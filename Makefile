@@ -9,6 +9,10 @@
 BINARY := claude-contextd
 CMD    := ./cmd/claude-contextd
 VPKG   := github.com/zilliztech/claude-context-go/internal/version
+CLI_BINARY := claude-context
+CLI_CMD := ./cmd/$(CLI_BINARY)
+MCP_BINARY := claude-context-mcp
+MCP_CMD := ./cmd/$(MCP_BINARY)
 
 # Pipeline modules. Add go-service.mk if this binary ships as a daemon and
 # set LAUNCHD_LABEL, SYSTEMD_UNIT, LOG_PATH before -include $(GO_MK).
@@ -26,3 +30,67 @@ LOG_PATH := $(HOME)/.contextd/logs/claude-contextd.log
 include bootstrap.mk
 
 .DEFAULT_GOAL := check
+
+# ---------------------------------------------------------------------------
+# Project-local
+# ---------------------------------------------------------------------------
+
+.PHONY: build-clients install-clients deploy deploy-service daemon-wait daemon-status
+
+CLI_DIST_BIN := $(DIST_DIR)/$(CLI_BINARY)
+MCP_DIST_BIN := $(DIST_DIR)/$(MCP_BINARY)
+CLI_INSTALL_BIN := $(INSTALL_DIR)/$(CLI_BINARY)
+MCP_INSTALL_BIN := $(INSTALL_DIR)/$(MCP_BINARY)
+
+build-clients:
+	@mkdir -p "$(DIST_DIR)"
+	go build $(GO_BUILD_FLAGS) -o "$(CLI_DIST_BIN)" $(CLI_CMD)
+	go build $(GO_BUILD_FLAGS) -o "$(MCP_DIST_BIN)" $(MCP_CMD)
+	@echo "built: $(CLI_DIST_BIN)"
+	@echo "built: $(MCP_DIST_BIN)"
+
+install-clients: build-clients
+	@printf 'install: installing %s to %s\n' '$(CLI_BINARY)' '$(CLI_INSTALL_BIN)'
+	@mkdir -p "$(INSTALL_DIR)"
+	@out="$$(mktemp "$(CLI_INSTALL_BIN)".new.XXXXXX)"; \
+	trap 'rm -f "$$out"' EXIT; \
+	cp -f "$(CLI_DIST_BIN)" "$$out"; \
+	chmod 0755 "$$out"; \
+	test -s "$$out"; \
+	mv -f "$$out" "$(CLI_INSTALL_BIN)"
+	@printf 'install: installing %s to %s\n' '$(MCP_BINARY)' '$(MCP_INSTALL_BIN)'
+	@out="$$(mktemp "$(MCP_INSTALL_BIN)".new.XXXXXX)"; \
+	trap 'rm -f "$$out"' EXIT; \
+	cp -f "$(MCP_DIST_BIN)" "$$out"; \
+	chmod 0755 "$$out"; \
+	test -s "$$out"; \
+	mv -f "$$out" "$(MCP_INSTALL_BIN)"
+
+deploy:
+	$(MAKE) BUILD_CHECKS=false install
+	$(MAKE) BUILD_CHECKS=false install-clients
+	$(MAKE) deploy-service
+	$(MAKE) daemon-wait
+	$(MAKE) daemon-status
+
+deploy-service:
+	@$(MAKE) service-restart || { \
+		echo "service restart failed; installing user service"; \
+		$(MAKE) service-install; \
+		if [ "$$(uname)" = "Darwin" ]; then \
+			launchctl enable "$(LAUNCHD_DOMAIN)/$(LAUNCHD_LABEL)" || true; \
+		fi; \
+		$(MAKE) service-restart; \
+	}
+
+daemon-status:
+	"$(CLI_INSTALL_BIN)" daemon status
+
+daemon-wait:
+	@for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
+		if status_output="$$( "$(CLI_INSTALL_BIN)" daemon status )"; then \
+			exit 0; \
+		fi; \
+		sleep 0.25; \
+	done; \
+	"$(CLI_INSTALL_BIN)" daemon status
