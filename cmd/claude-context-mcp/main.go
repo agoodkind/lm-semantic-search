@@ -2,12 +2,16 @@
 package main
 
 import (
-	"errors"
+	"context"
 	"log/slog"
 	"os"
+
+	"github.com/zilliztech/claude-context-go/internal/mcpserver"
 )
 
 func main() {
-	slog.Error("claude-context-mcp is not implemented yet", "err", errors.New("not implemented"))
-	os.Exit(1)
+	if err := mcpserver.Run(context.Background()); err != nil {
+		slog.Error("claude-context-mcp failed", "err", err)
+		os.Exit(1)
+	}
 }

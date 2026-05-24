@@ -20,6 +20,7 @@ import (
 	"github.com/zilliztech/claude-context-go/internal/clock"
 	"github.com/zilliztech/claude-context-go/internal/config"
 	"github.com/zilliztech/claude-context-go/internal/indexer"
+	"github.com/zilliztech/claude-context-go/internal/migrate"
 	"github.com/zilliztech/claude-context-go/internal/model"
 	"github.com/zilliztech/claude-context-go/internal/store"
 )
@@ -54,6 +55,11 @@ func (manager *Manager) load() error {
 		slog.Error("read registry failed", "path", manager.config.RegistryPath, "err", err)
 		return fmt.Errorf("read registry: %w", err)
 	}
+	if errors.Is(err, os.ErrNotExist) {
+		if migrationErr := manager.importLegacySnapshot(); migrationErr != nil {
+			return migrationErr
+		}
+	}
 	for _, codebase := range registry.Codebases {
 		manager.codebases[codebase.ID] = codebase
 	}
@@ -64,6 +70,41 @@ func (manager *Manager) load() error {
 		return fmt.Errorf("read jobs: %w", err)
 	}
 	maps.Copy(manager.jobs, jobs)
+	return nil
+}
+
+func (manager *Manager) importLegacySnapshot() error {
+	snapshotPath, err := migrate.LegacySnapshotPath()
+	if err != nil {
+		return fmt.Errorf("resolve legacy snapshot path: %w", err)
+	}
+	if !migrate.SnapshotExists(snapshotPath) {
+		return nil
+	}
+
+	codebases, jobs, err := migrate.ImportLegacySnapshot(snapshotPath)
+	if err != nil {
+		slog.Error("import legacy snapshot failed", "path", snapshotPath, "err", err)
+		return fmt.Errorf("import legacy snapshot %s: %w", snapshotPath, err)
+	}
+	for _, codebase := range codebases {
+		manager.codebases[codebase.ID] = codebase
+	}
+	for _, job := range jobs {
+		manager.jobs[job.ID] = job
+	}
+	if len(codebases) == 0 && len(jobs) == 0 {
+		return nil
+	}
+	if err := manager.saveLocked(); err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if appendErr := manager.appendJobLocked("legacy_migration", job); appendErr != nil {
+			slog.Error("append migrated job failed", "job_id", job.ID, "err", appendErr)
+			return appendErr
+		}
+	}
 	return nil
 }
 
