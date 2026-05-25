@@ -2,7 +2,9 @@
 
 A ground-up Go rewrite of the Claude Context runtime, owning the daemon, the operator CLI, and the MCP adapter; VS Code and Chrome extension clients are out of scope here.
 
-Original TypeScript implementation: `github.com/zilliztech/claude-context`.
+Original TypeScript implementation: `github.com/zilliztech/claude-context`. This Go port is independent of, and not affiliated with or endorsed by, Zilliz; the `io.zilliz.claude-contextd` launchd label is kept for drop-in service compatibility with the upstream daemon.
+
+Provided AS IS under the MIT License with no warranty. See [LICENSE](LICENSE).
 
 ## Transport Contract
 
