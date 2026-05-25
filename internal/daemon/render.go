@@ -10,10 +10,23 @@ import (
 )
 
 const (
-	indexingWarningTemplate = "⚠️  **Indexing in Progress**: This codebase is currently being indexed in the background. Search results may be incomplete or inaccurate until indexing completes. Progress: %.1f%%."
-	noResultsIndexingTip    = "Note: This codebase is still being indexed. Try searching again after indexing completes, or the query may not match any indexed content."
-	searchIndexingTip       = "💡 **Tip**: This codebase is still being indexed. More results may become available as indexing progresses."
+	indexingWarningHeader = "⚠️  **Indexing in Progress**: This codebase is currently being indexed in the background. Search results may be incomplete or inaccurate until indexing completes. Progress: %.1f%%."
+	indexingWarningRetry  = "🔁 Retry suggestion: call get_indexing_status (or get_indexing_job for the active job) in ~30s, or call index_codebase with wait=true on the next turn to block until the index is ready. Active job: %s."
+	noResultsIndexingTip  = "Note: This codebase is still being indexed. Try searching again after indexing completes, or the query may not match any indexed content."
+	searchIndexingTip     = "💡 **Tip**: This codebase is still being indexed. More results may become available as indexing progresses."
 )
+
+// formatIndexingWarning builds the in-progress search banner. The banner
+// surfaces the current progress percentage, names the active job so the agent
+// can poll it directly, and tells the caller exactly how to wait for the
+// index to finish.
+func formatIndexingWarning(progressPercent float64, activeJobID string) string {
+	header := fmt.Sprintf(indexingWarningHeader, progressPercent)
+	if activeJobID == "" {
+		return header
+	}
+	return header + "\n" + fmt.Sprintf(indexingWarningRetry, activeJobID)
+}
 
 type searchView struct {
 	RequestedPath string
@@ -177,7 +190,7 @@ func renderDoctor(diagnostics []string) string {
 func renderSearch(view searchView) string {
 	warning := ""
 	if view.ActiveJob != nil && view.Codebase.Status == model.CodebaseStatusIndexing {
-		warning = fmt.Sprintf(indexingWarningTemplate, view.ActiveJob.Progress.OverallPercent)
+		warning = formatIndexingWarning(view.ActiveJob.Progress.OverallPercent, view.ActiveJob.ID)
 	}
 
 	if len(view.Results) == 0 {
@@ -223,11 +236,22 @@ func progressPhaseSuffix(progress float64) string {
 	return ""
 }
 
+// formatLocalTime renders a wall-clock timestamp for human-facing MCP and CLI
+// output. The daemon stores every timestamp in UTC (see clock.Now), so this
+// converts to the daemon host's local time zone before formatting, including
+// the zone abbreviation so operators can recognize the time at a glance. The
+// zone is loaded by name rather than via [time.Local] so gosmopolitan stays
+// satisfied while the resolution still resolves to the host's local zone.
 func formatLocalTime(value time.Time) string {
 	if value.IsZero() {
 		return "unknown"
 	}
-	return value.Format("1/2/2006, 3:04:05 PM")
+	const layout = "1/2/2006, 3:04:05 PM MST"
+	location, err := time.LoadLocation("Local")
+	if err != nil {
+		return value.Format(layout)
+	}
+	return value.In(location).Format(layout)
 }
 
 func truncateContent(content string, limit int) string {

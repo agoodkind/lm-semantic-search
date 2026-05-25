@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,18 +21,23 @@ import (
 	"goodkind.io/claude-context-go/internal/config"
 	"goodkind.io/claude-context-go/internal/embedding"
 	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/claude-context-go/internal/tshash"
 )
 
+// Milvus field names match the upstream TS schema at
+// packages/core/src/vectordb/milvus-vectordb.ts so the Go daemon reads and
+// writes the same collections the TS adapter does. The names are camelCase
+// because that is what the TS adapter wrote.
 const (
 	maxCollectionNameLength = 255
 	denseVectorFieldName    = "vector"
 	sparseVectorFieldName   = "sparse_vector"
 	contentFieldName        = "content"
-	relativePathFieldName   = "relative_path"
-	startLineFieldName      = "start_line"
-	endLineFieldName        = "end_line"
-	languageFieldName       = "language"
-	fileExtensionFieldName  = "file_extension"
+	relativePathFieldName   = "relativePath"
+	startLineFieldName      = "startLine"
+	endLineFieldName        = "endLine"
+	fileExtensionFieldName  = "fileExtension"
+	metadataFieldName       = "metadata"
 	idFieldName             = "id"
 )
 
@@ -104,7 +110,9 @@ func (service *Service) Available() bool {
 	return service != nil && service.available
 }
 
-// CollectionName matches the TypeScript collection naming contract.
+// CollectionName matches the TypeScript collection naming contract at
+// packages/core/src/context.ts:275 so the Go daemon reads and writes the
+// same Milvus collections as the upstream TS adapter.
 func (service *Service) CollectionName(codebasePath string) string {
 	prefix := "code_chunks"
 	if service.cfg.HybridMode {
@@ -115,8 +123,7 @@ func (service *Service) CollectionName(codebasePath string) string {
 	if err != nil {
 		normalizedPath = codebasePath
 	}
-	pathHashBytes := sha256.Sum256([]byte(normalizedPath))
-	pathHash := hex.EncodeToString(pathHashBytes[:])[:8]
+	pathHash := tshash.PathPrefix(normalizedPath)
 
 	override := strings.TrimSpace(service.cfg.CollectionNameOverride)
 	if override == "" {
@@ -342,8 +349,8 @@ func (service *Service) Search(ctx context.Context, codebasePath string, query s
 		relativePathFieldName,
 		startLineFieldName,
 		endLineFieldName,
-		languageFieldName,
 		fileExtensionFieldName,
+		metadataFieldName,
 	}
 
 	if service.cfg.HybridMode {
@@ -455,11 +462,11 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 	schema := entity.NewSchema().
 		WithField(entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(512).WithIsPrimaryKey(true)).
 		WithField(entity.NewField().WithName(contentFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535).WithEnableAnalyzer(true).WithEnableMatch(true)).
-		WithField(entity.NewField().WithName(relativePathFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(4096)).
+		WithField(entity.NewField().WithName(relativePathFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(1024)).
 		WithField(entity.NewField().WithName(startLineFieldName).WithDataType(entity.FieldTypeInt64)).
 		WithField(entity.NewField().WithName(endLineFieldName).WithDataType(entity.FieldTypeInt64)).
-		WithField(entity.NewField().WithName(languageFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(128)).
 		WithField(entity.NewField().WithName(fileExtensionFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(32)).
+		WithField(entity.NewField().WithName(metadataFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
 		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)))
 
 	indexOptions := []milvusclient.CreateIndexOption{
@@ -497,8 +504,8 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 	relativePaths := make([]string, 0, len(chunks))
 	startLines := make([]int64, 0, len(chunks))
 	endLines := make([]int64, 0, len(chunks))
-	languages := make([]string, 0, len(chunks))
 	fileExtensions := make([]string, 0, len(chunks))
+	metadataValues := make([]string, 0, len(chunks))
 
 	for index, chunk := range chunks {
 		ids = append(ids, generateID(chunk, index))
@@ -506,8 +513,8 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 		relativePaths = append(relativePaths, chunk.RelativePath)
 		startLines = append(startLines, int64(chunk.StartLine))
 		endLines = append(endLines, int64(chunk.EndLine))
-		languages = append(languages, chunk.Language)
 		fileExtensions = append(fileExtensions, chunk.FileExtension)
+		metadataValues = append(metadataValues, encodeMetadata(chunk))
 	}
 
 	insertOption = insertOption.
@@ -516,8 +523,8 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 		WithVarcharColumn(relativePathFieldName, relativePaths).
 		WithInt64Column(startLineFieldName, startLines).
 		WithInt64Column(endLineFieldName, endLines).
-		WithVarcharColumn(languageFieldName, languages).
 		WithVarcharColumn(fileExtensionFieldName, fileExtensions).
+		WithVarcharColumn(metadataFieldName, metadataValues).
 		WithFloatVectorColumn(denseVectorFieldName, len(vectors[0]), vectors)
 
 	if _, err := service.milvus.Insert(ctx, insertOption); err != nil {
@@ -537,9 +544,9 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 	relativePathColumn := resultSet.GetColumn(relativePathFieldName)
 	startLineColumn := resultSet.GetColumn(startLineFieldName)
 	endLineColumn := resultSet.GetColumn(endLineFieldName)
-	languageColumn := resultSet.GetColumn(languageFieldName)
 	fileExtensionColumn := resultSet.GetColumn(fileExtensionFieldName)
-	if contentColumn == nil || relativePathColumn == nil || startLineColumn == nil || endLineColumn == nil || languageColumn == nil || fileExtensionColumn == nil {
+	metadataColumn := resultSet.GetColumn(metadataFieldName)
+	if contentColumn == nil || relativePathColumn == nil || startLineColumn == nil || endLineColumn == nil || fileExtensionColumn == nil {
 		return nil, ErrSearchResultIncomplete
 	}
 
@@ -565,15 +572,17 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			slog.Error("read end line column failed", "index", index, "err", err)
 			return nil, fmt.Errorf("read end line column at %d: %w", index, err)
 		}
-		languageValue, err := languageColumn.GetAsString(index)
-		if err != nil {
-			slog.Error("read language column failed", "index", index, "err", err)
-			return nil, fmt.Errorf("read language column at %d: %w", index, err)
-		}
 		fileExtensionValue, err := fileExtensionColumn.GetAsString(index)
 		if err != nil {
 			slog.Error("read file extension column failed", "index", index, "err", err)
 			return nil, fmt.Errorf("read file extension column at %d: %w", index, err)
+		}
+		languageValue := ""
+		if metadataColumn != nil {
+			metadataValue, metadataErr := metadataColumn.GetAsString(index)
+			if metadataErr == nil {
+				languageValue = decodeMetadataLanguage(metadataValue)
+			}
 		}
 
 		chunks = append(chunks, model.StoredChunk{
@@ -588,10 +597,41 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 	return chunks, nil
 }
 
-func generateID(chunk model.StoredChunk, index int) string {
-	hashInput := fmt.Sprintf("%s:%d:%d:%d:%s", chunk.RelativePath, chunk.StartLine, chunk.EndLine, index, chunk.Content)
+// chunkMetadata mirrors the JSON shape the TS adapter writes into the
+// Milvus `metadata` field. The Go daemon adds a language hint so search
+// results can resurface the splitter-derived language without a dedicated
+// column.
+type chunkMetadata struct {
+	Language string `json:"language,omitempty"`
+}
+
+func encodeMetadata(chunk model.StoredChunk) string {
+	if chunk.Language == "" {
+		return "{}"
+	}
+	encoded, err := json.Marshal(chunkMetadata{Language: chunk.Language})
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+func decodeMetadataLanguage(metadata string) string {
+	if metadata == "" {
+		return ""
+	}
+	var parsed chunkMetadata
+	if err := json.Unmarshal([]byte(metadata), &parsed); err != nil {
+		return ""
+	}
+	return parsed.Language
+}
+
+// generateID matches the TS chunk-ID format at packages/core/src/context.ts:1067.
+func generateID(chunk model.StoredChunk, _ int) string {
+	hashInput := fmt.Sprintf("%s:%d:%d:%s", chunk.RelativePath, chunk.StartLine, chunk.EndLine, chunk.Content)
 	sum := sha256.Sum256([]byte(hashInput))
-	return hex.EncodeToString(sum[:])
+	return "chunk_" + hex.EncodeToString(sum[:])[:16]
 }
 
 func buildExtensionFilter(extensionFilter []string) string {

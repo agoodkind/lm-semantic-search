@@ -10,19 +10,25 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	pb "goodkind.io/claude-context-go/gen/go/claudecontext/v1"
 	"goodkind.io/claude-context-go/internal/config"
 	"goodkind.io/claude-context-go/internal/grpcutil"
+	"goodkind.io/claude-context-go/internal/model"
 	"goodkind.io/claude-context-go/internal/response"
 	"goodkind.io/claude-context-go/internal/version"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
-const outputModeEnv = "CLAUDE_CONTEXT_MCP_OUTPUT"
+const (
+	outputModeEnv           = "CLAUDE_CONTEXT_MCP_OUTPUT"
+	defaultIndexWaitSeconds = 300
+	indexWaitPollInterval   = 1500 * time.Millisecond
+)
 
 // Run starts the MCP stdio server and blocks until the client disconnects.
 func Run(ctx context.Context) error {
@@ -103,18 +109,28 @@ func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMod
 			mcp.WithString("splitter", mcp.Description("splitter type, typically ast")),
 			mcp.WithArray("customExtensions", mcp.Description("extra file extensions to include"), mcp.WithStringItems()),
 			mcp.WithArray("ignorePatterns", mcp.Description("extra ignore patterns to exclude"), mcp.WithStringItems()),
+			mcp.WithBoolean("wait", mcp.Description("block this tool call until the indexing job reaches a terminal state (completed, failed, or cancelled)")),
+			mcp.WithNumber("wait_timeout_seconds", mcp.Description("max seconds to wait when wait=true; on timeout the daemon job keeps running and the tool returns the current progress (default 300)")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
-				return client.StartIndex(ctx, &pb.StartIndexRequest{
-					Path:             req.GetString("path", ""),
-					Force:            req.GetBool("force", false),
-					CustomExtensions: req.GetStringSlice("customExtensions", []string{}),
-					IgnorePatterns:   req.GetStringSlice("ignorePatterns", []string{}),
-					Splitter:         &pb.SplitterConfig{Type: req.GetString("splitter", "")},
-					Client:           &pb.ClientInfo{Name: "mcp"},
+			startRequest := &pb.StartIndexRequest{
+				Path:             req.GetString("path", ""),
+				Force:            req.GetBool("force", false),
+				CustomExtensions: req.GetStringSlice("customExtensions", []string{}),
+				IgnorePatterns:   req.GetStringSlice("ignorePatterns", []string{}),
+				Splitter:         &pb.SplitterConfig{Type: req.GetString("splitter", "")},
+				Client:           &pb.ClientInfo{Name: "mcp"},
+			}
+			if !req.GetBool("wait", false) {
+				return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+					return client.StartIndex(ctx, startRequest)
 				})
-			})
+			}
+			timeoutSeconds := req.GetInt("wait_timeout_seconds", defaultIndexWaitSeconds)
+			if timeoutSeconds <= 0 {
+				timeoutSeconds = defaultIndexWaitSeconds
+			}
+			return callDaemonIndexAndWait(ctx, socketPath, outputMode, startRequest, time.Duration(timeoutSeconds)*time.Second)
 		},
 	)
 }
@@ -231,6 +247,80 @@ func registerSearchTool(mcpServer *server.MCPServer, socketPath string, outputMo
 			})
 		},
 	)
+}
+
+// callDaemonIndexAndWait starts an index job through StartIndex and polls
+// GetJob until the job reaches a terminal state (completed, failed,
+// cancelled) or the supplied timeout elapses. When the timeout trips, the
+// daemon job keeps running and the tool returns the latest GetIndex view so
+// the caller can decide to poll again or move on. The poll cadence is short
+// (~1.5s) so terminal events propagate to the caller with minimal delay.
+//
+// Concurrent waiters dedupe at the daemon (see Manager.dedupAgainstActiveJob)
+// because StartIndex returns the existing job id when one is in flight, so
+// every waiter ends up polling the same job and observing the same terminal
+// event.
+func callDaemonIndexAndWait(ctx context.Context, socketPath string, outputMode response.Mode, startRequest *pb.StartIndexRequest, timeout time.Duration) (*mcp.CallToolResult, error) {
+	connection, client, err := grpcutil.DialDaemon(ctx, socketPath)
+	if err != nil {
+		slog.ErrorContext(ctx, "dial daemon for wait failed", "socket_path", socketPath, "err", err)
+		return nil, fmt.Errorf("dial daemon: %w", err)
+	}
+	defer connection.Close()
+
+	startResponse, err := client.StartIndex(ctx, startRequest)
+	if err != nil {
+		slog.ErrorContext(ctx, "start index for wait failed", "path", startRequest.GetPath(), "err", err)
+		return toolErrorResult(rpcErrorText(err)), nil
+	}
+
+	jobID := startResponse.GetJobId()
+	if jobID == "" {
+		return renderToolResponse(outputMode, startResponse)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(indexWaitPollInterval)
+	defer ticker.Stop()
+
+	for {
+		jobResponse, err := client.GetJob(waitCtx, &pb.GetJobRequest{JobId: jobID})
+		if err == nil && isTerminalJobState(jobResponse.GetJob().GetState()) {
+			indexResponse, err := client.GetIndex(ctx, &pb.GetIndexRequest{Path: startRequest.GetPath()})
+			if err != nil {
+				slog.ErrorContext(ctx, "get index after wait failed", "path", startRequest.GetPath(), "err", err)
+				return renderToolResponse(outputMode, jobResponse)
+			}
+			return renderToolResponse(outputMode, indexResponse)
+		}
+
+		select {
+		case <-waitCtx.Done():
+			indexResponse, err := client.GetIndex(ctx, &pb.GetIndexRequest{Path: startRequest.GetPath()})
+			if err != nil {
+				slog.ErrorContext(ctx, "get index after wait timeout failed", "path", startRequest.GetPath(), "err", err)
+				return renderToolResponse(outputMode, startResponse)
+			}
+			return renderToolResponse(outputMode, indexResponse)
+		case <-ticker.C:
+		}
+	}
+}
+
+// isTerminalJobState reports whether a JobState value will not change again.
+// The daemon emits JobState through the proto's `state` string field; the
+// comparison goes through model.JobState so the switch stays on typed
+// constants rather than bare string literals.
+func isTerminalJobState(state string) bool {
+	switch model.JobState(state) {
+	case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
+		return true
+	case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
+		return false
+	default:
+		return false
+	}
 }
 
 func callDaemonTool(ctx context.Context, socketPath string, outputMode response.Mode, call daemonProtoCall) (*mcp.CallToolResult, error) {

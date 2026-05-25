@@ -273,6 +273,12 @@ func TestForceReindexStartsFreshJobAndSearchShowsIndexingWarning(t *testing.T) {
 	if !strings.Contains(searchResponse.GetDisplayText(), "42.5%") {
 		t.Fatalf("SearchCode returned unexpected progress text: %q", searchResponse.GetDisplayText())
 	}
+	if !strings.Contains(searchResponse.GetDisplayText(), "🔁 Retry suggestion") {
+		t.Fatalf("SearchCode response missing retry suggestion: %q", searchResponse.GetDisplayText())
+	}
+	if !strings.Contains(searchResponse.GetDisplayText(), reindexJob.ID) {
+		t.Fatalf("SearchCode response missing active job id %s: %q", reindexJob.ID, searchResponse.GetDisplayText())
+	}
 
 	close(release)
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -523,6 +529,57 @@ func TestGetIndexMatchesTrackedParentForSubdirectory(t *testing.T) {
 	}
 	if codebase.CanonicalPath != expectedCanonicalPath {
 		t.Fatalf("GetIndex returned canonicalPath=%q", codebase.CanonicalPath)
+	}
+}
+
+func TestGetIndexFallsBackToLegacySnapshot(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, _ := newTestManager(t)
+
+	legacyPath := "/Users/example/Sites/clyde-dev/clyde"
+	snapshot := `{
+  "formatVersion": "v2",
+  "codebases": {
+    "` + legacyPath + `": {
+      "status": "indexed",
+      "indexedFiles": 877,
+      "totalChunks": 9139,
+      "indexStatus": "completed",
+      "requestSplitter": "ast",
+      "lastUpdated": "2026-05-24T11:28:01.806Z"
+    }
+  },
+  "lastUpdated": "2026-05-25T02:14:06.870Z"
+}`
+	if err := os.MkdirAll(cfg.ContextRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.ContextRoot, "mcp-codebase-snapshot.json"), []byte(snapshot), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	codebase, activeJob, found, err := manager.GetIndex(context.Background(), legacyPath)
+	if err != nil {
+		t.Fatalf("GetIndex returned error: %v", err)
+	}
+	if !found {
+		t.Fatal("GetIndex did not find the legacy snapshot entry")
+	}
+	if activeJob != nil {
+		t.Fatalf("activeJob = %#v, want nil for legacy entry", activeJob)
+	}
+	if codebase.Status != model.CodebaseStatusIndexed {
+		t.Fatalf("status = %q", codebase.Status)
+	}
+	if codebase.LastSuccessfulRun == nil {
+		t.Fatal("LastSuccessfulRun nil")
+	}
+	if codebase.LastSuccessfulRun.IndexedFiles != 877 {
+		t.Fatalf("IndexedFiles = %d", codebase.LastSuccessfulRun.IndexedFiles)
+	}
+	if codebase.CollectionName == "" {
+		t.Fatal("collection name empty for legacy codebase")
 	}
 }
 

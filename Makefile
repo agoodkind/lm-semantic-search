@@ -102,12 +102,16 @@ daemon-wait:
 # TS adapter; the Go adapter avoids this by exiting on stdin EOF, PPID poll,
 # and panic recovery, but this target stays as a paranoia cleanup.
 kill-orphans:
-	@killed=0; \
+	@killed=0; preserved=0; \
 	for pid in $$(pgrep -x $(MCP_BINARY) || true); do \
 		parent=$$(ps -o ppid= -p "$$pid" | tr -d ' '); \
 		if [ "$$parent" = "1" ]; then \
-			echo "kill-orphans: SIGKILL pid=$$pid"; \
+			echo "kill-orphans: SIGKILL pid=$$pid (orphan, ppid=1)"; \
 			kill -9 "$$pid" && killed=$$((killed + 1)); \
+		else \
+			parent_command=$$(ps -o comm= -p "$$parent" 2>&1 | head -n1); \
+			echo "kill-orphans: preserve pid=$$pid (ppid=$$parent $$parent_command)"; \
+			preserved=$$((preserved + 1)); \
 		fi; \
 	done; \
-	echo "kill-orphans: killed $$killed orphan(s)"
+	echo "kill-orphans: killed $$killed orphan(s), preserved $$preserved live adapter(s)"

@@ -22,10 +22,10 @@ import (
 	"goodkind.io/claude-context-go/internal/config"
 	"goodkind.io/claude-context-go/internal/indexer"
 	"goodkind.io/claude-context-go/internal/merkle"
-	"goodkind.io/claude-context-go/internal/migrate"
 	"goodkind.io/claude-context-go/internal/model"
 	"goodkind.io/claude-context-go/internal/semantic"
 	"goodkind.io/claude-context-go/internal/store"
+	"goodkind.io/claude-context-go/internal/tssnapshot"
 )
 
 // Manager coordinates persisted codebase and job state for the daemon.
@@ -82,11 +82,6 @@ func (manager *Manager) load() error {
 		slog.Error("read registry failed", "path", manager.config.RegistryPath, "err", err)
 		return fmt.Errorf("read registry: %w", err)
 	}
-	if errors.Is(err, os.ErrNotExist) {
-		if migrationErr := manager.importLegacySnapshot(); migrationErr != nil {
-			return migrationErr
-		}
-	}
 	for _, codebase := range registry.Codebases {
 		manager.codebases[codebase.ID] = codebase
 	}
@@ -100,39 +95,40 @@ func (manager *Manager) load() error {
 	return nil
 }
 
-func (manager *Manager) importLegacySnapshot() error {
-	snapshotPath, err := migrate.LegacySnapshotPath()
+// resolveFromTSSnapshot synthesizes an in-memory model.Codebase for paths
+// the Go daemon does not own but that the upstream TS adapter already
+// indexed. The returned record is never persisted, never enters
+// manager.codebases, and is never visible to background sync. The synthesized
+// codebase routes GetIndex and SearchCode at the existing Milvus collection
+// because both adapters derive the collection name from the same MD5(path)
+// scheme; see tshash.PathPrefix.
+func (manager *Manager) resolveFromTSSnapshot(canonicalPath string, aliasPath string) (model.Codebase, bool) {
+	var emptyCodebase model.Codebase
+
+	snapshotPath, err := tssnapshot.Path(manager.config.ContextRoot)
 	if err != nil {
-		return fmt.Errorf("resolve legacy snapshot path: %w", err)
+		return emptyCodebase, false
 	}
-	if !migrate.SnapshotExists(snapshotPath) {
-		return nil
+	entries, err := tssnapshot.Load(snapshotPath)
+	if err != nil || len(entries) == 0 {
+		return emptyCodebase, false
 	}
 
-	codebases, jobs, err := migrate.ImportLegacySnapshot(snapshotPath)
-	if err != nil {
-		slog.Error("import legacy snapshot failed", "path", snapshotPath, "err", err)
-		return fmt.Errorf("import legacy snapshot %s: %w", snapshotPath, err)
-	}
-	for _, codebase := range codebases {
-		manager.codebases[codebase.ID] = codebase
-	}
-	for _, job := range jobs {
-		manager.jobs[job.ID] = job
-	}
-	if len(codebases) == 0 && len(jobs) == 0 {
-		return nil
-	}
-	if err := manager.saveLocked(); err != nil {
-		return err
-	}
-	for _, job := range jobs {
-		if appendErr := manager.appendJobLocked("legacy_migration", job); appendErr != nil {
-			slog.Error("append migrated job failed", "job_id", job.ID, "err", appendErr)
-			return appendErr
+	for _, candidatePath := range []string{canonicalPath, aliasPath} {
+		if candidatePath == "" {
+			continue
 		}
+		entry, found := entries[candidatePath]
+		if !found {
+			continue
+		}
+		codebase := tssnapshot.Synthesize(candidatePath, entry, manager.config.HybridMode)
+		if canonicalPath != "" && canonicalPath != candidatePath {
+			codebase.Aliases = append(codebase.Aliases, canonicalPath)
+		}
+		return codebase, true
 	}
-	return nil
+	return emptyCodebase, false
 }
 
 func (manager *Manager) saveLocked() error {
@@ -550,13 +546,20 @@ func (manager *Manager) GetIndex(ctx context.Context, requestedPath string) (mod
 	}
 
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	codebase, found := manager.findCodebaseByPathLocked(canonicalPath, aliasPath)
-	if !found {
-		var emptyCodebase model.Codebase
-		return emptyCodebase, nil, false, nil
+	if found {
+		activeJob := manager.activeJobSnapshotLocked(codebase)
+		manager.mu.Unlock()
+		return codebase, activeJob, true, nil
 	}
-	return codebase, manager.activeJobSnapshotLocked(codebase), true, nil
+	manager.mu.Unlock()
+
+	if tsCodebase, tsFound := manager.resolveFromTSSnapshot(canonicalPath, aliasPath); tsFound {
+		return tsCodebase, nil, true, nil
+	}
+
+	var emptyCodebase model.Codebase
+	return emptyCodebase, nil, false, nil
 }
 
 // ListIndexes returns every tracked codebase in canonical path order.

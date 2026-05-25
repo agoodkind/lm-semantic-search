@@ -10,7 +10,8 @@ import (
 	"log/slog"
 	"math"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 
 	pb "goodkind.io/claude-context-go/gen/go/claudecontext/v1"
 	"goodkind.io/claude-context-go/internal/config"
@@ -284,7 +285,7 @@ func currentClientInfo() (*pb.ClientInfo, error) {
 }
 
 func callAndPrint(options cliOptions, call rpcCall) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	connection, client, err := grpcutil.DialDaemon(ctx, options.socketPath)
