@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 
 	"golang.org/x/sys/unix"
 )
@@ -25,17 +26,27 @@ func parentDeathSignal(ctx context.Context, parentPID int) <-chan struct{} {
 		goSafeOrphan(ctx, func() { pollParentDeath(ctx, ch) })
 		return ch
 	}
-	goSafeOrphan(ctx, func() { waitPidfdExit(ctx, pidfd, ch) })
+	if pidfd < 0 || pidfd > math.MaxInt32 {
+		// File descriptors fit in int32 by kernel contract; this guard
+		// satisfies the strict integer-overflow lint without trusting the
+		// runtime to enforce it.
+		_ = unix.Close(pidfd)
+		slog.WarnContext(ctx, "pidfd out of int32 range; falling back to polling", "pidfd", pidfd)
+		goSafeOrphan(ctx, func() { pollParentDeath(ctx, ch) })
+		return ch
+	}
+	pidfd32 := int32(pidfd)
+	goSafeOrphan(ctx, func() { waitPidfdExit(ctx, pidfd32, ch) })
 	return ch
 }
 
 // waitPidfdExit blocks on Poll until the pidfd signals exit. Poll uses a 1
 // second timeout solely to let ctx cancellation propagate; detection of the
 // actual exit is immediate (Poll wakes on the kernel event, not the timeout).
-func waitPidfdExit(ctx context.Context, pidfd int, ch chan struct{}) {
+func waitPidfdExit(ctx context.Context, pidfd int32, ch chan struct{}) {
 	defer close(ch)
-	defer func() { _ = unix.Close(pidfd) }()
-	fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN, Revents: 0}}
+	defer func() { _ = unix.Close(int(pidfd)) }()
+	fds := []unix.PollFd{{Fd: pidfd, Events: unix.POLLIN, Revents: 0}}
 	const pollTimeoutMillis = 1000
 	for {
 		n, err := unix.Poll(fds, pollTimeoutMillis)
