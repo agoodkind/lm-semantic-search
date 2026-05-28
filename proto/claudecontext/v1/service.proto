@@ -89,9 +89,10 @@ message IndexRunFailure {
 }
 
 message Codebase {
+  reserved 3;
+  reserved "aliases";
   string id = 1;
   string canonical_path = 2;
-  repeated string aliases = 3;
   string status = 4;
   string active_job_id = 5;
   IndexRunSummary last_successful_run = 6;
@@ -101,6 +102,7 @@ message Codebase {
   repeated string legacy_collection_names = 10;
   string merkle_snapshot_path = 11;
   google.protobuf.Timestamp updated_at = 12;
+  bool inode_tracking_disabled = 13;
 }
 
 message Job {
@@ -144,6 +146,10 @@ message StartIndexResponse {
   bool deduplicated = 4;
   string canonical_path = 5;
   string display_text = 6;
+  // overlaps_codebase_id names the existing codebase whose canonical path
+  // strictly prefix-covers this registration. Empty when there is no
+  // overlap. Used by the daemon to surface the overlap hint to the caller.
+  string overlaps_codebase_id = 7;
 }
 
 message ClearIndexRequest {
@@ -189,6 +195,26 @@ message GetIndexResponse {
   Job active_job = 2;
   bool tracked = 3;
   string display_text = 4;
+  PathClassification classification = 5;
+}
+
+// PathClassification reports how the daemon sees one queried path with
+// respect to the codebases it tracks. Kind reports the overall outcome.
+// Excluded_by_pattern and excluded_by_gitignore are populated when the path
+// is in scope but masked by an ignore rule. Covering_codebase_id names the
+// longest-prefix covering codebase, when any.
+message PathClassification {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_IN_SCOPE_INDEXED = 1;
+    KIND_IN_SCOPE_EXCLUDED = 2;
+    KIND_IN_SCOPE_UNINDEXED = 3;
+    KIND_OUT_OF_SCOPE = 4;
+  }
+  Kind kind = 1;
+  string excluded_by_pattern = 2;
+  string excluded_by_gitignore = 3;
+  string covering_codebase_id = 4;
 }
 
 message ListIndexesRequest {}

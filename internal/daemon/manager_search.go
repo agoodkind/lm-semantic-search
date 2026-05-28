@@ -21,7 +21,7 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		return SearchOutcome{}, fmt.Errorf("validate extension filter: %w", err)
 	}
 
-	codebase, activeJob, found, err := manager.GetIndex(ctx, requestedPath)
+	codebase, activeJob, found, _, err := manager.GetIndex(ctx, requestedPath)
 	if err != nil {
 		return SearchOutcome{}, err
 	}

@@ -148,17 +148,18 @@ func (server *GRPCServer) Version(ctx context.Context, request *pb.VersionReques
 func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndexRequest) (resp *pb.StartIndexResponse, err error) {
 	ctx, done := beginRPC(ctx, "StartIndex")
 	defer done(&err)
-	job, codebase, deduplicated, callErr := server.manager.StartIndex(ctx, request.GetPath(), pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce())
+	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndex(ctx, request.GetPath(), pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce())
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
 	}
 	return &pb.StartIndexResponse{
-		JobId:         job.ID,
-		CodebaseId:    codebase.ID,
-		State:         string(job.State),
-		Deduplicated:  deduplicated,
-		CanonicalPath: codebase.CanonicalPath,
-		DisplayText:   appendCorrelationRef(renderStartIndex(request.GetPath(), codebase, job, deduplicated), ctx, "codebase_id", codebase.ID, "job_id", job.ID),
+		JobId:              job.ID,
+		CodebaseId:         codebase.ID,
+		State:              string(job.State),
+		Deduplicated:       deduplicated,
+		CanonicalPath:      codebase.CanonicalPath,
+		OverlapsCodebaseId: overlapsCodebaseID,
+		DisplayText:        appendCorrelationRef(renderStartIndex(request.GetPath(), codebase, job, deduplicated, overlapsCodebaseID), ctx, "codebase_id", codebase.ID, "job_id", job.ID),
 	}, nil
 }
 
@@ -217,17 +218,19 @@ func (server *GRPCServer) SyncIndex(ctx context.Context, request *pb.SyncIndexRe
 	}, nil
 }
 
-// GetIndex resolves one tracked codebase by alias or canonical path.
+// GetIndex resolves one tracked codebase whose canonical path covers the
+// queried path.
 func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequest) (resp *pb.GetIndexResponse, err error) {
 	ctx, done := beginRPC(ctx, "GetIndex")
 	defer done(&err)
-	codebase, activeJob, found, callErr := server.manager.GetIndex(ctx, request.GetPath())
+	codebase, activeJob, found, classification, callErr := server.manager.GetIndex(ctx, request.GetPath())
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
 	}
 	response := &pb.GetIndexResponse{
-		Tracked:     found,
-		DisplayText: appendCorrelationRef(renderGetIndex(request.GetPath(), found, codebasePointer(found, codebase), activeJob), ctx, "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
+		Tracked:        found,
+		Classification: pbconv.ToPathClassification(classification),
+		DisplayText:    appendCorrelationRef(renderGetIndex(request.GetPath(), found, codebasePointer(found, codebase), activeJob, classification), ctx, "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
 	if found {
 		response.Codebase = pbconv.ToCodebase(codebase)

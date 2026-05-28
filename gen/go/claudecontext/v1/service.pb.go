@@ -22,6 +22,61 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type PathClassification_Kind int32
+
+const (
+	PathClassification_KIND_UNSPECIFIED        PathClassification_Kind = 0
+	PathClassification_KIND_IN_SCOPE_INDEXED   PathClassification_Kind = 1
+	PathClassification_KIND_IN_SCOPE_EXCLUDED  PathClassification_Kind = 2
+	PathClassification_KIND_IN_SCOPE_UNINDEXED PathClassification_Kind = 3
+	PathClassification_KIND_OUT_OF_SCOPE       PathClassification_Kind = 4
+)
+
+// Enum value maps for PathClassification_Kind.
+var (
+	PathClassification_Kind_name = map[int32]string{
+		0: "KIND_UNSPECIFIED",
+		1: "KIND_IN_SCOPE_INDEXED",
+		2: "KIND_IN_SCOPE_EXCLUDED",
+		3: "KIND_IN_SCOPE_UNINDEXED",
+		4: "KIND_OUT_OF_SCOPE",
+	}
+	PathClassification_Kind_value = map[string]int32{
+		"KIND_UNSPECIFIED":        0,
+		"KIND_IN_SCOPE_INDEXED":   1,
+		"KIND_IN_SCOPE_EXCLUDED":  2,
+		"KIND_IN_SCOPE_UNINDEXED": 3,
+		"KIND_OUT_OF_SCOPE":       4,
+	}
+)
+
+func (x PathClassification_Kind) Enum() *PathClassification_Kind {
+	p := new(PathClassification_Kind)
+	*p = x
+	return p
+}
+
+func (x PathClassification_Kind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PathClassification_Kind) Descriptor() protoreflect.EnumDescriptor {
+	return file_claudecontext_v1_service_proto_enumTypes[0].Descriptor()
+}
+
+func (PathClassification_Kind) Type() protoreflect.EnumType {
+	return &file_claudecontext_v1_service_proto_enumTypes[0]
+}
+
+func (x PathClassification_Kind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PathClassification_Kind.Descriptor instead.
+func (PathClassification_Kind) EnumDescriptor() ([]byte, []int) {
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{22, 0}
+}
+
 type VersionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -670,7 +725,6 @@ type Codebase struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
 	Id                    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	CanonicalPath         string                 `protobuf:"bytes,2,opt,name=canonical_path,json=canonicalPath,proto3" json:"canonical_path,omitempty"`
-	Aliases               []string               `protobuf:"bytes,3,rep,name=aliases,proto3" json:"aliases,omitempty"`
 	Status                string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
 	ActiveJobId           string                 `protobuf:"bytes,5,opt,name=active_job_id,json=activeJobId,proto3" json:"active_job_id,omitempty"`
 	LastSuccessfulRun     *IndexRunSummary       `protobuf:"bytes,6,opt,name=last_successful_run,json=lastSuccessfulRun,proto3" json:"last_successful_run,omitempty"`
@@ -680,6 +734,7 @@ type Codebase struct {
 	LegacyCollectionNames []string               `protobuf:"bytes,10,rep,name=legacy_collection_names,json=legacyCollectionNames,proto3" json:"legacy_collection_names,omitempty"`
 	MerkleSnapshotPath    string                 `protobuf:"bytes,11,opt,name=merkle_snapshot_path,json=merkleSnapshotPath,proto3" json:"merkle_snapshot_path,omitempty"`
 	UpdatedAt             *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	InodeTrackingDisabled bool                   `protobuf:"varint,13,opt,name=inode_tracking_disabled,json=inodeTrackingDisabled,proto3" json:"inode_tracking_disabled,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -726,13 +781,6 @@ func (x *Codebase) GetCanonicalPath() string {
 		return x.CanonicalPath
 	}
 	return ""
-}
-
-func (x *Codebase) GetAliases() []string {
-	if x != nil {
-		return x.Aliases
-	}
-	return nil
 }
 
 func (x *Codebase) GetStatus() string {
@@ -796,6 +844,13 @@ func (x *Codebase) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
+}
+
+func (x *Codebase) GetInodeTrackingDisabled() bool {
+	if x != nil {
+		return x.InodeTrackingDisabled
+	}
+	return false
 }
 
 type Job struct {
@@ -1114,8 +1169,12 @@ type StartIndexResponse struct {
 	Deduplicated  bool                   `protobuf:"varint,4,opt,name=deduplicated,proto3" json:"deduplicated,omitempty"`
 	CanonicalPath string                 `protobuf:"bytes,5,opt,name=canonical_path,json=canonicalPath,proto3" json:"canonical_path,omitempty"`
 	DisplayText   string                 `protobuf:"bytes,6,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// overlaps_codebase_id names the existing codebase whose canonical path
+	// strictly prefix-covers this registration. Empty when there is no
+	// overlap. Used by the daemon to surface the overlap hint to the caller.
+	OverlapsCodebaseId string `protobuf:"bytes,7,opt,name=overlaps_codebase_id,json=overlapsCodebaseId,proto3" json:"overlaps_codebase_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *StartIndexResponse) Reset() {
@@ -1186,6 +1245,13 @@ func (x *StartIndexResponse) GetCanonicalPath() string {
 func (x *StartIndexResponse) GetDisplayText() string {
 	if x != nil {
 		return x.DisplayText
+	}
+	return ""
+}
+
+func (x *StartIndexResponse) GetOverlapsCodebaseId() string {
+	if x != nil {
+		return x.OverlapsCodebaseId
 	}
 	return ""
 }
@@ -1579,13 +1645,14 @@ func (x *GetIndexRequest) GetPath() string {
 }
 
 type GetIndexResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Codebase      *Codebase              `protobuf:"bytes,1,opt,name=codebase,proto3" json:"codebase,omitempty"`
-	ActiveJob     *Job                   `protobuf:"bytes,2,opt,name=active_job,json=activeJob,proto3" json:"active_job,omitempty"`
-	Tracked       bool                   `protobuf:"varint,3,opt,name=tracked,proto3" json:"tracked,omitempty"`
-	DisplayText   string                 `protobuf:"bytes,4,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Codebase       *Codebase              `protobuf:"bytes,1,opt,name=codebase,proto3" json:"codebase,omitempty"`
+	ActiveJob      *Job                   `protobuf:"bytes,2,opt,name=active_job,json=activeJob,proto3" json:"active_job,omitempty"`
+	Tracked        bool                   `protobuf:"varint,3,opt,name=tracked,proto3" json:"tracked,omitempty"`
+	DisplayText    string                 `protobuf:"bytes,4,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
+	Classification *PathClassification    `protobuf:"bytes,5,opt,name=classification,proto3" json:"classification,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GetIndexResponse) Reset() {
@@ -1646,6 +1713,86 @@ func (x *GetIndexResponse) GetDisplayText() string {
 	return ""
 }
 
+func (x *GetIndexResponse) GetClassification() *PathClassification {
+	if x != nil {
+		return x.Classification
+	}
+	return nil
+}
+
+// PathClassification reports how the daemon sees one queried path with
+// respect to the codebases it tracks. Kind reports the overall outcome.
+// Excluded_by_pattern and excluded_by_gitignore are populated when the path
+// is in scope but masked by an ignore rule. Covering_codebase_id names the
+// longest-prefix covering codebase, when any.
+type PathClassification struct {
+	state               protoimpl.MessageState  `protogen:"open.v1"`
+	Kind                PathClassification_Kind `protobuf:"varint,1,opt,name=kind,proto3,enum=claudecontext.v1.PathClassification_Kind" json:"kind,omitempty"`
+	ExcludedByPattern   string                  `protobuf:"bytes,2,opt,name=excluded_by_pattern,json=excludedByPattern,proto3" json:"excluded_by_pattern,omitempty"`
+	ExcludedByGitignore string                  `protobuf:"bytes,3,opt,name=excluded_by_gitignore,json=excludedByGitignore,proto3" json:"excluded_by_gitignore,omitempty"`
+	CoveringCodebaseId  string                  `protobuf:"bytes,4,opt,name=covering_codebase_id,json=coveringCodebaseId,proto3" json:"covering_codebase_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *PathClassification) Reset() {
+	*x = PathClassification{}
+	mi := &file_claudecontext_v1_service_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PathClassification) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PathClassification) ProtoMessage() {}
+
+func (x *PathClassification) ProtoReflect() protoreflect.Message {
+	mi := &file_claudecontext_v1_service_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PathClassification.ProtoReflect.Descriptor instead.
+func (*PathClassification) Descriptor() ([]byte, []int) {
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *PathClassification) GetKind() PathClassification_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return PathClassification_KIND_UNSPECIFIED
+}
+
+func (x *PathClassification) GetExcludedByPattern() string {
+	if x != nil {
+		return x.ExcludedByPattern
+	}
+	return ""
+}
+
+func (x *PathClassification) GetExcludedByGitignore() string {
+	if x != nil {
+		return x.ExcludedByGitignore
+	}
+	return ""
+}
+
+func (x *PathClassification) GetCoveringCodebaseId() string {
+	if x != nil {
+		return x.CoveringCodebaseId
+	}
+	return ""
+}
+
 type ListIndexesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1654,7 +1801,7 @@ type ListIndexesRequest struct {
 
 func (x *ListIndexesRequest) Reset() {
 	*x = ListIndexesRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[22]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1666,7 +1813,7 @@ func (x *ListIndexesRequest) String() string {
 func (*ListIndexesRequest) ProtoMessage() {}
 
 func (x *ListIndexesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[22]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1679,7 +1826,7 @@ func (x *ListIndexesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIndexesRequest.ProtoReflect.Descriptor instead.
 func (*ListIndexesRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{22}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{23}
 }
 
 type ListIndexesResponse struct {
@@ -1692,7 +1839,7 @@ type ListIndexesResponse struct {
 
 func (x *ListIndexesResponse) Reset() {
 	*x = ListIndexesResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[23]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1704,7 +1851,7 @@ func (x *ListIndexesResponse) String() string {
 func (*ListIndexesResponse) ProtoMessage() {}
 
 func (x *ListIndexesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[23]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1717,7 +1864,7 @@ func (x *ListIndexesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIndexesResponse.ProtoReflect.Descriptor instead.
 func (*ListIndexesResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{23}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListIndexesResponse) GetIndexes() []*Codebase {
@@ -1743,7 +1890,7 @@ type GetJobRequest struct {
 
 func (x *GetJobRequest) Reset() {
 	*x = GetJobRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[24]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1755,7 +1902,7 @@ func (x *GetJobRequest) String() string {
 func (*GetJobRequest) ProtoMessage() {}
 
 func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[24]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1768,7 +1915,7 @@ func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobRequest.ProtoReflect.Descriptor instead.
 func (*GetJobRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{24}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetJobRequest) GetJobId() string {
@@ -1788,7 +1935,7 @@ type GetJobResponse struct {
 
 func (x *GetJobResponse) Reset() {
 	*x = GetJobResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[25]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1800,7 +1947,7 @@ func (x *GetJobResponse) String() string {
 func (*GetJobResponse) ProtoMessage() {}
 
 func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[25]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1813,7 +1960,7 @@ func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobResponse.ProtoReflect.Descriptor instead.
 func (*GetJobResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{25}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetJobResponse) GetJob() *Job {
@@ -1839,7 +1986,7 @@ type ListJobsRequest struct {
 
 func (x *ListJobsRequest) Reset() {
 	*x = ListJobsRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[26]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1851,7 +1998,7 @@ func (x *ListJobsRequest) String() string {
 func (*ListJobsRequest) ProtoMessage() {}
 
 func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[26]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1864,7 +2011,7 @@ func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsRequest.ProtoReflect.Descriptor instead.
 func (*ListJobsRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{26}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ListJobsRequest) GetCodebaseId() string {
@@ -1884,7 +2031,7 @@ type ListJobsResponse struct {
 
 func (x *ListJobsResponse) Reset() {
 	*x = ListJobsResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[27]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1896,7 +2043,7 @@ func (x *ListJobsResponse) String() string {
 func (*ListJobsResponse) ProtoMessage() {}
 
 func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[27]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1909,7 +2056,7 @@ func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsResponse.ProtoReflect.Descriptor instead.
 func (*ListJobsResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{27}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ListJobsResponse) GetJobs() []*Job {
@@ -1935,7 +2082,7 @@ type WatchJobsRequest struct {
 
 func (x *WatchJobsRequest) Reset() {
 	*x = WatchJobsRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[28]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1947,7 +2094,7 @@ func (x *WatchJobsRequest) String() string {
 func (*WatchJobsRequest) ProtoMessage() {}
 
 func (x *WatchJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[28]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1960,7 +2107,7 @@ func (x *WatchJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchJobsRequest.ProtoReflect.Descriptor instead.
 func (*WatchJobsRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{28}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *WatchJobsRequest) GetJobIds() []string {
@@ -1979,7 +2126,7 @@ type WatchJobsResponse struct {
 
 func (x *WatchJobsResponse) Reset() {
 	*x = WatchJobsResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[29]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1991,7 +2138,7 @@ func (x *WatchJobsResponse) String() string {
 func (*WatchJobsResponse) ProtoMessage() {}
 
 func (x *WatchJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[29]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2004,7 +2151,7 @@ func (x *WatchJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchJobsResponse.ProtoReflect.Descriptor instead.
 func (*WatchJobsResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{29}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *WatchJobsResponse) GetJob() *Job {
@@ -2026,7 +2173,7 @@ type SearchCodeRequest struct {
 
 func (x *SearchCodeRequest) Reset() {
 	*x = SearchCodeRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[30]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2038,7 +2185,7 @@ func (x *SearchCodeRequest) String() string {
 func (*SearchCodeRequest) ProtoMessage() {}
 
 func (x *SearchCodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[30]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2051,7 +2198,7 @@ func (x *SearchCodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchCodeRequest.ProtoReflect.Descriptor instead.
 func (*SearchCodeRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{30}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SearchCodeRequest) GetPath() string {
@@ -2094,7 +2241,7 @@ type SearchCodeResponse struct {
 
 func (x *SearchCodeResponse) Reset() {
 	*x = SearchCodeResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[31]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2106,7 +2253,7 @@ func (x *SearchCodeResponse) String() string {
 func (*SearchCodeResponse) ProtoMessage() {}
 
 func (x *SearchCodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[31]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2119,7 +2266,7 @@ func (x *SearchCodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchCodeResponse.ProtoReflect.Descriptor instead.
 func (*SearchCodeResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{31}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SearchCodeResponse) GetResults() []*SearchResult {
@@ -2162,7 +2309,7 @@ type Diagnostic struct {
 
 func (x *Diagnostic) Reset() {
 	*x = Diagnostic{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[32]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2174,7 +2321,7 @@ func (x *Diagnostic) String() string {
 func (*Diagnostic) ProtoMessage() {}
 
 func (x *Diagnostic) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[32]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2187,7 +2334,7 @@ func (x *Diagnostic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Diagnostic.ProtoReflect.Descriptor instead.
 func (*Diagnostic) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{32}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *Diagnostic) GetSeverity() string {
@@ -2226,7 +2373,7 @@ type DoctorRequest struct {
 
 func (x *DoctorRequest) Reset() {
 	*x = DoctorRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[33]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2238,7 +2385,7 @@ func (x *DoctorRequest) String() string {
 func (*DoctorRequest) ProtoMessage() {}
 
 func (x *DoctorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[33]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2251,7 +2398,7 @@ func (x *DoctorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorRequest.ProtoReflect.Descriptor instead.
 func (*DoctorRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{33}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{34}
 }
 
 type DoctorResponse struct {
@@ -2264,7 +2411,7 @@ type DoctorResponse struct {
 
 func (x *DoctorResponse) Reset() {
 	*x = DoctorResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[34]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2276,7 +2423,7 @@ func (x *DoctorResponse) String() string {
 func (*DoctorResponse) ProtoMessage() {}
 
 func (x *DoctorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[34]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2289,7 +2436,7 @@ func (x *DoctorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorResponse.ProtoReflect.Descriptor instead.
 func (*DoctorResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{34}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *DoctorResponse) GetDiagnostics() []*Diagnostic {
@@ -2314,7 +2461,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[35]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2326,7 +2473,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[35]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2339,7 +2486,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{35}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{36}
 }
 
 type ShutdownResponse struct {
@@ -2351,7 +2498,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[36]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2363,7 +2510,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[36]
+	mi := &file_claudecontext_v1_service_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2376,7 +2523,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{36}
+	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ShutdownResponse) GetAccepted() bool {
@@ -2447,11 +2594,10 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	"\x0fIndexRunFailure\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12:\n" +
 	"\x19last_attempted_percentage\x18\x02 \x01(\x05R\x17lastAttemptedPercentage\x127\n" +
-	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\xcd\x04\n" +
+	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\xfa\x04\n" +
 	"\bCodebase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
-	"\x0ecanonical_path\x18\x02 \x01(\tR\rcanonicalPath\x12\x18\n" +
-	"\aaliases\x18\x03 \x03(\tR\aaliases\x12\x16\n" +
+	"\x0ecanonical_path\x18\x02 \x01(\tR\rcanonicalPath\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\"\n" +
 	"\ractive_job_id\x18\x05 \x01(\tR\vactiveJobId\x12Q\n" +
 	"\x13last_successful_run\x18\x06 \x01(\v2!.claudecontext.v1.IndexRunSummaryR\x11lastSuccessfulRun\x12I\n" +
@@ -2462,7 +2608,8 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	" \x03(\tR\x15legacyCollectionNames\x120\n" +
 	"\x14merkle_snapshot_path\x18\v \x01(\tR\x12merkleSnapshotPath\x129\n" +
 	"\n" +
-	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xc4\x04\n" +
+	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x126\n" +
+	"\x17inode_tracking_disabled\x18\r \x01(\bR\x15inodeTrackingDisabledJ\x04\b\x03\x10\x04R\aaliases\"\xc4\x04\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
@@ -2495,7 +2642,7 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	"\bsplitter\x18\x03 \x01(\v2 .claudecontext.v1.SplitterConfigR\bsplitter\x12+\n" +
 	"\x11custom_extensions\x18\x04 \x03(\tR\x10customExtensions\x12'\n" +
 	"\x0fignore_patterns\x18\x05 \x03(\tR\x0eignorePatterns\x124\n" +
-	"\x06client\x18\x06 \x01(\v2\x1c.claudecontext.v1.ClientInfoR\x06client\"\xd0\x01\n" +
+	"\x06client\x18\x06 \x01(\v2\x1c.claudecontext.v1.ClientInfoR\x06client\"\x82\x02\n" +
 	"\x12StartIndexResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
@@ -2503,7 +2650,8 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	"\x05state\x18\x03 \x01(\tR\x05state\x12\"\n" +
 	"\fdeduplicated\x18\x04 \x01(\bR\fdeduplicated\x12%\n" +
 	"\x0ecanonical_path\x18\x05 \x01(\tR\rcanonicalPath\x12!\n" +
-	"\fdisplay_text\x18\x06 \x01(\tR\vdisplayText\"]\n" +
+	"\fdisplay_text\x18\x06 \x01(\tR\vdisplayText\x120\n" +
+	"\x14overlaps_codebase_id\x18\a \x01(\tR\x12overlapsCodebaseId\"]\n" +
 	"\x11ClearIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x124\n" +
 	"\x06client\x18\x02 \x01(\v2\x1c.claudecontext.v1.ClientInfoR\x06client\"r\n" +
@@ -2529,13 +2677,25 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	"\x05state\x18\x03 \x01(\tR\x05state\x12!\n" +
 	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\"%\n" +
 	"\x0fGetIndexRequest\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\"\xbd\x01\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"\x8b\x02\n" +
 	"\x10GetIndexResponse\x126\n" +
 	"\bcodebase\x18\x01 \x01(\v2\x1a.claudecontext.v1.CodebaseR\bcodebase\x124\n" +
 	"\n" +
 	"active_job\x18\x02 \x01(\v2\x15.claudecontext.v1.JobR\tactiveJob\x12\x18\n" +
 	"\atracked\x18\x03 \x01(\bR\atracked\x12!\n" +
-	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\"\x14\n" +
+	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\x12L\n" +
+	"\x0eclassification\x18\x05 \x01(\v2$.claudecontext.v1.PathClassificationR\x0eclassification\"\xf3\x02\n" +
+	"\x12PathClassification\x12=\n" +
+	"\x04kind\x18\x01 \x01(\x0e2).claudecontext.v1.PathClassification.KindR\x04kind\x12.\n" +
+	"\x13excluded_by_pattern\x18\x02 \x01(\tR\x11excludedByPattern\x122\n" +
+	"\x15excluded_by_gitignore\x18\x03 \x01(\tR\x13excludedByGitignore\x120\n" +
+	"\x14covering_codebase_id\x18\x04 \x01(\tR\x12coveringCodebaseId\"\x87\x01\n" +
+	"\x04Kind\x12\x14\n" +
+	"\x10KIND_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15KIND_IN_SCOPE_INDEXED\x10\x01\x12\x1a\n" +
+	"\x16KIND_IN_SCOPE_EXCLUDED\x10\x02\x12\x1b\n" +
+	"\x17KIND_IN_SCOPE_UNINDEXED\x10\x03\x12\x15\n" +
+	"\x11KIND_OUT_OF_SCOPE\x10\x04\"\x14\n" +
 	"\x12ListIndexesRequest\"n\n" +
 	"\x13ListIndexesResponse\x124\n" +
 	"\aindexes\x18\x01 \x03(\v2\x1a.claudecontext.v1.CodebaseR\aindexes\x12!\n" +
@@ -2609,109 +2769,114 @@ func file_claudecontext_v1_service_proto_rawDescGZIP() []byte {
 	return file_claudecontext_v1_service_proto_rawDescData
 }
 
-var file_claudecontext_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_claudecontext_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_claudecontext_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_claudecontext_v1_service_proto_goTypes = []any{
-	(*VersionRequest)(nil),        // 0: claudecontext.v1.VersionRequest
-	(*VersionResponse)(nil),       // 1: claudecontext.v1.VersionResponse
-	(*ClientInfo)(nil),            // 2: claudecontext.v1.ClientInfo
-	(*SplitterConfig)(nil),        // 3: claudecontext.v1.SplitterConfig
-	(*IndexConfig)(nil),           // 4: claudecontext.v1.IndexConfig
-	(*Progress)(nil),              // 5: claudecontext.v1.Progress
-	(*JobError)(nil),              // 6: claudecontext.v1.JobError
-	(*IndexRunSummary)(nil),       // 7: claudecontext.v1.IndexRunSummary
-	(*IndexRunFailure)(nil),       // 8: claudecontext.v1.IndexRunFailure
-	(*Codebase)(nil),              // 9: claudecontext.v1.Codebase
-	(*Job)(nil),                   // 10: claudecontext.v1.Job
-	(*SearchResult)(nil),          // 11: claudecontext.v1.SearchResult
-	(*StartIndexRequest)(nil),     // 12: claudecontext.v1.StartIndexRequest
-	(*StartIndexResponse)(nil),    // 13: claudecontext.v1.StartIndexResponse
-	(*ClearIndexRequest)(nil),     // 14: claudecontext.v1.ClearIndexRequest
-	(*ClearIndexResponse)(nil),    // 15: claudecontext.v1.ClearIndexResponse
-	(*CancelJobRequest)(nil),      // 16: claudecontext.v1.CancelJobRequest
-	(*CancelJobResponse)(nil),     // 17: claudecontext.v1.CancelJobResponse
-	(*SyncIndexRequest)(nil),      // 18: claudecontext.v1.SyncIndexRequest
-	(*SyncIndexResponse)(nil),     // 19: claudecontext.v1.SyncIndexResponse
-	(*GetIndexRequest)(nil),       // 20: claudecontext.v1.GetIndexRequest
-	(*GetIndexResponse)(nil),      // 21: claudecontext.v1.GetIndexResponse
-	(*ListIndexesRequest)(nil),    // 22: claudecontext.v1.ListIndexesRequest
-	(*ListIndexesResponse)(nil),   // 23: claudecontext.v1.ListIndexesResponse
-	(*GetJobRequest)(nil),         // 24: claudecontext.v1.GetJobRequest
-	(*GetJobResponse)(nil),        // 25: claudecontext.v1.GetJobResponse
-	(*ListJobsRequest)(nil),       // 26: claudecontext.v1.ListJobsRequest
-	(*ListJobsResponse)(nil),      // 27: claudecontext.v1.ListJobsResponse
-	(*WatchJobsRequest)(nil),      // 28: claudecontext.v1.WatchJobsRequest
-	(*WatchJobsResponse)(nil),     // 29: claudecontext.v1.WatchJobsResponse
-	(*SearchCodeRequest)(nil),     // 30: claudecontext.v1.SearchCodeRequest
-	(*SearchCodeResponse)(nil),    // 31: claudecontext.v1.SearchCodeResponse
-	(*Diagnostic)(nil),            // 32: claudecontext.v1.Diagnostic
-	(*DoctorRequest)(nil),         // 33: claudecontext.v1.DoctorRequest
-	(*DoctorResponse)(nil),        // 34: claudecontext.v1.DoctorResponse
-	(*ShutdownRequest)(nil),       // 35: claudecontext.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),      // 36: claudecontext.v1.ShutdownResponse
-	(*timestamppb.Timestamp)(nil), // 37: google.protobuf.Timestamp
+	(PathClassification_Kind)(0),  // 0: claudecontext.v1.PathClassification.Kind
+	(*VersionRequest)(nil),        // 1: claudecontext.v1.VersionRequest
+	(*VersionResponse)(nil),       // 2: claudecontext.v1.VersionResponse
+	(*ClientInfo)(nil),            // 3: claudecontext.v1.ClientInfo
+	(*SplitterConfig)(nil),        // 4: claudecontext.v1.SplitterConfig
+	(*IndexConfig)(nil),           // 5: claudecontext.v1.IndexConfig
+	(*Progress)(nil),              // 6: claudecontext.v1.Progress
+	(*JobError)(nil),              // 7: claudecontext.v1.JobError
+	(*IndexRunSummary)(nil),       // 8: claudecontext.v1.IndexRunSummary
+	(*IndexRunFailure)(nil),       // 9: claudecontext.v1.IndexRunFailure
+	(*Codebase)(nil),              // 10: claudecontext.v1.Codebase
+	(*Job)(nil),                   // 11: claudecontext.v1.Job
+	(*SearchResult)(nil),          // 12: claudecontext.v1.SearchResult
+	(*StartIndexRequest)(nil),     // 13: claudecontext.v1.StartIndexRequest
+	(*StartIndexResponse)(nil),    // 14: claudecontext.v1.StartIndexResponse
+	(*ClearIndexRequest)(nil),     // 15: claudecontext.v1.ClearIndexRequest
+	(*ClearIndexResponse)(nil),    // 16: claudecontext.v1.ClearIndexResponse
+	(*CancelJobRequest)(nil),      // 17: claudecontext.v1.CancelJobRequest
+	(*CancelJobResponse)(nil),     // 18: claudecontext.v1.CancelJobResponse
+	(*SyncIndexRequest)(nil),      // 19: claudecontext.v1.SyncIndexRequest
+	(*SyncIndexResponse)(nil),     // 20: claudecontext.v1.SyncIndexResponse
+	(*GetIndexRequest)(nil),       // 21: claudecontext.v1.GetIndexRequest
+	(*GetIndexResponse)(nil),      // 22: claudecontext.v1.GetIndexResponse
+	(*PathClassification)(nil),    // 23: claudecontext.v1.PathClassification
+	(*ListIndexesRequest)(nil),    // 24: claudecontext.v1.ListIndexesRequest
+	(*ListIndexesResponse)(nil),   // 25: claudecontext.v1.ListIndexesResponse
+	(*GetJobRequest)(nil),         // 26: claudecontext.v1.GetJobRequest
+	(*GetJobResponse)(nil),        // 27: claudecontext.v1.GetJobResponse
+	(*ListJobsRequest)(nil),       // 28: claudecontext.v1.ListJobsRequest
+	(*ListJobsResponse)(nil),      // 29: claudecontext.v1.ListJobsResponse
+	(*WatchJobsRequest)(nil),      // 30: claudecontext.v1.WatchJobsRequest
+	(*WatchJobsResponse)(nil),     // 31: claudecontext.v1.WatchJobsResponse
+	(*SearchCodeRequest)(nil),     // 32: claudecontext.v1.SearchCodeRequest
+	(*SearchCodeResponse)(nil),    // 33: claudecontext.v1.SearchCodeResponse
+	(*Diagnostic)(nil),            // 34: claudecontext.v1.Diagnostic
+	(*DoctorRequest)(nil),         // 35: claudecontext.v1.DoctorRequest
+	(*DoctorResponse)(nil),        // 36: claudecontext.v1.DoctorResponse
+	(*ShutdownRequest)(nil),       // 37: claudecontext.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),      // 38: claudecontext.v1.ShutdownResponse
+	(*timestamppb.Timestamp)(nil), // 39: google.protobuf.Timestamp
 }
 var file_claudecontext_v1_service_proto_depIdxs = []int32{
-	37, // 0: claudecontext.v1.Progress.last_event_at:type_name -> google.protobuf.Timestamp
-	37, // 1: claudecontext.v1.Progress.heartbeat_at:type_name -> google.protobuf.Timestamp
-	37, // 2: claudecontext.v1.IndexRunSummary.completed_at:type_name -> google.protobuf.Timestamp
-	37, // 3: claudecontext.v1.IndexRunFailure.failed_at:type_name -> google.protobuf.Timestamp
-	7,  // 4: claudecontext.v1.Codebase.last_successful_run:type_name -> claudecontext.v1.IndexRunSummary
-	8,  // 5: claudecontext.v1.Codebase.last_failed_run:type_name -> claudecontext.v1.IndexRunFailure
-	4,  // 6: claudecontext.v1.Codebase.effective_config:type_name -> claudecontext.v1.IndexConfig
-	37, // 7: claudecontext.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
-	2,  // 8: claudecontext.v1.Job.client:type_name -> claudecontext.v1.ClientInfo
-	5,  // 9: claudecontext.v1.Job.progress:type_name -> claudecontext.v1.Progress
-	4,  // 10: claudecontext.v1.Job.config:type_name -> claudecontext.v1.IndexConfig
-	37, // 11: claudecontext.v1.Job.started_at:type_name -> google.protobuf.Timestamp
-	37, // 12: claudecontext.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
-	37, // 13: claudecontext.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
-	6,  // 14: claudecontext.v1.Job.error:type_name -> claudecontext.v1.JobError
-	3,  // 15: claudecontext.v1.StartIndexRequest.splitter:type_name -> claudecontext.v1.SplitterConfig
-	2,  // 16: claudecontext.v1.StartIndexRequest.client:type_name -> claudecontext.v1.ClientInfo
-	2,  // 17: claudecontext.v1.ClearIndexRequest.client:type_name -> claudecontext.v1.ClientInfo
-	2,  // 18: claudecontext.v1.CancelJobRequest.client:type_name -> claudecontext.v1.ClientInfo
-	2,  // 19: claudecontext.v1.SyncIndexRequest.client:type_name -> claudecontext.v1.ClientInfo
-	9,  // 20: claudecontext.v1.GetIndexResponse.codebase:type_name -> claudecontext.v1.Codebase
-	10, // 21: claudecontext.v1.GetIndexResponse.active_job:type_name -> claudecontext.v1.Job
-	9,  // 22: claudecontext.v1.ListIndexesResponse.indexes:type_name -> claudecontext.v1.Codebase
-	10, // 23: claudecontext.v1.GetJobResponse.job:type_name -> claudecontext.v1.Job
-	10, // 24: claudecontext.v1.ListJobsResponse.jobs:type_name -> claudecontext.v1.Job
-	10, // 25: claudecontext.v1.WatchJobsResponse.job:type_name -> claudecontext.v1.Job
-	11, // 26: claudecontext.v1.SearchCodeResponse.results:type_name -> claudecontext.v1.SearchResult
-	9,  // 27: claudecontext.v1.SearchCodeResponse.codebase:type_name -> claudecontext.v1.Codebase
-	10, // 28: claudecontext.v1.SearchCodeResponse.active_job:type_name -> claudecontext.v1.Job
-	32, // 29: claudecontext.v1.DoctorResponse.diagnostics:type_name -> claudecontext.v1.Diagnostic
-	0,  // 30: claudecontext.v1.ClaudeContextDaemonService.Version:input_type -> claudecontext.v1.VersionRequest
-	12, // 31: claudecontext.v1.ClaudeContextDaemonService.StartIndex:input_type -> claudecontext.v1.StartIndexRequest
-	14, // 32: claudecontext.v1.ClaudeContextDaemonService.ClearIndex:input_type -> claudecontext.v1.ClearIndexRequest
-	16, // 33: claudecontext.v1.ClaudeContextDaemonService.CancelJob:input_type -> claudecontext.v1.CancelJobRequest
-	18, // 34: claudecontext.v1.ClaudeContextDaemonService.SyncIndex:input_type -> claudecontext.v1.SyncIndexRequest
-	20, // 35: claudecontext.v1.ClaudeContextDaemonService.GetIndex:input_type -> claudecontext.v1.GetIndexRequest
-	22, // 36: claudecontext.v1.ClaudeContextDaemonService.ListIndexes:input_type -> claudecontext.v1.ListIndexesRequest
-	24, // 37: claudecontext.v1.ClaudeContextDaemonService.GetJob:input_type -> claudecontext.v1.GetJobRequest
-	26, // 38: claudecontext.v1.ClaudeContextDaemonService.ListJobs:input_type -> claudecontext.v1.ListJobsRequest
-	28, // 39: claudecontext.v1.ClaudeContextDaemonService.WatchJobs:input_type -> claudecontext.v1.WatchJobsRequest
-	30, // 40: claudecontext.v1.ClaudeContextDaemonService.SearchCode:input_type -> claudecontext.v1.SearchCodeRequest
-	33, // 41: claudecontext.v1.ClaudeContextDaemonService.Doctor:input_type -> claudecontext.v1.DoctorRequest
-	35, // 42: claudecontext.v1.ClaudeContextDaemonService.Shutdown:input_type -> claudecontext.v1.ShutdownRequest
-	1,  // 43: claudecontext.v1.ClaudeContextDaemonService.Version:output_type -> claudecontext.v1.VersionResponse
-	13, // 44: claudecontext.v1.ClaudeContextDaemonService.StartIndex:output_type -> claudecontext.v1.StartIndexResponse
-	15, // 45: claudecontext.v1.ClaudeContextDaemonService.ClearIndex:output_type -> claudecontext.v1.ClearIndexResponse
-	17, // 46: claudecontext.v1.ClaudeContextDaemonService.CancelJob:output_type -> claudecontext.v1.CancelJobResponse
-	19, // 47: claudecontext.v1.ClaudeContextDaemonService.SyncIndex:output_type -> claudecontext.v1.SyncIndexResponse
-	21, // 48: claudecontext.v1.ClaudeContextDaemonService.GetIndex:output_type -> claudecontext.v1.GetIndexResponse
-	23, // 49: claudecontext.v1.ClaudeContextDaemonService.ListIndexes:output_type -> claudecontext.v1.ListIndexesResponse
-	25, // 50: claudecontext.v1.ClaudeContextDaemonService.GetJob:output_type -> claudecontext.v1.GetJobResponse
-	27, // 51: claudecontext.v1.ClaudeContextDaemonService.ListJobs:output_type -> claudecontext.v1.ListJobsResponse
-	29, // 52: claudecontext.v1.ClaudeContextDaemonService.WatchJobs:output_type -> claudecontext.v1.WatchJobsResponse
-	31, // 53: claudecontext.v1.ClaudeContextDaemonService.SearchCode:output_type -> claudecontext.v1.SearchCodeResponse
-	34, // 54: claudecontext.v1.ClaudeContextDaemonService.Doctor:output_type -> claudecontext.v1.DoctorResponse
-	36, // 55: claudecontext.v1.ClaudeContextDaemonService.Shutdown:output_type -> claudecontext.v1.ShutdownResponse
-	43, // [43:56] is the sub-list for method output_type
-	30, // [30:43] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	39, // 0: claudecontext.v1.Progress.last_event_at:type_name -> google.protobuf.Timestamp
+	39, // 1: claudecontext.v1.Progress.heartbeat_at:type_name -> google.protobuf.Timestamp
+	39, // 2: claudecontext.v1.IndexRunSummary.completed_at:type_name -> google.protobuf.Timestamp
+	39, // 3: claudecontext.v1.IndexRunFailure.failed_at:type_name -> google.protobuf.Timestamp
+	8,  // 4: claudecontext.v1.Codebase.last_successful_run:type_name -> claudecontext.v1.IndexRunSummary
+	9,  // 5: claudecontext.v1.Codebase.last_failed_run:type_name -> claudecontext.v1.IndexRunFailure
+	5,  // 6: claudecontext.v1.Codebase.effective_config:type_name -> claudecontext.v1.IndexConfig
+	39, // 7: claudecontext.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
+	3,  // 8: claudecontext.v1.Job.client:type_name -> claudecontext.v1.ClientInfo
+	6,  // 9: claudecontext.v1.Job.progress:type_name -> claudecontext.v1.Progress
+	5,  // 10: claudecontext.v1.Job.config:type_name -> claudecontext.v1.IndexConfig
+	39, // 11: claudecontext.v1.Job.started_at:type_name -> google.protobuf.Timestamp
+	39, // 12: claudecontext.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
+	39, // 13: claudecontext.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
+	7,  // 14: claudecontext.v1.Job.error:type_name -> claudecontext.v1.JobError
+	4,  // 15: claudecontext.v1.StartIndexRequest.splitter:type_name -> claudecontext.v1.SplitterConfig
+	3,  // 16: claudecontext.v1.StartIndexRequest.client:type_name -> claudecontext.v1.ClientInfo
+	3,  // 17: claudecontext.v1.ClearIndexRequest.client:type_name -> claudecontext.v1.ClientInfo
+	3,  // 18: claudecontext.v1.CancelJobRequest.client:type_name -> claudecontext.v1.ClientInfo
+	3,  // 19: claudecontext.v1.SyncIndexRequest.client:type_name -> claudecontext.v1.ClientInfo
+	10, // 20: claudecontext.v1.GetIndexResponse.codebase:type_name -> claudecontext.v1.Codebase
+	11, // 21: claudecontext.v1.GetIndexResponse.active_job:type_name -> claudecontext.v1.Job
+	23, // 22: claudecontext.v1.GetIndexResponse.classification:type_name -> claudecontext.v1.PathClassification
+	0,  // 23: claudecontext.v1.PathClassification.kind:type_name -> claudecontext.v1.PathClassification.Kind
+	10, // 24: claudecontext.v1.ListIndexesResponse.indexes:type_name -> claudecontext.v1.Codebase
+	11, // 25: claudecontext.v1.GetJobResponse.job:type_name -> claudecontext.v1.Job
+	11, // 26: claudecontext.v1.ListJobsResponse.jobs:type_name -> claudecontext.v1.Job
+	11, // 27: claudecontext.v1.WatchJobsResponse.job:type_name -> claudecontext.v1.Job
+	12, // 28: claudecontext.v1.SearchCodeResponse.results:type_name -> claudecontext.v1.SearchResult
+	10, // 29: claudecontext.v1.SearchCodeResponse.codebase:type_name -> claudecontext.v1.Codebase
+	11, // 30: claudecontext.v1.SearchCodeResponse.active_job:type_name -> claudecontext.v1.Job
+	34, // 31: claudecontext.v1.DoctorResponse.diagnostics:type_name -> claudecontext.v1.Diagnostic
+	1,  // 32: claudecontext.v1.ClaudeContextDaemonService.Version:input_type -> claudecontext.v1.VersionRequest
+	13, // 33: claudecontext.v1.ClaudeContextDaemonService.StartIndex:input_type -> claudecontext.v1.StartIndexRequest
+	15, // 34: claudecontext.v1.ClaudeContextDaemonService.ClearIndex:input_type -> claudecontext.v1.ClearIndexRequest
+	17, // 35: claudecontext.v1.ClaudeContextDaemonService.CancelJob:input_type -> claudecontext.v1.CancelJobRequest
+	19, // 36: claudecontext.v1.ClaudeContextDaemonService.SyncIndex:input_type -> claudecontext.v1.SyncIndexRequest
+	21, // 37: claudecontext.v1.ClaudeContextDaemonService.GetIndex:input_type -> claudecontext.v1.GetIndexRequest
+	24, // 38: claudecontext.v1.ClaudeContextDaemonService.ListIndexes:input_type -> claudecontext.v1.ListIndexesRequest
+	26, // 39: claudecontext.v1.ClaudeContextDaemonService.GetJob:input_type -> claudecontext.v1.GetJobRequest
+	28, // 40: claudecontext.v1.ClaudeContextDaemonService.ListJobs:input_type -> claudecontext.v1.ListJobsRequest
+	30, // 41: claudecontext.v1.ClaudeContextDaemonService.WatchJobs:input_type -> claudecontext.v1.WatchJobsRequest
+	32, // 42: claudecontext.v1.ClaudeContextDaemonService.SearchCode:input_type -> claudecontext.v1.SearchCodeRequest
+	35, // 43: claudecontext.v1.ClaudeContextDaemonService.Doctor:input_type -> claudecontext.v1.DoctorRequest
+	37, // 44: claudecontext.v1.ClaudeContextDaemonService.Shutdown:input_type -> claudecontext.v1.ShutdownRequest
+	2,  // 45: claudecontext.v1.ClaudeContextDaemonService.Version:output_type -> claudecontext.v1.VersionResponse
+	14, // 46: claudecontext.v1.ClaudeContextDaemonService.StartIndex:output_type -> claudecontext.v1.StartIndexResponse
+	16, // 47: claudecontext.v1.ClaudeContextDaemonService.ClearIndex:output_type -> claudecontext.v1.ClearIndexResponse
+	18, // 48: claudecontext.v1.ClaudeContextDaemonService.CancelJob:output_type -> claudecontext.v1.CancelJobResponse
+	20, // 49: claudecontext.v1.ClaudeContextDaemonService.SyncIndex:output_type -> claudecontext.v1.SyncIndexResponse
+	22, // 50: claudecontext.v1.ClaudeContextDaemonService.GetIndex:output_type -> claudecontext.v1.GetIndexResponse
+	25, // 51: claudecontext.v1.ClaudeContextDaemonService.ListIndexes:output_type -> claudecontext.v1.ListIndexesResponse
+	27, // 52: claudecontext.v1.ClaudeContextDaemonService.GetJob:output_type -> claudecontext.v1.GetJobResponse
+	29, // 53: claudecontext.v1.ClaudeContextDaemonService.ListJobs:output_type -> claudecontext.v1.ListJobsResponse
+	31, // 54: claudecontext.v1.ClaudeContextDaemonService.WatchJobs:output_type -> claudecontext.v1.WatchJobsResponse
+	33, // 55: claudecontext.v1.ClaudeContextDaemonService.SearchCode:output_type -> claudecontext.v1.SearchCodeResponse
+	36, // 56: claudecontext.v1.ClaudeContextDaemonService.Doctor:output_type -> claudecontext.v1.DoctorResponse
+	38, // 57: claudecontext.v1.ClaudeContextDaemonService.Shutdown:output_type -> claudecontext.v1.ShutdownResponse
+	45, // [45:58] is the sub-list for method output_type
+	32, // [32:45] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_claudecontext_v1_service_proto_init() }
@@ -2724,13 +2889,14 @@ func file_claudecontext_v1_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_claudecontext_v1_service_proto_rawDesc), len(file_claudecontext_v1_service_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   37,
+			NumEnums:      1,
+			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_claudecontext_v1_service_proto_goTypes,
 		DependencyIndexes: file_claudecontext_v1_service_proto_depIdxs,
+		EnumInfos:         file_claudecontext_v1_service_proto_enumTypes,
 		MessageInfos:      file_claudecontext_v1_service_proto_msgTypes,
 	}.Build()
 	File_claudecontext_v1_service_proto = out.File

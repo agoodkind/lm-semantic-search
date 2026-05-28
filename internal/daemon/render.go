@@ -36,7 +36,7 @@ type searchView struct {
 	Results       []model.StoredChunk
 }
 
-func renderStartIndex(requestedPath string, codebase model.Codebase, job model.Job, deduplicated bool) string {
+func renderStartIndex(requestedPath string, codebase model.Codebase, job model.Job, deduplicated bool, overlapsCodebaseID string) string {
 	if deduplicated {
 		return fmt.Sprintf(
 			"Background indexing is already running for codebase '%s' using %s splitter.\nCurrent job: %s\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.",
@@ -51,11 +51,17 @@ func renderStartIndex(requestedPath string, codebase model.Codebase, job model.J
 		pathInfo = fmt.Sprintf("\nNote: Input path '%s' was resolved to canonical path '%s'", requestedPath, codebase.CanonicalPath)
 	}
 
+	overlap := ""
+	if overlapsCodebaseID != "" {
+		overlap = fmt.Sprintf("\n⚠️  Overlap: this tree is also covered by codebase %s. Both will index files in the shared subtree independently.", overlapsCodebaseID)
+	}
+
 	return fmt.Sprintf(
-		"Started background indexing for codebase '%s' using %s splitter.%s\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.",
+		"Started background indexing for codebase '%s' using %s splitter.%s%s\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.",
 		codebase.CanonicalPath,
 		strings.ToUpper(orDefault(job.Config.SplitterType, "ast")),
 		pathInfo,
+		overlap,
 	)
 }
 
@@ -81,7 +87,16 @@ func renderSyncIndex(codebase model.Codebase, job model.Job, deduplicated bool) 
 	return fmt.Sprintf("Started sync job %s for '%s'", job.ID, codebase.CanonicalPath)
 }
 
-func renderGetIndex(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job) string {
+func renderGetIndex(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job, classification *model.PathClassification) string {
+	classificationLine := renderClassificationLine(classification)
+	body := renderGetIndexBody(requestedPath, tracked, codebase, activeJob)
+	if classificationLine == "" {
+		return body
+	}
+	return body + "\n" + classificationLine
+}
+
+func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job) string {
 	if !tracked || codebase == nil {
 		return fmt.Sprintf("❌ Codebase '%s' is not indexed. Please use the index_codebase tool to index it first.", requestedPath)
 	}
@@ -102,6 +117,37 @@ func renderGetIndex(requestedPath string, tracked bool, codebase *model.Codebase
 		return renderHistoricalFailure(codebase)
 	default:
 		return fmt.Sprintf("❌ Codebase '%s' is not indexed. Please use the index_codebase tool to index it first.", requestedPath)
+	}
+}
+
+// renderClassificationLine renders a one-line summary of the per-path
+// classification verdict. Returns an empty string when the verdict adds no
+// useful information beyond what the body already conveys.
+func renderClassificationLine(classification *model.PathClassification) string {
+	if classification == nil {
+		return ""
+	}
+	switch classification.Kind {
+	case model.PathClassificationInScopeExcluded:
+		parts := make([]string, 0, 2)
+		if classification.ExcludedByGitignore != "" {
+			parts = append(parts, "gitignore="+classification.ExcludedByGitignore)
+		}
+		if classification.ExcludedByPattern != "" {
+			parts = append(parts, "pattern="+classification.ExcludedByPattern)
+		}
+		if len(parts) == 0 {
+			return "🚫 Path is in scope of " + classification.CoveringCodebaseID + " but excluded by an ignore rule."
+		}
+		return "🚫 Path is in scope of " + classification.CoveringCodebaseID + " but excluded: " + strings.Join(parts, " ")
+	case model.PathClassificationOutOfScope:
+		return "🛈 Path is not under any tracked codebase."
+	case model.PathClassificationInScopeUnindexed:
+		return "🛈 Path is in scope of " + classification.CoveringCodebaseID + " but has no chunk row yet."
+	case model.PathClassificationInScopeIndexed, model.PathClassificationUnspecified:
+		return ""
+	default:
+		return ""
 	}
 }
 

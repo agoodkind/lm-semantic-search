@@ -153,6 +153,36 @@ type Result struct {
 	Extensions     []string
 }
 
+// IgnoreRules captures the resolved ignore decision tree for one codebase.
+// The discovery package walks the codebase tree at resolution time, reading
+// every nested .gitignore plus the built-in defaults, repo-level ignore
+// files, the global ~/.context/.contextignore, and any user overrides. The
+// resulting rules are then evaluated with PathIgnored.
+//
+// Nodes maps a directory relative path (slash-separated, root is "") to the
+// ignore patterns declared directly in that directory's .gitignore. The
+// flattened Patterns slice carries the root-level effective patterns so
+// callers that still expect a flat denylist (the discovery walk, the
+// indexer-time ignore digest) keep working without a tree walk.
+type IgnoreRules struct {
+	Patterns []string
+	Nodes    map[string][]string
+}
+
+// Flatten returns the flat union of every node's patterns in declaration
+// order so callers that want a single deduplicated denylist can fold the
+// tree without losing any rule.
+func (rules IgnoreRules) Flatten() []string {
+	if len(rules.Nodes) == 0 {
+		return append([]string{}, rules.Patterns...)
+	}
+	merged := append([]string{}, rules.Patterns...)
+	for _, patterns := range rules.Nodes {
+		merged = append(merged, patterns...)
+	}
+	return dedupStrings(merged)
+}
+
 // Discover walks a codebase root and returns every file that survives the
 // ignore-pattern denylist. Extensions in the request are honored for
 // backwards compatibility but no longer gate inclusion; the binary content

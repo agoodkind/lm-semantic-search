@@ -74,7 +74,7 @@ func TestStartIndexStoresFullyQualifiedEmbeddingConfig(t *testing.T) {
 		},
 	}
 
-	_, codebase, _, err := manager.StartIndex(
+	_, codebase, _, _, err := manager.StartIndex(
 		context.Background(),
 		repoPath,
 		testClientInfo(),
@@ -121,7 +121,7 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 		},
 	}
 
-	_, codebase, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 		t.Fatalf("chunk file still present after clear: %v", err)
 	}
 
-	_, _, found, err := manager.GetIndex(context.Background(), repoPath)
+	_, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestClearIndexCancelsActiveJob(t *testing.T) {
 		},
 	}
 
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
 	<-started
@@ -185,7 +185,7 @@ func TestClearIndexCancelsActiveJob(t *testing.T) {
 		t.Fatalf("ClearIndex returned error: %v", err)
 	}
 
-	_, _, found, err := manager.GetIndex(context.Background(), repoPath)
+	_, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestForceReindexStartsFreshJobAndSearchShowsIndexingWarning(t *testing.T) {
 		},
 	}
 
-	initialJob, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	initialJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
 	if err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestForceReindexStartsFreshJobAndSearchShowsIndexingWarning(t *testing.T) {
 		},
 	}
 
-	reindexJob, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
+	reindexJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
 	if err != nil {
 		t.Fatalf("force StartIndex returned error: %v", err)
 	}
@@ -312,12 +312,12 @@ func TestStartIndexPersistsSkippedFiles(t *testing.T) {
 		},
 	}
 
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	codebase, _, found, err := manager.GetIndex(context.Background(), repoPath)
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestStartIndexForceDeduplicatesAgainstInFlightJob(t *testing.T) {
 		},
 	}
 
-	firstJob, _, deduplicated, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
+	firstJob, _, deduplicated, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
 	if err != nil {
 		t.Fatalf("first force StartIndex returned error: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestStartIndexForceDeduplicatesAgainstInFlightJob(t *testing.T) {
 	for i := 0; i < concurrentForceCallers; i++ {
 		go func(slot int) {
 			defer wg.Done()
-			job, _, dedup, callErr := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
+			job, _, dedup, _, callErr := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
 			results[slot] = startResult{job: job, deduplicated: dedup, err: callErr}
 		}(i)
 	}
@@ -470,14 +470,14 @@ func TestStartIndexStreamingReindexUpgradesSplitterInPlace(t *testing.T) {
 
 	initialConfig := defaultIndexConfig()
 	initialConfig.SplitterType = "langchain"
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), initialConfig, false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), initialConfig, false); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	upgradedConfig := defaultIndexConfig()
 	upgradedConfig.SplitterType = "ast"
-	upgradeJob, _, deduplicated, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), upgradedConfig, false)
+	upgradeJob, _, deduplicated, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), upgradedConfig, false)
 	if err != nil {
 		t.Fatalf("upgrade StartIndex returned error: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestStartIndexStreamingReindexUpgradesSplitterInPlace(t *testing.T) {
 		t.Fatalf("streaming reindex did not pass main.go as modified; saw %v", finalObservedFiles)
 	}
 
-	codebase, _, found, err := manager.GetIndex(context.Background(), repoPath)
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
@@ -568,18 +568,18 @@ func TestRunDeltaSyncCheckpointsPerFile(t *testing.T) {
 		},
 	}
 
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	// Force a streaming reindex by passing force=true (matching config).
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true); err != nil {
 		t.Fatalf("streaming StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	codebase, _, found, err := manager.GetIndex(context.Background(), repoPath)
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
@@ -658,7 +658,7 @@ func TestRunDeltaSyncReportsCodebaseTotalsAfterSync(t *testing.T) {
 		},
 	}
 
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -672,7 +672,7 @@ func TestRunDeltaSyncReportsCodebaseTotalsAfterSync(t *testing.T) {
 	syncer.runSyncAll(context.Background(), "test")
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	codebase, _, found, err := manager.GetIndex(context.Background(), repoPath)
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
@@ -729,7 +729,7 @@ func TestRunDeltaSyncConvergesDeletedFileToRemoval(t *testing.T) {
 		},
 	}
 
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -745,7 +745,7 @@ func TestRunDeltaSyncConvergesDeletedFileToRemoval(t *testing.T) {
 	syncer.runSyncAll(context.Background(), "test")
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	codebase, _, found, err := manager.GetIndex(context.Background(), repoPath)
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
@@ -837,7 +837,7 @@ func TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals(t *testing.T) {
 		},
 	}
 
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -850,7 +850,7 @@ func TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals(t *testing.T) {
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	codebase, _, found, err := manager.GetIndex(context.Background(), repoPath)
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
@@ -906,12 +906,12 @@ func TestRunDeltaSyncInvalidatesSnapshotOnConfigChange(t *testing.T) {
 
 	initialConfig := defaultIndexConfig()
 	initialConfig.SplitterType = "langchain"
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), initialConfig, false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), initialConfig, false); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	codebase, _, found, err := manager.GetIndex(context.Background(), repoPath)
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
@@ -924,7 +924,7 @@ func TestRunDeltaSyncInvalidatesSnapshotOnConfigChange(t *testing.T) {
 
 	upgradedConfig := defaultIndexConfig()
 	upgradedConfig.SplitterType = "ast"
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), upgradedConfig, false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), upgradedConfig, false); err != nil {
 		t.Fatalf("upgrade StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -944,7 +944,13 @@ func TestRunDeltaSyncInvalidatesSnapshotOnConfigChange(t *testing.T) {
 // TestStartIndexRejectsMatchingConfigOnIndexedCodebase confirms that a
 // re-call with the same splitter and no force still returns the friendly
 // "already indexed" error so accidental no-op calls remain cheap.
-func TestStartIndexRejectsMatchingConfigOnIndexedCodebase(t *testing.T) {
+// TestStartIndexReRegistrationIsIdempotent confirms that re-calling
+// StartIndex for an already-indexed codebase with the same config is a
+// success path that returns the existing codebase record without enqueuing
+// a new job. The previous behavior treated this as an error; the new model
+// makes registration idempotent so callers can safely re-register without
+// branching on a sentinel error string.
+func TestStartIndexReRegistrationIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	manager, _, repoPath := newTestManager(t)
@@ -965,17 +971,27 @@ func TestStartIndexRejectsMatchingConfigOnIndexedCodebase(t *testing.T) {
 		},
 	}
 
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	_, firstCodebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	if err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	_, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
-	if err == nil {
-		t.Fatal("matching-config re-call should return 'already indexed' error")
+	job, secondCodebase, deduplicated, overlapsCodebaseID, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	if err != nil {
+		t.Fatalf("re-register returned error, want idempotent success: %v", err)
 	}
-	if !strings.Contains(err.Error(), "already indexed") {
-		t.Fatalf("expected 'already indexed' error, got %v", err)
+	if deduplicated {
+		t.Fatal("re-register marked deduplicated, but no in-flight job exists")
+	}
+	if job.ID != "" {
+		t.Fatalf("re-register returned a job (%s), but no new job should run", job.ID)
+	}
+	if secondCodebase.ID != firstCodebase.ID {
+		t.Fatalf("re-register returned codebase %s, want existing %s", secondCodebase.ID, firstCodebase.ID)
+	}
+	if overlapsCodebaseID != "" {
+		t.Fatalf("re-register reported overlap %s, but the same canonical path has no overlap", overlapsCodebaseID)
 	}
 }
 
@@ -1003,7 +1019,7 @@ func TestSyncIndexStartsFreshJobForChangedCodebase(t *testing.T) {
 		},
 	}
 
-	_, codebase, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
@@ -1037,7 +1053,7 @@ func TestSyncIndexStartsFreshJobForChangedCodebase(t *testing.T) {
 	syncer.runSyncAll(context.Background(), "test")
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexing)
 
-	codebase, activeJob, found, err := manager.GetIndex(context.Background(), repoPath)
+	codebase, activeJob, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
@@ -1078,7 +1094,7 @@ func TestBackgroundSyncSkipsUnchangedCodebase(t *testing.T) {
 		},
 	}
 
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -1120,7 +1136,7 @@ func TestGetIndexMatchesTrackedParentForSubdirectory(t *testing.T) {
 		},
 	}
 
-	if _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -1130,7 +1146,7 @@ func TestGetIndexMatchesTrackedParentForSubdirectory(t *testing.T) {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
 
-	codebase, _, found, err := manager.GetIndex(context.Background(), childDirectory)
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), childDirectory)
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
@@ -1216,7 +1232,7 @@ func waitForCodebaseStatus(t *testing.T, manager *Manager, repoPath string, want
 	t.Helper()
 
 	waitForCondition(t, func() bool {
-		codebase, _, found, err := manager.GetIndex(context.Background(), repoPath)
+		codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 		if err != nil || !found {
 			return false
 		}
@@ -1228,7 +1244,7 @@ func waitForProgress(t *testing.T, manager *Manager, repoPath string, minimum fl
 	t.Helper()
 
 	waitForCondition(t, func() bool {
-		_, activeJob, found, err := manager.GetIndex(context.Background(), repoPath)
+		_, activeJob, found, _, err := manager.GetIndex(context.Background(), repoPath)
 		if err != nil || !found || activeJob == nil {
 			return false
 		}

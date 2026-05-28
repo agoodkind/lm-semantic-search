@@ -1,7 +1,11 @@
 // Package model defines the daemon's persisted and in-memory domain types.
 package model
 
-import "time"
+import (
+	"time"
+
+	"goodkind.io/claude-context-go/internal/discovery"
+)
 
 // CodebaseStatus captures the lifecycle state of one tracked codebase.
 type CodebaseStatus string
@@ -108,20 +112,31 @@ type IndexRunFailure struct {
 	JobID                   string    `json:"job_id,omitempty"`
 }
 
-// Codebase records one canonical indexed codebase and its aliases.
+// Codebase records one canonical indexed codebase.
+//
+// ResolvedIgnoreRules is the runtime cache of the ignore rules that apply to
+// this codebase. The discovery package computes it at registration and on
+// periodic sync; the field is not persisted because it is derived from disk
+// (built-in defaults, nested .gitignore files, repo ignore files, global
+// ~/.context/.contextignore, and user overrides).
+//
+// InodeTrackingDisabled records that the root filesystem reported unstable
+// inodes at registration time. When true, convergence falls back to
+// path-only file tracking instead of (device, inode, contentHash).
 type Codebase struct {
-	ID                    string           `json:"id"`
-	CanonicalPath         string           `json:"canonical_path"`
-	Aliases               []string         `json:"aliases,omitempty"`
-	Status                CodebaseStatus   `json:"status"`
-	ActiveJobID           string           `json:"active_job_id,omitempty"`
-	LastSuccessfulRun     *IndexRunSummary `json:"last_successful_run,omitempty"`
-	LastFailedRun         *IndexRunFailure `json:"last_failed_run,omitempty"`
-	EffectiveConfig       IndexConfig      `json:"effective_config"`
-	CollectionName        string           `json:"collection_name,omitempty"`
-	LegacyCollectionNames []string         `json:"legacy_collection_names,omitempty"`
-	MerkleSnapshotPath    string           `json:"merkle_snapshot_path,omitempty"`
-	UpdatedAt             time.Time        `json:"updated_at"`
+	ID                    string                `json:"id"`
+	CanonicalPath         string                `json:"canonical_path"`
+	Status                CodebaseStatus        `json:"status"`
+	ActiveJobID           string                `json:"active_job_id,omitempty"`
+	LastSuccessfulRun     *IndexRunSummary      `json:"last_successful_run,omitempty"`
+	LastFailedRun         *IndexRunFailure      `json:"last_failed_run,omitempty"`
+	EffectiveConfig       IndexConfig           `json:"effective_config"`
+	CollectionName        string                `json:"collection_name,omitempty"`
+	LegacyCollectionNames []string              `json:"legacy_collection_names,omitempty"`
+	MerkleSnapshotPath    string                `json:"merkle_snapshot_path,omitempty"`
+	InodeTrackingDisabled bool                  `json:"inode_tracking_disabled,omitempty"`
+	ResolvedIgnoreRules   discovery.IgnoreRules `json:"-"`
+	UpdatedAt             time.Time             `json:"updated_at"`
 }
 
 // Job records one daemon job and its latest known state.
@@ -162,4 +177,37 @@ type StoredChunk struct {
 	EndLine       int32  `json:"end_line"`
 	Language      string `json:"language"`
 	FileExtension string `json:"file_extension"`
+}
+
+// PathClassificationKind reports the daemon's verdict about one queried path.
+type PathClassificationKind string
+
+const (
+	// PathClassificationUnspecified is the zero value; callers should treat
+	// it as out-of-scope or unknown.
+	PathClassificationUnspecified PathClassificationKind = ""
+	// PathClassificationInScopeIndexed means the path is covered by a
+	// codebase, survives ignore rules, and has a chunk row in the codebase
+	// collection.
+	PathClassificationInScopeIndexed PathClassificationKind = "in_scope_indexed"
+	// PathClassificationInScopeExcluded means the path is covered but
+	// excluded by the codebase's resolved ignore rules.
+	PathClassificationInScopeExcluded PathClassificationKind = "in_scope_excluded"
+	// PathClassificationInScopeUnindexed means the path is covered and not
+	// excluded but has no chunk row (not yet indexed or removed).
+	PathClassificationInScopeUnindexed PathClassificationKind = "in_scope_unindexed"
+	// PathClassificationOutOfScope means no tracked codebase covers the
+	// path's canonical form.
+	PathClassificationOutOfScope PathClassificationKind = "out_of_scope"
+)
+
+// PathClassification carries the daemon's verdict about one queried path.
+// CoveringCodebaseID names the longest-prefix covering codebase, when any.
+// ExcludedByPattern and ExcludedByGitignore name the rule that excluded
+// the path when Kind is PathClassificationInScopeExcluded.
+type PathClassification struct {
+	Kind                PathClassificationKind
+	ExcludedByPattern   string
+	ExcludedByGitignore string
+	CoveringCodebaseID  string
 }

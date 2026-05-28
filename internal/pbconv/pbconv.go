@@ -43,13 +43,13 @@ func ToCodebase(codebase model.Codebase) *pb.Codebase {
 	result := &pb.Codebase{
 		Id:                    codebase.ID,
 		CanonicalPath:         codebase.CanonicalPath,
-		Aliases:               append([]string{}, codebase.Aliases...),
 		Status:                string(codebase.Status),
 		ActiveJobId:           codebase.ActiveJobID,
 		EffectiveConfig:       toIndexConfig(codebase.EffectiveConfig),
 		CollectionName:        codebase.CollectionName,
 		LegacyCollectionNames: append([]string{}, codebase.LegacyCollectionNames...),
 		MerkleSnapshotPath:    codebase.MerkleSnapshotPath,
+		InodeTrackingDisabled: codebase.InodeTrackingDisabled,
 		UpdatedAt:             ts(codebase.UpdatedAt),
 	}
 	if codebase.LastSuccessfulRun != nil {
@@ -132,6 +132,38 @@ func toIndexConfig(config model.IndexConfig) *pb.IndexConfig {
 		EmbeddingDimension: config.EmbeddingDimension,
 		VectorBackend:      config.VectorBackend,
 		Hybrid:             config.Hybrid,
+	}
+}
+
+// ToPathClassification converts a daemon classification verdict into its
+// protobuf form. A nil verdict returns nil so the response message stays
+// canonical without an unspecified placeholder.
+func ToPathClassification(classification *model.PathClassification) *pb.PathClassification {
+	if classification == nil {
+		return nil
+	}
+	return &pb.PathClassification{
+		Kind:                pathClassificationKindToProto(classification.Kind),
+		ExcludedByPattern:   classification.ExcludedByPattern,
+		ExcludedByGitignore: classification.ExcludedByGitignore,
+		CoveringCodebaseId:  classification.CoveringCodebaseID,
+	}
+}
+
+func pathClassificationKindToProto(kind model.PathClassificationKind) pb.PathClassification_Kind {
+	switch kind {
+	case model.PathClassificationInScopeIndexed:
+		return pb.PathClassification_KIND_IN_SCOPE_INDEXED
+	case model.PathClassificationInScopeExcluded:
+		return pb.PathClassification_KIND_IN_SCOPE_EXCLUDED
+	case model.PathClassificationInScopeUnindexed:
+		return pb.PathClassification_KIND_IN_SCOPE_UNINDEXED
+	case model.PathClassificationOutOfScope:
+		return pb.PathClassification_KIND_OUT_OF_SCOPE
+	case model.PathClassificationUnspecified:
+		return pb.PathClassification_KIND_UNSPECIFIED
+	default:
+		return pb.PathClassification_KIND_UNSPECIFIED
 	}
 }
 
