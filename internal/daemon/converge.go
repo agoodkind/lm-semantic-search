@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"goodkind.io/claude-context-go/internal/discovery"
 	"goodkind.io/claude-context-go/internal/merkle"
 	"goodkind.io/claude-context-go/internal/model"
 	"goodkind.io/claude-context-go/internal/semantic"
@@ -45,7 +46,7 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 
 	changed := false
 	for _, relativePath := range relativePaths {
-		if converged := manager.convergeOnePath(ctx, codebase.CanonicalPath, relativePath, codebase.EffectiveConfig, snapshot.Files); converged {
+		if converged := manager.convergeOnePath(ctx, codebase.CanonicalPath, relativePath, codebase.EffectiveConfig, codebase.ResolvedIgnoreRules, snapshot.Files); converged {
 			changed = true
 		}
 	}
@@ -63,7 +64,24 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 // convergeOnePath converges a single path and reports whether it mutated the
 // snapshot's file-hash map. Errors are logged and swallowed so one path does
 // not abort the batch.
-func (manager *Manager) convergeOnePath(ctx context.Context, root string, relativePath string, cfg model.IndexConfig, fileHashes map[string]string) bool {
+//
+// A path that the codebase's resolved ignore rules now exclude is treated
+// as a removal so previously-indexed files drop out of the index when the
+// user adds them to .gitignore. A path that is not in the snapshot and is
+// excluded by the rules is a no-op.
+func (manager *Manager) convergeOnePath(ctx context.Context, root string, relativePath string, cfg model.IndexConfig, rules discovery.IgnoreRules, fileHashes map[string]string) bool {
+	if excluded, matchedPattern, gitignoreSource := discovery.PathIgnored(relativePath, rules); excluded {
+		if _, tracked := fileHashes[relativePath]; !tracked {
+			return false
+		}
+		if rmErr := manager.semantic.Reindex(ctx, root, nil, []string{relativePath}, nil); rmErr != nil {
+			manager.logConvergeReindexErr(ctx, relativePath, "remove_excluded", rmErr)
+			return false
+		}
+		delete(fileHashes, relativePath)
+		slog.InfoContext(ctx, "converge.remove_excluded", "component", "daemon", "subcomponent", "converge", "path", relativePath, "matched_pattern", matchedPattern, "gitignore", gitignoreSource)
+		return true
+	}
 	fileResult, indexErr := manager.runner.IndexOne(ctx, root, relativePath, cfg)
 	if indexErr != nil {
 		slog.ErrorContext(ctx, "converge.index_failed", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", indexErr)

@@ -117,6 +117,7 @@ func run(rootContext context.Context) error {
 	defer cancelRuntime()
 	manager.ResumeOrphanedJobs(runtimeContext)
 	daemon.NewBackgroundSync(cfg, manager).Start(runtimeContext)
+	manager.StartReconcilerLoop(runtimeContext)
 
 	server := grpc.NewServer()
 	shutdownCh := make(chan struct{}, 1)
