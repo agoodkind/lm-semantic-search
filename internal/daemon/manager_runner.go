@@ -64,6 +64,17 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) {
 
 	manager.updateJobRunning(job)
 
+	// Hold the shared advisory lock for the embed so the upstream TS adapter
+	// backs off while this job writes the collection. Skip it when there is no
+	// semantic backend, since then the job performs no embedding to coordinate.
+	if manager.semantic != nil && manager.semantic.Available() {
+		if !manager.syncLock.acquireBlocking(ctx) {
+			manager.updateJobCancelled(ctx, job.ID)
+			return
+		}
+		defer manager.syncLock.release(ctx)
+	}
+
 	// Every operation reaches a terminal job state below. An incremental sync
 	// or streaming reindex that finds no usable delta (no prior snapshot, or a
 	// live collection that has gone missing) falls through to the from-scratch

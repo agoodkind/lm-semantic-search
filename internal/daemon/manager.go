@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -67,6 +68,11 @@ type Manager struct {
 	// buffered slot for its duration; jobs that cannot acquire a slot stay
 	// queued until one frees.
 	indexSlots chan struct{}
+	// syncLock is the process-wide refcounted hold of the shared advisory lock
+	// that coordinates embedding with the upstream TS adapter. Index jobs and
+	// background converges all take a reference for the duration of their
+	// embed, so the external tool backs off while any daemon embed runs.
+	syncLock *syncLock
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -96,6 +102,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		lifecycleHook:  nil,
 		lifecycleMutex: sync.Mutex{},
 		indexSlots:     make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
+		syncLock:       newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
 	}
 	semanticService, err := semantic.NewService(ctx, cfg)
 	if err != nil {

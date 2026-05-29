@@ -32,14 +32,22 @@ const (
 // sync. The file watcher is the steady-state driver: it converges changed
 // paths within the debounce window. The periodic sweep is the anti-entropy
 // backstop that repairs drift from missed events or downtime.
+//
+// Watcher converges run through the manager's index-slot semaphore, so several
+// codebases converge at once up to the cap and a single heavily-edited
+// repository never blocks the others. Per-codebase serialization, plus the
+// shared advisory lock held for the embed window, keeps two converges of the
+// same codebase from racing and keeps the upstream TS adapter coordinated.
 type BackgroundSync struct {
 	cfg     config.Config
 	manager *Manager
 
 	mu           sync.Mutex
-	syncing      bool
 	triggerTimer *time.Timer
 	lastTrigger  time.Time
+
+	convergeMu sync.Mutex
+	converging map[string]struct{}
 
 	queue   *EventQueue
 	watcher *Watcher
@@ -51,9 +59,10 @@ func NewBackgroundSync(cfg config.Config, manager *Manager) *BackgroundSync {
 		cfg:          cfg,
 		manager:      manager,
 		mu:           sync.Mutex{},
-		syncing:      false,
 		triggerTimer: nil,
 		lastTrigger:  time.Time{},
+		convergeMu:   sync.Mutex{},
+		converging:   make(map[string]struct{}),
 		queue:        nil,
 		watcher:      nil,
 	}
@@ -185,12 +194,6 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 		}
 	}()
 
-	if !syncer.beginSync(ctx, source) {
-		metrics.SyncSkippedInflight()
-		return
-	}
-	defer syncer.endSync(ctx, source)
-
 	codebases := syncer.manager.ListIndexes(ctx)
 	for _, codebase := range codebases {
 		if codebase.Status != model.CodebaseStatusIndexed {
@@ -230,10 +233,11 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 	}
 }
 
-// convergeViaWatcher runs a per-path converge for the debounced path set from
-// the file watcher, serialized against the periodic sweep through the same
-// single-flight guard. When a sweep already holds the guard, the paths are
-// requeued so the change is not lost.
+// convergeViaWatcher runs the debounced path set for one codebase through the
+// manager's index-slot semaphore, so several codebases converge at once up to
+// the cap and a heavily-edited repository never blocks the others. A second
+// converge of the same codebase, or one that finds the shared lock held by the
+// external tool, requeues its paths so no change is lost.
 func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID string, relativePaths []string) {
 	if ctx.Err() != nil {
 		return
@@ -246,17 +250,62 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	)
 	ctx = correlation.WithContext(ctx, corr)
 
-	if !syncer.beginSync(ctx, "watcher") {
+	// Serialize converges of the same codebase so two never race on its
+	// snapshot; a concurrent one requeues rather than waits.
+	if !syncer.beginConverge(codebaseID) {
 		metrics.SyncSkippedInflight()
-		for _, relativePath := range relativePaths {
-			syncer.queue.Enqueue(codebaseID, relativePath)
-		}
+		syncer.requeuePaths(codebaseID, relativePaths)
 		return
 	}
-	defer syncer.endSync(ctx, "watcher")
+	defer syncer.endConverge(codebaseID)
+
+	// Bound concurrency across codebases through the shared index-slot
+	// semaphore that user index jobs also use.
+	select {
+	case syncer.manager.indexSlots <- struct{}{}:
+		defer func() { <-syncer.manager.indexSlots }()
+	case <-ctx.Done():
+		return
+	}
+
+	// Hold the shared advisory lock for the embed window. A zero-refcount lock
+	// held on disk means the external TS tool owns it, so defer and requeue.
+	if !syncer.manager.syncLock.acquire(ctx) {
+		metrics.SyncSkippedInflight()
+		syncer.requeuePaths(codebaseID, relativePaths)
+		return
+	}
+	defer syncer.manager.syncLock.release(ctx)
 
 	if err := syncer.manager.ConvergePaths(ctx, codebaseID, relativePaths); err != nil {
 		slog.ErrorContext(ctx, "watcher.converge_failed", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebaseID, "err", err)
+	}
+}
+
+// beginConverge claims the per-codebase converge slot, returning false when a
+// converge for that codebase is already running.
+func (syncer *BackgroundSync) beginConverge(codebaseID string) bool {
+	syncer.convergeMu.Lock()
+	defer syncer.convergeMu.Unlock()
+	if _, running := syncer.converging[codebaseID]; running {
+		return false
+	}
+	syncer.converging[codebaseID] = struct{}{}
+	return true
+}
+
+// endConverge releases the per-codebase converge slot.
+func (syncer *BackgroundSync) endConverge(codebaseID string) {
+	syncer.convergeMu.Lock()
+	defer syncer.convergeMu.Unlock()
+	delete(syncer.converging, codebaseID)
+}
+
+// requeuePaths re-enqueues a deferred converge's paths so the change is picked
+// up on the next debounce rather than dropped.
+func (syncer *BackgroundSync) requeuePaths(codebaseID string, relativePaths []string) {
+	for _, relativePath := range relativePaths {
+		syncer.queue.Enqueue(codebaseID, relativePath)
 	}
 }
 
@@ -285,77 +334,6 @@ func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase mode
 		return false, fmt.Errorf("capture Merkle snapshot for %s: %w", codebase.CanonicalPath, err)
 	}
 	return !merkle.Equal(existingSnapshot, currentSnapshot), nil
-}
-
-func (syncer *BackgroundSync) beginSync(ctx context.Context, source string) bool {
-	syncer.mu.Lock()
-	if syncer.syncing {
-		syncer.mu.Unlock()
-		return false
-	}
-	syncer.syncing = true
-	syncer.mu.Unlock()
-
-	if ok := syncer.acquireGlobalLock(ctx, source); ok {
-		return true
-	}
-
-	syncer.mu.Lock()
-	syncer.syncing = false
-	syncer.mu.Unlock()
-	return false
-}
-
-func (syncer *BackgroundSync) endSync(ctx context.Context, source string) {
-	syncer.releaseGlobalLock(ctx, source)
-	syncer.mu.Lock()
-	syncer.syncing = false
-	syncer.mu.Unlock()
-}
-
-func (syncer *BackgroundSync) acquireGlobalLock(ctx context.Context, source string) bool {
-	lockPath := filepath.Join(syncer.cfg.ContextRoot, "mcp-sync.lock")
-	if err := store.EnsureDir(syncer.cfg.ContextRoot); err != nil {
-		slog.ErrorContext(ctx, "ensure sync root failed", "path", syncer.cfg.ContextRoot, "err", err)
-		return false
-	}
-
-	if err := os.Mkdir(lockPath, 0o755); err == nil {
-		return true
-	} else if !errors.Is(err, os.ErrExist) {
-		slog.ErrorContext(ctx, "acquire sync lock failed", "path", lockPath, "source", source, "err", err)
-		return false
-	}
-
-	info, err := os.Stat(lockPath)
-	if err != nil {
-		slog.ErrorContext(ctx, "inspect sync lock failed", "path", lockPath, "source", source, "err", err)
-		return false
-	}
-	staleAge := time.Duration(syncer.cfg.SyncLockStaleMS) * time.Millisecond
-	if syncer.cfg.SyncLockStaleMS <= 0 {
-		staleAge = 10 * time.Minute
-	}
-	if clock.Now().Sub(info.ModTime()) <= staleAge {
-		return false
-	}
-
-	if err := os.RemoveAll(lockPath); err != nil {
-		slog.ErrorContext(ctx, "remove stale sync lock failed", "path", lockPath, "source", source, "err", err)
-		return false
-	}
-	if err := os.Mkdir(lockPath, 0o755); err != nil {
-		slog.ErrorContext(ctx, "reacquire sync lock failed", "path", lockPath, "source", source, "err", err)
-		return false
-	}
-	return true
-}
-
-func (syncer *BackgroundSync) releaseGlobalLock(ctx context.Context, source string) {
-	lockPath := filepath.Join(syncer.cfg.ContextRoot, "mcp-sync.lock")
-	if err := os.RemoveAll(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.ErrorContext(ctx, "release sync lock failed", "path", lockPath, "source", source, "err", err)
-	}
 }
 
 func syncConflictError(err error) bool {
