@@ -10,7 +10,9 @@ import (
 
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
+	"goodkind.io/claude-context-go/internal/clock"
 	"goodkind.io/claude-context-go/internal/config"
+	"goodkind.io/claude-context-go/internal/metrics"
 )
 
 const maxEmbeddingTokens = 8192
@@ -80,7 +82,7 @@ func (provider *openAICompatibleProvider) Embed(ctx context.Context, text string
 	return embeddings[0], nil
 }
 
-func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts []string) (vectors [][]float32, err error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
@@ -101,6 +103,14 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 		params.Dimensions = openai.Int(int64(provider.dimensions))
 	}
 
+	// Single choke point for every embedding call, so all per-batch latency and
+	// counters flow through one defer regardless of which return fires.
+	start := clock.Now()
+	metrics.EmbedBatchStarted()
+	defer func() {
+		metrics.EmbedBatchDone(len(texts), clock.Now().Sub(start), err != nil)
+	}()
+
 	response, err := provider.client.Embeddings.New(ctx, params)
 	if err != nil {
 		slog.ErrorContext(ctx, "generate embeddings failed", "provider", provider.name, "model", provider.model, "err", err)
@@ -111,7 +121,7 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 		return nil, fmt.Errorf("%s embedding provider returned %d vectors for %d texts", provider.name, len(response.Data), len(preprocessedTexts))
 	}
 
-	vectors := make([][]float32, 0, len(response.Data))
+	vectors = make([][]float32, 0, len(response.Data))
 	for _, item := range response.Data {
 		vector := make([]float32, 0, len(item.Embedding))
 		for _, value := range item.Embedding {

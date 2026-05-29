@@ -63,6 +63,10 @@ type Manager struct {
 	semantic       *semantic.Service
 	lifecycleHook  CodebaseLifecycleHook
 	lifecycleMutex sync.Mutex
+	// indexSlots caps concurrently running index jobs. Each runJob holds one
+	// buffered slot for its duration; jobs that cannot acquire a slot stay
+	// queued until one frees.
+	indexSlots chan struct{}
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -91,6 +95,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		semantic:       nil,
 		lifecycleHook:  nil,
 		lifecycleMutex: sync.Mutex{},
+		indexSlots:     make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
 	}
 	semanticService, err := semantic.NewService(ctx, cfg)
 	if err != nil {
@@ -156,47 +161,6 @@ func (manager *Manager) reconcileJournalOnStartLocked() {
 			slog.Error("append orphan recovery event failed", "job_id", id, "err", err)
 		}
 		slog.Warn("orphan job sanitized in journal after restart", "job_id", id, "codebase_id", job.CodebaseID)
-	}
-}
-
-// ResumeOrphanedJobs re-queues a streaming reindex for every codebase whose
-// previous indexing job was still running when the daemon exited. The
-// streaming path's per-file delete-then-upsert keeps the run idempotent, so
-// resuming is safe even though no mid-job state is persisted. Call this
-// once after NewManager returns and before the daemon advertises ready.
-func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
-	manager.mu.Lock()
-	type resumePlan struct {
-		canonicalPath string
-		config        model.IndexConfig
-		codebaseID    string
-	}
-	plans := make([]resumePlan, 0)
-	for _, codebase := range manager.codebases {
-		if codebase.Status != model.CodebaseStatusIndexing {
-			continue
-		}
-		plans = append(plans, resumePlan{
-			canonicalPath: codebase.CanonicalPath,
-			config:        codebase.EffectiveConfig,
-			codebaseID:    codebase.ID,
-		})
-	}
-	manager.mu.Unlock()
-
-	if len(plans) > 0 {
-		paths := make([]string, 0, len(plans))
-		for _, plan := range plans {
-			paths = append(paths, plan.canonicalPath)
-		}
-		slog.InfoContext(ctx, "resuming orphaned indexing jobs", "count", len(plans), "paths", paths)
-	}
-	for _, plan := range plans {
-		client := model.ClientInfo{Name: "daemon-resume", PID: 0}
-		_, _, _, _, err := manager.StartIndex(ctx, plan.canonicalPath, client, plan.config, false)
-		if err != nil {
-			slog.ErrorContext(ctx, "resume orphaned job failed", "codebase_id", plan.codebaseID, "path", plan.canonicalPath, "err", err)
-		}
 	}
 }
 

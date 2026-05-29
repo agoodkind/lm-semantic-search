@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"goodkind.io/claude-context-go/internal/indexer"
+	"goodkind.io/claude-context-go/internal/metrics"
 	"goodkind.io/claude-context-go/internal/semantic"
 	"goodkind.io/claude-context-go/internal/spans"
 	"goodkind.io/gklog/correlation"
@@ -36,13 +37,26 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 			manager.mu.Unlock()
 			close(done)
 		}()
-		manager.runJob(backgroundContext, jobID)
+		// The slot is acquired inside the goroutine so callers never block on
+		// the cap; the job stays JobStateQueued until runJob calls
+		// updateJobRunning, so a queued-behind-the-cap job reports queued.
+		select {
+		case manager.indexSlots <- struct{}{}:
+			defer func() { <-manager.indexSlots }()
+			manager.runJob(backgroundContext, jobID)
+		case <-backgroundContext.Done():
+			manager.updateJobCancelled(backgroundContext, jobID)
+			return
+		}
 	}()
 }
 
 func (manager *Manager) runJob(ctx context.Context, jobID string) {
 	ctx, done := spans.Open(ctx, "daemon.runJob")
 	defer done(nil)
+
+	metrics.JobStarted()
+	defer metrics.JobFinished()
 
 	manager.mu.Lock()
 	job, found := manager.jobs[jobID]

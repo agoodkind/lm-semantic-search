@@ -7,6 +7,7 @@ import (
 	"goodkind.io/claude-context-go/internal/clock"
 	"goodkind.io/claude-context-go/internal/indexer"
 	"goodkind.io/claude-context-go/internal/merkle"
+	"goodkind.io/claude-context-go/internal/metrics"
 	"goodkind.io/claude-context-go/internal/model"
 	"goodkind.io/claude-context-go/internal/semantic"
 	"goodkind.io/claude-context-go/internal/store"
@@ -91,6 +92,7 @@ func (manager *Manager) updateJobCompleted(jobID string, result indexer.Result) 
 	}
 
 	now := clock.Now()
+	metrics.JobCompleted()
 	job.State = model.JobStateCompleted
 	job.UpdatedAt = now
 	job.CompletedAt = &now
@@ -147,6 +149,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 
 	traceID := string(correlation.FromContext(ctx).TraceID)
 	now := clock.Now()
+	metrics.JobFailed()
 	job.State = model.JobStateFailed
 	job.UpdatedAt = now
 	job.CompletedAt = &now
@@ -195,6 +198,7 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 
 	traceID := string(correlation.FromContext(ctx).TraceID)
 	now := clock.Now()
+	metrics.JobCancelled()
 	job.State = model.JobStateCancelled
 	job.UpdatedAt = now
 	job.CompletedAt = &now

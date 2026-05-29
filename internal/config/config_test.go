@@ -91,3 +91,67 @@ func TestDefaultReadsCustomExtensionAndIgnoreEnvVars(t *testing.T) {
 		t.Errorf("CustomIgnorePatterns = %#v", cfg.CustomIgnorePatterns)
 	}
 }
+
+// isolateState points HOME and the state root at temp dirs so Default() never
+// reads the real machine's ~/.context or ~/.contextd state during the test.
+func isolateState(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONTEXTD_STATE_ROOT", t.TempDir())
+}
+
+func TestDefaultDebugAndJobControlDefaults(t *testing.T) {
+	isolateState(t)
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+
+	if !cfg.DebugListenerEnabled {
+		t.Errorf("DebugListenerEnabled = false want true")
+	}
+	if cfg.DebugListenAddr != defaultDebugListenAddr {
+		t.Errorf("DebugListenAddr = %q want %q", cfg.DebugListenAddr, defaultDebugListenAddr)
+	}
+	if cfg.PerfCountersIntervalMS != defaultPerfCountersIntervalMS {
+		t.Errorf("PerfCountersIntervalMS = %d want %d", cfg.PerfCountersIntervalMS, defaultPerfCountersIntervalMS)
+	}
+	if cfg.MaxConcurrentIndexJobs != defaultMaxConcurrentIndexJobs {
+		t.Errorf("MaxConcurrentIndexJobs = %d want %d", cfg.MaxConcurrentIndexJobs, defaultMaxConcurrentIndexJobs)
+	}
+	if !cfg.ResumeIndexingOnBoot {
+		t.Errorf("ResumeIndexingOnBoot = false want true")
+	}
+}
+
+func TestDefaultDebugAndJobControlEnvOverrides(t *testing.T) {
+	isolateState(t)
+
+	t.Setenv("CLAUDE_CONTEXT_DEBUG_LISTENER", "false")
+	t.Setenv("CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR", "127.0.0.1:7000")
+	t.Setenv("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", "0")
+	t.Setenv("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", "8")
+	t.Setenv("CLAUDE_CONTEXT_RESUME_ON_BOOT", "false")
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+
+	if cfg.DebugListenerEnabled {
+		t.Errorf("DebugListenerEnabled = true want false")
+	}
+	if cfg.DebugListenAddr != "127.0.0.1:7000" {
+		t.Errorf("DebugListenAddr = %q want 127.0.0.1:7000", cfg.DebugListenAddr)
+	}
+	if cfg.PerfCountersIntervalMS != 0 {
+		t.Errorf("PerfCountersIntervalMS = %d want 0", cfg.PerfCountersIntervalMS)
+	}
+	if cfg.MaxConcurrentIndexJobs != 8 {
+		t.Errorf("MaxConcurrentIndexJobs = %d want 8", cfg.MaxConcurrentIndexJobs)
+	}
+	if cfg.ResumeIndexingOnBoot {
+		t.Errorf("ResumeIndexingOnBoot = true want false")
+	}
+}

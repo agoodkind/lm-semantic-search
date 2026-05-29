@@ -11,6 +11,7 @@ import (
 
 	"goodkind.io/claude-context-go/internal/discovery"
 	"goodkind.io/claude-context-go/internal/merkle"
+	"goodkind.io/claude-context-go/internal/metrics"
 	"goodkind.io/claude-context-go/internal/model"
 	"goodkind.io/claude-context-go/internal/semantic"
 	"goodkind.io/claude-context-go/internal/spans"
@@ -107,6 +108,7 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 		}
 		delete(snapshot.Files, relativePath)
 		snapshot.ForgetInode(relativePath)
+		metrics.ConvergeRemove()
 		slog.InfoContext(ctx, "converge.remove_excluded", "component", "daemon", "subcomponent", "converge", "path", relativePath, "matched_pattern", matchedPattern, "gitignore", gitignoreSource)
 		return true
 	}
@@ -125,6 +127,7 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 		}
 		delete(snapshot.Files, relativePath)
 		snapshot.ForgetInode(relativePath)
+		metrics.ConvergeRemove()
 		slog.InfoContext(ctx, "converge.remove", "component", "daemon", "subcomponent", "converge", "path", relativePath)
 		return true
 	}
@@ -153,6 +156,7 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 	}
 	snapshot.Files[relativePath] = fileResult.FileHash
 	snapshot.RecordInode(relativePath, currentInode)
+	metrics.ConvergeUpsert()
 	slog.InfoContext(ctx, "converge.upsert", "component", "daemon", "subcomponent", "converge", "path", relativePath, "chunks", len(fileResult.Chunks))
 	return true
 }
@@ -184,6 +188,7 @@ func (manager *Manager) tryRenameCopy(ctx context.Context, root string, relative
 	}
 	snapshot.Files[relativePath] = freshHash
 	snapshot.RecordInode(relativePath, currentInode)
+	metrics.ConvergeCopyChunks()
 	slog.InfoContext(ctx, "converge.copy_chunks", "component", "daemon", "subcomponent", "converge", "src", source, "dst", relativePath, "rows", copied)
 	return true
 }

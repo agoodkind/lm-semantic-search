@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"goodkind.io/claude-context-go/internal/config"
+	"goodkind.io/claude-context-go/internal/metrics"
 )
 
 func TestOpenAICompatibleProviderEmbedBatch(t *testing.T) {
@@ -53,6 +54,45 @@ func TestOpenAICompatibleProviderEmbedBatch(t *testing.T) {
 	}
 	if len(vectors) != 2 || len(vectors[0]) != 2 || vectors[0][0] != 1 {
 		t.Fatalf("vectors = %#v", vectors)
+	}
+}
+
+func TestEmbedBatchRecordsMetrics(t *testing.T) {
+	// Touches package-global metrics counters, so it cannot run in parallel
+	// with other tests that read the same state.
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"data": []map[string]any{
+				{"embedding": []float64{1.0, 2.0}},
+				{"embedding": []float64{3.0, 4.0}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("OpenAI", "test-key", server.URL, "text-embedding-3-small", 2)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	before := metrics.Read()
+	if _, err := provider.EmbedBatch(context.Background(), []string{"alpha", "beta"}); err != nil {
+		t.Fatalf("EmbedBatch returned error: %v", err)
+	}
+	after := metrics.Read()
+
+	if after.EmbedBatchesTotal-before.EmbedBatchesTotal != 1 {
+		t.Fatalf("EmbedBatchesTotal delta = %d, want 1", after.EmbedBatchesTotal-before.EmbedBatchesTotal)
+	}
+	if after.EmbedVectorsTotal-before.EmbedVectorsTotal != 2 {
+		t.Fatalf("EmbedVectorsTotal delta = %d, want 2", after.EmbedVectorsTotal-before.EmbedVectorsTotal)
+	}
+	if after.EmbedBatchesFailed-before.EmbedBatchesFailed != 0 {
+		t.Fatalf("EmbedBatchesFailed delta = %d, want 0", after.EmbedBatchesFailed-before.EmbedBatchesFailed)
+	}
+	if after.EmbedInflight != 0 {
+		t.Fatalf("EmbedInflight = %d, want 0", after.EmbedInflight)
 	}
 }
 

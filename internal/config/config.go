@@ -19,6 +19,9 @@ const (
 	defaultSyncLockAge                = 600000
 	defaultMilvusOrphanGraceMS        = 86_400_000
 	defaultOrphanReconcilerIntervalMS = 3_600_000
+	defaultDebugListenAddr            = "127.0.0.1:6480"
+	defaultPerfCountersIntervalMS     = 60000
+	defaultMaxConcurrentIndexJobs     = 3
 )
 
 type embeddingProvider string
@@ -57,6 +60,26 @@ type Config struct {
 	TriggerWatcherEnabled  bool
 	FileWatcherEnabled     bool
 	SyncLockStaleMS        int
+
+	// DebugListenerEnabled controls whether the daemon starts a
+	// loopback-only HTTP listener exposing pprof and expvar handlers for
+	// live profiling and counter inspection.
+	DebugListenerEnabled bool
+	// DebugListenAddr is the loopback host:port the debug listener binds to.
+	// It must stay on a loopback address so the profiling surface is never
+	// reachable off-host.
+	DebugListenAddr string
+	// PerfCountersIntervalMS sets the cadence, in milliseconds, of the
+	// periodic daemon.perf_counters slog line. A value of zero or below
+	// disables the line entirely.
+	PerfCountersIntervalMS int
+	// MaxConcurrentIndexJobs caps how many index or converge jobs may run
+	// their embedding pass simultaneously, bounding peak memory and load on
+	// the embedding endpoint.
+	MaxConcurrentIndexJobs int
+	// ResumeIndexingOnBoot controls whether daemon startup relaunches
+	// codebases that were left mid-index when the daemon last stopped.
+	ResumeIndexingOnBoot bool
 
 	// MilvusOrphanGCEnabled controls whether the reconciler may drop
 	// orphan collections (collections matching the daemon's prefixes but
@@ -150,6 +173,11 @@ func Default() (Config, error) {
 		MilvusOrphanGCEnabled:      envBoolOrDefault("CLAUDE_CONTEXT_MILVUS_ORPHAN_GC", false),
 		MilvusOrphanGraceMS:        envIntOrDefault("CLAUDE_CONTEXT_MILVUS_ORPHAN_GRACE_MS", defaultMilvusOrphanGraceMS),
 		OrphanReconcilerIntervalMS: envIntOrDefault("CLAUDE_CONTEXT_ORPHAN_RECONCILER_INTERVAL_MS", defaultOrphanReconcilerIntervalMS),
+		DebugListenerEnabled:       envBoolOrDefault("CLAUDE_CONTEXT_DEBUG_LISTENER", true),
+		DebugListenAddr:            envOrDefault("CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR", defaultDebugListenAddr),
+		PerfCountersIntervalMS:     envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),
+		MaxConcurrentIndexJobs:     envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
+		ResumeIndexingOnBoot:       envBoolOrDefault("CLAUDE_CONTEXT_RESUME_ON_BOOT", true),
 	}, nil
 }
 

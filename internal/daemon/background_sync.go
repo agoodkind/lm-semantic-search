@@ -15,6 +15,7 @@ import (
 	"goodkind.io/claude-context-go/internal/clock"
 	"goodkind.io/claude-context-go/internal/config"
 	"goodkind.io/claude-context-go/internal/merkle"
+	"goodkind.io/claude-context-go/internal/metrics"
 	"goodkind.io/claude-context-go/internal/model"
 	"goodkind.io/claude-context-go/internal/store"
 	"goodkind.io/gklog/correlation"
@@ -185,6 +186,7 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 	}()
 
 	if !syncer.beginSync(ctx, source) {
+		metrics.SyncSkippedInflight()
 		return
 	}
 	defer syncer.endSync(ctx, source)
@@ -209,6 +211,7 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 			slog.ErrorContext(iterCtx, "check sync state failed", "path", codebase.CanonicalPath, "err", err)
 			continue
 		}
+		metrics.SweepRan(changed)
 		if !changed {
 			continue
 		}
@@ -244,6 +247,7 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	ctx = correlation.WithContext(ctx, corr)
 
 	if !syncer.beginSync(ctx, "watcher") {
+		metrics.SyncSkippedInflight()
 		for _, relativePath := range relativePaths {
 			syncer.queue.Enqueue(codebaseID, relativePath)
 		}
