@@ -108,14 +108,18 @@ func (manager *Manager) runReverseReconcile(ctx context.Context, orphanTable *or
 
 	nowMS := clock.Now().UnixMilli()
 	orphans := make([]string, 0)
+	detectedOrphans := 0
+	daemonOwned := 0
 	for _, collectionName := range collections {
 		if !semantic.IsDaemonOwnedCollection(collectionName) {
 			continue
 		}
+		daemonOwned++
 		if _, found := known[collectionName]; found {
 			orphanTable.drop(collectionName)
 			continue
 		}
+		detectedOrphans++
 		firstSeen := orphanTable.recordOrUpdate(collectionName, nowMS)
 		if !gcEnabled {
 			continue
@@ -125,13 +129,7 @@ func (manager *Manager) runReverseReconcile(ctx context.Context, orphanTable *or
 		}
 		orphans = append(orphans, collectionName)
 	}
-	daemonOwned := 0
-	for _, collectionName := range collections {
-		if semantic.IsDaemonOwnedCollection(collectionName) {
-			daemonOwned++
-		}
-	}
-	slog.InfoContext(ctx, "reverse reconcile pass", "collections_total", len(collections), "daemon_owned", daemonOwned, "registered", len(known), "candidates_for_gc", len(orphans))
+	slog.InfoContext(ctx, "reverse reconcile pass", "collections_total", len(collections), "daemon_owned", daemonOwned, "registered", len(known), "detected_orphans", detectedOrphans, "candidates_for_gc", len(orphans))
 	if len(orphans) == 0 {
 		return
 	}
