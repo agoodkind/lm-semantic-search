@@ -61,7 +61,7 @@ type Manager struct {
 	cancels        map[string]context.CancelFunc
 	done           map[string]chan struct{}
 	runner         indexingRunner
-	semantic       *semantic.Service
+	semantic       semanticIndex
 	lifecycleHook  CodebaseLifecycleHook
 	lifecycleMutex sync.Mutex
 	// indexSlots caps concurrently running index jobs. Each runJob holds one
