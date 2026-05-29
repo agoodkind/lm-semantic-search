@@ -24,7 +24,7 @@ The Go daemon must work as a drop-in replacement for the upstream TS adapter, wi
 
 Rules:
 
-- Both adapters compute the same Milvus collection name `hybrid_code_chunks_<sha256(path)[:8]>`, so the actual embedded data is already shared. Code that constructs collection names must keep this invariant.
+- Both adapters compute the same Milvus collection name `hybrid_code_chunks_<md5(path)[:8]>`, so the actual embedded data is already shared. Code that constructs collection names must keep this invariant.
 - The Go registry stays the write source for any codebase the Go daemon owns. Synthesized records from the TS snapshot are never persisted and never appear in `manager.codebases`, so background sync cannot accidentally pick them up and re-embed.
 - Do not add any one-shot or recurring import that copies TS state into the Go registry. The user explicitly rejected import semantics in favor of read-through.
 
