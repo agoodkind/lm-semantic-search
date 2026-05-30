@@ -178,13 +178,35 @@ func renderIndexingActive(codebase *model.Codebase, activeJob *model.Job) string
 			lastUpdated = activeJob.Progress.LastEventAt
 		}
 	}
-	return fmt.Sprintf(
-		"🔄 Codebase '%s' is currently being indexed. Progress: %.1f%%%s\n🕐 Last updated: %s",
+	header := fmt.Sprintf(
+		"🔄 Codebase '%s' is currently being indexed. Progress: %.1f%%%s",
 		codebase.CanonicalPath,
 		progress,
 		progressPhaseSuffix(progress),
-		formatLocalTime(lastUpdated),
 	)
+	footer := "🕐 Last updated: " + formatLocalTime(lastUpdated)
+	if activeJob != nil {
+		if magnitude := renderReconcileMagnitude(activeJob.Progress); magnitude != "" {
+			return header + "\n" + magnitude + "\n" + footer
+		}
+	}
+	return header + "\n" + footer
+}
+
+// renderReconcileMagnitude summarizes how much work a run covers: how many
+// files are embedded of the total with the chunk count, and, for a delta sync,
+// the added/modified/removed breakdown. It returns an empty string when no
+// counts are recorded yet, so a freshly queued job adds no noise. A large merge
+// reconcile is then visibly distinct from a one-file edit.
+func renderReconcileMagnitude(progress model.Progress) string {
+	lines := make([]string, 0, 2)
+	if progress.FilesTotal > 0 {
+		lines = append(lines, fmt.Sprintf("📦 %d/%d files embedded, %d chunks", progress.FilesProcessed, progress.FilesTotal, progress.ChunksGenerated))
+	}
+	if progress.FilesAdded > 0 || progress.FilesModified > 0 || progress.FilesRemoved > 0 {
+		lines = append(lines, fmt.Sprintf("🔀 Changes: %d added, %d modified, %d removed", progress.FilesAdded, progress.FilesModified, progress.FilesRemoved))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderHistoricalFailure reads as past tense so callers do not mistake an
@@ -238,7 +260,7 @@ func renderGetJob(job *model.Job) string {
 	if job == nil {
 		return "Job not found."
 	}
-	return fmt.Sprintf(
+	base := fmt.Sprintf(
 		"Job %s\nCodebase: %s\nOperation: %s\nState: %s\nPhase: %s\nProgress: %.1f%%",
 		job.ID,
 		job.CanonicalPath,
@@ -247,6 +269,10 @@ func renderGetJob(job *model.Job) string {
 		job.Progress.Phase,
 		job.Progress.OverallPercent,
 	)
+	if magnitude := renderReconcileMagnitude(job.Progress); magnitude != "" {
+		base += "\n" + magnitude
+	}
+	return base
 }
 
 func renderListJobs(jobs []model.Job) string {

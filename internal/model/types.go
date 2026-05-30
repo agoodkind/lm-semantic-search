@@ -64,11 +64,17 @@ type IndexConfig struct {
 
 // Progress records daemon-visible structured progress for a job.
 type Progress struct {
-	Phase                     string    `json:"phase"`
-	PhasePercent              float64   `json:"phase_percent"`
-	OverallPercent            float64   `json:"overall_percent"`
-	FilesTotal                int32     `json:"files_total"`
-	FilesProcessed            int32     `json:"files_processed"`
+	Phase          string  `json:"phase"`
+	PhasePercent   float64 `json:"phase_percent"`
+	OverallPercent float64 `json:"overall_percent"`
+	FilesTotal     int32   `json:"files_total"`
+	FilesProcessed int32   `json:"files_processed"`
+	// FilesAdded, FilesModified, and FilesRemoved record a delta sync's change
+	// breakdown so status output can show the magnitude of a reconcile (for
+	// example after a large merge). They stay zero for a full reindex.
+	FilesAdded                int32     `json:"files_added"`
+	FilesModified             int32     `json:"files_modified"`
+	FilesRemoved              int32     `json:"files_removed"`
 	ChunksGenerated           int32     `json:"chunks_generated"`
 	EmbeddingBatchesTotal     int32     `json:"embedding_batches_total"`
 	EmbeddingBatchesCompleted int32     `json:"embedding_batches_completed"`

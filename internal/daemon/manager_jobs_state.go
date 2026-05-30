@@ -56,6 +56,25 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	manager.jobs[jobID] = job
 }
 
+// setJobDeltaCounts records how many files a delta sync will add, modify, and
+// remove, so the status and job views can report the magnitude of a reconcile
+// (for example after a large merge). The counts are set once when the run
+// begins; updateJobProgress sets only the embed counters, so these survive the
+// per-file progress updates.
+func (manager *Manager) setJobDeltaCounts(jobID string, added int, modified int, removed int) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	job, found := manager.jobs[jobID]
+	if !found {
+		return
+	}
+	job.Progress.FilesAdded = safeInt32(added)
+	job.Progress.FilesModified = safeInt32(modified)
+	job.Progress.FilesRemoved = safeInt32(removed)
+	manager.jobs[jobID] = job
+}
+
 func (manager *Manager) updateJobCompleted(jobID string, result indexer.Result) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()

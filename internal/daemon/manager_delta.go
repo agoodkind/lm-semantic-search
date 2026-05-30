@@ -196,6 +196,11 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job) bool {
 		return true
 	}
 
+	// Record the change breakdown so the status and job views can report the
+	// magnitude of this reconcile while it runs. The per-file progress updates
+	// touch only the embed counters, so these counts persist for the run.
+	manager.setJobDeltaCounts(job.ID, len(plan.diff.Added), len(plan.diff.Modified), len(plan.diff.Removed))
+
 	state := deltaState{
 		plan:         plan,
 		snapshotPath: manager.merklePath(codebase.ID),
