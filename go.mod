@@ -25,6 +25,14 @@ require (
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
+	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0 // indirect
+	github.com/tree-sitter-grammars/tree-sitter-objc v1.2.1-0.20250131075517-181a81b8f23a // indirect
+	github.com/tree-sitter/tree-sitter-bash v0.23.3 // indirect
+	github.com/tree-sitter/tree-sitter-css v0.23.2 // indirect
+	github.com/tree-sitter/tree-sitter-html v0.23.2 // indirect
+	github.com/tree-sitter/tree-sitter-json v0.24.8 // indirect
+	github.com/tree-sitter/tree-sitter-php v0.23.12 // indirect
+	github.com/tree-sitter/tree-sitter-ruby v0.23.1 // indirect
 )
 
 require (
