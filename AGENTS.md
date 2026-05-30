@@ -44,10 +44,10 @@ Rules:
 
 ## Splitter
 
-- AST (default): `tree-sitter` parsers for JavaScript, TypeScript, Python, Java, C, C++, Go, Rust, Scala, and C#. Chunks fall on class, function, method, and interface declarations.
-- `langchain` (opt-in via `splitter: "langchain"` per index request): a recursive separator splitter that mirrors LangChain JS `RecursiveCharacterTextSplitter.fromLanguage`. Per-language separator tables live in `internal/splitter/langchain.go` for js, python, java, cpp, go, rust, php, ruby, swift, scala, html, markdown, latex, and sol.
-
-Treat `langchain` as a fallback diagnostic, not a default. AST chunks produce dramatically better search results.
+- AST (default): `tree-sitter` parsers cover JavaScript, TypeScript, Python, Java, C, C++, Go, Rust, Scala, C#, PHP, Ruby, Bash, JSON, HTML, CSS, Kotlin, Objective-C, Dart, and Swift. Eighteen of these are pinned Go-module grammars in `go.mod`. Dart and Swift have no usable module against the pinned runtime, so each is a pinned git submodule under `internal/splitter/grammars/<language>/upstream` compiled through a hand-written cgo `binding.go` (with `grammar_parser.c` and `grammar_scanner.c` shims so the parser and scanner compile as separate translation units). The runtime `github.com/tree-sitter/go-tree-sitter` accepts grammar ABI versions 13 through 15; adding a grammar needs a `grammarForLanguage` case and an `extensionLanguages` entry, and nothing else, because the chunker is grammar-agnostic.
+- The Swift submodule commits only its grammar definition, not the generated parser, so the parser is produced from the pinned submodule by the `make grammars` target, which `make build`, `make test`, and `make lint` run first. The generated parser stays inside the submodule working tree (gitignored there) and is never committed. A build host needs the `tree-sitter` CLI and initialized submodules (`git submodule update --init`).
+- Chunking method (cAST): the AST path walks the parse tree and balances chunk size. A node within the budget becomes one chunk; a larger node splits into its children whose chunks are greedily merged back up to the budget; a larger node with no children is cut on language-aware separators. The budget counts non-whitespace bytes. `splitter.go` holds this walk; there is no per-language declaration list.
+- Recursive separator splitter (`internal/splitter/langchain.go`): the automatic fallback when a file's language has no grammar or a parse fails, and the cut path the AST walk uses for an oversize leaf. Its tables mirror LangChain JS `RecursiveCharacterTextSplitter.fromLanguage` for the languages LangChain defines and a declaration-first chain for the rest. It is also selectable per index request via `splitter: "langchain"`, but AST is the default and produces better search results.
 
 ## Incremental sync
 
