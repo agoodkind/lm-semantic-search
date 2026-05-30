@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"math"
 	"path/filepath"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -70,18 +69,6 @@ const (
 	grammarCSharp     grammarKey = "csharp"
 	grammarCS         grammarKey = "cs"
 )
-
-var splittableNodeTypes = map[string][]string{
-	"javascript": {"function_declaration", "arrow_function", "class_declaration", "method_definition", "export_statement"},
-	"typescript": {"function_declaration", "arrow_function", "class_declaration", "method_definition", "export_statement", "interface_declaration", "type_alias_declaration"},
-	"python":     {"function_definition", "class_definition", "decorated_definition", "async_function_definition"},
-	"java":       {"method_declaration", "class_declaration", "interface_declaration", "constructor_declaration"},
-	"cpp":        {"function_definition", "class_specifier", "namespace_definition", "declaration"},
-	"go":         {"function_declaration", "method_declaration", "type_declaration", "var_declaration", "const_declaration"},
-	"rust":       {"function_item", "impl_item", "struct_item", "enum_item", "trait_item", "mod_item"},
-	"csharp":     {"method_declaration", "class_declaration", "interface_declaration", "struct_declaration", "record_declaration", "enum_declaration", "namespace_declaration", "constructor_declaration", "property_declaration"},
-	"scala":      {"method_declaration", "class_declaration", "interface_declaration", "constructor_declaration"},
-}
 
 var extensionLanguages = map[string]string{
 	".ts":       "typescript",
@@ -184,121 +171,141 @@ func (dispatcher *Dispatcher) tryAST(ctx context.Context, content []byte, langua
 		return nil, fmt.Errorf("parse produced no root node for %s", path)
 	}
 
-	chunks := make([]Chunk, 0)
-	dispatcher.collectASTChunks(rootNode, content, language, path, &chunks)
-	if len(chunks) == 0 {
-		fallbackChunk := Chunk{
-			Content:   string(content),
-			StartLine: 1,
-			EndLine:   lineCount(string(content)),
-			Language:  language,
-			FilePath:  path,
-		}
-		return dispatcher.refineChunks([]Chunk{fallbackChunk}, dispatcher.astChunkSize, dispatcher.astChunkOverlap), nil
+	chunks := dispatcher.chunkNode(rootNode, content, language, path, dispatcher.astChunkSize)
+	if len(chunks) == 0 && strings.TrimSpace(string(content)) != "" {
+		chunks = langchainSplit(string(content), language, path, dispatcher.astChunkSize, 0)
 	}
-
-	return dispatcher.refineChunks(chunks, dispatcher.astChunkSize, dispatcher.astChunkOverlap), nil
+	return addOverlap(chunks, dispatcher.astChunkOverlap), nil
 }
 
-func (dispatcher *Dispatcher) collectASTChunks(node *tree_sitter.Node, content []byte, language string, path string, chunks *[]Chunk) {
+// chunkNode walks the parse tree and returns size-balanced chunks following the
+// cAST method: a node whose non-whitespace size fits the budget becomes one
+// chunk, a larger node is split into its children whose chunks are greedily
+// merged back up to the budget, and a larger node with no children is split on
+// textual seams. The budget counts non-whitespace bytes so indentation and
+// blank lines do not fragment otherwise-coherent chunks.
+func (dispatcher *Dispatcher) chunkNode(node *tree_sitter.Node, content []byte, language string, path string, budget int) []Chunk {
 	if node == nil {
-		return
+		return nil
 	}
-	if slices.Contains(splittableNodeTypes[language], node.Kind()) {
-		startByte := node.StartByte()
-		endByte := node.EndByte()
-		nodeText := strings.TrimSpace(string(content[startByte:endByte]))
-		if nodeText != "" {
-			startPosition := node.StartPosition()
-			endPosition := node.EndPosition()
-			*chunks = append(*chunks, Chunk{
-				Content:   nodeText,
-				StartLine: safeInt(startPosition.Row) + 1,
-				EndLine:   safeInt(endPosition.Row) + 1,
-				Language:  language,
-				FilePath:  path,
-			})
+	if nonWhitespaceByteCount(content, node.StartByte(), node.EndByte()) <= budget {
+		if chunk, ok := chunkFromBytes(content, node.StartByte(), node.EndByte(), node.StartPosition(), node.EndPosition(), language, path); ok {
+			return []Chunk{chunk}
 		}
+		return nil
 	}
-
-	for i := range node.ChildCount() {
-		dispatcher.collectASTChunks(node.Child(i), content, language, path, chunks)
+	if node.ChildCount() == 0 {
+		return dispatcher.splitOversizeSpan(node, content, language, path)
 	}
+	return dispatcher.mergeChildChunks(node, content, language, path, budget)
 }
 
-func (dispatcher *Dispatcher) refineChunks(chunks []Chunk, chunkSize int, overlap int) []Chunk {
-	refined := make([]Chunk, 0, len(chunks))
-	for _, chunk := range chunks {
-		if len(chunk.Content) <= chunkSize {
-			refined = append(refined, chunk)
-			continue
-		}
-		refined = append(refined, dispatcher.splitLargeChunk(chunk, chunkSize)...)
-	}
-	return addOverlap(refined, overlap)
-}
+// mergeChildChunks greedily groups consecutive children of an oversize node into
+// chunks up to the budget. A child that alone exceeds the budget is chunked on
+// its own by recursing into chunkNode. A merged group spans from its first
+// child's start byte to its last child's end byte, so comments and punctuation
+// between children stay inside the chunk.
+func (dispatcher *Dispatcher) mergeChildChunks(node *tree_sitter.Node, content []byte, language string, path string, budget int) []Chunk {
+	chunks := make([]Chunk, 0)
+	var groupStartByte, groupEndByte uint
+	var groupStartPos, groupEndPos tree_sitter.Point
+	groupSize := 0
+	haveGroup := false
 
-func (dispatcher *Dispatcher) splitLargeChunk(chunk Chunk, chunkSize int) []Chunk {
-	lines := strings.Split(chunk.Content, "\n")
-	subChunks := make([]Chunk, 0)
-	currentChunk := ""
-	currentStartLine := chunk.StartLine
-	currentLineCount := 0
-
-	flush := func() {
-		if strings.TrimSpace(currentChunk) == "" {
+	flushGroup := func() {
+		if !haveGroup {
 			return
 		}
-		subChunks = append(subChunks, Chunk{
-			Content:   strings.TrimSpace(currentChunk),
-			StartLine: currentStartLine,
-			EndLine:   currentStartLine + currentLineCount - 1,
-			Language:  chunk.Language,
-			FilePath:  chunk.FilePath,
-		})
+		if chunk, ok := chunkFromBytes(content, groupStartByte, groupEndByte, groupStartPos, groupEndPos, language, path); ok {
+			chunks = append(chunks, chunk)
+		}
+		haveGroup = false
+		groupSize = 0
 	}
 
-	for i, line := range lines {
-		lineWithNewline := line
-		if i < len(lines)-1 {
-			lineWithNewline += "\n"
-		}
-
-		// A single line longer than chunkSize needs mid-line hard-splits;
-		// minified JS, generated code, and JSON dumps routinely produce
-		// these. Without this branch the AST chunk stays oversize and
-		// Milvus rejects it for exceeding the VarChar max length.
-		if len(lineWithNewline) > chunkSize {
-			flush()
-			currentChunk = ""
-			currentLineCount = 0
-			for _, piece := range hardSplit(lineWithNewline, chunkSize) {
-				subChunks = append(subChunks, Chunk{
-					Content:   strings.TrimSpace(piece),
-					StartLine: chunk.StartLine + i,
-					EndLine:   chunk.StartLine + i,
-					Language:  chunk.Language,
-					FilePath:  chunk.FilePath,
-				})
-			}
-			currentStartLine = chunk.StartLine + i + 1
+	for index := range node.ChildCount() {
+		child := node.Child(index)
+		if child == nil {
 			continue
 		}
-
-		if len(currentChunk)+len(lineWithNewline) > chunkSize && currentChunk != "" {
-			flush()
-			currentChunk = lineWithNewline
-			currentStartLine = chunk.StartLine + i
-			currentLineCount = 1
+		childSize := nonWhitespaceByteCount(content, child.StartByte(), child.EndByte())
+		if childSize > budget {
+			flushGroup()
+			chunks = append(chunks, dispatcher.chunkNode(child, content, language, path, budget)...)
 			continue
 		}
-
-		currentChunk += lineWithNewline
-		currentLineCount++
+		if haveGroup && groupSize+childSize > budget {
+			flushGroup()
+		}
+		if !haveGroup {
+			groupStartByte = child.StartByte()
+			groupStartPos = child.StartPosition()
+			haveGroup = true
+		}
+		groupEndByte = child.EndByte()
+		groupEndPos = child.EndPosition()
+		groupSize += childSize
 	}
+	flushGroup()
+	return chunks
+}
 
-	flush()
-	return subChunks
+// splitOversizeSpan splits a single node that exceeds the budget and has no
+// children to recurse into. It cuts on language-aware seams through the
+// recursive separator splitter, whose byte-based hard split keeps any single
+// piece within the per-chunk byte cap the vector store enforces. Line numbers
+// are offset back to the node's position in the file.
+func (dispatcher *Dispatcher) splitOversizeSpan(node *tree_sitter.Node, content []byte, language string, path string) []Chunk {
+	startByte := node.StartByte()
+	endByte := node.EndByte()
+	if startByte >= endByte || int(endByte) > len(content) {
+		return nil
+	}
+	baseLine := safeInt(node.StartPosition().Row)
+	pieces := langchainSplit(string(content[startByte:endByte]), language, path, dispatcher.astChunkSize, 0)
+	for index := range pieces {
+		pieces[index].StartLine += baseLine
+		pieces[index].EndLine += baseLine
+	}
+	return pieces
+}
+
+// chunkFromBytes builds a chunk from a byte span, trimming surrounding
+// whitespace. It returns false when the span is empty or whitespace-only.
+func chunkFromBytes(content []byte, startByte uint, endByte uint, startPos tree_sitter.Point, endPos tree_sitter.Point, language string, path string) (Chunk, bool) {
+	var zero Chunk
+	if startByte >= endByte || int(endByte) > len(content) {
+		return zero, false
+	}
+	text := strings.TrimSpace(string(content[startByte:endByte]))
+	if text == "" {
+		return zero, false
+	}
+	return Chunk{
+		Content:   text,
+		StartLine: safeInt(startPos.Row) + 1,
+		EndLine:   safeInt(endPos.Row) + 1,
+		Language:  language,
+		FilePath:  path,
+	}, true
+}
+
+// nonWhitespaceByteCount counts the non-whitespace bytes in content[start:end].
+// The cAST budget uses this measure so indentation and blank lines do not
+// inflate a node's size and fragment otherwise-coherent chunks.
+func nonWhitespaceByteCount(content []byte, start uint, end uint) int {
+	if start >= end || int(end) > len(content) {
+		return 0
+	}
+	count := 0
+	for index := start; index < end; index++ {
+		switch content[index] {
+		case ' ', '\t', '\n', '\r', '\f', '\v':
+		default:
+			count++
+		}
+	}
+	return count
 }
 
 func addOverlap(chunks []Chunk, overlap int) []Chunk {
