@@ -24,47 +24,68 @@ const (
 	langchainLangMarkdown langchainLanguage = "markdown"
 	langchainLangLatex    langchainLanguage = "latex"
 	langchainLangSolidity langchainLanguage = "solidity"
+	langchainLangKotlin   langchainLanguage = "kotlin"
+	langchainLangObjC     langchainLanguage = "objc"
+	langchainLangDart     langchainLanguage = "dart"
+	langchainLangBash     langchainLanguage = "bash"
+	langchainLangJSON     langchainLanguage = "json"
+	langchainLangCSS      langchainLanguage = "css"
 	langchainLangDefault  langchainLanguage = ""
 )
 
 // languageKeyAliases maps caller-facing language strings to the normalized key.
 var languageKeyAliases = map[string]langchainLanguage{
-	"javascript": langchainLangJSFamily,
-	"js":         langchainLangJSFamily,
-	"typescript": langchainLangJSFamily,
-	"ts":         langchainLangJSFamily,
-	"jsx":        langchainLangJSFamily,
-	"tsx":        langchainLangJSFamily,
-	"python":     langchainLangPython,
-	"py":         langchainLangPython,
-	"java":       langchainLangJava,
-	"cpp":        langchainLangCFamily,
-	"c++":        langchainLangCFamily,
-	"c":          langchainLangCFamily,
-	"go":         langchainLangGo,
-	"rust":       langchainLangRust,
-	"rs":         langchainLangRust,
-	"php":        langchainLangPHP,
-	"ruby":       langchainLangRuby,
-	"rb":         langchainLangRuby,
-	"swift":      langchainLangSwift,
-	"scala":      langchainLangScala,
-	"csharp":     langchainLangCSharp,
-	"cs":         langchainLangCSharp,
-	"html":       langchainLangHTML,
-	"markdown":   langchainLangMarkdown,
-	"md":         langchainLangMarkdown,
-	"latex":      langchainLangLatex,
-	"tex":        langchainLangLatex,
-	"solidity":   langchainLangSolidity,
-	"sol":        langchainLangSolidity,
+	"javascript":  langchainLangJSFamily,
+	"js":          langchainLangJSFamily,
+	"typescript":  langchainLangJSFamily,
+	"ts":          langchainLangJSFamily,
+	"jsx":         langchainLangJSFamily,
+	"tsx":         langchainLangJSFamily,
+	"python":      langchainLangPython,
+	"py":          langchainLangPython,
+	"java":        langchainLangJava,
+	"cpp":         langchainLangCFamily,
+	"c++":         langchainLangCFamily,
+	"c":           langchainLangCFamily,
+	"go":          langchainLangGo,
+	"rust":        langchainLangRust,
+	"rs":          langchainLangRust,
+	"php":         langchainLangPHP,
+	"ruby":        langchainLangRuby,
+	"rb":          langchainLangRuby,
+	"swift":       langchainLangSwift,
+	"scala":       langchainLangScala,
+	"csharp":      langchainLangCSharp,
+	"cs":          langchainLangCSharp,
+	"html":        langchainLangHTML,
+	"markdown":    langchainLangMarkdown,
+	"md":          langchainLangMarkdown,
+	"latex":       langchainLangLatex,
+	"tex":         langchainLangLatex,
+	"solidity":    langchainLangSolidity,
+	"sol":         langchainLangSolidity,
+	"kotlin":      langchainLangKotlin,
+	"kt":          langchainLangKotlin,
+	"kts":         langchainLangKotlin,
+	"objective-c": langchainLangObjC,
+	"objc":        langchainLangObjC,
+	"objectivec":  langchainLangObjC,
+	"dart":        langchainLangDart,
+	"bash":        langchainLangBash,
+	"sh":          langchainLangBash,
+	"shell":       langchainLangBash,
+	"json":        langchainLangJSON,
+	"css":         langchainLangCSS,
+	"scss":        langchainLangCSS,
 }
 
 // langchainSeparatorTable maps normalized language keys to their separator
-// chain. Tables mirror LangChain's RecursiveCharacterTextSplitter.fromLanguage
-// so chunk boundaries fall on function, class, or other natural code seams
-// before breaking on blank lines, line breaks, words, and finally individual
-// characters. Source: langchain-js src/text_splitter.ts.
+// chain. Chunk boundaries fall on function, class, or other natural code
+// seams before breaking on blank lines, line breaks, words, and finally
+// individual characters. Tables for languages LangChain defines mirror its
+// RecursiveCharacterTextSplitter.fromLanguage chains (langchain-js
+// src/text_splitter.ts); tables for the remaining languages follow the same
+// declaration-first shape.
 var langchainSeparatorTable = map[langchainLanguage][]string{
 	langchainLangJSFamily: {
 		"\nfunction ", "\nconst ", "\nlet ", "\nvar ", "\nclass ",
@@ -144,6 +165,35 @@ var langchainSeparatorTable = map[langchainLanguage][]string{
 		"\nstruct ", "\nenum ",
 		"\nif ", "\nfor ", "\nwhile ", "\ndo while ", "\nassembly ",
 		"\n\n", "\n", " ", "",
+	},
+	langchainLangKotlin: {
+		"\nfun ", "\nclass ", "\nobject ", "\ninterface ", "\ndata class ", "\nsealed class ", "\nenum class ",
+		"\nval ", "\nvar ",
+		"\nif ", "\nfor ", "\nwhile ", "\nwhen ",
+		"\n\n", "\n", " ", "",
+	},
+	langchainLangObjC: {
+		"\n@interface ", "\n@implementation ", "\n@protocol ", "\n@property ",
+		"\n- (", "\n+ (",
+		"\nif ", "\nfor ", "\nwhile ", "\nswitch ",
+		"\n\n", "\n", " ", "",
+	},
+	langchainLangDart: {
+		"\nclass ", "\nabstract class ", "\nenum ", "\nmixin ", "\nextension ", "\ntypedef ",
+		"\nvoid ", "\nFuture", "\nStream",
+		"\nif ", "\nfor ", "\nwhile ", "\nswitch ",
+		"\n\n", "\n", " ", "",
+	},
+	langchainLangBash: {
+		"\nfunction ", "\n# ",
+		"\nif ", "\nfor ", "\nwhile ", "\nuntil ", "\ncase ",
+		"\n\n", "\n", " ", "",
+	},
+	langchainLangJSON: {
+		"\n\n", "\n  \"", "\n\t\"", "\n", " ", "",
+	},
+	langchainLangCSS: {
+		"\n\n", "}\n", "\n", " ", "",
 	},
 	langchainLangDefault: {"\n\n", "\n", " ", ""},
 }

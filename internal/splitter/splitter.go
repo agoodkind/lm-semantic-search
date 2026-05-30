@@ -84,29 +84,39 @@ var splittableNodeTypes = map[string][]string{
 }
 
 var extensionLanguages = map[string]string{
-	".ts":    "typescript",
-	".tsx":   "typescript",
-	".js":    "javascript",
-	".jsx":   "javascript",
-	".py":    "python",
-	".java":  "java",
-	".cpp":   "cpp",
-	".c":     "c",
-	".h":     "c",
-	".hpp":   "cpp",
-	".cs":    "csharp",
-	".go":    "go",
-	".rs":    "rust",
-	".php":   "php",
-	".rb":    "ruby",
-	".swift": "swift",
-	".kt":    "kotlin",
-	".scala": "scala",
-	".m":     "objective-c",
-	".mm":    "objective-c",
-	".dart":  "dart",
-	".sol":   "solidity",
-	".ipynb": "jupyter",
+	".ts":       "typescript",
+	".tsx":      "typescript",
+	".js":       "javascript",
+	".jsx":      "javascript",
+	".py":       "python",
+	".java":     "java",
+	".cpp":      "cpp",
+	".c":        "c",
+	".h":        "c",
+	".hpp":      "cpp",
+	".cs":       "csharp",
+	".go":       "go",
+	".rs":       "rust",
+	".php":      "php",
+	".rb":       "ruby",
+	".swift":    "swift",
+	".kt":       "kotlin",
+	".scala":    "scala",
+	".m":        "objective-c",
+	".mm":       "objective-c",
+	".dart":     "dart",
+	".sol":      "solidity",
+	".ipynb":    "jupyter",
+	".md":       "markdown",
+	".markdown": "markdown",
+	".tex":      "latex",
+	".sh":       "bash",
+	".bash":     "bash",
+	".json":     "json",
+	".css":      "css",
+	".html":     "html",
+	".htm":      "html",
+	".kts":      "kotlin",
 }
 
 // NewDispatcher constructs a splitter dispatcher using the current defaults.
@@ -139,9 +149,9 @@ func (dispatcher *Dispatcher) SplitFileWithType(ctx context.Context, path string
 		return Result{Chunks: astChunks, Strategy: "ast"}, nil
 	}
 
-	slog.WarnContext(ctx, "fall back to character splitter", "path", path, "language", language, "err", err)
+	slog.WarnContext(ctx, "fall back to recursive separator splitter", "path", path, "language", language, "err", err)
 	return Result{
-		Chunks:   dispatcher.characterSplit(string(content), language, path, dispatcher.fallbackChunkSize, dispatcher.fallbackOverlap),
+		Chunks:   langchainSplit(string(content), language, path, dispatcher.fallbackChunkSize, dispatcher.fallbackOverlap),
 		Strategy: "fallback",
 	}, nil
 }
@@ -289,70 +299,6 @@ func (dispatcher *Dispatcher) splitLargeChunk(chunk Chunk, chunkSize int) []Chun
 
 	flush()
 	return subChunks
-}
-
-func (dispatcher *Dispatcher) characterSplit(content string, language string, path string, chunkSize int, overlap int) []Chunk {
-	chunks := make([]Chunk, 0)
-	lines := strings.Split(content, "\n")
-	currentChunk := ""
-	currentStartLine := 1
-	currentLineCount := 0
-
-	flush := func() {
-		if strings.TrimSpace(currentChunk) == "" {
-			return
-		}
-		chunks = append(chunks, Chunk{
-			Content:   currentChunk,
-			StartLine: currentStartLine,
-			EndLine:   currentStartLine + currentLineCount - 1,
-			Language:  language,
-			FilePath:  path,
-		})
-	}
-
-	for i, line := range lines {
-		lineWithNewline := line
-		if i < len(lines)-1 {
-			lineWithNewline += "\n"
-		}
-
-		// Mid-line hard-split for lines longer than chunkSize keeps
-		// minified or single-line generated files within the per-chunk
-		// byte budget. Without it the line stays a single oversize
-		// chunk that Milvus refuses to accept.
-		if len(lineWithNewline) > chunkSize {
-			flush()
-			currentChunk = ""
-			currentLineCount = 0
-			for _, piece := range hardSplit(lineWithNewline, chunkSize) {
-				chunks = append(chunks, Chunk{
-					Content:   piece,
-					StartLine: i + 1,
-					EndLine:   i + 1,
-					Language:  language,
-					FilePath:  path,
-				})
-			}
-			currentStartLine = i + 2
-			continue
-		}
-
-		if len(currentChunk)+len(lineWithNewline) > chunkSize && currentChunk != "" {
-			flush()
-			currentChunk = lineWithNewline
-			currentStartLine = i + 1
-			currentLineCount = 1
-			continue
-		}
-
-		currentChunk += lineWithNewline
-		currentLineCount++
-	}
-
-	flush()
-
-	return addOverlap(chunks, overlap)
 }
 
 func addOverlap(chunks []Chunk, overlap int) []Chunk {

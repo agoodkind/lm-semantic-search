@@ -113,3 +113,87 @@ func TestCSharpASTSupported(t *testing.T) {
 		t.Fatal("expected at least one chunk")
 	}
 }
+
+// TestSplitFileFallbackUsesMarkdownHeadings proves a .md file, which has no AST
+// grammar, routes through the recursive separator fallback and cuts one chunk
+// per second-level heading rather than packing sections together.
+func TestSplitFileFallbackUsesMarkdownHeadings(t *testing.T) {
+	t.Parallel()
+
+	content := strings.Join([]string{
+		"# Document Title",
+		"",
+		"Introductory paragraph that sets up the document context here.",
+		"",
+		"## Alpha",
+		"The alpha section explains the very first concept in brief.",
+		"",
+		"## Bravo",
+		"The bravo section explains the second concept in brief here.",
+		"",
+		"## Charlie",
+		"The charlie section explains the third concept in brief now.",
+	}, "\n")
+
+	dispatcher := &Dispatcher{
+		astChunkSize:      2500,
+		astChunkOverlap:   0,
+		fallbackChunkSize: 100,
+		fallbackOverlap:   0,
+	}
+	result, err := dispatcher.SplitFile(context.Background(), "doc.md", []byte(content))
+	if err != nil {
+		t.Fatalf("SplitFile returned error: %v", err)
+	}
+	if result.Strategy != "fallback" {
+		t.Fatalf("strategy = %q (expected fallback; markdown has no AST grammar)", result.Strategy)
+	}
+	headingChunks := 0
+	for _, chunk := range result.Chunks {
+		trimmed := strings.TrimSpace(chunk.Content)
+		if strings.HasPrefix(trimmed, "## ") {
+			headingChunks++
+		}
+		if strings.Count(trimmed, "## ") > 1 {
+			t.Fatalf("a single chunk merged multiple headings: %q", chunk.Content)
+		}
+	}
+	if headingChunks != 3 {
+		t.Fatalf("expected 3 section chunks beginning at a heading, got %d: %#v", headingChunks, result.Chunks)
+	}
+}
+
+// TestSplitFileFallbackForUnknownExtensionBreaksOnBlankLines proves an
+// extension absent from extensionLanguages routes through the recursive
+// fallback and cuts on paragraph boundaries rather than spanning non-adjacent
+// paragraphs.
+func TestSplitFileFallbackForUnknownExtensionBreaksOnBlankLines(t *testing.T) {
+	t.Parallel()
+
+	paragraph := func(word string) string {
+		return strings.TrimRight(strings.Repeat(word+" ", 9), " ")
+	}
+	content := strings.Join([]string{paragraph("alpha"), "", paragraph("bravo"), "", paragraph("charlie")}, "\n")
+
+	dispatcher := &Dispatcher{
+		astChunkSize:      2500,
+		astChunkOverlap:   0,
+		fallbackChunkSize: 60,
+		fallbackOverlap:   0,
+	}
+	result, err := dispatcher.SplitFile(context.Background(), "notes.unknownext", []byte(content))
+	if err != nil {
+		t.Fatalf("SplitFile returned error: %v", err)
+	}
+	if result.Strategy != "fallback" {
+		t.Fatalf("strategy = %q (expected fallback)", result.Strategy)
+	}
+	if len(result.Chunks) < 2 {
+		t.Fatalf("expected the recursive fallback to produce multiple chunks, got %d", len(result.Chunks))
+	}
+	for _, chunk := range result.Chunks {
+		if strings.Contains(chunk.Content, "alpha") && strings.Contains(chunk.Content, "charlie") {
+			t.Fatalf("a chunk spanned non-adjacent paragraphs, suggesting blind windowing: %q", chunk.Content)
+		}
+	}
+}
