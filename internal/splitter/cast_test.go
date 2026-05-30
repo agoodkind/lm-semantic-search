@@ -44,6 +44,45 @@ func TestASTChunkerMergesSmallDeclarations(t *testing.T) {
 	}
 }
 
+// TestSwiftDeclarationsChunkByAST proves a Swift file of two functions and one
+// struct chunks at declaration boundaries through the AST path, rather than
+// collapsing to one whole-file chunk.
+func TestSwiftDeclarationsChunkByAST(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		"struct Point {",
+		"    let x: Int",
+		"    let y: Int",
+		"}",
+		"",
+		"func add(a: Int, b: Int) -> Int {",
+		"    return a + b",
+		"}",
+		"",
+		"func mul(a: Int, b: Int) -> Int {",
+		"    return a * b",
+		"}",
+	}, "\n")
+
+	dispatcher := &Dispatcher{astChunkSize: 40, astChunkOverlap: 0, fallbackChunkSize: 1000, fallbackOverlap: 0}
+	result, err := dispatcher.SplitFile(context.Background(), "Math.swift", []byte(source))
+	if err != nil {
+		t.Fatalf("SplitFile returned error: %v", err)
+	}
+	if result.Strategy != "ast" {
+		t.Fatalf("strategy = %q (expected ast; Swift grammar did not load)", result.Strategy)
+	}
+	if len(result.Chunks) < 2 {
+		t.Fatalf("expected Swift declarations to split into multiple chunks, got %d", len(result.Chunks))
+	}
+	for _, chunk := range result.Chunks {
+		if strings.Contains(chunk.Content, "struct Point") && strings.Contains(chunk.Content, "func mul") {
+			t.Fatalf("a chunk spanned the whole file instead of aligning to declarations: %q", chunk.Content)
+		}
+	}
+}
+
 // TestASTChunkerSplitsOversizeDeclaration proves a single declaration larger
 // than the budget is split into more than one chunk by recursing into its
 // children, rather than emitted as one oversize chunk.

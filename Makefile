@@ -41,12 +41,52 @@ include bootstrap.mk
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: build-clients install-clients deploy deploy-service daemon-wait daemon-status kill-orphans
+.PHONY: build-clients install-clients deploy deploy-service daemon-wait daemon-status kill-orphans grammars
 
 CLI_DIST_BIN := $(DIST_DIR)/$(CLI_BINARY)
 MCP_DIST_BIN := $(DIST_DIR)/$(MCP_BINARY)
 CLI_INSTALL_BIN := $(INSTALL_DIR)/$(CLI_BINARY)
 MCP_INSTALL_BIN := $(INSTALL_DIR)/$(MCP_BINARY)
+
+# ---------------------------------------------------------------------------
+# Grammar generation
+# ---------------------------------------------------------------------------
+# The Swift grammar submodule commits only its grammar definition, not the
+# generated parser, so the parser is produced from the pinned submodule by the
+# tree-sitter CLI. The other grammars commit their parser and need no step. The
+# generated files stay inside the submodule working tree (gitignored there) and
+# are never committed to this repository.
+SWIFT_GRAMMAR_DIR := internal/splitter/grammars/swift/upstream
+SWIFT_GRAMMAR_DEF := $(SWIFT_GRAMMAR_DIR)/src/grammar.json
+SWIFT_GRAMMAR_PARSER := $(SWIFT_GRAMMAR_DIR)/src/parser.c
+TREE_SITTER_ABI ?= 14
+
+grammars:
+	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
+		echo "grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
+		exit 1; \
+	fi
+	@if ! command -v tree-sitter >/dev/null 2>&1; then \
+		echo "grammars: tree-sitter CLI not found; install it (e.g. 'brew install tree-sitter') to build the Swift grammar"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(SWIFT_GRAMMAR_PARSER)" ] || [ "$(SWIFT_GRAMMAR_DEF)" -nt "$(SWIFT_GRAMMAR_PARSER)" ]; then \
+		echo "grammars: generating Swift parser (abi $(TREE_SITTER_ABI))"; \
+		( cd "$(SWIFT_GRAMMAR_DIR)" && tree-sitter generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
+		git -C "$(SWIFT_GRAMMAR_DIR)" checkout -- . >/dev/null 2>&1 || true; \
+	else \
+		echo "grammars: Swift parser already generated"; \
+	fi
+
+# tree-sitter generate also rewrites the upstream Go binding; the checkout above
+# reverts those tracked edits so the submodule stays at its pinned commit. The
+# generated parser.c and tree_sitter/ headers are gitignored in the submodule,
+# so the checkout leaves them in place.
+
+# Building, testing, and linting compile the Swift grammar package, so they need
+# the generated parser. The order-only prerequisite generates it first on a
+# fresh checkout without forcing rebuilds.
+build build-check check test lint: | grammars
 
 build-clients:
 	@mkdir -p "$(DIST_DIR)"

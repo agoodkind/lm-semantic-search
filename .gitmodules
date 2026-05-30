@@ -1,0 +1,6 @@
+[submodule "internal/splitter/grammars/dart/upstream"]
+	path = internal/splitter/grammars/dart/upstream
+	url = https://github.com/UserNobody14/tree-sitter-dart.git
+[submodule "internal/splitter/grammars/swift/upstream"]
+	path = internal/splitter/grammars/swift/upstream
+	url = https://github.com/alex-pinkus/tree-sitter-swift.git

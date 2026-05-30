@@ -30,6 +30,8 @@ import (
 	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
 	tree_sitter_scala "github.com/tree-sitter/tree-sitter-scala/bindings/go"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
+	tree_sitter_dart "goodkind.io/claude-context-go/internal/splitter/grammars/dart"
+	tree_sitter_swift "goodkind.io/claude-context-go/internal/splitter/grammars/swift"
 )
 
 // Chunk is one code chunk emitted by a splitter.
@@ -84,6 +86,8 @@ const (
 	grammarCSS        grammarKey = "css"
 	grammarKotlin     grammarKey = "kotlin"
 	grammarObjectiveC grammarKey = "objective-c"
+	grammarDart       grammarKey = "dart"
+	grammarSwift      grammarKey = "swift"
 )
 
 var extensionLanguages = map[string]string{
@@ -416,6 +420,10 @@ func grammarForLanguage(language string) (*tree_sitter.Language, bool) {
 		return tree_sitter.NewLanguage(tree_sitter_kotlin.Language()), true
 	case grammarObjectiveC:
 		return tree_sitter.NewLanguage(tree_sitter_objc.Language()), true
+	case grammarDart:
+		return tree_sitter.NewLanguage(tree_sitter_dart.Language()), true
+	case grammarSwift:
+		return tree_sitter.NewLanguage(tree_sitter_swift.Language()), true
 	default:
 		return nil, false
 	}

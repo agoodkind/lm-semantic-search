@@ -25,6 +25,8 @@ func TestModuleGrammarsParseThroughAST(t *testing.T) {
 		{"css", "styles.css", ".box { color: red; margin: 0; }\n"},
 		{"kotlin", "Greet.kt", "fun greet(): String { return \"hi\" }\n"},
 		{"objective-c", "Greeter.m", "@interface Greeter : NSObject\n- (void)greet;\n@end\n"},
+		{"dart", "main.dart", "class Greeter {\n  String greet() => \"hi\";\n}\n"},
+		{"swift", "Greeter.swift", "struct Greeter {\n    func greet() -> String { return \"hi\" }\n}\n"},
 	}
 
 	for _, testCase := range cases {
