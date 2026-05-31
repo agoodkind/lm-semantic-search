@@ -1,0 +1,9 @@
+📁 {{ .Name }}
+✅ Ready to search
+{{- if .HasStats }}
+📊 {{ .Files }} files, {{ .Chunks }} chunks
+{{- end }}
+{{- if .SkippedLine }}
+{{ .SkippedLine }}
+{{- end }}
+🕐 Updated {{ .UpdatedAt }}

@@ -8,78 +8,99 @@ import (
 	"goodkind.io/claude-context-go/internal/model"
 )
 
-// TestRenderReconcileMagnitudeEmpty proves a queued run with no recorded counts
-// adds no magnitude line, so the status output stays quiet until work starts.
-func TestRenderReconcileMagnitudeEmpty(t *testing.T) {
+var renderTestTime = time.Unix(1700000000, 0)
+
+// TestRenderIndexedDetailReady proves the ready status leads with the repo
+// title, states readiness, and shows the standing index totals.
+func TestRenderIndexedDetailReady(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath: "/Users/agoodkind/Sites/swift-makefile",
+		LastSuccessfulRun: &model.IndexRunSummary{
+			IndexedFiles: 58,
+			TotalChunks:  600,
+			Status:       "completed",
+			CompletedAt:  renderTestTime,
+		},
+	}
+	out := renderIndexedDetail(codebase)
+	for _, want := range []string{"📁 swift-makefile", "✅ Ready to search", "📊 58 files, 600 chunks"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("ready status missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderIndexingActivePreparingSync proves a watcher-driven sync that has
+// not started embedding reads as "Changes detected, preparing to index".
+func TestRenderIndexingActivePreparingSync(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
+	job := &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 0, LastEventAt: renderTestTime}}
+	out := renderIndexingActive(codebase, job)
+	if !strings.Contains(out, "📁 swift-makefile") {
+		t.Fatalf("missing title in:\n%s", out)
+	}
+	if !strings.Contains(out, "⚙️ Changes detected, preparing to index") {
+		t.Fatalf("expected changes-detected prepare line in:\n%s", out)
+	}
+	if strings.Contains(out, "🔄 Indexing") {
+		t.Fatalf("did not expect indexing line during prepare in:\n%s", out)
+	}
+}
+
+// TestRenderIndexingActivePreparingForced proves a full or forced reindex that
+// has not started embedding reads as a plain "Preparing to index".
+func TestRenderIndexingActivePreparingForced(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
+	job := &model.Job{Operation: "index", Progress: model.Progress{FilesTotal: 0}}
+	out := renderIndexingActive(codebase, job)
+	if !strings.Contains(out, "⚙️ Preparing to index") {
+		t.Fatalf("expected plain prepare line in:\n%s", out)
+	}
+	if strings.Contains(out, "Changes detected") {
+		t.Fatalf("did not expect changes-detected for a forced reindex in:\n%s", out)
+	}
+}
+
+// TestRenderIndexingActiveEmbedding proves the embedding phase shows the file
+// progress as "X of N" and the chunk count as a running tally.
+func TestRenderIndexingActiveEmbedding(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
+	job := &model.Job{
+		Operation: "streaming_reindex",
+		Progress:  model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84, LastEventAt: renderTestTime},
+	}
+	out := renderIndexingActive(codebase, job)
+	for _, want := range []string{"📁 swift-makefile", "🔄 Indexing", "📄 7 of 58 files", "🧩 84 chunks so far"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("embedding status missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderReconcileMagnitude proves the job-view magnitude shows files and
+// chunks, plus the change breakdown for a delta, and nothing when empty.
+func TestRenderReconcileMagnitude(t *testing.T) {
 	t.Parallel()
 	if got := renderReconcileMagnitude(model.Progress{}); got != "" {
 		t.Fatalf("expected empty magnitude for zero progress, got %q", got)
 	}
-}
-
-// TestRenderReconcileMagnitudeFullReindex proves a full reindex (no delta
-// breakdown) reports the embed progress but no change line.
-func TestRenderReconcileMagnitudeFullReindex(t *testing.T) {
-	t.Parallel()
-	got := renderReconcileMagnitude(model.Progress{FilesTotal: 100, FilesProcessed: 50, ChunksGenerated: 800})
-	if !strings.Contains(got, "📦 50/100 files embedded, 800 chunks") {
-		t.Fatalf("expected embed progress line, got %q", got)
-	}
-	if strings.Contains(got, "🔀") {
-		t.Fatalf("did not expect a change-breakdown line for a full reindex, got %q", got)
-	}
-}
-
-// TestRenderReconcileMagnitudeDelta proves a delta sync reports both the embed
-// progress and the added/modified/removed breakdown.
-func TestRenderReconcileMagnitudeDelta(t *testing.T) {
-	t.Parallel()
 	got := renderReconcileMagnitude(model.Progress{
-		FilesTotal:      480,
-		FilesProcessed:  168,
-		ChunksGenerated: 5400,
-		FilesAdded:      12,
-		FilesModified:   30,
-		FilesRemoved:    5,
+		FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84,
+		FilesAdded: 12, FilesModified: 30, FilesRemoved: 5,
 	})
-	if !strings.Contains(got, "📦 168/480 files embedded, 5400 chunks") {
-		t.Fatalf("expected embed progress line, got %q", got)
+	if !strings.Contains(got, "📄 7 of 58 files · 🧩 84 chunks") {
+		t.Fatalf("expected files and chunks line, got %q", got)
 	}
-	if !strings.Contains(got, "🔀 Changes: 12 added, 30 modified, 5 removed") {
-		t.Fatalf("expected change-breakdown line, got %q", got)
-	}
-}
-
-// TestRenderIndexingActiveShowsMagnitude proves the in-progress status banner
-// surfaces the reconcile magnitude, so a large merge is visibly distinct from a
-// one-file edit.
-func TestRenderIndexingActiveShowsMagnitude(t *testing.T) {
-	t.Parallel()
-	codebase := &model.Codebase{CanonicalPath: "/repo", UpdatedAt: time.Unix(1700000000, 0)}
-	job := &model.Job{Progress: model.Progress{
-		OverallPercent:  35,
-		FilesTotal:      480,
-		FilesProcessed:  168,
-		ChunksGenerated: 5400,
-		FilesAdded:      12,
-		FilesModified:   30,
-		FilesRemoved:    5,
-		LastEventAt:     time.Unix(1700000000, 0),
-	}}
-	out := renderIndexingActive(codebase, job)
-	if !strings.Contains(out, "Progress: 35.0%") {
-		t.Fatalf("expected progress percent, got %q", out)
-	}
-	if !strings.Contains(out, "📦 168/480 files embedded, 5400 chunks") {
-		t.Fatalf("expected embed progress line in active banner, got %q", out)
-	}
-	if !strings.Contains(out, "🔀 Changes: 12 added, 30 modified, 5 removed") {
-		t.Fatalf("expected change-breakdown line in active banner, got %q", out)
+	if !strings.Contains(got, "Added 12 · Modified 30 · Removed 5") {
+		t.Fatalf("expected change breakdown, got %q", got)
 	}
 }
 
-// TestRenderGetJobShowsMagnitude proves the per-job view carries the same
-// magnitude detail.
+// TestRenderGetJobShowsMagnitude proves the job view carries the magnitude.
 func TestRenderGetJobShowsMagnitude(t *testing.T) {
 	t.Parallel()
 	job := &model.Job{
@@ -87,21 +108,42 @@ func TestRenderGetJobShowsMagnitude(t *testing.T) {
 		CanonicalPath: "/repo",
 		Operation:     "sync",
 		State:         model.JobStateRunning,
-		Progress: model.Progress{
-			OverallPercent:  35,
-			FilesTotal:      480,
-			FilesProcessed:  168,
-			ChunksGenerated: 5400,
-			FilesAdded:      12,
-			FilesModified:   30,
-			FilesRemoved:    5,
-		},
+		Progress:      model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84},
 	}
 	out := renderGetJob(job)
-	if !strings.Contains(out, "📦 168/480 files embedded, 5400 chunks") {
-		t.Fatalf("expected embed progress line in job view, got %q", out)
+	if !strings.Contains(out, "📄 7 of 58 files · 🧩 84 chunks") {
+		t.Fatalf("expected magnitude in job view, got:\n%s", out)
 	}
-	if !strings.Contains(out, "🔀 Changes: 12 added, 30 modified, 5 removed") {
-		t.Fatalf("expected change-breakdown line in job view, got %q", out)
+}
+
+// TestStatusTemplateNoBlankLines proves the embedded templates produce a tidy
+// block with no blank lines and the expected line count, guarding against
+// template whitespace regressions.
+func TestStatusTemplateNoBlankLines(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath: "/Users/agoodkind/Sites/swift-makefile",
+		LastSuccessfulRun: &model.IndexRunSummary{
+			IndexedFiles: 58,
+			TotalChunks:  600,
+			Status:       "completed",
+			CompletedAt:  renderTestTime,
+		},
+	}
+	cases := map[string]string{
+		"ready":     renderIndexedDetail(codebase),
+		"preparing": renderIndexingActive(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 0}}),
+		"indexing":  renderIndexingActive(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84}}),
+	}
+	wantLines := map[string]int{"ready": 4, "preparing": 3, "indexing": 5}
+	for name, out := range cases {
+		for _, line := range strings.Split(out, "\n") {
+			if strings.TrimSpace(line) == "" {
+				t.Fatalf("%s has a blank line:\n%s", name, out)
+			}
+		}
+		if got := len(strings.Split(out, "\n")); got != wantLines[name] {
+			t.Fatalf("%s line count = %d, want %d:\n%s", name, got, wantLines[name], out)
+		}
 	}
 }

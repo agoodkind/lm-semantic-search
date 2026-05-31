@@ -267,8 +267,9 @@ func TestForceReindexStartsFreshJobAndSearchShowsIndexingWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
-	if !strings.Contains(statusResponse.GetDisplayText(), "currently being indexed") {
-		t.Fatalf("GetIndex returned unexpected status text: %q", statusResponse.GetDisplayText())
+	statusText := strings.ToLower(statusResponse.GetDisplayText())
+	if !strings.Contains(statusText, "indexing") && !strings.Contains(statusText, "preparing") {
+		t.Fatalf("GetIndex did not show an in-progress status: %q", statusResponse.GetDisplayText())
 	}
 
 	searchResponse, err := server.SearchCode(context.Background(), &pb.SearchCodeRequest{

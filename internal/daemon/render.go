@@ -152,59 +152,78 @@ func renderClassificationLine(classification *model.PathClassification) string {
 }
 
 func renderIndexedDetail(codebase *model.Codebase) string {
-	if codebase.LastSuccessfulRun == nil {
-		return fmt.Sprintf("✅ Codebase '%s' is fully indexed and ready for search.", codebase.CanonicalPath)
+	view := statusView{
+		Name:           filepath.Base(codebase.CanonicalPath),
+		HasStats:       false,
+		Files:          0,
+		Chunks:         0,
+		SkippedLine:    "",
+		PrepareLabel:   "",
+		FilesProcessed: 0,
+		FilesTotal:     0,
+		ChunksSoFar:    0,
+		UpdatedAt:      formatStatusTime(codebase.UpdatedAt),
 	}
-	base := fmt.Sprintf(
-		"✅ Codebase '%s' is fully indexed and ready for search.\n📊 Statistics: %d files, %d chunks\n📅 Status: %s\n🕐 Last updated: %s",
-		codebase.CanonicalPath,
-		codebase.LastSuccessfulRun.IndexedFiles,
-		codebase.LastSuccessfulRun.TotalChunks,
-		orDefault(codebase.LastSuccessfulRun.Status, "completed"),
-		formatLocalTime(codebase.LastSuccessfulRun.CompletedAt),
-	)
-	if skipLine := renderSkippedFiles(codebase.LastSuccessfulRun.SkippedFiles); skipLine != "" {
-		base += "\n" + skipLine
+	if run := codebase.LastSuccessfulRun; run != nil {
+		view.HasStats = true
+		view.Files = run.IndexedFiles
+		view.Chunks = run.TotalChunks
+		view.SkippedLine = renderSkippedFiles(run.SkippedFiles)
+		view.UpdatedAt = formatStatusTime(run.CompletedAt)
 	}
-	return base
+	return renderStatusTemplate("ready.md.tmpl", view)
 }
 
 func renderIndexingActive(codebase *model.Codebase, activeJob *model.Job) string {
-	progress := 0.0
-	lastUpdated := codebase.UpdatedAt
+	view := statusView{
+		Name:           filepath.Base(codebase.CanonicalPath),
+		HasStats:       false,
+		Files:          0,
+		Chunks:         0,
+		SkippedLine:    "",
+		PrepareLabel:   prepareLabel(activeJob),
+		FilesProcessed: 0,
+		FilesTotal:     0,
+		ChunksSoFar:    0,
+		UpdatedAt:      formatStatusTime(codebase.UpdatedAt),
+	}
+	embedding := false
 	if activeJob != nil {
-		progress = activeJob.Progress.OverallPercent
 		if !activeJob.Progress.LastEventAt.IsZero() {
-			lastUpdated = activeJob.Progress.LastEventAt
+			view.UpdatedAt = formatStatusTime(activeJob.Progress.LastEventAt)
 		}
+		view.FilesProcessed = activeJob.Progress.FilesProcessed
+		view.FilesTotal = activeJob.Progress.FilesTotal
+		view.ChunksSoFar = activeJob.Progress.ChunksGenerated
+		embedding = activeJob.Progress.FilesTotal > 0
 	}
-	header := fmt.Sprintf(
-		"🔄 Codebase '%s' is currently being indexed. Progress: %.1f%%%s",
-		codebase.CanonicalPath,
-		progress,
-		progressPhaseSuffix(progress),
-	)
-	footer := "🕐 Last updated: " + formatLocalTime(lastUpdated)
-	if activeJob != nil {
-		if magnitude := renderReconcileMagnitude(activeJob.Progress); magnitude != "" {
-			return header + "\n" + magnitude + "\n" + footer
-		}
+	if embedding {
+		return renderStatusTemplate("indexing.md.tmpl", view)
 	}
-	return header + "\n" + footer
+	return renderStatusTemplate("preparing.md.tmpl", view)
 }
 
-// renderReconcileMagnitude summarizes how much work a run covers: how many
-// files are embedded of the total with the chunk count, and, for a delta sync,
-// the added/modified/removed breakdown. It returns an empty string when no
-// counts are recorded yet, so a freshly queued job adds no noise. A large merge
-// reconcile is then visibly distinct from a one-file edit.
+// prepareLabel names the phase before embedding starts. A watcher-driven sync
+// reaches this phase because a change was detected, so it says so; a full or
+// forced reindex is just preparing.
+func prepareLabel(job *model.Job) string {
+	if job != nil && jobOperation(job.Operation) == jobOperationSync {
+		return "Changes detected, preparing to index"
+	}
+	return "Preparing to index"
+}
+
+// renderReconcileMagnitude summarizes a run's work for the job view: how many
+// files of the run's scope are processed with the chunk count, and, for a delta
+// sync, the added, modified, and removed breakdown. It returns an empty string
+// when no counts are recorded yet.
 func renderReconcileMagnitude(progress model.Progress) string {
 	lines := make([]string, 0, 2)
 	if progress.FilesTotal > 0 {
-		lines = append(lines, fmt.Sprintf("📦 %d/%d files embedded, %d chunks", progress.FilesProcessed, progress.FilesTotal, progress.ChunksGenerated))
+		lines = append(lines, fmt.Sprintf("📄 %d of %d files · 🧩 %d chunks", progress.FilesProcessed, progress.FilesTotal, progress.ChunksGenerated))
 	}
 	if progress.FilesAdded > 0 || progress.FilesModified > 0 || progress.FilesRemoved > 0 {
-		lines = append(lines, fmt.Sprintf("🔀 Changes: %d added, %d modified, %d removed", progress.FilesAdded, progress.FilesModified, progress.FilesRemoved))
+		lines = append(lines, fmt.Sprintf("Added %d · Modified %d · Removed %d", progress.FilesAdded, progress.FilesModified, progress.FilesRemoved))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -359,14 +378,19 @@ func renderSkippedFiles(skipped []string) string {
 	return fmt.Sprintf("⏭️  Skipped: %d non-UTF-8 file(s): %s", len(skipped), preview)
 }
 
-func progressPhaseSuffix(progress float64) string {
-	if progress < 10 {
-		return " (Preparing and scanning files...)"
+// formatStatusTime renders a compact wall-clock time with zone for the status
+// header, for example "4:52 PM PDT". The daemon stores UTC, so this converts to
+// the host's local zone first, loaded by name so gosmopolitan stays satisfied.
+func formatStatusTime(value time.Time) string {
+	if value.IsZero() {
+		return "unknown"
 	}
-	if progress < 100 {
-		return " (Processing files and generating embeddings...)"
+	const layout = "3:04 PM MST"
+	location, err := time.LoadLocation("Local")
+	if err != nil {
+		return value.Format(layout)
 	}
-	return ""
+	return value.In(location).Format(layout)
 }
 
 // formatLocalTime renders a wall-clock timestamp for human-facing MCP and CLI
