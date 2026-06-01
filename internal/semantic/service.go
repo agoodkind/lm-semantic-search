@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"math"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -42,6 +41,7 @@ const (
 	fileExtensionFieldName  = "fileExtension"
 	metadataFieldName       = "metadata"
 	idFieldName             = "id"
+	countOutputField        = "count(*)"
 )
 
 // Progress reports semantic indexing progress after chunk extraction.
@@ -340,29 +340,36 @@ func (service *Service) Drop(ctx context.Context, codebasePath string) error {
 	return service.dropIfExists(ctx, service.CollectionName(codebasePath))
 }
 
-// Count returns the current row count for one semantic collection.
+// Count returns the current number of chunk rows in one semantic collection.
+// It asks Milvus to count the collection directly with a count(*) query under
+// Strong consistency, so the result includes rows a just-finished run wrote
+// and excludes deleted rows. The store is the single source of this number;
+// the daemon keeps no separate running tally that could drift from it.
 func (service *Service) Count(ctx context.Context, codebasePath string) (int32, error) {
 	if !service.Available() {
 		return 0, ErrUnavailable
 	}
 
-	stats, err := service.milvus.GetCollectionStats(ctx, milvusclient.NewGetCollectionStatsOption(service.CollectionName(codebasePath)))
+	collectionName := service.CollectionName(codebasePath)
+	resultSet, err := service.milvus.Query(ctx, milvusclient.NewQueryOption(collectionName).
+		WithOutputFields(countOutputField).
+		WithConsistencyLevel(entity.ClStrong))
 	if err != nil {
-		slog.ErrorContext(ctx, "get collection stats failed", "collection", service.CollectionName(codebasePath), "err", err)
-		return 0, fmt.Errorf("get collection stats: %w", err)
+		slog.ErrorContext(ctx, "count collection rows failed", "collection", collectionName, "err", err)
+		return 0, fmt.Errorf("count collection %s: %w", collectionName, err)
 	}
 
-	rowCount, found := stats["row_count"]
-	if !found {
-		slog.ErrorContext(ctx, "collection stats missing row_count", "collection", service.CollectionName(codebasePath), "err", errors.New("missing row_count"))
-		return 0, errors.New("milvus collection stats missing row_count")
+	countColumn := resultSet.GetColumn(countOutputField)
+	if countColumn == nil {
+		slog.ErrorContext(ctx, "count query missing count column", "collection", collectionName, "err", errors.New("missing count(*) column"))
+		return 0, errors.New("milvus count query missing count(*) column")
 	}
-	parsedCount, err := strconv.ParseInt(rowCount, 10, 32)
+	total, err := countColumn.GetAsInt64(0)
 	if err != nil {
-		slog.ErrorContext(ctx, "parse row count failed", "row_count", rowCount, "err", err)
-		return 0, fmt.Errorf("parse row_count %q: %w", rowCount, err)
+		slog.ErrorContext(ctx, "read count column failed", "collection", collectionName, "err", err)
+		return 0, fmt.Errorf("read count(*) column for %s: %w", collectionName, err)
 	}
-	return int32(parsedCount), nil
+	return safeInt32FromInt64(total), nil
 }
 
 // ListCollections returns the current semantic collection names from Milvus.
