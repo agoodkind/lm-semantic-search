@@ -10,7 +10,7 @@ import (
 // the human-facing status message live in these files so they can be reviewed
 // and edited as durable layout, while the Go code only computes the values.
 //
-//go:embed templates/status/ready.md.tmpl templates/status/preparing.md.tmpl templates/status/indexing.md.tmpl
+//go:embed templates/status/ready.md.tmpl templates/status/preparing.md.tmpl templates/status/building.md.tmpl templates/status/incremental.md.tmpl
 var statusTemplateFS embed.FS
 
 var statusTemplates = template.Must(template.ParseFS(statusTemplateFS, "templates/status/*.md.tmpl"))
@@ -18,16 +18,29 @@ var statusTemplates = template.Must(template.ParseFS(statusTemplateFS, "template
 // statusView is the data a status template renders. Every field is always set;
 // each state's template reads only the subset it needs.
 type statusView struct {
-	Name           string
-	HasStats       bool
-	Files          int32
-	Chunks         int32
-	SkippedLine    string
-	PrepareLabel   string
+	Name         string
+	HasStats     bool
+	Files        int32
+	Chunks       int32
+	SkippedLine  string
+	PrepareLabel string
+	Percent      int32
+	// Building view: raw loop progress and the running chunk tally.
 	FilesProcessed int32
 	FilesTotal     int32
 	ChunksSoFar    int32
-	UpdatedAt      string
+	// Incremental view: the diff breakdown against the whole codebase.
+	FilesInCodebase        int32
+	FilesChanged           int32
+	FilesUnchanged         int32
+	FilesProcessedChanged  int32
+	FilesReEmbedded        int32
+	FilesRemoved           int32
+	FilesSkippedOversize   int32
+	FilesSkippedUnreadable int32
+	ChunksAdded            int32
+	ChunksTotal            int32
+	UpdatedAt              string
 }
 
 // renderStatusTemplate executes one embedded status template by file name and

@@ -286,11 +286,9 @@ func TestForceReindexStartsFreshJobAndSearchShowsIndexingWarning(t *testing.T) {
 	if !strings.HasPrefix(searchResponse.GetDisplayText(), "Found ") {
 		t.Fatalf("SearchCode must lead with the result count for truncating clients: %q", searchResponse.GetDisplayText())
 	}
-	if !strings.Contains(searchResponse.GetDisplayText(), "⚠️  **Indexing in Progress**") {
-		t.Fatalf("SearchCode response missing in-progress warning: %q", searchResponse.GetDisplayText())
-	}
-	if !strings.Contains(searchResponse.GetDisplayText(), "🔁 Retry suggestion") {
-		t.Fatalf("SearchCode response missing retry suggestion: %q", searchResponse.GetDisplayText())
+	searchText := strings.ToLower(searchResponse.GetDisplayText())
+	if !strings.Contains(searchText, "indexing") && !strings.Contains(searchText, "preparing") {
+		t.Fatalf("SearchCode response missing in-progress status block: %q", searchResponse.GetDisplayText())
 	}
 	if !strings.Contains(searchResponse.GetDisplayText(), reindexJob.ID) {
 		t.Fatalf("SearchCode response missing active job id %s: %q", reindexJob.ID, searchResponse.GetDisplayText())

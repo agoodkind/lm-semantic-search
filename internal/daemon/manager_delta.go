@@ -72,45 +72,6 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 	return deltaOutcome{fallback: false, handled: false}
 }
 
-// planStreamingReindex captures a fresh merkle snapshot and synthesizes a
-// diff where every discovered file counts as "modified". The streaming
-// path also loads the previous checkpoint so the per-file loop can skip
-// any file whose content hash is already recorded under the same config.
-func (manager *Manager) planStreamingReindex(ctx context.Context, job model.Job, codebaseID string) deltaPlan {
-	configDigest := job.Config.IgnoreDigest
-	legacyDigest := manager.legacyDigestForCodebase(codebaseID)
-	seed := merkle.LoadSnapshotForConfig(manager.merklePath(codebaseID), configDigest, legacyDigest)
-	captured, err := merkle.Capture(ctx, job.CanonicalPath, job.Config)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			manager.updateJobCancelled(ctx, job.ID)
-		} else {
-			manager.updateJobFailed(ctx, job.ID, fmt.Errorf("capture reindex snapshot: %w", err))
-		}
-		return deltaPlan{
-			diff:            merkle.Diff{Added: nil, Modified: nil, Removed: nil},
-			currentSnapshot: merkle.Snapshot{ConfigDigest: "", Files: nil, Inodes: nil},
-			seedSnapshot:    seed,
-			configDigest:    configDigest,
-			fallback:        false,
-			handled:         true,
-		}
-	}
-	modifiedFiles := make([]string, 0, len(captured.Files))
-	for relativePath := range captured.Files {
-		modifiedFiles = append(modifiedFiles, relativePath)
-	}
-	sort.Strings(modifiedFiles)
-	return deltaPlan{
-		diff:            merkle.Diff{Added: nil, Modified: modifiedFiles, Removed: nil},
-		currentSnapshot: captured,
-		seedSnapshot:    seed,
-		configDigest:    configDigest,
-		fallback:        false,
-		handled:         false,
-	}
-}
-
 // planSyncDiff loads the previous snapshot under the requested config
 // digest, captures the current one, and returns the diff. An empty diff
 // completes the job as a no-op. A missing snapshot produces an empty seed
@@ -141,11 +102,13 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 	if diff.Empty() {
 		fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, captured.Files, 0)
 		manager.updateJobCompleted(job.ID, indexer.Result{
-			IndexedFiles: fileCount,
-			TotalChunks:  chunkCount,
-			Chunks:       nil,
-			FileHashes:   captured.Files,
-			SkippedFiles: nil,
+			IndexedFiles:      fileCount,
+			TotalChunks:       chunkCount,
+			Chunks:            nil,
+			FileHashes:        captured.Files,
+			SkippedFiles:      nil,
+			SkippedOversize:   0,
+			SkippedUnreadable: 0,
 		})
 		return deltaPlan{
 			diff:            diff,
@@ -171,11 +134,11 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 // returns false to fall back to the full Replace path when there is no
 // previous snapshot or the semantic collection is gone.
 //
-// Two operations route here. "sync" computes the merkle diff against the
-// previous snapshot and processes only added and modified files.
-// "streaming_reindex" treats every discovered file as modified and feeds
-// the list through semantic.Reindex so the Milvus collection stays
-// populated row-by-row while the splitter upgrade runs.
+// Both "sync" and "streaming_reindex" route here and share one plan: the
+// merkle diff against the previous snapshot, processing only added and
+// modified files. The streaming operation differs only in a post-pass prune
+// that drops rows for files no longer present, which covers the splitter
+// upgrade where the empty seed re-embeds everything.
 func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job) bool {
 	ctx, done := spans.Open(ctx, "daemon.runDeltaSync")
 	defer done(nil)
@@ -188,7 +151,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job) bool {
 	}
 
 	streamingReindex := jobOperation(job.Operation) == jobOperationStreamingReindex
-	plan := manager.computeDeltaPlan(ctx, job, codebase.ID, streamingReindex)
+	plan := manager.planSyncDiff(ctx, job, codebase.ID)
 	if plan.fallback {
 		return false
 	}
@@ -199,7 +162,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job) bool {
 	// Record the change breakdown so the status and job views can report the
 	// magnitude of this reconcile while it runs. The per-file progress updates
 	// touch only the embed counters, so these counts persist for the run.
-	manager.setJobDeltaCounts(job.ID, len(plan.diff.Added), len(plan.diff.Modified), len(plan.diff.Removed))
+	manager.setJobDeltaCounts(job.ID, len(plan.diff.Added), len(plan.diff.Modified), len(plan.diff.Removed), len(plan.currentSnapshot.Files))
 
 	state := deltaState{
 		plan:         plan,
@@ -239,11 +202,11 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job) bool {
 }
 
 // codebaseTotals reports the file and chunk totals that represent the
-// codebase as a whole at the moment a delta sync completes, so the
-// registry's LastSuccessfulRun describes current state rather than the
-// per-run delta. fileCount is the size of the working merkle set, which
-// matches the codebase under the active config digest. chunkCount comes
-// from semantic.Service.Count when the backend is available; on
+// codebase as a whole at the moment a run completes, so the registry's
+// LastSuccessfulRun describes current state rather than the per-run delta.
+// fileCount is the size of the working merkle set, which matches the codebase
+// under the active config digest. chunkCount comes from semantic.Service.Count,
+// a live count(*) of the collection, when the backend is available; on
 // unavailability or any error it falls back to fallbackChunks, which the
 // caller passes as either the loop's running TotalChunks (incremental
 // path) or zero (empty-diff fast path).
@@ -419,13 +382,6 @@ func (manager *Manager) promoteBootstrap(ctx context.Context, job model.Job, sta
 	return deltaOutcome{fallback: false, handled: false}
 }
 
-func (manager *Manager) computeDeltaPlan(ctx context.Context, job model.Job, codebaseID string, streamingReindex bool) deltaPlan {
-	if streamingReindex {
-		return manager.planStreamingReindex(ctx, job, codebaseID)
-	}
-	return manager.planSyncDiff(ctx, job, codebaseID)
-}
-
 func (manager *Manager) applyDeltaRemovals(ctx context.Context, job model.Job, state deltaState) deltaOutcome {
 	removed := state.plan.diff.Removed
 	if len(removed) == 0 || !state.semantic {
@@ -449,11 +405,13 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 	totalChanged := len(changed)
 	totalFiles := safeInt32(totalChanged)
 	result := indexer.Result{
-		IndexedFiles: 0,
-		TotalChunks:  0,
-		Chunks:       make([]model.StoredChunk, 0),
-		FileHashes:   nil,
-		SkippedFiles: []string{},
+		IndexedFiles:      0,
+		TotalChunks:       0,
+		Chunks:            make([]model.StoredChunk, 0),
+		FileHashes:        nil,
+		SkippedFiles:      []string{},
+		SkippedOversize:   0,
+		SkippedUnreadable: 0,
 	}
 	for index, relativePath := range changed {
 		if err := ctx.Err(); err != nil {
@@ -462,7 +420,7 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		}
 		if seedHash, present := state.plan.seedSnapshot.Files[relativePath]; present && seedHash == state.plan.currentSnapshot.Files[relativePath] {
 			state.working[relativePath] = seedHash
-			manager.reportDeltaProgress(job.ID, index, totalChanged, totalFiles, result.TotalChunks)
+			manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result)
 			continue
 		}
 		outcome := manager.handleChangedFile(ctx, job, state, relativePath, &result)
@@ -470,7 +428,7 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 			return result, outcome
 		}
 		manager.writeCheckpoint(ctx, state, relativePath)
-		manager.reportDeltaProgress(job.ID, index, totalChanged, totalFiles, result.TotalChunks)
+		manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result)
 	}
 	return result, deltaOutcome{fallback: false, handled: false}
 }
@@ -497,6 +455,11 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 	}
 	if fileResult.Skipped {
 		result.SkippedFiles = append(result.SkippedFiles, relativePath)
+		if fileResult.SkipReason == indexer.SkipOversize {
+			result.SkippedOversize++
+		} else {
+			result.SkippedUnreadable++
+		}
 		return deltaOutcome{fallback: false, handled: false}
 	}
 	if state.semantic {
@@ -532,13 +495,25 @@ func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, l
 	}
 }
 
-func (manager *Manager) reportDeltaProgress(jobID string, index int, totalChanged int, totalFiles int32, totalChunks int32) {
+// phaseReindexingChanged is the job phase while the per-file embed loop runs,
+// shared by every progress update from that loop.
+const phaseReindexingChanged = "Reindexing changed files..."
+
+// reportDeltaProgress publishes one progress update from the per-file embed
+// loop. processed is the number of files the loop has finished. An initial call
+// with processed=0 establishes the embedding phase and the to-process total, so
+// the status shows the indexing view before the first (possibly slow) embed
+// rather than a stalled "Preparing".
+func (manager *Manager) reportDeltaProgress(jobID string, processed int32, totalChanged int, totalFiles int32, result indexer.Result) {
 	manager.updateJobProgress(jobID, indexer.Progress{
-		Phase:           "Reindexing changed files...",
-		OverallPercent:  10 + (float64(index+1)/float64(maxInt(totalChanged, 1)))*90,
-		FilesTotal:      totalFiles,
-		FilesProcessed:  safeInt32(index + 1),
-		ChunksGenerated: totalChunks,
+		Phase:                  phaseReindexingChanged,
+		OverallPercent:         float64(processed) / float64(maxInt(totalChanged, 1)) * 100,
+		FilesTotal:             totalFiles,
+		FilesProcessed:         processed,
+		FilesEmbedded:          result.IndexedFiles,
+		FilesSkippedOversize:   result.SkippedOversize,
+		FilesSkippedUnreadable: result.SkippedUnreadable,
+		ChunksGenerated:        result.TotalChunks,
 	})
 }
 

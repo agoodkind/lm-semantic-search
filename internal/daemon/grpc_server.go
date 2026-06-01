@@ -256,6 +256,9 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
 	}
+	if found {
+		server.manager.fillLiveChunkTotal(ctx, codebase, activeJob)
+	}
 	response := &pb.GetIndexResponse{
 		Tracked:        found,
 		Classification: pbconv.ToPathClassification(classification),
@@ -348,6 +351,7 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
 	}
+	server.manager.fillLiveChunkTotal(ctx, outcome.Codebase, outcome.ActiveJob)
 	response := &pb.SearchCodeResponse{
 		Results:   make([]*pb.SearchResult, 0, len(outcome.Results)),
 		Codebase:  pbconv.ToCodebase(outcome.Codebase),

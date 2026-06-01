@@ -138,3 +138,30 @@ func (manager *Manager) synthesizeUnregisteredCodebase(canonicalPath string) mod
 	codebase.EffectiveConfig.Hybrid = manager.config.HybridMode
 	return codebase
 }
+
+// isIncrementalOperation reports whether a job operation reuses the existing
+// collection and re-embeds only changed files, rather than building from
+// scratch. The live whole-collection chunk total is meaningful only for these.
+func isIncrementalOperation(operation string) bool {
+	op := jobOperation(operation)
+	return op == jobOperationSync || op == jobOperationStreamingReindex
+}
+
+// fillLiveChunkTotal sets an in-flight incremental job's live whole-collection
+// chunk count on its progress snapshot, so status shows the running total
+// rather than only this run's additions. It is best-effort: on any failure the
+// field stays zero and the renderer falls back to the last recorded total. The
+// activeJob must be a snapshot the caller owns, since this mutates it.
+func (manager *Manager) fillLiveChunkTotal(ctx context.Context, codebase model.Codebase, activeJob *model.Job) {
+	if activeJob == nil || !isIncrementalOperation(activeJob.Operation) {
+		return
+	}
+	if manager.semantic == nil || !manager.semantic.Available() {
+		return
+	}
+	count, err := manager.semantic.Count(ctx, codebase.CanonicalPath)
+	if err != nil {
+		return
+	}
+	activeJob.Progress.ChunksTotal = count
+}

@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,30 @@ import (
 )
 
 var renderTestTime = time.Unix(1700000000, 0)
+
+// TestRenderSymlinkResolution proves the status output names the real path a
+// symlinked query path resolves to, and adds nothing for a non-symlink path.
+func TestRenderSymlinkResolution(t *testing.T) {
+	t.Parallel()
+	// Resolve the temp dir first: on macOS t.TempDir lives under /var, itself a
+	// symlink to /private/var, so the resolved form is the true non-symlink path.
+	realRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
+	link := filepath.Join(filepath.Dir(realRoot), "codebase-link")
+	if err := os.Symlink(realRoot, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(link) })
+
+	if got := renderSymlinkResolution(link); got != "🔗 symlink resolved to: "+realRoot {
+		t.Fatalf("symlink path: got %q, want resolution to %q", got, realRoot)
+	}
+	if got := renderSymlinkResolution(realRoot); got != "" {
+		t.Fatalf("non-symlink path should add no line, got %q", got)
+	}
+}
 
 // TestRenderIndexedDetailReady proves the ready status leads with the repo
 // title, states readiness, and shows the standing index totals.
@@ -64,20 +90,107 @@ func TestRenderIndexingActivePreparingForced(t *testing.T) {
 	}
 }
 
-// TestRenderIndexingActiveEmbedding proves the embedding phase shows the file
-// progress as "X of N" and the chunk count as a running tally.
-func TestRenderIndexingActiveEmbedding(t *testing.T) {
+// TestRenderIndexingActiveBuilding proves a from-scratch build reads as
+// "Building initial index" with the percent, files embedded, and chunks so far.
+func TestRenderIndexingActiveBuilding(t *testing.T) {
 	t.Parallel()
 	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
 	job := &model.Job{
-		Operation: "streaming_reindex",
-		Progress:  model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84, LastEventAt: renderTestTime},
+		Operation: "index",
+		Progress:  model.Progress{OverallPercent: 42, FilesTotal: 58, FilesProcessed: 24, ChunksGenerated: 71, LastEventAt: renderTestTime},
 	}
 	out := renderIndexingActive(codebase, job)
-	for _, want := range []string{"📁 swift-makefile", "🔄 Indexing", "📄 7 of 58 files", "🧩 84 chunks so far"} {
+	for _, want := range []string{"📁 swift-makefile", "🔄 Building initial index: 42%", "📥 24 of 58 files embedded", "📈 71 chunks so far"} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("embedding status missing %q in:\n%s", want, out)
+			t.Fatalf("building status missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+// TestRenderIndexingActiveIncremental proves an incremental run reads as
+// "Indexing new changes" with the percent, the scanned/unchanged/re-embedded
+// breakdown, the live chunk total, and the chunks added this scan.
+func TestRenderIndexingActiveIncremental(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath:     "/Users/agoodkind/Sites/swift-makefile",
+		LastSuccessfulRun: &model.IndexRunSummary{TotalChunks: 600},
+	}
+	job := &model.Job{
+		Operation: "streaming_reindex",
+		Progress: model.Progress{
+			OverallPercent: 37, FilesTotal: 452, FilesProcessed: 285,
+			FilesInCodebase: 4292, FilesAdded: 29, FilesModified: 423, FilesRemoved: 10,
+			FilesEmbedded: 285, FilesSkippedOversize: 3, FilesSkippedUnreadable: 2,
+			ChunksGenerated: 1043, ChunksTotal: 57240, LastEventAt: renderTestTime,
+		},
+	}
+	out := renderIndexingActive(codebase, job)
+	for _, want := range []string{
+		"📁 swift-makefile",
+		"🔄 Indexing new changes: 37%",
+		"🔢 4292 files: 462 changed, 3830 unchanged",
+		"📄 300 of 462 changed files processed",
+		"♻️ 285 re-embedded",
+		"🗑️ 10 removed",
+		"📏 3 skipped, oversize",
+		"🚫 2 skipped, unreadable",
+		"🧩 57240 chunks total",
+		"➕ 1043 chunks added this scan",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("incremental status missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderIndexingActiveIncrementalZeroProcessed proves that once the diff is
+// known the status shows the indexing view with zero processed, rather than
+// "Preparing", so a slow first embed does not read as a stall.
+func TestRenderIndexingActiveIncrementalZeroProcessed(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
+	// Diff just captured: FilesInCodebase and the changed counts are set, but the
+	// embed loop has not reported a FilesTotal yet. The renderer flips to the
+	// indexing view off the diff-known fact, not the first per-file update.
+	job := &model.Job{
+		Operation: "sync",
+		Progress: model.Progress{
+			OverallPercent: 0, FilesTotal: 0, FilesProcessed: 0,
+			FilesInCodebase: 4292, FilesAdded: 0, FilesModified: 118, FilesRemoved: 0,
+			FilesEmbedded: 0, ChunksGenerated: 0,
+		},
+	}
+	out := renderIndexingActive(codebase, job)
+	for _, want := range []string{
+		"🔄 Indexing new changes: 0%",
+		"🔢 4292 files: 118 changed, 4174 unchanged",
+		"📄 0 of 118 changed files processed",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("zero-processed incremental status missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Preparing") {
+		t.Fatalf("expected indexing view, not preparing, in:\n%s", out)
+	}
+}
+
+// TestRenderIndexingActiveIncrementalFallsBackToLastTotal proves the chunk total
+// falls back to the last recorded run total when the live count is unpopulated.
+func TestRenderIndexingActiveIncrementalFallsBackToLastTotal(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath:     "/Users/agoodkind/Sites/swift-makefile",
+		LastSuccessfulRun: &model.IndexRunSummary{TotalChunks: 600},
+	}
+	job := &model.Job{
+		Operation: "sync",
+		Progress:  model.Progress{OverallPercent: 10, FilesTotal: 58, FilesProcessed: 1, ChunksTotal: 0},
+	}
+	out := renderIndexingActive(codebase, job)
+	if !strings.Contains(out, "🧩 600 chunks total") {
+		t.Fatalf("expected fallback to last recorded total in:\n%s", out)
 	}
 }
 
@@ -131,11 +244,12 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 		},
 	}
 	cases := map[string]string{
-		"ready":     renderIndexedDetail(codebase),
-		"preparing": renderIndexingActive(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 0}}),
-		"indexing":  renderIndexingActive(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84}}),
+		"ready":       renderIndexedDetail(codebase),
+		"preparing":   renderIndexingActive(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 0}}),
+		"building":    renderIndexingActive(codebase, &model.Job{Operation: "index", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84}}),
+		"incremental": renderIndexingActive(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, FilesInCodebase: 100, FilesAdded: 5, FilesModified: 50, FilesRemoved: 3, FilesEmbedded: 2, ChunksGenerated: 84, ChunksTotal: 620}}),
 	}
-	wantLines := map[string]int{"ready": 4, "preparing": 3, "indexing": 5}
+	wantLines := map[string]int{"ready": 4, "preparing": 3, "building": 5, "incremental": 11}
 	for name, out := range cases {
 		for _, line := range strings.Split(out, "\n") {
 			if strings.TrimSpace(line) == "" {

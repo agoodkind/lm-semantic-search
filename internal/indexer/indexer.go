@@ -38,20 +38,38 @@ type Runner struct {
 // to be valid UTF-8 on the gRPC wire) or when its size exceeds the
 // per-file cap.
 type Result struct {
-	IndexedFiles int32
-	TotalChunks  int32
-	Chunks       []model.StoredChunk
-	FileHashes   map[string]string
-	SkippedFiles []string
+	IndexedFiles      int32
+	TotalChunks       int32
+	Chunks            []model.StoredChunk
+	FileHashes        map[string]string
+	SkippedFiles      []string
+	SkippedOversize   int32
+	SkippedUnreadable int32
 }
+
+// SkipReason names why the indexer declined to embed a changed file. The empty
+// value means the file was not skipped.
+type SkipReason string
+
+const (
+	// SkipNone marks a file that was embedded or removed, not skipped.
+	SkipNone SkipReason = ""
+	// SkipOversize marks a file past the per-file size cap.
+	SkipOversize SkipReason = "oversize"
+	// SkipUnreadable marks a file whose bytes are not valid UTF-8.
+	SkipUnreadable SkipReason = "unreadable"
+)
 
 // Progress describes one visible indexing progress update.
 type Progress struct {
-	Phase           string
-	OverallPercent  float64
-	FilesTotal      int32
-	FilesProcessed  int32
-	ChunksGenerated int32
+	Phase                  string
+	OverallPercent         float64
+	FilesTotal             int32
+	FilesProcessed         int32
+	FilesEmbedded          int32
+	FilesSkippedOversize   int32
+	FilesSkippedUnreadable int32
+	ChunksGenerated        int32
 }
 
 // NewRunner constructs the local indexing runner.
@@ -84,10 +102,11 @@ func resolveMaxFileBytes() int64 {
 // for this path is a removal: callers delete its rows and drop it from the
 // snapshot rather than treating the absence as an error.
 type processedFile struct {
-	Chunks   []model.StoredChunk
-	FileHash string
-	Skipped  bool
-	Removed  bool
+	Chunks     []model.StoredChunk
+	FileHash   string
+	Skipped    bool
+	SkipReason SkipReason
+	Removed    bool
 }
 
 // OneFileResult mirrors the per-file accumulator output for callers that
@@ -102,20 +121,20 @@ func (runner *Runner) IndexOne(ctx context.Context, root string, relativePath st
 	if oversize, err := runner.isOversize(ctx, fullPath, relativePath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent; converging to removal", "path", fullPath)
-			return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, Removed: true}, nil
+			return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, nil
 		}
-		return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, Removed: false}, err
+		return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, err
 	} else if oversize {
-		return OneFileResult{Chunks: nil, FileHash: "", Skipped: true, Removed: false}, nil
+		return OneFileResult{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipOversize, Removed: false}, nil
 	}
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent; converging to removal", "path", fullPath)
-			return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, Removed: true}, nil
+			return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, nil
 		}
 		slog.ErrorContext(ctx, "read source file failed", "path", fullPath, "err", err)
-		return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, Removed: false}, fmt.Errorf("read source file %s: %w", fullPath, err)
+		return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, fmt.Errorf("read source file %s: %w", fullPath, err)
 	}
 	return runner.processFile(ctx, fullPath, relativePath, data, cfg.SplitterType)
 }
@@ -147,7 +166,7 @@ func (runner *Runner) isOversize(ctx context.Context, fullPath string, relativeP
 func (runner *Runner) processFile(ctx context.Context, fullPath string, relativePath string, data []byte, splitterType string) (processedFile, error) {
 	if !utf8.Valid(data) {
 		slog.WarnContext(ctx, "indexer.skipped_invalid_utf8", "path", relativePath, "bytes", len(data))
-		return processedFile{Chunks: nil, FileHash: "", Skipped: true, Removed: false}, nil
+		return processedFile{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipUnreadable, Removed: false}, nil
 	}
 	splitResult, err := runner.dispatcher.SplitFileWithType(ctx, fullPath, data, splitterType)
 	if err != nil {
@@ -164,16 +183,18 @@ func (runner *Runner) processFile(ctx context.Context, fullPath string, relative
 			FileExtension: filepath.Ext(relativePath),
 		})
 	}
-	return processedFile{Chunks: chunks, FileHash: digestFileBytes(data), Skipped: false, Removed: false}, nil
+	return processedFile{Chunks: chunks, FileHash: digestFileBytes(data), Skipped: false, SkipReason: SkipNone, Removed: false}, nil
 }
 
 // indexAccumulator collects per-file output across one indexing pass.
 type indexAccumulator struct {
-	totalChunks  int32
-	indexedCount int32
-	storedChunks []model.StoredChunk
-	fileHashes   map[string]string
-	skippedFiles []string
+	totalChunks       int32
+	indexedCount      int32
+	storedChunks      []model.StoredChunk
+	fileHashes        map[string]string
+	skippedFiles      []string
+	skippedOversize   int32
+	skippedUnreadable int32
 }
 
 // ingestFile reads one file, checks size and UTF-8 gates, and routes the
@@ -187,6 +208,7 @@ func (runner *Runner) ingestFile(ctx context.Context, fullPath string, relativeP
 		return sizeErr
 	} else if oversize {
 		accumulator.skippedFiles = append(accumulator.skippedFiles, relativePath)
+		accumulator.skippedOversize++
 		return nil
 	}
 	data, err := os.ReadFile(fullPath)
@@ -205,6 +227,11 @@ func (runner *Runner) ingestFile(ctx context.Context, fullPath string, relativeP
 	}
 	if processed.Skipped {
 		accumulator.skippedFiles = append(accumulator.skippedFiles, relativePath)
+		if processed.SkipReason == SkipOversize {
+			accumulator.skippedOversize++
+		} else {
+			accumulator.skippedUnreadable++
+		}
 		return nil
 	}
 	accumulator.totalChunks += safeInt32(len(processed.Chunks))
@@ -218,11 +245,14 @@ func (runner *Runner) ingestFile(ctx context.Context, fullPath string, relativeP
 func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(Progress)) (Result, error) {
 	if progress != nil {
 		progress(Progress{
-			Phase:           "Preparing and scanning files...",
-			OverallPercent:  0,
-			FilesTotal:      0,
-			FilesProcessed:  0,
-			ChunksGenerated: 0,
+			Phase:                  "Preparing and scanning files...",
+			OverallPercent:         0,
+			FilesTotal:             0,
+			FilesProcessed:         0,
+			FilesEmbedded:          0,
+			FilesSkippedOversize:   0,
+			FilesSkippedUnreadable: 0,
+			ChunksGenerated:        0,
 		})
 	}
 
@@ -235,20 +265,25 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 	totalFiles := safeInt32(len(discoveryResult.Files))
 	if progress != nil {
 		progress(Progress{
-			Phase:           "Processing files and generating embeddings...",
-			OverallPercent:  10,
-			FilesTotal:      totalFiles,
-			FilesProcessed:  0,
-			ChunksGenerated: 0,
+			Phase:                  "Processing files and generating embeddings...",
+			OverallPercent:         10,
+			FilesTotal:             totalFiles,
+			FilesProcessed:         0,
+			FilesEmbedded:          0,
+			FilesSkippedOversize:   0,
+			FilesSkippedUnreadable: 0,
+			ChunksGenerated:        0,
 		})
 	}
 
 	accumulator := &indexAccumulator{
-		totalChunks:  0,
-		indexedCount: 0,
-		storedChunks: make([]model.StoredChunk, 0),
-		fileHashes:   make(map[string]string, len(discoveryResult.Files)),
-		skippedFiles: []string{},
+		totalChunks:       0,
+		indexedCount:      0,
+		storedChunks:      make([]model.StoredChunk, 0),
+		fileHashes:        make(map[string]string, len(discoveryResult.Files)),
+		skippedFiles:      []string{},
+		skippedOversize:   0,
+		skippedUnreadable: 0,
 	}
 	for index, path := range discoveryResult.Files {
 		if err := ctx.Err(); err != nil {
@@ -265,31 +300,39 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 		}
 		if progress != nil {
 			progress(Progress{
-				Phase:           "Processing files and generating embeddings...",
-				OverallPercent:  calculateOverallPercent(index+1, len(discoveryResult.Files)),
-				FilesTotal:      totalFiles,
-				FilesProcessed:  safeInt32(index + 1),
-				ChunksGenerated: accumulator.totalChunks,
+				Phase:                  "Processing files and generating embeddings...",
+				OverallPercent:         calculateOverallPercent(index+1, len(discoveryResult.Files)),
+				FilesTotal:             totalFiles,
+				FilesProcessed:         safeInt32(index + 1),
+				FilesEmbedded:          safeInt32(index + 1),
+				FilesSkippedOversize:   accumulator.skippedOversize,
+				FilesSkippedUnreadable: accumulator.skippedUnreadable,
+				ChunksGenerated:        accumulator.totalChunks,
 			})
 		}
 	}
 
 	if progress != nil {
 		progress(Progress{
-			Phase:           "completed",
-			OverallPercent:  100,
-			FilesTotal:      totalFiles,
-			FilesProcessed:  totalFiles,
-			ChunksGenerated: accumulator.totalChunks,
+			Phase:                  "completed",
+			OverallPercent:         100,
+			FilesTotal:             totalFiles,
+			FilesProcessed:         totalFiles,
+			FilesEmbedded:          totalFiles,
+			FilesSkippedOversize:   accumulator.skippedOversize,
+			FilesSkippedUnreadable: accumulator.skippedUnreadable,
+			ChunksGenerated:        accumulator.totalChunks,
 		})
 	}
 
 	return Result{
-		IndexedFiles: accumulator.indexedCount,
-		TotalChunks:  accumulator.totalChunks,
-		Chunks:       accumulator.storedChunks,
-		FileHashes:   accumulator.fileHashes,
-		SkippedFiles: accumulator.skippedFiles,
+		IndexedFiles:      accumulator.indexedCount,
+		TotalChunks:       accumulator.totalChunks,
+		Chunks:            accumulator.storedChunks,
+		FileHashes:        accumulator.fileHashes,
+		SkippedFiles:      accumulator.skippedFiles,
+		SkippedOversize:   accumulator.skippedOversize,
+		SkippedUnreadable: accumulator.skippedUnreadable,
 	}, nil
 }
 
@@ -303,20 +346,25 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 	totalFiles := safeInt32(len(relativePaths))
 	if progress != nil {
 		progress(Progress{
-			Phase:           "Processing changed files...",
-			OverallPercent:  10,
-			FilesTotal:      totalFiles,
-			FilesProcessed:  0,
-			ChunksGenerated: 0,
+			Phase:                  "Processing changed files...",
+			OverallPercent:         10,
+			FilesTotal:             totalFiles,
+			FilesProcessed:         0,
+			FilesEmbedded:          0,
+			FilesSkippedOversize:   0,
+			FilesSkippedUnreadable: 0,
+			ChunksGenerated:        0,
 		})
 	}
 
 	accumulator := &indexAccumulator{
-		totalChunks:  0,
-		indexedCount: 0,
-		storedChunks: make([]model.StoredChunk, 0),
-		fileHashes:   make(map[string]string, len(relativePaths)),
-		skippedFiles: []string{},
+		totalChunks:       0,
+		indexedCount:      0,
+		storedChunks:      make([]model.StoredChunk, 0),
+		fileHashes:        make(map[string]string, len(relativePaths)),
+		skippedFiles:      []string{},
+		skippedOversize:   0,
+		skippedUnreadable: 0,
 	}
 	for index, relativePath := range relativePaths {
 		if err := ctx.Err(); err != nil {
@@ -329,31 +377,39 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 		}
 		if progress != nil {
 			progress(Progress{
-				Phase:           "Processing changed files...",
-				OverallPercent:  calculateOverallPercent(index+1, len(relativePaths)),
-				FilesTotal:      totalFiles,
-				FilesProcessed:  safeInt32(index + 1),
-				ChunksGenerated: accumulator.totalChunks,
+				Phase:                  "Processing changed files...",
+				OverallPercent:         calculateOverallPercent(index+1, len(relativePaths)),
+				FilesTotal:             totalFiles,
+				FilesProcessed:         safeInt32(index + 1),
+				FilesEmbedded:          safeInt32(index + 1),
+				FilesSkippedOversize:   accumulator.skippedOversize,
+				FilesSkippedUnreadable: accumulator.skippedUnreadable,
+				ChunksGenerated:        accumulator.totalChunks,
 			})
 		}
 	}
 
 	if progress != nil {
 		progress(Progress{
-			Phase:           "completed",
-			OverallPercent:  100,
-			FilesTotal:      totalFiles,
-			FilesProcessed:  totalFiles,
-			ChunksGenerated: accumulator.totalChunks,
+			Phase:                  "completed",
+			OverallPercent:         100,
+			FilesTotal:             totalFiles,
+			FilesProcessed:         totalFiles,
+			FilesEmbedded:          totalFiles,
+			FilesSkippedOversize:   accumulator.skippedOversize,
+			FilesSkippedUnreadable: accumulator.skippedUnreadable,
+			ChunksGenerated:        accumulator.totalChunks,
 		})
 	}
 
 	return Result{
-		IndexedFiles: accumulator.indexedCount,
-		TotalChunks:  accumulator.totalChunks,
-		Chunks:       accumulator.storedChunks,
-		FileHashes:   accumulator.fileHashes,
-		SkippedFiles: accumulator.skippedFiles,
+		IndexedFiles:      accumulator.indexedCount,
+		TotalChunks:       accumulator.totalChunks,
+		Chunks:            accumulator.storedChunks,
+		FileHashes:        accumulator.fileHashes,
+		SkippedFiles:      accumulator.skippedFiles,
+		SkippedOversize:   accumulator.skippedOversize,
+		SkippedUnreadable: accumulator.skippedUnreadable,
 	}, nil
 }
 

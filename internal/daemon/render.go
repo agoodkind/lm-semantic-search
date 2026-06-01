@@ -10,23 +10,9 @@ import (
 )
 
 const (
-	indexingWarningHeader = "⚠️  **Indexing in Progress**: This codebase is currently being indexed in the background. Search results may be incomplete or inaccurate until indexing completes. Progress: %.1f%%."
-	indexingWarningRetry  = "🔁 Retry suggestion: call get_indexing_status (or get_indexing_job for the active job) in ~30s, or call index_codebase with wait=true on the next turn to block until the index is ready. Active job: %s."
-	noResultsIndexingTip  = "Note: This codebase is still being indexed. Try searching again after indexing completes, or the query may not match any indexed content."
-	searchIndexingTip     = "💡 **Tip**: This codebase is still being indexed. More results may become available as indexing progresses."
+	noResultsIndexingTip = "Note: This codebase is still being indexed. Try searching again after indexing completes, or the query may not match any indexed content."
+	searchIndexingTip    = "💡 **Tip**: This codebase is still being indexed. More results may become available as indexing progresses."
 )
-
-// formatIndexingWarning builds the in-progress search banner. The banner
-// surfaces the current progress percentage, names the active job so the agent
-// can poll it directly, and tells the caller exactly how to wait for the
-// index to finish.
-func formatIndexingWarning(progressPercent float64, activeJobID string) string {
-	header := fmt.Sprintf(indexingWarningHeader, progressPercent)
-	if activeJobID == "" {
-		return header
-	}
-	return header + "\n" + fmt.Sprintf(indexingWarningRetry, activeJobID)
-}
 
 type searchView struct {
 	RequestedPath string
@@ -88,12 +74,33 @@ func renderSyncIndex(codebase model.Codebase, job model.Job, deduplicated bool) 
 }
 
 func renderGetIndex(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job, classification *model.PathClassification) string {
-	classificationLine := renderClassificationLine(classification)
-	body := renderGetIndexBody(requestedPath, tracked, codebase, activeJob)
-	if classificationLine == "" {
-		return body
+	lines := []string{renderGetIndexBody(requestedPath, tracked, codebase, activeJob)}
+	if symlinkLine := renderSymlinkResolution(requestedPath); symlinkLine != "" {
+		lines = append(lines, symlinkLine)
 	}
-	return body + "\n" + classificationLine
+	if classificationLine := renderClassificationLine(classification); classificationLine != "" {
+		lines = append(lines, classificationLine)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderSymlinkResolution names the real path a symlinked query path resolves
+// to, or returns an empty string when the query path traverses no symlink. A
+// codebase's identity is the resolved real path, so when the caller passes a
+// symlink this line states which real directory it points at.
+func renderSymlinkResolution(requestedPath string) string {
+	if strings.TrimSpace(requestedPath) == "" {
+		return ""
+	}
+	absolutePath, err := filepath.Abs(requestedPath)
+	if err != nil {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(absolutePath)
+	if err != nil || resolved == absolutePath {
+		return ""
+	}
+	return "🔗 symlink resolved to: " + resolved
 }
 
 func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job) string {
@@ -151,19 +158,36 @@ func renderClassificationLine(classification *model.PathClassification) string {
 	}
 }
 
-func renderIndexedDetail(codebase *model.Codebase) string {
-	view := statusView{
-		Name:           filepath.Base(codebase.CanonicalPath),
-		HasStats:       false,
-		Files:          0,
-		Chunks:         0,
-		SkippedLine:    "",
-		PrepareLabel:   "",
-		FilesProcessed: 0,
-		FilesTotal:     0,
-		ChunksSoFar:    0,
-		UpdatedAt:      formatStatusTime(codebase.UpdatedAt),
+// blankStatusView returns a fully zeroed status view with only the name and
+// timestamp set, so each caller fills the subset its template reads.
+func blankStatusView(name string, updatedAt string) statusView {
+	return statusView{
+		Name:                   name,
+		HasStats:               false,
+		Files:                  0,
+		Chunks:                 0,
+		SkippedLine:            "",
+		PrepareLabel:           "",
+		Percent:                0,
+		FilesProcessed:         0,
+		FilesTotal:             0,
+		ChunksSoFar:            0,
+		FilesInCodebase:        0,
+		FilesChanged:           0,
+		FilesUnchanged:         0,
+		FilesProcessedChanged:  0,
+		FilesReEmbedded:        0,
+		FilesRemoved:           0,
+		FilesSkippedOversize:   0,
+		FilesSkippedUnreadable: 0,
+		ChunksAdded:            0,
+		ChunksTotal:            0,
+		UpdatedAt:              updatedAt,
 	}
+}
+
+func renderIndexedDetail(codebase *model.Codebase) string {
+	view := blankStatusView(filepath.Base(codebase.CanonicalPath), formatStatusTime(codebase.UpdatedAt))
 	if run := codebase.LastSuccessfulRun; run != nil {
 		view.HasStats = true
 		view.Files = run.IndexedFiles
@@ -175,32 +199,45 @@ func renderIndexedDetail(codebase *model.Codebase) string {
 }
 
 func renderIndexingActive(codebase *model.Codebase, activeJob *model.Job) string {
-	view := statusView{
-		Name:           filepath.Base(codebase.CanonicalPath),
-		HasStats:       false,
-		Files:          0,
-		Chunks:         0,
-		SkippedLine:    "",
-		PrepareLabel:   prepareLabel(activeJob),
-		FilesProcessed: 0,
-		FilesTotal:     0,
-		ChunksSoFar:    0,
-		UpdatedAt:      formatStatusTime(codebase.UpdatedAt),
-	}
+	view := blankStatusView(filepath.Base(codebase.CanonicalPath), formatStatusTime(codebase.UpdatedAt))
+	view.PrepareLabel = prepareLabel(activeJob)
 	embedding := false
 	if activeJob != nil {
-		if !activeJob.Progress.LastEventAt.IsZero() {
-			view.UpdatedAt = formatStatusTime(activeJob.Progress.LastEventAt)
+		progress := activeJob.Progress
+		if !progress.LastEventAt.IsZero() {
+			view.UpdatedAt = formatStatusTime(progress.LastEventAt)
 		}
-		view.FilesProcessed = activeJob.Progress.FilesProcessed
-		view.FilesTotal = activeJob.Progress.FilesTotal
-		view.ChunksSoFar = activeJob.Progress.ChunksGenerated
-		embedding = activeJob.Progress.FilesTotal > 0
+		changed := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
+		view.Percent = int32(progress.OverallPercent + 0.5)
+		view.FilesProcessed = progress.FilesProcessed
+		view.FilesTotal = progress.FilesTotal
+		view.FilesInCodebase = progress.FilesInCodebase
+		view.FilesChanged = changed
+		view.FilesUnchanged = max(progress.FilesInCodebase-changed, 0)
+		view.FilesReEmbedded = progress.FilesEmbedded
+		view.FilesRemoved = progress.FilesRemoved
+		view.FilesSkippedOversize = progress.FilesSkippedOversize
+		view.FilesSkippedUnreadable = progress.FilesSkippedUnreadable
+		view.FilesProcessedChanged = progress.FilesEmbedded + progress.FilesRemoved + progress.FilesSkippedOversize + progress.FilesSkippedUnreadable
+		view.ChunksSoFar = progress.ChunksGenerated
+		view.ChunksAdded = progress.ChunksGenerated
+		view.ChunksTotal = progress.ChunksTotal
+		if view.ChunksTotal == 0 && codebase.LastSuccessfulRun != nil {
+			view.ChunksTotal = codebase.LastSuccessfulRun.TotalChunks
+		}
+		// The work scope is known once the loop has a total (a from-scratch
+		// build) or the diff is captured (a delta sync sets FilesInCodebase).
+		// Showing the indexing view from that point, rather than waiting for the
+		// first file to embed, keeps a slow first embed from reading as a stall.
+		embedding = progress.FilesTotal > 0 || progress.FilesInCodebase > 0
 	}
-	if embedding {
-		return renderStatusTemplate("indexing.md.tmpl", view)
+	if !embedding {
+		return renderStatusTemplate("preparing.md.tmpl", view)
 	}
-	return renderStatusTemplate("preparing.md.tmpl", view)
+	if activeJob != nil && jobOperation(activeJob.Operation) == jobOperationIndex {
+		return renderStatusTemplate("building.md.tmpl", view)
+	}
+	return renderStatusTemplate("incremental.md.tmpl", view)
 }
 
 // prepareLabel names the phase before embedding starts. A watcher-driven sync
@@ -321,17 +358,17 @@ func renderDoctor(diagnostics []string) string {
 }
 
 func renderSearch(view searchView) string {
-	warning := ""
-	if view.ActiveJob != nil && view.Codebase.Status == model.CodebaseStatusIndexing {
-		warning = formatIndexingWarning(view.ActiveJob.Progress.OverallPercent, view.ActiveJob.ID)
-	}
+	// When a run is in flight, the search response carries the same status block
+	// get_indexing_status returns, so the caller sees the file and chunk progress
+	// inline and does not need a second tool call to learn the index is building.
+	status := renderSearchIndexingStatus(view)
 
 	if len(view.Results) == 0 {
 		noResults := fmt.Sprintf("No results found for query: %q in codebase '%s'", view.Query, view.Codebase.CanonicalPath)
-		if warning == "" {
+		if status == "" {
 			return noResults
 		}
-		return noResults + "\n\n" + warning + "\n\n" + noResultsIndexingTip
+		return noResults + "\n\n" + status + "\n\n" + noResultsIndexingTip
 	}
 
 	formatted := make([]string, 0, len(view.Results))
@@ -356,10 +393,26 @@ func renderSearch(view searchView) string {
 	// answer. The in-progress warning and tip trail the results.
 	header := fmt.Sprintf("Found %d results for query: %q in codebase '%s'", len(view.Results), view.Query, view.Codebase.CanonicalPath)
 	body := header + "\n\n" + strings.Join(formatted, "\n\n")
-	if warning == "" {
+	if status == "" {
 		return body
 	}
-	return body + "\n\n" + warning + "\n\n" + searchIndexingTip
+	return body + "\n\n" + status + "\n\n" + searchIndexingTip
+}
+
+// renderSearchIndexingStatus returns the in-progress status block for a search
+// response, matching what get_indexing_status shows: the indexing or preparing
+// detail plus the symlink-resolution line when the queried path is a symlink.
+// It returns an empty string when no run is in flight.
+func renderSearchIndexingStatus(view searchView) string {
+	if view.ActiveJob == nil {
+		return ""
+	}
+	codebase := view.Codebase
+	lines := []string{renderIndexingActive(&codebase, view.ActiveJob)}
+	if symlinkLine := renderSymlinkResolution(view.RequestedPath); symlinkLine != "" {
+		lines = append(lines, symlinkLine)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderSkippedFiles formats the per-run skipped-file summary for the

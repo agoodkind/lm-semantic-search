@@ -50,6 +50,9 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	job.Progress.OverallPercent = progress.OverallPercent
 	job.Progress.FilesTotal = progress.FilesTotal
 	job.Progress.FilesProcessed = progress.FilesProcessed
+	job.Progress.FilesEmbedded = progress.FilesEmbedded
+	job.Progress.FilesSkippedOversize = progress.FilesSkippedOversize
+	job.Progress.FilesSkippedUnreadable = progress.FilesSkippedUnreadable
 	job.Progress.ChunksGenerated = progress.ChunksGenerated
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
@@ -57,11 +60,11 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 }
 
 // setJobDeltaCounts records how many files a delta sync will add, modify, and
-// remove, so the status and job views can report the magnitude of a reconcile
-// (for example after a large merge). The counts are set once when the run
-// begins; updateJobProgress sets only the embed counters, so these survive the
-// per-file progress updates.
-func (manager *Manager) setJobDeltaCounts(jobID string, added int, modified int, removed int) {
+// remove, plus the codebase file total, so the status and job views can report
+// the magnitude of a reconcile (for example after a large merge). The counts
+// are set once when the diff is known; updateJobProgress sets only the embed
+// counters, so these survive the per-file progress updates.
+func (manager *Manager) setJobDeltaCounts(jobID string, added int, modified int, removed int, filesInCodebase int) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -72,6 +75,7 @@ func (manager *Manager) setJobDeltaCounts(jobID string, added int, modified int,
 	job.Progress.FilesAdded = safeInt32(added)
 	job.Progress.FilesModified = safeInt32(modified)
 	job.Progress.FilesRemoved = safeInt32(removed)
+	job.Progress.FilesInCodebase = safeInt32(filesInCodebase)
 	manager.jobs[jobID] = job
 }
 

@@ -72,9 +72,24 @@ type Progress struct {
 	// FilesAdded, FilesModified, and FilesRemoved record a delta sync's change
 	// breakdown so status output can show the magnitude of a reconcile (for
 	// example after a large merge). They stay zero for a full reindex.
-	FilesAdded                int32     `json:"files_added"`
-	FilesModified             int32     `json:"files_modified"`
-	FilesRemoved              int32     `json:"files_removed"`
+	FilesAdded    int32 `json:"files_added"`
+	FilesModified int32 `json:"files_modified"`
+	FilesRemoved  int32 `json:"files_removed"`
+	// FilesInCodebase is the total file count in the current snapshot, so an
+	// incremental run can report unchanged as this total less the changed set.
+	FilesInCodebase int32 `json:"files_in_codebase"`
+	// FilesEmbedded counts files this run actually re-embedded, so an
+	// incremental run can report unchanged (FilesProcessed - FilesEmbedded)
+	// separately from re-embedded. It stays zero until embedding begins.
+	FilesEmbedded int32 `json:"files_embedded"`
+	// FilesSkippedOversize and FilesSkippedUnreadable count changed files the
+	// indexer declined to embed: past the size cap, or not valid UTF-8.
+	FilesSkippedOversize   int32 `json:"files_skipped_oversize"`
+	FilesSkippedUnreadable int32 `json:"files_skipped_unreadable"`
+	// ChunksTotal is the live whole-collection chunk count, populated at render
+	// time for an in-flight incremental run so status can show the running total
+	// rather than only the per-run additions. Zero means not populated.
+	ChunksTotal               int32     `json:"chunks_total"`
 	ChunksGenerated           int32     `json:"chunks_generated"`
 	EmbeddingBatchesTotal     int32     `json:"embedding_batches_total"`
 	EmbeddingBatchesCompleted int32     `json:"embedding_batches_completed"`
