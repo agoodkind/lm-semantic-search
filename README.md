@@ -2,7 +2,7 @@
 
 A ground-up Go rewrite of the Claude Context runtime, owning the daemon, the operator CLI, and the MCP adapter. VS Code and Chrome extension clients are out of scope here.
 
-Original TypeScript implementation: `github.com/zilliztech/claude-context`. This Go port is independent of, and not affiliated with or endorsed by, Zilliz; the `io.zilliz.claude-contextd` launchd label is kept for drop-in service compatibility with the upstream daemon.
+Original TypeScript implementation: `github.com/zilliztech/claude-context`. This Go port is independent of, and not affiliated with or endorsed by, Zilliz.
 
 Provided AS IS under the MIT License with no warranty. See [LICENSE](LICENSE).
 
@@ -16,7 +16,7 @@ Coding agents working in this repository should read [AGENTS.md](AGENTS.md) for 
 
 ## TS adapter drop-in
 
-The Go daemon reads `~/.context/mcp-codebase-snapshot.json` at request time, so codebases that the upstream TS adapter has already indexed are immediately searchable through the Go MCP without any migration step. Both adapters write to the same Milvus collection name `hybrid_code_chunks_<sha256(path)[:8]>`, so the embedded data is shared.
+The Go daemon and the upstream TypeScript adapter share one Milvus index per codebase, so a codebase indexed by either tool is searchable through the other with no migration step and neither tool modified. The shared-index contract and the adoption flow are defined in the "TS upstream drop-in compatibility" section of [AGENTS.md](AGENTS.md).
 
 ## Build
 
