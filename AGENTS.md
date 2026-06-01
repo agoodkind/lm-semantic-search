@@ -33,6 +33,12 @@ Rules:
 - Code that constructs collection names, the schema, or chunk ids must preserve the shared invariant; the tests in `internal/semantic/portability_test.go` lock it.
 - The only collection deletion is explicit `clear_index`. There is no orphan-collection garbage collection; a collection without a registry entry is adopted, never dropped.
 
+## Path identity
+
+A codebase's identity is the real directory its path resolves to. `canonicalizePath` (`internal/daemon/manager_paths.go`) makes the requested path absolute and resolves it with `filepath.EvalSymlinks`, and the registry record, the merkle snapshot, and the Milvus collection name all key off that resolved real path. A symlink's own location or name may change without breaking the link, because any symlink that resolves to an indexed real directory resolves to that codebase. `get_indexing_status` appends `🔗 symlink resolved to: <real path>` when the queried path traverses a symlink.
+
+For a codebase rooted at a symlink the shared-collection invariant does not hold: the upstream TS adapter names its collection from `path.resolve` (`packages/core/src/context.ts`), which does not follow symlinks, so the Go name (md5 of the real path) and the TS name (md5 of the symlink path) differ and the two tools do not share that collection. Non-symlinked roots resolve identically in both tools and stay shared.
+
 ## Embedding
 
 The Go port supports exactly one embedding provider, an OpenAI-compatible HTTP adapter. `OPENAI_BASE_URL` points at any endpoint that speaks the OpenAI embeddings API.
