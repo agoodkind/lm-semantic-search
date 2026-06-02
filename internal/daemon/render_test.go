@@ -194,6 +194,86 @@ func TestRenderIndexingActiveIncrementalFallsBackToLastTotal(t *testing.T) {
 	}
 }
 
+// TestRenderGetIndexBodySyncKeepsReady proves a background sync over an
+// already-indexed codebase holds the ready view with a background note rather
+// than the busy "Indexing new changes" takeover, because the live collection
+// stays searchable while the delta runs.
+func TestRenderGetIndexBodySyncKeepsReady(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath:     "/Users/agoodkind/Sites/swift-makefile",
+		Status:            model.CodebaseStatusIndexing,
+		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 58, TotalChunks: 600, CompletedAt: renderTestTime},
+	}
+	job := &model.Job{
+		Operation: "sync",
+		Progress:  model.Progress{OverallPercent: 33, FilesInCodebase: 58, FilesModified: 3, FilesProcessed: 1, LastEventAt: renderTestTime},
+	}
+	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job)
+	for _, want := range []string{"✅ Ready to search", "📊 58 files, 600 chunks", "🔄 syncing 3 changed files in the background (33%)"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("sync-reconcile status missing %q in:\n%s", want, out)
+		}
+	}
+	for _, reject := range []string{"Indexing new changes", "Building initial index"} {
+		if strings.Contains(out, reject) {
+			t.Fatalf("sync-reconcile status should not show %q in:\n%s", reject, out)
+		}
+	}
+}
+
+// TestRenderGetIndexBodySyncPreDiffKeepsReady proves a sync that has not yet
+// captured its diff still reads as ready, with a generic background note.
+func TestRenderGetIndexBodySyncPreDiffKeepsReady(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath:     "/Users/agoodkind/Sites/swift-makefile",
+		Status:            model.CodebaseStatusIndexing,
+		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 58, TotalChunks: 600, CompletedAt: renderTestTime},
+	}
+	job := &model.Job{Operation: "sync", Progress: model.Progress{FilesInCodebase: 0, LastEventAt: renderTestTime}}
+	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job)
+	for _, want := range []string{"✅ Ready to search", "🔄 changes detected, syncing in the background"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("pre-diff sync status missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderGetIndexBodyBuildingTakesOver proves a from-scratch build still
+// owns the display, because its staging collection is not promoted yet.
+func TestRenderGetIndexBodyBuildingTakesOver(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile", Status: model.CodebaseStatusIndexing}
+	job := &model.Job{Operation: "index", Progress: model.Progress{OverallPercent: 42, FilesTotal: 58, FilesProcessed: 24, ChunksGenerated: 71}}
+	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job)
+	if !strings.Contains(out, "🔄 Building initial index") {
+		t.Fatalf("expected building takeover in:\n%s", out)
+	}
+	if strings.Contains(out, "✅ Ready to search") {
+		t.Fatalf("a from-scratch build must not read as ready in:\n%s", out)
+	}
+}
+
+// TestRenderGetIndexBodyStreamingReindexTakesOver proves a streaming_reindex
+// keeps the busy takeover, scoping the ready-during-sync change to "sync" only.
+func TestRenderGetIndexBodyStreamingReindexTakesOver(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath:     "/Users/agoodkind/Sites/swift-makefile",
+		Status:            model.CodebaseStatusIndexing,
+		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 58, TotalChunks: 600, CompletedAt: renderTestTime},
+	}
+	job := &model.Job{Operation: "streaming_reindex", Progress: model.Progress{OverallPercent: 37, FilesInCodebase: 58, FilesModified: 58, FilesProcessed: 20}}
+	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job)
+	if !strings.Contains(out, "🔄 Indexing new changes") {
+		t.Fatalf("expected streaming_reindex takeover in:\n%s", out)
+	}
+	if strings.Contains(out, "✅ Ready to search") {
+		t.Fatalf("a streaming_reindex must not read as ready in:\n%s", out)
+	}
+}
+
 // TestRenderReconcileMagnitude proves the job-view magnitude shows files and
 // chunks, plus the change breakdown for a delta, and nothing when empty.
 func TestRenderReconcileMagnitude(t *testing.T) {

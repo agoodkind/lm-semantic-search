@@ -41,6 +41,9 @@ type statusView struct {
 	ChunksAdded            int32
 	ChunksTotal            int32
 	UpdatedAt              string
+	// SyncNote, when set, appends a one-line background-sync note to the ready
+	// view so a searchable incremental sync reads as ready rather than busy.
+	SyncNote string
 }
 
 // renderStatusTemplate executes one embedded status template by file name and

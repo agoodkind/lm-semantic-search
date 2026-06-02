@@ -107,10 +107,16 @@ func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Code
 	if !tracked || codebase == nil {
 		return fmt.Sprintf("❌ Codebase '%s' is not indexed. Please use the index_codebase tool to index it first.", requestedPath)
 	}
-	// An active job always wins the display. A historical LastFailedRun
+	// An active job otherwise wins the display. A historical LastFailedRun
 	// that lingers in the registry alongside an in-flight retry would
-	// otherwise read as the current state and confuse callers.
+	// otherwise read as the current state and confuse callers. The one
+	// exception is a background incremental sync over an already-indexed
+	// codebase: the live collection stays searchable while it runs, so the
+	// ready view holds with a background note rather than a busy takeover.
 	if activeJob != nil {
+		if isBackgroundSyncReconcile(codebase, activeJob) {
+			return renderIndexedWithSync(codebase, activeJob)
+		}
 		return renderIndexingActive(codebase, activeJob)
 	}
 	switch codebase.Status {
@@ -183,6 +189,7 @@ func blankStatusView(name string, updatedAt string) statusView {
 		ChunksAdded:            0,
 		ChunksTotal:            0,
 		UpdatedAt:              updatedAt,
+		SyncNote:               "",
 	}
 }
 
@@ -195,6 +202,53 @@ func renderIndexedDetail(codebase *model.Codebase) string {
 		view.SkippedLine = renderSkippedFiles(run.SkippedFiles)
 		view.UpdatedAt = formatStatusTime(run.CompletedAt)
 	}
+	return renderStatusTemplate("ready.md.tmpl", view)
+}
+
+// isBackgroundSyncReconcile reports whether the active job is a background
+// incremental sync over a codebase that already has a successful run. That
+// delta writes to the live collection, so the index stays searchable while it
+// runs and the ready view holds. A from-scratch "index" build (staging, not
+// promoted) and a "streaming_reindex" rebuild keep their busy takeover.
+func isBackgroundSyncReconcile(codebase *model.Codebase, job *model.Job) bool {
+	return job != nil &&
+		jobOperation(job.Operation) == jobOperationSync &&
+		codebase.LastSuccessfulRun != nil
+}
+
+// backgroundSyncNote is the one-line note appended to the ready view while a
+// background sync runs. Before the diff is captured the changed counts are
+// zero, so it states only that a sync is underway.
+func backgroundSyncNote(job *model.Job) string {
+	progress := job.Progress
+	changed := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
+	if changed == 0 {
+		return "🔄 changes detected, syncing in the background"
+	}
+	noun := "files"
+	if changed == 1 {
+		noun = "file"
+	}
+	percent := int32(progress.OverallPercent + 0.5)
+	return fmt.Sprintf("🔄 syncing %d changed %s in the background (%d%%)", changed, noun, percent)
+}
+
+// renderIndexedWithSync renders the ready view for an already-indexed codebase
+// with a background sync in flight, appending the sync note and preferring the
+// job's last event time for the freshness stamp.
+func renderIndexedWithSync(codebase *model.Codebase, job *model.Job) string {
+	view := blankStatusView(filepath.Base(codebase.CanonicalPath), formatStatusTime(codebase.UpdatedAt))
+	if run := codebase.LastSuccessfulRun; run != nil {
+		view.HasStats = true
+		view.Files = run.IndexedFiles
+		view.Chunks = run.TotalChunks
+		view.SkippedLine = renderSkippedFiles(run.SkippedFiles)
+		view.UpdatedAt = formatStatusTime(run.CompletedAt)
+	}
+	if !job.Progress.LastEventAt.IsZero() {
+		view.UpdatedAt = formatStatusTime(job.Progress.LastEventAt)
+	}
+	view.SyncNote = backgroundSyncNote(job)
 	return renderStatusTemplate("ready.md.tmpl", view)
 }
 
@@ -368,7 +422,7 @@ func renderSearch(view searchView) string {
 		if status == "" {
 			return noResults
 		}
-		return noResults + "\n\n" + status + "\n\n" + noResultsIndexingTip
+		return noResults + "\n\n" + status + "\n\n" + searchStatusTip(view, false)
 	}
 
 	formatted := make([]string, 0, len(view.Results))
@@ -396,7 +450,21 @@ func renderSearch(view searchView) string {
 	if status == "" {
 		return body
 	}
-	return body + "\n\n" + status + "\n\n" + searchIndexingTip
+	return body + "\n\n" + status + "\n\n" + searchStatusTip(view, true)
+}
+
+// searchStatusTip picks the trailing tip for a search response that has a run
+// in flight. A background-sync reconcile keeps the live collection searchable,
+// so its results are current; a from-scratch build or rebuild may still be
+// filling in, so it keeps the existing "still being indexed" tips.
+func searchStatusTip(view searchView, hasResults bool) string {
+	if isBackgroundSyncReconcile(&view.Codebase, view.ActiveJob) {
+		return "💡 Results are current; a few changed files are still syncing in the background."
+	}
+	if hasResults {
+		return searchIndexingTip
+	}
+	return noResultsIndexingTip
 }
 
 // renderSearchIndexingStatus returns the in-progress status block for a search
@@ -408,7 +476,11 @@ func renderSearchIndexingStatus(view searchView) string {
 		return ""
 	}
 	codebase := view.Codebase
-	lines := []string{renderIndexingActive(&codebase, view.ActiveJob)}
+	detail := renderIndexingActive(&codebase, view.ActiveJob)
+	if isBackgroundSyncReconcile(&codebase, view.ActiveJob) {
+		detail = renderIndexedWithSync(&codebase, view.ActiveJob)
+	}
+	lines := []string{detail}
 	if symlinkLine := renderSymlinkResolution(view.RequestedPath); symlinkLine != "" {
 		lines = append(lines, symlinkLine)
 	}
