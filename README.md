@@ -21,10 +21,8 @@ The Go daemon and the upstream TypeScript adapter share one Milvus index per cod
 ## Build
 
 ```sh
-GO_MK_DEV_DIR=$HOME/Sites/go-makefile make check
-GO_MK_DEV_DIR=$HOME/Sites/go-makefile make test
-GO_MK_DEV_DIR=$HOME/Sites/go-makefile make build
-GO_MK_DEV_DIR=$HOME/Sites/go-makefile make staticcheck-extra
+make test
+make build
 ```
 
 ## Install and deploy
