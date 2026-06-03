@@ -13,3 +13,9 @@ updates:
     open-pull-requests-limit: 5
     reviewers:
       - agoodkind
+    ignore:
+      # The Go binding (bindings/go) lives only on the upstream master HEAD;
+      # every published tag (v1.0.0 through v2.1.0+incompatible) omits it, so
+      # any dependabot bump to a tag breaks the build. Pin via pseudo-version
+      # in go.mod and bump it manually when the binding gets a real release.
+      - dependency-name: github.com/tree-sitter-grammars/tree-sitter-objc

@@ -60,19 +60,23 @@ SWIFT_GRAMMAR_DIR := internal/splitter/grammars/swift/upstream
 SWIFT_GRAMMAR_DEF := $(SWIFT_GRAMMAR_DIR)/src/grammar.json
 SWIFT_GRAMMAR_PARSER := $(SWIFT_GRAMMAR_DIR)/src/parser.c
 TREE_SITTER_ABI ?= 14
+# tree-sitter CLI lands here when the host has none on PATH, so a bare runner
+# with only Go can still generate the Swift parser. Gitignored.
+TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
 
 grammars:
 	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
 		echo "grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
 		exit 1; \
 	fi
-	@if ! command -v tree-sitter >/dev/null 2>&1; then \
-		echo "grammars: tree-sitter CLI not found; install it (e.g. 'brew install tree-sitter') to build the Swift grammar"; \
-		exit 1; \
-	fi
-	@if [ ! -f "$(SWIFT_GRAMMAR_PARSER)" ] || [ "$(SWIFT_GRAMMAR_DEF)" -nt "$(SWIFT_GRAMMAR_PARSER)" ]; then \
+	@ts_bin="$$(command -v tree-sitter 2>/dev/null || true)"; \
+	if [ -z "$$ts_bin" ]; then \
+		./scripts/install-tree-sitter.sh "$(TREE_SITTER_LOCAL_DIR)"; \
+		ts_bin="$(TREE_SITTER_LOCAL_DIR)/tree-sitter"; \
+	fi; \
+	if [ ! -f "$(SWIFT_GRAMMAR_PARSER)" ] || [ "$(SWIFT_GRAMMAR_DEF)" -nt "$(SWIFT_GRAMMAR_PARSER)" ]; then \
 		echo "grammars: generating Swift parser (abi $(TREE_SITTER_ABI))"; \
-		( cd "$(SWIFT_GRAMMAR_DIR)" && tree-sitter generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
+		( cd "$(SWIFT_GRAMMAR_DIR)" && "$$ts_bin" generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
 		git -C "$(SWIFT_GRAMMAR_DIR)" checkout -- . >/dev/null 2>&1 || true; \
 	else \
 		echo "grammars: Swift parser already generated"; \
@@ -83,10 +87,10 @@ grammars:
 # generated parser.c and tree_sitter/ headers are gitignored in the submodule,
 # so the checkout leaves them in place.
 
-# Building, testing, and linting compile the Swift grammar package, so they need
-# the generated parser. The order-only prerequisite generates it first on a
-# fresh checkout without forcing rebuilds.
-build build-check check test lint: | grammars
+# Building, testing, vetting, linting, and govulncheck all compile the Swift
+# grammar package, so they need the generated parser. The order-only
+# prerequisite generates it first on a fresh checkout without forcing rebuilds.
+build build-check check test lint vet govulncheck: | grammars
 
 build-clients:
 	@mkdir -p "$(DIST_DIR)"
