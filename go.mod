@@ -1,19 +1,27 @@
 module goodkind.io/claude-context-go
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/mark3labs/mcp-go v0.50.0
 	github.com/milvus-io/milvus/client/v2 v2.6.4
 	github.com/openai/openai-go/v2 v2.7.1
 	github.com/rjeczalik/notify v0.9.3
+	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0
+	github.com/tree-sitter-grammars/tree-sitter-objc v1.2.1-0.20250131075517-181a81b8f23a
 	github.com/tree-sitter/go-tree-sitter v0.24.1-0.20251112183152-c9492002f76e
+	github.com/tree-sitter/tree-sitter-bash v0.23.3
 	github.com/tree-sitter/tree-sitter-c v0.24.0
 	github.com/tree-sitter/tree-sitter-cpp v0.23.4
+	github.com/tree-sitter/tree-sitter-css v0.23.2
 	github.com/tree-sitter/tree-sitter-go v0.25.0
+	github.com/tree-sitter/tree-sitter-html v0.23.2
 	github.com/tree-sitter/tree-sitter-java v0.23.5
 	github.com/tree-sitter/tree-sitter-javascript v0.25.0
+	github.com/tree-sitter/tree-sitter-json v0.24.8
+	github.com/tree-sitter/tree-sitter-php v0.23.12
 	github.com/tree-sitter/tree-sitter-python v0.25.0
+	github.com/tree-sitter/tree-sitter-ruby v0.23.1
 	github.com/tree-sitter/tree-sitter-rust v0.24.2
 	github.com/tree-sitter/tree-sitter-scala v0.26.0
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2
@@ -25,14 +33,6 @@ require (
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
-	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0 // indirect
-	github.com/tree-sitter-grammars/tree-sitter-objc v1.2.1-0.20250131075517-181a81b8f23a // indirect
-	github.com/tree-sitter/tree-sitter-bash v0.23.3 // indirect
-	github.com/tree-sitter/tree-sitter-css v0.23.2 // indirect
-	github.com/tree-sitter/tree-sitter-html v0.23.2 // indirect
-	github.com/tree-sitter/tree-sitter-json v0.24.8 // indirect
-	github.com/tree-sitter/tree-sitter-php v0.23.12 // indirect
-	github.com/tree-sitter/tree-sitter-ruby v0.23.1 // indirect
 )
 
 require (
