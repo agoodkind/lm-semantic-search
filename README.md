@@ -21,10 +21,8 @@ The Go daemon and the upstream TypeScript adapter share one Milvus index per cod
 ## Build
 
 ```sh
-GO_MK_DEV_DIR=$HOME/Sites/go-makefile make check
-GO_MK_DEV_DIR=$HOME/Sites/go-makefile make test
-GO_MK_DEV_DIR=$HOME/Sites/go-makefile make build
-GO_MK_DEV_DIR=$HOME/Sites/go-makefile make staticcheck-extra
+make test
+make build
 ```
 
 ## Install and deploy
@@ -38,10 +36,6 @@ This repo follows the same local deploy shape as `~/Sites/agent-gate`:
 - `make daemon-status` checks the daemon through the installed CLI.
 - `make daemon-wait` polls the installed CLI until the daemon is reachable.
 - `make kill-orphans` SIGKILLs any `claude-context-mcp` process whose PPID is `1`. Live sessions with a real parent stay untouched.
-
-### Do not run broad pattern kills
-
-Never run `pkill -9 -f "claude-context-mcp"` or any equivalent broad pattern match. The pattern matches every running adapter instance on the host, including the MCP child that an active Claude Code, Cursor, or Codex session is currently talking to. Killing it mid-conversation drops the client's tool surface and forces a respawn that can take minutes. Use `make kill-orphans` or `kill <pid>` against a specific PID identified through `ps -ax -o pid,ppid,command | grep claude-context-mcp`.
 
 ## Configuration
 
