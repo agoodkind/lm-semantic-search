@@ -50,6 +50,12 @@ type deltaState struct {
 	// from-scratch build promotes onto the live name at the end, instead of
 	// the live collection an incremental sync writes to directly.
 	staging bool
+	// reuse maps a chunk's content hash to an already-embedded dense vector,
+	// populated for a merge-down build from the collections of the indexed
+	// child codebases the new parent absorbs. The embed step takes a reused
+	// vector instead of calling the embedder, so the shared subtree is never
+	// re-embedded. Nil for an ordinary build, which embeds every chunk.
+	reuse map[string][]float32
 }
 
 // applyReindexForState runs one per-file delta against the live collection, or
@@ -62,9 +68,9 @@ type deltaState struct {
 func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job, state deltaState, chunks []model.StoredChunk, removedPaths []string, phase string) deltaOutcome {
 	var err error
 	if state.staging {
-		err = manager.semantic.StageReindex(ctx, job.CanonicalPath, chunks, removedPaths, nil)
+		err = manager.semantic.StageReindex(ctx, job.CanonicalPath, chunks, removedPaths, nil, state.reuse)
 	} else {
-		err = manager.semantic.Reindex(ctx, job.CanonicalPath, chunks, removedPaths, nil)
+		err = manager.semantic.Reindex(ctx, job.CanonicalPath, chunks, removedPaths, nil, state.reuse)
 	}
 	if err != nil {
 		return manager.classifyReindexErr(ctx, job, err, phase)
@@ -170,6 +176,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job) bool {
 		working:      make(map[string]string, len(plan.seedSnapshot.Files)),
 		semantic:     manager.semantic != nil && manager.semantic.Available(),
 		staging:      false,
+		reuse:        nil,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -255,8 +262,22 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job) {
 		working:      make(map[string]string, len(plan.currentSnapshot.Files)),
 		semantic:     manager.semantic != nil && manager.semantic.Available(),
 		staging:      true,
+		reuse:        nil,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
+
+	// Merge-down: when this build roots above already-indexed child codebases,
+	// reuse their stored embeddings for the shared subtree instead of
+	// re-embedding it, then absorb the children once the build promotes.
+	descendants := manager.descendantReuseCandidates(job.CanonicalPath, job.Config)
+	if len(descendants) > 0 && state.semantic {
+		reuse, reuseErr := manager.semantic.LoadReuseVectors(ctx, collectionNamesOf(descendants))
+		if reuseErr != nil {
+			slog.WarnContext(ctx, "load reuse vectors failed; embedding shared subtree", "job_id", job.ID, "err", reuseErr)
+		} else {
+			state.reuse = reuse
+		}
+	}
 
 	result, outcome := manager.applyDeltaChanges(ctx, job, state)
 	if outcome.handled {
@@ -272,6 +293,8 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job) {
 	if promote := manager.promoteBootstrap(ctx, job, state); promote.handled {
 		return
 	}
+
+	manager.absorbDescendants(ctx, descendants)
 
 	result.FileHashes = state.working
 	fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, state.working, result.TotalChunks)

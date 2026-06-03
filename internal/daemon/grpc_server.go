@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -170,6 +171,7 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
 	}
+	mergeNote := server.startIndexMergeNote(request.GetPath(), codebase)
 	return &pb.StartIndexResponse{
 		JobId:              job.ID,
 		CodebaseId:         codebase.ID,
@@ -177,8 +179,31 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 		Deduplicated:       deduplicated,
 		CanonicalPath:      codebase.CanonicalPath,
 		OverlapsCodebaseId: overlapsCodebaseID,
-		DisplayText:        appendCorrelationRef(renderStartIndex(request.GetPath(), codebase, job, deduplicated, overlapsCodebaseID), ctx, "codebase_id", codebase.ID, "job_id", job.ID),
+		DisplayText:        appendCorrelationRef(renderStartIndex(request.GetPath(), codebase, job, deduplicated, overlapsCodebaseID, mergeNote), ctx, "codebase_id", codebase.ID, "job_id", job.ID),
 	}, nil
+}
+
+// startIndexMergeNote describes a containment relationship the StartIndex call
+// resolved: a merge-up redirect when the requested path is covered by the
+// returned (larger) codebase, or a merge-down reuse note when the requested
+// path roots above already-indexed sub-folders. It returns an empty string for
+// an ordinary, non-overlapping index.
+func (server *GRPCServer) startIndexMergeNote(requestedPath string, codebase model.Codebase) string {
+	if canonical, err := canonicalizePath(requestedPath); err == nil && codebase.CanonicalPath != "" {
+		coveringRoot := filepath.Clean(codebase.CanonicalPath)
+		if canonical != coveringRoot && pathCovers(coveringRoot, canonical) {
+			return fmt.Sprintf("🔁 '%s' is covered by the larger index '%s'; syncing that index to include this subtree instead of building a separate one.", requestedPath, codebase.CanonicalPath)
+		}
+	}
+	descendants := server.manager.IndexedDescendants(requestedPath)
+	if len(descendants) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(descendants))
+	for _, child := range descendants {
+		names = append(names, child.CanonicalPath)
+	}
+	return "🔗 Reusing already-indexed sub-folder(s): " + strings.Join(names, ", ") + " (their embeddings are merged in, not re-embedded)."
 }
 
 // ClearIndex removes a tracked codebase from daemon state.
@@ -259,10 +284,14 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	if found {
 		server.manager.fillLiveChunkTotal(ctx, codebase, activeJob)
 	}
+	var indexedDescendants []model.Codebase
+	if !found {
+		indexedDescendants = server.manager.IndexedDescendants(request.GetPath())
+	}
 	response := &pb.GetIndexResponse{
 		Tracked:        found,
 		Classification: pbconv.ToPathClassification(classification),
-		DisplayText:    appendCorrelationRef(renderGetIndex(request.GetPath(), found, codebasePointer(found, codebase), activeJob, classification), ctx, "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
+		DisplayText:    appendCorrelationRef(renderGetIndex(request.GetPath(), found, codebasePointer(found, codebase), activeJob, classification, indexedDescendants), ctx, "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
 	if found {
 		response.Codebase = pbconv.ToCodebase(codebase)

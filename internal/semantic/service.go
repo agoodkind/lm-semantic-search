@@ -160,7 +160,7 @@ func (service *Service) renameCollection(ctx context.Context, oldName string, ne
 // same batched flow the staging build uses. Reindex returns
 // ErrCollectionMissing when the live collection no longer exists, so callers
 // can fall back to a full staging build.
-func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removedOrModifiedRelativePaths []string, progress func(Progress)) (err error) {
+func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removedOrModifiedRelativePaths []string, progress func(Progress), reuse map[string][]float32) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.reindex")
 	defer done(&err)
 
@@ -188,7 +188,7 @@ func (service *Service) Reindex(ctx context.Context, codebasePath string, addedO
 		return nil
 	}
 	addedOrModifiedChunks = service.guardrailExpand(ctx, codebasePath, addedOrModifiedChunks, "reindex")
-	return service.insertChunksBatched(ctx, collectionName, addedOrModifiedChunks, true, "Reindexing changed files...", progress)
+	return service.insertChunksBatched(ctx, collectionName, addedOrModifiedChunks, true, "Reindexing changed files...", progress, reuse)
 }
 
 // PruneToCurrent removes rows whose relativePath is outside the provided
@@ -253,7 +253,13 @@ func escapeMilvusString(value string) string {
 }
 
 // Search executes semantic or hybrid search against the configured collection.
-func (service *Service) Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string) ([]model.StoredChunk, error) {
+//
+// relativePathPrefix scopes the search to one subtree of the collection: when
+// it is a non-empty relative directory, only rows whose relativePath equals it
+// or descends from it are returned. The covering-codebase resolution uses this
+// so a query aimed at a nested directory of a larger index returns only that
+// directory's chunks.
+func (service *Service) Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error) {
 	if !service.Available() {
 		return nil, ErrUnavailable
 	}
@@ -278,7 +284,7 @@ func (service *Service) Search(ctx context.Context, codebasePath string, query s
 	if searchLimit <= 0 {
 		searchLimit = 10
 	}
-	filterExpr := buildExtensionFilter(extensionFilter)
+	filterExpr := buildSearchFilter(extensionFilter, relativePathPrefix)
 
 	outputFields := []string{
 		contentFieldName,
@@ -709,6 +715,34 @@ func generateID(chunk model.StoredChunk, _ int) string {
 	hashInput := fmt.Sprintf("%s:%d:%d:%s", chunk.RelativePath, chunk.StartLine, chunk.EndLine, chunk.Content)
 	sum := sha256.Sum256([]byte(hashInput))
 	return "chunk_" + hex.EncodeToString(sum[:])[:16]
+}
+
+// buildSearchFilter joins the extension filter and the relative-path prefix
+// scope into one Milvus boolean expression, ANDing whichever clauses are
+// present. An empty result means no filter, which searches the whole
+// collection.
+func buildSearchFilter(extensionFilter []string, relativePathPrefix string) string {
+	clauses := make([]string, 0, 2)
+	if extensionClause := buildExtensionFilter(extensionFilter); extensionClause != "" {
+		clauses = append(clauses, extensionClause)
+	}
+	if prefixClause := buildRelativePathPrefixFilter(relativePathPrefix); prefixClause != "" {
+		clauses = append(clauses, prefixClause)
+	}
+	return strings.Join(clauses, " and ")
+}
+
+// buildRelativePathPrefixFilter matches a directory and everything beneath it:
+// the row whose relativePath equals the prefix, plus every row whose
+// relativePath begins with the prefix and a separator. An empty or root prefix
+// returns no clause so the whole collection is searched.
+func buildRelativePathPrefixFilter(relativePathPrefix string) string {
+	trimmed := strings.Trim(strings.TrimSpace(relativePathPrefix), "/")
+	if trimmed == "" || trimmed == "." {
+		return ""
+	}
+	escaped := escapeMilvusString(trimmed)
+	return fmt.Sprintf(`(%s == "%s" or %s like "%s/%%")`, relativePathFieldName, escaped, relativePathFieldName, escaped)
 }
 
 func buildExtensionFilter(extensionFilter []string) string {

@@ -69,6 +69,29 @@ func (manager *Manager) findStrictAncestor(canonicalPath string) (model.Codebase
 	return best, true
 }
 
+// findDescendants returns every codebase whose CanonicalPath is strictly
+// inside canonicalPath (so canonicalPath covers the codebase root and is not
+// equal to it), sorted longest-prefix first. It is the mirror of
+// findStrictAncestor and drives the merge-down absorb path: when a new index
+// roots above existing child codebases, their stored vectors are reused
+// instead of being re-embedded.
+func (manager *Manager) findDescendants(canonicalPath string) []model.Codebase {
+	matches := make([]model.Codebase, 0, len(manager.codebases))
+	for _, codebase := range manager.codebases {
+		if codebase.CanonicalPath == canonicalPath {
+			continue
+		}
+		if !pathCovers(canonicalPath, codebase.CanonicalPath) {
+			continue
+		}
+		matches = append(matches, codebase)
+	}
+	sort.Slice(matches, func(first int, second int) bool {
+		return len(matches[first].CanonicalPath) > len(matches[second].CanonicalPath)
+	})
+	return matches
+}
+
 func canonicalizePath(requestedPath string) (string, error) {
 	// Reject an empty or whitespace path before filepath.Abs, which would
 	// otherwise resolve "" to the current working directory and let a caller
@@ -90,6 +113,27 @@ func canonicalizePath(requestedPath string) (string, error) {
 		return "", fmt.Errorf("resolve symlinks for %s: %w", absolutePath, err)
 	}
 	return canonicalPath, nil
+}
+
+// subtreePrefix returns the covering-codebase-relative directory that
+// requestedPath points at, in forward-slash form, or "" when the request
+// targets the codebase root itself or cannot be resolved. Search uses it to
+// scope a query aimed at a nested directory of a larger covering index to only
+// that directory's chunks.
+func subtreePrefix(requestedPath string, coveringRoot string) string {
+	canonical, err := canonicalizePath(requestedPath)
+	if err != nil {
+		return ""
+	}
+	coveringRoot = filepath.Clean(coveringRoot)
+	if canonical == coveringRoot || !pathCovers(coveringRoot, canonical) {
+		return ""
+	}
+	relative, err := filepath.Rel(coveringRoot, canonical)
+	if err != nil || relative == "" || relative == "." {
+		return ""
+	}
+	return filepath.ToSlash(relative)
 }
 
 func pathCovers(rootPath string, targetPath string) bool {

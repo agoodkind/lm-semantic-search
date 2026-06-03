@@ -22,7 +22,7 @@ type searchView struct {
 	Results       []model.StoredChunk
 }
 
-func renderStartIndex(requestedPath string, codebase model.Codebase, job model.Job, deduplicated bool, overlapsCodebaseID string) string {
+func renderStartIndex(requestedPath string, codebase model.Codebase, job model.Job, deduplicated bool, overlapsCodebaseID string, mergeNote string) string {
 	if deduplicated {
 		return fmt.Sprintf(
 			"Background indexing is already running for codebase '%s' using %s splitter.\nCurrent job: %s\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.",
@@ -32,9 +32,17 @@ func renderStartIndex(requestedPath string, codebase model.Codebase, job model.J
 		)
 	}
 
+	// The merge note already explains the relationship between the requested path
+	// and the codebase, so the plain "resolved to canonical path" line would only
+	// repeat it; it renders only in the ordinary, non-merge case.
 	pathInfo := ""
-	if requestedPath != "" && requestedPath != codebase.CanonicalPath {
+	if mergeNote == "" && requestedPath != "" && requestedPath != codebase.CanonicalPath {
 		pathInfo = fmt.Sprintf("\nNote: Input path '%s' was resolved to canonical path '%s'", requestedPath, codebase.CanonicalPath)
+	}
+
+	merge := ""
+	if mergeNote != "" {
+		merge = "\n" + mergeNote
 	}
 
 	overlap := ""
@@ -43,10 +51,11 @@ func renderStartIndex(requestedPath string, codebase model.Codebase, job model.J
 	}
 
 	return fmt.Sprintf(
-		"Started background indexing for codebase '%s' using %s splitter.%s%s\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.",
+		"Started background indexing for codebase '%s' using %s splitter.%s%s%s\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.",
 		codebase.CanonicalPath,
 		strings.ToUpper(orDefault(job.Config.SplitterType, "ast")),
 		pathInfo,
+		merge,
 		overlap,
 	)
 }
@@ -73,15 +82,58 @@ func renderSyncIndex(codebase model.Codebase, job model.Job, deduplicated bool) 
 	return fmt.Sprintf("Started sync job %s for '%s'", job.ID, codebase.CanonicalPath)
 }
 
-func renderGetIndex(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job, classification *model.PathClassification) string {
+func renderGetIndex(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job, classification *model.PathClassification, indexedDescendants []model.Codebase) string {
+	// A path that is not indexed as its own codebase but contains already-indexed
+	// sub-folders reads as an offer to merge them into one larger index, rather
+	// than a bare "not indexed" dead end.
+	if !tracked && len(indexedDescendants) > 0 {
+		return renderIndexedDescendantsHint(requestedPath, indexedDescendants)
+	}
 	lines := []string{renderGetIndexBody(requestedPath, tracked, codebase, activeJob)}
 	if symlinkLine := renderSymlinkResolution(requestedPath); symlinkLine != "" {
 		lines = append(lines, symlinkLine)
+	}
+	if coverageLine := renderCoveringResolution(requestedPath, tracked, codebase); coverageLine != "" {
+		lines = append(lines, coverageLine)
 	}
 	if classificationLine := renderClassificationLine(classification); classificationLine != "" {
 		lines = append(lines, classificationLine)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderIndexedDescendantsHint replaces the bare not-indexed message for a path
+// that already has indexed sub-folders. It names the sub-folders, totals their
+// indexed files, and points at the one command that builds a merged parent
+// index reusing their embeddings.
+func renderIndexedDescendantsHint(requestedPath string, descendants []model.Codebase) string {
+	var totalFiles int32
+	names := make([]string, 0, len(descendants))
+	for _, child := range descendants {
+		names = append(names, child.CanonicalPath)
+		if child.LastSuccessfulRun != nil {
+			totalFiles += child.LastSuccessfulRun.IndexedFiles
+		}
+	}
+	return fmt.Sprintf(
+		"🛈 '%s' is not indexed on its own, but %d already-indexed file(s) live under sub-folder(s): %s\n"+
+			"Build one merged index that reuses those embeddings by running: index_codebase %s",
+		requestedPath, totalFiles, strings.Join(names, ", "), requestedPath,
+	)
+}
+
+// renderCoveringResolution names the larger index a nested query resolved to,
+// scoped to the sub-path, so the operator sees that a sub-folder query is served
+// by the covering parent index rather than a separate one.
+func renderCoveringResolution(requestedPath string, tracked bool, codebase *model.Codebase) string {
+	if !tracked || codebase == nil {
+		return ""
+	}
+	prefix := subtreePrefix(requestedPath, codebase.CanonicalPath)
+	if prefix == "" {
+		return ""
+	}
+	return fmt.Sprintf("🔁 Resolved to larger index '%s' (scoped to %s/).", codebase.CanonicalPath, prefix)
 }
 
 // renderSymlinkResolution names the real path a symlinked query path resolves

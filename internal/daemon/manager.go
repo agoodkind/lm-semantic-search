@@ -457,6 +457,14 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 		return emptyJob, emptyCodebase, false, "", err
 	}
 
+	// Merge-up: a nested path already covered by an indexed parent does not get
+	// its own redundant index. Resolve to the covering parent and sync it so the
+	// requested subtree is current, rather than building a second overlapping
+	// collection over the shared files.
+	if ancestor, found := manager.mergeUpTarget(canonicalPath); found {
+		return manager.redirectIndexToAncestor(ctx, requestedPath, ancestor, client)
+	}
+
 	indexConfig = manager.enrichIndexConfig(indexConfig)
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 

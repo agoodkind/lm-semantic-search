@@ -22,6 +22,13 @@ import (
 type fakeSemantic struct {
 	reindex    func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
 	copyChunks func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
+	// loadReuse, when set, supplies the reuse map a merge-down build receives and
+	// records which collections were asked for. dropped records every Drop call
+	// so a test can prove an absorb never drops the absorbed child collection.
+	loadReuse        func(ctx context.Context, collectionNames []string) (map[string][]float32, error)
+	reuseCollections [][]string
+	dropped          []string
+	mu               sync.Mutex
 }
 
 func (f *fakeSemantic) Available() bool                { return true }
@@ -30,7 +37,7 @@ func (f *fakeSemantic) HasStaging(context.Context, string) (bool, error) {
 	return false, nil
 }
 
-func (f *fakeSemantic) Search(context.Context, string, string, int32, []string) ([]model.StoredChunk, error) {
+func (f *fakeSemantic) Search(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 	return nil, nil
 }
 func (f *fakeSemantic) Count(context.Context, string) (int32, error) { return 0, nil }
@@ -46,14 +53,24 @@ func (f *fakeSemantic) HasCollectionForPath(context.Context, string) (bool, erro
 	return true, nil
 }
 
-func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, _ func(semantic.Progress)) error {
+func (f *fakeSemantic) LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error) {
+	f.mu.Lock()
+	f.reuseCollections = append(f.reuseCollections, collectionNames)
+	f.mu.Unlock()
+	if f.loadReuse != nil {
+		return f.loadReuse(ctx, collectionNames)
+	}
+	return map[string][]float32{}, nil
+}
+
+func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, _ func(semantic.Progress), _ map[string][]float32) error {
 	if f.reindex != nil {
 		return f.reindex(ctx, codebasePath, chunks, removed)
 	}
 	return nil
 }
 
-func (f *fakeSemantic) StageReindex(context.Context, string, []model.StoredChunk, []string, func(semantic.Progress)) error {
+func (f *fakeSemantic) StageReindex(context.Context, string, []model.StoredChunk, []string, func(semantic.Progress), map[string][]float32) error {
 	return nil
 }
 func (f *fakeSemantic) PromoteStaging(context.Context, string) error { return nil }
@@ -66,8 +83,13 @@ func (f *fakeSemantic) CopyChunks(ctx context.Context, codebasePath string, src 
 }
 
 func (f *fakeSemantic) PruneToCurrent(context.Context, string, []string) error { return nil }
-func (f *fakeSemantic) Drop(context.Context, string) error                     { return nil }
-func (f *fakeSemantic) DropStaging(context.Context, string) error              { return nil }
+func (f *fakeSemantic) Drop(_ context.Context, codebasePath string) error {
+	f.mu.Lock()
+	f.dropped = append(f.dropped, codebasePath)
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeSemantic) DropStaging(context.Context, string) error { return nil }
 
 // TestConvergeViaWatcherRunsCodebasesConcurrentlyUpToCap proves that several
 // codebases converge at once up to the index-slot cap while another waits, that
