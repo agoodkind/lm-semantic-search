@@ -8,7 +8,6 @@ require (
 	github.com/openai/openai-go/v2 v2.7.1
 	github.com/rjeczalik/notify v0.9.3
 	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0
-	github.com/tree-sitter-grammars/tree-sitter-objc v1.2.1-0.20250131075517-181a81b8f23a
 	github.com/tree-sitter/go-tree-sitter v0.25.0
 	github.com/tree-sitter/tree-sitter-bash v0.25.1
 	github.com/tree-sitter/tree-sitter-c v0.24.2
