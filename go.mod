@@ -3,29 +3,29 @@ module goodkind.io/claude-context-go
 go 1.26.4
 
 require (
-	github.com/mark3labs/mcp-go v0.50.0
-	github.com/milvus-io/milvus/client/v2 v2.6.4
+	github.com/mark3labs/mcp-go v0.54.1
+	github.com/milvus-io/milvus/client/v2 v2.6.5
 	github.com/openai/openai-go/v2 v2.7.1
 	github.com/rjeczalik/notify v0.9.3
 	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0
 	github.com/tree-sitter-grammars/tree-sitter-objc v1.2.1-0.20250131075517-181a81b8f23a
-	github.com/tree-sitter/go-tree-sitter v0.24.1-0.20251112183152-c9492002f76e
-	github.com/tree-sitter/tree-sitter-bash v0.23.3
-	github.com/tree-sitter/tree-sitter-c v0.24.0
+	github.com/tree-sitter/go-tree-sitter v0.25.0
+	github.com/tree-sitter/tree-sitter-bash v0.25.1
+	github.com/tree-sitter/tree-sitter-c v0.24.2
 	github.com/tree-sitter/tree-sitter-cpp v0.23.4
-	github.com/tree-sitter/tree-sitter-css v0.23.2
+	github.com/tree-sitter/tree-sitter-css v0.25.0
 	github.com/tree-sitter/tree-sitter-go v0.25.0
 	github.com/tree-sitter/tree-sitter-html v0.23.2
 	github.com/tree-sitter/tree-sitter-java v0.23.5
 	github.com/tree-sitter/tree-sitter-javascript v0.25.0
 	github.com/tree-sitter/tree-sitter-json v0.24.8
-	github.com/tree-sitter/tree-sitter-php v0.23.12
+	github.com/tree-sitter/tree-sitter-php v0.24.2
 	github.com/tree-sitter/tree-sitter-python v0.25.0
 	github.com/tree-sitter/tree-sitter-ruby v0.23.1
 	github.com/tree-sitter/tree-sitter-rust v0.24.2
 	github.com/tree-sitter/tree-sitter-scala v0.26.0
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2
-	goodkind.io/gklog v0.4.0
+	goodkind.io/gklog v0.4.2
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )
@@ -74,7 +74,7 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/mattn/go-pointer v0.0.1 // indirect
-	github.com/milvus-io/milvus-proto/go-api/v2 v2.6.15 // indirect
+	github.com/milvus-io/milvus-proto/go-api/v2 v2.6.17 // indirect
 	github.com/milvus-io/milvus/pkg/v2 v2.6.7-0.20251201120310-af64f2acba38 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
