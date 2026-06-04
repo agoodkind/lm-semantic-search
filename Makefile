@@ -6,12 +6,12 @@
 # pipeline and let agents bypass strict rules.
 
 # Identity. This repo has no own version package; it cross-stamps gklog/version.
-BINARY := claude-contextd
-CMD    := ./cmd/claude-contextd
+BINARY := lm-semantic-search-daemon
+CMD    := ./cmd/lm-semantic-search-daemon
 GKLOG_VPKG := goodkind.io/gklog/version
-CLI_BINARY := claude-context
+CLI_BINARY := lm-semantic-search
 CLI_CMD := ./cmd/$(CLI_BINARY)
-MCP_BINARY := claude-context-mcp
+MCP_BINARY := lm-semantic-search-mcp
 MCP_CMD := ./cmd/$(MCP_BINARY)
 
 # make install builds and installs the daemon plus both client binaries.
@@ -23,14 +23,14 @@ GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 BUILD_CHECKS := true
 STATICCHECK_EXTRA_FLAGS = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_STRICT_FLAGS)
 
-LAUNCHD_LABEL := io.goodkind.claude-contextd
-SYSTEMD_UNIT := claude-contextd.service
+LAUNCHD_LABEL := io.goodkind.lm-semantic-search-daemon
+SYSTEMD_UNIT := lm-semantic-search-daemon.service
 # macOS launchd captures the daemon's stderr to this file; Linux logs to journald
 # (the systemd unit sets no file path), so LOG_PATH there is only a harmless default.
 ifeq ($(shell uname),Darwin)
-LOG_PATH := $(HOME)/Library/Logs/claude-contextd.log
+LOG_PATH := $(HOME)/Library/Logs/lm-semantic-search-daemon.log
 else
-LOG_PATH := $(HOME)/.contextd/logs/claude-contextd.log
+LOG_PATH := $(HOME)/.lm-semantic-search/logs/lm-semantic-search-daemon.log
 endif
 
 # bootstrap.mk fetches go.mk + golangci.yml + every module in GO_MK_MODULES
@@ -124,7 +124,7 @@ daemon-wait:
 	done; \
 	"$(CLI_INSTALL_BIN)" daemon status
 
-# kill-orphans walks every running claude-context-mcp process and sends
+# kill-orphans walks every running lm-semantic-search-mcp process and sends
 # SIGKILL when its parent PID is 1 (init). Active sessions with a live parent
 # stay untouched. This is the mitigation for the orphan-pile failure mode
 # (199 zombies on the host pushing system load to 28) that bit the upstream

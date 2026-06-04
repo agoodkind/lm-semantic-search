@@ -1,6 +1,6 @@
 [Unit]
 Description=Claude Context daemon
-Documentation=https://github.com/agoodkind/claude-context-go
+Documentation=https://github.com/agoodkind/lm-semantic-search
 After=network.target
 
 [Service]
