@@ -20,8 +20,13 @@ import (
 // copyChunks are the only behaviors a converge exercises; the rest return inert
 // values so the manager treats the backend as available and empty.
 type fakeSemantic struct {
-	reindex    func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
-	copyChunks func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
+	reindex              func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
+	copyChunks           func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
+	collectionName       func(codebasePath string) string
+	listCollections      func(context.Context) ([]string, error)
+	hasCollectionForPath func(context.Context, string) (bool, error)
+	search               func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
+	count                func(context.Context, string) (int32, error)
 	// loadReuse, when set, supplies the reuse map a merge-down build receives and
 	// records which collections were asked for. dropped records every Drop call
 	// so a test can prove an absorb never drops the absorbed child collection.
@@ -31,25 +36,43 @@ type fakeSemantic struct {
 	mu               sync.Mutex
 }
 
-func (f *fakeSemantic) Available() bool                { return true }
-func (f *fakeSemantic) CollectionName(_ string) string { return "code_chunks_test" }
+func (f *fakeSemantic) Available() bool { return true }
+func (f *fakeSemantic) CollectionName(codebasePath string) string {
+	if f.collectionName != nil {
+		return f.collectionName(codebasePath)
+	}
+	return "code_chunks_test"
+}
+
 func (f *fakeSemantic) HasStaging(context.Context, string) (bool, error) {
 	return false, nil
 }
 
-func (f *fakeSemantic) Search(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
+func (f *fakeSemantic) Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error) {
+	if f.search != nil {
+		return f.search(ctx, codebasePath, query, limit, extensionFilter, relativePathPrefix)
+	}
 	return nil, nil
 }
-func (f *fakeSemantic) Count(context.Context, string) (int32, error) { return 0, nil }
 
-// ListCollections returns the one collection CollectionName reports, keeping the
-// fake self-consistent: the forward reconciler in GetIndex drops a registry
-// entry whose collection is absent from this list, so it must include it.
-func (f *fakeSemantic) ListCollections(context.Context) ([]string, error) {
+func (f *fakeSemantic) Count(ctx context.Context, codebasePath string) (int32, error) {
+	if f.count != nil {
+		return f.count(ctx, codebasePath)
+	}
+	return 0, nil
+}
+
+func (f *fakeSemantic) ListCollections(ctx context.Context) ([]string, error) {
+	if f.listCollections != nil {
+		return f.listCollections(ctx)
+	}
 	return []string{"code_chunks_test"}, nil
 }
 
-func (f *fakeSemantic) HasCollectionForPath(context.Context, string) (bool, error) {
+func (f *fakeSemantic) HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error) {
+	if f.hasCollectionForPath != nil {
+		return f.hasCollectionForPath(ctx, codebasePath)
+	}
 	return true, nil
 }
 

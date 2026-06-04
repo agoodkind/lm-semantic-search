@@ -76,10 +76,13 @@ type Manager struct {
 }
 
 // SearchOutcome carries search results plus current indexing context.
+// StateNote adds read-only repair or availability context to the rendered
+// response when results alone are not enough to explain the current state.
 type SearchOutcome struct {
 	Codebase  model.Codebase
 	ActiveJob *model.Job
 	Results   []model.StoredChunk
+	StateNote string
 }
 
 type indexingRunner interface {
@@ -212,53 +215,6 @@ func (manager *Manager) Version() map[string]string {
 	}
 }
 
-func (manager *Manager) reconcileIndexedCodebases(ctx context.Context) {
-	if manager.semantic == nil || !manager.semantic.Available() {
-		return
-	}
-
-	collections, err := manager.semantic.ListCollections(ctx)
-	if err != nil {
-		slog.ErrorContext(ctx, "reconcile indexed codebases failed", "err", err)
-		return
-	}
-
-	collectionSet := make(map[string]struct{}, len(collections))
-	for _, collectionName := range collections {
-		collectionSet[collectionName] = struct{}{}
-	}
-
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-
-	changed := false
-	for codebaseID, codebase := range manager.codebases {
-		if codebase.Status != model.CodebaseStatusIndexed {
-			continue
-		}
-		expectedCollectionName := codebase.CollectionName
-		if expectedCollectionName == "" && manager.semantic != nil {
-			expectedCollectionName = manager.semantic.CollectionName(codebase.CanonicalPath)
-			codebase.CollectionName = expectedCollectionName
-			manager.codebases[codebaseID] = codebase
-			changed = true
-		}
-		if expectedCollectionName == "" {
-			continue
-		}
-		if _, found := collectionSet[expectedCollectionName]; found {
-			continue
-		}
-		delete(manager.codebases, codebaseID)
-		changed = true
-	}
-	if changed {
-		if err := manager.saveLocked(); err != nil {
-			slog.ErrorContext(ctx, "persist reconciled codebases failed", "err", err)
-		}
-	}
-}
-
 func newCodebaseRecord(canonicalPath string) model.Codebase {
 	return model.Codebase{
 		ID:                newID("cb"),
@@ -338,40 +294,29 @@ func newQueuedJob(
 // startIndexDecision captures one StartIndex call's resolved codebase plus
 // the routing decision derived from the current registry state.
 type startIndexDecision struct {
-	codebase         model.Codebase
-	activeJob        model.Job
-	dedup            bool
-	streamingReindex bool
-	alreadyIndexed   bool
+	codebase  model.Codebase
+	activeJob model.Job
+	dedup     bool
+	mode      startIndexMode
 }
 
-// decideStartIndexLocked resolves the codebase record and routing decision
-// from the registry plus the caller-provided Milvus collection state. A
-// registry miss with hasCollection=true produces an Indexed codebase that
-// streams its next reindex into the existing collection. A Failed status
-// always allows retry: streaming when the collection exists, full bootstrap
-// otherwise. Caller must hold manager.mu.
-func (manager *Manager) decideStartIndexLocked(canonicalPath string, indexConfig model.IndexConfig, force bool, hasCollection bool) (startIndexDecision, error) {
+// decideStartIndexLocked resolves the codebase record and routing mode from
+// the registry plus the caller-provided collection presence. The shared
+// collection-state policy decides whether this call is already indexed, should
+// queue an incremental run, or must bootstrap. Caller must hold manager.mu.
+func (manager *Manager) decideStartIndexLocked(canonicalPath string, indexConfig model.IndexConfig, force bool, presence collectionPresence) (startIndexDecision, error) {
 	var emptyJob model.Job
 	codebase, found := manager.findCodebaseByExactRoot(canonicalPath)
 	if !found {
 		fresh := newCodebaseRecord(canonicalPath)
-		if hasCollection {
+		if presence == collectionPresencePresent {
 			fresh.Status = model.CodebaseStatusIndexed
-			return startIndexDecision{
-				codebase:         fresh,
-				activeJob:        emptyJob,
-				dedup:            false,
-				streamingReindex: true,
-				alreadyIndexed:   false,
-			}, nil
 		}
 		return startIndexDecision{
-			codebase:         fresh,
-			activeJob:        emptyJob,
-			dedup:            false,
-			streamingReindex: false,
-			alreadyIndexed:   false,
+			codebase:  fresh,
+			activeJob: emptyJob,
+			dedup:     false,
+			mode:      decideStartIndexMode(false, fresh.Status, false, force, presence),
 		}, nil
 	}
 	activeJob, deduplicated, err := manager.activeJobLocked(codebase, canonicalPath, indexConfig)
@@ -380,57 +325,23 @@ func (manager *Manager) decideStartIndexLocked(canonicalPath string, indexConfig
 	}
 	if deduplicated {
 		return startIndexDecision{
-			codebase:         codebase,
-			activeJob:        activeJob,
-			dedup:            true,
-			streamingReindex: false,
-			alreadyIndexed:   false,
-		}, nil
-	}
-	// Failed, Stale, or Indexing-without-an-active-job all allow a new
-	// indexing pass. The Indexing case is the daemon-restart resume path:
-	// the codebase was mid-flight when the previous process exited, so
-	// the resumed run streams into the existing collection (or bootstraps
-	// when Milvus is empty).
-	switch codebase.Status {
-	case model.CodebaseStatusFailed, model.CodebaseStatusStale, model.CodebaseStatusIndexing:
-		return startIndexDecision{
-			codebase:         codebase,
-			activeJob:        emptyJob,
-			dedup:            false,
-			streamingReindex: hasCollection,
-			alreadyIndexed:   false,
-		}, nil
-	case model.CodebaseStatusIndexed, model.CodebaseStatusNotIndexed:
-	}
-	indexed := codebase.Status == model.CodebaseStatusIndexed || hasCollection
-	if !indexed {
-		return startIndexDecision{
-			codebase:         codebase,
-			activeJob:        emptyJob,
-			dedup:            false,
-			streamingReindex: false,
-			alreadyIndexed:   false,
-		}, nil
-	}
-	// Matching config with force=false maps to a no-op "already indexed"
-	// reply. Every other re-call streams into the existing collection so
-	// search keeps working across the upgrade.
-	if !force && codebase.EffectiveConfig.IgnoreDigest == indexConfig.IgnoreDigest {
-		return startIndexDecision{
-			codebase:         codebase,
-			activeJob:        emptyJob,
-			dedup:            false,
-			streamingReindex: false,
-			alreadyIndexed:   true,
+			codebase:  codebase,
+			activeJob: activeJob,
+			dedup:     true,
+			mode:      startIndexModeBootstrap,
 		}, nil
 	}
 	return startIndexDecision{
-		codebase:         codebase,
-		activeJob:        emptyJob,
-		dedup:            false,
-		streamingReindex: true,
-		alreadyIndexed:   false,
+		codebase:  codebase,
+		activeJob: emptyJob,
+		dedup:     false,
+		mode: decideStartIndexMode(
+			true,
+			codebase.Status,
+			codebase.EffectiveConfig.IgnoreDigest == indexConfig.IgnoreDigest,
+			force,
+			presence,
+		),
 	}, nil
 }
 
@@ -478,9 +389,9 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 		}
 	}
 
-	hasCollection := manager.probeCollectionForPath(ctx, canonicalPath)
+	presence := manager.probeCollectionPresence(ctx, canonicalPath, "StartIndex")
 
-	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(ctx, canonicalPath, requestedPath, client, indexConfig, force, hasCollection)
+	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(ctx, canonicalPath, requestedPath, client, indexConfig, force, presence)
 	if err != nil || deduped {
 		return job, codebase, deduped, overlapsCodebaseID, err
 	}
@@ -493,20 +404,22 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 	return job, codebase, false, overlapsCodebaseID, nil
 }
 
-// probeCollectionForPath asks Milvus whether canonicalPath already has a
-// collection so commitStartIndexLocked can decide between bootstrap and
-// streaming-reindex. Returns false when the semantic service is unavailable
-// or the check fails; both cases route to bootstrap which is correct.
-func (manager *Manager) probeCollectionForPath(ctx context.Context, canonicalPath string) bool {
+// probeCollectionPresence asks Milvus whether canonicalPath already has a live
+// collection and preserves the distinction between missing and unknown
+// backend state. Unknown must not be treated as definite collection loss.
+func (manager *Manager) probeCollectionPresence(ctx context.Context, canonicalPath string, caller string) collectionPresence {
 	if manager.semantic == nil || !manager.semantic.Available() {
-		return false
+		return collectionPresenceUnknown
 	}
 	present, hasErr := manager.semantic.HasCollectionForPath(ctx, canonicalPath)
 	if hasErr != nil {
-		slog.WarnContext(ctx, "Milvus HasCollection failed during StartIndex", "path", canonicalPath, "err", hasErr)
-		return false
+		slog.WarnContext(ctx, "Milvus HasCollection failed", "caller", caller, "path", canonicalPath, "err", hasErr)
+		return collectionPresenceUnknown
 	}
-	return present
+	if present {
+		return collectionPresencePresent
+	}
+	return collectionPresenceMissing
 }
 
 // commitStartIndexLocked acquires the registry lock, runs the decision
@@ -514,13 +427,13 @@ func (manager *Manager) probeCollectionForPath(ctx context.Context, canonicalPat
 // and queues the job event. The returned job has an empty ID when the
 // decision resolved as already-indexed; the caller treats that as a no-op
 // success.
-func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPath string, requestedPath string, client model.ClientInfo, indexConfig model.IndexConfig, force bool, hasCollection bool) (model.Job, model.Codebase, bool, string, error) {
+func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPath string, requestedPath string, client model.ClientInfo, indexConfig model.IndexConfig, force bool, presence collectionPresence) (model.Job, model.Codebase, bool, string, error) {
 	var emptyJob model.Job
 	var emptyCodebase model.Codebase
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
-	decision, err := manager.decideStartIndexLocked(canonicalPath, indexConfig, force, hasCollection)
+	decision, err := manager.decideStartIndexLocked(canonicalPath, indexConfig, force, presence)
 	if err != nil {
 		slog.ErrorContext(ctx, "resolve active job failed", "canonical_path", canonicalPath, "err", err)
 		return emptyJob, emptyCodebase, false, "", err
@@ -532,7 +445,7 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	if ancestor, found := manager.findStrictAncestor(canonicalPath); found {
 		overlapsCodebaseID = ancestor.ID
 	}
-	if decision.alreadyIndexed {
+	if decision.mode == startIndexModeAlreadyIndexed {
 		return emptyJob, decision.codebase, false, overlapsCodebaseID, nil
 	}
 
@@ -547,7 +460,7 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	codebase.UpdatedAt = clock.Now()
 
 	operation := jobOperationIndex
-	if decision.streamingReindex {
+	if decision.mode == startIndexModeIncremental {
 		operation = jobOperationStreamingReindex
 	}
 	job := newQueuedJob(codebase.ID, requestedPath, canonicalPath, client, string(operation), indexConfig, clock.Now())
@@ -758,8 +671,6 @@ func resolveIgnoreRulesOrLog(ctx context.Context, canonicalPath string, override
 
 // ListIndexes returns every tracked codebase in canonical path order.
 func (manager *Manager) ListIndexes(ctx context.Context) []model.Codebase {
-	manager.reconcileIndexedCodebases(ctx)
-
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 

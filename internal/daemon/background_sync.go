@@ -194,6 +194,8 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 		}
 	}()
 
+	syncer.manager.RepairMissingCollections(ctx)
+
 	codebases := syncer.manager.ListIndexes(ctx)
 	for _, codebase := range codebases {
 		if codebase.Status != model.CodebaseStatusIndexed {

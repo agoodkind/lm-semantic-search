@@ -382,6 +382,7 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 			Codebase:      outcome.Codebase,
 			ActiveJob:     outcome.ActiveJob,
 			Results:       outcome.Results,
+			StateNote:     outcome.StateNote,
 		}), ctx, "codebase_id", outcome.Codebase.ID, "job_id", jobIDOf(outcome.ActiveJob)),
 	}
 	for _, result := range outcome.Results {

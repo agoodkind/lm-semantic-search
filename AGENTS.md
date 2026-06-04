@@ -63,7 +63,7 @@ On every sync request:
 
 1. The daemon captures a new snapshot of the codebase.
 2. `merkle.DiffSnapshots` computes `{Added, Modified, Removed}`.
-3. An empty diff completes the job as a no-op tagged "already up to date".
+3. An empty diff completes the job as a no-op tagged "already up to date" only when the live semantic collection is still present. If the collection is definitively missing, the daemon falls back to a full Replace instead of treating the codebase as current.
 4. The indexer otherwise processes only added and modified files, and `semantic.Reindex` deletes existing Milvus rows for `relative_path in (removed + modified)` before upserting the new chunks.
 5. The new snapshot is persisted only after success.
 

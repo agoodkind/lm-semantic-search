@@ -42,14 +42,26 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 				Codebase:  codebase,
 				ActiveJob: activeJob,
 				Results:   semantic.DeduplicateChunks(chunks),
+				StateNote: "",
 			}, nil
-		case (errors.Is(semanticErr, semantic.ErrCollectionMissing) ||
-			errors.Is(semanticErr, semantic.ErrCollectionNotReady) ||
+		case (errors.Is(semanticErr, semantic.ErrCollectionNotReady) ||
 			errors.Is(semanticErr, semantic.ErrSearchResultIncomplete)) &&
 			codebase.Status == model.CodebaseStatusIndexing:
-			return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: []model.StoredChunk{}}, nil
+			return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: []model.StoredChunk{}, StateNote: ""}, nil
 		case errors.Is(semanticErr, semantic.ErrCollectionMissing):
-			return SearchOutcome{}, fmt.Errorf("index data for '%s' has been lost (collection not found in Milvus). Please re-index using index_codebase with force=true", codebase.CanonicalPath)
+			switch decideSearchCollectionMode(codebase, activeJob, collectionPresenceMissing) {
+			case searchCollectionModeAutomaticRepair:
+				return SearchOutcome{
+					Codebase:  codebase,
+					ActiveJob: activeJob,
+					Results:   []model.StoredChunk{},
+					StateNote: "⚠️ Search is temporarily unavailable because the semantic collection is missing. The daemon is handling automatic rebuild in the background.",
+				}, nil
+			case searchCollectionModeMissing:
+				return SearchOutcome{}, fmt.Errorf("index data for '%s' has been lost (collection not found in Milvus). Wait for background repair or re-index using index_codebase if you need to recover it immediately", codebase.CanonicalPath)
+			case searchCollectionModeProceed:
+				return SearchOutcome{}, fmt.Errorf("index data for '%s' is unavailable", codebase.CanonicalPath)
+			}
 		case errors.Is(semanticErr, semantic.ErrUnavailable):
 		default:
 			return SearchOutcome{}, fmt.Errorf("semantic search for %s: %w", codebase.CanonicalPath, semanticErr)
@@ -59,12 +71,12 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 	chunks, err := store.ReadChunks(manager.chunkPath(codebase.ID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) && codebase.Status == model.CodebaseStatusIndexing {
-			return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: []model.StoredChunk{}}, nil
+			return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: []model.StoredChunk{}, StateNote: ""}, nil
 		}
 		slog.ErrorContext(ctx, "read chunk cache failed", "codebase_id", codebase.ID, "err", err)
 		return SearchOutcome{}, fmt.Errorf("read chunk cache for %s: %w", codebase.ID, err)
 	}
-	return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: rankChunks(chunks, query, limit, normalizedExtensions, relativePathPrefix)}, nil
+	return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: rankChunks(chunks, query, limit, normalizedExtensions, relativePathPrefix), StateNote: ""}, nil
 }
 
 // chunkUnderPrefix reports whether a chunk's relative path equals scopePrefix

@@ -784,6 +784,31 @@ func TestRenderHistoricalFailureIncludesCorrelationIds(t *testing.T) {
 	}
 }
 
+func TestRenderStaleStatusIncludesRepairReason(t *testing.T) {
+	t.Parallel()
+
+	codebase := model.Codebase{
+		CanonicalPath: "/repo",
+		LastFailedRun: &model.IndexRunFailure{
+			Message:                 "Milvus collection missing; automatic rebuild could not start: boom",
+			LastAttemptedPercentage: 0,
+			FailedAt:                time.Now(),
+			TraceID:                 "trace-abc",
+			JobID:                   "job-xyz",
+		},
+	}
+	out := renderStaleStatus(&codebase)
+	if !strings.Contains(out, "is stale") {
+		t.Fatalf("render output missing stale marker; got %q", out)
+	}
+	if !strings.Contains(out, "automatic rebuild could not start") {
+		t.Fatalf("render output missing repair detail; got %q", out)
+	}
+	if !strings.Contains(out, "trace_id=trace-abc") {
+		t.Fatalf("render output missing trace_id; got %q", out)
+	}
+}
+
 // TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals proves the empty-diff
 // fast path no longer re-zeros LastSuccessfulRun.IndexedFiles every time a
 // background sync runs against an unchanged codebase. The test indexes

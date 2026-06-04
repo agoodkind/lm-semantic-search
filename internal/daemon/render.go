@@ -20,6 +20,7 @@ type searchView struct {
 	Codebase      model.Codebase
 	ActiveJob     *model.Job
 	Results       []model.StoredChunk
+	StateNote     string
 }
 
 func renderStartIndex(requestedPath string, codebase model.Codebase, job model.Job, deduplicated bool, overlapsCodebaseID string, mergeNote string) string {
@@ -178,8 +179,10 @@ func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Code
 		return renderIndexedDetail(codebase)
 	case model.CodebaseStatusIndexing:
 		return renderIndexingActive(codebase, activeJob)
-	case model.CodebaseStatusFailed, model.CodebaseStatusStale:
+	case model.CodebaseStatusFailed:
 		return renderHistoricalFailure(codebase)
+	case model.CodebaseStatusStale:
+		return renderStaleStatus(codebase)
 	default:
 		return fmt.Sprintf("❌ Codebase '%s' is not indexed. Please use the index_codebase tool to index it first.", requestedPath)
 	}
@@ -388,6 +391,22 @@ func renderHistoricalFailure(codebase *model.Codebase) string {
 	)
 }
 
+func renderStaleStatus(codebase *model.Codebase) string {
+	if codebase.LastFailedRun == nil {
+		return fmt.Sprintf(
+			"⚠️ Codebase '%s' is stale because its semantic collection is missing.\n💡 The daemon will rebuild it automatically on the next background repair pass.",
+			codebase.CanonicalPath,
+		)
+	}
+	return fmt.Sprintf(
+		"⚠️ Codebase '%s' is stale since %s.\n🚨 Repair detail: %s\n💡 The daemon will retry automatic rebuild while the codebase remains stale.%s",
+		codebase.CanonicalPath,
+		formatLocalTime(codebase.LastFailedRun.FailedAt),
+		orDefault(codebase.LastFailedRun.Message, "semantic collection is missing"),
+		renderFailureDiagnostics(codebase.LastFailedRun),
+	)
+}
+
 // renderFailureDiagnostics returns a leading-newline diagnostics line naming
 // the correlation ids behind a failure, or an empty string when none are
 // recorded. The ids resolve against the daemon's structured logs.
@@ -471,10 +490,19 @@ func renderSearch(view searchView) string {
 
 	if len(view.Results) == 0 {
 		noResults := fmt.Sprintf("No results found for query: %q in codebase '%s'", view.Query, view.Codebase.CanonicalPath)
-		if status == "" {
+		if status == "" && view.StateNote == "" {
 			return noResults
 		}
-		return noResults + "\n\n" + status + "\n\n" + searchStatusTip(view, false)
+		sections := []string{noResults}
+		if status != "" {
+			sections = append(sections, status)
+		}
+		if view.StateNote != "" {
+			sections = append(sections, view.StateNote)
+		} else if status != "" {
+			sections = append(sections, searchStatusTip(view, false))
+		}
+		return strings.Join(sections, "\n\n")
 	}
 
 	formatted := make([]string, 0, len(view.Results))
@@ -499,10 +527,19 @@ func renderSearch(view searchView) string {
 	// answer. The in-progress warning and tip trail the results.
 	header := fmt.Sprintf("Found %d results for query: %q in codebase '%s'", len(view.Results), view.Query, view.Codebase.CanonicalPath)
 	body := header + "\n\n" + strings.Join(formatted, "\n\n")
-	if status == "" {
+	if status == "" && view.StateNote == "" {
 		return body
 	}
-	return body + "\n\n" + status + "\n\n" + searchStatusTip(view, true)
+	sections := []string{body}
+	if status != "" {
+		sections = append(sections, status)
+	}
+	if view.StateNote != "" {
+		sections = append(sections, view.StateNote)
+	} else if status != "" {
+		sections = append(sections, searchStatusTip(view, true))
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 // searchStatusTip picks the trailing tip for a search response that has a run

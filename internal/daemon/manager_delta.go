@@ -80,9 +80,10 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 
 // planSyncDiff loads the previous snapshot under the requested config
 // digest, captures the current one, and returns the diff. An empty diff
-// completes the job as a no-op. A missing snapshot produces an empty seed
-// whose diff classifies every file as Added, which the per-file loop
-// handles uniformly.
+// completes the job as a no-op only when the shared collection-state policy
+// confirms the live collection is still present or otherwise not definitively
+// missing. A missing snapshot produces an empty seed whose diff classifies
+// every file as Added, which the per-file loop handles uniformly.
 func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebaseID string) deltaPlan {
 	configDigest := job.Config.IgnoreDigest
 	snapshotPath := manager.merklePath(codebaseID)
@@ -106,6 +107,17 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 	}
 	diff := merkle.DiffSnapshots(seed, captured)
 	if diff.Empty() {
+		presence := manager.probeCollectionPresence(ctx, job.CanonicalPath, "planSyncDiff")
+		if decideEmptyDiffMode(presence) == emptyDiffModeFallbackBootstrap {
+			return deltaPlan{
+				diff:            diff,
+				currentSnapshot: captured,
+				seedSnapshot:    seed,
+				configDigest:    configDigest,
+				fallback:        true,
+				handled:         false,
+			}
+		}
 		fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, captured.Files, 0)
 		manager.updateJobCompleted(job.ID, indexer.Result{
 			IndexedFiles:      fileCount,
