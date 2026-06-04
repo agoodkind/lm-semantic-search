@@ -14,6 +14,9 @@ CLI_CMD := ./cmd/$(CLI_BINARY)
 MCP_BINARY := claude-context-mcp
 MCP_CMD := ./cmd/$(MCP_BINARY)
 
+# make install builds and installs the daemon plus both client binaries.
+INSTALL_BINS := $(BINARY):$(CMD) $(CLI_BINARY):$(CLI_CMD) $(MCP_BINARY):$(MCP_CMD)
+
 # Pipeline modules. Add go-service.mk if this binary ships as a daemon and
 # set LAUNCHD_LABEL, SYSTEMD_UNIT, LOG_PATH before -include $(GO_MK).
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
@@ -41,12 +44,11 @@ include bootstrap.mk
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: build-clients install-clients deploy deploy-service daemon-wait daemon-status kill-orphans grammars
+.PHONY: deploy deploy-service daemon-wait daemon-status kill-orphans grammars
 
-CLI_DIST_BIN := $(DIST_DIR)/$(CLI_BINARY)
-MCP_DIST_BIN := $(DIST_DIR)/$(MCP_BINARY)
+# daemon-status and daemon-wait call the installed CLI; kill-orphans matches the
+# installed MCP binary by name.
 CLI_INSTALL_BIN := $(INSTALL_DIR)/$(CLI_BINARY)
-MCP_INSTALL_BIN := $(INSTALL_DIR)/$(MCP_BINARY)
 
 # ---------------------------------------------------------------------------
 # Grammar generation
@@ -87,40 +89,15 @@ grammars:
 # generated parser.c and tree_sitter/ headers are gitignored in the submodule,
 # so the checkout leaves them in place.
 
-# Building, testing, vetting, linting, and govulncheck all compile the Swift
-# grammar package, so they need the generated parser. The order-only
+# Building, installing, testing, vetting, linting, and govulncheck all compile
+# the Swift grammar package, so they need the generated parser. The order-only
 # prerequisite generates it first on a fresh checkout without forcing rebuilds.
-build build-check check test lint vet govulncheck: | grammars
-
-build-clients:
-	@mkdir -p "$(DIST_DIR)"
-	go build $(GO_BUILD_FLAGS) -o "$(CLI_DIST_BIN)" $(CLI_CMD)
-	@echo "built: $(CLI_DIST_BIN)"
-	$(call codesign_binary,$(CLI_DIST_BIN))
-	go build $(GO_BUILD_FLAGS) -o "$(MCP_DIST_BIN)" $(MCP_CMD)
-	@echo "built: $(MCP_DIST_BIN)"
-	$(call codesign_binary,$(MCP_DIST_BIN))
-
-install-clients: build-clients
-	@printf 'install: installing %s to %s\n' '$(CLI_BINARY)' '$(CLI_INSTALL_BIN)'
-	@mkdir -p "$(INSTALL_DIR)"
-	@out="$$(mktemp "$(CLI_INSTALL_BIN)".new.XXXXXX)"; \
-	trap 'rm -f "$$out"' EXIT; \
-	cp -f "$(CLI_DIST_BIN)" "$$out"; \
-	chmod 0755 "$$out"; \
-	test -s "$$out"; \
-	mv -f "$$out" "$(CLI_INSTALL_BIN)"
-	@printf 'install: installing %s to %s\n' '$(MCP_BINARY)' '$(MCP_INSTALL_BIN)'
-	@out="$$(mktemp "$(MCP_INSTALL_BIN)".new.XXXXXX)"; \
-	trap 'rm -f "$$out"' EXIT; \
-	cp -f "$(MCP_DIST_BIN)" "$$out"; \
-	chmod 0755 "$$out"; \
-	test -s "$$out"; \
-	mv -f "$$out" "$(MCP_INSTALL_BIN)"
+# install is listed because go-mk install builds the binaries inside the engine
+# rather than through the make build target.
+build build-check check test lint vet govulncheck install: | grammars
 
 deploy:
 	$(MAKE) install
-	$(MAKE) install-clients
 	$(MAKE) deploy-service
 	$(MAKE) daemon-wait
 	$(MAKE) daemon-status
