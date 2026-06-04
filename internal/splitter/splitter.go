@@ -30,8 +30,8 @@ import (
 	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
 	tree_sitter_scala "github.com/tree-sitter/tree-sitter-scala/bindings/go"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
-	tree_sitter_dart "goodkind.io/claude-context-go/internal/splitter/grammars/dart"
-	tree_sitter_swift "goodkind.io/claude-context-go/internal/splitter/grammars/swift"
+	tree_sitter_dart "goodkind.io/lm-semantic-search/internal/splitter/grammars/dart"
+	tree_sitter_swift "goodkind.io/lm-semantic-search/internal/splitter/grammars/swift"
 )
 
 // Chunk is one code chunk emitted by a splitter.

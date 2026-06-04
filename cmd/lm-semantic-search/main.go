@@ -1,4 +1,4 @@
-// Command claude-context is the operator CLI for the local daemon.
+// Command lm-semantic-search is the operator CLI for the local daemon.
 package main
 
 import (
@@ -14,10 +14,10 @@ import (
 	"strings"
 	"syscall"
 
-	pb "goodkind.io/claude-context-go/gen/go/claudecontext/v1"
-	"goodkind.io/claude-context-go/internal/config"
-	"goodkind.io/claude-context-go/internal/grpcutil"
-	"goodkind.io/claude-context-go/internal/response"
+	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/grpcutil"
+	"goodkind.io/lm-semantic-search/internal/response"
 	"goodkind.io/gklog/version"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -26,7 +26,7 @@ import (
 type (
 	command          string
 	daemonSubcommand string
-	rpcCall          func(context.Context, pb.ClaudeContextDaemonServiceClient) (proto.Message, error)
+	rpcCall          func(context.Context, pb.SemanticSearchDaemonServiceClient) (proto.Message, error)
 )
 
 const (
@@ -99,7 +99,7 @@ func run() error {
 }
 
 // blank reports whether a positional argument is missing or only whitespace,
-// so a subcommand rejects `claude-context status ""` locally instead of sending
+// so a subcommand rejects `lm-semantic-search status ""` locally instead of sending
 // an empty value to the daemon.
 func blank(args []string, index int) bool {
 	return index >= len(args) || strings.TrimSpace(args[index]) == ""
@@ -113,11 +113,11 @@ func execute(selected command, args []string, options cliOptions) error {
 	case commandDaemon:
 		return runDaemonSubcommand(args, options)
 	case commandList:
-		return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+		return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 			return client.ListIndexes(ctx, &pb.ListIndexesRequest{})
 		})
 	case commandJobs:
-		return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+		return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 			request := &pb.ListJobsRequest{}
 			if len(args) > 0 {
 				request.CodebaseId = args[0]
@@ -125,21 +125,21 @@ func execute(selected command, args []string, options cliOptions) error {
 			return client.ListJobs(ctx, request)
 		})
 	case commandDoctor:
-		return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+		return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 			return client.Doctor(ctx, &pb.DoctorRequest{})
 		})
 	case commandStatus:
 		if blank(args, 0) {
 			return fmt.Errorf("status requires a path")
 		}
-		return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+		return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 			return client.GetIndex(ctx, &pb.GetIndexRequest{Path: args[0]})
 		})
 	case commandJob:
 		if blank(args, 0) {
 			return fmt.Errorf("job requires an id")
 		}
-		return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+		return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 			return client.GetJob(ctx, &pb.GetJobRequest{JobId: args[0]})
 		})
 	case commandIndex:
@@ -152,7 +152,7 @@ func execute(selected command, args []string, options cliOptions) error {
 		if err != nil {
 			return err
 		}
-		return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+		return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 			return client.SyncIndex(ctx, &pb.SyncIndexRequest{Path: args[0], Client: clientInfo})
 		})
 	case commandSearch:
@@ -165,7 +165,7 @@ func execute(selected command, args []string, options cliOptions) error {
 		if err != nil {
 			return err
 		}
-		return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+		return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 			return client.ClearIndex(ctx, &pb.ClearIndexRequest{Path: args[0], Client: clientInfo})
 		})
 	case commandCancel:
@@ -176,7 +176,7 @@ func execute(selected command, args []string, options cliOptions) error {
 		if err != nil {
 			return err
 		}
-		return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+		return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 			return client.CancelJob(ctx, &pb.CancelJobRequest{JobId: args[0], Client: clientInfo})
 		})
 	default:
@@ -220,7 +220,7 @@ func runIndexCommand(args []string, options cliOptions) error {
 		request.Splitter = &pb.SplitterConfig{Type: *splitterType}
 	}
 
-	return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+	return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 		return client.StartIndex(ctx, request)
 	})
 }
@@ -242,7 +242,7 @@ func runSearchCommand(args []string, options cliOptions) error {
 		return fmt.Errorf("search requires a path and query")
 	}
 
-	return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+	return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 		searchLimit, err := safeSearchLimit(*limit)
 		if err != nil {
 			return nil, err
@@ -263,11 +263,11 @@ func runDaemonSubcommand(args []string, options cliOptions) error {
 
 	switch daemonSubcommand(args[0]) {
 	case daemonSubcommand("status"):
-		return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+		return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 			return client.Version(ctx, &pb.VersionRequest{})
 		})
 	case daemonSubcommand("stop"):
-		return callAndPrint(options, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+		return callAndPrint(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 			return client.Shutdown(ctx, &pb.ShutdownRequest{})
 		})
 	default:
@@ -276,7 +276,7 @@ func runDaemonSubcommand(args []string, options cliOptions) error {
 }
 
 func usage() string {
-	return "usage: claude-context [--socket PATH] [--json|--output MODE] <version|daemon|list|jobs|doctor|status|job|index|sync|search|clear|cancel> [arg]"
+	return "usage: lm-semantic-search [--socket PATH] [--json|--output MODE] <version|daemon|list|jobs|doctor|status|job|index|sync|search|clear|cancel> [arg]"
 }
 
 func currentClientInfo() (*pb.ClientInfo, error) {

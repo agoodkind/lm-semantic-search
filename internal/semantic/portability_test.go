@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"goodkind.io/claude-context-go/internal/config"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/tshash"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/tshash"
 )
 
 // TestCollectionNameMatchesSharedInvariant locks the collection-name format to

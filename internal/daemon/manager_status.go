@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	"goodkind.io/claude-context-go/internal/discovery"
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // GetIndex resolves one tracked codebase whose canonical path covers

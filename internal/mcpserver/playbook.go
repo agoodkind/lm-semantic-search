@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	semanticSearchResourceURI  = "claude-context://semantic_search"
+	semanticSearchResourceURI  = "lm-semantic-search://semantic_search"
 	semanticSearchPromptName   = "semantic_search"
 	semanticSearchResourceName = "semantic_search"
 )
@@ -41,7 +41,7 @@ func registerSemanticSearchPrompt(s *server.MCPServer) {
 	s.AddPrompt(
 		mcp.Prompt{
 			Name:        semanticSearchPromptName,
-			Description: "Orientation guide for claude-context semantic search and indexing workflows.",
+			Description: "Orientation guide for lm-semantic-search semantic search and indexing workflows.",
 		},
 		func(_ context.Context, _ mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 			return &mcp.GetPromptResult{

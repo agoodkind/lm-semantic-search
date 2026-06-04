@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"goodkind.io/claude-context-go/internal/clock"
-	"goodkind.io/claude-context-go/internal/merkle"
-	"goodkind.io/claude-context-go/internal/migrate"
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/merkle"
+	"goodkind.io/lm-semantic-search/internal/migrate"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/gklog/correlation"
 )
 

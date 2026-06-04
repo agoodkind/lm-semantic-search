@@ -18,11 +18,11 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"goodkind.io/claude-context-go/internal/config"
-	"goodkind.io/claude-context-go/internal/embedding"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/spans"
-	"goodkind.io/claude-context-go/internal/tshash"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/spans"
+	"goodkind.io/lm-semantic-search/internal/tshash"
 )
 
 // Milvus field names match the upstream TS schema at

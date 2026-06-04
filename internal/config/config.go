@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	defaultStateDirName           = ".contextd"
-	defaultSocketName             = "claude-contextd.sock"
-	defaultLogFileName            = "claude-contextd.log"
+	defaultStateDirName           = ".lm-semantic-search"
+	defaultSocketName             = "lm-semantic-search-daemon.sock"
+	defaultLogFileName            = "lm-semantic-search-daemon.log"
 	defaultSyncInterval           = 300000
 	defaultSyncLockAge            = 600000
 	defaultDebugListenAddr        = "127.0.0.1:6480"

@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	pb "goodkind.io/claude-context-go/gen/go/claudecontext/v1"
-	"goodkind.io/claude-context-go/internal/adapterr"
-	"goodkind.io/claude-context-go/internal/clock"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/pbconv"
+	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/pbconv"
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/gklog/version"
 	"google.golang.org/grpc/peer"
@@ -350,7 +350,7 @@ func (server *GRPCServer) ListJobs(ctx context.Context, request *pb.ListJobsRequ
 }
 
 // WatchJobs streams the latest visible state for requested jobs.
-func (server *GRPCServer) WatchJobs(request *pb.WatchJobsRequest, stream pb.ClaudeContextDaemonService_WatchJobsServer) (err error) {
+func (server *GRPCServer) WatchJobs(request *pb.WatchJobsRequest, stream pb.SemanticSearchDaemonService_WatchJobsServer) (err error) {
 	ctx, done := beginRPC(stream.Context(), "WatchJobs")
 	defer done(&err)
 	for _, jobID := range request.GetJobIds() {

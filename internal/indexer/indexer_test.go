@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 func TestIndexUsesRequestedLangchainSplitter(t *testing.T) {

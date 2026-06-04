@@ -13,8 +13,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"goodkind.io/claude-context-go/internal/merkle"
-	"goodkind.io/claude-context-go/internal/tshash"
+	"goodkind.io/lm-semantic-search/internal/merkle"
+	"goodkind.io/lm-semantic-search/internal/tshash"
 )
 
 // tsMerkleFile mirrors the shape the TS synchronizer writes to

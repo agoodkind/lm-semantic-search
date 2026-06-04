@@ -11,13 +11,13 @@ import (
 	"sync"
 	"time"
 
-	"goodkind.io/claude-context-go/internal/adapterr"
-	"goodkind.io/claude-context-go/internal/clock"
-	"goodkind.io/claude-context-go/internal/config"
-	"goodkind.io/claude-context-go/internal/merkle"
-	"goodkind.io/claude-context-go/internal/metrics"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/store"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/merkle"
+	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/store"
 	"goodkind.io/gklog/correlation"
 )
 

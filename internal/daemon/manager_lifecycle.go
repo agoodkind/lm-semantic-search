@@ -3,7 +3,7 @@ package daemon
 import (
 	"context"
 
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // SetCodebaseLifecycleHook plugs in the watcher (or another consumer)

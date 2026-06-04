@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"goodkind.io/claude-context-go/internal/config"
-	"goodkind.io/claude-context-go/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/metrics"
 )
 
 func TestOpenAICompatibleProviderEmbedBatch(t *testing.T) {

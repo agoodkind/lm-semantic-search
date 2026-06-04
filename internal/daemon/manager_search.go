@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/semantic"
-	"goodkind.io/claude-context-go/internal/store"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/store"
 )
 
 // SearchCode performs a local ranked search over persisted chunk content.

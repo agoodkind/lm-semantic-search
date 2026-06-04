@@ -93,7 +93,7 @@ func TestDefaultReadsCustomExtensionAndIgnoreEnvVars(t *testing.T) {
 }
 
 // isolateState points HOME and the state root at temp dirs so Default() never
-// reads the real machine's ~/.context or ~/.contextd state during the test.
+// reads the real machine's ~/.context or ~/.lm-semantic-search state during the test.
 func isolateState(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())

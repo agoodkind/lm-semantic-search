@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"net"
 
-	pb "goodkind.io/claude-context-go/gen/go/claudecontext/v1"
+	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/gklog/correlation"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -17,7 +17,7 @@ import (
 // socket. Callers should wrap their context with [WithCorrelation]
 // (or call [correlation.NewOutgoingContext] directly) so the daemon
 // receives the trace, span, and request identifiers.
-func DialDaemon(ctx context.Context, socketPath string) (*grpc.ClientConn, pb.ClaudeContextDaemonServiceClient, error) {
+func DialDaemon(ctx context.Context, socketPath string) (*grpc.ClientConn, pb.SemanticSearchDaemonServiceClient, error) {
 	connection, err := grpc.NewClient(
 		"passthrough:///unix",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -31,7 +31,7 @@ func DialDaemon(ctx context.Context, socketPath string) (*grpc.ClientConn, pb.Cl
 		return nil, nil, fmt.Errorf("create gRPC client for %s: %w", socketPath, err)
 	}
 	connection.Connect()
-	return connection, pb.NewClaudeContextDaemonServiceClient(connection), nil
+	return connection, pb.NewSemanticSearchDaemonServiceClient(connection), nil
 }
 
 // WithCorrelation builds an outgoing-metadata context that carries

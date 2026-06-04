@@ -7,8 +7,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"goodkind.io/claude-context-go/internal/adapterr"
-	"goodkind.io/claude-context-go/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/gklog/correlation"
 )
 

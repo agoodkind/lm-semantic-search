@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	pb "goodkind.io/claude-context-go/gen/go/claudecontext/v1"
-	"goodkind.io/claude-context-go/internal/config"
-	"goodkind.io/claude-context-go/internal/indexer"
-	"goodkind.io/claude-context-go/internal/merkle"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/store"
+	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/indexer"
+	"goodkind.io/lm-semantic-search/internal/merkle"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/store"
 )
 
 type fakeRunner struct {
@@ -1150,12 +1150,12 @@ func newTestManager(t *testing.T) (*Manager, config.Config, string) {
 
 	cfg := config.Config{
 		StateRoot:         stateRoot,
-		SocketPath:        filepath.Join(stateRoot, "sockets", "claude-contextd.sock"),
+		SocketPath:        filepath.Join(stateRoot, "sockets", "lm-semantic-search-daemon.sock"),
 		RegistryPath:      filepath.Join(stateRoot, "registry.json"),
 		JobsPath:          filepath.Join(stateRoot, "jobs.jsonl"),
 		EventsPath:        filepath.Join(stateRoot, "events.jsonl"),
 		LogsDir:           filepath.Join(stateRoot, "logs"),
-		LogPath:           filepath.Join(stateRoot, "logs", "claude-contextd.log"),
+		LogPath:           filepath.Join(stateRoot, "logs", "lm-semantic-search-daemon.log"),
 		MerkleDir:         filepath.Join(stateRoot, "merkle"),
 		LocksDir:          filepath.Join(stateRoot, "locks"),
 		SocketsDir:        filepath.Join(stateRoot, "sockets"),

@@ -13,14 +13,14 @@ import (
 	"sync"
 	"time"
 
-	"goodkind.io/claude-context-go/internal/clock"
-	"goodkind.io/claude-context-go/internal/config"
-	"goodkind.io/claude-context-go/internal/discovery"
-	"goodkind.io/claude-context-go/internal/indexer"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/semantic"
-	"goodkind.io/claude-context-go/internal/spans"
-	"goodkind.io/claude-context-go/internal/store"
+	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/indexer"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/spans"
+	"goodkind.io/lm-semantic-search/internal/store"
 	"goodkind.io/gklog/correlation"
 )
 

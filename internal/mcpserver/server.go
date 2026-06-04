@@ -16,11 +16,11 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	pb "goodkind.io/claude-context-go/gen/go/claudecontext/v1"
-	"goodkind.io/claude-context-go/internal/config"
-	"goodkind.io/claude-context-go/internal/grpcutil"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/response"
+	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/grpcutil"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/response"
 	"goodkind.io/gklog/version"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -48,7 +48,7 @@ func Run(ctx context.Context) error {
 	// protocol layer, before the handler runs, so a missing argument fails
 	// loudly instead of defaulting to an empty value.
 	mcpServer := server.NewMCPServer(
-		"claude-context",
+		"lm-semantic-search",
 		version.String(),
 		server.WithToolCapabilities(true),
 		server.WithInputSchemaValidation(),
@@ -108,7 +108,7 @@ func Run(ctx context.Context) error {
 	return nil
 }
 
-type daemonProtoCall func(context.Context, pb.ClaudeContextDaemonServiceClient) (proto.Message, error)
+type daemonProtoCall func(context.Context, pb.SemanticSearchDaemonServiceClient) (proto.Message, error)
 
 func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMode response.Mode) {
 	mcpServer.AddTool(
@@ -137,7 +137,7 @@ func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMod
 				Client:           &pb.ClientInfo{Name: "mcp"},
 			}
 			if !req.GetBool("wait", false) {
-				return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+				return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 					return client.StartIndex(ctx, startRequest)
 				})
 			}
@@ -162,7 +162,7 @@ func registerClearTool(mcpServer *server.MCPServer, socketPath string, outputMod
 			if !ok {
 				return errResult, nil
 			}
-			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 				return client.ClearIndex(ctx, &pb.ClearIndexRequest{
 					Path:   absolutePath,
 					Client: &pb.ClientInfo{Name: "mcp"},
@@ -184,7 +184,7 @@ func registerStatusTool(mcpServer *server.MCPServer, socketPath string, outputMo
 			if !ok {
 				return errResult, nil
 			}
-			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: absolutePath})
 			})
 		}),
@@ -198,7 +198,7 @@ func registerListIndexesTool(mcpServer *server.MCPServer, socketPath string, out
 			mcp.WithDescription("List every tracked codebase and its current indexing status"),
 		),
 		wrapTool("list_indexing_statuses", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 				return client.ListIndexes(ctx, &pb.ListIndexesRequest{})
 			})
 		}),
@@ -213,7 +213,7 @@ func registerListJobsTool(mcpServer *server.MCPServer, socketPath string, output
 			mcp.WithString("codebase_id", mcp.Description("optional codebase id to filter jobs")),
 		),
 		wrapTool("list_indexing_jobs", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 				return client.ListJobs(ctx, &pb.ListJobsRequest{CodebaseId: req.GetString("codebase_id", "")})
 			})
 		}),
@@ -232,7 +232,7 @@ func registerGetJobTool(mcpServer *server.MCPServer, socketPath string, outputMo
 			if !ok {
 				return errResult, nil
 			}
-			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 				return client.GetJob(ctx, &pb.GetJobRequest{JobId: jobID})
 			})
 		}),
@@ -396,7 +396,7 @@ func registerSearchTool(mcpServer *server.MCPServer, socketPath string, outputMo
 			if !ok {
 				return errResult, nil
 			}
-			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.ClaudeContextDaemonServiceClient) (proto.Message, error) {
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 				return client.SearchCode(ctx, &pb.SearchCodeRequest{
 					Path:            absolutePath,
 					Query:           query,

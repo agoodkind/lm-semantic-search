@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/claude-context-go/internal/merkle"
-	"goodkind.io/claude-context-go/internal/metrics"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/merkle"
+	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
 // fakeSemantic is a semanticIndex double for converge tests. reindex and

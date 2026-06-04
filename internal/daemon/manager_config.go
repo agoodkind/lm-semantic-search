@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"goodkind.io/claude-context-go/internal/clock"
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // legacyDigestForCodebase returns the canonical digest of the codebase's

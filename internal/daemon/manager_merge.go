@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"os"
 
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // descendantReuseCandidates returns the settled, indexed child codebases

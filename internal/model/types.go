@@ -4,7 +4,7 @@ package model
 import (
 	"time"
 
-	"goodkind.io/claude-context-go/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/discovery"
 )
 
 // CodebaseStatus captures the lifecycle state of one tracked codebase.

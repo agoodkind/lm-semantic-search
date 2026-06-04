@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"unicode/utf8"
 
-	"goodkind.io/claude-context-go/internal/discovery"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/splitter"
+	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/splitter"
 )
 
 // defaultMaxFileBytes caps a single file at 2 MiB before it reaches the

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "goodkind.io/claude-context-go/gen/go/claudecontext/v1"
+	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 )
 
 func TestFormatProtoHumanUsesDisplayText(t *testing.T) {

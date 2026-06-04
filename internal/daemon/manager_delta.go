@@ -9,11 +9,11 @@ import (
 	"math"
 	"sort"
 
-	"goodkind.io/claude-context-go/internal/indexer"
-	"goodkind.io/claude-context-go/internal/merkle"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/semantic"
-	"goodkind.io/claude-context-go/internal/spans"
+	"goodkind.io/lm-semantic-search/internal/indexer"
+	"goodkind.io/lm-semantic-search/internal/merkle"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
 // deltaPlan packages the file-set decision for one runDeltaSync invocation.

@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"sort"
 
-	"goodkind.io/claude-context-go/internal/discovery"
-	"goodkind.io/claude-context-go/internal/merkle"
-	"goodkind.io/claude-context-go/internal/metrics"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/semantic"
-	"goodkind.io/claude-context-go/internal/spans"
+	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/merkle"
+	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
 // ConvergePaths makes the index match disk for each relative path in a

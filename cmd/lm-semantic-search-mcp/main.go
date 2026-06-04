@@ -1,4 +1,4 @@
-// Command claude-context-mcp hosts the MCP adapter process.
+// Command lm-semantic-search-mcp hosts the MCP adapter process.
 //
 // The adapter is launched by Claude, Cursor, and other MCP clients via stdio.
 // Three independent defenses make sure the process exits with its parent and
@@ -17,15 +17,15 @@ import (
 	"log/slog"
 	"os"
 
-	"goodkind.io/claude-context-go/internal/mcpserver"
+	"goodkind.io/lm-semantic-search/internal/mcpserver"
 	"goodkind.io/gklog/correlation"
 )
 
 func main() {
 	rootContext := installCorrelationLogger("mcp-boot")
-	slog.InfoContext(rootContext, "claude-context-mcp starting", "pid", os.Getpid(), "parent_pid", os.Getppid())
+	slog.InfoContext(rootContext, "lm-semantic-search-mcp starting", "pid", os.Getpid(), "parent_pid", os.Getppid())
 	exitCode := run(rootContext)
-	slog.InfoContext(rootContext, "claude-context-mcp stopping", "exit_code", exitCode)
+	slog.InfoContext(rootContext, "lm-semantic-search-mcp stopping", "exit_code", exitCode)
 	os.Exit(exitCode)
 }
 
@@ -48,13 +48,13 @@ func installCorrelationLogger(origin string) context.Context {
 func run(rootContext context.Context) (exitCode int) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			slog.ErrorContext(rootContext, "claude-context-mcp panicked", "err", fmt.Errorf("panic: %v", recovered))
+			slog.ErrorContext(rootContext, "lm-semantic-search-mcp panicked", "err", fmt.Errorf("panic: %v", recovered))
 			exitCode = 1
 		}
 	}()
 
 	if err := mcpserver.Run(rootContext); err != nil {
-		slog.ErrorContext(rootContext, "claude-context-mcp failed", "err", err)
+		slog.ErrorContext(rootContext, "lm-semantic-search-mcp failed", "err", err)
 		return 1
 	}
 	return 0

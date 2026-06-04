@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"goodkind.io/claude-context-go/internal/clock"
-	"goodkind.io/claude-context-go/internal/store"
+	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/store"
 )
 
 const (

@@ -1,12 +1,12 @@
 syntax = "proto3";
 
-package claudecontext.v1;
+package lmsemanticsearch.v1;
 
-option go_package = "goodkind.io/claude-context-go/gen/go/claudecontext/v1;claudecontextv1";
+option go_package = "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1;lmsemanticsearchv1";
 
 import "google/protobuf/timestamp.proto";
 
-service ClaudeContextDaemonService {
+service SemanticSearchDaemonService {
   rpc Version(VersionRequest) returns (VersionResponse);
   rpc StartIndex(StartIndexRequest) returns (StartIndexResponse);
   rpc ClearIndex(ClearIndexRequest) returns (ClearIndexResponse);

@@ -1,5 +1,5 @@
 // Package metrics holds process-wide aggregate performance counters for
-// the daemon. Per-call timing belongs to [goodkind.io/claude-context-go/internal/spans];
+// the daemon. Per-call timing belongs to [goodkind.io/lm-semantic-search/internal/spans];
 // this package is strictly aggregate counters surfaced through expvar
 // (see expvar.go) and a periodic slog line (see reporter.go). The
 // counter identifiers double as expvar keys and slog field keys.

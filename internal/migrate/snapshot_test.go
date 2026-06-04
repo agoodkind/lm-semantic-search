@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"goodkind.io/claude-context-go/internal/tshash"
+	"goodkind.io/lm-semantic-search/internal/tshash"
 )
 
 func TestLoadTSMerkleConvertsFileHashes(t *testing.T) {

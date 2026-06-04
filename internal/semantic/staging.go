@@ -7,9 +7,9 @@ import (
 	"log/slog"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"goodkind.io/claude-context-go/internal/adapterr"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/spans"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
 // StageReindex embeds chunks into the staging collection that PromoteStaging

@@ -2,9 +2,9 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: claudecontext/v1/service.proto
+// source: lmsemanticsearch/v1/service.proto
 
-package claudecontextv1
+package lmsemanticsearchv1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -61,11 +61,11 @@ func (x PathClassification_Kind) String() string {
 }
 
 func (PathClassification_Kind) Descriptor() protoreflect.EnumDescriptor {
-	return file_claudecontext_v1_service_proto_enumTypes[0].Descriptor()
+	return file_lmsemanticsearch_v1_service_proto_enumTypes[0].Descriptor()
 }
 
 func (PathClassification_Kind) Type() protoreflect.EnumType {
-	return &file_claudecontext_v1_service_proto_enumTypes[0]
+	return &file_lmsemanticsearch_v1_service_proto_enumTypes[0]
 }
 
 func (x PathClassification_Kind) Number() protoreflect.EnumNumber {
@@ -74,7 +74,7 @@ func (x PathClassification_Kind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PathClassification_Kind.Descriptor instead.
 func (PathClassification_Kind) EnumDescriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{22, 0}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{22, 0}
 }
 
 type VersionRequest struct {
@@ -85,7 +85,7 @@ type VersionRequest struct {
 
 func (x *VersionRequest) Reset() {
 	*x = VersionRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[0]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -97,7 +97,7 @@ func (x *VersionRequest) String() string {
 func (*VersionRequest) ProtoMessage() {}
 
 func (x *VersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[0]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -110,7 +110,7 @@ func (x *VersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VersionRequest.ProtoReflect.Descriptor instead.
 func (*VersionRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{0}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{0}
 }
 
 type VersionResponse struct {
@@ -124,7 +124,7 @@ type VersionResponse struct {
 
 func (x *VersionResponse) Reset() {
 	*x = VersionResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[1]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -136,7 +136,7 @@ func (x *VersionResponse) String() string {
 func (*VersionResponse) ProtoMessage() {}
 
 func (x *VersionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[1]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -149,7 +149,7 @@ func (x *VersionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VersionResponse.ProtoReflect.Descriptor instead.
 func (*VersionResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{1}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *VersionResponse) GetVersion() string {
@@ -183,7 +183,7 @@ type ClientInfo struct {
 
 func (x *ClientInfo) Reset() {
 	*x = ClientInfo{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[2]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -195,7 +195,7 @@ func (x *ClientInfo) String() string {
 func (*ClientInfo) ProtoMessage() {}
 
 func (x *ClientInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[2]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -208,7 +208,7 @@ func (x *ClientInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientInfo.ProtoReflect.Descriptor instead.
 func (*ClientInfo) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{2}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ClientInfo) GetName() string {
@@ -236,7 +236,7 @@ type SplitterConfig struct {
 
 func (x *SplitterConfig) Reset() {
 	*x = SplitterConfig{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[3]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -248,7 +248,7 @@ func (x *SplitterConfig) String() string {
 func (*SplitterConfig) ProtoMessage() {}
 
 func (x *SplitterConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[3]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -261,7 +261,7 @@ func (x *SplitterConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SplitterConfig.ProtoReflect.Descriptor instead.
 func (*SplitterConfig) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{3}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SplitterConfig) GetType() string {
@@ -304,7 +304,7 @@ type IndexConfig struct {
 
 func (x *IndexConfig) Reset() {
 	*x = IndexConfig{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[4]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -316,7 +316,7 @@ func (x *IndexConfig) String() string {
 func (*IndexConfig) ProtoMessage() {}
 
 func (x *IndexConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[4]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -329,7 +329,7 @@ func (x *IndexConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexConfig.ProtoReflect.Descriptor instead.
 func (*IndexConfig) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{4}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *IndexConfig) GetSplitterType() string {
@@ -428,7 +428,7 @@ type Progress struct {
 
 func (x *Progress) Reset() {
 	*x = Progress{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[5]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -440,7 +440,7 @@ func (x *Progress) String() string {
 func (*Progress) ProtoMessage() {}
 
 func (x *Progress) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[5]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -453,7 +453,7 @@ func (x *Progress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Progress.ProtoReflect.Descriptor instead.
 func (*Progress) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{5}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Progress) GetPhase() string {
@@ -543,7 +543,7 @@ type JobError struct {
 
 func (x *JobError) Reset() {
 	*x = JobError{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[6]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -555,7 +555,7 @@ func (x *JobError) String() string {
 func (*JobError) ProtoMessage() {}
 
 func (x *JobError) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[6]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -568,7 +568,7 @@ func (x *JobError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobError.ProtoReflect.Descriptor instead.
 func (*JobError) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{6}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *JobError) GetMessage() string {
@@ -598,7 +598,7 @@ type IndexRunSummary struct {
 
 func (x *IndexRunSummary) Reset() {
 	*x = IndexRunSummary{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[7]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -610,7 +610,7 @@ func (x *IndexRunSummary) String() string {
 func (*IndexRunSummary) ProtoMessage() {}
 
 func (x *IndexRunSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[7]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -623,7 +623,7 @@ func (x *IndexRunSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexRunSummary.ProtoReflect.Descriptor instead.
 func (*IndexRunSummary) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{7}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *IndexRunSummary) GetIndexedFiles() int32 {
@@ -672,7 +672,7 @@ type IndexRunFailure struct {
 
 func (x *IndexRunFailure) Reset() {
 	*x = IndexRunFailure{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[8]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -684,7 +684,7 @@ func (x *IndexRunFailure) String() string {
 func (*IndexRunFailure) ProtoMessage() {}
 
 func (x *IndexRunFailure) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[8]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -697,7 +697,7 @@ func (x *IndexRunFailure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexRunFailure.ProtoReflect.Descriptor instead.
 func (*IndexRunFailure) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{8}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *IndexRunFailure) GetMessage() string {
@@ -741,7 +741,7 @@ type Codebase struct {
 
 func (x *Codebase) Reset() {
 	*x = Codebase{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[9]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -753,7 +753,7 @@ func (x *Codebase) String() string {
 func (*Codebase) ProtoMessage() {}
 
 func (x *Codebase) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[9]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -766,7 +766,7 @@ func (x *Codebase) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Codebase.ProtoReflect.Descriptor instead.
 func (*Codebase) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{9}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Codebase) GetId() string {
@@ -874,7 +874,7 @@ type Job struct {
 
 func (x *Job) Reset() {
 	*x = Job{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[10]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -886,7 +886,7 @@ func (x *Job) String() string {
 func (*Job) ProtoMessage() {}
 
 func (x *Job) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[10]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -899,7 +899,7 @@ func (x *Job) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Job.ProtoReflect.Descriptor instead.
 func (*Job) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{10}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Job) GetId() string {
@@ -1007,7 +1007,7 @@ type SearchResult struct {
 
 func (x *SearchResult) Reset() {
 	*x = SearchResult{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[11]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1019,7 +1019,7 @@ func (x *SearchResult) String() string {
 func (*SearchResult) ProtoMessage() {}
 
 func (x *SearchResult) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[11]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1032,7 +1032,7 @@ func (x *SearchResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchResult.ProtoReflect.Descriptor instead.
 func (*SearchResult) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{11}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *SearchResult) GetRelativePath() string {
@@ -1091,7 +1091,7 @@ type StartIndexRequest struct {
 
 func (x *StartIndexRequest) Reset() {
 	*x = StartIndexRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[12]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1103,7 +1103,7 @@ func (x *StartIndexRequest) String() string {
 func (*StartIndexRequest) ProtoMessage() {}
 
 func (x *StartIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[12]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1116,7 +1116,7 @@ func (x *StartIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartIndexRequest.ProtoReflect.Descriptor instead.
 func (*StartIndexRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{12}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StartIndexRequest) GetPath() string {
@@ -1179,7 +1179,7 @@ type StartIndexResponse struct {
 
 func (x *StartIndexResponse) Reset() {
 	*x = StartIndexResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[13]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1191,7 +1191,7 @@ func (x *StartIndexResponse) String() string {
 func (*StartIndexResponse) ProtoMessage() {}
 
 func (x *StartIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[13]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1204,7 +1204,7 @@ func (x *StartIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartIndexResponse.ProtoReflect.Descriptor instead.
 func (*StartIndexResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{13}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *StartIndexResponse) GetJobId() string {
@@ -1266,7 +1266,7 @@ type ClearIndexRequest struct {
 
 func (x *ClearIndexRequest) Reset() {
 	*x = ClearIndexRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[14]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1278,7 +1278,7 @@ func (x *ClearIndexRequest) String() string {
 func (*ClearIndexRequest) ProtoMessage() {}
 
 func (x *ClearIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[14]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1291,7 +1291,7 @@ func (x *ClearIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearIndexRequest.ProtoReflect.Descriptor instead.
 func (*ClearIndexRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{14}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ClearIndexRequest) GetPath() string {
@@ -1319,7 +1319,7 @@ type ClearIndexResponse struct {
 
 func (x *ClearIndexResponse) Reset() {
 	*x = ClearIndexResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[15]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1331,7 +1331,7 @@ func (x *ClearIndexResponse) String() string {
 func (*ClearIndexResponse) ProtoMessage() {}
 
 func (x *ClearIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[15]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1344,7 +1344,7 @@ func (x *ClearIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearIndexResponse.ProtoReflect.Descriptor instead.
 func (*ClearIndexResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{15}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ClearIndexResponse) GetCodebaseId() string {
@@ -1378,7 +1378,7 @@ type CancelJobRequest struct {
 
 func (x *CancelJobRequest) Reset() {
 	*x = CancelJobRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[16]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1390,7 +1390,7 @@ func (x *CancelJobRequest) String() string {
 func (*CancelJobRequest) ProtoMessage() {}
 
 func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[16]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1403,7 +1403,7 @@ func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobRequest.ProtoReflect.Descriptor instead.
 func (*CancelJobRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{16}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CancelJobRequest) GetJobId() string {
@@ -1431,7 +1431,7 @@ type CancelJobResponse struct {
 
 func (x *CancelJobResponse) Reset() {
 	*x = CancelJobResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[17]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1443,7 +1443,7 @@ func (x *CancelJobResponse) String() string {
 func (*CancelJobResponse) ProtoMessage() {}
 
 func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[17]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1456,7 +1456,7 @@ func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobResponse.ProtoReflect.Descriptor instead.
 func (*CancelJobResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{17}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CancelJobResponse) GetJobId() string {
@@ -1490,7 +1490,7 @@ type SyncIndexRequest struct {
 
 func (x *SyncIndexRequest) Reset() {
 	*x = SyncIndexRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[18]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1502,7 +1502,7 @@ func (x *SyncIndexRequest) String() string {
 func (*SyncIndexRequest) ProtoMessage() {}
 
 func (x *SyncIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[18]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1515,7 +1515,7 @@ func (x *SyncIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncIndexRequest.ProtoReflect.Descriptor instead.
 func (*SyncIndexRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{18}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SyncIndexRequest) GetPath() string {
@@ -1544,7 +1544,7 @@ type SyncIndexResponse struct {
 
 func (x *SyncIndexResponse) Reset() {
 	*x = SyncIndexResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[19]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1556,7 +1556,7 @@ func (x *SyncIndexResponse) String() string {
 func (*SyncIndexResponse) ProtoMessage() {}
 
 func (x *SyncIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[19]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1569,7 +1569,7 @@ func (x *SyncIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncIndexResponse.ProtoReflect.Descriptor instead.
 func (*SyncIndexResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{19}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SyncIndexResponse) GetJobId() string {
@@ -1609,7 +1609,7 @@ type GetIndexRequest struct {
 
 func (x *GetIndexRequest) Reset() {
 	*x = GetIndexRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[20]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1621,7 +1621,7 @@ func (x *GetIndexRequest) String() string {
 func (*GetIndexRequest) ProtoMessage() {}
 
 func (x *GetIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[20]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1634,7 +1634,7 @@ func (x *GetIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetIndexRequest.ProtoReflect.Descriptor instead.
 func (*GetIndexRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{20}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetIndexRequest) GetPath() string {
@@ -1657,7 +1657,7 @@ type GetIndexResponse struct {
 
 func (x *GetIndexResponse) Reset() {
 	*x = GetIndexResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[21]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1669,7 +1669,7 @@ func (x *GetIndexResponse) String() string {
 func (*GetIndexResponse) ProtoMessage() {}
 
 func (x *GetIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[21]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1682,7 +1682,7 @@ func (x *GetIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetIndexResponse.ProtoReflect.Descriptor instead.
 func (*GetIndexResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{21}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetIndexResponse) GetCodebase() *Codebase {
@@ -1727,7 +1727,7 @@ func (x *GetIndexResponse) GetClassification() *PathClassification {
 // longest-prefix covering codebase, when any.
 type PathClassification struct {
 	state               protoimpl.MessageState  `protogen:"open.v1"`
-	Kind                PathClassification_Kind `protobuf:"varint,1,opt,name=kind,proto3,enum=claudecontext.v1.PathClassification_Kind" json:"kind,omitempty"`
+	Kind                PathClassification_Kind `protobuf:"varint,1,opt,name=kind,proto3,enum=lmsemanticsearch.v1.PathClassification_Kind" json:"kind,omitempty"`
 	ExcludedByPattern   string                  `protobuf:"bytes,2,opt,name=excluded_by_pattern,json=excludedByPattern,proto3" json:"excluded_by_pattern,omitempty"`
 	ExcludedByGitignore string                  `protobuf:"bytes,3,opt,name=excluded_by_gitignore,json=excludedByGitignore,proto3" json:"excluded_by_gitignore,omitempty"`
 	CoveringCodebaseId  string                  `protobuf:"bytes,4,opt,name=covering_codebase_id,json=coveringCodebaseId,proto3" json:"covering_codebase_id,omitempty"`
@@ -1737,7 +1737,7 @@ type PathClassification struct {
 
 func (x *PathClassification) Reset() {
 	*x = PathClassification{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[22]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1749,7 +1749,7 @@ func (x *PathClassification) String() string {
 func (*PathClassification) ProtoMessage() {}
 
 func (x *PathClassification) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[22]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1762,7 +1762,7 @@ func (x *PathClassification) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PathClassification.ProtoReflect.Descriptor instead.
 func (*PathClassification) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{22}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *PathClassification) GetKind() PathClassification_Kind {
@@ -1801,7 +1801,7 @@ type ListIndexesRequest struct {
 
 func (x *ListIndexesRequest) Reset() {
 	*x = ListIndexesRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[23]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1813,7 +1813,7 @@ func (x *ListIndexesRequest) String() string {
 func (*ListIndexesRequest) ProtoMessage() {}
 
 func (x *ListIndexesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[23]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1826,7 +1826,7 @@ func (x *ListIndexesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIndexesRequest.ProtoReflect.Descriptor instead.
 func (*ListIndexesRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{23}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{23}
 }
 
 type ListIndexesResponse struct {
@@ -1839,7 +1839,7 @@ type ListIndexesResponse struct {
 
 func (x *ListIndexesResponse) Reset() {
 	*x = ListIndexesResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[24]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1851,7 +1851,7 @@ func (x *ListIndexesResponse) String() string {
 func (*ListIndexesResponse) ProtoMessage() {}
 
 func (x *ListIndexesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[24]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1864,7 +1864,7 @@ func (x *ListIndexesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIndexesResponse.ProtoReflect.Descriptor instead.
 func (*ListIndexesResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{24}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListIndexesResponse) GetIndexes() []*Codebase {
@@ -1890,7 +1890,7 @@ type GetJobRequest struct {
 
 func (x *GetJobRequest) Reset() {
 	*x = GetJobRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[25]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1902,7 +1902,7 @@ func (x *GetJobRequest) String() string {
 func (*GetJobRequest) ProtoMessage() {}
 
 func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[25]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1915,7 +1915,7 @@ func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobRequest.ProtoReflect.Descriptor instead.
 func (*GetJobRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{25}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetJobRequest) GetJobId() string {
@@ -1935,7 +1935,7 @@ type GetJobResponse struct {
 
 func (x *GetJobResponse) Reset() {
 	*x = GetJobResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[26]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1947,7 +1947,7 @@ func (x *GetJobResponse) String() string {
 func (*GetJobResponse) ProtoMessage() {}
 
 func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[26]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1960,7 +1960,7 @@ func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobResponse.ProtoReflect.Descriptor instead.
 func (*GetJobResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{26}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetJobResponse) GetJob() *Job {
@@ -1986,7 +1986,7 @@ type ListJobsRequest struct {
 
 func (x *ListJobsRequest) Reset() {
 	*x = ListJobsRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[27]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1998,7 +1998,7 @@ func (x *ListJobsRequest) String() string {
 func (*ListJobsRequest) ProtoMessage() {}
 
 func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[27]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2011,7 +2011,7 @@ func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsRequest.ProtoReflect.Descriptor instead.
 func (*ListJobsRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{27}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ListJobsRequest) GetCodebaseId() string {
@@ -2031,7 +2031,7 @@ type ListJobsResponse struct {
 
 func (x *ListJobsResponse) Reset() {
 	*x = ListJobsResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[28]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2043,7 +2043,7 @@ func (x *ListJobsResponse) String() string {
 func (*ListJobsResponse) ProtoMessage() {}
 
 func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[28]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2056,7 +2056,7 @@ func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsResponse.ProtoReflect.Descriptor instead.
 func (*ListJobsResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{28}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ListJobsResponse) GetJobs() []*Job {
@@ -2082,7 +2082,7 @@ type WatchJobsRequest struct {
 
 func (x *WatchJobsRequest) Reset() {
 	*x = WatchJobsRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[29]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2094,7 +2094,7 @@ func (x *WatchJobsRequest) String() string {
 func (*WatchJobsRequest) ProtoMessage() {}
 
 func (x *WatchJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[29]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2107,7 +2107,7 @@ func (x *WatchJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchJobsRequest.ProtoReflect.Descriptor instead.
 func (*WatchJobsRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{29}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *WatchJobsRequest) GetJobIds() []string {
@@ -2126,7 +2126,7 @@ type WatchJobsResponse struct {
 
 func (x *WatchJobsResponse) Reset() {
 	*x = WatchJobsResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[30]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2138,7 +2138,7 @@ func (x *WatchJobsResponse) String() string {
 func (*WatchJobsResponse) ProtoMessage() {}
 
 func (x *WatchJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[30]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2151,7 +2151,7 @@ func (x *WatchJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchJobsResponse.ProtoReflect.Descriptor instead.
 func (*WatchJobsResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{30}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *WatchJobsResponse) GetJob() *Job {
@@ -2173,7 +2173,7 @@ type SearchCodeRequest struct {
 
 func (x *SearchCodeRequest) Reset() {
 	*x = SearchCodeRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[31]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2185,7 +2185,7 @@ func (x *SearchCodeRequest) String() string {
 func (*SearchCodeRequest) ProtoMessage() {}
 
 func (x *SearchCodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[31]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2198,7 +2198,7 @@ func (x *SearchCodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchCodeRequest.ProtoReflect.Descriptor instead.
 func (*SearchCodeRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{31}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SearchCodeRequest) GetPath() string {
@@ -2241,7 +2241,7 @@ type SearchCodeResponse struct {
 
 func (x *SearchCodeResponse) Reset() {
 	*x = SearchCodeResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[32]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2253,7 +2253,7 @@ func (x *SearchCodeResponse) String() string {
 func (*SearchCodeResponse) ProtoMessage() {}
 
 func (x *SearchCodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[32]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2266,7 +2266,7 @@ func (x *SearchCodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchCodeResponse.ProtoReflect.Descriptor instead.
 func (*SearchCodeResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{32}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SearchCodeResponse) GetResults() []*SearchResult {
@@ -2309,7 +2309,7 @@ type Diagnostic struct {
 
 func (x *Diagnostic) Reset() {
 	*x = Diagnostic{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[33]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2321,7 +2321,7 @@ func (x *Diagnostic) String() string {
 func (*Diagnostic) ProtoMessage() {}
 
 func (x *Diagnostic) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[33]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2334,7 +2334,7 @@ func (x *Diagnostic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Diagnostic.ProtoReflect.Descriptor instead.
 func (*Diagnostic) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{33}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *Diagnostic) GetSeverity() string {
@@ -2373,7 +2373,7 @@ type DoctorRequest struct {
 
 func (x *DoctorRequest) Reset() {
 	*x = DoctorRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[34]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2385,7 +2385,7 @@ func (x *DoctorRequest) String() string {
 func (*DoctorRequest) ProtoMessage() {}
 
 func (x *DoctorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[34]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2398,7 +2398,7 @@ func (x *DoctorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorRequest.ProtoReflect.Descriptor instead.
 func (*DoctorRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{34}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{34}
 }
 
 type DoctorResponse struct {
@@ -2411,7 +2411,7 @@ type DoctorResponse struct {
 
 func (x *DoctorResponse) Reset() {
 	*x = DoctorResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[35]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2423,7 +2423,7 @@ func (x *DoctorResponse) String() string {
 func (*DoctorResponse) ProtoMessage() {}
 
 func (x *DoctorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[35]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2436,7 +2436,7 @@ func (x *DoctorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorResponse.ProtoReflect.Descriptor instead.
 func (*DoctorResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{35}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *DoctorResponse) GetDiagnostics() []*Diagnostic {
@@ -2461,7 +2461,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[36]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2473,7 +2473,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[36]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2486,7 +2486,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{36}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{36}
 }
 
 type ShutdownResponse struct {
@@ -2498,7 +2498,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_claudecontext_v1_service_proto_msgTypes[37]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2510,7 +2510,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_claudecontext_v1_service_proto_msgTypes[37]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2523,7 +2523,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_claudecontext_v1_service_proto_rawDescGZIP(), []int{37}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ShutdownResponse) GetAccepted() bool {
@@ -2533,11 +2533,11 @@ func (x *ShutdownResponse) GetAccepted() bool {
 	return false
 }
 
-var File_claudecontext_v1_service_proto protoreflect.FileDescriptor
+var File_lmsemanticsearch_v1_service_proto protoreflect.FileDescriptor
 
-const file_claudecontext_v1_service_proto_rawDesc = "" +
+const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1eclaudecontext/v1/service.proto\x12\x10claudecontext.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x10\n" +
+	"!lmsemanticsearch/v1/service.proto\x12\x13lmsemanticsearch.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x10\n" +
 	"\x0eVersionRequest\"b\n" +
 	"\x0fVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x16\n" +
@@ -2594,40 +2594,40 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	"\x0fIndexRunFailure\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12:\n" +
 	"\x19last_attempted_percentage\x18\x02 \x01(\x05R\x17lastAttemptedPercentage\x127\n" +
-	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\xfa\x04\n" +
+	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\x83\x05\n" +
 	"\bCodebase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0ecanonical_path\x18\x02 \x01(\tR\rcanonicalPath\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\"\n" +
-	"\ractive_job_id\x18\x05 \x01(\tR\vactiveJobId\x12Q\n" +
-	"\x13last_successful_run\x18\x06 \x01(\v2!.claudecontext.v1.IndexRunSummaryR\x11lastSuccessfulRun\x12I\n" +
-	"\x0flast_failed_run\x18\a \x01(\v2!.claudecontext.v1.IndexRunFailureR\rlastFailedRun\x12H\n" +
-	"\x10effective_config\x18\b \x01(\v2\x1d.claudecontext.v1.IndexConfigR\x0feffectiveConfig\x12'\n" +
+	"\ractive_job_id\x18\x05 \x01(\tR\vactiveJobId\x12T\n" +
+	"\x13last_successful_run\x18\x06 \x01(\v2$.lmsemanticsearch.v1.IndexRunSummaryR\x11lastSuccessfulRun\x12L\n" +
+	"\x0flast_failed_run\x18\a \x01(\v2$.lmsemanticsearch.v1.IndexRunFailureR\rlastFailedRun\x12K\n" +
+	"\x10effective_config\x18\b \x01(\v2 .lmsemanticsearch.v1.IndexConfigR\x0feffectiveConfig\x12'\n" +
 	"\x0fcollection_name\x18\t \x01(\tR\x0ecollectionName\x126\n" +
 	"\x17legacy_collection_names\x18\n" +
 	" \x03(\tR\x15legacyCollectionNames\x120\n" +
 	"\x14merkle_snapshot_path\x18\v \x01(\tR\x12merkleSnapshotPath\x129\n" +
 	"\n" +
 	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x126\n" +
-	"\x17inode_tracking_disabled\x18\r \x01(\bR\x15inodeTrackingDisabledJ\x04\b\x03\x10\x04R\aaliases\"\xc4\x04\n" +
+	"\x17inode_tracking_disabled\x18\r \x01(\bR\x15inodeTrackingDisabledJ\x04\b\x03\x10\x04R\aaliases\"\xd0\x04\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
 	"codebaseId\x12%\n" +
 	"\x0erequested_path\x18\x03 \x01(\tR\rrequestedPath\x12%\n" +
-	"\x0ecanonical_path\x18\x04 \x01(\tR\rcanonicalPath\x124\n" +
-	"\x06client\x18\x05 \x01(\v2\x1c.claudecontext.v1.ClientInfoR\x06client\x12\x1c\n" +
+	"\x0ecanonical_path\x18\x04 \x01(\tR\rcanonicalPath\x127\n" +
+	"\x06client\x18\x05 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\x12\x1c\n" +
 	"\toperation\x18\x06 \x01(\tR\toperation\x12\x14\n" +
-	"\x05state\x18\a \x01(\tR\x05state\x126\n" +
-	"\bprogress\x18\b \x01(\v2\x1a.claudecontext.v1.ProgressR\bprogress\x125\n" +
-	"\x06config\x18\t \x01(\v2\x1d.claudecontext.v1.IndexConfigR\x06config\x129\n" +
+	"\x05state\x18\a \x01(\tR\x05state\x129\n" +
+	"\bprogress\x18\b \x01(\v2\x1d.lmsemanticsearch.v1.ProgressR\bprogress\x128\n" +
+	"\x06config\x18\t \x01(\v2 .lmsemanticsearch.v1.IndexConfigR\x06config\x129\n" +
 	"\n" +
 	"started_at\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x129\n" +
 	"\n" +
 	"updated_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12=\n" +
-	"\fcompleted_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x120\n" +
-	"\x05error\x18\r \x01(\v2\x1a.claudecontext.v1.JobErrorR\x05error\"\xb9\x01\n" +
+	"\fcompleted_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x123\n" +
+	"\x05error\x18\r \x01(\v2\x1d.lmsemanticsearch.v1.JobErrorR\x05error\"\xb9\x01\n" +
 	"\fSearchResult\x12#\n" +
 	"\rrelative_path\x18\x01 \x01(\tR\frelativePath\x12\x1d\n" +
 	"\n" +
@@ -2635,14 +2635,14 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	"\bend_line\x18\x03 \x01(\x05R\aendLine\x12\x1a\n" +
 	"\blanguage\x18\x04 \x01(\tR\blanguage\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
-	"\acontent\x18\x06 \x01(\tR\acontent\"\x87\x02\n" +
+	"\acontent\x18\x06 \x01(\tR\acontent\"\x8d\x02\n" +
 	"\x11StartIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
-	"\x05force\x18\x02 \x01(\bR\x05force\x12<\n" +
-	"\bsplitter\x18\x03 \x01(\v2 .claudecontext.v1.SplitterConfigR\bsplitter\x12+\n" +
+	"\x05force\x18\x02 \x01(\bR\x05force\x12?\n" +
+	"\bsplitter\x18\x03 \x01(\v2#.lmsemanticsearch.v1.SplitterConfigR\bsplitter\x12+\n" +
 	"\x11custom_extensions\x18\x04 \x03(\tR\x10customExtensions\x12'\n" +
-	"\x0fignore_patterns\x18\x05 \x03(\tR\x0eignorePatterns\x124\n" +
-	"\x06client\x18\x06 \x01(\v2\x1c.claudecontext.v1.ClientInfoR\x06client\"\x82\x02\n" +
+	"\x0fignore_patterns\x18\x05 \x03(\tR\x0eignorePatterns\x127\n" +
+	"\x06client\x18\x06 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\x82\x02\n" +
 	"\x12StartIndexResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
@@ -2651,25 +2651,25 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	"\fdeduplicated\x18\x04 \x01(\bR\fdeduplicated\x12%\n" +
 	"\x0ecanonical_path\x18\x05 \x01(\tR\rcanonicalPath\x12!\n" +
 	"\fdisplay_text\x18\x06 \x01(\tR\vdisplayText\x120\n" +
-	"\x14overlaps_codebase_id\x18\a \x01(\tR\x12overlapsCodebaseId\"]\n" +
+	"\x14overlaps_codebase_id\x18\a \x01(\tR\x12overlapsCodebaseId\"`\n" +
 	"\x11ClearIndexRequest\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\x124\n" +
-	"\x06client\x18\x02 \x01(\v2\x1c.claudecontext.v1.ClientInfoR\x06client\"r\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x127\n" +
+	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"r\n" +
 	"\x12ClearIndexResponse\x12\x1f\n" +
 	"\vcodebase_id\x18\x01 \x01(\tR\n" +
 	"codebaseId\x12\x18\n" +
 	"\acleared\x18\x02 \x01(\bR\acleared\x12!\n" +
-	"\fdisplay_text\x18\x03 \x01(\tR\vdisplayText\"_\n" +
+	"\fdisplay_text\x18\x03 \x01(\tR\vdisplayText\"b\n" +
 	"\x10CancelJobRequest\x12\x15\n" +
-	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x124\n" +
-	"\x06client\x18\x02 \x01(\v2\x1c.claudecontext.v1.ClientInfoR\x06client\"k\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x127\n" +
+	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"k\n" +
 	"\x11CancelJobResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1c\n" +
 	"\tcancelled\x18\x02 \x01(\bR\tcancelled\x12!\n" +
-	"\fdisplay_text\x18\x03 \x01(\tR\vdisplayText\"\\\n" +
+	"\fdisplay_text\x18\x03 \x01(\tR\vdisplayText\"_\n" +
 	"\x10SyncIndexRequest\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\x124\n" +
-	"\x06client\x18\x02 \x01(\v2\x1c.claudecontext.v1.ClientInfoR\x06client\"\x84\x01\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x127\n" +
+	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\x84\x01\n" +
 	"\x11SyncIndexResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
@@ -2677,16 +2677,16 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	"\x05state\x18\x03 \x01(\tR\x05state\x12!\n" +
 	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\"%\n" +
 	"\x0fGetIndexRequest\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\"\x8b\x02\n" +
-	"\x10GetIndexResponse\x126\n" +
-	"\bcodebase\x18\x01 \x01(\v2\x1a.claudecontext.v1.CodebaseR\bcodebase\x124\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"\x94\x02\n" +
+	"\x10GetIndexResponse\x129\n" +
+	"\bcodebase\x18\x01 \x01(\v2\x1d.lmsemanticsearch.v1.CodebaseR\bcodebase\x127\n" +
 	"\n" +
-	"active_job\x18\x02 \x01(\v2\x15.claudecontext.v1.JobR\tactiveJob\x12\x18\n" +
+	"active_job\x18\x02 \x01(\v2\x18.lmsemanticsearch.v1.JobR\tactiveJob\x12\x18\n" +
 	"\atracked\x18\x03 \x01(\bR\atracked\x12!\n" +
-	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\x12L\n" +
-	"\x0eclassification\x18\x05 \x01(\v2$.claudecontext.v1.PathClassificationR\x0eclassification\"\xf3\x02\n" +
-	"\x12PathClassification\x12=\n" +
-	"\x04kind\x18\x01 \x01(\x0e2).claudecontext.v1.PathClassification.KindR\x04kind\x12.\n" +
+	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\x12O\n" +
+	"\x0eclassification\x18\x05 \x01(\v2'.lmsemanticsearch.v1.PathClassificationR\x0eclassification\"\xf6\x02\n" +
+	"\x12PathClassification\x12@\n" +
+	"\x04kind\x18\x01 \x01(\x0e2,.lmsemanticsearch.v1.PathClassification.KindR\x04kind\x12.\n" +
 	"\x13excluded_by_pattern\x18\x02 \x01(\tR\x11excludedByPattern\x122\n" +
 	"\x15excluded_by_gitignore\x18\x03 \x01(\tR\x13excludedByGitignore\x120\n" +
 	"\x14covering_codebase_id\x18\x04 \x01(\tR\x12coveringCodebaseId\"\x87\x01\n" +
@@ -2696,35 +2696,35 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	"\x16KIND_IN_SCOPE_EXCLUDED\x10\x02\x12\x1b\n" +
 	"\x17KIND_IN_SCOPE_UNINDEXED\x10\x03\x12\x15\n" +
 	"\x11KIND_OUT_OF_SCOPE\x10\x04\"\x14\n" +
-	"\x12ListIndexesRequest\"n\n" +
-	"\x13ListIndexesResponse\x124\n" +
-	"\aindexes\x18\x01 \x03(\v2\x1a.claudecontext.v1.CodebaseR\aindexes\x12!\n" +
+	"\x12ListIndexesRequest\"q\n" +
+	"\x13ListIndexesResponse\x127\n" +
+	"\aindexes\x18\x01 \x03(\v2\x1d.lmsemanticsearch.v1.CodebaseR\aindexes\x12!\n" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"&\n" +
 	"\rGetJobRequest\x12\x15\n" +
-	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\\\n" +
-	"\x0eGetJobResponse\x12'\n" +
-	"\x03job\x18\x01 \x01(\v2\x15.claudecontext.v1.JobR\x03job\x12!\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"_\n" +
+	"\x0eGetJobResponse\x12*\n" +
+	"\x03job\x18\x01 \x01(\v2\x18.lmsemanticsearch.v1.JobR\x03job\x12!\n" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"2\n" +
 	"\x0fListJobsRequest\x12\x1f\n" +
 	"\vcodebase_id\x18\x01 \x01(\tR\n" +
-	"codebaseId\"`\n" +
-	"\x10ListJobsResponse\x12)\n" +
-	"\x04jobs\x18\x01 \x03(\v2\x15.claudecontext.v1.JobR\x04jobs\x12!\n" +
+	"codebaseId\"c\n" +
+	"\x10ListJobsResponse\x12,\n" +
+	"\x04jobs\x18\x01 \x03(\v2\x18.lmsemanticsearch.v1.JobR\x04jobs\x12!\n" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"+\n" +
 	"\x10WatchJobsRequest\x12\x17\n" +
-	"\ajob_ids\x18\x01 \x03(\tR\x06jobIds\"<\n" +
-	"\x11WatchJobsResponse\x12'\n" +
-	"\x03job\x18\x01 \x01(\v2\x15.claudecontext.v1.JobR\x03job\"~\n" +
+	"\ajob_ids\x18\x01 \x03(\tR\x06jobIds\"?\n" +
+	"\x11WatchJobsResponse\x12*\n" +
+	"\x03job\x18\x01 \x01(\v2\x18.lmsemanticsearch.v1.JobR\x03job\"~\n" +
 	"\x11SearchCodeRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05query\x18\x02 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12)\n" +
-	"\x10extension_filter\x18\x04 \x03(\tR\x0fextensionFilter\"\xdf\x01\n" +
-	"\x12SearchCodeResponse\x128\n" +
-	"\aresults\x18\x01 \x03(\v2\x1e.claudecontext.v1.SearchResultR\aresults\x126\n" +
-	"\bcodebase\x18\x02 \x01(\v2\x1a.claudecontext.v1.CodebaseR\bcodebase\x124\n" +
+	"\x10extension_filter\x18\x04 \x03(\tR\x0fextensionFilter\"\xe8\x01\n" +
+	"\x12SearchCodeResponse\x12;\n" +
+	"\aresults\x18\x01 \x03(\v2!.lmsemanticsearch.v1.SearchResultR\aresults\x129\n" +
+	"\bcodebase\x18\x02 \x01(\v2\x1d.lmsemanticsearch.v1.CodebaseR\bcodebase\x127\n" +
 	"\n" +
-	"active_job\x18\x03 \x01(\v2\x15.claudecontext.v1.JobR\tactiveJob\x12!\n" +
+	"active_job\x18\x03 \x01(\v2\x18.lmsemanticsearch.v1.JobR\tactiveJob\x12!\n" +
 	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\"n\n" +
 	"\n" +
 	"Diagnostic\x12\x1a\n" +
@@ -2732,146 +2732,146 @@ const file_claudecontext_v1_service_proto_rawDesc = "" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x18\n" +
 	"\asummary\x18\x03 \x01(\tR\asummary\x12\x16\n" +
 	"\x06detail\x18\x04 \x01(\tR\x06detail\"\x0f\n" +
-	"\rDoctorRequest\"s\n" +
-	"\x0eDoctorResponse\x12>\n" +
-	"\vdiagnostics\x18\x01 \x03(\v2\x1c.claudecontext.v1.DiagnosticR\vdiagnostics\x12!\n" +
+	"\rDoctorRequest\"v\n" +
+	"\x0eDoctorResponse\x12A\n" +
+	"\vdiagnostics\x18\x01 \x03(\v2\x1f.lmsemanticsearch.v1.DiagnosticR\vdiagnostics\x12!\n" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\x11\n" +
 	"\x0fShutdownRequest\".\n" +
 	"\x10ShutdownResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted2\xea\b\n" +
-	"\x1aClaudeContextDaemonService\x12N\n" +
-	"\aVersion\x12 .claudecontext.v1.VersionRequest\x1a!.claudecontext.v1.VersionResponse\x12W\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted2\xb9\t\n" +
+	"\x1bSemanticSearchDaemonService\x12T\n" +
+	"\aVersion\x12#.lmsemanticsearch.v1.VersionRequest\x1a$.lmsemanticsearch.v1.VersionResponse\x12]\n" +
 	"\n" +
-	"StartIndex\x12#.claudecontext.v1.StartIndexRequest\x1a$.claudecontext.v1.StartIndexResponse\x12W\n" +
+	"StartIndex\x12&.lmsemanticsearch.v1.StartIndexRequest\x1a'.lmsemanticsearch.v1.StartIndexResponse\x12]\n" +
 	"\n" +
-	"ClearIndex\x12#.claudecontext.v1.ClearIndexRequest\x1a$.claudecontext.v1.ClearIndexResponse\x12T\n" +
-	"\tCancelJob\x12\".claudecontext.v1.CancelJobRequest\x1a#.claudecontext.v1.CancelJobResponse\x12T\n" +
-	"\tSyncIndex\x12\".claudecontext.v1.SyncIndexRequest\x1a#.claudecontext.v1.SyncIndexResponse\x12Q\n" +
-	"\bGetIndex\x12!.claudecontext.v1.GetIndexRequest\x1a\".claudecontext.v1.GetIndexResponse\x12Z\n" +
-	"\vListIndexes\x12$.claudecontext.v1.ListIndexesRequest\x1a%.claudecontext.v1.ListIndexesResponse\x12K\n" +
-	"\x06GetJob\x12\x1f.claudecontext.v1.GetJobRequest\x1a .claudecontext.v1.GetJobResponse\x12Q\n" +
-	"\bListJobs\x12!.claudecontext.v1.ListJobsRequest\x1a\".claudecontext.v1.ListJobsResponse\x12V\n" +
-	"\tWatchJobs\x12\".claudecontext.v1.WatchJobsRequest\x1a#.claudecontext.v1.WatchJobsResponse0\x01\x12W\n" +
+	"ClearIndex\x12&.lmsemanticsearch.v1.ClearIndexRequest\x1a'.lmsemanticsearch.v1.ClearIndexResponse\x12Z\n" +
+	"\tCancelJob\x12%.lmsemanticsearch.v1.CancelJobRequest\x1a&.lmsemanticsearch.v1.CancelJobResponse\x12Z\n" +
+	"\tSyncIndex\x12%.lmsemanticsearch.v1.SyncIndexRequest\x1a&.lmsemanticsearch.v1.SyncIndexResponse\x12W\n" +
+	"\bGetIndex\x12$.lmsemanticsearch.v1.GetIndexRequest\x1a%.lmsemanticsearch.v1.GetIndexResponse\x12`\n" +
+	"\vListIndexes\x12'.lmsemanticsearch.v1.ListIndexesRequest\x1a(.lmsemanticsearch.v1.ListIndexesResponse\x12Q\n" +
+	"\x06GetJob\x12\".lmsemanticsearch.v1.GetJobRequest\x1a#.lmsemanticsearch.v1.GetJobResponse\x12W\n" +
+	"\bListJobs\x12$.lmsemanticsearch.v1.ListJobsRequest\x1a%.lmsemanticsearch.v1.ListJobsResponse\x12\\\n" +
+	"\tWatchJobs\x12%.lmsemanticsearch.v1.WatchJobsRequest\x1a&.lmsemanticsearch.v1.WatchJobsResponse0\x01\x12]\n" +
 	"\n" +
-	"SearchCode\x12#.claudecontext.v1.SearchCodeRequest\x1a$.claudecontext.v1.SearchCodeResponse\x12K\n" +
-	"\x06Doctor\x12\x1f.claudecontext.v1.DoctorRequest\x1a .claudecontext.v1.DoctorResponse\x12Q\n" +
-	"\bShutdown\x12!.claudecontext.v1.ShutdownRequest\x1a\".claudecontext.v1.ShutdownResponseBGZEgoodkind.io/claude-context-go/gen/go/claudecontext/v1;claudecontextv1b\x06proto3"
+	"SearchCode\x12&.lmsemanticsearch.v1.SearchCodeRequest\x1a'.lmsemanticsearch.v1.SearchCodeResponse\x12Q\n" +
+	"\x06Doctor\x12\".lmsemanticsearch.v1.DoctorRequest\x1a#.lmsemanticsearch.v1.DoctorResponse\x12W\n" +
+	"\bShutdown\x12$.lmsemanticsearch.v1.ShutdownRequest\x1a%.lmsemanticsearch.v1.ShutdownResponseBNZLgoodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1;lmsemanticsearchv1b\x06proto3"
 
 var (
-	file_claudecontext_v1_service_proto_rawDescOnce sync.Once
-	file_claudecontext_v1_service_proto_rawDescData []byte
+	file_lmsemanticsearch_v1_service_proto_rawDescOnce sync.Once
+	file_lmsemanticsearch_v1_service_proto_rawDescData []byte
 )
 
-func file_claudecontext_v1_service_proto_rawDescGZIP() []byte {
-	file_claudecontext_v1_service_proto_rawDescOnce.Do(func() {
-		file_claudecontext_v1_service_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_claudecontext_v1_service_proto_rawDesc), len(file_claudecontext_v1_service_proto_rawDesc)))
+func file_lmsemanticsearch_v1_service_proto_rawDescGZIP() []byte {
+	file_lmsemanticsearch_v1_service_proto_rawDescOnce.Do(func() {
+		file_lmsemanticsearch_v1_service_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_lmsemanticsearch_v1_service_proto_rawDesc), len(file_lmsemanticsearch_v1_service_proto_rawDesc)))
 	})
-	return file_claudecontext_v1_service_proto_rawDescData
+	return file_lmsemanticsearch_v1_service_proto_rawDescData
 }
 
-var file_claudecontext_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_claudecontext_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
-var file_claudecontext_v1_service_proto_goTypes = []any{
-	(PathClassification_Kind)(0),  // 0: claudecontext.v1.PathClassification.Kind
-	(*VersionRequest)(nil),        // 1: claudecontext.v1.VersionRequest
-	(*VersionResponse)(nil),       // 2: claudecontext.v1.VersionResponse
-	(*ClientInfo)(nil),            // 3: claudecontext.v1.ClientInfo
-	(*SplitterConfig)(nil),        // 4: claudecontext.v1.SplitterConfig
-	(*IndexConfig)(nil),           // 5: claudecontext.v1.IndexConfig
-	(*Progress)(nil),              // 6: claudecontext.v1.Progress
-	(*JobError)(nil),              // 7: claudecontext.v1.JobError
-	(*IndexRunSummary)(nil),       // 8: claudecontext.v1.IndexRunSummary
-	(*IndexRunFailure)(nil),       // 9: claudecontext.v1.IndexRunFailure
-	(*Codebase)(nil),              // 10: claudecontext.v1.Codebase
-	(*Job)(nil),                   // 11: claudecontext.v1.Job
-	(*SearchResult)(nil),          // 12: claudecontext.v1.SearchResult
-	(*StartIndexRequest)(nil),     // 13: claudecontext.v1.StartIndexRequest
-	(*StartIndexResponse)(nil),    // 14: claudecontext.v1.StartIndexResponse
-	(*ClearIndexRequest)(nil),     // 15: claudecontext.v1.ClearIndexRequest
-	(*ClearIndexResponse)(nil),    // 16: claudecontext.v1.ClearIndexResponse
-	(*CancelJobRequest)(nil),      // 17: claudecontext.v1.CancelJobRequest
-	(*CancelJobResponse)(nil),     // 18: claudecontext.v1.CancelJobResponse
-	(*SyncIndexRequest)(nil),      // 19: claudecontext.v1.SyncIndexRequest
-	(*SyncIndexResponse)(nil),     // 20: claudecontext.v1.SyncIndexResponse
-	(*GetIndexRequest)(nil),       // 21: claudecontext.v1.GetIndexRequest
-	(*GetIndexResponse)(nil),      // 22: claudecontext.v1.GetIndexResponse
-	(*PathClassification)(nil),    // 23: claudecontext.v1.PathClassification
-	(*ListIndexesRequest)(nil),    // 24: claudecontext.v1.ListIndexesRequest
-	(*ListIndexesResponse)(nil),   // 25: claudecontext.v1.ListIndexesResponse
-	(*GetJobRequest)(nil),         // 26: claudecontext.v1.GetJobRequest
-	(*GetJobResponse)(nil),        // 27: claudecontext.v1.GetJobResponse
-	(*ListJobsRequest)(nil),       // 28: claudecontext.v1.ListJobsRequest
-	(*ListJobsResponse)(nil),      // 29: claudecontext.v1.ListJobsResponse
-	(*WatchJobsRequest)(nil),      // 30: claudecontext.v1.WatchJobsRequest
-	(*WatchJobsResponse)(nil),     // 31: claudecontext.v1.WatchJobsResponse
-	(*SearchCodeRequest)(nil),     // 32: claudecontext.v1.SearchCodeRequest
-	(*SearchCodeResponse)(nil),    // 33: claudecontext.v1.SearchCodeResponse
-	(*Diagnostic)(nil),            // 34: claudecontext.v1.Diagnostic
-	(*DoctorRequest)(nil),         // 35: claudecontext.v1.DoctorRequest
-	(*DoctorResponse)(nil),        // 36: claudecontext.v1.DoctorResponse
-	(*ShutdownRequest)(nil),       // 37: claudecontext.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),      // 38: claudecontext.v1.ShutdownResponse
+var file_lmsemanticsearch_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_lmsemanticsearch_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_lmsemanticsearch_v1_service_proto_goTypes = []any{
+	(PathClassification_Kind)(0),  // 0: lmsemanticsearch.v1.PathClassification.Kind
+	(*VersionRequest)(nil),        // 1: lmsemanticsearch.v1.VersionRequest
+	(*VersionResponse)(nil),       // 2: lmsemanticsearch.v1.VersionResponse
+	(*ClientInfo)(nil),            // 3: lmsemanticsearch.v1.ClientInfo
+	(*SplitterConfig)(nil),        // 4: lmsemanticsearch.v1.SplitterConfig
+	(*IndexConfig)(nil),           // 5: lmsemanticsearch.v1.IndexConfig
+	(*Progress)(nil),              // 6: lmsemanticsearch.v1.Progress
+	(*JobError)(nil),              // 7: lmsemanticsearch.v1.JobError
+	(*IndexRunSummary)(nil),       // 8: lmsemanticsearch.v1.IndexRunSummary
+	(*IndexRunFailure)(nil),       // 9: lmsemanticsearch.v1.IndexRunFailure
+	(*Codebase)(nil),              // 10: lmsemanticsearch.v1.Codebase
+	(*Job)(nil),                   // 11: lmsemanticsearch.v1.Job
+	(*SearchResult)(nil),          // 12: lmsemanticsearch.v1.SearchResult
+	(*StartIndexRequest)(nil),     // 13: lmsemanticsearch.v1.StartIndexRequest
+	(*StartIndexResponse)(nil),    // 14: lmsemanticsearch.v1.StartIndexResponse
+	(*ClearIndexRequest)(nil),     // 15: lmsemanticsearch.v1.ClearIndexRequest
+	(*ClearIndexResponse)(nil),    // 16: lmsemanticsearch.v1.ClearIndexResponse
+	(*CancelJobRequest)(nil),      // 17: lmsemanticsearch.v1.CancelJobRequest
+	(*CancelJobResponse)(nil),     // 18: lmsemanticsearch.v1.CancelJobResponse
+	(*SyncIndexRequest)(nil),      // 19: lmsemanticsearch.v1.SyncIndexRequest
+	(*SyncIndexResponse)(nil),     // 20: lmsemanticsearch.v1.SyncIndexResponse
+	(*GetIndexRequest)(nil),       // 21: lmsemanticsearch.v1.GetIndexRequest
+	(*GetIndexResponse)(nil),      // 22: lmsemanticsearch.v1.GetIndexResponse
+	(*PathClassification)(nil),    // 23: lmsemanticsearch.v1.PathClassification
+	(*ListIndexesRequest)(nil),    // 24: lmsemanticsearch.v1.ListIndexesRequest
+	(*ListIndexesResponse)(nil),   // 25: lmsemanticsearch.v1.ListIndexesResponse
+	(*GetJobRequest)(nil),         // 26: lmsemanticsearch.v1.GetJobRequest
+	(*GetJobResponse)(nil),        // 27: lmsemanticsearch.v1.GetJobResponse
+	(*ListJobsRequest)(nil),       // 28: lmsemanticsearch.v1.ListJobsRequest
+	(*ListJobsResponse)(nil),      // 29: lmsemanticsearch.v1.ListJobsResponse
+	(*WatchJobsRequest)(nil),      // 30: lmsemanticsearch.v1.WatchJobsRequest
+	(*WatchJobsResponse)(nil),     // 31: lmsemanticsearch.v1.WatchJobsResponse
+	(*SearchCodeRequest)(nil),     // 32: lmsemanticsearch.v1.SearchCodeRequest
+	(*SearchCodeResponse)(nil),    // 33: lmsemanticsearch.v1.SearchCodeResponse
+	(*Diagnostic)(nil),            // 34: lmsemanticsearch.v1.Diagnostic
+	(*DoctorRequest)(nil),         // 35: lmsemanticsearch.v1.DoctorRequest
+	(*DoctorResponse)(nil),        // 36: lmsemanticsearch.v1.DoctorResponse
+	(*ShutdownRequest)(nil),       // 37: lmsemanticsearch.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),      // 38: lmsemanticsearch.v1.ShutdownResponse
 	(*timestamppb.Timestamp)(nil), // 39: google.protobuf.Timestamp
 }
-var file_claudecontext_v1_service_proto_depIdxs = []int32{
-	39, // 0: claudecontext.v1.Progress.last_event_at:type_name -> google.protobuf.Timestamp
-	39, // 1: claudecontext.v1.Progress.heartbeat_at:type_name -> google.protobuf.Timestamp
-	39, // 2: claudecontext.v1.IndexRunSummary.completed_at:type_name -> google.protobuf.Timestamp
-	39, // 3: claudecontext.v1.IndexRunFailure.failed_at:type_name -> google.protobuf.Timestamp
-	8,  // 4: claudecontext.v1.Codebase.last_successful_run:type_name -> claudecontext.v1.IndexRunSummary
-	9,  // 5: claudecontext.v1.Codebase.last_failed_run:type_name -> claudecontext.v1.IndexRunFailure
-	5,  // 6: claudecontext.v1.Codebase.effective_config:type_name -> claudecontext.v1.IndexConfig
-	39, // 7: claudecontext.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
-	3,  // 8: claudecontext.v1.Job.client:type_name -> claudecontext.v1.ClientInfo
-	6,  // 9: claudecontext.v1.Job.progress:type_name -> claudecontext.v1.Progress
-	5,  // 10: claudecontext.v1.Job.config:type_name -> claudecontext.v1.IndexConfig
-	39, // 11: claudecontext.v1.Job.started_at:type_name -> google.protobuf.Timestamp
-	39, // 12: claudecontext.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
-	39, // 13: claudecontext.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
-	7,  // 14: claudecontext.v1.Job.error:type_name -> claudecontext.v1.JobError
-	4,  // 15: claudecontext.v1.StartIndexRequest.splitter:type_name -> claudecontext.v1.SplitterConfig
-	3,  // 16: claudecontext.v1.StartIndexRequest.client:type_name -> claudecontext.v1.ClientInfo
-	3,  // 17: claudecontext.v1.ClearIndexRequest.client:type_name -> claudecontext.v1.ClientInfo
-	3,  // 18: claudecontext.v1.CancelJobRequest.client:type_name -> claudecontext.v1.ClientInfo
-	3,  // 19: claudecontext.v1.SyncIndexRequest.client:type_name -> claudecontext.v1.ClientInfo
-	10, // 20: claudecontext.v1.GetIndexResponse.codebase:type_name -> claudecontext.v1.Codebase
-	11, // 21: claudecontext.v1.GetIndexResponse.active_job:type_name -> claudecontext.v1.Job
-	23, // 22: claudecontext.v1.GetIndexResponse.classification:type_name -> claudecontext.v1.PathClassification
-	0,  // 23: claudecontext.v1.PathClassification.kind:type_name -> claudecontext.v1.PathClassification.Kind
-	10, // 24: claudecontext.v1.ListIndexesResponse.indexes:type_name -> claudecontext.v1.Codebase
-	11, // 25: claudecontext.v1.GetJobResponse.job:type_name -> claudecontext.v1.Job
-	11, // 26: claudecontext.v1.ListJobsResponse.jobs:type_name -> claudecontext.v1.Job
-	11, // 27: claudecontext.v1.WatchJobsResponse.job:type_name -> claudecontext.v1.Job
-	12, // 28: claudecontext.v1.SearchCodeResponse.results:type_name -> claudecontext.v1.SearchResult
-	10, // 29: claudecontext.v1.SearchCodeResponse.codebase:type_name -> claudecontext.v1.Codebase
-	11, // 30: claudecontext.v1.SearchCodeResponse.active_job:type_name -> claudecontext.v1.Job
-	34, // 31: claudecontext.v1.DoctorResponse.diagnostics:type_name -> claudecontext.v1.Diagnostic
-	1,  // 32: claudecontext.v1.ClaudeContextDaemonService.Version:input_type -> claudecontext.v1.VersionRequest
-	13, // 33: claudecontext.v1.ClaudeContextDaemonService.StartIndex:input_type -> claudecontext.v1.StartIndexRequest
-	15, // 34: claudecontext.v1.ClaudeContextDaemonService.ClearIndex:input_type -> claudecontext.v1.ClearIndexRequest
-	17, // 35: claudecontext.v1.ClaudeContextDaemonService.CancelJob:input_type -> claudecontext.v1.CancelJobRequest
-	19, // 36: claudecontext.v1.ClaudeContextDaemonService.SyncIndex:input_type -> claudecontext.v1.SyncIndexRequest
-	21, // 37: claudecontext.v1.ClaudeContextDaemonService.GetIndex:input_type -> claudecontext.v1.GetIndexRequest
-	24, // 38: claudecontext.v1.ClaudeContextDaemonService.ListIndexes:input_type -> claudecontext.v1.ListIndexesRequest
-	26, // 39: claudecontext.v1.ClaudeContextDaemonService.GetJob:input_type -> claudecontext.v1.GetJobRequest
-	28, // 40: claudecontext.v1.ClaudeContextDaemonService.ListJobs:input_type -> claudecontext.v1.ListJobsRequest
-	30, // 41: claudecontext.v1.ClaudeContextDaemonService.WatchJobs:input_type -> claudecontext.v1.WatchJobsRequest
-	32, // 42: claudecontext.v1.ClaudeContextDaemonService.SearchCode:input_type -> claudecontext.v1.SearchCodeRequest
-	35, // 43: claudecontext.v1.ClaudeContextDaemonService.Doctor:input_type -> claudecontext.v1.DoctorRequest
-	37, // 44: claudecontext.v1.ClaudeContextDaemonService.Shutdown:input_type -> claudecontext.v1.ShutdownRequest
-	2,  // 45: claudecontext.v1.ClaudeContextDaemonService.Version:output_type -> claudecontext.v1.VersionResponse
-	14, // 46: claudecontext.v1.ClaudeContextDaemonService.StartIndex:output_type -> claudecontext.v1.StartIndexResponse
-	16, // 47: claudecontext.v1.ClaudeContextDaemonService.ClearIndex:output_type -> claudecontext.v1.ClearIndexResponse
-	18, // 48: claudecontext.v1.ClaudeContextDaemonService.CancelJob:output_type -> claudecontext.v1.CancelJobResponse
-	20, // 49: claudecontext.v1.ClaudeContextDaemonService.SyncIndex:output_type -> claudecontext.v1.SyncIndexResponse
-	22, // 50: claudecontext.v1.ClaudeContextDaemonService.GetIndex:output_type -> claudecontext.v1.GetIndexResponse
-	25, // 51: claudecontext.v1.ClaudeContextDaemonService.ListIndexes:output_type -> claudecontext.v1.ListIndexesResponse
-	27, // 52: claudecontext.v1.ClaudeContextDaemonService.GetJob:output_type -> claudecontext.v1.GetJobResponse
-	29, // 53: claudecontext.v1.ClaudeContextDaemonService.ListJobs:output_type -> claudecontext.v1.ListJobsResponse
-	31, // 54: claudecontext.v1.ClaudeContextDaemonService.WatchJobs:output_type -> claudecontext.v1.WatchJobsResponse
-	33, // 55: claudecontext.v1.ClaudeContextDaemonService.SearchCode:output_type -> claudecontext.v1.SearchCodeResponse
-	36, // 56: claudecontext.v1.ClaudeContextDaemonService.Doctor:output_type -> claudecontext.v1.DoctorResponse
-	38, // 57: claudecontext.v1.ClaudeContextDaemonService.Shutdown:output_type -> claudecontext.v1.ShutdownResponse
+var file_lmsemanticsearch_v1_service_proto_depIdxs = []int32{
+	39, // 0: lmsemanticsearch.v1.Progress.last_event_at:type_name -> google.protobuf.Timestamp
+	39, // 1: lmsemanticsearch.v1.Progress.heartbeat_at:type_name -> google.protobuf.Timestamp
+	39, // 2: lmsemanticsearch.v1.IndexRunSummary.completed_at:type_name -> google.protobuf.Timestamp
+	39, // 3: lmsemanticsearch.v1.IndexRunFailure.failed_at:type_name -> google.protobuf.Timestamp
+	8,  // 4: lmsemanticsearch.v1.Codebase.last_successful_run:type_name -> lmsemanticsearch.v1.IndexRunSummary
+	9,  // 5: lmsemanticsearch.v1.Codebase.last_failed_run:type_name -> lmsemanticsearch.v1.IndexRunFailure
+	5,  // 6: lmsemanticsearch.v1.Codebase.effective_config:type_name -> lmsemanticsearch.v1.IndexConfig
+	39, // 7: lmsemanticsearch.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
+	3,  // 8: lmsemanticsearch.v1.Job.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	6,  // 9: lmsemanticsearch.v1.Job.progress:type_name -> lmsemanticsearch.v1.Progress
+	5,  // 10: lmsemanticsearch.v1.Job.config:type_name -> lmsemanticsearch.v1.IndexConfig
+	39, // 11: lmsemanticsearch.v1.Job.started_at:type_name -> google.protobuf.Timestamp
+	39, // 12: lmsemanticsearch.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
+	39, // 13: lmsemanticsearch.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
+	7,  // 14: lmsemanticsearch.v1.Job.error:type_name -> lmsemanticsearch.v1.JobError
+	4,  // 15: lmsemanticsearch.v1.StartIndexRequest.splitter:type_name -> lmsemanticsearch.v1.SplitterConfig
+	3,  // 16: lmsemanticsearch.v1.StartIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	3,  // 17: lmsemanticsearch.v1.ClearIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	3,  // 18: lmsemanticsearch.v1.CancelJobRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	3,  // 19: lmsemanticsearch.v1.SyncIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	10, // 20: lmsemanticsearch.v1.GetIndexResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
+	11, // 21: lmsemanticsearch.v1.GetIndexResponse.active_job:type_name -> lmsemanticsearch.v1.Job
+	23, // 22: lmsemanticsearch.v1.GetIndexResponse.classification:type_name -> lmsemanticsearch.v1.PathClassification
+	0,  // 23: lmsemanticsearch.v1.PathClassification.kind:type_name -> lmsemanticsearch.v1.PathClassification.Kind
+	10, // 24: lmsemanticsearch.v1.ListIndexesResponse.indexes:type_name -> lmsemanticsearch.v1.Codebase
+	11, // 25: lmsemanticsearch.v1.GetJobResponse.job:type_name -> lmsemanticsearch.v1.Job
+	11, // 26: lmsemanticsearch.v1.ListJobsResponse.jobs:type_name -> lmsemanticsearch.v1.Job
+	11, // 27: lmsemanticsearch.v1.WatchJobsResponse.job:type_name -> lmsemanticsearch.v1.Job
+	12, // 28: lmsemanticsearch.v1.SearchCodeResponse.results:type_name -> lmsemanticsearch.v1.SearchResult
+	10, // 29: lmsemanticsearch.v1.SearchCodeResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
+	11, // 30: lmsemanticsearch.v1.SearchCodeResponse.active_job:type_name -> lmsemanticsearch.v1.Job
+	34, // 31: lmsemanticsearch.v1.DoctorResponse.diagnostics:type_name -> lmsemanticsearch.v1.Diagnostic
+	1,  // 32: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:input_type -> lmsemanticsearch.v1.VersionRequest
+	13, // 33: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:input_type -> lmsemanticsearch.v1.StartIndexRequest
+	15, // 34: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:input_type -> lmsemanticsearch.v1.ClearIndexRequest
+	17, // 35: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:input_type -> lmsemanticsearch.v1.CancelJobRequest
+	19, // 36: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:input_type -> lmsemanticsearch.v1.SyncIndexRequest
+	21, // 37: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:input_type -> lmsemanticsearch.v1.GetIndexRequest
+	24, // 38: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:input_type -> lmsemanticsearch.v1.ListIndexesRequest
+	26, // 39: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:input_type -> lmsemanticsearch.v1.GetJobRequest
+	28, // 40: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:input_type -> lmsemanticsearch.v1.ListJobsRequest
+	30, // 41: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:input_type -> lmsemanticsearch.v1.WatchJobsRequest
+	32, // 42: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:input_type -> lmsemanticsearch.v1.SearchCodeRequest
+	35, // 43: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:input_type -> lmsemanticsearch.v1.DoctorRequest
+	37, // 44: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:input_type -> lmsemanticsearch.v1.ShutdownRequest
+	2,  // 45: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:output_type -> lmsemanticsearch.v1.VersionResponse
+	14, // 46: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:output_type -> lmsemanticsearch.v1.StartIndexResponse
+	16, // 47: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:output_type -> lmsemanticsearch.v1.ClearIndexResponse
+	18, // 48: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:output_type -> lmsemanticsearch.v1.CancelJobResponse
+	20, // 49: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:output_type -> lmsemanticsearch.v1.SyncIndexResponse
+	22, // 50: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:output_type -> lmsemanticsearch.v1.GetIndexResponse
+	25, // 51: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:output_type -> lmsemanticsearch.v1.ListIndexesResponse
+	27, // 52: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:output_type -> lmsemanticsearch.v1.GetJobResponse
+	29, // 53: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:output_type -> lmsemanticsearch.v1.ListJobsResponse
+	31, // 54: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:output_type -> lmsemanticsearch.v1.WatchJobsResponse
+	33, // 55: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:output_type -> lmsemanticsearch.v1.SearchCodeResponse
+	36, // 56: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:output_type -> lmsemanticsearch.v1.DoctorResponse
+	38, // 57: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:output_type -> lmsemanticsearch.v1.ShutdownResponse
 	45, // [45:58] is the sub-list for method output_type
 	32, // [32:45] is the sub-list for method input_type
 	32, // [32:32] is the sub-list for extension type_name
@@ -2879,27 +2879,27 @@ var file_claudecontext_v1_service_proto_depIdxs = []int32{
 	0,  // [0:32] is the sub-list for field type_name
 }
 
-func init() { file_claudecontext_v1_service_proto_init() }
-func file_claudecontext_v1_service_proto_init() {
-	if File_claudecontext_v1_service_proto != nil {
+func init() { file_lmsemanticsearch_v1_service_proto_init() }
+func file_lmsemanticsearch_v1_service_proto_init() {
+	if File_lmsemanticsearch_v1_service_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_claudecontext_v1_service_proto_rawDesc), len(file_claudecontext_v1_service_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lmsemanticsearch_v1_service_proto_rawDesc), len(file_lmsemanticsearch_v1_service_proto_rawDesc)),
 			NumEnums:      1,
 			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_claudecontext_v1_service_proto_goTypes,
-		DependencyIndexes: file_claudecontext_v1_service_proto_depIdxs,
-		EnumInfos:         file_claudecontext_v1_service_proto_enumTypes,
-		MessageInfos:      file_claudecontext_v1_service_proto_msgTypes,
+		GoTypes:           file_lmsemanticsearch_v1_service_proto_goTypes,
+		DependencyIndexes: file_lmsemanticsearch_v1_service_proto_depIdxs,
+		EnumInfos:         file_lmsemanticsearch_v1_service_proto_enumTypes,
+		MessageInfos:      file_lmsemanticsearch_v1_service_proto_msgTypes,
 	}.Build()
-	File_claudecontext_v1_service_proto = out.File
-	file_claudecontext_v1_service_proto_goTypes = nil
-	file_claudecontext_v1_service_proto_depIdxs = nil
+	File_lmsemanticsearch_v1_service_proto = out.File
+	file_lmsemanticsearch_v1_service_proto_goTypes = nil
+	file_lmsemanticsearch_v1_service_proto_depIdxs = nil
 }

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // TestStagingCollectionNameStaysWithinCap proves the rebuild staging name

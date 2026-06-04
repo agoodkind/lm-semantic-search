@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // recordingLifecycleHook captures the codebases the manager hands to the

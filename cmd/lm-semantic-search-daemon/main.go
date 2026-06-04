@@ -1,4 +1,4 @@
-// Command claude-contextd runs the local gRPC daemon.
+// Command lm-semantic-search-daemon runs the local gRPC daemon.
 package main
 
 import (
@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	pb "goodkind.io/claude-context-go/gen/go/claudecontext/v1"
-	"goodkind.io/claude-context-go/internal/config"
-	"goodkind.io/claude-context-go/internal/daemon"
-	"goodkind.io/claude-context-go/internal/debugserver"
-	"goodkind.io/claude-context-go/internal/metrics"
-	"goodkind.io/claude-context-go/internal/store"
+	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/daemon"
+	"goodkind.io/lm-semantic-search/internal/debugserver"
+	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/store"
 	"goodkind.io/gklog"
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/gklog/version"
@@ -129,7 +129,7 @@ func run(rootContext context.Context) error {
 
 	server := grpc.NewServer()
 	shutdownCh := make(chan struct{}, 1)
-	pb.RegisterClaudeContextDaemonServiceServer(server, daemon.NewGRPCServer(manager, func() {
+	pb.RegisterSemanticSearchDaemonServiceServer(server, daemon.NewGRPCServer(manager, func() {
 		select {
 		case shutdownCh <- struct{}{}:
 		default:
@@ -170,7 +170,7 @@ func applyStatePaths(cfg config.Config, stateRoot string, socketPath string) con
 	cfg.EventsPath = filepath.Join(cfg.StateRoot, "events.jsonl")
 	cfg.SocketsDir = filepath.Dir(cfg.SocketPath)
 	cfg.LogsDir = filepath.Join(cfg.StateRoot, "logs")
-	cfg.LogPath = filepath.Join(cfg.LogsDir, "claude-contextd.log")
+	cfg.LogPath = filepath.Join(cfg.LogsDir, "lm-semantic-search-daemon.log")
 	cfg.MerkleDir = filepath.Join(cfg.StateRoot, "merkle")
 	cfg.LocksDir = filepath.Join(cfg.StateRoot, "locks")
 	cfg.ChunksDir = filepath.Join(cfg.StateRoot, "chunks")
@@ -184,7 +184,7 @@ const debugShutdownTimeout = 2 * time.Second
 // startDebugServer binds the loopback pprof and expvar listener. The bind is
 // eager so a port conflict surfaces during startup rather than inside the
 // serving goroutine.
-// refuseIfDaemonAlreadyServing returns an error when another claude-contextd is
+// refuseIfDaemonAlreadyServing returns an error when another lm-semantic-search-daemon is
 // already accepting connections on socketPath, so a second instance never
 // clobbers the live one's socket and steals its clients. A stale socket file
 // with no listener (the normal case after a crash or a kill-and-restart) fails
@@ -201,8 +201,8 @@ func refuseIfDaemonAlreadyServing(ctx context.Context, socketPath string) error 
 	if closeErr := conn.Close(); closeErr != nil {
 		slog.WarnContext(ctx, "close probe connection failed", "path", socketPath, "err", closeErr)
 	}
-	conflict := fmt.Errorf("another claude-contextd is already listening on %s", socketPath)
-	slog.ErrorContext(ctx, "another claude-contextd is already serving this socket; refusing to start", "path", socketPath, "err", conflict)
+	conflict := fmt.Errorf("another lm-semantic-search-daemon is already listening on %s", socketPath)
+	slog.ErrorContext(ctx, "another lm-semantic-search-daemon is already serving this socket; refusing to start", "path", socketPath, "err", conflict)
 	return conflict
 }
 

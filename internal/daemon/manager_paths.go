@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // findCodebaseByExactRoot returns the codebase whose CanonicalPath equals

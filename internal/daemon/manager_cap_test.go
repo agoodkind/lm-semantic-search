@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/claude-context-go/internal/config"
-	"goodkind.io/claude-context-go/internal/indexer"
-	"goodkind.io/claude-context-go/internal/merkle"
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/store"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/indexer"
+	"goodkind.io/lm-semantic-search/internal/merkle"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/store"
 )
 
 // newTestManagerWithCap builds a manager whose index-slot cap is set to
@@ -25,12 +25,12 @@ func newTestManagerWithCap(t *testing.T, maxConcurrent int) (*Manager, config.Co
 	stateRoot := t.TempDir()
 	cfg := config.Config{
 		StateRoot:              stateRoot,
-		SocketPath:             filepath.Join(stateRoot, "sockets", "claude-contextd.sock"),
+		SocketPath:             filepath.Join(stateRoot, "sockets", "lm-semantic-search-daemon.sock"),
 		RegistryPath:           filepath.Join(stateRoot, "registry.json"),
 		JobsPath:               filepath.Join(stateRoot, "jobs.jsonl"),
 		EventsPath:             filepath.Join(stateRoot, "events.jsonl"),
 		LogsDir:                filepath.Join(stateRoot, "logs"),
-		LogPath:                filepath.Join(stateRoot, "logs", "claude-contextd.log"),
+		LogPath:                filepath.Join(stateRoot, "logs", "lm-semantic-search-daemon.log"),
 		MerkleDir:              filepath.Join(stateRoot, "merkle"),
 		LocksDir:               filepath.Join(stateRoot, "locks"),
 		SocketsDir:             filepath.Join(stateRoot, "sockets"),

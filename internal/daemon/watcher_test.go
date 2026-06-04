@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/rjeczalik/notify"
-	"goodkind.io/claude-context-go/internal/discovery"
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // stubNotifyEvent satisfies notify.EventInfo so the watcher's dispatch

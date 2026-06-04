@@ -1,6 +1,6 @@
 package semantic
 
-import "goodkind.io/claude-context-go/internal/adapterr"
+import "goodkind.io/lm-semantic-search/internal/adapterr"
 
 // ErrUnavailable reports that the semantic backend is not configured.
 var ErrUnavailable error = newSentinel(

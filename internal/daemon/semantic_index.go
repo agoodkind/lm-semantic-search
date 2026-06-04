@@ -3,8 +3,8 @@ package daemon
 import (
 	"context"
 
-	"goodkind.io/claude-context-go/internal/model"
-	"goodkind.io/claude-context-go/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
 // semanticReader is the read-only slice of the embedding-and-vector-store

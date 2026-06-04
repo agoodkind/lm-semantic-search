@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"goodkind.io/claude-context-go/internal/metrics"
-	"goodkind.io/claude-context-go/internal/spans"
+	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/gklog/correlation"
 )
 

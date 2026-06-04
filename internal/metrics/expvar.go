@@ -9,7 +9,7 @@ import (
 
 // expvarPrefix namespaces every published variable so a process that
 // hosts other expvar producers keeps the daemon counters grouped.
-const expvarPrefix = "claude_contextd."
+const expvarPrefix = "lm_semantic_search_daemon."
 
 // registerOnce guards Register so repeated calls do not trip expvar's
 // duplicate-publish panic.
@@ -30,7 +30,7 @@ func (v counterVar) String() string {
 }
 
 // Register publishes every counter into expvar under the
-// claude_contextd. prefix. Each variable is a counterVar over the live
+// lm_semantic_search_daemon. prefix. Each variable is a counterVar over the live
 // atomic, so reads always reflect the current value without copying
 // through a Snapshot. It is safe to call multiple times; only the first
 // call publishes. The publish is guarded by a [sync.Once].

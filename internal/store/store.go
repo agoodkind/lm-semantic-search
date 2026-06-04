@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // EnsureDir creates a directory tree when it is missing.

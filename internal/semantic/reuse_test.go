@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"goodkind.io/claude-context-go/internal/model"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // countingEmbedder records every EmbedBatch call so a test can prove that a

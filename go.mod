@@ -1,4 +1,4 @@
-module goodkind.io/claude-context-go
+module goodkind.io/lm-semantic-search
 
 go 1.26.4
 
