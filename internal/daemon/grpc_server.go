@@ -27,21 +27,12 @@ import (
 // does not already carry, such as codebase_id and job_id.
 func appendCorrelationRef(displayText string, ctx context.Context, extras ...string) string {
 	corr := correlation.FromContext(ctx)
-	refs := make([]string, 0, 1+len(extras)/2)
-	if corr.TraceID != "" {
-		refs = append(refs, "trace_id="+string(corr.TraceID))
-	}
-	for index := 0; index+1 < len(extras); index += 2 {
-		value := extras[index+1]
-		if value == "" {
-			continue
-		}
-		refs = append(refs, extras[index]+"="+value)
-	}
-	if len(refs) == 0 {
+	pairs := append([]string{"trace_id", string(corr.TraceID)}, extras...)
+	line := correlation.MarkerLine(pairs...)
+	if line == "" {
 		return displayText
 	}
-	return displayText + "\n🔎 " + strings.Join(refs, " ")
+	return displayText + "\n" + line
 }
 
 // jobIDOf returns the id of job or "" when job is nil, so callers can fold
