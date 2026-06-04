@@ -2,6 +2,9 @@ package daemon
 
 import "goodkind.io/lm-semantic-search/internal/model"
 
+// Collection presence drives rebuild behavior only. Collection loss must never
+// implicitly prune a tracked registration; only explicit clear or another
+// intentional registration-deletion flow may remove daemon-owned state.
 type collectionPresence int
 
 const (

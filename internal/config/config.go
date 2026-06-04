@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultStateDirName           = ".lm-semantic-search"
+	defaultStateDirName           = "lm-semantic-search"
 	defaultSocketName             = "lm-semantic-search-daemon.sock"
 	defaultLogFileName            = "lm-semantic-search-daemon.log"
 	defaultSyncInterval           = 300000
@@ -28,6 +28,8 @@ const embeddingProviderOpenAI embeddingProvider = "OpenAI"
 
 // Config describes daemon runtime paths on the local machine.
 type Config struct {
+	ConfigRoot   string
+	ConfigPath   string
 	StateRoot    string
 	SocketPath   string
 	RegistryPath string
@@ -103,7 +105,13 @@ func Default() (Config, error) {
 
 	loadContextEnvFile(filepath.Join(homeDir, ".context", ".env"))
 
-	stateRoot := filepath.Join(homeDir, defaultStateDirName)
+	defaultConfigRoot := filepath.Join(resolveXDGConfigHome(homeDir), defaultStateDirName)
+	defaultStateRoot := filepath.Join(resolveXDGStateHome(homeDir), defaultStateDirName)
+
+	configRoot := envOrDefault("CLAUDE_CONTEXTD_CONFIG_ROOT", defaultConfigRoot)
+	configPath := filepath.Join(configRoot, "config.json")
+
+	stateRoot := defaultStateRoot
 	stateRoot = envOrDefault("CLAUDE_CONTEXTD_STATE_ROOT", stateRoot)
 	socketsDir := filepath.Join(stateRoot, "sockets")
 	logsDir := filepath.Join(stateRoot, "logs")
@@ -112,7 +120,7 @@ func Default() (Config, error) {
 	socketPath := envOrDefault("CLAUDE_CONTEXTD_SOCKET_PATH", filepath.Join(socketsDir, defaultSocketName))
 	logPath := envOrDefault("CLAUDE_CONTEXTD_LOG_PATH", filepath.Join(logsDir, defaultLogFileName))
 
-	fileConfig := readPersistedConfig(filepath.Join(stateRoot, "config.json"))
+	fileConfig := readPersistedConfig(configPath)
 
 	defaultProvider := envOrDefault("EMBEDDING_PROVIDER", string(embeddingProviderOpenAI))
 	if defaultProvider == string(embeddingProviderOpenAI) && fileConfig.EmbeddingProvider != "" {
@@ -125,6 +133,8 @@ func Default() (Config, error) {
 	}
 
 	return Config{
+		ConfigRoot:             configRoot,
+		ConfigPath:             configPath,
 		StateRoot:              stateRoot,
 		SocketPath:             socketPath,
 		RegistryPath:           filepath.Join(stateRoot, "registry.json"),
@@ -160,6 +170,14 @@ func Default() (Config, error) {
 		MaxConcurrentIndexJobs: envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
 		ResumeIndexingOnBoot:   envBoolOrDefault("CLAUDE_CONTEXT_RESUME_ON_BOOT", true),
 	}, nil
+}
+
+func resolveXDGConfigHome(homeDir string) string {
+	return envOrDefault("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+}
+
+func resolveXDGStateHome(homeDir string) string {
+	return envOrDefault("XDG_STATE_HOME", filepath.Join(homeDir, ".local", "state"))
 }
 
 func envOrDefault(name string, fallback string) string {

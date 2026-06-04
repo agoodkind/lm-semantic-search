@@ -125,6 +125,82 @@ func TestDefaultDebugAndJobControlDefaults(t *testing.T) {
 	}
 }
 
+func TestDefaultKeepsDaemonStateAndCompatRootsSplit(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	if err := os.Unsetenv("CLAUDE_CONTEXTD_STATE_ROOT"); err != nil {
+		t.Fatalf("Unsetenv returned error: %v", err)
+	}
+	if err := os.Unsetenv("CLAUDE_CONTEXTD_CONFIG_ROOT"); err != nil {
+		t.Fatalf("Unsetenv returned error: %v", err)
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir returned error: %v", err)
+	}
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+
+	wantConfigRoot := filepath.Join(homeDir, ".config", "lm-semantic-search")
+	if cfg.ConfigRoot != wantConfigRoot {
+		t.Fatalf("ConfigRoot = %q, want %q", cfg.ConfigRoot, wantConfigRoot)
+	}
+	if cfg.ConfigPath != filepath.Join(wantConfigRoot, "config.json") {
+		t.Fatalf("ConfigPath = %q", cfg.ConfigPath)
+	}
+	wantStateRoot := filepath.Join(homeDir, ".local", "state", "lm-semantic-search")
+	if cfg.StateRoot != wantStateRoot {
+		t.Fatalf("StateRoot = %q, want %q", cfg.StateRoot, wantStateRoot)
+	}
+	wantContextRoot := filepath.Join(homeDir, ".context")
+	if cfg.ContextRoot != wantContextRoot {
+		t.Fatalf("ContextRoot = %q, want %q", cfg.ContextRoot, wantContextRoot)
+	}
+	if cfg.RegistryPath != filepath.Join(wantStateRoot, "registry.json") {
+		t.Fatalf("RegistryPath = %q", cfg.RegistryPath)
+	}
+	if cfg.MerkleDir != filepath.Join(wantStateRoot, "merkle") {
+		t.Fatalf("MerkleDir = %q", cfg.MerkleDir)
+	}
+	if cfg.ChunksDir != filepath.Join(wantStateRoot, "chunks") {
+		t.Fatalf("ChunksDir = %q", cfg.ChunksDir)
+	}
+	if cfg.SocketPath != filepath.Join(wantStateRoot, "sockets", "lm-semantic-search-daemon.sock") {
+		t.Fatalf("SocketPath = %q", cfg.SocketPath)
+	}
+}
+
+func TestDefaultUsesXDGRootsWhenSet(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	xdgConfig := filepath.Join(tempHome, "xdg-config")
+	xdgState := filepath.Join(tempHome, "xdg-state")
+	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
+	t.Setenv("XDG_STATE_HOME", xdgState)
+	if err := os.Unsetenv("CLAUDE_CONTEXTD_STATE_ROOT"); err != nil {
+		t.Fatalf("Unsetenv returned error: %v", err)
+	}
+	if err := os.Unsetenv("CLAUDE_CONTEXTD_CONFIG_ROOT"); err != nil {
+		t.Fatalf("Unsetenv returned error: %v", err)
+	}
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+
+	if cfg.ConfigRoot != filepath.Join(xdgConfig, "lm-semantic-search") {
+		t.Fatalf("ConfigRoot = %q", cfg.ConfigRoot)
+	}
+	if cfg.StateRoot != filepath.Join(xdgState, "lm-semantic-search") {
+		t.Fatalf("StateRoot = %q", cfg.StateRoot)
+	}
+}
+
 func TestDefaultDebugAndJobControlEnvOverrides(t *testing.T) {
 	isolateState(t)
 

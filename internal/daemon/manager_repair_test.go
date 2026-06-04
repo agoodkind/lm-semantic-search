@@ -572,3 +572,122 @@ func TestSearchCodeMissingCollectionErrorDoesNotMentionForceTrue(t *testing.T) {
 		t.Fatalf("search error still mentions force=true: %q", err.Error())
 	}
 }
+
+func TestCollectionLossDoesNotPruneUntilClearIndex(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, repoPath := newTestManager(t)
+	initialSemantic := &fakeSemantic{
+		collectionName: func(string) string { return "collection_loss_test" },
+		count:          func(context.Context, string) (int32, error) { return 1, nil },
+	}
+	manager.semantic = initialSemantic
+	manager.runner = fakeRunner{
+		indexOne: func(ctx context.Context, root string, relativePath string, cfg model.IndexConfig) (indexer.OneFileResult, error) {
+			content := "package main\n"
+			return indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:       content,
+					RelativePath:  relativePath,
+					StartLine:     1,
+					EndLine:       1,
+					Language:      "go",
+					FileExtension: ".go",
+				}},
+				FileHash: hashText(content),
+				Skipped:  false,
+				Removed:  false,
+			}, nil
+		},
+	}
+
+	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	if err != nil {
+		t.Fatalf("StartIndex returned error: %v", err)
+	}
+	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
+
+	chunkPath := filepath.Join(cfg.ChunksDir, codebase.ID+".json")
+	merklePath := filepath.Join(cfg.MerkleDir, codebase.ID+".json")
+	release := make(chan struct{})
+	missingSemantic := &fakeSemantic{
+		collectionName:       func(string) string { return "collection_loss_test" },
+		listCollections:      func(context.Context) ([]string, error) { return []string{}, nil },
+		hasCollectionForPath: func(context.Context, string) (bool, error) { return false, nil },
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
+			return nil, semantic.ErrCollectionMissing
+		},
+	}
+	manager.semantic = missingSemantic
+	manager.runner = fakeRunner{
+		indexOne: func(ctx context.Context, root string, relativePath string, cfg model.IndexConfig) (indexer.OneFileResult, error) {
+			<-release
+			content := "package main\n"
+			return indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:       content,
+					RelativePath:  relativePath,
+					StartLine:     1,
+					EndLine:       1,
+					Language:      "go",
+					FileExtension: ".go",
+				}},
+				FileHash: hashText(content),
+				Skipped:  false,
+				Removed:  false,
+			}, nil
+		},
+	}
+
+	if _, _, found, _, err := manager.GetIndex(context.Background(), repoPath); err != nil || !found {
+		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
+	}
+	if indexes := manager.ListIndexes(context.Background()); len(indexes) != 1 {
+		t.Fatalf("ListIndexes returned %d entries, want 1", len(indexes))
+	}
+
+	syncer := NewBackgroundSync(cfg, manager)
+	syncer.runSyncAll(context.Background(), "test")
+	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexing)
+
+	server := NewGRPCServer(manager, nil)
+	searchResponse, err := server.SearchCode(context.Background(), &pb.SearchCodeRequest{
+		Path:  repoPath,
+		Query: "SmokeNeedle",
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("SearchCode returned error: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(searchResponse.GetDisplayText()), "automatic rebuild") {
+		t.Fatalf("search output missing automatic rebuild note: %q", searchResponse.GetDisplayText())
+	}
+
+	if _, _, found, _, err := manager.GetIndex(context.Background(), repoPath); err != nil || !found {
+		t.Fatalf("GetIndex after repair returned err=%v found=%v", err, found)
+	}
+	if _, err := os.Stat(chunkPath); err != nil {
+		t.Fatalf("chunk file missing before clear: %v", err)
+	}
+	if _, err := os.Stat(merklePath); err != nil {
+		t.Fatalf("merkle file missing before clear: %v", err)
+	}
+
+	if _, err := manager.ClearIndex(context.Background(), repoPath, testClientInfo()); err != nil {
+		t.Fatalf("ClearIndex returned error: %v", err)
+	}
+	close(release)
+
+	if _, err := os.Stat(chunkPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("chunk file still present after clear: %v", err)
+	}
+	if _, err := os.Stat(merklePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("merkle file still present after clear: %v", err)
+	}
+	if len(missingSemantic.dropped) != 1 || missingSemantic.dropped[0] != codebase.CanonicalPath {
+		t.Fatalf("semantic drop calls = %v, want [%s]", missingSemantic.dropped, codebase.CanonicalPath)
+	}
+	if _, _, found, _, err := manager.GetIndex(context.Background(), repoPath); err != nil || found {
+		t.Fatalf("GetIndex after clear returned err=%v found=%v, want found=false", err, found)
+	}
+}

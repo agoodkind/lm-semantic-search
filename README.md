@@ -43,7 +43,9 @@ The daemon reads configuration in this order (highest precedence first):
 
 1. Process environment variables.
 2. `~/.context/.env` (KEY=VALUE pairs, comments via `#`, respects already-set env vars).
-3. `~/.contextd/config.json` (persisted daemon defaults).
+3. `XDG_CONFIG_HOME/lm-semantic-search/config.json`, fallback `~/.config/lm-semantic-search/config.json` (persisted daemon defaults).
+
+The daemon owns its local registry, jobs journal, chunk cache, Merkle snapshots, sockets, locks, and logs under `XDG_STATE_HOME/lm-semantic-search`, fallback `~/.local/state/lm-semantic-search`. The `~/.context` directory remains a compatibility input root for `.env`, `.sync-trigger`, and upstream TS snapshot or merkle adoption.
 
 Required keys:
 

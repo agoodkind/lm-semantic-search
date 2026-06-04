@@ -111,6 +111,12 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 	t.Parallel()
 
 	manager, cfg, repoPath := newTestManager(t)
+	semanticDouble := &fakeSemantic{
+		collectionName:       func(string) string { return "clear_collection" },
+		listCollections:      func(context.Context) ([]string, error) { return []string{}, nil },
+		hasCollectionForPath: func(context.Context, string) (bool, error) { return false, nil },
+	}
+	manager.semantic = semanticDouble
 	manager.runner = fakeRunner{
 		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
 			return indexer.Result{
@@ -135,8 +141,12 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	chunkPath := filepath.Join(cfg.ChunksDir, codebase.ID+".json")
+	merklePath := filepath.Join(cfg.MerkleDir, codebase.ID+".json")
 	if _, err := os.Stat(chunkPath); err != nil {
 		t.Fatalf("chunk file missing before clear: %v", err)
+	}
+	if _, err := os.Stat(merklePath); err != nil {
+		t.Fatalf("merkle file missing before clear: %v", err)
 	}
 
 	if _, err := manager.ClearIndex(context.Background(), repoPath, testClientInfo()); err != nil {
@@ -145,6 +155,12 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 
 	if _, err := os.Stat(chunkPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("chunk file still present after clear: %v", err)
+	}
+	if _, err := os.Stat(merklePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("merkle file still present after clear: %v", err)
+	}
+	if len(semanticDouble.dropped) != 1 || semanticDouble.dropped[0] != codebase.CanonicalPath {
+		t.Fatalf("semantic drop calls = %v, want [%s]", semanticDouble.dropped, codebase.CanonicalPath)
 	}
 
 	_, _, found, _, err := manager.GetIndex(context.Background(), repoPath)

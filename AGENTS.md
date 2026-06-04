@@ -20,7 +20,7 @@ Sources of truth:
 
 ## TS upstream drop-in compatibility
 
-The Milvus collection is the portable index, shared byte-for-byte with the upstream TS adapter. Both tools name it `hybrid_code_chunks_<md5(path)[:8]>`, use the same schema, and compute the same deterministic chunk id `chunk_<sha256(path:start:end:content)[:16]>`. Each tool keeps its own private bookkeeping outside Milvus: TS at `~/.context/mcp-codebase-snapshot.json` and `~/.context/merkle/<md5(path)>.json`; the Go daemon at `~/.contextd/registry.json` and `~/.contextd/merkle/<codebase-id>.json`.
+The Milvus collection is the portable index, shared byte-for-byte with the upstream TS adapter. Both tools name it `hybrid_code_chunks_<md5(path)[:8]>`, use the same schema, and compute the same deterministic chunk id `chunk_<sha256(path:start:end:content)[:16]>`. Each tool keeps its own private bookkeeping outside Milvus: TS at `~/.context/mcp-codebase-snapshot.json` and `~/.context/merkle/<md5(path)>.json`; the Go daemon at `XDG_STATE_HOME/lm-semantic-search/registry.json`, fallback `~/.local/state/lm-semantic-search/registry.json`, and the matching `merkle/<codebase-id>.json` files under that same state root. The `~/.context` directory stays read-only for daemon compatibility inputs such as `.env`, `.sync-trigger`, and TS snapshot or merkle adoption.
 
 The contract is two-way and reduces to one rule the daemon fully controls: never silently drop or rename a shared collection, and never write TS's bookkeeping files (the daemon only reads the TS merkle, to seed adoption).
 
@@ -57,7 +57,7 @@ Rules:
 
 ## Incremental sync
 
-Per-codebase Merkle snapshots live under `~/.contextd/merkle/<codebase-id>.json`. The sync flow lives in `internal/daemon/background_sync.go` and `internal/daemon/manager.go` (`runDeltaSync`).
+Per-codebase Merkle snapshots live under `XDG_STATE_HOME/lm-semantic-search/merkle/<codebase-id>.json`, fallback `~/.local/state/lm-semantic-search/merkle/<codebase-id>.json`. The sync flow lives in `internal/daemon/background_sync.go` and `internal/daemon/manager.go` (`runDeltaSync`).
 
 On every sync request:
 
