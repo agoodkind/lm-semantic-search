@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/spans"
-	"goodkind.io/gklog/correlation"
 )
 
 func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {

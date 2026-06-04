@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/migrate"
 	"goodkind.io/lm-semantic-search/internal/model"
-	"goodkind.io/gklog/correlation"
 )
 
 // adoptUnregisteredCodebase turns a codebase that has a live Milvus collection

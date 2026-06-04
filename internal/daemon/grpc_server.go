@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/gklog/correlation"
+	"goodkind.io/gklog/version"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/pbconv"
-	"goodkind.io/gklog/correlation"
-	"goodkind.io/gklog/version"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )

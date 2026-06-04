@@ -4,11 +4,11 @@ import (
 	"context"
 	"log/slog"
 
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
-	"goodkind.io/gklog/correlation"
 )
 
 // ResumeOrphanedJobs re-queues indexing for every codebase whose previous job

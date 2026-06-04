@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/discovery"
@@ -21,7 +22,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/lm-semantic-search/internal/store"
-	"goodkind.io/gklog/correlation"
 )
 
 // jobOperation tags one daemon job so runJob can route it to the right

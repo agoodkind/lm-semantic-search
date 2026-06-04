@@ -17,8 +17,8 @@ import (
 	"log/slog"
 	"os"
 
-	"goodkind.io/lm-semantic-search/internal/mcpserver"
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/lm-semantic-search/internal/mcpserver"
 )
 
 func main() {

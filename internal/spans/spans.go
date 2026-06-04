@@ -9,9 +9,9 @@ import (
 	"errors"
 	"log/slog"
 
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
-	"goodkind.io/gklog/correlation"
 )
 
 // Attach returns a child of ctx with the given correlation identity

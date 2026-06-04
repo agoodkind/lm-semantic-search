@@ -13,15 +13,15 @@ import (
 	"syscall"
 	"time"
 
+	"goodkind.io/gklog"
+	"goodkind.io/gklog/correlation"
+	"goodkind.io/gklog/version"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/debugserver"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/store"
-	"goodkind.io/gklog"
-	"goodkind.io/gklog/correlation"
-	"goodkind.io/gklog/version"
 	"google.golang.org/grpc"
 )
 

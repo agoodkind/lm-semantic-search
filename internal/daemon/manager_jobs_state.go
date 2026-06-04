@@ -4,13 +4,13 @@ import (
 	"context"
 	"log/slog"
 
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
-	"goodkind.io/gklog/correlation"
 )
 
 func (manager *Manager) updateJobRunning(job model.Job) {
