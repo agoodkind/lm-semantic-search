@@ -7,6 +7,7 @@ require (
 	github.com/milvus-io/milvus/client/v2 v2.6.5
 	github.com/openai/openai-go/v2 v2.7.1
 	github.com/rjeczalik/notify v0.9.3
+	github.com/spf13/cobra v1.10.2
 	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0
 	github.com/tree-sitter-grammars/tree-sitter-objc v1.2.1-0.20250131075517-181a81b8f23a
 	github.com/tree-sitter/go-tree-sitter v0.25.0
@@ -33,6 +34,7 @@ require (
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 )
 
 require (
@@ -97,7 +99,7 @@ require (
 	github.com/soheilhy/cmux v0.1.5 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
-	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tidwall/gjson v1.17.1 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
