@@ -78,6 +78,9 @@ func TestRespondUnknownSanitizesAndReferencesTrace(t *testing.T) {
 	if strings.Contains(msg, "stack overflow") {
 		t.Fatalf("unknown message should be sanitized, got %q", msg)
 	}
+	if !strings.HasPrefix(msg, correlation.HeaderMarker) {
+		t.Fatalf("message should start with the correlation header, got %q", msg)
+	}
 	if !strings.Contains(msg, "trace_id="+string(corr.TraceID)) {
 		t.Fatalf("message should reference trace_id, got %q", msg)
 	}
@@ -111,6 +114,9 @@ func TestRespondMCPKnown(t *testing.T) {
 	if !strings.Contains(mcp.Message, "not indexed") {
 		t.Fatalf("message should describe the error, got %q", mcp.Message)
 	}
+	if !strings.HasPrefix(mcp.Message, correlation.HeaderMarker) {
+		t.Fatalf("message should start with the correlation header, got %q", mcp.Message)
+	}
 	if mcp.TraceID != string(corr.TraceID) {
 		t.Fatalf("trace id mismatch")
 	}
@@ -132,6 +138,9 @@ func TestRespondMCPUnknown(t *testing.T) {
 	}
 	if strings.Contains(mcp.Message, "opaque") {
 		t.Fatalf("unknown message should be sanitized, got %q", mcp.Message)
+	}
+	if !strings.HasPrefix(mcp.Message, correlation.HeaderMarker) {
+		t.Fatalf("message should start with the correlation header, got %q", mcp.Message)
 	}
 	if mcp.TraceID == "" {
 		t.Fatalf("trace_id should be set")

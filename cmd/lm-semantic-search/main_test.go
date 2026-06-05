@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"goodkind.io/gklog/correlation"
 )
 
 func TestRootNoArgsShowsHelp(t *testing.T) {
@@ -99,6 +100,23 @@ func TestDaemonRequiresSubcommand(t *testing.T) {
 	}
 }
 
+func TestFormatCLIErrorKeepsCorrelationHeaderFirst(t *testing.T) {
+	t.Parallel()
+	message := correlation.HeaderMarker + "trace_id=abc span_id=def\ninternal error; see daemon logs"
+	got := formatCLIError(assertError(message))
+	if got != message+"\n" {
+		t.Fatalf("formatCLIError returned %q", got)
+	}
+}
+
+func TestFormatCLIErrorPrefixesOrdinaryErrors(t *testing.T) {
+	t.Parallel()
+	got := formatCLIError(assertError("plain failure"))
+	if got != "Error: plain failure\n" {
+		t.Fatalf("formatCLIError returned %q", got)
+	}
+}
+
 func testRoot() (*cobra.Command, *bytes.Buffer, *bytes.Buffer) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
@@ -106,4 +124,16 @@ func testRoot() (*cobra.Command, *bytes.Buffer, *bytes.Buffer) {
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	return root, stdout, stderr
+}
+
+func assertError(message string) error {
+	return &staticError{message: message}
+}
+
+type staticError struct {
+	message string
+}
+
+func (err *staticError) Error() string {
+	return err.message
 }

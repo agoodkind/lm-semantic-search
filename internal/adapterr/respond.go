@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strings"
 
 	"goodkind.io/gklog/correlation"
 	"google.golang.org/grpc/codes"
@@ -65,35 +64,25 @@ func formatKnown(adapterErr *AdapterError, ctx context.Context) string {
 		base = adapterErr.Message + "; " + adapterErr.Hint
 	}
 	if refs := formatDiagRefs(ctx); refs != "" {
-		return base + " " + refs
+		return refs + "\n" + base
 	}
 	return base
 }
 
 func formatUnknown(ctx context.Context) string {
 	if refs := formatDiagRefs(ctx); refs != "" {
-		return "internal error; see daemon logs " + refs
+		return refs + "\ninternal error; see daemon logs"
 	}
 	return "internal error"
 }
 
-// formatDiagRefs renders the correlation refs from ctx as "[trace_id=… job_id=…]"
-// so error messages carry a greppable handle to the daemon log. Returns "" when
-// no ids are available. The MCP client layer relies on the daemon embedding
-// these in the message so it can stay a pure relay.
+// formatDiagRefs renders the correlation header from ctx so error messages
+// carry a greppable handle to the daemon log. Returns "" when no ids are
+// available. The MCP client layer relies on the daemon embedding these in
+// the message so it can stay a pure relay.
 func formatDiagRefs(ctx context.Context) string {
 	corr := correlation.FromContext(ctx)
-	refs := make([]string, 0, 2)
-	if corr.TraceID != "" {
-		refs = append(refs, "trace_id="+string(corr.TraceID))
-	}
-	if jobID := corr.IdentityAttributeValue("job_id"); jobID != "" {
-		refs = append(refs, "job_id="+jobID)
-	}
-	if len(refs) == 0 {
-		return ""
-	}
-	return "[" + strings.Join(refs, " ") + "]"
+	return correlation.HeaderLine(corr, "job_id", corr.IdentityAttributeValue("job_id"))
 }
 
 func logRespond(ctx context.Context, adapterErr *AdapterError) {

@@ -120,7 +120,7 @@ func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMod
 			mcp.WithString("splitter", mcp.Description("splitter type, typically ast")),
 			mcp.WithArray("customExtensions", mcp.Description("extra file extensions to include"), mcp.WithStringItems()),
 			mcp.WithArray("ignorePatterns", mcp.Description("extra ignore patterns to exclude"), mcp.WithStringItems()),
-			mcp.WithBoolean("wait", mcp.Description("block this tool call until the indexing job reaches a terminal state (completed, failed, or cancelled)")),
+			mcp.WithBoolean("wait", mcp.Description("block this tool call until the indexing job reaches a terminal state (completed, failed, or canceled)")),
 			mcp.WithNumber("wait_timeout_seconds", mcp.Description("max seconds to wait when wait=true; on timeout the daemon job keeps running and the tool returns the current progress (default 300)")),
 		),
 		wrapTool("index_codebase", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -410,7 +410,7 @@ func registerSearchTool(mcpServer *server.MCPServer, socketPath string, outputMo
 
 // callDaemonIndexAndWait starts an index job through StartIndex and polls
 // GetJob until the job reaches a terminal state (completed, failed,
-// cancelled) or the supplied timeout elapses. When the timeout trips, the
+// canceled) or the supplied timeout elapses. When the timeout trips, the
 // daemon job keeps running and the tool returns the latest GetIndex view so
 // the caller can decide to poll again or move on. The poll cadence is short
 // (~1.5s) so terminal events propagate to the caller with minimal delay.

@@ -20,19 +20,20 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// appendCorrelationRef adds a single compact diagnostics line to a display
-// text so a successful response carries a greppable handle for the daemon
-// logs. The verdict stays on line 1 because the ref trails. Extras are
-// key/value pairs (skipped when the value is empty) for ids the trace context
-// does not already carry, such as codebase_id and job_id.
+// appendCorrelationRef prefixes one compact diagnostics line to a display
+// text so every successful response starts with a greppable correlation
+// header. Extras are key/value pairs for ids the trace context does not
+// already carry, such as codebase_id and job_id.
 func appendCorrelationRef(displayText string, ctx context.Context, extras ...string) string {
 	corr := correlation.FromContext(ctx)
-	pairs := append([]string{"trace_id", string(corr.TraceID)}, extras...)
-	line := correlation.MarkerLine(pairs...)
+	line := correlation.HeaderLine(corr, extras...)
 	if line == "" {
 		return displayText
 	}
-	return displayText + "\n" + line
+	if strings.TrimSpace(displayText) == "" {
+		return line
+	}
+	return line + "\n" + displayText
 }
 
 // jobIDOf returns the id of job or "" when job is nil, so callers can fold
@@ -229,7 +230,7 @@ func (server *GRPCServer) CancelJob(ctx context.Context, request *pb.CancelJobRe
 	}
 	return &pb.CancelJobResponse{
 		JobId:       job.ID,
-		Cancelled:   job.State == "cancelled",
+		Cancelled:   job.State == model.JobStateCancelled,
 		DisplayText: appendCorrelationRef(renderCancelJob(job), ctx, "job_id", job.ID, "codebase_id", job.CodebaseID),
 	}, nil
 }
