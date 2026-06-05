@@ -33,6 +33,7 @@ type fakeSemantic struct {
 	loadReuse        func(ctx context.Context, collectionNames []string) (map[string][]float32, error)
 	reuseCollections [][]string
 	dropped          []string
+	droppedStaging   []string
 	mu               sync.Mutex
 }
 
@@ -112,7 +113,13 @@ func (f *fakeSemantic) Drop(_ context.Context, codebasePath string) error {
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeSemantic) DropStaging(context.Context, string) error { return nil }
+
+func (f *fakeSemantic) DropStaging(_ context.Context, codebasePath string) error {
+	f.mu.Lock()
+	f.droppedStaging = append(f.droppedStaging, codebasePath)
+	f.mu.Unlock()
+	return nil
+}
 
 // TestConvergeViaWatcherRunsCodebasesConcurrentlyUpToCap proves that several
 // codebases converge at once up to the index-slot cap while another waits, that

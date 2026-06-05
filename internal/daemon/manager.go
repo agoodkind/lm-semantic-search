@@ -143,8 +143,8 @@ func (manager *Manager) load(ctx context.Context) error {
 // daemon process exited. Any queued, running, or cancelling job becomes
 // cancelled in the journal because its goroutine is gone. Codebase records
 // keep Status=Indexing when they were mid-flight so ResumeOrphanedJobs can
-// pick them back up with a fresh streaming reindex; the registry already
-// holds the canonical path and effective config that resume needs.
+// pick them back up on boot; the registry already holds the canonical path
+// and effective config that resume needs.
 func (manager *Manager) reconcileJournalOnStartLocked() {
 	now := clock.Now()
 	for id, job := range manager.jobs {
@@ -579,6 +579,9 @@ func (manager *Manager) ClearIndex(ctx context.Context, requestedPath string, cl
 	if manager.semantic != nil {
 		if err := manager.semantic.Drop(ctx, codebase.CanonicalPath); err != nil && !errors.Is(err, semantic.ErrUnavailable) {
 			return model.Codebase{}, fmt.Errorf("drop semantic index for %s: %w", codebase.CanonicalPath, err)
+		}
+		if err := manager.semantic.DropStaging(ctx, codebase.CanonicalPath); err != nil && !errors.Is(err, semantic.ErrUnavailable) {
+			return model.Codebase{}, fmt.Errorf("drop semantic staging for %s: %w", codebase.CanonicalPath, err)
 		}
 	}
 

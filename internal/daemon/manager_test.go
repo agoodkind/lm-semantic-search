@@ -148,6 +148,7 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 	if _, err := os.Stat(merklePath); err != nil {
 		t.Fatalf("merkle file missing before clear: %v", err)
 	}
+	stagingDropsBeforeClear := len(semanticDouble.droppedStaging)
 
 	if _, err := manager.ClearIndex(context.Background(), repoPath, testClientInfo()); err != nil {
 		t.Fatalf("ClearIndex returned error: %v", err)
@@ -161,6 +162,9 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 	}
 	if len(semanticDouble.dropped) != 1 || semanticDouble.dropped[0] != codebase.CanonicalPath {
 		t.Fatalf("semantic drop calls = %v, want [%s]", semanticDouble.dropped, codebase.CanonicalPath)
+	}
+	if len(semanticDouble.droppedStaging) != stagingDropsBeforeClear+1 || semanticDouble.droppedStaging[len(semanticDouble.droppedStaging)-1] != codebase.CanonicalPath {
+		t.Fatalf("semantic staging drop calls = %v, want one additional clear-time drop for %s", semanticDouble.droppedStaging, codebase.CanonicalPath)
 	}
 
 	_, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
@@ -299,8 +303,11 @@ func TestForceReindexStartsFreshJobAndSearchShowsIndexingWarning(t *testing.T) {
 	if len(searchResponse.GetResults()) == 0 {
 		t.Fatal("SearchCode returned no results during force reindex")
 	}
-	if !strings.HasPrefix(searchResponse.GetDisplayText(), "Found ") {
-		t.Fatalf("SearchCode must lead with the result count for truncating clients: %q", searchResponse.GetDisplayText())
+	if !strings.HasPrefix(searchResponse.GetDisplayText(), "🔎 trace_id=") {
+		t.Fatalf("SearchCode must lead with the correlation header: %q", searchResponse.GetDisplayText())
+	}
+	if !strings.Contains(searchResponse.GetDisplayText(), "\nFound ") {
+		t.Fatalf("SearchCode must still include the result count after the correlation header: %q", searchResponse.GetDisplayText())
 	}
 	searchText := strings.ToLower(searchResponse.GetDisplayText())
 	if !strings.Contains(searchText, "indexing") && !strings.Contains(searchText, "preparing") {

@@ -13,12 +13,12 @@ import (
 
 // ResumeOrphanedJobs re-queues indexing for every codebase whose previous job
 // was still running when the daemon exited, but only when a merkle checkpoint
-// records the work already done. The delta and streaming paths checkpoint
-// per file, so their interrupted runs resume and skip embedded files. A full
-// bootstrap index writes its snapshot only on completion, so an interrupted
-// bootstrap has no checkpoint; resuming it would re-embed the whole codebase,
-// which a restart must never trigger. Call this once after NewManager returns
-// and before the daemon advertises ready.
+// records the work already done. Delta, streaming, and bootstrap builds all
+// checkpoint per file, so an interrupted run can skip files already embedded.
+// A bootstrap resume also requires its staging collection to still exist; when
+// the checkpoint is missing, the daemon marks the codebase failed instead of
+// restarting the whole build implicitly. Call this once after NewManager
+// returns and before the daemon advertises ready.
 func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	manager.mu.Lock()
 	type resumePlan struct {
