@@ -309,6 +309,200 @@ func TestRenderGetJobShowsMagnitude(t *testing.T) {
 	}
 }
 
+func TestRenderGetJobUsesAmericanCanceledSpelling(t *testing.T) {
+	t.Parallel()
+	completedAt := renderTestTime.Add(90 * time.Second)
+	job := &model.Job{
+		ID:            "job_x",
+		CanonicalPath: "/repo",
+		Operation:     "sync",
+		State:         model.JobStateCancelled,
+		StartedAt:     renderTestTime,
+		UpdatedAt:     completedAt,
+		CompletedAt:   &completedAt,
+		Progress:      model.Progress{Phase: "cancelled"},
+	}
+	out := renderGetJob(job)
+	if strings.Contains(out, "cancelled") {
+		t.Fatalf("job view should use American spelling, got:\n%s", out)
+	}
+	for _, want := range []string{"State: canceled", "Phase: canceled", "Duration: 1m30s"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("job view missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderListJobsSummarizesHistory(t *testing.T) {
+	t.Parallel()
+	activeUpdatedAt := renderTestTime.Add(2 * time.Minute)
+	completedAt := renderTestTime.Add(45 * time.Minute)
+	jobs := []model.Job{
+		{
+			ID:            "job_running",
+			CanonicalPath: "/repo/running",
+			Operation:     "index",
+			State:         model.JobStateRunning,
+			StartedAt:     renderTestTime,
+			UpdatedAt:     activeUpdatedAt,
+			Progress:      model.Progress{OverallPercent: 22.5, FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84},
+		},
+		{
+			ID:            "job_completed",
+			CanonicalPath: "/repo/completed",
+			Operation:     "sync",
+			State:         model.JobStateCompleted,
+			StartedAt:     renderTestTime,
+			UpdatedAt:     completedAt,
+			CompletedAt:   &completedAt,
+			Progress:      model.Progress{OverallPercent: 100, FilesTotal: 58, FilesProcessed: 58, ChunksGenerated: 144},
+		},
+		{
+			ID:            "job_cancelled",
+			CanonicalPath: "/repo/cancelled",
+			Operation:     "sync",
+			State:         model.JobStateCancelled,
+			StartedAt:     renderTestTime,
+			UpdatedAt:     completedAt,
+			CompletedAt:   &completedAt,
+			Progress:      model.Progress{OverallPercent: 0, Phase: "cancelled"},
+		},
+	}
+	out := renderListJobs(jobs)
+	for _, want := range []string{
+		"Tracked jobs: 3 total",
+		"Active: 0 queued, 1 running, 0 canceling",
+		"Terminal: 1 completed, 0 failed, 1 canceled",
+		"Active jobs:",
+		"Terminal jobs: 2",
+		"Duration: 45m0s",
+		"Elapsed: 2m0s",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("job list missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "[cancelled") {
+		t.Fatalf("job list should use American spelling for states, got:\n%s", out)
+	}
+}
+
+// TestRenderGetJobPreparingNotZeroPercent proves a running index job whose work
+// scope is not measured yet (A1) shows the preparing label, not a 0.0%.
+func TestRenderGetJobPreparingNotZeroPercent(t *testing.T) {
+	t.Parallel()
+	job := &model.Job{
+		ID:            "job_prep",
+		CanonicalPath: "/repo",
+		Operation:     "index",
+		State:         model.JobStateRunning,
+		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0, OverallPercent: 0},
+	}
+	out := renderGetJob(job)
+	if !strings.Contains(out, "Progress: Preparing to index") {
+		t.Fatalf("expected preparing label, got:\n%s", out)
+	}
+	if strings.Contains(out, "0.0%") {
+		t.Fatalf("running job with unknown scope must not show 0.0%%, got:\n%s", out)
+	}
+}
+
+// TestRenderListJobsPreparingNotZeroPercent proves the same for the list view (A1).
+func TestRenderListJobsPreparingNotZeroPercent(t *testing.T) {
+	t.Parallel()
+	jobs := []model.Job{{
+		ID:            "job_prep",
+		CanonicalPath: "/repo",
+		Operation:     "index",
+		State:         model.JobStateRunning,
+		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0},
+	}}
+	out := renderListJobs(jobs)
+	if !strings.Contains(out, "Preparing to index") {
+		t.Fatalf("expected preparing label in list, got:\n%s", out)
+	}
+	if strings.Contains(out, "0.0%") {
+		t.Fatalf("list entry with unknown scope must not show 0.0%%, got:\n%s", out)
+	}
+}
+
+// TestRenderGetJobSyncPreparingWording proves a sync job with unknown scope uses
+// the sync-specific preparing wording (A2).
+func TestRenderGetJobSyncPreparingWording(t *testing.T) {
+	t.Parallel()
+	job := &model.Job{
+		ID:            "job_sync",
+		CanonicalPath: "/repo",
+		Operation:     "sync",
+		State:         model.JobStateRunning,
+		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0},
+	}
+	out := renderGetJob(job)
+	if !strings.Contains(out, "Changes detected, preparing to index") {
+		t.Fatalf("expected sync preparing wording, got:\n%s", out)
+	}
+}
+
+// TestRenderGetJobKeepsRealZeroPercent proves a running job whose scope IS known
+// still shows 0.0% (a genuine "0 of N"), not the preparing label (A3).
+func TestRenderGetJobKeepsRealZeroPercent(t *testing.T) {
+	t.Parallel()
+	job := &model.Job{
+		ID:            "job_zero",
+		CanonicalPath: "/repo",
+		Operation:     "index",
+		State:         model.JobStateRunning,
+		Progress:      model.Progress{FilesTotal: 58, OverallPercent: 0},
+	}
+	out := renderGetJob(job)
+	if !strings.Contains(out, "Progress: 0.0%") {
+		t.Fatalf("known-scope zero should render 0.0%%, got:\n%s", out)
+	}
+	if strings.Contains(out, "Preparing to index") {
+		t.Fatalf("known-scope job should not show preparing, got:\n%s", out)
+	}
+}
+
+// TestRenderGetJobShowsMeasuredPercent proves a measured percent renders as-is (A4).
+func TestRenderGetJobShowsMeasuredPercent(t *testing.T) {
+	t.Parallel()
+	job := &model.Job{
+		ID:            "job_mid",
+		CanonicalPath: "/repo",
+		Operation:     "index",
+		State:         model.JobStateRunning,
+		Progress:      model.Progress{FilesTotal: 4292, FilesProcessed: 2139, OverallPercent: 49.8},
+	}
+	out := renderGetJob(job)
+	if !strings.Contains(out, "Progress: 49.8%") {
+		t.Fatalf("expected 49.8%%, got:\n%s", out)
+	}
+}
+
+// TestRenderGetJobFailedShowsPercentAndError proves a terminal failed job keeps
+// its percent and error line, never the preparing label, even at 0% (A5).
+func TestRenderGetJobFailedShowsPercentAndError(t *testing.T) {
+	t.Parallel()
+	job := &model.Job{
+		ID:            "job_fail",
+		CanonicalPath: "/repo",
+		Operation:     "index",
+		State:         model.JobStateFailed,
+		Progress:      model.Progress{FilesTotal: 0, OverallPercent: 0},
+		Error:         &model.JobError{Message: "embedder_unreachable: dial tcp [::1]:5400: connect: connection refused"},
+	}
+	out := renderGetJob(job)
+	if !strings.Contains(out, "Progress: 0.0%") {
+		t.Fatalf("failed job should show its percent, got:\n%s", out)
+	}
+	if strings.Contains(out, "Preparing to index") {
+		t.Fatalf("failed (terminal) job must not show preparing, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Error: embedder_unreachable") {
+		t.Fatalf("failed job should show error line, got:\n%s", out)
+	}
+}
+
 // TestStatusTemplateNoBlankLines proves the embedded templates produce a tidy
 // block with no blank lines and the expected line count, guarding against
 // template whitespace regressions.

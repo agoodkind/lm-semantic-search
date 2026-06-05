@@ -23,6 +23,13 @@ type searchView struct {
 	StateNote     string
 }
 
+type jobPhase string
+
+const (
+	jobPhaseCancelling jobPhase = "cancelling"
+	jobPhaseCancelled  jobPhase = "cancelled"
+)
+
 func renderStartIndex(requestedPath string, codebase model.Codebase, job model.Job, deduplicated bool, overlapsCodebaseID string, mergeNote string) string {
 	if deduplicated {
 		return fmt.Sprintf(
@@ -71,9 +78,9 @@ func renderClearIndex(codebase model.Codebase, remainingIndexed int, remainingIn
 
 func renderCancelJob(job model.Job) string {
 	if job.State == model.JobStateCancelled {
-		return "Cancelled indexing job " + job.ID
+		return "Canceled indexing job " + job.ID
 	}
-	return fmt.Sprintf("Indexing job %s is already %s", job.ID, job.State)
+	return fmt.Sprintf("Indexing job %s is already %s", job.ID, displayJobState(job.State))
 }
 
 func renderSyncIndex(codebase model.Codebase, job model.Job, deduplicated bool) string {
@@ -437,23 +444,47 @@ func renderListIndexes(codebases []model.Codebase) string {
 	return strings.Join(lines, "\n")
 }
 
+// jobScopeKnown reports whether the daemon has measured the work scope for a
+// job. It mirrors the gate renderIndexingActive uses to leave the "Preparing"
+// view: before the scope is known a 0% reads as stalled rather than measured.
+func jobScopeKnown(progress model.Progress) bool {
+	return progress.FilesTotal > 0 || progress.FilesInCodebase > 0
+}
+
+// jobProgressDisplay returns the percent for a job whose scope is known, and the
+// preparing label for an active job that has not measured progress yet, so a
+// just-started job never reads as a misleading 0.0%. Terminal jobs always show
+// their percent.
+func jobProgressDisplay(job model.Job) string {
+	active := job.State == model.JobStateQueued ||
+		job.State == model.JobStateRunning ||
+		job.State == model.JobStateCancelling
+	if active && !jobScopeKnown(job.Progress) {
+		return prepareLabel(&job)
+	}
+	return fmt.Sprintf("%.1f%%", job.Progress.OverallPercent)
+}
+
 func renderGetJob(job *model.Job) string {
 	if job == nil {
 		return "Job not found."
 	}
-	base := fmt.Sprintf(
-		"Job %s\nCodebase: %s\nOperation: %s\nState: %s\nPhase: %s\nProgress: %.1f%%",
-		job.ID,
-		job.CanonicalPath,
-		job.Operation,
-		job.State,
-		job.Progress.Phase,
-		job.Progress.OverallPercent,
-	)
-	if magnitude := renderReconcileMagnitude(job.Progress); magnitude != "" {
-		base += "\n" + magnitude
+	lines := []string{
+		"Job " + job.ID,
+		"Codebase: " + job.CanonicalPath,
+		"Operation: " + job.Operation,
+		"State: " + displayJobState(job.State),
+		"Phase: " + displayJobPhase(job.Progress.Phase),
+		"Progress: " + jobProgressDisplay(*job),
 	}
-	return base
+	lines = append(lines, renderJobTimingLines(*job)...)
+	if magnitude := renderReconcileMagnitude(job.Progress); magnitude != "" {
+		lines = append(lines, magnitude)
+	}
+	if job.Error != nil && strings.TrimSpace(job.Error.Message) != "" {
+		lines = append(lines, "Error: "+job.Error.Message)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderListJobs(jobs []model.Job) string {
@@ -461,12 +492,153 @@ func renderListJobs(jobs []model.Job) string {
 		return "No tracked jobs."
 	}
 
-	lines := make([]string, 0, len(jobs)+1)
-	lines = append(lines, fmt.Sprintf("Tracked jobs: %d", len(jobs)))
+	activeJobs := make([]model.Job, 0, len(jobs))
+	terminalJobs := make([]model.Job, 0, len(jobs))
+	stateCounts := map[model.JobState]int{}
 	for _, job := range jobs {
-		lines = append(lines, fmt.Sprintf("- %s [%s %.1f%%] %s", job.ID, job.State, job.Progress.OverallPercent, job.CanonicalPath))
+		stateCounts[job.State]++
+		switch job.State {
+		case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
+			activeJobs = append(activeJobs, job)
+		case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
+			terminalJobs = append(terminalJobs, job)
+		default:
+			terminalJobs = append(terminalJobs, job)
+		}
+	}
+
+	lines := make([]string, 0, 32)
+	lines = append(lines, fmt.Sprintf("Tracked jobs: %d total", len(jobs)))
+	lines = append(lines, fmt.Sprintf(
+		"Active: %d queued, %d running, %d canceling",
+		stateCounts[model.JobStateQueued],
+		stateCounts[model.JobStateRunning],
+		stateCounts[model.JobStateCancelling],
+	))
+	lines = append(lines, fmt.Sprintf(
+		"Terminal: %d completed, %d failed, %d canceled",
+		stateCounts[model.JobStateCompleted],
+		stateCounts[model.JobStateFailed],
+		stateCounts[model.JobStateCancelled],
+	))
+
+	if len(activeJobs) == 0 {
+		lines = append(lines, "", "No active jobs.")
+	} else {
+		lines = append(lines, "", "Active jobs:")
+		for _, job := range activeJobs {
+			lines = append(lines, renderJobListEntry(job)...)
+		}
+	}
+
+	const recentTerminalLimit = 8
+	if len(terminalJobs) == 0 {
+		return strings.Join(lines, "\n")
+	}
+	lines = append(lines, "")
+	if len(terminalJobs) > recentTerminalLimit {
+		lines = append(lines, fmt.Sprintf("Recent terminal jobs: showing %d of %d", recentTerminalLimit, len(terminalJobs)))
+		for _, job := range terminalJobs[:recentTerminalLimit] {
+			lines = append(lines, renderJobListEntry(job)...)
+		}
+		lines = append(lines, "Use `job get JOB_ID` or `--json` for full history.")
+		return strings.Join(lines, "\n")
+	}
+
+	lines = append(lines, fmt.Sprintf("Terminal jobs: %d", len(terminalJobs)))
+	for _, job := range terminalJobs {
+		lines = append(lines, renderJobListEntry(job)...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func displayJobState(state model.JobState) string {
+	switch state {
+	case model.JobStateQueued:
+		return string(model.JobStateQueued)
+	case model.JobStateRunning:
+		return string(model.JobStateRunning)
+	case model.JobStateCancelling:
+		return "canceling"
+	case model.JobStateCompleted:
+		return string(model.JobStateCompleted)
+	case model.JobStateFailed:
+		return string(model.JobStateFailed)
+	case model.JobStateCancelled:
+		return "canceled"
+	default:
+		return string(state)
+	}
+}
+
+func displayJobPhase(phase string) string {
+	switch jobPhase(strings.TrimSpace(phase)) {
+	case jobPhaseCancelling:
+		return "canceling"
+	case jobPhaseCancelled:
+		return "canceled"
+	default:
+		return phase
+	}
+}
+
+func renderJobListEntry(job model.Job) []string {
+	lines := []string{
+		fmt.Sprintf(
+			"- %s [%s · %s] %s %s",
+			job.ID,
+			displayJobState(job.State),
+			jobProgressDisplay(job),
+			job.Operation,
+			job.CanonicalPath,
+		),
+	}
+	lines = append(lines, renderJobTimingLines(job)...)
+	if magnitude := renderReconcileMagnitude(job.Progress); magnitude != "" {
+		for line := range strings.SplitSeq(magnitude, "\n") {
+			lines = append(lines, "  "+line)
+		}
+	}
+	if job.Error != nil && strings.TrimSpace(job.Error.Message) != "" {
+		lines = append(lines, "  Error: "+job.Error.Message)
+	}
+	return lines
+}
+
+func renderJobTimingLines(job model.Job) []string {
+	lines := []string{
+		"  Started: " + formatLocalTime(job.StartedAt),
+		"  Updated: " + formatLocalTime(job.UpdatedAt),
+	}
+	if job.CompletedAt != nil {
+		lines = append(lines, "  Completed: "+formatLocalTime(*job.CompletedAt))
+	}
+	if duration := formatJobDuration(job); duration != "" {
+		label := "Elapsed"
+		if job.CompletedAt != nil {
+			label = "Duration"
+		}
+		lines = append(lines, "  "+label+": "+duration)
+	}
+	return lines
+}
+
+func formatJobDuration(job model.Job) string {
+	if job.StartedAt.IsZero() {
+		return ""
+	}
+	end := job.UpdatedAt
+	if job.CompletedAt != nil && !job.CompletedAt.IsZero() {
+		end = *job.CompletedAt
+	}
+	if end.IsZero() || end.Before(job.StartedAt) {
+		return ""
+	}
+	duration := end.Sub(job.StartedAt).Round(time.Second)
+	if duration <= 0 {
+		return "0s"
+	}
+	return duration.String()
 }
 
 func renderDoctor(diagnostics []string) string {
