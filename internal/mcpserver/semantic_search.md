@@ -16,9 +16,9 @@ corrective pass.
 4. Look at the reported file and chunk counts. If the index is roughly one
    chunk per file, treat it as coarse and expect noisy whole-file matches.
 5. Phrase the query as natural-language intent.
-6. For implementation questions, start with extensionFilter for real source
-   files such as .go, .swift, .ts, or .py. Do not search docs first unless the
-   user is asking about docs.
+6. For implementation questions, pass an extensionFilter array for real source
+   files such as [".go"], [".swift"], [".ts"], or [".py"]. Do not search docs
+   first unless the user is asking about docs.
 7. Read the first results skeptically. Hits in README.md, AGENTS.md, *.pb.go,
    *.grpc.pb.go, or other generated files are warning signs, not answers.
 8. If results are coarse, retry once with a tighter extensionFilter and a
@@ -50,7 +50,8 @@ indexed", stop, ask the user for permission to index, and wait for an explicit
 yes before calling index_codebase. Do not index without permission. Do not
 trust rankings while indexing is still in progress. If the reported stats are
 roughly one chunk per file, treat the index as coarse. For implementation
-questions, start with extensionFilter for the source language. If the top hits
+questions, pass an extensionFilter array for the source language, e.g. [".go"].
+If the top hits
 are docs like README.md or generated files like *.pb.go, retry once with
 tighter filters and a higher limit, then fall back to native grep or ripgrep
 instead of repeatedly forcing semantic search. Use splitter: ast by default
@@ -59,12 +60,24 @@ wants that diagnostic.
 
 ## Tool Reference
 
-- search_code(path, query, limit?, extensionFilter?) returns ranked chunks.
-- get_indexing_status(path) reports status and file or chunk counts.
-- index_codebase(path, force?, splitter?) bootstraps the index when the
-  codebase is not tracked, or runs a streaming reindex against the existing
-  Milvus collection when the codebase is already indexed with a different
-  config or when force=true. The streaming path replaces chunks file by file
-  so search results stay available throughout the upgrade.
-- clear_index(path) removes the index and should only be used when the user
-  explicitly wants a full wipe.
+Every path argument is named `absolutePath` and must be an absolute path. Array
+arguments are JSON arrays of strings, for example `[".go", ".ts"]`, not a
+comma-separated string.
+
+- search_code(absolutePath: string, query: string, limit?: number,
+  extensionFilter?: string[]) returns ranked chunks. `extensionFilter` is a JSON
+  array of extensions like `[".go"]`; omit it or pass `[]` to search all files.
+- get_indexing_status(absolutePath: string) reports status and file or chunk
+  counts.
+- index_codebase(absolutePath: string, force?: boolean, splitter?: string,
+  customExtensions?: string[], ignorePatterns?: string[], wait?: boolean,
+  wait_timeout_seconds?: number) bootstraps the index when the codebase is not
+  tracked, or runs a streaming reindex against the existing Milvus collection
+  when the codebase is already indexed with a different config or when
+  force=true. The streaming path replaces chunks file by file so search results
+  stay available throughout the upgrade. `customExtensions` and `ignorePatterns`
+  are string arrays. When `wait` is true the call blocks until the job reaches a
+  terminal state or `wait_timeout_seconds` (default 300) elapses, after which it
+  returns current progress while the job keeps running.
+- clear_index(absolutePath: string) removes the index and should only be used
+  when the user explicitly wants a full wipe.
