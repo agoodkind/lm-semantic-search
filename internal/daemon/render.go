@@ -188,34 +188,30 @@ func renderWorktreeRelation(requestedPath string) string {
 }
 
 func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job) string {
+	// An untracked path is genuinely not indexed: offer to build it. This is the
+	// only "not indexed" message; a tracked codebase always presents as one of
+	// the live states below.
 	if !tracked || codebase == nil {
 		return fmt.Sprintf("❌ Codebase '%s' is not indexed. Please use the index_codebase tool to index it first.", requestedPath)
 	}
-	// An active job otherwise wins the display. A historical LastFailedRun
-	// that lingers in the registry alongside an in-flight retry would
-	// otherwise read as the current state and confuse callers. The one
-	// exception is a background incremental sync over an already-indexed
-	// codebase: the live collection stays searchable while it runs, so the
-	// ready view holds with a background note rather than a busy takeover.
-	if activeJob != nil {
-		if isBackgroundSyncReconcile(codebase, activeJob) {
+	// The display status is the single source of truth; the renderers below only
+	// fill in detail for the bucket it picks. A live background sync over an
+	// already-indexed codebase keeps the searchable ready view with a sync note
+	// rather than a busy takeover.
+	switch computeDisplayStatus(*codebase, activeJob) {
+	case displayIndexed:
+		if activeJob != nil && isBackgroundSyncReconcile(codebase, activeJob) {
 			return renderIndexedWithSync(codebase, activeJob)
 		}
-		return renderIndexingActive(codebase, activeJob)
-	}
-	switch codebase.Status {
-	case model.CodebaseStatusNotIndexed:
-		return fmt.Sprintf("❌ Codebase '%s' is not indexed. Please use the index_codebase tool to index it first.", requestedPath)
-	case model.CodebaseStatusIndexed:
 		return renderIndexedDetail(codebase)
-	case model.CodebaseStatusIndexing:
+	case displayPreparing, displayIndexing:
 		return renderIndexingActive(codebase, activeJob)
-	case model.CodebaseStatusFailed:
-		return renderHistoricalFailure(codebase)
-	case model.CodebaseStatusStale:
+	case displayStale:
 		return renderStaleStatus(codebase)
+	case displayFailed:
+		return renderHistoricalFailure(codebase)
 	default:
-		return fmt.Sprintf("❌ Codebase '%s' is not indexed. Please use the index_codebase tool to index it first.", requestedPath)
+		return renderIndexingActive(codebase, activeJob)
 	}
 }
 
@@ -309,10 +305,13 @@ func backgroundSyncNote(job *model.Job) string {
 	progress := job.Progress
 	changed := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
 	if changed == 0 {
-		return "🔄 changes detected, syncing in the background"
+		// The watcher fired but the diff has not been computed yet, so the
+		// changed-file count does not exist to show. Name the detection phase
+		// honestly rather than calling it a sync of an unknown size.
+		return "🔄 Checking for changes in the background"
 	}
 	percent := int32(progress.OverallPercent + 0.5)
-	return fmt.Sprintf("🔄 syncing %d changed %s in the background (%d%%)", changed, plural("file", int(changed)), percent)
+	return fmt.Sprintf("🔄 Syncing %d changed %s in the background (%d%%)", changed, plural("file", int(changed)), percent)
 }
 
 // renderIndexedWithSync renders the ready view for an already-indexed codebase
@@ -449,15 +448,15 @@ func renderFailureDiagnostics(failure *model.IndexRunFailure) string {
 	return "\n🔎 Diagnostics: " + strings.Join(refs, " ")
 }
 
-func renderListIndexes(codebases []model.Codebase) string {
-	if len(codebases) == 0 {
+func renderListIndexes(views []CodebaseView) string {
+	if len(views) == 0 {
 		return "No tracked codebases."
 	}
 
-	lines := make([]string, 0, len(codebases)+1)
-	lines = append(lines, "Tracked "+countWord("codebase", len(codebases))+":")
-	for _, codebase := range codebases {
-		lines = append(lines, fmt.Sprintf("- %s  %s  [%s]", codebase.ID, codebase.CanonicalPath, codebase.Status))
+	lines := make([]string, 0, len(views)+1)
+	lines = append(lines, "Tracked "+countWord("codebase", len(views))+":")
+	for _, view := range views {
+		lines = append(lines, fmt.Sprintf("- %s  %s  [%s]", view.Codebase.ID, view.Codebase.CanonicalPath, view.Display))
 	}
 	return strings.Join(lines, "\n")
 }

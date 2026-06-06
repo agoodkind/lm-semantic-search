@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 
-	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
@@ -16,9 +15,9 @@ import (
 // records the work already done. Delta, streaming, and bootstrap builds all
 // checkpoint per file, so an interrupted run can skip files already embedded.
 // A bootstrap resume also requires its staging collection to still exist; when
-// the checkpoint is missing, the daemon marks the codebase failed instead of
-// restarting the whole build implicitly. Call this once after NewManager
-// returns and before the daemon advertises ready.
+// the checkpoint is missing, the daemon leaves the codebase re-queueable so the
+// background repair pass restarts the build, rather than parking it as failed.
+// Call this once after NewManager returns and before the daemon advertises ready.
 func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	manager.mu.Lock()
 	type resumePlan struct {
@@ -53,7 +52,7 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 			continue
 		}
 		manager.logResumeUnresumable(ctx, plan.codebaseID, plan.canonicalPath)
-		manager.markUnresumableFailed(ctx, plan.codebaseID)
+		manager.parkUnresumableForRetry(ctx, plan.codebaseID)
 	}
 	if len(resumable) == 0 {
 		return
@@ -85,12 +84,13 @@ func (manager *Manager) hasResumableCheckpoint(codebaseID string, configDigest s
 	return len(snapshot.Files) > 0
 }
 
-// markUnresumableFailed transitions an interrupted codebase that has no
-// checkpoint to failed, so it surfaces as failed rather than staying stuck
-// showing indexing across restarts. A per-file build checkpoints after each
-// file, so a missing checkpoint means almost nothing was embedded; a re-run of
-// index_codebase starts the build fresh.
-func (manager *Manager) markUnresumableFailed(ctx context.Context, codebaseID string) {
+// parkUnresumableForRetry leaves an interrupted codebase that has no checkpoint
+// at "indexing" with its active job cleared, so the background repair pass
+// re-queues a fresh build rather than parking it as a failure. A per-file build
+// checkpoints after each file, so a missing checkpoint means almost nothing was
+// embedded and the re-queued build restarts cleanly. Clearing the index is the
+// only way to stop the retry.
+func (manager *Manager) parkUnresumableForRetry(ctx context.Context, codebaseID string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -102,20 +102,11 @@ func (manager *Manager) markUnresumableFailed(ctx context.Context, codebaseID st
 		return
 	}
 
-	now := clock.Now()
-	codebase.Status = model.CodebaseStatusFailed
 	codebase.ActiveJobID = ""
-	codebase.LastFailedRun = &model.IndexRunFailure{
-		Message:                 "interrupted index had no checkpoint to resume; re-run index_codebase to finish",
-		LastAttemptedPercentage: 0,
-		FailedAt:                now,
-		TraceID:                 string(correlation.FromContext(ctx).TraceID),
-		JobID:                   "",
-	}
-	codebase.UpdatedAt = now
+	codebase.UpdatedAt = clock.Now()
 	manager.codebases[codebaseID] = codebase
 	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after marking unresumable index failed", "codebase_id", codebaseID, "err", err)
+		slog.ErrorContext(ctx, "write registry after parking unresumable index failed", "codebase_id", codebaseID, "err", err)
 	}
 }
 

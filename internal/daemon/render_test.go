@@ -210,7 +210,7 @@ func TestRenderGetIndexBodySyncKeepsReady(t *testing.T) {
 		Progress:  model.Progress{OverallPercent: 33, FilesInCodebase: 58, FilesModified: 3, FilesProcessed: 1, LastEventAt: renderTestTime},
 	}
 	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job)
-	for _, want := range []string{"✅ Ready to search", "📊 58 files, 600 chunks", "🔄 syncing 3 changed files in the background (33%)"} {
+	for _, want := range []string{"✅ Ready to search", "📊 58 files, 600 chunks", "🔄 Syncing 3 changed files in the background (33%)"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("sync-reconcile status missing %q in:\n%s", want, out)
 		}
@@ -233,7 +233,7 @@ func TestRenderGetIndexBodySyncPreDiffKeepsReady(t *testing.T) {
 	}
 	job := &model.Job{Operation: "sync", Progress: model.Progress{FilesInCodebase: 0, LastEventAt: renderTestTime}}
 	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job)
-	for _, want := range []string{"✅ Ready to search", "🔄 changes detected, syncing in the background"} {
+	for _, want := range []string{"✅ Ready to search", "🔄 Checking for changes in the background"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("pre-diff sync status missing %q in:\n%s", want, out)
 		}
@@ -555,24 +555,27 @@ func TestRenderClearIndexHasNoRemainLine(t *testing.T) {
 // copy-pasteable id and the header pluralizes the codebase count correctly.
 func TestRenderListIndexesShowsIDAndPluralHeader(t *testing.T) {
 	t.Parallel()
-	single := []model.Codebase{
-		{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: model.CodebaseStatusIndexed},
+	single := []CodebaseView{
+		{Codebase: model.Codebase{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: model.CodebaseStatusIndexed}, Display: displayIndexed},
 	}
 	out := renderListIndexes(single)
 	if !strings.Contains(out, "Tracked 1 codebase:") {
 		t.Fatalf("single header not singular:\n%s", out)
 	}
-	if !strings.Contains(out, "cb_1_aaaa") || !strings.Contains(out, "/tmp/alpha") {
-		t.Fatalf("row missing id or path:\n%s", out)
+	if !strings.Contains(out, "cb_1_aaaa") || !strings.Contains(out, "/tmp/alpha") || !strings.Contains(out, "[indexed]") {
+		t.Fatalf("row missing id, path, or display status:\n%s", out)
 	}
 
-	many := []model.Codebase{
-		{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: model.CodebaseStatusIndexed},
-		{ID: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: model.CodebaseStatusStale},
+	many := []CodebaseView{
+		{Codebase: model.Codebase{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: model.CodebaseStatusIndexed}, Display: displayIndexed},
+		{Codebase: model.Codebase{ID: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: model.CodebaseStatusIndexing}, Display: displayPreparing},
 	}
 	outMany := renderListIndexes(many)
 	if !strings.Contains(outMany, "Tracked 2 codebases:") {
 		t.Fatalf("plural header wrong:\n%s", outMany)
+	}
+	if !strings.Contains(outMany, "[preparing]") {
+		t.Fatalf("list should show the display status, not raw status:\n%s", outMany)
 	}
 	if strings.Contains(outMany, "(s)") {
 		t.Fatalf("list still uses a (s) suffix:\n%s", outMany)

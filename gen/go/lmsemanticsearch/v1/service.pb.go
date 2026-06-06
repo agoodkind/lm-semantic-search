@@ -735,8 +735,13 @@ type Codebase struct {
 	MerkleSnapshotPath    string                 `protobuf:"bytes,11,opt,name=merkle_snapshot_path,json=merkleSnapshotPath,proto3" json:"merkle_snapshot_path,omitempty"`
 	UpdatedAt             *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	InodeTrackingDisabled bool                   `protobuf:"varint,13,opt,name=inode_tracking_disabled,json=inodeTrackingDisabled,proto3" json:"inode_tracking_disabled,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// display_status is the daemon-computed presentation status (preparing,
+	// indexing, indexed, stale, failed) that every surface renders. It folds the
+	// live job into the lifecycle status; status (field 4) stays the raw
+	// lifecycle value for debugging.
+	DisplayStatus string `protobuf:"bytes,14,opt,name=display_status,json=displayStatus,proto3" json:"display_status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Codebase) Reset() {
@@ -851,6 +856,13 @@ func (x *Codebase) GetInodeTrackingDisabled() bool {
 		return x.InodeTrackingDisabled
 	}
 	return false
+}
+
+func (x *Codebase) GetDisplayStatus() string {
+	if x != nil {
+		return x.DisplayStatus
+	}
+	return ""
 }
 
 type Job struct {
@@ -2594,7 +2606,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0fIndexRunFailure\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12:\n" +
 	"\x19last_attempted_percentage\x18\x02 \x01(\x05R\x17lastAttemptedPercentage\x127\n" +
-	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\x83\x05\n" +
+	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\xaa\x05\n" +
 	"\bCodebase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0ecanonical_path\x18\x02 \x01(\tR\rcanonicalPath\x12\x16\n" +
@@ -2609,7 +2621,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x14merkle_snapshot_path\x18\v \x01(\tR\x12merkleSnapshotPath\x129\n" +
 	"\n" +
 	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x126\n" +
-	"\x17inode_tracking_disabled\x18\r \x01(\bR\x15inodeTrackingDisabledJ\x04\b\x03\x10\x04R\aaliases\"\xd0\x04\n" +
+	"\x17inode_tracking_disabled\x18\r \x01(\bR\x15inodeTrackingDisabled\x12%\n" +
+	"\x0edisplay_status\x18\x0e \x01(\tR\rdisplayStatusJ\x04\b\x03\x10\x04R\aaliases\"\xd0\x04\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +

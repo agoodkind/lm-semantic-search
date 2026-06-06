@@ -28,7 +28,6 @@ func (manager *Manager) GetIndex(ctx context.Context, requestedPath string) (mod
 	// tracked, this auto-creates and resolves to the worktree's own index rather
 	// than serving a covering parent that holds a different branch's content.
 	if codebase, activeJob, ok := manager.resolveWorktreeIndex(ctx, canonicalPath); ok {
-		codebase = manager.presentCurrentState(ctx, codebase, activeJob)
 		classification := manager.classifyTrackedPath(ctx, codebase, canonicalPath)
 		return codebase, activeJob, true, classification, nil
 	}
@@ -39,7 +38,6 @@ func (manager *Manager) GetIndex(ctx context.Context, requestedPath string) (mod
 		codebase := matches[0]
 		activeJob := manager.activeJobSnapshotLocked(codebase)
 		manager.mu.Unlock()
-		codebase = manager.presentCurrentState(ctx, codebase, activeJob)
 		classification := manager.classifyTrackedPath(ctx, codebase, canonicalPath)
 		return codebase, activeJob, true, classification, nil
 	}
@@ -77,32 +75,6 @@ func (manager *Manager) GetIndex(ctx context.Context, requestedPath string) (mod
 		CoveringCodebaseID:  "",
 	}
 	return emptyCodebase, nil, false, classification, nil
-}
-
-// presentCurrentState makes a tracked codebase's reported status reflect the
-// current usable state rather than a stale terminal failure. When a codebase is
-// marked Failed but has no active job and its semantic collection currently
-// exists, it is presented as Indexed, since a status check should surface an
-// error only when something is blocking right now. Stale is left as-is: it
-// already denotes a current condition (collection missing, auto-rebuilding). The
-// registry is not mutated; this shapes only the response copy.
-func (manager *Manager) presentCurrentState(ctx context.Context, codebase model.Codebase, activeJob *model.Job) model.Codebase {
-	if activeJob != nil {
-		return codebase
-	}
-	if codebase.Status != model.CodebaseStatusFailed {
-		return codebase
-	}
-	if manager.semantic == nil || !manager.semantic.Available() {
-		return codebase
-	}
-	hasCollection, err := manager.semantic.HasCollectionForPath(ctx, codebase.CanonicalPath)
-	if err != nil || !hasCollection {
-		return codebase
-	}
-	codebase.Status = model.CodebaseStatusIndexed
-	codebase.LastFailedRun = nil
-	return codebase
 }
 
 // classifyTrackedPath maps a covered canonical path into a classification.

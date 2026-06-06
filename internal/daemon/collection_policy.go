@@ -72,6 +72,27 @@ func decideEmptyDiffMode(presence collectionPresence) emptyDiffMode {
 	return emptyDiffModeCompleteNoop
 }
 
+// shouldResumeInterruptedBuild reports whether a codebase represents a build
+// that never finished and has no live job, so the background pass should
+// re-queue it. A cancelled or transiently-failed from-scratch build is left at
+// "indexing" (or "not_indexed") with the active job cleared; re-queuing it is
+// the auto-retry that keeps an interrupted build from sitting stuck. A genuine
+// terminal failure (status failed) is excluded; it waits for an explicit
+// re-index or clear.
+func shouldResumeInterruptedBuild(codebase model.Codebase, hasActiveJob bool) bool {
+	if hasActiveJob {
+		return false
+	}
+	switch codebase.Status {
+	case model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed:
+		return true
+	case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed:
+		return false
+	default:
+		return false
+	}
+}
+
 func shouldQueueMissingCollectionRepair(codebase model.Codebase, hasActiveJob bool, presence collectionPresence) bool {
 	if hasActiveJob || presence != collectionPresenceMissing {
 		return false

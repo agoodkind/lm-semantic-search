@@ -12,42 +12,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// A codebase marked Failed by a past run is presented as Indexed when its
-// semantic collection currently exists: a status check reflects the current
-// usable state, not a stale failure that no longer blocks anything.
-func TestGetIndexPresentsIndexedWhenCollectionPresentDespiteFailed(t *testing.T) {
-	manager, _, repoPath := newTestManager(t)
-	canonical, err := filepath.EvalSymlinks(repoPath)
-	if err != nil {
-		t.Fatalf("EvalSymlinks returned error: %v", err)
-	}
-
-	codebase := newCodebaseRecord(canonical)
-	codebase.Status = model.CodebaseStatusFailed
-	codebase.LastFailedRun = &model.IndexRunFailure{
-		Message:  "embedding endpoint is unreachable",
-		FailedAt: time.Now(),
-	}
-	manager.mu.Lock()
-	manager.codebases[codebase.ID] = codebase
-	manager.mu.Unlock()
-
-	manager.semantic = &fakeSemantic{
-		hasCollectionForPath: func(context.Context, string) (bool, error) { return true, nil },
-	}
-
-	got, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
-	if err != nil || !found {
-		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
-	}
-	if got.Status != model.CodebaseStatusIndexed {
-		t.Fatalf("status = %q, want Indexed since the collection is present now", got.Status)
-	}
-	if got.LastFailedRun != nil {
-		t.Fatalf("LastFailedRun = %+v, want nil when presented as current", got.LastFailedRun)
-	}
-}
-
 // A Failed codebase whose collection is genuinely missing keeps showing Failed.
 func TestGetIndexKeepsFailedWhenCollectionAbsent(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)

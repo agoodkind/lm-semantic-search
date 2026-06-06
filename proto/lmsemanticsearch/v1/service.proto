@@ -103,6 +103,11 @@ message Codebase {
   string merkle_snapshot_path = 11;
   google.protobuf.Timestamp updated_at = 12;
   bool inode_tracking_disabled = 13;
+  // display_status is the daemon-computed presentation status (preparing,
+  // indexing, indexed, stale, failed) that every surface renders. It folds the
+  // live job into the lifecycle status; status (field 4) stays the raw
+  // lifecycle value for debugging.
+  string display_status = 14;
 }
 
 message Job {

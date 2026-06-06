@@ -92,9 +92,8 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 	changed := false
 	for codebaseID, codebase := range manager.codebases {
 		switch codebase.Status {
-		case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed:
-		case model.CodebaseStatusNotIndexed, model.CodebaseStatusIndexing:
-			continue
+		case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed,
+			model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed:
 		default:
 			continue
 		}
@@ -127,6 +126,19 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 			codebase.UpdatedAt = clock.Now()
 			manager.codebases[codebaseID] = codebase
 			changed = true
+			continue
+		}
+
+		// An interrupted build (indexing or not_indexed with no live job) never
+		// finished, so re-queue it to resume from its checkpoint or restart. This
+		// is the auto-retry that makes a "preparing" presentation honest; only
+		// clearing the index stops it.
+		if shouldResumeInterruptedBuild(codebase, hasActiveJob) {
+			plans = append(plans, missingCollectionRepair{
+				codebaseID:    codebaseID,
+				canonicalPath: codebase.CanonicalPath,
+				config:        codebase.EffectiveConfig,
+			})
 			continue
 		}
 

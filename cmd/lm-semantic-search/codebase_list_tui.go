@@ -6,15 +6,25 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+)
+
+const (
+	refreshInterval  = 3 * time.Second
+	defaultTermWidth = 120
+	maxNameWidth     = 22
+	statusWidth      = 13 // glyph + space + len("not indexed")
+	columnGap        = "  "
 )
 
 // runCodebaseListTUI fetches the tracked codebases once and drives the
@@ -52,62 +62,63 @@ func runCodebaseListTUI(options cliOptions) error {
 
 // listModel is the bubbletea state for the interactive codebase list. It lays
 // out daemon-provided records and, on enter, asks the daemon (GetIndex) for the
-// current-state detail. It makes no status decision of its own.
+// current-state detail. It makes no status decision of its own; the daemon owns
+// every value, and the list re-fetches on a timer so it never goes stale.
 type listModel struct {
 	options       cliOptions
-	table         table.Model
 	codebases     []*pb.Codebase
+	cursor        int
+	offset        int
+	width         int
+	height        int
 	showingDetail bool
 	detail        string
 	loading       bool
+	refreshing    bool
 	err           error
 	quitting      bool
 }
 
-// detailLoadedMsg carries the result of the GetIndex call fired on enter.
 type detailLoadedMsg struct {
 	text string
 	err  error
 }
 
-func newListModel(options cliOptions, codebases []*pb.Codebase) listModel {
-	columns, rows := buildTableColumns(codebases)
-	codebaseTable := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-		table.WithHeight(tableHeight(len(rows))),
-	)
-	styles := table.DefaultStyles()
-	styles.Header = styles.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		BorderBottom(true).
-		Bold(true)
-	styles.Selected = styles.Selected.
-		Foreground(lipgloss.Color("231")).
-		Background(lipgloss.Color("57")).
-		Bold(true)
-	codebaseTable.SetStyles(styles)
+type refreshedMsg struct {
+	codebases []*pb.Codebase
+	err       error
+}
 
+type tickMsg struct{}
+
+func newListModel(options cliOptions, codebases []*pb.Codebase) listModel {
 	return listModel{
 		options:       options,
-		table:         codebaseTable,
 		codebases:     codebases,
+		cursor:        0,
+		offset:        0,
+		width:         0,
+		height:        0,
 		showingDetail: false,
 		detail:        "",
 		loading:       false,
+		refreshing:    false,
 		err:           nil,
 		quitting:      false,
 	}
 }
 
 func (m listModel) Init() tea.Cmd {
-	return nil
+	return tickEvery()
 }
 
 func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch typed := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = typed.Width
+		m.height = typed.Height
+		m = m.clampOffset()
+		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(typed)
 	case detailLoadedMsg:
@@ -120,13 +131,47 @@ func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail = typed.text
 		m.showingDetail = true
 		return m, nil
+	case refreshedMsg:
+		return m.applyRefresh(typed), nil
+	case tickMsg:
+		return m.handleTick()
 	}
-	if m.showingDetail {
-		return m, nil
+	return m, nil
+}
+
+// handleTick reschedules the timer and, when the list view is idle, kicks off a
+// background re-fetch so the rows reflect the daemon's current state.
+func (m listModel) handleTick() (tea.Model, tea.Cmd) {
+	cmds := []tea.Cmd{tickEvery()}
+	if !m.showingDetail && !m.refreshing {
+		m.refreshing = true
+		cmds = append(cmds, refreshCmd(m.options))
 	}
-	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
+	return m, tea.Batch(cmds...)
+}
+
+// applyRefresh swaps in freshly fetched records while keeping the cursor on the
+// same codebase id, so a background refresh never makes the selection jump.
+func (m listModel) applyRefresh(msg refreshedMsg) listModel {
+	m.refreshing = false
+	if msg.err != nil {
+		m.err = msg.err
+		return m
+	}
+	m.err = nil
+	selectedID := ""
+	if m.cursor >= 0 && m.cursor < len(m.codebases) {
+		selectedID = m.codebases[m.cursor].GetId()
+	}
+	m.codebases = msg.codebases
+	m.cursor = 0
+	for index, codebase := range m.codebases {
+		if codebase.GetId() == selectedID {
+			m.cursor = index
+			break
+		}
+	}
+	return m.clampOffset()
 }
 
 func (m listModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -150,22 +195,67 @@ func (m listModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m listModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if keyMatches(msg, "esc") {
+	switch {
+	case keyMatches(msg, "esc"):
 		m.quitting = true
 		return m, tea.Quit
-	}
-	if keyMatches(msg, "enter", "right", "l") {
+	case keyMatches(msg, "up", "k"):
+		return m.moveCursor(-1), nil
+	case keyMatches(msg, "down", "j"):
+		return m.moveCursor(1), nil
+	case keyMatches(msg, "r"):
+		if !m.refreshing {
+			m.refreshing = true
+			return m, refreshCmd(m.options)
+		}
+		return m, nil
+	case keyMatches(msg, "enter", "right", "l"):
 		if len(m.codebases) == 0 {
 			return m, nil
 		}
-		id := m.codebases[m.table.Cursor()].GetId()
+		id := m.codebases[m.cursor].GetId()
 		m.loading = true
 		m.err = nil
 		return m, loadDetailCmd(m.options, id)
+	default:
+		return m, nil
 	}
-	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
+}
+
+func (m listModel) moveCursor(delta int) listModel {
+	if len(m.codebases) == 0 {
+		return m
+	}
+	m.cursor = clampInt(m.cursor+delta, 0, len(m.codebases)-1)
+	return m.clampOffset()
+}
+
+// clampOffset keeps the scroll window anchored so the cursor stays visible.
+func (m listModel) clampOffset() listModel {
+	visible := m.visibleRows()
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	}
+	if m.cursor >= m.offset+visible {
+		m.offset = m.cursor - visible + 1
+	}
+	maxOffset := max(len(m.codebases)-visible, 0)
+	m.offset = clampInt(m.offset, 0, maxOffset)
+	return m
+}
+
+// visibleRows is the number of data rows that fit between the header and footer.
+func (m listModel) visibleRows() int {
+	const chromeRows = 4 // header, rule, blank, footer
+	height := m.height
+	if height <= 0 {
+		height = len(m.codebases) + chromeRows
+	}
+	rows := height - chromeRows
+	if rows < 1 {
+		return 1
+	}
+	return rows
 }
 
 // keyMatches reports whether the pressed key equals any of the given names,
@@ -185,17 +275,6 @@ func (m listModel) View() string {
 	return m.listView()
 }
 
-func (m listModel) listView() string {
-	footer := faintStyle.Render("up/down move · enter open · q quit")
-	if m.loading {
-		footer = faintStyle.Render("loading")
-	}
-	if m.err != nil {
-		footer = errorStyle.Render(m.err.Error())
-	}
-	return m.table.View() + "\n" + footer + "\n"
-}
-
 func (m listModel) detailView() string {
 	body := m.detail
 	if m.err != nil {
@@ -203,6 +282,116 @@ func (m listModel) detailView() string {
 	}
 	footer := faintStyle.Render("esc back · q quit")
 	return strings.TrimRight(body, "\n") + "\n\n" + footer + "\n"
+}
+
+func (m listModel) listView() string {
+	widths := m.columnWidths()
+	lines := make([]string, 0, m.visibleRows()+3)
+	lines = append(lines, m.headerLine(widths))
+	lines = append(lines, faintStyle.Render(strings.Repeat("─", lineWidth(widths))))
+
+	visible := m.visibleRows()
+	end := min(m.offset+visible, len(m.codebases))
+	for index := m.offset; index < end; index++ {
+		lines = append(lines, m.renderRow(m.codebases[index], index == m.cursor, widths))
+	}
+	lines = append(lines, m.footerLine())
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func (m listModel) footerLine() string {
+	keys := "↑/↓ move · enter open · r refresh · q quit"
+	if m.refreshing {
+		keys += " · updating"
+	}
+	position := fmt.Sprintf("  %d/%d", m.cursor+1, len(m.codebases))
+	if m.err != nil {
+		return errorStyle.Render(m.err.Error())
+	}
+	return faintStyle.Render(keys + position)
+}
+
+func (m listModel) headerLine(widths colWidths) string {
+	header := strings.Join([]string{
+		padTo("NAME", widths.name),
+		padTo("STATUS", widths.status),
+		padLeftTo("FILES", widths.files),
+		padTo("ID", widths.id),
+		padTo("PATH", widths.path),
+	}, columnGap)
+	return "  " + headerStyle.Render(header)
+}
+
+func (m listModel) renderRow(codebase *pb.Codebase, selected bool, widths colWidths) string {
+	name := padTo(fitTail(filepath.Base(codebase.GetCanonicalPath()), widths.name), widths.name)
+	files := padLeftTo(fileCountCell(codebase), widths.files)
+	id := padTo(fitTail(codebase.GetId(), widths.id), widths.id)
+	pathCell := padTo(fitHead(codebase.GetCanonicalPath(), widths.path), widths.path)
+	status := codebase.GetDisplayStatus()
+	if status == "" {
+		status = codebase.GetStatus()
+	}
+	label := statusGlyph(status) + " " + statusLabel(status)
+	statusText := padTo(fitTail(label, widths.status), widths.status)
+
+	if selected {
+		line := "❯ " + strings.Join([]string{name, statusText, files, id, pathCell}, columnGap)
+		return selectedStyle.Render(line)
+	}
+	statusCell := lipgloss.NewStyle().Foreground(statusColor(status)).Render(statusText)
+	return "  " + strings.Join([]string{name, statusCell, files, id, pathCell}, columnGap)
+}
+
+// colWidths holds the computed column widths for one render pass.
+type colWidths struct {
+	name   int
+	status int
+	files  int
+	id     int
+	path   int
+}
+
+func (m listModel) columnWidths() colWidths {
+	nameW := len("NAME")
+	filesW := len("FILES")
+	idW := len("ID")
+	for _, codebase := range m.codebases {
+		nameW = max(nameW, len(filepath.Base(codebase.GetCanonicalPath())))
+		filesW = max(filesW, len(fileCountCell(codebase)))
+		idW = max(idW, len(codebase.GetId()))
+	}
+	nameW = min(nameW, maxNameWidth)
+
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = defaultTermWidth
+	}
+	const marker = 2
+	const gaps = 4 * len(columnGap)
+	const minPath = 8
+	fixed := marker + nameW + statusWidth + filesW + idW + gaps
+	pathW := max(termWidth-fixed, minPath)
+	return colWidths{name: nameW, status: statusWidth, files: filesW, id: idW, path: pathW}
+}
+
+func lineWidth(widths colWidths) int {
+	return 2 + widths.name + widths.status + widths.files + widths.id + widths.path + 4*len(columnGap)
+}
+
+func refreshCmd(options cliOptions) tea.Cmd {
+	return func() tea.Msg {
+		result, err := callDaemon(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
+			return client.ListIndexes(ctx, &pb.ListIndexesRequest{})
+		})
+		if err != nil {
+			return refreshedMsg{codebases: nil, err: err}
+		}
+		listResponse, ok := result.(*pb.ListIndexesResponse)
+		if !ok {
+			return refreshedMsg{codebases: nil, err: errors.New("unexpected response type from ListIndexes")}
+		}
+		return refreshedMsg{codebases: listResponse.GetIndexes(), err: nil}
+	}
 }
 
 func loadDetailCmd(options cliOptions, id string) tea.Cmd {
@@ -221,56 +410,23 @@ func loadDetailCmd(options cliOptions, id string) tea.Cmd {
 	}
 }
 
+func tickEvery() tea.Cmd {
+	return tea.Tick(refreshInterval, func(time.Time) tea.Msg {
+		return tickMsg{}
+	})
+}
+
 var (
-	faintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	faintStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	headerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true)
+	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("57")).Bold(true)
 )
-
-// buildTableColumns builds the column set and rows for the codebase table. The
-// ID column is sized to the longest id so the full id stays visible and
-// selectable, since callers copy it into other commands.
-func buildTableColumns(codebases []*pb.Codebase) ([]table.Column, []table.Row) {
-	idWidth := len("ID")
-	pathWidth := len("PATH")
-	for _, codebase := range codebases {
-		if width := len(codebase.GetId()); width > idWidth {
-			idWidth = width
-		}
-		if width := len(codebase.GetCanonicalPath()); width > pathWidth {
-			pathWidth = width
-		}
-	}
-	const maxPathWidth = 70
-	pathWidth = min(pathWidth, maxPathWidth)
-	columns := []table.Column{
-		{Title: "ID", Width: idWidth},
-		{Title: "STATUS", Width: 12},
-		{Title: "FILES", Width: 6},
-		{Title: "PATH", Width: pathWidth},
-	}
-	rows := make([]table.Row, 0, len(codebases))
-	for _, codebase := range codebases {
-		rows = append(rows, table.Row{
-			codebase.GetId(),
-			statusCell(codebase.GetStatus()),
-			fileCountCell(codebase),
-			codebase.GetCanonicalPath(),
-		})
-	}
-	return columns, rows
-}
-
-// statusCell renders a color-coded dot and the status word so the five states
-// are visually distinct. The dot carries the color; the word stays plain to keep
-// the table column width predictable.
-func statusCell(status string) string {
-	dot := lipgloss.NewStyle().Foreground(statusColor(status)).Render("●")
-	return dot + " " + status
-}
 
 // statusColors maps each codebase status to a distinct foreground color. An
 // unknown status falls back to grayStatus.
 var statusColors = map[string]lipgloss.Color{
+	"preparing":   lipgloss.Color("12"),
 	"indexed":     lipgloss.Color("10"),
 	"indexing":    lipgloss.Color("11"),
 	"stale":       lipgloss.Color("208"),
@@ -280,12 +436,38 @@ var statusColors = map[string]lipgloss.Color{
 
 const grayStatus = lipgloss.Color("245")
 
-// statusColor returns the color for a codebase status, defaulting to gray.
 func statusColor(status string) lipgloss.Color {
 	if color, ok := statusColors[status]; ok {
 		return color
 	}
 	return grayStatus
+}
+
+// statusGlyphs gives each status a distinct shape so the states stay
+// distinguishable without color, per the don't-rely-on-color-alone guideline.
+var statusGlyphs = map[string]string{
+	"preparing":   "◌",
+	"indexed":     "●",
+	"indexing":    "◐",
+	"stale":       "△",
+	"failed":      "✗",
+	"not_indexed": "○",
+}
+
+func statusGlyph(status string) string {
+	if glyph, ok := statusGlyphs[status]; ok {
+		return glyph
+	}
+	return "•"
+}
+
+// statusLabel renders the wire status as a human label, spelling not_indexed as
+// two words so the column reads naturally.
+func statusLabel(status string) string {
+	if status == "not_indexed" {
+		return "not indexed"
+	}
+	return status
 }
 
 // fileCountCell returns the indexed-file count from the last successful run, or
@@ -298,12 +480,66 @@ func fileCountCell(codebase *pb.Codebase) string {
 	return strconv.Itoa(int(run.GetIndexedFiles()))
 }
 
-// tableHeight caps the visible rows so a long registry scrolls inside the table
-// rather than overflowing the screen, while a short list stays fully visible.
-func tableHeight(rowCount int) int {
-	const maxVisibleRows = 20
-	if rowCount < maxVisibleRows {
-		return rowCount + 1
+// padTo pads text with trailing spaces to a display width of width, measured in
+// runes so a multibyte ellipsis counts as one column. It assumes text already
+// fits; fit it first with fitTail or fitHead.
+func padTo(text string, width int) string {
+	gap := width - utf8.RuneCountInString(text)
+	if gap <= 0 {
+		return text
 	}
-	return maxVisibleRows
+	return text + strings.Repeat(" ", gap)
+}
+
+// padLeftTo right-aligns text within width by prepending spaces, measured in
+// runes.
+func padLeftTo(text string, width int) string {
+	gap := width - utf8.RuneCountInString(text)
+	if gap <= 0 {
+		return text
+	}
+	return strings.Repeat(" ", gap) + text
+}
+
+// fitTail keeps the head of text and drops the tail with a trailing ellipsis
+// when it overflows width. Width and slicing are rune-based so the ellipsis is
+// not double-counted.
+func fitTail(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= width {
+		return text
+	}
+	if width == 1 {
+		return "…"
+	}
+	return string(runes[:width-1]) + "…"
+}
+
+// fitHead keeps the tail of text (for a path, the repo end) and drops the head
+// with a leading ellipsis when it overflows width.
+func fitHead(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= width {
+		return text
+	}
+	if width == 1 {
+		return "…"
+	}
+	return "…" + string(runes[len(runes)-(width-1):])
+}
+
+func clampInt(value, low, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
 }

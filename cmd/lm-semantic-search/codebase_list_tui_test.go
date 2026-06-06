@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -17,10 +18,32 @@ func TestListModelViewShowsRecords(t *testing.T) {
 	model := newListModel(cliOptions{}, codebases)
 
 	view := model.View()
-	for _, want := range []string{"cb_1_aaaa", "cb_2_bbbb", "/tmp/alpha", "/tmp/beta", "indexed", "stale", "12"} {
+	for _, want := range []string{"cb_1_aaaa", "cb_2_bbbb", "alpha", "beta", "indexed", "stale", "12", "NAME", "STATUS", "PATH"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() missing %q\n%s", want, view)
 		}
+	}
+}
+
+func TestStatusLabelSpellsNotIndexed(t *testing.T) {
+	if got := statusLabel("not_indexed"); got != "not indexed" {
+		t.Errorf("statusLabel(not_indexed) = %q, want %q", got, "not indexed")
+	}
+	if got := statusLabel("indexed"); got != "indexed" {
+		t.Errorf("statusLabel(indexed) = %q, want %q", got, "indexed")
+	}
+}
+
+func TestFitHeadKeepsTail(t *testing.T) {
+	got := fitHead("/Users/agoodkind/Sites/lmd", 8)
+	if !strings.HasSuffix(got, "lmd") {
+		t.Errorf("fitHead kept the wrong end: %q", got)
+	}
+	if !strings.HasPrefix(got, "…") {
+		t.Errorf("fitHead missing leading ellipsis: %q", got)
+	}
+	if utf8.RuneCountInString(got) != 8 {
+		t.Errorf("fitHead width = %d runes, want 8: %q", utf8.RuneCountInString(got), got)
 	}
 }
 
@@ -30,8 +53,8 @@ func TestListModelNavigationMovesSelection(t *testing.T) {
 		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "stale"},
 	}
 	model := newListModel(cliOptions{}, codebases)
-	if model.table.Cursor() != 0 {
-		t.Fatalf("initial cursor = %d, want 0", model.table.Cursor())
+	if model.cursor != 0 {
+		t.Fatalf("initial cursor = %d, want 0", model.cursor)
 	}
 
 	downModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -39,8 +62,8 @@ func TestListModelNavigationMovesSelection(t *testing.T) {
 	if !ok {
 		t.Fatalf("Update did not return a listModel")
 	}
-	if moved.table.Cursor() != 1 {
-		t.Errorf("cursor after down = %d, want 1", moved.table.Cursor())
+	if moved.cursor != 1 {
+		t.Errorf("cursor after down = %d, want 1", moved.cursor)
 	}
 
 	upModel, _ := moved.Update(tea.KeyMsg{Type: tea.KeyUp})
@@ -48,8 +71,28 @@ func TestListModelNavigationMovesSelection(t *testing.T) {
 	if !ok {
 		t.Fatalf("Update did not return a listModel")
 	}
-	if back.table.Cursor() != 0 {
-		t.Errorf("cursor after up = %d, want 0", back.table.Cursor())
+	if back.cursor != 0 {
+		t.Errorf("cursor after up = %d, want 0", back.cursor)
+	}
+}
+
+func TestListModelRefreshPreservesSelectionByID(t *testing.T) {
+	codebases := []*pb.Codebase{
+		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
+		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "stale"},
+	}
+	model := newListModel(cliOptions{}, codebases)
+	model.cursor = 1
+
+	// A refresh reorders the records; the cursor should follow cb_2_bbbb.
+	reordered := []*pb.Codebase{
+		{Id: "cb_3_cccc", CanonicalPath: "/tmp/gamma", Status: "indexed"},
+		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "indexed"},
+		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
+	}
+	refreshed := model.applyRefresh(refreshedMsg{codebases: reordered})
+	if refreshed.codebases[refreshed.cursor].GetId() != "cb_2_bbbb" {
+		t.Errorf("cursor moved off cb_2_bbbb after refresh: index=%d id=%s", refreshed.cursor, refreshed.codebases[refreshed.cursor].GetId())
 	}
 }
 

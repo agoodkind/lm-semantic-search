@@ -285,7 +285,9 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 		DisplayText:    appendCorrelationRef(renderGetIndex(request.GetPath(), found, codebasePointer(found, codebase), activeJob, classification, indexedDescendants), ctx, "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
 	if found {
-		response.Codebase = pbconv.ToCodebase(codebase)
+		pbCodebase := pbconv.ToCodebase(codebase)
+		pbCodebase.DisplayStatus = string(computeDisplayStatus(codebase, activeJob))
+		response.Codebase = pbCodebase
 		response.ActiveJob = pbconv.ToJobPointer(activeJob)
 	}
 	return response, nil
@@ -296,14 +298,16 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 	ctx, done := beginRPC(ctx, "ListIndexes")
 	defer done(&err)
 	_ = request
-	codebases := server.manager.ListIndexes(ctx)
+	views := server.manager.ListIndexesView()
 	response := &pb.ListIndexesResponse{
-		Indexes: make([]*pb.Codebase, 0, len(codebases)),
+		Indexes: make([]*pb.Codebase, 0, len(views)),
 	}
-	for _, codebase := range codebases {
-		response.Indexes = append(response.Indexes, pbconv.ToCodebase(codebase))
+	for _, view := range views {
+		pbCodebase := pbconv.ToCodebase(view.Codebase)
+		pbCodebase.DisplayStatus = string(view.Display)
+		response.Indexes = append(response.Indexes, pbCodebase)
 	}
-	response.DisplayText = appendCorrelationRef(renderListIndexes(codebases), ctx)
+	response.DisplayText = appendCorrelationRef(renderListIndexes(views), ctx)
 	return response, nil
 }
 

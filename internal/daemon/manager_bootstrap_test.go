@@ -152,7 +152,7 @@ func TestRunBootstrapEmbedsEveryFileWithoutCheckpoint(t *testing.T) {
 	waitForCodebaseStatus(t, manager, canonical, model.CodebaseStatusIndexed)
 }
 
-func TestResumeOrphanedJobsMarksNoCheckpointInterruptedFailed(t *testing.T) {
+func TestResumeOrphanedJobsParksNoCheckpointInterruptedForRetry(t *testing.T) {
 	manager, _ := newTestManagerWithCap(t, 2)
 	manager.config.ResumeIndexingOnBoot = true
 
@@ -163,6 +163,7 @@ func TestResumeOrphanedJobsMarksNoCheckpointInterruptedFailed(t *testing.T) {
 		ID:              codebaseID,
 		CanonicalPath:   canonical,
 		Status:          model.CodebaseStatusIndexing,
+		ActiveJobID:     "stale-orphan-job",
 		EffectiveConfig: defaultIndexConfig(),
 	}
 	manager.mu.Unlock()
@@ -170,16 +171,22 @@ func TestResumeOrphanedJobsMarksNoCheckpointInterruptedFailed(t *testing.T) {
 	manager.ResumeOrphanedJobs(context.Background())
 
 	if jobs := manager.ListJobs(""); len(jobs) != 0 {
-		t.Fatalf("no-checkpoint resume launched %d jobs, want 0", len(jobs))
+		t.Fatalf("no-checkpoint resume launched %d jobs, want 0 (the background pass re-queues it)", len(jobs))
 	}
 
 	manager.mu.Lock()
 	codebase := manager.codebases[codebaseID]
 	manager.mu.Unlock()
-	if codebase.Status != model.CodebaseStatusFailed {
-		t.Fatalf("codebase status = %q, want %q so it is not stuck showing indexing", codebase.Status, model.CodebaseStatusFailed)
+	// An interrupted build with no checkpoint is parked re-queueable, not failed:
+	// it stays indexing with the active job cleared so the background pass starts
+	// a fresh build. Only clearing the index stops the retry.
+	if codebase.Status != model.CodebaseStatusIndexing {
+		t.Fatalf("status = %q, want Indexing so the background pass re-queues it", codebase.Status)
 	}
-	if codebase.LastFailedRun == nil {
-		t.Fatal("LastFailedRun not recorded for an unresumable interrupted index")
+	if codebase.ActiveJobID != "" {
+		t.Fatalf("ActiveJobID = %q, want cleared so the pass sees no live job", codebase.ActiveJobID)
+	}
+	if codebase.LastFailedRun != nil {
+		t.Fatalf("LastFailedRun = %+v, want nil; an interrupted build is not a failure", codebase.LastFailedRun)
 	}
 }

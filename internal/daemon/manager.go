@@ -683,6 +683,35 @@ func (manager *Manager) ListIndexes(ctx context.Context) []model.Codebase {
 	return codebases
 }
 
+// CodebaseView pairs a codebase with its daemon-computed display status, so the
+// presentation fold (live job phase) is decided once, under the lock, rather
+// than recomputed at each rendering callsite.
+type CodebaseView struct {
+	Codebase model.Codebase
+	Display  displayStatus
+}
+
+// ListIndexesView returns every tracked codebase in canonical path order, each
+// paired with its single-source-of-truth display status. It folds the active
+// job in under the lock so the list and detail surfaces agree by construction.
+func (manager *Manager) ListIndexesView() []CodebaseView {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	views := make([]CodebaseView, 0, len(manager.codebases))
+	for _, codebase := range manager.codebases {
+		activeJob := manager.activeJobSnapshotLocked(codebase)
+		views = append(views, CodebaseView{
+			Codebase: codebase,
+			Display:  computeDisplayStatus(codebase, activeJob),
+		})
+	}
+	sort.Slice(views, func(i int, j int) bool {
+		return views[i].Codebase.CanonicalPath < views[j].Codebase.CanonicalPath
+	})
+	return views
+}
+
 // GetJob resolves one tracked job by id.
 func (manager *Manager) GetJob(jobID string) (model.Job, bool) {
 	manager.mu.Lock()
