@@ -211,6 +211,18 @@ func (manager *Manager) reconcileCodebaseCollection(
 			persist = true
 		}
 	}
+	// Backfill the worktree common dir for a codebase indexed before that field
+	// existed, while its directory is still present. Recording it now is what
+	// lets the auto-clean recognize this worktree as removed once git deletes it
+	// later; without the backfill an older worktree index would fall to missing
+	// instead of being dropped.
+	if codebase.WorktreeCommonDir == "" {
+		if info, ok := gitworktree.Resolve(codebase.CanonicalPath); ok && info.Linked {
+			codebase.WorktreeCommonDir = info.CommonDir
+			manager.codebases[codebaseID] = codebase
+			persist = true
+		}
+	}
 	if expectedCollectionName == "" {
 		return repairOutcome{persist: persist, cleanup: false, plan: nil}
 	}

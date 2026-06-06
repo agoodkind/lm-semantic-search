@@ -130,3 +130,36 @@ func TestUpdateJobFailedSourceMissingSetsMissing(t *testing.T) {
 		t.Fatalf("LastFailedRun = %+v, want nil for a missing source", got.LastFailedRun)
 	}
 }
+
+// TestPlanBackfillsWorktreeCommonDir proves the repair pass records the worktree
+// common dir for a worktree indexed before that field existed, while its
+// directory is still present, so a later removal can auto-clean it.
+func TestPlanBackfillsWorktreeCommonDir(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	mainRoot := filepath.Join(t.TempDir(), "repo")
+	makeMainRepo(t, mainRoot)
+	worktreeDir := filepath.Join(mainRoot, ".claude", "worktrees", "feat")
+	makeLinkedWorktree(t, mainRoot, "feat", worktreeDir, "feat")
+
+	codebase := newCodebaseRecord(evalSym(t, worktreeDir))
+	codebase.Status = model.CodebaseStatusIndexed
+	codebase.CollectionName = "wt_coll"
+	if codebase.WorktreeCommonDir != "" {
+		t.Fatalf("precondition: WorktreeCommonDir should start empty, got %q", codebase.WorktreeCommonDir)
+	}
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+	manager.semantic = worktreeSemantic("wt_coll")
+
+	if _, _, err := manager.planMissingCollectionRepairs(context.Background()); err != nil {
+		t.Fatalf("planMissingCollectionRepairs returned error: %v", err)
+	}
+
+	manager.mu.Lock()
+	got := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if got.WorktreeCommonDir == "" {
+		t.Fatal("WorktreeCommonDir was not backfilled for an indexed linked worktree")
+	}
+}
