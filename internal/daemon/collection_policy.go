@@ -45,7 +45,8 @@ func decideStartIndexMode(codebaseFound bool, status model.CodebaseStatus, confi
 	}
 
 	switch status {
-	case model.CodebaseStatusFailed, model.CodebaseStatusStale, model.CodebaseStatusIndexing:
+	case model.CodebaseStatusFailed, model.CodebaseStatusStale, model.CodebaseStatusIndexing,
+		model.CodebaseStatusMissing:
 		if presence == collectionPresenceMissing {
 			return startIndexModeBootstrap
 		}
@@ -76,15 +77,16 @@ func decideEmptyDiffMode(presence collectionPresence) emptyDiffMode {
 // that never finished and has no live job, so the background pass should
 // re-queue it. A cancelled or transiently-failed from-scratch build is left at
 // "indexing" (or "not_indexed") with the active job cleared; re-queuing it is
-// the auto-retry that keeps an interrupted build from sitting stuck. A genuine
-// terminal failure (status failed) is excluded; it waits for an explicit
-// re-index or clear.
+// the auto-retry that keeps an interrupted build from sitting stuck. A codebase
+// whose missing source directory has returned (status missing, dir present
+// again) is likewise re-queued to rebuild. A genuine terminal failure (status
+// failed) is excluded; it waits for an explicit re-index or clear.
 func shouldResumeInterruptedBuild(codebase model.Codebase, hasActiveJob bool) bool {
 	if hasActiveJob {
 		return false
 	}
 	switch codebase.Status {
-	case model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed:
+	case model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed, model.CodebaseStatusMissing:
 		return true
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed:
 		return false
@@ -100,7 +102,7 @@ func shouldQueueMissingCollectionRepair(codebase model.Codebase, hasActiveJob bo
 	switch codebase.Status {
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale:
 		return true
-	case model.CodebaseStatusNotIndexed, model.CodebaseStatusIndexing, model.CodebaseStatusFailed:
+	case model.CodebaseStatusNotIndexed, model.CodebaseStatusIndexing, model.CodebaseStatusFailed, model.CodebaseStatusMissing:
 		return false
 	default:
 		return false

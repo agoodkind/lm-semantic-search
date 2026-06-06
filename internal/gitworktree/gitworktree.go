@@ -89,6 +89,37 @@ func CommonDirAt(dir string) (string, bool) {
 	return commonDirFor(gitDirPath)
 }
 
+// WorktreeTracked reports whether commonDir still holds a linked-worktree admin
+// entry for worktreeRoot. git records one pointer per linked worktree at
+// commonDir/worktrees/<name>/gitdir, and `git worktree remove` deletes it, so a
+// false result is the positive "this worktree was removed" signal. It inspects
+// the admin entry, not the directory, so a transiently-missing live worktree
+// (its directory unmounted while the admin entry stays) still reports tracked
+// and is never mistaken for a removal.
+func WorktreeTracked(commonDir string, worktreeRoot string) bool {
+	if commonDir == "" {
+		return false
+	}
+	entries, err := os.ReadDir(filepath.Join(commonDir, "worktrees"))
+	if err != nil {
+		return false
+	}
+	wantGitDir := filepath.Clean(filepath.Join(worktreeRoot, ".git"))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		target, ok := readTrimmed(filepath.Join(commonDir, "worktrees", entry.Name(), "gitdir"))
+		if !ok {
+			continue
+		}
+		if filepath.Clean(target) == wantGitDir {
+			return true
+		}
+	}
+	return false
+}
+
 // SiblingWorktreeRoots returns the resolved worktree roots that share
 // commonDir, including the main worktree, sorted. Roots whose directory no
 // longer exists on disk are omitted, so a stale pointer (a worktree moved

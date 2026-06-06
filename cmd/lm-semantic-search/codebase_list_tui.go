@@ -431,6 +431,7 @@ var statusColors = map[string]lipgloss.Color{
 	"indexing":    lipgloss.Color("11"),
 	"stale":       lipgloss.Color("208"),
 	"failed":      lipgloss.Color("9"),
+	"missing":     lipgloss.Color("245"),
 	"not_indexed": grayStatus,
 }
 
@@ -451,6 +452,7 @@ var statusGlyphs = map[string]string{
 	"indexing":    "◐",
 	"stale":       "△",
 	"failed":      "✗",
+	"missing":     "⊘",
 	"not_indexed": "○",
 }
 

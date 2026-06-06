@@ -9,6 +9,7 @@ import (
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -27,11 +28,13 @@ type missingCollectionRepair struct {
 // stale failure, so the registry is the single source of truth every reader
 // agrees with. Read paths stay side-effect free; this pass owns the mutation.
 func (manager *Manager) RepairMissingCollections(ctx context.Context) {
-	plans, err := manager.planMissingCollectionRepairs(ctx)
+	plans, cleanups, err := manager.planMissingCollectionRepairs(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "repair missing collections failed", "err", err)
 		return
 	}
+
+	manager.cleanRemovedWorktrees(ctx, cleanups)
 
 	queuedPaths := make([]string, 0, len(plans))
 	for _, plan := range plans {
@@ -70,14 +73,45 @@ func (manager *Manager) RepairMissingCollections(ctx context.Context) {
 	}
 }
 
-func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]missingCollectionRepair, error) {
+// cleanRemovedWorktrees drops the disposable index (registration plus
+// collection) for each removed git worktree. A removed worktree is a
+// definitive, intentional deletion, so leaving a stale entry would diverge the
+// registry from reality; ClearIndex works with the directory already gone. The
+// success path logs one summary outside the loop rather than per iteration, so
+// the cleaned paths land in a single state-transition record.
+func (manager *Manager) cleanRemovedWorktrees(ctx context.Context, cleanups []string) {
+	cleaned := make([]string, 0, len(cleanups))
+	for _, canonicalPath := range cleanups {
+		if _, clearErr := manager.ClearIndex(ctx, canonicalPath, model.ClientInfo{Name: "daemon-worktree-cleanup", PID: 0}); clearErr != nil {
+			slog.WarnContext(ctx, "auto-clean of removed worktree failed", "path", canonicalPath, "err", clearErr)
+			continue
+		}
+		cleaned = append(cleaned, canonicalPath)
+	}
+	if len(cleaned) > 0 {
+		slog.InfoContext(
+			ctx,
+			"auto-cleaned removed git worktree index",
+			"component",
+			"daemon",
+			"subcomponent",
+			"repair",
+			"count",
+			len(cleaned),
+			"paths",
+			cleaned,
+		)
+	}
+}
+
+func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]missingCollectionRepair, []string, error) {
 	if manager.semantic == nil || !manager.semantic.Available() {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	collections, err := manager.semantic.ListCollections(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list semantic collections: %w", err)
+		return nil, nil, fmt.Errorf("list semantic collections: %w", err)
 	}
 
 	collectionSet := make(map[string]struct{}, len(collections))
@@ -89,84 +123,138 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 	defer manager.mu.Unlock()
 
 	plans := make([]missingCollectionRepair, 0)
+	cleanups := make([]string, 0)
 	changed := false
 	for codebaseID, codebase := range manager.codebases {
-		switch codebase.Status {
-		case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed,
-			model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed:
-		default:
-			continue
-		}
-		if _, err := os.Stat(codebase.CanonicalPath); errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-
-		expectedCollectionName := codebase.CollectionName
-		if expectedCollectionName == "" {
-			expectedCollectionName = manager.semantic.CollectionName(codebase.CanonicalPath)
-			if expectedCollectionName != "" {
-				codebase.CollectionName = expectedCollectionName
-				manager.codebases[codebaseID] = codebase
-				changed = true
-			}
-		}
-		if expectedCollectionName == "" {
-			continue
-		}
-		presence := presenceFromCollectionSet(expectedCollectionName, collectionSet)
-		hasActiveJob := manager.activeJobSnapshotLocked(codebase) != nil
-
-		// Reconcile the other direction: a codebase marked failed or stale whose
-		// collection is present now is usable, so heal it to indexed and clear the
-		// stale failure rather than leaving the registry divergent from reality.
-		if presence == collectionPresencePresent && !hasActiveJob &&
-			(codebase.Status == model.CodebaseStatusFailed || codebase.Status == model.CodebaseStatusStale) {
-			codebase.Status = model.CodebaseStatusIndexed
-			codebase.LastFailedRun = nil
-			codebase.UpdatedAt = clock.Now()
-			manager.codebases[codebaseID] = codebase
-			changed = true
-			continue
-		}
-
-		// An interrupted build (indexing or not_indexed with no live job) never
-		// finished, so re-queue it to resume from its checkpoint or restart. This
-		// is the auto-retry that makes a "preparing" presentation honest; only
-		// clearing the index stops it.
-		if shouldResumeInterruptedBuild(codebase, hasActiveJob) {
-			plans = append(plans, missingCollectionRepair{
-				codebaseID:    codebaseID,
-				canonicalPath: codebase.CanonicalPath,
-				config:        codebase.EffectiveConfig,
-			})
-			continue
-		}
-
-		if !shouldQueueMissingCollectionRepair(codebase, hasActiveJob, presence) {
-			continue
-		}
-
-		if codebase.Status != model.CodebaseStatusStale || codebase.ActiveJobID != "" {
-			codebase.Status = model.CodebaseStatusStale
-			codebase.ActiveJobID = ""
-			codebase.UpdatedAt = clock.Now()
-			manager.codebases[codebaseID] = codebase
+		outcome := manager.classifyCodebaseRepair(codebaseID, codebase, collectionSet)
+		if outcome.persist {
 			changed = true
 		}
-		plans = append(plans, missingCollectionRepair{
-			codebaseID:    codebaseID,
-			canonicalPath: codebase.CanonicalPath,
-			config:        codebase.EffectiveConfig,
-		})
+		if outcome.cleanup {
+			cleanups = append(cleanups, codebase.CanonicalPath)
+		}
+		if outcome.plan != nil {
+			plans = append(plans, *outcome.plan)
+		}
 	}
 
 	if changed {
 		if err := manager.saveLocked(); err != nil {
 			slog.ErrorContext(ctx, "persist stale codebases before automatic rebuild failed", "err", err)
-			return nil, fmt.Errorf("persist stale codebases before automatic rebuild: %w", err)
+			return nil, nil, fmt.Errorf("persist stale codebases before automatic rebuild: %w", err)
 		}
 	}
-	return plans, nil
+	return plans, cleanups, nil
+}
+
+// repairOutcome is the per-codebase decision the planning loop applies: whether
+// the registry record was mutated and needs persisting, whether the codebase is
+// a removed worktree to auto-clean, and the rebuild plan to enqueue if any.
+type repairOutcome struct {
+	persist bool
+	cleanup bool
+	plan    *missingCollectionRepair
+}
+
+// classifyCodebaseRepair decides the repair action for one codebase under the
+// manager lock. A missing source directory is reconciled before any collection
+// logic: a removed git worktree (git deleted its admin entry) is flagged for
+// auto-clean, and any other vanished directory is marked missing and kept since
+// it may return.
+func (manager *Manager) classifyCodebaseRepair(
+	codebaseID string,
+	codebase model.Codebase,
+	collectionSet map[string]struct{},
+) repairOutcome {
+	if _, statErr := os.Stat(codebase.CanonicalPath); errors.Is(statErr, os.ErrNotExist) {
+		if codebase.WorktreeCommonDir != "" &&
+			!sourceDirMissing(codebase.WorktreeCommonDir) &&
+			!gitworktree.WorktreeTracked(codebase.WorktreeCommonDir, codebase.CanonicalPath) {
+			return repairOutcome{persist: false, cleanup: true, plan: nil}
+		}
+		if codebase.Status != model.CodebaseStatusMissing || codebase.ActiveJobID != "" {
+			codebase.Status = model.CodebaseStatusMissing
+			codebase.ActiveJobID = ""
+			codebase.UpdatedAt = clock.Now()
+			manager.codebases[codebaseID] = codebase
+			return repairOutcome{persist: true, cleanup: false, plan: nil}
+		}
+		return repairOutcome{persist: false, cleanup: false, plan: nil}
+	}
+
+	switch codebase.Status {
+	case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed,
+		model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed, model.CodebaseStatusMissing:
+	default:
+		return repairOutcome{persist: false, cleanup: false, plan: nil}
+	}
+
+	return manager.reconcileCodebaseCollection(codebaseID, codebase, collectionSet)
+}
+
+// reconcileCodebaseCollection compares a present-on-disk codebase against the
+// live collection set and returns the repair action: heal a stale or failed
+// codebase whose collection reappeared, re-queue an interrupted build, or mark a
+// codebase with a missing collection stale and enqueue a full rebuild.
+func (manager *Manager) reconcileCodebaseCollection(
+	codebaseID string,
+	codebase model.Codebase,
+	collectionSet map[string]struct{},
+) repairOutcome {
+	persist := false
+	expectedCollectionName := codebase.CollectionName
+	if expectedCollectionName == "" {
+		expectedCollectionName = manager.semantic.CollectionName(codebase.CanonicalPath)
+		if expectedCollectionName != "" {
+			codebase.CollectionName = expectedCollectionName
+			manager.codebases[codebaseID] = codebase
+			persist = true
+		}
+	}
+	if expectedCollectionName == "" {
+		return repairOutcome{persist: persist, cleanup: false, plan: nil}
+	}
+	presence := presenceFromCollectionSet(expectedCollectionName, collectionSet)
+	hasActiveJob := manager.activeJobSnapshotLocked(codebase) != nil
+
+	// Reconcile the other direction: a codebase marked failed or stale whose
+	// collection is present now is usable, so heal it to indexed and clear the
+	// stale failure rather than leaving the registry divergent from reality.
+	if presence == collectionPresencePresent && !hasActiveJob &&
+		(codebase.Status == model.CodebaseStatusFailed || codebase.Status == model.CodebaseStatusStale) {
+		codebase.Status = model.CodebaseStatusIndexed
+		codebase.LastFailedRun = nil
+		codebase.UpdatedAt = clock.Now()
+		manager.codebases[codebaseID] = codebase
+		return repairOutcome{persist: true, cleanup: false, plan: nil}
+	}
+
+	plan := &missingCollectionRepair{
+		codebaseID:    codebaseID,
+		canonicalPath: codebase.CanonicalPath,
+		config:        codebase.EffectiveConfig,
+	}
+
+	// An interrupted build (indexing or not_indexed with no live job) never
+	// finished, so re-queue it to resume from its checkpoint or restart. This is
+	// the auto-retry that makes a "preparing" presentation honest; only clearing
+	// the index stops it.
+	if shouldResumeInterruptedBuild(codebase, hasActiveJob) {
+		return repairOutcome{persist: persist, cleanup: false, plan: plan}
+	}
+
+	if !shouldQueueMissingCollectionRepair(codebase, hasActiveJob, presence) {
+		return repairOutcome{persist: persist, cleanup: false, plan: nil}
+	}
+
+	if codebase.Status != model.CodebaseStatusStale || codebase.ActiveJobID != "" {
+		codebase.Status = model.CodebaseStatusStale
+		codebase.ActiveJobID = ""
+		codebase.UpdatedAt = clock.Now()
+		manager.codebases[codebaseID] = codebase
+		persist = true
+	}
+	return repairOutcome{persist: persist, cleanup: false, plan: plan}
 }
 
 func (manager *Manager) noteAutomaticRepairStartFailure(ctx context.Context, codebaseID string, startErr error) {

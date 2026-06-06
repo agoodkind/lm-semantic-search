@@ -10,6 +10,14 @@ import (
 	"strings"
 )
 
+// sourceDirMissing reports whether a codebase's source directory is absent.
+// It distinguishes a vanished-source failure (a removed worktree or deleted
+// directory) from a real build failure so the codebase reads as missing.
+func sourceDirMissing(canonicalPath string) bool {
+	_, err := os.Stat(canonicalPath)
+	return errors.Is(err, os.ErrNotExist)
+}
+
 // guardStateRoot rejects any registration whose canonical path covers the
 // daemon's StateRoot. Indexing StateRoot would re-enter the daemon's own
 // registry and snapshot files; the resulting feedback loop is hard to

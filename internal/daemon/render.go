@@ -205,9 +205,21 @@ func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Code
 		return renderStaleStatus(codebase)
 	case displayFailed:
 		return renderHistoricalFailure(codebase)
+	case displayMissing:
+		return renderMissingStatus(codebase)
 	default:
 		return renderIndexingActive(codebase, activeJob)
 	}
+}
+
+// renderMissingStatus reads as a current condition, not a failure: the source
+// directory is gone, so the index is held until the directory returns or the
+// caller drops it.
+func renderMissingStatus(codebase *model.Codebase) string {
+	return fmt.Sprintf(
+		"🚫 Codebase '%s' source directory is missing.\n💡 Re-create the directory to resume indexing, or call clear_index to drop the index.",
+		codebase.CanonicalPath,
+	)
 }
 
 // renderClassificationLine renders a one-line summary of the per-path

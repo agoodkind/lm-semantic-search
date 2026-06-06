@@ -176,7 +176,15 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 		return
 	}
 	codebase.ActiveJobID = ""
-	if !transient {
+	switch {
+	case transient:
+		// A transient failure is not terminal; keep the codebase at last-good.
+	case sourceDirMissing(codebase.CanonicalPath):
+		// The source directory vanished mid-run. This is not a build failure, so
+		// present it as missing and keep the index in case the directory returns.
+		codebase.Status = model.CodebaseStatusMissing
+		codebase.LastFailedRun = nil
+	default:
 		codebase.Status = model.CodebaseStatusFailed
 		codebase.LastFailedRun = &model.IndexRunFailure{
 			Message:                 safeMessage,

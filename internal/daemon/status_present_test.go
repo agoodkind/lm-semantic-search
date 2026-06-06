@@ -27,6 +27,7 @@ func TestComputeDisplayStatusNeverNotIndexed(t *testing.T) {
 		{"no job, indexed", model.Codebase{Status: model.CodebaseStatusIndexed}, nil, displayIndexed},
 		{"no job, stale", model.Codebase{Status: model.CodebaseStatusStale}, nil, displayStale},
 		{"no job, failed", model.Codebase{Status: model.CodebaseStatusFailed}, nil, displayFailed},
+		{"no job, missing", model.Codebase{Status: model.CodebaseStatusMissing}, nil, displayMissing},
 		{"interrupted: indexing, no job", model.Codebase{Status: model.CodebaseStatusIndexing}, nil, displayPreparing},
 		{"interrupted: not_indexed, no job", model.Codebase{Status: model.CodebaseStatusNotIndexed}, nil, displayPreparing},
 	}
@@ -84,7 +85,7 @@ func TestPlanRepairsResumesInterruptedBuild(t *testing.T) {
 		listCollections: func(context.Context) ([]string, error) { return []string{}, nil },
 	}
 
-	plans, err := manager.planMissingCollectionRepairs(context.Background())
+	plans, _, err := manager.planMissingCollectionRepairs(context.Background())
 	if err != nil {
 		t.Fatalf("planMissingCollectionRepairs returned error: %v", err)
 	}

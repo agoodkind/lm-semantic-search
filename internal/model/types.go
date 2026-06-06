@@ -21,6 +21,11 @@ const (
 	CodebaseStatusFailed CodebaseStatus = "failed"
 	// CodebaseStatusStale means the index metadata is known to be stale.
 	CodebaseStatusStale CodebaseStatus = "stale"
+	// CodebaseStatusMissing means the codebase's source directory is absent. It
+	// is distinct from failed (a build error) and never auto-retries; the index
+	// is kept in case the directory returns, and is removed only by an explicit
+	// clear or the removed-worktree auto-clean.
+	CodebaseStatusMissing CodebaseStatus = "missing"
 )
 
 // JobState captures the lifecycle state of one daemon job.
@@ -145,16 +150,21 @@ type IndexRunFailure struct {
 // inodes at registration time. When true, convergence falls back to
 // path-only file tracking instead of (device, inode, contentHash).
 type Codebase struct {
-	ID                    string                `json:"id"`
-	CanonicalPath         string                `json:"canonical_path"`
-	Status                CodebaseStatus        `json:"status"`
-	ActiveJobID           string                `json:"active_job_id,omitempty"`
-	LastSuccessfulRun     *IndexRunSummary      `json:"last_successful_run,omitempty"`
-	LastFailedRun         *IndexRunFailure      `json:"last_failed_run,omitempty"`
-	EffectiveConfig       IndexConfig           `json:"effective_config"`
-	CollectionName        string                `json:"collection_name,omitempty"`
-	LegacyCollectionNames []string              `json:"legacy_collection_names,omitempty"`
-	MerkleSnapshotPath    string                `json:"merkle_snapshot_path,omitempty"`
+	ID                    string           `json:"id"`
+	CanonicalPath         string           `json:"canonical_path"`
+	Status                CodebaseStatus   `json:"status"`
+	ActiveJobID           string           `json:"active_job_id,omitempty"`
+	LastSuccessfulRun     *IndexRunSummary `json:"last_successful_run,omitempty"`
+	LastFailedRun         *IndexRunFailure `json:"last_failed_run,omitempty"`
+	EffectiveConfig       IndexConfig      `json:"effective_config"`
+	CollectionName        string           `json:"collection_name,omitempty"`
+	LegacyCollectionNames []string         `json:"legacy_collection_names,omitempty"`
+	MerkleSnapshotPath    string           `json:"merkle_snapshot_path,omitempty"`
+	// WorktreeCommonDir is the shared git common dir when this codebase's root
+	// is a linked git worktree, else empty. It lets the daemon recognize a
+	// removed worktree (git deleted its admin entry) after the directory is gone
+	// and auto-clean the disposable index.
+	WorktreeCommonDir     string                `json:"worktree_common_dir,omitempty"`
 	InodeTrackingDisabled bool                  `json:"inode_tracking_disabled,omitempty"`
 	ResolvedIgnoreRules   discovery.IgnoreRules `json:"-"`
 	UpdatedAt             time.Time             `json:"updated_at"`

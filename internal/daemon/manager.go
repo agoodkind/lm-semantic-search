@@ -17,6 +17,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -239,6 +240,7 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 		CollectionName:        "",
 		LegacyCollectionNames: nil,
 		MerkleSnapshotPath:    "",
+		WorktreeCommonDir:     "",
 		InodeTrackingDisabled: false,
 		ResolvedIgnoreRules:   discovery.IgnoreRules{Nodes: nil},
 		UpdatedAt:             clock.Now(),
@@ -459,6 +461,9 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	if manager.semantic != nil && manager.semantic.Available() {
 		codebase.CollectionName = manager.semantic.CollectionName(canonicalPath)
 	}
+	if info, ok := gitworktree.Resolve(canonicalPath); ok && info.Linked {
+		codebase.WorktreeCommonDir = info.CommonDir
+	}
 	codebase.UpdatedAt = clock.Now()
 
 	operation := jobOperationIndex
@@ -519,6 +524,9 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 	codebase.ResolvedIgnoreRules = resolveIgnoreRulesOrLog(ctx, canonicalPath, indexConfig.IgnorePatterns)
 	if manager.semantic != nil && manager.semantic.Available() {
 		codebase.CollectionName = manager.semantic.CollectionName(canonicalPath)
+	}
+	if info, ok := gitworktree.Resolve(canonicalPath); ok && info.Linked {
+		codebase.WorktreeCommonDir = info.CommonDir
 	}
 	codebase.UpdatedAt = clock.Now()
 

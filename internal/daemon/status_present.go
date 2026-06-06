@@ -14,6 +14,7 @@ const (
 	displayIndexed   displayStatus = "indexed"
 	displayStale     displayStatus = "stale"
 	displayFailed    displayStatus = "failed"
+	displayMissing   displayStatus = "missing"
 )
 
 // computeDisplayStatus is the single source of truth for the status every
@@ -46,6 +47,8 @@ func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job) display
 		return displayStale
 	case model.CodebaseStatusFailed:
 		return displayFailed
+	case model.CodebaseStatusMissing:
+		return displayMissing
 	case model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed:
 		return displayPreparing
 	default:

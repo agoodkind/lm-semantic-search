@@ -235,3 +235,26 @@ func TestSiblingWorktreeRootsOmitsMissingDir(t *testing.T) {
 		t.Errorf("SiblingWorktreeRoots = %v, want %v", got, want)
 	}
 }
+
+func TestWorktreeTrackedTrueThenFalseAfterRemoval(t *testing.T) {
+	base := t.TempDir()
+	wtDir := filepath.Join(base, "feat")
+	_, commonDir := buildRepo(t, "ref: refs/heads/main\n", []linkedSpec{
+		{name: "feat", dir: wtDir, head: "ref: refs/heads/feat\n"},
+	})
+
+	if !WorktreeTracked(commonDir, wtDir) {
+		t.Fatalf("WorktreeTracked = false for a live linked worktree, want true")
+	}
+
+	// Simulate `git worktree remove`: git deletes the per-worktree admin entry.
+	if err := os.RemoveAll(filepath.Join(commonDir, "worktrees", "feat")); err != nil {
+		t.Fatalf("remove admin entry: %v", err)
+	}
+	if WorktreeTracked(commonDir, wtDir) {
+		t.Fatalf("WorktreeTracked = true after the admin entry was removed, want false")
+	}
+	if WorktreeTracked("", wtDir) {
+		t.Fatalf("WorktreeTracked = true for an empty common dir, want false")
+	}
+}
