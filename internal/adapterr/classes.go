@@ -32,6 +32,23 @@ const (
 	// endpoint refused or timed out the request.
 	ClassEmbedderUnreachable Class = "embedder_unreachable"
 
+	// ClassEmbedderBusy reports that the embedding endpoint answered but
+	// is at capacity (rate limited or temporarily unavailable, HTTP
+	// 429/503). The endpoint is reachable; the failure is transient and
+	// retryable, distinct from ClassEmbedderUnreachable.
+	ClassEmbedderBusy Class = "embedder_busy"
+
+	// ClassEmbedderRejected reports that the embedding endpoint answered
+	// with a non-429 HTTP error (for example 400/401/500): reachable but
+	// rejecting the request, which usually points at a misconfigured model,
+	// dimensions, or credentials rather than a transient condition.
+	ClassEmbedderRejected Class = "embedder_rejected"
+
+	// ClassEmbedCancelled reports that the embedding request was cancelled
+	// (context cancellation or deadline), for example because the job was
+	// cancelled or the daemon is shutting down. Not a fault of the endpoint.
+	ClassEmbedCancelled Class = "embed_cancelled"
+
 	// ClassInvalidPath reports a path argument that fails validation
 	// (empty, malformed, or otherwise unusable).
 	ClassInvalidPath Class = "invalid_path"
@@ -63,9 +80,13 @@ func CodeFor(class Class) codes.Code {
 		return codes.FailedPrecondition
 	case ClassMilvusUnavailable, ClassEmbedderUnreachable:
 		return codes.Unavailable
+	case ClassEmbedderBusy:
+		return codes.ResourceExhausted
+	case ClassEmbedCancelled:
+		return codes.Canceled
 	case ClassInvalidPath, ClassInvalidArgument:
 		return codes.InvalidArgument
-	case ClassSearchResultIncomplete, ClassInternal:
+	case ClassSearchResultIncomplete, ClassEmbedderRejected, ClassInternal:
 		return codes.Internal
 	default:
 		return codes.Unknown
@@ -93,6 +114,47 @@ func NewEmbedderUnreachable(cause error) *AdapterError {
 		Message:       "embedding endpoint is unreachable",
 		Code:          "embedder_unreachable",
 		Hint:          "verify OPENAI_BASE_URL and that the endpoint serves the OpenAI embeddings API",
+		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
+// NewEmbedderBusy reports a transient embedding failure where the endpoint
+// answered but is at capacity (rate limited or temporarily unavailable). It is
+// distinct from NewEmbedderUnreachable so a busy endpoint does not read as down.
+func NewEmbedderBusy(cause error) *AdapterError {
+	return &AdapterError{
+		Class:         ClassEmbedderBusy,
+		Message:       "embedding endpoint is at capacity (rate limited)",
+		Code:          "embedder_busy",
+		Hint:          "the endpoint is busy; this retries automatically and the job can be re-run",
+		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
+// NewEmbedderRejected reports that the embedding endpoint answered with a
+// non-429 HTTP error: reachable but rejecting the request, typically a
+// misconfigured model, dimensions, or credentials.
+func NewEmbedderRejected(cause error) *AdapterError {
+	return &AdapterError{
+		Class:         ClassEmbedderRejected,
+		Message:       "embedding endpoint rejected the request",
+		Code:          "embedder_rejected",
+		Hint:          "check the embedding model name, dimensions, and credentials",
+		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
+// NewEmbedCancelled reports that the embedding request was cancelled (context
+// cancellation or deadline), for example a cancelled job or daemon shutdown.
+func NewEmbedCancelled(cause error) *AdapterError {
+	return &AdapterError{
+		Class:         ClassEmbedCancelled,
+		Message:       "embedding request was cancelled",
+		Code:          "embed_cancelled",
+		Hint:          "re-run index_codebase when ready",
 		Cause:         cause,
 		SafeForClient: true,
 	}

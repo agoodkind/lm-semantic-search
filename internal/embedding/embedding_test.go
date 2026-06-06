@@ -3,10 +3,14 @@ package embedding
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
+	"github.com/openai/openai-go/v2"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 )
@@ -34,7 +38,7 @@ func TestOpenAICompatibleProviderEmbedBatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := newOpenAICompatibleProvider("OpenAI", "test-key", server.URL, "text-embedding-3-small", 2)
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 2)
 	if err != nil {
 		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
 	}
@@ -71,7 +75,7 @@ func TestEmbedBatchRecordsMetrics(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := newOpenAICompatibleProvider("OpenAI", "test-key", server.URL, "text-embedding-3-small", 2)
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 2)
 	if err != nil {
 		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
 	}
@@ -93,6 +97,149 @@ func TestEmbedBatchRecordsMetrics(t *testing.T) {
 	}
 	if after.EmbedInflight != 0 {
 		t.Fatalf("EmbedInflight = %d, want 0", after.EmbedInflight)
+	}
+}
+
+func TestEmbedBatchRetriesTransientThenSucceeds(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if calls.Add(1) == 1 {
+			writer.WriteHeader(http.StatusTooManyRequests)
+			_, _ = writer.Write([]byte(`{"error":{"message":"busy","type":"rate_limit_exceeded","code":"rate_limited"}}`))
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"data": []map[string]any{{"embedding": []float64{1.0, 2.0}}},
+		})
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 0)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	vectors, err := provider.EmbedBatch(context.Background(), []string{"alpha"})
+	if err != nil {
+		t.Fatalf("EmbedBatch returned error: %v", err)
+	}
+	if len(vectors) != 1 {
+		t.Fatalf("vectors = %#v", vectors)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("server calls = %d, want 2 (one 429 then a successful retry)", got)
+	}
+}
+
+func TestEmbedBatchPersistentBusyReturnsErrEmbedderBusy(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusTooManyRequests)
+		_, _ = writer.Write([]byte(`{"error":{"message":"busy","type":"rate_limit_exceeded"}}`))
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 0)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	_, err = provider.EmbedBatch(context.Background(), []string{"alpha"})
+	if err == nil {
+		t.Fatal("EmbedBatch returned nil error for a persistent 429")
+	}
+	if !errors.Is(err, ErrEmbedderBusy) {
+		t.Fatalf("error is not classified ErrEmbedderBusy: %v", err)
+	}
+}
+
+func TestEmbedBatchNon429NotBusy(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"message":"bad request","type":"invalid_request_error"}}`))
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 0)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	_, err = provider.EmbedBatch(context.Background(), []string{"alpha"})
+	if err == nil {
+		t.Fatal("EmbedBatch returned nil error for a 400")
+	}
+	if errors.Is(err, ErrEmbedderBusy) {
+		t.Fatalf("a 400 was wrongly classified as ErrEmbedderBusy: %v", err)
+	}
+}
+
+func TestEmbedBatchNon429ReturnsRejected(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"message":"bad","type":"invalid_request_error"}}`))
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 0)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	_, err = provider.EmbedBatch(context.Background(), []string{"alpha"})
+	if !errors.Is(err, ErrEmbedderRejected) {
+		t.Fatalf("a 400 should classify as ErrEmbedderRejected: %v", err)
+	}
+	if errors.Is(err, ErrEmbedderBusy) {
+		t.Fatalf("a 400 must not classify as ErrEmbedderBusy: %v", err)
+	}
+}
+
+func TestTransientEmbedStatus(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		err       error
+		wantCode  int
+		transient bool
+	}{
+		{"too many requests", &openai.Error{StatusCode: http.StatusTooManyRequests}, http.StatusTooManyRequests, true},
+		{"service unavailable", &openai.Error{StatusCode: http.StatusServiceUnavailable}, http.StatusServiceUnavailable, true},
+		{"bad request", &openai.Error{StatusCode: http.StatusBadRequest}, http.StatusBadRequest, false},
+		{"wrapped 429", fmt.Errorf("context: %w", &openai.Error{StatusCode: http.StatusTooManyRequests}), http.StatusTooManyRequests, true},
+		{"non-api error", errors.New("connection refused"), 0, false},
+	}
+	for _, testCase := range cases {
+		code, transient := transientEmbedStatus(testCase.err)
+		if code != testCase.wantCode || transient != testCase.transient {
+			t.Fatalf("%s: got (%d, %v), want (%d, %v)", testCase.name, code, transient, testCase.wantCode, testCase.transient)
+		}
+	}
+}
+
+func TestEmbedBackoffDoubles(t *testing.T) {
+	t.Parallel()
+
+	if embedBackoff(1) != embedBackoffBase {
+		t.Fatalf("attempt 1 backoff = %v, want %v", embedBackoff(1), embedBackoffBase)
+	}
+	if embedBackoff(2) != 2*embedBackoffBase {
+		t.Fatalf("attempt 2 backoff = %v, want %v", embedBackoff(2), 2*embedBackoffBase)
+	}
+	if embedBackoff(3) != 4*embedBackoffBase {
+		t.Fatalf("attempt 3 backoff = %v, want %v", embedBackoff(3), 4*embedBackoffBase)
 	}
 }
 

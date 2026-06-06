@@ -8,6 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
@@ -189,7 +190,16 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 	embedded, err := service.embedder.EmbedBatch(ctx, missTexts)
 	if err != nil {
 		slog.ErrorContext(ctx, "embed batch failed", "err", err)
-		return nil, adapterr.NewEmbedderUnreachable(err)
+		switch {
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			return nil, adapterr.NewEmbedCancelled(err)
+		case errors.Is(err, embedding.ErrEmbedderBusy):
+			return nil, adapterr.NewEmbedderBusy(err)
+		case errors.Is(err, embedding.ErrEmbedderRejected):
+			return nil, adapterr.NewEmbedderRejected(err)
+		default:
+			return nil, adapterr.NewEmbedderUnreachable(err)
+		}
 	}
 	if len(embedded) != len(missTexts) {
 		slog.ErrorContext(ctx, "embedding batch returned unexpected vector count", "want", len(missTexts), "got", len(embedded), "err", errors.New("vector count mismatch"))

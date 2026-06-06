@@ -58,6 +58,38 @@ func classify(err error) *AdapterError {
 	return NewInternal(err.Error(), err)
 }
 
+// SafeMessage returns the client-safe one-line message for err: a known adapter
+// class returns its message (plus hint); anything else returns a generic
+// message. It carries no wrapped cause or implementation detail, so it is what
+// the daemon persists and displays, while the full cause stays in the log.
+func SafeMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	adapterErr := classify(err)
+	if !adapterErr.SafeForClient {
+		return "internal error"
+	}
+	if adapterErr.Hint != "" {
+		return adapterErr.Message + "; " + adapterErr.Hint
+	}
+	return adapterErr.Message
+}
+
+// IsTransient reports whether err is a transient condition that must not be
+// persisted as a codebase's terminal failure: an at-capacity embedder or a
+// cancellation. The next sync or index attempt resolves it on its own.
+func IsTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	adapterErr := classify(err)
+	return adapterErr.Class == ClassEmbedderBusy || adapterErr.Class == ClassEmbedCancelled
+}
+
 func formatKnown(adapterErr *AdapterError, ctx context.Context) string {
 	base := adapterErr.Message
 	if adapterErr.Hint != "" {

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
@@ -16,6 +18,28 @@ import (
 )
 
 const maxEmbeddingTokens = 8192
+
+// openAIProviderName is the only supported provider label.
+const openAIProviderName = "OpenAI"
+
+// Embedding retry policy for transient contention (HTTP 429/503). The endpoint
+// is reachable but rate limiting or briefly unavailable, so the batch is retried
+// with exponential backoff rather than failing the indexing job outright.
+const (
+	embedMaxAttempts = 4
+	embedBackoffBase = 200 * time.Millisecond
+)
+
+// ErrEmbedderBusy marks a transient embedding failure: the endpoint answered but
+// is at capacity (rate limited or temporarily unavailable). Callers branch on it
+// with [errors.Is] to treat the failure as retryable rather than as the endpoint
+// being unreachable.
+var ErrEmbedderBusy = errors.New("embedding endpoint is at capacity")
+
+// ErrEmbedderRejected marks a non-429 HTTP error from the endpoint: it is
+// reachable but rejected the request (for example 400/401/500), distinct from a
+// network failure that means the endpoint is unreachable.
+var ErrEmbedderRejected = errors.New("embedding endpoint rejected the request")
 
 // Provider generates dense embedding vectors.
 type Provider interface {
@@ -36,7 +60,7 @@ func NewProvider(cfg config.Config) (Provider, error) {
 		slog.Error("embedding provider is not supported", "provider", provider, "err", errors.New("only OpenAI-compatible adapter is supported"))
 		return nil, fmt.Errorf("embedding provider %q is not supported; only the OpenAI-compatible adapter is available", provider)
 	}
-	return newOpenAICompatibleProvider("OpenAI", cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.EmbeddingModel, cfg.EmbeddingDimension)
+	return newOpenAICompatibleProvider(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.EmbeddingModel, cfg.EmbeddingDimension)
 }
 
 type openAICompatibleProvider struct {
@@ -46,21 +70,27 @@ type openAICompatibleProvider struct {
 	client     openai.Client
 }
 
-func newOpenAICompatibleProvider(name string, apiKey string, baseURL string, model string, dimensions int32) (Provider, error) {
+func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, dimensions int32) (Provider, error) {
 	if strings.TrimSpace(apiKey) == "" {
-		return nil, fmt.Errorf("%s embedding provider requires an API key", name)
+		return nil, fmt.Errorf("%s embedding provider requires an API key", openAIProviderName)
 	}
 	if strings.TrimSpace(model) == "" {
-		return nil, fmt.Errorf("%s embedding provider requires a model", name)
+		return nil, fmt.Errorf("%s embedding provider requires a model", openAIProviderName)
 	}
 
-	requestOptions := []option.RequestOption{option.WithAPIKey(apiKey)}
+	// Own the retry policy explicitly in embedWithRetry rather than letting the
+	// SDK retry transparently, so transient 429/503 backoff is single-layered and
+	// classified consistently instead of compounding with the SDK's own retries.
+	requestOptions := []option.RequestOption{
+		option.WithAPIKey(apiKey),
+		option.WithMaxRetries(0),
+	}
 	if strings.TrimSpace(baseURL) != "" {
 		requestOptions = append(requestOptions, option.WithBaseURL(baseURL))
 	}
 
 	return &openAICompatibleProvider{
-		name:       name,
+		name:       openAIProviderName,
 		model:      model,
 		dimensions: dimensions,
 		client:     openai.NewClient(requestOptions...),
@@ -111,10 +141,9 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 		metrics.EmbedBatchDone(len(texts), clock.Now().Sub(start), err != nil)
 	}()
 
-	response, err := provider.client.Embeddings.New(ctx, params)
+	response, err := provider.embedWithRetry(ctx, params)
 	if err != nil {
-		slog.ErrorContext(ctx, "generate embeddings failed", "provider", provider.name, "model", provider.model, "err", err)
-		return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, err)
+		return nil, err
 	}
 	if len(response.Data) != len(preprocessedTexts) {
 		slog.ErrorContext(ctx, "embedding provider returned unexpected vector count", "provider", provider.name, "want", len(preprocessedTexts), "got", len(response.Data), "err", errors.New("vector count mismatch"))
@@ -130,6 +159,74 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 		vectors = append(vectors, vector)
 	}
 	return vectors, nil
+}
+
+// embedWithRetry issues the embeddings request, retrying transient contention
+// (HTTP 429/503) with exponential backoff. A non-transient error returns
+// immediately wrapped with operation context; transient exhaustion returns an
+// error wrapping ErrEmbedderBusy so callers can classify it as "busy" rather
+// than "unreachable".
+func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, params openai.EmbeddingNewParams) (*openai.CreateEmbeddingResponse, error) {
+	var lastErr error
+	for attempt := 1; attempt <= embedMaxAttempts; attempt++ {
+		response, err := provider.client.Embeddings.New(ctx, params)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+
+		statusCode, transient := transientEmbedStatus(err)
+		if !transient {
+			slog.ErrorContext(ctx, "generate embeddings failed", "provider", provider.name, "model", provider.model, "status", statusCode, "err", err)
+			var apiErr *openai.Error
+			if errors.As(err, &apiErr) {
+				// Reachable endpoint that answered with a non-429 HTTP error.
+				return nil, fmt.Errorf("generate %s embeddings: %w: %w", provider.name, ErrEmbedderRejected, err)
+			}
+			// Network failure: the endpoint is unreachable.
+			return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, err)
+		}
+		if attempt == embedMaxAttempts {
+			break
+		}
+
+		backoff := embedBackoff(attempt)
+		slog.WarnContext(ctx, "embedding endpoint busy, retrying", "provider", provider.name, "model", provider.model, "status", statusCode, "attempt", attempt, "backoff", backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, ctx.Err())
+		case <-timer.C:
+		}
+	}
+
+	statusCode, _ := transientEmbedStatus(lastErr)
+	slog.ErrorContext(ctx, "embedding endpoint still busy after retries", "provider", provider.name, "model", provider.model, "status", statusCode, "attempts", embedMaxAttempts, "err", lastErr)
+	return nil, fmt.Errorf("generate %s embeddings: %w: %w", provider.name, ErrEmbedderBusy, lastErr)
+}
+
+// transientEmbedStatus reports the HTTP status of an OpenAI API error and whether
+// it indicates transient contention worth retrying (429 Too Many Requests or 503
+// Service Unavailable). Non-API errors and other statuses are not transient.
+func transientEmbedStatus(err error) (int, bool) {
+	var apiErr *openai.Error
+	if !errors.As(err, &apiErr) {
+		return 0, false
+	}
+	switch apiErr.StatusCode {
+	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
+		return apiErr.StatusCode, true
+	default:
+		return apiErr.StatusCode, false
+	}
+}
+
+// embedBackoff returns the wait before the next attempt, doubling from the base
+// (attempt 1 waits the base, attempt 2 twice the base, and so on).
+func embedBackoff(attempt int) time.Duration {
+	multiplier := 1 << (attempt - 1)
+	return embedBackoffBase * time.Duration(multiplier)
 }
 
 func preprocessText(text string) string {
