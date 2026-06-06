@@ -1,0 +1,170 @@
+package daemon
+
+import (
+	"context"
+	"log/slog"
+
+	"goodkind.io/lm-semantic-search/internal/gitworktree"
+	"goodkind.io/lm-semantic-search/internal/model"
+)
+
+// worktreeAutoIndexClient labels the index jobs the daemon starts when it
+// auto-creates a worktree index on first use, so the job's origin is legible in
+// status and logs.
+var worktreeAutoIndexClient = model.ClientInfo{Name: "worktree-auto-index", PID: 0}
+
+// resolveWorktreeIndex implements worktree-bounded resolution. A git worktree is
+// its own codebase: when canonicalPath lives inside a worktree whose root is not
+// yet tracked, and at least one sibling worktree of the same repository is
+// already indexed, the daemon auto-creates the worktree's index and resolves to
+// it instead of letting a covering parent serve another branch's content. The
+// returned bool is false when canonicalPath is not such a worktree, which leaves
+// the caller's normal coverage resolution untouched.
+func (manager *Manager) resolveWorktreeIndex(ctx context.Context, canonicalPath string) (model.Codebase, *model.Job, bool) {
+	var empty model.Codebase
+	info, isWorktree := gitworktree.Resolve(canonicalPath)
+	if !isWorktree {
+		return empty, nil, false
+	}
+
+	manager.mu.Lock()
+	if _, exists := manager.findCodebaseByExactRoot(info.WorktreeRoot); exists {
+		// The worktree already has its own codebase; longest-prefix coverage
+		// resolves to it without intervention.
+		manager.mu.Unlock()
+		return empty, nil, false
+	}
+	hasIndexedSibling := manager.hasIndexedSiblingWorktreeLocked(info.WorktreeRoot, info.CommonDir)
+	manager.mu.Unlock()
+	if !hasIndexedSibling {
+		return empty, nil, false
+	}
+
+	job, codebase, _, _, err := manager.StartIndex(ctx, info.WorktreeRoot, worktreeAutoIndexClient, emptyAutoIndexConfig(), false)
+	if err != nil {
+		slog.WarnContext(ctx, "worktree auto-index failed; falling back to normal resolution", "worktree_root", info.WorktreeRoot, "err", err)
+		return empty, nil, false
+	}
+	var activeJob *model.Job
+	if job.ID != "" {
+		jobCopy := job
+		activeJob = &jobCopy
+	}
+	return codebase, activeJob, true
+}
+
+// hasIndexedSiblingWorktreeLocked reports whether any worktree of the same repo
+// group (other than worktreeRoot) is already a tracked, indexed codebase, which
+// is the condition that turns a worktree into "a worktree of an indexed repo"
+// for the auto-create trigger. Caller must hold manager.mu.
+func (manager *Manager) hasIndexedSiblingWorktreeLocked(worktreeRoot string, commonDir string) bool {
+	if commonDir == "" {
+		return false
+	}
+	siblingRoots := gitworktree.SiblingWorktreeRoots(commonDir)
+	siblings := make(map[string]struct{}, len(siblingRoots))
+	for _, root := range siblingRoots {
+		if root != worktreeRoot {
+			siblings[root] = struct{}{}
+		}
+	}
+	if len(siblings) == 0 {
+		return false
+	}
+	for _, codebase := range manager.codebases {
+		if _, ok := siblings[codebase.CanonicalPath]; !ok {
+			continue
+		}
+		if codebase.Status == model.CodebaseStatusIndexed || codebase.LastSuccessfulRun != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// worktreeSiblingReuseCollections returns the collection names of indexed
+// sibling worktrees of the same repo group as canonicalPath whose embedding
+// model matches indexConfig. A worktree build preloads reuse vectors from these
+// so files unchanged from a sibling reuse their embeddings and only the branch
+// diff is embedded. It returns nil when canonicalPath is not a worktree or has
+// no eligible sibling.
+func (manager *Manager) worktreeSiblingReuseCollections(canonicalPath string, indexConfig model.IndexConfig) []string {
+	info, ok := gitworktree.Resolve(canonicalPath)
+	if !ok {
+		return nil
+	}
+	siblingRoots := gitworktree.SiblingWorktreeRoots(info.CommonDir)
+	siblings := make(map[string]struct{}, len(siblingRoots))
+	for _, root := range siblingRoots {
+		if root != info.WorktreeRoot {
+			siblings[root] = struct{}{}
+		}
+	}
+	if len(siblings) == 0 {
+		return nil
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	collections := make([]string, 0)
+	for _, codebase := range manager.codebases {
+		if _, member := siblings[codebase.CanonicalPath]; !member {
+			continue
+		}
+		if codebase.CollectionName == "" || codebase.ActiveJobID != "" {
+			continue
+		}
+		if codebase.Status != model.CodebaseStatusIndexed {
+			continue
+		}
+		if !reuseModelMatches(codebase.EffectiveConfig, indexConfig) {
+			continue
+		}
+		collections = append(collections, codebase.CollectionName)
+	}
+	return collections
+}
+
+// isWorktreeBoundary reports whether canonicalPath is the root of a git worktree
+// whose repo group matches the covering ancestor, which makes the two distinct
+// worktrees of the same repository that must stay separate codebases rather than
+// merge. The merge-up redirect consults it so a worktree root is never folded
+// into a sibling worktree's index.
+func (manager *Manager) isWorktreeBoundary(canonicalPath string, ancestor model.Codebase) bool {
+	info, ok := gitworktree.Resolve(canonicalPath)
+	if !ok || info.WorktreeRoot != canonicalPath {
+		return false
+	}
+	ancestorCommon, ok := gitworktree.CommonDirAt(ancestor.CanonicalPath)
+	if !ok {
+		return false
+	}
+	return ancestorCommon == info.CommonDir
+}
+
+// isSameRepoSiblingWorktree reports whether child is a worktree of the same repo
+// group as parentPath but rooted at a different worktree. Such a child is a
+// sibling worktree, not a nested part of the parent, so the parent's build must
+// not reuse its vectors or absorb its registration.
+func isSameRepoSiblingWorktree(parentPath string, childPath string) bool {
+	parentCommon, ok := gitworktree.CommonDirAt(parentPath)
+	if !ok {
+		return false
+	}
+	childCommon, ok := gitworktree.CommonDirAt(childPath)
+	if !ok {
+		return false
+	}
+	return parentCommon == childCommon && parentPath != childPath
+}
+
+// emptyAutoIndexConfig is the zero index config handed to an auto-created
+// worktree build; enrichIndexConfig fills in the daemon defaults.
+func emptyAutoIndexConfig() model.IndexConfig {
+	return model.IndexConfig{
+		SplitterType: "", SplitterChunkSize: 0, SplitterOverlap: 0,
+		Extensions: nil, IgnorePatterns: nil, IgnoreDigest: "",
+		EmbeddingProvider: "", EmbeddingModel: "", EmbeddingDimension: 0,
+		VectorBackend: "", Hybrid: false,
+	}
+}

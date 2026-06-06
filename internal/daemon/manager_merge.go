@@ -28,6 +28,12 @@ func (manager *Manager) descendantReuseCandidates(canonicalPath string, indexCon
 		if !reuseModelMatches(child.EffectiveConfig, indexConfig) {
 			continue
 		}
+		// A nested sibling worktree of the same repo is a separate codebase
+		// holding a different branch; the parent's discovery already excludes its
+		// files, so it must be neither reused nor absorbed.
+		if isSameRepoSiblingWorktree(canonicalPath, child.CanonicalPath) {
+			continue
+		}
 		candidates = append(candidates, child)
 	}
 	return candidates
