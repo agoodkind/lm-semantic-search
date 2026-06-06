@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -101,6 +102,9 @@ func renderGetIndex(requestedPath string, tracked bool, codebase *model.Codebase
 	if symlinkLine := renderSymlinkResolution(requestedPath); symlinkLine != "" {
 		lines = append(lines, symlinkLine)
 	}
+	if worktreeLine := renderWorktreeRelation(requestedPath); worktreeLine != "" {
+		lines = append(lines, worktreeLine)
+	}
 	if coverageLine := renderCoveringResolution(requestedPath, tracked, codebase); coverageLine != "" {
 		lines = append(lines, coverageLine)
 	}
@@ -161,6 +165,29 @@ func renderSymlinkResolution(requestedPath string) string {
 		return ""
 	}
 	return "🔗 symlink resolved to: " + resolved
+}
+
+// renderWorktreeRelation names the main checkout and branch a linked worktree
+// belongs to, so the operator sees that this index is one branch of a shared
+// repository. It returns an empty string for the main worktree (no separate
+// checkout to point at) and for a non-git path.
+func renderWorktreeRelation(requestedPath string) string {
+	if strings.TrimSpace(requestedPath) == "" {
+		return ""
+	}
+	absolutePath, err := filepath.Abs(requestedPath)
+	if err != nil {
+		return ""
+	}
+	info, ok := gitworktree.Resolve(absolutePath)
+	if !ok || !info.Linked {
+		return ""
+	}
+	mainCheckout := filepath.Dir(info.CommonDir)
+	if info.Detached {
+		return fmt.Sprintf("🌿 git worktree of %s (detached HEAD %s)", mainCheckout, info.Head)
+	}
+	return fmt.Sprintf("🌿 git worktree of %s (branch %s)", mainCheckout, info.Branch)
 }
 
 func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job) string {
@@ -742,6 +769,9 @@ func renderSearchIndexingStatus(view searchView) string {
 	lines := []string{detail}
 	if symlinkLine := renderSymlinkResolution(view.RequestedPath); symlinkLine != "" {
 		lines = append(lines, symlinkLine)
+	}
+	if worktreeLine := renderWorktreeRelation(view.RequestedPath); worktreeLine != "" {
+		lines = append(lines, worktreeLine)
 	}
 	return strings.Join(lines, "\n")
 }

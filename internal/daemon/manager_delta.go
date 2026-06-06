@@ -278,16 +278,21 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job) {
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
-	// Merge-down: when this build roots above already-indexed child codebases,
-	// reuse their stored embeddings for the shared subtree instead of
-	// re-embedding it, then absorb the children once the build promotes.
+	// Reuse stored embeddings instead of re-embedding shared content. Two
+	// sources contribute: merge-down children this build roots above (absorbed
+	// after promotion) and sibling worktrees of the same repo (a linked clone
+	// where only the branch diff is embedded). Reuse is keyed on content hash, so
+	// both sources compose into one map.
 	descendants := manager.descendantReuseCandidates(job.CanonicalPath, job.Config)
-	if len(descendants) > 0 && state.semantic {
-		reuse, reuseErr := manager.semantic.LoadReuseVectors(ctx, collectionNamesOf(descendants))
+	reuseCollections := collectionNamesOf(descendants)
+	reuseCollections = append(reuseCollections, manager.worktreeSiblingReuseCollections(job.CanonicalPath, job.Config)...)
+	if len(reuseCollections) > 0 && state.semantic {
+		reuse, reuseErr := manager.semantic.LoadReuseVectors(ctx, reuseCollections)
 		if reuseErr != nil {
 			slog.WarnContext(ctx, "load reuse vectors failed; embedding shared subtree", "job_id", job.ID, "err", reuseErr)
 		} else {
 			state.reuse = reuse
+			slog.InfoContext(ctx, "build.reuse_seeded", "job_id", job.ID, "reuse_collections", len(reuseCollections), "reuse_vectors", len(reuse))
 		}
 	}
 

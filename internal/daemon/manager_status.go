@@ -23,6 +23,16 @@ func (manager *Manager) GetIndex(ctx context.Context, requestedPath string) (mod
 		return model.Codebase{}, nil, false, nil, fmt.Errorf("canonicalize path %s: %w", requestedPath, err)
 	}
 
+	// Worktree-bounded resolution: a git worktree is its own codebase. When the
+	// queried path lives in a worktree of an indexed repo that is not yet
+	// tracked, this auto-creates and resolves to the worktree's own index rather
+	// than serving a covering parent that holds a different branch's content.
+	if codebase, activeJob, ok := manager.resolveWorktreeIndex(ctx, canonicalPath); ok {
+		codebase = manager.presentCurrentState(ctx, codebase, activeJob)
+		classification := manager.classifyTrackedPath(ctx, codebase, canonicalPath)
+		return codebase, activeJob, true, classification, nil
+	}
+
 	manager.mu.Lock()
 	matches := manager.findCodebasesByCoverage(canonicalPath)
 	if len(matches) > 0 {

@@ -134,3 +134,57 @@ func TestEffectiveIgnorePatternsAdditionalOverrides(t *testing.T) {
 		t.Fatal("override pattern did not exclude research/file.txt")
 	}
 }
+
+// TestDiscoverExcludesNestedSameRepoWorktree proves the walk stops at a nested
+// directory that is a git worktree of the same repository as the codebase
+// root, so worktree files never leak into the parent index, while a submodule
+// (a different common dir) keeps today's behavior of being included.
+func TestDiscoverExcludesNestedSameRepoWorktree(t *testing.T) {
+	t.Parallel()
+	repo := filepath.Join(t.TempDir(), "repo")
+
+	// main worktree
+	writeFile(t, filepath.Join(repo, ".git", "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(repo, "main.go"), "package main\n")
+
+	// nested linked worktree of the same repo at repo/wt
+	perWorktree := filepath.Join(repo, ".git", "worktrees", "foo")
+	writeFile(t, filepath.Join(perWorktree, "commondir"), "../..\n")
+	writeFile(t, filepath.Join(perWorktree, "gitdir"), filepath.Join(repo, "wt", ".git")+"\n")
+	writeFile(t, filepath.Join(perWorktree, "HEAD"), "ref: refs/heads/feature\n")
+	writeFile(t, filepath.Join(repo, "wt", ".git"), "gitdir: "+perWorktree+"\n")
+	writeFile(t, filepath.Join(repo, "wt", "feature.go"), "package feature\n")
+
+	// nested submodule (a different common dir) at repo/vendor/lib
+	moduleGitDir := filepath.Join(repo, ".git", "modules", "lib")
+	writeFile(t, filepath.Join(moduleGitDir, "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(repo, "extern", "lib", ".git"), "gitdir: "+moduleGitDir+"\n")
+	writeFile(t, filepath.Join(repo, "extern", "lib", "sub.go"), "package lib\n")
+
+	result, err := Discover(context.Background(), repo, nil, nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+
+	got := make(map[string]bool)
+	for _, file := range result.Files {
+		rel, relErr := filepath.Rel(repo, file)
+		if relErr != nil {
+			t.Fatalf("rel for %s: %v", file, relErr)
+		}
+		got[filepath.ToSlash(rel)] = true
+	}
+
+	if !got["main.go"] {
+		t.Errorf("main.go missing from discovery; got %v", got)
+	}
+	if !got["extern/lib/sub.go"] {
+		t.Errorf("submodule file extern/lib/sub.go should be included (today's behavior); got %v", got)
+	}
+	if got["wt/feature.go"] {
+		t.Errorf("nested worktree file wt/feature.go must be excluded; got %v", got)
+	}
+	if got["wt/.git"] {
+		t.Errorf("nested worktree .git pointer must never be indexed; got %v", got)
+	}
+}

@@ -371,8 +371,10 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 	// Merge-up: a nested path already covered by an indexed parent does not get
 	// its own redundant index. Resolve to the covering parent and sync it so the
 	// requested subtree is current, rather than building a second overlapping
-	// collection over the shared files.
-	if ancestor, found := manager.mergeUpTarget(canonicalPath); found {
+	// collection over the shared files. A git worktree root is exempt: it shares
+	// the parent's repo group but holds a different branch, so it stays its own
+	// codebase rather than merging into a sibling worktree.
+	if ancestor, found := manager.mergeUpTarget(canonicalPath); found && !manager.isWorktreeBoundary(canonicalPath, ancestor) {
 		return manager.redirectIndexToAncestor(ctx, requestedPath, ancestor, client)
 	}
 

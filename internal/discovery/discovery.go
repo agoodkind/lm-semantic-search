@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"goodkind.io/lm-semantic-search/internal/gitworktree"
 )
 
 // defaultIgnorePatterns is the denylist applied to every codebase. It
@@ -242,8 +244,15 @@ func Discover(ctx context.Context, root string, additionalIgnorePatterns []strin
 	}
 	effectiveExtensions := normalizeExtensions(additionalExtensions)
 
+	// rootCommonDir identifies the repo group of the codebase root, when it is a
+	// git working tree. The walk uses it to stop at a nested directory that is a
+	// worktree of the same repository, so a sibling worktree's files never leak
+	// into this codebase's index. It is empty for a non-git root, which disables
+	// the boundary entirely.
+	rootCommonDir, _ := gitworktree.CommonDirAt(absoluteRoot)
+
 	files := []string{}
-	if err := walkFiles(ctx, absoluteRoot, absoluteRoot, rules, &files); err != nil {
+	if err := walkFiles(ctx, absoluteRoot, absoluteRoot, rules, rootCommonDir, &files); err != nil {
 		return Result{}, err
 	}
 	slices.Sort(files)
@@ -269,7 +278,8 @@ func EffectiveIgnorePatterns(ctx context.Context, root string, additionalIgnoreP
 		rootPatterns = append(rootPatterns, parsePattern(pattern, patternSourceOverride))
 	}
 
-	if err := walkGitignore(ctx, root, "", nodes); err != nil {
+	rootCommonDir, _ := gitworktree.CommonDirAt(root)
+	if err := walkGitignore(ctx, root, "", rootCommonDir, nodes); err != nil {
 		return IgnoreRules{}, err
 	}
 
@@ -362,7 +372,7 @@ func PathIgnored(relativePath string, rules IgnoreRules) (bool, string, string) 
 	return false, "", ""
 }
 
-func walkFiles(ctx context.Context, root string, current string, rules IgnoreRules, files *[]string) error {
+func walkFiles(ctx context.Context, root string, current string, rules IgnoreRules, rootCommonDir string, files *[]string) error {
 	if err := ctx.Err(); err != nil {
 		slog.ErrorContext(ctx, "walk cancelled", "path", current, "err", err)
 		return fmt.Errorf("walk cancelled at %s: %w", current, err)
@@ -375,6 +385,13 @@ func walkFiles(ctx context.Context, root string, current string, rules IgnoreRul
 	}
 
 	for _, entry := range entries {
+		// The codebase root's own .git entry is metadata, never content. The
+		// .git/ pattern already excludes the main worktree's .git directory, but
+		// a linked worktree roots at a .git file that the directory pattern does
+		// not match, so it is dropped explicitly here.
+		if entry.Name() == ".git" && current == root {
+			continue
+		}
 		fullPath := filepath.Join(current, entry.Name())
 		relativePath, err := filepath.Rel(root, fullPath)
 		if err != nil {
@@ -386,7 +403,10 @@ func walkFiles(ctx context.Context, root string, current string, rules IgnoreRul
 		}
 
 		if entry.IsDir() {
-			if err := walkFiles(ctx, root, fullPath, rules, files); err != nil {
+			if isSameRepoWorktree(fullPath, rootCommonDir) {
+				continue
+			}
+			if err := walkFiles(ctx, root, fullPath, rules, rootCommonDir, files); err != nil {
 				return err
 			}
 			continue
@@ -397,9 +417,25 @@ func walkFiles(ctx context.Context, root string, current string, rules IgnoreRul
 	return nil
 }
 
+// isSameRepoWorktree reports whether dir is the root of a git worktree that
+// shares rootCommonDir, which marks it as a sibling worktree of the codebase
+// being walked rather than part of it. An empty rootCommonDir (a non-git
+// codebase root) disables the check. Submodules and unrelated nested repos
+// resolve to a different common dir and are not treated as boundaries.
+func isSameRepoWorktree(dir string, rootCommonDir string) bool {
+	if rootCommonDir == "" {
+		return false
+	}
+	dirCommon, ok := gitworktree.CommonDirAt(dir)
+	if !ok {
+		return false
+	}
+	return dirCommon == rootCommonDir
+}
+
 // walkGitignore reads every .gitignore file under root (recursively) and
 // records its patterns in the per-directory node table.
-func walkGitignore(ctx context.Context, root string, relativeDir string, nodes map[string][]ignorePattern) error {
+func walkGitignore(ctx context.Context, root string, relativeDir string, rootCommonDir string, nodes map[string][]ignorePattern) error {
 	currentDir := filepath.Join(root, relativeDir)
 	entries, err := os.ReadDir(currentDir)
 	if err != nil {
@@ -419,11 +455,16 @@ func walkGitignore(ctx context.Context, root string, relativeDir string, nodes m
 			if isDefaultExcludedDir(name) {
 				continue
 			}
+			// A nested worktree of the same repo is a boundary: its .gitignore
+			// belongs to that worktree, not this codebase.
+			if isSameRepoWorktree(filepath.Join(currentDir, name), rootCommonDir) {
+				continue
+			}
 			nextRelative := name
 			if relativeDir != "" {
 				nextRelative = filepath.ToSlash(filepath.Join(relativeDir, name))
 			}
-			if err := walkGitignore(ctx, root, nextRelative, nodes); err != nil {
+			if err := walkGitignore(ctx, root, nextRelative, rootCommonDir, nodes); err != nil {
 				return err
 			}
 			continue
