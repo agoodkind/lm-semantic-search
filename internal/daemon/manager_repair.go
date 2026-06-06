@@ -149,10 +149,13 @@ func (manager *Manager) noteAutomaticRepairStartFailure(ctx context.Context, cod
 	}
 
 	now := clock.Now()
+	// Keep the raw enqueue error in the log; the persisted message stays a clean
+	// summary so the status surface carries no implementation detail.
+	slog.ErrorContext(ctx, "automatic rebuild could not start for missing collection", "codebase_id", codebaseID, "err", startErr)
 	codebase.Status = model.CodebaseStatusStale
 	codebase.ActiveJobID = ""
 	codebase.LastFailedRun = &model.IndexRunFailure{
-		Message:                 "Milvus collection missing; automatic rebuild could not start: " + startErr.Error(),
+		Message:                 "semantic collection is missing and automatic rebuild could not start",
 		LastAttemptedPercentage: 0,
 		FailedAt:                now,
 		TraceID:                 string(correlation.FromContext(ctx).TraceID),

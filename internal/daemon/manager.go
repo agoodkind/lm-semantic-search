@@ -636,15 +636,9 @@ func (manager *Manager) CancelJob(jobID string) (model.Job, error) {
 
 	codebase, found := manager.codebases[job.CodebaseID]
 	if found && codebase.ActiveJobID == job.ID {
+		// A cancellation is not a failure: leave the codebase at its last-good
+		// state so a status check reflects the current usable state.
 		codebase.ActiveJobID = ""
-		codebase.Status = model.CodebaseStatusFailed
-		codebase.LastFailedRun = &model.IndexRunFailure{
-			Message:                 "job cancelled",
-			LastAttemptedPercentage: 0,
-			FailedAt:                now,
-			TraceID:                 "",
-			JobID:                   jobID,
-		}
 		codebase.UpdatedAt = now
 		manager.codebases[codebase.ID] = codebase
 		if err := manager.saveLocked(); err != nil {

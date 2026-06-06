@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
@@ -147,6 +148,12 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	traceID := string(correlation.FromContext(ctx).TraceID)
 	now := clock.Now()
 	metrics.JobFailed()
+	// A transient failure (at-capacity embedder or cancellation) does not change
+	// the codebase's usable state; only genuine failures become terminal. The
+	// persisted message is the safe class message, never the wrapped cause, which
+	// stays in the log below correlated by trace_id.
+	transient := adapterr.IsTransient(runErr)
+	safeMessage := adapterr.SafeMessage(runErr)
 	job.State = model.JobStateFailed
 	job.UpdatedAt = now
 	job.CompletedAt = &now
@@ -154,12 +161,12 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
 	job.Error = &model.JobError{
-		Message:   runErr.Error(),
-		Retryable: false,
+		Message:   safeMessage,
+		Retryable: transient,
 		TraceID:   traceID,
 		JobID:     jobID,
 	}
-	slog.ErrorContext(ctx, "job.failed", "component", "daemon", "subcomponent", "jobs", "job_id", jobID, "trace_id", traceID, "err", runErr)
+	slog.ErrorContext(ctx, "job.failed", "component", "daemon", "subcomponent", "jobs", "job_id", jobID, "trace_id", traceID, "transient", transient, "err", runErr)
 	if err := manager.appendJobLocked("job_failed", job); err != nil {
 		slog.ErrorContext(ctx, "append failed job event failed", "job_id", jobID, "err", err)
 	}
@@ -168,14 +175,16 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	if !found {
 		return
 	}
-	codebase.Status = model.CodebaseStatusFailed
 	codebase.ActiveJobID = ""
-	codebase.LastFailedRun = &model.IndexRunFailure{
-		Message:                 runErr.Error(),
-		LastAttemptedPercentage: 0,
-		FailedAt:                now,
-		TraceID:                 traceID,
-		JobID:                   jobID,
+	if !transient {
+		codebase.Status = model.CodebaseStatusFailed
+		codebase.LastFailedRun = &model.IndexRunFailure{
+			Message:                 safeMessage,
+			LastAttemptedPercentage: 0,
+			FailedAt:                now,
+			TraceID:                 traceID,
+			JobID:                   jobID,
+		}
 	}
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
@@ -193,7 +202,6 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 		return
 	}
 
-	traceID := string(correlation.FromContext(ctx).TraceID)
 	now := clock.Now()
 	metrics.JobCancelled()
 	job.State = model.JobStateCancelled
@@ -210,15 +218,9 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 	if !found {
 		return
 	}
-	codebase.Status = model.CodebaseStatusFailed
+	// A cancellation is not a failure: leave the codebase at its last-good state
+	// so a status check reflects the current usable state, not a stale failure.
 	codebase.ActiveJobID = ""
-	codebase.LastFailedRun = &model.IndexRunFailure{
-		Message:                 "job cancelled",
-		LastAttemptedPercentage: 0,
-		FailedAt:                now,
-		TraceID:                 traceID,
-		JobID:                   jobID,
-	}
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {

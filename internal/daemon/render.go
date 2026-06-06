@@ -386,14 +386,12 @@ func renderReconcileMagnitude(progress model.Progress) string {
 // ids it appends a diagnostics line so the operator can grep the daemon log.
 func renderHistoricalFailure(codebase *model.Codebase) string {
 	if codebase.LastFailedRun == nil {
-		return fmt.Sprintf("❌ Codebase '%s' last indexing attempt failed. Call index_codebase to retry.", codebase.CanonicalPath)
+		return fmt.Sprintf("❌ Codebase '%s' is not currently indexed. Call index_codebase to build it.", codebase.CanonicalPath)
 	}
 	return fmt.Sprintf(
-		"❌ Codebase '%s' last indexing attempt failed at %s (%.1f%% complete).\n🚨 Previous error: %s\n💡 Call index_codebase to retry; the previous failure no longer blocks new attempts.%s",
+		"❌ Codebase '%s' is not currently indexed.\n🚧 %s\n💡 Call index_codebase to build it.%s",
 		codebase.CanonicalPath,
-		formatLocalTime(codebase.LastFailedRun.FailedAt),
-		float64(codebase.LastFailedRun.LastAttemptedPercentage),
-		orDefault(codebase.LastFailedRun.Message, "unknown error"),
+		orDefault(codebase.LastFailedRun.Message, "the index could not be built"),
 		renderFailureDiagnostics(codebase.LastFailedRun),
 	)
 }
