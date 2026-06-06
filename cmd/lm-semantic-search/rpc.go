@@ -32,21 +32,32 @@ func currentClientInfo() (*pb.ClientInfo, error) {
 	}, nil
 }
 
-func callAndPrint(options cliOptions, call rpcCall) error {
+// callDaemon dials the daemon, runs one RPC, and returns the raw proto reply.
+// It is the shared seam under callAndPrint and the interactive list view, so the
+// TUI can fetch records without the print step double-emitting output.
+func callDaemon(options cliOptions, call rpcCall) (protoMessage, error) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	connection, client, err := grpcutil.DialDaemon(ctx, options.socketPath)
 	if err != nil {
 		slog.Error("dial daemon failed", "socket_path", options.socketPath, "err", err)
-		return fmt.Errorf("dial daemon: %w", err)
+		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
 	defer connection.Close()
 
 	result, err := call(ctx, client)
 	if err != nil {
 		slog.Error("daemon RPC failed", "socket_path", options.socketPath, "err", err)
-		return formatCallError(err)
+		return nil, formatCallError(err)
+	}
+	return result, nil
+}
+
+func callAndPrint(options cliOptions, call rpcCall) error {
+	result, err := callDaemon(options, call)
+	if err != nil {
+		return err
 	}
 
 	formatted, err := response.FormatProto(options.outputMode, result)

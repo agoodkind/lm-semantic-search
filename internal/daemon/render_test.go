@@ -535,3 +535,46 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderClearIndexHasNoRemainLine proves the clear output is just the
+// success line, with no trailing "other ... remain" count.
+func TestRenderClearIndexHasNoRemainLine(t *testing.T) {
+	t.Parallel()
+	codebase := model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
+	out := renderClearIndex(codebase)
+	want := "Successfully cleared codebase '/Users/agoodkind/Sites/swift-makefile'"
+	if out != want {
+		t.Fatalf("renderClearIndex = %q, want %q", out, want)
+	}
+	if strings.Contains(out, "remain") {
+		t.Fatalf("renderClearIndex still contains a remain line:\n%s", out)
+	}
+}
+
+// TestRenderListIndexesShowsIDAndPluralHeader proves each row carries the
+// copy-pasteable id and the header pluralizes the codebase count correctly.
+func TestRenderListIndexesShowsIDAndPluralHeader(t *testing.T) {
+	t.Parallel()
+	single := []model.Codebase{
+		{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: model.CodebaseStatusIndexed},
+	}
+	out := renderListIndexes(single)
+	if !strings.Contains(out, "Tracked 1 codebase:") {
+		t.Fatalf("single header not singular:\n%s", out)
+	}
+	if !strings.Contains(out, "cb_1_aaaa") || !strings.Contains(out, "/tmp/alpha") {
+		t.Fatalf("row missing id or path:\n%s", out)
+	}
+
+	many := []model.Codebase{
+		{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: model.CodebaseStatusIndexed},
+		{ID: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: model.CodebaseStatusStale},
+	}
+	outMany := renderListIndexes(many)
+	if !strings.Contains(outMany, "Tracked 2 codebases:") {
+		t.Fatalf("plural header wrong:\n%s", outMany)
+	}
+	if strings.Contains(outMany, "(s)") {
+		t.Fatalf("list still uses a (s) suffix:\n%s", outMany)
+	}
+}

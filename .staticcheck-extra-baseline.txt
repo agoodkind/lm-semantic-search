@@ -1,0 +1,2 @@
+# staticcheck-extra: generated_at=2026-06-06T02:43:39Z
+cmd/lm-semantic-search/codebase_list_tui.go:209:16: signature uses tea.Msg, which expands to any (empty interface); define a deeply enumerated named type	# staticcheck-extra:first_added=2026-06-06T02:43:39Z last_seen=2026-06-06T02:43:39Z

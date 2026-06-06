@@ -17,7 +17,7 @@ import (
 // path whose Milvus collection exists, synthesizing a record when the
 // registry has no entry for it.
 func (manager *Manager) GetIndex(ctx context.Context, requestedPath string) (model.Codebase, *model.Job, bool, *model.PathClassification, error) {
-	canonicalPath, err := canonicalizePath(requestedPath)
+	canonicalPath, err := manager.resolveCanonicalPath(requestedPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)
 		return model.Codebase{}, nil, false, nil, fmt.Errorf("canonicalize path %s: %w", requestedPath, err)

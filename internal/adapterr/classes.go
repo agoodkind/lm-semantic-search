@@ -11,6 +11,11 @@ const (
 	// track as an indexed codebase.
 	ClassNotIndexed Class = "not_indexed"
 
+	// ClassUnknownCodebaseID reports a request argument shaped like a codebase
+	// id (the "cb_" prefix) that matches no tracked codebase, distinct from a
+	// real path that is simply not indexed yet.
+	ClassUnknownCodebaseID Class = "unknown_codebase_id"
+
 	// ClassCollectionMissing reports that the Milvus collection for
 	// the codebase does not exist.
 	ClassCollectionMissing Class = "collection_missing"
@@ -74,7 +79,7 @@ const (
 // CodeFor maps a class to its gRPC status code.
 func CodeFor(class Class) codes.Code {
 	switch class {
-	case ClassNotIndexed, ClassJobNotFound:
+	case ClassNotIndexed, ClassJobNotFound, ClassUnknownCodebaseID:
 		return codes.NotFound
 	case ClassCollectionMissing, ClassCollectionNotReady, ClassConflictingJob:
 		return codes.FailedPrecondition
@@ -102,6 +107,20 @@ func NewNotIndexed(path string, cause error) *AdapterError {
 		Code:          "not_indexed",
 		Hint:          "run the index_codebase tool against this path first",
 		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
+// NewUnknownCodebaseID reports a request argument shaped like a codebase id
+// that matches no tracked codebase. The message names the id so the caller can
+// see the typo rather than getting a path-not-indexed message for a non-path.
+func NewUnknownCodebaseID(id string) *AdapterError {
+	return &AdapterError{
+		Class:         ClassUnknownCodebaseID,
+		Message:       "no codebase with id " + quote(id),
+		Code:          "unknown_codebase_id",
+		Hint:          "list tracked codebases with list_indexing_statuses to find the current id",
+		Cause:         nil,
 		SafeForClient: true,
 	}
 }

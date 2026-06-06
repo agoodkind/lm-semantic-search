@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -90,6 +91,35 @@ func (manager *Manager) findDescendants(canonicalPath string) []model.Codebase {
 		return len(matches[first].CanonicalPath) > len(matches[second].CanonicalPath)
 	})
 	return matches
+}
+
+// looksLikeCodebaseID reports whether requestedPath has the shape of a codebase
+// id rather than a filesystem path: the "cb_" prefix newID stamps and no path
+// separator. It lets resolveCanonicalPath return a clear "unknown id" error for
+// a mistyped id instead of silently resolving it as a relative path.
+func looksLikeCodebaseID(requestedPath string) bool {
+	return strings.HasPrefix(requestedPath, "cb_") && !strings.ContainsRune(requestedPath, filepath.Separator)
+}
+
+// resolveCanonicalPath maps a request argument to a codebase's canonical path,
+// accepting three forms interchangeably: a registry codebase id, a filesystem
+// path, or a symlink to one. An exact id match returns that codebase's stored
+// canonical path; an id-shaped argument with no match returns an error naming
+// the id; anything else resolves through canonicalizePath, which makes the path
+// absolute and follows symlinks. Resolution lives here in the daemon so the CLI
+// and MCP adapter pass their argument through unchanged.
+func (manager *Manager) resolveCanonicalPath(requestedPath string) (string, error) {
+	trimmed := strings.TrimSpace(requestedPath)
+	manager.mu.Lock()
+	codebase, found := manager.codebases[trimmed]
+	manager.mu.Unlock()
+	if found {
+		return codebase.CanonicalPath, nil
+	}
+	if looksLikeCodebaseID(trimmed) {
+		return "", adapterr.NewUnknownCodebaseID(trimmed)
+	}
+	return canonicalizePath(requestedPath)
 }
 
 func canonicalizePath(requestedPath string) (string, error) {

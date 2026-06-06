@@ -195,7 +195,7 @@ func (server *GRPCServer) startIndexMergeNote(requestedPath string, codebase mod
 	for _, child := range descendants {
 		names = append(names, child.CanonicalPath)
 	}
-	return "🔗 Reusing already-indexed sub-folder(s): " + strings.Join(names, ", ") + " (their embeddings are merged in, not re-embedded)."
+	return "🔗 Reusing already-indexed " + plural("sub-folder", len(names)) + ": " + strings.Join(names, ", ") + " (their embeddings are merged in, not re-embedded)."
 }
 
 // ClearIndex removes a tracked codebase from daemon state.
@@ -209,11 +209,10 @@ func (server *GRPCServer) ClearIndex(ctx context.Context, request *pb.ClearIndex
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
 	}
-	indexedCount, indexingCount := countCodebaseStates(server.manager.ListIndexes(ctx))
 	return &pb.ClearIndexResponse{
 		CodebaseId:  codebase.ID,
 		Cleared:     true,
-		DisplayText: appendCorrelationRef(renderClearIndex(codebase, indexedCount, indexingCount), ctx, "codebase_id", codebase.ID),
+		DisplayText: appendCorrelationRef(renderClearIndex(codebase), ctx, "codebase_id", codebase.ID),
 	}, nil
 }
 
@@ -460,20 +459,4 @@ func codebasePointer(found bool, codebase model.Codebase) *model.Codebase {
 		return nil
 	}
 	return &codebase
-}
-
-func countCodebaseStates(codebases []model.Codebase) (int, int) {
-	indexedCount := 0
-	indexingCount := 0
-	for _, codebase := range codebases {
-		switch codebase.Status {
-		case model.CodebaseStatusIndexed:
-			indexedCount++
-		case model.CodebaseStatusIndexing:
-			indexingCount++
-		case model.CodebaseStatusNotIndexed, model.CodebaseStatusFailed, model.CodebaseStatusStale:
-		default:
-		}
-	}
-	return indexedCount, indexingCount
 }

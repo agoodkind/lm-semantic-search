@@ -68,12 +68,8 @@ func renderStartIndex(requestedPath string, codebase model.Codebase, job model.J
 	)
 }
 
-func renderClearIndex(codebase model.Codebase, remainingIndexed int, remainingIndexing int) string {
-	message := fmt.Sprintf("Successfully cleared codebase '%s'", codebase.CanonicalPath)
-	if remainingIndexed > 0 || remainingIndexing > 0 {
-		message += fmt.Sprintf("\n%d other indexed codebase(s) and %d indexing codebase(s) remain", remainingIndexed, remainingIndexing)
-	}
-	return message
+func renderClearIndex(codebase model.Codebase) string {
+	return fmt.Sprintf("Successfully cleared codebase '%s'", codebase.CanonicalPath)
 }
 
 func renderCancelJob(job model.Job) string {
@@ -123,10 +119,11 @@ func renderIndexedDescendantsHint(requestedPath string, descendants []model.Code
 			totalFiles += child.LastSuccessfulRun.IndexedFiles
 		}
 	}
+	fileCount := int(totalFiles)
 	return fmt.Sprintf(
-		"🛈 '%s' is not indexed on its own, but %d already-indexed file(s) live under sub-folder(s): %s\n"+
+		"🛈 '%s' is not indexed on its own, but %d already-indexed %s live under %s: %s\n"+
 			"Build one merged index that reuses those embeddings by running: index_codebase %s",
-		requestedPath, totalFiles, strings.Join(names, ", "), requestedPath,
+		requestedPath, fileCount, plural("file", fileCount), plural("sub-folder", len(names)), strings.Join(names, ", "), requestedPath,
 	)
 }
 
@@ -287,12 +284,8 @@ func backgroundSyncNote(job *model.Job) string {
 	if changed == 0 {
 		return "🔄 changes detected, syncing in the background"
 	}
-	noun := "files"
-	if changed == 1 {
-		noun = "file"
-	}
 	percent := int32(progress.OverallPercent + 0.5)
-	return fmt.Sprintf("🔄 syncing %d changed %s in the background (%d%%)", changed, noun, percent)
+	return fmt.Sprintf("🔄 syncing %d changed %s in the background (%d%%)", changed, plural("file", int(changed)), percent)
 }
 
 // renderIndexedWithSync renders the ready view for an already-indexed codebase
@@ -435,9 +428,9 @@ func renderListIndexes(codebases []model.Codebase) string {
 	}
 
 	lines := make([]string, 0, len(codebases)+1)
-	lines = append(lines, fmt.Sprintf("Tracked codebases: %d", len(codebases)))
+	lines = append(lines, "Tracked "+countWord("codebase", len(codebases))+":")
 	for _, codebase := range codebases {
-		lines = append(lines, fmt.Sprintf("- %s [%s]", codebase.CanonicalPath, codebase.Status))
+		lines = append(lines, fmt.Sprintf("- %s  %s  [%s]", codebase.ID, codebase.CanonicalPath, codebase.Status))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -759,7 +752,7 @@ func renderSkippedFiles(skipped []string) string {
 	if len(skipped) > maxPreview {
 		preview += fmt.Sprintf(", ... (+%d more)", len(skipped)-maxPreview)
 	}
-	return fmt.Sprintf("⏭️  Skipped: %d non-UTF-8 file(s): %s", len(skipped), preview)
+	return fmt.Sprintf("⏭️  Skipped: %d non-UTF-8 %s: %s", len(skipped), plural("file", len(skipped)), preview)
 }
 
 // formatStatusTime renders a compact wall-clock time with zone for the status

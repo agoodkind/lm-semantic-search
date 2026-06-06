@@ -379,7 +379,7 @@ func TestStartIndexPersistsSkippedFiles(t *testing.T) {
 	}
 
 	diagnostics := manager.Doctor()
-	wantSuffix := "2 non-UTF-8 file(s) skipped during last indexing run"
+	wantSuffix := "2 non-UTF-8 files skipped during last indexing run"
 	foundDiagnostic := false
 	for _, diagnostic := range diagnostics {
 		if strings.Contains(diagnostic, wantSuffix) {

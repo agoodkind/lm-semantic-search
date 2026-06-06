@@ -355,7 +355,7 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 	var emptyJob model.Job
 	var emptyCodebase model.Codebase
 
-	canonicalPath, err := canonicalizePath(requestedPath)
+	canonicalPath, err := manager.resolveCanonicalPath(requestedPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)
 		return emptyJob, emptyCodebase, false, "", fmt.Errorf("canonicalize path %s: %w", requestedPath, err)
@@ -477,7 +477,7 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 
 // SyncIndex registers a new sync job for an existing tracked codebase.
 func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, client model.ClientInfo) (model.Job, model.Codebase, bool, error) {
-	canonicalPath, err := canonicalizePath(requestedPath)
+	canonicalPath, err := manager.resolveCanonicalPath(requestedPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)
 		var emptyJob model.Job
@@ -547,7 +547,7 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 func (manager *Manager) ClearIndex(ctx context.Context, requestedPath string, client model.ClientInfo) (model.Codebase, error) {
 	_ = client
 
-	canonicalPath, err := canonicalizePath(requestedPath)
+	canonicalPath, err := manager.resolveCanonicalPath(requestedPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)
 		return model.Codebase{}, fmt.Errorf("canonicalize path %s: %w", requestedPath, err)
@@ -737,9 +737,10 @@ func (manager *Manager) Doctor() []string {
 			continue
 		}
 		diagnostics = append(diagnostics, fmt.Sprintf(
-			"%s: %d non-UTF-8 file(s) skipped during last indexing run",
+			"%s: %d non-UTF-8 %s skipped during last indexing run",
 			codebase.CanonicalPath,
 			skipped,
+			plural("file", skipped),
 		))
 	}
 	return diagnostics

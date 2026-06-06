@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/response"
 )
 
 func newCodebaseCmd(options *rootOptions) *cobra.Command {
@@ -37,7 +40,11 @@ func newCodebaseListCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search --json codebase list",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
+			cliOpts := options.cliOptions()
+			if cliOpts.outputMode == response.ModeHuman && term.IsTerminal(int(os.Stdout.Fd())) {
+				return runCodebaseListTUI(cliOpts)
+			}
+			return callAndPrint(cliOpts, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
 				return client.ListIndexes(ctx, &pb.ListIndexesRequest{})
 			})
 		},
@@ -46,13 +53,13 @@ func newCodebaseListCmd(options *rootOptions) *cobra.Command {
 
 func newCodebaseStatusCmd(options *rootOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status PATH",
+		Use:   "status PATH|ID",
 		Short: "Show indexing status for one codebase path",
 		Long: strings.Join([]string{
 			"Show indexing status for one codebase path.",
 			"",
 			"Arguments:",
-			"  PATH    Absolute or resolvable codebase path",
+			"  PATH|ID    A codebase path, a symlink to it, or its codebase id",
 		}, "\n"),
 		Args: requireExactArgs("codebase status requires PATH", 1),
 		Example: strings.Join([]string{
@@ -73,13 +80,13 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 	var ignorePatterns []string
 
 	cmd := &cobra.Command{
-		Use:   "index PATH",
+		Use:   "index PATH|ID",
 		Short: "Start background indexing for one codebase",
 		Long: strings.Join([]string{
 			"Start background indexing for one codebase.",
 			"",
 			"Arguments:",
-			"  PATH    Absolute or resolvable codebase path",
+			"  PATH|ID    A codebase path, a symlink to it, or its codebase id",
 		}, "\n"),
 		Args: requireExactArgs("codebase index requires PATH", 1),
 		Example: strings.Join([]string{
@@ -116,13 +123,13 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 
 func newCodebaseSyncCmd(options *rootOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "sync PATH",
+		Use:   "sync PATH|ID",
 		Short: "Start an incremental sync for one tracked codebase",
 		Long: strings.Join([]string{
 			"Start an incremental sync for one tracked codebase.",
 			"",
 			"Arguments:",
-			"  PATH    Absolute or resolvable codebase path",
+			"  PATH|ID    A codebase path, a symlink to it, or its codebase id",
 		}, "\n"),
 		Args: requireExactArgs("codebase sync requires PATH", 1),
 		Example: strings.Join([]string{
@@ -145,14 +152,14 @@ func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
 	var extensions []string
 
 	cmd := &cobra.Command{
-		Use:   "search PATH QUERY",
+		Use:   "search PATH|ID QUERY",
 		Short: "Search one indexed codebase",
 		Long: strings.Join([]string{
 			"Search one indexed codebase.",
 			"",
 			"Arguments:",
-			"  PATH     Absolute or resolvable codebase path",
-			"  QUERY    Natural-language search query",
+			"  PATH|ID    A codebase path, a symlink to it, or its codebase id",
+			"  QUERY      Natural-language search query",
 		}, "\n"),
 		Args: requireExactArgs("codebase search requires PATH and QUERY", 2),
 		Example: strings.Join([]string{
@@ -181,13 +188,13 @@ func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
 
 func newCodebaseClearCmd(options *rootOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "clear PATH",
+		Use:   "clear PATH|ID",
 		Short: "Clear one tracked codebase",
 		Long: strings.Join([]string{
 			"Clear one tracked codebase.",
 			"",
 			"Arguments:",
-			"  PATH    Absolute or resolvable codebase path",
+			"  PATH|ID    A codebase path, a symlink to it, or its codebase id",
 		}, "\n"),
 		Args: requireExactArgs("codebase clear requires PATH", 1),
 		Example: strings.Join([]string{
