@@ -18,10 +18,14 @@ type missingCollectionRepair struct {
 	config        model.IndexConfig
 }
 
-// RepairMissingCollections is the daemon-owned anti-entropy pass for the case
-// where the registry says a codebase is indexed but Milvus no longer has its
-// collection. The repair keeps the codebase tracked, marks it stale, and
-// re-queues a full bootstrap rebuild. Read paths stay side-effect free.
+// RepairMissingCollections is the daemon-owned anti-entropy pass that
+// reconciles the registry to collection reality in both directions. When the
+// registry says a codebase is indexed but Milvus no longer has its collection,
+// it keeps the codebase tracked, marks it stale, and re-queues a full bootstrap
+// rebuild. When the registry says a codebase failed or is stale but its
+// collection is present, it heals the codebase back to indexed and clears the
+// stale failure, so the registry is the single source of truth every reader
+// agrees with. Read paths stay side-effect free; this pass owns the mutation.
 func (manager *Manager) RepairMissingCollections(ctx context.Context) {
 	plans, err := manager.planMissingCollectionRepairs(ctx)
 	if err != nil {
@@ -88,8 +92,8 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 	changed := false
 	for codebaseID, codebase := range manager.codebases {
 		switch codebase.Status {
-		case model.CodebaseStatusIndexed, model.CodebaseStatusStale:
-		case model.CodebaseStatusNotIndexed, model.CodebaseStatusIndexing, model.CodebaseStatusFailed:
+		case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed:
+		case model.CodebaseStatusNotIndexed, model.CodebaseStatusIndexing:
 			continue
 		default:
 			continue
@@ -112,6 +116,20 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 		}
 		presence := presenceFromCollectionSet(expectedCollectionName, collectionSet)
 		hasActiveJob := manager.activeJobSnapshotLocked(codebase) != nil
+
+		// Reconcile the other direction: a codebase marked failed or stale whose
+		// collection is present now is usable, so heal it to indexed and clear the
+		// stale failure rather than leaving the registry divergent from reality.
+		if presence == collectionPresencePresent && !hasActiveJob &&
+			(codebase.Status == model.CodebaseStatusFailed || codebase.Status == model.CodebaseStatusStale) {
+			codebase.Status = model.CodebaseStatusIndexed
+			codebase.LastFailedRun = nil
+			codebase.UpdatedAt = clock.Now()
+			manager.codebases[codebaseID] = codebase
+			changed = true
+			continue
+		}
+
 		if !shouldQueueMissingCollectionRepair(codebase, hasActiveJob, presence) {
 			continue
 		}
