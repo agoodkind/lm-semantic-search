@@ -11,6 +11,7 @@ import (
 
 	"github.com/rjeczalik/notify"
 	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -19,7 +20,12 @@ const watcherEventBuffer = 4096
 type watchRoot struct {
 	codebaseID string
 	root       string
-	rules      discovery.IgnoreRules
+	// commonDir is the git common dir when root is a worktree root, else "".
+	// Two roots that share a non-empty commonDir are worktrees of the same
+	// repository; dispatch uses that to keep a parent root from re-indexing a
+	// nested sibling worktree's files, mirroring the discovery walk boundary.
+	commonDir string
+	rules     discovery.IgnoreRules
 }
 
 // Watcher converts filesystem events under tracked codebases into per-path
@@ -98,7 +104,8 @@ func (watcher *Watcher) AddCodebase(ctx context.Context, codebase model.Codebase
 		watcher.mu.Unlock()
 		return
 	}
-	watcher.roots[codebase.ID] = watchRoot{codebaseID: codebase.ID, root: codebase.CanonicalPath, rules: rules}
+	commonDir, _ := gitworktree.CommonDirAt(codebase.CanonicalPath)
+	watcher.roots[codebase.ID] = watchRoot{codebaseID: codebase.ID, root: codebase.CanonicalPath, commonDir: commonDir, rules: rules}
 	watcher.mu.Unlock()
 
 	recursivePath := filepath.Join(codebase.CanonicalPath, "...")
@@ -155,6 +162,12 @@ func (watcher *Watcher) dispatch(event notify.EventInfo) {
 		return
 	}
 	for _, root := range covers {
+		if coveredByNestedWorktree(root, covers) {
+			// A nested same-repo worktree (its own codebase) owns this path, so
+			// the parent root must not also index it, matching the discovery walk
+			// boundary that stops the parent scan at a sibling worktree.
+			continue
+		}
 		relativePath, err := filepath.Rel(root.root, path)
 		if err != nil {
 			continue
@@ -168,6 +181,31 @@ func (watcher *Watcher) dispatch(event notify.EventInfo) {
 		}
 		watcher.queue.Enqueue(root.codebaseID, relativePath)
 	}
+}
+
+// coveredByNestedWorktree reports whether the event path, already covered by
+// root, actually belongs to a nested git worktree of root's repository that is
+// its own tracked codebase. covers holds every root covering the path. A nested
+// covering root that shares root's non-empty common dir is a sibling worktree of
+// the same repo, so that worktree owns the path and the parent root skips it.
+// This mirrors the discovery walk, which stops the parent index at a same-repo
+// nested worktree (isSameRepoWorktree).
+func coveredByNestedWorktree(root watchRoot, covers []watchRoot) bool {
+	if root.commonDir == "" {
+		return false
+	}
+	for _, other := range covers {
+		if other.codebaseID == root.codebaseID {
+			continue
+		}
+		if other.commonDir != root.commonDir {
+			continue
+		}
+		if strings.HasPrefix(other.root, root.root+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func covering(roots []watchRoot, path string) []watchRoot {

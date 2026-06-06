@@ -95,12 +95,7 @@ func renderGetIndex(requestedPath string, tracked bool, codebase *model.Codebase
 		return renderIndexedDescendantsHint(requestedPath, indexedDescendants)
 	}
 	lines := []string{renderGetIndexBody(requestedPath, tracked, codebase, activeJob)}
-	if symlinkLine := renderSymlinkResolution(requestedPath); symlinkLine != "" {
-		lines = append(lines, symlinkLine)
-	}
-	if worktreeLine := renderWorktreeRelation(requestedPath); worktreeLine != "" {
-		lines = append(lines, worktreeLine)
-	}
+	lines = append(lines, pathResolutionLines(requestedPath)...)
 	if coverageLine := renderCoveringResolution(requestedPath, tracked, codebase); coverageLine != "" {
 		lines = append(lines, coverageLine)
 	}
@@ -676,22 +671,11 @@ func renderSearch(view searchView) string {
 	// get_indexing_status returns, so the caller sees the file and chunk progress
 	// inline and does not need a second tool call to learn the index is building.
 	status := renderSearchIndexingStatus(view)
+	resolution := strings.Join(pathResolutionLines(view.RequestedPath), "\n")
 
 	if len(view.Results) == 0 {
 		noResults := fmt.Sprintf("No results found for query: %q in codebase '%s'", view.Query, view.Codebase.CanonicalPath)
-		if status == "" && view.StateNote == "" {
-			return noResults
-		}
-		sections := []string{noResults}
-		if status != "" {
-			sections = append(sections, status)
-		}
-		if view.StateNote != "" {
-			sections = append(sections, view.StateNote)
-		} else if status != "" {
-			sections = append(sections, searchStatusTip(view, false))
-		}
-		return strings.Join(sections, "\n\n")
+		return joinSearchSections(view, noResults, status, resolution, false)
 	}
 
 	formatted := make([]string, 0, len(view.Results))
@@ -716,17 +700,28 @@ func renderSearch(view searchView) string {
 	// answer. The in-progress warning and tip trail the results.
 	header := fmt.Sprintf("Found %d results for query: %q in codebase '%s'", len(view.Results), view.Query, view.Codebase.CanonicalPath)
 	body := header + "\n\n" + strings.Join(formatted, "\n\n")
-	if status == "" && view.StateNote == "" {
-		return body
+	return joinSearchSections(view, body, status, resolution, true)
+}
+
+// joinSearchSections appends the identity (resolution), in-progress status, and
+// trailing tip sections to a search response body. The resolution and status
+// lines show whether or not a run is in flight; the tip only trails an active
+// run that has no explicit state note.
+func joinSearchSections(view searchView, base string, status string, resolution string, hasResults bool) string {
+	if status == "" && view.StateNote == "" && resolution == "" {
+		return base
 	}
-	sections := []string{body}
+	sections := []string{base}
+	if resolution != "" {
+		sections = append(sections, resolution)
+	}
 	if status != "" {
 		sections = append(sections, status)
 	}
 	if view.StateNote != "" {
 		sections = append(sections, view.StateNote)
 	} else if status != "" {
-		sections = append(sections, searchStatusTip(view, true))
+		sections = append(sections, searchStatusTip(view, hasResults))
 	}
 	return strings.Join(sections, "\n\n")
 }
@@ -758,14 +753,25 @@ func renderSearchIndexingStatus(view searchView) string {
 	if isBackgroundSyncReconcile(&codebase, view.ActiveJob) {
 		detail = renderIndexedWithSync(&codebase, view.ActiveJob)
 	}
-	lines := []string{detail}
-	if symlinkLine := renderSymlinkResolution(view.RequestedPath); symlinkLine != "" {
+	// The symlink and worktree relation lines are appended once by renderSearch
+	// itself, idle or active, so they are not repeated here.
+	return detail
+}
+
+// pathResolutionLines returns the identity lines for a queried path: the real
+// path a symlink resolves to and the git worktree relation, in that order,
+// omitting any that do not apply. Both status and search show these so a caller
+// always sees that a path is a worktree of a parent repo, even when the index is
+// idle.
+func pathResolutionLines(requestedPath string) []string {
+	lines := make([]string, 0, 2)
+	if symlinkLine := renderSymlinkResolution(requestedPath); symlinkLine != "" {
 		lines = append(lines, symlinkLine)
 	}
-	if worktreeLine := renderWorktreeRelation(view.RequestedPath); worktreeLine != "" {
+	if worktreeLine := renderWorktreeRelation(requestedPath); worktreeLine != "" {
 		lines = append(lines, worktreeLine)
 	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 // renderSkippedFiles formats the per-run skipped-file summary for the
