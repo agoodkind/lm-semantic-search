@@ -128,6 +128,12 @@ func TestDefaultDebugAndJobControlDefaults(t *testing.T) {
 func TestDefaultKeepsDaemonStateAndCompatRootsSplit(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	// Neutralize the XDG overrides so this test exercises the home-directory
+	// fallback it asserts. CI runners set XDG_CONFIG_HOME/XDG_STATE_HOME, which
+	// resolveXDGConfigHome/resolveXDGStateHome honor, so without this the roots
+	// resolve to the runner's real home instead of tempHome.
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_STATE_HOME", "")
 	if err := os.Unsetenv("CLAUDE_CONTEXTD_STATE_ROOT"); err != nil {
 		t.Fatalf("Unsetenv returned error: %v", err)
 	}

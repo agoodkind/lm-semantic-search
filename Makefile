@@ -93,8 +93,9 @@ grammars:
 # the Swift grammar package, so they need the generated parser. The order-only
 # prerequisite generates it first on a fresh checkout without forcing rebuilds.
 # install is listed because go-mk install builds the binaries inside the engine
-# rather than through the make build target.
-build build-check check test lint vet govulncheck install: | grammars
+# rather than through the make build target. release is listed because the
+# release matrix cross-builds the daemon, which links the generated Swift parser.
+build build-check check test lint vet govulncheck install release: | grammars
 
 deploy:
 	$(MAKE) install
