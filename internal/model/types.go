@@ -177,23 +177,23 @@ type Codebase struct {
 
 // Job records one daemon job and its latest known state.
 type Job struct {
-	ID            string      `json:"id"`
-	CodebaseID    string      `json:"codebase_id"`
-	RequestedPath string      `json:"requested_path"`
-	CanonicalPath string      `json:"canonical_path"`
-	Client        ClientInfo  `json:"client"`
-	Operation string   `json:"operation"`
-	State     JobState `json:"state"`
+	ID            string     `json:"id"`
+	CodebaseID    string     `json:"codebase_id"`
+	RequestedPath string     `json:"requested_path"`
+	CanonicalPath string     `json:"canonical_path"`
+	Client        ClientInfo `json:"client"`
+	Operation     string     `json:"operation"`
+	State         JobState   `json:"state"`
 	// Forced records that the caller passed force=true on the index request, so a
 	// trigger-aware heading can tell a forced reindex apart from a first build or
 	// a changed-files sync, which otherwise share the same operation.
-	Forced   bool        `json:"forced"`
-	Progress Progress    `json:"progress"`
-	Config   IndexConfig `json:"config"`
-	StartedAt     time.Time   `json:"started_at"`
-	UpdatedAt     time.Time   `json:"updated_at"`
-	CompletedAt   *time.Time  `json:"completed_at,omitempty"`
-	Error         *JobError   `json:"error,omitempty"`
+	Forced      bool        `json:"forced"`
+	Progress    Progress    `json:"progress"`
+	Config      IndexConfig `json:"config"`
+	StartedAt   time.Time   `json:"started_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+	CompletedAt *time.Time  `json:"completed_at,omitempty"`
+	Error       *JobError   `json:"error,omitempty"`
 }
 
 // RegistryFile is the durable JSON representation of tracked codebases.
