@@ -76,9 +76,11 @@ func SafeMessage(err error) string {
 	return adapterErr.Message
 }
 
-// IsTransient reports whether err is a transient condition that must not be
-// persisted as a codebase's terminal failure: an at-capacity embedder or a
-// cancellation. The next sync or index attempt resolves it on its own.
+// IsTransient reports whether err is a self-healing condition: the next sync or
+// index attempt resolves it on its own once the dependency recovers. It marks a
+// job retryable and, like every shared-infrastructure failure, must not be
+// persisted as a codebase's terminal state. The set is an at-capacity or
+// unreachable embedder, an unavailable vector store, and a cancellation.
 func IsTransient(err error) bool {
 	if err == nil {
 		return false
@@ -87,7 +89,29 @@ func IsTransient(err error) bool {
 		return true
 	}
 	adapterErr := classify(err)
-	return adapterErr.Class == ClassEmbedderBusy || adapterErr.Class == ClassEmbedCancelled
+	switch adapterErr.Class {
+	case ClassEmbedderBusy, ClassEmbedCancelled, ClassEmbedderUnreachable, ClassMilvusUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsInfraFailure reports whether err is a failure of shared infrastructure (the
+// embedding pipeline or the vector store) rather than a fault of one codebase's
+// own content. Such a failure affects every codebase the same way, so it never
+// marks a codebase failed; it belongs on the job and the daemon health record.
+// It is the self-healing transient set plus a rejected embedder, which is a
+// global config error that a retry alone will not fix but is still not local to
+// any codebase.
+func IsInfraFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsTransient(err) {
+		return true
+	}
+	return classify(err).Class == ClassEmbedderRejected
 }
 
 func formatKnown(adapterErr *AdapterError, ctx context.Context) string {

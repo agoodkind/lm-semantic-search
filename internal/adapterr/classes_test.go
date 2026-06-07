@@ -111,7 +111,8 @@ func TestIsTransient(t *testing.T) {
 		{"cancelled class", NewEmbedCancelled(nil), true},
 		{"context canceled", context.Canceled, true},
 		{"context deadline", context.DeadlineExceeded, true},
-		{"unreachable", NewEmbedderUnreachable(nil), false},
+		{"unreachable", NewEmbedderUnreachable(nil), true},
+		{"milvus unavailable", NewMilvusUnavailable(nil), true},
 		{"rejected", NewEmbedderRejected(nil), false},
 		{"non-adapter", errors.New("boom"), false},
 		{"nil", nil, false},
@@ -119,6 +120,35 @@ func TestIsTransient(t *testing.T) {
 	for _, testCase := range cases {
 		if got := IsTransient(testCase.err); got != testCase.want {
 			t.Fatalf("%s: IsTransient = %v, want %v", testCase.name, got, testCase.want)
+		}
+	}
+}
+
+// IsInfraFailure covers the self-healing transient set plus a rejected embedder,
+// since a rejected config error is global to the pipeline and never a fault of one
+// codebase, even though it is not retryable on its own.
+func TestIsInfraFailure(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"busy", NewEmbedderBusy(nil), true},
+		{"cancelled class", NewEmbedCancelled(nil), true},
+		{"context canceled", context.Canceled, true},
+		{"unreachable", NewEmbedderUnreachable(nil), true},
+		{"milvus unavailable", NewMilvusUnavailable(nil), true},
+		{"rejected", NewEmbedderRejected(nil), true},
+		{"internal", NewInternal("boom", nil), false},
+		{"not indexed", NewNotIndexed("/x", nil), false},
+		{"non-adapter", errors.New("boom"), false},
+		{"nil", nil, false},
+	}
+	for _, testCase := range cases {
+		if got := IsInfraFailure(testCase.err); got != testCase.want {
+			t.Fatalf("%s: IsInfraFailure = %v, want %v", testCase.name, got, testCase.want)
 		}
 	}
 }

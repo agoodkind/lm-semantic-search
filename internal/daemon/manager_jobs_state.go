@@ -148,11 +148,15 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	traceID := string(correlation.FromContext(ctx).TraceID)
 	now := clock.Now()
 	metrics.JobFailed()
-	// A transient failure (at-capacity embedder or cancellation) does not change
-	// the codebase's usable state; only genuine failures become terminal. The
-	// persisted message is the safe class message, never the wrapped cause, which
-	// stays in the log below correlated by trace_id.
+	// A self-healing failure marks the job retryable. A shared-infrastructure
+	// failure (the embedding pipeline or the vector store) never changes the
+	// codebase's durable state, because it affects every codebase the same way
+	// and is surfaced once by the daemon health banner; only a fault local to
+	// this codebase becomes terminal. The persisted message is the safe class
+	// message, never the wrapped cause, which stays in the log below correlated
+	// by trace_id.
 	transient := adapterr.IsTransient(runErr)
+	infra := adapterr.IsInfraFailure(runErr)
 	safeMessage := adapterr.SafeMessage(runErr)
 	job.State = model.JobStateFailed
 	job.UpdatedAt = now
@@ -177,8 +181,11 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	}
 	codebase.ActiveJobID = ""
 	switch {
-	case transient:
-		// A transient failure is not terminal; keep the codebase at last-good.
+	case infra:
+		// A shared-infrastructure failure is not the codebase's fault and never
+		// terminal; keep the codebase at its resumable last-good state. The repair
+		// pass re-attempts it once the dependency recovers, and the health banner
+		// carries the cause.
 	case sourceDirMissing(codebase.CanonicalPath):
 		// The source directory vanished mid-run. This is not a build failure, so
 		// present it as missing and keep the index in case the directory returns.

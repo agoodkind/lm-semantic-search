@@ -81,9 +81,62 @@ func TestUpdateJobFailedTransientKeepsCodebaseUsable(t *testing.T) {
 	}
 }
 
-// A terminal failure marks the codebase failed and persists only the sanitized
-// class message, never the wrapped cause.
-func TestUpdateJobFailedTerminalPersistsSanitizedMessage(t *testing.T) {
+// A shared-infrastructure failure never marks the codebase failed, whether it is
+// a self-healing outage (unreachable) or a global config error (rejected). The
+// codebase stays resumable and the cause lives on the job, not the codebase. An
+// unreachable outage is retryable; a rejected config error is not, yet still must
+// not fail the codebase.
+func TestUpdateJobFailedInfraKeepsCodebaseUsable(t *testing.T) {
+	cases := []struct {
+		name      string
+		runErr    error
+		retryable bool
+	}{
+		{"unreachable", adapterr.NewEmbedderUnreachable(errors.New("connection refused")), true},
+		{"rejected", adapterr.NewEmbedderRejected(errors.New("400 invalid_request model=bad")), false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			manager, _, repoPath := newTestManager(t)
+			canonical, err := filepath.EvalSymlinks(repoPath)
+			if err != nil {
+				t.Fatalf("EvalSymlinks returned error: %v", err)
+			}
+
+			codebase := newCodebaseRecord(canonical)
+			codebase.Status = model.CodebaseStatusIndexing
+			job := model.Job{ID: "job-" + testCase.name, CodebaseID: codebase.ID, State: model.JobStateRunning}
+			manager.mu.Lock()
+			manager.codebases[codebase.ID] = codebase
+			manager.jobs[job.ID] = job
+			manager.mu.Unlock()
+
+			manager.updateJobFailed(context.Background(), job.ID, testCase.runErr)
+
+			manager.mu.Lock()
+			gotCodebase := manager.codebases[codebase.ID]
+			gotJob := manager.jobs[job.ID]
+			manager.mu.Unlock()
+
+			if gotCodebase.Status == model.CodebaseStatusFailed {
+				t.Fatalf("codebase status = Failed, want it left usable for a shared-infrastructure failure")
+			}
+			if gotCodebase.LastFailedRun != nil {
+				t.Fatalf("LastFailedRun = %+v, want nil for a shared-infrastructure failure", gotCodebase.LastFailedRun)
+			}
+			if gotJob.State != model.JobStateFailed {
+				t.Fatalf("job state = %q, want Failed", gotJob.State)
+			}
+			if gotJob.Error == nil || gotJob.Error.Retryable != testCase.retryable {
+				t.Fatalf("job error = %+v, want Retryable=%v", gotJob.Error, testCase.retryable)
+			}
+		})
+	}
+}
+
+// A fault local to the codebase marks it failed and persists only the sanitized
+// envelope, never the wrapped cause.
+func TestUpdateJobFailedLocalErrorMarksFailed(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	canonical, err := filepath.EvalSymlinks(repoPath)
 	if err != nil {
@@ -92,29 +145,26 @@ func TestUpdateJobFailedTerminalPersistsSanitizedMessage(t *testing.T) {
 
 	codebase := newCodebaseRecord(canonical)
 	codebase.Status = model.CodebaseStatusIndexed
-	job := model.Job{ID: "job-terminal", CodebaseID: codebase.ID, State: model.JobStateRunning}
+	job := model.Job{ID: "job-local", CodebaseID: codebase.ID, State: model.JobStateRunning}
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
 
-	manager.updateJobFailed(context.Background(), job.ID, adapterr.NewEmbedderRejected(errors.New("400 invalid_request model=bad")))
+	manager.updateJobFailed(context.Background(), job.ID, adapterr.NewInternal("boom: secret detail", errors.New("secret detail")))
 
 	manager.mu.Lock()
 	gotCodebase := manager.codebases[codebase.ID]
 	manager.mu.Unlock()
 
 	if gotCodebase.Status != model.CodebaseStatusFailed {
-		t.Fatalf("status = %q, want Failed for a terminal failure", gotCodebase.Status)
+		t.Fatalf("status = %q, want Failed for a codebase-local error", gotCodebase.Status)
 	}
 	if gotCodebase.LastFailedRun == nil {
-		t.Fatal("LastFailedRun nil, want it recorded for a terminal failure")
+		t.Fatal("LastFailedRun nil, want it recorded for a codebase-local failure")
 	}
-	if strings.Contains(gotCodebase.LastFailedRun.Message, "400") || strings.Contains(gotCodebase.LastFailedRun.Message, "invalid_request") {
-		t.Fatalf("persisted message leaked implementation detail: %q", gotCodebase.LastFailedRun.Message)
-	}
-	if !strings.Contains(gotCodebase.LastFailedRun.Message, "rejected") {
-		t.Fatalf("persisted message dropped the class message: %q", gotCodebase.LastFailedRun.Message)
+	if strings.Contains(gotCodebase.LastFailedRun.Message, "secret detail") {
+		t.Fatalf("persisted message leaked the wrapped cause: %q", gotCodebase.LastFailedRun.Message)
 	}
 }
 
