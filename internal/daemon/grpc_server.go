@@ -18,7 +18,27 @@ import (
 	"goodkind.io/lm-semantic-search/internal/pbconv"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// toDependencyHealth converts the daemon's cached shared-dependency health into
+// its protobuf form for JSON consumers. Timestamps stay UTC on the wire and are
+// omitted while zero, so a never-degraded record carries no since stamp.
+func toDependencyHealth(health dependencyHealth) *pb.DependencyHealth {
+	result := &pb.DependencyHealth{
+		Degraded:      health.Degraded(),
+		Mode:          string(health.Mode),
+		Since:         nil,
+		LastHealthyAt: nil,
+	}
+	if !health.Since.IsZero() {
+		result.Since = timestamppb.New(health.Since)
+	}
+	if !health.LastHealthyAt.IsZero() {
+		result.LastHealthyAt = timestamppb.New(health.LastHealthyAt)
+	}
+	return result
+}
 
 // appendCorrelationRef prefixes one compact diagnostics line to a display
 // text so every successful response starts with a greppable correlation
@@ -299,9 +319,10 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	}
 	health := server.manager.DependencyHealth()
 	response := &pb.GetIndexResponse{
-		Tracked:        found,
-		Classification: pbconv.ToPathClassification(classification),
-		DisplayText:    server.envelopeText(ctx, health, renderGetIndex(request.GetPath(), found, codebasePointer(found, codebase), activeJob, classification, indexedDescendants, health), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
+		Tracked:          found,
+		Classification:   pbconv.ToPathClassification(classification),
+		DependencyHealth: toDependencyHealth(health),
+		DisplayText:      server.envelopeText(ctx, health, renderGetIndex(request.GetPath(), found, codebasePointer(found, codebase), activeJob, classification, indexedDescendants, health), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
 	if found {
 		pbCodebase := pbconv.ToCodebase(codebase)
@@ -326,7 +347,9 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 		pbCodebase.DisplayStatus = string(view.Display)
 		response.Indexes = append(response.Indexes, pbCodebase)
 	}
-	response.DisplayText = server.envelopeText(ctx, server.manager.DependencyHealth(), renderListIndexes(views))
+	health := server.manager.DependencyHealth()
+	response.DependencyHealth = toDependencyHealth(health)
+	response.DisplayText = server.envelopeText(ctx, health, renderListIndexes(views))
 	return response, nil
 }
 
@@ -343,8 +366,9 @@ func (server *GRPCServer) GetJob(ctx context.Context, request *pb.GetJobRequest)
 	}
 	health := server.manager.DependencyHealth()
 	return &pb.GetJobResponse{
-		Job:         pbconv.ToJob(job),
-		DisplayText: server.envelopeText(ctx, health, renderGetJob(&job, health.Degraded()), "job_id", job.ID, "codebase_id", job.CodebaseID),
+		Job:              pbconv.ToJob(job),
+		DependencyHealth: toDependencyHealth(health),
+		DisplayText:      server.envelopeText(ctx, health, renderGetJob(&job, health.Degraded()), "job_id", job.ID, "codebase_id", job.CodebaseID),
 	}, nil
 }
 
@@ -360,7 +384,9 @@ func (server *GRPCServer) ListJobs(ctx context.Context, request *pb.ListJobsRequ
 	for _, job := range jobs {
 		response.Jobs = append(response.Jobs, pbconv.ToJob(job))
 	}
-	response.DisplayText = server.envelopeText(ctx, server.manager.DependencyHealth(), renderListJobs(jobs), "codebase_id", request.GetCodebaseId())
+	health := server.manager.DependencyHealth()
+	response.DependencyHealth = toDependencyHealth(health)
+	response.DisplayText = server.envelopeText(ctx, health, renderListJobs(jobs), "codebase_id", request.GetCodebaseId())
 	return response, nil
 }
 
@@ -396,11 +422,13 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
 	}
 	server.manager.fillLiveChunkTotal(ctx, outcome.Codebase, outcome.ActiveJob)
+	health := server.manager.DependencyHealth()
 	response := &pb.SearchCodeResponse{
-		Results:   make([]*pb.SearchResult, 0, len(outcome.Results)),
-		Codebase:  pbconv.ToCodebase(outcome.Codebase),
-		ActiveJob: pbconv.ToJobPointer(outcome.ActiveJob),
-		DisplayText: server.envelopeText(ctx, server.manager.DependencyHealth(), renderSearch(searchView{
+		Results:          make([]*pb.SearchResult, 0, len(outcome.Results)),
+		Codebase:         pbconv.ToCodebase(outcome.Codebase),
+		ActiveJob:        pbconv.ToJobPointer(outcome.ActiveJob),
+		DependencyHealth: toDependencyHealth(health),
+		DisplayText: server.envelopeText(ctx, health, renderSearch(searchView{
 			RequestedPath: request.GetPath(),
 			Query:         request.GetQuery(),
 			Codebase:      outcome.Codebase,

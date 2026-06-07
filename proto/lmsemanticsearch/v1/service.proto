@@ -74,6 +74,20 @@ message JobError {
   bool retryable = 2;
 }
 
+// DependencyHealth reports the daemon's view of shared-infrastructure health
+// (the embedding pipeline and the vector store). It is one global fact, not a
+// per-codebase value, observed from job outcomes rather than a live probe. When
+// degraded is true a hard outage is in effect and the human surfaces show a
+// banner; mode names which one. Timestamps are UTC on the wire.
+message DependencyHealth {
+  bool degraded = 1;
+  // mode is the degraded condition: "embedder_unreachable", "embedder_rejected",
+  // "store_unavailable", or empty when healthy.
+  string mode = 2;
+  google.protobuf.Timestamp since = 3;
+  google.protobuf.Timestamp last_healthy_at = 4;
+}
+
 message IndexRunSummary {
   int32 indexed_files = 1;
   int32 total_chunks = 2;
@@ -201,6 +215,7 @@ message GetIndexResponse {
   bool tracked = 3;
   string display_text = 4;
   PathClassification classification = 5;
+  DependencyHealth dependency_health = 6;
 }
 
 // PathClassification reports how the daemon sees one queried path with
@@ -227,6 +242,7 @@ message ListIndexesRequest {}
 message ListIndexesResponse {
   repeated Codebase indexes = 1;
   string display_text = 2;
+  DependencyHealth dependency_health = 3;
 }
 
 message GetJobRequest {
@@ -236,6 +252,7 @@ message GetJobRequest {
 message GetJobResponse {
   Job job = 1;
   string display_text = 2;
+  DependencyHealth dependency_health = 3;
 }
 
 message ListJobsRequest {
@@ -245,6 +262,7 @@ message ListJobsRequest {
 message ListJobsResponse {
   repeated Job jobs = 1;
   string display_text = 2;
+  DependencyHealth dependency_health = 3;
 }
 
 message WatchJobsRequest {
@@ -267,6 +285,7 @@ message SearchCodeResponse {
   Codebase codebase = 2;
   Job active_job = 3;
   string display_text = 4;
+  DependencyHealth dependency_health = 5;
 }
 
 message Diagnostic {
