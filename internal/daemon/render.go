@@ -287,9 +287,11 @@ func blankStatusView(name string, updatedAt string) statusView {
 		PrepareLabel:           "",
 		WaitLabel:              "",
 		Percent:                0,
+		Heading:                "",
 		FilesProcessed:         0,
 		FilesTotal:             0,
-		ChunksSoFar:            0,
+		ChunksReused:           0,
+		ChunksEmbeddedThisRun:  0,
 		FilesInCodebase:        0,
 		FilesChanged:           0,
 		FilesUnchanged:         0,
@@ -384,9 +386,14 @@ func renderIndexingActive(codebase *model.Codebase, activeJob *model.Job) string
 		view.FilesSkippedOversize = progress.FilesSkippedOversize
 		view.FilesSkippedUnreadable = progress.FilesSkippedUnreadable
 		view.FilesProcessedChanged = progress.FilesEmbedded + progress.FilesRemoved + progress.FilesSkippedOversize + progress.FilesSkippedUnreadable
-		view.ChunksSoFar = progress.ChunksGenerated
+		view.Heading = headingFor(*codebase, activeJob)
 		view.ChunksAdded = progress.ChunksGenerated
-		view.ChunksTotal = progress.ChunksTotal
+		view.ChunksReused = progress.ChunksReused
+		view.ChunksEmbeddedThisRun = progress.ChunksGenerated
+		// total = reused + embedded this run, falling back to the live collection
+		// count when that is larger (a forced reindex over an existing index) and
+		// to the last recorded total when the run has produced nothing yet.
+		view.ChunksTotal = max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated)
 		if view.ChunksTotal == 0 && codebase.LastSuccessfulRun != nil {
 			view.ChunksTotal = codebase.LastSuccessfulRun.TotalChunks
 		}
@@ -403,6 +410,21 @@ func renderIndexingActive(codebase *model.Codebase, activeJob *model.Job) string
 		return renderStatusTemplate("building.md.tmpl", view)
 	}
 	return renderStatusTemplate("incremental.md.tmpl", view)
+}
+
+// headingFor names what started an in-progress run so the building view leads
+// with the trigger rather than the internal job path. A codebase with no
+// completed run reads as a first build even when resuming a failed checkpoint;
+// once a completed run exists, a forced or full reindex reads as a forced
+// reindex, and anything else reads as indexing changed files.
+func headingFor(codebase model.Codebase, job *model.Job) string {
+	if codebase.LastSuccessfulRun == nil {
+		return "Building initial index"
+	}
+	if job != nil && (jobOperation(job.Operation) == jobOperationIndex || job.Forced) {
+		return "Forced reindex"
+	}
+	return "Indexing new changes"
 }
 
 // prepareLabel names the phase before embedding starts. A watcher-driven sync

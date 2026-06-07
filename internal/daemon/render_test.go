@@ -100,9 +100,33 @@ func TestRenderIndexingActiveBuilding(t *testing.T) {
 		Progress:  model.Progress{OverallPercent: 42, FilesTotal: 58, FilesProcessed: 24, ChunksGenerated: 71, LastEventAt: renderTestTime},
 	}
 	out := renderIndexingActive(codebase, job)
-	for _, want := range []string{"📁 swift-makefile", "🔄 Building initial index: 42%", "📥 24 of 58 files embedded", "📈 71 chunks so far"} {
+	for _, want := range []string{"📁 swift-makefile", "🔄 Building initial index: 42%", "📥 24 of 58 files processed", "🧩 71 chunks total", "♻️ 0 reused", "➕ 71 embedded this run"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("building status missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// TestHeadingFor proves the in-progress heading derives from whether a completed
+// run exists and from the trigger: a first build, a forced reindex over a good
+// index, or a changed-files sync.
+func TestHeadingFor(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		cb   model.Codebase
+		job  model.Job
+		want string
+	}{
+		{"initial", model.Codebase{}, model.Job{Operation: "index", Forced: true}, "Building initial index"},
+		{"forced", model.Codebase{LastSuccessfulRun: &model.IndexRunSummary{}}, model.Job{Operation: "index", Forced: true}, "Forced reindex"},
+		{"forced-sync", model.Codebase{LastSuccessfulRun: &model.IndexRunSummary{}}, model.Job{Operation: "sync", Forced: true}, "Forced reindex"},
+		{"changed", model.Codebase{LastSuccessfulRun: &model.IndexRunSummary{}}, model.Job{Operation: "sync"}, "Indexing new changes"},
+	}
+	for _, testCase := range cases {
+		job := testCase.job
+		if got := headingFor(testCase.cb, &job); got != testCase.want {
+			t.Errorf("%s: headingFor = %q, want %q", testCase.name, got, testCase.want)
 		}
 	}
 }
@@ -523,7 +547,7 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 		"building":    renderIndexingActive(codebase, &model.Job{Operation: "index", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84}}),
 		"incremental": renderIndexingActive(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, FilesInCodebase: 100, FilesAdded: 5, FilesModified: 50, FilesRemoved: 3, FilesEmbedded: 2, ChunksGenerated: 84, ChunksTotal: 620}}),
 	}
-	wantLines := map[string]int{"ready": 4, "preparing": 3, "building": 5, "incremental": 11}
+	wantLines := map[string]int{"ready": 4, "preparing": 3, "building": 7, "incremental": 11}
 	for name, out := range cases {
 		for _, line := range strings.Split(out, "\n") {
 			if strings.TrimSpace(line) == "" {

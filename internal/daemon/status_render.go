@@ -28,10 +28,17 @@ type statusView struct {
 	// hard pipeline outage; the banner carries the cause, so this stays generic.
 	WaitLabel string
 	Percent   int32
-	// Building view: raw loop progress and the running chunk tally.
+	// Heading names what started the in-progress run (a first build, a forced
+	// reindex, or a changed-files sync), so the building view leads with the
+	// trigger rather than the internal job path.
+	Heading string
+	// Building view: raw loop progress.
 	FilesProcessed int32
 	FilesTotal     int32
-	ChunksSoFar    int32
+	// Building view chunk tree: total = reused + embedded this run, so the
+	// reuse-vs-redo split is visible on screen.
+	ChunksReused          int32
+	ChunksEmbeddedThisRun int32
 	// Incremental view: the diff breakdown against the whole codebase.
 	FilesInCodebase        int32
 	FilesChanged           int32
