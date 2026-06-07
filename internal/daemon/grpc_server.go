@@ -411,7 +411,7 @@ func (server *GRPCServer) WatchJobs(request *pb.WatchJobsRequest, stream pb.Sema
 		}
 		if sendErr := stream.Send(&pb.WatchJobsResponse{Job: pbconv.ToJob(job)}); sendErr != nil {
 			slog.ErrorContext(ctx, "send watch jobs event failed", "job_id", jobID, "err", sendErr)
-			return fmt.Errorf("send watch jobs event for %s: %w", jobID, sendErr)
+			return status.Error(adapterr.Respond(ctx, adapterr.NewInternal("send watch jobs event for "+jobID, sendErr)))
 		}
 	}
 	return nil
@@ -478,8 +478,9 @@ func (server *GRPCServer) Doctor(ctx context.Context, request *pb.DoctorRequest)
 			Detail:   diagnostic,
 		})
 	}
+	health := server.manager.DependencyHealth()
 	body := renderDoctor(diagnostics) + "\n\n" + renderDroppedSection(server.manager.DroppedCodebases())
-	response.DisplayText = appendCorrelationRef(body, ctx)
+	response.DisplayText = server.envelopeText(ctx, health, body)
 	return response, nil
 }
 
