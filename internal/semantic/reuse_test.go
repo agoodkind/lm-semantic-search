@@ -45,12 +45,15 @@ func TestEmbedChunkBatchReusesByContentAndEmbedsOnlyMisses(t *testing.T) {
 		contentVectorKey("reused-C"): {9, 9},
 	}
 
-	vectors, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	vectors, reused, err := service.embedChunkBatch(context.Background(), chunks, reuse)
 	if err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
 	}
 	if len(vectors) != 3 {
 		t.Fatalf("got %d vectors, want 3", len(vectors))
+	}
+	if reused != 2 {
+		t.Fatalf("reused = %d, want 2 (reused-A and reused-C)", reused)
 	}
 	if !slices.Equal(vectors[0], []float32{7, 7}) {
 		t.Fatalf("vectors[0] = %v, want the reused {7,7}", vectors[0])
@@ -81,9 +84,12 @@ func TestEmbedChunkBatchAllReusedSkipsEmbedderEntirely(t *testing.T) {
 		contentVectorKey("y"): {2},
 	}
 
-	vectors, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	vectors, reused, err := service.embedChunkBatch(context.Background(), chunks, reuse)
 	if err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
+	}
+	if reused != 2 {
+		t.Fatalf("reused = %d, want 2 (every chunk reused)", reused)
 	}
 	if len(embedder.batches) != 0 {
 		t.Fatalf("embedder was called %d time(s) for an all-reuse batch, want 0", len(embedder.batches))
@@ -98,9 +104,12 @@ func TestEmbedChunkBatchNoReuseEmbedsEverything(t *testing.T) {
 	service := &Service{embedder: embedder}
 
 	chunks := []model.StoredChunk{{Content: "a"}, {Content: "bb"}}
-	vectors, err := service.embedChunkBatch(context.Background(), chunks, nil)
+	vectors, reused, err := service.embedChunkBatch(context.Background(), chunks, nil)
 	if err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
+	}
+	if reused != 0 {
+		t.Fatalf("reused = %d, want 0 (no reuse map)", reused)
 	}
 	if len(embedder.batches) != 1 || len(embedder.batches[0]) != 2 {
 		t.Fatalf("embedder batches = %v, want one batch of 2", embedder.batches)

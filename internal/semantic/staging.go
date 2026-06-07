@@ -127,13 +127,15 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 
 	totalBatches := (len(chunks) + batchSize - 1) / batchSize
 	var writtenRows int32
+	var reusedRows int32
+	var embeddedRows int32
 
 	for batchIndex := range totalBatches {
 		start := batchIndex * batchSize
 		end := min(start+batchSize, len(chunks))
 
 		chunkBatch := chunks[start:end]
-		vectors, err := service.embedChunkBatch(ctx, chunkBatch, reuse)
+		vectors, reused, err := service.embedChunkBatch(ctx, chunkBatch, reuse)
 		if err != nil {
 			return err
 		}
@@ -151,6 +153,8 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 		}
 
 		writtenRows += safeInt32FromInt(len(chunkBatch))
+		reusedRows += safeInt32FromInt(reused)
+		embeddedRows += safeInt32FromInt(len(chunkBatch) - reused)
 		if progress != nil {
 			progress(Progress{
 				Phase:                     phase,
@@ -158,18 +162,21 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 				EmbeddingBatchesTotal:     safeInt32FromInt(totalBatches),
 				EmbeddingBatchesCompleted: safeInt32FromInt(batchIndex + 1),
 				CollectionRowsWritten:     writtenRows,
+				ChunksReused:              reusedRows,
+				ChunksEmbedded:            embeddedRows,
 			})
 		}
 	}
 	return nil
 }
 
-// embedChunkBatch returns one dense vector per chunk in chunkBatch, in order.
-// When reuse holds a vector for a chunk's content (keyed by content hash) that
-// vector is taken directly and the embedder is never called for it; only the
-// remaining misses are embedded in a single batch. A nil or empty reuse map
-// makes this embed every chunk, which is the ordinary first-index behavior.
-func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.StoredChunk, reuse map[string][]float32) ([][]float32, error) {
+// embedChunkBatch returns one dense vector per chunk in chunkBatch, in order,
+// plus the count of chunks served from the reuse map (which never reach the
+// embedder). When reuse holds a vector for a chunk's content (keyed by content
+// hash) that vector is taken directly; only the remaining misses are embedded in
+// a single batch. A nil or empty reuse map makes this embed every chunk, which
+// is the ordinary first-index behavior, and reports zero reused.
+func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.StoredChunk, reuse map[string][]float32) ([][]float32, int, error) {
 	vectors := make([][]float32, len(chunkBatch))
 	missTexts := make([]string, 0, len(chunkBatch))
 	missIndexes := make([]int, 0, len(chunkBatch))
@@ -183,8 +190,9 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 		missTexts = append(missTexts, chunk.Content)
 		missIndexes = append(missIndexes, index)
 	}
+	reused := len(chunkBatch) - len(missTexts)
 	if len(missTexts) == 0 {
-		return vectors, nil
+		return vectors, reused, nil
 	}
 
 	embedded, err := service.embedder.EmbedBatch(ctx, missTexts)
@@ -192,23 +200,23 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 		slog.ErrorContext(ctx, "embed batch failed", "err", err)
 		switch {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			return nil, adapterr.NewEmbedCancelled(err)
+			return nil, 0, adapterr.NewEmbedCancelled(err)
 		case errors.Is(err, embedding.ErrEmbedderBusy):
-			return nil, adapterr.NewEmbedderBusy(err)
+			return nil, 0, adapterr.NewEmbedderBusy(err)
 		case errors.Is(err, embedding.ErrEmbedderRejected):
-			return nil, adapterr.NewEmbedderRejected(err)
+			return nil, 0, adapterr.NewEmbedderRejected(err)
 		default:
-			return nil, adapterr.NewEmbedderUnreachable(err)
+			return nil, 0, adapterr.NewEmbedderUnreachable(err)
 		}
 	}
 	if len(embedded) != len(missTexts) {
 		slog.ErrorContext(ctx, "embedding batch returned unexpected vector count", "want", len(missTexts), "got", len(embedded), "err", errors.New("vector count mismatch"))
-		return nil, fmt.Errorf("embedding batch returned %d vectors for %d chunks", len(embedded), len(missTexts))
+		return nil, 0, fmt.Errorf("embedding batch returned %d vectors for %d chunks", len(embedded), len(missTexts))
 	}
 	for position, vectorIndex := range missIndexes {
 		vectors[vectorIndex] = embedded[position]
 	}
-	return vectors, nil
+	return vectors, reused, nil
 }
 
 // stagingCollectionName derives the transient rebuild collection name, kept

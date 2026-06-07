@@ -45,12 +45,19 @@ const (
 )
 
 // Progress reports semantic indexing progress after chunk extraction.
+//
+// ChunksReused counts chunks served a vector from the reuse map (no embedder
+// call), and ChunksEmbedded counts chunks whose vector came from the embedder
+// this run. Their sum is the chunks written so far, so a surface can show
+// total = reused + embedded and make the reuse-vs-redo split visible.
 type Progress struct {
 	Phase                     string
 	OverallPercent            float64
 	EmbeddingBatchesTotal     int32
 	EmbeddingBatchesCompleted int32
 	CollectionRowsWritten     int32
+	ChunksReused              int32
+	ChunksEmbedded            int32
 }
 
 // Service owns the embedding provider and Milvus client for semantic search.
