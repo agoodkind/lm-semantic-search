@@ -41,7 +41,7 @@ func TestDeltaProgressAccumulatesReuseSplit(t *testing.T) {
 	}
 	manager.mu.Unlock()
 
-	job := newQueuedJob(codebaseID, canonical, canonical, testClientInfo(), string(jobOperationIndex), cfg, clock.Now())
+	job := newQueuedJob(codebaseID, canonical, canonical, testClientInfo(), string(jobOperationIndex), false, cfg, clock.Now())
 	manager.mu.Lock()
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()

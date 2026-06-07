@@ -216,6 +216,44 @@ func TestClearIndexCancelsActiveJob(t *testing.T) {
 	}
 }
 
+// TestStartIndexRecordsForceFlagOnJob proves the job records whether the caller
+// passed force=true, so a trigger-aware heading can distinguish a forced reindex
+// from a first build or a changed-files sync.
+func TestStartIndexRecordsForceFlagOnJob(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	manager.runner = fakeRunner{
+		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
+			content := "package main\n"
+			return indexer.OneFileResult{
+				Chunks:   []model.StoredChunk{{Content: content, RelativePath: relativePath, StartLine: 1, EndLine: 1, Language: "go", FileExtension: ".go"}},
+				FileHash: hashText(content),
+				Skipped:  false,
+				Removed:  false,
+			}, nil
+		},
+	}
+
+	plainJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	if err != nil {
+		t.Fatalf("StartIndex(force=false) returned error: %v", err)
+	}
+	if plainJob.Forced {
+		t.Fatalf("StartIndex(force=false) job.Forced = true, want false")
+	}
+	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
+
+	forcedJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
+	if err != nil {
+		t.Fatalf("StartIndex(force=true) returned error: %v", err)
+	}
+	if !forcedJob.Forced {
+		t.Fatalf("StartIndex(force=true) job.Forced = false, want true")
+	}
+	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
+}
+
 func TestForceReindexStartsFreshJobAndSearchShowsIndexingWarning(t *testing.T) {
 	t.Parallel()
 

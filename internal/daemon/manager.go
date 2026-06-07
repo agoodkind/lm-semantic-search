@@ -258,6 +258,7 @@ func newQueuedJob(
 	canonicalPath string,
 	client model.ClientInfo,
 	operation string,
+	forced bool,
 	indexConfig model.IndexConfig,
 	now time.Time,
 ) model.Job {
@@ -269,6 +270,7 @@ func newQueuedJob(
 		Client:        client,
 		Operation:     operation,
 		State:         model.JobStateQueued,
+		Forced:        forced,
 		Progress: model.Progress{
 			Phase:                     "queued",
 			PhasePercent:              0,
@@ -476,7 +478,7 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	if decision.mode == startIndexModeIncremental {
 		operation = jobOperationStreamingReindex
 	}
-	job := newQueuedJob(codebase.ID, requestedPath, canonicalPath, client, string(operation), indexConfig, clock.Now())
+	job := newQueuedJob(codebase.ID, requestedPath, canonicalPath, client, string(operation), force, indexConfig, clock.Now())
 	codebase.ActiveJobID = job.ID
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
@@ -537,7 +539,7 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 	codebase.UpdatedAt = clock.Now()
 
 	now := clock.Now()
-	job := newQueuedJob(codebase.ID, requestedPath, canonicalPath, client, string(jobOperationSync), indexConfig, now)
+	job := newQueuedJob(codebase.ID, requestedPath, canonicalPath, client, string(jobOperationSync), false, indexConfig, now)
 
 	codebase.ActiveJobID = job.ID
 	manager.codebases[codebase.ID] = codebase

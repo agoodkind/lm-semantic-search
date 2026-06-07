@@ -182,10 +182,14 @@ type Job struct {
 	RequestedPath string      `json:"requested_path"`
 	CanonicalPath string      `json:"canonical_path"`
 	Client        ClientInfo  `json:"client"`
-	Operation     string      `json:"operation"`
-	State         JobState    `json:"state"`
-	Progress      Progress    `json:"progress"`
-	Config        IndexConfig `json:"config"`
+	Operation string   `json:"operation"`
+	State     JobState `json:"state"`
+	// Forced records that the caller passed force=true on the index request, so a
+	// trigger-aware heading can tell a forced reindex apart from a first build or
+	// a changed-files sync, which otherwise share the same operation.
+	Forced   bool        `json:"forced"`
+	Progress Progress    `json:"progress"`
+	Config   IndexConfig `json:"config"`
 	StartedAt     time.Time   `json:"started_at"`
 	UpdatedAt     time.Time   `json:"updated_at"`
 	CompletedAt   *time.Time  `json:"completed_at,omitempty"`
