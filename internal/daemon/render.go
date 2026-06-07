@@ -87,14 +87,14 @@ func renderSyncIndex(codebase model.Codebase, job model.Job, deduplicated bool) 
 	return fmt.Sprintf("Started sync job %s for '%s'", job.ID, codebase.CanonicalPath)
 }
 
-func renderGetIndex(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job, classification *model.PathClassification, indexedDescendants []model.Codebase) string {
+func renderGetIndex(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job, classification *model.PathClassification, indexedDescendants []model.Codebase, health dependencyHealth) string {
 	// A path that is not indexed as its own codebase but contains already-indexed
 	// sub-folders reads as an offer to merge them into one larger index, rather
 	// than a bare "not indexed" dead end.
 	if !tracked && len(indexedDescendants) > 0 {
 		return renderIndexedDescendantsHint(requestedPath, indexedDescendants)
 	}
-	lines := []string{renderGetIndexBody(requestedPath, tracked, codebase, activeJob)}
+	lines := []string{renderGetIndexBody(requestedPath, tracked, codebase, activeJob, health)}
 	lines = append(lines, pathResolutionLines(requestedPath)...)
 	if coverageLine := renderCoveringResolution(requestedPath, tracked, codebase); coverageLine != "" {
 		lines = append(lines, coverageLine)
@@ -182,7 +182,7 @@ func renderWorktreeRelation(requestedPath string) string {
 	return fmt.Sprintf("🌿 git worktree of %s (branch %s)", mainCheckout, info.Branch)
 }
 
-func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job) string {
+func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job, health dependencyHealth) string {
 	// An untracked path is genuinely not indexed: offer to build it. This is the
 	// only "not indexed" message; a tracked codebase always presents as one of
 	// the live states below.
@@ -192,13 +192,17 @@ func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Code
 	// The display status is the single source of truth; the renderers below only
 	// fill in detail for the bucket it picks. A live background sync over an
 	// already-indexed codebase keeps the searchable ready view with a sync note
-	// rather than a busy takeover.
-	switch computeDisplayStatus(*codebase, activeJob) {
+	// rather than a busy takeover. Under a hard dependency outage an incomplete
+	// codebase folds to "waiting"; the banner above carries the cause, so the
+	// waiting view names none.
+	switch computeDisplayStatus(*codebase, activeJob, health.Degraded()) {
 	case displayIndexed:
 		if activeJob != nil && isBackgroundSyncReconcile(codebase, activeJob) {
 			return renderIndexedWithSync(codebase, activeJob)
 		}
 		return renderIndexedDetail(codebase)
+	case displayWaiting:
+		return renderWaiting(codebase, health.Mode)
 	case displayPreparing, displayIndexing:
 		return renderIndexingActive(codebase, activeJob)
 	case displayStale:
@@ -210,6 +214,24 @@ func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Code
 	default:
 		return renderIndexingActive(codebase, activeJob)
 	}
+}
+
+// renderWaiting renders the status view for an incomplete codebase that cannot
+// progress because a shared dependency is in a hard outage. It names the
+// dependency generically and leaves the specific cause to the banner.
+func renderWaiting(codebase *model.Codebase, mode dependencyMode) string {
+	view := blankStatusView(filepath.Base(codebase.CanonicalPath), formatStatusTime(codebase.UpdatedAt))
+	view.WaitLabel = waitingLabel(mode)
+	return renderStatusTemplate("waiting.md.tmpl", view)
+}
+
+// waitingLabel names the dependency a waiting codebase is blocked on. The banner
+// carries the exact cause and fix, so this stays a short, plain phrase.
+func waitingLabel(mode dependencyMode) string {
+	if mode == dependencyStoreUnavailable {
+		return "Waiting for the vector store"
+	}
+	return "Waiting for the embedding server"
 }
 
 // renderMissingStatus reads as a current condition, not a failure: the source
@@ -263,6 +285,7 @@ func blankStatusView(name string, updatedAt string) statusView {
 		Chunks:                 0,
 		SkippedLine:            "",
 		PrepareLabel:           "",
+		WaitLabel:              "",
 		Percent:                0,
 		FilesProcessed:         0,
 		FilesTotal:             0,
@@ -412,10 +435,10 @@ func renderReconcileMagnitude(progress model.Progress) string {
 // ids it appends a diagnostics line so the operator can grep the daemon log.
 func renderHistoricalFailure(codebase *model.Codebase) string {
 	if codebase.LastFailedRun == nil {
-		return fmt.Sprintf("❌ Codebase '%s' is not currently indexed. Call index_codebase to build it.", codebase.CanonicalPath)
+		return fmt.Sprintf("❌ Codebase '%s' could not be indexed. Re-run index_codebase to retry.", codebase.CanonicalPath)
 	}
 	return fmt.Sprintf(
-		"❌ Codebase '%s' is not currently indexed.\n🚧 %s\n💡 Call index_codebase to build it.%s",
+		"❌ Codebase '%s' could not be indexed.\n🚧 %s\n💡 Re-run index_codebase; if it keeps failing, check the daemon log via the failed-job reference below.%s",
 		codebase.CanonicalPath,
 		orDefault(codebase.LastFailedRun.Message, "the index could not be built"),
 		renderFailureDiagnostics(codebase.LastFailedRun),
@@ -438,21 +461,22 @@ func renderStaleStatus(codebase *model.Codebase) string {
 	)
 }
 
-// renderFailureDiagnostics returns a leading-newline diagnostics line naming
-// the correlation ids behind a failure, or an empty string when none are
-// recorded. The ids resolve against the daemon's structured logs.
+// renderFailureDiagnostics returns a leading-newline line naming the failed job
+// and its trace id, or an empty string when neither is recorded. It leads with
+// the job so it reads as the past failure's reference rather than a second
+// request-trace line, leaving the envelope header as the only "trace_id=" line.
 func renderFailureDiagnostics(failure *model.IndexRunFailure) string {
-	refs := make([]string, 0, 2)
-	if failure.TraceID != "" {
-		refs = append(refs, "trace_id="+failure.TraceID)
-	}
-	if failure.JobID != "" {
-		refs = append(refs, "job_id="+failure.JobID)
-	}
-	if len(refs) == 0 {
+	if failure.JobID == "" && failure.TraceID == "" {
 		return ""
 	}
-	return "\n🔎 Diagnostics: " + strings.Join(refs, " ")
+	label := "Failed job"
+	if failure.JobID != "" {
+		label = "Failed job " + failure.JobID
+	}
+	if failure.TraceID != "" {
+		label += " (trace_id=" + failure.TraceID + ")"
+	}
+	return "\n🔎 " + label
 }
 
 func renderListIndexes(views []CodebaseView) string {
@@ -489,24 +513,33 @@ func jobProgressDisplay(job model.Job) string {
 	return fmt.Sprintf("%.1f%%", job.Progress.OverallPercent)
 }
 
-func renderGetJob(job *model.Job) string {
+func renderGetJob(job *model.Job, pipelineDegraded bool) string {
 	if job == nil {
 		return "Job not found."
 	}
+	state := displayJobState(job.State)
+	if job.Error != nil && job.Error.Retryable {
+		state += " (retryable)"
+	}
 	lines := []string{
-		"Job " + job.ID,
-		"Codebase: " + job.CanonicalPath,
-		"Operation: " + job.Operation,
-		"State: " + displayJobState(job.State),
-		"Phase: " + displayJobPhase(job.Progress.Phase),
-		"Progress: " + jobProgressDisplay(*job),
+		"🧾 Job " + job.ID,
+		"📁 Codebase: " + job.CanonicalPath,
+		"⚙️ Operation: " + job.Operation,
+		"🚦 State: " + state,
+		"🔧 Phase: " + displayJobPhase(job.Progress.Phase),
+		"📊 Progress: " + jobProgressDisplay(*job),
 	}
 	lines = append(lines, renderJobTimingLines(*job)...)
 	if magnitude := renderReconcileMagnitude(job.Progress); magnitude != "" {
 		lines = append(lines, magnitude)
 	}
-	if job.Error != nil && strings.TrimSpace(job.Error.Message) != "" {
-		lines = append(lines, "Error: "+job.Error.Message)
+	// No echo: when the dependency banner is showing and this job stopped on that
+	// shared-infrastructure cause (a retryable error), the banner already carries
+	// the reason, so a per-job Error line would only repeat it.
+	showError := job.Error != nil && strings.TrimSpace(job.Error.Message) != ""
+	echoesBanner := pipelineDegraded && job.Error != nil && job.Error.Retryable
+	if showError && !echoesBanner {
+		lines = append(lines, "🧯 Error: "+job.Error.Message)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -686,7 +719,7 @@ func renderSearch(view searchView) string {
 	resolution := strings.Join(pathResolutionLines(view.RequestedPath), "\n")
 
 	if len(view.Results) == 0 {
-		noResults := fmt.Sprintf("No results found for query: %q in codebase '%s'", view.Query, view.Codebase.CanonicalPath)
+		noResults := fmt.Sprintf("🔍 No results found for query: %q in codebase '%s'", view.Query, view.Codebase.CanonicalPath)
 		return joinSearchSections(view, noResults, status, resolution, false)
 	}
 
@@ -710,7 +743,7 @@ func renderSearch(view searchView) string {
 	// Lead with the result count and the results themselves so a client that
 	// shows only the first line or truncates long output still surfaces the
 	// answer. The in-progress warning and tip trail the results.
-	header := fmt.Sprintf("Found %d results for query: %q in codebase '%s'", len(view.Results), view.Query, view.Codebase.CanonicalPath)
+	header := fmt.Sprintf("🔍 Found %d results for query: %q in codebase '%s'", len(view.Results), view.Query, view.Codebase.CanonicalPath)
 	body := header + "\n\n" + strings.Join(formatted, "\n\n")
 	return joinSearchSections(view, body, status, resolution, true)
 }

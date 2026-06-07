@@ -711,12 +711,13 @@ func (manager *Manager) ListIndexesView() []CodebaseView {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
+	degraded := manager.health.Degraded()
 	views := make([]CodebaseView, 0, len(manager.codebases))
 	for _, codebase := range manager.codebases {
 		activeJob := manager.activeJobSnapshotLocked(codebase)
 		views = append(views, CodebaseView{
 			Codebase: codebase,
-			Display:  computeDisplayStatus(codebase, activeJob),
+			Display:  computeDisplayStatus(codebase, activeJob, degraded),
 		})
 	}
 	sort.Slice(views, func(i int, j int) bool {

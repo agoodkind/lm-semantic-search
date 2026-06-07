@@ -32,12 +32,44 @@ func TestComputeDisplayStatusNeverNotIndexed(t *testing.T) {
 		{"interrupted: not_indexed, no job", model.Codebase{Status: model.CodebaseStatusNotIndexed}, nil, displayPreparing},
 	}
 	for _, testCase := range cases {
-		got := computeDisplayStatus(testCase.codebase, testCase.job)
+		got := computeDisplayStatus(testCase.codebase, testCase.job, false)
 		if got != testCase.want {
 			t.Errorf("%s: computeDisplayStatus = %q, want %q", testCase.name, got, testCase.want)
 		}
 		if string(got) == string(model.CodebaseStatusNotIndexed) {
 			t.Errorf("%s: a tracked codebase must never present as not_indexed", testCase.name)
+		}
+	}
+}
+
+// TestComputeDisplayStatusWaitingFold proves that during a hard pipeline outage
+// an incomplete codebase folds to "waiting" while an already-indexed codebase
+// keeps reading "indexed", per the rule that pipeline health never rewrites a
+// completed local state.
+func TestComputeDisplayStatusWaitingFold(t *testing.T) {
+	t.Parallel()
+	indexedRun := &model.IndexRunSummary{IndexedFiles: 5}
+	embeddingJob := &model.Job{Operation: "index", State: model.JobStateRunning, Progress: model.Progress{FilesTotal: 10}}
+	backgroundSyncJob := &model.Job{Operation: "sync", State: model.JobStateRunning, Progress: model.Progress{FilesInCodebase: 10, FilesModified: 1}}
+
+	cases := []struct {
+		name     string
+		codebase model.Codebase
+		job      *model.Job
+		want     displayStatus
+	}{
+		{"interrupted first index folds to waiting", model.Codebase{Status: model.CodebaseStatusIndexing}, nil, displayWaiting},
+		{"not_indexed folds to waiting", model.Codebase{Status: model.CodebaseStatusNotIndexed}, nil, displayWaiting},
+		{"active build folds to waiting", model.Codebase{Status: model.CodebaseStatusIndexing}, embeddingJob, displayWaiting},
+		{"already indexed stays indexed", model.Codebase{Status: model.CodebaseStatusIndexed}, nil, displayIndexed},
+		{"background sync over indexed stays indexed", model.Codebase{Status: model.CodebaseStatusIndexed, LastSuccessfulRun: indexedRun}, backgroundSyncJob, displayIndexed},
+		{"stale stays stale", model.Codebase{Status: model.CodebaseStatusStale}, nil, displayStale},
+		{"missing stays missing", model.Codebase{Status: model.CodebaseStatusMissing}, nil, displayMissing},
+	}
+	for _, testCase := range cases {
+		got := computeDisplayStatus(testCase.codebase, testCase.job, true)
+		if got != testCase.want {
+			t.Errorf("%s: computeDisplayStatus(degraded) = %q, want %q", testCase.name, got, testCase.want)
 		}
 	}
 }

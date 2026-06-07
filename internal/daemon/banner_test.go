@@ -1,0 +1,137 @@
+package daemon
+
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/model"
+)
+
+// A healthy record renders no banner; each degraded mode renders its own variant
+// with the matching environment reference.
+func TestRenderHealthBannerVariants(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{OpenAIBaseURL: "http://localhost:5400/v1", MilvusAddress: "127.0.0.1:19530"}
+
+	if got := renderHealthBanner(dependencyHealth{Mode: dependencyHealthy}, cfg); got != "" {
+		t.Fatalf("healthy banner = %q, want empty", got)
+	}
+
+	cases := []struct {
+		mode        dependencyMode
+		wantHeadGot string
+		wantRef     string
+	}{
+		{dependencyEmbedderUnreachable, "unreachable", "OPENAI_BASE_URL=http://localhost:5400/v1"},
+		{dependencyEmbedderRejected, "rejecting requests", "Check the model name, dimensions, and credentials"},
+		{dependencyStoreUnavailable, "Vector store unavailable", "MILVUS_ADDRESS=127.0.0.1:19530"},
+	}
+	for _, testCase := range cases {
+		out := renderHealthBanner(dependencyHealth{Mode: testCase.mode, LastHealthyAt: clock.Now()}, cfg)
+		if !strings.HasPrefix(out, "🟥 ") {
+			t.Fatalf("%s banner missing the 🟥 marker: %q", testCase.mode, out)
+		}
+		if !strings.Contains(out, testCase.wantHeadGot) {
+			t.Fatalf("%s banner missing %q in: %q", testCase.mode, testCase.wantHeadGot, out)
+		}
+		if !strings.Contains(out, testCase.wantRef) {
+			t.Fatalf("%s banner missing reference %q in: %q", testCase.mode, testCase.wantRef, out)
+		}
+		if strings.Count(out, "🟥") != 1 {
+			t.Fatalf("%s banner should have exactly one marker: %q", testCase.mode, out)
+		}
+	}
+}
+
+// The waiting body names the embedder for the embedder modes and the vector store
+// for the store mode, leaving the specific cause to the banner.
+func TestRenderWaitingNamesDependency(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
+
+	embedderOut := renderWaiting(codebase, dependencyEmbedderUnreachable)
+	if !strings.Contains(embedderOut, "⏳ Waiting for the embedding server") {
+		t.Fatalf("embedder waiting body wrong:\n%s", embedderOut)
+	}
+	storeOut := renderWaiting(codebase, dependencyStoreUnavailable)
+	if !strings.Contains(storeOut, "⏳ Waiting for the vector store") {
+		t.Fatalf("store waiting body wrong:\n%s", storeOut)
+	}
+}
+
+// The job view suppresses the Error line when the banner is showing and the job
+// stopped on that retryable cause, and shows it otherwise.
+func TestRenderGetJobNoEchoWhenDegraded(t *testing.T) {
+	t.Parallel()
+	job := &model.Job{
+		ID:            "job_x",
+		CanonicalPath: "/repo",
+		Operation:     "index",
+		State:         model.JobStateFailed,
+		Error:         &model.JobError{Message: "embedding endpoint is unreachable; verify OPENAI_BASE_URL", Retryable: true},
+	}
+
+	degraded := renderGetJob(job, true)
+	if strings.Contains(degraded, "Error:") {
+		t.Fatalf("degraded job view echoed the banner cause:\n%s", degraded)
+	}
+	if !strings.Contains(degraded, "State: failed (retryable)") {
+		t.Fatalf("degraded job view missing retryable state:\n%s", degraded)
+	}
+
+	healthy := renderGetJob(job, false)
+	if !strings.Contains(healthy, "Error:") {
+		t.Fatalf("non-degraded job view should keep the error line:\n%s", healthy)
+	}
+}
+
+// During a degraded pipeline, GetIndex shows exactly one banner, the waiting
+// body, and one correlation header, with no blank lines from the envelope.
+func TestGetIndexDegradedEnvelope(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusIndexing
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), LastHealthyAt: clock.Now()}
+	manager.mu.Unlock()
+
+	server := NewGRPCServer(manager, nil)
+	resp, err := server.GetIndex(context.Background(), &pb.GetIndexRequest{Path: repoPath})
+	if err != nil {
+		t.Fatalf("GetIndex returned error: %v", err)
+	}
+	text := resp.GetDisplayText()
+
+	if strings.Count(text, "🟥") != 1 {
+		t.Fatalf("want exactly one banner, got:\n%s", text)
+	}
+	if !strings.Contains(text, "Embedding server unreachable") {
+		t.Fatalf("missing unreachable banner:\n%s", text)
+	}
+	if !strings.Contains(text, "⏳ Waiting for the embedding server") {
+		t.Fatalf("codebase should read waiting, got:\n%s", text)
+	}
+	if strings.Count(text, "🔎 trace_id=") != 1 {
+		t.Fatalf("want exactly one correlation header, got:\n%s", text)
+	}
+	if strings.Contains(text, "❌") {
+		t.Fatalf("a degraded pipeline must not read as a codebase failure:\n%s", text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) == "" {
+			t.Fatalf("envelope produced a blank line:\n%s", text)
+		}
+	}
+}

@@ -209,7 +209,7 @@ func TestRenderGetIndexBodySyncKeepsReady(t *testing.T) {
 		Operation: "sync",
 		Progress:  model.Progress{OverallPercent: 33, FilesInCodebase: 58, FilesModified: 3, FilesProcessed: 1, LastEventAt: renderTestTime},
 	}
-	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job)
+	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
 	for _, want := range []string{"✅ Ready to search", "📊 58 files, 600 chunks", "🔄 Syncing 3 changed files in the background (33%)"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("sync-reconcile status missing %q in:\n%s", want, out)
@@ -232,7 +232,7 @@ func TestRenderGetIndexBodySyncPreDiffKeepsReady(t *testing.T) {
 		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 58, TotalChunks: 600, CompletedAt: renderTestTime},
 	}
 	job := &model.Job{Operation: "sync", Progress: model.Progress{FilesInCodebase: 0, LastEventAt: renderTestTime}}
-	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job)
+	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
 	for _, want := range []string{"✅ Ready to search", "🔄 Checking for changes in the background"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("pre-diff sync status missing %q in:\n%s", want, out)
@@ -246,7 +246,7 @@ func TestRenderGetIndexBodyBuildingTakesOver(t *testing.T) {
 	t.Parallel()
 	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile", Status: model.CodebaseStatusIndexing}
 	job := &model.Job{Operation: "index", Progress: model.Progress{OverallPercent: 42, FilesTotal: 58, FilesProcessed: 24, ChunksGenerated: 71}}
-	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job)
+	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
 	if !strings.Contains(out, "🔄 Building initial index") {
 		t.Fatalf("expected building takeover in:\n%s", out)
 	}
@@ -265,7 +265,7 @@ func TestRenderGetIndexBodyStreamingReindexTakesOver(t *testing.T) {
 		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 58, TotalChunks: 600, CompletedAt: renderTestTime},
 	}
 	job := &model.Job{Operation: "streaming_reindex", Progress: model.Progress{OverallPercent: 37, FilesInCodebase: 58, FilesModified: 58, FilesProcessed: 20}}
-	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job)
+	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
 	if !strings.Contains(out, "🔄 Indexing new changes") {
 		t.Fatalf("expected streaming_reindex takeover in:\n%s", out)
 	}
@@ -303,7 +303,7 @@ func TestRenderGetJobShowsMagnitude(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84},
 	}
-	out := renderGetJob(job)
+	out := renderGetJob(job, false)
 	if !strings.Contains(out, "📄 7 of 58 files · 🧩 84 chunks") {
 		t.Fatalf("expected magnitude in job view, got:\n%s", out)
 	}
@@ -322,7 +322,7 @@ func TestRenderGetJobUsesAmericanCanceledSpelling(t *testing.T) {
 		CompletedAt:   &completedAt,
 		Progress:      model.Progress{Phase: "cancelled"},
 	}
-	out := renderGetJob(job)
+	out := renderGetJob(job, false)
 	if strings.Contains(out, "cancelled") {
 		t.Fatalf("job view should use American spelling, got:\n%s", out)
 	}
@@ -398,7 +398,7 @@ func TestRenderGetJobPreparingNotZeroPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0, OverallPercent: 0},
 	}
-	out := renderGetJob(job)
+	out := renderGetJob(job, false)
 	if !strings.Contains(out, "Progress: Preparing to index") {
 		t.Fatalf("expected preparing label, got:\n%s", out)
 	}
@@ -437,7 +437,7 @@ func TestRenderGetJobSyncPreparingWording(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0},
 	}
-	out := renderGetJob(job)
+	out := renderGetJob(job, false)
 	if !strings.Contains(out, "Changes detected, preparing to index") {
 		t.Fatalf("expected sync preparing wording, got:\n%s", out)
 	}
@@ -454,7 +454,7 @@ func TestRenderGetJobKeepsRealZeroPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 58, OverallPercent: 0},
 	}
-	out := renderGetJob(job)
+	out := renderGetJob(job, false)
 	if !strings.Contains(out, "Progress: 0.0%") {
 		t.Fatalf("known-scope zero should render 0.0%%, got:\n%s", out)
 	}
@@ -473,7 +473,7 @@ func TestRenderGetJobShowsMeasuredPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 4292, FilesProcessed: 2139, OverallPercent: 49.8},
 	}
-	out := renderGetJob(job)
+	out := renderGetJob(job, false)
 	if !strings.Contains(out, "Progress: 49.8%") {
 		t.Fatalf("expected 49.8%%, got:\n%s", out)
 	}
@@ -491,7 +491,7 @@ func TestRenderGetJobFailedShowsPercentAndError(t *testing.T) {
 		Progress:      model.Progress{FilesTotal: 0, OverallPercent: 0},
 		Error:         &model.JobError{Message: "embedder_unreachable: dial tcp [::1]:5400: connect: connection refused"},
 	}
-	out := renderGetJob(job)
+	out := renderGetJob(job, false)
 	if !strings.Contains(out, "Progress: 0.0%") {
 		t.Fatalf("failed job should show its percent, got:\n%s", out)
 	}

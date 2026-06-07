@@ -12,20 +12,36 @@ const (
 	displayPreparing displayStatus = "preparing"
 	displayIndexing  displayStatus = "indexing"
 	displayIndexed   displayStatus = "indexed"
+	displayWaiting   displayStatus = "waiting"
 	displayStale     displayStatus = "stale"
 	displayFailed    displayStatus = "failed"
 	displayMissing   displayStatus = "missing"
 )
 
 // computeDisplayStatus is the single source of truth for the status every
-// surface shows (list, detail, MCP, CLI). It folds the live job into the
-// persisted status and never returns "not_indexed": a tracked codebase is
-// always preparing, indexing, indexed, stale, or failed.
+// surface shows (list, detail, MCP, CLI). It folds the live job and the daemon's
+// dependency health into the persisted status and never returns "not_indexed": a
+// tracked codebase is always preparing, indexing, indexed, waiting, stale, or
+// failed.
 //
 // An interrupted build (persisted "indexing" or "not_indexed" with no live job)
 // reads as "preparing" because the background pass re-queues it; it is never a
 // phantom "indexing" with nothing running.
-func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job) displayStatus {
+//
+// pipelineDegraded is true when a shared dependency (the embedding pipeline or
+// the vector store) is in a hard outage. An incomplete codebase cannot progress
+// then, so it reads "waiting" rather than "preparing" or "building". An
+// already-indexed codebase keeps reading "indexed", since its index is complete
+// and only live search is affected, which the banner states.
+func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, pipelineDegraded bool) displayStatus {
+	base := baseDisplayStatus(codebase, activeJob)
+	if pipelineDegraded && (base == displayPreparing || base == displayIndexing) {
+		return displayWaiting
+	}
+	return base
+}
+
+func baseDisplayStatus(codebase model.Codebase, activeJob *model.Job) displayStatus {
 	// activeJob is the live job for this codebase or nil; the lifecycle clears
 	// ActiveJobID on every terminal transition, so a non-nil job here is always
 	// in flight. That is what turns a cancelled or transiently-failed build

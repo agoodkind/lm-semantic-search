@@ -10,7 +10,7 @@ import (
 // the human-facing status message live in these files so they can be reviewed
 // and edited as durable layout, while the Go code only computes the values.
 //
-//go:embed templates/status/ready.md.tmpl templates/status/preparing.md.tmpl templates/status/building.md.tmpl templates/status/incremental.md.tmpl
+//go:embed templates/status/*.md.tmpl
 var statusTemplateFS embed.FS
 
 var statusTemplates = template.Must(template.ParseFS(statusTemplateFS, "templates/status/*.md.tmpl"))
@@ -24,7 +24,10 @@ type statusView struct {
 	Chunks       int32
 	SkippedLine  string
 	PrepareLabel string
-	Percent      int32
+	// WaitLabel names the dependency an incomplete codebase is waiting on during a
+	// hard pipeline outage; the banner carries the cause, so this stays generic.
+	WaitLabel string
+	Percent   int32
 	// Building view: raw loop progress and the running chunk tally.
 	FilesProcessed int32
 	FilesTotal     int32

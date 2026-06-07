@@ -306,7 +306,7 @@ func TestForceReindexStartsFreshJobAndSearchShowsIndexingWarning(t *testing.T) {
 	if !strings.HasPrefix(searchResponse.GetDisplayText(), "🔎 trace_id=") {
 		t.Fatalf("SearchCode must lead with the correlation header: %q", searchResponse.GetDisplayText())
 	}
-	if !strings.Contains(searchResponse.GetDisplayText(), "\nFound ") {
+	if !strings.Contains(searchResponse.GetDisplayText(), "🔍 Found ") {
 		t.Fatalf("SearchCode must still include the result count after the correlation header: %q", searchResponse.GetDisplayText())
 	}
 	searchText := strings.ToLower(searchResponse.GetDisplayText())
@@ -802,8 +802,11 @@ func TestRenderHistoricalFailureIncludesCorrelationIds(t *testing.T) {
 	if !strings.Contains(out, "trace_id=trace-abc") {
 		t.Fatalf("render output missing trace_id; got %q", out)
 	}
-	if !strings.Contains(out, "job_id=job-xyz") {
-		t.Fatalf("render output missing job_id; got %q", out)
+	// The diagnostics line leads with the failed job and folds the trace into
+	// parentheses, so it reads as the past failure's reference rather than a
+	// second request-trace line.
+	if !strings.Contains(out, "Failed job job-xyz") {
+		t.Fatalf("render output missing failed-job reference; got %q", out)
 	}
 }
 
