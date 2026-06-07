@@ -91,6 +91,9 @@ func (manager *Manager) updateJobCompleted(jobID string, result indexer.Result) 
 
 	now := clock.Now()
 	metrics.JobCompleted()
+	// A completed job embedded against both the pipeline and the store, so both
+	// dependencies are reachable; clear any degraded banner.
+	manager.noteDependencyHealthyLocked()
 	job.State = model.JobStateCompleted
 	job.UpdatedAt = now
 	job.CompletedAt = &now
@@ -186,6 +189,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 		// terminal; keep the codebase at its resumable last-good state. The repair
 		// pass re-attempts it once the dependency recovers, and the health banner
 		// carries the cause.
+		manager.noteDependencyFailureLocked(runErr)
 	case sourceDirMissing(codebase.CanonicalPath):
 		// The source directory vanished mid-run. This is not a build failure, so
 		// present it as missing and keep the index in case the directory returns.

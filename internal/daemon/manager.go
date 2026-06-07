@@ -74,6 +74,10 @@ type Manager struct {
 	// background converges all take a reference for the duration of their
 	// embed, so the external tool backs off while any daemon embed runs.
 	syncLock *syncLock
+	// health is the daemon's view of shared-infrastructure health (the embedding
+	// pipeline and the vector store). It is global, not per-codebase, observed
+	// from job outcomes, and drives the status banner. Guarded by mu.
+	health dependencyHealth
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -107,6 +111,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		lifecycleMutex: sync.Mutex{},
 		indexSlots:     make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
 		syncLock:       newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
+		health:         dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
 	}
 	semanticService, err := semantic.NewService(ctx, cfg)
 	if err != nil {
