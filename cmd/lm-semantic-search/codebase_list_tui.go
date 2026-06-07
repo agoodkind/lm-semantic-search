@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/status"
 )
 
 const (
@@ -52,7 +53,7 @@ func runCodebaseListTUI(options cliOptions) error {
 		return nil
 	}
 
-	program := tea.NewProgram(newListModel(options, codebases), tea.WithAltScreen())
+	program := tea.NewProgram(newListModel(options, codebases, listResponse.GetDependencyHealth()), tea.WithAltScreen())
 	if _, runErr := program.Run(); runErr != nil {
 		slog.Error("run codebase list TUI failed", "err", runErr)
 		return fmt.Errorf("run codebase list: %w", runErr)
@@ -77,6 +78,7 @@ type listModel struct {
 	refreshing    bool
 	err           error
 	quitting      bool
+	health        *pb.DependencyHealth
 }
 
 type detailLoadedMsg struct {
@@ -86,12 +88,13 @@ type detailLoadedMsg struct {
 
 type refreshedMsg struct {
 	codebases []*pb.Codebase
+	health    *pb.DependencyHealth
 	err       error
 }
 
 type tickMsg struct{}
 
-func newListModel(options cliOptions, codebases []*pb.Codebase) listModel {
+func newListModel(options cliOptions, codebases []*pb.Codebase, health *pb.DependencyHealth) listModel {
 	return listModel{
 		options:       options,
 		codebases:     codebases,
@@ -105,6 +108,7 @@ func newListModel(options cliOptions, codebases []*pb.Codebase) listModel {
 		refreshing:    false,
 		err:           nil,
 		quitting:      false,
+		health:        health,
 	}
 }
 
@@ -159,6 +163,7 @@ func (m listModel) applyRefresh(msg refreshedMsg) listModel {
 		return m
 	}
 	m.err = nil
+	m.health = msg.health
 	selectedID := ""
 	if m.cursor >= 0 && m.cursor < len(m.codebases) {
 		selectedID = m.codebases[m.cursor].GetId()
@@ -286,7 +291,10 @@ func (m listModel) detailView() string {
 
 func (m listModel) listView() string {
 	widths := m.columnWidths()
-	lines := make([]string, 0, m.visibleRows()+3)
+	lines := make([]string, 0, m.visibleRows()+4)
+	if banner := m.bannerLine(); banner != "" {
+		lines = append(lines, banner)
+	}
 	lines = append(lines, m.headerLine(widths))
 	lines = append(lines, faintStyle.Render(strings.Repeat("─", lineWidth(widths))))
 
@@ -297,6 +305,18 @@ func (m listModel) listView() string {
 	}
 	lines = append(lines, m.footerLine())
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// bannerLine renders the degraded-dependency banner above the table when the
+// daemon reports a shared-dependency outage, so the interactive list carries the
+// same warning as the piped surfaces. The headline comes from the single status
+// vocabulary; an empty string means the dependencies are healthy.
+func (m listModel) bannerLine() string {
+	if m.health == nil || !m.health.GetDegraded() {
+		return ""
+	}
+	headline := status.BannerHeadlineFor(status.DependencyMode(m.health.GetMode()))
+	return bannerStyle.Render("🟥 " + headline)
 }
 
 func (m listModel) footerLine() string {
@@ -395,13 +415,13 @@ func refreshCmd(options cliOptions) tea.Cmd {
 			return client.ListIndexes(ctx, &pb.ListIndexesRequest{})
 		})
 		if err != nil {
-			return refreshedMsg{codebases: nil, err: err}
+			return refreshedMsg{codebases: nil, health: nil, err: err}
 		}
 		listResponse, ok := result.(*pb.ListIndexesResponse)
 		if !ok {
-			return refreshedMsg{codebases: nil, err: errors.New("unexpected response type from ListIndexes")}
+			return refreshedMsg{codebases: nil, health: nil, err: errors.New("unexpected response type from ListIndexes")}
 		}
-		return refreshedMsg{codebases: listResponse.GetIndexes(), err: nil}
+		return refreshedMsg{codebases: listResponse.GetIndexes(), health: listResponse.GetDependencyHealth(), err: nil}
 	}
 }
 
@@ -432,6 +452,7 @@ var (
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	headerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true)
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("57")).Bold(true)
+	bannerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
 )
 
 // statusColors maps each codebase status to a distinct foreground color. An

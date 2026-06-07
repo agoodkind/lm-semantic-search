@@ -15,7 +15,7 @@ func TestListModelViewShowsRecords(t *testing.T) {
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed", LastSuccessfulRun: &pb.IndexRunSummary{IndexedFiles: 12}},
 		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "stale"},
 	}
-	model := newListModel(cliOptions{}, codebases)
+	model := newListModel(cliOptions{}, codebases, nil)
 
 	view := model.View()
 	for _, want := range []string{"cb_1_aaaa", "cb_2_bbbb", "alpha", "beta", "indexed", "stale", "12", "NAME", "STATUS", "PATH"} {
@@ -32,7 +32,7 @@ func TestListRowRendersDaemonTokens(t *testing.T) {
 	codebases := []*pb.Codebase{
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexing", DisplayStatus: "waiting", GlyphToken: "⋯", StatusLabel: "waiting"},
 	}
-	model := newListModel(cliOptions{}, codebases)
+	model := newListModel(cliOptions{}, codebases, nil)
 
 	view := model.View()
 	for _, want := range []string{"⋯", "waiting"} {
@@ -48,11 +48,34 @@ func TestListRowFallsBackToRawStatusWithoutTokens(t *testing.T) {
 	codebases := []*pb.Codebase{
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
 	}
-	model := newListModel(cliOptions{}, codebases)
+	model := newListModel(cliOptions{}, codebases, nil)
 
 	view := model.View()
 	if !strings.Contains(view, "indexed") {
 		t.Errorf("View() missing fallback raw status:\n%s", view)
+	}
+}
+
+// TestListViewShowsDegradedBanner proves the interactive list renders the
+// degraded-dependency banner above the table when the daemon reports an outage,
+// and shows none when healthy, so the TUI carries the same warning as the piped
+// surfaces.
+func TestListViewShowsDegradedBanner(t *testing.T) {
+	codebases := []*pb.Codebase{
+		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed", DisplayStatus: "waiting", GlyphToken: "⋯", StatusLabel: "waiting"},
+	}
+	degraded := newListModel(cliOptions{}, codebases, &pb.DependencyHealth{Degraded: true, Mode: "embedder_unreachable"})
+	view := degraded.View()
+	if !strings.Contains(view, "🟥") {
+		t.Errorf("degraded list view missing banner marker:\n%s", view)
+	}
+	if !strings.Contains(view, "unreachable") {
+		t.Errorf("degraded list view missing banner headline:\n%s", view)
+	}
+
+	healthy := newListModel(cliOptions{}, codebases, &pb.DependencyHealth{Degraded: false})
+	if strings.Contains(healthy.View(), "🟥") {
+		t.Errorf("healthy list view should carry no banner:\n%s", healthy.View())
 	}
 }
 
@@ -74,7 +97,7 @@ func TestListModelNavigationMovesSelection(t *testing.T) {
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
 		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "stale"},
 	}
-	model := newListModel(cliOptions{}, codebases)
+	model := newListModel(cliOptions{}, codebases, nil)
 	if model.cursor != 0 {
 		t.Fatalf("initial cursor = %d, want 0", model.cursor)
 	}
@@ -103,7 +126,7 @@ func TestListModelRefreshPreservesSelectionByID(t *testing.T) {
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
 		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "stale"},
 	}
-	model := newListModel(cliOptions{}, codebases)
+	model := newListModel(cliOptions{}, codebases, nil)
 	model.cursor = 1
 
 	// A refresh reorders the records; the cursor should follow cb_2_bbbb.
@@ -112,7 +135,7 @@ func TestListModelRefreshPreservesSelectionByID(t *testing.T) {
 		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "indexed"},
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
 	}
-	refreshed := model.applyRefresh(refreshedMsg{codebases: reordered})
+	refreshed := model.applyRefresh(refreshedMsg{codebases: reordered, health: nil, err: nil})
 	if refreshed.codebases[refreshed.cursor].GetId() != "cb_2_bbbb" {
 		t.Errorf("cursor moved off cb_2_bbbb after refresh: index=%d id=%s", refreshed.cursor, refreshed.codebases[refreshed.cursor].GetId())
 	}
@@ -122,7 +145,7 @@ func TestListModelQuitKeySignalsQuit(t *testing.T) {
 	codebases := []*pb.Codebase{
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
 	}
-	model := newListModel(cliOptions{}, codebases)
+	model := newListModel(cliOptions{}, codebases, nil)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	quit, ok := updated.(listModel)
 	if !ok {
