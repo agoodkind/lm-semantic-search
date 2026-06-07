@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -251,14 +250,10 @@ func registerDoctorTool(mcpServer *server.MCPServer, socketPath string, outputMo
 	)
 }
 
-// callDaemonDoctor renders the daemon's own diagnostics and then appends a
-// dropped-codebase section. A dropped codebase is a path that has a completed
-// indexing job in the daemon's retained job history but no longer appears in
-// the current registry, while its directory still exists on disk. Such a path
-// was indexed before and silently fell out of tracking, so it would otherwise
-// go stale forever without surfacing anywhere. A path that was never indexed is
-// never reported, because the user intentionally leaves many repositories
-// unindexed.
+// callDaemonDoctor returns the daemon's doctor surface verbatim. The daemon's
+// display_text already includes the dropped-codebases section (a completed
+// index that fell out of tracking while its directory still exists on disk), so
+// the adapter does not recompute it client-side.
 func callDaemonDoctor(ctx context.Context, socketPath string, outputMode response.Mode) (*mcp.CallToolResult, error) {
 	connection, client, err := grpcutil.DialDaemon(ctx, socketPath)
 	if err != nil {
@@ -275,106 +270,7 @@ func callDaemonDoctor(ctx context.Context, socketPath string, outputMode respons
 		return toolErrorResult(rpcErrorText(err)), nil
 	}
 
-	base, err := renderToolResponse(outputMode, doctorResponse)
-	if err != nil {
-		return nil, err
-	}
-
-	jobsResponse, err := client.ListJobs(outgoingCtx, &pb.ListJobsRequest{})
-	if err != nil {
-		slog.ErrorContext(ctx, "list jobs for doctor failed", "socket_path", socketPath, "err", err)
-		return base, nil
-	}
-	indexesResponse, err := client.ListIndexes(outgoingCtx, &pb.ListIndexesRequest{})
-	if err != nil {
-		slog.ErrorContext(ctx, "list indexes for doctor failed", "socket_path", socketPath, "err", err)
-		return base, nil
-	}
-
-	dropped := computeDroppedCodebases(jobsResponse.GetJobs(), indexesResponse.GetIndexes(), pathExists)
-	section := renderDroppedSection(dropped)
-
-	baseText := toolResultText(base)
-	combined := baseText + "\n\n" + section
-	return mcp.NewToolResultText(combined), nil
-}
-
-// computeDroppedCodebases returns the sorted canonical paths that have a
-// completed indexing job but are absent from the current index set while their
-// directory still exists on disk. The presence check runs through exists so
-// the computation stays unit-testable without touching the filesystem.
-func computeDroppedCodebases(jobs []*pb.Job, indexes []*pb.Codebase, exists func(string) bool) []string {
-	tracked := make(map[string]struct{}, len(indexes))
-	for _, codebase := range indexes {
-		path := codebase.GetCanonicalPath()
-		if path == "" {
-			continue
-		}
-		tracked[path] = struct{}{}
-	}
-
-	indexedBefore := make(map[string]struct{})
-	for _, job := range jobs {
-		if model.JobState(job.GetState()) != model.JobStateCompleted {
-			continue
-		}
-		path := job.GetCanonicalPath()
-		if path == "" {
-			continue
-		}
-		indexedBefore[path] = struct{}{}
-	}
-
-	dropped := make([]string, 0)
-	for path := range indexedBefore {
-		if _, stillTracked := tracked[path]; stillTracked {
-			continue
-		}
-		if !exists(path) {
-			continue
-		}
-		dropped = append(dropped, path)
-	}
-	sort.Strings(dropped)
-	return dropped
-}
-
-// renderDroppedSection formats the dropped-codebase section for human-facing
-// doctor output. With no dropped codebases it states that none exist so the
-// section reads as a deliberate clean result rather than a missing check.
-func renderDroppedSection(dropped []string) string {
-	if len(dropped) == 0 {
-		return "Dropped codebases (completed index, now untracked, still on disk): none"
-	}
-
-	lines := make([]string, 0, len(dropped)+1)
-	lines = append(lines, fmt.Sprintf("Dropped codebases (completed index, now untracked, still on disk): %d", len(dropped)))
-	for _, path := range dropped {
-		lines = append(lines, "- "+path)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// pathExists reports whether a directory or file exists at path. It treats any
-// stat error other than non-existence as "present" so a transient permission
-// error does not suppress a genuinely dropped codebase.
-func pathExists(path string) bool {
-	_, err := os.Stat(path)
-	return !errors.Is(err, os.ErrNotExist)
-}
-
-// toolResultText extracts the single text payload from a rendered tool result.
-// renderToolResponse always returns exactly one mcp.TextContent item, so the
-// fallback empty string only guards against an unexpected content shape.
-func toolResultText(result *mcp.CallToolResult) string {
-	if result == nil || len(result.Content) == 0 {
-		return ""
-	}
-	text, ok := result.Content[0].(mcp.TextContent)
-	if !ok {
-		return ""
-	}
-	return text.Text
+	return renderToolResponse(outputMode, doctorResponse)
 }
 
 func registerSearchTool(mcpServer *server.MCPServer, socketPath string, outputMode response.Mode) {

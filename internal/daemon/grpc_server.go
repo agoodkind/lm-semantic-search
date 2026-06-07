@@ -478,7 +478,8 @@ func (server *GRPCServer) Doctor(ctx context.Context, request *pb.DoctorRequest)
 			Detail:   diagnostic,
 		})
 	}
-	response.DisplayText = appendCorrelationRef(renderDoctor(diagnostics), ctx)
+	body := renderDoctor(diagnostics) + "\n\n" + renderDroppedSection(server.manager.DroppedCodebases())
+	response.DisplayText = appendCorrelationRef(body, ctx)
 	return response, nil
 }
 
