@@ -67,6 +67,10 @@ message Progress {
   int32 collection_rows_written = 9;
   google.protobuf.Timestamp last_event_at = 10;
   google.protobuf.Timestamp heartbeat_at = 11;
+  // chunks_reused counts chunks served from an already-embedded vector this run,
+  // distinct from chunks_generated (embedded this run), so total = reused +
+  // embedded is visible on the wire.
+  int32 chunks_reused = 12;
 }
 
 message JobError {
@@ -122,6 +126,11 @@ message Codebase {
   // live job into the lifecycle status; status (field 4) stays the raw
   // lifecycle value for debugging.
   string display_status = 14;
+  // glyph_token is the daemon-owned shape per display status (for example ⋯ for
+  // waiting), so list rows render one vocabulary instead of each client owning a
+  // map. status_label is the human word per display status.
+  string glyph_token = 15;
+  string status_label = 16;
 }
 
 message Job {
@@ -138,6 +147,11 @@ message Job {
   google.protobuf.Timestamp updated_at = 11;
   google.protobuf.Timestamp completed_at = 12;
   JobError error = 13;
+  // forced records that the caller passed force=true on the index request.
+  bool forced = 14;
+  // trigger names what started the run ("initial_build", "forced_reindex", or
+  // "changed_files"), derived from the operation and the force flag.
+  string trigger = 15;
 }
 
 message SearchResult {

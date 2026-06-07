@@ -84,12 +84,15 @@ func ToJob(job model.Job) *pb.Job {
 		},
 		Operation: job.Operation,
 		State:     string(job.State),
+		Forced:    job.Forced,
+		Trigger:   jobTrigger(job),
 		Progress: &pb.Progress{
 			Phase:                     job.Progress.Phase,
 			PhasePercent:              job.Progress.PhasePercent,
 			OverallPercent:            job.Progress.OverallPercent,
 			FilesTotal:                job.Progress.FilesTotal,
 			FilesProcessed:            job.Progress.FilesProcessed,
+			ChunksReused:              job.Progress.ChunksReused,
 			ChunksGenerated:           job.Progress.ChunksGenerated,
 			EmbeddingBatchesTotal:     job.Progress.EmbeddingBatchesTotal,
 			EmbeddingBatchesCompleted: job.Progress.EmbeddingBatchesCompleted,
@@ -109,6 +112,28 @@ func ToJob(job model.Job) *pb.Job {
 		}
 	}
 	return result
+}
+
+// Operation values a daemon job can carry, mirrored here so the wire trigger
+// token can be derived without importing the daemon package.
+const (
+	jobOperationIndex    = "index"
+	triggerInitialBuild  = "initial_build"
+	triggerForcedReindex = "forced_reindex"
+	triggerChangedFiles  = "changed_files"
+)
+
+// jobTrigger derives the wire trigger token from the job's operation and force
+// flag: a full build is an initial build unless forced, and any other operation
+// is a changed-files run.
+func jobTrigger(job model.Job) string {
+	if job.Operation == jobOperationIndex {
+		if job.Forced {
+			return triggerForcedReindex
+		}
+		return triggerInitialBuild
+	}
+	return triggerChangedFiles
 }
 
 // ToJobPointer converts an optional daemon job into protobuf form.

@@ -298,6 +298,16 @@ func (server *GRPCServer) SyncIndex(ctx context.Context, request *pb.SyncIndexRe
 	}, nil
 }
 
+// applyDisplayTokens sets the display status plus its glyph and label on a
+// protobuf codebase, so the three stay in sync from the daemon's single
+// vocabulary. pbconv cannot import the daemon vocab, so the tokens are applied
+// here at the boundary.
+func applyDisplayTokens(pbCodebase *pb.Codebase, display displayStatus) {
+	pbCodebase.DisplayStatus = string(display)
+	pbCodebase.GlyphToken = glyphForDisplay(display)
+	pbCodebase.StatusLabel = labelForDisplay(display)
+}
+
 // GetIndex resolves one tracked codebase whose canonical path covers the
 // queried path.
 func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequest) (resp *pb.GetIndexResponse, err error) {
@@ -326,7 +336,7 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	}
 	if found {
 		pbCodebase := pbconv.ToCodebase(codebase)
-		pbCodebase.DisplayStatus = string(computeDisplayStatus(codebase, activeJob, health.Degraded()))
+		applyDisplayTokens(pbCodebase, computeDisplayStatus(codebase, activeJob, health.Degraded()))
 		response.Codebase = pbCodebase
 		response.ActiveJob = pbconv.ToJobPointer(activeJob)
 	}
@@ -344,7 +354,7 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 	}
 	for _, view := range views {
 		pbCodebase := pbconv.ToCodebase(view.Codebase)
-		pbCodebase.DisplayStatus = string(view.Display)
+		applyDisplayTokens(pbCodebase, view.Display)
 		response.Indexes = append(response.Indexes, pbCodebase)
 	}
 	health := server.manager.DependencyHealth()

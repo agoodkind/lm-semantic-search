@@ -422,8 +422,12 @@ type Progress struct {
 	CollectionRowsWritten     int32                  `protobuf:"varint,9,opt,name=collection_rows_written,json=collectionRowsWritten,proto3" json:"collection_rows_written,omitempty"`
 	LastEventAt               *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=last_event_at,json=lastEventAt,proto3" json:"last_event_at,omitempty"`
 	HeartbeatAt               *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=heartbeat_at,json=heartbeatAt,proto3" json:"heartbeat_at,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// chunks_reused counts chunks served from an already-embedded vector this run,
+	// distinct from chunks_generated (embedded this run), so total = reused +
+	// embedded is visible on the wire.
+	ChunksReused  int32 `protobuf:"varint,12,opt,name=chunks_reused,json=chunksReused,proto3" json:"chunks_reused,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Progress) Reset() {
@@ -531,6 +535,13 @@ func (x *Progress) GetHeartbeatAt() *timestamppb.Timestamp {
 		return x.HeartbeatAt
 	}
 	return nil
+}
+
+func (x *Progress) GetChunksReused() int32 {
+	if x != nil {
+		return x.ChunksReused
+	}
+	return 0
 }
 
 type JobError struct {
@@ -815,6 +826,11 @@ type Codebase struct {
 	// live job into the lifecycle status; status (field 4) stays the raw
 	// lifecycle value for debugging.
 	DisplayStatus string `protobuf:"bytes,14,opt,name=display_status,json=displayStatus,proto3" json:"display_status,omitempty"`
+	// glyph_token is the daemon-owned shape per display status (for example ⋯ for
+	// waiting), so list rows render one vocabulary instead of each client owning a
+	// map. status_label is the human word per display status.
+	GlyphToken    string `protobuf:"bytes,15,opt,name=glyph_token,json=glyphToken,proto3" json:"glyph_token,omitempty"`
+	StatusLabel   string `protobuf:"bytes,16,opt,name=status_label,json=statusLabel,proto3" json:"status_label,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -940,6 +956,20 @@ func (x *Codebase) GetDisplayStatus() string {
 	return ""
 }
 
+func (x *Codebase) GetGlyphToken() string {
+	if x != nil {
+		return x.GlyphToken
+	}
+	return ""
+}
+
+func (x *Codebase) GetStatusLabel() string {
+	if x != nil {
+		return x.StatusLabel
+	}
+	return ""
+}
+
 type Job struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -955,6 +985,11 @@ type Job struct {
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	CompletedAt   *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
 	Error         *JobError              `protobuf:"bytes,13,opt,name=error,proto3" json:"error,omitempty"`
+	// forced records that the caller passed force=true on the index request.
+	Forced bool `protobuf:"varint,14,opt,name=forced,proto3" json:"forced,omitempty"`
+	// trigger names what started the run ("initial_build", "forced_reindex", or
+	// "changed_files"), derived from the operation and the force flag.
+	Trigger       string `protobuf:"bytes,15,opt,name=trigger,proto3" json:"trigger,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1078,6 +1113,20 @@ func (x *Job) GetError() *JobError {
 		return x.Error
 	}
 	return nil
+}
+
+func (x *Job) GetForced() bool {
+	if x != nil {
+		return x.Forced
+	}
+	return false
+}
+
+func (x *Job) GetTrigger() string {
+	if x != nil {
+		return x.Trigger
+	}
+	return ""
 }
 
 type SearchResult struct {
@@ -2694,7 +2743,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x13embedding_dimension\x18\t \x01(\x05R\x12embeddingDimension\x12%\n" +
 	"\x0evector_backend\x18\n" +
 	" \x01(\tR\rvectorBackend\x12\x16\n" +
-	"\x06hybrid\x18\v \x01(\bR\x06hybrid\"\x92\x04\n" +
+	"\x06hybrid\x18\v \x01(\bR\x06hybrid\"\xb7\x04\n" +
 	"\bProgress\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12#\n" +
 	"\rphase_percent\x18\x02 \x01(\x01R\fphasePercent\x12'\n" +
@@ -2708,7 +2757,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x17collection_rows_written\x18\t \x01(\x05R\x15collectionRowsWritten\x12>\n" +
 	"\rlast_event_at\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\vlastEventAt\x12=\n" +
-	"\fheartbeat_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\vheartbeatAt\"B\n" +
+	"\fheartbeat_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\vheartbeatAt\x12#\n" +
+	"\rchunks_reused\x18\f \x01(\x05R\fchunksReused\"B\n" +
 	"\bJobError\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12\x1c\n" +
 	"\tretryable\x18\x02 \x01(\bR\tretryable\"\xb8\x01\n" +
@@ -2726,7 +2776,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0fIndexRunFailure\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12:\n" +
 	"\x19last_attempted_percentage\x18\x02 \x01(\x05R\x17lastAttemptedPercentage\x127\n" +
-	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\xaa\x05\n" +
+	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\xee\x05\n" +
 	"\bCodebase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0ecanonical_path\x18\x02 \x01(\tR\rcanonicalPath\x12\x16\n" +
@@ -2742,7 +2792,10 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x126\n" +
 	"\x17inode_tracking_disabled\x18\r \x01(\bR\x15inodeTrackingDisabled\x12%\n" +
-	"\x0edisplay_status\x18\x0e \x01(\tR\rdisplayStatusJ\x04\b\x03\x10\x04R\aaliases\"\xd0\x04\n" +
+	"\x0edisplay_status\x18\x0e \x01(\tR\rdisplayStatus\x12\x1f\n" +
+	"\vglyph_token\x18\x0f \x01(\tR\n" +
+	"glyphToken\x12!\n" +
+	"\fstatus_label\x18\x10 \x01(\tR\vstatusLabelJ\x04\b\x03\x10\x04R\aaliases\"\x82\x05\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
@@ -2760,7 +2813,9 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12=\n" +
 	"\fcompleted_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x123\n" +
-	"\x05error\x18\r \x01(\v2\x1d.lmsemanticsearch.v1.JobErrorR\x05error\"\xb9\x01\n" +
+	"\x05error\x18\r \x01(\v2\x1d.lmsemanticsearch.v1.JobErrorR\x05error\x12\x16\n" +
+	"\x06forced\x18\x0e \x01(\bR\x06forced\x12\x18\n" +
+	"\atrigger\x18\x0f \x01(\tR\atrigger\"\xb9\x01\n" +
 	"\fSearchResult\x12#\n" +
 	"\rrelative_path\x18\x01 \x01(\tR\frelativePath\x12\x1d\n" +
 	"\n" +
