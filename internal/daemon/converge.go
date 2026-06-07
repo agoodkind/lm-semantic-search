@@ -41,7 +41,7 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 	}
 
 	configDigest := codebase.EffectiveConfig.IgnoreDigest
-	snapshotPath := manager.merklePath(codebaseID)
+	snapshotPath := manager.snapshotPathForCodebase(codebase)
 	snapshot := merkle.LoadSnapshotForConfig(snapshotPath, configDigest, manager.legacyDigestForCodebase(codebaseID))
 	if snapshot.Files == nil {
 		snapshot.Files = make(map[string]string)
@@ -99,7 +99,7 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 	rules := codebase.ResolvedIgnoreRules
 
 	if excluded, matchedPattern, gitignoreSource := discovery.PathIgnored(relativePath, rules); excluded {
-		if _, tracked := snapshot.Files[relativePath]; !tracked {
+		if !snapshot.HasFile(relativePath) {
 			return false
 		}
 		if rmErr := manager.semantic.Reindex(ctx, root, nil, []string{relativePath}, nil, nil); rmErr != nil {
@@ -122,7 +122,7 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 			manager.logConvergeReindexErr(ctx, relativePath, "remove", rmErr)
 			return false
 		}
-		if _, present := snapshot.Files[relativePath]; !present {
+		if !snapshot.HasFile(relativePath) {
 			return false
 		}
 		delete(snapshot.Files, relativePath)

@@ -312,10 +312,7 @@ func (syncer *BackgroundSync) requeuePaths(codebaseID string, relativePaths []st
 }
 
 func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase model.Codebase) (bool, error) {
-	snapshotPath := codebase.MerkleSnapshotPath
-	if strings.TrimSpace(snapshotPath) == "" {
-		snapshotPath = syncer.manager.merklePath(codebase.ID)
-	}
+	snapshotPath := syncer.manager.snapshotPathForCodebase(codebase)
 
 	existingSnapshot, err := merkle.ReadSnapshot(snapshotPath)
 	if err != nil {
