@@ -92,6 +92,11 @@ func IsTransient(err error) bool {
 	switch adapterErr.Class {
 	case ClassEmbedderBusy, ClassEmbedCancelled, ClassEmbedderUnreachable, ClassMilvusUnavailable:
 		return true
+	case ClassNotIndexed, ClassUnknownCodebaseID, ClassCollectionMissing,
+		ClassCollectionNotReady, ClassSearchResultIncomplete, ClassEmbedderRejected,
+		ClassInvalidPath, ClassInvalidArgument, ClassConflictingJob, ClassJobNotFound,
+		ClassInternal:
+		return false
 	default:
 		return false
 	}

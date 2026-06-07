@@ -36,6 +36,10 @@ func renderHealthBanner(health dependencyHealth, cfg config.Config) string {
 
 func bannerViewFor(health dependencyHealth, cfg config.Config) bannerView {
 	lastReachable := "last reachable " + formatStatusTime(health.LastHealthyAt)
+	generic := bannerView{
+		Headline: "A shared dependency is degraded. Indexing is paused until it recovers.",
+		Detail:   lastReachable,
+	}
 	switch health.Mode {
 	case dependencyEmbedderUnreachable:
 		return bannerView{
@@ -52,11 +56,10 @@ func bannerViewFor(health dependencyHealth, cfg config.Config) bannerView {
 			Headline: "Vector store unavailable. Search and indexing are paused until it returns.",
 			Detail:   joinBannerDetail(storeEndpointRef(cfg), lastReachable),
 		}
+	case dependencyHealthy:
+		return generic
 	default:
-		return bannerView{
-			Headline: "A shared dependency is degraded. Indexing is paused until it recovers.",
-			Detail:   lastReachable,
-		}
+		return generic
 	}
 }
 

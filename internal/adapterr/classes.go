@@ -125,20 +125,6 @@ func NewUnknownCodebaseID(id string) *AdapterError {
 	}
 }
 
-// NewMilvusUnavailable reports that the vector store is not configured or cannot
-// be reached at its configured address. Like an unreachable embedder, this is a
-// shared-infrastructure outage that self-heals when the store returns.
-func NewMilvusUnavailable(cause error) *AdapterError {
-	return &AdapterError{
-		Class:         ClassMilvusUnavailable,
-		Message:       "vector store is unavailable",
-		Code:          "milvus_unavailable",
-		Hint:          "verify the vector store is running and reachable at its configured address",
-		Cause:         cause,
-		SafeForClient: true,
-	}
-}
-
 // NewEmbedderUnreachable reports a transient failure reaching the configured
 // embedding endpoint. It is a shared-infrastructure outage that self-heals when
 // the endpoint returns, so it never marks a codebase failed.

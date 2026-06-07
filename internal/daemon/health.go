@@ -62,6 +62,11 @@ func degradeModeFor(err error) dependencyMode {
 		return dependencyEmbedderRejected
 	case adapterr.ClassMilvusUnavailable:
 		return dependencyStoreUnavailable
+	case adapterr.ClassEmbedderBusy, adapterr.ClassEmbedCancelled, adapterr.ClassNotIndexed,
+		adapterr.ClassUnknownCodebaseID, adapterr.ClassCollectionMissing, adapterr.ClassCollectionNotReady,
+		adapterr.ClassSearchResultIncomplete, adapterr.ClassInvalidPath, adapterr.ClassInvalidArgument,
+		adapterr.ClassConflictingJob, adapterr.ClassJobNotFound, adapterr.ClassInternal:
+		return dependencyHealthy
 	default:
 		return dependencyHealthy
 	}

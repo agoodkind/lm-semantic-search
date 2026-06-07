@@ -9,6 +9,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
 // A hard outage degrades the health record with the matching mode; a busy
@@ -23,7 +24,7 @@ func TestDegradeModeFor(t *testing.T) {
 	}{
 		{"unreachable", adapterr.NewEmbedderUnreachable(nil), dependencyEmbedderUnreachable},
 		{"rejected", adapterr.NewEmbedderRejected(nil), dependencyEmbedderRejected},
-		{"store unavailable", adapterr.NewMilvusUnavailable(nil), dependencyStoreUnavailable},
+		{"store unavailable", semantic.ErrUnavailable, dependencyStoreUnavailable},
 		{"busy", adapterr.NewEmbedderBusy(nil), dependencyHealthy},
 		{"cancelled", adapterr.NewEmbedCancelled(nil), dependencyHealthy},
 		{"context canceled", context.Canceled, dependencyHealthy},
