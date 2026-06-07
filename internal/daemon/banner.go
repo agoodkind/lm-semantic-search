@@ -51,6 +51,11 @@ func bannerViewFor(health dependencyHealth, cfg config.Config) bannerView {
 			Headline: "Embedding server is rejecting requests. Indexing is paused until the embedding config is fixed.",
 			Detail:   joinBannerDetail("Check the model name, dimensions, and credentials", embedderEndpointRef(cfg)),
 		}
+	case dependencyEmbedderBusy:
+		return bannerView{
+			Headline: "Embedding server is at capacity. Indexing is paused and retries automatically when it frees up.",
+			Detail:   joinBannerDetail(embedderEndpointRef(cfg), lastReachable),
+		}
 	case dependencyStoreUnavailable:
 		return bannerView{
 			Headline: "Vector store unavailable. Search and indexing are paused until it returns.",

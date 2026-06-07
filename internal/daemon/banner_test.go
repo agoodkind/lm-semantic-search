@@ -29,6 +29,7 @@ func TestRenderHealthBannerVariants(t *testing.T) {
 	}{
 		{dependencyEmbedderUnreachable, "unreachable", "OPENAI_BASE_URL=http://localhost:5400/v1"},
 		{dependencyEmbedderRejected, "rejecting requests", "Check the model name, dimensions, and credentials"},
+		{dependencyEmbedderBusy, "at capacity", "OPENAI_BASE_URL=http://localhost:5400/v1"},
 		{dependencyStoreUnavailable, "Vector store unavailable", "MILVUS_ADDRESS=127.0.0.1:19530"},
 	}
 	for _, testCase := range cases {

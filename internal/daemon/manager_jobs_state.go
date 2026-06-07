@@ -92,9 +92,13 @@ func (manager *Manager) updateJobCompleted(jobID string, result indexer.Result) 
 
 	now := clock.Now()
 	metrics.JobCompleted()
-	// A completed job embedded against both the pipeline and the store, so both
-	// dependencies are reachable; clear any degraded banner.
-	manager.noteDependencyHealthyLocked()
+	// Clear the degraded banner only when this run actually embedded against the
+	// pipeline, which proves the dependency is reachable. A no-op sync that found
+	// no changed files completes without touching the embedder, so it must not
+	// wipe a banner raised by a real outage on another codebase.
+	if result.IndexedFiles > 0 {
+		manager.noteDependencyHealthyLocked()
+	}
 	job.State = model.JobStateCompleted
 	job.UpdatedAt = now
 	job.CompletedAt = &now

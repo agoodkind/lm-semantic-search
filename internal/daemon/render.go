@@ -195,7 +195,7 @@ func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Code
 	// rather than a busy takeover. Under a hard dependency outage an incomplete
 	// codebase folds to "waiting"; the banner above carries the cause, so the
 	// waiting view names none.
-	switch computeDisplayStatus(*codebase, activeJob, health.Degraded()) {
+	switch computeDisplayStatus(*codebase, activeJob, health.HardDegraded()) {
 	case displayIndexed:
 		if activeJob != nil && isBackgroundSyncReconcile(codebase, activeJob) {
 			return renderIndexedWithSync(codebase, activeJob)

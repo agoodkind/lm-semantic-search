@@ -9,15 +9,19 @@ import (
 )
 
 // dependencyMode names a degraded shared-dependency condition. The empty mode is
-// healthy. Each non-empty mode selects one status-banner variant. Only a hard
-// outage degrades the banner: a rate-limited (busy) endpoint and a cancellation
-// are transient but self-progress or self-resolve, so they leave the banner off.
+// healthy. Each non-empty mode selects one status-banner variant. A degraded
+// mode is recorded only when a job actually fails on that condition, so a brief
+// rate-limit absorbed by the in-process retry never reaches the banner; a busy
+// mode appears only when the endpoint stays at capacity long enough to fail a
+// job, which is a real outage worth surfacing. A cancellation is transient and
+// never degrades the banner.
 type dependencyMode string
 
 const (
 	dependencyHealthy             dependencyMode = ""
 	dependencyEmbedderUnreachable dependencyMode = "embedder_unreachable"
 	dependencyEmbedderRejected    dependencyMode = "embedder_rejected"
+	dependencyEmbedderBusy        dependencyMode = "embedder_busy"
 	dependencyStoreUnavailable    dependencyMode = "store_unavailable"
 )
 
@@ -37,16 +41,33 @@ type dependencyHealth struct {
 	LastHealthyAt time.Time
 }
 
-// Degraded reports whether a hard dependency outage is in effect, which is when
-// the banner shows.
+// Degraded reports whether any dependency outage is in effect, which is when the
+// banner shows. This includes a busy endpoint, so a sustained at-capacity outage
+// surfaces a banner.
 func (health dependencyHealth) Degraded() bool {
 	return health.Mode != dependencyHealthy
 }
 
-// degradeModeFor maps a run error to the banner mode it implies, or
-// dependencyHealthy for anything that is not a hard shared-infrastructure outage.
-// A busy or cancelled condition is transient but not a banner-worthy outage, so
-// it maps to healthy.
+// HardDegraded reports whether a progress-blocking outage is in effect, which is
+// the set that folds an incomplete codebase to "waiting". A busy endpoint shows a
+// banner but still self-progresses once capacity frees, so it is excluded here:
+// a rate-limited pipeline still reads "indexing" or "preparing", not "waiting".
+func (health dependencyHealth) HardDegraded() bool {
+	switch health.Mode {
+	case dependencyEmbedderUnreachable, dependencyEmbedderRejected, dependencyStoreUnavailable:
+		return true
+	case dependencyHealthy, dependencyEmbedderBusy:
+		return false
+	default:
+		return false
+	}
+}
+
+// degradeModeFor maps a job-failure error to the banner mode it implies, or
+// dependencyHealthy for anything that is not a shared-infrastructure outage. It
+// runs only on a job failure, so a busy class here means the endpoint stayed at
+// capacity past the in-process retry and failed the job, which is a real outage.
+// A cancellation is transient and never degrades the banner.
 func degradeModeFor(err error) dependencyMode {
 	if err == nil {
 		return dependencyHealthy
@@ -60,9 +81,11 @@ func degradeModeFor(err error) dependencyMode {
 		return dependencyEmbedderUnreachable
 	case adapterr.ClassEmbedderRejected:
 		return dependencyEmbedderRejected
+	case adapterr.ClassEmbedderBusy:
+		return dependencyEmbedderBusy
 	case adapterr.ClassMilvusUnavailable:
 		return dependencyStoreUnavailable
-	case adapterr.ClassEmbedderBusy, adapterr.ClassEmbedCancelled, adapterr.ClassNotIndexed,
+	case adapterr.ClassEmbedCancelled, adapterr.ClassNotIndexed,
 		adapterr.ClassUnknownCodebaseID, adapterr.ClassCollectionMissing, adapterr.ClassCollectionNotReady,
 		adapterr.ClassSearchResultIncomplete, adapterr.ClassInvalidPath, adapterr.ClassInvalidArgument,
 		adapterr.ClassConflictingJob, adapterr.ClassJobNotFound, adapterr.ClassInternal:

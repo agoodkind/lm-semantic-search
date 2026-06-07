@@ -714,7 +714,7 @@ func (manager *Manager) ListIndexesView() []CodebaseView {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
-	degraded := manager.health.Degraded()
+	degraded := manager.health.HardDegraded()
 	views := make([]CodebaseView, 0, len(manager.codebases))
 	for _, codebase := range manager.codebases {
 		activeJob := manager.activeJobSnapshotLocked(codebase)
