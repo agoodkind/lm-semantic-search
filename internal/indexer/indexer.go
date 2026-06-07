@@ -69,7 +69,11 @@ type Progress struct {
 	FilesEmbedded          int32
 	FilesSkippedOversize   int32
 	FilesSkippedUnreadable int32
-	ChunksGenerated        int32
+	// ChunksReused counts chunks served from an already-embedded vector this run,
+	// distinct from ChunksGenerated (embedded this run), so total = reused +
+	// embedded is visible on the progress surface.
+	ChunksReused    int32
+	ChunksGenerated int32
 }
 
 // NewRunner constructs the local indexing runner.
@@ -252,6 +256,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 			FilesEmbedded:          0,
 			FilesSkippedOversize:   0,
 			FilesSkippedUnreadable: 0,
+			ChunksReused:           0,
 			ChunksGenerated:        0,
 		})
 	}
@@ -272,6 +277,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 			FilesEmbedded:          0,
 			FilesSkippedOversize:   0,
 			FilesSkippedUnreadable: 0,
+			ChunksReused:           0,
 			ChunksGenerated:        0,
 		})
 	}
@@ -307,6 +313,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 				FilesEmbedded:          safeInt32(index + 1),
 				FilesSkippedOversize:   accumulator.skippedOversize,
 				FilesSkippedUnreadable: accumulator.skippedUnreadable,
+				ChunksReused:           0,
 				ChunksGenerated:        accumulator.totalChunks,
 			})
 		}
@@ -321,6 +328,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 			FilesEmbedded:          totalFiles,
 			FilesSkippedOversize:   accumulator.skippedOversize,
 			FilesSkippedUnreadable: accumulator.skippedUnreadable,
+			ChunksReused:           0,
 			ChunksGenerated:        accumulator.totalChunks,
 		})
 	}
@@ -353,6 +361,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 			FilesEmbedded:          0,
 			FilesSkippedOversize:   0,
 			FilesSkippedUnreadable: 0,
+			ChunksReused:           0,
 			ChunksGenerated:        0,
 		})
 	}
@@ -384,6 +393,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 				FilesEmbedded:          safeInt32(index + 1),
 				FilesSkippedOversize:   accumulator.skippedOversize,
 				FilesSkippedUnreadable: accumulator.skippedUnreadable,
+				ChunksReused:           0,
 				ChunksGenerated:        accumulator.totalChunks,
 			})
 		}
@@ -398,6 +408,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 			FilesEmbedded:          totalFiles,
 			FilesSkippedOversize:   accumulator.skippedOversize,
 			FilesSkippedUnreadable: accumulator.skippedUnreadable,
+			ChunksReused:           0,
 			ChunksGenerated:        accumulator.totalChunks,
 		})
 	}

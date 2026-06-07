@@ -54,6 +54,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	job.Progress.FilesEmbedded = progress.FilesEmbedded
 	job.Progress.FilesSkippedOversize = progress.FilesSkippedOversize
 	job.Progress.FilesSkippedUnreadable = progress.FilesSkippedUnreadable
+	job.Progress.ChunksReused = progress.ChunksReused
 	job.Progress.ChunksGenerated = progress.ChunksGenerated
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now

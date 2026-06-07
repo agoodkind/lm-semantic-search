@@ -56,6 +56,18 @@ type deltaState struct {
 	// vector instead of calling the embedder, so the shared subtree is never
 	// re-embedded. Nil for an ordinary build, which embeds every chunk.
 	reuse map[string][]float32
+	// chunkCounts accumulates the reused and embedded chunk counts across every
+	// per-file reindex in this run, so the job progress can show total = reused +
+	// embedded. It is a pointer because deltaState is copied by value through the
+	// per-file loop, and the totals must survive each copy.
+	chunkCounts *chunkCounters
+}
+
+// chunkCounters accumulates the reuse-vs-embed split across one run's per-file
+// reindex calls.
+type chunkCounters struct {
+	reused   int32
+	embedded int32
 }
 
 // applyReindexForState runs one per-file delta against the live collection, or
@@ -66,14 +78,26 @@ type deltaState struct {
 // continue; a non-zero outcome means the step already resolved the job
 // (failed, cancelled) or signalled a fallback to a full build.
 func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job, state deltaState, chunks []model.StoredChunk, removedPaths []string, phase string) deltaOutcome {
+	// Capture the last semantic progress for this one reindex call. The semantic
+	// callback reports cumulative reused/embedded counts within the call, so the
+	// final value is this file's split, which we fold into the run totals.
+	var fileReused, fileEmbedded int32
+	progressFn := func(progress semantic.Progress) {
+		fileReused = progress.ChunksReused
+		fileEmbedded = progress.ChunksEmbedded
+	}
 	var err error
 	if state.staging {
-		err = manager.semantic.StageReindex(ctx, job.CanonicalPath, chunks, removedPaths, nil, state.reuse)
+		err = manager.semantic.StageReindex(ctx, job.CanonicalPath, chunks, removedPaths, progressFn, state.reuse)
 	} else {
-		err = manager.semantic.Reindex(ctx, job.CanonicalPath, chunks, removedPaths, nil, state.reuse)
+		err = manager.semantic.Reindex(ctx, job.CanonicalPath, chunks, removedPaths, progressFn, state.reuse)
 	}
 	if err != nil {
 		return manager.classifyReindexErr(ctx, job, err, phase)
+	}
+	if state.chunkCounts != nil {
+		state.chunkCounts.reused += fileReused
+		state.chunkCounts.embedded += fileEmbedded
 	}
 	return deltaOutcome{fallback: false, handled: false}
 }
@@ -189,6 +213,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job) bool {
 		semantic:     manager.semantic != nil && manager.semantic.Available(),
 		staging:      false,
 		reuse:        nil,
+		chunkCounts:  &chunkCounters{reused: 0, embedded: 0},
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -275,6 +300,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job) {
 		semantic:     manager.semantic != nil && manager.semantic.Available(),
 		staging:      true,
 		reuse:        nil,
+		chunkCounts:  &chunkCounters{reused: 0, embedded: 0},
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -460,7 +486,8 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		}
 		if seedHash, present := state.plan.seedSnapshot.Files[relativePath]; present && seedHash == state.plan.currentSnapshot.Files[relativePath] {
 			state.working[relativePath] = seedHash
-			manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result)
+			reused, embedded := state.chunkSplit()
+			manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, reused, embedded)
 			continue
 		}
 		outcome := manager.handleChangedFile(ctx, job, state, relativePath, &result)
@@ -468,7 +495,8 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 			return result, outcome
 		}
 		manager.writeCheckpoint(ctx, state, relativePath)
-		manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result)
+		reused, embedded := state.chunkSplit()
+		manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, reused, embedded)
 	}
 	return result, deltaOutcome{fallback: false, handled: false}
 }
@@ -539,12 +567,24 @@ func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, l
 // shared by every progress update from that loop.
 const phaseReindexingChanged = "Reindexing changed files..."
 
+// chunkSplit returns the run's accumulated reused and embedded chunk counts,
+// or (0, 0) when no accumulator is attached, so callers can pass the split into
+// progress reporting without a nil check.
+func (state deltaState) chunkSplit() (int32, int32) {
+	if state.chunkCounts == nil {
+		return 0, 0
+	}
+	return state.chunkCounts.reused, state.chunkCounts.embedded
+}
+
 // reportDeltaProgress publishes one progress update from the per-file embed
 // loop. processed is the number of files the loop has finished. An initial call
 // with processed=0 establishes the embedding phase and the to-process total, so
 // the status shows the indexing view before the first (possibly slow) embed
-// rather than a stalled "Preparing".
-func (manager *Manager) reportDeltaProgress(jobID string, processed int32, totalChanged int, totalFiles int32, result indexer.Result) {
+// rather than a stalled "Preparing". reused and embedded are the run's
+// accumulated chunk split; ChunksGenerated carries the embedded-this-run total
+// so a surface can show total = reused + embedded.
+func (manager *Manager) reportDeltaProgress(jobID string, processed int32, totalChanged int, totalFiles int32, result indexer.Result, reused int32, embedded int32) {
 	manager.updateJobProgress(jobID, indexer.Progress{
 		Phase:                  phaseReindexingChanged,
 		OverallPercent:         float64(processed) / float64(maxInt(totalChanged, 1)) * 100,
@@ -553,7 +593,8 @@ func (manager *Manager) reportDeltaProgress(jobID string, processed int32, total
 		FilesEmbedded:          result.IndexedFiles,
 		FilesSkippedOversize:   result.SkippedOversize,
 		FilesSkippedUnreadable: result.SkippedUnreadable,
-		ChunksGenerated:        result.TotalChunks,
+		ChunksReused:           reused,
+		ChunksGenerated:        embedded,
 	})
 }
 

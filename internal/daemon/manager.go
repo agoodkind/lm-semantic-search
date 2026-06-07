@@ -283,6 +283,7 @@ func newQueuedJob(
 			FilesSkippedOversize:      0,
 			FilesSkippedUnreadable:    0,
 			ChunksTotal:               0,
+			ChunksReused:              0,
 			ChunksGenerated:           0,
 			EmbeddingBatchesTotal:     0,
 			EmbeddingBatchesCompleted: 0,

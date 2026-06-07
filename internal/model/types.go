@@ -94,7 +94,12 @@ type Progress struct {
 	// ChunksTotal is the live whole-collection chunk count, populated at render
 	// time for an in-flight incremental run so status can show the running total
 	// rather than only the per-run additions. Zero means not populated.
-	ChunksTotal               int32     `json:"chunks_total"`
+	ChunksTotal int32 `json:"chunks_total"`
+	// ChunksReused counts chunks this run served from an already-embedded vector
+	// (a merge-down child or sibling worktree) instead of calling the embedder,
+	// so a surface can show total = reused + embedded and make the reuse-vs-redo
+	// split visible. ChunksGenerated stays the embedded-this-run total.
+	ChunksReused              int32     `json:"chunks_reused"`
 	ChunksGenerated           int32     `json:"chunks_generated"`
 	EmbeddingBatchesTotal     int32     `json:"embedding_batches_total"`
 	EmbeddingBatchesCompleted int32     `json:"embedding_batches_completed"`

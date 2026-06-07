@@ -180,21 +180,17 @@ func (manager *Manager) synthesizeUnregisteredCodebase(canonicalPath string) mod
 	return codebase
 }
 
-// isIncrementalOperation reports whether a job operation reuses the existing
-// collection and re-embeds only changed files, rather than building from
-// scratch. The live whole-collection chunk total is meaningful only for these.
-func isIncrementalOperation(operation string) bool {
-	op := jobOperation(operation)
-	return op == jobOperationSync || op == jobOperationStreamingReindex
-}
-
-// fillLiveChunkTotal sets an in-flight incremental job's live whole-collection
-// chunk count on its progress snapshot, so status shows the running total
-// rather than only this run's additions. It is best-effort: on any failure the
-// field stays zero and the renderer falls back to the last recorded total. The
-// activeJob must be a snapshot the caller owns, since this mutates it.
+// fillLiveChunkTotal sets an in-flight job's live whole-collection chunk count
+// on its progress snapshot, so status shows the running total rather than only
+// this run's additions. It covers both incremental syncs (writing the live
+// collection directly) and a forced reindex over an existing index (the prior
+// collection is still live until the staging build promotes). It is best-effort:
+// on any failure, including a from-scratch build whose collection does not exist
+// yet, the field stays zero and the renderer falls back to the reuse+embed total
+// or the last recorded total. The activeJob must be a snapshot the caller owns,
+// since this mutates it.
 func (manager *Manager) fillLiveChunkTotal(ctx context.Context, codebase model.Codebase, activeJob *model.Job) {
-	if activeJob == nil || !isIncrementalOperation(activeJob.Operation) {
+	if activeJob == nil {
 		return
 	}
 	if manager.semantic == nil || !manager.semantic.Available() {

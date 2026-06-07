@@ -34,7 +34,10 @@ type fakeSemantic struct {
 	reuseCollections [][]string
 	dropped          []string
 	droppedStaging   []string
-	mu               sync.Mutex
+	// reindexEmit, when set, is invoked with the live progress callback during
+	// Reindex so a test can drive reuse-vs-embed progress reporting.
+	reindexEmit func(progress func(semantic.Progress))
+	mu          sync.Mutex
 }
 
 func (f *fakeSemantic) Available() bool { return true }
@@ -87,7 +90,10 @@ func (f *fakeSemantic) LoadReuseVectors(ctx context.Context, collectionNames []s
 	return map[string][]float32{}, nil
 }
 
-func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, _ func(semantic.Progress), _ map[string][]float32) error {
+func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), _ map[string][]float32) error {
+	if f.reindexEmit != nil && progress != nil {
+		f.reindexEmit(progress)
+	}
 	if f.reindex != nil {
 		return f.reindex(ctx, codebasePath, chunks, removed)
 	}
