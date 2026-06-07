@@ -43,24 +43,11 @@ type dependencyHealth struct {
 
 // Degraded reports whether any dependency outage is in effect, which is when the
 // banner shows. This includes a busy endpoint, so a sustained at-capacity outage
-// surfaces a banner.
+// surfaces a banner. The waiting fold keys off this too, but only for a codebase
+// with no live job, so a brief rate-limit during an active job still reads
+// "indexing" rather than "waiting".
 func (health dependencyHealth) Degraded() bool {
 	return health.Mode != dependencyHealthy
-}
-
-// HardDegraded reports whether a progress-blocking outage is in effect, which is
-// the set that folds an incomplete codebase to "waiting". A busy endpoint shows a
-// banner but still self-progresses once capacity frees, so it is excluded here:
-// a rate-limited pipeline still reads "indexing" or "preparing", not "waiting".
-func (health dependencyHealth) HardDegraded() bool {
-	switch health.Mode {
-	case dependencyEmbedderUnreachable, dependencyEmbedderRejected, dependencyStoreUnavailable:
-		return true
-	case dependencyHealthy, dependencyEmbedderBusy:
-		return false
-	default:
-		return false
-	}
 }
 
 // degradeModeFor maps a job-failure error to the banner mode it implies, or

@@ -42,10 +42,11 @@ func TestComputeDisplayStatusNeverNotIndexed(t *testing.T) {
 	}
 }
 
-// TestComputeDisplayStatusWaitingFold proves that during a hard pipeline outage
-// an incomplete codebase folds to "waiting" while an already-indexed codebase
-// keeps reading "indexed", per the rule that pipeline health never rewrites a
-// completed local state.
+// TestComputeDisplayStatusWaitingFold proves that during a pipeline outage a
+// codebase with no live job folds to "waiting", while a codebase with a live
+// scoped job keeps reading "indexing" (it is embedding right now) and an
+// already-indexed codebase keeps reading "indexed". Pipeline health never
+// rewrites a completed local state or a live-progress state.
 func TestComputeDisplayStatusWaitingFold(t *testing.T) {
 	t.Parallel()
 	indexedRun := &model.IndexRunSummary{IndexedFiles: 5}
@@ -60,7 +61,7 @@ func TestComputeDisplayStatusWaitingFold(t *testing.T) {
 	}{
 		{"interrupted first index folds to waiting", model.Codebase{Status: model.CodebaseStatusIndexing}, nil, displayWaiting},
 		{"not_indexed folds to waiting", model.Codebase{Status: model.CodebaseStatusNotIndexed}, nil, displayWaiting},
-		{"active build folds to waiting", model.Codebase{Status: model.CodebaseStatusIndexing}, embeddingJob, displayWaiting},
+		{"live scoped job stays indexing", model.Codebase{Status: model.CodebaseStatusIndexing}, embeddingJob, displayIndexing},
 		{"already indexed stays indexed", model.Codebase{Status: model.CodebaseStatusIndexed}, nil, displayIndexed},
 		{"background sync over indexed stays indexed", model.Codebase{Status: model.CodebaseStatusIndexed, LastSuccessfulRun: indexedRun}, backgroundSyncJob, displayIndexed},
 		{"stale stays stale", model.Codebase{Status: model.CodebaseStatusStale}, nil, displayStale},

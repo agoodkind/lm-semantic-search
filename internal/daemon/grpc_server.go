@@ -336,7 +336,7 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	}
 	if found {
 		pbCodebase := pbconv.ToCodebase(codebase)
-		applyDisplayTokens(pbCodebase, computeDisplayStatus(codebase, activeJob, health.HardDegraded()))
+		applyDisplayTokens(pbCodebase, computeDisplayStatus(codebase, activeJob, health.Degraded()))
 		response.Codebase = pbCodebase
 		response.ActiveJob = pbconv.ToJobPointer(activeJob)
 	}

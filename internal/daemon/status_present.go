@@ -29,13 +29,16 @@ const (
 // phantom "indexing" with nothing running.
 //
 // pipelineDegraded is true when a shared dependency (the embedding pipeline or
-// the vector store) is in a hard outage. An incomplete codebase cannot progress
-// then, so it reads "waiting" rather than "preparing" or "building". An
-// already-indexed codebase keeps reading "indexed", since its index is complete
-// and only live search is affected, which the banner states.
+// the vector store) is degraded. A codebase that is not making live progress
+// then (an interrupted build with no live job, which reads "preparing") cannot
+// advance, so it reads "waiting". A codebase with a live scoped job keeps reading
+// "indexing", since it is embedding right now, which is why a brief rate-limit
+// still reads "indexing" rather than "waiting". An already-indexed codebase keeps
+// reading "indexed", since its index is complete and only live search is
+// affected, which the banner states.
 func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, pipelineDegraded bool) displayStatus {
 	base := baseDisplayStatus(codebase, activeJob)
-	if pipelineDegraded && (base == displayPreparing || base == displayIndexing) {
+	if pipelineDegraded && base == displayPreparing {
 		return displayWaiting
 	}
 	return base
