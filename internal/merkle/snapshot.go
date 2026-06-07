@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"goodkind.io/lm-semantic-search/internal/discovery"
@@ -89,6 +90,36 @@ func (snapshot *Snapshot) ForgetInode(relativePath string) {
 		return
 	}
 	delete(snapshot.Inodes, relativePath)
+}
+
+// HasFile reports whether relativePath is recorded as an indexed file. The path
+// must be repo-relative and slash-separated, matching how Capture stores keys.
+// This is the exact-file membership check; use CoversPath to also match a
+// directory that contains indexed files.
+func (snapshot *Snapshot) HasFile(relativePath string) bool {
+	_, ok := snapshot.Files[relativePath]
+	return ok
+}
+
+// CoversPath reports whether the snapshot records relativePath as an indexed
+// file or, when relativePath names a directory, records any indexed file
+// beneath it. It is the per-file membership source of truth: a path covered
+// here is searchable through the index. The path must be repo-relative and
+// slash-separated; the empty string or "." matches when any file is indexed.
+func (snapshot *Snapshot) CoversPath(relativePath string) bool {
+	if relativePath == "" || relativePath == "." {
+		return len(snapshot.Files) > 0
+	}
+	if snapshot.HasFile(relativePath) {
+		return true
+	}
+	prefix := relativePath + "/"
+	for indexedPath := range snapshot.Files {
+		if strings.HasPrefix(indexedPath, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // Capture walks a codebase and records content hashes for the tracked files.
