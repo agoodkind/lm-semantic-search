@@ -71,6 +71,36 @@ func TestNoOpCompletionKeepsBanner(t *testing.T) {
 	}
 }
 
+// A progress update that embedded a file clears the banner immediately, so a long
+// recovering build stops showing a stale "paused" banner while it makes progress;
+// a progress update that embedded nothing leaves the banner up.
+func TestEmbedProgressClearsBanner(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusIndexing
+	job := model.Job{ID: "job-progress", CodebaseID: codebase.ID, State: model.JobStateRunning}
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.jobs[job.ID] = job
+	manager.health = dependencyHealth{Mode: dependencyEmbedderBusy}
+	manager.mu.Unlock()
+
+	manager.updateJobProgress(job.ID, indexer.Progress{FilesTotal: 10, FilesProcessed: 1, FilesEmbedded: 0})
+	if !manager.DependencyHealth().Degraded() {
+		t.Fatal("a no-embed progress update cleared the banner; want it kept")
+	}
+
+	manager.updateJobProgress(job.ID, indexer.Progress{FilesTotal: 10, FilesProcessed: 2, FilesEmbedded: 1})
+	if manager.DependencyHealth().Degraded() {
+		t.Fatal("an embed-progress update did not clear the banner")
+	}
+}
+
 // A failed infra job degrades the daemon health record; the next completed job
 // clears it, so the banner appears on the outage and clears on recovery.
 func TestDependencyHealthFollowsJobOutcomes(t *testing.T) {

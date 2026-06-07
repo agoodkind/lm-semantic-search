@@ -59,6 +59,16 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
 	manager.jobs[jobID] = job
+
+	// A progress update that embedded a file proves the embedding pipeline is
+	// reachable right now, so clear a degraded banner as soon as embedding
+	// resumes rather than waiting for the job to complete. Without this a long
+	// recovering build would keep showing a stale "paused" banner while it is
+	// visibly making progress. A reuse-only or no-op update embeds nothing, so it
+	// leaves the banner untouched.
+	if progress.FilesEmbedded > 0 {
+		manager.noteDependencyHealthyLocked()
+	}
 }
 
 // setJobDeltaCounts records how many files a delta sync will add, modify, and
