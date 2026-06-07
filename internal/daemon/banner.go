@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/status"
 )
 
 // bannerView is the data the dependency-health banner template renders. The
@@ -34,37 +35,31 @@ func renderHealthBanner(health dependencyHealth, cfg config.Config) string {
 	return strings.TrimRight(buf.String(), "\n")
 }
 
+// bannerViewFor composes the banner for a degraded mode. The headline comes from
+// the single status vocabulary; only the supporting detail (which environment
+// variable to check, and the last-reachable time) is composed here, since that
+// needs the config and the health timestamps the status package does not see.
 func bannerViewFor(health dependencyHealth, cfg config.Config) bannerView {
 	lastReachable := "last reachable " + formatStatusTime(health.LastHealthyAt)
-	generic := bannerView{
-		Headline: "A shared dependency is degraded. Indexing is paused until it recovers.",
-		Detail:   lastReachable,
-	}
+	headline := status.BannerHeadlineFor(health.Mode)
 	switch health.Mode {
-	case dependencyEmbedderUnreachable:
-		return bannerView{
-			Headline: "Embedding server unreachable. Indexing is paused and resumes automatically when it returns.",
-			Detail:   joinBannerDetail(embedderEndpointRef(cfg), lastReachable),
-		}
 	case dependencyEmbedderRejected:
 		return bannerView{
-			Headline: "Embedding server is rejecting requests. Indexing is paused until the embedding config is fixed.",
+			Headline: headline,
 			Detail:   joinBannerDetail("Check the model name, dimensions, and credentials", embedderEndpointRef(cfg)),
-		}
-	case dependencyEmbedderBusy:
-		return bannerView{
-			Headline: "Embedding server is at capacity. Indexing is paused and retries automatically when it frees up.",
-			Detail:   joinBannerDetail(embedderEndpointRef(cfg), lastReachable),
 		}
 	case dependencyStoreUnavailable:
 		return bannerView{
-			Headline: "Vector store unavailable. Search and indexing are paused until it returns.",
+			Headline: headline,
 			Detail:   joinBannerDetail(storeEndpointRef(cfg), lastReachable),
 		}
-	case dependencyHealthy:
-		return generic
+	case dependencyEmbedderUnreachable, dependencyEmbedderBusy:
+		return bannerView{
+			Headline: headline,
+			Detail:   joinBannerDetail(embedderEndpointRef(cfg), lastReachable),
+		}
 	default:
-		return generic
+		return bannerView{Headline: headline, Detail: lastReachable}
 	}
 }
 

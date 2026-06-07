@@ -12,6 +12,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/status"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
 
@@ -60,7 +61,7 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 					Codebase:  codebase,
 					ActiveJob: activeJob,
 					Results:   []model.StoredChunk{},
-					StateNote: "⚠️ Search is temporarily unavailable because the semantic collection is missing. The daemon is handling automatic rebuild in the background.",
+					StateNote: status.StateNoteFor(status.SearchRepairing),
 				}, nil
 			case searchCollectionModeMissing:
 				return SearchOutcome{}, adapterr.NewIndexDataLost(codebase.CanonicalPath, nil)

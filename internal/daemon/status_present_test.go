@@ -42,11 +42,13 @@ func TestComputeDisplayStatusNeverNotIndexed(t *testing.T) {
 	}
 }
 
-// TestComputeDisplayStatusWaitingFold proves that during a pipeline outage a
-// codebase with no live job folds to "waiting", while a codebase with a live
-// scoped job keeps reading "indexing" (it is embedding right now) and an
-// already-indexed codebase keeps reading "indexed". Pipeline health never
-// rewrites a completed local state or a live-progress state.
+// TestComputeDisplayStatusWaitingFold proves that during a pipeline outage any
+// codebase that cannot be searched right now folds to "waiting": an interrupted
+// build, a not-indexed build, an already-indexed codebase, and a background sync
+// over an indexed codebase all read "waiting" because a query embed would fail.
+// A codebase with a live scoped job keeps reading "indexing" (it is embedding
+// right now), and a local terminal state (stale, missing) is never rewritten by
+// pipeline health.
 func TestComputeDisplayStatusWaitingFold(t *testing.T) {
 	t.Parallel()
 	indexedRun := &model.IndexRunSummary{IndexedFiles: 5}
@@ -62,8 +64,8 @@ func TestComputeDisplayStatusWaitingFold(t *testing.T) {
 		{"interrupted first index folds to waiting", model.Codebase{Status: model.CodebaseStatusIndexing}, nil, displayWaiting},
 		{"not_indexed folds to waiting", model.Codebase{Status: model.CodebaseStatusNotIndexed}, nil, displayWaiting},
 		{"live scoped job stays indexing", model.Codebase{Status: model.CodebaseStatusIndexing}, embeddingJob, displayIndexing},
-		{"already indexed stays indexed", model.Codebase{Status: model.CodebaseStatusIndexed}, nil, displayIndexed},
-		{"background sync over indexed stays indexed", model.Codebase{Status: model.CodebaseStatusIndexed, LastSuccessfulRun: indexedRun}, backgroundSyncJob, displayIndexed},
+		{"already indexed folds to waiting", model.Codebase{Status: model.CodebaseStatusIndexed}, nil, displayWaiting},
+		{"background sync over indexed folds to waiting", model.Codebase{Status: model.CodebaseStatusIndexed, LastSuccessfulRun: indexedRun}, backgroundSyncJob, displayWaiting},
 		{"stale stays stale", model.Codebase{Status: model.CodebaseStatusStale}, nil, displayStale},
 		{"missing stays missing", model.Codebase{Status: model.CodebaseStatusMissing}, nil, displayMissing},
 	}

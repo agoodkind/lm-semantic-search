@@ -6,6 +6,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/status"
 )
 
 // dependencyMode names a degraded shared-dependency condition. The empty mode is
@@ -15,14 +16,18 @@ import (
 // mode appears only when the endpoint stays at capacity long enough to fail a
 // job, which is a real outage worth surfacing. A cancellation is transient and
 // never degrades the banner.
-type dependencyMode string
+//
+// The type and its values alias the status package so the daemon keeps its short
+// names while the canonical definitions live in the single status source of
+// truth.
+type dependencyMode = status.DependencyMode
 
 const (
-	dependencyHealthy             dependencyMode = ""
-	dependencyEmbedderUnreachable dependencyMode = "embedder_unreachable"
-	dependencyEmbedderRejected    dependencyMode = "embedder_rejected"
-	dependencyEmbedderBusy        dependencyMode = "embedder_busy"
-	dependencyStoreUnavailable    dependencyMode = "store_unavailable"
+	dependencyHealthy             = status.Healthy
+	dependencyEmbedderUnreachable = status.EmbedderUnreachable
+	dependencyEmbedderRejected    = status.EmbedderRejected
+	dependencyEmbedderBusy        = status.EmbedderBusy
+	dependencyStoreUnavailable    = status.StoreUnavailable
 )
 
 // dependencyHealth is the daemon's view of shared-infrastructure health: the
