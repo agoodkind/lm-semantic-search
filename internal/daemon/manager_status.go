@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -113,8 +115,40 @@ func (manager *Manager) classifyTrackedPath(ctx context.Context, codebase model.
 		classification.ExcludedByGitignore = gitignoreSource
 		return classification
 	}
+	// The merkle files map mirrors the file set that has chunks in the
+	// collection, so it is the authoritative per-file membership source. A path
+	// that is in scope and not excluded is only actually searchable when it, or
+	// for a directory a file beneath it, is recorded there. Without this check
+	// every non-root path reports unindexed even when its file is in the index.
+	if manager.pathHasIndexedFiles(codebase, filepath.ToSlash(relative)) {
+		return classification
+	}
 	classification.Kind = model.PathClassificationInScopeUnindexed
 	return classification
+}
+
+// pathHasIndexedFiles reports whether the codebase's merkle snapshot covers
+// relative (a repo-relative, slash-separated path): the file itself, or for a
+// directory any indexed file beneath it. Membership means the path is
+// searchable through the index. The per-file decision lives on the snapshot
+// ([merkle.Snapshot.CoversPath]) so every caller shares one source of truth.
+func (manager *Manager) pathHasIndexedFiles(codebase model.Codebase, relative string) bool {
+	snapshot, err := merkle.ReadSnapshot(manager.snapshotPathForCodebase(codebase))
+	if err != nil {
+		return false
+	}
+	return snapshot.CoversPath(relative)
+}
+
+// snapshotPathForCodebase returns the on-disk merkle snapshot path for a
+// codebase, preferring the path stored on the record and falling back to the
+// id-derived location. Centralizing this avoids the resolution being repeated
+// at each merkle read site.
+func (manager *Manager) snapshotPathForCodebase(codebase model.Codebase) string {
+	if path := strings.TrimSpace(codebase.MerkleSnapshotPath); path != "" {
+		return path
+	}
+	return manager.merklePath(codebase.ID)
 }
 
 // cacheResolvedRules folds a lazily-resolved IgnoreRules tree back into
