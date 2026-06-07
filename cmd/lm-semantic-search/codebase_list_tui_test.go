@@ -25,12 +25,34 @@ func TestListModelViewShowsRecords(t *testing.T) {
 	}
 }
 
-func TestStatusLabelSpellsNotIndexed(t *testing.T) {
-	if got := statusLabel("not_indexed"); got != "not indexed" {
-		t.Errorf("statusLabel(not_indexed) = %q, want %q", got, "not indexed")
+// TestListRowRendersDaemonTokens proves a row renders the daemon-provided glyph
+// and label tokens rather than a client-side map, so the CLI shares the daemon's
+// status vocabulary including "waiting".
+func TestListRowRendersDaemonTokens(t *testing.T) {
+	codebases := []*pb.Codebase{
+		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexing", DisplayStatus: "waiting", GlyphToken: "⋯", StatusLabel: "waiting"},
 	}
-	if got := statusLabel("indexed"); got != "indexed" {
-		t.Errorf("statusLabel(indexed) = %q, want %q", got, "indexed")
+	model := newListModel(cliOptions{}, codebases)
+
+	view := model.View()
+	for _, want := range []string{"⋯", "waiting"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("View() missing daemon token %q\n%s", want, view)
+		}
+	}
+}
+
+// TestListRowFallsBackToRawStatusWithoutTokens proves a row from an older daemon
+// that omits the glyph and label tokens still renders the raw status word.
+func TestListRowFallsBackToRawStatusWithoutTokens(t *testing.T) {
+	codebases := []*pb.Codebase{
+		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
+	}
+	model := newListModel(cliOptions{}, codebases)
+
+	view := model.View()
+	if !strings.Contains(view, "indexed") {
+		t.Errorf("View() missing fallback raw status:\n%s", view)
 	}
 }
 

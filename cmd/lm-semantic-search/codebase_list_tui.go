@@ -331,7 +331,18 @@ func (m listModel) renderRow(codebase *pb.Codebase, selected bool, widths colWid
 	if status == "" {
 		status = codebase.GetStatus()
 	}
-	label := statusGlyph(status) + " " + statusLabel(status)
+	// The daemon owns the status vocabulary: render its glyph and label tokens,
+	// falling back to the raw status only when an older daemon omits them. Color
+	// stays a client concern, keyed off the display status.
+	glyph := codebase.GetGlyphToken()
+	if glyph == "" {
+		glyph = "•"
+	}
+	labelText := codebase.GetStatusLabel()
+	if labelText == "" {
+		labelText = status
+	}
+	label := glyph + " " + labelText
 	statusText := padTo(fitTail(label, widths.status), widths.status)
 
 	if selected {
@@ -443,35 +454,6 @@ func statusColor(status string) lipgloss.Color {
 		return color
 	}
 	return grayStatus
-}
-
-// statusGlyphs gives each status a distinct shape so the states stay
-// distinguishable without color, per the don't-rely-on-color-alone guideline.
-var statusGlyphs = map[string]string{
-	"preparing":   "◌",
-	"indexed":     "●",
-	"indexing":    "◐",
-	"waiting":     "⋯",
-	"stale":       "△",
-	"failed":      "✗",
-	"missing":     "⊘",
-	"not_indexed": "○",
-}
-
-func statusGlyph(status string) string {
-	if glyph, ok := statusGlyphs[status]; ok {
-		return glyph
-	}
-	return "•"
-}
-
-// statusLabel renders the wire status as a human label, spelling not_indexed as
-// two words so the column reads naturally.
-func statusLabel(status string) string {
-	if status == "not_indexed" {
-		return "not indexed"
-	}
-	return status
 }
 
 // fileCountCell returns the indexed-file count from the last successful run, or
