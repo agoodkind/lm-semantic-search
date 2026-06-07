@@ -180,6 +180,21 @@ func NewEmbedCancelled(cause error) *AdapterError {
 	}
 }
 
+// NewIndexDataLost reports that a codebase's Milvus collection is gone, so its
+// index data is lost and a search cannot run until a rebuild recreates it. It
+// maps to FailedPrecondition through [ClassCollectionMissing], which keeps the
+// search path off the catch-all internal class.
+func NewIndexDataLost(path string, cause error) *AdapterError {
+	return &AdapterError{
+		Class:         ClassCollectionMissing,
+		Message:       "index data for " + quote(path) + " has been lost (collection not found in Milvus)",
+		Code:          "collection_missing",
+		Hint:          "wait for background repair or re-run index_codebase to rebuild it",
+		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
 // NewInvalidPath reports a path argument that fails validation.
 func NewInvalidPath(message string, cause error) *AdapterError {
 	return &AdapterError{

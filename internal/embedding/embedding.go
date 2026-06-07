@@ -12,6 +12,7 @@ import (
 
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
@@ -162,10 +163,12 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 }
 
 // embedWithRetry issues the embeddings request, retrying transient contention
-// (HTTP 429/503) with exponential backoff. A non-transient error returns
-// immediately wrapped with operation context; transient exhaustion returns an
-// error wrapping ErrEmbedderBusy so callers can classify it as "busy" rather
-// than "unreachable".
+// (HTTP 429/503) with exponential backoff. Every error return is a typed
+// [adapterr.AdapterError] so the daemon boundary classifies an embedding failure
+// the same way regardless of which path (index or search) made the call. The
+// embedding sentinels stay wrapped inside the cause so callers that branch with
+// [errors.Is] keep working. Order matters: a cancellation is checked before the
+// unreachable default so a cancelled request never reads as a down endpoint.
 func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, params openai.EmbeddingNewParams) (*openai.CreateEmbeddingResponse, error) {
 	var lastErr error
 	for attempt := 1; attempt <= embedMaxAttempts; attempt++ {
@@ -179,12 +182,16 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 		if !transient {
 			slog.ErrorContext(ctx, "generate embeddings failed", "provider", provider.name, "model", provider.model, "status", statusCode, "err", err)
 			var apiErr *openai.Error
-			if errors.As(err, &apiErr) {
+			switch {
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+				return nil, adapterr.NewEmbedCancelled(fmt.Errorf("generate %s embeddings: %w", provider.name, err))
+			case errors.As(err, &apiErr):
 				// Reachable endpoint that answered with a non-429 HTTP error.
-				return nil, fmt.Errorf("generate %s embeddings: %w: %w", provider.name, ErrEmbedderRejected, err)
+				return nil, adapterr.NewEmbedderRejected(fmt.Errorf("generate %s embeddings: %w: %w", provider.name, ErrEmbedderRejected, err))
+			default:
+				// Network failure: the endpoint is unreachable.
+				return nil, adapterr.NewEmbedderUnreachable(fmt.Errorf("generate %s embeddings: %w", provider.name, err))
 			}
-			// Network failure: the endpoint is unreachable.
-			return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, err)
 		}
 		if attempt == embedMaxAttempts {
 			break
@@ -196,14 +203,14 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, ctx.Err())
+			return nil, adapterr.NewEmbedCancelled(fmt.Errorf("generate %s embeddings: %w", provider.name, ctx.Err()))
 		case <-timer.C:
 		}
 	}
 
 	statusCode, _ := transientEmbedStatus(lastErr)
 	slog.ErrorContext(ctx, "embedding endpoint still busy after retries", "provider", provider.name, "model", provider.model, "status", statusCode, "attempts", embedMaxAttempts, "err", lastErr)
-	return nil, fmt.Errorf("generate %s embeddings: %w: %w", provider.name, ErrEmbedderBusy, lastErr)
+	return nil, adapterr.NewEmbedderBusy(fmt.Errorf("generate %s embeddings: %w: %w", provider.name, ErrEmbedderBusy, lastErr))
 }
 
 // transientEmbedStatus reports the HTTP status of an OpenAI API error and whether

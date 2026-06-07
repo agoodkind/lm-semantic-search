@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
@@ -18,7 +19,7 @@ import (
 func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, query string, limit int32, extensionFilter []string) (SearchOutcome, error) {
 	normalizedExtensions, err := semantic.ValidateExtensionFilter(extensionFilter)
 	if err != nil {
-		return SearchOutcome{}, fmt.Errorf("validate extension filter: %w", err)
+		return SearchOutcome{}, adapterr.NewInvalidPath(err.Error(), err)
 	}
 
 	codebase, activeJob, found, _, err := manager.GetIndex(ctx, requestedPath)
@@ -26,7 +27,7 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		return SearchOutcome{}, err
 	}
 	if !found {
-		return SearchOutcome{}, errors.New("codebase not tracked: " + requestedPath)
+		return SearchOutcome{}, adapterr.NewNotIndexed(requestedPath, nil)
 	}
 
 	// When the query targets a nested directory of a larger covering index, scope
@@ -38,6 +39,10 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		chunks, semanticErr := manager.semantic.Search(ctx, codebase.CanonicalPath, query, limit, normalizedExtensions, relativePathPrefix)
 		switch {
 		case semanticErr == nil:
+			// The query embed succeeded, which proves the embedder is reachable, so
+			// clear any degraded banner a prior outage left up. This mirrors the
+			// indexing rule that only a real embed clears the banner.
+			manager.noteDependencyHealthy()
 			return SearchOutcome{
 				Codebase:  codebase,
 				ActiveJob: activeJob,
@@ -58,12 +63,16 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 					StateNote: "⚠️ Search is temporarily unavailable because the semantic collection is missing. The daemon is handling automatic rebuild in the background.",
 				}, nil
 			case searchCollectionModeMissing:
-				return SearchOutcome{}, fmt.Errorf("index data for '%s' has been lost (collection not found in Milvus). Wait for background repair or re-index using index_codebase if you need to recover it immediately", codebase.CanonicalPath)
+				return SearchOutcome{}, adapterr.NewIndexDataLost(codebase.CanonicalPath, nil)
 			case searchCollectionModeProceed:
-				return SearchOutcome{}, fmt.Errorf("index data for '%s' is unavailable", codebase.CanonicalPath)
+				return SearchOutcome{}, adapterr.NewIndexDataLost(codebase.CanonicalPath, nil)
 			}
 		case errors.Is(semanticErr, semantic.ErrUnavailable):
 		default:
+			// Record a shared-infrastructure outage from the search path too, not
+			// only from index jobs, so a failed search trips the same banner. The
+			// recorder no-ops for any error that is not a real outage.
+			manager.noteDependencyFailure(semanticErr)
 			return SearchOutcome{}, fmt.Errorf("semantic search for %s: %w", codebase.CanonicalPath, semanticErr)
 		}
 	}

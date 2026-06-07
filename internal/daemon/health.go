@@ -105,6 +105,25 @@ func (manager *Manager) noteDependencyHealthyLocked() {
 	manager.health.LastHealthyAt = clock.Now()
 }
 
+// noteDependencyFailure records a shared-infrastructure outage on the health
+// record, acquiring manager.mu. It is the lock-taking wrapper the search path
+// uses, since search runs outside the job-state critical section. It no-ops for
+// any error that is not a real outage.
+func (manager *Manager) noteDependencyFailure(err error) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.noteDependencyFailureLocked(err)
+}
+
+// noteDependencyHealthy clears the health record after a dependency interaction
+// succeeds, acquiring manager.mu. It is the lock-taking wrapper the search path
+// uses when a query embed proves the embedder recovered.
+func (manager *Manager) noteDependencyHealthy() {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.noteDependencyHealthyLocked()
+}
+
 // DependencyHealth returns a snapshot of the current shared-dependency health
 // for the render layer. It reads the cached record and never probes.
 func (manager *Manager) DependencyHealth() dependencyHealth {
