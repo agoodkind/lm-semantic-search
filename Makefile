@@ -44,58 +44,55 @@ include bootstrap.mk
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: deploy deploy-service daemon-wait daemon-status kill-orphans grammars
+.PHONY: deploy deploy-service daemon-wait daemon-status kill-orphans
 
 # daemon-status and daemon-wait call the installed CLI; kill-orphans matches the
 # installed MCP binary by name.
 CLI_INSTALL_BIN := $(INSTALL_DIR)/$(CLI_BINARY)
 
 # ---------------------------------------------------------------------------
-# Grammar generation
+# gksyntax submodule grammars
 # ---------------------------------------------------------------------------
-# The Swift grammar submodule commits only its grammar definition, not the
-# generated parser, so the parser is produced from the pinned submodule by the
-# tree-sitter CLI. The other grammars commit their parser and need no step. The
-# generated files stay inside the submodule working tree (gitignored there) and
-# are never committed to this repository.
-SWIFT_GRAMMAR_DIR := internal/splitter/grammars/swift/upstream
+# The AST splitter and tree-sitter grammars live in goodkind.io/gksyntax, a git
+# submodule under third_party/ consumed through go.work (a module require is not
+# possible because gksyntax vendors the dart and swift grammars as its own
+# submodules, whose C sources are absent from a Go module zip). gksyntax commits
+# only the swift grammar definition, not the generated parser, so the parser is
+# produced from the pinned submodule by the tree-sitter CLI. The generated parser
+# stays inside the submodule working tree (gitignored there) and is never
+# committed. The order-only prerequisite initializes the submodule and generates
+# the parser before any compile, vet, lint, or govulncheck.
+GKS_DIR := third_party/gksyntax
+SWIFT_GRAMMAR_DIR := $(GKS_DIR)/treesitter/grammars/swift/upstream
 SWIFT_GRAMMAR_DEF := $(SWIFT_GRAMMAR_DIR)/src/grammar.json
 SWIFT_GRAMMAR_PARSER := $(SWIFT_GRAMMAR_DIR)/src/parser.c
 TREE_SITTER_ABI ?= 14
-# tree-sitter CLI lands here when the host has none on PATH, so a bare runner
-# with only Go can still generate the Swift parser. Gitignored.
+# tree-sitter CLI lands here when the host has none on PATH. Gitignored.
 TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
 
-grammars:
+.PHONY: gksyntax-grammars
+gksyntax-grammars:
+	@git submodule update --init --recursive $(GKS_DIR)
 	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
-		echo "grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
+		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
 		exit 1; \
 	fi
 	@ts_bin="$$(command -v tree-sitter 2>/dev/null || true)"; \
 	if [ -z "$$ts_bin" ]; then \
-		./scripts/install-tree-sitter.sh "$(TREE_SITTER_LOCAL_DIR)"; \
+		"$(GKS_DIR)/scripts/install-tree-sitter.sh" "$(TREE_SITTER_LOCAL_DIR)"; \
 		ts_bin="$(TREE_SITTER_LOCAL_DIR)/tree-sitter"; \
 	fi; \
 	if [ ! -f "$(SWIFT_GRAMMAR_PARSER)" ] || [ "$(SWIFT_GRAMMAR_DEF)" -nt "$(SWIFT_GRAMMAR_PARSER)" ]; then \
-		echo "grammars: generating Swift parser (abi $(TREE_SITTER_ABI))"; \
+		echo "gksyntax-grammars: generating Swift parser (abi $(TREE_SITTER_ABI))"; \
 		( cd "$(SWIFT_GRAMMAR_DIR)" && "$$ts_bin" generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
 		git -C "$(SWIFT_GRAMMAR_DIR)" checkout -- . >/dev/null 2>&1 || true; \
 	else \
-		echo "grammars: Swift parser already generated"; \
+		echo "gksyntax-grammars: Swift parser already generated"; \
 	fi
 
-# tree-sitter generate also rewrites the upstream Go binding; the checkout above
-# reverts those tracked edits so the submodule stays at its pinned commit. The
-# generated parser.c and tree_sitter/ headers are gitignored in the submodule,
-# so the checkout leaves them in place.
-
 # Building, installing, testing, vetting, linting, and govulncheck all compile
-# the Swift grammar package, so they need the generated parser. The order-only
-# prerequisite generates it first on a fresh checkout without forcing rebuilds.
-# install is listed because go-mk install builds the binaries inside the engine
-# rather than through the make build target. release is listed because the
-# release matrix cross-builds the daemon, which links the generated Swift parser.
-build build-check check test lint vet govulncheck install release: | grammars
+# the swift grammar package inside gksyntax, so they need the generated parser.
+build build-check check test lint vet govulncheck install release: | gksyntax-grammars
 
 deploy:
 	$(MAKE) install
