@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -238,6 +239,158 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 	}
 }
 
+func TestConversationIngestMaintainsChunkCache(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{unavailable: true}
+	ctx := context.Background()
+	collectionID := "thread-cache"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+
+	firstJob, err := manager.UpsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
+		{
+			ConversationID: "conv-alpha",
+			MessageIndex:   0,
+			Role:           "user",
+			TimestampUnix:  1712345000,
+			Text:           "old needle cache entry",
+		},
+		{
+			ConversationID: "conv-beta",
+			MessageIndex:   0,
+			Role:           "assistant",
+			TimestampUnix:  1712345001,
+			Text:           "beta cache entry",
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
+
+	chunks := readConversationChunkCache(t, manager, codebase.ID)
+	if len(chunks) != 2 {
+		t.Fatalf("first cache write stored %d chunks, want 2", len(chunks))
+	}
+
+	secondJob, err := manager.UpsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{{
+		ConversationID: "conv-alpha",
+		MessageIndex:   1,
+		Role:           "assistant",
+		TimestampUnix:  1712345002,
+		Text:           "fresh needle cache entry",
+	}})
+	if err != nil {
+		t.Fatalf("second UpsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, secondJob.ID, model.JobStateCompleted)
+
+	chunks = readConversationChunkCache(t, manager, codebase.ID)
+	if len(chunks) != 2 {
+		t.Fatalf("re-upsert cache stored %d chunks, want 2", len(chunks))
+	}
+	alphaCount := 0
+	for _, chunk := range chunks {
+		if strings.Contains(chunk.Content, "old needle") {
+			t.Fatalf("re-upsert left stale chunk content %q", chunk.Content)
+		}
+		if strings.HasPrefix(chunk.RelativePath, "conv/conv-alpha/") {
+			alphaCount++
+			if chunk.Content != "fresh needle cache entry" {
+				t.Fatalf("conv-alpha cached content = %q, want fresh needle cache entry", chunk.Content)
+			}
+		}
+	}
+	if alphaCount != 1 {
+		t.Fatalf("re-upsert stored %d conv-alpha chunks, want 1", alphaCount)
+	}
+
+	results, err := manager.SearchConversations(ctx, collectionID, "fresh needle", 5)
+	if err != nil {
+		t.Fatalf("SearchConversations returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("fallback SearchConversations returned %d chunks, want 1", len(results))
+	}
+	if results[0].ConversationID != "conv-alpha" {
+		t.Fatalf("fallback result ConversationID = %q, want conv-alpha", results[0].ConversationID)
+	}
+
+	deleteJob, err := manager.DeleteConversation(ctx, collectionID, "conv-alpha")
+	if err != nil {
+		t.Fatalf("DeleteConversation returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, deleteJob.ID, model.JobStateCompleted)
+
+	chunks = readConversationChunkCache(t, manager, codebase.ID)
+	if len(chunks) != 1 {
+		t.Fatalf("delete cache stored %d chunks, want 1", len(chunks))
+	}
+	if chunks[0].ConversationID != "conv-beta" {
+		t.Fatalf("remaining cached ConversationID = %q, want conv-beta", chunks[0].ConversationID)
+	}
+}
+
+func TestSearchConversationsFallsBackToChunkCacheAfterSemanticError(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	collectionID := "thread-cache-error"
+	codebase, err := manager.RegisterConversationCollection(context.Background(), collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	searchCalls := 0
+	manager.semantic = &fakeSemantic{
+		conversationSearch: func(ctx context.Context, collectionName string, query string, limit int32) ([]model.StoredChunk, error) {
+			_ = ctx
+			_ = collectionName
+			_ = query
+			_ = limit
+			searchCalls++
+			return nil, errors.New("semantic search unavailable")
+		},
+	}
+	if err := store.WriteChunks(manager.chunkPath(codebase.ID), []model.StoredChunk{
+		{
+			Content:        "needle cache fallback result",
+			RelativePath:   "conv/conv-cache/0",
+			ConversationID: "conv-cache",
+			MessageIndex:   0,
+			Role:           "assistant",
+			TimestampUnix:  1712345000,
+		},
+		{
+			Content:        "unrelated cache result",
+			RelativePath:   "conv/conv-other/0",
+			ConversationID: "conv-other",
+			MessageIndex:   0,
+			Role:           "user",
+			TimestampUnix:  1712345001,
+		},
+	}); err != nil {
+		t.Fatalf("WriteChunks returned error: %v", err)
+	}
+
+	results, err := manager.SearchConversations(context.Background(), collectionID, "needle", 5)
+	if err != nil {
+		t.Fatalf("SearchConversations returned error: %v", err)
+	}
+	if searchCalls != 1 {
+		t.Fatalf("semantic search calls = %d, want 1", searchCalls)
+	}
+	if len(results) != 1 {
+		t.Fatalf("fallback SearchConversations returned %d chunks, want 1", len(results))
+	}
+	if results[0].ConversationID != "conv-cache" {
+		t.Fatalf("fallback result ConversationID = %q, want conv-cache", results[0].ConversationID)
+	}
+}
+
 func TestConversationDocumentsToStoredChunksSplitsOversizedMessage(t *testing.T) {
 	t.Parallel()
 
@@ -381,4 +534,23 @@ func TestConversationRPCsQueueJournaledJobs(t *testing.T) {
 	if jobs[deleteResponse.GetJobId()].State != model.JobStateCompleted {
 		t.Fatalf("delete journal state = %q, want completed", jobs[deleteResponse.GetJobId()].State)
 	}
+}
+
+func readConversationChunkCache(t *testing.T, manager *Manager, codebaseID string) []model.StoredChunk {
+	t.Helper()
+
+	chunks, err := store.ReadChunks(manager.chunkPath(codebaseID))
+	if err != nil {
+		t.Fatalf("ReadChunks returned error: %v", err)
+	}
+	return chunks
+}
+
+func waitForConversationJobState(t *testing.T, manager *Manager, jobID string, state model.JobState) {
+	t.Helper()
+
+	waitForCondition(t, func() bool {
+		job, found := manager.GetJob(jobID)
+		return found && job.State == state
+	})
 }

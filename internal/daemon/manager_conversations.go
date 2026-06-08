@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -13,6 +14,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
+	"goodkind.io/lm-semantic-search/internal/store"
 )
 
 const (
@@ -114,18 +116,18 @@ func (manager *Manager) SearchConversations(ctx context.Context, collectionID st
 	if !found {
 		return nil, nil
 	}
-	if manager.semantic == nil || !manager.semantic.Available() {
-		return nil, nil
-	}
 
-	chunks, err := manager.semantic.SearchConversationCollection(ctx, codebase.CollectionName, query, limit)
-	if err != nil {
+	if manager.semantic != nil && manager.semantic.Available() {
+		chunks, err := manager.semantic.SearchConversationCollection(ctx, codebase.CollectionName, query, limit)
+		if err == nil {
+			manager.noteDependencyHealthy()
+			return chunks, nil
+		}
 		manager.noteDependencyFailure(err)
 		slog.ErrorContext(ctx, "search conversation collection failed", "collection_id", trimmedCollectionID, "collection", codebase.CollectionName, "err", err)
-		return nil, fmt.Errorf("search conversation collection %s: %w", trimmedCollectionID, err)
 	}
-	manager.noteDependencyHealthy()
-	return chunks, nil
+
+	return manager.searchConversationChunkCache(ctx, codebase, query, limit)
 }
 
 func (manager *Manager) deleteConversation(ctx context.Context, collectionID string, conversationID string, client model.ClientInfo) (model.Job, error) {
@@ -256,7 +258,113 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 		manager.updateJobFailed(ctx, job.ID, err)
 		return
 	}
+	if err := manager.updateConversationChunkCache(ctx, job.CodebaseID, payload); err != nil {
+		manager.updateJobFailed(ctx, job.ID, err)
+		return
+	}
 	manager.updateConversationJobCompleted(job.ID, payload)
+}
+
+func (manager *Manager) searchConversationChunkCache(ctx context.Context, codebase model.Codebase, query string, limit int32) ([]model.StoredChunk, error) {
+	chunks, err := store.ReadChunks(manager.chunkPath(codebase.ID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []model.StoredChunk{}, nil
+		}
+		slog.ErrorContext(ctx, "read conversation chunk cache failed", "codebase_id", codebase.ID, "err", err)
+		return nil, fmt.Errorf("read conversation chunk cache for %s: %w", codebase.ID, err)
+	}
+	return rankChunks(chunks, query, limit, nil, ""), nil
+}
+
+func (manager *Manager) updateConversationChunkCache(ctx context.Context, codebaseID string, payload conversationJobPayload) error {
+	chunkPath := manager.chunkPath(codebaseID)
+	chunks, err := store.ReadChunks(chunkPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			chunks = []model.StoredChunk{}
+		} else {
+			slog.ErrorContext(ctx, "read conversation chunk cache failed", "codebase_id", codebaseID, "err", err)
+			return fmt.Errorf("read conversation chunk cache for %s: %w", codebaseID, err)
+		}
+	}
+
+	switch payload.Kind {
+	case conversationJobKindUpsert:
+		conversationIDs := conversationIDsFromChunks(payload.Chunks)
+		chunks = dropConversationChunks(chunks, conversationIDs)
+		chunks = append(chunks, payload.Chunks...)
+	case conversationJobKindDelete:
+		chunks = dropConversationChunks(chunks, []string{payload.ConversationID})
+	default:
+		return fmt.Errorf("unknown conversation job kind %s", payload.Kind)
+	}
+
+	if err := store.WriteChunks(chunkPath, chunks); err != nil {
+		slog.ErrorContext(ctx, "write conversation chunk cache failed", "codebase_id", codebaseID, "err", err)
+		return fmt.Errorf("write conversation chunk cache for %s: %w", codebaseID, err)
+	}
+	return nil
+}
+
+func conversationIDsFromChunks(chunks []model.StoredChunk) []string {
+	seen := make(map[string]struct{})
+	conversationIDs := make([]string, 0)
+	for _, chunk := range chunks {
+		conversationID := strings.TrimSpace(chunk.ConversationID)
+		if conversationID == "" {
+			continue
+		}
+		if _, found := seen[conversationID]; found {
+			continue
+		}
+		seen[conversationID] = struct{}{}
+		conversationIDs = append(conversationIDs, conversationID)
+	}
+	return conversationIDs
+}
+
+func dropConversationChunks(chunks []model.StoredChunk, conversationIDs []string) []model.StoredChunk {
+	prefixes := conversationRelativePathPrefixes(conversationIDs)
+	if len(prefixes) == 0 {
+		return chunks
+	}
+
+	kept := make([]model.StoredChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if chunkHasConversationPrefix(chunk, prefixes) {
+			continue
+		}
+		kept = append(kept, chunk)
+	}
+	return kept
+}
+
+func conversationRelativePathPrefixes(conversationIDs []string) []string {
+	seen := make(map[string]struct{})
+	prefixes := make([]string, 0, len(conversationIDs))
+	for _, conversationID := range conversationIDs {
+		trimmedConversationID := strings.TrimSpace(conversationID)
+		if trimmedConversationID == "" {
+			continue
+		}
+		prefix := conversationRelativePathPrefix(trimmedConversationID)
+		if _, found := seen[prefix]; found {
+			continue
+		}
+		seen[prefix] = struct{}{}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes
+}
+
+func chunkHasConversationPrefix(chunk model.StoredChunk, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(chunk.RelativePath, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (manager *Manager) conversationJobPayload(jobID string) (conversationJobPayload, bool) {
@@ -381,6 +489,10 @@ func conversationRelativePath(conversationID string, messageIndex int32, partInd
 		return basePath
 	}
 	return fmt.Sprintf("%s/%d", basePath, partIndex)
+}
+
+func conversationRelativePathPrefix(conversationID string) string {
+	return "conv/" + conversationID + "/"
 }
 
 func splitConversationText(text string) []string {
