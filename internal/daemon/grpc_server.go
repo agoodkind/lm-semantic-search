@@ -16,7 +16,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/pbconv"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -549,9 +548,37 @@ func (server *GRPCServer) DeleteConversation(ctx context.Context, request *pb.De
 func (server *GRPCServer) SearchConversations(ctx context.Context, request *pb.SearchConversationsRequest) (resp *pb.SearchConversationsResponse, err error) {
 	ctx, done := beginRPC(ctx, "SearchConversations")
 	defer done(&err)
-	_ = ctx
-	_ = request
-	return nil, status.Error(codes.Unimplemented, "SearchConversations not implemented")
+	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
+		return nil, argErr
+	}
+	if argErr := requireNonEmpty(ctx, request.GetQuery(), "query", false); argErr != nil {
+		return nil, argErr
+	}
+	results, callErr := server.manager.SearchConversations(ctx, request.GetCollectionId(), request.GetQuery(), request.GetLimit())
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
+	}
+	health := server.manager.DependencyHealth()
+	response := &pb.SearchConversationsResponse{
+		Results:          make([]*pb.ConversationSearchResult, 0, len(results)),
+		DependencyHealth: toDependencyHealth(health),
+		DisplayText: server.envelopeText(ctx, health, renderConversationSearch(conversationSearchView{
+			CollectionID: request.GetCollectionId(),
+			Query:        request.GetQuery(),
+			Results:      results,
+		})),
+	}
+	for _, result := range results {
+		response.Results = append(response.Results, &pb.ConversationSearchResult{
+			ConversationId: result.ConversationID,
+			MessageIndex:   result.MessageIndex,
+			Role:           result.Role,
+			TimestampUnix:  result.TimestampUnix,
+			Score:          0,
+			Content:        result.Content,
+		})
+	}
+	return response, nil
 }
 
 // Doctor reports daemon-local diagnostics.

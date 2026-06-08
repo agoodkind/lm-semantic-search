@@ -30,6 +30,7 @@ type fakeSemantic struct {
 	listCollections      func(context.Context) ([]string, error)
 	hasCollectionForPath func(context.Context, string) (bool, error)
 	search               func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
+	conversationSearch   func(context.Context, string, string, int32) ([]model.StoredChunk, error)
 	count                func(context.Context, string) (int32, error)
 	// loadReuse, when set, supplies the reuse map a merge-down build receives and
 	// records which collections were asked for. dropped records every Drop call
@@ -66,6 +67,13 @@ func (f *fakeSemantic) HasStaging(context.Context, string) (bool, error) {
 func (f *fakeSemantic) Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error) {
 	if f.search != nil {
 		return f.search(ctx, codebasePath, query, limit, extensionFilter, relativePathPrefix)
+	}
+	return nil, nil
+}
+
+func (f *fakeSemantic) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32) ([]model.StoredChunk, error) {
+	if f.conversationSearch != nil {
+		return f.conversationSearch(ctx, collectionName, query, limit)
 	}
 	return nil, nil
 }

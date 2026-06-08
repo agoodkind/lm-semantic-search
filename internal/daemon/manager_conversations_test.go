@@ -115,6 +115,129 @@ func TestRunSyncAllLeavesDocumentCollectionUntouched(t *testing.T) {
 	}
 }
 
+func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	collectionID := "thread-search"
+	codebase, err := manager.RegisterConversationCollection(context.Background(), collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+
+	expectedChunks := []model.StoredChunk{{
+		Content:        "Needle conversation content",
+		RelativePath:   "conv/conversation-alpha/12",
+		StartLine:      0,
+		EndLine:        0,
+		Language:       "",
+		FileExtension:  "",
+		ConversationID: "conversation-alpha",
+		MessageIndex:   12,
+		Role:           "assistant",
+		TimestampUnix:  1712345678,
+	}}
+	searchCalls := 0
+	manager.semantic = &fakeSemantic{
+		conversationSearch: func(ctx context.Context, collectionName string, query string, limit int32) ([]model.StoredChunk, error) {
+			_ = ctx
+			searchCalls++
+			if collectionName != codebase.CollectionName {
+				t.Fatalf("collectionName = %q, want %q", collectionName, codebase.CollectionName)
+			}
+			if query != "needle" {
+				t.Fatalf("query = %q, want needle", query)
+			}
+			if limit != 5 {
+				t.Fatalf("limit = %d, want 5", limit)
+			}
+			return append([]model.StoredChunk{}, expectedChunks...), nil
+		},
+	}
+
+	chunks, err := manager.SearchConversations(context.Background(), collectionID, "needle", 5)
+	if err != nil {
+		t.Fatalf("SearchConversations returned error: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("SearchConversations returned %d chunks, want 1", len(chunks))
+	}
+	if chunks[0].ConversationID != expectedChunks[0].ConversationID {
+		t.Fatalf("ConversationID = %q, want %q", chunks[0].ConversationID, expectedChunks[0].ConversationID)
+	}
+	if chunks[0].MessageIndex != expectedChunks[0].MessageIndex {
+		t.Fatalf("MessageIndex = %d, want %d", chunks[0].MessageIndex, expectedChunks[0].MessageIndex)
+	}
+	if chunks[0].Role != expectedChunks[0].Role {
+		t.Fatalf("Role = %q, want %q", chunks[0].Role, expectedChunks[0].Role)
+	}
+	if chunks[0].TimestampUnix != expectedChunks[0].TimestampUnix {
+		t.Fatalf("TimestampUnix = %d, want %d", chunks[0].TimestampUnix, expectedChunks[0].TimestampUnix)
+	}
+
+	server := NewGRPCServer(manager, nil)
+	response, err := server.SearchConversations(context.Background(), &pb.SearchConversationsRequest{
+		CollectionId: collectionID,
+		Query:        "needle",
+		Limit:        5,
+	})
+	if err != nil {
+		t.Fatalf("SearchConversations RPC returned error: %v", err)
+	}
+	if len(response.GetResults()) != 1 {
+		t.Fatalf("SearchConversations RPC returned %d results, want 1", len(response.GetResults()))
+	}
+	result := response.GetResults()[0]
+	if result.GetConversationId() != expectedChunks[0].ConversationID {
+		t.Fatalf("RPC ConversationId = %q, want %q", result.GetConversationId(), expectedChunks[0].ConversationID)
+	}
+	if result.GetMessageIndex() != expectedChunks[0].MessageIndex {
+		t.Fatalf("RPC MessageIndex = %d, want %d", result.GetMessageIndex(), expectedChunks[0].MessageIndex)
+	}
+	if result.GetRole() != expectedChunks[0].Role {
+		t.Fatalf("RPC Role = %q, want %q", result.GetRole(), expectedChunks[0].Role)
+	}
+	if result.GetTimestampUnix() != expectedChunks[0].TimestampUnix {
+		t.Fatalf("RPC TimestampUnix = %d, want %d", result.GetTimestampUnix(), expectedChunks[0].TimestampUnix)
+	}
+	if result.GetContent() != expectedChunks[0].Content {
+		t.Fatalf("RPC Content = %q, want %q", result.GetContent(), expectedChunks[0].Content)
+	}
+	if response.GetDependencyHealth() == nil {
+		t.Fatal("SearchConversations RPC returned nil DependencyHealth")
+	}
+	if !strings.Contains(response.GetDisplayText(), "Found 1 conversation results") {
+		t.Fatalf("SearchConversations RPC DisplayText = %q, want result summary", response.GetDisplayText())
+	}
+
+	callsBeforeUnregistered := searchCalls
+	unregisteredChunks, err := manager.SearchConversations(context.Background(), "missing-thread", "needle", 5)
+	if err != nil {
+		t.Fatalf("SearchConversations for unregistered collection returned error: %v", err)
+	}
+	if len(unregisteredChunks) != 0 {
+		t.Fatalf("SearchConversations for unregistered collection returned %d chunks, want 0", len(unregisteredChunks))
+	}
+	if searchCalls != callsBeforeUnregistered {
+		t.Fatalf("SearchConversations called semantic backend for unregistered collection")
+	}
+
+	unregisteredResponse, err := server.SearchConversations(context.Background(), &pb.SearchConversationsRequest{
+		CollectionId: "missing-thread",
+		Query:        "needle",
+		Limit:        5,
+	})
+	if err != nil {
+		t.Fatalf("SearchConversations RPC for unregistered collection returned error: %v", err)
+	}
+	if len(unregisteredResponse.GetResults()) != 0 {
+		t.Fatalf("SearchConversations RPC for unregistered collection returned %d results, want 0", len(unregisteredResponse.GetResults()))
+	}
+	if searchCalls != callsBeforeUnregistered {
+		t.Fatalf("SearchConversations RPC called semantic backend for unregistered collection")
+	}
+}
+
 func TestConversationDocumentsToStoredChunksSplitsOversizedMessage(t *testing.T) {
 	t.Parallel()
 

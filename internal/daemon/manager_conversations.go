@@ -104,6 +104,30 @@ func (manager *Manager) DeleteConversation(ctx context.Context, collectionID str
 	return manager.deleteConversation(ctx, collectionID, conversationID, model.ClientInfo{Name: "", PID: 0})
 }
 
+// SearchConversations searches a registered virtual conversation collection.
+func (manager *Manager) SearchConversations(ctx context.Context, collectionID string, query string, limit int32) ([]model.StoredChunk, error) {
+	trimmedCollectionID := strings.TrimSpace(collectionID)
+
+	manager.mu.Lock()
+	codebase, found := manager.findConversationCollectionLocked(trimmedCollectionID)
+	manager.mu.Unlock()
+	if !found {
+		return nil, nil
+	}
+	if manager.semantic == nil || !manager.semantic.Available() {
+		return nil, nil
+	}
+
+	chunks, err := manager.semantic.SearchConversationCollection(ctx, codebase.CollectionName, query, limit)
+	if err != nil {
+		manager.noteDependencyFailure(err)
+		slog.ErrorContext(ctx, "search conversation collection failed", "collection_id", trimmedCollectionID, "collection", codebase.CollectionName, "err", err)
+		return nil, fmt.Errorf("search conversation collection %s: %w", trimmedCollectionID, err)
+	}
+	manager.noteDependencyHealthy()
+	return chunks, nil
+}
+
 func (manager *Manager) deleteConversation(ctx context.Context, collectionID string, conversationID string, client model.ClientInfo) (model.Job, error) {
 	trimmedConversationID := strings.TrimSpace(conversationID)
 	if trimmedConversationID == "" {

@@ -279,6 +279,23 @@ func (service *Service) Search(ctx context.Context, codebasePath string, query s
 	}
 
 	collectionName := service.CollectionName(codebasePath)
+	return service.searchCollection(ctx, collectionName, query, limit, extensionFilter, relativePathPrefix)
+}
+
+// SearchConversationCollection executes semantic or hybrid search against a
+// registered virtual conversation collection name.
+func (service *Service) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32) ([]model.StoredChunk, error) {
+	if !service.Available() {
+		return nil, nil
+	}
+	trimmedCollectionName := strings.TrimSpace(collectionName)
+	if trimmedCollectionName == "" {
+		return nil, errors.New("conversation collection name is required")
+	}
+	return service.searchCollection(ctx, trimmedCollectionName, query, limit, nil, "")
+}
+
+func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error) {
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "check Milvus collection failed", "collection", collectionName, "err", err)
