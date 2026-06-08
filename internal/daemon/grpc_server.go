@@ -16,6 +16,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/pbconv"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -458,6 +459,42 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 		})
 	}
 	return response, nil
+}
+
+// RegisterConversationCollection reserves the conversation collection RPC surface.
+func (server *GRPCServer) RegisterConversationCollection(ctx context.Context, request *pb.RegisterConversationCollectionRequest) (resp *pb.RegisterConversationCollectionResponse, err error) {
+	ctx, done := beginRPC(ctx, "RegisterConversationCollection")
+	defer done(&err)
+	_ = ctx
+	_ = request
+	return nil, status.Error(codes.Unimplemented, "RegisterConversationCollection not implemented")
+}
+
+// UpsertConversationDocuments reserves the conversation document upsert RPC surface.
+func (server *GRPCServer) UpsertConversationDocuments(ctx context.Context, request *pb.UpsertConversationDocumentsRequest) (resp *pb.UpsertConversationDocumentsResponse, err error) {
+	ctx, done := beginRPC(ctx, "UpsertConversationDocuments")
+	defer done(&err)
+	_ = ctx
+	_ = request
+	return nil, status.Error(codes.Unimplemented, "UpsertConversationDocuments not implemented")
+}
+
+// DeleteConversation reserves the conversation deletion RPC surface.
+func (server *GRPCServer) DeleteConversation(ctx context.Context, request *pb.DeleteConversationRequest) (resp *pb.DeleteConversationResponse, err error) {
+	ctx, done := beginRPC(ctx, "DeleteConversation")
+	defer done(&err)
+	_ = ctx
+	_ = request
+	return nil, status.Error(codes.Unimplemented, "DeleteConversation not implemented")
+}
+
+// SearchConversations reserves the conversation search RPC surface.
+func (server *GRPCServer) SearchConversations(ctx context.Context, request *pb.SearchConversationsRequest) (resp *pb.SearchConversationsResponse, err error) {
+	ctx, done := beginRPC(ctx, "SearchConversations")
+	defer done(&err)
+	_ = ctx
+	_ = request
+	return nil, status.Error(codes.Unimplemented, "SearchConversations not implemented")
 }
 
 // Doctor reports daemon-local diagnostics.
