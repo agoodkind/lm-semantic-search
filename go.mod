@@ -3,7 +3,6 @@ module goodkind.io/lm-semantic-search
 go 1.26.4
 
 require (
-	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/gertd/go-pluralize v0.2.1
@@ -12,24 +11,6 @@ require (
 	github.com/openai/openai-go/v2 v2.7.1
 	github.com/rjeczalik/notify v0.9.3
 	github.com/spf13/cobra v1.10.2
-	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0
-	github.com/tree-sitter-grammars/tree-sitter-objc v1.2.1-0.20250131075517-181a81b8f23a
-	github.com/tree-sitter/go-tree-sitter v0.25.0
-	github.com/tree-sitter/tree-sitter-bash v0.25.1
-	github.com/tree-sitter/tree-sitter-c v0.24.2
-	github.com/tree-sitter/tree-sitter-cpp v0.23.4
-	github.com/tree-sitter/tree-sitter-css v0.25.0
-	github.com/tree-sitter/tree-sitter-go v0.25.0
-	github.com/tree-sitter/tree-sitter-html v0.23.2
-	github.com/tree-sitter/tree-sitter-java v0.23.5
-	github.com/tree-sitter/tree-sitter-javascript v0.25.0
-	github.com/tree-sitter/tree-sitter-json v0.24.8
-	github.com/tree-sitter/tree-sitter-php v0.24.2
-	github.com/tree-sitter/tree-sitter-python v0.25.0
-	github.com/tree-sitter/tree-sitter-ruby v0.23.1
-	github.com/tree-sitter/tree-sitter-rust v0.24.2
-	github.com/tree-sitter/tree-sitter-scala v0.26.0
-	github.com/tree-sitter/tree-sitter-typescript v0.23.2
 	golang.org/x/term v0.43.0
 	goodkind.io/gklog v0.4.4
 	google.golang.org/grpc v1.81.1
@@ -98,7 +79,6 @@ require (
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
-	github.com/mattn/go-pointer v0.0.1 // indirect
 	github.com/milvus-io/milvus-proto/go-api/v2 v2.6.17 // indirect
 	github.com/milvus-io/milvus/pkg/v2 v2.6.7-0.20251201120310-af64f2acba38 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
@@ -131,7 +111,6 @@ require (
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20201229170055-e5319fda7802 // indirect
-	github.com/tree-sitter/tree-sitter-c-sharp v0.23.5
 	github.com/twpayne/go-geom v1.6.1 // indirect
 	github.com/uber/jaeger-client-go v2.30.0+incompatible // indirect
 	github.com/x448/float16 v0.8.4 // indirect

@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"unicode/utf8"
 
+	"goodkind.io/gksyntax/chunk"
 	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/model"
-	"goodkind.io/lm-semantic-search/internal/splitter"
 )
 
 // defaultMaxFileBytes caps a single file at 2 MiB before it reaches the
@@ -27,7 +27,7 @@ const defaultMaxFileBytes int64 = 2 * 1024 * 1024
 
 // Runner executes the local discovery and splitting pipeline for one codebase.
 type Runner struct {
-	dispatcher   *splitter.Dispatcher
+	dispatcher   *chunk.Dispatcher
 	maxFileBytes int64
 }
 
@@ -79,7 +79,7 @@ type Progress struct {
 // NewRunner constructs the local indexing runner.
 func NewRunner() *Runner {
 	return &Runner{
-		dispatcher:   splitter.NewDispatcher(),
+		dispatcher:   chunk.NewDispatcher(),
 		maxFileBytes: resolveMaxFileBytes(),
 	}
 }
@@ -177,13 +177,13 @@ func (runner *Runner) processFile(ctx context.Context, fullPath string, relative
 		return processedFile{}, fmt.Errorf("split source file %s: %w", fullPath, err)
 	}
 	chunks := make([]model.StoredChunk, 0, len(splitResult.Chunks))
-	for _, chunk := range splitResult.Chunks {
+	for _, splitChunk := range splitResult.Chunks {
 		chunks = append(chunks, model.StoredChunk{
-			Content:       chunk.Content,
+			Content:       splitChunk.Content,
 			RelativePath:  relativePath,
-			StartLine:     safeInt32(chunk.StartLine),
-			EndLine:       safeInt32(chunk.EndLine),
-			Language:      chunk.Language,
+			StartLine:     safeInt32(splitChunk.StartLine),
+			EndLine:       safeInt32(splitChunk.EndLine),
+			Language:      splitChunk.Language,
 			FileExtension: filepath.Ext(relativePath),
 		})
 	}
