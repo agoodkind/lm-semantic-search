@@ -488,18 +488,61 @@ func (server *GRPCServer) RegisterConversationCollection(ctx context.Context, re
 func (server *GRPCServer) UpsertConversationDocuments(ctx context.Context, request *pb.UpsertConversationDocumentsRequest) (resp *pb.UpsertConversationDocumentsResponse, err error) {
 	ctx, done := beginRPC(ctx, "UpsertConversationDocuments")
 	defer done(&err)
-	_ = ctx
-	_ = request
-	return nil, status.Error(codes.Unimplemented, "UpsertConversationDocuments not implemented")
+	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
+		return nil, argErr
+	}
+	job, callErr := server.manager.upsertConversationDocuments(
+		ctx,
+		request.GetCollectionId(),
+		pbConversationDocuments(request.GetDocuments()),
+		pbClient(request.GetClient()),
+	)
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
+	}
+	return &pb.UpsertConversationDocumentsResponse{
+		JobId: job.ID,
+		DisplayText: appendCorrelationRef(
+			renderUpsertConversationDocuments(request.GetCollectionId(), job, len(request.GetDocuments())),
+			ctx,
+			"codebase_id",
+			job.CodebaseID,
+			"job_id",
+			job.ID,
+		),
+	}, nil
 }
 
 // DeleteConversation reserves the conversation deletion RPC surface.
 func (server *GRPCServer) DeleteConversation(ctx context.Context, request *pb.DeleteConversationRequest) (resp *pb.DeleteConversationResponse, err error) {
 	ctx, done := beginRPC(ctx, "DeleteConversation")
 	defer done(&err)
-	_ = ctx
-	_ = request
-	return nil, status.Error(codes.Unimplemented, "DeleteConversation not implemented")
+	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
+		return nil, argErr
+	}
+	if argErr := requireNonEmpty(ctx, request.GetConversationId(), "conversation_id", false); argErr != nil {
+		return nil, argErr
+	}
+	job, callErr := server.manager.deleteConversation(
+		ctx,
+		request.GetCollectionId(),
+		request.GetConversationId(),
+		pbClient(request.GetClient()),
+	)
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
+	}
+	return &pb.DeleteConversationResponse{
+		JobId: job.ID,
+		DisplayText: appendCorrelationRef(
+			renderDeleteConversation(request.GetCollectionId(), request.GetConversationId(), job),
+			ctx,
+			"codebase_id",
+			job.CodebaseID,
+			"job_id",
+			job.ID,
+		),
+	}, nil
 }
 
 // SearchConversations reserves the conversation search RPC surface.
@@ -567,6 +610,23 @@ func pbClient(client *pb.ClientInfo) model.ClientInfo {
 		Name: client.GetName(),
 		PID:  client.GetPid(),
 	}
+}
+
+func pbConversationDocuments(documents []*pb.ConversationDocument) []model.ConversationDocument {
+	result := make([]model.ConversationDocument, 0, len(documents))
+	for _, document := range documents {
+		if document == nil {
+			continue
+		}
+		result = append(result, model.ConversationDocument{
+			ConversationID: document.GetConversationId(),
+			MessageIndex:   document.GetMessageIndex(),
+			Role:           document.GetRole(),
+			TimestampUnix:  document.GetTimestampUnix(),
+			Text:           document.GetText(),
+		})
+	}
+	return result
 }
 
 func codebasePointer(found bool, codebase model.Codebase) *model.Codebase {

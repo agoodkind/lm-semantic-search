@@ -82,6 +82,25 @@ func renderRegisterConversationCollection(collectionID string, codebase model.Co
 	)
 }
 
+func renderUpsertConversationDocuments(collectionID string, job model.Job, documentCount int) string {
+	return fmt.Sprintf(
+		"Started conversation ingest job %s for collection '%s' with %d %s.",
+		job.ID,
+		collectionID,
+		documentCount,
+		plural("document", documentCount),
+	)
+}
+
+func renderDeleteConversation(collectionID string, conversationID string, job model.Job) string {
+	return fmt.Sprintf(
+		"Started conversation delete job %s for conversation '%s' in collection '%s'.",
+		job.ID,
+		conversationID,
+		collectionID,
+	)
+}
+
 func renderCancelJob(job model.Job) string {
 	if job.State == model.JobStateCancelled {
 		return "Canceled indexing job " + job.ID

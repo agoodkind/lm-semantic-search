@@ -573,21 +573,25 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			slog.Error("read file extension column failed", "index", index, "err", err)
 			return nil, fmt.Errorf("read file extension column at %d: %w", index, err)
 		}
-		languageValue := ""
+		metadataValue := emptyChunkMetadata()
 		if metadataColumn != nil {
-			metadataValue, metadataErr := metadataColumn.GetAsString(index)
+			rawMetadata, metadataErr := metadataColumn.GetAsString(index)
 			if metadataErr == nil {
-				languageValue = decodeMetadataLanguage(metadataValue)
+				metadataValue = decodeMetadata(rawMetadata)
 			}
 		}
 
 		chunks = append(chunks, model.StoredChunk{
-			Content:       contentValue,
-			RelativePath:  relativePathValue,
-			StartLine:     safeInt32FromInt64(startLineValue),
-			EndLine:       safeInt32FromInt64(endLineValue),
-			Language:      languageValue,
-			FileExtension: fileExtensionValue,
+			Content:        contentValue,
+			RelativePath:   relativePathValue,
+			StartLine:      safeInt32FromInt64(startLineValue),
+			EndLine:        safeInt32FromInt64(endLineValue),
+			Language:       metadataValue.Language,
+			FileExtension:  fileExtensionValue,
+			ConversationID: metadataValue.ConversationID,
+			MessageIndex:   metadataValue.messageIndex(),
+			Role:           metadataValue.Role,
+			TimestampUnix:  metadataValue.timestampUnix(),
 		})
 	}
 	return chunks, nil
@@ -598,29 +602,85 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 // results can resurface the splitter-derived language without a dedicated
 // column.
 type chunkMetadata struct {
-	Language string `json:"language,omitempty"`
+	Language       string `json:"language,omitempty"`
+	ConversationID string `json:"conversation_id,omitempty"`
+	MessageIndex   *int32 `json:"message_index,omitempty"`
+	Role           string `json:"role,omitempty"`
+	TimestampUnix  *int64 `json:"timestamp_unix,omitempty"`
 }
 
 func encodeMetadata(chunk model.StoredChunk) string {
-	if chunk.Language == "" {
+	if chunk.Language == "" &&
+		chunk.ConversationID == "" &&
+		chunk.MessageIndex == 0 &&
+		chunk.Role == "" &&
+		chunk.TimestampUnix == 0 {
 		return "{}"
 	}
-	encoded, err := json.Marshal(chunkMetadata{Language: chunk.Language})
+	metadata := chunkMetadata{
+		Language:       chunk.Language,
+		ConversationID: chunk.ConversationID,
+		MessageIndex:   nil,
+		Role:           chunk.Role,
+		TimestampUnix:  nil,
+	}
+	if hasConversationMetadata(chunk) {
+		messageIndex := chunk.MessageIndex
+		timestampUnix := chunk.TimestampUnix
+		metadata.MessageIndex = &messageIndex
+		metadata.TimestampUnix = &timestampUnix
+	}
+	encoded, err := json.Marshal(metadata)
 	if err != nil {
 		return "{}"
 	}
 	return string(encoded)
 }
 
+func hasConversationMetadata(chunk model.StoredChunk) bool {
+	return chunk.ConversationID != "" ||
+		chunk.MessageIndex != 0 ||
+		chunk.Role != "" ||
+		chunk.TimestampUnix != 0
+}
+
 func decodeMetadataLanguage(metadata string) string {
+	return decodeMetadata(metadata).Language
+}
+
+func decodeMetadata(metadata string) chunkMetadata {
 	if metadata == "" {
-		return ""
+		return emptyChunkMetadata()
 	}
 	var parsed chunkMetadata
 	if err := json.Unmarshal([]byte(metadata), &parsed); err != nil {
-		return ""
+		return emptyChunkMetadata()
 	}
-	return parsed.Language
+	return parsed
+}
+
+func emptyChunkMetadata() chunkMetadata {
+	return chunkMetadata{
+		Language:       "",
+		ConversationID: "",
+		MessageIndex:   nil,
+		Role:           "",
+		TimestampUnix:  nil,
+	}
+}
+
+func (metadata chunkMetadata) messageIndex() int32 {
+	if metadata.MessageIndex == nil {
+		return 0
+	}
+	return *metadata.MessageIndex
+}
+
+func (metadata chunkMetadata) timestampUnix() int64 {
+	if metadata.TimestampUnix == nil {
+		return 0
+	}
+	return *metadata.TimestampUnix
 }
 
 // sanitizeUTF8 returns a copy of value with invalid UTF-8 byte sequences

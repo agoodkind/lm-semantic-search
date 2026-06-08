@@ -93,5 +93,7 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) {
 		manager.runBootstrap(ctx, job)
 	case jobOperationIndex:
 		manager.runBootstrap(ctx, job)
+	case jobOperationConversationIngest:
+		manager.runConversationIngest(ctx, job)
 	}
 }

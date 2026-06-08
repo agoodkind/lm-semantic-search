@@ -23,6 +23,8 @@ import (
 type fakeSemantic struct {
 	reindex              func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
 	copyChunks           func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
+	upsertConversation   func(ctx context.Context, collectionName string, chunks []model.StoredChunk) error
+	deleteConversation   func(ctx context.Context, collectionName string, conversationID string) error
 	collectionName       func(codebasePath string) string
 	conversationName     func(collectionID string) string
 	listCollections      func(context.Context) ([]string, error)
@@ -113,6 +115,20 @@ func (f *fakeSemantic) StageReindex(context.Context, string, []model.StoredChunk
 	return nil
 }
 func (f *fakeSemantic) PromoteStaging(context.Context, string) error { return nil }
+
+func (f *fakeSemantic) UpsertConversationChunks(ctx context.Context, collectionName string, chunks []model.StoredChunk) error {
+	if f.upsertConversation != nil {
+		return f.upsertConversation(ctx, collectionName, chunks)
+	}
+	return nil
+}
+
+func (f *fakeSemantic) DeleteConversation(ctx context.Context, collectionName string, conversationID string) error {
+	if f.deleteConversation != nil {
+		return f.deleteConversation(ctx, collectionName, conversationID)
+	}
+	return nil
+}
 
 func (f *fakeSemantic) CopyChunks(ctx context.Context, codebasePath string, src string, dst string) (int, error) {
 	if f.copyChunks != nil {

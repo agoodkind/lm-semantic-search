@@ -179,12 +179,16 @@ func (runner *Runner) processFile(ctx context.Context, fullPath string, relative
 	chunks := make([]model.StoredChunk, 0, len(splitResult.Chunks))
 	for _, splitChunk := range splitResult.Chunks {
 		chunks = append(chunks, model.StoredChunk{
-			Content:       splitChunk.Content,
-			RelativePath:  relativePath,
-			StartLine:     safeInt32(splitChunk.StartLine),
-			EndLine:       safeInt32(splitChunk.EndLine),
-			Language:      splitChunk.Language,
-			FileExtension: filepath.Ext(relativePath),
+			Content:        splitChunk.Content,
+			RelativePath:   relativePath,
+			StartLine:      safeInt32(splitChunk.StartLine),
+			EndLine:        safeInt32(splitChunk.EndLine),
+			Language:       splitChunk.Language,
+			FileExtension:  filepath.Ext(relativePath),
+			ConversationID: "",
+			MessageIndex:   0,
+			Role:           "",
+			TimestampUnix:  0,
 		})
 	}
 	return processedFile{Chunks: chunks, FileHash: digestFileBytes(data), Skipped: false, SkipReason: SkipNone, Removed: false}, nil

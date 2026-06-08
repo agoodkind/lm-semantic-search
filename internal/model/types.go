@@ -225,12 +225,25 @@ type JobEvent struct {
 
 // StoredChunk is one persisted search chunk for a codebase.
 type StoredChunk struct {
-	Content       string `json:"content"`
-	RelativePath  string `json:"relative_path"`
-	StartLine     int32  `json:"start_line"`
-	EndLine       int32  `json:"end_line"`
-	Language      string `json:"language"`
-	FileExtension string `json:"file_extension"`
+	Content        string `json:"content"`
+	RelativePath   string `json:"relative_path"`
+	StartLine      int32  `json:"start_line"`
+	EndLine        int32  `json:"end_line"`
+	Language       string `json:"language"`
+	FileExtension  string `json:"file_extension"`
+	ConversationID string `json:"conversation_id"`
+	MessageIndex   int32  `json:"message_index"`
+	Role           string `json:"role"`
+	TimestampUnix  int64  `json:"timestamp_unix"`
+}
+
+// ConversationDocument is one caller-provided conversation message chunk.
+type ConversationDocument struct {
+	ConversationID string `json:"conversation_id"`
+	MessageIndex   int32  `json:"message_index"`
+	Role           string `json:"role"`
+	TimestampUnix  int64  `json:"timestamp_unix"`
+	Text           string `json:"text"`
 }
 
 // PathClassificationKind reports the daemon's verdict about one queried path.
