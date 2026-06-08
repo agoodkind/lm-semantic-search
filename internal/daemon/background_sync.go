@@ -201,6 +201,9 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 		if codebase.Status != model.CodebaseStatusIndexed {
 			continue
 		}
+		if codebase.Kind == model.CodebaseKindDocument {
+			continue
+		}
 		if _, err := os.Stat(codebase.CanonicalPath); errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -312,6 +315,10 @@ func (syncer *BackgroundSync) requeuePaths(codebaseID string, relativePaths []st
 }
 
 func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase model.Codebase) (bool, error) {
+	if codebase.Kind == model.CodebaseKindDocument {
+		return false, nil
+	}
+
 	snapshotPath := syncer.manager.snapshotPathForCodebase(codebase)
 
 	existingSnapshot, err := merkle.ReadSnapshot(snapshotPath)

@@ -12,6 +12,7 @@ import (
 type semanticReader interface {
 	Available() bool
 	CollectionName(codebasePath string) string
+	ConversationCollectionName(collectionID string) string
 	Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error)
 	Count(ctx context.Context, codebasePath string) (int32, error)
 	ListCollections(ctx context.Context) ([]string, error)

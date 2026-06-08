@@ -465,9 +465,23 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 func (server *GRPCServer) RegisterConversationCollection(ctx context.Context, request *pb.RegisterConversationCollectionRequest) (resp *pb.RegisterConversationCollectionResponse, err error) {
 	ctx, done := beginRPC(ctx, "RegisterConversationCollection")
 	defer done(&err)
-	_ = ctx
-	_ = request
-	return nil, status.Error(codes.Unimplemented, "RegisterConversationCollection not implemented")
+	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
+		return nil, argErr
+	}
+	codebase, callErr := server.manager.RegisterConversationCollection(ctx, request.GetCollectionId())
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, callErr))
+	}
+	return &pb.RegisterConversationCollectionResponse{
+		CodebaseId:     codebase.ID,
+		CollectionName: codebase.CollectionName,
+		DisplayText: appendCorrelationRef(
+			renderRegisterConversationCollection(request.GetCollectionId(), codebase),
+			ctx,
+			"codebase_id",
+			codebase.ID,
+		),
+	}, nil
 }
 
 // UpsertConversationDocuments reserves the conversation document upsert RPC surface.

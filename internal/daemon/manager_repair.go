@@ -166,6 +166,10 @@ func (manager *Manager) classifyCodebaseRepair(
 	codebase model.Codebase,
 	collectionSet map[string]struct{},
 ) repairOutcome {
+	if codebase.Kind == model.CodebaseKindDocument {
+		return repairOutcome{persist: false, cleanup: false, plan: nil}
+	}
+
 	if _, statErr := os.Stat(codebase.CanonicalPath); errors.Is(statErr, os.ErrNotExist) {
 		if codebase.WorktreeCommonDir != "" &&
 			!sourceDirMissing(codebase.WorktreeCommonDir) &&

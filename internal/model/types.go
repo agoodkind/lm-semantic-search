@@ -28,6 +28,19 @@ const (
 	CodebaseStatusMissing CodebaseStatus = "missing"
 )
 
+// CodebaseKind distinguishes filesystem code indexes from virtual document
+// collections. The empty value is accepted as code for older registry entries
+// written before this field existed.
+type CodebaseKind string
+
+const (
+	// CodebaseKindCode is a filesystem-backed source code collection.
+	CodebaseKindCode CodebaseKind = "code"
+	// CodebaseKindDocument is a virtual document collection with no source
+	// directory on disk.
+	CodebaseKindDocument CodebaseKind = "document"
+)
+
 // JobState captures the lifecycle state of one daemon job.
 type JobState string
 
@@ -156,6 +169,7 @@ type IndexRunFailure struct {
 // path-only file tracking instead of (device, inode, contentHash).
 type Codebase struct {
 	ID                    string           `json:"id"`
+	Kind                  CodebaseKind     `json:"kind,omitempty"`
 	CanonicalPath         string           `json:"canonical_path"`
 	Status                CodebaseStatus   `json:"status"`
 	ActiveJobID           string           `json:"active_job_id,omitempty"`

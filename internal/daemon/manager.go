@@ -132,6 +132,9 @@ func (manager *Manager) load(ctx context.Context) error {
 		return fmt.Errorf("read registry: %w", err)
 	}
 	for _, codebase := range registry.Codebases {
+		if codebase.Kind == "" {
+			codebase.Kind = model.CodebaseKindCode
+		}
 		manager.codebases[codebase.ID] = codebase
 	}
 
@@ -224,6 +227,7 @@ func (manager *Manager) Version() map[string]string {
 func newCodebaseRecord(canonicalPath string) model.Codebase {
 	return model.Codebase{
 		ID:                newID("cb"),
+		Kind:              model.CodebaseKindCode,
 		CanonicalPath:     canonicalPath,
 		Status:            model.CodebaseStatusNotIndexed,
 		ActiveJobID:       "",

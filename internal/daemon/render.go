@@ -73,6 +73,15 @@ func renderClearIndex(codebase model.Codebase) string {
 	return fmt.Sprintf("Successfully cleared codebase '%s'", codebase.CanonicalPath)
 }
 
+func renderRegisterConversationCollection(collectionID string, codebase model.Codebase) string {
+	return fmt.Sprintf(
+		"Registered conversation collection '%s' as codebase %s using Milvus collection '%s'.",
+		collectionID,
+		codebase.ID,
+		codebase.CollectionName,
+	)
+}
+
 func renderCancelJob(job model.Job) string {
 	if job.State == model.JobStateCancelled {
 		return "Canceled indexing job " + job.ID

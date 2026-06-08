@@ -14,6 +14,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/tshash"
 )
 
 // fakeSemantic is a semanticIndex double for converge tests. reindex and
@@ -23,6 +24,7 @@ type fakeSemantic struct {
 	reindex              func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
 	copyChunks           func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
 	collectionName       func(codebasePath string) string
+	conversationName     func(collectionID string) string
 	listCollections      func(context.Context) ([]string, error)
 	hasCollectionForPath func(context.Context, string) (bool, error)
 	search               func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
@@ -46,6 +48,13 @@ func (f *fakeSemantic) CollectionName(codebasePath string) string {
 		return f.collectionName(codebasePath)
 	}
 	return "code_chunks_test"
+}
+
+func (f *fakeSemantic) ConversationCollectionName(collectionID string) string {
+	if f.conversationName != nil {
+		return f.conversationName(collectionID)
+	}
+	return "conv_chunks_" + tshash.PathPrefix(collectionID)
 }
 
 func (f *fakeSemantic) HasStaging(context.Context, string) (bool, error) {

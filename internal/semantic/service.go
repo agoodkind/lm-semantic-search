@@ -152,6 +152,13 @@ func (service *Service) CollectionName(codebasePath string) string {
 	return prefix + "_" + sanitized + hashSuffix
 }
 
+// ConversationCollectionName returns the Milvus collection name for a virtual
+// conversation document collection.
+func (service *Service) ConversationCollectionName(collectionID string) string {
+	_ = service
+	return "conv_chunks_" + tshash.PathPrefix(strings.TrimSpace(collectionID))
+}
+
 func (service *Service) renameCollection(ctx context.Context, oldName string, newName string) error {
 	if err := service.milvus.RenameCollection(ctx, milvusclient.NewRenameCollectionOption(oldName, newName)); err != nil {
 		slog.ErrorContext(ctx, "rename Milvus collection failed", "from", oldName, "to", newName, "err", err)

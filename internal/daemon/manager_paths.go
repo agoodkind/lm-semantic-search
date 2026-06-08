@@ -34,6 +34,9 @@ func (manager *Manager) findCodebaseByExactRoot(canonicalPath string) (model.Cod
 func (manager *Manager) findCodebasesByCoverage(canonicalPath string) []model.Codebase {
 	matches := make([]model.Codebase, 0, len(manager.codebases))
 	for _, codebase := range manager.codebases {
+		if codebase.Kind == model.CodebaseKindDocument {
+			continue
+		}
 		if pathCovers(codebase.CanonicalPath, canonicalPath) {
 			matches = append(matches, codebase)
 		}
@@ -52,6 +55,9 @@ func (manager *Manager) findStrictAncestor(canonicalPath string) (model.Codebase
 	var best model.Codebase
 	bestLength := -1
 	for _, codebase := range manager.codebases {
+		if codebase.Kind == model.CodebaseKindDocument {
+			continue
+		}
 		if codebase.CanonicalPath == canonicalPath {
 			continue
 		}
@@ -79,6 +85,9 @@ func (manager *Manager) findStrictAncestor(canonicalPath string) (model.Codebase
 func (manager *Manager) findDescendants(canonicalPath string) []model.Codebase {
 	matches := make([]model.Codebase, 0, len(manager.codebases))
 	for _, codebase := range manager.codebases {
+		if codebase.Kind == model.CodebaseKindDocument {
+			continue
+		}
 		if codebase.CanonicalPath == canonicalPath {
 			continue
 		}
