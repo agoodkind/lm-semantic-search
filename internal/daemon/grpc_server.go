@@ -570,12 +570,13 @@ func (server *GRPCServer) SearchConversations(ctx context.Context, request *pb.S
 	}
 	for _, result := range results {
 		response.Results = append(response.Results, &pb.ConversationSearchResult{
-			ConversationId: result.ConversationID,
-			MessageIndex:   result.MessageIndex,
-			Role:           result.Role,
-			TimestampUnix:  result.TimestampUnix,
-			Score:          0,
-			Content:        result.Content,
+			ConversationId:       result.ConversationID,
+			ParentConversationId: result.ParentConversationID,
+			MessageIndex:         result.MessageIndex,
+			Role:                 result.Role,
+			TimestampUnix:        result.TimestampUnix,
+			Score:                0,
+			Content:              result.Content,
 		})
 	}
 	return response, nil
@@ -646,11 +647,12 @@ func pbConversationDocuments(documents []*pb.ConversationDocument) []model.Conve
 			continue
 		}
 		result = append(result, model.ConversationDocument{
-			ConversationID: document.GetConversationId(),
-			MessageIndex:   document.GetMessageIndex(),
-			Role:           document.GetRole(),
-			TimestampUnix:  document.GetTimestampUnix(),
-			Text:           document.GetText(),
+			ConversationID:       document.GetConversationId(),
+			ParentConversationID: document.GetParentConversationId(),
+			MessageIndex:         document.GetMessageIndex(),
+			Role:                 document.GetRole(),
+			TimestampUnix:        document.GetTimestampUnix(),
+			Text:                 document.GetText(),
 		})
 	}
 	return result

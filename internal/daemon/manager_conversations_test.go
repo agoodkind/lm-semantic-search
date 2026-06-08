@@ -199,16 +199,17 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 	}
 
 	expectedChunks := []model.StoredChunk{{
-		Content:        "Needle conversation content",
-		RelativePath:   "conv/conversation-alpha/12",
-		StartLine:      0,
-		EndLine:        0,
-		Language:       "",
-		FileExtension:  "",
-		ConversationID: "conversation-alpha",
-		MessageIndex:   12,
-		Role:           "assistant",
-		TimestampUnix:  1712345678,
+		Content:              "Needle conversation content",
+		RelativePath:         "conv/conversation-alpha/12",
+		StartLine:            0,
+		EndLine:              0,
+		Language:             "",
+		FileExtension:        "",
+		ConversationID:       "conversation-alpha",
+		ParentConversationID: "conversation-root",
+		MessageIndex:         12,
+		Role:                 "assistant",
+		TimestampUnix:        1712345678,
 	}}
 	searchCalls := 0
 	manager.semantic = &fakeSemantic{
@@ -238,6 +239,9 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 	if chunks[0].ConversationID != expectedChunks[0].ConversationID {
 		t.Fatalf("ConversationID = %q, want %q", chunks[0].ConversationID, expectedChunks[0].ConversationID)
 	}
+	if chunks[0].ParentConversationID != expectedChunks[0].ParentConversationID {
+		t.Fatalf("ParentConversationID = %q, want %q", chunks[0].ParentConversationID, expectedChunks[0].ParentConversationID)
+	}
 	if chunks[0].MessageIndex != expectedChunks[0].MessageIndex {
 		t.Fatalf("MessageIndex = %d, want %d", chunks[0].MessageIndex, expectedChunks[0].MessageIndex)
 	}
@@ -263,6 +267,9 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 	result := response.GetResults()[0]
 	if result.GetConversationId() != expectedChunks[0].ConversationID {
 		t.Fatalf("RPC ConversationId = %q, want %q", result.GetConversationId(), expectedChunks[0].ConversationID)
+	}
+	if result.GetParentConversationId() != expectedChunks[0].ParentConversationID {
+		t.Fatalf("RPC ParentConversationId = %q, want %q", result.GetParentConversationId(), expectedChunks[0].ParentConversationID)
 	}
 	if result.GetMessageIndex() != expectedChunks[0].MessageIndex {
 		t.Fatalf("RPC MessageIndex = %d, want %d", result.GetMessageIndex(), expectedChunks[0].MessageIndex)
@@ -468,11 +475,12 @@ func TestConversationDocumentsToStoredChunksSplitsOversizedMessage(t *testing.T)
 
 	text := strings.Repeat("a", conversationChunkMaxBytes+5)
 	chunks, err := conversationDocumentsToStoredChunks([]model.ConversationDocument{{
-		ConversationID: "thread-large",
-		MessageIndex:   7,
-		Role:           "assistant",
-		TimestampUnix:  1712345678,
-		Text:           text,
+		ConversationID:       "thread-large",
+		ParentConversationID: "thread-large-parent",
+		MessageIndex:         7,
+		Role:                 "assistant",
+		TimestampUnix:        1712345678,
+		Text:                 text,
 	}})
 	if err != nil {
 		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
@@ -492,6 +500,9 @@ func TestConversationDocumentsToStoredChunksSplitsOversizedMessage(t *testing.T)
 		}
 		if chunk.ConversationID != "thread-large" {
 			t.Fatalf("chunk %d ConversationID = %q, want thread-large", index, chunk.ConversationID)
+		}
+		if chunk.ParentConversationID != "thread-large-parent" {
+			t.Fatalf("chunk %d ParentConversationID = %q, want thread-large-parent", index, chunk.ParentConversationID)
 		}
 		if chunk.MessageIndex != 7 {
 			t.Fatalf("chunk %d MessageIndex = %d, want 7", index, chunk.MessageIndex)

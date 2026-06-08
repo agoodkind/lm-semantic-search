@@ -560,16 +560,17 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 		}
 
 		chunks = append(chunks, model.StoredChunk{
-			Content:        contentValue,
-			RelativePath:   relativePathValue,
-			StartLine:      safeInt32FromInt64(startLineValue),
-			EndLine:        safeInt32FromInt64(endLineValue),
-			Language:       metadataValue.Language,
-			FileExtension:  fileExtensionValue,
-			ConversationID: metadataValue.ConversationID,
-			MessageIndex:   metadataValue.messageIndex(),
-			Role:           metadataValue.Role,
-			TimestampUnix:  metadataValue.timestampUnix(),
+			Content:              contentValue,
+			RelativePath:         relativePathValue,
+			StartLine:            safeInt32FromInt64(startLineValue),
+			EndLine:              safeInt32FromInt64(endLineValue),
+			Language:             metadataValue.Language,
+			FileExtension:        fileExtensionValue,
+			ConversationID:       metadataValue.ConversationID,
+			ParentConversationID: metadataValue.ParentConversationID,
+			MessageIndex:         metadataValue.messageIndex(),
+			Role:                 metadataValue.Role,
+			TimestampUnix:        metadataValue.timestampUnix(),
 		})
 	}
 	return chunks, nil
@@ -580,27 +581,30 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 // results can resurface the splitter-derived language without a dedicated
 // column.
 type chunkMetadata struct {
-	Language       string `json:"language,omitempty"`
-	ConversationID string `json:"conversation_id,omitempty"`
-	MessageIndex   *int32 `json:"message_index,omitempty"`
-	Role           string `json:"role,omitempty"`
-	TimestampUnix  *int64 `json:"timestamp_unix,omitempty"`
+	Language             string `json:"language,omitempty"`
+	ConversationID       string `json:"conversation_id,omitempty"`
+	ParentConversationID string `json:"parent_conversation_id,omitempty"`
+	MessageIndex         *int32 `json:"message_index,omitempty"`
+	Role                 string `json:"role,omitempty"`
+	TimestampUnix        *int64 `json:"timestamp_unix,omitempty"`
 }
 
 func encodeMetadata(chunk model.StoredChunk) string {
 	if chunk.Language == "" &&
 		chunk.ConversationID == "" &&
+		chunk.ParentConversationID == "" &&
 		chunk.MessageIndex == 0 &&
 		chunk.Role == "" &&
 		chunk.TimestampUnix == 0 {
 		return "{}"
 	}
 	metadata := chunkMetadata{
-		Language:       chunk.Language,
-		ConversationID: chunk.ConversationID,
-		MessageIndex:   nil,
-		Role:           chunk.Role,
-		TimestampUnix:  nil,
+		Language:             chunk.Language,
+		ConversationID:       chunk.ConversationID,
+		ParentConversationID: chunk.ParentConversationID,
+		MessageIndex:         nil,
+		Role:                 chunk.Role,
+		TimestampUnix:        nil,
 	}
 	if hasConversationMetadata(chunk) {
 		messageIndex := chunk.MessageIndex
@@ -639,11 +643,12 @@ func decodeMetadata(metadata string) chunkMetadata {
 
 func emptyChunkMetadata() chunkMetadata {
 	return chunkMetadata{
-		Language:       "",
-		ConversationID: "",
-		MessageIndex:   nil,
-		Role:           "",
-		TimestampUnix:  nil,
+		Language:             "",
+		ConversationID:       "",
+		ParentConversationID: "",
+		MessageIndex:         nil,
+		Role:                 "",
+		TimestampUnix:        nil,
 	}
 }
 

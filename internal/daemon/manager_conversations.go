@@ -497,19 +497,21 @@ func conversationDocumentsToStoredChunks(documents []model.ConversationDocument)
 		if conversationID == "" {
 			return nil, errors.New("conversation id is required")
 		}
+		parentConversationID := strings.TrimSpace(document.ParentConversationID)
 		pieces := splitConversationText(document.Text)
 		for partIndex, piece := range pieces {
 			chunks = append(chunks, model.StoredChunk{
-				Content:        piece,
-				RelativePath:   conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
-				StartLine:      0,
-				EndLine:        0,
-				Language:       "",
-				FileExtension:  "",
-				ConversationID: conversationID,
-				MessageIndex:   document.MessageIndex,
-				Role:           document.Role,
-				TimestampUnix:  document.TimestampUnix,
+				Content:              piece,
+				RelativePath:         conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
+				StartLine:            0,
+				EndLine:              0,
+				Language:             "",
+				FileExtension:        "",
+				ConversationID:       conversationID,
+				ParentConversationID: parentConversationID,
+				MessageIndex:         document.MessageIndex,
+				Role:                 document.Role,
+				TimestampUnix:        document.TimestampUnix,
 			})
 		}
 	}

@@ -132,16 +132,17 @@ func (service *Service) fetchChunksForPath(ctx context.Context, collectionName s
 		}
 
 		chunks = append(chunks, model.StoredChunk{
-			Content:        contentValue,
-			RelativePath:   relativePath,
-			StartLine:      safeInt32FromInt64(startLineValue),
-			EndLine:        safeInt32FromInt64(endLineValue),
-			Language:       languageValue,
-			FileExtension:  fileExtensionValue,
-			ConversationID: "",
-			MessageIndex:   0,
-			Role:           "",
-			TimestampUnix:  0,
+			Content:              contentValue,
+			RelativePath:         relativePath,
+			StartLine:            safeInt32FromInt64(startLineValue),
+			EndLine:              safeInt32FromInt64(endLineValue),
+			Language:             languageValue,
+			FileExtension:        fileExtensionValue,
+			ConversationID:       "",
+			ParentConversationID: "",
+			MessageIndex:         0,
+			Role:                 "",
+			TimestampUnix:        0,
 		})
 		vectors = append(vectors, vector)
 	}

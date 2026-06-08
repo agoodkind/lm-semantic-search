@@ -112,15 +112,19 @@ func TestEncodeDecodeMetadataConversationFields(t *testing.T) {
 	t.Parallel()
 
 	metadata := encodeMetadata(model.StoredChunk{
-		ConversationID: "thread-alpha",
-		MessageIndex:   0,
-		Role:           "assistant",
-		TimestampUnix:  1712345678,
+		ConversationID:       "thread-alpha",
+		ParentConversationID: "thread-root",
+		MessageIndex:         0,
+		Role:                 "assistant",
+		TimestampUnix:        1712345678,
 	})
 	decoded := decodeMetadata(metadata)
 
 	if decoded.ConversationID != "thread-alpha" {
 		t.Fatalf("ConversationID = %q, want thread-alpha", decoded.ConversationID)
+	}
+	if decoded.ParentConversationID != "thread-root" {
+		t.Fatalf("ParentConversationID = %q, want thread-root", decoded.ParentConversationID)
 	}
 	if decoded.messageIndex() != 0 {
 		t.Fatalf("MessageIndex = %d, want 0", decoded.messageIndex())
@@ -133,5 +137,8 @@ func TestEncodeDecodeMetadataConversationFields(t *testing.T) {
 	}
 	if !strings.Contains(metadata, `"message_index":0`) {
 		t.Fatalf("metadata %q omitted zero message_index for a conversation chunk", metadata)
+	}
+	if !strings.Contains(metadata, `"parent_conversation_id":"thread-root"`) {
+		t.Fatalf("metadata %q omitted parent_conversation_id for a forked conversation chunk", metadata)
 	}
 }

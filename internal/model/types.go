@@ -232,18 +232,25 @@ type StoredChunk struct {
 	Language       string `json:"language"`
 	FileExtension  string `json:"file_extension"`
 	ConversationID string `json:"conversation_id"`
-	MessageIndex   int32  `json:"message_index"`
-	Role           string `json:"role"`
-	TimestampUnix  int64  `json:"timestamp_unix"`
+	// ParentConversationID names the conversation this chunk's conversation
+	// forked from, so a fork can be grouped with its parent. Empty for code
+	// chunks and for conversations with no parent.
+	ParentConversationID string `json:"parent_conversation_id"`
+	MessageIndex         int32  `json:"message_index"`
+	Role                 string `json:"role"`
+	TimestampUnix        int64  `json:"timestamp_unix"`
 }
 
 // ConversationDocument is one caller-provided conversation message chunk.
 type ConversationDocument struct {
 	ConversationID string `json:"conversation_id"`
-	MessageIndex   int32  `json:"message_index"`
-	Role           string `json:"role"`
-	TimestampUnix  int64  `json:"timestamp_unix"`
-	Text           string `json:"text"`
+	// ParentConversationID names the conversation this one forked from, carried
+	// into chunk metadata so forks group with their parent. Empty when absent.
+	ParentConversationID string `json:"parent_conversation_id"`
+	MessageIndex         int32  `json:"message_index"`
+	Role                 string `json:"role"`
+	TimestampUnix        int64  `json:"timestamp_unix"`
+	Text                 string `json:"text"`
 }
 
 // PathClassificationKind reports the daemon's verdict about one queried path.

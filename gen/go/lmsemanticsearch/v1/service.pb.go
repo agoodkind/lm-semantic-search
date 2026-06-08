@@ -1220,8 +1220,12 @@ type ConversationDocument struct {
 	Role           string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
 	TimestampUnix  int64                  `protobuf:"varint,4,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
 	Text           string                 `protobuf:"bytes,5,opt,name=text,proto3" json:"text,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// parent_conversation_id names the conversation this one forked from, so the
+	// index can group a fork with its parent. Empty when the conversation has no
+	// parent.
+	ParentConversationId string `protobuf:"bytes,6,opt,name=parent_conversation_id,json=parentConversationId,proto3" json:"parent_conversation_id,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ConversationDocument) Reset() {
@@ -1289,6 +1293,13 @@ func (x *ConversationDocument) GetText() string {
 	return ""
 }
 
+func (x *ConversationDocument) GetParentConversationId() string {
+	if x != nil {
+		return x.ParentConversationId
+	}
+	return ""
+}
+
 type ConversationSearchResult struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
@@ -1297,8 +1308,11 @@ type ConversationSearchResult struct {
 	TimestampUnix  int64                  `protobuf:"varint,4,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
 	Score          float64                `protobuf:"fixed64,5,opt,name=score,proto3" json:"score,omitempty"`
 	Content        string                 `protobuf:"bytes,6,opt,name=content,proto3" json:"content,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// parent_conversation_id names the conversation this one forked from, carried
+	// through from the indexed document. Empty when the conversation has no parent.
+	ParentConversationId string `protobuf:"bytes,7,opt,name=parent_conversation_id,json=parentConversationId,proto3" json:"parent_conversation_id,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ConversationSearchResult) Reset() {
@@ -1369,6 +1383,13 @@ func (x *ConversationSearchResult) GetScore() float64 {
 func (x *ConversationSearchResult) GetContent() string {
 	if x != nil {
 		return x.Content
+	}
+	return ""
+}
+
+func (x *ConversationSearchResult) GetParentConversationId() string {
+	if x != nil {
+		return x.ParentConversationId
 	}
 	return ""
 }
@@ -3439,20 +3460,22 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\bend_line\x18\x03 \x01(\x05R\aendLine\x12\x1a\n" +
 	"\blanguage\x18\x04 \x01(\tR\blanguage\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
-	"\acontent\x18\x06 \x01(\tR\acontent\"\xb3\x01\n" +
+	"\acontent\x18\x06 \x01(\tR\acontent\"\xe9\x01\n" +
 	"\x14ConversationDocument\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12%\n" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x12\n" +
-	"\x04text\x18\x05 \x01(\tR\x04text\"\xd3\x01\n" +
+	"\x04text\x18\x05 \x01(\tR\x04text\x124\n" +
+	"\x16parent_conversation_id\x18\x06 \x01(\tR\x14parentConversationId\"\x89\x02\n" +
 	"\x18ConversationSearchResult\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12%\n" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
-	"\acontent\x18\x06 \x01(\tR\acontent\"\x8d\x02\n" +
+	"\acontent\x18\x06 \x01(\tR\acontent\x124\n" +
+	"\x16parent_conversation_id\x18\a \x01(\tR\x14parentConversationId\"\x8d\x02\n" +
 	"\x11StartIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x12?\n" +

@@ -173,6 +173,10 @@ message ConversationDocument {
   string role = 3;
   int64 timestamp_unix = 4;
   string text = 5;
+  // parent_conversation_id names the conversation this one forked from, so the
+  // index can group a fork with its parent. Empty when the conversation has no
+  // parent.
+  string parent_conversation_id = 6;
 }
 
 message ConversationSearchResult {
@@ -182,6 +186,9 @@ message ConversationSearchResult {
   int64 timestamp_unix = 4;
   double score = 5;
   string content = 6;
+  // parent_conversation_id names the conversation this one forked from, carried
+  // through from the indexed document. Empty when the conversation has no parent.
+  string parent_conversation_id = 7;
 }
 
 message StartIndexRequest {
