@@ -14,7 +14,7 @@ import (
 
 // UpsertConversationChunks replaces the stored chunks for every conversation id
 // present in chunks, then embeds and inserts the provided pre-chunked messages.
-func (service *Service) UpsertConversationChunks(ctx context.Context, collectionName string, chunks []model.StoredChunk) (err error) {
+func (service *Service) UpsertConversationChunks(ctx context.Context, collectionName string, chunks []model.StoredChunk, progress func(Progress)) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.upsertConversationChunks")
 	defer done(&err)
 
@@ -32,6 +32,13 @@ func (service *Service) UpsertConversationChunks(ctx context.Context, collection
 		return fmt.Errorf("check conversation collection %s: %w", trimmedCollectionName, err)
 	}
 	if hasCollection {
+		// The prefix delete below runs an expression-filtered Delete, which Milvus
+		// only serves on a loaded collection. The first ingest creates and loads
+		// the collection through insertChunksBatched, but a later ingest reaches
+		// this branch without ever loading it, so load it here before deleting.
+		if err := service.loadCollection(ctx, trimmedCollectionName); err != nil {
+			return err
+		}
 		for _, conversationID := range conversationIDsFromChunks(chunks) {
 			prefix := conversationRelativePathPrefix(conversationID)
 			if err := service.deleteByRelativePathPrefix(ctx, trimmedCollectionName, prefix); err != nil {
@@ -42,7 +49,7 @@ func (service *Service) UpsertConversationChunks(ctx context.Context, collection
 	if len(chunks) == 0 {
 		return nil
 	}
-	return service.insertChunksBatched(ctx, trimmedCollectionName, chunks, hasCollection, "Generating conversation embeddings...", nil, nil)
+	return service.insertChunksBatched(ctx, trimmedCollectionName, chunks, hasCollection, "Generating conversation embeddings...", progress, nil)
 }
 
 // DeleteConversation removes every chunk stored for one conversation id.
@@ -69,6 +76,11 @@ func (service *Service) DeleteConversation(ctx context.Context, collectionName s
 	}
 	if !hasCollection {
 		return nil
+	}
+	// Load before the expression-filtered delete for the same reason as the
+	// upsert path: a daemon that did not create this collection never loaded it.
+	if err := service.loadCollection(ctx, trimmedCollectionName); err != nil {
+		return err
 	}
 	return service.deleteByRelativePathPrefix(ctx, trimmedCollectionName, conversationRelativePathPrefix(trimmedConversationID))
 }

@@ -43,7 +43,11 @@ type fakeSemantic struct {
 	// reindexEmit, when set, is invoked with the live progress callback during
 	// Reindex so a test can drive reuse-vs-embed progress reporting.
 	reindexEmit func(progress func(semantic.Progress))
-	mu          sync.Mutex
+	// upsertConversationEmit, when set, is invoked with the live progress callback
+	// during UpsertConversationChunks so a test can drive conversation-batch
+	// progress reporting.
+	upsertConversationEmit func(progress func(semantic.Progress))
+	mu                     sync.Mutex
 }
 
 func (f *fakeSemantic) Available() bool { return !f.unavailable }
@@ -125,7 +129,10 @@ func (f *fakeSemantic) StageReindex(context.Context, string, []model.StoredChunk
 }
 func (f *fakeSemantic) PromoteStaging(context.Context, string) error { return nil }
 
-func (f *fakeSemantic) UpsertConversationChunks(ctx context.Context, collectionName string, chunks []model.StoredChunk) error {
+func (f *fakeSemantic) UpsertConversationChunks(ctx context.Context, collectionName string, chunks []model.StoredChunk, progress func(semantic.Progress)) error {
+	if f.upsertConversationEmit != nil && progress != nil {
+		f.upsertConversationEmit(progress)
+	}
 	if f.upsertConversation != nil {
 		return f.upsertConversation(ctx, collectionName, chunks)
 	}

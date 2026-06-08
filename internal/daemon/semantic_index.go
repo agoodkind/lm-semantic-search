@@ -27,7 +27,7 @@ type semanticWriter interface {
 	Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removedOrModifiedRelativePaths []string, progress func(semantic.Progress), reuse map[string][]float32) error
 	StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removedOrModifiedRelativePaths []string, progress func(semantic.Progress), reuse map[string][]float32) error
 	PromoteStaging(ctx context.Context, codebasePath string) error
-	UpsertConversationChunks(ctx context.Context, collectionName string, chunks []model.StoredChunk) error
+	UpsertConversationChunks(ctx context.Context, collectionName string, chunks []model.StoredChunk, progress func(semantic.Progress)) error
 	DeleteConversation(ctx context.Context, collectionName string, conversationID string) error
 	CopyChunks(ctx context.Context, codebasePath string, srcRelativePath string, dstRelativePath string) (int, error)
 	PruneToCurrent(ctx context.Context, codebasePath string, currentRelativePaths []string) error

@@ -16,7 +16,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
@@ -449,44 +448,6 @@ func (service *Service) dropIfExists(ctx context.Context, collectionName string)
 	if err := service.milvus.DropCollection(ctx, milvusclient.NewDropCollectionOption(collectionName)); err != nil {
 		slog.ErrorContext(ctx, "drop Milvus collection failed", "collection", collectionName, "err", err)
 		return fmt.Errorf("drop Milvus collection %s: %w", collectionName, err)
-	}
-	return nil
-}
-
-func (service *Service) createCollection(ctx context.Context, collectionName string, dimension int) error {
-	schema := entity.NewSchema().
-		WithField(entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(512).WithIsPrimaryKey(true)).
-		WithField(entity.NewField().WithName(contentFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535).WithEnableAnalyzer(true).WithEnableMatch(true)).
-		WithField(entity.NewField().WithName(relativePathFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(1024)).
-		WithField(entity.NewField().WithName(startLineFieldName).WithDataType(entity.FieldTypeInt64)).
-		WithField(entity.NewField().WithName(endLineFieldName).WithDataType(entity.FieldTypeInt64)).
-		WithField(entity.NewField().WithName(fileExtensionFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(32)).
-		WithField(entity.NewField().WithName(metadataFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
-		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)))
-
-	indexOptions := []milvusclient.CreateIndexOption{
-		milvusclient.NewCreateIndexOption(collectionName, denseVectorFieldName, index.NewAutoIndex(entity.COSINE)),
-	}
-
-	if service.cfg.HybridMode {
-		schema = schema.
-			WithField(entity.NewField().WithName(sparseVectorFieldName).WithDataType(entity.FieldTypeSparseVector)).
-			WithFunction(entity.NewFunction().WithName("bm25").WithType(entity.FunctionTypeBM25).WithInputFields(contentFieldName).WithOutputFields(sparseVectorFieldName))
-		indexOptions = append(indexOptions, milvusclient.NewCreateIndexOption(collectionName, sparseVectorFieldName, index.NewSparseInvertedIndex(entity.BM25, 0.2)))
-	}
-
-	if err := service.milvus.CreateCollection(ctx, milvusclient.NewCreateCollectionOption(collectionName, schema).WithIndexOptions(indexOptions...)); err != nil {
-		slog.ErrorContext(ctx, "create Milvus collection failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("create Milvus collection %s: %w", collectionName, err)
-	}
-	loadTask, err := service.milvus.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName))
-	if err != nil {
-		slog.ErrorContext(ctx, "load Milvus collection failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("load Milvus collection %s: %w", collectionName, err)
-	}
-	if err := loadTask.Await(ctx); err != nil {
-		slog.ErrorContext(ctx, "await Milvus collection load failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("await Milvus collection load %s: %w", collectionName, err)
 	}
 	return nil
 }

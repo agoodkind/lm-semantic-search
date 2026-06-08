@@ -8,7 +8,9 @@ import (
 	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
 
@@ -52,6 +54,76 @@ func TestRegisterConversationCollectionIsIdempotent(t *testing.T) {
 	}
 	if registry.Codebases[0].Kind != model.CodebaseKindDocument {
 		t.Fatalf("persisted Kind = %q, want %q", registry.Codebases[0].Kind, model.CodebaseKindDocument)
+	}
+}
+
+// TestUpdateConversationJobBatchProgressAdvancesRunningJob proves one embedding
+// batch emission moves a running conversation job off 0%: the percent reflects
+// the batch fraction, the written rows and chunk total carry over, and the
+// heartbeat advances so the job no longer reads as frozen.
+func TestUpdateConversationJobBatchProgressAdvancesRunningJob(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	cfg := defaultIndexConfig()
+	job := newQueuedJob("cb-conv", "chat:///conv", "chat:///conv", testClientInfo(), string(jobOperationConversationIngest), false, cfg, clock.Now())
+	job.State = model.JobStateRunning
+	manager.mu.Lock()
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+
+	manager.updateConversationJobBatchProgress(job.ID, semantic.Progress{
+		Phase:                     "Generating conversation embeddings...",
+		EmbeddingBatchesTotal:     4,
+		EmbeddingBatchesCompleted: 2,
+		CollectionRowsWritten:     64,
+		ChunksReused:              10,
+		ChunksEmbedded:            54,
+	})
+
+	got, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatalf("GetJob(%s) not found", job.ID)
+	}
+	if got.Progress.OverallPercent != 50 {
+		t.Fatalf("OverallPercent = %v, want 50", got.Progress.OverallPercent)
+	}
+	if got.Progress.CollectionRowsWritten != 64 {
+		t.Fatalf("CollectionRowsWritten = %d, want 64", got.Progress.CollectionRowsWritten)
+	}
+	if got.Progress.ChunksGenerated != 64 {
+		t.Fatalf("ChunksGenerated = %d, want 64", got.Progress.ChunksGenerated)
+	}
+	if got.Progress.HeartbeatAt.IsZero() {
+		t.Fatal("HeartbeatAt is zero, want a moved heartbeat")
+	}
+}
+
+// TestUpdateConversationJobBatchProgressIgnoresTerminalJob proves a batch
+// emission never resurrects a completed job, so progress reporting cannot
+// overwrite a terminal state.
+func TestUpdateConversationJobBatchProgressIgnoresTerminalJob(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	cfg := defaultIndexConfig()
+	job := newQueuedJob("cb-conv", "chat:///conv", "chat:///conv", testClientInfo(), string(jobOperationConversationIngest), false, cfg, clock.Now())
+	job.State = model.JobStateCompleted
+	manager.mu.Lock()
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+
+	manager.updateConversationJobBatchProgress(job.ID, semantic.Progress{EmbeddingBatchesTotal: 4, EmbeddingBatchesCompleted: 2, CollectionRowsWritten: 64})
+
+	got, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatalf("GetJob(%s) not found", job.ID)
+	}
+	if got.State != model.JobStateCompleted {
+		t.Fatalf("State = %q, want completed", got.State)
+	}
+	if got.Progress.OverallPercent != 0 {
+		t.Fatalf("OverallPercent = %v, want 0 (untouched)", got.Progress.OverallPercent)
 	}
 }
 

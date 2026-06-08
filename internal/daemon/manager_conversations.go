@@ -13,6 +13,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
@@ -241,7 +242,9 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	switch payload.Kind {
 	case conversationJobKindUpsert:
 		if manager.semantic != nil {
-			err = manager.semantic.UpsertConversationChunks(ctx, payload.CollectionName, payload.Chunks)
+			err = manager.semantic.UpsertConversationChunks(ctx, payload.CollectionName, payload.Chunks, func(progress semantic.Progress) {
+				manager.updateConversationJobBatchProgress(job.ID, progress)
+			})
 		}
 	case conversationJobKindDelete:
 		if manager.semantic != nil {
@@ -394,6 +397,36 @@ func (manager *Manager) updateConversationJobProgress(jobID string, payload conv
 	job.Progress.FilesProcessed = 0
 	job.Progress.ChunksGenerated = safeInt32(len(payload.Chunks))
 	job.Progress.CollectionRowsWritten = 0
+	job.Progress.LastEventAt = now
+	job.Progress.HeartbeatAt = now
+	manager.jobs[jobID] = job
+}
+
+// updateConversationJobBatchProgress refreshes the running conversation job from
+// one embedding-batch emission so a long embed advances the percent and moves
+// the heartbeat instead of sitting frozen at 0%. It only touches a queued or
+// running job and never sets a terminal state, which stays the job of
+// updateConversationJobCompleted.
+func (manager *Manager) updateConversationJobBatchProgress(jobID string, progress semantic.Progress) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	job, found := manager.jobs[jobID]
+	if !found {
+		return
+	}
+	if job.State != model.JobStateQueued && job.State != model.JobStateRunning {
+		return
+	}
+
+	now := clock.Now()
+	job.State = model.JobStateRunning
+	job.UpdatedAt = now
+	if progress.EmbeddingBatchesTotal > 0 {
+		job.Progress.OverallPercent = float64(progress.EmbeddingBatchesCompleted) / float64(progress.EmbeddingBatchesTotal) * 100
+	}
+	job.Progress.CollectionRowsWritten = progress.CollectionRowsWritten
+	job.Progress.ChunksGenerated = progress.ChunksReused + progress.ChunksEmbedded
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
 	manager.jobs[jobID] = job
