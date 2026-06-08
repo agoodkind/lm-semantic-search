@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"goodkind.io/gklog/version"
-	"goodkind.io/lm-semantic-search/internal/config"
+	daemonclient "goodkind.io/lm-semantic-search/client"
 	"goodkind.io/lm-semantic-search/internal/response"
 )
 
@@ -40,13 +40,14 @@ func (options *rootOptions) cliOptions() cliOptions {
 }
 
 func executeRoot(args []string) error {
-	cfg, err := config.Default()
-	if err != nil {
+	defaultSocketPath := daemonclient.ResolveSocketPath()
+	if defaultSocketPath == "" {
+		err := errors.New("daemon socket path is empty")
 		slog.Error("load config failed", "err", err)
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	root := newRoot(cfg.SocketPath)
+	root := newRoot(defaultSocketPath)
 	root.SetArgs(args)
 	if err := root.Execute(); err != nil {
 		return fmt.Errorf("execute root command: %w", err)
