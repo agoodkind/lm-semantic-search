@@ -575,11 +575,11 @@ func jobProgressDisplay(job model.Job) string {
 	return fmt.Sprintf("%.1f%%", job.Progress.OverallPercent)
 }
 
-func renderGetJob(job *model.Job, pipelineDegraded bool) string {
+func renderGetJob(job *model.Job, pipelineDegraded bool, supersededByJobID string) string {
 	if job == nil {
 		return "Job not found."
 	}
-	surface := resolveJobSurface(*job, pipelineDegraded)
+	surface := resolveJobSurface(*job, pipelineDegraded, supersededByJobID)
 	lines := []string{
 		"🧾 Job " + job.ID,
 		"📁 Codebase: " + job.CanonicalPath,
@@ -603,14 +603,15 @@ func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 		return "No tracked jobs."
 	}
 
+	successors := buildJobSuccessors(jobs)
 	activeJobs := make([]model.Job, 0, len(jobs))
 	terminalJobs := make([]model.Job, 0, len(jobs))
 	stateCounts := map[model.JobState]int{}
-	retryableFailures := 0
+	supersededCount := 0
 	for _, job := range jobs {
 		stateCounts[job.State]++
-		if resolveJobSurface(job, pipelineDegraded).RetryableFailure {
-			retryableFailures++
+		if resolveJobSurface(job, pipelineDegraded, successors[job.ID]).Superseded {
+			supersededCount++
 		}
 		switch job.State {
 		case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
@@ -630,14 +631,15 @@ func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 		stateCounts[model.JobStateRunning],
 		stateCounts[model.JobStateCancelling],
 	))
-	// A retryable failure recovers on its own, so it is tallied apart from real
-	// failures: the headline "failed" count names only stops that need attention.
+	// A superseded failure was overtaken by a later terminal job, so it is tallied
+	// apart from current failures: the headline "failed" count names only the
+	// latest unresolved failure per codebase.
 	lines = append(lines, fmt.Sprintf(
 		"Terminal: %d completed, %d failed, %d %s, %d canceled",
 		stateCounts[model.JobStateCompleted],
-		stateCounts[model.JobStateFailed]-retryableFailures,
-		retryableFailures,
-		status.JobRetryableCountLabel,
+		stateCounts[model.JobStateFailed]-supersededCount,
+		supersededCount,
+		status.JobSupersededCountLabel,
 		stateCounts[model.JobStateCancelled],
 	))
 
@@ -646,7 +648,7 @@ func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 	} else {
 		lines = append(lines, "", "Active jobs:")
 		for _, job := range activeJobs {
-			lines = append(lines, renderJobListEntry(job, pipelineDegraded)...)
+			lines = append(lines, renderJobListEntry(job, pipelineDegraded, successors[job.ID])...)
 		}
 	}
 
@@ -658,7 +660,7 @@ func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 	if len(terminalJobs) > recentTerminalLimit {
 		lines = append(lines, fmt.Sprintf("Recent terminal jobs: showing %d of %d", recentTerminalLimit, len(terminalJobs)))
 		for _, job := range terminalJobs[:recentTerminalLimit] {
-			lines = append(lines, renderJobListEntry(job, pipelineDegraded)...)
+			lines = append(lines, renderJobListEntry(job, pipelineDegraded, successors[job.ID])...)
 		}
 		lines = append(lines, "Use `job get JOB_ID` or `--json` for full history.")
 		return strings.Join(lines, "\n")
@@ -666,7 +668,7 @@ func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 
 	lines = append(lines, fmt.Sprintf("Terminal jobs: %d", len(terminalJobs)))
 	for _, job := range terminalJobs {
-		lines = append(lines, renderJobListEntry(job, pipelineDegraded)...)
+		lines = append(lines, renderJobListEntry(job, pipelineDegraded, successors[job.ID])...)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -682,8 +684,8 @@ func displayJobPhase(phase string) string {
 	}
 }
 
-func renderJobListEntry(job model.Job, pipelineDegraded bool) []string {
-	surface := resolveJobSurface(job, pipelineDegraded)
+func renderJobListEntry(job model.Job, pipelineDegraded bool, supersededByJobID string) []string {
+	surface := resolveJobSurface(job, pipelineDegraded, supersededByJobID)
 	lines := []string{
 		fmt.Sprintf(
 			"- %s [%s · %s] %s %s",

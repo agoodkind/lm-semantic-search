@@ -327,7 +327,7 @@ func TestRenderGetJobShowsMagnitude(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84},
 	}
-	out := renderGetJob(job, false)
+	out := renderGetJob(job, false, "")
 	if !strings.Contains(out, "📄 7 of 58 files · 🧩 84 chunks") {
 		t.Fatalf("expected magnitude in job view, got:\n%s", out)
 	}
@@ -346,7 +346,7 @@ func TestRenderGetJobUsesAmericanCanceledSpelling(t *testing.T) {
 		CompletedAt:   &completedAt,
 		Progress:      model.Progress{Phase: "cancelled"},
 	}
-	out := renderGetJob(job, false)
+	out := renderGetJob(job, false, "")
 	if strings.Contains(out, "cancelled") {
 		t.Fatalf("job view should use American spelling, got:\n%s", out)
 	}
@@ -396,7 +396,7 @@ func TestRenderListJobsSummarizesHistory(t *testing.T) {
 	for _, want := range []string{
 		"Tracked jobs: 3 total",
 		"Active: 0 queued, 1 running, 0 canceling",
-		"Terminal: 1 completed, 0 failed, 0 waiting (retryable), 1 canceled",
+		"Terminal: 1 completed, 0 failed, 0 superseded, 1 canceled",
 		"Active jobs:",
 		"Terminal jobs: 2",
 		"Duration: 45m0s",
@@ -411,36 +411,41 @@ func TestRenderListJobsSummarizesHistory(t *testing.T) {
 	}
 }
 
-// A failed job whose error is retryable is tallied in the waiting bucket, not
-// the failed count, so the headline names only stops that need attention.
-func TestRenderListJobsSeparatesRetryableFailures(t *testing.T) {
+// An earlier failure for a codebase that has a later terminal job is tallied as
+// superseded, not failed, and the entry names the successor.
+func TestRenderListJobsSeparatesSupersededFailures(t *testing.T) {
 	t.Parallel()
+	t0 := renderTestTime
+	older := t0.Add(1 * time.Minute)
+	newer := t0.Add(2 * time.Minute)
 	jobs := []model.Job{
 		{
-			ID:            "job_real_fail",
-			CanonicalPath: "/repo/real",
-			Operation:     "index",
-			State:         model.JobStateFailed,
-			Error:         &model.JobError{Message: "internal error", Retryable: false},
-		},
-		{
-			ID:            "job_retry_a",
+			ID:            "job_old",
+			CodebaseID:    "A",
 			CanonicalPath: "/repo/a",
 			Operation:     "sync",
 			State:         model.JobStateFailed,
+			StartedAt:     t0,
+			CompletedAt:   &older,
 			Error:         &model.JobError{Message: "embedding endpoint is unreachable", Retryable: true},
 		},
 		{
-			ID:            "job_retry_b",
-			CanonicalPath: "/repo/b",
+			ID:            "job_new",
+			CodebaseID:    "A",
+			CanonicalPath: "/repo/a",
 			Operation:     "sync",
 			State:         model.JobStateFailed,
-			Error:         &model.JobError{Message: "embedding endpoint is unreachable", Retryable: true},
+			StartedAt:     t0,
+			CompletedAt:   &newer,
+			Error:         &model.JobError{Message: "internal error", Retryable: false},
 		},
 	}
-	out := renderListJobs(jobs, true)
-	if want := "Terminal: 0 completed, 1 failed, 2 waiting (retryable), 0 canceled"; !strings.Contains(out, want) {
-		t.Fatalf("job list summary did not separate retryable failures, want %q in:\n%s", want, out)
+	out := renderListJobs(jobs, false)
+	if want := "Terminal: 0 completed, 1 failed, 1 superseded, 0 canceled"; !strings.Contains(out, want) {
+		t.Fatalf("summary did not separate superseded from failed, want %q in:\n%s", want, out)
+	}
+	if want := "superseded by job_new"; !strings.Contains(out, want) {
+		t.Fatalf("superseded entry did not name its successor, want %q in:\n%s", want, out)
 	}
 }
 
@@ -455,7 +460,7 @@ func TestRenderGetJobPreparingNotZeroPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0, OverallPercent: 0},
 	}
-	out := renderGetJob(job, false)
+	out := renderGetJob(job, false, "")
 	if !strings.Contains(out, "Progress: Preparing to index") {
 		t.Fatalf("expected preparing label, got:\n%s", out)
 	}
@@ -494,7 +499,7 @@ func TestRenderGetJobSyncPreparingWording(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0},
 	}
-	out := renderGetJob(job, false)
+	out := renderGetJob(job, false, "")
 	if !strings.Contains(out, "Changes detected, preparing to index") {
 		t.Fatalf("expected sync preparing wording, got:\n%s", out)
 	}
@@ -511,7 +516,7 @@ func TestRenderGetJobKeepsRealZeroPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 58, OverallPercent: 0},
 	}
-	out := renderGetJob(job, false)
+	out := renderGetJob(job, false, "")
 	if !strings.Contains(out, "Progress: 0.0%") {
 		t.Fatalf("known-scope zero should render 0.0%%, got:\n%s", out)
 	}
@@ -530,7 +535,7 @@ func TestRenderGetJobShowsMeasuredPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 4292, FilesProcessed: 2139, OverallPercent: 49.8},
 	}
-	out := renderGetJob(job, false)
+	out := renderGetJob(job, false, "")
 	if !strings.Contains(out, "Progress: 49.8%") {
 		t.Fatalf("expected 49.8%%, got:\n%s", out)
 	}
@@ -548,7 +553,7 @@ func TestRenderGetJobFailedShowsPercentAndError(t *testing.T) {
 		Progress:      model.Progress{FilesTotal: 0, OverallPercent: 0},
 		Error:         &model.JobError{Message: "embedder_unreachable: dial tcp [::1]:5400: connect: connection refused"},
 	}
-	out := renderGetJob(job, false)
+	out := renderGetJob(job, false, "")
 	if !strings.Contains(out, "Progress: 0.0%") {
 		t.Fatalf("failed job should show its percent, got:\n%s", out)
 	}

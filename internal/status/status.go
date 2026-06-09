@@ -1,6 +1,10 @@
 package status
 
-import "goodkind.io/lm-semantic-search/internal/model"
+import (
+	"strings"
+
+	"goodkind.io/lm-semantic-search/internal/model"
+)
 
 // Display is the user-facing status a codebase presents. It is derived, never
 // persisted: the registry keeps the lifecycle model.CodebaseStatus, and this
@@ -184,48 +188,64 @@ type JobInputs struct {
 	ErrorMessage string
 	// Dependency is the daemon's shared-dependency health mode.
 	Dependency DependencyMode
+	// SupersededByJobID is the id of the immediate next terminal job for this
+	// job's codebase, or empty when this job is the latest. A failed job with a
+	// successor is superseded.
+	SupersededByJobID string
 }
 
-// JobRetryableCountLabel is the summary-tally word for a failed job that will
-// retry on its own, so the job-list count reads it from the one vocabulary
-// instead of a renderer hard-coding the phrase.
-const JobRetryableCountLabel = "waiting (retryable)"
+// JobSupersededCountLabel is the summary-tally word for a failed job overtaken by
+// a later terminal job, read from the one vocabulary instead of a renderer
+// hard-coding the phrase.
+const JobSupersededCountLabel = "superseded"
 
 // JobSurface is the fully resolved presentation of one job. Every field is
 // decided here so the render layer only formats them; no renderer re-derives a
 // state label or an error echo from the raw job record.
 type JobSurface struct {
-	// StateLabel is the human word for the job state, with a " (retryable)"
-	// suffix when the failure is self-healing.
+	// StateLabel is the comma-joined tag list for the job: the state word, then
+	// "retryable" when the failure is self-healing, then "superseded by <id>"
+	// when a later terminal job overtook it.
 	StateLabel string
 	// ErrorLine is the message a surface shows beneath the job, or empty when the
 	// job has no error or the dependency banner already carries the cause.
 	ErrorLine string
-	// RetryableFailure reports a terminal failure that will retry on its own (a
-	// self-healing shared-infrastructure stop). The job-list summary tallies
-	// these apart from real failures so the headline count is not inflated by
-	// stops that recover automatically.
-	RetryableFailure bool
+	// Superseded reports a failed job overtaken by a later terminal job for the
+	// same codebase. The job-list summary tallies these apart from current
+	// failures.
+	Superseded bool
+	// SupersededByJobID is the successor job id when Superseded, else empty.
+	SupersededByJobID string
 }
 
-// ResolveJob turns the normalized job inputs into the resolved surface. A
-// retryable failure that coincides with a degraded dependency suppresses the
-// error line, because the banner already names that shared-infrastructure cause
-// and a per-job echo would only repeat it; every other error still shows. The
-// state label gains a " (retryable)" suffix whenever the error is self-healing,
-// so a transient stop never reads as a hard failure on any surface.
+// ResolveJob turns the normalized job inputs into the resolved surface. The
+// state label is a comma-joined tag list: the state word, then "retryable" when
+// the error is self-healing, then "superseded by <id>" when a later terminal job
+// overtook this failure. A retryable failure that coincides with a degraded
+// dependency suppresses the error line, because the banner already names that
+// shared-infrastructure cause and a per-job echo would only repeat it; every
+// other error still shows.
 func ResolveJob(in JobInputs) JobSurface {
-	label := JobStateLabelFor(in.State)
+	superseded := in.State == model.JobStateFailed && in.SupersededByJobID != ""
+	tags := []string{JobStateLabelFor(in.State)}
 	if in.Retryable {
-		label += " (retryable)"
+		tags = append(tags, "retryable")
+	}
+	if superseded {
+		tags = append(tags, "superseded by "+in.SupersededByJobID)
 	}
 	errorLine := ""
 	if in.ErrorMessage != "" && (!in.Dependency.Degraded() || !in.Retryable) {
 		errorLine = in.ErrorMessage
 	}
+	supersededBy := ""
+	if superseded {
+		supersededBy = in.SupersededByJobID
+	}
 	return JobSurface{
-		StateLabel:       label,
-		ErrorLine:        errorLine,
-		RetryableFailure: in.State == model.JobStateFailed && in.Retryable,
+		StateLabel:        strings.Join(tags, ", "),
+		ErrorLine:         errorLine,
+		Superseded:        superseded,
+		SupersededByJobID: supersededBy,
 	}
 }
