@@ -28,6 +28,19 @@ const (
 	CodebaseStatusMissing CodebaseStatus = "missing"
 )
 
+// CodebaseKind distinguishes filesystem code indexes from virtual document
+// collections. The empty value is accepted as code for older registry entries
+// written before this field existed.
+type CodebaseKind string
+
+const (
+	// CodebaseKindCode is a filesystem-backed source code collection.
+	CodebaseKindCode CodebaseKind = "code"
+	// CodebaseKindDocument is a virtual document collection with no source
+	// directory on disk.
+	CodebaseKindDocument CodebaseKind = "document"
+)
+
 // JobState captures the lifecycle state of one daemon job.
 type JobState string
 
@@ -156,6 +169,7 @@ type IndexRunFailure struct {
 // path-only file tracking instead of (device, inode, contentHash).
 type Codebase struct {
 	ID                    string           `json:"id"`
+	Kind                  CodebaseKind     `json:"kind,omitempty"`
 	CanonicalPath         string           `json:"canonical_path"`
 	Status                CodebaseStatus   `json:"status"`
 	ActiveJobID           string           `json:"active_job_id,omitempty"`
@@ -211,12 +225,32 @@ type JobEvent struct {
 
 // StoredChunk is one persisted search chunk for a codebase.
 type StoredChunk struct {
-	Content       string `json:"content"`
-	RelativePath  string `json:"relative_path"`
-	StartLine     int32  `json:"start_line"`
-	EndLine       int32  `json:"end_line"`
-	Language      string `json:"language"`
-	FileExtension string `json:"file_extension"`
+	Content        string `json:"content"`
+	RelativePath   string `json:"relative_path"`
+	StartLine      int32  `json:"start_line"`
+	EndLine        int32  `json:"end_line"`
+	Language       string `json:"language"`
+	FileExtension  string `json:"file_extension"`
+	ConversationID string `json:"conversation_id"`
+	// ParentConversationID names the conversation this chunk's conversation
+	// forked from, so a fork can be grouped with its parent. Empty for code
+	// chunks and for conversations with no parent.
+	ParentConversationID string `json:"parent_conversation_id"`
+	MessageIndex         int32  `json:"message_index"`
+	Role                 string `json:"role"`
+	TimestampUnix        int64  `json:"timestamp_unix"`
+}
+
+// ConversationDocument is one caller-provided conversation message chunk.
+type ConversationDocument struct {
+	ConversationID string `json:"conversation_id"`
+	// ParentConversationID names the conversation this one forked from, carried
+	// into chunk metadata so forks group with their parent. Empty when absent.
+	ParentConversationID string `json:"parent_conversation_id"`
+	MessageIndex         int32  `json:"message_index"`
+	Role                 string `json:"role"`
+	TimestampUnix        int64  `json:"timestamp_unix"`
+	Text                 string `json:"text"`
 }
 
 // PathClassificationKind reports the daemon's verdict about one queried path.

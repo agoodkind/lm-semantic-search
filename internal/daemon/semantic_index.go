@@ -12,7 +12,9 @@ import (
 type semanticReader interface {
 	Available() bool
 	CollectionName(codebasePath string) string
+	ConversationCollectionName(collectionID string) string
 	Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error)
+	SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32) ([]model.StoredChunk, error)
 	Count(ctx context.Context, codebasePath string) (int32, error)
 	ListCollections(ctx context.Context) ([]string, error)
 	HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error)
@@ -25,6 +27,8 @@ type semanticWriter interface {
 	Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removedOrModifiedRelativePaths []string, progress func(semantic.Progress), reuse map[string][]float32) error
 	StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removedOrModifiedRelativePaths []string, progress func(semantic.Progress), reuse map[string][]float32) error
 	PromoteStaging(ctx context.Context, codebasePath string) error
+	UpsertConversationChunks(ctx context.Context, collectionName string, chunks []model.StoredChunk, progress func(semantic.Progress)) error
+	DeleteConversation(ctx context.Context, collectionName string, conversationID string) error
 	CopyChunks(ctx context.Context, codebasePath string, srcRelativePath string, dstRelativePath string) (int, error)
 	PruneToCurrent(ctx context.Context, codebasePath string, currentRelativePaths []string) error
 }

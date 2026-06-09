@@ -14,18 +14,24 @@ import (
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/tshash"
 )
 
 // fakeSemantic is a semanticIndex double for converge tests. reindex and
 // copyChunks are the only behaviors a converge exercises; the rest return inert
 // values so the manager treats the backend as available and empty.
 type fakeSemantic struct {
+	unavailable          bool
 	reindex              func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
 	copyChunks           func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
+	upsertConversation   func(ctx context.Context, collectionName string, chunks []model.StoredChunk) error
+	deleteConversation   func(ctx context.Context, collectionName string, conversationID string) error
 	collectionName       func(codebasePath string) string
+	conversationName     func(collectionID string) string
 	listCollections      func(context.Context) ([]string, error)
 	hasCollectionForPath func(context.Context, string) (bool, error)
 	search               func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
+	conversationSearch   func(context.Context, string, string, int32) ([]model.StoredChunk, error)
 	count                func(context.Context, string) (int32, error)
 	// loadReuse, when set, supplies the reuse map a merge-down build receives and
 	// records which collections were asked for. dropped records every Drop call
@@ -37,15 +43,26 @@ type fakeSemantic struct {
 	// reindexEmit, when set, is invoked with the live progress callback during
 	// Reindex so a test can drive reuse-vs-embed progress reporting.
 	reindexEmit func(progress func(semantic.Progress))
-	mu          sync.Mutex
+	// upsertConversationEmit, when set, is invoked with the live progress callback
+	// during UpsertConversationChunks so a test can drive conversation-batch
+	// progress reporting.
+	upsertConversationEmit func(progress func(semantic.Progress))
+	mu                     sync.Mutex
 }
 
-func (f *fakeSemantic) Available() bool { return true }
+func (f *fakeSemantic) Available() bool { return !f.unavailable }
 func (f *fakeSemantic) CollectionName(codebasePath string) string {
 	if f.collectionName != nil {
 		return f.collectionName(codebasePath)
 	}
 	return "code_chunks_test"
+}
+
+func (f *fakeSemantic) ConversationCollectionName(collectionID string) string {
+	if f.conversationName != nil {
+		return f.conversationName(collectionID)
+	}
+	return "conv_chunks_" + tshash.PathPrefix(collectionID)
 }
 
 func (f *fakeSemantic) HasStaging(context.Context, string) (bool, error) {
@@ -55,6 +72,13 @@ func (f *fakeSemantic) HasStaging(context.Context, string) (bool, error) {
 func (f *fakeSemantic) Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error) {
 	if f.search != nil {
 		return f.search(ctx, codebasePath, query, limit, extensionFilter, relativePathPrefix)
+	}
+	return nil, nil
+}
+
+func (f *fakeSemantic) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32) ([]model.StoredChunk, error) {
+	if f.conversationSearch != nil {
+		return f.conversationSearch(ctx, collectionName, query, limit)
 	}
 	return nil, nil
 }
@@ -104,6 +128,23 @@ func (f *fakeSemantic) StageReindex(context.Context, string, []model.StoredChunk
 	return nil
 }
 func (f *fakeSemantic) PromoteStaging(context.Context, string) error { return nil }
+
+func (f *fakeSemantic) UpsertConversationChunks(ctx context.Context, collectionName string, chunks []model.StoredChunk, progress func(semantic.Progress)) error {
+	if f.upsertConversationEmit != nil && progress != nil {
+		f.upsertConversationEmit(progress)
+	}
+	if f.upsertConversation != nil {
+		return f.upsertConversation(ctx, collectionName, chunks)
+	}
+	return nil
+}
+
+func (f *fakeSemantic) DeleteConversation(ctx context.Context, collectionName string, conversationID string) error {
+	if f.deleteConversation != nil {
+		return f.deleteConversation(ctx, collectionName, conversationID)
+	}
+	return nil
+}
 
 func (f *fakeSemantic) CopyChunks(ctx context.Context, codebasePath string, src string, dst string) (int, error) {
 	if f.copyChunks != nil {

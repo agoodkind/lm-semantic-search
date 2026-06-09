@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	daemonclient "goodkind.io/lm-semantic-search/client"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
-	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/response"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -39,7 +39,7 @@ func callDaemon(options cliOptions, call rpcCall) (protoMessage, error) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	connection, client, err := grpcutil.DialDaemon(ctx, options.socketPath)
+	connection, client, err := daemonclient.DialDaemon(ctx, options.socketPath)
 	if err != nil {
 		slog.Error("dial daemon failed", "socket_path", options.socketPath, "err", err)
 		return nil, fmt.Errorf("dial daemon: %w", err)

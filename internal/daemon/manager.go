@@ -42,6 +42,9 @@ const (
 	// replaces chunks file by file through semantic.Reindex, so the existing
 	// Milvus collection stays searchable across the upgrade.
 	jobOperationStreamingReindex jobOperation = "streaming_reindex"
+	// jobOperationConversationIngest upserts or deletes virtual conversation
+	// documents in a document collection.
+	jobOperationConversationIngest jobOperation = "conversation_ingest"
 )
 
 // CodebaseLifecycleHook is the watcher-side interface the manager calls so
@@ -55,16 +58,17 @@ type CodebaseLifecycleHook interface {
 
 // Manager coordinates persisted codebase and job state for the daemon.
 type Manager struct {
-	config         config.Config
-	mu             sync.Mutex
-	codebases      map[string]model.Codebase
-	jobs           map[string]model.Job
-	cancels        map[string]context.CancelFunc
-	done           map[string]chan struct{}
-	runner         indexingRunner
-	semantic       semanticIndex
-	lifecycleHook  CodebaseLifecycleHook
-	lifecycleMutex sync.Mutex
+	config           config.Config
+	mu               sync.Mutex
+	codebases        map[string]model.Codebase
+	jobs             map[string]model.Job
+	conversationJobs map[string]conversationJobPayload
+	cancels          map[string]context.CancelFunc
+	done             map[string]chan struct{}
+	runner           indexingRunner
+	semantic         semanticIndex
+	lifecycleHook    CodebaseLifecycleHook
+	lifecycleMutex   sync.Mutex
 	// indexSlots caps concurrently running index jobs. Each runJob holds one
 	// buffered slot for its duration; jobs that cannot acquire a slot stay
 	// queued until one frees.
@@ -99,19 +103,20 @@ type indexingRunner interface {
 // NewManager loads persisted daemon state from disk.
 func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	manager := &Manager{
-		config:         cfg,
-		mu:             sync.Mutex{},
-		codebases:      map[string]model.Codebase{},
-		jobs:           map[string]model.Job{},
-		cancels:        map[string]context.CancelFunc{},
-		done:           map[string]chan struct{}{},
-		runner:         indexer.NewRunner(),
-		semantic:       nil,
-		lifecycleHook:  nil,
-		lifecycleMutex: sync.Mutex{},
-		indexSlots:     make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
-		syncLock:       newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
-		health:         dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
+		config:           cfg,
+		mu:               sync.Mutex{},
+		codebases:        map[string]model.Codebase{},
+		jobs:             map[string]model.Job{},
+		conversationJobs: map[string]conversationJobPayload{},
+		cancels:          map[string]context.CancelFunc{},
+		done:             map[string]chan struct{}{},
+		runner:           indexer.NewRunner(),
+		semantic:         nil,
+		lifecycleHook:    nil,
+		lifecycleMutex:   sync.Mutex{},
+		indexSlots:       make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
+		syncLock:         newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
+		health:           dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
 	}
 	semanticService, err := semantic.NewService(ctx, cfg)
 	if err != nil {
@@ -132,6 +137,9 @@ func (manager *Manager) load(ctx context.Context) error {
 		return fmt.Errorf("read registry: %w", err)
 	}
 	for _, codebase := range registry.Codebases {
+		if codebase.Kind == "" {
+			codebase.Kind = model.CodebaseKindCode
+		}
 		manager.codebases[codebase.ID] = codebase
 	}
 
@@ -153,6 +161,7 @@ func (manager *Manager) load(ctx context.Context) error {
 // and effective config that resume needs.
 func (manager *Manager) reconcileJournalOnStartLocked() {
 	now := clock.Now()
+	documentCodebaseChanged := false
 	for id, job := range manager.jobs {
 		switch job.State {
 		case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
@@ -176,7 +185,20 @@ func (manager *Manager) reconcileJournalOnStartLocked() {
 		}); err != nil {
 			slog.Error("append orphan recovery event failed", "job_id", id, "err", err)
 		}
+		codebase, found := manager.codebases[job.CodebaseID]
+		if found && codebase.Kind == model.CodebaseKindDocument && codebase.ActiveJobID == id {
+			codebase.Status = model.CodebaseStatusIndexed
+			codebase.ActiveJobID = ""
+			codebase.UpdatedAt = now
+			manager.codebases[codebase.ID] = codebase
+			documentCodebaseChanged = true
+		}
 		slog.Warn("orphan job sanitized in journal after restart", "job_id", id, "codebase_id", job.CodebaseID)
+	}
+	if documentCodebaseChanged {
+		if err := manager.saveLocked(); err != nil {
+			slog.Error("write registry after document orphan recovery failed", "err", err)
+		}
 	}
 }
 
@@ -224,6 +246,7 @@ func (manager *Manager) Version() map[string]string {
 func newCodebaseRecord(canonicalPath string) model.Codebase {
 	return model.Codebase{
 		ID:                newID("cb"),
+		Kind:              model.CodebaseKindCode,
 		CanonicalPath:     canonicalPath,
 		Status:            model.CodebaseStatusNotIndexed,
 		ActiveJobID:       "",
@@ -634,6 +657,7 @@ func (manager *Manager) CancelJob(jobID string) (model.Job, error) {
 	if job.State == model.JobStateCompleted || job.State == model.JobStateFailed || job.State == model.JobStateCancelled {
 		return job, nil
 	}
+	delete(manager.conversationJobs, jobID)
 
 	cancel, found := manager.cancels[jobID]
 	if found {

@@ -18,6 +18,10 @@ service SemanticSearchDaemonService {
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
   rpc WatchJobs(WatchJobsRequest) returns (stream WatchJobsResponse);
   rpc SearchCode(SearchCodeRequest) returns (SearchCodeResponse);
+  rpc RegisterConversationCollection(RegisterConversationCollectionRequest) returns (RegisterConversationCollectionResponse);
+  rpc UpsertConversationDocuments(UpsertConversationDocumentsRequest) returns (UpsertConversationDocumentsResponse);
+  rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
+  rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
@@ -163,6 +167,30 @@ message SearchResult {
   string content = 6;
 }
 
+message ConversationDocument {
+  string conversation_id = 1;
+  int32 message_index = 2;
+  string role = 3;
+  int64 timestamp_unix = 4;
+  string text = 5;
+  // parent_conversation_id names the conversation this one forked from, so the
+  // index can group a fork with its parent. Empty when the conversation has no
+  // parent.
+  string parent_conversation_id = 6;
+}
+
+message ConversationSearchResult {
+  string conversation_id = 1;
+  int32 message_index = 2;
+  string role = 3;
+  int64 timestamp_unix = 4;
+  double score = 5;
+  string content = 6;
+  // parent_conversation_id names the conversation this one forked from, carried
+  // through from the indexed document. Empty when the conversation has no parent.
+  string parent_conversation_id = 7;
+}
+
 message StartIndexRequest {
   string path = 1;
   bool force = 2;
@@ -300,6 +328,51 @@ message SearchCodeResponse {
   Job active_job = 3;
   string display_text = 4;
   DependencyHealth dependency_health = 5;
+}
+
+message RegisterConversationCollectionRequest {
+  string collection_id = 1;
+  ClientInfo client = 2;
+}
+
+message RegisterConversationCollectionResponse {
+  string codebase_id = 1;
+  string collection_name = 2;
+  string display_text = 3;
+}
+
+message UpsertConversationDocumentsRequest {
+  string collection_id = 1;
+  repeated ConversationDocument documents = 2;
+  ClientInfo client = 3;
+}
+
+message UpsertConversationDocumentsResponse {
+  string job_id = 1;
+  string display_text = 2;
+}
+
+message DeleteConversationRequest {
+  string collection_id = 1;
+  string conversation_id = 2;
+  ClientInfo client = 3;
+}
+
+message DeleteConversationResponse {
+  string job_id = 1;
+  string display_text = 2;
+}
+
+message SearchConversationsRequest {
+  string collection_id = 1;
+  string query = 2;
+  int32 limit = 3;
+}
+
+message SearchConversationsResponse {
+  repeated ConversationSearchResult results = 1;
+  string display_text = 2;
+  DependencyHealth dependency_health = 3;
 }
 
 message Diagnostic {

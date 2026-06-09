@@ -24,6 +24,12 @@ type searchView struct {
 	StateNote     string
 }
 
+type conversationSearchView struct {
+	CollectionID string
+	Query        string
+	Results      []model.StoredChunk
+}
+
 type jobPhase string
 
 const (
@@ -71,6 +77,34 @@ func renderStartIndex(requestedPath string, codebase model.Codebase, job model.J
 
 func renderClearIndex(codebase model.Codebase) string {
 	return fmt.Sprintf("Successfully cleared codebase '%s'", codebase.CanonicalPath)
+}
+
+func renderRegisterConversationCollection(collectionID string, codebase model.Codebase) string {
+	return fmt.Sprintf(
+		"Registered conversation collection '%s' as codebase %s using Milvus collection '%s'.",
+		collectionID,
+		codebase.ID,
+		codebase.CollectionName,
+	)
+}
+
+func renderUpsertConversationDocuments(collectionID string, job model.Job, documentCount int) string {
+	return fmt.Sprintf(
+		"Started conversation ingest job %s for collection '%s' with %d %s.",
+		job.ID,
+		collectionID,
+		documentCount,
+		plural("document", documentCount),
+	)
+}
+
+func renderDeleteConversation(collectionID string, conversationID string, job model.Job) string {
+	return fmt.Sprintf(
+		"Started conversation delete job %s for conversation '%s' in collection '%s'.",
+		job.ID,
+		conversationID,
+		collectionID,
+	)
 }
 
 func renderCancelJob(job model.Job) string {
@@ -768,6 +802,30 @@ func renderSearch(view searchView) string {
 	header := fmt.Sprintf("🔍 Found %d results for query: %q in codebase '%s'", len(view.Results), view.Query, view.Codebase.CanonicalPath)
 	body := header + "\n\n" + strings.Join(formatted, "\n\n")
 	return joinSearchSections(view, body, status, resolution, true)
+}
+
+func renderConversationSearch(view conversationSearchView) string {
+	if len(view.Results) == 0 {
+		return fmt.Sprintf("🔍 No conversation results found for query: %q in collection '%s'", view.Query, view.CollectionID)
+	}
+
+	formatted := make([]string, 0, len(view.Results))
+	for index, result := range view.Results {
+		formatted = append(formatted, fmt.Sprintf(
+			"%d. Conversation message [%s]\n   Conversation: %s\n   Message index: %d\n   Role: %s\n   Timestamp Unix: %d\n   Rank: %d\n   Content:\n```\n%s\n```",
+			index+1,
+			view.CollectionID,
+			result.ConversationID,
+			result.MessageIndex,
+			orDefault(result.Role, "unknown"),
+			result.TimestampUnix,
+			index+1,
+			strings.TrimSpace(truncateContent(result.Content, 5000)),
+		))
+	}
+
+	header := fmt.Sprintf("🔍 Found %d conversation results for query: %q in collection '%s'", len(view.Results), view.Query, view.CollectionID)
+	return header + "\n\n" + strings.Join(formatted, "\n\n")
 }
 
 // joinSearchSections appends the identity (resolution), in-progress status, and

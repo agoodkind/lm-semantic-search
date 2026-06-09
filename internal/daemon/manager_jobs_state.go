@@ -40,6 +40,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	if !found {
 		return
 	}
+	delete(manager.conversationJobs, jobID)
 	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStateCancelling {
 		return
 	}
@@ -162,6 +163,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	if !found {
 		return
 	}
+	delete(manager.conversationJobs, jobID)
 
 	traceID := string(correlation.FromContext(ctx).TraceID)
 	now := clock.Now()
@@ -205,7 +207,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 		// pass re-attempts it once the dependency recovers, and the health banner
 		// carries the cause.
 		manager.noteDependencyFailureLocked(runErr)
-	case sourceDirMissing(codebase.CanonicalPath):
+	case codebase.Kind != model.CodebaseKindDocument && sourceDirMissing(codebase.CanonicalPath):
 		// The source directory vanished mid-run. This is not a build failure, so
 		// present it as missing and keep the index in case the directory returns.
 		codebase.Status = model.CodebaseStatusMissing
@@ -235,6 +237,7 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 	if !found {
 		return
 	}
+	delete(manager.conversationJobs, jobID)
 
 	now := clock.Now()
 	metrics.JobCancelled()

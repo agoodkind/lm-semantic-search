@@ -93,3 +93,52 @@ func TestResultSetsToChunksReturnsIncompleteResultError(t *testing.T) {
 		t.Fatalf("resultSetsToChunks returned err=%v", err)
 	}
 }
+
+func TestEncodeMetadataCodeChunkShapeUnchanged(t *testing.T) {
+	t.Parallel()
+
+	emptyMetadata := encodeMetadata(model.StoredChunk{})
+	if emptyMetadata != "{}" {
+		t.Fatalf("empty metadata = %q, want {}", emptyMetadata)
+	}
+
+	languageMetadata := encodeMetadata(model.StoredChunk{Language: "go"})
+	if languageMetadata != `{"language":"go"}` {
+		t.Fatalf("language metadata = %q, want language-only JSON", languageMetadata)
+	}
+}
+
+func TestEncodeDecodeMetadataConversationFields(t *testing.T) {
+	t.Parallel()
+
+	metadata := encodeMetadata(model.StoredChunk{
+		ConversationID:       "thread-alpha",
+		ParentConversationID: "thread-root",
+		MessageIndex:         0,
+		Role:                 "assistant",
+		TimestampUnix:        1712345678,
+	})
+	decoded := decodeMetadata(metadata)
+
+	if decoded.ConversationID != "thread-alpha" {
+		t.Fatalf("ConversationID = %q, want thread-alpha", decoded.ConversationID)
+	}
+	if decoded.ParentConversationID != "thread-root" {
+		t.Fatalf("ParentConversationID = %q, want thread-root", decoded.ParentConversationID)
+	}
+	if decoded.messageIndex() != 0 {
+		t.Fatalf("MessageIndex = %d, want 0", decoded.messageIndex())
+	}
+	if decoded.Role != "assistant" {
+		t.Fatalf("Role = %q, want assistant", decoded.Role)
+	}
+	if decoded.timestampUnix() != 1712345678 {
+		t.Fatalf("TimestampUnix = %d, want 1712345678", decoded.timestampUnix())
+	}
+	if !strings.Contains(metadata, `"message_index":0`) {
+		t.Fatalf("metadata %q omitted zero message_index for a conversation chunk", metadata)
+	}
+	if !strings.Contains(metadata, `"parent_conversation_id":"thread-root"`) {
+		t.Fatalf("metadata %q omitted parent_conversation_id for a forked conversation chunk", metadata)
+	}
+}

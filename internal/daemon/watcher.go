@@ -85,6 +85,10 @@ func (watcher *Watcher) Run(ctx context.Context) {
 // AddCodebase registers a recursive watch for the supplied codebase. Safe
 // to call before or after Run starts. Idempotent per codebase id.
 func (watcher *Watcher) AddCodebase(ctx context.Context, codebase model.Codebase) {
+	if codebase.Kind == model.CodebaseKindDocument {
+		return
+	}
+
 	rules := codebase.ResolvedIgnoreRules
 	if rules.IsEmpty() {
 		// A codebase persisted before the rule tree was introduced (or one

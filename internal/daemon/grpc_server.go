@@ -460,6 +460,128 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	return response, nil
 }
 
+// RegisterConversationCollection reserves the conversation collection RPC surface.
+func (server *GRPCServer) RegisterConversationCollection(ctx context.Context, request *pb.RegisterConversationCollectionRequest) (resp *pb.RegisterConversationCollectionResponse, err error) {
+	ctx, done := beginRPC(ctx, "RegisterConversationCollection")
+	defer done(&err)
+	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
+		return nil, argErr
+	}
+	codebase, callErr := server.manager.RegisterConversationCollection(ctx, request.GetCollectionId())
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, callErr))
+	}
+	return &pb.RegisterConversationCollectionResponse{
+		CodebaseId:     codebase.ID,
+		CollectionName: codebase.CollectionName,
+		DisplayText: appendCorrelationRef(
+			renderRegisterConversationCollection(request.GetCollectionId(), codebase),
+			ctx,
+			"codebase_id",
+			codebase.ID,
+		),
+	}, nil
+}
+
+// UpsertConversationDocuments reserves the conversation document upsert RPC surface.
+func (server *GRPCServer) UpsertConversationDocuments(ctx context.Context, request *pb.UpsertConversationDocumentsRequest) (resp *pb.UpsertConversationDocumentsResponse, err error) {
+	ctx, done := beginRPC(ctx, "UpsertConversationDocuments")
+	defer done(&err)
+	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
+		return nil, argErr
+	}
+	job, callErr := server.manager.upsertConversationDocuments(
+		ctx,
+		request.GetCollectionId(),
+		pbConversationDocuments(request.GetDocuments()),
+		pbClient(request.GetClient()),
+	)
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
+	}
+	return &pb.UpsertConversationDocumentsResponse{
+		JobId: job.ID,
+		DisplayText: appendCorrelationRef(
+			renderUpsertConversationDocuments(request.GetCollectionId(), job, len(request.GetDocuments())),
+			ctx,
+			"codebase_id",
+			job.CodebaseID,
+			"job_id",
+			job.ID,
+		),
+	}, nil
+}
+
+// DeleteConversation reserves the conversation deletion RPC surface.
+func (server *GRPCServer) DeleteConversation(ctx context.Context, request *pb.DeleteConversationRequest) (resp *pb.DeleteConversationResponse, err error) {
+	ctx, done := beginRPC(ctx, "DeleteConversation")
+	defer done(&err)
+	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
+		return nil, argErr
+	}
+	if argErr := requireNonEmpty(ctx, request.GetConversationId(), "conversation_id", false); argErr != nil {
+		return nil, argErr
+	}
+	job, callErr := server.manager.deleteConversation(
+		ctx,
+		request.GetCollectionId(),
+		request.GetConversationId(),
+		pbClient(request.GetClient()),
+	)
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
+	}
+	return &pb.DeleteConversationResponse{
+		JobId: job.ID,
+		DisplayText: appendCorrelationRef(
+			renderDeleteConversation(request.GetCollectionId(), request.GetConversationId(), job),
+			ctx,
+			"codebase_id",
+			job.CodebaseID,
+			"job_id",
+			job.ID,
+		),
+	}, nil
+}
+
+// SearchConversations reserves the conversation search RPC surface.
+func (server *GRPCServer) SearchConversations(ctx context.Context, request *pb.SearchConversationsRequest) (resp *pb.SearchConversationsResponse, err error) {
+	ctx, done := beginRPC(ctx, "SearchConversations")
+	defer done(&err)
+	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
+		return nil, argErr
+	}
+	if argErr := requireNonEmpty(ctx, request.GetQuery(), "query", false); argErr != nil {
+		return nil, argErr
+	}
+	results, callErr := server.manager.SearchConversations(ctx, request.GetCollectionId(), request.GetQuery(), request.GetLimit())
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
+	}
+	health := server.manager.DependencyHealth()
+	response := &pb.SearchConversationsResponse{
+		Results:          make([]*pb.ConversationSearchResult, 0, len(results)),
+		DependencyHealth: toDependencyHealth(health),
+		DisplayText: server.envelopeText(ctx, health, renderConversationSearch(conversationSearchView{
+			CollectionID: request.GetCollectionId(),
+			Query:        request.GetQuery(),
+			Results:      results,
+		})),
+	}
+	for _, result := range results {
+		response.Results = append(response.Results, &pb.ConversationSearchResult{
+			ConversationId:       result.ConversationID,
+			ParentConversationId: result.ParentConversationID,
+			MessageIndex:         result.MessageIndex,
+			Role:                 result.Role,
+			TimestampUnix:        result.TimestampUnix,
+			Score:                0,
+			Content:              result.Content,
+		})
+	}
+	return response, nil
+}
+
 // Doctor reports daemon-local diagnostics.
 func (server *GRPCServer) Doctor(ctx context.Context, request *pb.DoctorRequest) (resp *pb.DoctorResponse, err error) {
 	ctx, done := beginRPC(ctx, "Doctor")
@@ -516,6 +638,24 @@ func pbClient(client *pb.ClientInfo) model.ClientInfo {
 		Name: client.GetName(),
 		PID:  client.GetPid(),
 	}
+}
+
+func pbConversationDocuments(documents []*pb.ConversationDocument) []model.ConversationDocument {
+	result := make([]model.ConversationDocument, 0, len(documents))
+	for _, document := range documents {
+		if document == nil {
+			continue
+		}
+		result = append(result, model.ConversationDocument{
+			ConversationID:       document.GetConversationId(),
+			ParentConversationID: document.GetParentConversationId(),
+			MessageIndex:         document.GetMessageIndex(),
+			Role:                 document.GetRole(),
+			TimestampUnix:        document.GetTimestampUnix(),
+			Text:                 document.GetText(),
+		})
+	}
+	return result
 }
 
 func codebasePointer(found bool, codebase model.Codebase) *model.Codebase {
