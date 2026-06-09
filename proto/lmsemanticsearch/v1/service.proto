@@ -19,6 +19,7 @@ service SemanticSearchDaemonService {
   rpc WatchJobs(WatchJobsRequest) returns (stream WatchJobsResponse);
   rpc SearchCode(SearchCodeRequest) returns (SearchCodeResponse);
   rpc RegisterConversationCollection(RegisterConversationCollectionRequest) returns (RegisterConversationCollectionResponse);
+  rpc SyncConversationManifest(SyncConversationManifestRequest) returns (SyncConversationManifestResponse);
   rpc UpsertConversationDocuments(UpsertConversationDocumentsRequest) returns (UpsertConversationDocumentsResponse);
   rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
@@ -75,6 +76,9 @@ message Progress {
   // distinct from chunks_generated (embedded this run), so total = reused +
   // embedded is visible on the wire.
   int32 chunks_reused = 12;
+  // unit is the human progress noun for the counted items: "file" for a code
+  // index and "document" for a conversation index. Empty reads as "file".
+  string unit = 13;
 }
 
 message JobError {
@@ -349,10 +353,39 @@ message RegisterConversationCollectionResponse {
   string display_text = 3;
 }
 
+// ConversationFingerprint is one conversation id paired with a content
+// fingerprint that changes whenever the conversation's messages change. clyde
+// computes it per conversation; the engine compares it against the stored
+// checkpoint to decide which conversations to re-embed.
+message ConversationFingerprint {
+  string conversation_id = 1;
+  string fingerprint = 2;
+}
+
+message SyncConversationManifestRequest {
+  string collection_id = 1;
+  // manifest lists every current conversation with its content fingerprint, so
+  // the engine can diff against its checkpoint and reply with the ids it needs.
+  repeated ConversationFingerprint manifest = 2;
+  ClientInfo client = 3;
+}
+
+message SyncConversationManifestResponse {
+  // needed_conversation_ids names the conversations new or changed since the
+  // last ingest. clyde sends documents for only these.
+  repeated string needed_conversation_ids = 1;
+  string display_text = 2;
+}
+
 message UpsertConversationDocumentsRequest {
   string collection_id = 1;
   repeated ConversationDocument documents = 2;
   ClientInfo client = 3;
+  // manifest is the full current conversation set with fingerprints. The engine
+  // diffs it against its checkpoint to embed the delivered documents, drop
+  // conversations no longer present, and skip unchanged ones. Empty means the
+  // delivered documents are the complete set and fingerprints are derived.
+  repeated ConversationFingerprint manifest = 4;
 }
 
 message UpsertConversationDocumentsResponse {

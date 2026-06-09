@@ -31,6 +31,7 @@ const (
 	SemanticSearchDaemonService_WatchJobs_FullMethodName                      = "/lmsemanticsearch.v1.SemanticSearchDaemonService/WatchJobs"
 	SemanticSearchDaemonService_SearchCode_FullMethodName                     = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCode"
 	SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterConversationCollection"
+	SemanticSearchDaemonService_SyncConversationManifest_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncConversationManifest"
 	SemanticSearchDaemonService_UpsertConversationDocuments_FullMethodName    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocuments"
 	SemanticSearchDaemonService_DeleteConversation_FullMethodName             = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteConversation"
 	SemanticSearchDaemonService_SearchConversations_FullMethodName            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchConversations"
@@ -54,6 +55,7 @@ type SemanticSearchDaemonServiceClient interface {
 	WatchJobs(ctx context.Context, in *WatchJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchJobsResponse], error)
 	SearchCode(ctx context.Context, in *SearchCodeRequest, opts ...grpc.CallOption) (*SearchCodeResponse, error)
 	RegisterConversationCollection(ctx context.Context, in *RegisterConversationCollectionRequest, opts ...grpc.CallOption) (*RegisterConversationCollectionResponse, error)
+	SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error)
 	UpsertConversationDocuments(ctx context.Context, in *UpsertConversationDocumentsRequest, opts ...grpc.CallOption) (*UpsertConversationDocumentsResponse, error)
 	DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
@@ -198,6 +200,16 @@ func (c *semanticSearchDaemonServiceClient) RegisterConversationCollection(ctx c
 	return out, nil
 }
 
+func (c *semanticSearchDaemonServiceClient) SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncConversationManifestResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_SyncConversationManifest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *semanticSearchDaemonServiceClient) UpsertConversationDocuments(ctx context.Context, in *UpsertConversationDocumentsRequest, opts ...grpc.CallOption) (*UpsertConversationDocumentsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpsertConversationDocumentsResponse)
@@ -264,6 +276,7 @@ type SemanticSearchDaemonServiceServer interface {
 	WatchJobs(*WatchJobsRequest, grpc.ServerStreamingServer[WatchJobsResponse]) error
 	SearchCode(context.Context, *SearchCodeRequest) (*SearchCodeResponse, error)
 	RegisterConversationCollection(context.Context, *RegisterConversationCollectionRequest) (*RegisterConversationCollectionResponse, error)
+	SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error)
 	UpsertConversationDocuments(context.Context, *UpsertConversationDocumentsRequest) (*UpsertConversationDocumentsResponse, error)
 	DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
@@ -313,6 +326,9 @@ func (UnimplementedSemanticSearchDaemonServiceServer) SearchCode(context.Context
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) RegisterConversationCollection(context.Context, *RegisterConversationCollectionRequest) (*RegisterConversationCollectionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterConversationCollection not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SyncConversationManifest not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) UpsertConversationDocuments(context.Context, *UpsertConversationDocumentsRequest) (*UpsertConversationDocumentsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpsertConversationDocuments not implemented")
@@ -558,6 +574,24 @@ func _SemanticSearchDaemonService_RegisterConversationCollection_Handler(srv int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SemanticSearchDaemonService_SyncConversationManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncConversationManifestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).SyncConversationManifest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_SyncConversationManifest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).SyncConversationManifest(ctx, req.(*SyncConversationManifestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SemanticSearchDaemonService_UpsertConversationDocuments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpsertConversationDocumentsRequest)
 	if err := dec(in); err != nil {
@@ -698,6 +732,10 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RegisterConversationCollection",
 			Handler:    _SemanticSearchDaemonService_RegisterConversationCollection_Handler,
+		},
+		{
+			MethodName: "SyncConversationManifest",
+			Handler:    _SemanticSearchDaemonService_SyncConversationManifest_Handler,
 		},
 		{
 			MethodName: "UpsertConversationDocuments",
