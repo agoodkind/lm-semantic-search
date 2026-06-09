@@ -396,7 +396,7 @@ func TestRenderListJobsSummarizesHistory(t *testing.T) {
 	for _, want := range []string{
 		"Tracked jobs: 3 total",
 		"Active: 0 queued, 1 running, 0 canceling",
-		"Terminal: 1 completed, 0 failed, 1 canceled",
+		"Terminal: 1 completed, 0 failed, 0 waiting (retryable), 1 canceled",
 		"Active jobs:",
 		"Terminal jobs: 2",
 		"Duration: 45m0s",
@@ -408,6 +408,39 @@ func TestRenderListJobsSummarizesHistory(t *testing.T) {
 	}
 	if strings.Contains(out, "[cancelled") {
 		t.Fatalf("job list should use American spelling for states, got:\n%s", out)
+	}
+}
+
+// A failed job whose error is retryable is tallied in the waiting bucket, not
+// the failed count, so the headline names only stops that need attention.
+func TestRenderListJobsSeparatesRetryableFailures(t *testing.T) {
+	t.Parallel()
+	jobs := []model.Job{
+		{
+			ID:            "job_real_fail",
+			CanonicalPath: "/repo/real",
+			Operation:     "index",
+			State:         model.JobStateFailed,
+			Error:         &model.JobError{Message: "internal error", Retryable: false},
+		},
+		{
+			ID:            "job_retry_a",
+			CanonicalPath: "/repo/a",
+			Operation:     "sync",
+			State:         model.JobStateFailed,
+			Error:         &model.JobError{Message: "embedding endpoint is unreachable", Retryable: true},
+		},
+		{
+			ID:            "job_retry_b",
+			CanonicalPath: "/repo/b",
+			Operation:     "sync",
+			State:         model.JobStateFailed,
+			Error:         &model.JobError{Message: "embedding endpoint is unreachable", Retryable: true},
+		},
+	}
+	out := renderListJobs(jobs, true)
+	if want := "Terminal: 0 completed, 1 failed, 2 waiting (retryable), 0 canceled"; !strings.Contains(out, want) {
+		t.Fatalf("job list summary did not separate retryable failures, want %q in:\n%s", want, out)
 	}
 }
 

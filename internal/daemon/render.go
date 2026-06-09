@@ -601,8 +601,12 @@ func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 	activeJobs := make([]model.Job, 0, len(jobs))
 	terminalJobs := make([]model.Job, 0, len(jobs))
 	stateCounts := map[model.JobState]int{}
+	retryableFailures := 0
 	for _, job := range jobs {
 		stateCounts[job.State]++
+		if resolveJobSurface(job, pipelineDegraded).RetryableFailure {
+			retryableFailures++
+		}
 		switch job.State {
 		case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
 			activeJobs = append(activeJobs, job)
@@ -621,10 +625,14 @@ func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 		stateCounts[model.JobStateRunning],
 		stateCounts[model.JobStateCancelling],
 	))
+	// A retryable failure recovers on its own, so it is tallied apart from real
+	// failures: the headline "failed" count names only stops that need attention.
 	lines = append(lines, fmt.Sprintf(
-		"Terminal: %d completed, %d failed, %d canceled",
+		"Terminal: %d completed, %d failed, %d %s, %d canceled",
 		stateCounts[model.JobStateCompleted],
-		stateCounts[model.JobStateFailed],
+		stateCounts[model.JobStateFailed]-retryableFailures,
+		retryableFailures,
+		status.JobRetryableCountLabel,
 		stateCounts[model.JobStateCancelled],
 	))
 

@@ -186,6 +186,11 @@ type JobInputs struct {
 	Dependency DependencyMode
 }
 
+// JobRetryableCountLabel is the summary-tally word for a failed job that will
+// retry on its own, so the job-list count reads it from the one vocabulary
+// instead of a renderer hard-coding the phrase.
+const JobRetryableCountLabel = "waiting (retryable)"
+
 // JobSurface is the fully resolved presentation of one job. Every field is
 // decided here so the render layer only formats them; no renderer re-derives a
 // state label or an error echo from the raw job record.
@@ -196,6 +201,11 @@ type JobSurface struct {
 	// ErrorLine is the message a surface shows beneath the job, or empty when the
 	// job has no error or the dependency banner already carries the cause.
 	ErrorLine string
+	// RetryableFailure reports a terminal failure that will retry on its own (a
+	// self-healing shared-infrastructure stop). The job-list summary tallies
+	// these apart from real failures so the headline count is not inflated by
+	// stops that recover automatically.
+	RetryableFailure bool
 }
 
 // ResolveJob turns the normalized job inputs into the resolved surface. A
@@ -213,5 +223,9 @@ func ResolveJob(in JobInputs) JobSurface {
 	if in.ErrorMessage != "" && (!in.Dependency.Degraded() || !in.Retryable) {
 		errorLine = in.ErrorMessage
 	}
-	return JobSurface{StateLabel: label, ErrorLine: errorLine}
+	return JobSurface{
+		StateLabel:       label,
+		ErrorLine:        errorLine,
+		RetryableFailure: in.State == model.JobStateFailed && in.Retryable,
+	}
 }
