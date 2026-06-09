@@ -150,3 +150,79 @@ func TestStateNoteForEveryOutcome(t *testing.T) {
 		}
 	}
 }
+
+// Every job state maps to a non-empty word, cancelling and cancelled use the
+// American spellings, and an unknown state falls back to its raw token.
+func TestJobStateLabelForCoversEveryState(t *testing.T) {
+	t.Parallel()
+	for _, state := range []model.JobState{
+		model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling,
+		model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled,
+	} {
+		if JobStateLabelFor(state) == "" {
+			t.Errorf("%s: empty job state label", state)
+		}
+	}
+	if got := JobStateLabelFor(model.JobStateCancelling); got != "canceling" {
+		t.Errorf("cancelling label = %q, want canceling", got)
+	}
+	if got := JobStateLabelFor(model.JobStateCancelled); got != "canceled" {
+		t.Errorf("cancelled label = %q, want canceled", got)
+	}
+	if got := JobStateLabelFor(model.JobState("bogus")); got != "bogus" {
+		t.Errorf("unknown state should fall back to its raw token, got %q", got)
+	}
+}
+
+// ResolveJob adds the retryable suffix to a self-healing failure, and suppresses
+// the error echo only when a retryable failure coincides with a degraded
+// dependency, since the banner then already carries the cause.
+func TestResolveJob(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		in        JobInputs
+		wantLabel string
+		wantError string
+	}{
+		{
+			"running healthy",
+			JobInputs{State: model.JobStateRunning},
+			"running", "",
+		},
+		{
+			"completed healthy",
+			JobInputs{State: model.JobStateCompleted},
+			"completed", "",
+		},
+		{
+			"retryable failure, healthy, shows error",
+			JobInputs{State: model.JobStateFailed, Retryable: true, ErrorMessage: "embedding endpoint is unreachable"},
+			"failed (retryable)", "embedding endpoint is unreachable",
+		},
+		{
+			"retryable failure, degraded, suppresses echo",
+			JobInputs{State: model.JobStateFailed, Retryable: true, ErrorMessage: "embedding endpoint is unreachable", Dependency: EmbedderUnreachable},
+			"failed (retryable)", "",
+		},
+		{
+			"local failure, degraded, still shows error",
+			JobInputs{State: model.JobStateFailed, Retryable: false, ErrorMessage: "internal error", Dependency: EmbedderUnreachable},
+			"failed", "internal error",
+		},
+		{
+			"local failure, healthy, shows error",
+			JobInputs{State: model.JobStateFailed, ErrorMessage: "internal error"},
+			"failed", "internal error",
+		},
+	}
+	for _, testCase := range cases {
+		got := ResolveJob(testCase.in)
+		if got.StateLabel != testCase.wantLabel {
+			t.Errorf("%s: StateLabel = %q, want %q", testCase.name, got.StateLabel, testCase.wantLabel)
+		}
+		if got.ErrorLine != testCase.wantError {
+			t.Errorf("%s: ErrorLine = %q, want %q", testCase.name, got.ErrorLine, testCase.wantError)
+		}
+	}
+}
