@@ -8,9 +8,7 @@ import (
 	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
-	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
-	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
 
@@ -57,73 +55,49 @@ func TestRegisterConversationCollectionIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestUpdateConversationJobBatchProgressAdvancesRunningJob proves one embedding
-// batch emission moves a running conversation job off 0%: the percent reflects
-// the batch fraction, the written rows and chunk total carry over, and the
-// heartbeat advances so the job no longer reads as frozen.
-func TestUpdateConversationJobBatchProgressAdvancesRunningJob(t *testing.T) {
+// TestConversationManifestSyncReturnsNeededIDs proves the manifest diff: a first
+// sync needs every conversation, a re-sync with one changed fingerprint needs
+// only that conversation, and an unchanged re-sync needs none. This is the
+// engine owning drift so clyde holds no change-tracking state.
+func TestConversationManifestSyncReturnsNeededIDs(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
-	cfg := defaultIndexConfig()
-	job := newQueuedJob("cb-conv", "chat:///conv", "chat:///conv", testClientInfo(), string(jobOperationConversationIngest), false, cfg, clock.Now())
-	job.State = model.JobStateRunning
-	manager.mu.Lock()
-	manager.jobs[job.ID] = job
-	manager.mu.Unlock()
+	manager.semantic = &fakeSemantic{unavailable: true}
+	ctx := context.Background()
+	collectionID := "thread-manifest"
 
-	manager.updateConversationJobBatchProgress(job.ID, semantic.Progress{
-		Phase:                     "Generating conversation embeddings...",
-		EmbeddingBatchesTotal:     4,
-		EmbeddingBatchesCompleted: 2,
-		CollectionRowsWritten:     64,
-		ChunksReused:              10,
-		ChunksEmbedded:            54,
-	})
+	needed, err := manager.SyncConversationManifest(ctx, collectionID, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"})
+	if err != nil {
+		t.Fatalf("first SyncConversationManifest returned error: %v", err)
+	}
+	if len(needed) != 2 {
+		t.Fatalf("first sync needed %d ids, want 2", len(needed))
+	}
 
-	got, found := manager.GetJob(job.ID)
-	if !found {
-		t.Fatalf("GetJob(%s) not found", job.ID)
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
+		{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "alpha"},
+		{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "beta"},
+	}, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"}, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
-	if got.Progress.OverallPercent != 50 {
-		t.Fatalf("OverallPercent = %v, want 50", got.Progress.OverallPercent)
-	}
-	if got.Progress.CollectionRowsWritten != 64 {
-		t.Fatalf("CollectionRowsWritten = %d, want 64", got.Progress.CollectionRowsWritten)
-	}
-	if got.Progress.ChunksGenerated != 64 {
-		t.Fatalf("ChunksGenerated = %d, want 64", got.Progress.ChunksGenerated)
-	}
-	if got.Progress.HeartbeatAt.IsZero() {
-		t.Fatal("HeartbeatAt is zero, want a moved heartbeat")
-	}
-}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
 
-// TestUpdateConversationJobBatchProgressIgnoresTerminalJob proves a batch
-// emission never resurrects a completed job, so progress reporting cannot
-// overwrite a terminal state.
-func TestUpdateConversationJobBatchProgressIgnoresTerminalJob(t *testing.T) {
-	t.Parallel()
-
-	manager, _, _ := newTestManager(t)
-	cfg := defaultIndexConfig()
-	job := newQueuedJob("cb-conv", "chat:///conv", "chat:///conv", testClientInfo(), string(jobOperationConversationIngest), false, cfg, clock.Now())
-	job.State = model.JobStateCompleted
-	manager.mu.Lock()
-	manager.jobs[job.ID] = job
-	manager.mu.Unlock()
-
-	manager.updateConversationJobBatchProgress(job.ID, semantic.Progress{EmbeddingBatchesTotal: 4, EmbeddingBatchesCompleted: 2, CollectionRowsWritten: 64})
-
-	got, found := manager.GetJob(job.ID)
-	if !found {
-		t.Fatalf("GetJob(%s) not found", job.ID)
+	needed, err = manager.SyncConversationManifest(ctx, collectionID, map[string]string{"conv-a": "fp-a-2", "conv-b": "fp-b-1"})
+	if err != nil {
+		t.Fatalf("second SyncConversationManifest returned error: %v", err)
 	}
-	if got.State != model.JobStateCompleted {
-		t.Fatalf("State = %q, want completed", got.State)
+	if len(needed) != 1 || needed[0] != "conv-a" {
+		t.Fatalf("second sync needed %v, want [conv-a]", needed)
 	}
-	if got.Progress.OverallPercent != 0 {
-		t.Fatalf("OverallPercent = %v, want 0 (untouched)", got.Progress.OverallPercent)
+
+	needed, err = manager.SyncConversationManifest(ctx, collectionID, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"})
+	if err != nil {
+		t.Fatalf("third SyncConversationManifest returned error: %v", err)
+	}
+	if len(needed) != 0 {
+		t.Fatalf("unchanged re-sync needed %v, want none", needed)
 	}
 }
 
@@ -330,7 +304,8 @@ func TestConversationIngestMaintainsChunkCache(t *testing.T) {
 		t.Fatalf("RegisterConversationCollection returned error: %v", err)
 	}
 
-	firstJob, err := manager.UpsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
+	firstManifest := map[string]string{"conv-alpha": "alpha-1", "conv-beta": "beta-1"}
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{
 			ConversationID: "conv-alpha",
 			MessageIndex:   0,
@@ -345,9 +320,9 @@ func TestConversationIngestMaintainsChunkCache(t *testing.T) {
 			TimestampUnix:  1712345001,
 			Text:           "beta cache entry",
 		},
-	})
+	}, firstManifest, testClientInfo())
 	if err != nil {
-		t.Fatalf("UpsertConversationDocuments returned error: %v", err)
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
 	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
 
@@ -356,15 +331,19 @@ func TestConversationIngestMaintainsChunkCache(t *testing.T) {
 		t.Fatalf("first cache write stored %d chunks, want 2", len(chunks))
 	}
 
-	secondJob, err := manager.UpsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{{
+	// conv-beta is unchanged, so its fingerprint stays and clyde sends no
+	// document for it. conv-alpha changed, so only its document is delivered. The
+	// merge must keep conv-beta's prior chunk and replace conv-alpha's.
+	secondManifest := map[string]string{"conv-alpha": "alpha-2", "conv-beta": "beta-1"}
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{{
 		ConversationID: "conv-alpha",
 		MessageIndex:   1,
 		Role:           "assistant",
 		TimestampUnix:  1712345002,
 		Text:           "fresh needle cache entry",
-	}})
+	}}, secondManifest, testClientInfo())
 	if err != nil {
-		t.Fatalf("second UpsertConversationDocuments returned error: %v", err)
+		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
 	}
 	waitForConversationJobState(t, manager, secondJob.ID, model.JobStateCompleted)
 
@@ -523,10 +502,16 @@ func TestConversationRPCsQueueJournaledJobs(t *testing.T) {
 	upsertedChunks := make(chan []model.StoredChunk, 1)
 	deletedConversation := make(chan string, 1)
 	manager.semantic = &fakeSemantic{
-		upsertConversation: func(ctx context.Context, collectionName string, chunks []model.StoredChunk) error {
+		reindex: func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error {
 			_ = ctx
-			_ = collectionName
-			upsertedChunks <- append([]model.StoredChunk{}, chunks...)
+			_ = codebasePath
+			_ = removed
+			if len(chunks) > 0 {
+				select {
+				case upsertedChunks <- append([]model.StoredChunk{}, chunks...):
+				default:
+				}
+			}
 			return nil
 		},
 		deleteConversation: func(ctx context.Context, collectionName string, conversationID string) error {

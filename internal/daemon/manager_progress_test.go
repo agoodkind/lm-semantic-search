@@ -55,13 +55,13 @@ func TestDeltaProgressAccumulatesReuseSplit(t *testing.T) {
 
 	for _, relativePath := range []string{"a.go", "b.go"} {
 		chunks := []model.StoredChunk{{Content: "x", RelativePath: relativePath}}
-		if outcome := manager.applyReindexForState(context.Background(), job, state, chunks, []string{relativePath}, "test reindex"); outcome.fallback || outcome.handled {
+		if outcome := manager.applyReindexForState(context.Background(), job, state, chunks, semantic.RemovePaths([]string{relativePath}), "test reindex"); outcome.fallback || outcome.handled {
 			t.Fatalf("applyReindexForState returned terminal outcome %+v", outcome)
 		}
 	}
 
 	reused, embedded := state.chunkSplit()
-	manager.reportDeltaProgress(job.ID, 2, 2, 2, indexer.Result{IndexedFiles: 2, TotalChunks: 7461}, reused, embedded)
+	manager.reportDeltaProgress(job.ID, 2, 2, 2, indexer.Result{IndexedFiles: 2, TotalChunks: 7461}, reused, embedded, "file")
 
 	got, found := manager.GetJob(job.ID)
 	if !found {

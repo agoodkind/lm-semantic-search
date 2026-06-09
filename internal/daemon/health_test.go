@@ -58,13 +58,13 @@ func TestNoOpCompletionKeepsBanner(t *testing.T) {
 	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable}
 	manager.mu.Unlock()
 
-	manager.updateJobCompleted(job.ID, indexer.Result{IndexedFiles: 0, TotalChunks: 0})
+	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 0, TotalChunks: 0})
 
 	if !manager.DependencyHealth().Degraded() {
 		t.Fatal("a no-op completion cleared the banner; want it kept during the outage")
 	}
 
-	manager.updateJobCompleted(job.ID, indexer.Result{IndexedFiles: 3, TotalChunks: 12})
+	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 3, TotalChunks: 12})
 
 	if manager.DependencyHealth().Degraded() {
 		t.Fatal("a completion that embedded did not clear the banner")
@@ -90,12 +90,12 @@ func TestEmbedProgressClearsBanner(t *testing.T) {
 	manager.health = dependencyHealth{Mode: dependencyEmbedderBusy}
 	manager.mu.Unlock()
 
-	manager.updateJobProgress(job.ID, indexer.Progress{FilesTotal: 10, FilesProcessed: 1, FilesEmbedded: 0})
+	manager.updateJobProgress(job.ID, indexer.Progress{FilesTotal: 10, FilesProcessed: 1, FilesEmbedded: 0}, "file")
 	if !manager.DependencyHealth().Degraded() {
 		t.Fatal("a no-embed progress update cleared the banner; want it kept")
 	}
 
-	manager.updateJobProgress(job.ID, indexer.Progress{FilesTotal: 10, FilesProcessed: 2, FilesEmbedded: 1})
+	manager.updateJobProgress(job.ID, indexer.Progress{FilesTotal: 10, FilesProcessed: 2, FilesEmbedded: 1}, "file")
 	if manager.DependencyHealth().Degraded() {
 		t.Fatal("an embed-progress update did not clear the banner")
 	}
@@ -132,7 +132,7 @@ func TestDependencyHealthFollowsJobOutcomes(t *testing.T) {
 		t.Fatal("health Since is zero after degrading, want a timestamp")
 	}
 
-	manager.updateJobCompleted(job.ID, indexer.Result{IndexedFiles: 1, TotalChunks: 1})
+	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 1, TotalChunks: 1})
 
 	if manager.DependencyHealth().Degraded() {
 		t.Fatal("health still degraded after a completed job, want cleared")

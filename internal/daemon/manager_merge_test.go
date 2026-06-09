@@ -76,7 +76,7 @@ func TestMergeDownReusesAndAbsorbsIndexedChild(t *testing.T) {
 	registerIndexedChild(manager, childID, childCanonical, cfg, childCollection)
 
 	_, job := seedBootstrapCodebase(t, manager, parentCanonical, cfg)
-	manager.runBootstrap(context.Background(), job)
+	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, job.CanonicalPath, job.Config))
 
 	fake.mu.Lock()
 	reuseCalls := fake.reuseCollections
