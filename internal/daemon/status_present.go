@@ -57,10 +57,16 @@ func resolveJobSurface(job model.Job, pipelineDegraded bool) status.JobSurface {
 	if pipelineDegraded {
 		dependency = status.EmbedderBusy
 	}
-	jobInputs := status.JobInputs{State: job.State, Dependency: dependency}
+	retryable := false
+	errorMessage := ""
 	if job.Error != nil {
-		jobInputs.Retryable = job.Error.Retryable
-		jobInputs.ErrorMessage = strings.TrimSpace(job.Error.Message)
+		retryable = job.Error.Retryable
+		errorMessage = strings.TrimSpace(job.Error.Message)
 	}
-	return status.ResolveJob(jobInputs)
+	return status.ResolveJob(status.JobInputs{
+		State:        job.State,
+		Retryable:    retryable,
+		ErrorMessage: errorMessage,
+		Dependency:   dependency,
+	})
 }

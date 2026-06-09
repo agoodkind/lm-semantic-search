@@ -156,6 +156,14 @@ message Job {
   // trigger names what started the run ("initial_build", "forced_reindex", or
   // "changed_files"), derived from the operation and the force flag.
   string trigger = 15;
+  // display_state is the daemon-resolved presentation label for the job (for
+  // example "failed (retryable)"), the authoritative status every surface
+  // renders. state (field 7) stays the raw lifecycle value for machine parsing.
+  string display_state = 16;
+  // display_error is the resolved error line a surface shows beneath the job, or
+  // empty when the job has no error or a degraded-dependency banner already
+  // carries the cause. error (field 13) stays the raw error for machine parsing.
+  string display_error = 17;
 }
 
 message SearchResult {

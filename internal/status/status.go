@@ -210,7 +210,7 @@ func ResolveJob(in JobInputs) JobSurface {
 		label += " (retryable)"
 	}
 	errorLine := ""
-	if in.ErrorMessage != "" && !(in.Dependency.Degraded() && in.Retryable) {
+	if in.ErrorMessage != "" && (!in.Dependency.Degraded() || !in.Retryable) {
 		errorLine = in.ErrorMessage
 	}
 	return JobSurface{StateLabel: label, ErrorLine: errorLine}
