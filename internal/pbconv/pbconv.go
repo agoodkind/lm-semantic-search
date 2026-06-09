@@ -136,14 +136,6 @@ func jobTrigger(job model.Job) string {
 	return triggerChangedFiles
 }
 
-// ToJobPointer converts an optional daemon job into protobuf form.
-func ToJobPointer(job *model.Job) *pb.Job {
-	if job == nil {
-		return nil
-	}
-	return ToJob(*job)
-}
-
 func toIndexConfig(config model.IndexConfig) *pb.IndexConfig {
 	return &pb.IndexConfig{
 		SplitterType:       config.SplitterType,

@@ -836,7 +836,7 @@ func TestRenderHistoricalFailureIncludesCorrelationIds(t *testing.T) {
 			JobID:                   "job-xyz",
 		},
 	}
-	out := renderHistoricalFailure(&codebase)
+	out := renderHistoricalFailure(&codebase, resolveCodebaseFailure(codebase))
 	if !strings.Contains(out, "trace_id=trace-abc") {
 		t.Fatalf("render output missing trace_id; got %q", out)
 	}
@@ -861,7 +861,7 @@ func TestRenderStaleStatusIncludesRepairReason(t *testing.T) {
 			JobID:                   "job-xyz",
 		},
 	}
-	out := renderStaleStatus(&codebase)
+	out := renderStaleStatus(&codebase, resolveCodebaseFailure(codebase))
 	if !strings.Contains(out, "is stale") {
 		t.Fatalf("render output missing stale marker; got %q", out)
 	}

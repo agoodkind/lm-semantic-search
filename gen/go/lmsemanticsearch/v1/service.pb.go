@@ -989,7 +989,15 @@ type Job struct {
 	Forced bool `protobuf:"varint,14,opt,name=forced,proto3" json:"forced,omitempty"`
 	// trigger names what started the run ("initial_build", "forced_reindex", or
 	// "changed_files"), derived from the operation and the force flag.
-	Trigger       string `protobuf:"bytes,15,opt,name=trigger,proto3" json:"trigger,omitempty"`
+	Trigger string `protobuf:"bytes,15,opt,name=trigger,proto3" json:"trigger,omitempty"`
+	// display_state is the daemon-resolved presentation label for the job (for
+	// example "failed (retryable)"), the authoritative status every surface
+	// renders. state (field 7) stays the raw lifecycle value for machine parsing.
+	DisplayState string `protobuf:"bytes,16,opt,name=display_state,json=displayState,proto3" json:"display_state,omitempty"`
+	// display_error is the resolved error line a surface shows beneath the job, or
+	// empty when the job has no error or a degraded-dependency banner already
+	// carries the cause. error (field 13) stays the raw error for machine parsing.
+	DisplayError  string `protobuf:"bytes,17,opt,name=display_error,json=displayError,proto3" json:"display_error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1125,6 +1133,20 @@ func (x *Job) GetForced() bool {
 func (x *Job) GetTrigger() string {
 	if x != nil {
 		return x.Trigger
+	}
+	return ""
+}
+
+func (x *Job) GetDisplayState() string {
+	if x != nil {
+		return x.DisplayState
+	}
+	return ""
+}
+
+func (x *Job) GetDisplayError() string {
+	if x != nil {
+		return x.DisplayError
 	}
 	return ""
 }
@@ -3432,7 +3454,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0edisplay_status\x18\x0e \x01(\tR\rdisplayStatus\x12\x1f\n" +
 	"\vglyph_token\x18\x0f \x01(\tR\n" +
 	"glyphToken\x12!\n" +
-	"\fstatus_label\x18\x10 \x01(\tR\vstatusLabelJ\x04\b\x03\x10\x04R\aaliases\"\x82\x05\n" +
+	"\fstatus_label\x18\x10 \x01(\tR\vstatusLabelJ\x04\b\x03\x10\x04R\aaliases\"\xcc\x05\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
@@ -3452,7 +3474,9 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\fcompleted_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x123\n" +
 	"\x05error\x18\r \x01(\v2\x1d.lmsemanticsearch.v1.JobErrorR\x05error\x12\x16\n" +
 	"\x06forced\x18\x0e \x01(\bR\x06forced\x12\x18\n" +
-	"\atrigger\x18\x0f \x01(\tR\atrigger\"\xb9\x01\n" +
+	"\atrigger\x18\x0f \x01(\tR\atrigger\x12#\n" +
+	"\rdisplay_state\x18\x10 \x01(\tR\fdisplayState\x12#\n" +
+	"\rdisplay_error\x18\x11 \x01(\tR\fdisplayError\"\xb9\x01\n" +
 	"\fSearchResult\x12#\n" +
 	"\rrelative_path\x18\x01 \x01(\tR\frelativePath\x12\x1d\n" +
 	"\n" +

@@ -147,3 +147,85 @@ func Resolve(in Inputs) Surface {
 		StateNote:      StateNoteFor(in.Search),
 	}
 }
+
+// jobStateWordByState maps a persisted job state to its human word. The
+// cancelling and cancelled states use the American spellings the surfaces show.
+var jobStateWordByState = map[model.JobState]string{
+	model.JobStateQueued:     "queued",
+	model.JobStateRunning:    "running",
+	model.JobStateCancelling: "canceling",
+	model.JobStateCompleted:  "completed",
+	model.JobStateFailed:     "failed",
+	model.JobStateCancelled:  "canceled",
+}
+
+// JobStateLabelFor returns the human word for a job state, falling back to the
+// raw token for an unrecognized value. It is the only place a job state becomes
+// a word, so every job surface reads the same vocabulary.
+func JobStateLabelFor(state model.JobState) string {
+	if word, ok := jobStateWordByState[state]; ok {
+		return word
+	}
+	return string(state)
+}
+
+// JobInputs is the normalized snapshot for one job's presentation. Like Inputs
+// for a codebase, it carries only the facts the resolver needs, already reduced
+// from the raw record, so the render layer never inspects a model.Job to decide
+// how the job reads.
+type JobInputs struct {
+	// State is the persisted job state.
+	State model.JobState
+	// Retryable reports whether the job's error is self-healing, which makes a
+	// failure read as a transient stop rather than a hard failure.
+	Retryable bool
+	// ErrorMessage is the sanitized, client-safe message for the job's error, or
+	// empty when the job carries no error.
+	ErrorMessage string
+	// Dependency is the daemon's shared-dependency health mode.
+	Dependency DependencyMode
+}
+
+// JobRetryableCountLabel is the summary-tally word for a failed job that will
+// retry on its own, so the job-list count reads it from the one vocabulary
+// instead of a renderer hard-coding the phrase.
+const JobRetryableCountLabel = "waiting (retryable)"
+
+// JobSurface is the fully resolved presentation of one job. Every field is
+// decided here so the render layer only formats them; no renderer re-derives a
+// state label or an error echo from the raw job record.
+type JobSurface struct {
+	// StateLabel is the human word for the job state, with a " (retryable)"
+	// suffix when the failure is self-healing.
+	StateLabel string
+	// ErrorLine is the message a surface shows beneath the job, or empty when the
+	// job has no error or the dependency banner already carries the cause.
+	ErrorLine string
+	// RetryableFailure reports a terminal failure that will retry on its own (a
+	// self-healing shared-infrastructure stop). The job-list summary tallies
+	// these apart from real failures so the headline count is not inflated by
+	// stops that recover automatically.
+	RetryableFailure bool
+}
+
+// ResolveJob turns the normalized job inputs into the resolved surface. A
+// retryable failure that coincides with a degraded dependency suppresses the
+// error line, because the banner already names that shared-infrastructure cause
+// and a per-job echo would only repeat it; every other error still shows. The
+// state label gains a " (retryable)" suffix whenever the error is self-healing,
+// so a transient stop never reads as a hard failure on any surface.
+func ResolveJob(in JobInputs) JobSurface {
+	label := JobStateLabelFor(in.State)
+	if in.Retryable {
+		label += " (retryable)"
+	}
+	errorLine := ""
+	if in.ErrorMessage != "" && (!in.Dependency.Degraded() || !in.Retryable) {
+		errorLine = in.ErrorMessage
+	}
+	return JobSurface{
+		StateLabel:       label,
+		ErrorLine:        errorLine,
+		RetryableFailure: in.State == model.JobStateFailed && in.Retryable,
+	}
+}

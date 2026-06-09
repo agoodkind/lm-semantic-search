@@ -8,6 +8,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/status"
 )
 
 const (
@@ -111,7 +112,7 @@ func renderCancelJob(job model.Job) string {
 	if job.State == model.JobStateCancelled {
 		return "Canceled indexing job " + job.ID
 	}
-	return fmt.Sprintf("Indexing job %s is already %s", job.ID, displayJobState(job.State))
+	return fmt.Sprintf("Indexing job %s is already %s", job.ID, status.JobStateLabelFor(job.State))
 }
 
 func renderSyncIndex(codebase model.Codebase, job model.Job, deduplicated bool) string {
@@ -240,9 +241,9 @@ func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Code
 	case displayPreparing, displayIndexing:
 		return renderIndexingActive(codebase, activeJob)
 	case displayStale:
-		return renderStaleStatus(codebase)
+		return renderStaleStatus(codebase, resolveCodebaseFailure(*codebase))
 	case displayFailed:
-		return renderHistoricalFailure(codebase)
+		return renderHistoricalFailure(codebase, resolveCodebaseFailure(*codebase))
 	case displayMissing:
 		return renderMissingStatus(codebase)
 	default:
@@ -489,20 +490,20 @@ func renderReconcileMagnitude(progress model.Progress) string {
 // renderHistoricalFailure reads as past tense so callers do not mistake an
 // old failure record for a live one. When the failure carries correlation
 // ids it appends a diagnostics line so the operator can grep the daemon log.
-func renderHistoricalFailure(codebase *model.Codebase) string {
-	if codebase.LastFailedRun == nil {
+func renderHistoricalFailure(codebase *model.Codebase, failure codebaseFailureView) string {
+	if !failure.HasFailure {
 		return fmt.Sprintf("❌ Codebase '%s' could not be indexed. Re-run index_codebase to retry.", codebase.CanonicalPath)
 	}
 	return fmt.Sprintf(
 		"❌ Codebase '%s' could not be indexed.\n🚧 %s\n💡 Re-run index_codebase; if it keeps failing, check the daemon log via the failed-job reference below.%s",
 		codebase.CanonicalPath,
-		orDefault(codebase.LastFailedRun.Message, "the index could not be built"),
-		renderFailureDiagnostics(codebase.LastFailedRun),
+		orDefault(failure.Message, "the index could not be built"),
+		renderFailureDiagnostics(failure),
 	)
 }
 
-func renderStaleStatus(codebase *model.Codebase) string {
-	if codebase.LastFailedRun == nil {
+func renderStaleStatus(codebase *model.Codebase, failure codebaseFailureView) string {
+	if !failure.HasFailure {
 		return fmt.Sprintf(
 			"⚠️ Codebase '%s' is stale because its semantic collection is missing.\n💡 The daemon will rebuild it automatically on the next background repair pass.",
 			codebase.CanonicalPath,
@@ -511,9 +512,9 @@ func renderStaleStatus(codebase *model.Codebase) string {
 	return fmt.Sprintf(
 		"⚠️ Codebase '%s' is stale since %s.\n🚨 Repair detail: %s\n💡 The daemon will retry automatic rebuild while the codebase remains stale.%s",
 		codebase.CanonicalPath,
-		formatLocalTime(codebase.LastFailedRun.FailedAt),
-		orDefault(codebase.LastFailedRun.Message, "semantic collection is missing"),
-		renderFailureDiagnostics(codebase.LastFailedRun),
+		formatLocalTime(failure.FailedAt),
+		orDefault(failure.Message, "semantic collection is missing"),
+		renderFailureDiagnostics(failure),
 	)
 }
 
@@ -521,7 +522,8 @@ func renderStaleStatus(codebase *model.Codebase) string {
 // and its trace id, or an empty string when neither is recorded. It leads with
 // the job so it reads as the past failure's reference rather than a second
 // request-trace line, leaving the envelope header as the only "trace_id=" line.
-func renderFailureDiagnostics(failure *model.IndexRunFailure) string {
+// It formats the resolved failure view, never the raw failure record.
+func renderFailureDiagnostics(failure codebaseFailureView) string {
 	if failure.JobID == "" && failure.TraceID == "" {
 		return ""
 	}
@@ -573,15 +575,12 @@ func renderGetJob(job *model.Job, pipelineDegraded bool) string {
 	if job == nil {
 		return "Job not found."
 	}
-	state := displayJobState(job.State)
-	if job.Error != nil && job.Error.Retryable {
-		state += " (retryable)"
-	}
+	surface := resolveJobSurface(*job, pipelineDegraded)
 	lines := []string{
 		"🧾 Job " + job.ID,
 		"📁 Codebase: " + job.CanonicalPath,
 		"⚙️ Operation: " + job.Operation,
-		"🚦 State: " + state,
+		"🚦 State: " + surface.StateLabel,
 		"🔧 Phase: " + displayJobPhase(job.Progress.Phase),
 		"📊 Progress: " + jobProgressDisplay(*job),
 	}
@@ -589,18 +588,13 @@ func renderGetJob(job *model.Job, pipelineDegraded bool) string {
 	if magnitude := renderReconcileMagnitude(job.Progress); magnitude != "" {
 		lines = append(lines, magnitude)
 	}
-	// No echo: when the dependency banner is showing and this job stopped on that
-	// shared-infrastructure cause (a retryable error), the banner already carries
-	// the reason, so a per-job Error line would only repeat it.
-	showError := job.Error != nil && strings.TrimSpace(job.Error.Message) != ""
-	echoesBanner := pipelineDegraded && job.Error != nil && job.Error.Retryable
-	if showError && !echoesBanner {
-		lines = append(lines, "🧯 Error: "+job.Error.Message)
+	if surface.ErrorLine != "" {
+		lines = append(lines, "🧯 Error: "+surface.ErrorLine)
 	}
 	return strings.Join(lines, "\n")
 }
 
-func renderListJobs(jobs []model.Job) string {
+func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 	if len(jobs) == 0 {
 		return "No tracked jobs."
 	}
@@ -608,8 +602,12 @@ func renderListJobs(jobs []model.Job) string {
 	activeJobs := make([]model.Job, 0, len(jobs))
 	terminalJobs := make([]model.Job, 0, len(jobs))
 	stateCounts := map[model.JobState]int{}
+	retryableFailures := 0
 	for _, job := range jobs {
 		stateCounts[job.State]++
+		if resolveJobSurface(job, pipelineDegraded).RetryableFailure {
+			retryableFailures++
+		}
 		switch job.State {
 		case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
 			activeJobs = append(activeJobs, job)
@@ -628,10 +626,14 @@ func renderListJobs(jobs []model.Job) string {
 		stateCounts[model.JobStateRunning],
 		stateCounts[model.JobStateCancelling],
 	))
+	// A retryable failure recovers on its own, so it is tallied apart from real
+	// failures: the headline "failed" count names only stops that need attention.
 	lines = append(lines, fmt.Sprintf(
-		"Terminal: %d completed, %d failed, %d canceled",
+		"Terminal: %d completed, %d failed, %d %s, %d canceled",
 		stateCounts[model.JobStateCompleted],
-		stateCounts[model.JobStateFailed],
+		stateCounts[model.JobStateFailed]-retryableFailures,
+		retryableFailures,
+		status.JobRetryableCountLabel,
 		stateCounts[model.JobStateCancelled],
 	))
 
@@ -640,7 +642,7 @@ func renderListJobs(jobs []model.Job) string {
 	} else {
 		lines = append(lines, "", "Active jobs:")
 		for _, job := range activeJobs {
-			lines = append(lines, renderJobListEntry(job)...)
+			lines = append(lines, renderJobListEntry(job, pipelineDegraded)...)
 		}
 	}
 
@@ -652,7 +654,7 @@ func renderListJobs(jobs []model.Job) string {
 	if len(terminalJobs) > recentTerminalLimit {
 		lines = append(lines, fmt.Sprintf("Recent terminal jobs: showing %d of %d", recentTerminalLimit, len(terminalJobs)))
 		for _, job := range terminalJobs[:recentTerminalLimit] {
-			lines = append(lines, renderJobListEntry(job)...)
+			lines = append(lines, renderJobListEntry(job, pipelineDegraded)...)
 		}
 		lines = append(lines, "Use `job get JOB_ID` or `--json` for full history.")
 		return strings.Join(lines, "\n")
@@ -660,28 +662,9 @@ func renderListJobs(jobs []model.Job) string {
 
 	lines = append(lines, fmt.Sprintf("Terminal jobs: %d", len(terminalJobs)))
 	for _, job := range terminalJobs {
-		lines = append(lines, renderJobListEntry(job)...)
+		lines = append(lines, renderJobListEntry(job, pipelineDegraded)...)
 	}
 	return strings.Join(lines, "\n")
-}
-
-func displayJobState(state model.JobState) string {
-	switch state {
-	case model.JobStateQueued:
-		return string(model.JobStateQueued)
-	case model.JobStateRunning:
-		return string(model.JobStateRunning)
-	case model.JobStateCancelling:
-		return "canceling"
-	case model.JobStateCompleted:
-		return string(model.JobStateCompleted)
-	case model.JobStateFailed:
-		return string(model.JobStateFailed)
-	case model.JobStateCancelled:
-		return "canceled"
-	default:
-		return string(state)
-	}
 }
 
 func displayJobPhase(phase string) string {
@@ -695,12 +678,13 @@ func displayJobPhase(phase string) string {
 	}
 }
 
-func renderJobListEntry(job model.Job) []string {
+func renderJobListEntry(job model.Job, pipelineDegraded bool) []string {
+	surface := resolveJobSurface(job, pipelineDegraded)
 	lines := []string{
 		fmt.Sprintf(
 			"- %s [%s · %s] %s %s",
 			job.ID,
-			displayJobState(job.State),
+			surface.StateLabel,
 			jobProgressDisplay(job),
 			job.Operation,
 			job.CanonicalPath,
@@ -712,8 +696,8 @@ func renderJobListEntry(job model.Job) []string {
 			lines = append(lines, "  "+line)
 		}
 	}
-	if job.Error != nil && strings.TrimSpace(job.Error.Message) != "" {
-		lines = append(lines, "  Error: "+job.Error.Message)
+	if surface.ErrorLine != "" {
+		lines = append(lines, "  Error: "+surface.ErrorLine)
 	}
 	return lines
 }

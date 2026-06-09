@@ -308,6 +308,38 @@ func applyDisplayTokens(pbCodebase *pb.Codebase, display displayStatus) {
 	pbCodebase.StatusLabel = labelForDisplay(display)
 }
 
+// applyJobDisplayTokens sets the resolved presentation fields on a protobuf job
+// from the daemon's single status vocabulary, so a machine consumer reads the
+// same folded status the human surfaces do instead of re-deriving it from the
+// raw state and error. The raw state and error fields stay for debugging.
+// pbconv cannot compute the degraded fold, so the tokens are applied here at the
+// boundary, mirroring applyDisplayTokens for codebases.
+func applyJobDisplayTokens(pbJob *pb.Job, job model.Job, pipelineDegraded bool) {
+	if pbJob == nil {
+		return
+	}
+	surface := resolveJobSurface(job, pipelineDegraded)
+	pbJob.DisplayState = surface.StateLabel
+	pbJob.DisplayError = surface.ErrorLine
+}
+
+// toJobWithTokens converts a job to protobuf and applies its resolved display
+// tokens, so every emit site produces a job carrying the authoritative status.
+func toJobWithTokens(job model.Job, pipelineDegraded bool) *pb.Job {
+	pbJob := pbconv.ToJob(job)
+	applyJobDisplayTokens(pbJob, job, pipelineDegraded)
+	return pbJob
+}
+
+// toJobPointerWithTokens is the optional-job variant for the active-job fields,
+// returning nil when there is no job so the response stays canonical.
+func toJobPointerWithTokens(job *model.Job, pipelineDegraded bool) *pb.Job {
+	if job == nil {
+		return nil
+	}
+	return toJobWithTokens(*job, pipelineDegraded)
+}
+
 // GetIndex resolves one tracked codebase whose canonical path covers the
 // queried path.
 func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequest) (resp *pb.GetIndexResponse, err error) {
@@ -338,7 +370,7 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 		pbCodebase := pbconv.ToCodebase(codebase)
 		applyDisplayTokens(pbCodebase, computeDisplayStatus(codebase, activeJob, health.Degraded()))
 		response.Codebase = pbCodebase
-		response.ActiveJob = pbconv.ToJobPointer(activeJob)
+		response.ActiveJob = toJobPointerWithTokens(activeJob, health.Degraded())
 	}
 	return response, nil
 }
@@ -376,7 +408,7 @@ func (server *GRPCServer) GetJob(ctx context.Context, request *pb.GetJobRequest)
 	}
 	health := server.manager.DependencyHealth()
 	return &pb.GetJobResponse{
-		Job:              pbconv.ToJob(job),
+		Job:              toJobWithTokens(job, health.Degraded()),
 		DependencyHealth: toDependencyHealth(health),
 		DisplayText:      server.envelopeText(ctx, health, renderGetJob(&job, health.Degraded()), "job_id", job.ID, "codebase_id", job.CodebaseID),
 	}, nil
@@ -388,15 +420,15 @@ func (server *GRPCServer) ListJobs(ctx context.Context, request *pb.ListJobsRequ
 	defer done(&err)
 	_ = ctx
 	jobs := server.manager.ListJobs(request.GetCodebaseId())
+	health := server.manager.DependencyHealth()
 	response := &pb.ListJobsResponse{
 		Jobs: make([]*pb.Job, 0, len(jobs)),
 	}
 	for _, job := range jobs {
-		response.Jobs = append(response.Jobs, pbconv.ToJob(job))
+		response.Jobs = append(response.Jobs, toJobWithTokens(job, health.Degraded()))
 	}
-	health := server.manager.DependencyHealth()
 	response.DependencyHealth = toDependencyHealth(health)
-	response.DisplayText = server.envelopeText(ctx, health, renderListJobs(jobs), "codebase_id", request.GetCodebaseId())
+	response.DisplayText = server.envelopeText(ctx, health, renderListJobs(jobs, health.Degraded()), "codebase_id", request.GetCodebaseId())
 	return response, nil
 }
 
@@ -404,12 +436,13 @@ func (server *GRPCServer) ListJobs(ctx context.Context, request *pb.ListJobsRequ
 func (server *GRPCServer) WatchJobs(request *pb.WatchJobsRequest, stream pb.SemanticSearchDaemonService_WatchJobsServer) (err error) {
 	ctx, done := beginRPC(stream.Context(), "WatchJobs")
 	defer done(&err)
+	degraded := server.manager.DependencyHealth().Degraded()
 	for _, jobID := range request.GetJobIds() {
 		job, found := server.manager.GetJob(jobID)
 		if !found {
 			continue
 		}
-		if sendErr := stream.Send(&pb.WatchJobsResponse{Job: pbconv.ToJob(job)}); sendErr != nil {
+		if sendErr := stream.Send(&pb.WatchJobsResponse{Job: toJobWithTokens(job, degraded)}); sendErr != nil {
 			slog.ErrorContext(ctx, "send watch jobs event failed", "job_id", jobID, "err", sendErr)
 			return status.Error(adapterr.Respond(ctx, adapterr.NewInternal("send watch jobs event for "+jobID, sendErr)))
 		}
@@ -436,7 +469,7 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	response := &pb.SearchCodeResponse{
 		Results:          make([]*pb.SearchResult, 0, len(outcome.Results)),
 		Codebase:         pbconv.ToCodebase(outcome.Codebase),
-		ActiveJob:        pbconv.ToJobPointer(outcome.ActiveJob),
+		ActiveJob:        toJobPointerWithTokens(outcome.ActiveJob, health.Degraded()),
 		DependencyHealth: toDependencyHealth(health),
 		DisplayText: server.envelopeText(ctx, health, renderSearch(searchView{
 			RequestedPath: request.GetPath(),
