@@ -321,6 +321,8 @@ func applyJobDisplayTokens(pbJob *pb.Job, job model.Job, pipelineDegraded bool, 
 	surface := resolveJobSurface(job, pipelineDegraded, supersededByJobID)
 	pbJob.DisplayState = surface.StateLabel
 	pbJob.DisplayError = surface.ErrorLine
+	pbJob.Superseded = surface.Superseded
+	pbJob.SupersededByJobId = surface.SupersededByJobID
 }
 
 // toJobWithTokens converts a job to protobuf and applies its resolved display
