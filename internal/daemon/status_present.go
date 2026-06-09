@@ -54,7 +54,7 @@ func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, pipelin
 // re-deriving a state label or error echo. A job stopping on a shared
 // dependency is exactly a retryable error during a degraded pipeline, which
 // ResolveJob folds by suppressing the per-job echo the banner already carries.
-func resolveJobSurface(job model.Job, pipelineDegraded bool) status.JobSurface {
+func resolveJobSurface(job model.Job, pipelineDegraded bool, supersededByJobID string) status.JobSurface {
 	dependency := status.Healthy
 	if pipelineDegraded {
 		dependency = status.EmbedderBusy
@@ -66,10 +66,11 @@ func resolveJobSurface(job model.Job, pipelineDegraded bool) status.JobSurface {
 		errorMessage = strings.TrimSpace(job.Error.Message)
 	}
 	return status.ResolveJob(status.JobInputs{
-		State:        job.State,
-		Retryable:    retryable,
-		ErrorMessage: errorMessage,
-		Dependency:   dependency,
+		State:             job.State,
+		Retryable:         retryable,
+		ErrorMessage:      errorMessage,
+		Dependency:        dependency,
+		SupersededByJobID: supersededByJobID,
 	})
 }
 

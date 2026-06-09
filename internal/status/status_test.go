@@ -180,40 +180,41 @@ func TestJobStateLabelForCoversEveryState(t *testing.T) {
 func TestResolveJob(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name      string
-		in        JobInputs
-		wantLabel string
-		wantError string
+		name           string
+		in             JobInputs
+		wantLabel      string
+		wantError      string
+		wantSuperseded bool
 	}{
 		{
 			"running healthy",
 			JobInputs{State: model.JobStateRunning},
-			"running", "",
-		},
-		{
-			"completed healthy",
-			JobInputs{State: model.JobStateCompleted},
-			"completed", "",
+			"running", "", false,
 		},
 		{
 			"retryable failure, healthy, shows error",
 			JobInputs{State: model.JobStateFailed, Retryable: true, ErrorMessage: "embedding endpoint is unreachable"},
-			"failed (retryable)", "embedding endpoint is unreachable",
+			"failed, retryable", "embedding endpoint is unreachable", false,
 		},
 		{
 			"retryable failure, degraded, suppresses echo",
 			JobInputs{State: model.JobStateFailed, Retryable: true, ErrorMessage: "embedding endpoint is unreachable", Dependency: EmbedderUnreachable},
-			"failed (retryable)", "",
+			"failed, retryable", "", false,
 		},
 		{
-			"local failure, degraded, still shows error",
-			JobInputs{State: model.JobStateFailed, Retryable: false, ErrorMessage: "internal error", Dependency: EmbedderUnreachable},
-			"failed", "internal error",
+			"superseded retryable failure",
+			JobInputs{State: model.JobStateFailed, Retryable: true, ErrorMessage: "boom", SupersededByJobID: "job_B"},
+			"failed, retryable, superseded by job_B", "boom", true,
 		},
 		{
-			"local failure, healthy, shows error",
-			JobInputs{State: model.JobStateFailed, ErrorMessage: "internal error"},
-			"failed", "internal error",
+			"superseded hard failure",
+			JobInputs{State: model.JobStateFailed, ErrorMessage: "internal error", SupersededByJobID: "job_B"},
+			"failed, superseded by job_B", "internal error", true,
+		},
+		{
+			"completed job with a successor is not superseded",
+			JobInputs{State: model.JobStateCompleted, SupersededByJobID: "job_B"},
+			"completed", "", false,
 		},
 	}
 	for _, testCase := range cases {
@@ -223,6 +224,9 @@ func TestResolveJob(t *testing.T) {
 		}
 		if got.ErrorLine != testCase.wantError {
 			t.Errorf("%s: ErrorLine = %q, want %q", testCase.name, got.ErrorLine, testCase.wantError)
+		}
+		if got.Superseded != testCase.wantSuperseded {
+			t.Errorf("%s: Superseded = %v, want %v", testCase.name, got.Superseded, testCase.wantSuperseded)
 		}
 	}
 }
