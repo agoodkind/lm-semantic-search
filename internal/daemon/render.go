@@ -593,26 +593,6 @@ func renderGetJob(job *model.Job, pipelineDegraded bool) string {
 	return strings.Join(lines, "\n")
 }
 
-// resolveJobSurface reduces a raw job and the pipeline-degraded flag into the
-// status package's resolved job view. It is the one seam between a model.Job and
-// the SOT: every job surface formats from the JobSurface it returns rather than
-// re-deriving a state label or error echo from the raw record. The job stopping
-// on a shared-infrastructure cause is exactly a retryable error during a
-// degraded pipeline, which ResolveJob folds by suppressing the per-job echo the
-// banner already carries.
-func resolveJobSurface(job model.Job, pipelineDegraded bool) status.JobSurface {
-	dependency := status.Healthy
-	if pipelineDegraded {
-		dependency = status.EmbedderBusy
-	}
-	in := status.JobInputs{State: job.State, Dependency: dependency}
-	if job.Error != nil {
-		in.Retryable = job.Error.Retryable
-		in.ErrorMessage = strings.TrimSpace(job.Error.Message)
-	}
-	return status.ResolveJob(in)
-}
-
 func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 	if len(jobs) == 0 {
 		return "No tracked jobs."

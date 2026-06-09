@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"strings"
+
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/status"
 )
@@ -40,4 +42,25 @@ func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, pipelin
 		Dependency:              dependency,
 		Search:                  status.SearchNone,
 	}).Display
+}
+
+// resolveJobSurface reduces a raw job and the pipeline-degraded flag into the
+// status package's resolved job view. It is the one seam between a model.Job and
+// the SOT, the job-side mirror of computeDisplayStatus, so it lives here at the
+// boundary rather than in the render layer the guard test keeps free of raw job
+// reads. Every job surface formats from the JobSurface it returns instead of
+// re-deriving a state label or error echo. A job stopping on a shared
+// dependency is exactly a retryable error during a degraded pipeline, which
+// ResolveJob folds by suppressing the per-job echo the banner already carries.
+func resolveJobSurface(job model.Job, pipelineDegraded bool) status.JobSurface {
+	dependency := status.Healthy
+	if pipelineDegraded {
+		dependency = status.EmbedderBusy
+	}
+	jobInputs := status.JobInputs{State: job.State, Dependency: dependency}
+	if job.Error != nil {
+		jobInputs.Retryable = job.Error.Retryable
+		jobInputs.ErrorMessage = strings.TrimSpace(job.Error.Message)
+	}
+	return status.ResolveJob(jobInputs)
 }
