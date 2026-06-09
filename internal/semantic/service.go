@@ -119,10 +119,33 @@ func (service *Service) Available() bool {
 	return service != nil && service.available
 }
 
+// conversationPathPrefix marks a virtual conversation collection's canonical
+// path. A path with this prefix is not a filesystem directory; its collection
+// name derives from the trailing collection id rather than a path hash, so the
+// shared embed, staging, and count functions address the conversation
+// collection when handed the conversation codebase's canonical path.
+const conversationPathPrefix = "chat:///"
+
+// conversationCollectionIDFromPath returns the conversation collection id
+// encoded in a canonical path and whether the path is a conversation path.
+func conversationCollectionIDFromPath(codebasePath string) (string, bool) {
+	if !strings.HasPrefix(codebasePath, conversationPathPrefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(codebasePath, conversationPathPrefix), true
+}
+
 // CollectionName matches the TypeScript collection naming contract at
 // packages/core/src/context.ts:275 so the Go daemon reads and writes the
-// same Milvus collections as the upstream TS adapter.
+// same Milvus collections as the upstream TS adapter. A conversation canonical
+// path resolves to the conversation collection so every shared embed, staging,
+// and count function addresses the right collection from the codebase path
+// alone.
 func (service *Service) CollectionName(codebasePath string) string {
+	if collectionID, isConversation := conversationCollectionIDFromPath(codebasePath); isConversation {
+		return service.ConversationCollectionName(collectionID)
+	}
+
 	prefix := "code_chunks"
 	if service.cfg.HybridMode {
 		prefix = "hybrid_code_chunks"
@@ -166,14 +189,14 @@ func (service *Service) renameCollection(ctx context.Context, oldName string, ne
 	return nil
 }
 
-// Reindex applies a per-file delta against an existing live collection.
+// Reindex applies a per-item delta against an existing live collection.
 //
-// removedOrModifiedRelativePaths is deleted via the Milvus `relativePath in
-// [...]` expression. The chunk batch is then embedded and inserted through the
-// same batched flow the staging build uses. Reindex returns
-// ErrCollectionMissing when the live collection no longer exists, so callers
-// can fall back to a full staging build.
-func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removedOrModifiedRelativePaths []string, progress func(Progress), reuse map[string][]float32) (err error) {
+// removal deletes the item's prior rows (a code file by exact relativePath, a
+// conversation by relativePath prefix). The chunk batch is then embedded and
+// inserted through the same batched flow the staging build uses. Reindex
+// returns ErrCollectionMissing when the live collection no longer exists, so
+// callers can fall back to a full staging build.
+func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.reindex")
 	defer done(&err)
 
@@ -191,8 +214,8 @@ func (service *Service) Reindex(ctx context.Context, codebasePath string, addedO
 		return ErrCollectionMissing
 	}
 
-	if len(removedOrModifiedRelativePaths) > 0 {
-		if err := service.deleteByRelativePaths(ctx, collectionName, removedOrModifiedRelativePaths); err != nil {
+	if !removal.Empty() {
+		if err := service.deleteByRemoval(ctx, collectionName, removal); err != nil {
 			return err
 		}
 	}

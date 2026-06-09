@@ -19,12 +19,12 @@ import (
 // the first inserted batch with the embedding dimension taken from the first
 // returned vector, so the dimension is never guessed up front.
 //
-// removedOrModifiedRelativePaths are deleted from staging first when staging
-// already exists, which keeps a re-embedded file idempotent: if a crash lands
-// between a file's insert and its checkpoint, the resumed run re-embeds that
-// one file and its prior staging rows are removed before the fresh rows land.
-// A nil chunk slice with nothing to remove is a no-op.
-func (service *Service) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removedOrModifiedRelativePaths []string, progress func(Progress), reuse map[string][]float32) (err error) {
+// removal drops the item's prior rows from staging first when staging already
+// exists, which keeps a re-embedded item idempotent: if a crash lands between an
+// item's insert and its checkpoint, the resumed run re-embeds that one item and
+// its prior staging rows are removed before the fresh rows land. A nil chunk
+// slice with an empty removal is a no-op.
+func (service *Service) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.stageReindex")
 	defer done(&err)
 
@@ -39,8 +39,8 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 		return fmt.Errorf("check staging collection %s: %w", stagingName, err)
 	}
 
-	if hasStaging && len(removedOrModifiedRelativePaths) > 0 {
-		if err := service.deleteByRelativePaths(ctx, stagingName, removedOrModifiedRelativePaths); err != nil {
+	if hasStaging && !removal.Empty() {
+		if err := service.deleteByRemoval(ctx, stagingName, removal); err != nil {
 			return err
 		}
 	}
