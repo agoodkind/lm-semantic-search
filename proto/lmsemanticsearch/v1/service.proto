@@ -164,6 +164,13 @@ message Job {
   // empty when the job has no error or a degraded-dependency banner already
   // carries the cause. error (field 13) stays the raw error for machine parsing.
   string display_error = 17;
+  // superseded reports a failed job overtaken by a later terminal job for the
+  // same codebase. The daemon resolves it at the boundary, so machine consumers
+  // read the same fact the human surfaces do. state (field 7) stays raw.
+  bool superseded = 18;
+  // superseded_by_job_id is the id of the immediate next terminal job for this
+  // job's codebase when superseded, else empty.
+  string superseded_by_job_id = 19;
 }
 
 message SearchResult {

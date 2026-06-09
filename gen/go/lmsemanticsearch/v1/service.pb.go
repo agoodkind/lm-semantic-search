@@ -997,9 +997,16 @@ type Job struct {
 	// display_error is the resolved error line a surface shows beneath the job, or
 	// empty when the job has no error or a degraded-dependency banner already
 	// carries the cause. error (field 13) stays the raw error for machine parsing.
-	DisplayError  string `protobuf:"bytes,17,opt,name=display_error,json=displayError,proto3" json:"display_error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	DisplayError string `protobuf:"bytes,17,opt,name=display_error,json=displayError,proto3" json:"display_error,omitempty"`
+	// superseded reports a failed job overtaken by a later terminal job for the
+	// same codebase. The daemon resolves it at the boundary, so machine consumers
+	// read the same fact the human surfaces do. state (field 7) stays raw.
+	Superseded bool `protobuf:"varint,18,opt,name=superseded,proto3" json:"superseded,omitempty"`
+	// superseded_by_job_id is the id of the immediate next terminal job for this
+	// job's codebase when superseded, else empty.
+	SupersededByJobId string `protobuf:"bytes,19,opt,name=superseded_by_job_id,json=supersededByJobId,proto3" json:"superseded_by_job_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Job) Reset() {
@@ -1147,6 +1154,20 @@ func (x *Job) GetDisplayState() string {
 func (x *Job) GetDisplayError() string {
 	if x != nil {
 		return x.DisplayError
+	}
+	return ""
+}
+
+func (x *Job) GetSuperseded() bool {
+	if x != nil {
+		return x.Superseded
+	}
+	return false
+}
+
+func (x *Job) GetSupersededByJobId() string {
+	if x != nil {
+		return x.SupersededByJobId
 	}
 	return ""
 }
@@ -3454,7 +3475,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0edisplay_status\x18\x0e \x01(\tR\rdisplayStatus\x12\x1f\n" +
 	"\vglyph_token\x18\x0f \x01(\tR\n" +
 	"glyphToken\x12!\n" +
-	"\fstatus_label\x18\x10 \x01(\tR\vstatusLabelJ\x04\b\x03\x10\x04R\aaliases\"\xcc\x05\n" +
+	"\fstatus_label\x18\x10 \x01(\tR\vstatusLabelJ\x04\b\x03\x10\x04R\aaliases\"\x9d\x06\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
@@ -3476,7 +3497,11 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x06forced\x18\x0e \x01(\bR\x06forced\x12\x18\n" +
 	"\atrigger\x18\x0f \x01(\tR\atrigger\x12#\n" +
 	"\rdisplay_state\x18\x10 \x01(\tR\fdisplayState\x12#\n" +
-	"\rdisplay_error\x18\x11 \x01(\tR\fdisplayError\"\xb9\x01\n" +
+	"\rdisplay_error\x18\x11 \x01(\tR\fdisplayError\x12\x1e\n" +
+	"\n" +
+	"superseded\x18\x12 \x01(\bR\n" +
+	"superseded\x12/\n" +
+	"\x14superseded_by_job_id\x18\x13 \x01(\tR\x11supersededByJobId\"\xb9\x01\n" +
 	"\fSearchResult\x12#\n" +
 	"\rrelative_path\x18\x01 \x01(\tR\frelativePath\x12\x1d\n" +
 	"\n" +

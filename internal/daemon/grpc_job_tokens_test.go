@@ -35,4 +35,15 @@ func TestToJobWithTokensEmitsResolvedDisplay(t *testing.T) {
 	if got := healthy.GetDisplayError(); got != "embedding endpoint is unreachable" {
 		t.Fatalf("healthy display_error = %q, want the message shown", got)
 	}
+
+	superseded := toJobWithTokens(job, false, "job_next")
+	if !superseded.GetSuperseded() {
+		t.Fatalf("expected superseded=true when a successor is supplied")
+	}
+	if got := superseded.GetSupersededByJobId(); got != "job_next" {
+		t.Fatalf("superseded_by_job_id = %q, want job_next", got)
+	}
+	if got := superseded.GetDisplayState(); got != "failed, retryable, superseded by job_next" {
+		t.Fatalf("display_state = %q, want the superseded tag list", got)
+	}
 }
