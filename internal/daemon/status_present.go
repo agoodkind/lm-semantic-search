@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -101,4 +102,55 @@ func resolveCodebaseFailure(codebase model.Codebase) codebaseFailureView {
 		JobID:      codebase.LastFailedRun.JobID,
 		TraceID:    codebase.LastFailedRun.TraceID,
 	}
+}
+
+// isTerminalJobState reports whether a job state is terminal (no further work).
+// The successor chain links only terminal jobs, since an active job is not yet a
+// recorded outcome in the ledger.
+func isTerminalJobState(state model.JobState) bool {
+	switch state {
+	case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// jobOrderTime returns the time a terminal job is ordered by: its completion
+// time when set, else its start time.
+func jobOrderTime(job model.Job) time.Time {
+	if job.CompletedAt != nil {
+		return *job.CompletedAt
+	}
+	return job.StartedAt
+}
+
+// buildJobSuccessors returns, for each terminal job id, the id of the immediate
+// next terminal job for the same codebase, or no entry when it is the latest.
+// Active jobs are excluded, so a failure whose only later attempt is still
+// running has no successor until that attempt terminates. The chain is the basis
+// for the superseded relationship: a failed job with a successor was overtaken.
+func buildJobSuccessors(jobs []model.Job) map[string]string {
+	byCodebase := make(map[string][]model.Job)
+	for _, job := range jobs {
+		if !isTerminalJobState(job.State) {
+			continue
+		}
+		byCodebase[job.CodebaseID] = append(byCodebase[job.CodebaseID], job)
+	}
+	successors := make(map[string]string)
+	for _, codebaseJobs := range byCodebase {
+		sort.Slice(codebaseJobs, func(first int, second int) bool {
+			timeFirst := jobOrderTime(codebaseJobs[first])
+			timeSecond := jobOrderTime(codebaseJobs[second])
+			if !timeFirst.Equal(timeSecond) {
+				return timeFirst.Before(timeSecond)
+			}
+			return codebaseJobs[first].ID < codebaseJobs[second].ID
+		})
+		for index := 0; index+1 < len(codebaseJobs); index++ {
+			successors[codebaseJobs[index].ID] = codebaseJobs[index+1].ID
+		}
+	}
+	return successors
 }

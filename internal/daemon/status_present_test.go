@@ -4,9 +4,43 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/model"
 )
+
+func TestBuildJobSuccessorsLinksEachTerminalJobToTheNext(t *testing.T) {
+	t.Parallel()
+	t0 := renderTestTime
+	mk := func(id, cb string, state model.JobState, completedOffset time.Duration) model.Job {
+		completed := t0.Add(completedOffset)
+		return model.Job{ID: id, CodebaseID: cb, State: state, StartedAt: t0, CompletedAt: &completed}
+	}
+	running := model.Job{ID: "live", CodebaseID: "A", State: model.JobStateRunning, StartedAt: t0}
+	jobs := []model.Job{
+		mk("a1", "A", model.JobStateFailed, 1*time.Minute),
+		mk("a2", "A", model.JobStateFailed, 2*time.Minute),
+		mk("a3", "A", model.JobStateCompleted, 3*time.Minute),
+		running, // active jobs are not part of the terminal chain
+		mk("b1", "B", model.JobStateFailed, 1*time.Minute),
+	}
+	got := buildJobSuccessors(jobs)
+	if got["a1"] != "a2" {
+		t.Fatalf("a1 successor = %q, want a2", got["a1"])
+	}
+	if got["a2"] != "a3" {
+		t.Fatalf("a2 successor = %q, want a3", got["a2"])
+	}
+	if _, ok := got["a3"]; ok {
+		t.Fatalf("a3 is the latest terminal job and must have no successor, got %q", got["a3"])
+	}
+	if _, ok := got["live"]; ok {
+		t.Fatalf("an active job must not appear in the successor chain")
+	}
+	if _, ok := got["b1"]; ok {
+		t.Fatalf("b1 is the only job for its codebase and must have no successor")
+	}
+}
 
 func TestComputeDisplayStatusNeverNotIndexed(t *testing.T) {
 	t.Parallel()
