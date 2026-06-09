@@ -241,9 +241,9 @@ func renderGetIndexBody(requestedPath string, tracked bool, codebase *model.Code
 	case displayPreparing, displayIndexing:
 		return renderIndexingActive(codebase, activeJob)
 	case displayStale:
-		return renderStaleStatus(codebase)
+		return renderStaleStatus(codebase, resolveCodebaseFailure(*codebase))
 	case displayFailed:
-		return renderHistoricalFailure(codebase)
+		return renderHistoricalFailure(codebase, resolveCodebaseFailure(*codebase))
 	case displayMissing:
 		return renderMissingStatus(codebase)
 	default:
@@ -490,20 +490,20 @@ func renderReconcileMagnitude(progress model.Progress) string {
 // renderHistoricalFailure reads as past tense so callers do not mistake an
 // old failure record for a live one. When the failure carries correlation
 // ids it appends a diagnostics line so the operator can grep the daemon log.
-func renderHistoricalFailure(codebase *model.Codebase) string {
-	if codebase.LastFailedRun == nil {
+func renderHistoricalFailure(codebase *model.Codebase, failure codebaseFailureView) string {
+	if !failure.HasFailure {
 		return fmt.Sprintf("❌ Codebase '%s' could not be indexed. Re-run index_codebase to retry.", codebase.CanonicalPath)
 	}
 	return fmt.Sprintf(
 		"❌ Codebase '%s' could not be indexed.\n🚧 %s\n💡 Re-run index_codebase; if it keeps failing, check the daemon log via the failed-job reference below.%s",
 		codebase.CanonicalPath,
-		orDefault(codebase.LastFailedRun.Message, "the index could not be built"),
-		renderFailureDiagnostics(codebase.LastFailedRun),
+		orDefault(failure.Message, "the index could not be built"),
+		renderFailureDiagnostics(failure),
 	)
 }
 
-func renderStaleStatus(codebase *model.Codebase) string {
-	if codebase.LastFailedRun == nil {
+func renderStaleStatus(codebase *model.Codebase, failure codebaseFailureView) string {
+	if !failure.HasFailure {
 		return fmt.Sprintf(
 			"⚠️ Codebase '%s' is stale because its semantic collection is missing.\n💡 The daemon will rebuild it automatically on the next background repair pass.",
 			codebase.CanonicalPath,
@@ -512,9 +512,9 @@ func renderStaleStatus(codebase *model.Codebase) string {
 	return fmt.Sprintf(
 		"⚠️ Codebase '%s' is stale since %s.\n🚨 Repair detail: %s\n💡 The daemon will retry automatic rebuild while the codebase remains stale.%s",
 		codebase.CanonicalPath,
-		formatLocalTime(codebase.LastFailedRun.FailedAt),
-		orDefault(codebase.LastFailedRun.Message, "semantic collection is missing"),
-		renderFailureDiagnostics(codebase.LastFailedRun),
+		formatLocalTime(failure.FailedAt),
+		orDefault(failure.Message, "semantic collection is missing"),
+		renderFailureDiagnostics(failure),
 	)
 }
 
@@ -522,7 +522,8 @@ func renderStaleStatus(codebase *model.Codebase) string {
 // and its trace id, or an empty string when neither is recorded. It leads with
 // the job so it reads as the past failure's reference rather than a second
 // request-trace line, leaving the envelope header as the only "trace_id=" line.
-func renderFailureDiagnostics(failure *model.IndexRunFailure) string {
+// It formats the resolved failure view, never the raw failure record.
+func renderFailureDiagnostics(failure codebaseFailureView) string {
 	if failure.JobID == "" && failure.TraceID == "" {
 		return ""
 	}

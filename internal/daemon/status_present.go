@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"strings"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/status"
@@ -69,4 +70,35 @@ func resolveJobSurface(job model.Job, pipelineDegraded bool) status.JobSurface {
 		ErrorMessage: errorMessage,
 		Dependency:   dependency,
 	})
+}
+
+// codebaseFailureView is the resolved failure detail a render bucket formats. It
+// is built once at the boundary from the raw failure record so the render layer
+// never reaches into codebase.LastFailedRun; a renderer that cannot see the raw
+// failure record cannot print failure text that contradicts the bucket the SOT
+// chose. HasFailure is false when the codebase carries no recorded failure.
+type codebaseFailureView struct {
+	HasFailure bool
+	Message    string
+	FailedAt   time.Time
+	JobID      string
+	TraceID    string
+}
+
+// resolveCodebaseFailure reduces a codebase's raw failure record into the
+// render-facing failure view, the codebase-side mirror of resolveJobSurface. It
+// is the only reader of codebase.LastFailedRun outside the lifecycle logic, kept
+// here at the boundary rather than in the render layer the guard test holds free
+// of raw failure reads.
+func resolveCodebaseFailure(codebase model.Codebase) codebaseFailureView {
+	if codebase.LastFailedRun == nil {
+		return codebaseFailureView{HasFailure: false, Message: "", FailedAt: time.Time{}, JobID: "", TraceID: ""}
+	}
+	return codebaseFailureView{
+		HasFailure: true,
+		Message:    codebase.LastFailedRun.Message,
+		FailedAt:   codebase.LastFailedRun.FailedAt,
+		JobID:      codebase.LastFailedRun.JobID,
+		TraceID:    codebase.LastFailedRun.TraceID,
+	}
 }

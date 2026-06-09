@@ -22,7 +22,13 @@ import (
 //   - reading job.Error to compose output, since the resolved JobSurface.ErrorLine decides the echo;
 //   - reading the .Retryable flag, the only field that classifies a self-healing failure;
 //   - converting a .State selector to a string for display (string(job.State));
-//   - the literal " (retryable)" suffix, which the resolver owns.
+//   - the literal " (retryable)" suffix, which the resolver owns;
+//   - reading codebase.LastFailedRun, since the resolved codebaseFailureView decides the failure detail;
+//   - reading codebase.Status, since computeDisplayStatus decides the bucket.
+//
+// Reading the raw codebase failure record under the wrong bucket is exactly how a
+// renderer could print "failed" while the SOT chose "waiting", so the failure
+// detail must arrive pre-resolved.
 //
 // Branching on job.State for grouping or counting is allowed: that is control
 // flow, not a status label, so an equality comparison against a model.JobState
@@ -87,6 +93,12 @@ func scanRenderFileForLaundering(t *testing.T, file string) []string {
 			}
 			if typed.Sel.Name == "Error" && isIdent(typed.X, "job") {
 				report(typed, "reads job.Error; use the resolved JobSurface.ErrorLine")
+			}
+			if typed.Sel.Name == "LastFailedRun" && isIdent(typed.X, "codebase") {
+				report(typed, "reads codebase.LastFailedRun; use the resolved codebaseFailureView")
+			}
+			if typed.Sel.Name == "Status" && isIdent(typed.X, "codebase") {
+				report(typed, "reads codebase.Status; use computeDisplayStatus")
 			}
 		case *ast.CallExpr:
 			if isStringConversionOfState(typed) {
