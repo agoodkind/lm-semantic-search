@@ -111,10 +111,18 @@ func (manager *Manager) worktreeSiblingReuseCollections(canonicalPath string, in
 		if _, member := siblings[codebase.CanonicalPath]; !member {
 			continue
 		}
-		if codebase.CollectionName == "" || codebase.ActiveJobID != "" {
+		if codebase.Kind == model.CodebaseKindDocument {
 			continue
 		}
-		if codebase.Status != model.CodebaseStatusIndexed {
+		if codebase.CollectionName == "" {
+			continue
+		}
+		// Reuse keys on durable facts, not the transient ActiveJobID: a sibling
+		// that is currently indexed or has at least one past successful run has a
+		// usable collection. An in-flight sync does not drop the live collection,
+		// and reuse is content-hash keyed, so reading a mid-sync sibling is safe.
+		// This mirrors the auto-create trigger's eligibility so the two agree.
+		if codebase.Status != model.CodebaseStatusIndexed && codebase.LastSuccessfulRun == nil {
 			continue
 		}
 		if !reuseModelMatches(codebase.EffectiveConfig, indexConfig) {
