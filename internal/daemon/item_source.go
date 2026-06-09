@@ -1,0 +1,129 @@
+package daemon
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"maps"
+
+	"goodkind.io/lm-semantic-search/internal/indexer"
+	"goodkind.io/lm-semantic-search/internal/merkle"
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
+)
+
+// itemSource is the one part of the indexing routine that differs by kind. The
+// shared delta and bootstrap routine asks a source to list the current items
+// with a content fingerprint each, to produce one item's chunks on request, to
+// name the store rows that drop when an item changes or leaves, and to name the
+// progress unit. A code source walks the filesystem and reads files; a
+// conversation source reads the manifest and documents the daemon was handed.
+type itemSource interface {
+	// capture lists the current items as itemID -> content fingerprint.
+	capture(ctx context.Context) (merkle.Snapshot, error)
+	// indexOne produces the stored chunks and fingerprint for one item.
+	indexOne(ctx context.Context, itemID string) (indexer.OneFileResult, error)
+	// removalFor maps item ids to the store removal that drops their prior rows.
+	removalFor(itemIDs []string) semantic.Removal
+	// unit is the human progress noun, "file" or "document".
+	unit() string
+}
+
+// codeItemSource lists and reads a filesystem codebase. It is the byte-for-byte
+// behavior the daemon ran before the routine became source-driven: capture is a
+// merkle walk and indexOne is one file read and split.
+type codeItemSource struct {
+	runner        indexingRunner
+	canonicalPath string
+	config        model.IndexConfig
+}
+
+func newCodeItemSource(runner indexingRunner, canonicalPath string, config model.IndexConfig) codeItemSource {
+	return codeItemSource{runner: runner, canonicalPath: canonicalPath, config: config}
+}
+
+func (source codeItemSource) capture(ctx context.Context) (merkle.Snapshot, error) {
+	snapshot, err := merkle.Capture(ctx, source.canonicalPath, source.config)
+	if err != nil {
+		slog.ErrorContext(ctx, "capture code snapshot failed", "path", source.canonicalPath, "err", err)
+		return merkle.Snapshot{}, fmt.Errorf("capture code snapshot for %s: %w", source.canonicalPath, err)
+	}
+	return snapshot, nil
+}
+
+func (source codeItemSource) indexOne(ctx context.Context, relativePath string) (indexer.OneFileResult, error) {
+	result, err := source.runner.IndexOne(ctx, source.canonicalPath, relativePath, source.config)
+	if err != nil {
+		slog.ErrorContext(ctx, "index code file failed", "path", relativePath, "err", err)
+		return indexer.OneFileResult{}, fmt.Errorf("index code file %s: %w", relativePath, err)
+	}
+	return result, nil
+}
+
+func (source codeItemSource) removalFor(itemIDs []string) semantic.Removal {
+	return semantic.RemovePaths(itemIDs)
+}
+
+func (source codeItemSource) unit() string {
+	return "file"
+}
+
+// conversationItemSource lists and reads conversation documents the daemon was
+// handed over the wire. capture returns the manifest clyde sent (every
+// conversation id with its content fingerprint), and indexOne returns the chunks
+// for the documents clyde delivered for one conversation. A conversation's
+// messages span many rows under one conv/<id>/ prefix, so its removal is a
+// prefix delete rather than the code file's exact path.
+type conversationItemSource struct {
+	manifest   map[string]string
+	documents  map[string][]model.ConversationDocument
+	splitterID string
+}
+
+func newConversationItemSource(manifest map[string]string, documents []model.ConversationDocument) conversationItemSource {
+	byID := make(map[string][]model.ConversationDocument, len(manifest))
+	for _, document := range documents {
+		conversationID := document.ConversationID
+		byID[conversationID] = append(byID[conversationID], document)
+	}
+	return conversationItemSource{manifest: manifest, documents: byID, splitterID: ""}
+}
+
+func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot, error) {
+	files := make(map[string]string, len(source.manifest))
+	maps.Copy(files, source.manifest)
+	return merkle.Snapshot{ConfigDigest: "", Files: files, Inodes: nil}, nil
+}
+
+func (source conversationItemSource) indexOne(_ context.Context, conversationID string) (indexer.OneFileResult, error) {
+	documents, delivered := source.documents[conversationID]
+	if !delivered || len(documents) == 0 {
+		// clyde asked for this conversation's documents but delivered none, so it
+		// cannot be embedded this pass. Skip it without advancing the checkpoint, so
+		// the next manifest sync still classifies it changed and clyde resends.
+		return indexer.OneFileResult{Chunks: nil, FileHash: "", Skipped: true, SkipReason: indexer.SkipUnreadable, Removed: false}, nil
+	}
+	chunks, err := conversationDocumentsToStoredChunks(documents)
+	if err != nil {
+		return indexer.OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: indexer.SkipNone, Removed: false}, err
+	}
+	return indexer.OneFileResult{
+		Chunks:     chunks,
+		FileHash:   source.manifest[conversationID],
+		Skipped:    false,
+		SkipReason: indexer.SkipNone,
+		Removed:    false,
+	}, nil
+}
+
+func (source conversationItemSource) removalFor(itemIDs []string) semantic.Removal {
+	prefixes := make([]string, 0, len(itemIDs))
+	for _, conversationID := range itemIDs {
+		prefixes = append(prefixes, conversationRelativePathPrefix(conversationID))
+	}
+	return semantic.RemovePrefixes(prefixes)
+}
+
+func (source conversationItemSource) unit() string {
+	return "document"
+}

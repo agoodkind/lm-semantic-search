@@ -32,7 +32,7 @@ func (manager *Manager) updateJobRunning(job model.Job) {
 	_ = manager.appendJobLocked("job_running", currentJob)
 }
 
-func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progress) {
+func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progress, unit string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -50,6 +50,9 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	job.UpdatedAt = now
 	job.Progress.Phase = progress.Phase
 	job.Progress.OverallPercent = progress.OverallPercent
+	if unit != "" {
+		job.Progress.Unit = unit
+	}
 	job.Progress.FilesTotal = progress.FilesTotal
 	job.Progress.FilesProcessed = progress.FilesProcessed
 	job.Progress.FilesEmbedded = progress.FilesEmbedded
@@ -92,7 +95,7 @@ func (manager *Manager) setJobDeltaCounts(jobID string, added int, modified int,
 	manager.jobs[jobID] = job
 }
 
-func (manager *Manager) updateJobCompleted(jobID string, result indexer.Result) {
+func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, result indexer.Result) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -121,7 +124,7 @@ func (manager *Manager) updateJobCompleted(jobID string, result indexer.Result) 
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
 	if err := manager.appendJobLocked("job_completed", job); err != nil {
-		slog.Error("append completed job event failed", "job_id", jobID, "err", err)
+		slog.ErrorContext(ctx, "append completed job event failed", "job_id", jobID, "err", err)
 	}
 
 	codebase, found := manager.codebases[job.CodebaseID]
@@ -140,18 +143,28 @@ func (manager *Manager) updateJobCompleted(jobID string, result indexer.Result) 
 	codebase.MerkleSnapshotPath = manager.merklePath(codebase.ID)
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
-	chunkPath := manager.chunkPath(codebase.ID)
-	if err := store.WriteChunks(chunkPath, result.Chunks); err != nil {
-		slog.Error("write chunk cache failed", "job_id", jobID, "err", err)
+	// A conversation collection's literal-fallback cache must stay complete across
+	// an incremental ingest, so a delta merges into the prior cache rather than
+	// overwriting it with only the changed conversations. A code codebase keeps
+	// the existing whole-result write.
+	if codebase.Kind == model.CodebaseKindDocument {
+		if err := manager.mergeConversationChunkCache(ctx, codebase.ID, result.Chunks, result.FileHashes); err != nil {
+			slog.ErrorContext(ctx, "merge conversation chunk cache failed", "job_id", jobID, "err", err)
+		}
+	} else {
+		chunkPath := manager.chunkPath(codebase.ID)
+		if err := store.WriteChunks(chunkPath, result.Chunks); err != nil {
+			slog.ErrorContext(ctx, "write chunk cache failed", "job_id", jobID, "err", err)
+		}
 	}
 	if len(result.FileHashes) != 0 {
 		snapshot := merkle.Snapshot{ConfigDigest: codebase.EffectiveConfig.IgnoreDigest, Files: result.FileHashes, Inodes: nil}
 		if err := merkle.WriteSnapshot(codebase.MerkleSnapshotPath, snapshot); err != nil {
-			slog.Error("write Merkle snapshot failed", "job_id", jobID, "err", err)
+			slog.ErrorContext(ctx, "write Merkle snapshot failed", "job_id", jobID, "err", err)
 		}
 	}
 	if err := manager.saveLocked(); err != nil {
-		slog.Error("write registry after completed job failed", "job_id", jobID, "err", err)
+		slog.ErrorContext(ctx, "write registry after completed job failed", "job_id", jobID, "err", err)
 	}
 }
 

@@ -479,7 +479,11 @@ func prepareLabel(job *model.Job) string {
 func renderReconcileMagnitude(progress model.Progress) string {
 	lines := make([]string, 0, 2)
 	if progress.FilesTotal > 0 {
-		lines = append(lines, fmt.Sprintf("📄 %d of %d files · 🧩 %d chunks", progress.FilesProcessed, progress.FilesTotal, progress.ChunksGenerated))
+		unit := progress.Unit
+		if unit == "" {
+			unit = "file"
+		}
+		lines = append(lines, fmt.Sprintf("📄 %d of %d %s · 🧩 %d chunks", progress.FilesProcessed, progress.FilesTotal, plural(unit, int(progress.FilesTotal)), progress.ChunksGenerated))
 	}
 	if progress.FilesAdded > 0 || progress.FilesModified > 0 || progress.FilesRemoved > 0 {
 		lines = append(lines, fmt.Sprintf("Added %d · Modified %d · Removed %d", progress.FilesAdded, progress.FilesModified, progress.FilesRemoved))

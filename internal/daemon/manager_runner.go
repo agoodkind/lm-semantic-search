@@ -79,20 +79,23 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) {
 	// or streaming reindex that finds no usable delta (no prior snapshot, or a
 	// live collection that has gone missing) falls through to the from-scratch
 	// staging build, which is also the path a true first index and a forced
-	// rebuild take.
+	// rebuild take. A code job walks the filesystem through the code source; a
+	// conversation ingest feeds the manifest and documents through its own source
+	// in runConversationIngest, then shares the same delta-then-bootstrap routine.
+	codeSource := newCodeItemSource(manager.runner, job.CanonicalPath, job.Config)
 	switch jobOperation(job.Operation) {
 	case jobOperationSync:
-		if manager.runDeltaSync(ctx, job) {
+		if manager.runDeltaSync(ctx, job, codeSource) {
 			return
 		}
-		manager.runBootstrap(ctx, job)
+		manager.runBootstrap(ctx, job, codeSource)
 	case jobOperationStreamingReindex:
-		if manager.runDeltaSync(ctx, job) {
+		if manager.runDeltaSync(ctx, job, codeSource) {
 			return
 		}
-		manager.runBootstrap(ctx, job)
+		manager.runBootstrap(ctx, job, codeSource)
 	case jobOperationIndex:
-		manager.runBootstrap(ctx, job)
+		manager.runBootstrap(ctx, job, codeSource)
 	case jobOperationConversationIngest:
 		manager.runConversationIngest(ctx, job)
 	}

@@ -90,6 +90,7 @@ func ToJob(job model.Job) *pb.Job {
 			Phase:                     job.Progress.Phase,
 			PhasePercent:              job.Progress.PhasePercent,
 			OverallPercent:            job.Progress.OverallPercent,
+			Unit:                      job.Progress.Unit,
 			FilesTotal:                job.Progress.FilesTotal,
 			FilesProcessed:            job.Progress.FilesProcessed,
 			ChunksReused:              job.Progress.ChunksReused,

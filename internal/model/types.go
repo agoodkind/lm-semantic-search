@@ -85,8 +85,12 @@ type Progress struct {
 	Phase          string  `json:"phase"`
 	PhasePercent   float64 `json:"phase_percent"`
 	OverallPercent float64 `json:"overall_percent"`
-	FilesTotal     int32   `json:"files_total"`
-	FilesProcessed int32   `json:"files_processed"`
+	// Unit is the human progress noun for the counted items: "file" for a code
+	// index and "document" for a conversation index. An empty value reads as
+	// "file" so older persisted jobs render unchanged.
+	Unit           string `json:"unit,omitempty"`
+	FilesTotal     int32  `json:"files_total"`
+	FilesProcessed int32  `json:"files_processed"`
 	// FilesAdded, FilesModified, and FilesRemoved record a delta sync's change
 	// breakdown so status output can show the magnitude of a reconcile (for
 	// example after a large merge). They stay zero for a full reindex.

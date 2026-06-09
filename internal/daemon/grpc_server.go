@@ -516,6 +516,29 @@ func (server *GRPCServer) RegisterConversationCollection(ctx context.Context, re
 	}, nil
 }
 
+// SyncConversationManifest diffs clyde's full conversation manifest against the
+// engine checkpoint and returns the conversation ids the engine needs.
+func (server *GRPCServer) SyncConversationManifest(ctx context.Context, request *pb.SyncConversationManifestRequest) (resp *pb.SyncConversationManifestResponse, err error) {
+	ctx, done := beginRPC(ctx, "SyncConversationManifest")
+	defer done(&err)
+	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
+		return nil, argErr
+	}
+	needed, callErr := server.manager.SyncConversationManifest(ctx, request.GetCollectionId(), pbConversationManifest(request.GetManifest()))
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
+	}
+	return &pb.SyncConversationManifestResponse{
+		NeededConversationIds: needed,
+		DisplayText: appendCorrelationRef(
+			fmt.Sprintf("Conversation collection '%s' needs %d of %d %s.", request.GetCollectionId(), len(needed), len(request.GetManifest()), plural("conversation", len(request.GetManifest()))),
+			ctx,
+			"codebase_id",
+			request.GetCollectionId(),
+		),
+	}, nil
+}
+
 // UpsertConversationDocuments reserves the conversation document upsert RPC surface.
 func (server *GRPCServer) UpsertConversationDocuments(ctx context.Context, request *pb.UpsertConversationDocumentsRequest) (resp *pb.UpsertConversationDocumentsResponse, err error) {
 	ctx, done := beginRPC(ctx, "UpsertConversationDocuments")
@@ -527,6 +550,7 @@ func (server *GRPCServer) UpsertConversationDocuments(ctx context.Context, reque
 		ctx,
 		request.GetCollectionId(),
 		pbConversationDocuments(request.GetDocuments()),
+		pbConversationManifest(request.GetManifest()),
 		pbClient(request.GetClient()),
 	)
 	if callErr != nil {
@@ -689,6 +713,27 @@ func pbConversationDocuments(documents []*pb.ConversationDocument) []model.Conve
 		})
 	}
 	return result
+}
+
+// pbConversationManifest converts the wire fingerprint list to the id ->
+// fingerprint map the manager diffs against its checkpoint. A nil or empty list
+// returns nil so the manager derives the manifest from the delivered documents.
+func pbConversationManifest(fingerprints []*pb.ConversationFingerprint) map[string]string {
+	if len(fingerprints) == 0 {
+		return nil
+	}
+	manifest := make(map[string]string, len(fingerprints))
+	for _, fingerprint := range fingerprints {
+		if fingerprint == nil {
+			continue
+		}
+		conversationID := strings.TrimSpace(fingerprint.GetConversationId())
+		if conversationID == "" {
+			continue
+		}
+		manifest[conversationID] = fingerprint.GetFingerprint()
+	}
+	return manifest
 }
 
 func codebasePointer(found bool, codebase model.Codebase) *model.Codebase {

@@ -298,6 +298,7 @@ func newQueuedJob(
 			Phase:                     "queued",
 			PhasePercent:              0,
 			OverallPercent:            0,
+			Unit:                      "",
 			FilesTotal:                0,
 			FilesProcessed:            0,
 			FilesAdded:                0,

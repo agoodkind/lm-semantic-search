@@ -2,18 +2,21 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
-	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
-	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
@@ -30,11 +33,16 @@ const (
 	conversationJobKindDelete conversationJobKind = "delete"
 )
 
+// conversationJobPayload carries the work for one conversation job. An upsert
+// holds the full manifest (every conversation id with its content fingerprint)
+// and the documents clyde delivered for the changed ids; the shared routine
+// diffs the manifest against the stored checkpoint and embeds only the changed
+// conversations. A delete holds one conversation id to drop.
 type conversationJobPayload struct {
 	Kind           conversationJobKind
 	CollectionName string
-	Chunks         []model.StoredChunk
-	DocumentCount  int
+	Manifest       map[string]string
+	Documents      []model.ConversationDocument
 	ConversationID string
 }
 
@@ -77,16 +85,45 @@ func (manager *Manager) RegisterConversationCollection(ctx context.Context, coll
 	return codebase, nil
 }
 
-// UpsertConversationDocuments queues an asynchronous ingest for pre-chunked
-// conversation documents in a virtual document collection.
-func (manager *Manager) UpsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument) (model.Job, error) {
-	return manager.upsertConversationDocuments(ctx, collectionID, documents, model.ClientInfo{Name: "", PID: 0})
+// SyncConversationManifest diffs clyde's full conversation manifest against the
+// stored checkpoint and returns the ids the engine needs: the conversations new
+// or changed since the last successful ingest. clyde then sends documents for
+// only those ids. The engine owns drift, so clyde keeps no change-tracking
+// state and a slow first embed runs exactly once.
+func (manager *Manager) SyncConversationManifest(ctx context.Context, collectionID string, manifest map[string]string) ([]string, error) {
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+
+	configDigest := codebase.EffectiveConfig.IgnoreDigest
+	legacyDigest := manager.legacyDigestForCodebase(codebase.ID)
+	seed := merkle.LoadSnapshotForConfig(manager.merklePath(codebase.ID), configDigest, legacyDigest)
+	current := merkle.Snapshot{ConfigDigest: configDigest, Files: manifest, Inodes: nil}
+	diff := merkle.DiffSnapshots(seed, current)
+
+	needed := make([]string, 0, len(diff.Added)+len(diff.Modified))
+	needed = append(needed, diff.Added...)
+	needed = append(needed, diff.Modified...)
+	sort.Strings(needed)
+	return needed, nil
 }
 
-func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, client model.ClientInfo) (model.Job, error) {
-	chunks, err := conversationDocumentsToStoredChunks(documents)
-	if err != nil {
-		return model.Job{}, err
+// UpsertConversationDocuments queues an asynchronous ingest. When manifest is
+// nil it is derived from the delivered documents, so a caller that hands over a
+// complete set need not compute fingerprints itself.
+func (manager *Manager) UpsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument) (model.Job, error) {
+	return manager.upsertConversationDocuments(ctx, collectionID, documents, nil, model.ClientInfo{Name: "", PID: 0})
+}
+
+func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo) (model.Job, error) {
+	for _, document := range documents {
+		if strings.TrimSpace(document.ConversationID) == "" {
+			return model.Job{}, errors.New("conversation id is required")
+		}
+	}
+	if manifest == nil {
+		manifest = manifestFromDocuments(documents)
 	}
 	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
 	if err != nil {
@@ -95,8 +132,8 @@ func (manager *Manager) upsertConversationDocuments(ctx context.Context, collect
 	payload := conversationJobPayload{
 		Kind:           conversationJobKindUpsert,
 		CollectionName: codebase.CollectionName,
-		Chunks:         chunks,
-		DocumentCount:  len(documents),
+		Manifest:       manifest,
+		Documents:      documents,
 		ConversationID: "",
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
@@ -143,8 +180,8 @@ func (manager *Manager) deleteConversation(ctx context.Context, collectionID str
 	payload := conversationJobPayload{
 		Kind:           conversationJobKindDelete,
 		CollectionName: codebase.CollectionName,
-		Chunks:         nil,
-		DocumentCount:  0,
+		Manifest:       nil,
+		Documents:      nil,
 		ConversationID: trimmedConversationID,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
@@ -223,6 +260,9 @@ func (manager *Manager) activeConversationJobLocked(codebase model.Codebase) (mo
 	}
 }
 
+// runConversationIngest runs one conversation job. An upsert flows through the
+// same delta-then-bootstrap routine code uses, with a conversation source
+// feeding the manifest and documents; a delete drops one conversation's rows.
 func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job) {
 	payload, found := manager.conversationJobPayload(job.ID)
 	if !found {
@@ -237,35 +277,75 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	default:
 	}
 
-	manager.updateConversationJobProgress(job.ID, payload)
-	var err error
 	switch payload.Kind {
-	case conversationJobKindUpsert:
-		if manager.semantic != nil {
-			err = manager.semantic.UpsertConversationChunks(ctx, payload.CollectionName, payload.Chunks, func(progress semantic.Progress) {
-				manager.updateConversationJobBatchProgress(job.ID, progress)
-			})
-		}
 	case conversationJobKindDelete:
-		if manager.semantic != nil {
-			err = manager.semantic.DeleteConversation(ctx, payload.CollectionName, payload.ConversationID)
-		}
-	default:
-		err = fmt.Errorf("unknown conversation job kind %s", payload.Kind)
-	}
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-			manager.updateJobCancelled(ctx, job.ID)
+		manager.runConversationDelete(ctx, job, payload)
+	case conversationJobKindUpsert:
+		source := newConversationItemSource(payload.Manifest, payload.Documents)
+		if manager.runDeltaSync(ctx, job, source) {
 			return
 		}
+		manager.runBootstrap(ctx, job, source)
+	default:
+		manager.updateJobFailed(ctx, job.ID, fmt.Errorf("unknown conversation job kind %s", payload.Kind))
+	}
+}
+
+// runConversationDelete drops one conversation's rows from the live collection
+// and the literal-fallback chunk cache, then marks the job complete. It does not
+// touch the merkle checkpoint: a later manifest sync that omits the id converges
+// the same removal idempotently.
+func (manager *Manager) runConversationDelete(ctx context.Context, job model.Job, payload conversationJobPayload) {
+	if manager.semantic != nil {
+		if err := manager.semantic.DeleteConversation(ctx, payload.CollectionName, payload.ConversationID); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				manager.updateJobCancelled(ctx, job.ID)
+				return
+			}
+			manager.updateJobFailed(ctx, job.ID, err)
+			return
+		}
+	}
+	if err := manager.dropConversationFromChunkCache(ctx, job.CodebaseID, payload.ConversationID); err != nil {
 		manager.updateJobFailed(ctx, job.ID, err)
 		return
 	}
-	if err := manager.updateConversationChunkCache(ctx, job.CodebaseID, payload); err != nil {
-		manager.updateJobFailed(ctx, job.ID, err)
+	manager.finishConversationDelete(job.ID)
+}
+
+func (manager *Manager) finishConversationDelete(jobID string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	job, found := manager.jobs[jobID]
+	if !found {
+		delete(manager.conversationJobs, jobID)
 		return
 	}
-	manager.updateConversationJobCompleted(job.ID, payload)
+	now := clock.Now()
+	job.State = model.JobStateCompleted
+	job.UpdatedAt = now
+	job.CompletedAt = &now
+	job.Progress.Phase = "completed"
+	job.Progress.OverallPercent = 100
+	job.Progress.LastEventAt = now
+	job.Progress.HeartbeatAt = now
+	delete(manager.conversationJobs, jobID)
+	if err := manager.appendJobLocked("job_completed", job); err != nil {
+		slog.Error("append completed conversation delete event failed", "job_id", jobID, "err", err)
+	}
+
+	codebase, found := manager.codebases[job.CodebaseID]
+	if !found {
+		return
+	}
+	codebase.Status = model.CodebaseStatusIndexed
+	codebase.ActiveJobID = ""
+	codebase.UpdatedAt = now
+	manager.codebases[codebase.ID] = codebase
+	if err := manager.saveLocked(); err != nil {
+		slog.Error("write registry after conversation delete failed", "job_id", jobID, "err", err)
+	}
 }
 
 func (manager *Manager) searchConversationChunkCache(ctx context.Context, codebase model.Codebase, query string, limit int32) ([]model.StoredChunk, error) {
@@ -280,29 +360,63 @@ func (manager *Manager) searchConversationChunkCache(ctx context.Context, codeba
 	return rankChunks(chunks, query, limit, nil, ""), nil
 }
 
-func (manager *Manager) updateConversationChunkCache(ctx context.Context, codebaseID string, payload conversationJobPayload) error {
+// mergeConversationChunkCache keeps the literal-fallback chunk cache complete
+// across an incremental ingest. It keeps the prior chunks for conversations
+// still present in the manifest and not re-sent this run, drops conversations no
+// longer in the manifest, replaces re-sent conversations with their fresh
+// chunks, and writes the union back. The cache backs conversation search when
+// the vector store is down.
+func (manager *Manager) mergeConversationChunkCache(ctx context.Context, codebaseID string, newChunks []model.StoredChunk, manifest map[string]string) error {
 	chunkPath := manager.chunkPath(codebaseID)
-	chunks, err := store.ReadChunks(chunkPath)
+	existing, err := store.ReadChunks(chunkPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			chunks = []model.StoredChunk{}
+			existing = []model.StoredChunk{}
 		} else {
 			slog.ErrorContext(ctx, "read conversation chunk cache failed", "codebase_id", codebaseID, "err", err)
 			return fmt.Errorf("read conversation chunk cache for %s: %w", codebaseID, err)
 		}
 	}
 
-	switch payload.Kind {
-	case conversationJobKindUpsert:
-		conversationIDs := conversationIDsFromChunks(payload.Chunks)
-		chunks = dropConversationChunks(chunks, conversationIDs)
-		chunks = append(chunks, payload.Chunks...)
-	case conversationJobKindDelete:
-		chunks = dropConversationChunks(chunks, []string{payload.ConversationID})
-	default:
-		return fmt.Errorf("unknown conversation job kind %s", payload.Kind)
+	resentIDs := make(map[string]struct{})
+	for _, conversationID := range conversationIDsFromChunks(newChunks) {
+		resentIDs[conversationID] = struct{}{}
 	}
 
+	kept := make([]model.StoredChunk, 0, len(existing)+len(newChunks))
+	for _, chunk := range existing {
+		conversationID := strings.TrimSpace(chunk.ConversationID)
+		if conversationID == "" {
+			continue
+		}
+		if _, stillPresent := manifest[conversationID]; !stillPresent {
+			continue
+		}
+		if _, resent := resentIDs[conversationID]; resent {
+			continue
+		}
+		kept = append(kept, chunk)
+	}
+	kept = append(kept, newChunks...)
+
+	if err := store.WriteChunks(chunkPath, kept); err != nil {
+		slog.ErrorContext(ctx, "write conversation chunk cache failed", "codebase_id", codebaseID, "err", err)
+		return fmt.Errorf("write conversation chunk cache for %s: %w", codebaseID, err)
+	}
+	return nil
+}
+
+func (manager *Manager) dropConversationFromChunkCache(ctx context.Context, codebaseID string, conversationID string) error {
+	chunkPath := manager.chunkPath(codebaseID)
+	chunks, err := store.ReadChunks(chunkPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		slog.ErrorContext(ctx, "read conversation chunk cache failed", "codebase_id", codebaseID, "err", err)
+		return fmt.Errorf("read conversation chunk cache for %s: %w", codebaseID, err)
+	}
+	chunks = dropConversationChunks(chunks, []string{conversationID})
 	if err := store.WriteChunks(chunkPath, chunks); err != nil {
 		slog.ErrorContext(ctx, "write conversation chunk cache failed", "codebase_id", codebaseID, "err", err)
 		return fmt.Errorf("write conversation chunk cache for %s: %w", codebaseID, err)
@@ -377,117 +491,46 @@ func (manager *Manager) conversationJobPayload(jobID string) (conversationJobPay
 	return payload, found
 }
 
-func (manager *Manager) updateConversationJobProgress(jobID string, payload conversationJobPayload) {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-
-	job, found := manager.jobs[jobID]
-	if !found {
-		return
+// manifestFromDocuments derives a content fingerprint per conversation from a
+// complete delivered document set, so a caller that hands over every document
+// need not compute fingerprints. The fingerprint covers each message's index,
+// role, and text in message order.
+func manifestFromDocuments(documents []model.ConversationDocument) map[string]string {
+	byID := make(map[string][]model.ConversationDocument)
+	order := make([]string, 0)
+	for _, document := range documents {
+		conversationID := strings.TrimSpace(document.ConversationID)
+		if conversationID == "" {
+			continue
+		}
+		if _, seen := byID[conversationID]; !seen {
+			order = append(order, conversationID)
+		}
+		byID[conversationID] = append(byID[conversationID], document)
 	}
-	if job.State != model.JobStateQueued && job.State != model.JobStateRunning {
-		return
+	manifest := make(map[string]string, len(order))
+	for _, conversationID := range order {
+		manifest[conversationID] = fingerprintConversationDocuments(byID[conversationID])
 	}
-
-	now := clock.Now()
-	job.State = model.JobStateRunning
-	job.UpdatedAt = now
-	job.Progress.Phase = conversationJobPhase(payload)
-	job.Progress.FilesTotal = safeInt32(payload.DocumentCount)
-	job.Progress.FilesProcessed = 0
-	job.Progress.ChunksGenerated = safeInt32(len(payload.Chunks))
-	job.Progress.CollectionRowsWritten = 0
-	job.Progress.LastEventAt = now
-	job.Progress.HeartbeatAt = now
-	manager.jobs[jobID] = job
+	return manifest
 }
 
-// updateConversationJobBatchProgress refreshes the running conversation job from
-// one embedding-batch emission so a long embed advances the percent and moves
-// the heartbeat instead of sitting frozen at 0%. It only touches a queued or
-// running job and never sets a terminal state, which stays the job of
-// updateConversationJobCompleted.
-func (manager *Manager) updateConversationJobBatchProgress(jobID string, progress semantic.Progress) {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-
-	job, found := manager.jobs[jobID]
-	if !found {
-		return
+func fingerprintConversationDocuments(documents []model.ConversationDocument) string {
+	sorted := make([]model.ConversationDocument, len(documents))
+	copy(sorted, documents)
+	sort.Slice(sorted, func(first int, second int) bool {
+		return sorted[first].MessageIndex < sorted[second].MessageIndex
+	})
+	hasher := sha256.New()
+	for _, document := range sorted {
+		hasher.Write([]byte(strconv.Itoa(int(document.MessageIndex))))
+		hasher.Write([]byte{0})
+		hasher.Write([]byte(document.Role))
+		hasher.Write([]byte{0})
+		hasher.Write([]byte(document.Text))
+		hasher.Write([]byte{0})
 	}
-	if job.State != model.JobStateQueued && job.State != model.JobStateRunning {
-		return
-	}
-
-	now := clock.Now()
-	job.State = model.JobStateRunning
-	job.UpdatedAt = now
-	if progress.EmbeddingBatchesTotal > 0 {
-		job.Progress.OverallPercent = float64(progress.EmbeddingBatchesCompleted) / float64(progress.EmbeddingBatchesTotal) * 100
-	}
-	job.Progress.CollectionRowsWritten = progress.CollectionRowsWritten
-	job.Progress.ChunksGenerated = progress.ChunksReused + progress.ChunksEmbedded
-	job.Progress.LastEventAt = now
-	job.Progress.HeartbeatAt = now
-	manager.jobs[jobID] = job
-}
-
-func (manager *Manager) updateConversationJobCompleted(jobID string, payload conversationJobPayload) {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-
-	job, found := manager.jobs[jobID]
-	if !found {
-		delete(manager.conversationJobs, jobID)
-		return
-	}
-
-	now := clock.Now()
-	metrics.JobCompleted()
-	if payload.Kind == conversationJobKindUpsert && len(payload.Chunks) > 0 {
-		manager.noteDependencyHealthyLocked()
-	}
-	job.State = model.JobStateCompleted
-	job.UpdatedAt = now
-	job.CompletedAt = &now
-	job.Progress.Phase = "completed"
-	job.Progress.OverallPercent = 100
-	job.Progress.FilesProcessed = safeInt32(payload.DocumentCount)
-	job.Progress.FilesTotal = safeInt32(payload.DocumentCount)
-	job.Progress.ChunksGenerated = safeInt32(len(payload.Chunks))
-	job.Progress.CollectionRowsWritten = safeInt32(len(payload.Chunks))
-	job.Progress.LastEventAt = now
-	job.Progress.HeartbeatAt = now
-	delete(manager.conversationJobs, jobID)
-	if err := manager.appendJobLocked("job_completed", job); err != nil {
-		slog.Error("append completed conversation job event failed", "job_id", jobID, "err", err)
-	}
-
-	codebase, found := manager.codebases[job.CodebaseID]
-	if !found {
-		return
-	}
-	codebase.Status = model.CodebaseStatusIndexed
-	codebase.ActiveJobID = ""
-	codebase.LastSuccessfulRun = &model.IndexRunSummary{
-		IndexedFiles: safeInt32(payload.DocumentCount),
-		TotalChunks:  safeInt32(len(payload.Chunks)),
-		Status:       "completed",
-		CompletedAt:  now,
-		SkippedFiles: nil,
-	}
-	codebase.UpdatedAt = now
-	manager.codebases[codebase.ID] = codebase
-	if err := manager.saveLocked(); err != nil {
-		slog.Error("write registry after completed conversation job failed", "job_id", jobID, "err", err)
-	}
-}
-
-func conversationJobPhase(payload conversationJobPayload) string {
-	if payload.Kind == conversationJobKindDelete {
-		return "Deleting conversation documents..."
-	}
-	return "Ingesting conversation documents..."
+	return hex.EncodeToString(hasher.Sum(nil))
 }
 
 func conversationDocumentsToStoredChunks(documents []model.ConversationDocument) ([]model.StoredChunk, error) {
