@@ -778,6 +778,21 @@ func (manager *Manager) ListJobs(codebaseID string) []model.Job {
 	return jobs
 }
 
+// JobSuccessorID returns the id of the immediate next terminal job for job's
+// codebase, or empty when job is the latest terminal job. The single-job views
+// use it since they do not hold the full job set the list view does.
+func (manager *Manager) JobSuccessorID(job model.Job) string {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	codebaseJobs := make([]model.Job, 0)
+	for _, candidate := range manager.jobs {
+		if candidate.CodebaseID == job.CodebaseID {
+			codebaseJobs = append(codebaseJobs, candidate)
+		}
+	}
+	return buildJobSuccessors(codebaseJobs)[job.ID]
+}
+
 // Doctor reports basic local state-path diagnostics.
 func (manager *Manager) Doctor() []string {
 	diagnostics := []string{}
