@@ -392,7 +392,7 @@ func TestRenderListJobsSummarizesHistory(t *testing.T) {
 			Progress:      model.Progress{OverallPercent: 0, Phase: "cancelled"},
 		},
 	}
-	out := renderListJobs(jobs)
+	out := renderListJobs(jobs, false)
 	for _, want := range []string{
 		"Tracked jobs: 3 total",
 		"Active: 0 queued, 1 running, 0 canceling",
@@ -441,7 +441,7 @@ func TestRenderListJobsPreparingNotZeroPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0},
 	}}
-	out := renderListJobs(jobs)
+	out := renderListJobs(jobs, false)
 	if !strings.Contains(out, "Preparing to index") {
 		t.Fatalf("expected preparing label in list, got:\n%s", out)
 	}

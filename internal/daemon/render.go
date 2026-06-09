@@ -8,6 +8,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/status"
 )
 
 const (
@@ -111,7 +112,7 @@ func renderCancelJob(job model.Job) string {
 	if job.State == model.JobStateCancelled {
 		return "Canceled indexing job " + job.ID
 	}
-	return fmt.Sprintf("Indexing job %s is already %s", job.ID, displayJobState(job.State))
+	return fmt.Sprintf("Indexing job %s is already %s", job.ID, status.JobStateLabelFor(job.State))
 }
 
 func renderSyncIndex(codebase model.Codebase, job model.Job, deduplicated bool) string {
@@ -573,15 +574,12 @@ func renderGetJob(job *model.Job, pipelineDegraded bool) string {
 	if job == nil {
 		return "Job not found."
 	}
-	state := displayJobState(job.State)
-	if job.Error != nil && job.Error.Retryable {
-		state += " (retryable)"
-	}
+	surface := resolveJobSurface(*job, pipelineDegraded)
 	lines := []string{
 		"🧾 Job " + job.ID,
 		"📁 Codebase: " + job.CanonicalPath,
 		"⚙️ Operation: " + job.Operation,
-		"🚦 State: " + state,
+		"🚦 State: " + surface.StateLabel,
 		"🔧 Phase: " + displayJobPhase(job.Progress.Phase),
 		"📊 Progress: " + jobProgressDisplay(*job),
 	}
@@ -589,18 +587,33 @@ func renderGetJob(job *model.Job, pipelineDegraded bool) string {
 	if magnitude := renderReconcileMagnitude(job.Progress); magnitude != "" {
 		lines = append(lines, magnitude)
 	}
-	// No echo: when the dependency banner is showing and this job stopped on that
-	// shared-infrastructure cause (a retryable error), the banner already carries
-	// the reason, so a per-job Error line would only repeat it.
-	showError := job.Error != nil && strings.TrimSpace(job.Error.Message) != ""
-	echoesBanner := pipelineDegraded && job.Error != nil && job.Error.Retryable
-	if showError && !echoesBanner {
-		lines = append(lines, "🧯 Error: "+job.Error.Message)
+	if surface.ErrorLine != "" {
+		lines = append(lines, "🧯 Error: "+surface.ErrorLine)
 	}
 	return strings.Join(lines, "\n")
 }
 
-func renderListJobs(jobs []model.Job) string {
+// resolveJobSurface reduces a raw job and the pipeline-degraded flag into the
+// status package's resolved job view. It is the one seam between a model.Job and
+// the SOT: every job surface formats from the JobSurface it returns rather than
+// re-deriving a state label or error echo from the raw record. The job stopping
+// on a shared-infrastructure cause is exactly a retryable error during a
+// degraded pipeline, which ResolveJob folds by suppressing the per-job echo the
+// banner already carries.
+func resolveJobSurface(job model.Job, pipelineDegraded bool) status.JobSurface {
+	dependency := status.Healthy
+	if pipelineDegraded {
+		dependency = status.EmbedderBusy
+	}
+	in := status.JobInputs{State: job.State, Dependency: dependency}
+	if job.Error != nil {
+		in.Retryable = job.Error.Retryable
+		in.ErrorMessage = strings.TrimSpace(job.Error.Message)
+	}
+	return status.ResolveJob(in)
+}
+
+func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 	if len(jobs) == 0 {
 		return "No tracked jobs."
 	}
@@ -640,7 +653,7 @@ func renderListJobs(jobs []model.Job) string {
 	} else {
 		lines = append(lines, "", "Active jobs:")
 		for _, job := range activeJobs {
-			lines = append(lines, renderJobListEntry(job)...)
+			lines = append(lines, renderJobListEntry(job, pipelineDegraded)...)
 		}
 	}
 
@@ -652,7 +665,7 @@ func renderListJobs(jobs []model.Job) string {
 	if len(terminalJobs) > recentTerminalLimit {
 		lines = append(lines, fmt.Sprintf("Recent terminal jobs: showing %d of %d", recentTerminalLimit, len(terminalJobs)))
 		for _, job := range terminalJobs[:recentTerminalLimit] {
-			lines = append(lines, renderJobListEntry(job)...)
+			lines = append(lines, renderJobListEntry(job, pipelineDegraded)...)
 		}
 		lines = append(lines, "Use `job get JOB_ID` or `--json` for full history.")
 		return strings.Join(lines, "\n")
@@ -660,28 +673,9 @@ func renderListJobs(jobs []model.Job) string {
 
 	lines = append(lines, fmt.Sprintf("Terminal jobs: %d", len(terminalJobs)))
 	for _, job := range terminalJobs {
-		lines = append(lines, renderJobListEntry(job)...)
+		lines = append(lines, renderJobListEntry(job, pipelineDegraded)...)
 	}
 	return strings.Join(lines, "\n")
-}
-
-func displayJobState(state model.JobState) string {
-	switch state {
-	case model.JobStateQueued:
-		return string(model.JobStateQueued)
-	case model.JobStateRunning:
-		return string(model.JobStateRunning)
-	case model.JobStateCancelling:
-		return "canceling"
-	case model.JobStateCompleted:
-		return string(model.JobStateCompleted)
-	case model.JobStateFailed:
-		return string(model.JobStateFailed)
-	case model.JobStateCancelled:
-		return "canceled"
-	default:
-		return string(state)
-	}
 }
 
 func displayJobPhase(phase string) string {
@@ -695,12 +689,13 @@ func displayJobPhase(phase string) string {
 	}
 }
 
-func renderJobListEntry(job model.Job) []string {
+func renderJobListEntry(job model.Job, pipelineDegraded bool) []string {
+	surface := resolveJobSurface(job, pipelineDegraded)
 	lines := []string{
 		fmt.Sprintf(
 			"- %s [%s · %s] %s %s",
 			job.ID,
-			displayJobState(job.State),
+			surface.StateLabel,
 			jobProgressDisplay(job),
 			job.Operation,
 			job.CanonicalPath,
@@ -712,8 +707,8 @@ func renderJobListEntry(job model.Job) []string {
 			lines = append(lines, "  "+line)
 		}
 	}
-	if job.Error != nil && strings.TrimSpace(job.Error.Message) != "" {
-		lines = append(lines, "  Error: "+job.Error.Message)
+	if surface.ErrorLine != "" {
+		lines = append(lines, "  Error: "+surface.ErrorLine)
 	}
 	return lines
 }

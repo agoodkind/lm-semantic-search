@@ -396,7 +396,7 @@ func (server *GRPCServer) ListJobs(ctx context.Context, request *pb.ListJobsRequ
 	}
 	health := server.manager.DependencyHealth()
 	response.DependencyHealth = toDependencyHealth(health)
-	response.DisplayText = server.envelopeText(ctx, health, renderListJobs(jobs), "codebase_id", request.GetCodebaseId())
+	response.DisplayText = server.envelopeText(ctx, health, renderListJobs(jobs, health.Degraded()), "codebase_id", request.GetCodebaseId())
 	return response, nil
 }
 
