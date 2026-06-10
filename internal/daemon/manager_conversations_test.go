@@ -8,6 +8,7 @@ import (
 	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
@@ -621,4 +622,153 @@ func waitForConversationJobState(t *testing.T, manager *Manager, jobID string, s
 		job, found := manager.GetJob(jobID)
 		return found && job.State == state
 	})
+}
+
+// TestConversationIngestLoadsReuseVectorsPerConversation proves the upsert path
+// loads each delivered conversation's existing vectors from the live collection,
+// scoped to its conv/<id>/ prefix, and hands that exact map to the reindex, so
+// unchanged chunks take their stored vector instead of the embedder.
+func TestConversationIngestLoadsReuseVectorsPerConversation(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	reuseByPrefix := map[string]map[string][]float32{
+		"conv/conv-alpha/": {"hash-alpha": {0.1}},
+		"conv/conv-beta/":  {"hash-beta": {0.2}},
+	}
+	fake := &fakeSemantic{
+		loadReuseForPrefix: func(_ context.Context, _ string, prefix string) (map[string][]float32, error) {
+			return reuseByPrefix[prefix], nil
+		},
+	}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-reuse"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
+		{ConversationID: "conv-alpha", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "alpha"},
+		{ConversationID: "conv-beta", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "beta"},
+	}, map[string]string{"conv-alpha": "fp-a-1", "conv-beta": "fp-b-1"}, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+
+	prefixCalls := fake.reusePrefixCallsSnapshot()
+	if len(prefixCalls) != 2 {
+		t.Fatalf("reuse prefix loads = %d, want 2 (one per delivered conversation): %+v", len(prefixCalls), prefixCalls)
+	}
+	seenPrefixes := map[string]bool{}
+	for _, call := range prefixCalls {
+		if call.Collection != codebase.CollectionName {
+			t.Fatalf("reuse load collection = %q, want live collection %q", call.Collection, codebase.CollectionName)
+		}
+		seenPrefixes[call.Prefix] = true
+	}
+	if !seenPrefixes["conv/conv-alpha/"] || !seenPrefixes["conv/conv-beta/"] {
+		t.Fatalf("reuse load prefixes = %v, want conv/conv-alpha/ and conv/conv-beta/", seenPrefixes)
+	}
+
+	reuseByConversation := fake.reindexReuseSnapshot()
+	alphaReuse, alphaSeen := reuseByConversation["conv-alpha"]
+	if !alphaSeen || len(alphaReuse) != 1 || alphaReuse["hash-alpha"] == nil {
+		t.Fatalf("conv-alpha reindex reuse = %v, want the conv/conv-alpha/ map", alphaReuse)
+	}
+	betaReuse, betaSeen := reuseByConversation["conv-beta"]
+	if !betaSeen || len(betaReuse) != 1 || betaReuse["hash-beta"] == nil {
+		t.Fatalf("conv-beta reindex reuse = %v, want the conv/conv-beta/ map", betaReuse)
+	}
+}
+
+// TestHandleChangedFileProgressReflectsRealWork proves the per-item outcome
+// reports progressed only when the item changed the working set: an embedded
+// conversation progresses, while one whose documents were not delivered is
+// skipped without progress, so the loop writes the checkpoint only after real
+// work instead of once per skipped item.
+func TestHandleChangedFileProgressReflectsRealWork(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	source := newConversationItemSource(
+		"conv_chunks_test",
+		map[string]string{"conv-delivered": "fp-d-1", "conv-missing": "fp-m-1"},
+		[]model.ConversationDocument{
+			{ConversationID: "conv-delivered", MessageIndex: 0, Role: "user", TimestampUnix: 1712345003, Text: "delivered"},
+		},
+	)
+	state := deltaState{
+		plan:         deltaPlan{},
+		snapshotPath: cfg.MerkleDir + "/checkpoint-test.json",
+		working:      map[string]string{},
+		source:       source,
+		semantic:     true,
+		staging:      false,
+		reuse:        nil,
+		chunkCounts:  &chunkCounters{reused: 0, embedded: 0},
+	}
+	result := indexer.Result{
+		IndexedFiles:      0,
+		TotalChunks:       0,
+		Chunks:            []model.StoredChunk{},
+		FileHashes:        nil,
+		SkippedFiles:      []string{},
+		SkippedOversize:   0,
+		SkippedUnreadable: 0,
+	}
+	job := model.Job{ID: "job-checkpoint-test"}
+
+	delivered := manager.handleChangedFile(context.Background(), job, state, "conv-delivered", &result)
+	if delivered.fallback || delivered.handled {
+		t.Fatalf("delivered outcome = %+v, want neither fallback nor handled", delivered)
+	}
+	if !delivered.progressed {
+		t.Fatal("delivered conversation outcome progressed = false, want true")
+	}
+
+	skipped := manager.handleChangedFile(context.Background(), job, state, "conv-missing", &result)
+	if skipped.fallback || skipped.handled {
+		t.Fatalf("skipped outcome = %+v, want neither fallback nor handled", skipped)
+	}
+	if skipped.progressed {
+		t.Fatal("undelivered conversation outcome progressed = true, want false (no checkpoint write)")
+	}
+}
+
+// TestConversationIngestReuseLoadFailureFallsBackToFullEmbed proves a failed
+// reuse load does not fail the job: the conversation reindexes with a nil reuse
+// map, so every chunk embeds fresh, and the job still completes.
+func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	fake := &fakeSemantic{
+		loadReuseForPrefix: func(_ context.Context, _ string, _ string) (map[string][]float32, error) {
+			return nil, errors.New("milvus read failed")
+		},
+	}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-reuse-fallback"
+
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
+		{ConversationID: "conv-solo", MessageIndex: 0, Role: "user", TimestampUnix: 1712345002, Text: "solo"},
+	}, map[string]string{"conv-solo": "fp-s-1"}, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+
+	reuseByConversation := fake.reindexReuseSnapshot()
+	soloReuse, soloSeen := reuseByConversation["conv-solo"]
+	if !soloSeen {
+		t.Fatal("conv-solo was not reindexed after reuse load failure")
+	}
+	if len(soloReuse) != 0 {
+		t.Fatalf("conv-solo reindex reuse = %v, want empty after load failure", soloReuse)
+	}
 }

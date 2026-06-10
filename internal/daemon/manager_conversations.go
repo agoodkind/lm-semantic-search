@@ -281,7 +281,7 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
-		source := newConversationItemSource(payload.Manifest, payload.Documents)
+		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents)
 		if manager.runDeltaSync(ctx, job, source) {
 			return
 		}

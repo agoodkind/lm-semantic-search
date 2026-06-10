@@ -35,10 +35,14 @@ type deltaPlan struct {
 // deltaOutcome reports what happened inside a runDeltaSync step.
 // fallback=true tells the caller to drop to full Replace. handled=true
 // means the step terminated the job (failed, cancelled, or progressed
-// normally and the caller should not run later steps).
+// normally and the caller should not run later steps). progressed=true means
+// the step changed the working set (an item embedded or removed), which is
+// what makes a checkpoint write worthwhile; a skipped item leaves it false so
+// the per-item loop does not rewrite an unchanged snapshot.
 type deltaOutcome struct {
-	fallback bool
-	handled  bool
+	fallback   bool
+	handled    bool
+	progressed bool
 }
 
 type deltaState struct {
@@ -103,7 +107,7 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 		state.chunkCounts.reused += fileReused
 		state.chunkCounts.embedded += fileEmbedded
 	}
-	return deltaOutcome{fallback: false, handled: false}
+	return deltaOutcome{fallback: false, handled: false, progressed: false}
 }
 
 // planSyncDiff loads the previous snapshot under the requested config
@@ -433,15 +437,15 @@ func (manager *Manager) canResumeStaging(ctx context.Context, canonicalPath stri
 // outcome means promoteBootstrap already set a terminal job state.
 func (manager *Manager) promoteBootstrap(ctx context.Context, job model.Job, state deltaState) deltaOutcome {
 	if !state.semantic {
-		return deltaOutcome{fallback: false, handled: false}
+		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 	hasStaging, err := manager.semantic.HasStaging(ctx, job.CanonicalPath)
 	if err != nil {
 		manager.updateJobFailed(ctx, job.ID, err)
-		return deltaOutcome{fallback: false, handled: true}
+		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
 	if !hasStaging {
-		return deltaOutcome{fallback: false, handled: false}
+		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 	if err := manager.semantic.PromoteStaging(ctx, job.CanonicalPath); err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -449,15 +453,15 @@ func (manager *Manager) promoteBootstrap(ctx context.Context, job model.Job, sta
 		} else {
 			manager.updateJobFailed(ctx, job.ID, fmt.Errorf("promote staging collection: %w", err))
 		}
-		return deltaOutcome{fallback: false, handled: true}
+		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
-	return deltaOutcome{fallback: false, handled: false}
+	return deltaOutcome{fallback: false, handled: false, progressed: false}
 }
 
 func (manager *Manager) applyDeltaRemovals(ctx context.Context, job model.Job, state deltaState) deltaOutcome {
 	removed := state.plan.diff.Removed
 	if len(removed) == 0 || !state.semantic {
-		return deltaOutcome{fallback: false, handled: false}
+		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 	if outcome := manager.applyReindexForState(ctx, job, state, nil, state.source.removalFor(removed), "delta removal"); outcome.fallback || outcome.handled {
 		return outcome
@@ -466,7 +470,7 @@ func (manager *Manager) applyDeltaRemovals(ctx context.Context, job model.Job, s
 		delete(state.working, path)
 	}
 	manager.writeCheckpoint(ctx, state, "removals")
-	return deltaOutcome{fallback: false, handled: false}
+	return deltaOutcome{fallback: false, handled: false, progressed: false}
 }
 
 func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, state deltaState) (indexer.Result, deltaOutcome) {
@@ -488,7 +492,7 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 	for index, relativePath := range changed {
 		if err := ctx.Err(); err != nil {
 			manager.updateJobCancelled(ctx, job.ID)
-			return result, deltaOutcome{fallback: false, handled: true}
+			return result, deltaOutcome{fallback: false, handled: true, progressed: false}
 		}
 		if seedHash, present := state.plan.seedSnapshot.Files[relativePath]; present && seedHash == state.plan.currentSnapshot.Files[relativePath] {
 			state.working[relativePath] = seedHash
@@ -500,11 +504,17 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		if outcome.fallback || outcome.handled {
 			return result, outcome
 		}
-		manager.writeCheckpoint(ctx, state, relativePath)
+		// A skipped item changes nothing in the working set, so rewriting the
+		// snapshot for it would be one full-file disk write per skipped item; a
+		// job that skips a thousand undelivered conversations checkpoints only
+		// after the items that actually embedded or removed.
+		if outcome.progressed {
+			manager.writeCheckpoint(ctx, state, relativePath)
+		}
 		reused, embedded := state.chunkSplit()
 		manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, reused, embedded, state.source.unit())
 	}
-	return result, deltaOutcome{fallback: false, handled: false}
+	return result, deltaOutcome{fallback: false, handled: false, progressed: false}
 }
 
 func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, state deltaState, relativePath string, result *indexer.Result) deltaOutcome {
@@ -515,7 +525,7 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		} else {
 			manager.updateJobFailed(ctx, job.ID, err)
 		}
-		return deltaOutcome{fallback: false, handled: true}
+		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
 	if fileResult.Removed {
 		slog.InfoContext(ctx, "converge.remove", "component", "daemon", "subcomponent", "delta", "path", relativePath, "semantic", state.semantic)
@@ -525,7 +535,7 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 			}
 		}
 		delete(state.working, relativePath)
-		return deltaOutcome{fallback: false, handled: false}
+		return deltaOutcome{fallback: false, handled: false, progressed: true}
 	}
 	if fileResult.Skipped {
 		result.SkippedFiles = append(result.SkippedFiles, relativePath)
@@ -534,9 +544,10 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		} else {
 			result.SkippedUnreadable++
 		}
-		return deltaOutcome{fallback: false, handled: false}
+		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 	if state.semantic {
+		state.reuse = manager.itemReuse(ctx, state, relativePath)
 		if outcome := manager.applyReindexForState(ctx, job, state, fileResult.Chunks, state.source.removalFor([]string{relativePath}), "per-file reindex"); outcome.fallback || outcome.handled {
 			return outcome
 		}
@@ -545,20 +556,51 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 	result.Chunks = append(result.Chunks, fileResult.Chunks...)
 	result.TotalChunks += safeInt32(len(fileResult.Chunks))
 	result.IndexedFiles++
-	return deltaOutcome{fallback: false, handled: false}
+	return deltaOutcome{fallback: false, handled: false, progressed: true}
+}
+
+// itemReuse loads one item's own stored vectors before the reindex deletes
+// them, so chunks whose content is unchanged take their vector from the store
+// instead of the embedder. It returns the build-wide reuse map unchanged when
+// the source has no per-item reuse, and on a failed load it logs and falls
+// back to that map so the item embeds every chunk rather than failing.
+func (manager *Manager) itemReuse(ctx context.Context, state deltaState, relativePath string) map[string][]float32 {
+	collectionName, reusePrefix, ok := state.source.reuseSource(relativePath)
+	if !ok {
+		return state.reuse
+	}
+	itemReuse, err := manager.semantic.LoadReuseVectorsForPrefix(ctx, collectionName, reusePrefix)
+	if err != nil {
+		slog.WarnContext(ctx, "load item reuse vectors failed; embedding every chunk", "path", relativePath, "collection", collectionName, "err", err)
+		return state.reuse
+	}
+	return mergedReuse(state.reuse, itemReuse)
+}
+
+// mergedReuse overlays an item's own reuse vectors on any build-wide reuse map
+// without mutating either input. With no build-wide map the item map is used
+// as-is, which is the conversation delta case.
+func mergedReuse(base map[string][]float32, item map[string][]float32) map[string][]float32 {
+	if len(base) == 0 {
+		return item
+	}
+	merged := make(map[string][]float32, len(base)+len(item))
+	maps.Copy(merged, base)
+	maps.Copy(merged, item)
+	return merged
 }
 
 func (manager *Manager) classifyReindexErr(ctx context.Context, job model.Job, err error, phase string) deltaOutcome {
 	switch {
 	case errors.Is(err, semantic.ErrCollectionMissing):
 		slog.WarnContext(ctx, "semantic collection missing; falling back to full reindex", "job_id", job.ID, "phase", phase)
-		return deltaOutcome{fallback: true, handled: false}
+		return deltaOutcome{fallback: true, handled: false, progressed: false}
 	case errors.Is(err, context.Canceled):
 		manager.updateJobCancelled(ctx, job.ID)
-		return deltaOutcome{fallback: false, handled: true}
+		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	default:
 		manager.updateJobFailed(ctx, job.ID, err)
-		return deltaOutcome{fallback: false, handled: true}
+		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
 }
 
@@ -614,15 +656,15 @@ func (manager *Manager) pruneAfterStreaming(ctx context.Context, job model.Job, 
 		switch {
 		case errors.Is(err, context.Canceled):
 			manager.updateJobCancelled(ctx, job.ID)
-			return deltaOutcome{fallback: false, handled: true}
+			return deltaOutcome{fallback: false, handled: true, progressed: false}
 		case errors.Is(err, semantic.ErrCollectionMissing):
 			slog.WarnContext(ctx, "semantic collection missing during streaming prune", "job_id", job.ID)
 		default:
 			manager.updateJobFailed(ctx, job.ID, err)
-			return deltaOutcome{fallback: false, handled: true}
+			return deltaOutcome{fallback: false, handled: true, progressed: false}
 		}
 	}
-	return deltaOutcome{fallback: false, handled: false}
+	return deltaOutcome{fallback: false, handled: false, progressed: false}
 }
 
 func maxInt(a int, b int) int {

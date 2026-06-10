@@ -20,6 +20,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/debugserver"
+	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/store"
 	"google.golang.org/grpc"
@@ -127,7 +128,10 @@ func run(rootContext context.Context) error {
 		defer stopDebugServer(rootContext, debugSrv)
 	}
 
-	server := grpc.NewServer()
+	server := grpc.NewServer(
+		grpc.MaxRecvMsgSize(grpcutil.MaxMessageBytes),
+		grpc.MaxSendMsgSize(grpcutil.MaxMessageBytes),
+	)
 	shutdownCh := make(chan struct{}, 1)
 	pb.RegisterSemanticSearchDaemonServiceServer(server, daemon.NewGRPCServer(manager, func() {
 		select {

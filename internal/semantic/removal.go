@@ -66,10 +66,17 @@ func (service *Service) deleteByRelativePathPrefix(ctx context.Context, collecti
 	if prefix == "" {
 		return nil
 	}
-	expression := fmt.Sprintf(`%s like "%s%%"`, relativePathFieldName, escapeMilvusString(prefix))
+	expression := relativePathPrefixExpression(prefix)
 	if _, err := service.milvus.Delete(ctx, milvusclient.NewDeleteOption(collectionName).WithExpr(expression)); err != nil {
 		slog.ErrorContext(ctx, "delete by relative path prefix failed", "collection", collectionName, "prefix", prefix, "err", err)
 		return fmt.Errorf("delete from %s by relative path prefix: %w", collectionName, err)
 	}
 	return nil
+}
+
+// relativePathPrefixExpression renders the Milvus filter expression matching
+// every row whose relativePath begins with prefix. The prefix delete and the
+// prefix-scoped reuse read share it so both name the same row set.
+func relativePathPrefixExpression(prefix string) string {
+	return fmt.Sprintf(`%s like "%s%%"`, relativePathFieldName, escapeMilvusString(prefix))
 }

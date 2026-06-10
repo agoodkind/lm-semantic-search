@@ -49,8 +49,38 @@ func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []
 	return reuse, nil
 }
 
-// loadReuseVectorsFromCollection streams one source collection into reuse.
+// LoadReuseVectorsForPrefix reads one collection's chunks whose relativePath
+// begins with relativePathPrefix and returns the contentVectorKey -> vector
+// map for them. A conversation ingest passes the live conversation collection
+// and the changed conversation's conv/<id>/ prefix, loaded before that
+// conversation's prefix delete runs, so the reindex reuses the unchanged
+// chunks' stored vectors instead of re-embedding the whole conversation. A
+// missing collection or an empty prefix returns an empty map.
+func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
+	reuse := make(map[string][]float32)
+	if !service.Available() || collectionName == "" || relativePathPrefix == "" {
+		return reuse, nil
+	}
+	if err := service.loadReuseVectorsFiltered(ctx, collectionName, relativePathPrefixExpression(relativePathPrefix), reuse); err != nil {
+		return nil, err
+	}
+	slog.DebugContext(ctx, "semantic.reuse_vectors_loaded_for_prefix",
+		"collection", collectionName,
+		"prefix", relativePathPrefix,
+		"chunks", len(reuse),
+	)
+	return reuse, nil
+}
+
+// loadReuseVectorsFromCollection streams one whole source collection into reuse.
 func (service *Service) loadReuseVectorsFromCollection(ctx context.Context, collectionName string, reuse map[string][]float32) error {
+	return service.loadReuseVectorsFiltered(ctx, collectionName, relativePathFieldName+` != ""`, reuse)
+}
+
+// loadReuseVectorsFiltered streams the rows of one collection matching
+// filterExpression into reuse, keyed by contentVectorKey. A missing collection
+// loads nothing.
+func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collectionName string, filterExpression string, reuse map[string][]float32) error {
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "check collection for reuse load failed", "collection", collectionName, "err", err)
@@ -65,7 +95,7 @@ func (service *Service) loadReuseVectorsFromCollection(ctx context.Context, coll
 
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(reuseVectorBatchSize).
-		WithFilter(relativePathFieldName+` != ""`).
+		WithFilter(filterExpression).
 		WithOutputFields(contentFieldName, denseVectorFieldName))
 	if err != nil {
 		slog.ErrorContext(ctx, "open reuse query iterator failed", "collection", collectionName, "err", err)

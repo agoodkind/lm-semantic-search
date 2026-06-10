@@ -25,6 +25,12 @@ type itemSource interface {
 	indexOne(ctx context.Context, itemID string) (indexer.OneFileResult, error)
 	// removalFor maps item ids to the store removal that drops their prior rows.
 	removalFor(itemIDs []string) semantic.Removal
+	// reuseSource names where one item's already-embedded vectors live: the
+	// collection and the relativePath prefix that scopes the read. ok=false
+	// means the item has no per-item reuse source and every chunk embeds. A
+	// conversation returns its live collection and conv/<id>/ prefix, so a
+	// changed conversation re-embeds only its changed chunks.
+	reuseSource(itemID string) (collectionName string, relativePathPrefix string, ok bool)
 	// unit is the human progress noun, "file" or "document".
 	unit() string
 }
@@ -64,6 +70,14 @@ func (source codeItemSource) removalFor(itemIDs []string) semantic.Removal {
 	return semantic.RemovePaths(itemIDs)
 }
 
+// reuseSource reports no per-item reuse for code files: a code file's chunks
+// share one relativePath and change together, so there is nothing unchanged to
+// reuse within one file. Cross-collection reuse (worktree siblings, merge-down
+// children) stays on the bootstrap path.
+func (source codeItemSource) reuseSource(string) (string, string, bool) {
+	return "", "", false
+}
+
 func (source codeItemSource) unit() string {
 	return "file"
 }
@@ -75,18 +89,21 @@ func (source codeItemSource) unit() string {
 // messages span many rows under one conv/<id>/ prefix, so its removal is a
 // prefix delete rather than the code file's exact path.
 type conversationItemSource struct {
-	manifest   map[string]string
-	documents  map[string][]model.ConversationDocument
-	splitterID string
+	// collectionName is the live conversation collection, the reuse source for
+	// a changed conversation's already-embedded vectors.
+	collectionName string
+	manifest       map[string]string
+	documents      map[string][]model.ConversationDocument
+	splitterID     string
 }
 
-func newConversationItemSource(manifest map[string]string, documents []model.ConversationDocument) conversationItemSource {
+func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument) conversationItemSource {
 	byID := make(map[string][]model.ConversationDocument, len(manifest))
 	for _, document := range documents {
 		conversationID := document.ConversationID
 		byID[conversationID] = append(byID[conversationID], document)
 	}
-	return conversationItemSource{manifest: manifest, documents: byID, splitterID: ""}
+	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, splitterID: ""}
 }
 
 func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot, error) {
@@ -122,6 +139,16 @@ func (source conversationItemSource) removalFor(itemIDs []string) semantic.Remov
 		prefixes = append(prefixes, conversationRelativePathPrefix(conversationID))
 	}
 	return semantic.RemovePrefixes(prefixes)
+}
+
+// reuseSource points one conversation's reuse read at its own rows in the live
+// collection: the conv/<id>/ prefix the reindex is about to delete. Loaded
+// before the delete, those vectors let unchanged messages skip the embedder.
+func (source conversationItemSource) reuseSource(conversationID string) (string, string, bool) {
+	if source.collectionName == "" {
+		return "", "", false
+	}
+	return source.collectionName, conversationRelativePathPrefix(conversationID), true
 }
 
 func (source conversationItemSource) unit() string {
