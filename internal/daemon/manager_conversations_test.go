@@ -8,6 +8,7 @@ import (
 	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
@@ -680,6 +681,61 @@ func TestConversationIngestLoadsReuseVectorsPerConversation(t *testing.T) {
 	betaReuse, betaSeen := reuseByConversation["conv-beta"]
 	if !betaSeen || len(betaReuse) != 1 || betaReuse["hash-beta"] == nil {
 		t.Fatalf("conv-beta reindex reuse = %v, want the conv/conv-beta/ map", betaReuse)
+	}
+}
+
+// TestHandleChangedFileProgressReflectsRealWork proves the per-item outcome
+// reports progressed only when the item changed the working set: an embedded
+// conversation progresses, while one whose documents were not delivered is
+// skipped without progress, so the loop writes the checkpoint only after real
+// work instead of once per skipped item.
+func TestHandleChangedFileProgressReflectsRealWork(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	source := newConversationItemSource(
+		"conv_chunks_test",
+		map[string]string{"conv-delivered": "fp-d-1", "conv-missing": "fp-m-1"},
+		[]model.ConversationDocument{
+			{ConversationID: "conv-delivered", MessageIndex: 0, Role: "user", TimestampUnix: 1712345003, Text: "delivered"},
+		},
+	)
+	state := deltaState{
+		plan:         deltaPlan{},
+		snapshotPath: cfg.MerkleDir + "/checkpoint-test.json",
+		working:      map[string]string{},
+		source:       source,
+		semantic:     true,
+		staging:      false,
+		reuse:        nil,
+		chunkCounts:  &chunkCounters{reused: 0, embedded: 0},
+	}
+	result := indexer.Result{
+		IndexedFiles:      0,
+		TotalChunks:       0,
+		Chunks:            []model.StoredChunk{},
+		FileHashes:        nil,
+		SkippedFiles:      []string{},
+		SkippedOversize:   0,
+		SkippedUnreadable: 0,
+	}
+	job := model.Job{ID: "job-checkpoint-test"}
+
+	delivered := manager.handleChangedFile(context.Background(), job, state, "conv-delivered", &result)
+	if delivered.fallback || delivered.handled {
+		t.Fatalf("delivered outcome = %+v, want neither fallback nor handled", delivered)
+	}
+	if !delivered.progressed {
+		t.Fatal("delivered conversation outcome progressed = false, want true")
+	}
+
+	skipped := manager.handleChangedFile(context.Background(), job, state, "conv-missing", &result)
+	if skipped.fallback || skipped.handled {
+		t.Fatalf("skipped outcome = %+v, want neither fallback nor handled", skipped)
+	}
+	if skipped.progressed {
+		t.Fatal("undelivered conversation outcome progressed = true, want false (no checkpoint write)")
 	}
 }
 
