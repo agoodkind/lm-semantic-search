@@ -218,3 +218,106 @@ func TestWorktreeBuildReusesSiblingCollection(t *testing.T) {
 		t.Fatalf("worktree build did not request reuse vectors from the sibling collection cc_repo; reuse calls = %v", fake.reuseCollections)
 	}
 }
+
+// registerSiblingCodebase records a main-worktree codebase for the repo rooted at
+// mainRoot with the given liveness fields, so the reuse gate can be unit-tested
+// without driving a full concurrent build.
+func registerSiblingCodebase(t *testing.T, manager *Manager, mainRoot string, mutate func(*model.Codebase)) {
+	t.Helper()
+	codebase := newCodebaseRecord(evalSym(t, mainRoot))
+	codebase.CollectionName = "cc_repo"
+	codebase.EffectiveConfig = defaultIndexConfig()
+	mutate(&codebase)
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+}
+
+// TestWorktreeReuseAcceptsBusyIndexedSibling proves the race fix: a sibling that
+// was indexed once but is currently mid-sync (ActiveJobID set, Status indexing)
+// is still an eligible reuse source.
+func TestWorktreeReuseAcceptsBusyIndexedSibling(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "repo")
+	makeMainRepo(t, mainRoot)
+	worktreeDir := filepath.Join(base, "feature")
+	makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
+
+	registerSiblingCodebase(t, manager, mainRoot, func(c *model.Codebase) {
+		c.Status = model.CodebaseStatusIndexing // busy
+		c.ActiveJobID = "job-sync-inflight"     // busy
+		c.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
+	})
+
+	got := manager.worktreeSiblingReuseCollections(evalSym(t, worktreeDir), defaultIndexConfig())
+	if len(got) != 1 || got[0] != "cc_repo" {
+		t.Fatalf("busy-but-indexed sibling not reused: got %v, want [cc_repo]", got)
+	}
+}
+
+// TestWorktreeReuseAcceptsAdoptedSibling proves an adopted sibling (Status
+// Indexed, no run record) is eligible, matching the auto-create trigger.
+func TestWorktreeReuseAcceptsAdoptedSibling(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "repo")
+	makeMainRepo(t, mainRoot)
+	worktreeDir := filepath.Join(base, "feature")
+	makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
+
+	registerSiblingCodebase(t, manager, mainRoot, func(c *model.Codebase) {
+		c.Status = model.CodebaseStatusIndexed
+		c.LastSuccessfulRun = nil
+	})
+
+	got := manager.worktreeSiblingReuseCollections(evalSym(t, worktreeDir), defaultIndexConfig())
+	if len(got) != 1 || got[0] != "cc_repo" {
+		t.Fatalf("adopted sibling not reused: got %v, want [cc_repo]", got)
+	}
+}
+
+// TestWorktreeReuseSkipsNeverIndexedSibling proves a sibling that never produced
+// a usable collection (not indexed, no run) is not an eligible source.
+func TestWorktreeReuseSkipsNeverIndexedSibling(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "repo")
+	makeMainRepo(t, mainRoot)
+	worktreeDir := filepath.Join(base, "feature")
+	makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
+
+	registerSiblingCodebase(t, manager, mainRoot, func(c *model.Codebase) {
+		c.Status = model.CodebaseStatusIndexing
+		c.LastSuccessfulRun = nil
+	})
+
+	got := manager.worktreeSiblingReuseCollections(evalSym(t, worktreeDir), defaultIndexConfig())
+	if len(got) != 0 {
+		t.Fatalf("never-indexed sibling should not be reused: got %v", got)
+	}
+}
+
+// TestWorktreeReuseSkipsModelMismatch proves a sibling indexed with a different
+// embedding model is not an eligible source.
+func TestWorktreeReuseSkipsModelMismatch(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "repo")
+	makeMainRepo(t, mainRoot)
+	worktreeDir := filepath.Join(base, "feature")
+	makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
+
+	mismatched := defaultIndexConfig()
+	mismatched.EmbeddingModel = "some-other-model"
+	registerSiblingCodebase(t, manager, mainRoot, func(c *model.Codebase) {
+		c.Status = model.CodebaseStatusIndexed
+		c.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
+		c.EffectiveConfig = mismatched
+	})
+
+	got := manager.worktreeSiblingReuseCollections(evalSym(t, worktreeDir), defaultIndexConfig())
+	if len(got) != 0 {
+		t.Fatalf("model-mismatched sibling should not be reused: got %v", got)
+	}
+}
