@@ -145,7 +145,7 @@ func (manager *Manager) DeleteConversation(ctx context.Context, collectionID str
 }
 
 // SearchConversations searches a registered virtual conversation collection.
-func (manager *Manager) SearchConversations(ctx context.Context, collectionID string, query string, limit int32) ([]model.StoredChunk, error) {
+func (manager *Manager) SearchConversations(ctx context.Context, collectionID string, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
 	trimmedCollectionID := strings.TrimSpace(collectionID)
 
 	manager.mu.Lock()
@@ -154,18 +154,84 @@ func (manager *Manager) SearchConversations(ctx context.Context, collectionID st
 	if !found {
 		return nil, nil
 	}
+	return manager.searchConversationCollectionFiltered(ctx, codebase, query, limit, filter, perConversationLimit)
+}
+
+// SearchWithinConversation retrieves one conversation's matching rows plus the
+// content fingerprint the engine has embedded for it. An empty fingerprint
+// means the conversation is not indexed; a fingerprint differing from the
+// conversation's current one means the index trails the transcript. Either way
+// the caller decides whether to literal-scan newer content.
+func (manager *Manager) SearchWithinConversation(ctx context.Context, collectionID string, conversationID string, query string, limit int32, filter conversationSearchFilter) ([]model.StoredChunk, string, error) {
+	trimmedConversationID := strings.TrimSpace(conversationID)
+	if trimmedConversationID == "" {
+		return nil, "", errors.New("conversation id is required")
+	}
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		return nil, "", err
+	}
+	filter.ConversationIDs = []string{trimmedConversationID}
+	chunks, err := manager.searchConversationCollectionFiltered(ctx, codebase, query, limit, filter, 0)
+	if err != nil {
+		return nil, "", err
+	}
+	return chunks, manager.conversationIndexedFingerprint(codebase, trimmedConversationID), nil
+}
+
+// conversationIndexedFingerprint reads the checkpointed content fingerprint
+// for one conversation from the collection's merkle snapshot. Empty when the
+// engine has never embedded the conversation.
+func (manager *Manager) conversationIndexedFingerprint(codebase model.Codebase, conversationID string) string {
+	snapshot := merkle.LoadSnapshotForConfig(
+		manager.merklePath(codebase.ID),
+		codebase.EffectiveConfig.IgnoreDigest,
+		manager.legacyDigestForCodebase(codebase.ID),
+	)
+	return snapshot.Files[conversationID]
+}
+
+const (
+	// conversationSearchInflationFactor over-fetches before post-retrieval
+	// filtering so row conditions do not starve the final result list.
+	conversationSearchInflationFactor = 4
+	// conversationSearchInflationCap bounds the over-fetch.
+	conversationSearchInflationCap = int32(500)
+)
+
+// inflatedConversationSearchLimit returns how many rows to fetch before
+// post-filtering: the requested limit when nothing filters per row, otherwise
+// the inflated, capped fetch size.
+func inflatedConversationSearchLimit(limit int32, filter conversationSearchFilter, perConversationLimit int32) int32 {
+	if !filter.hasRowConditions() && perConversationLimit <= 0 {
+		return limit
+	}
+	inflated := min(limit*conversationSearchInflationFactor, conversationSearchInflationCap)
+	return max(inflated, limit)
+}
+
+// searchConversationCollectionFiltered is the one retrieval path under both
+// conversation search RPCs: a semantic search scoped by the filter's
+// conversation-id prefixes when the vector store is up, the literal chunk
+// cache otherwise, with the same row filtering applied to either source.
+func (manager *Manager) searchConversationCollectionFiltered(ctx context.Context, codebase model.Codebase, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	fetchLimit := inflatedConversationSearchLimit(limit, filter, perConversationLimit)
 
 	if manager.semantic != nil && manager.semantic.Available() {
-		chunks, err := manager.semantic.SearchConversationCollection(ctx, codebase.CollectionName, query, limit)
+		prefixes := conversationRelativePathPrefixes(filter.ConversationIDs)
+		chunks, err := manager.semantic.SearchConversationCollection(ctx, codebase.CollectionName, query, fetchLimit, prefixes)
 		if err == nil {
 			manager.noteDependencyHealthy()
-			return chunks, nil
+			return applyConversationSearchFilter(chunks, filter, perConversationLimit, limit), nil
 		}
 		manager.noteDependencyFailure(err)
-		slog.ErrorContext(ctx, "search conversation collection failed", "collection_id", trimmedCollectionID, "collection", codebase.CollectionName, "err", err)
+		slog.ErrorContext(ctx, "search conversation collection failed", "collection", codebase.CollectionName, "err", err)
 	}
 
-	return manager.searchConversationChunkCache(ctx, codebase, query, limit)
+	return manager.searchConversationChunkCache(ctx, codebase, query, limit, fetchLimit, filter, perConversationLimit)
 }
 
 func (manager *Manager) deleteConversation(ctx context.Context, collectionID string, conversationID string, client model.ClientInfo) (model.Job, error) {
@@ -348,7 +414,7 @@ func (manager *Manager) finishConversationDelete(jobID string) {
 	}
 }
 
-func (manager *Manager) searchConversationChunkCache(ctx context.Context, codebase model.Codebase, query string, limit int32) ([]model.StoredChunk, error) {
+func (manager *Manager) searchConversationChunkCache(ctx context.Context, codebase model.Codebase, query string, limit int32, fetchLimit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
 	chunks, err := store.ReadChunks(manager.chunkPath(codebase.ID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -357,7 +423,8 @@ func (manager *Manager) searchConversationChunkCache(ctx context.Context, codeba
 		slog.ErrorContext(ctx, "read conversation chunk cache failed", "codebase_id", codebase.ID, "err", err)
 		return nil, fmt.Errorf("read conversation chunk cache for %s: %w", codebase.ID, err)
 	}
-	return rankChunks(chunks, query, limit, nil, ""), nil
+	ranked := rankChunks(chunks, query, fetchLimit, nil, "")
+	return applyConversationSearchFilter(ranked, filter, perConversationLimit, limit), nil
 }
 
 // mergeConversationChunkCache keeps the literal-fallback chunk cache complete
@@ -555,6 +622,7 @@ func conversationDocumentsToStoredChunks(documents []model.ConversationDocument)
 				MessageIndex:         document.MessageIndex,
 				Role:                 document.Role,
 				TimestampUnix:        document.TimestampUnix,
+				Score:                0,
 			})
 		}
 	}

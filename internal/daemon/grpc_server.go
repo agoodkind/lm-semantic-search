@@ -615,13 +615,13 @@ func (server *GRPCServer) SearchConversations(ctx context.Context, request *pb.S
 	if argErr := requireNonEmpty(ctx, request.GetQuery(), "query", false); argErr != nil {
 		return nil, argErr
 	}
-	results, callErr := server.manager.SearchConversations(ctx, request.GetCollectionId(), request.GetQuery(), request.GetLimit())
+	results, callErr := server.manager.SearchConversations(ctx, request.GetCollectionId(), request.GetQuery(), request.GetLimit(), pbConversationSearchFilter(request.GetFilter()), request.GetPerConversationLimit())
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
 	}
 	health := server.manager.DependencyHealth()
 	response := &pb.SearchConversationsResponse{
-		Results:          make([]*pb.ConversationSearchResult, 0, len(results)),
+		Results:          conversationSearchResults(results),
 		DependencyHealth: toDependencyHealth(health),
 		DisplayText: server.envelopeText(ctx, health, renderConversationSearch(conversationSearchView{
 			CollectionID: request.GetCollectionId(),
@@ -629,18 +629,84 @@ func (server *GRPCServer) SearchConversations(ctx context.Context, request *pb.S
 			Results:      results,
 		})),
 	}
+	return response, nil
+}
+
+// SearchWithinConversation retrieves one conversation's matching rows plus the
+// fingerprint the engine has embedded for it, so the caller can tell complete
+// results from ones that trail the live transcript.
+func (server *GRPCServer) SearchWithinConversation(ctx context.Context, request *pb.SearchWithinConversationRequest) (resp *pb.SearchWithinConversationResponse, err error) {
+	ctx, done := beginRPC(ctx, "SearchWithinConversation")
+	defer done(&err)
+	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
+		return nil, argErr
+	}
+	if argErr := requireNonEmpty(ctx, request.GetConversationId(), "conversation_id", false); argErr != nil {
+		return nil, argErr
+	}
+	if argErr := requireNonEmpty(ctx, request.GetQuery(), "query", false); argErr != nil {
+		return nil, argErr
+	}
+	results, indexedFingerprint, callErr := server.manager.SearchWithinConversation(ctx, request.GetCollectionId(), request.GetConversationId(), request.GetQuery(), request.GetLimit(), pbConversationSearchFilter(request.GetFilter()))
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
+	}
+	health := server.manager.DependencyHealth()
+	return &pb.SearchWithinConversationResponse{
+		Results:            conversationSearchResults(results),
+		IndexedFingerprint: indexedFingerprint,
+		DependencyHealth:   toDependencyHealth(health),
+		DisplayText: server.envelopeText(ctx, health, renderConversationSearch(conversationSearchView{
+			CollectionID: request.GetCollectionId(),
+			Query:        request.GetQuery(),
+			Results:      results,
+		})),
+	}, nil
+}
+
+// conversationSearchResults converts retrieved chunks to wire results,
+// carrying the retrieval score.
+func conversationSearchResults(results []model.StoredChunk) []*pb.ConversationSearchResult {
+	out := make([]*pb.ConversationSearchResult, 0, len(results))
 	for _, result := range results {
-		response.Results = append(response.Results, &pb.ConversationSearchResult{
+		out = append(out, &pb.ConversationSearchResult{
 			ConversationId:       result.ConversationID,
 			ParentConversationId: result.ParentConversationID,
 			MessageIndex:         result.MessageIndex,
 			Role:                 result.Role,
 			TimestampUnix:        result.TimestampUnix,
-			Score:                0,
+			Score:                result.Score,
 			Content:              result.Content,
 		})
 	}
-	return response, nil
+	return out
+}
+
+// pbConversationSearchFilter converts the wire filter to the manager's typed
+// filter. A nil filter matches everything.
+func pbConversationSearchFilter(filter *pb.ConversationSearchFilter) conversationSearchFilter {
+	if filter == nil {
+		return conversationSearchFilter{
+			Roles:                nil,
+			FromUnix:             0,
+			UntilUnix:            0,
+			ConversationIDs:      nil,
+			ParentConversationID: "",
+			MinScore:             0,
+			MessageIndexFrom:     0,
+			MessageIndexUntil:    0,
+		}
+	}
+	return conversationSearchFilter{
+		Roles:                filter.GetRoles(),
+		FromUnix:             filter.GetFromUnix(),
+		UntilUnix:            filter.GetUntilUnix(),
+		ConversationIDs:      filter.GetConversationIds(),
+		ParentConversationID: filter.GetParentConversationId(),
+		MinScore:             filter.GetMinScore(),
+		MessageIndexFrom:     filter.GetMessageIndexFrom(),
+		MessageIndexUntil:    filter.GetMessageIndexUntil(),
+	}
 }
 
 // Doctor reports daemon-local diagnostics.

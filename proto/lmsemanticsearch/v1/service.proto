@@ -23,6 +23,7 @@ service SemanticSearchDaemonService {
   rpc UpsertConversationDocuments(UpsertConversationDocumentsRequest) returns (UpsertConversationDocumentsResponse);
   rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
+  rpc SearchWithinConversation(SearchWithinConversationRequest) returns (SearchWithinConversationResponse);
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
@@ -411,16 +412,66 @@ message DeleteConversationResponse {
   string display_text = 2;
 }
 
+// ConversationSearchFilter narrows conversation retrieval by row attributes.
+// Every field is optional; an empty filter matches everything. conversation_ids
+// pushes into the vector store as path-prefix expressions; the other fields
+// apply to the decoded row metadata after retrieval.
+message ConversationSearchFilter {
+  // roles keeps only hits whose message role is in the set, e.g. "user".
+  repeated string roles = 1;
+  // from_unix / until_unix bound the message timestamp (inclusive from,
+  // exclusive until). Zero means unbounded.
+  int64 from_unix = 2;
+  int64 until_unix = 3;
+  // conversation_ids restricts retrieval to these conversations. clyde resolves
+  // record-level scopes (provider, workspace, archived) into this set.
+  repeated string conversation_ids = 4;
+  // parent_conversation_id keeps only hits whose conversation forked from this
+  // parent, selecting a fork family.
+  string parent_conversation_id = 5;
+  // min_score drops hits scoring below the floor. Zero means no floor.
+  double min_score = 6;
+  // message_index_from / message_index_until bound the message index
+  // (inclusive from, exclusive until). until zero means unbounded.
+  int32 message_index_from = 7;
+  int32 message_index_until = 8;
+}
+
 message SearchConversationsRequest {
   string collection_id = 1;
   string query = 2;
   int32 limit = 3;
+  ConversationSearchFilter filter = 4;
+  // per_conversation_limit caps hits per conversation so one large transcript
+  // does not monopolize the result list. Zero means uncapped.
+  int32 per_conversation_limit = 5;
 }
 
 message SearchConversationsResponse {
   repeated ConversationSearchResult results = 1;
   string display_text = 2;
   DependencyHealth dependency_health = 3;
+}
+
+message SearchWithinConversationRequest {
+  string collection_id = 1;
+  // conversation_id scopes retrieval to one conversation and is required.
+  string conversation_id = 2;
+  string query = 3;
+  int32 limit = 4;
+  ConversationSearchFilter filter = 5;
+}
+
+message SearchWithinConversationResponse {
+  repeated ConversationSearchResult results = 1;
+  // indexed_fingerprint is the content fingerprint the engine has embedded for
+  // this conversation, from its checkpoint. Empty means the conversation is not
+  // indexed. A caller compares it to the conversation's current fingerprint to
+  // decide whether the hits are complete or a literal scan of newer content is
+  // needed.
+  string indexed_fingerprint = 2;
+  string display_text = 3;
+  DependencyHealth dependency_health = 4;
 }
 
 message Diagnostic {

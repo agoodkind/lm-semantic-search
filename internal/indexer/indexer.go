@@ -190,6 +190,7 @@ func (runner *Runner) processFile(ctx context.Context, fullPath string, relative
 			MessageIndex:         0,
 			Role:                 "",
 			TimestampUnix:        0,
+			Score:                0,
 		})
 	}
 	return processedFile{Chunks: chunks, FileHash: digestFileBytes(data), Skipped: false, SkipReason: SkipNone, Removed: false}, nil

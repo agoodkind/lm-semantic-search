@@ -45,8 +45,11 @@ type fakeSemantic struct {
 	loadReuseForPrefix func(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
 	reusePrefixCalls   []reusePrefixCall
 	reindexReuse       map[string]map[string][]float32
-	dropped            []string
-	droppedStaging     []string
+	// conversationSearchPrefixes records the scope prefixes each conversation
+	// search received, so tests can prove id-set pushdown.
+	conversationSearchPrefixes [][]string
+	dropped                    []string
+	droppedStaging             []string
 	// reindexEmit, when set, is invoked with the live progress callback during
 	// Reindex and StageReindex so a test can drive reuse-vs-embed progress
 	// reporting, including a conversation ingest's batch progress.
@@ -80,7 +83,10 @@ func (f *fakeSemantic) Search(ctx context.Context, codebasePath string, query st
 	return nil, nil
 }
 
-func (f *fakeSemantic) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32) ([]model.StoredChunk, error) {
+func (f *fakeSemantic) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32, relativePathPrefixes []string) ([]model.StoredChunk, error) {
+	f.mu.Lock()
+	f.conversationSearchPrefixes = append(f.conversationSearchPrefixes, append([]string(nil), relativePathPrefixes...))
+	f.mu.Unlock()
 	if f.conversationSearch != nil {
 		return f.conversationSearch(ctx, collectionName, query, limit)
 	}
