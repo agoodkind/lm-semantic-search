@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -37,8 +38,15 @@ type fakeSemantic struct {
 	// so a test can prove an absorb never drops the absorbed child collection.
 	loadReuse        func(ctx context.Context, collectionNames []string) (map[string][]float32, error)
 	reuseCollections [][]string
-	dropped          []string
-	droppedStaging   []string
+	// loadReuseForPrefix, when set, supplies the per-conversation reuse map a
+	// conversation ingest loads by conv/<id>/ prefix; reusePrefixCalls records
+	// every such load and reindexReuse records the reuse map each conversation's
+	// Reindex actually received.
+	loadReuseForPrefix func(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
+	reusePrefixCalls   []reusePrefixCall
+	reindexReuse       map[string]map[string][]float32
+	dropped            []string
+	droppedStaging     []string
 	// reindexEmit, when set, is invoked with the live progress callback during
 	// Reindex and StageReindex so a test can drive reuse-vs-embed progress
 	// reporting, including a conversation ingest's batch progress.
@@ -110,7 +118,63 @@ func (f *fakeSemantic) LoadReuseVectors(ctx context.Context, collectionNames []s
 	return map[string][]float32{}, nil
 }
 
-func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), _ map[string][]float32) error {
+// reusePrefixCall records one prefix-scoped reuse load: the collection asked
+// for and the relativePath prefix that scoped the read.
+type reusePrefixCall struct {
+	Collection string
+	Prefix     string
+}
+
+func (f *fakeSemantic) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
+	f.mu.Lock()
+	f.reusePrefixCalls = append(f.reusePrefixCalls, reusePrefixCall{Collection: collectionName, Prefix: relativePathPrefix})
+	f.mu.Unlock()
+	if f.loadReuseForPrefix != nil {
+		return f.loadReuseForPrefix(ctx, collectionName, relativePathPrefix)
+	}
+	return map[string][]float32{}, nil
+}
+
+// reusePrefixCallsSnapshot returns a copy of the recorded prefix reuse loads.
+func (f *fakeSemantic) reusePrefixCallsSnapshot() []reusePrefixCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]reusePrefixCall(nil), f.reusePrefixCalls...)
+}
+
+// reindexReuseSnapshot returns, per conversation id, a copy of the reuse map
+// the last Reindex for that conversation received.
+func (f *fakeSemantic) reindexReuseSnapshot() map[string]map[string][]float32 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]map[string][]float32, len(f.reindexReuse))
+	for conversationID, reuse := range f.reindexReuse {
+		copied := make(map[string][]float32, len(reuse))
+		maps.Copy(copied, reuse)
+		out[conversationID] = copied
+	}
+	return out
+}
+
+// recordReindexReuse stores the reuse map a Reindex call carried, keyed by the
+// conversation id of its first chunk, so conversation tests can assert which
+// reuse map reached which conversation's reindex.
+func (f *fakeSemantic) recordReindexReuse(chunks []model.StoredChunk, reuse map[string][]float32) {
+	if len(chunks) == 0 || chunks[0].ConversationID == "" {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reindexReuse == nil {
+		f.reindexReuse = make(map[string]map[string][]float32)
+	}
+	copied := make(map[string][]float32, len(reuse))
+	maps.Copy(copied, reuse)
+	f.reindexReuse[chunks[0].ConversationID] = copied
+}
+
+func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32) error {
+	f.recordReindexReuse(chunks, reuse)
 	if f.reindexEmit != nil && progress != nil {
 		f.reindexEmit(progress)
 	}

@@ -19,7 +19,14 @@ type semanticReader interface {
 	ListCollections(ctx context.Context) ([]string, error)
 	HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error)
 	HasStaging(ctx context.Context, codebasePath string) (bool, error)
+}
+
+// semanticReuseLoader is the slice that reads already-embedded vectors back
+// out of collections so a build or reindex can skip the embedder for chunks
+// whose content is unchanged.
+type semanticReuseLoader interface {
 	LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error)
+	LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
 }
 
 // semanticWriter is the slice that mutates the live or staging collection.
@@ -44,6 +51,7 @@ type semanticDropper interface {
 // exactly what the daemon calls, no more.
 type semanticIndex interface {
 	semanticReader
+	semanticReuseLoader
 	semanticWriter
 	semanticDropper
 }

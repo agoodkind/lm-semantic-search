@@ -537,6 +537,7 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		return deltaOutcome{fallback: false, handled: false}
 	}
 	if state.semantic {
+		state.reuse = manager.itemReuse(ctx, state, relativePath)
 		if outcome := manager.applyReindexForState(ctx, job, state, fileResult.Chunks, state.source.removalFor([]string{relativePath}), "per-file reindex"); outcome.fallback || outcome.handled {
 			return outcome
 		}
@@ -546,6 +547,37 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 	result.TotalChunks += safeInt32(len(fileResult.Chunks))
 	result.IndexedFiles++
 	return deltaOutcome{fallback: false, handled: false}
+}
+
+// itemReuse loads one item's own stored vectors before the reindex deletes
+// them, so chunks whose content is unchanged take their vector from the store
+// instead of the embedder. It returns the build-wide reuse map unchanged when
+// the source has no per-item reuse, and on a failed load it logs and falls
+// back to that map so the item embeds every chunk rather than failing.
+func (manager *Manager) itemReuse(ctx context.Context, state deltaState, relativePath string) map[string][]float32 {
+	collectionName, reusePrefix, ok := state.source.reuseSource(relativePath)
+	if !ok {
+		return state.reuse
+	}
+	itemReuse, err := manager.semantic.LoadReuseVectorsForPrefix(ctx, collectionName, reusePrefix)
+	if err != nil {
+		slog.WarnContext(ctx, "load item reuse vectors failed; embedding every chunk", "path", relativePath, "collection", collectionName, "err", err)
+		return state.reuse
+	}
+	return mergedReuse(state.reuse, itemReuse)
+}
+
+// mergedReuse overlays an item's own reuse vectors on any build-wide reuse map
+// without mutating either input. With no build-wide map the item map is used
+// as-is, which is the conversation delta case.
+func mergedReuse(base map[string][]float32, item map[string][]float32) map[string][]float32 {
+	if len(base) == 0 {
+		return item
+	}
+	merged := make(map[string][]float32, len(base)+len(item))
+	maps.Copy(merged, base)
+	maps.Copy(merged, item)
+	return merged
 }
 
 func (manager *Manager) classifyReindexErr(ctx context.Context, job model.Job, err error, phase string) deltaOutcome {

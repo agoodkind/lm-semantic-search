@@ -622,3 +622,97 @@ func waitForConversationJobState(t *testing.T, manager *Manager, jobID string, s
 		return found && job.State == state
 	})
 }
+
+// TestConversationIngestLoadsReuseVectorsPerConversation proves the upsert path
+// loads each delivered conversation's existing vectors from the live collection,
+// scoped to its conv/<id>/ prefix, and hands that exact map to the reindex, so
+// unchanged chunks take their stored vector instead of the embedder.
+func TestConversationIngestLoadsReuseVectorsPerConversation(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	reuseByPrefix := map[string]map[string][]float32{
+		"conv/conv-alpha/": {"hash-alpha": {0.1}},
+		"conv/conv-beta/":  {"hash-beta": {0.2}},
+	}
+	fake := &fakeSemantic{
+		loadReuseForPrefix: func(_ context.Context, _ string, prefix string) (map[string][]float32, error) {
+			return reuseByPrefix[prefix], nil
+		},
+	}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-reuse"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
+		{ConversationID: "conv-alpha", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "alpha"},
+		{ConversationID: "conv-beta", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "beta"},
+	}, map[string]string{"conv-alpha": "fp-a-1", "conv-beta": "fp-b-1"}, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+
+	prefixCalls := fake.reusePrefixCallsSnapshot()
+	if len(prefixCalls) != 2 {
+		t.Fatalf("reuse prefix loads = %d, want 2 (one per delivered conversation): %+v", len(prefixCalls), prefixCalls)
+	}
+	seenPrefixes := map[string]bool{}
+	for _, call := range prefixCalls {
+		if call.Collection != codebase.CollectionName {
+			t.Fatalf("reuse load collection = %q, want live collection %q", call.Collection, codebase.CollectionName)
+		}
+		seenPrefixes[call.Prefix] = true
+	}
+	if !seenPrefixes["conv/conv-alpha/"] || !seenPrefixes["conv/conv-beta/"] {
+		t.Fatalf("reuse load prefixes = %v, want conv/conv-alpha/ and conv/conv-beta/", seenPrefixes)
+	}
+
+	reuseByConversation := fake.reindexReuseSnapshot()
+	alphaReuse, alphaSeen := reuseByConversation["conv-alpha"]
+	if !alphaSeen || len(alphaReuse) != 1 || alphaReuse["hash-alpha"] == nil {
+		t.Fatalf("conv-alpha reindex reuse = %v, want the conv/conv-alpha/ map", alphaReuse)
+	}
+	betaReuse, betaSeen := reuseByConversation["conv-beta"]
+	if !betaSeen || len(betaReuse) != 1 || betaReuse["hash-beta"] == nil {
+		t.Fatalf("conv-beta reindex reuse = %v, want the conv/conv-beta/ map", betaReuse)
+	}
+}
+
+// TestConversationIngestReuseLoadFailureFallsBackToFullEmbed proves a failed
+// reuse load does not fail the job: the conversation reindexes with a nil reuse
+// map, so every chunk embeds fresh, and the job still completes.
+func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	fake := &fakeSemantic{
+		loadReuseForPrefix: func(_ context.Context, _ string, _ string) (map[string][]float32, error) {
+			return nil, errors.New("milvus read failed")
+		},
+	}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-reuse-fallback"
+
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
+		{ConversationID: "conv-solo", MessageIndex: 0, Role: "user", TimestampUnix: 1712345002, Text: "solo"},
+	}, map[string]string{"conv-solo": "fp-s-1"}, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+
+	reuseByConversation := fake.reindexReuseSnapshot()
+	soloReuse, soloSeen := reuseByConversation["conv-solo"]
+	if !soloSeen {
+		t.Fatal("conv-solo was not reindexed after reuse load failure")
+	}
+	if len(soloReuse) != 0 {
+		t.Fatalf("conv-solo reindex reuse = %v, want empty after load failure", soloReuse)
+	}
+}
