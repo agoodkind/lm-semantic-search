@@ -157,7 +157,11 @@ func rankChunks(chunks []model.StoredChunk, query string, limit int32, extension
 		maxResults = len(scored)
 	}
 	for _, item := range scored[:maxResults] {
-		filteredChunks = append(filteredChunks, item.chunk)
+		// Carry the keyword rank as the chunk score so literal-fallback results
+		// keep an ordering signal alongside semantic results' similarity scores.
+		rankedChunk := item.chunk
+		rankedChunk.Score = float64(item.score)
+		filteredChunks = append(filteredChunks, rankedChunk)
 	}
 	return filteredChunks
 }

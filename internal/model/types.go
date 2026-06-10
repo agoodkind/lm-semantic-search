@@ -243,6 +243,10 @@ type StoredChunk struct {
 	MessageIndex         int32  `json:"message_index"`
 	Role                 string `json:"role"`
 	TimestampUnix        int64  `json:"timestamp_unix"`
+	// Score is the retrieval relevance for this chunk: the vector similarity
+	// from a semantic search, or the keyword rank from the literal fallback.
+	// Zero on chunks that did not come from a search.
+	Score float64 `json:"score,omitempty"`
 }
 
 // ConversationDocument is one caller-provided conversation message chunk.

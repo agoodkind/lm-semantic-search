@@ -134,12 +134,12 @@ func TestBuildRelativePathPrefixFilterMatchesSubtree(t *testing.T) {
 }
 
 func TestBuildSearchFilterCombinesExtensionAndPrefix(t *testing.T) {
-	got := buildSearchFilter([]string{".go"}, "codex-rs")
+	got := buildSearchFilter([]string{".go"}, []string{"codex-rs"})
 	want := `fileExtension in [".go"] and (relativePath == "codex-rs" or relativePath like "codex-rs/%")`
 	if got != want {
 		t.Fatalf("combined filter = %q, want %q", got, want)
 	}
-	if got := buildSearchFilter(nil, ""); got != "" {
+	if got := buildSearchFilter(nil, nil); got != "" {
 		t.Fatalf("no extension and no prefix produced %q, want empty", got)
 	}
 }

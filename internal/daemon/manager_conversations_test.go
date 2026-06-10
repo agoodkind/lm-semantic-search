@@ -204,7 +204,7 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 		},
 	}
 
-	chunks, err := manager.SearchConversations(context.Background(), collectionID, "needle", 5)
+	chunks, err := manager.SearchConversations(context.Background(), collectionID, "needle", 5, conversationSearchFilter{Roles: nil, FromUnix: 0, UntilUnix: 0, ConversationIDs: nil, ParentConversationID: "", MinScore: 0, MessageIndexFrom: 0, MessageIndexUntil: 0}, 0)
 	if err != nil {
 		t.Fatalf("SearchConversations returned error: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 	}
 
 	callsBeforeUnregistered := searchCalls
-	unregisteredChunks, err := manager.SearchConversations(context.Background(), "missing-thread", "needle", 5)
+	unregisteredChunks, err := manager.SearchConversations(context.Background(), "missing-thread", "needle", 5, conversationSearchFilter{Roles: nil, FromUnix: 0, UntilUnix: 0, ConversationIDs: nil, ParentConversationID: "", MinScore: 0, MessageIndexFrom: 0, MessageIndexUntil: 0}, 0)
 	if err != nil {
 		t.Fatalf("SearchConversations for unregistered collection returned error: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestConversationIngestMaintainsChunkCache(t *testing.T) {
 		t.Fatalf("re-upsert stored %d conv-alpha chunks, want 1", alphaCount)
 	}
 
-	results, err := manager.SearchConversations(ctx, collectionID, "fresh needle", 5)
+	results, err := manager.SearchConversations(ctx, collectionID, "fresh needle", 5, conversationSearchFilter{Roles: nil, FromUnix: 0, UntilUnix: 0, ConversationIDs: nil, ParentConversationID: "", MinScore: 0, MessageIndexFrom: 0, MessageIndexUntil: 0}, 0)
 	if err != nil {
 		t.Fatalf("SearchConversations returned error: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestSearchConversationsFallsBackToChunkCacheAfterSemanticError(t *testing.T
 		t.Fatalf("WriteChunks returned error: %v", err)
 	}
 
-	results, err := manager.SearchConversations(context.Background(), collectionID, "needle", 5)
+	results, err := manager.SearchConversations(context.Background(), collectionID, "needle", 5, conversationSearchFilter{Roles: nil, FromUnix: 0, UntilUnix: 0, ConversationIDs: nil, ParentConversationID: "", MinScore: 0, MessageIndexFrom: 0, MessageIndexUntil: 0}, 0)
 	if err != nil {
 		t.Fatalf("SearchConversations returned error: %v", err)
 	}
@@ -622,6 +622,134 @@ func waitForConversationJobState(t *testing.T, manager *Manager, jobID string, s
 		job, found := manager.GetJob(jobID)
 		return found && job.State == state
 	})
+}
+
+// TestSearchWithinConversationScopesAndReportsFingerprint proves the within
+// search returns only the target conversation's rows and the checkpointed
+// fingerprint for it, while an unknown conversation returns empty hits with an
+// empty fingerprint, which is the typed not-indexed answer.
+func TestSearchWithinConversationScopesAndReportsFingerprint(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{unavailable: true}
+	ctx := context.Background()
+	collectionID := "thread-within"
+
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
+		{ConversationID: "conv-a", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "needle in alpha"},
+		{ConversationID: "conv-b", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "needle in beta"},
+	}, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"}, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+
+	hits, indexedFingerprint, err := manager.SearchWithinConversation(ctx, collectionID, "conv-a", "needle", 5, emptyConversationSearchFilter())
+	if err != nil {
+		t.Fatalf("SearchWithinConversation returned error: %v", err)
+	}
+	if len(hits) != 1 || hits[0].ConversationID != "conv-a" {
+		t.Fatalf("within hits = %+v, want only conv-a", hits)
+	}
+	if hits[0].Score <= 0 {
+		t.Fatalf("within hit score = %v, want a positive literal rank", hits[0].Score)
+	}
+	if indexedFingerprint != "fp-a-1" {
+		t.Fatalf("indexed fingerprint = %q, want fp-a-1", indexedFingerprint)
+	}
+
+	missingHits, missingFingerprint, err := manager.SearchWithinConversation(ctx, collectionID, "conv-unknown", "needle", 5, emptyConversationSearchFilter())
+	if err != nil {
+		t.Fatalf("SearchWithinConversation for unknown conversation returned error: %v", err)
+	}
+	if len(missingHits) != 0 {
+		t.Fatalf("unknown conversation hits = %+v, want none", missingHits)
+	}
+	if missingFingerprint != "" {
+		t.Fatalf("unknown conversation fingerprint = %q, want empty", missingFingerprint)
+	}
+}
+
+// TestSearchWithinConversationPushesPrefixScope proves the within search hands
+// the engine the conversation's conv/<id>/ prefix, so scoping happens in the
+// vector store rather than by post-filtering an unscoped result list.
+func TestSearchWithinConversationPushesPrefixScope(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	fake := &fakeSemantic{
+		conversationSearch: func(_ context.Context, _ string, _ string, _ int32) ([]model.StoredChunk, error) {
+			return []model.StoredChunk{}, nil
+		},
+	}
+	manager.semantic = fake
+	ctx := context.Background()
+
+	if _, _, err := manager.SearchWithinConversation(ctx, "thread-scope", "conv-scoped", "needle", 5, emptyConversationSearchFilter()); err != nil {
+		t.Fatalf("SearchWithinConversation returned error: %v", err)
+	}
+
+	fake.mu.Lock()
+	prefixCalls := append([][]string(nil), fake.conversationSearchPrefixes...)
+	fake.mu.Unlock()
+	if len(prefixCalls) != 1 {
+		t.Fatalf("conversation searches = %d, want 1", len(prefixCalls))
+	}
+	if len(prefixCalls[0]) != 1 || prefixCalls[0][0] != "conv/conv-scoped/" {
+		t.Fatalf("scope prefixes = %v, want [conv/conv-scoped/]", prefixCalls[0])
+	}
+}
+
+// TestSearchWithinConversationRPCBoundary proves the wire handler round-trips
+// hits, scores, and the indexed fingerprint, and rejects a missing
+// conversation id.
+func TestSearchWithinConversationRPCBoundary(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{unavailable: true}
+	server := NewGRPCServer(manager, nil)
+	ctx := context.Background()
+	collectionID := "thread-within-rpc"
+
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
+		{ConversationID: "conv-rpc", MessageIndex: 3, Role: "assistant", TimestampUnix: 1712345002, Text: "needle on the wire"},
+	}, map[string]string{"conv-rpc": "fp-rpc-1"}, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+
+	response, err := server.SearchWithinConversation(ctx, &pb.SearchWithinConversationRequest{
+		CollectionId:   collectionID,
+		ConversationId: "conv-rpc",
+		Query:          "needle",
+		Limit:          5,
+	})
+	if err != nil {
+		t.Fatalf("SearchWithinConversation RPC returned error: %v", err)
+	}
+	if response.GetIndexedFingerprint() != "fp-rpc-1" {
+		t.Fatalf("RPC indexed fingerprint = %q, want fp-rpc-1", response.GetIndexedFingerprint())
+	}
+	results := response.GetResults()
+	if len(results) != 1 {
+		t.Fatalf("RPC results = %d, want 1", len(results))
+	}
+	if results[0].GetConversationId() != "conv-rpc" || results[0].GetMessageIndex() != 3 || results[0].GetRole() != "assistant" {
+		t.Fatalf("RPC result = %+v, want conv-rpc message 3 assistant", results[0])
+	}
+	if results[0].GetScore() <= 0 {
+		t.Fatalf("RPC result score = %v, want positive", results[0].GetScore())
+	}
+
+	if _, err := server.SearchWithinConversation(ctx, &pb.SearchWithinConversationRequest{
+		CollectionId: collectionID,
+		Query:        "needle",
+	}); err == nil {
+		t.Fatal("RPC accepted a missing conversation_id, want an argument error")
+	}
 }
 
 // TestConversationIngestLoadsReuseVectorsPerConversation proves the upsert path

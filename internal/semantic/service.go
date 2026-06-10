@@ -301,12 +301,14 @@ func (service *Service) Search(ctx context.Context, codebasePath string, query s
 	}
 
 	collectionName := service.CollectionName(codebasePath)
-	return service.searchCollection(ctx, collectionName, query, limit, extensionFilter, relativePathPrefix)
+	return service.searchCollection(ctx, collectionName, query, limit, extensionFilter, []string{relativePathPrefix})
 }
 
 // SearchConversationCollection executes semantic or hybrid search against a
-// registered virtual conversation collection name.
-func (service *Service) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32) ([]model.StoredChunk, error) {
+// registered virtual conversation collection name. relativePathPrefixes scopes
+// retrieval to the given path subtrees (a conversation's rows live under its
+// conv/<id>/ prefix); an empty set searches the whole collection.
+func (service *Service) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32, relativePathPrefixes []string) ([]model.StoredChunk, error) {
 	if !service.Available() {
 		return nil, nil
 	}
@@ -314,10 +316,10 @@ func (service *Service) SearchConversationCollection(ctx context.Context, collec
 	if trimmedCollectionName == "" {
 		return nil, errors.New("conversation collection name is required")
 	}
-	return service.searchCollection(ctx, trimmedCollectionName, query, limit, nil, "")
+	return service.searchCollection(ctx, trimmedCollectionName, query, limit, nil, relativePathPrefixes)
 }
 
-func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error) {
+func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, extensionFilter []string, relativePathPrefixes []string) ([]model.StoredChunk, error) {
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "check Milvus collection failed", "collection", collectionName, "err", err)
@@ -337,7 +339,7 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 	if searchLimit <= 0 {
 		searchLimit = 10
 	}
-	filterExpr := buildSearchFilter(extensionFilter, relativePathPrefix)
+	filterExpr := buildSearchFilter(extensionFilter, relativePathPrefixes)
 
 	outputFields := []string{
 		contentFieldName,
@@ -582,6 +584,10 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			}
 		}
 
+		score := 0.0
+		if index < len(resultSet.Scores) {
+			score = float64(resultSet.Scores[index])
+		}
 		chunks = append(chunks, model.StoredChunk{
 			Content:              contentValue,
 			RelativePath:         relativePathValue,
@@ -594,6 +600,7 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			MessageIndex:         metadataValue.messageIndex(),
 			Role:                 metadataValue.Role,
 			TimestampUnix:        metadataValue.timestampUnix(),
+			Score:                score,
 		})
 	}
 	return chunks, nil
@@ -795,49 +802,6 @@ func generateID(chunk model.StoredChunk, _ int) string {
 	hashInput := fmt.Sprintf("%s:%d:%d:%s", chunk.RelativePath, chunk.StartLine, chunk.EndLine, chunk.Content)
 	sum := sha256.Sum256([]byte(hashInput))
 	return "chunk_" + hex.EncodeToString(sum[:])[:16]
-}
-
-// buildSearchFilter joins the extension filter and the relative-path prefix
-// scope into one Milvus boolean expression, ANDing whichever clauses are
-// present. An empty result means no filter, which searches the whole
-// collection.
-func buildSearchFilter(extensionFilter []string, relativePathPrefix string) string {
-	clauses := make([]string, 0, 2)
-	if extensionClause := buildExtensionFilter(extensionFilter); extensionClause != "" {
-		clauses = append(clauses, extensionClause)
-	}
-	if prefixClause := buildRelativePathPrefixFilter(relativePathPrefix); prefixClause != "" {
-		clauses = append(clauses, prefixClause)
-	}
-	return strings.Join(clauses, " and ")
-}
-
-// buildRelativePathPrefixFilter matches a directory and everything beneath it:
-// the row whose relativePath equals the prefix, plus every row whose
-// relativePath begins with the prefix and a separator. An empty or root prefix
-// returns no clause so the whole collection is searched.
-func buildRelativePathPrefixFilter(relativePathPrefix string) string {
-	trimmed := strings.Trim(strings.TrimSpace(relativePathPrefix), "/")
-	if trimmed == "" || trimmed == "." {
-		return ""
-	}
-	escaped := escapeMilvusString(trimmed)
-	return fmt.Sprintf(`(%s == "%s" or %s like "%s/%%")`, relativePathFieldName, escaped, relativePathFieldName, escaped)
-}
-
-func buildExtensionFilter(extensionFilter []string) string {
-	cleanedExtensions := make([]string, 0, len(extensionFilter))
-	for _, extension := range normalizeExtensionFilter(extensionFilter) {
-		trimmedExtension := strings.TrimSpace(extension)
-		if trimmedExtension == "" {
-			continue
-		}
-		cleanedExtensions = append(cleanedExtensions, fmt.Sprintf("%q", trimmedExtension))
-	}
-	if len(cleanedExtensions) == 0 {
-		return ""
-	}
-	return fileExtensionFieldName + " in [" + strings.Join(cleanedExtensions, ", ") + "]"
 }
 
 func sanitizeCollectionSuffix(value string) string {
