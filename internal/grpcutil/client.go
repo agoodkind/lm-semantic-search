@@ -13,6 +13,14 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// MaxMessageBytes is the gRPC message ceiling for the daemon socket on both
+// the client send and server receive sides. A conversation upsert carries one
+// whole conversation's documents in a single message because the engine
+// replaces a conversation atomically, and a long transcript exceeds gRPC's
+// 4 MiB default, so the local-socket ceiling is raised instead of splitting
+// a conversation across messages.
+const MaxMessageBytes = 64 << 20
+
 // DialDaemon creates a gRPC client connection to the local daemon
 // socket. Callers should wrap their context with [WithCorrelation]
 // (or call [correlation.NewOutgoingContext] directly) so the daemon
@@ -21,6 +29,10 @@ func DialDaemon(ctx context.Context, socketPath string) (*grpc.ClientConn, pb.Se
 	connection, err := grpc.NewClient(
 		"passthrough:///unix",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallSendMsgSize(MaxMessageBytes),
+			grpc.MaxCallRecvMsgSize(MaxMessageBytes),
+		),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			var dialer net.Dialer
 			return dialer.DialContext(ctx, "unix", socketPath)
