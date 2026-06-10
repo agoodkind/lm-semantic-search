@@ -3227,18 +3227,136 @@ func (x *DeleteConversationResponse) GetDisplayText() string {
 	return ""
 }
 
+// ConversationSearchFilter narrows conversation retrieval by row attributes.
+// Every field is optional; an empty filter matches everything. conversation_ids
+// pushes into the vector store as path-prefix expressions; the other fields
+// apply to the decoded row metadata after retrieval.
+type ConversationSearchFilter struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// roles keeps only hits whose message role is in the set, e.g. "user".
+	Roles []string `protobuf:"bytes,1,rep,name=roles,proto3" json:"roles,omitempty"`
+	// from_unix / until_unix bound the message timestamp (inclusive from,
+	// exclusive until). Zero means unbounded.
+	FromUnix  int64 `protobuf:"varint,2,opt,name=from_unix,json=fromUnix,proto3" json:"from_unix,omitempty"`
+	UntilUnix int64 `protobuf:"varint,3,opt,name=until_unix,json=untilUnix,proto3" json:"until_unix,omitempty"`
+	// conversation_ids restricts retrieval to these conversations. clyde resolves
+	// record-level scopes (provider, workspace, archived) into this set.
+	ConversationIds []string `protobuf:"bytes,4,rep,name=conversation_ids,json=conversationIds,proto3" json:"conversation_ids,omitempty"`
+	// parent_conversation_id keeps only hits whose conversation forked from this
+	// parent, selecting a fork family.
+	ParentConversationId string `protobuf:"bytes,5,opt,name=parent_conversation_id,json=parentConversationId,proto3" json:"parent_conversation_id,omitempty"`
+	// min_score drops hits scoring below the floor. Zero means no floor.
+	MinScore float64 `protobuf:"fixed64,6,opt,name=min_score,json=minScore,proto3" json:"min_score,omitempty"`
+	// message_index_from / message_index_until bound the message index
+	// (inclusive from, exclusive until). until zero means unbounded.
+	MessageIndexFrom  int32 `protobuf:"varint,7,opt,name=message_index_from,json=messageIndexFrom,proto3" json:"message_index_from,omitempty"`
+	MessageIndexUntil int32 `protobuf:"varint,8,opt,name=message_index_until,json=messageIndexUntil,proto3" json:"message_index_until,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ConversationSearchFilter) Reset() {
+	*x = ConversationSearchFilter{}
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConversationSearchFilter) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConversationSearchFilter) ProtoMessage() {}
+
+func (x *ConversationSearchFilter) ProtoReflect() protoreflect.Message {
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConversationSearchFilter.ProtoReflect.Descriptor instead.
+func (*ConversationSearchFilter) Descriptor() ([]byte, []int) {
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *ConversationSearchFilter) GetRoles() []string {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
+}
+
+func (x *ConversationSearchFilter) GetFromUnix() int64 {
+	if x != nil {
+		return x.FromUnix
+	}
+	return 0
+}
+
+func (x *ConversationSearchFilter) GetUntilUnix() int64 {
+	if x != nil {
+		return x.UntilUnix
+	}
+	return 0
+}
+
+func (x *ConversationSearchFilter) GetConversationIds() []string {
+	if x != nil {
+		return x.ConversationIds
+	}
+	return nil
+}
+
+func (x *ConversationSearchFilter) GetParentConversationId() string {
+	if x != nil {
+		return x.ParentConversationId
+	}
+	return ""
+}
+
+func (x *ConversationSearchFilter) GetMinScore() float64 {
+	if x != nil {
+		return x.MinScore
+	}
+	return 0
+}
+
+func (x *ConversationSearchFilter) GetMessageIndexFrom() int32 {
+	if x != nil {
+		return x.MessageIndexFrom
+	}
+	return 0
+}
+
+func (x *ConversationSearchFilter) GetMessageIndexUntil() int32 {
+	if x != nil {
+		return x.MessageIndexUntil
+	}
+	return 0
+}
+
 type SearchConversationsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId  string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	Query         string                 `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
-	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState    `protogen:"open.v1"`
+	CollectionId string                    `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
+	Query        string                    `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
+	Limit        int32                     `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	Filter       *ConversationSearchFilter `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
+	// per_conversation_limit caps hits per conversation so one large transcript
+	// does not monopolize the result list. Zero means uncapped.
+	PerConversationLimit int32 `protobuf:"varint,5,opt,name=per_conversation_limit,json=perConversationLimit,proto3" json:"per_conversation_limit,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SearchConversationsRequest) Reset() {
 	*x = SearchConversationsRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[45]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3250,7 +3368,7 @@ func (x *SearchConversationsRequest) String() string {
 func (*SearchConversationsRequest) ProtoMessage() {}
 
 func (x *SearchConversationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[45]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3263,7 +3381,7 @@ func (x *SearchConversationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchConversationsRequest.ProtoReflect.Descriptor instead.
 func (*SearchConversationsRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{45}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *SearchConversationsRequest) GetCollectionId() string {
@@ -3287,6 +3405,20 @@ func (x *SearchConversationsRequest) GetLimit() int32 {
 	return 0
 }
 
+func (x *SearchConversationsRequest) GetFilter() *ConversationSearchFilter {
+	if x != nil {
+		return x.Filter
+	}
+	return nil
+}
+
+func (x *SearchConversationsRequest) GetPerConversationLimit() int32 {
+	if x != nil {
+		return x.PerConversationLimit
+	}
+	return 0
+}
+
 type SearchConversationsResponse struct {
 	state            protoimpl.MessageState      `protogen:"open.v1"`
 	Results          []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
@@ -3298,7 +3430,7 @@ type SearchConversationsResponse struct {
 
 func (x *SearchConversationsResponse) Reset() {
 	*x = SearchConversationsResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[46]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3310,7 +3442,7 @@ func (x *SearchConversationsResponse) String() string {
 func (*SearchConversationsResponse) ProtoMessage() {}
 
 func (x *SearchConversationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[46]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3323,7 +3455,7 @@ func (x *SearchConversationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchConversationsResponse.ProtoReflect.Descriptor instead.
 func (*SearchConversationsResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{46}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *SearchConversationsResponse) GetResults() []*ConversationSearchResult {
@@ -3347,6 +3479,156 @@ func (x *SearchConversationsResponse) GetDependencyHealth() *DependencyHealth {
 	return nil
 }
 
+type SearchWithinConversationRequest struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	CollectionId string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
+	// conversation_id scopes retrieval to one conversation and is required.
+	ConversationId string                    `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	Query          string                    `protobuf:"bytes,3,opt,name=query,proto3" json:"query,omitempty"`
+	Limit          int32                     `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	Filter         *ConversationSearchFilter `protobuf:"bytes,5,opt,name=filter,proto3" json:"filter,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SearchWithinConversationRequest) Reset() {
+	*x = SearchWithinConversationRequest{}
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchWithinConversationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchWithinConversationRequest) ProtoMessage() {}
+
+func (x *SearchWithinConversationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchWithinConversationRequest.ProtoReflect.Descriptor instead.
+func (*SearchWithinConversationRequest) Descriptor() ([]byte, []int) {
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *SearchWithinConversationRequest) GetCollectionId() string {
+	if x != nil {
+		return x.CollectionId
+	}
+	return ""
+}
+
+func (x *SearchWithinConversationRequest) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
+func (x *SearchWithinConversationRequest) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *SearchWithinConversationRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *SearchWithinConversationRequest) GetFilter() *ConversationSearchFilter {
+	if x != nil {
+		return x.Filter
+	}
+	return nil
+}
+
+type SearchWithinConversationResponse struct {
+	state   protoimpl.MessageState      `protogen:"open.v1"`
+	Results []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
+	// indexed_fingerprint is the content fingerprint the engine has embedded for
+	// this conversation, from its checkpoint. Empty means the conversation is not
+	// indexed. A caller compares it to the conversation's current fingerprint to
+	// decide whether the hits are complete or a literal scan of newer content is
+	// needed.
+	IndexedFingerprint string            `protobuf:"bytes,2,opt,name=indexed_fingerprint,json=indexedFingerprint,proto3" json:"indexed_fingerprint,omitempty"`
+	DisplayText        string            `protobuf:"bytes,3,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
+	DependencyHealth   *DependencyHealth `protobuf:"bytes,4,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *SearchWithinConversationResponse) Reset() {
+	*x = SearchWithinConversationResponse{}
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchWithinConversationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchWithinConversationResponse) ProtoMessage() {}
+
+func (x *SearchWithinConversationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchWithinConversationResponse.ProtoReflect.Descriptor instead.
+func (*SearchWithinConversationResponse) Descriptor() ([]byte, []int) {
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *SearchWithinConversationResponse) GetResults() []*ConversationSearchResult {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
+func (x *SearchWithinConversationResponse) GetIndexedFingerprint() string {
+	if x != nil {
+		return x.IndexedFingerprint
+	}
+	return ""
+}
+
+func (x *SearchWithinConversationResponse) GetDisplayText() string {
+	if x != nil {
+		return x.DisplayText
+	}
+	return ""
+}
+
+func (x *SearchWithinConversationResponse) GetDependencyHealth() *DependencyHealth {
+	if x != nil {
+		return x.DependencyHealth
+	}
+	return nil
+}
+
 type Diagnostic struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Severity      string                 `protobuf:"bytes,1,opt,name=severity,proto3" json:"severity,omitempty"`
@@ -3359,7 +3641,7 @@ type Diagnostic struct {
 
 func (x *Diagnostic) Reset() {
 	*x = Diagnostic{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[47]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3371,7 +3653,7 @@ func (x *Diagnostic) String() string {
 func (*Diagnostic) ProtoMessage() {}
 
 func (x *Diagnostic) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[47]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3384,7 +3666,7 @@ func (x *Diagnostic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Diagnostic.ProtoReflect.Descriptor instead.
 func (*Diagnostic) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{47}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *Diagnostic) GetSeverity() string {
@@ -3423,7 +3705,7 @@ type DoctorRequest struct {
 
 func (x *DoctorRequest) Reset() {
 	*x = DoctorRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[48]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3435,7 +3717,7 @@ func (x *DoctorRequest) String() string {
 func (*DoctorRequest) ProtoMessage() {}
 
 func (x *DoctorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[48]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3448,7 +3730,7 @@ func (x *DoctorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorRequest.ProtoReflect.Descriptor instead.
 func (*DoctorRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{48}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{51}
 }
 
 type DoctorResponse struct {
@@ -3461,7 +3743,7 @@ type DoctorResponse struct {
 
 func (x *DoctorResponse) Reset() {
 	*x = DoctorResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[49]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3473,7 +3755,7 @@ func (x *DoctorResponse) String() string {
 func (*DoctorResponse) ProtoMessage() {}
 
 func (x *DoctorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[49]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3486,7 +3768,7 @@ func (x *DoctorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorResponse.ProtoReflect.Descriptor instead.
 func (*DoctorResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{49}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *DoctorResponse) GetDiagnostics() []*Diagnostic {
@@ -3511,7 +3793,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[50]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3523,7 +3805,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[50]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3536,7 +3818,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{50}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{53}
 }
 
 type ShutdownResponse struct {
@@ -3548,7 +3830,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[51]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3560,7 +3842,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[51]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3573,7 +3855,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{51}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ShutdownResponse) GetAccepted() bool {
@@ -3847,15 +4129,38 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x06client\x18\x03 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"V\n" +
 	"\x1aDeleteConversationResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"m\n" +
+	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\xc8\x02\n" +
+	"\x18ConversationSearchFilter\x12\x14\n" +
+	"\x05roles\x18\x01 \x03(\tR\x05roles\x12\x1b\n" +
+	"\tfrom_unix\x18\x02 \x01(\x03R\bfromUnix\x12\x1d\n" +
+	"\n" +
+	"until_unix\x18\x03 \x01(\x03R\tuntilUnix\x12)\n" +
+	"\x10conversation_ids\x18\x04 \x03(\tR\x0fconversationIds\x124\n" +
+	"\x16parent_conversation_id\x18\x05 \x01(\tR\x14parentConversationId\x12\x1b\n" +
+	"\tmin_score\x18\x06 \x01(\x01R\bminScore\x12,\n" +
+	"\x12message_index_from\x18\a \x01(\x05R\x10messageIndexFrom\x12.\n" +
+	"\x13message_index_until\x18\b \x01(\x05R\x11messageIndexUntil\"\xea\x01\n" +
 	"\x1aSearchConversationsRequest\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x14\n" +
 	"\x05query\x18\x02 \x01(\tR\x05query\x12\x14\n" +
-	"\x05limit\x18\x03 \x01(\x05R\x05limit\"\xdd\x01\n" +
+	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12E\n" +
+	"\x06filter\x18\x04 \x01(\v2-.lmsemanticsearch.v1.ConversationSearchFilterR\x06filter\x124\n" +
+	"\x16per_conversation_limit\x18\x05 \x01(\x05R\x14perConversationLimit\"\xdd\x01\n" +
 	"\x1bSearchConversationsResponse\x12G\n" +
 	"\aresults\x18\x01 \x03(\v2-.lmsemanticsearch.v1.ConversationSearchResultR\aresults\x12!\n" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\x12R\n" +
-	"\x11dependency_health\x18\x03 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\"n\n" +
+	"\x11dependency_health\x18\x03 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\"\xe2\x01\n" +
+	"\x1fSearchWithinConversationRequest\x12#\n" +
+	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12'\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x14\n" +
+	"\x05query\x18\x03 \x01(\tR\x05query\x12\x14\n" +
+	"\x05limit\x18\x04 \x01(\x05R\x05limit\x12E\n" +
+	"\x06filter\x18\x05 \x01(\v2-.lmsemanticsearch.v1.ConversationSearchFilterR\x06filter\"\x93\x02\n" +
+	" SearchWithinConversationResponse\x12G\n" +
+	"\aresults\x18\x01 \x03(\v2-.lmsemanticsearch.v1.ConversationSearchResultR\aresults\x12/\n" +
+	"\x13indexed_fingerprint\x18\x02 \x01(\tR\x12indexedFingerprint\x12!\n" +
+	"\fdisplay_text\x18\x03 \x01(\tR\vdisplayText\x12R\n" +
+	"\x11dependency_health\x18\x04 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\"n\n" +
 	"\n" +
 	"Diagnostic\x12\x1a\n" +
 	"\bseverity\x18\x01 \x01(\tR\bseverity\x12\x12\n" +
@@ -3868,7 +4173,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\x11\n" +
 	"\x0fShutdownRequest\".\n" +
 	"\x10ShutdownResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted2\xe3\x0e\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted2\xed\x0f\n" +
 	"\x1bSemanticSearchDaemonService\x12T\n" +
 	"\aVersion\x12#.lmsemanticsearch.v1.VersionRequest\x1a$.lmsemanticsearch.v1.VersionResponse\x12]\n" +
 	"\n" +
@@ -3888,7 +4193,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x18SyncConversationManifest\x124.lmsemanticsearch.v1.SyncConversationManifestRequest\x1a5.lmsemanticsearch.v1.SyncConversationManifestResponse\x12\x90\x01\n" +
 	"\x1bUpsertConversationDocuments\x127.lmsemanticsearch.v1.UpsertConversationDocumentsRequest\x1a8.lmsemanticsearch.v1.UpsertConversationDocumentsResponse\x12u\n" +
 	"\x12DeleteConversation\x12..lmsemanticsearch.v1.DeleteConversationRequest\x1a/.lmsemanticsearch.v1.DeleteConversationResponse\x12x\n" +
-	"\x13SearchConversations\x12/.lmsemanticsearch.v1.SearchConversationsRequest\x1a0.lmsemanticsearch.v1.SearchConversationsResponse\x12Q\n" +
+	"\x13SearchConversations\x12/.lmsemanticsearch.v1.SearchConversationsRequest\x1a0.lmsemanticsearch.v1.SearchConversationsResponse\x12\x87\x01\n" +
+	"\x18SearchWithinConversation\x124.lmsemanticsearch.v1.SearchWithinConversationRequest\x1a5.lmsemanticsearch.v1.SearchWithinConversationResponse\x12Q\n" +
 	"\x06Doctor\x12\".lmsemanticsearch.v1.DoctorRequest\x1a#.lmsemanticsearch.v1.DoctorResponse\x12W\n" +
 	"\bShutdown\x12$.lmsemanticsearch.v1.ShutdownRequest\x1a%.lmsemanticsearch.v1.ShutdownResponseBNZLgoodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1;lmsemanticsearchv1b\x06proto3"
 
@@ -3905,7 +4211,7 @@ func file_lmsemanticsearch_v1_service_proto_rawDescGZIP() []byte {
 }
 
 var file_lmsemanticsearch_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_lmsemanticsearch_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
+var file_lmsemanticsearch_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
 var file_lmsemanticsearch_v1_service_proto_goTypes = []any{
 	(PathClassification_Kind)(0),                   // 0: lmsemanticsearch.v1.PathClassification.Kind
 	(*VersionRequest)(nil),                         // 1: lmsemanticsearch.v1.VersionRequest
@@ -3953,32 +4259,35 @@ var file_lmsemanticsearch_v1_service_proto_goTypes = []any{
 	(*UpsertConversationDocumentsResponse)(nil),    // 43: lmsemanticsearch.v1.UpsertConversationDocumentsResponse
 	(*DeleteConversationRequest)(nil),              // 44: lmsemanticsearch.v1.DeleteConversationRequest
 	(*DeleteConversationResponse)(nil),             // 45: lmsemanticsearch.v1.DeleteConversationResponse
-	(*SearchConversationsRequest)(nil),             // 46: lmsemanticsearch.v1.SearchConversationsRequest
-	(*SearchConversationsResponse)(nil),            // 47: lmsemanticsearch.v1.SearchConversationsResponse
-	(*Diagnostic)(nil),                             // 48: lmsemanticsearch.v1.Diagnostic
-	(*DoctorRequest)(nil),                          // 49: lmsemanticsearch.v1.DoctorRequest
-	(*DoctorResponse)(nil),                         // 50: lmsemanticsearch.v1.DoctorResponse
-	(*ShutdownRequest)(nil),                        // 51: lmsemanticsearch.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),                       // 52: lmsemanticsearch.v1.ShutdownResponse
-	(*timestamppb.Timestamp)(nil),                  // 53: google.protobuf.Timestamp
+	(*ConversationSearchFilter)(nil),               // 46: lmsemanticsearch.v1.ConversationSearchFilter
+	(*SearchConversationsRequest)(nil),             // 47: lmsemanticsearch.v1.SearchConversationsRequest
+	(*SearchConversationsResponse)(nil),            // 48: lmsemanticsearch.v1.SearchConversationsResponse
+	(*SearchWithinConversationRequest)(nil),        // 49: lmsemanticsearch.v1.SearchWithinConversationRequest
+	(*SearchWithinConversationResponse)(nil),       // 50: lmsemanticsearch.v1.SearchWithinConversationResponse
+	(*Diagnostic)(nil),                             // 51: lmsemanticsearch.v1.Diagnostic
+	(*DoctorRequest)(nil),                          // 52: lmsemanticsearch.v1.DoctorRequest
+	(*DoctorResponse)(nil),                         // 53: lmsemanticsearch.v1.DoctorResponse
+	(*ShutdownRequest)(nil),                        // 54: lmsemanticsearch.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),                       // 55: lmsemanticsearch.v1.ShutdownResponse
+	(*timestamppb.Timestamp)(nil),                  // 56: google.protobuf.Timestamp
 }
 var file_lmsemanticsearch_v1_service_proto_depIdxs = []int32{
-	53, // 0: lmsemanticsearch.v1.Progress.last_event_at:type_name -> google.protobuf.Timestamp
-	53, // 1: lmsemanticsearch.v1.Progress.heartbeat_at:type_name -> google.protobuf.Timestamp
-	53, // 2: lmsemanticsearch.v1.DependencyHealth.since:type_name -> google.protobuf.Timestamp
-	53, // 3: lmsemanticsearch.v1.DependencyHealth.last_healthy_at:type_name -> google.protobuf.Timestamp
-	53, // 4: lmsemanticsearch.v1.IndexRunSummary.completed_at:type_name -> google.protobuf.Timestamp
-	53, // 5: lmsemanticsearch.v1.IndexRunFailure.failed_at:type_name -> google.protobuf.Timestamp
+	56, // 0: lmsemanticsearch.v1.Progress.last_event_at:type_name -> google.protobuf.Timestamp
+	56, // 1: lmsemanticsearch.v1.Progress.heartbeat_at:type_name -> google.protobuf.Timestamp
+	56, // 2: lmsemanticsearch.v1.DependencyHealth.since:type_name -> google.protobuf.Timestamp
+	56, // 3: lmsemanticsearch.v1.DependencyHealth.last_healthy_at:type_name -> google.protobuf.Timestamp
+	56, // 4: lmsemanticsearch.v1.IndexRunSummary.completed_at:type_name -> google.protobuf.Timestamp
+	56, // 5: lmsemanticsearch.v1.IndexRunFailure.failed_at:type_name -> google.protobuf.Timestamp
 	9,  // 6: lmsemanticsearch.v1.Codebase.last_successful_run:type_name -> lmsemanticsearch.v1.IndexRunSummary
 	10, // 7: lmsemanticsearch.v1.Codebase.last_failed_run:type_name -> lmsemanticsearch.v1.IndexRunFailure
 	5,  // 8: lmsemanticsearch.v1.Codebase.effective_config:type_name -> lmsemanticsearch.v1.IndexConfig
-	53, // 9: lmsemanticsearch.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
+	56, // 9: lmsemanticsearch.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
 	3,  // 10: lmsemanticsearch.v1.Job.client:type_name -> lmsemanticsearch.v1.ClientInfo
 	6,  // 11: lmsemanticsearch.v1.Job.progress:type_name -> lmsemanticsearch.v1.Progress
 	5,  // 12: lmsemanticsearch.v1.Job.config:type_name -> lmsemanticsearch.v1.IndexConfig
-	53, // 13: lmsemanticsearch.v1.Job.started_at:type_name -> google.protobuf.Timestamp
-	53, // 14: lmsemanticsearch.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
-	53, // 15: lmsemanticsearch.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
+	56, // 13: lmsemanticsearch.v1.Job.started_at:type_name -> google.protobuf.Timestamp
+	56, // 14: lmsemanticsearch.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
+	56, // 15: lmsemanticsearch.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
 	7,  // 16: lmsemanticsearch.v1.Job.error:type_name -> lmsemanticsearch.v1.JobError
 	4,  // 17: lmsemanticsearch.v1.StartIndexRequest.splitter:type_name -> lmsemanticsearch.v1.SplitterConfig
 	3,  // 18: lmsemanticsearch.v1.StartIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
@@ -4008,50 +4317,56 @@ var file_lmsemanticsearch_v1_service_proto_depIdxs = []int32{
 	3,  // 42: lmsemanticsearch.v1.UpsertConversationDocumentsRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
 	39, // 43: lmsemanticsearch.v1.UpsertConversationDocumentsRequest.manifest:type_name -> lmsemanticsearch.v1.ConversationFingerprint
 	3,  // 44: lmsemanticsearch.v1.DeleteConversationRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	15, // 45: lmsemanticsearch.v1.SearchConversationsResponse.results:type_name -> lmsemanticsearch.v1.ConversationSearchResult
-	8,  // 46: lmsemanticsearch.v1.SearchConversationsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	48, // 47: lmsemanticsearch.v1.DoctorResponse.diagnostics:type_name -> lmsemanticsearch.v1.Diagnostic
-	1,  // 48: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:input_type -> lmsemanticsearch.v1.VersionRequest
-	16, // 49: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:input_type -> lmsemanticsearch.v1.StartIndexRequest
-	18, // 50: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:input_type -> lmsemanticsearch.v1.ClearIndexRequest
-	20, // 51: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:input_type -> lmsemanticsearch.v1.CancelJobRequest
-	22, // 52: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:input_type -> lmsemanticsearch.v1.SyncIndexRequest
-	24, // 53: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:input_type -> lmsemanticsearch.v1.GetIndexRequest
-	27, // 54: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:input_type -> lmsemanticsearch.v1.ListIndexesRequest
-	29, // 55: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:input_type -> lmsemanticsearch.v1.GetJobRequest
-	31, // 56: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:input_type -> lmsemanticsearch.v1.ListJobsRequest
-	33, // 57: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:input_type -> lmsemanticsearch.v1.WatchJobsRequest
-	35, // 58: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:input_type -> lmsemanticsearch.v1.SearchCodeRequest
-	37, // 59: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterConversationCollection:input_type -> lmsemanticsearch.v1.RegisterConversationCollectionRequest
-	40, // 60: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncConversationManifest:input_type -> lmsemanticsearch.v1.SyncConversationManifestRequest
-	42, // 61: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertConversationDocuments:input_type -> lmsemanticsearch.v1.UpsertConversationDocumentsRequest
-	44, // 62: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteConversation:input_type -> lmsemanticsearch.v1.DeleteConversationRequest
-	46, // 63: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchConversations:input_type -> lmsemanticsearch.v1.SearchConversationsRequest
-	49, // 64: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:input_type -> lmsemanticsearch.v1.DoctorRequest
-	51, // 65: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:input_type -> lmsemanticsearch.v1.ShutdownRequest
-	2,  // 66: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:output_type -> lmsemanticsearch.v1.VersionResponse
-	17, // 67: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:output_type -> lmsemanticsearch.v1.StartIndexResponse
-	19, // 68: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:output_type -> lmsemanticsearch.v1.ClearIndexResponse
-	21, // 69: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:output_type -> lmsemanticsearch.v1.CancelJobResponse
-	23, // 70: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:output_type -> lmsemanticsearch.v1.SyncIndexResponse
-	25, // 71: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:output_type -> lmsemanticsearch.v1.GetIndexResponse
-	28, // 72: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:output_type -> lmsemanticsearch.v1.ListIndexesResponse
-	30, // 73: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:output_type -> lmsemanticsearch.v1.GetJobResponse
-	32, // 74: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:output_type -> lmsemanticsearch.v1.ListJobsResponse
-	34, // 75: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:output_type -> lmsemanticsearch.v1.WatchJobsResponse
-	36, // 76: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:output_type -> lmsemanticsearch.v1.SearchCodeResponse
-	38, // 77: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterConversationCollection:output_type -> lmsemanticsearch.v1.RegisterConversationCollectionResponse
-	41, // 78: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncConversationManifest:output_type -> lmsemanticsearch.v1.SyncConversationManifestResponse
-	43, // 79: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertConversationDocuments:output_type -> lmsemanticsearch.v1.UpsertConversationDocumentsResponse
-	45, // 80: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteConversation:output_type -> lmsemanticsearch.v1.DeleteConversationResponse
-	47, // 81: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchConversations:output_type -> lmsemanticsearch.v1.SearchConversationsResponse
-	50, // 82: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:output_type -> lmsemanticsearch.v1.DoctorResponse
-	52, // 83: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:output_type -> lmsemanticsearch.v1.ShutdownResponse
-	66, // [66:84] is the sub-list for method output_type
-	48, // [48:66] is the sub-list for method input_type
-	48, // [48:48] is the sub-list for extension type_name
-	48, // [48:48] is the sub-list for extension extendee
-	0,  // [0:48] is the sub-list for field type_name
+	46, // 45: lmsemanticsearch.v1.SearchConversationsRequest.filter:type_name -> lmsemanticsearch.v1.ConversationSearchFilter
+	15, // 46: lmsemanticsearch.v1.SearchConversationsResponse.results:type_name -> lmsemanticsearch.v1.ConversationSearchResult
+	8,  // 47: lmsemanticsearch.v1.SearchConversationsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	46, // 48: lmsemanticsearch.v1.SearchWithinConversationRequest.filter:type_name -> lmsemanticsearch.v1.ConversationSearchFilter
+	15, // 49: lmsemanticsearch.v1.SearchWithinConversationResponse.results:type_name -> lmsemanticsearch.v1.ConversationSearchResult
+	8,  // 50: lmsemanticsearch.v1.SearchWithinConversationResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	51, // 51: lmsemanticsearch.v1.DoctorResponse.diagnostics:type_name -> lmsemanticsearch.v1.Diagnostic
+	1,  // 52: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:input_type -> lmsemanticsearch.v1.VersionRequest
+	16, // 53: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:input_type -> lmsemanticsearch.v1.StartIndexRequest
+	18, // 54: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:input_type -> lmsemanticsearch.v1.ClearIndexRequest
+	20, // 55: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:input_type -> lmsemanticsearch.v1.CancelJobRequest
+	22, // 56: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:input_type -> lmsemanticsearch.v1.SyncIndexRequest
+	24, // 57: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:input_type -> lmsemanticsearch.v1.GetIndexRequest
+	27, // 58: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:input_type -> lmsemanticsearch.v1.ListIndexesRequest
+	29, // 59: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:input_type -> lmsemanticsearch.v1.GetJobRequest
+	31, // 60: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:input_type -> lmsemanticsearch.v1.ListJobsRequest
+	33, // 61: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:input_type -> lmsemanticsearch.v1.WatchJobsRequest
+	35, // 62: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:input_type -> lmsemanticsearch.v1.SearchCodeRequest
+	37, // 63: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterConversationCollection:input_type -> lmsemanticsearch.v1.RegisterConversationCollectionRequest
+	40, // 64: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncConversationManifest:input_type -> lmsemanticsearch.v1.SyncConversationManifestRequest
+	42, // 65: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertConversationDocuments:input_type -> lmsemanticsearch.v1.UpsertConversationDocumentsRequest
+	44, // 66: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteConversation:input_type -> lmsemanticsearch.v1.DeleteConversationRequest
+	47, // 67: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchConversations:input_type -> lmsemanticsearch.v1.SearchConversationsRequest
+	49, // 68: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchWithinConversation:input_type -> lmsemanticsearch.v1.SearchWithinConversationRequest
+	52, // 69: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:input_type -> lmsemanticsearch.v1.DoctorRequest
+	54, // 70: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:input_type -> lmsemanticsearch.v1.ShutdownRequest
+	2,  // 71: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:output_type -> lmsemanticsearch.v1.VersionResponse
+	17, // 72: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:output_type -> lmsemanticsearch.v1.StartIndexResponse
+	19, // 73: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:output_type -> lmsemanticsearch.v1.ClearIndexResponse
+	21, // 74: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:output_type -> lmsemanticsearch.v1.CancelJobResponse
+	23, // 75: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:output_type -> lmsemanticsearch.v1.SyncIndexResponse
+	25, // 76: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:output_type -> lmsemanticsearch.v1.GetIndexResponse
+	28, // 77: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:output_type -> lmsemanticsearch.v1.ListIndexesResponse
+	30, // 78: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:output_type -> lmsemanticsearch.v1.GetJobResponse
+	32, // 79: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:output_type -> lmsemanticsearch.v1.ListJobsResponse
+	34, // 80: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:output_type -> lmsemanticsearch.v1.WatchJobsResponse
+	36, // 81: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:output_type -> lmsemanticsearch.v1.SearchCodeResponse
+	38, // 82: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterConversationCollection:output_type -> lmsemanticsearch.v1.RegisterConversationCollectionResponse
+	41, // 83: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncConversationManifest:output_type -> lmsemanticsearch.v1.SyncConversationManifestResponse
+	43, // 84: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertConversationDocuments:output_type -> lmsemanticsearch.v1.UpsertConversationDocumentsResponse
+	45, // 85: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteConversation:output_type -> lmsemanticsearch.v1.DeleteConversationResponse
+	48, // 86: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchConversations:output_type -> lmsemanticsearch.v1.SearchConversationsResponse
+	50, // 87: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchWithinConversation:output_type -> lmsemanticsearch.v1.SearchWithinConversationResponse
+	53, // 88: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:output_type -> lmsemanticsearch.v1.DoctorResponse
+	55, // 89: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:output_type -> lmsemanticsearch.v1.ShutdownResponse
+	71, // [71:90] is the sub-list for method output_type
+	52, // [52:71] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_lmsemanticsearch_v1_service_proto_init() }
@@ -4065,7 +4380,7 @@ func file_lmsemanticsearch_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lmsemanticsearch_v1_service_proto_rawDesc), len(file_lmsemanticsearch_v1_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   52,
+			NumMessages:   55,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

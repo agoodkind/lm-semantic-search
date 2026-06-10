@@ -35,6 +35,7 @@ const (
 	SemanticSearchDaemonService_UpsertConversationDocuments_FullMethodName    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocuments"
 	SemanticSearchDaemonService_DeleteConversation_FullMethodName             = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteConversation"
 	SemanticSearchDaemonService_SearchConversations_FullMethodName            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchConversations"
+	SemanticSearchDaemonService_SearchWithinConversation_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchWithinConversation"
 	SemanticSearchDaemonService_Doctor_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Doctor"
 	SemanticSearchDaemonService_Shutdown_FullMethodName                       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Shutdown"
 )
@@ -59,6 +60,7 @@ type SemanticSearchDaemonServiceClient interface {
 	UpsertConversationDocuments(ctx context.Context, in *UpsertConversationDocumentsRequest, opts ...grpc.CallOption) (*UpsertConversationDocumentsResponse, error)
 	DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
+	SearchWithinConversation(ctx context.Context, in *SearchWithinConversationRequest, opts ...grpc.CallOption) (*SearchWithinConversationResponse, error)
 	Doctor(ctx context.Context, in *DoctorRequest, opts ...grpc.CallOption) (*DoctorResponse, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 }
@@ -240,6 +242,16 @@ func (c *semanticSearchDaemonServiceClient) SearchConversations(ctx context.Cont
 	return out, nil
 }
 
+func (c *semanticSearchDaemonServiceClient) SearchWithinConversation(ctx context.Context, in *SearchWithinConversationRequest, opts ...grpc.CallOption) (*SearchWithinConversationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchWithinConversationResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_SearchWithinConversation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *semanticSearchDaemonServiceClient) Doctor(ctx context.Context, in *DoctorRequest, opts ...grpc.CallOption) (*DoctorResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DoctorResponse)
@@ -280,6 +292,7 @@ type SemanticSearchDaemonServiceServer interface {
 	UpsertConversationDocuments(context.Context, *UpsertConversationDocumentsRequest) (*UpsertConversationDocumentsResponse, error)
 	DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
+	SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
@@ -338,6 +351,9 @@ func (UnimplementedSemanticSearchDaemonServiceServer) DeleteConversation(context
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchConversations not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchWithinConversation not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Doctor not implemented")
@@ -646,6 +662,24 @@ func _SemanticSearchDaemonService_SearchConversations_Handler(srv interface{}, c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SemanticSearchDaemonService_SearchWithinConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchWithinConversationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).SearchWithinConversation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_SearchWithinConversation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).SearchWithinConversation(ctx, req.(*SearchWithinConversationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SemanticSearchDaemonService_Doctor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DoctorRequest)
 	if err := dec(in); err != nil {
@@ -748,6 +782,10 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SearchConversations",
 			Handler:    _SemanticSearchDaemonService_SearchConversations_Handler,
+		},
+		{
+			MethodName: "SearchWithinConversation",
+			Handler:    _SemanticSearchDaemonService_SearchWithinConversation_Handler,
 		},
 		{
 			MethodName: "Doctor",
