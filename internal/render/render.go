@@ -1,7 +1,9 @@
-package daemon
+// Package render formats resolved view models into human-facing text.
+package render
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/view"
@@ -12,12 +14,56 @@ const (
 	searchIndexingTip    = "💡 **Tip**: This codebase is still being indexed. More results may become available as indexing progresses."
 )
 
-type jobPhase string
-
 const (
-	jobPhaseCancelling jobPhase = "cancelling"
-	jobPhaseCancelled  jobPhase = "cancelled"
+	displayFailed  view.Display = "failed"
+	displayMissing view.Display = "missing"
+	displayStale   view.Display = "stale"
 )
+
+// StartIndex formats the start-index acknowledgment.
+func StartIndex(startIndex view.StartIndexView) string {
+	return renderStartIndex(startIndex)
+}
+
+// MutationAck formats a mutation acknowledgment.
+func MutationAck(ack view.MutationAckView) string {
+	return renderMutationAck(ack)
+}
+
+// GetIndex formats the full get-index display body.
+func GetIndex(getIndex view.GetIndexView) string {
+	return renderGetIndex(getIndex)
+}
+
+// ListIndexes formats the codebase list.
+func ListIndexes(views []view.CodebaseRowView) string {
+	return renderListIndexes(views)
+}
+
+// GetJob formats one job detail view.
+func GetJob(entry view.JobEntryView, found bool) string {
+	return renderGetJob(entry, found)
+}
+
+// ListJobs formats active and terminal job entries.
+func ListJobs(summary view.ListSummary, active []view.JobEntryView, terminal []view.JobEntryView) string {
+	return renderListJobs(summary, active, terminal)
+}
+
+// Doctor formats daemon diagnostics.
+func Doctor(doctor view.DoctorView) string {
+	return renderDoctor(doctor)
+}
+
+// Search formats code search results.
+func Search(searchView view.SearchView) string {
+	return renderSearch(searchView)
+}
+
+// ConversationSearch formats conversation search results.
+func ConversationSearch(conversationView view.ConversationSearchView) string {
+	return renderConversationSearch(conversationView)
+}
 
 func renderStartIndex(startIndex view.StartIndexView) string {
 	if startIndex.Deduplicated {
@@ -129,11 +175,11 @@ func renderGetIndexBody(getIndex view.GetIndexView) string {
 	// codebase folds to "waiting"; the banner above carries the cause, so the
 	// waiting view names none.
 	switch getIndex.Display {
-	case view.Display(displayFailed):
+	case displayFailed:
 		return renderHistoricalFailure(getIndex.CanonicalPath, getIndex.Failure)
-	case view.Display(displayMissing):
+	case displayMissing:
 		return renderMissingStatus(getIndex.CanonicalPath)
-	case view.Display(displayStale):
+	case displayStale:
 		return renderStaleStatus(getIndex.CanonicalPath, getIndex.Failure)
 	default:
 		return renderStatusBody(getIndex.Status, getIndex.TemplateName)
@@ -204,15 +250,15 @@ func renderFailureDiagnostics(failure view.FailureSurface) string {
 	return "\n🔎 " + label
 }
 
-func renderListIndexes(views []CodebaseView) string {
+func renderListIndexes(views []view.CodebaseRowView) string {
 	if len(views) == 0 {
 		return "No tracked codebases."
 	}
 
 	lines := make([]string, 0, len(views)+1)
 	lines = append(lines, "Tracked "+countWord("codebase", len(views))+":")
-	for _, view := range views {
-		lines = append(lines, fmt.Sprintf("- %s  %s  [%s]", view.Codebase.ID, view.Codebase.CanonicalPath, view.Display))
+	for _, row := range views {
+		lines = append(lines, fmt.Sprintf("- %s  %s  [%s]", row.ID, row.CanonicalPath, row.Display))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -331,17 +377,6 @@ func renderListJobs(summary view.ListSummary, active []view.JobEntryView, termin
 	return strings.Join(lines, "\n")
 }
 
-func displayJobPhase(phase string) string {
-	switch jobPhase(strings.TrimSpace(phase)) {
-	case jobPhaseCancelling:
-		return "canceling"
-	case jobPhaseCancelled:
-		return "canceled"
-	default:
-		return phase
-	}
-}
-
 func renderJobListEntry(entry view.JobEntryView) []string {
 	lines := []string{fmt.Sprintf("- %s [%s · %s] %s %s",
 		entry.ID, entry.Surface.StateLabel, entry.Progress.PercentLabel, entry.Operation, entry.CanonicalPath)}
@@ -356,7 +391,25 @@ func renderJobListEntry(entry view.JobEntryView) []string {
 // formatCountString is the render-side alias for thousands formatting; the
 // value arrives pre-resolved, only the digit grouping happens here.
 func formatCountString(value int32) string {
-	return formatCount(value)
+	digits := strconv.FormatInt(int64(value), 10)
+	if len(digits) <= 3 {
+		return digits
+	}
+	var out strings.Builder
+	lead := len(digits) % 3
+	if lead > 0 {
+		out.WriteString(digits[:lead])
+		if len(digits) > lead {
+			out.WriteString(",")
+		}
+	}
+	for i := lead; i < len(digits); i += 3 {
+		out.WriteString(digits[i : i+3])
+		if i+3 < len(digits) {
+			out.WriteString(",")
+		}
+	}
+	return out.String()
 }
 
 func renderDoctor(doctor view.DoctorView) string {
@@ -513,4 +566,15 @@ func orDefault(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func countWord(word string, count int) string {
+	return fmt.Sprintf("%d %s", count, plural(word, count))
+}
+
+func plural(word string, count int) string {
+	if count == 1 {
+		return word
+	}
+	return word + "s"
 }

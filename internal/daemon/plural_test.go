@@ -24,23 +24,3 @@ func TestPlural(t *testing.T) {
 		}
 	}
 }
-
-func TestCountWord(t *testing.T) {
-	cases := []struct {
-		word string
-		n    int
-		want string
-	}{
-		{"codebase", 0, "0 codebases"},
-		{"codebase", 1, "1 codebase"},
-		{"codebase", 18, "18 codebases"},
-		{"file", 1, "1 file"},
-		{"file", 2, "2 files"},
-	}
-	for _, testCase := range cases {
-		got := countWord(testCase.word, testCase.n)
-		if got != testCase.want {
-			t.Errorf("countWord(%q, %d) = %q, want %q", testCase.word, testCase.n, got, testCase.want)
-		}
-	}
-}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/model"
+	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
 
@@ -27,7 +28,7 @@ func TestResolveStatusViewFallsBackToLiveChunkTotal(t *testing.T) {
 
 func TestRenderMutationAckManifest(t *testing.T) {
 	t.Parallel()
-	out := renderMutationAck(view.MutationAckView{
+	out := render.MutationAck(view.MutationAckView{
 		Kind:            view.AckManifest,
 		Path:            "",
 		JobID:           "",

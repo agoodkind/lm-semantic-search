@@ -10,6 +10,8 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
+	render "goodkind.io/lm-semantic-search/internal/render"
+	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 // A healthy record renders no banner; each degraded mode renders its own variant
@@ -18,7 +20,7 @@ func TestRenderHealthBannerVariants(t *testing.T) {
 	t.Parallel()
 	cfg := config.Config{OpenAIBaseURL: "http://localhost:5400/v1", MilvusAddress: "127.0.0.1:19530"}
 
-	if got := renderHealthBanner(dependencyHealth{Mode: dependencyHealthy}, cfg); got != "" {
+	if got := render.HealthBanner(resolveBannerView(dependencyHealth{Mode: dependencyHealthy}, cfg)); got != "" {
 		t.Fatalf("healthy banner = %q, want empty", got)
 	}
 
@@ -33,7 +35,7 @@ func TestRenderHealthBannerVariants(t *testing.T) {
 		{dependencyStoreUnavailable, "Vector store unavailable", "MILVUS_ADDRESS=127.0.0.1:19530"},
 	}
 	for _, testCase := range cases {
-		out := renderHealthBanner(dependencyHealth{Mode: testCase.mode, LastHealthyAt: clock.Now()}, cfg)
+		out := render.HealthBanner(resolveBannerView(dependencyHealth{Mode: testCase.mode, LastHealthyAt: clock.Now()}, cfg))
 		if !strings.HasPrefix(out, "🟥 ") {
 			t.Fatalf("%s banner missing the 🟥 marker: %q", testCase.mode, out)
 		}
@@ -56,12 +58,12 @@ func TestRenderWaitingNamesDependency(t *testing.T) {
 	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
 
 	embedderView, embedderTemplate := resolveStatusView(*codebase, nil, displayWaiting, waitingLabel(dependencyEmbedderUnreachable))
-	embedderOut := renderStatusBody(embedderView, embedderTemplate)
+	embedderOut := render.GetIndex(view.GetIndexView{Tracked: true, TemplateName: embedderTemplate, Status: embedderView})
 	if !strings.Contains(embedderOut, "⏳ Waiting for the embedding server") {
 		t.Fatalf("embedder waiting body wrong:\n%s", embedderOut)
 	}
 	storeView, storeTemplate := resolveStatusView(*codebase, nil, displayWaiting, waitingLabel(dependencyStoreUnavailable))
-	storeOut := renderStatusBody(storeView, storeTemplate)
+	storeOut := render.GetIndex(view.GetIndexView{Tracked: true, TemplateName: storeTemplate, Status: storeView})
 	if !strings.Contains(storeOut, "⏳ Waiting for the vector store") {
 		t.Fatalf("store waiting body wrong:\n%s", storeOut)
 	}
@@ -79,7 +81,7 @@ func TestRenderGetJobNoEchoWhenDegraded(t *testing.T) {
 		Error:         &model.JobError{Message: "embedding endpoint is unreachable; verify OPENAI_BASE_URL", Retryable: true},
 	}
 
-	degraded := renderGetJob(resolveJobEntry(*job, true, ""), true)
+	degraded := render.GetJob(resolveJobEntry(*job, true, ""), true)
 	if strings.Contains(degraded, "Error:") {
 		t.Fatalf("degraded job view echoed the banner cause:\n%s", degraded)
 	}
@@ -87,7 +89,7 @@ func TestRenderGetJobNoEchoWhenDegraded(t *testing.T) {
 		t.Fatalf("degraded job view missing retryable state:\n%s", degraded)
 	}
 
-	healthy := renderGetJob(resolveJobEntry(*job, false, ""), true)
+	healthy := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(healthy, "Error:") {
 		t.Fatalf("non-degraded job view should keep the error line:\n%s", healthy)
 	}

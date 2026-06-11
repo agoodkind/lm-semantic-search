@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/model"
+	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
 
@@ -26,12 +27,16 @@ func renderListJobsForTest(jobs []model.Job, degraded bool) string {
 			active = append(active, entry)
 		}
 	}
-	return renderListJobs(summary, active, terminal)
+	return render.ListJobs(summary, active, terminal)
 }
 
 func renderStatusForTest(codebase *model.Codebase, activeJob *model.Job, display displayStatus) string {
 	statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(dependencyHealthy))
-	return renderStatusBody(statusView, templateName)
+	return render.GetIndex(view.GetIndexView{
+		Tracked:      true,
+		TemplateName: templateName,
+		Status:       statusView,
+	})
 }
 
 func renderActiveStatusForTest(codebase *model.Codebase, activeJob *model.Job) string {
@@ -67,7 +72,7 @@ func renderGetIndexBodyForTest(requestedPath string, tracked bool, codebase *mod
 		getIndex.Status = statusView
 		getIndex.TemplateName = templateName
 	}
-	return renderGetIndexBody(getIndex)
+	return render.GetIndex(getIndex)
 }
 
 // TestRenderSymlinkResolution proves the status output names the real path a
@@ -375,8 +380,9 @@ func TestRenderProgressLines(t *testing.T) {
 		ScopeLine:          "",
 		PercentLabel:       "",
 	}
-	if got := renderProgressLines(empty); len(got) != 0 {
-		t.Fatalf("expected no progress lines for an empty view, got %q", got)
+	emptyOut := render.GetJob(view.JobEntryView{ID: "job_empty", Progress: empty}, true)
+	if strings.Contains(emptyOut, "📄") || strings.Contains(emptyOut, "🧩") {
+		t.Fatalf("expected no progress lines for an empty view, got:\n%s", emptyOut)
 	}
 	progress := view.ProgressSurface{
 		Heading:            "",
@@ -393,7 +399,7 @@ func TestRenderProgressLines(t *testing.T) {
 		ScopeLine:          "Changed since last sync: 12 files added · 30 modified · 5 removed",
 		PercentLabel:       "12.1%",
 	}
-	got := strings.Join(renderProgressLines(progress), "\n")
+	got := render.GetJob(view.JobEntryView{ID: "job_progress", Progress: progress}, true)
 	if !strings.Contains(got, "📄 7 of 58 files embedded") {
 		t.Fatalf("expected files and chunks line, got %q", got)
 	}
@@ -407,7 +413,7 @@ func TestRenderProgressLines(t *testing.T) {
 
 func TestRenderGetJobNotFound(t *testing.T) {
 	t.Parallel()
-	if got := renderGetJob(view.JobEntryView{}, false); got != "Job not found." {
+	if got := render.GetJob(view.JobEntryView{}, false); got != "Job not found." {
 		t.Fatalf("renderGetJob not found = %q, want %q", got, "Job not found.")
 	}
 }
@@ -422,7 +428,7 @@ func TestRenderGetJobShowsMagnitude(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84},
 	}
-	out := renderGetJob(resolveJobEntry(*job, false, ""), true)
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "📄 7 of 58 files embedded") {
 		t.Fatalf("expected magnitude in job view, got:\n%s", out)
 	}
@@ -444,7 +450,7 @@ func TestRenderGetJobUsesAmericanCanceledSpelling(t *testing.T) {
 		CompletedAt:   &completedAt,
 		Progress:      model.Progress{Phase: "cancelled"},
 	}
-	out := renderGetJob(resolveJobEntry(*job, false, ""), true)
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if strings.Contains(out, "cancelled") {
 		t.Fatalf("job view should use American spelling, got:\n%s", out)
 	}
@@ -558,7 +564,7 @@ func TestRenderGetJobPreparingNotZeroPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0, OverallPercent: 0},
 	}
-	out := renderGetJob(resolveJobEntry(*job, false, ""), true)
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "Progress: Preparing to index") {
 		t.Fatalf("expected preparing label, got:\n%s", out)
 	}
@@ -597,7 +603,7 @@ func TestRenderGetJobSyncPreparingWording(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0},
 	}
-	out := renderGetJob(resolveJobEntry(*job, false, ""), true)
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "Changes detected, preparing to index") {
 		t.Fatalf("expected sync preparing wording, got:\n%s", out)
 	}
@@ -614,7 +620,7 @@ func TestRenderGetJobKeepsRealZeroPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 58, OverallPercent: 0},
 	}
-	out := renderGetJob(resolveJobEntry(*job, false, ""), true)
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "Progress: 0.0%") {
 		t.Fatalf("known-scope zero should render 0.0%%, got:\n%s", out)
 	}
@@ -633,7 +639,7 @@ func TestRenderGetJobShowsMeasuredPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 4292, FilesProcessed: 2139, OverallPercent: 49.8},
 	}
-	out := renderGetJob(resolveJobEntry(*job, false, ""), true)
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "Progress: 49.8%") {
 		t.Fatalf("expected 49.8%%, got:\n%s", out)
 	}
@@ -651,7 +657,7 @@ func TestRenderGetJobFailedShowsPercentAndError(t *testing.T) {
 		Progress:      model.Progress{FilesTotal: 0, OverallPercent: 0},
 		Error:         &model.JobError{Message: "embedder_unreachable: dial tcp [::1]:5400: connect: connection refused"},
 	}
-	out := renderGetJob(resolveJobEntry(*job, false, ""), true)
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "Progress: 0.0%") {
 		t.Fatalf("failed job should show its percent, got:\n%s", out)
 	}
@@ -701,7 +707,7 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 func TestRenderClearIndexHasNoRemainLine(t *testing.T) {
 	t.Parallel()
 	codebase := model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
-	out := renderMutationAck(view.MutationAckView{Kind: view.AckClear, Path: codebase.CanonicalPath})
+	out := render.MutationAck(view.MutationAckView{Kind: view.AckClear, Path: codebase.CanonicalPath})
 	want := "Successfully cleared codebase '/Users/agoodkind/Sites/swift-makefile'"
 	if out != want {
 		t.Fatalf("renderClearIndex = %q, want %q", out, want)
@@ -715,10 +721,10 @@ func TestRenderClearIndexHasNoRemainLine(t *testing.T) {
 // copy-pasteable id and the header pluralizes the codebase count correctly.
 func TestRenderListIndexesShowsIDAndPluralHeader(t *testing.T) {
 	t.Parallel()
-	single := []CodebaseView{
-		{Codebase: model.Codebase{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: model.CodebaseStatusIndexed}, Display: displayIndexed},
+	single := []view.CodebaseRowView{
+		{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Display: view.Display(displayIndexed)},
 	}
-	out := renderListIndexes(single)
+	out := render.ListIndexes(single)
 	if !strings.Contains(out, "Tracked 1 codebase:") {
 		t.Fatalf("single header not singular:\n%s", out)
 	}
@@ -726,11 +732,11 @@ func TestRenderListIndexesShowsIDAndPluralHeader(t *testing.T) {
 		t.Fatalf("row missing id, path, or display status:\n%s", out)
 	}
 
-	many := []CodebaseView{
-		{Codebase: model.Codebase{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: model.CodebaseStatusIndexed}, Display: displayIndexed},
-		{Codebase: model.Codebase{ID: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: model.CodebaseStatusIndexing}, Display: displayPreparing},
+	many := []view.CodebaseRowView{
+		{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Display: view.Display(displayIndexed)},
+		{ID: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Display: view.Display(displayPreparing)},
 	}
-	outMany := renderListIndexes(many)
+	outMany := render.ListIndexes(many)
 	if !strings.Contains(outMany, "Tracked 2 codebases:") {
 		t.Fatalf("plural header wrong:\n%s", outMany)
 	}

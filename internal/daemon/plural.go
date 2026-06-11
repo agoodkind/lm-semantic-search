@@ -12,9 +12,3 @@ var pluralizeClient = pluralize.NewClient()
 func plural(word string, n int) string {
 	return pluralizeClient.Pluralize(word, n, false)
 }
-
-// countWord returns n prefixed to word inflected for n, for example "1 file"
-// or "3 files", so callers never hand-write a "(s)" suffix.
-func countWord(word string, n int) string {
-	return pluralizeClient.Pluralize(word, n, true)
-}

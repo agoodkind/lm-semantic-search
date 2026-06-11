@@ -19,7 +19,9 @@ import (
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
+	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/store"
+	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 type fakeRunner struct {
@@ -836,7 +838,13 @@ func TestRenderHistoricalFailureIncludesCorrelationIds(t *testing.T) {
 			JobID:                   "job-xyz",
 		},
 	}
-	out := renderHistoricalFailure(codebase.CanonicalPath, resolveCodebaseFailure(codebase))
+	out := render.GetIndex(view.GetIndexView{
+		Tracked:       true,
+		RequestedPath: codebase.CanonicalPath,
+		CanonicalPath: codebase.CanonicalPath,
+		Display:       view.Display(displayFailed),
+		Failure:       resolveCodebaseFailure(codebase),
+	})
 	if !strings.Contains(out, "trace_id=trace-abc") {
 		t.Fatalf("render output missing trace_id; got %q", out)
 	}
@@ -861,7 +869,13 @@ func TestRenderStaleStatusIncludesRepairReason(t *testing.T) {
 			JobID:                   "job-xyz",
 		},
 	}
-	out := renderStaleStatus(codebase.CanonicalPath, resolveCodebaseFailure(codebase))
+	out := render.GetIndex(view.GetIndexView{
+		Tracked:       true,
+		RequestedPath: codebase.CanonicalPath,
+		CanonicalPath: codebase.CanonicalPath,
+		Display:       view.Display(displayStale),
+		Failure:       resolveCodebaseFailure(codebase),
+	})
 	if !strings.Contains(out, "is stale") {
 		t.Fatalf("render output missing stale marker; got %q", out)
 	}

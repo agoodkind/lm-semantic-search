@@ -10,6 +10,13 @@ import (
 	"goodkind.io/lm-semantic-search/internal/view"
 )
 
+type jobPhase string
+
+const (
+	jobPhaseCancelling jobPhase = "cancelling"
+	jobPhaseCancelled  jobPhase = "cancelled"
+)
+
 // formatCount renders an integer with thousands separators so large corpus
 // numbers stay readable, for example "33,240".
 func formatCount(value int32) string {
@@ -201,6 +208,17 @@ func resolveJobEntry(job model.Job, pipelineDegraded bool, supersededByJobID str
 		Surface:       resolveJobSurface(job, pipelineDegraded, supersededByJobID),
 		Progress:      resolveProgressSurface(job),
 		Timing:        resolveTimingView(job),
+	}
+}
+
+func displayJobPhase(phase string) string {
+	switch jobPhase(strings.TrimSpace(phase)) {
+	case jobPhaseCancelling:
+		return "canceling"
+	case jobPhaseCancelled:
+		return "canceled"
+	default:
+		return phase
 	}
 }
 
