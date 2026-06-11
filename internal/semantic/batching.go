@@ -35,7 +35,7 @@ func packChunksByEstimatedTokens(
 	for _, chunk := range chunks {
 		tokens := estimatedTokenCount(chunk.Content)
 		overBudget := currentTokens+tokens > tokenBudget
-		overRows := len(current)+1 > maxRows
+		overRows := len(current) >= maxRows
 		if len(current) > 0 && (overBudget || overRows) {
 			groups = append(groups, current)
 			current = make([]model.StoredChunk, 0, maxRows)

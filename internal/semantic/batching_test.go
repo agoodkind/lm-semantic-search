@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -74,6 +75,54 @@ func TestPackChunksPreservesOrderAndCoverage(t *testing.T) {
 	for i := range chunks {
 		if flattened[i].Content != chunks[i].Content {
 			t.Fatalf("chunk %d out of order", i)
+		}
+	}
+}
+
+func TestPackForEmbeddingClosesOnConfiguredTokenBudget(t *testing.T) {
+	service := &Service{cfg: config.Config{
+		EmbeddingBatchSize:        32,
+		EmbeddingBatchTokenBudget: 250,
+	}}
+	chunks := []model.StoredChunk{
+		chunkOfBytes(400),
+		chunkOfBytes(400),
+		chunkOfBytes(400),
+	}
+
+	groups := service.packForEmbedding(chunks)
+	want := []int{2, 1}
+	if len(groups) != len(want) {
+		t.Fatalf("groups = %d, want %d", len(groups), len(want))
+	}
+	for i, group := range groups {
+		if len(group) != want[i] {
+			t.Fatalf("group %d rows = %d, want %d", i, len(group), want[i])
+		}
+	}
+}
+
+func TestPackForEmbeddingClosesOnConfiguredRowCap(t *testing.T) {
+	service := &Service{cfg: config.Config{
+		EmbeddingBatchSize:        2,
+		EmbeddingBatchTokenBudget: 6000,
+	}}
+	chunks := []model.StoredChunk{
+		chunkOfBytes(4),
+		chunkOfBytes(4),
+		chunkOfBytes(4),
+		chunkOfBytes(4),
+		chunkOfBytes(4),
+	}
+
+	groups := service.packForEmbedding(chunks)
+	want := []int{2, 2, 1}
+	if len(groups) != len(want) {
+		t.Fatalf("groups = %d, want %d", len(groups), len(want))
+	}
+	for i, group := range groups {
+		if len(group) != want[i] {
+			t.Fatalf("group %d rows = %d, want %d", i, len(group), want[i])
 		}
 	}
 }

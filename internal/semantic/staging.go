@@ -111,28 +111,37 @@ func (service *Service) DropStaging(ctx context.Context, codebasePath string) er
 	return service.dropIfExists(ctx, stagingCollectionName(service.CollectionName(codebasePath)))
 }
 
-// insertChunksBatched embeds chunks in EmbeddingBatchSize batches and inserts
-// them into collectionName. When collectionReady is false the collection is
-// created on the first batch using the dimension of the first returned vector,
-// which is how both the staging build and an empty live collection learn their
-// dimension without an up-front guess. The caller guarantees chunks is
-// non-empty and already guardrail-expanded.
-func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string][]float32) error {
-	batchSize := service.cfg.EmbeddingBatchSize
-	if batchSize <= 0 {
-		batchSize = 32
-	}
+const (
+	defaultEmbeddingBatchRows        = 32
+	defaultEmbeddingBatchTokenBudget = 6000
+)
 
-	totalBatches := (len(chunks) + batchSize - 1) / batchSize
+func (service *Service) packForEmbedding(chunks []model.StoredChunk) [][]model.StoredChunk {
+	batchRows := service.cfg.EmbeddingBatchSize
+	if batchRows <= 0 {
+		batchRows = defaultEmbeddingBatchRows
+	}
+	tokenBudget := service.cfg.EmbeddingBatchTokenBudget
+	if tokenBudget <= 0 {
+		tokenBudget = defaultEmbeddingBatchTokenBudget
+	}
+	return packChunksByEstimatedTokens(chunks, batchRows, tokenBudget)
+}
+
+// insertChunksBatched embeds chunks in row-count and estimated-token capped
+// batches and inserts them into collectionName. When collectionReady is false
+// the collection is created on the first batch using the dimension of the first
+// returned vector, which is how both the staging build and an empty live
+// collection learn their dimension without an up-front guess. The caller
+// guarantees chunks is non-empty and already guardrail-expanded.
+func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string][]float32) error {
+	packs := service.packForEmbedding(chunks)
+	totalBatches := len(packs)
 	var writtenRows int32
 	var reusedRows int32
 	var embeddedRows int32
 
-	for batchIndex := range totalBatches {
-		start := batchIndex * batchSize
-		end := min(start+batchSize, len(chunks))
-
-		chunkBatch := chunks[start:end]
+	for batchIndex, chunkBatch := range packs {
 		vectors, reused, err := service.embedChunkBatch(ctx, chunkBatch, reuse)
 		if err != nil {
 			return err
