@@ -89,28 +89,31 @@ The daemon refuses to register the filesystem root `/`. This guard sits next to
 the existing guards in `manager_guards.go`, which reject the daemon's own state
 directory and any path that is not a directory.
 
-### The index command shows progress in a terminal
+### The index command returns immediately, and `--wait` attaches with a timeout
 
-When stdout is a terminal and the output mode is human, `codebase index` and
-`codebase sync` print the job id as soon as the daemon accepts the job, then stay
-attached and render live progress from the `WatchJobs` stream, the daemon's
-existing job-event subscription. Progress lines show the phase, the percent
-complete, and the file counts the job already reports. The command exits 0 when
-the job completes, and exits non-zero with the job's error message when the job
-fails or is cancelled.
+`codebase index` and `codebase sync` print the job id as soon as the daemon
+accepts the job and then return. This is the default in every output mode, so
+scripts and machine consumers always get the return-immediately contract.
 
-A `--no-wait` flag skips the attachment and returns right after the job id
-prints. When stdout is not a terminal, or the output mode is JSON or single-line,
-the command behaves as if `--no-wait` were set, so scripts and machine consumers
-keep the return-immediately contract.
+A `--wait <duration>` flag attaches to the job after the job id prints and
+renders live progress from the `WatchJobs` stream, the daemon's existing
+job-event subscription. Progress lines show the phase, the percent complete, and
+the file counts the job already reports. Bare `--wait` uses 300 seconds, the same
+default as the MCP tool's `wait_timeout_seconds`. There is no indefinite wait.
+
+While attached, the command exits 0 when the job completes and exits non-zero
+with the job's error message when the job fails or is cancelled. When the timeout
+expires first, the command detaches, prints a line saying the job was sent to the
+background along with the job id and the `job get <id>` command to keep checking,
+and exits 0, because a timeout says nothing about whether the job will succeed.
 
 ### Ctrl-C prints one line
 
 The CLI suppresses the usage text once arguments have parsed, so a failed call or
-an interrupt prints a single error line. Ctrl-C while attached to progress
-detaches from the stream without cancelling the job; the message states that the
-job keeps running in the daemon and names `job get <id>` as the way to keep
-checking on it.
+an interrupt prints a single error line. Ctrl-C while attached under `--wait`
+detaches from the stream without cancelling the job and prints the same
+sent-to-background line as a timeout: the job keeps running in the daemon, and
+`job get <id>` checks on it.
 
 ## Testing
 
@@ -118,17 +121,19 @@ Unit tests cover each behavior: a relative path joins against `caller_cwd`; a
 relative path with an empty `caller_cwd` is rejected; `cb_*` ids skip the join;
 registration of `/` is refused; the single-pass walk returns the same rule tree
 as `EffectiveIgnorePatterns` for the fixtures in `discovery_test.go`; the watcher
-never calls `EffectiveIgnorePatterns`; the non-terminal and `--no-wait` paths
-return without attaching to the job stream.
+never calls `EffectiveIgnorePatterns`; the default path returns without attaching
+to the job stream; `--wait` detaches with the sent-to-background message when the
+timeout expires before the job finishes.
 
 The standard gates run before completion: `go test ./...`, `make lint`, and
 `make build`.
 
 A live smoke test confirms the user-facing behavior: `codebase index .` from a
-real repository prints a job id immediately and then renders progress until the
-job finishes; the same command piped through `cat` returns right after the job id;
-the same command against a stopped daemon prints a clear error; Ctrl-C while
-progress is rendering prints one line and the job finishes in the daemon.
+real repository prints a job id immediately and returns; `codebase index . --wait`
+renders progress and exits when the job finishes; a short `--wait 1s` on a large
+repository prints the sent-to-background line; the command against a stopped
+daemon prints a clear error; Ctrl-C while attached prints one line and the job
+finishes in the daemon.
 
 ## Out of scope
 
