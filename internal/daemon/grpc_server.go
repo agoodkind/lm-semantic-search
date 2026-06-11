@@ -197,11 +197,15 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 	if argErr := requireNonEmpty(ctx, request.GetPath(), "absolutePath", true); argErr != nil {
 		return nil, argErr
 	}
-	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndex(ctx, request.GetPath(), pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce())
-	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
+	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
+	if pathErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
 	}
-	mergeNote := server.startIndexMergeNote(request.GetPath(), codebase)
+	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndex(ctx, requestedPath, pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce())
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
+	}
+	mergeNote := server.startIndexMergeNote(requestedPath, codebase)
 	return &pb.StartIndexResponse{
 		JobId:              job.ID,
 		CodebaseId:         codebase.ID,
@@ -209,7 +213,7 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 		Deduplicated:       deduplicated,
 		CanonicalPath:      codebase.CanonicalPath,
 		OverlapsCodebaseId: overlapsCodebaseID,
-		DisplayText:        appendCorrelationRef(renderStartIndex(request.GetPath(), codebase, job, deduplicated, overlapsCodebaseID, mergeNote), ctx, "codebase_id", codebase.ID, "job_id", job.ID),
+		DisplayText:        appendCorrelationRef(renderStartIndex(requestedPath, codebase, job, deduplicated, overlapsCodebaseID, mergeNote), ctx, "codebase_id", codebase.ID, "job_id", job.ID),
 	}, nil
 }
 
@@ -243,9 +247,13 @@ func (server *GRPCServer) ClearIndex(ctx context.Context, request *pb.ClearIndex
 	if argErr := requireNonEmpty(ctx, request.GetPath(), "absolutePath", true); argErr != nil {
 		return nil, argErr
 	}
-	codebase, callErr := server.manager.ClearIndex(ctx, request.GetPath(), pbClient(request.GetClient()))
+	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
+	if pathErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+	}
+	codebase, callErr := server.manager.ClearIndex(ctx, requestedPath, pbClient(request.GetClient()))
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}
 	return &pb.ClearIndexResponse{
 		CodebaseId:  codebase.ID,
@@ -279,9 +287,13 @@ func (server *GRPCServer) SyncIndex(ctx context.Context, request *pb.SyncIndexRe
 	if argErr := requireNonEmpty(ctx, request.GetPath(), "absolutePath", true); argErr != nil {
 		return nil, argErr
 	}
-	job, codebase, deduplicated, callErr := server.manager.SyncIndex(ctx, request.GetPath(), pbClient(request.GetClient()))
+	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
+	if pathErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+	}
+	job, codebase, deduplicated, callErr := server.manager.SyncIndex(ctx, requestedPath, pbClient(request.GetClient()))
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}
 	operation := "sync"
 	if deduplicated {
@@ -350,23 +362,27 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	if argErr := requireNonEmpty(ctx, request.GetPath(), "absolutePath", true); argErr != nil {
 		return nil, argErr
 	}
-	codebase, activeJob, found, classification, callErr := server.manager.GetIndex(ctx, request.GetPath())
+	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
+	if pathErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+	}
+	codebase, activeJob, found, classification, callErr := server.manager.GetIndex(ctx, requestedPath)
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}
 	if found {
 		server.manager.fillLiveChunkTotal(ctx, codebase, activeJob)
 	}
 	var indexedDescendants []model.Codebase
 	if !found {
-		indexedDescendants = server.manager.IndexedDescendants(request.GetPath())
+		indexedDescendants = server.manager.IndexedDescendants(requestedPath)
 	}
 	health := server.manager.DependencyHealth()
 	response := &pb.GetIndexResponse{
 		Tracked:          found,
 		Classification:   pbconv.ToPathClassification(classification),
 		DependencyHealth: toDependencyHealth(health),
-		DisplayText:      server.envelopeText(ctx, health, renderGetIndex(request.GetPath(), found, codebasePointer(found, codebase), activeJob, classification, indexedDescendants, health), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
+		DisplayText:      server.envelopeText(ctx, health, renderGetIndex(requestedPath, found, codebasePointer(found, codebase), activeJob, classification, indexedDescendants, health), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
 	if found {
 		pbCodebase := pbconv.ToCodebase(codebase)
@@ -464,9 +480,13 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	if argErr := requireNonEmpty(ctx, request.GetQuery(), "query", false); argErr != nil {
 		return nil, argErr
 	}
-	outcome, callErr := server.manager.SearchCode(ctx, request.GetPath(), request.GetQuery(), request.GetLimit(), request.GetExtensionFilter())
+	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
+	if pathErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+	}
+	outcome, callErr := server.manager.SearchCode(ctx, requestedPath, request.GetQuery(), request.GetLimit(), request.GetExtensionFilter())
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}
 	server.manager.fillLiveChunkTotal(ctx, outcome.Codebase, outcome.ActiveJob)
 	health := server.manager.DependencyHealth()
@@ -476,7 +496,7 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 		ActiveJob:        toJobPointerWithTokens(outcome.ActiveJob, health.Degraded(), ""),
 		DependencyHealth: toDependencyHealth(health),
 		DisplayText: server.envelopeText(ctx, health, renderSearch(searchView{
-			RequestedPath: request.GetPath(),
+			RequestedPath: requestedPath,
 			Query:         request.GetQuery(),
 			Codebase:      outcome.Codebase,
 			ActiveJob:     outcome.ActiveJob,

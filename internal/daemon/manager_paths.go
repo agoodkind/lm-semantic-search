@@ -131,6 +131,27 @@ func (manager *Manager) resolveCanonicalPath(requestedPath string) (string, erro
 	return canonicalizePath(requestedPath)
 }
 
+// resolveRequestPath makes a relative request path absolute using the
+// caller's working directory, carried in ClientInfo.caller_cwd. Absolute
+// paths, codebase ids, and URI-shaped arguments pass through unchanged for
+// the later resolution stages to classify. A relative path with no absolute
+// caller cwd is rejected: the daemon's own working directory is never the
+// caller's, so resolving against it silently is never correct.
+func resolveRequestPath(requestedPath string, callerCwd string) (string, error) {
+	trimmed := strings.TrimSpace(requestedPath)
+	if trimmed == "" || looksLikeCodebaseID(trimmed) || strings.Contains(trimmed, "://") {
+		return requestedPath, nil
+	}
+	if filepath.IsAbs(trimmed) {
+		return trimmed, nil
+	}
+	cwd := strings.TrimSpace(callerCwd)
+	if !filepath.IsAbs(cwd) {
+		return "", fmt.Errorf("path %q is relative and the request carries no absolute caller working directory; pass an absolute path or upgrade the client", requestedPath)
+	}
+	return filepath.Join(cwd, trimmed), nil
+}
+
 func canonicalizePath(requestedPath string) (string, error) {
 	// Reject an empty or whitespace path early; "" must never silently
 	// resolve to any directory.
