@@ -77,7 +77,7 @@ func TestRenderGetJobNoEchoWhenDegraded(t *testing.T) {
 		Error:         &model.JobError{Message: "embedding endpoint is unreachable; verify OPENAI_BASE_URL", Retryable: true},
 	}
 
-	degraded := renderGetJob(job, true, "")
+	degraded := renderGetJob(resolveJobEntry(*job, true, ""), true)
 	if strings.Contains(degraded, "Error:") {
 		t.Fatalf("degraded job view echoed the banner cause:\n%s", degraded)
 	}
@@ -85,7 +85,7 @@ func TestRenderGetJobNoEchoWhenDegraded(t *testing.T) {
 		t.Fatalf("degraded job view missing retryable state:\n%s", degraded)
 	}
 
-	healthy := renderGetJob(job, false, "")
+	healthy := renderGetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(healthy, "Error:") {
 		t.Fatalf("non-degraded job view should keep the error line:\n%s", healthy)
 	}

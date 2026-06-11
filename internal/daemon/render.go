@@ -473,25 +473,6 @@ func prepareLabel(job *model.Job) string {
 	return "Preparing to index"
 }
 
-// renderReconcileMagnitude summarizes a run's work for the job view: how many
-// files of the run's scope are processed with the chunk count, and, for a delta
-// sync, the added, modified, and removed breakdown. It returns an empty string
-// when no counts are recorded yet.
-func renderReconcileMagnitude(progress model.Progress) string {
-	lines := make([]string, 0, 2)
-	if progress.FilesTotal > 0 {
-		unit := progress.Unit
-		if unit == "" {
-			unit = "file"
-		}
-		lines = append(lines, fmt.Sprintf("📄 %d of %d %s · 🧩 %d chunks", progress.FilesProcessed, progress.FilesTotal, plural(unit, int(progress.FilesTotal)), progress.ChunksGenerated))
-	}
-	if progress.FilesAdded > 0 || progress.FilesModified > 0 || progress.FilesRemoved > 0 {
-		lines = append(lines, fmt.Sprintf("Added %d · Modified %d · Removed %d", progress.FilesAdded, progress.FilesModified, progress.FilesRemoved))
-	}
-	return strings.Join(lines, "\n")
-}
-
 // renderHistoricalFailure reads as past tense so callers do not mistake an
 // old failure record for a live one. When the failure carries correlation
 // ids it appends a diagnostics line so the operator can grep the daemon log.
@@ -562,11 +543,10 @@ func jobScopeKnown(progress model.Progress) bool {
 	return progress.FilesTotal > 0 || progress.FilesInCodebase > 0
 }
 
-func renderGetJob(job *model.Job, pipelineDegraded bool, supersededByJobID string) string {
-	if job == nil {
+func renderGetJob(entry view.JobEntryView, found bool) string {
+	if !found {
 		return "Job not found."
 	}
-	entry := resolveJobEntry(*job, pipelineDegraded, supersededByJobID)
 	lines := []string{
 		"🧾 Job " + entry.ID,
 		"📁 Codebase: " + entry.CanonicalPath,
@@ -575,82 +555,104 @@ func renderGetJob(job *model.Job, pipelineDegraded bool, supersededByJobID strin
 		"🔧 Phase: " + entry.PhaseLabel,
 		"📊 Progress: " + entry.Progress.PercentLabel,
 	}
-	lines = append(lines, renderJobTimingLines(*job)...)
-	if magnitude := renderReconcileMagnitude(job.Progress); magnitude != "" {
-		lines = append(lines, magnitude)
-	}
+	lines = append(lines, renderTimingLines(entry.Timing)...)
+	lines = append(lines, renderProgressLines(entry.Progress)...)
 	if entry.Surface.ErrorLine != "" {
 		lines = append(lines, "🧯 Error: "+entry.Surface.ErrorLine)
 	}
 	return strings.Join(lines, "\n")
 }
 
-func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
-	if len(jobs) == 0 {
-		return "No tracked jobs."
+// renderProgressLines renders the resolved progress: heading, the typed
+// denominator with the work split, the chunk line with the collection total,
+// and the typed classification line. Each line renders only when its data is
+// present so terminal acks stay compact.
+func renderProgressLines(progress view.ProgressSurface) []string {
+	lines := make([]string, 0, 4)
+	if progress.Heading != "" {
+		lines = append(lines, "  "+progress.Heading)
 	}
-
-	successors := buildJobSuccessors(jobs)
-	activeJobs := make([]model.Job, 0, len(jobs))
-	terminalJobs := make([]model.Job, 0, len(jobs))
-	summary := resolveListSummary(jobs, pipelineDegraded)
-	for _, job := range jobs {
-		switch job.State {
-		case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
-			activeJobs = append(activeJobs, job)
-		case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
-			terminalJobs = append(terminalJobs, job)
-		default:
-			terminalJobs = append(terminalJobs, job)
+	if progress.HasScope {
+		main := fmt.Sprintf(
+			"  📄 %s of %s %s %s",
+			formatCountString(progress.Checked),
+			formatCountString(progress.ScopeTotal),
+			progress.ScopeLabel,
+			progress.CheckVerb,
+		)
+		if progress.CheckVerb == "checked" {
+			main += fmt.Sprintf(
+				" · %s embedded · %s already indexed",
+				formatCountString(progress.Embedded),
+				formatCountString(progress.AlreadyIndexed),
+			)
 		}
+		lines = append(lines, main)
+	}
+	if progress.ChunksThisRun > 0 || progress.ChunksInCollection > 0 {
+		chunkLine := fmt.Sprintf("  🧩 %s chunks added this run", formatCountString(progress.ChunksThisRun))
+		if progress.ChunksReused > 0 {
+			chunkLine += fmt.Sprintf(" · %s reused", formatCountString(progress.ChunksReused))
+		}
+		if progress.ChunksInCollection > 0 {
+			chunkLine += fmt.Sprintf(" · %s in collection", formatCountString(progress.ChunksInCollection))
+		}
+		lines = append(lines, chunkLine)
+	}
+	if progress.ScopeLine != "" {
+		lines = append(lines, "  "+progress.ScopeLine)
+	}
+	return lines
+}
+
+func renderTimingLines(timing view.TimingView) []string {
+	lines := []string{
+		"  Started: " + timing.StartedLabel,
+		"  Updated: " + timing.UpdatedLabel,
+	}
+	if timing.CompletedLabel != "" {
+		lines = append(lines, "  Completed: "+timing.CompletedLabel)
+	}
+	if timing.DurationLabel != "" {
+		lines = append(lines, "  "+timing.DurationWord+": "+timing.DurationLabel)
+	}
+	return lines
+}
+
+func renderListJobs(summary view.ListSummary, active []view.JobEntryView, terminal []view.JobEntryView) string {
+	if summary.Total == 0 {
+		return "No tracked jobs."
 	}
 
 	lines := make([]string, 0, 32)
 	lines = append(lines, fmt.Sprintf("Tracked jobs: %d total", summary.Total))
-	lines = append(lines, fmt.Sprintf(
-		"Active: %d queued, %d running, %d canceling",
-		summary.Queued,
-		summary.Running,
-		summary.Canceling,
-	))
-	// A superseded failure was overtaken by a later terminal job, so it is tallied
-	// apart from current failures: the headline "failed" count names only the
-	// latest unresolved failure per codebase.
-	lines = append(lines, fmt.Sprintf(
-		"Terminal: %d completed, %d failed, %d %s, %d canceled",
-		summary.Completed,
-		summary.Failed,
-		summary.Superseded,
-		status.JobSupersededCountLabel,
-		summary.Canceled,
-	))
-
-	if len(activeJobs) == 0 {
+	lines = append(lines, fmt.Sprintf("Active: %d queued, %d running, %d canceling", summary.Queued, summary.Running, summary.Canceling))
+	lines = append(lines, fmt.Sprintf("Terminal: %d completed, %d failed, %d superseded, %d canceled",
+		summary.Completed, summary.Failed, summary.Superseded, summary.Canceled))
+	if len(active) == 0 {
 		lines = append(lines, "", "No active jobs.")
 	} else {
 		lines = append(lines, "", "Active jobs:")
-		for _, job := range activeJobs {
-			lines = append(lines, renderJobListEntry(job, pipelineDegraded, successors[job.ID])...)
+		for _, entry := range active {
+			lines = append(lines, renderJobListEntry(entry)...)
 		}
 	}
-
 	const recentTerminalLimit = 8
-	if len(terminalJobs) == 0 {
+	if len(terminal) == 0 {
 		return strings.Join(lines, "\n")
 	}
 	lines = append(lines, "")
-	if len(terminalJobs) > recentTerminalLimit {
-		lines = append(lines, fmt.Sprintf("Recent terminal jobs: showing %d of %d", recentTerminalLimit, len(terminalJobs)))
-		for _, job := range terminalJobs[:recentTerminalLimit] {
-			lines = append(lines, renderJobListEntry(job, pipelineDegraded, successors[job.ID])...)
+	if len(terminal) > recentTerminalLimit {
+		lines = append(lines, fmt.Sprintf("Recent terminal jobs: showing %d of %d", recentTerminalLimit, len(terminal)))
+		for _, entry := range terminal[:recentTerminalLimit] {
+			lines = append(lines, renderJobListEntry(entry)...)
 		}
 		lines = append(lines, "Use `job get JOB_ID` or `--json` for full history.")
 		return strings.Join(lines, "\n")
 	}
-
-	lines = append(lines, fmt.Sprintf("Terminal jobs: %d", len(terminalJobs)))
-	for _, job := range terminalJobs {
-		lines = append(lines, renderJobListEntry(job, pipelineDegraded, successors[job.ID])...)
+	lines = append(lines, fmt.Sprintf("Terminal jobs: %d", len(terminal)))
+	for _, entry := range terminal {
+		lines = append(lines, renderJobListEntry(entry)...)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -666,64 +668,21 @@ func displayJobPhase(phase string) string {
 	}
 }
 
-func renderJobListEntry(job model.Job, pipelineDegraded bool, supersededByJobID string) []string {
-	entry := resolveJobEntry(job, pipelineDegraded, supersededByJobID)
-	lines := []string{
-		fmt.Sprintf(
-			"- %s [%s · %s] %s %s",
-			entry.ID,
-			entry.Surface.StateLabel,
-			entry.Progress.PercentLabel,
-			entry.Operation,
-			entry.CanonicalPath,
-		),
-	}
-	lines = append(lines, renderJobTimingLines(job)...)
-	if magnitude := renderReconcileMagnitude(job.Progress); magnitude != "" {
-		for line := range strings.SplitSeq(magnitude, "\n") {
-			lines = append(lines, "  "+line)
-		}
-	}
+func renderJobListEntry(entry view.JobEntryView) []string {
+	lines := []string{fmt.Sprintf("- %s [%s · %s] %s %s",
+		entry.ID, entry.Surface.StateLabel, entry.Progress.PercentLabel, entry.Operation, entry.CanonicalPath)}
+	lines = append(lines, renderTimingLines(entry.Timing)...)
+	lines = append(lines, renderProgressLines(entry.Progress)...)
 	if entry.Surface.ErrorLine != "" {
 		lines = append(lines, "  Error: "+entry.Surface.ErrorLine)
 	}
 	return lines
 }
 
-func renderJobTimingLines(job model.Job) []string {
-	lines := []string{
-		"  Started: " + formatLocalTime(job.StartedAt),
-		"  Updated: " + formatLocalTime(job.UpdatedAt),
-	}
-	if job.CompletedAt != nil {
-		lines = append(lines, "  Completed: "+formatLocalTime(*job.CompletedAt))
-	}
-	if duration := formatJobDuration(job); duration != "" {
-		label := "Elapsed"
-		if job.CompletedAt != nil {
-			label = "Duration"
-		}
-		lines = append(lines, "  "+label+": "+duration)
-	}
-	return lines
-}
-
-func formatJobDuration(job model.Job) string {
-	if job.StartedAt.IsZero() {
-		return ""
-	}
-	end := job.UpdatedAt
-	if job.CompletedAt != nil && !job.CompletedAt.IsZero() {
-		end = *job.CompletedAt
-	}
-	if end.IsZero() || end.Before(job.StartedAt) {
-		return ""
-	}
-	duration := end.Sub(job.StartedAt).Round(time.Second)
-	if duration <= 0 {
-		return "0s"
-	}
-	return duration.String()
+// formatCountString is the render-side alias for thousands formatting; the
+// value arrives pre-resolved, only the digit grouping happens here.
+func formatCountString(value int32) string {
+	return formatCount(value)
 }
 
 func renderDoctor(diagnostics []string) string {
@@ -895,24 +854,6 @@ func formatStatusTime(value time.Time) string {
 		return "unknown"
 	}
 	const layout = "3:04 PM MST"
-	location, err := time.LoadLocation("Local")
-	if err != nil {
-		return value.Format(layout)
-	}
-	return value.In(location).Format(layout)
-}
-
-// formatLocalTime renders a wall-clock timestamp for human-facing MCP and CLI
-// output. The daemon stores every timestamp in UTC (see clock.Now), so this
-// converts to the daemon host's local time zone before formatting, including
-// the zone abbreviation so operators can recognize the time at a glance. The
-// zone is loaded by name rather than via [time.Local] so gosmopolitan stays
-// satisfied while the resolution still resolves to the host's local zone.
-func formatLocalTime(value time.Time) string {
-	if value.IsZero() {
-		return "unknown"
-	}
-	const layout = "1/2/2006, 3:04:05 PM MST"
 	location, err := time.LoadLocation("Local")
 	if err != nil {
 		return value.Format(layout)

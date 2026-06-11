@@ -16,6 +16,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/pbconv"
+	"goodkind.io/lm-semantic-search/internal/view"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -410,10 +411,11 @@ func (server *GRPCServer) GetJob(ctx context.Context, request *pb.GetJobRequest)
 	}
 	health := server.manager.DependencyHealth()
 	successorID := server.manager.JobSuccessorID(job)
+	entry := resolveJobEntry(job, health.Degraded(), successorID)
 	return &pb.GetJobResponse{
 		Job:              toJobWithTokens(job, health.Degraded(), successorID),
 		DependencyHealth: toDependencyHealth(health),
-		DisplayText:      server.envelopeText(ctx, health, renderGetJob(&job, health.Degraded(), successorID), "job_id", job.ID, "codebase_id", job.CodebaseID),
+		DisplayText:      server.envelopeText(ctx, health, renderGetJob(entry, true), "job_id", job.ID, "codebase_id", job.CodebaseID),
 	}, nil
 }
 
@@ -421,18 +423,24 @@ func (server *GRPCServer) GetJob(ctx context.Context, request *pb.GetJobRequest)
 func (server *GRPCServer) ListJobs(ctx context.Context, request *pb.ListJobsRequest) (resp *pb.ListJobsResponse, err error) {
 	ctx, done := beginRPC(ctx, "ListJobs")
 	defer done(&err)
-	_ = ctx
 	jobs := server.manager.ListJobs(request.GetCodebaseId())
 	health := server.manager.DependencyHealth()
 	successors := buildJobSuccessors(jobs)
-	response := &pb.ListJobsResponse{
-		Jobs: make([]*pb.Job, 0, len(jobs)),
-	}
+	summary := resolveListSummary(jobs, health.Degraded())
+	activeEntries := make([]view.JobEntryView, 0, len(jobs))
+	terminalEntries := make([]view.JobEntryView, 0, len(jobs))
+	response := &pb.ListJobsResponse{Jobs: make([]*pb.Job, 0, len(jobs))}
 	for _, job := range jobs {
 		response.Jobs = append(response.Jobs, toJobWithTokens(job, health.Degraded(), successors[job.ID]))
+		entry := resolveJobEntry(job, health.Degraded(), successors[job.ID])
+		if isTerminalJobState(job.State) {
+			terminalEntries = append(terminalEntries, entry)
+		} else {
+			activeEntries = append(activeEntries, entry)
+		}
 	}
 	response.DependencyHealth = toDependencyHealth(health)
-	response.DisplayText = server.envelopeText(ctx, health, renderListJobs(jobs, health.Degraded()), "codebase_id", request.GetCodebaseId())
+	response.DisplayText = server.envelopeText(ctx, health, renderListJobs(summary, activeEntries, terminalEntries), "codebase_id", request.GetCodebaseId())
 	return response, nil
 }
 
