@@ -138,6 +138,9 @@ func canonicalizePath(requestedPath string) (string, error) {
 	if strings.TrimSpace(requestedPath) == "" {
 		return "", errors.New("codebase path is required")
 	}
+	if strings.Contains(requestedPath, "://") {
+		return "", fmt.Errorf("path %q looks like a URI; pass a filesystem directory instead", requestedPath)
+	}
 	absolutePath, err := filepath.Abs(requestedPath)
 	if err != nil {
 		slog.Error("resolve absolute path failed", "path", requestedPath, "err", err)

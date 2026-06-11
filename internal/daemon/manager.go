@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -142,6 +143,7 @@ func (manager *Manager) load(ctx context.Context) error {
 		}
 		manager.codebases[codebase.ID] = codebase
 	}
+	dropGhostURICodebases(manager.codebases)
 
 	jobs, err := store.ReadJobEvents(manager.config.JobsPath)
 	if err != nil {
@@ -151,6 +153,23 @@ func (manager *Manager) load(ctx context.Context) error {
 	maps.Copy(manager.jobs, jobs)
 	manager.reconcileJournalOnStartLocked()
 	return nil
+}
+
+// dropGhostURICodebases removes code-kind records whose canonical path is a
+// filesystem-mangled URI, which the previous boot resume path could create by
+// running [filepath.Abs] on a chat URI. A legitimate conversation codebase keeps
+// its scheme intact and its kind set to document, so it never matches.
+func dropGhostURICodebases(codebases map[string]model.Codebase) {
+	for id, codebase := range codebases {
+		if codebase.Kind == model.CodebaseKindDocument {
+			continue
+		}
+		segments := strings.SplitN(strings.TrimPrefix(codebase.CanonicalPath, "/"), "/", 2)
+		if len(segments) > 0 && strings.HasSuffix(segments[0], ":") {
+			slog.Warn("dropping ghost URI codebase record", "codebase_id", id, "path", codebase.CanonicalPath)
+			delete(codebases, id)
+		}
+	}
 }
 
 // reconcileJournalOnStartLocked sanitizes the job journal after the previous
