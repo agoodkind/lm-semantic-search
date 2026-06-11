@@ -31,6 +31,12 @@ repository size. The inode stability check, which stats the root twice to detect
 filesystems with unstable file ids, stays in registration because it is constant
 time.
 
+Watch registration also leaves the reply path. The lifecycle hook that adds a new
+codebase to the file watcher runs in a goroutine owned by the daemon's run
+context, so even the watch setup call (`notify.Watch`) cannot delay the reply.
+Adding a codebase to the watcher is idempotent per codebase id, which makes the
+goroutine safe to fire on every registration.
+
 ### One walk produces both the file list and the ignore rules
 
 The background job walks the tree once. When the walk enters a directory, it
@@ -83,12 +89,28 @@ The daemon refuses to register the filesystem root `/`. This guard sits next to
 the existing guards in `manager_guards.go`, which reject the daemon's own state
 directory and any path that is not a directory.
 
+### The index command shows progress in a terminal
+
+When stdout is a terminal and the output mode is human, `codebase index` and
+`codebase sync` print the job id as soon as the daemon accepts the job, then stay
+attached and render live progress from the `WatchJobs` stream, the daemon's
+existing job-event subscription. Progress lines show the phase, the percent
+complete, and the file counts the job already reports. The command exits 0 when
+the job completes, and exits non-zero with the job's error message when the job
+fails or is cancelled.
+
+A `--no-wait` flag skips the attachment and returns right after the job id
+prints. When stdout is not a terminal, or the output mode is JSON or single-line,
+the command behaves as if `--no-wait` were set, so scripts and machine consumers
+keep the return-immediately contract.
+
 ### Ctrl-C prints one line
 
 The CLI suppresses the usage text once arguments have parsed, so a failed call or
-an interrupt prints a single error line. The interrupt message states that a job
-the daemon already accepted keeps running, and names `codebase list` as the way
-to check on it.
+an interrupt prints a single error line. Ctrl-C while attached to progress
+detaches from the stream without cancelling the job; the message states that the
+job keeps running in the daemon and names `job get <id>` as the way to keep
+checking on it.
 
 ## Testing
 
@@ -96,19 +118,19 @@ Unit tests cover each behavior: a relative path joins against `caller_cwd`; a
 relative path with an empty `caller_cwd` is rejected; `cb_*` ids skip the join;
 registration of `/` is refused; the single-pass walk returns the same rule tree
 as `EffectiveIgnorePatterns` for the fixtures in `discovery_test.go`; the watcher
-never calls `EffectiveIgnorePatterns`.
+never calls `EffectiveIgnorePatterns`; the non-terminal and `--no-wait` paths
+return without attaching to the job stream.
 
 The standard gates run before completion: `go test ./...`, `make lint`, and
 `make build`.
 
 A live smoke test confirms the user-facing behavior: `codebase index .` from a
-real repository prints a job id immediately; the same command against a stopped
-daemon prints a clear error; Ctrl-C during a slow call prints one line.
+real repository prints a job id immediately and then renders progress until the
+job finishes; the same command piped through `cat` returns right after the job id;
+the same command against a stopped daemon prints a clear error; Ctrl-C while
+progress is rendering prints one line and the job finishes in the daemon.
 
 ## Out of scope
 
-- Progress streaming for `codebase index`. The command keeps its
-  return-immediately contract.
-- Asynchronous watcher registration. FSEvents registration is cheap on macOS.
 - Any change to collection naming, chunk ids, or the TypeScript-compatibility
   surface.
