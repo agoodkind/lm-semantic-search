@@ -73,7 +73,8 @@ func (source codeItemSource) indexOne(ctx context.Context, relativePath string) 
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				done <- indexOneOutcome{err: fmt.Errorf("index code file panic: %v", recovered)}
+				var empty indexer.OneFileResult
+				done <- indexOneOutcome{result: empty, err: fmt.Errorf("index code file panic: %v", recovered)}
 			}
 		}()
 		result, err := source.runner.IndexOne(ctx, source.canonicalPath, relativePath, source.config)
@@ -82,7 +83,7 @@ func (source codeItemSource) indexOne(ctx context.Context, relativePath string) 
 
 	select {
 	case <-ctx.Done():
-		return indexer.OneFileResult{}, ctx.Err()
+		return indexer.OneFileResult{}, fmt.Errorf("index code file %s cancelled: %w", relativePath, ctx.Err())
 	case outcome := <-done:
 		if outcome.err == nil {
 			return outcome.result, nil
