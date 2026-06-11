@@ -437,7 +437,8 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 	if job.ID == "" {
 		return emptyJob, codebase, false, overlapsCodebaseID, nil
 	}
-	manager.notifyCodebaseAdded(ctx, codebase)
+	notifyCtx := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
+	go manager.notifyCodebaseAdded(notifyCtx, codebase)
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)
 	return job, codebase, false, overlapsCodebaseID, nil

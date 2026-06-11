@@ -59,7 +59,8 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 	manager.mu.Unlock()
 
 	manager.seedAdoptedMerkle(ctx, record)
-	manager.notifyCodebaseAdded(ctx, record)
+	notifyCtx := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
+	go manager.notifyCodebaseAdded(notifyCtx, record)
 	slog.InfoContext(ctx, "adopted unregistered codebase", "codebase_id", record.ID, "path", canonicalPath, "collection", collectionName)
 	manager.enqueueAdoptionSync(ctx, canonicalPath)
 	return record, true
