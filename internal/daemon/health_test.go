@@ -3,13 +3,17 @@ package daemon
 import (
 	"context"
 	"errors"
+	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/store"
 )
 
 // A job failure on a shared dependency degrades the health record with the
@@ -140,4 +144,74 @@ func TestDependencyHealthFollowsJobOutcomes(t *testing.T) {
 	if manager.DependencyHealth().LastHealthyAt.IsZero() {
 		t.Fatal("LastHealthyAt is zero after a completed job, want a timestamp")
 	}
+}
+
+func TestNewManagerMarksStoreUnavailableWhenMilvusBootDialFails(t *testing.T) {
+	stateRoot := t.TempDir()
+	cfg := config.Config{
+		StateRoot:              stateRoot,
+		SocketPath:             filepath.Join(stateRoot, "sockets", "lm-semantic-search-daemon.sock"),
+		RegistryPath:           filepath.Join(stateRoot, "registry.json"),
+		JobsPath:               filepath.Join(stateRoot, "jobs.jsonl"),
+		EventsPath:             filepath.Join(stateRoot, "events.jsonl"),
+		LogsDir:                filepath.Join(stateRoot, "logs"),
+		LogPath:                filepath.Join(stateRoot, "logs", "lm-semantic-search-daemon.log"),
+		MerkleDir:              filepath.Join(stateRoot, "merkle"),
+		LocksDir:               filepath.Join(stateRoot, "locks"),
+		SocketsDir:             filepath.Join(stateRoot, "sockets"),
+		ChunksDir:              filepath.Join(stateRoot, "chunks"),
+		ContextRoot:            filepath.Join(stateRoot, "context"),
+		EmbeddingProvider:      "OpenAI",
+		EmbeddingModel:         "text-embedding-3-small",
+		OpenAIAPIKey:           "test-key",
+		MilvusAddress:          closedDaemonMilvusAddress(t),
+		HybridMode:             true,
+		SyncIntervalMS:         300000,
+		SyncLockStaleMS:        600000,
+		MaxConcurrentIndexJobs: 1,
+	}
+	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.ContextRoot} {
+		if err := store.EnsureDir(path); err != nil {
+			t.Fatalf("EnsureDir returned error: %v", err)
+		}
+	}
+	if err := store.WriteRegistry(cfg.RegistryPath, model.RegistryFile{}); err != nil {
+		t.Fatalf("WriteRegistry returned error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	manager, err := NewManager(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if service, ok := manager.semantic.(*semantic.Service); ok {
+			if closeErr := service.Close(context.Background()); closeErr != nil {
+				t.Fatalf("Close returned error: %v", closeErr)
+			}
+		}
+	})
+
+	health := manager.DependencyHealth()
+	if health.Mode != dependencyStoreUnavailable {
+		t.Fatalf("DependencyHealth().Mode = %q, want %q", health.Mode, dependencyStoreUnavailable)
+	}
+	if health.Since.IsZero() {
+		t.Fatal("DependencyHealth().Since is zero, want the boot failure timestamp")
+	}
+}
+
+func closedDaemonMilvusAddress(t *testing.T) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("Close listener returned error: %v", err)
+	}
+	return address
 }

@@ -130,9 +130,14 @@ func (manager *Manager) noteDependencyHealthy() {
 }
 
 // DependencyHealth returns a snapshot of the current shared-dependency health
-// for the render layer. It reads the cached record and never probes.
+// for the render layer. It clears a boot-time store banner when the cached
+// semantic service has already reconnected, so a status read observes recovery
+// without adding a live dependency probe.
 func (manager *Manager) DependencyHealth() dependencyHealth {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	if manager.health.Mode == dependencyStoreUnavailable && manager.semantic != nil && manager.semantic.Available() {
+		manager.noteDependencyHealthyLocked()
+	}
 	return manager.health
 }
