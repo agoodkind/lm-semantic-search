@@ -143,7 +143,7 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 	cmd.Flags().StringVar(&splitterType, "splitter", "", "splitter type: ast|langchain")
 	cmd.Flags().StringArrayVar(&customExtensions, "extension", nil, "custom file extension to include")
 	cmd.Flags().StringArrayVar(&ignorePatterns, "ignore", nil, "ignore pattern to exclude")
-	cmd.Flags().DurationVar(&waitTimeout, "wait", 0, "attach to the job and render progress for up to this long; bare --wait uses 5m")
+	cmd.Flags().DurationVar(&waitTimeout, "wait", 0, "attach to the job and render progress; value needs the = form (--wait=30s), bare --wait uses 5m")
 	cmd.Flags().Lookup("wait").NoOptDefVal = "5m"
 	return cmd
 }
@@ -192,7 +192,7 @@ func newCodebaseSyncCmd(options *rootOptions) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().DurationVar(&waitTimeout, "wait", 0, "attach to the job and render progress for up to this long; bare --wait uses 5m")
+	cmd.Flags().DurationVar(&waitTimeout, "wait", 0, "attach to the job and render progress; value needs the = form (--wait=30s), bare --wait uses 5m")
 	cmd.Flags().Lookup("wait").NoOptDefVal = "5m"
 	return cmd
 }

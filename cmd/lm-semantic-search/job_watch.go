@@ -15,10 +15,18 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// watchJob attaches to one daemon job and renders progress lines until the
-// job reaches a terminal state, the timeout expires, or the user interrupts.
-// Timeout and interrupt both detach without cancelling the job: the daemon
-// owns the job, so the command reports it as sent to the background.
+// watchPollInterval is how often watchJob asks the daemon for job state. It
+// matches the MCP adapter's wait poll cadence so both surfaces load the
+// daemon identically.
+const watchPollInterval = 1500 * time.Millisecond
+
+// watchJob follows one daemon job and renders progress lines until the job
+// reaches a terminal state, the timeout expires, or the user interrupts. It
+// polls GetJob on a fixed interval; the daemon's WatchJobs RPC reports a
+// one-shot snapshot rather than a subscription, so polling is the reliable
+// follow primitive, exactly as the MCP adapter's wait path does. Timeout and
+// interrupt both detach without cancelling the job: the daemon owns the job,
+// so the command reports it as sent to the background.
 func watchJob(options cliOptions, jobID string, timeout time.Duration) error {
 	if jobID == "" {
 		// A deduplicated or already-indexed registration has no job to watch.
@@ -36,32 +44,35 @@ func watchJob(options cliOptions, jobID string, timeout time.Duration) error {
 	}
 	defer connection.Close()
 
-	stream, err := client.WatchJobs(ctx, &pb.WatchJobsRequest{JobIds: []string{jobID}})
-	if err != nil {
-		return formatCallError(err)
-	}
+	ticker := time.NewTicker(watchPollInterval)
+	defer ticker.Stop()
 
-	// The stream pushes transitions; fetch the current state once so a job
-	// that finished before the attach does not wait out the whole timeout.
-	if current, getErr := client.GetJob(ctx, &pb.GetJobRequest{JobId: jobID}); getErr == nil {
+	for {
+		current, getErr := client.GetJob(ctx, &pb.GetJobRequest{JobId: jobID})
+		if getErr != nil {
+			if ctx.Err() != nil {
+				printSentToBackground(jobID)
+				return nil
+			}
+			return formatCallError(getErr)
+		}
 		if done, exitErr := renderJobUpdate(current.GetJob()); done {
 			return exitErr
 		}
-	}
 
-	for {
-		update, recvErr := stream.Recv()
-		if recvErr != nil {
-			if ctx.Err() != nil {
-				fmt.Fprintf(os.Stderr, "\nsent to background: job %s keeps running in the daemon; check it with `lm-semantic-search job get %s`\n", jobID, jobID)
-				return nil
-			}
-			return formatCallError(recvErr)
-		}
-		if done, exitErr := renderJobUpdate(update.GetJob()); done {
-			return exitErr
+		select {
+		case <-ctx.Done():
+			printSentToBackground(jobID)
+			return nil
+		case <-ticker.C:
 		}
 	}
+}
+
+// printSentToBackground is the single detach line for both the timeout and
+// the interrupt: the job keeps running in the daemon either way.
+func printSentToBackground(jobID string) {
+	fmt.Fprintf(os.Stderr, "\nsent to background: job %s keeps running in the daemon; check it with `lm-semantic-search job get %s`\n", jobID, jobID)
 }
 
 // renderJobUpdate prints one progress line and reports whether the job

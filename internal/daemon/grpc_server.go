@@ -144,6 +144,18 @@ func classifyManagerError(path string, err error) error {
 		return adapterr.NewInvalidPath(text, err)
 	case strings.Contains(text, "index data for '"):
 		return adapterr.NewInvalidPath(text, err)
+	// Path-guard refusals: the reason must reach the client, not just the
+	// daemon log, so the operator can correct the argument.
+	case strings.Contains(text, "looks like a URI"):
+		return adapterr.NewInvalidPath(text, err)
+	case strings.Contains(text, "is relative"):
+		return adapterr.NewInvalidPath(text, err)
+	case strings.Contains(text, "refusing to index filesystem root"):
+		return adapterr.NewInvalidPath(text, err)
+	case strings.Contains(text, "is not a directory"):
+		return adapterr.NewInvalidPath(text, err)
+	case strings.Contains(text, "covers daemon state root"):
+		return adapterr.NewInvalidPath(text, err)
 	}
 	return err
 }
