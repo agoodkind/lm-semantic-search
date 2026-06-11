@@ -492,7 +492,6 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	codebase.Status = model.CodebaseStatusIndexing
 	codebase.EffectiveConfig = indexConfig
 	codebase.InodeTrackingDisabled = detectInodeTrackingDisabled(ctx, canonicalPath)
-	codebase.ResolvedIgnoreRules = resolveIgnoreRulesOrLog(ctx, canonicalPath, indexConfig.IgnorePatterns)
 	if manager.semantic != nil && manager.semantic.Available() {
 		codebase.CollectionName = manager.semantic.CollectionName(canonicalPath)
 	}
@@ -556,7 +555,6 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 
 	codebase.Status = model.CodebaseStatusIndexing
 	codebase.EffectiveConfig = indexConfig
-	codebase.ResolvedIgnoreRules = resolveIgnoreRulesOrLog(ctx, canonicalPath, indexConfig.IgnorePatterns)
 	if manager.semantic != nil && manager.semantic.Available() {
 		codebase.CollectionName = manager.semantic.CollectionName(canonicalPath)
 	}
@@ -696,19 +694,6 @@ func (manager *Manager) CancelJob(jobID string) (model.Job, error) {
 }
 
 // Codebase lifecycle hook plumbing lives in manager_lifecycle.go.
-
-// resolveIgnoreRulesOrLog computes the discovery rule tree for a codebase
-// at registration or sync time. A failure is downgraded to an empty rule
-// set so the codebase keeps running with the built-in defaults; the
-// underlying error is logged with the path so the operator can act.
-func resolveIgnoreRulesOrLog(ctx context.Context, canonicalPath string, overrides []string) discovery.IgnoreRules {
-	rules, err := discovery.EffectiveIgnorePatterns(ctx, canonicalPath, overrides)
-	if err != nil {
-		slog.ErrorContext(ctx, "resolve effective ignore rules failed; falling back to empty tree", "path", canonicalPath, "err", err)
-		return discovery.IgnoreRules{Nodes: nil}
-	}
-	return rules
-}
 
 // GetIndex / classification / synthesis helpers live in manager_status.go.
 

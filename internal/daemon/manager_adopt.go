@@ -45,7 +45,6 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 	record.Status = model.CodebaseStatusIndexed
 	record.EffectiveConfig = indexConfig
 	record.CollectionName = collectionName
-	record.ResolvedIgnoreRules = resolveIgnoreRulesOrLog(ctx, canonicalPath, indexConfig.IgnorePatterns)
 	record.InodeTrackingDisabled = detectInodeTrackingDisabled(ctx, canonicalPath)
 	record.MerkleSnapshotPath = manager.merklePath(record.ID)
 	record.UpdatedAt = clock.Now()

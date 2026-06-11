@@ -89,19 +89,10 @@ func (watcher *Watcher) AddCodebase(ctx context.Context, codebase model.Codebase
 		return
 	}
 
+	// The record's rules are the walk-resolved cache the jobs maintain.
+	// Empty rules mean no capture has run yet; dispatch passes a few extra
+	// events until the first capture persists rules, and converge drops them.
 	rules := codebase.ResolvedIgnoreRules
-	if rules.IsEmpty() {
-		// A codebase persisted before the rule tree was introduced (or one
-		// whose registration failed to resolve rules) needs a one-shot
-		// resolution before the watcher can use it. Failure logs and falls
-		// back to an empty tree so the watch still fires events.
-		resolved, err := discovery.EffectiveIgnorePatterns(ctx, codebase.CanonicalPath, codebase.EffectiveConfig.IgnorePatterns)
-		if err != nil {
-			slog.ErrorContext(ctx, "watcher.ignore_resolve_failed", "component", "daemon", "subcomponent", "watcher", "root", codebase.CanonicalPath, "err", err)
-		} else {
-			rules = resolved
-		}
-	}
 
 	watcher.mu.Lock()
 	if _, found := watcher.roots[codebase.ID]; found {
