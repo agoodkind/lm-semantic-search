@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -100,6 +101,29 @@ func isolateState(t *testing.T) {
 	t.Setenv("CLAUDE_CONTEXTD_STATE_ROOT", t.TempDir())
 }
 
+func defaultWithPersistedConfig(t *testing.T, fileConfig persistedConfig) Config {
+	t.Helper()
+	isolateState(t)
+	t.Setenv("EMBEDDING_MODEL", "")
+	configRoot := t.TempDir()
+	t.Setenv("CLAUDE_CONTEXTD_CONFIG_ROOT", configRoot)
+
+	data, err := json.Marshal(fileConfig)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	configPath := filepath.Join(configRoot, "config.json")
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+	return cfg
+}
+
 func TestDefaultDebugAndJobControlDefaults(t *testing.T) {
 	isolateState(t)
 
@@ -122,6 +146,50 @@ func TestDefaultDebugAndJobControlDefaults(t *testing.T) {
 	}
 	if !cfg.ResumeIndexingOnBoot {
 		t.Errorf("ResumeIndexingOnBoot = false want true")
+	}
+}
+
+func TestDefaultEmbeddingBatchTokenBudgetDefaultsTo6000(t *testing.T) {
+	cfg := defaultWithPersistedConfig(t, persistedConfig{})
+
+	if cfg.EmbeddingBatchTokenBudget != 6000 {
+		t.Errorf("EmbeddingBatchTokenBudget = %d want 6000", cfg.EmbeddingBatchTokenBudget)
+	}
+}
+
+func TestDefaultQueryInstructionPrefixForNVEmbedCodeModel(t *testing.T) {
+	cfg := defaultWithPersistedConfig(t, persistedConfig{
+		EmbeddingModel: "nvidia/NV-EmbedCode-7b-v1",
+	})
+	wantPrefix := "Instruct: Retrieve code or text relevant to the query.\nQuery: "
+
+	if cfg.QueryInstructionPrefix != wantPrefix {
+		t.Errorf("QueryInstructionPrefix = %q want %q", cfg.QueryInstructionPrefix, wantPrefix)
+	}
+}
+
+func TestDefaultQueryInstructionPrefixEmptyForOtherModels(t *testing.T) {
+	cfg := defaultWithPersistedConfig(t, persistedConfig{
+		EmbeddingModel: "text-embedding-3-small",
+	})
+
+	if cfg.QueryInstructionPrefix != "" {
+		t.Errorf("QueryInstructionPrefix = %q want empty", cfg.QueryInstructionPrefix)
+	}
+}
+
+func TestDefaultEmbeddingBatchConfigUsesPersistedValues(t *testing.T) {
+	cfg := defaultWithPersistedConfig(t, persistedConfig{
+		EmbeddingModel:            "nvidia/NV-EmbedCode-7b-v1",
+		EmbeddingBatchTokenBudget: 4096,
+		QueryInstructionPrefix:    "custom query prefix: ",
+	})
+
+	if cfg.EmbeddingBatchTokenBudget != 4096 {
+		t.Errorf("EmbeddingBatchTokenBudget = %d want 4096", cfg.EmbeddingBatchTokenBudget)
+	}
+	if cfg.QueryInstructionPrefix != "custom query prefix: " {
+		t.Errorf("QueryInstructionPrefix = %q want custom query prefix", cfg.QueryInstructionPrefix)
 	}
 }
 

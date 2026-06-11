@@ -12,14 +12,16 @@ import (
 )
 
 const (
-	defaultStateDirName           = "lm-semantic-search"
-	defaultSocketName             = "lm-semantic-search-daemon.sock"
-	defaultLogFileName            = "lm-semantic-search-daemon.log"
-	defaultSyncInterval           = 300000
-	defaultSyncLockAge            = 600000
-	defaultDebugListenAddr        = "127.0.0.1:6480"
-	defaultPerfCountersIntervalMS = 60000
-	defaultMaxConcurrentIndexJobs = 3
+	defaultStateDirName              = "lm-semantic-search"
+	defaultSocketName                = "lm-semantic-search-daemon.sock"
+	defaultLogFileName               = "lm-semantic-search-daemon.log"
+	defaultSyncInterval              = 300000
+	defaultSyncLockAge               = 600000
+	defaultDebugListenAddr           = "127.0.0.1:6480"
+	defaultPerfCountersIntervalMS    = 60000
+	defaultMaxConcurrentIndexJobs    = 3
+	defaultEmbeddingBatchTokenBudget = 6000
+	nvEmbedCodeQueryPrefix           = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
 )
 
 type embeddingProvider string
@@ -43,12 +45,18 @@ type Config struct {
 	ChunksDir    string
 	ContextRoot  string
 
-	EmbeddingProvider      string
-	EmbeddingModel         string
-	EmbeddingBatchSize     int
-	EmbeddingDimension     int32
-	OpenAIAPIKey           string
-	OpenAIBaseURL          string
+	EmbeddingProvider  string
+	EmbeddingModel     string
+	EmbeddingBatchSize int
+	// EmbeddingBatchTokenBudget caps the estimated tokens (bytes/4) packed into
+	// one embedding request. EmbeddingBatchSize stays as the row-count ceiling.
+	EmbeddingBatchTokenBudget int
+	EmbeddingDimension        int32
+	OpenAIAPIKey              string
+	OpenAIBaseURL             string
+	// QueryInstructionPrefix is prepended to query-time embedding text only.
+	// Stored document vectors are embedded bare and stay valid.
+	QueryInstructionPrefix string
 	CustomExtensions       []string
 	CustomIgnorePatterns   []string
 	MilvusAddress          string
@@ -83,16 +91,18 @@ type Config struct {
 }
 
 type persistedConfig struct {
-	EmbeddingProvider      string `json:"embeddingProvider"`
-	EmbeddingModel         string `json:"embeddingModel"`
-	EmbeddingBatchSize     int    `json:"embeddingBatchSize"`
-	EmbeddingDimension     int32  `json:"embeddingDimension"`
-	OpenAIAPIKey           string `json:"openaiApiKey"`
-	OpenAIBaseURL          string `json:"openaiBaseUrl"`
-	MilvusAddress          string `json:"milvusAddress"`
-	MilvusToken            string `json:"milvusToken"`
-	CollectionNameOverride string `json:"collectionNameOverride"`
-	HybridMode             *bool  `json:"hybridMode"`
+	EmbeddingProvider         string `json:"embeddingProvider"`
+	EmbeddingModel            string `json:"embeddingModel"`
+	EmbeddingBatchSize        int    `json:"embeddingBatchSize"`
+	EmbeddingBatchTokenBudget int    `json:"embeddingBatchTokenBudget"`
+	EmbeddingDimension        int32  `json:"embeddingDimension"`
+	OpenAIAPIKey              string `json:"openaiApiKey"`
+	OpenAIBaseURL             string `json:"openaiBaseUrl"`
+	QueryInstructionPrefix    string `json:"queryInstructionPrefix"`
+	MilvusAddress             string `json:"milvusAddress"`
+	MilvusToken               string `json:"milvusToken"`
+	CollectionNameOverride    string `json:"collectionNameOverride"`
+	HybridMode                *bool  `json:"hybridMode"`
 }
 
 // Default returns the daemon configuration derived from the local environment.
@@ -132,43 +142,54 @@ func Default() (Config, error) {
 		defaultModel = envOrDefault("EMBEDDING_MODEL", "text-embedding-3-small")
 	}
 
+	batchTokenBudget := fileConfig.EmbeddingBatchTokenBudget
+	if batchTokenBudget <= 0 {
+		batchTokenBudget = defaultEmbeddingBatchTokenBudget
+	}
+	queryPrefix := fileConfig.QueryInstructionPrefix
+	if queryPrefix == "" && strings.Contains(defaultModel, "NV-EmbedCode") {
+		queryPrefix = nvEmbedCodeQueryPrefix
+	}
+
 	return Config{
-		ConfigRoot:             configRoot,
-		ConfigPath:             configPath,
-		StateRoot:              stateRoot,
-		SocketPath:             socketPath,
-		RegistryPath:           filepath.Join(stateRoot, "registry.json"),
-		JobsPath:               filepath.Join(stateRoot, "jobs.jsonl"),
-		EventsPath:             filepath.Join(stateRoot, "events.jsonl"),
-		LogsDir:                logsDir,
-		LogPath:                logPath,
-		MerkleDir:              filepath.Join(stateRoot, "merkle"),
-		LocksDir:               filepath.Join(stateRoot, "locks"),
-		SocketsDir:             socketsDir,
-		ChunksDir:              filepath.Join(stateRoot, "chunks"),
-		ContextRoot:            contextRoot,
-		EmbeddingProvider:      envOrDefault("EMBEDDING_PROVIDER", defaultProvider),
-		EmbeddingModel:         envOrDefault("EMBEDDING_MODEL", defaultModel),
-		EmbeddingBatchSize:     envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
-		EmbeddingDimension:     envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
-		OpenAIAPIKey:           envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
-		OpenAIBaseURL:          envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),
-		CustomExtensions:       parseCommaSeparated(os.Getenv("CUSTOM_EXTENSIONS")),
-		CustomIgnorePatterns:   parseCommaSeparated(os.Getenv("CUSTOM_IGNORE_PATTERNS")),
-		MilvusAddress:          envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),
-		MilvusToken:            envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),
-		CollectionNameOverride: envOrDefault("CODE_CHUNKS_COLLECTION_NAME_OVERRIDE", fileConfig.CollectionNameOverride),
-		HybridMode:             envBoolOrDefault("HYBRID_MODE", boolOrDefault(fileConfig.HybridMode, true)),
-		BackgroundSyncEnabled:  envBoolOrDefault("CLAUDE_CONTEXT_BACKGROUND_SYNC", true),
-		SyncIntervalMS:         envIntOrDefault("CLAUDE_CONTEXT_SYNC_INTERVAL_MS", defaultSyncInterval),
-		TriggerWatcherEnabled:  envBoolOrDefault("CLAUDE_CONTEXT_TRIGGER_WATCHER", true),
-		FileWatcherEnabled:     envBoolOrDefault("CLAUDE_CONTEXT_FILE_WATCHER", true),
-		SyncLockStaleMS:        envIntOrDefault("CLAUDE_CONTEXT_SYNC_LOCK_STALE_MS", defaultSyncLockAge),
-		DebugListenerEnabled:   envBoolOrDefault("CLAUDE_CONTEXT_DEBUG_LISTENER", true),
-		DebugListenAddr:        envOrDefault("CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR", defaultDebugListenAddr),
-		PerfCountersIntervalMS: envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),
-		MaxConcurrentIndexJobs: envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
-		ResumeIndexingOnBoot:   envBoolOrDefault("CLAUDE_CONTEXT_RESUME_ON_BOOT", true),
+		ConfigRoot:                configRoot,
+		ConfigPath:                configPath,
+		StateRoot:                 stateRoot,
+		SocketPath:                socketPath,
+		RegistryPath:              filepath.Join(stateRoot, "registry.json"),
+		JobsPath:                  filepath.Join(stateRoot, "jobs.jsonl"),
+		EventsPath:                filepath.Join(stateRoot, "events.jsonl"),
+		LogsDir:                   logsDir,
+		LogPath:                   logPath,
+		MerkleDir:                 filepath.Join(stateRoot, "merkle"),
+		LocksDir:                  filepath.Join(stateRoot, "locks"),
+		SocketsDir:                socketsDir,
+		ChunksDir:                 filepath.Join(stateRoot, "chunks"),
+		ContextRoot:               contextRoot,
+		EmbeddingProvider:         envOrDefault("EMBEDDING_PROVIDER", defaultProvider),
+		EmbeddingModel:            envOrDefault("EMBEDDING_MODEL", defaultModel),
+		EmbeddingBatchSize:        envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
+		EmbeddingBatchTokenBudget: batchTokenBudget,
+		EmbeddingDimension:        envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
+		OpenAIAPIKey:              envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
+		OpenAIBaseURL:             envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),
+		QueryInstructionPrefix:    queryPrefix,
+		CustomExtensions:          parseCommaSeparated(os.Getenv("CUSTOM_EXTENSIONS")),
+		CustomIgnorePatterns:      parseCommaSeparated(os.Getenv("CUSTOM_IGNORE_PATTERNS")),
+		MilvusAddress:             envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),
+		MilvusToken:               envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),
+		CollectionNameOverride:    envOrDefault("CODE_CHUNKS_COLLECTION_NAME_OVERRIDE", fileConfig.CollectionNameOverride),
+		HybridMode:                envBoolOrDefault("HYBRID_MODE", boolOrDefault(fileConfig.HybridMode, true)),
+		BackgroundSyncEnabled:     envBoolOrDefault("CLAUDE_CONTEXT_BACKGROUND_SYNC", true),
+		SyncIntervalMS:            envIntOrDefault("CLAUDE_CONTEXT_SYNC_INTERVAL_MS", defaultSyncInterval),
+		TriggerWatcherEnabled:     envBoolOrDefault("CLAUDE_CONTEXT_TRIGGER_WATCHER", true),
+		FileWatcherEnabled:        envBoolOrDefault("CLAUDE_CONTEXT_FILE_WATCHER", true),
+		SyncLockStaleMS:           envIntOrDefault("CLAUDE_CONTEXT_SYNC_LOCK_STALE_MS", defaultSyncLockAge),
+		DebugListenerEnabled:      envBoolOrDefault("CLAUDE_CONTEXT_DEBUG_LISTENER", true),
+		DebugListenAddr:           envOrDefault("CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR", defaultDebugListenAddr),
+		PerfCountersIntervalMS:    envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),
+		MaxConcurrentIndexJobs:    envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
+		ResumeIndexingOnBoot:      envBoolOrDefault("CLAUDE_CONTEXT_RESUME_ON_BOOT", true),
 	}, nil
 }
 
