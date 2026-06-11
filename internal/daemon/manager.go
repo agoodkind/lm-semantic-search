@@ -398,6 +398,9 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 	if err := manager.guardStateRoot(canonicalPath); err != nil {
 		return emptyJob, emptyCodebase, false, "", err
 	}
+	if err := manager.guardFilesystemRoot(canonicalPath); err != nil {
+		return emptyJob, emptyCodebase, false, "", err
+	}
 	if err := manager.guardDirectory(canonicalPath); err != nil {
 		return emptyJob, emptyCodebase, false, "", err
 	}
