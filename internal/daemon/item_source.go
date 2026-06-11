@@ -65,32 +65,12 @@ func (source codeItemSource) capture(ctx context.Context) (merkle.Snapshot, erro
 }
 
 func (source codeItemSource) indexOne(ctx context.Context, relativePath string) (indexer.OneFileResult, error) {
-	type indexOneOutcome struct {
-		result indexer.OneFileResult
-		err    error
+	result, err := source.runner.IndexOne(ctx, source.canonicalPath, relativePath, source.config)
+	if err != nil {
+		slog.ErrorContext(ctx, "index code file failed", "path", relativePath, "err", err)
+		return indexer.OneFileResult{}, fmt.Errorf("index code file %s: %w", relativePath, err)
 	}
-	done := make(chan indexOneOutcome, 1)
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				var empty indexer.OneFileResult
-				done <- indexOneOutcome{result: empty, err: fmt.Errorf("index code file panic: %v", recovered)}
-			}
-		}()
-		result, err := source.runner.IndexOne(ctx, source.canonicalPath, relativePath, source.config)
-		done <- indexOneOutcome{result: result, err: err}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return indexer.OneFileResult{}, fmt.Errorf("index code file %s cancelled: %w", relativePath, ctx.Err())
-	case outcome := <-done:
-		if outcome.err == nil {
-			return outcome.result, nil
-		}
-		slog.ErrorContext(ctx, "index code file failed", "path", relativePath, "err", outcome.err)
-		return indexer.OneFileResult{}, fmt.Errorf("index code file %s: %w", relativePath, outcome.err)
-	}
+	return result, nil
 }
 
 func (source codeItemSource) removalFor(itemIDs []string) semantic.Removal {
