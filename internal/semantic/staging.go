@@ -9,7 +9,6 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
-	"google.golang.org/grpc/metadata"
 )
 
 // StageReindex embeds chunks into the staging collection that PromoteStaging
@@ -90,8 +89,6 @@ func (service *Service) PromoteStaging(ctx context.Context, codebasePath string)
 // build survived, so embedded files are skipped; a missing staging collection
 // means the partial build was lost, so the build restarts from the first file.
 func (service *Service) HasStaging(ctx context.Context, codebasePath string) (bool, error) {
-	_, _ = metadata.FromIncomingContext(ctx)
-
 	if !service.Available() {
 		return false, nil
 	}
@@ -187,8 +184,6 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 // a single batch. A nil or empty reuse map makes this embed every chunk, which
 // is the ordinary first-index behavior, and reports zero reused.
 func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.StoredChunk, reuse map[string][]float32) ([][]float32, int, error) {
-	_, _ = metadata.FromIncomingContext(ctx)
-
 	vectors := make([][]float32, len(chunkBatch))
 	missTexts := make([]string, 0, len(chunkBatch))
 	missIndexes := make([]int, 0, len(chunkBatch))

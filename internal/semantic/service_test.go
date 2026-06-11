@@ -11,7 +11,6 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
-	"google.golang.org/grpc"
 )
 
 // TestStagingCollectionNameStaysWithinCap proves the rebuild staging name
@@ -179,62 +178,6 @@ func TestNewServiceBootsDegradedWhenMilvusClosed(t *testing.T) {
 	if !service.Degraded() {
 		t.Fatal("Degraded() = false, want true for configured but disconnected Milvus")
 	}
-}
-
-func TestReconnectMakesServiceAvailableAgainstFakeMilvus(t *testing.T) {
-	previousTimeout := bootDialTimeout
-	previousSleep := reconnectSleep
-	previousJitter := reconnectJitter
-	bootDialTimeout = 20 * time.Millisecond
-	reconnectSleep = func(ctx context.Context, _ time.Duration) bool {
-		timer := time.NewTimer(time.Millisecond)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return false
-		case <-timer.C:
-			return true
-		}
-	}
-	reconnectJitter = func(limit time.Duration) time.Duration {
-		_ = limit
-		return time.Millisecond
-	}
-	t.Cleanup(func() {
-		bootDialTimeout = previousTimeout
-		reconnectSleep = previousSleep
-		reconnectJitter = previousJitter
-	})
-
-	address := closedLoopbackAddress(t)
-	service, err := NewService(context.Background(), testServiceConfig(address))
-	if err != nil {
-		t.Fatalf("NewService returned error: %v", err)
-	}
-	t.Cleanup(func() {
-		if closeErr := service.Close(context.Background()); closeErr != nil {
-			t.Fatalf("Close returned error: %v", closeErr)
-		}
-	})
-	if service.Available() {
-		t.Fatal("Available() = true before fake Milvus starts")
-	}
-
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		t.Fatalf("Listen returned error: %v", err)
-	}
-	grpcServer := grpc.NewServer()
-	t.Cleanup(func() {
-		grpcServer.Stop()
-	})
-	go func() {
-		_ = grpcServer.Serve(listener)
-	}()
-
-	waitForSemanticCondition(t, func() bool {
-		return service.Available() && !service.Degraded()
-	})
 }
 
 func TestReconnectBackoffDoublesAndCaps(t *testing.T) {

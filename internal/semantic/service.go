@@ -24,7 +24,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/lm-semantic-search/internal/tshash"
-	"google.golang.org/grpc/metadata"
 )
 
 // Milvus field names match the upstream TS schema at
@@ -368,8 +367,6 @@ func (service *Service) queryTextForEmbedding(query string) string {
 }
 
 func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, extensionFilter []string, relativePathPrefixes []string) ([]model.StoredChunk, error) {
-	_, _ = metadata.FromIncomingContext(ctx)
-
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "check Milvus collection failed", "collection", collectionName, "err", err)
@@ -457,8 +454,6 @@ func (service *Service) Drop(ctx context.Context, codebasePath string) error {
 // and excludes deleted rows. The store is the single source of this number;
 // the daemon keeps no separate running tally that could drift from it.
 func (service *Service) Count(ctx context.Context, codebasePath string) (int32, error) {
-	_, _ = metadata.FromIncomingContext(ctx)
-
 	if !service.Available() {
 		return 0, ErrUnavailable
 	}
@@ -501,8 +496,6 @@ func (service *Service) ListCollections(ctx context.Context) ([]string, error) {
 // HasCollectionForPath reports whether Milvus has the collection for the
 // given codebase path.
 func (service *Service) HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error) {
-	_, _ = metadata.FromIncomingContext(ctx)
-
 	if !service.Available() {
 		return false, ErrUnavailable
 	}
