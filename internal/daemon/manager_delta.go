@@ -208,6 +208,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	if plan.handled {
 		return true
 	}
+	manager.setJobRunMode(job.ID, model.RunModeChanged)
 
 	// Record the change breakdown so the status and job views can report the
 	// magnitude of this reconcile while it runs. The per-file progress updates
@@ -301,6 +302,14 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	if plan.handled {
 		return
 	}
+	runMode := model.RunModeFirstBuild
+	if len(plan.seedSnapshot.Files) > 0 {
+		runMode = model.RunModeResuming
+	}
+	if job.Forced && codebase.LastSuccessfulRun != nil {
+		runMode = model.RunModeForcedReindex
+	}
+	manager.setJobRunMode(job.ID, runMode)
 
 	state := deltaState{
 		plan:         plan,

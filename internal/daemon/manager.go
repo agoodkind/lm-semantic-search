@@ -271,6 +271,8 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 		ActiveJobID:       "",
 		LastSuccessfulRun: nil,
 		LastFailedRun:     nil,
+		LiveFileTotal:     0,
+		LiveChunkTotal:    0,
 		EffectiveConfig: model.IndexConfig{
 			SplitterType:       "",
 			SplitterChunkSize:  0,
@@ -318,6 +320,8 @@ func newQueuedJob(
 			PhasePercent:              0,
 			OverallPercent:            0,
 			Unit:                      "",
+			RunMode:                   "",
+			ScopeUnit:                 "",
 			FilesTotal:                0,
 			FilesProcessed:            0,
 			FilesAdded:                0,
