@@ -139,7 +139,9 @@ func canonicalizePath(requestedPath string) (string, error) {
 		return "", errors.New("codebase path is required")
 	}
 	if strings.Contains(requestedPath, "://") {
-		return "", fmt.Errorf("path %q looks like a URI; pass a filesystem directory instead", requestedPath)
+		// A typed invalid-path error keeps the rejection client-safe; a plain
+		// error would sanitize to "internal error" at the boundary.
+		return "", adapterr.NewInvalidPath(fmt.Sprintf("path %q looks like a URI; pass a filesystem directory instead", requestedPath), nil)
 	}
 	absolutePath, err := filepath.Abs(requestedPath)
 	if err != nil {
