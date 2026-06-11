@@ -109,6 +109,17 @@ func Run(ctx context.Context) error {
 
 type daemonProtoCall func(context.Context, pb.SemanticSearchDaemonServiceClient) (proto.Message, error)
 
+// mcpClientInfo identifies this adapter to the daemon. caller_cwd lets the
+// daemon resolve a relative tool path against the adapter's working
+// directory, which the editor sets to the project root.
+func mcpClientInfo() *pb.ClientInfo {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		workingDir = ""
+	}
+	return &pb.ClientInfo{Name: "mcp", CallerCwd: workingDir}
+}
+
 func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMode response.Mode) {
 	mcpServer.AddTool(
 		mcp.NewTool(
@@ -133,7 +144,7 @@ func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMod
 				CustomExtensions: req.GetStringSlice("customExtensions", []string{}),
 				IgnorePatterns:   req.GetStringSlice("ignorePatterns", []string{}),
 				Splitter:         &pb.SplitterConfig{Type: req.GetString("splitter", "")},
-				Client:           &pb.ClientInfo{Name: "mcp"},
+				Client:           mcpClientInfo(),
 			}
 			if !req.GetBool("wait", false) {
 				return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
@@ -164,7 +175,7 @@ func registerClearTool(mcpServer *server.MCPServer, socketPath string, outputMod
 			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 				return client.ClearIndex(ctx, &pb.ClearIndexRequest{
 					Path:   absolutePath,
-					Client: &pb.ClientInfo{Name: "mcp"},
+					Client: mcpClientInfo(),
 				})
 			})
 		}),
@@ -184,7 +195,7 @@ func registerStatusTool(mcpServer *server.MCPServer, socketPath string, outputMo
 				return errResult, nil
 			}
 			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
-				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: absolutePath})
+				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: absolutePath, Client: mcpClientInfo()})
 			})
 		}),
 	)
@@ -298,6 +309,7 @@ func registerSearchTool(mcpServer *server.MCPServer, socketPath string, outputMo
 					Query:           query,
 					Limit:           safeInt32(req.GetInt("limit", 10)),
 					ExtensionFilter: req.GetStringSlice("extensionFilter", []string{}),
+					Client:          mcpClientInfo(),
 				})
 			})
 		}),
@@ -343,7 +355,7 @@ func callDaemonIndexAndWait(ctx context.Context, socketPath string, outputMode r
 	for {
 		jobResponse, err := client.GetJob(waitCtx, &pb.GetJobRequest{JobId: jobID})
 		if err == nil && isTerminalJobState(jobResponse.GetJob().GetState()) {
-			indexResponse, err := client.GetIndex(outgoingCtx, &pb.GetIndexRequest{Path: startRequest.GetPath()})
+			indexResponse, err := client.GetIndex(outgoingCtx, &pb.GetIndexRequest{Path: startRequest.GetPath(), Client: mcpClientInfo()})
 			if err != nil {
 				slog.ErrorContext(ctx, "get index after wait failed", "path", startRequest.GetPath(), "err", err)
 				return renderToolResponse(outputMode, jobResponse)
@@ -353,7 +365,7 @@ func callDaemonIndexAndWait(ctx context.Context, socketPath string, outputMode r
 
 		select {
 		case <-waitCtx.Done():
-			indexResponse, err := client.GetIndex(outgoingCtx, &pb.GetIndexRequest{Path: startRequest.GetPath()})
+			indexResponse, err := client.GetIndex(outgoingCtx, &pb.GetIndexRequest{Path: startRequest.GetPath(), Client: mcpClientInfo()})
 			if err != nil {
 				slog.ErrorContext(ctx, "get index after wait timeout failed", "path", startRequest.GetPath(), "err", err)
 				return renderToolResponse(outputMode, startResponse)
