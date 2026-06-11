@@ -52,6 +52,9 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	job.Progress.OverallPercent = progress.OverallPercent
 	if unit != "" {
 		job.Progress.Unit = unit
+		if unit == "document" {
+			job.Progress.ScopeUnit = "conversation"
+		}
 	}
 	job.Progress.FilesTotal = progress.FilesTotal
 	job.Progress.FilesProcessed = progress.FilesProcessed
@@ -63,6 +66,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
 	manager.jobs[jobID] = job
+	manager.updateCodebaseLiveTotalsLocked(job)
 
 	// A progress update that embedded a file proves the embedding pipeline is
 	// reachable right now, so clear a degraded banner as soon as embedding
@@ -73,6 +77,40 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	if progress.FilesEmbedded > 0 {
 		manager.noteDependencyHealthyLocked()
 	}
+}
+
+func (manager *Manager) updateCodebaseLiveTotalsLocked(job model.Job) {
+	codebase, found := manager.codebases[job.CodebaseID]
+	if !found {
+		return
+	}
+	changed := false
+	lastRun := codebase.LastSuccessfulRun
+	if lastRun != nil && codebase.LiveFileTotal == 0 {
+		codebase.LiveFileTotal = lastRun.IndexedFiles
+		changed = true
+	}
+	if lastRun != nil && codebase.LiveChunkTotal == 0 {
+		codebase.LiveChunkTotal = lastRun.TotalChunks
+		changed = true
+	}
+	liveFiles := job.Progress.FilesInCodebase
+	if liveFiles == 0 {
+		liveFiles = job.Progress.FilesTotal
+	}
+	if liveFiles > 0 && codebase.LiveFileTotal != liveFiles {
+		codebase.LiveFileTotal = liveFiles
+		changed = true
+	}
+	liveChunks := max(job.Progress.ChunksTotal, job.Progress.ChunksReused+job.Progress.ChunksGenerated)
+	if liveChunks > codebase.LiveChunkTotal {
+		codebase.LiveChunkTotal = liveChunks
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	manager.codebases[job.CodebaseID] = codebase
 }
 
 // setJobDeltaCounts records how many files a delta sync will add, modify, and
@@ -92,6 +130,20 @@ func (manager *Manager) setJobDeltaCounts(jobID string, added int, modified int,
 	job.Progress.FilesModified = safeInt32(modified)
 	job.Progress.FilesRemoved = safeInt32(removed)
 	job.Progress.FilesInCodebase = safeInt32(filesInCodebase)
+	manager.jobs[jobID] = job
+}
+
+// setJobRunMode records the kind of pass a run is making, decided once when
+// the plan is chosen, so surfaces can label denominators and name a resume.
+func (manager *Manager) setJobRunMode(jobID string, runMode string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	job, found := manager.jobs[jobID]
+	if !found {
+		return
+	}
+	job.Progress.RunMode = runMode
 	manager.jobs[jobID] = job
 }
 
@@ -140,6 +192,8 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 		CompletedAt:  now,
 		SkippedFiles: result.SkippedFiles,
 	}
+	codebase.LiveFileTotal = result.IndexedFiles
+	codebase.LiveChunkTotal = result.TotalChunks
 	codebase.MerkleSnapshotPath = manager.merklePath(codebase.ID)
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase

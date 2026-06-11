@@ -1,12 +1,16 @@
 package daemon
 
 import (
+	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/status"
+	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 // displayStatus is the user-facing status a codebase presents. It aliases the
@@ -54,7 +58,7 @@ func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, pipelin
 // re-deriving a state label or error echo. A job stopping on a shared
 // dependency is exactly a retryable error during a degraded pipeline, which
 // ResolveJob folds by suppressing the per-job echo the banner already carries.
-func resolveJobSurface(job model.Job, pipelineDegraded bool, supersededByJobID string) status.JobSurface {
+func resolveJobSurface(job model.Job, pipelineDegraded bool, supersededByJobID string) view.JobSurface {
 	dependency := status.Healthy
 	if pipelineDegraded {
 		dependency = status.EmbedderBusy
@@ -65,26 +69,19 @@ func resolveJobSurface(job model.Job, pipelineDegraded bool, supersededByJobID s
 		retryable = job.Error.Retryable
 		errorMessage = strings.TrimSpace(job.Error.Message)
 	}
-	return status.ResolveJob(status.JobInputs{
+	resolved := status.ResolveJob(status.JobInputs{
 		State:             job.State,
 		Retryable:         retryable,
 		ErrorMessage:      errorMessage,
 		Dependency:        dependency,
 		SupersededByJobID: supersededByJobID,
 	})
-}
-
-// codebaseFailureView is the resolved failure detail a render bucket formats. It
-// is built once at the boundary from the raw failure record so the render layer
-// never reaches into codebase.LastFailedRun; a renderer that cannot see the raw
-// failure record cannot print failure text that contradicts the bucket the SOT
-// chose. HasFailure is false when the codebase carries no recorded failure.
-type codebaseFailureView struct {
-	HasFailure bool
-	Message    string
-	FailedAt   time.Time
-	JobID      string
-	TraceID    string
+	return view.JobSurface{
+		StateLabel:        resolved.StateLabel,
+		ErrorLine:         resolved.ErrorLine,
+		Superseded:        resolved.Superseded,
+		SupersededByJobID: resolved.SupersededByJobID,
+	}
 }
 
 // resolveCodebaseFailure reduces a codebase's raw failure record into the
@@ -92,16 +89,478 @@ type codebaseFailureView struct {
 // is the only reader of codebase.LastFailedRun outside the lifecycle logic, kept
 // here at the boundary rather than in the render layer the guard test holds free
 // of raw failure reads.
-func resolveCodebaseFailure(codebase model.Codebase) codebaseFailureView {
+func resolveCodebaseFailure(codebase model.Codebase) view.FailureSurface {
 	if codebase.LastFailedRun == nil {
-		return codebaseFailureView{HasFailure: false, Message: "", FailedAt: time.Time{}, JobID: "", TraceID: ""}
+		return emptyFailureSurface()
 	}
-	return codebaseFailureView{
-		HasFailure: true,
-		Message:    codebase.LastFailedRun.Message,
-		FailedAt:   codebase.LastFailedRun.FailedAt,
-		JobID:      codebase.LastFailedRun.JobID,
-		TraceID:    codebase.LastFailedRun.TraceID,
+	return view.FailureSurface{
+		HasFailure:    true,
+		Message:       codebase.LastFailedRun.Message,
+		FailedAtLabel: formatBoundaryTime(codebase.LastFailedRun.FailedAt),
+		JobID:         codebase.LastFailedRun.JobID,
+		TraceID:       codebase.LastFailedRun.TraceID,
+	}
+}
+
+func emptyFailureSurface() view.FailureSurface {
+	return view.FailureSurface{
+		HasFailure:    false,
+		Message:       "",
+		FailedAtLabel: "",
+		JobID:         "",
+		TraceID:       "",
+	}
+}
+
+// resolveStatusView builds the template view for an active or ready codebase.
+// It is the relocated body of the render-side builder, so the templates keep
+// their exact output. templateName selects among preparing, building,
+// incremental, ready, and waiting.
+func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display displayStatus, waitLabel string) (view.StatusView, string) {
+	statusView := blankStatusView(filepath.Base(codebase.CanonicalPath), formatBoundaryStatusTime(codebase.UpdatedAt))
+	switch display {
+	case displayWaiting:
+		statusView.WaitLabel = waitLabel
+		return statusView, "waiting.md.tmpl"
+	case displayIndexed:
+		if run := codebase.LastSuccessfulRun; run != nil {
+			statusView.HasStats = true
+			statusView.Files = run.IndexedFiles
+			statusView.Chunks = run.TotalChunks
+			statusView.SkippedLine = skippedFilesLine(run.SkippedFiles)
+			statusView.UpdatedAt = formatBoundaryStatusTime(run.CompletedAt)
+		}
+		if activeJob != nil && isBackgroundSyncReconcile(&codebase, activeJob) {
+			if !activeJob.Progress.LastEventAt.IsZero() {
+				statusView.UpdatedAt = formatBoundaryStatusTime(activeJob.Progress.LastEventAt)
+			}
+			statusView.SyncNote = backgroundSyncNote(activeJob)
+		}
+		return statusView, "ready.md.tmpl"
+	}
+	statusView.PrepareLabel = prepareLabel(activeJob)
+	embedding := false
+	if activeJob != nil {
+		progress := activeJob.Progress
+		if !progress.LastEventAt.IsZero() {
+			statusView.UpdatedAt = formatBoundaryStatusTime(progress.LastEventAt)
+		}
+		changed := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
+		statusView.Percent = int32(progress.OverallPercent + 0.5)
+		statusView.FilesProcessed = progress.FilesProcessed
+		statusView.FilesTotal = progress.FilesTotal
+		statusView.FilesInCodebase = progress.FilesInCodebase
+		statusView.FilesChanged = changed
+		statusView.FilesUnchanged = max(progress.FilesInCodebase-changed, 0)
+		statusView.FilesReEmbedded = progress.FilesEmbedded
+		statusView.FilesRemoved = progress.FilesRemoved
+		statusView.FilesSkippedOversize = progress.FilesSkippedOversize
+		statusView.FilesSkippedUnreadable = progress.FilesSkippedUnreadable
+		statusView.FilesProcessedChanged = progress.FilesEmbedded + progress.FilesRemoved + progress.FilesSkippedOversize + progress.FilesSkippedUnreadable
+		statusView.Heading = headingFor(codebase, activeJob)
+		statusView.ChunksAdded = progress.ChunksGenerated
+		statusView.ChunksReused = progress.ChunksReused
+		statusView.ChunksEmbeddedThisRun = progress.ChunksGenerated
+		statusView.ChunksTotal = max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated)
+		if statusView.ChunksTotal == 0 {
+			statusView.ChunksTotal = codebase.LiveChunkTotal
+		}
+		if statusView.ChunksTotal == 0 && codebase.LastSuccessfulRun != nil {
+			statusView.ChunksTotal = codebase.LastSuccessfulRun.TotalChunks
+		}
+		embedding = progress.FilesTotal > 0 || progress.FilesInCodebase > 0
+	}
+	if !embedding {
+		return statusView, "preparing.md.tmpl"
+	}
+	if activeJob != nil && jobOperation(activeJob.Operation) == jobOperationIndex {
+		return statusView, "building.md.tmpl"
+	}
+	return statusView, "incremental.md.tmpl"
+}
+
+// blankStatusView returns a fully zeroed status view with only the name and
+// timestamp set, so each caller fills the subset its template reads.
+func blankStatusView(name string, updatedAt string) view.StatusView {
+	return view.StatusView{
+		Name:                   name,
+		HasStats:               false,
+		Files:                  0,
+		Chunks:                 0,
+		SkippedLine:            "",
+		PrepareLabel:           "",
+		WaitLabel:              "",
+		Percent:                0,
+		Heading:                "",
+		FilesProcessed:         0,
+		FilesTotal:             0,
+		ChunksReused:           0,
+		ChunksEmbeddedThisRun:  0,
+		FilesInCodebase:        0,
+		FilesChanged:           0,
+		FilesUnchanged:         0,
+		FilesProcessedChanged:  0,
+		FilesReEmbedded:        0,
+		FilesRemoved:           0,
+		FilesSkippedOversize:   0,
+		FilesSkippedUnreadable: 0,
+		ChunksAdded:            0,
+		ChunksTotal:            0,
+		UpdatedAt:              updatedAt,
+		SyncNote:               "",
+	}
+}
+
+// formatBoundaryStatusTime renders a compact wall-clock time with zone for the
+// status header, for example "4:52 PM PDT". The daemon stores UTC, so this
+// converts to the host's local zone first, loaded by name so gosmopolitan stays
+// satisfied.
+func formatBoundaryStatusTime(value time.Time) string {
+	if value.IsZero() {
+		return "unknown"
+	}
+	const layout = "3:04 PM MST"
+	location, err := time.LoadLocation("Local")
+	if err != nil {
+		return value.Format(layout)
+	}
+	return value.In(location).Format(layout)
+}
+
+func formatStatusTime(value time.Time) string {
+	return formatBoundaryStatusTime(value)
+}
+
+// waitingLabel names the dependency a waiting codebase is blocked on. The banner
+// carries the exact cause and fix, so this stays a short, plain phrase.
+func waitingLabel(mode dependencyMode) string {
+	if mode == dependencyStoreUnavailable {
+		return "Waiting for the vector store"
+	}
+	return "Waiting for the embedding server"
+}
+
+// isBackgroundSyncReconcile reports whether the active job is a background
+// incremental sync over a codebase that already has a successful run. That
+// delta writes to the live collection, so the index stays searchable while it
+// runs and the ready view holds. A from-scratch "index" build (staging, not
+// promoted) and a "streaming_reindex" rebuild keep their busy takeover.
+func isBackgroundSyncReconcile(codebase *model.Codebase, job *model.Job) bool {
+	return job != nil &&
+		jobOperation(job.Operation) == jobOperationSync &&
+		codebase.LastSuccessfulRun != nil
+}
+
+// backgroundSyncNote is the one-line note appended to the ready view while a
+// background sync runs. Before the diff is captured the changed counts are
+// zero, so it states only that a sync is underway.
+func backgroundSyncNote(job *model.Job) string {
+	progress := job.Progress
+	changed := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
+	if changed == 0 {
+		// The watcher fired but the diff has not been computed yet, so the
+		// changed-file count does not exist to show. Name the detection phase
+		// honestly rather than calling it a sync of an unknown size.
+		return "🔄 Checking for changes in the background"
+	}
+	percent := int32(progress.OverallPercent + 0.5)
+	return fmt.Sprintf("🔄 Syncing %d changed %s in the background (%d%%)", changed, plural("file", int(changed)), percent)
+}
+
+// headingFor names what started an in-progress run so the building view leads
+// with the trigger rather than the internal job path. A codebase with no
+// completed run reads as a first build even when resuming a failed checkpoint;
+// once a completed run exists, a forced or full reindex reads as a forced
+// reindex, and anything else reads as indexing changed files.
+func headingFor(codebase model.Codebase, job *model.Job) string {
+	if codebase.LastSuccessfulRun == nil {
+		return "Building initial index"
+	}
+	if job != nil && (jobOperation(job.Operation) == jobOperationIndex || job.Forced) {
+		return "Forced reindex"
+	}
+	return "Indexing new changes"
+}
+
+// prepareLabel names the phase before embedding starts. A watcher-driven sync
+// reaches this phase because a change was detected, so it says so; a full or
+// forced reindex is just preparing.
+func prepareLabel(job *model.Job) string {
+	if job != nil && jobOperation(job.Operation) == jobOperationSync {
+		return "Changes detected, preparing to index"
+	}
+	return "Preparing to index"
+}
+
+// skippedFilesLine formats the per-run skipped-file summary for the
+// human-facing GetIndex view. The first few paths are listed inline so the
+// operator can spot the culprits without grepping the daemon log.
+func skippedFilesLine(skipped []string) string {
+	if len(skipped) == 0 {
+		return ""
+	}
+	const maxPreview = 3
+	previewLimit := min(len(skipped), maxPreview)
+	preview := strings.Join(skipped[:previewLimit], ", ")
+	if len(skipped) > maxPreview {
+		preview += fmt.Sprintf(", ... (+%d more)", len(skipped)-maxPreview)
+	}
+	return fmt.Sprintf("⏭️  Skipped: %d non-UTF-8 %s: %s", len(skipped), plural("file", len(skipped)), preview)
+}
+
+// jobScopeKnown reports whether the daemon has measured the work scope for a
+// job. Before the scope is known a 0% reads as stalled rather than measured.
+func jobScopeKnown(progress model.Progress) bool {
+	return progress.FilesTotal > 0 || progress.FilesInCodebase > 0
+}
+
+// resolveGetIndexView assembles the full codebase status response view.
+func (manager *Manager) resolveGetIndexView(
+	requestedPath string,
+	tracked bool,
+	codebase *model.Codebase,
+	activeJob *model.Job,
+	health dependencyHealth,
+	classification *model.PathClassification,
+	descendants []model.Codebase,
+) view.GetIndexView {
+	getIndex := view.GetIndexView{
+		Tracked:            tracked,
+		RequestedPath:      requestedPath,
+		CanonicalPath:      "",
+		Display:            "",
+		TemplateName:       "",
+		Status:             blankStatusView("", ""),
+		Failure:            emptyFailureSurface(),
+		WaitLabel:          "",
+		ClassificationLine: classificationLine(classification),
+		ResolutionLines:    pathResolutionLines(requestedPath),
+		CoverageLine:       coveringResolutionLine(requestedPath, tracked, codebase),
+		DescendantsHint:    descendantsHint(requestedPath, descendants),
+		SyncNote:           "",
+	}
+	if !tracked || codebase == nil {
+		return getIndex
+	}
+	getIndex.CanonicalPath = codebase.CanonicalPath
+	display := computeDisplayStatus(*codebase, activeJob, health.Degraded())
+	getIndex.Display = view.Display(display)
+	getIndex.Failure = resolveCodebaseFailure(*codebase)
+	statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
+	getIndex.Status = statusView
+	getIndex.TemplateName = templateName
+	return getIndex
+}
+
+// descendantsHint replaces the bare not-indexed message for a path that already
+// has indexed sub-folders. It names the sub-folders, totals their indexed files,
+// and points at the one command that builds a merged parent index reusing their
+// embeddings.
+func descendantsHint(requestedPath string, descendants []model.Codebase) string {
+	if len(descendants) == 0 {
+		return ""
+	}
+	var totalFiles int32
+	names := make([]string, 0, len(descendants))
+	for _, child := range descendants {
+		names = append(names, child.CanonicalPath)
+		if child.LastSuccessfulRun != nil {
+			totalFiles += child.LastSuccessfulRun.IndexedFiles
+		}
+	}
+	fileCount := int(totalFiles)
+	return fmt.Sprintf(
+		"🛈 '%s' is not indexed on its own, but %d already-indexed %s live under %s: %s\n"+
+			"Build one merged index that reuses those embeddings by running: index_codebase %s",
+		requestedPath, fileCount, plural("file", fileCount), plural("sub-folder", len(names)), strings.Join(names, ", "), requestedPath,
+	)
+}
+
+// coveringResolutionLine names the larger index a nested query resolved to,
+// scoped to the sub-path, so the operator sees that a sub-folder query is served
+// by the covering parent index rather than a separate one.
+func coveringResolutionLine(requestedPath string, tracked bool, codebase *model.Codebase) string {
+	if !tracked || codebase == nil {
+		return ""
+	}
+	prefix := subtreePrefix(requestedPath, codebase.CanonicalPath)
+	if prefix == "" {
+		return ""
+	}
+	return fmt.Sprintf("🔁 Resolved to larger index '%s' (scoped to %s/).", codebase.CanonicalPath, prefix)
+}
+
+// classificationLine renders a one-line summary of the per-path classification
+// verdict. Returns an empty string when the verdict adds no useful information
+// beyond what the body already conveys.
+func classificationLine(classification *model.PathClassification) string {
+	if classification == nil {
+		return ""
+	}
+	switch classification.Kind {
+	case model.PathClassificationInScopeExcluded:
+		parts := make([]string, 0, 2)
+		if classification.ExcludedByGitignore != "" {
+			parts = append(parts, "gitignore="+classification.ExcludedByGitignore)
+		}
+		if classification.ExcludedByPattern != "" {
+			parts = append(parts, "pattern="+classification.ExcludedByPattern)
+		}
+		if len(parts) == 0 {
+			return "🚫 Path is in scope of " + classification.CoveringCodebaseID + " but excluded by an ignore rule."
+		}
+		return "🚫 Path is in scope of " + classification.CoveringCodebaseID + " but excluded: " + strings.Join(parts, " ")
+	case model.PathClassificationOutOfScope:
+		return "🛈 Path is not under any tracked codebase."
+	case model.PathClassificationInScopeUnindexed:
+		return "🛈 Path is in scope of " + classification.CoveringCodebaseID + " but has no chunk row yet."
+	case model.PathClassificationInScopeIndexed, model.PathClassificationUnspecified:
+		return ""
+	default:
+		return ""
+	}
+}
+
+// pathResolutionLines returns the identity lines for a queried path: the real
+// path a symlink resolves to and the git worktree relation, in that order,
+// omitting any that do not apply. Both status and search show these so a caller
+// always sees that a path is a worktree of a parent repo, even when the index is
+// idle.
+func pathResolutionLines(requestedPath string) []string {
+	lines := make([]string, 0, 2)
+	if symlinkLine := renderSymlinkResolution(requestedPath); symlinkLine != "" {
+		lines = append(lines, symlinkLine)
+	}
+	if worktreeLine := renderWorktreeRelation(requestedPath); worktreeLine != "" {
+		lines = append(lines, worktreeLine)
+	}
+	return lines
+}
+
+// renderSymlinkResolution names the real path a symlinked query path resolves
+// to, or returns an empty string when the query path traverses no symlink. A
+// codebase's identity is the resolved real path, so when the caller passes a
+// symlink this line states which real directory it points at.
+func renderSymlinkResolution(requestedPath string) string {
+	// Only an absolute argument is a path the note can describe. An id-shaped
+	// or relative argument must not resolve against the daemon's own working
+	// directory, which is never the caller's.
+	if !filepath.IsAbs(strings.TrimSpace(requestedPath)) {
+		return ""
+	}
+	absolutePath := filepath.Clean(requestedPath)
+	resolved, err := filepath.EvalSymlinks(absolutePath)
+	if err != nil || resolved == absolutePath {
+		return ""
+	}
+	return "🔗 symlink resolved to: " + resolved
+}
+
+// renderWorktreeRelation names the main checkout and branch a linked worktree
+// belongs to, so the operator sees that this index is one branch of a shared
+// repository. It returns an empty string for the main worktree and for a non-git
+// path.
+func renderWorktreeRelation(requestedPath string) string {
+	// Only an absolute argument is a path the note can describe. An id-shaped
+	// or relative argument must not resolve against the daemon's own working
+	// directory, which is never the caller's.
+	if !filepath.IsAbs(strings.TrimSpace(requestedPath)) {
+		return ""
+	}
+	absolutePath := filepath.Clean(requestedPath)
+	info, ok := gitworktree.Resolve(absolutePath)
+	if !ok || !info.Linked {
+		return ""
+	}
+	mainCheckout := filepath.Dir(info.CommonDir)
+	if info.Detached {
+		return fmt.Sprintf("🌿 git worktree of %s (detached HEAD %s)", mainCheckout, info.Head)
+	}
+	return fmt.Sprintf("🌿 git worktree of %s (branch %s)", mainCheckout, info.Branch)
+}
+
+// resolveSearchResults reduces stored chunks to the view shape.
+func resolveSearchResults(chunks []model.StoredChunk) []view.SearchResultView {
+	results := make([]view.SearchResultView, 0, len(chunks))
+	for _, chunk := range chunks {
+		results = append(results, view.SearchResultView{
+			RelativePath: chunk.RelativePath,
+			StartLine:    chunk.StartLine,
+			EndLine:      chunk.EndLine,
+			Language:     chunk.Language,
+			Score:        chunk.Score,
+			Content:      chunk.Content,
+		})
+	}
+	return results
+}
+
+// resolveConversationSearchResults reduces stored conversation chunks to the
+// view shape.
+func resolveConversationSearchResults(chunks []model.StoredChunk) []view.ConversationResultView {
+	results := make([]view.ConversationResultView, 0, len(chunks))
+	for _, chunk := range chunks {
+		results = append(results, view.ConversationResultView{
+			ConversationID: chunk.ConversationID,
+			MessageIndex:   chunk.MessageIndex,
+			Role:           chunk.Role,
+			TimestampUnix:  chunk.TimestampUnix,
+			Score:          chunk.Score,
+			Content:        chunk.Content,
+		})
+	}
+	return results
+}
+
+// resolveSearchStatusView builds the optional in-flight status portion for a
+// search response.
+func resolveSearchStatusView(codebase model.Codebase, activeJob *model.Job, health dependencyHealth) (view.StatusView, string, bool) {
+	if activeJob == nil {
+		return blankStatusView("", ""), "", false
+	}
+	display := computeDisplayStatus(codebase, activeJob, health.Degraded())
+	statusView, templateName := resolveStatusView(codebase, activeJob, display, waitingLabel(health.Mode))
+	return statusView, templateName, isBackgroundSyncReconcile(&codebase, activeJob)
+}
+
+// resolveStartIndexView assembles the start acknowledgment including the merge
+// note relocated from grpc_server.startIndexMergeNote.
+func (server *GRPCServer) resolveStartIndexView(
+	requestedPath string,
+	codebase model.Codebase,
+	job model.Job,
+	deduplicated bool,
+	overlapsCodebaseID string,
+) view.StartIndexView {
+	return view.StartIndexView{
+		RequestedPath:      requestedPath,
+		CanonicalPath:      codebase.CanonicalPath,
+		CodebaseID:         codebase.ID,
+		JobID:              job.ID,
+		SplitterType:       job.Config.SplitterType,
+		Deduplicated:       deduplicated,
+		OverlapsCodebaseID: overlapsCodebaseID,
+		MergeNote:          server.startIndexMergeNote(requestedPath, codebase),
+	}
+}
+
+// resolveCancelJobAck builds the cancel acknowledgment while preserving the
+// current cancelled-vs-terminal wording split.
+func resolveCancelJobAck(job model.Job) view.MutationAckView {
+	return view.MutationAckView{
+		Kind:            view.AckCancel,
+		Path:            "",
+		JobID:           job.ID,
+		StateLabel:      status.JobStateLabelFor(job.State),
+		AlreadyTerminal: job.State != model.JobStateCancelled,
+		Deduplicated:    false,
+		CollectionID:    "",
+		CollectionName:  "",
+		CodebaseID:      job.CodebaseID,
+		ConversationID:  "",
+		DocumentCount:   0,
+		NeededCount:     0,
+		TotalCount:      0,
 	}
 }
 

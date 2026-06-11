@@ -1027,8 +1027,12 @@ type Job struct {
 	// superseded_by_job_id is the id of the immediate next terminal job for this
 	// job's codebase when superseded, else empty.
 	SupersededByJobId string `protobuf:"bytes,19,opt,name=superseded_by_job_id,json=supersededByJobId,proto3" json:"superseded_by_job_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// outcome is the daemon-resolved terminal result: "succeeded", "failed", or
+	// "canceled", and empty while the job is still live. Machine consumers read
+	// this instead of deriving terminality from the raw state field.
+	Outcome       string `protobuf:"bytes,20,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Job) Reset() {
@@ -1190,6 +1194,13 @@ func (x *Job) GetSuperseded() bool {
 func (x *Job) GetSupersededByJobId() string {
 	if x != nil {
 		return x.SupersededByJobId
+	}
+	return ""
+}
+
+func (x *Job) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
 	}
 	return ""
 }
@@ -3982,7 +3993,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0edisplay_status\x18\x0e \x01(\tR\rdisplayStatus\x12\x1f\n" +
 	"\vglyph_token\x18\x0f \x01(\tR\n" +
 	"glyphToken\x12!\n" +
-	"\fstatus_label\x18\x10 \x01(\tR\vstatusLabelJ\x04\b\x03\x10\x04R\aaliases\"\x9d\x06\n" +
+	"\fstatus_label\x18\x10 \x01(\tR\vstatusLabelJ\x04\b\x03\x10\x04R\aaliases\"\xb7\x06\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
@@ -4008,7 +4019,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\n" +
 	"superseded\x18\x12 \x01(\bR\n" +
 	"superseded\x12/\n" +
-	"\x14superseded_by_job_id\x18\x13 \x01(\tR\x11supersededByJobId\"\xb9\x01\n" +
+	"\x14superseded_by_job_id\x18\x13 \x01(\tR\x11supersededByJobId\x12\x18\n" +
+	"\aoutcome\x18\x14 \x01(\tR\aoutcome\"\xb9\x01\n" +
 	"\fSearchResult\x12#\n" +
 	"\rrelative_path\x18\x01 \x01(\tR\frelativePath\x12\x1d\n" +
 	"\n" +

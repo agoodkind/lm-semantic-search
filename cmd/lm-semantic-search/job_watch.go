@@ -12,7 +12,6 @@ import (
 
 	daemonclient "goodkind.io/lm-semantic-search/client"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
-	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // watchPollInterval is how often watchJob asks the daemon for job state. It
@@ -75,6 +74,19 @@ func printSentToBackground(jobID string) {
 	fmt.Fprintf(os.Stderr, "\nsent to background: job %s keeps running in the daemon; check it with `lm-semantic-search job get %s`\n", jobID, jobID)
 }
 
+// jobOutcome is the daemon-resolved terminal result carried on the wire's
+// outcome field. The CLI never derives terminality from the raw state field
+// (the display guard enforces this); these constants mirror the tokens
+// internal/pbconv stamps.
+type jobOutcome string
+
+const (
+	outcomeLive      jobOutcome = ""
+	outcomeSucceeded jobOutcome = "succeeded"
+	outcomeFailed    jobOutcome = "failed"
+	outcomeCanceled  jobOutcome = "canceled"
+)
+
 // renderJobUpdate prints one progress line and reports whether the job
 // reached a terminal state, with the error the command should exit with.
 func renderJobUpdate(job *pb.Job) (bool, error) {
@@ -90,21 +102,21 @@ func renderJobUpdate(job *pb.Job) (bool, error) {
 		progress.GetPhase(), progress.GetOverallPercent(),
 		progress.GetFilesProcessed(), progress.GetFilesTotal(), unit)
 
-	switch model.JobState(job.GetState()) {
-	case model.JobStateCompleted:
+	switch jobOutcome(job.GetOutcome()) {
+	case outcomeSucceeded:
 		fmt.Fprintf(os.Stderr, "\njob %s completed\n", job.GetId())
 		return true, nil
-	case model.JobStateFailed:
+	case outcomeFailed:
 		fmt.Fprintln(os.Stderr)
 		message := job.GetDisplayError()
 		if message == "" {
 			message = "job failed; see `lm-semantic-search job get " + job.GetId() + "`"
 		}
 		return true, errors.New(message)
-	case model.JobStateCancelled:
+	case outcomeCanceled:
 		fmt.Fprintln(os.Stderr)
 		return true, errors.New("job " + job.GetId() + " was cancelled")
-	case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
+	case outcomeLive:
 		return false, nil
 	default:
 		return false, nil

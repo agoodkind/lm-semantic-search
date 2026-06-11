@@ -1,9 +1,7 @@
 package daemon
 
 import (
-	"fmt"
 	"sort"
-	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/model"
 )
@@ -47,22 +45,6 @@ func computeDroppedCodebases(jobs []model.Job, codebases []model.Codebase, exist
 	}
 	sort.Strings(dropped)
 	return dropped
-}
-
-// renderDroppedSection formats the dropped-codebase section for the doctor
-// surface. With no dropped codebases it states that none exist, so the section
-// reads as a deliberate clean result rather than a missing check.
-func renderDroppedSection(dropped []string) string {
-	if len(dropped) == 0 {
-		return "Dropped codebases (completed index, now untracked, still on disk): none"
-	}
-
-	lines := make([]string, 0, len(dropped)+1)
-	lines = append(lines, fmt.Sprintf("Dropped codebases (completed index, now untracked, still on disk): %d", len(dropped)))
-	for _, path := range dropped {
-		lines = append(lines, "- "+path)
-	}
-	return strings.Join(lines, "\n")
 }
 
 // DroppedCodebases reports the canonical paths that completed an index, are no

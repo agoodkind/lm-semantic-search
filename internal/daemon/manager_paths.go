@@ -159,13 +159,15 @@ func canonicalizePath(requestedPath string) (string, error) {
 		return "", errors.New("codebase path is required")
 	}
 	if strings.Contains(requestedPath, "://") {
-		return "", fmt.Errorf("path %q looks like a URI; pass a filesystem directory instead", requestedPath)
+		// A typed invalid-path error keeps the rejection client-safe; a plain
+		// error would sanitize to "internal error" at the boundary.
+		return "", adapterr.NewInvalidPath(fmt.Sprintf("path %q looks like a URI; pass a filesystem directory instead", requestedPath), nil)
 	}
 	// A relative path reaching the daemon is unresolvable here: the daemon's
 	// working directory is never the caller's. resolveRequestPath at the gRPC
 	// boundary joins relative paths against the caller's cwd before this point.
 	if !filepath.IsAbs(requestedPath) {
-		return "", fmt.Errorf("path %q is relative; pass an absolute path or send caller_cwd", requestedPath)
+		return "", adapterr.NewInvalidPath(fmt.Sprintf("path %q is relative; pass an absolute path or send caller_cwd", requestedPath), nil)
 	}
 	absolutePath := filepath.Clean(requestedPath)
 	canonicalPath, err := filepath.EvalSymlinks(absolutePath)
