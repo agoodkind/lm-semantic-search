@@ -140,3 +140,22 @@ func TestGetIndexDegradedEnvelope(t *testing.T) {
 		}
 	}
 }
+
+// Every text-bearing mutation RPC shows the degraded banner, not only the read
+// surfaces: a StartIndex during an outage must carry the same warning.
+func TestStartIndexShowsBannerWhenDegraded(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	manager.runner = fakeRunner{}
+	manager.mu.Lock()
+	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), LastHealthyAt: clock.Now()}
+	manager.mu.Unlock()
+
+	server := NewGRPCServer(manager, nil)
+	resp, err := server.StartIndex(context.Background(), &pb.StartIndexRequest{Path: repoPath})
+	if err != nil {
+		t.Fatalf("StartIndex returned error: %v", err)
+	}
+	if !strings.Contains(resp.GetDisplayText(), "🟥") {
+		t.Fatalf("StartIndex display text lacks the degraded banner:\n%s", resp.GetDisplayText())
+	}
+}

@@ -348,21 +348,9 @@ func (m listModel) renderRow(codebase *pb.Codebase, selected bool, widths colWid
 	id := padTo(fitTail(codebase.GetId(), widths.id), widths.id)
 	pathCell := padTo(fitHead(codebase.GetCanonicalPath(), widths.path), widths.path)
 	status := codebase.GetDisplayStatus()
-	if status == "" {
-		status = codebase.GetStatus()
-	}
-	// The daemon owns the status vocabulary: render its glyph and label tokens,
-	// falling back to the raw status only when an older daemon omits them. Color
-	// stays a client concern, keyed off the display status.
 	glyph := codebase.GetGlyphToken()
-	if glyph == "" {
-		glyph = "•"
-	}
 	labelText := codebase.GetStatusLabel()
-	if labelText == "" {
-		labelText = status
-	}
-	label := glyph + " " + labelText
+	label := strings.TrimSpace(glyph + " " + labelText)
 	statusText := padTo(fitTail(label, widths.status), widths.status)
 
 	if selected {
@@ -455,17 +443,16 @@ var (
 	bannerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
 )
 
-// statusColors maps each codebase status to a distinct foreground color. An
-// unknown status falls back to grayStatus.
+// statusColors maps each resolved display status to a distinct foreground
+// color. An unknown status falls back to grayStatus.
 var statusColors = map[string]lipgloss.Color{
-	"preparing":   lipgloss.Color("12"),
-	"indexed":     lipgloss.Color("10"),
-	"indexing":    lipgloss.Color("11"),
-	"waiting":     lipgloss.Color("214"),
-	"stale":       lipgloss.Color("208"),
-	"failed":      lipgloss.Color("9"),
-	"missing":     lipgloss.Color("245"),
-	"not_indexed": grayStatus,
+	"preparing": lipgloss.Color("12"),
+	"indexed":   lipgloss.Color("10"),
+	"indexing":  lipgloss.Color("11"),
+	"waiting":   lipgloss.Color("214"),
+	"stale":     lipgloss.Color("208"),
+	"failed":    lipgloss.Color("9"),
+	"missing":   lipgloss.Color("245"),
 }
 
 const grayStatus = lipgloss.Color("245")

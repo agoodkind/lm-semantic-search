@@ -204,6 +204,7 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
 	}
 	startIndexView := server.resolveStartIndexView(request.GetPath(), codebase, job, deduplicated, overlapsCodebaseID)
+	health := server.manager.DependencyHealth()
 	return &pb.StartIndexResponse{
 		JobId:              job.ID,
 		CodebaseId:         codebase.ID,
@@ -211,7 +212,7 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 		Deduplicated:       deduplicated,
 		CanonicalPath:      codebase.CanonicalPath,
 		OverlapsCodebaseId: overlapsCodebaseID,
-		DisplayText:        appendCorrelationRef(render.StartIndex(startIndexView), ctx, "codebase_id", codebase.ID, "job_id", job.ID),
+		DisplayText:        server.envelopeText(ctx, health, render.StartIndex(startIndexView), "codebase_id", codebase.ID, "job_id", job.ID),
 	}, nil
 }
 
@@ -264,10 +265,11 @@ func (server *GRPCServer) ClearIndex(ctx context.Context, request *pb.ClearIndex
 		NeededCount:     0,
 		TotalCount:      0,
 	}
+	health := server.manager.DependencyHealth()
 	return &pb.ClearIndexResponse{
 		CodebaseId:  codebase.ID,
 		Cleared:     true,
-		DisplayText: appendCorrelationRef(render.MutationAck(ack), ctx, "codebase_id", codebase.ID),
+		DisplayText: server.envelopeText(ctx, health, render.MutationAck(ack), "codebase_id", codebase.ID),
 	}, nil
 }
 
@@ -283,10 +285,11 @@ func (server *GRPCServer) CancelJob(ctx context.Context, request *pb.CancelJobRe
 		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewJobNotFound(request.GetJobId())))
 	}
 	ack := resolveCancelJobAck(job)
+	health := server.manager.DependencyHealth()
 	return &pb.CancelJobResponse{
 		JobId:       job.ID,
 		Cancelled:   job.State == model.JobStateCancelled,
-		DisplayText: appendCorrelationRef(render.MutationAck(ack), ctx, "job_id", job.ID, "codebase_id", job.CodebaseID),
+		DisplayText: server.envelopeText(ctx, health, render.MutationAck(ack), "job_id", job.ID, "codebase_id", job.CodebaseID),
 	}, nil
 }
 
@@ -323,11 +326,12 @@ func (server *GRPCServer) SyncIndex(ctx context.Context, request *pb.SyncIndexRe
 		NeededCount:     0,
 		TotalCount:      0,
 	}
+	health := server.manager.DependencyHealth()
 	return &pb.SyncIndexResponse{
 		JobId:       job.ID,
 		CodebaseId:  codebase.ID,
 		State:       string(job.State),
-		DisplayText: appendCorrelationRef(render.MutationAck(ack), ctx, "codebase_id", codebase.ID, "job_id", job.ID),
+		DisplayText: server.envelopeText(ctx, health, render.MutationAck(ack), "codebase_id", codebase.ID, "job_id", job.ID),
 	}, nil
 }
 
@@ -579,12 +583,14 @@ func (server *GRPCServer) RegisterConversationCollection(ctx context.Context, re
 		NeededCount:     0,
 		TotalCount:      0,
 	}
+	health := server.manager.DependencyHealth()
 	return &pb.RegisterConversationCollectionResponse{
 		CodebaseId:     codebase.ID,
 		CollectionName: codebase.CollectionName,
-		DisplayText: appendCorrelationRef(
-			render.MutationAck(ack),
+		DisplayText: server.envelopeText(
 			ctx,
+			health,
+			render.MutationAck(ack),
 			"codebase_id",
 			codebase.ID,
 		),
@@ -618,11 +624,13 @@ func (server *GRPCServer) SyncConversationManifest(ctx context.Context, request 
 		NeededCount:     len(needed),
 		TotalCount:      len(request.GetManifest()),
 	}
+	health := server.manager.DependencyHealth()
 	return &pb.SyncConversationManifestResponse{
 		NeededConversationIds: needed,
-		DisplayText: appendCorrelationRef(
-			render.MutationAck(ack),
+		DisplayText: server.envelopeText(
 			ctx,
+			health,
+			render.MutationAck(ack),
 			"codebase_id",
 			request.GetCollectionId(),
 		),
@@ -661,11 +669,13 @@ func (server *GRPCServer) UpsertConversationDocuments(ctx context.Context, reque
 		NeededCount:     0,
 		TotalCount:      0,
 	}
+	health := server.manager.DependencyHealth()
 	return &pb.UpsertConversationDocumentsResponse{
 		JobId: job.ID,
-		DisplayText: appendCorrelationRef(
-			render.MutationAck(ack),
+		DisplayText: server.envelopeText(
 			ctx,
+			health,
+			render.MutationAck(ack),
 			"codebase_id",
 			job.CodebaseID,
 			"job_id",
@@ -708,11 +718,13 @@ func (server *GRPCServer) DeleteConversation(ctx context.Context, request *pb.De
 		NeededCount:     0,
 		TotalCount:      0,
 	}
+	health := server.manager.DependencyHealth()
 	return &pb.DeleteConversationResponse{
 		JobId: job.ID,
-		DisplayText: appendCorrelationRef(
-			render.MutationAck(ack),
+		DisplayText: server.envelopeText(
 			ctx,
+			health,
+			render.MutationAck(ack),
 			"codebase_id",
 			job.CodebaseID,
 			"job_id",
