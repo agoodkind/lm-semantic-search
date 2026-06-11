@@ -94,17 +94,23 @@ The daemon refuses to register the filesystem root `/`. This guard sits next to
 the existing guards in `manager_guards.go`, which reject the daemon's own state
 directory and any path that is not a directory.
 
+Every guard refusal reaches the client as a typed invalid-path error carrying
+the refusal reason. `classifyManagerError` in `grpc_server.go` maps the guard
+messages, so the operator never has to read the daemon log to learn why a path
+was rejected.
+
 ### The index command returns immediately, and `--wait` attaches with a timeout
 
 `codebase index` and `codebase sync` print the job id as soon as the daemon
 accepts the job and then return. This is the default in every output mode, so
 scripts and machine consumers always get the return-immediately contract.
 
-A `--wait <duration>` flag attaches to the job after the job id prints and
-renders live progress from the `WatchJobs` stream, the daemon's existing
-job-event subscription. Progress lines show the phase, the percent complete, and
-the file counts the job already reports. Bare `--wait` uses 300 seconds, the same
-default as the MCP tool's `wait_timeout_seconds`. There is no indefinite wait.
+A `--wait` flag attaches to the job after the job id prints and renders live
+progress by polling `GetJob` every 1.5 seconds, the same cadence the MCP
+adapter's wait path uses. Progress lines show the phase, the percent complete,
+and the file counts the job already reports. Bare `--wait` uses 300 seconds,
+the same default as the MCP tool's `wait_timeout_seconds`; an explicit
+duration uses the `=` form (`--wait=30s`). There is no indefinite wait.
 `--wait` requires human output mode; combining it with `--json` or
 `--output single-line` is an error, so machine output never interleaves with
 progress rendering.
