@@ -66,8 +66,12 @@ func newCodebaseStatusCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase status /abs/path/to/repo",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			clientInfo, err := currentClientInfo()
+			if err != nil {
+				return err
+			}
 			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
-				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: args[0]})
+				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: args[0], Client: clientInfo})
 			})
 		},
 	}
@@ -167,6 +171,10 @@ func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase search /abs/path/to/repo splitter --limit 5",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			clientInfo, err := currentClientInfo()
+			if err != nil {
+				return err
+			}
 			searchLimit, err := safeSearchLimit(limit)
 			if err != nil {
 				return err
@@ -177,6 +185,7 @@ func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
 					Query:           args[1],
 					Limit:           searchLimit,
 					ExtensionFilter: extensions,
+					Client:          clientInfo,
 				})
 			})
 		},
