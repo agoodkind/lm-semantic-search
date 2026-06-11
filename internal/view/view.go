@@ -142,22 +142,25 @@ type SearchResultView struct {
 	StartLine    int32
 	EndLine      int32
 	Language     string
-	Score        float32
+	Score        float64
 	Content      string
 }
 
 // SearchView is the code search response view.
 type SearchView struct {
-	RequestedPath   string
-	Query           string
-	CodebaseName    string
-	Results         []SearchResultView
-	StateNote       string
-	InFlight        bool
-	InFlightStatus  StatusView
-	InFlightPercent int32
-	Degraded        bool
-	ResolutionLines []string
+	RequestedPath          string
+	Query                  string
+	CodebaseName           string
+	CodebasePath           string
+	Results                []SearchResultView
+	StateNote              string
+	InFlight               bool
+	InFlightStatus         StatusView
+	InFlightTemplateName   string
+	InFlightPercent        int32
+	InFlightBackgroundSync bool
+	Degraded               bool
+	ResolutionLines        []string
 }
 
 // ConversationSearchView is the conversation search response view.
@@ -173,7 +176,8 @@ type ConversationResultView struct {
 	ConversationID string
 	MessageIndex   int32
 	Role           string
-	Score          float32
+	TimestampUnix  int64
+	Score          float64
 	Content        string
 }
 
@@ -189,6 +193,7 @@ type GetIndexView struct {
 	WaitLabel          string
 	ClassificationLine string
 	ResolutionLines    []string
+	CoverageLine       string
 	DescendantsHint    string
 	SyncNote           string
 }

@@ -8,6 +8,7 @@ import (
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 func TestComputeDroppedCodebasesReportsCompletedUntrackedOnDisk(t *testing.T) {
@@ -71,7 +72,7 @@ func TestComputeDroppedCodebasesSortsAndDeduplicates(t *testing.T) {
 func TestRenderDroppedSectionStatesNoneWhenEmpty(t *testing.T) {
 	t.Parallel()
 
-	if section := renderDroppedSection(nil); !strings.Contains(section, "none") {
+	if section := renderDroppedSection(view.DoctorView{}); !strings.Contains(section, "none") {
 		t.Fatalf("renderDroppedSection empty = %q, want a none statement", section)
 	}
 }
