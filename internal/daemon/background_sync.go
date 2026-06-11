@@ -330,7 +330,7 @@ func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase mode
 		return false, fmt.Errorf("read Merkle snapshot %s: %w", snapshotPath, err)
 	}
 
-	currentSnapshot, err := merkle.Capture(
+	currentSnapshot, rules, err := merkle.Capture(
 		ctx,
 		codebase.CanonicalPath,
 		codebase.EffectiveConfig,
@@ -339,6 +339,7 @@ func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase mode
 		slog.ErrorContext(ctx, "capture Merkle snapshot failed", "path", codebase.CanonicalPath, "err", err)
 		return false, fmt.Errorf("capture Merkle snapshot for %s: %w", codebase.CanonicalPath, err)
 	}
+	syncer.manager.cacheResolvedRules(codebase.ID, rules)
 	return !merkle.Equal(existingSnapshot, currentSnapshot), nil
 }
 

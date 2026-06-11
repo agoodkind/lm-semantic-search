@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 
+	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -42,17 +43,23 @@ type codeItemSource struct {
 	runner        indexingRunner
 	canonicalPath string
 	config        model.IndexConfig
+	// onRules receives the walk's resolved ignore rules each capture, so the
+	// manager can persist them without a second walk. Nil disables reporting.
+	onRules func(discovery.IgnoreRules)
 }
 
-func newCodeItemSource(runner indexingRunner, canonicalPath string, config model.IndexConfig) codeItemSource {
-	return codeItemSource{runner: runner, canonicalPath: canonicalPath, config: config}
+func newCodeItemSource(runner indexingRunner, canonicalPath string, config model.IndexConfig, onRules func(discovery.IgnoreRules)) codeItemSource {
+	return codeItemSource{runner: runner, canonicalPath: canonicalPath, config: config, onRules: onRules}
 }
 
 func (source codeItemSource) capture(ctx context.Context) (merkle.Snapshot, error) {
-	snapshot, err := merkle.Capture(ctx, source.canonicalPath, source.config)
+	snapshot, rules, err := merkle.Capture(ctx, source.canonicalPath, source.config)
 	if err != nil {
 		slog.ErrorContext(ctx, "capture code snapshot failed", "path", source.canonicalPath, "err", err)
 		return merkle.Snapshot{}, fmt.Errorf("capture code snapshot for %s: %w", source.canonicalPath, err)
+	}
+	if source.onRules != nil {
+		source.onRules(rules)
 	}
 	return snapshot, nil
 }

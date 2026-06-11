@@ -90,7 +90,7 @@ func TestRunBootstrapResumesSkippingEmbeddedFiles(t *testing.T) {
 	cfg := defaultIndexConfig()
 	cfg.IgnoreDigest = "sha256:bootstrap-resume"
 
-	captured, err := merkle.Capture(context.Background(), canonical, cfg)
+	captured, _, err := merkle.Capture(context.Background(), canonical, cfg)
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestRunBootstrapResumesSkippingEmbeddedFiles(t *testing.T) {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, job.CanonicalPath, job.Config))
+	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, job.CanonicalPath, job.Config, nil))
 
 	mu.Lock()
 	slices.Sort(embedded)
@@ -140,7 +140,7 @@ func TestRunBootstrapEmbedsEveryFileWithoutCheckpoint(t *testing.T) {
 
 	_, job := seedBootstrapCodebase(t, manager, canonical, cfg)
 
-	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, job.CanonicalPath, job.Config))
+	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, job.CanonicalPath, job.Config, nil))
 
 	mu.Lock()
 	slices.Sort(embedded)
