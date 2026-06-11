@@ -438,7 +438,14 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 		return emptyJob, codebase, false, overlapsCodebaseID, nil
 	}
 	notifyCtx := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
-	go manager.notifyCodebaseAdded(notifyCtx, codebase)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(notifyCtx, "notify codebase added panic", "codebase_id", codebase.ID, "err", recovered)
+			}
+		}()
+		manager.notifyCodebaseAdded(notifyCtx, codebase)
+	}()
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)
 	return job, codebase, false, overlapsCodebaseID, nil

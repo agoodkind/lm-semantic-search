@@ -60,7 +60,14 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 
 	manager.seedAdoptedMerkle(ctx, record)
 	notifyCtx := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
-	go manager.notifyCodebaseAdded(notifyCtx, record)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(notifyCtx, "notify codebase added panic", "codebase_id", record.ID, "err", recovered)
+			}
+		}()
+		manager.notifyCodebaseAdded(notifyCtx, record)
+	}()
 	slog.InfoContext(ctx, "adopted unregistered codebase", "codebase_id", record.ID, "path", canonicalPath, "collection", collectionName)
 	manager.enqueueAdoptionSync(ctx, canonicalPath)
 	return record, true
