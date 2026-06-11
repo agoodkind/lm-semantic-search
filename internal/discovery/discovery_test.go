@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -14,6 +15,79 @@ func writeFile(t *testing.T, path string, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func mkdir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+}
+
+// TestDiscoverReturnsRulesMatchingEffectiveIgnorePatterns proves the
+// single-pass walk produces verdicts identical to the standalone rules
+// resolver for the same tree.
+func TestDiscoverReturnsRulesMatchingEffectiveIgnorePatterns(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	writeFile(t, filepath.Join(tempDir, ".gitignore"), "ignored-dir/\n*.tmp\n")
+	mkdir(t, filepath.Join(tempDir, "ignored-dir"))
+	writeFile(t, filepath.Join(tempDir, "ignored-dir", "inside.go"), "package x\n")
+	mkdir(t, filepath.Join(tempDir, "nested"))
+	writeFile(t, filepath.Join(tempDir, "nested", ".gitignore"), "local-only.go\n")
+	writeFile(t, filepath.Join(tempDir, "nested", "local-only.go"), "package x\n")
+	writeFile(t, filepath.Join(tempDir, "nested", "kept.go"), "package x\n")
+	writeFile(t, filepath.Join(tempDir, "kept.go"), "package x\n")
+	writeFile(t, filepath.Join(tempDir, "scratch.tmp"), "x\n")
+
+	result, err := Discover(context.Background(), tempDir, nil, nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	standalone, err := EffectiveIgnorePatterns(context.Background(), tempDir, nil)
+	if err != nil {
+		t.Fatalf("EffectiveIgnorePatterns returned error: %v", err)
+	}
+
+	candidates := []string{
+		"kept.go", "scratch.tmp", "ignored-dir/inside.go",
+		"nested/local-only.go", "nested/kept.go",
+	}
+	for _, candidate := range candidates {
+		fromWalk, _, _ := PathIgnored(candidate, result.Rules)
+		fromStandalone, _, _ := PathIgnored(candidate, standalone)
+		if fromWalk != fromStandalone {
+			t.Fatalf("verdict for %q diverged: walk=%v standalone=%v", candidate, fromWalk, fromStandalone)
+		}
+	}
+
+	wantFiles := []string{
+		filepath.Join(tempDir, ".gitignore"),
+		filepath.Join(tempDir, "kept.go"),
+		filepath.Join(tempDir, "nested", ".gitignore"),
+		filepath.Join(tempDir, "nested", "kept.go"),
+	}
+	if !slices.Equal(result.Files, wantFiles) {
+		t.Fatalf("Files = %v, want %v", result.Files, wantFiles)
+	}
+}
+
+// TestDiscoverDoesNotDescendIntoIgnoredDirectories proves the walk prunes:
+// an unreadable directory that the rules exclude must not fail discovery.
+func TestDiscoverDoesNotDescendIntoIgnoredDirectories(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	writeFile(t, filepath.Join(tempDir, ".gitignore"), "sealed/\n")
+	mkdir(t, filepath.Join(tempDir, "sealed"))
+	writeFile(t, filepath.Join(tempDir, "sealed", "file.go"), "package x\n")
+	if err := os.Chmod(filepath.Join(tempDir, "sealed"), 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(tempDir, "sealed"), 0o755) })
+
+	if _, err := Discover(context.Background(), tempDir, nil, nil); err != nil {
+		t.Fatalf("Discover failed on a pruned unreadable directory: %v", err)
 	}
 }
 

@@ -161,6 +161,7 @@ type Result struct {
 	Files          []string
 	IgnorePatterns []string
 	Extensions     []string
+	Rules          IgnoreRules
 }
 
 // IgnoreRules captures the resolved ignore decision tree for one codebase.
@@ -227,10 +228,11 @@ func (rules IgnoreRules) IsEmpty() bool {
 	return len(rules.Nodes) == 0
 }
 
-// Discover walks a codebase root and returns every file that survives the
-// ignore-pattern denylist. Extensions in the request are honored for
-// backwards compatibility but no longer gate inclusion; the binary content
-// gate now lives in the indexer's UTF-8 check.
+// Discover walks a codebase root once. The walk reads each directory's
+// ignore files as it enters the directory and applies the rules collected
+// so far, so it never descends into an ignored directory. It returns the
+// surviving files together with the finished rule tree, which callers
+// persist so no second walk is needed.
 func Discover(ctx context.Context, root string, additionalIgnorePatterns []string, additionalExtensions []string) (Result, error) {
 	absoluteRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -238,29 +240,39 @@ func Discover(ctx context.Context, root string, additionalIgnorePatterns []strin
 		return Result{}, fmt.Errorf("resolve absolute root %s: %w", root, err)
 	}
 
-	rules, err := EffectiveIgnorePatterns(ctx, absoluteRoot, additionalIgnorePatterns)
-	if err != nil {
-		return Result{}, err
+	rootPatterns := make([]ignorePattern, 0, len(defaultIgnorePatterns)+len(additionalIgnorePatterns))
+	for _, pattern := range defaultIgnorePatterns {
+		rootPatterns = append(rootPatterns, parsePattern(pattern, patternSourceBuiltin))
 	}
-	effectiveExtensions := normalizeExtensions(additionalExtensions)
+	for _, pattern := range additionalIgnorePatterns {
+		rootPatterns = append(rootPatterns, parsePattern(pattern, patternSourceOverride))
+	}
+	globalPatterns, globalErr := loadGlobalContextIgnore(ctx)
+	if globalErr != nil {
+		globalPatterns = nil
+	}
 
-	// rootCommonDir identifies the repo group of the codebase root, when it is a
-	// git working tree. The walk uses it to stop at a nested directory that is a
-	// worktree of the same repository, so a sibling worktree's files never leak
-	// into this codebase's index. It is empty for a non-git root, which disables
-	// the boundary entirely.
 	rootCommonDir, _ := gitworktree.CommonDirAt(absoluteRoot)
 
 	files := []string{}
-	if err := walkFiles(ctx, absoluteRoot, absoluteRoot, rules, rootCommonDir, &files); err != nil {
+	walker := &combinedWalker{
+		root:           absoluteRoot,
+		rootCommonDir:  rootCommonDir,
+		rootPatterns:   rootPatterns,
+		globalPatterns: globalPatterns,
+		rules:          IgnoreRules{Nodes: map[string][]ignorePattern{}},
+		files:          &files,
+	}
+	if err := walker.walk(ctx, ""); err != nil {
 		return Result{}, err
 	}
 	slices.Sort(files)
 
 	return Result{
 		Files:          files,
-		IgnorePatterns: rules.Flatten(),
-		Extensions:     effectiveExtensions,
+		IgnorePatterns: walker.rules.Flatten(),
+		Extensions:     normalizeExtensions(additionalExtensions),
+		Rules:          walker.rules,
 	}, nil
 }
 
@@ -372,49 +384,114 @@ func PathIgnored(relativePath string, rules IgnoreRules) (bool, string, string) 
 	return false, "", ""
 }
 
-func walkFiles(ctx context.Context, root string, current string, rules IgnoreRules, rootCommonDir string, files *[]string) error {
+// combinedWalker is the one-pass descent that powers Discover: rules are
+// collected and applied in the same walk that lists files.
+type combinedWalker struct {
+	root           string
+	rootCommonDir  string
+	rootPatterns   []ignorePattern
+	globalPatterns []ignorePattern
+	rules          IgnoreRules
+	files          *[]string
+}
+
+func (walker *combinedWalker) walk(ctx context.Context, relativeDir string) error {
 	if err := ctx.Err(); err != nil {
-		slog.ErrorContext(ctx, "walk cancelled", "path", current, "err", err)
-		return fmt.Errorf("walk cancelled at %s: %w", current, err)
+		slog.ErrorContext(ctx, "walk cancelled", "path", relativeDir, "err", err)
+		return fmt.Errorf("walk cancelled at %s: %w", relativeDir, err)
+	}
+	currentDir := filepath.Join(walker.root, relativeDir)
+	entries, err := os.ReadDir(currentDir)
+	if err != nil {
+		slog.ErrorContext(ctx, "read directory failed", "path", currentDir, "err", err)
+		return fmt.Errorf("read directory %s: %w", currentDir, err)
 	}
 
-	entries, err := os.ReadDir(current)
+	// Read this directory's ignore files before judging any child, so the
+	// rules that govern the children exist when the children are evaluated.
+	// The root node keeps EffectiveIgnorePatterns's order (builtin,
+	// override, root ignore files, global) because PathIgnored is
+	// last-match-wins within a node.
+	parsed, err := walker.readIgnoreEntries(ctx, currentDir, relativeDir, entries)
 	if err != nil {
-		slog.ErrorContext(ctx, "read directory failed", "path", current, "err", err)
-		return fmt.Errorf("read directory %s: %w", current, err)
+		return err
+	}
+	if relativeDir == "" {
+		merged := make([]ignorePattern, 0, len(walker.rootPatterns)+len(parsed)+len(walker.globalPatterns))
+		merged = append(merged, walker.rootPatterns...)
+		merged = append(merged, parsed...)
+		merged = append(merged, walker.globalPatterns...)
+		walker.rules.Nodes[""] = merged
+	} else if len(parsed) > 0 {
+		walker.rules.Nodes[relativeDir] = parsed
 	}
 
 	for _, entry := range entries {
 		// The codebase root's own .git entry is metadata, never content. The
-		// .git/ pattern already excludes the main worktree's .git directory, but
-		// a linked worktree roots at a .git file that the directory pattern does
-		// not match, so it is dropped explicitly here.
-		if entry.Name() == ".git" && current == root {
+		// .git/ pattern already excludes the main worktree's .git directory,
+		// but a linked worktree roots at a .git file that the directory
+		// pattern does not match, so it is dropped explicitly here.
+		if entry.Name() == ".git" && relativeDir == "" {
 			continue
 		}
-		fullPath := filepath.Join(current, entry.Name())
-		relativePath, err := filepath.Rel(root, fullPath)
-		if err != nil {
-			slog.ErrorContext(ctx, "compute relative path failed", "root", root, "path", fullPath, "err", err)
-			return fmt.Errorf("compute relative path for %s: %w", fullPath, err)
+		childRelative := entry.Name()
+		if relativeDir != "" {
+			childRelative = relativeDir + "/" + entry.Name()
 		}
-		if excluded, _, _ := PathIgnored(relativePath, rules); excluded {
+		if walker.ignoredDuringWalk(childRelative, entry.IsDir()) {
 			continue
 		}
-
+		fullPath := filepath.Join(currentDir, entry.Name())
 		if entry.IsDir() {
-			if isSameRepoWorktree(fullPath, rootCommonDir) {
+			if isSameRepoWorktree(fullPath, walker.rootCommonDir) {
 				continue
 			}
-			if err := walkFiles(ctx, root, fullPath, rules, rootCommonDir, files); err != nil {
+			if err := walker.walk(ctx, childRelative); err != nil {
 				return err
 			}
 			continue
 		}
-
-		*files = append(*files, fullPath)
+		*walker.files = append(*walker.files, fullPath)
 	}
 	return nil
+}
+
+func (walker *combinedWalker) ignoredDuringWalk(relativePath string, isDir bool) bool {
+	if excluded, _, _ := PathIgnored(relativePath, walker.rules); excluded {
+		return true
+	}
+	if !isDir {
+		return false
+	}
+	// Directory patterns exclude descendants, so probe a sentinel child before
+	// recursing. This keeps the walk from opening ignored directories.
+	probePath := strings.Trim(relativePath, "/") + "/.lm-semantic-search-directory"
+	excluded, _, _ := PathIgnored(probePath, walker.rules)
+	return excluded
+}
+
+// readIgnoreEntries parses every dot-prefixed *ignore file in the directory
+// listing, mirroring walkGitignore's name predicate and source labeling.
+func (walker *combinedWalker) readIgnoreEntries(ctx context.Context, currentDir string, relativeDir string, entries []os.DirEntry) ([]ignorePattern, error) {
+	parsed := []ignorePattern{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, ".") || !strings.HasSuffix(name, "ignore") {
+			continue
+		}
+		raw, readErr := readIgnoreFile(ctx, filepath.Join(currentDir, name))
+		if readErr != nil {
+			return nil, readErr
+		}
+		source := name
+		if relativeDir != "" {
+			source = filepath.ToSlash(filepath.Join(relativeDir, name))
+		}
+		for _, pattern := range raw {
+			parsed = append(parsed, parsePattern(pattern, source))
+		}
+	}
+	return parsed, nil
 }
 
 // isSameRepoWorktree reports whether dir is the root of a git worktree that
