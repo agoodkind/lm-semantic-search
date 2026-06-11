@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 
+	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -42,28 +43,54 @@ type codeItemSource struct {
 	runner        indexingRunner
 	canonicalPath string
 	config        model.IndexConfig
+	// onRules receives the walk's resolved ignore rules each capture, so the
+	// manager can persist them without a second walk. Nil disables reporting.
+	onRules func(discovery.IgnoreRules)
 }
 
-func newCodeItemSource(runner indexingRunner, canonicalPath string, config model.IndexConfig) codeItemSource {
-	return codeItemSource{runner: runner, canonicalPath: canonicalPath, config: config}
+func newCodeItemSource(runner indexingRunner, canonicalPath string, config model.IndexConfig, onRules func(discovery.IgnoreRules)) codeItemSource {
+	return codeItemSource{runner: runner, canonicalPath: canonicalPath, config: config, onRules: onRules}
 }
 
 func (source codeItemSource) capture(ctx context.Context) (merkle.Snapshot, error) {
-	snapshot, err := merkle.Capture(ctx, source.canonicalPath, source.config)
+	snapshot, rules, err := merkle.Capture(ctx, source.canonicalPath, source.config)
 	if err != nil {
 		slog.ErrorContext(ctx, "capture code snapshot failed", "path", source.canonicalPath, "err", err)
 		return merkle.Snapshot{}, fmt.Errorf("capture code snapshot for %s: %w", source.canonicalPath, err)
+	}
+	if source.onRules != nil {
+		source.onRules(rules)
 	}
 	return snapshot, nil
 }
 
 func (source codeItemSource) indexOne(ctx context.Context, relativePath string) (indexer.OneFileResult, error) {
-	result, err := source.runner.IndexOne(ctx, source.canonicalPath, relativePath, source.config)
-	if err != nil {
-		slog.ErrorContext(ctx, "index code file failed", "path", relativePath, "err", err)
-		return indexer.OneFileResult{}, fmt.Errorf("index code file %s: %w", relativePath, err)
+	type indexOneOutcome struct {
+		result indexer.OneFileResult
+		err    error
 	}
-	return result, nil
+	done := make(chan indexOneOutcome, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				var empty indexer.OneFileResult
+				done <- indexOneOutcome{result: empty, err: fmt.Errorf("index code file panic: %v", recovered)}
+			}
+		}()
+		result, err := source.runner.IndexOne(ctx, source.canonicalPath, relativePath, source.config)
+		done <- indexOneOutcome{result: result, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return indexer.OneFileResult{}, fmt.Errorf("index code file %s cancelled: %w", relativePath, ctx.Err())
+	case outcome := <-done:
+		if outcome.err == nil {
+			return outcome.result, nil
+		}
+		slog.ErrorContext(ctx, "index code file failed", "path", relativePath, "err", outcome.err)
+		return indexer.OneFileResult{}, fmt.Errorf("index code file %s: %w", relativePath, outcome.err)
+	}
 }
 
 func (source codeItemSource) removalFor(itemIDs []string) semantic.Removal {

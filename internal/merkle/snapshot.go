@@ -122,12 +122,14 @@ func (snapshot *Snapshot) CoversPath(relativePath string) bool {
 	return false
 }
 
-// Capture walks a codebase and records content hashes for the tracked files.
+// Capture walks a codebase once and records content hashes for the tracked
+// files. The returned rule tree is the walk's resolved ignore rules, handed
+// back so the caller can persist them instead of re-walking.
 func Capture(
 	ctx context.Context,
 	root string,
 	indexConfig model.IndexConfig,
-) (Snapshot, error) {
+) (Snapshot, discovery.IgnoreRules, error) {
 	discoveryResult, err := discovery.Discover(
 		ctx,
 		root,
@@ -135,19 +137,19 @@ func Capture(
 		indexConfig.Extensions,
 	)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("discover sync files under %s: %w", root, err)
+		return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("discover sync files under %s: %w", root, err)
 	}
 
 	files := make(map[string]string, len(discoveryResult.Files))
 	for _, path := range discoveryResult.Files {
 		if err := ctx.Err(); err != nil {
-			return Snapshot{}, fmt.Errorf("capture snapshot cancelled: %w", err)
+			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("capture snapshot cancelled: %w", err)
 		}
 
 		data, err := os.ReadFile(path)
 		if err != nil {
 			slog.ErrorContext(ctx, "read file for snapshot failed", "path", path, "err", err)
-			return Snapshot{}, fmt.Errorf("read file for snapshot %s: %w", path, err)
+			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("read file for snapshot %s: %w", path, err)
 		}
 
 		relativePath, err := filepath.Rel(root, path)
@@ -162,7 +164,7 @@ func Capture(
 				"err",
 				err,
 			)
-			return Snapshot{}, fmt.Errorf(
+			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf(
 				"compute snapshot relative path for %s: %w",
 				path,
 				err,
@@ -177,7 +179,8 @@ func Capture(
 		files[relativePath] = digestBytes(data)
 	}
 
-	return Snapshot{ConfigDigest: "", Files: files, Inodes: nil}, nil
+	snapshot := Snapshot{ConfigDigest: "", Files: files, Inodes: nil}
+	return snapshot, discoveryResult.Rules, nil
 }
 
 // WriteSnapshot persists a snapshot atomically.

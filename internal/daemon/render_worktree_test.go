@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,6 +45,46 @@ func TestRenderWorktreeRelationMainAndNonGit(t *testing.T) {
 	plain := t.TempDir()
 	if line := renderWorktreeRelation(plain); line != "" {
 		t.Errorf("non-git directory produced a relation line %q, want empty", line)
+	}
+}
+
+// TestRenderWorktreeRelationIgnoresNonAbsoluteArguments proves an id-shaped or
+// relative request argument produces no worktree note. The render layer must
+// never resolve a non-absolute argument against the daemon's own working
+// directory; doing so reported the daemon-cwd repository's worktree relation
+// for `codebase status cb_<id>` calls.
+func TestRenderWorktreeRelationIgnoresNonAbsoluteArguments(t *testing.T) {
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "repo")
+	makeMainRepo(t, mainRoot)
+	worktreeDir := filepath.Join(base, "feature")
+	makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
+	t.Chdir(worktreeDir)
+
+	for _, requested := range []string{"cb_1781157036_d9abd515219f", "some/relative", "."} {
+		if line := renderWorktreeRelation(requested); line != "" {
+			t.Errorf("renderWorktreeRelation(%q) = %q, want empty for a non-absolute argument", requested, line)
+		}
+	}
+}
+
+// TestRenderSymlinkResolutionIgnoresNonAbsoluteArguments proves the symlink
+// note has the same guard: a relative or id-shaped argument never resolves
+// against the daemon's working directory.
+func TestRenderSymlinkResolutionIgnoresNonAbsoluteArguments(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatalf("mkdir real: %v", err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	t.Chdir(base)
+
+	if line := renderSymlinkResolution("link"); line != "" {
+		t.Errorf("renderSymlinkResolution(%q) = %q, want empty for a relative argument", "link", line)
 	}
 }
 

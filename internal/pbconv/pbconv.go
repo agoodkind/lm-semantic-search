@@ -105,6 +105,7 @@ func ToJob(job model.Job) *pb.Job {
 		StartedAt:   ts(job.StartedAt),
 		UpdatedAt:   ts(job.UpdatedAt),
 		CompletedAt: tsp(job.CompletedAt),
+		Outcome:     jobOutcome(job.State),
 	}
 	if job.Error != nil {
 		result.Error = &pb.JobError{
@@ -113,6 +114,25 @@ func ToJob(job model.Job) *pb.Job {
 		}
 	}
 	return result
+}
+
+// jobOutcome resolves the terminal result token for the wire: "succeeded",
+// "failed", or "canceled", and "" while the job is live. It exists so machine
+// consumers (the CLI's --wait follower in particular) never derive
+// terminality from the raw state field.
+func jobOutcome(state model.JobState) string {
+	switch state {
+	case model.JobStateCompleted:
+		return "succeeded"
+	case model.JobStateFailed:
+		return "failed"
+	case model.JobStateCancelled:
+		return "canceled"
+	case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
+		return ""
+	default:
+		return ""
+	}
 }
 
 // Operation values a daemon job can carry, mirrored here so the wire trigger

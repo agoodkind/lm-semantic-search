@@ -35,6 +35,19 @@ func (manager *Manager) guardStateRoot(canonicalPath string) error {
 	return nil
 }
 
+// guardFilesystemRoot rejects a registration rooted at the filesystem root.
+// Indexing "/" swallows every mount on the host and is never intentional;
+// the daemon-resolved-relative-path incident registered "/" exactly this way.
+func (manager *Manager) guardFilesystemRoot(canonicalPath string) error {
+	_ = manager
+	if filepath.Clean(canonicalPath) == string(filepath.Separator) {
+		err := fmt.Errorf("refusing to index filesystem root %s", canonicalPath)
+		slog.Error("filesystem-root guard rejected registration", "path", canonicalPath, "err", err)
+		return err
+	}
+	return nil
+}
+
 // guardDirectory rejects any registration whose canonical path is not a
 // directory. Files, sockets, FIFOs, and devices are not indexable
 // codebases. A non-existent path is allowed so a future periodic sync can

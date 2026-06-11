@@ -45,7 +45,6 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 	record.Status = model.CodebaseStatusIndexed
 	record.EffectiveConfig = indexConfig
 	record.CollectionName = collectionName
-	record.ResolvedIgnoreRules = resolveIgnoreRulesOrLog(ctx, canonicalPath, indexConfig.IgnorePatterns)
 	record.InodeTrackingDisabled = detectInodeTrackingDisabled(ctx, canonicalPath)
 	record.MerkleSnapshotPath = manager.merklePath(record.ID)
 	record.UpdatedAt = clock.Now()
@@ -60,7 +59,15 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 	manager.mu.Unlock()
 
 	manager.seedAdoptedMerkle(ctx, record)
-	manager.notifyCodebaseAdded(ctx, record)
+	notifyCtx := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(notifyCtx, "notify codebase added panic", "codebase_id", record.ID, "err", recovered)
+			}
+		}()
+		manager.notifyCodebaseAdded(notifyCtx, record)
+	}()
 	slog.InfoContext(ctx, "adopted unregistered codebase", "codebase_id", record.ID, "path", canonicalPath, "collection", collectionName)
 	manager.enqueueAdoptionSync(ctx, canonicalPath)
 	return record, true

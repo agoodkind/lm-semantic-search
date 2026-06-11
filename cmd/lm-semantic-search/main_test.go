@@ -74,6 +74,34 @@ func TestCodebaseStatusRequiresPath(t *testing.T) {
 	}
 }
 
+// TestIndexRejectsWaitOutsideHumanMode proves --wait cannot interleave
+// progress rendering with machine output.
+func TestIndexRejectsWaitOutsideHumanMode(t *testing.T) {
+	root, _, _ := testRoot()
+	root.SetArgs([]string{"--json", "codebase", "index", "/tmp/x", "--wait"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected --wait with --json to error")
+	}
+	if !strings.Contains(err.Error(), "--wait requires human output") {
+		t.Fatalf("error = %q, want --wait requires human output", err.Error())
+	}
+}
+
+// TestRuntimeErrorsDoNotPrintUsage proves a post-parse failure prints no
+// usage block (the Ctrl-C dump from the incident).
+func TestRuntimeErrorsDoNotPrintUsage(t *testing.T) {
+	root, stdout, stderr := testRoot()
+	root.SetArgs([]string{"daemon", "status", "--socket", "/nonexistent/socket.sock"})
+
+	_ = root.Execute()
+	combined := stdout.String() + stderr.String()
+	if strings.Contains(combined, "Usage:") {
+		t.Fatalf("runtime error printed usage:\n%s", combined)
+	}
+}
+
 func TestJobGetRequiresID(t *testing.T) {
 	root, _, _ := testRoot()
 	root.SetArgs([]string{"job", "get"})

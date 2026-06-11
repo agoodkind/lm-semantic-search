@@ -404,7 +404,7 @@ func TestConvergeCopyChunksFiresOnRename(t *testing.T) {
 
 	// Seed a checkpoint recording src.go with its real content hash and inode,
 	// so the renamed file is recognized as a move of src.go.
-	captured, err := merkle.Capture(context.Background(), canonical, cfg)
+	captured, _, err := merkle.Capture(context.Background(), canonical, cfg)
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}

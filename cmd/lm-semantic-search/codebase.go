@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -66,8 +68,12 @@ func newCodebaseStatusCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase status /abs/path/to/repo",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			clientInfo, err := currentClientInfo()
+			if err != nil {
+				return err
+			}
 			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
-				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: args[0]})
+				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: args[0], Client: clientInfo})
 			})
 		},
 	}
@@ -78,6 +84,7 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 	var splitterType string
 	var customExtensions []string
 	var ignorePatterns []string
+	var waitTimeout time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "index PATH|ID",
@@ -99,6 +106,10 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			cliOpts := options.cliOptions()
+			if waitTimeout > 0 && cliOpts.outputMode != response.ModeHuman {
+				return errors.New("--wait requires human output mode")
+			}
 			request := &pb.StartIndexRequest{
 				Path:             args[0],
 				Force:            force,
@@ -109,20 +120,38 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 			if splitterType != "" {
 				request.Splitter = &pb.SplitterConfig{Type: splitterType}
 			}
-			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
+			result, err := callDaemon(cliOpts, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
 				return client.StartIndex(ctx, request)
 			})
+			if err != nil {
+				return err
+			}
+			if err := printResponse(cliOpts, result); err != nil {
+				return err
+			}
+			if waitTimeout > 0 {
+				started, ok := result.(*pb.StartIndexResponse)
+				if !ok {
+					return nil
+				}
+				return watchJob(cliOpts, started.GetJobId(), waitTimeout)
+			}
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "force reindex even if already indexed")
 	cmd.Flags().StringVar(&splitterType, "splitter", "", "splitter type: ast|langchain")
 	cmd.Flags().StringArrayVar(&customExtensions, "extension", nil, "custom file extension to include")
 	cmd.Flags().StringArrayVar(&ignorePatterns, "ignore", nil, "ignore pattern to exclude")
+	cmd.Flags().DurationVar(&waitTimeout, "wait", 0, "attach to the job and render progress; value needs the = form (--wait=30s), bare --wait uses 5m")
+	cmd.Flags().Lookup("wait").NoOptDefVal = "5m"
 	return cmd
 }
 
 func newCodebaseSyncCmd(options *rootOptions) *cobra.Command {
-	return &cobra.Command{
+	var waitTimeout time.Duration
+
+	cmd := &cobra.Command{
 		Use:   "sync PATH|ID",
 		Short: "Start an incremental sync for one tracked codebase",
 		Long: strings.Join([]string{
@@ -140,11 +169,32 @@ func newCodebaseSyncCmd(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
+			cliOpts := options.cliOptions()
+			if waitTimeout > 0 && cliOpts.outputMode != response.ModeHuman {
+				return errors.New("--wait requires human output mode")
+			}
+			result, err := callDaemon(cliOpts, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
 				return client.SyncIndex(ctx, &pb.SyncIndexRequest{Path: args[0], Client: clientInfo})
 			})
+			if err != nil {
+				return err
+			}
+			if err := printResponse(cliOpts, result); err != nil {
+				return err
+			}
+			if waitTimeout > 0 {
+				started, ok := result.(*pb.SyncIndexResponse)
+				if !ok {
+					return nil
+				}
+				return watchJob(cliOpts, started.GetJobId(), waitTimeout)
+			}
+			return nil
 		},
 	}
+	cmd.Flags().DurationVar(&waitTimeout, "wait", 0, "attach to the job and render progress; value needs the = form (--wait=30s), bare --wait uses 5m")
+	cmd.Flags().Lookup("wait").NoOptDefVal = "5m"
+	return cmd
 }
 
 func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
@@ -167,6 +217,10 @@ func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase search /abs/path/to/repo splitter --limit 5",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			clientInfo, err := currentClientInfo()
+			if err != nil {
+				return err
+			}
 			searchLimit, err := safeSearchLimit(limit)
 			if err != nil {
 				return err
@@ -177,6 +231,7 @@ func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
 					Query:           args[1],
 					Limit:           searchLimit,
 					ExtensionFilter: extensions,
+					Client:          clientInfo,
 				})
 			})
 		},

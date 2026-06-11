@@ -46,6 +46,33 @@ func TestWatcherAddCodebaseIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestWatcherAddCodebaseDoesNotResolveRules proves AddCodebase never scans
+// the tree itself: a codebase whose record holds no rules is registered with
+// empty rules even when a .gitignore exists on disk.
+func TestWatcherAddCodebaseDoesNotResolveRules(t *testing.T) {
+	t.Parallel()
+	manager, _, _ := newTestManager(t)
+	queue := NewEventQueue(time.Millisecond, func(_ string, _ []string) {})
+	watcher := NewWatcher(manager, queue)
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored/\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	codebase := model.Codebase{
+		ID:                  "cb_test_no_resolve",
+		CanonicalPath:       root,
+		ResolvedIgnoreRules: discovery.IgnoreRules{Nodes: nil},
+	}
+	watcher.AddCodebase(context.Background(), codebase)
+
+	for _, watchRoot := range watcher.snapshotRoots() {
+		if watchRoot.codebaseID == codebase.ID && !watchRoot.rules.IsEmpty() {
+			t.Fatal("AddCodebase resolved rules from disk; it must reuse the record")
+		}
+	}
+}
+
 // TestWatcherRemoveCodebaseDropsRoot confirms RemoveCodebase clears the
 // dispatch entry so events for that path stop enqueuing into the coalescer.
 func TestWatcherRemoveCodebaseDropsRoot(t *testing.T) {

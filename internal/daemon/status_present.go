@@ -442,13 +442,13 @@ func pathResolutionLines(requestedPath string) []string {
 // codebase's identity is the resolved real path, so when the caller passes a
 // symlink this line states which real directory it points at.
 func renderSymlinkResolution(requestedPath string) string {
-	if strings.TrimSpace(requestedPath) == "" {
+	// Only an absolute argument is a path the note can describe. An id-shaped
+	// or relative argument must not resolve against the daemon's own working
+	// directory, which is never the caller's.
+	if !filepath.IsAbs(strings.TrimSpace(requestedPath)) {
 		return ""
 	}
-	absolutePath, err := filepath.Abs(requestedPath)
-	if err != nil {
-		return ""
-	}
+	absolutePath := filepath.Clean(requestedPath)
 	resolved, err := filepath.EvalSymlinks(absolutePath)
 	if err != nil || resolved == absolutePath {
 		return ""
@@ -461,13 +461,13 @@ func renderSymlinkResolution(requestedPath string) string {
 // repository. It returns an empty string for the main worktree and for a non-git
 // path.
 func renderWorktreeRelation(requestedPath string) string {
-	if strings.TrimSpace(requestedPath) == "" {
+	// Only an absolute argument is a path the note can describe. An id-shaped
+	// or relative argument must not resolve against the daemon's own working
+	// directory, which is never the caller's.
+	if !filepath.IsAbs(strings.TrimSpace(requestedPath)) {
 		return ""
 	}
-	absolutePath, err := filepath.Abs(requestedPath)
-	if err != nil {
-		return ""
-	}
+	absolutePath := filepath.Clean(requestedPath)
 	info, ok := gitworktree.Resolve(absolutePath)
 	if !ok || !info.Linked {
 		return ""

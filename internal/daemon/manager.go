@@ -421,6 +421,9 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 	if err := manager.guardStateRoot(canonicalPath); err != nil {
 		return emptyJob, emptyCodebase, false, "", err
 	}
+	if err := manager.guardFilesystemRoot(canonicalPath); err != nil {
+		return emptyJob, emptyCodebase, false, "", err
+	}
 	if err := manager.guardDirectory(canonicalPath); err != nil {
 		return emptyJob, emptyCodebase, false, "", err
 	}
@@ -457,7 +460,15 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 	if job.ID == "" {
 		return emptyJob, codebase, false, overlapsCodebaseID, nil
 	}
-	manager.notifyCodebaseAdded(ctx, codebase)
+	notifyCtx := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(notifyCtx, "notify codebase added panic", "codebase_id", codebase.ID, "err", recovered)
+			}
+		}()
+		manager.notifyCodebaseAdded(notifyCtx, codebase)
+	}()
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)
 	return job, codebase, false, overlapsCodebaseID, nil
@@ -512,7 +523,6 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	codebase.Status = model.CodebaseStatusIndexing
 	codebase.EffectiveConfig = indexConfig
 	codebase.InodeTrackingDisabled = detectInodeTrackingDisabled(ctx, canonicalPath)
-	codebase.ResolvedIgnoreRules = resolveIgnoreRulesOrLog(ctx, canonicalPath, indexConfig.IgnorePatterns)
 	if manager.semantic != nil && manager.semantic.Available() {
 		codebase.CollectionName = manager.semantic.CollectionName(canonicalPath)
 	}
@@ -576,7 +586,6 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 
 	codebase.Status = model.CodebaseStatusIndexing
 	codebase.EffectiveConfig = indexConfig
-	codebase.ResolvedIgnoreRules = resolveIgnoreRulesOrLog(ctx, canonicalPath, indexConfig.IgnorePatterns)
 	if manager.semantic != nil && manager.semantic.Available() {
 		codebase.CollectionName = manager.semantic.CollectionName(canonicalPath)
 	}
@@ -716,19 +725,6 @@ func (manager *Manager) CancelJob(jobID string) (model.Job, error) {
 }
 
 // Codebase lifecycle hook plumbing lives in manager_lifecycle.go.
-
-// resolveIgnoreRulesOrLog computes the discovery rule tree for a codebase
-// at registration or sync time. A failure is downgraded to an empty rule
-// set so the codebase keeps running with the built-in defaults; the
-// underlying error is logged with the path so the operator can act.
-func resolveIgnoreRulesOrLog(ctx context.Context, canonicalPath string, overrides []string) discovery.IgnoreRules {
-	rules, err := discovery.EffectiveIgnorePatterns(ctx, canonicalPath, overrides)
-	if err != nil {
-		slog.ErrorContext(ctx, "resolve effective ignore rules failed; falling back to empty tree", "path", canonicalPath, "err", err)
-		return discovery.IgnoreRules{Nodes: nil}
-	}
-	return rules
-}
 
 // GetIndex / classification / synthesis helpers live in manager_status.go.
 

@@ -146,6 +146,18 @@ func classifyManagerError(path string, err error) error {
 		return adapterr.NewInvalidPath(text, err)
 	case strings.Contains(text, "index data for '"):
 		return adapterr.NewInvalidPath(text, err)
+	// Path-guard refusals: the reason must reach the client, not just the
+	// daemon log, so the operator can correct the argument.
+	case strings.Contains(text, "looks like a URI"):
+		return adapterr.NewInvalidPath(text, err)
+	case strings.Contains(text, "is relative"):
+		return adapterr.NewInvalidPath(text, err)
+	case strings.Contains(text, "refusing to index filesystem root"):
+		return adapterr.NewInvalidPath(text, err)
+	case strings.Contains(text, "is not a directory"):
+		return adapterr.NewInvalidPath(text, err)
+	case strings.Contains(text, "covers daemon state root"):
+		return adapterr.NewInvalidPath(text, err)
 	}
 	return err
 }
@@ -199,11 +211,15 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 	if argErr := requireNonEmpty(ctx, request.GetPath(), "absolutePath", true); argErr != nil {
 		return nil, argErr
 	}
-	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndex(ctx, request.GetPath(), pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce())
-	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
+	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
+	if pathErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
 	}
-	startIndexView := server.resolveStartIndexView(request.GetPath(), codebase, job, deduplicated, overlapsCodebaseID)
+	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndex(ctx, requestedPath, pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce())
+	if callErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
+	}
+	startIndexView := server.resolveStartIndexView(requestedPath, codebase, job, deduplicated, overlapsCodebaseID)
 	health := server.manager.DependencyHealth()
 	return &pb.StartIndexResponse{
 		JobId:              job.ID,
@@ -246,9 +262,13 @@ func (server *GRPCServer) ClearIndex(ctx context.Context, request *pb.ClearIndex
 	if argErr := requireNonEmpty(ctx, request.GetPath(), "absolutePath", true); argErr != nil {
 		return nil, argErr
 	}
-	codebase, callErr := server.manager.ClearIndex(ctx, request.GetPath(), pbClient(request.GetClient()))
+	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
+	if pathErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+	}
+	codebase, callErr := server.manager.ClearIndex(ctx, requestedPath, pbClient(request.GetClient()))
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}
 	ack := view.MutationAckView{
 		Kind:            view.AckClear,
@@ -300,9 +320,13 @@ func (server *GRPCServer) SyncIndex(ctx context.Context, request *pb.SyncIndexRe
 	if argErr := requireNonEmpty(ctx, request.GetPath(), "absolutePath", true); argErr != nil {
 		return nil, argErr
 	}
-	job, codebase, deduplicated, callErr := server.manager.SyncIndex(ctx, request.GetPath(), pbClient(request.GetClient()))
+	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
+	if pathErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+	}
+	job, codebase, deduplicated, callErr := server.manager.SyncIndex(ctx, requestedPath, pbClient(request.GetClient()))
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}
 	operation := "sync"
 	if deduplicated {
@@ -387,19 +411,23 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	if argErr := requireNonEmpty(ctx, request.GetPath(), "absolutePath", true); argErr != nil {
 		return nil, argErr
 	}
-	codebase, activeJob, found, classification, callErr := server.manager.GetIndex(ctx, request.GetPath())
+	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
+	if pathErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+	}
+	codebase, activeJob, found, classification, callErr := server.manager.GetIndex(ctx, requestedPath)
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}
 	if found {
 		server.manager.fillLiveChunkTotal(ctx, codebase, activeJob)
 	}
 	var indexedDescendants []model.Codebase
 	if !found {
-		indexedDescendants = server.manager.IndexedDescendants(request.GetPath())
+		indexedDescendants = server.manager.IndexedDescendants(requestedPath)
 	}
 	health := server.manager.DependencyHealth()
-	getIndexView := server.manager.resolveGetIndexView(request.GetPath(), found, codebasePointer(found, codebase), activeJob, health, classification, indexedDescendants)
+	getIndexView := server.manager.resolveGetIndexView(requestedPath, found, codebasePointer(found, codebase), activeJob, health, classification, indexedDescendants)
 	response := &pb.GetIndexResponse{
 		Tracked:          found,
 		Classification:   pbconv.ToPathClassification(classification),
@@ -515,15 +543,19 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	if argErr := requireNonEmpty(ctx, request.GetQuery(), "query", false); argErr != nil {
 		return nil, argErr
 	}
-	outcome, callErr := server.manager.SearchCode(ctx, request.GetPath(), request.GetQuery(), request.GetLimit(), request.GetExtensionFilter())
+	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
+	if pathErr != nil {
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+	}
+	outcome, callErr := server.manager.SearchCode(ctx, requestedPath, request.GetQuery(), request.GetLimit(), request.GetExtensionFilter())
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
+		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}
 	server.manager.fillLiveChunkTotal(ctx, outcome.Codebase, outcome.ActiveJob)
 	health := server.manager.DependencyHealth()
 	inFlightStatus, inFlightTemplateName, inFlightBackgroundSync := resolveSearchStatusView(outcome.Codebase, outcome.ActiveJob, health)
 	searchView := view.SearchView{
-		RequestedPath:          request.GetPath(),
+		RequestedPath:          requestedPath,
 		Query:                  request.GetQuery(),
 		CodebaseName:           filepath.Base(outcome.Codebase.CanonicalPath),
 		CodebasePath:           outcome.Codebase.CanonicalPath,
@@ -535,7 +567,7 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 		InFlightPercent:        0,
 		InFlightBackgroundSync: inFlightBackgroundSync,
 		Degraded:               health.Degraded(),
-		ResolutionLines:        pathResolutionLines(request.GetPath()),
+		ResolutionLines:        pathResolutionLines(requestedPath),
 	}
 	response := &pb.SearchCodeResponse{
 		Results:          make([]*pb.SearchResult, 0, len(outcome.Results)),

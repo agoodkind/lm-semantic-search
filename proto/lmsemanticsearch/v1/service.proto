@@ -39,6 +39,11 @@ message VersionResponse {
 message ClientInfo {
   string name = 1;
   int32 pid = 2;
+  // caller_cwd is the absolute working directory of the calling process.
+  // The daemon resolves a relative request path against it; a relative
+  // path with no caller_cwd is rejected, because the daemon's own working
+  // directory is never the caller's.
+  string caller_cwd = 3;
 }
 
 message SplitterConfig {
@@ -176,6 +181,10 @@ message Job {
   // superseded_by_job_id is the id of the immediate next terminal job for this
   // job's codebase when superseded, else empty.
   string superseded_by_job_id = 19;
+  // outcome is the daemon-resolved terminal result: "succeeded", "failed", or
+  // "canceled", and empty while the job is still live. Machine consumers read
+  // this instead of deriving terminality from the raw state field.
+  string outcome = 20;
 }
 
 message SearchResult {
@@ -269,6 +278,7 @@ message SyncIndexResponse {
 
 message GetIndexRequest {
   string path = 1;
+  ClientInfo client = 2;
 }
 
 message GetIndexResponse {
@@ -340,6 +350,7 @@ message SearchCodeRequest {
   string query = 2;
   int32 limit = 3;
   repeated string extension_filter = 4;
+  ClientInfo client = 5;
 }
 
 message SearchCodeResponse {
