@@ -64,7 +64,8 @@ func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectio
 	if err := service.loadReuseVectorsFiltered(ctx, collectionName, relativePathPrefixExpression(relativePathPrefix), reuse); err != nil {
 		return nil, err
 	}
-	slog.DebugContext(ctx, "semantic.reuse_vectors_loaded_for_prefix",
+	slog.DebugContext(
+		ctx, "semantic.reuse_vectors_loaded_for_prefix",
 		"collection", collectionName,
 		"prefix", relativePathPrefix,
 		"chunks", len(reuse),

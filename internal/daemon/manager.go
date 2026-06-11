@@ -124,6 +124,9 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		return nil, fmt.Errorf("create semantic service: %w", err)
 	}
 	manager.semantic = semanticService
+	if semanticService.Degraded() {
+		manager.health = dependencyHealth{Mode: dependencyStoreUnavailable, Since: clock.Now(), LastHealthyAt: time.Time{}}
+	}
 	if err := manager.load(ctx); err != nil {
 		slog.ErrorContext(ctx, "load daemon state failed", "state_root", cfg.StateRoot, "err", err)
 		return nil, fmt.Errorf("load daemon state: %w", err)

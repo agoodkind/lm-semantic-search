@@ -12,6 +12,8 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
 
@@ -61,20 +63,26 @@ type Progress struct {
 
 // Service owns the embedding provider and Milvus client for semantic search.
 type Service struct {
-	cfg       config.Config
-	embedder  embedding.Provider
-	milvus    *milvusclient.Client
-	available bool
+	cfg             config.Config
+	embedder        embedding.Provider
+	milvus          *milvusclient.Client
+	available       atomic.Bool
+	reconnectCancel context.CancelFunc
+	reconnectDone   chan struct{}
+	closeOnce       sync.Once
 }
 
 // NewService constructs the semantic search runtime.
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
 		return &Service{
-			cfg:       cfg,
-			embedder:  nil,
-			milvus:    nil,
-			available: false,
+			cfg:             cfg,
+			embedder:        nil,
+			milvus:          nil,
+			available:       atomic.Bool{},
+			reconnectCancel: nil,
+			reconnectDone:   nil,
+			closeOnce:       sync.Once{},
 		}, nil
 	}
 
@@ -84,39 +92,67 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
 
-	clientConfig := &milvusclient.ClientConfig{
-		Address: cfg.MilvusAddress,
-		APIKey:  cfg.MilvusToken,
-	}
-	client, err := milvusclient.New(ctx, clientConfig)
-	if err != nil {
-		slog.ErrorContext(ctx, "connect to Milvus failed", "address", cfg.MilvusAddress, "err", err)
-		return nil, fmt.Errorf("connect to Milvus at %s: %w", cfg.MilvusAddress, err)
+	service := &Service{
+		cfg:             cfg,
+		embedder:        embedder,
+		milvus:          nil,
+		available:       atomic.Bool{},
+		reconnectCancel: nil,
+		reconnectDone:   nil,
+		closeOnce:       sync.Once{},
 	}
 
-	return &Service{
-		cfg:       cfg,
-		embedder:  embedder,
-		milvus:    client,
-		available: true,
-	}, nil
+	client, err := service.dialMilvus(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "connect to Milvus failed; starting degraded semantic service", "address", cfg.MilvusAddress, "err", err)
+		service.startReconnector(context.WithoutCancel(ctx))
+		return service, nil
+	}
+
+	service.publishClient(client)
+	return service, nil
 }
 
 // Close shuts down external resources held by the semantic service.
 func (service *Service) Close(ctx context.Context) error {
-	if service == nil || service.milvus == nil {
+	if service == nil {
 		return nil
 	}
-	if err := service.milvus.Close(ctx); err != nil {
-		slog.ErrorContext(ctx, "close Milvus client failed", "err", err)
-		return fmt.Errorf("close Milvus client: %w", err)
-	}
-	return nil
+
+	var closeErr error
+	service.closeOnce.Do(func() {
+		if service.reconnectCancel != nil {
+			service.reconnectCancel()
+		}
+		if service.reconnectDone != nil {
+			select {
+			case <-service.reconnectDone:
+			case <-ctx.Done():
+				closeErr = fmt.Errorf("wait for Milvus reconnect shutdown: %w", ctx.Err())
+				return
+			}
+		}
+		if !service.Available() || service.milvus == nil {
+			return
+		}
+		if err := service.milvus.Close(ctx); err != nil {
+			slog.ErrorContext(ctx, "close Milvus client failed", "err", err)
+			closeErr = fmt.Errorf("close Milvus client: %w", err)
+			return
+		}
+		service.available.Store(false)
+	})
+	return closeErr
 }
 
 // Available reports whether semantic indexing is configured.
 func (service *Service) Available() bool {
-	return service != nil && service.available
+	return service != nil && service.available.Load()
+}
+
+// Degraded reports that Milvus is configured but not yet connected.
+func (service *Service) Degraded() bool {
+	return service != nil && strings.TrimSpace(service.cfg.MilvusAddress) != "" && !service.Available()
 }
 
 // conversationPathPrefix marks a virtual conversation collection's canonical
