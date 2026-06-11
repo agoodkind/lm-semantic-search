@@ -9,6 +9,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/status"
+	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 const (
@@ -494,7 +495,7 @@ func renderReconcileMagnitude(progress model.Progress) string {
 // renderHistoricalFailure reads as past tense so callers do not mistake an
 // old failure record for a live one. When the failure carries correlation
 // ids it appends a diagnostics line so the operator can grep the daemon log.
-func renderHistoricalFailure(codebase *model.Codebase, failure codebaseFailureView) string {
+func renderHistoricalFailure(codebase *model.Codebase, failure view.FailureSurface) string {
 	if !failure.HasFailure {
 		return fmt.Sprintf("❌ Codebase '%s' could not be indexed. Re-run index_codebase to retry.", codebase.CanonicalPath)
 	}
@@ -506,7 +507,7 @@ func renderHistoricalFailure(codebase *model.Codebase, failure codebaseFailureVi
 	)
 }
 
-func renderStaleStatus(codebase *model.Codebase, failure codebaseFailureView) string {
+func renderStaleStatus(codebase *model.Codebase, failure view.FailureSurface) string {
 	if !failure.HasFailure {
 		return fmt.Sprintf(
 			"⚠️ Codebase '%s' is stale because its semantic collection is missing.\n💡 The daemon will rebuild it automatically on the next background repair pass.",
@@ -516,7 +517,7 @@ func renderStaleStatus(codebase *model.Codebase, failure codebaseFailureView) st
 	return fmt.Sprintf(
 		"⚠️ Codebase '%s' is stale since %s.\n🚨 Repair detail: %s\n💡 The daemon will retry automatic rebuild while the codebase remains stale.%s",
 		codebase.CanonicalPath,
-		formatLocalTime(failure.FailedAt),
+		failure.FailedAtLabel,
 		orDefault(failure.Message, "semantic collection is missing"),
 		renderFailureDiagnostics(failure),
 	)
@@ -527,7 +528,7 @@ func renderStaleStatus(codebase *model.Codebase, failure codebaseFailureView) st
 // the job so it reads as the past failure's reference rather than a second
 // request-trace line, leaving the envelope header as the only "trace_id=" line.
 // It formats the resolved failure view, never the raw failure record.
-func renderFailureDiagnostics(failure codebaseFailureView) string {
+func renderFailureDiagnostics(failure view.FailureSurface) string {
 	if failure.JobID == "" && failure.TraceID == "" {
 		return ""
 	}
@@ -561,39 +562,25 @@ func jobScopeKnown(progress model.Progress) bool {
 	return progress.FilesTotal > 0 || progress.FilesInCodebase > 0
 }
 
-// jobProgressDisplay returns the percent for a job whose scope is known, and the
-// preparing label for an active job that has not measured progress yet, so a
-// just-started job never reads as a misleading 0.0%. Terminal jobs always show
-// their percent.
-func jobProgressDisplay(job model.Job) string {
-	active := job.State == model.JobStateQueued ||
-		job.State == model.JobStateRunning ||
-		job.State == model.JobStateCancelling
-	if active && !jobScopeKnown(job.Progress) {
-		return prepareLabel(&job)
-	}
-	return fmt.Sprintf("%.1f%%", job.Progress.OverallPercent)
-}
-
 func renderGetJob(job *model.Job, pipelineDegraded bool, supersededByJobID string) string {
 	if job == nil {
 		return "Job not found."
 	}
-	surface := resolveJobSurface(*job, pipelineDegraded, supersededByJobID)
+	entry := resolveJobEntry(*job, pipelineDegraded, supersededByJobID)
 	lines := []string{
-		"🧾 Job " + job.ID,
-		"📁 Codebase: " + job.CanonicalPath,
-		"⚙️ Operation: " + job.Operation,
-		"🚦 State: " + surface.StateLabel,
-		"🔧 Phase: " + displayJobPhase(job.Progress.Phase),
-		"📊 Progress: " + jobProgressDisplay(*job),
+		"🧾 Job " + entry.ID,
+		"📁 Codebase: " + entry.CanonicalPath,
+		"⚙️ Operation: " + entry.Operation,
+		"🚦 State: " + entry.Surface.StateLabel,
+		"🔧 Phase: " + entry.PhaseLabel,
+		"📊 Progress: " + entry.Progress.PercentLabel,
 	}
 	lines = append(lines, renderJobTimingLines(*job)...)
 	if magnitude := renderReconcileMagnitude(job.Progress); magnitude != "" {
 		lines = append(lines, magnitude)
 	}
-	if surface.ErrorLine != "" {
-		lines = append(lines, "🧯 Error: "+surface.ErrorLine)
+	if entry.Surface.ErrorLine != "" {
+		lines = append(lines, "🧯 Error: "+entry.Surface.ErrorLine)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -606,13 +593,8 @@ func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 	successors := buildJobSuccessors(jobs)
 	activeJobs := make([]model.Job, 0, len(jobs))
 	terminalJobs := make([]model.Job, 0, len(jobs))
-	stateCounts := map[model.JobState]int{}
-	supersededCount := 0
+	summary := resolveListSummary(jobs, pipelineDegraded)
 	for _, job := range jobs {
-		stateCounts[job.State]++
-		if resolveJobSurface(job, pipelineDegraded, successors[job.ID]).Superseded {
-			supersededCount++
-		}
 		switch job.State {
 		case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
 			activeJobs = append(activeJobs, job)
@@ -624,23 +606,23 @@ func renderListJobs(jobs []model.Job, pipelineDegraded bool) string {
 	}
 
 	lines := make([]string, 0, 32)
-	lines = append(lines, fmt.Sprintf("Tracked jobs: %d total", len(jobs)))
+	lines = append(lines, fmt.Sprintf("Tracked jobs: %d total", summary.Total))
 	lines = append(lines, fmt.Sprintf(
 		"Active: %d queued, %d running, %d canceling",
-		stateCounts[model.JobStateQueued],
-		stateCounts[model.JobStateRunning],
-		stateCounts[model.JobStateCancelling],
+		summary.Queued,
+		summary.Running,
+		summary.Canceling,
 	))
 	// A superseded failure was overtaken by a later terminal job, so it is tallied
 	// apart from current failures: the headline "failed" count names only the
 	// latest unresolved failure per codebase.
 	lines = append(lines, fmt.Sprintf(
 		"Terminal: %d completed, %d failed, %d %s, %d canceled",
-		stateCounts[model.JobStateCompleted],
-		stateCounts[model.JobStateFailed]-supersededCount,
-		supersededCount,
+		summary.Completed,
+		summary.Failed,
+		summary.Superseded,
 		status.JobSupersededCountLabel,
-		stateCounts[model.JobStateCancelled],
+		summary.Canceled,
 	))
 
 	if len(activeJobs) == 0 {
@@ -685,15 +667,15 @@ func displayJobPhase(phase string) string {
 }
 
 func renderJobListEntry(job model.Job, pipelineDegraded bool, supersededByJobID string) []string {
-	surface := resolveJobSurface(job, pipelineDegraded, supersededByJobID)
+	entry := resolveJobEntry(job, pipelineDegraded, supersededByJobID)
 	lines := []string{
 		fmt.Sprintf(
 			"- %s [%s · %s] %s %s",
-			job.ID,
-			surface.StateLabel,
-			jobProgressDisplay(job),
-			job.Operation,
-			job.CanonicalPath,
+			entry.ID,
+			entry.Surface.StateLabel,
+			entry.Progress.PercentLabel,
+			entry.Operation,
+			entry.CanonicalPath,
 		),
 	}
 	lines = append(lines, renderJobTimingLines(job)...)
@@ -702,8 +684,8 @@ func renderJobListEntry(job model.Job, pipelineDegraded bool, supersededByJobID 
 			lines = append(lines, "  "+line)
 		}
 	}
-	if surface.ErrorLine != "" {
-		lines = append(lines, "  Error: "+surface.ErrorLine)
+	if entry.Surface.ErrorLine != "" {
+		lines = append(lines, "  Error: "+entry.Surface.ErrorLine)
 	}
 	return lines
 }

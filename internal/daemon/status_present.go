@@ -7,6 +7,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/status"
+	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 // displayStatus is the user-facing status a codebase presents. It aliases the
@@ -54,7 +55,7 @@ func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, pipelin
 // re-deriving a state label or error echo. A job stopping on a shared
 // dependency is exactly a retryable error during a degraded pipeline, which
 // ResolveJob folds by suppressing the per-job echo the banner already carries.
-func resolveJobSurface(job model.Job, pipelineDegraded bool, supersededByJobID string) status.JobSurface {
+func resolveJobSurface(job model.Job, pipelineDegraded bool, supersededByJobID string) view.JobSurface {
 	dependency := status.Healthy
 	if pipelineDegraded {
 		dependency = status.EmbedderBusy
@@ -65,26 +66,19 @@ func resolveJobSurface(job model.Job, pipelineDegraded bool, supersededByJobID s
 		retryable = job.Error.Retryable
 		errorMessage = strings.TrimSpace(job.Error.Message)
 	}
-	return status.ResolveJob(status.JobInputs{
+	resolved := status.ResolveJob(status.JobInputs{
 		State:             job.State,
 		Retryable:         retryable,
 		ErrorMessage:      errorMessage,
 		Dependency:        dependency,
 		SupersededByJobID: supersededByJobID,
 	})
-}
-
-// codebaseFailureView is the resolved failure detail a render bucket formats. It
-// is built once at the boundary from the raw failure record so the render layer
-// never reaches into codebase.LastFailedRun; a renderer that cannot see the raw
-// failure record cannot print failure text that contradicts the bucket the SOT
-// chose. HasFailure is false when the codebase carries no recorded failure.
-type codebaseFailureView struct {
-	HasFailure bool
-	Message    string
-	FailedAt   time.Time
-	JobID      string
-	TraceID    string
+	return view.JobSurface{
+		StateLabel:        resolved.StateLabel,
+		ErrorLine:         resolved.ErrorLine,
+		Superseded:        resolved.Superseded,
+		SupersededByJobID: resolved.SupersededByJobID,
+	}
 }
 
 // resolveCodebaseFailure reduces a codebase's raw failure record into the
@@ -92,16 +86,16 @@ type codebaseFailureView struct {
 // is the only reader of codebase.LastFailedRun outside the lifecycle logic, kept
 // here at the boundary rather than in the render layer the guard test holds free
 // of raw failure reads.
-func resolveCodebaseFailure(codebase model.Codebase) codebaseFailureView {
+func resolveCodebaseFailure(codebase model.Codebase) view.FailureSurface {
 	if codebase.LastFailedRun == nil {
-		return codebaseFailureView{HasFailure: false, Message: "", FailedAt: time.Time{}, JobID: "", TraceID: ""}
+		return view.FailureSurface{HasFailure: false, Message: "", FailedAtLabel: "", JobID: "", TraceID: ""}
 	}
-	return codebaseFailureView{
-		HasFailure: true,
-		Message:    codebase.LastFailedRun.Message,
-		FailedAt:   codebase.LastFailedRun.FailedAt,
-		JobID:      codebase.LastFailedRun.JobID,
-		TraceID:    codebase.LastFailedRun.TraceID,
+	return view.FailureSurface{
+		HasFailure:    true,
+		Message:       codebase.LastFailedRun.Message,
+		FailedAtLabel: formatBoundaryTime(codebase.LastFailedRun.FailedAt),
+		JobID:         codebase.LastFailedRun.JobID,
+		TraceID:       codebase.LastFailedRun.TraceID,
 	}
 }
 
