@@ -27,6 +27,11 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	}
 	plans := make([]resumePlan, 0)
 	for _, codebase := range manager.codebases {
+		if codebase.Kind == model.CodebaseKindDocument {
+			// A conversation codebase recovers through its own ingest trigger;
+			// its chat:// path is not a directory the index runner can walk.
+			continue
+		}
 		if codebase.Status != model.CodebaseStatusIndexing {
 			continue
 		}

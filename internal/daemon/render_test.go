@@ -8,9 +8,72 @@ import (
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/model"
+	render "goodkind.io/lm-semantic-search/internal/render"
+	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 var renderTestTime = time.Unix(1700000000, 0)
+
+func renderListJobsForTest(jobs []model.Job, degraded bool) string {
+	successors := buildJobSuccessors(jobs)
+	summary := resolveListSummary(jobs, degraded)
+	active := make([]view.JobEntryView, 0, len(jobs))
+	terminal := make([]view.JobEntryView, 0, len(jobs))
+	for _, job := range jobs {
+		entry := resolveJobEntry(job, degraded, successors[job.ID])
+		if isTerminalJobState(job.State) {
+			terminal = append(terminal, entry)
+		} else {
+			active = append(active, entry)
+		}
+	}
+	return render.ListJobs(summary, active, terminal)
+}
+
+func renderStatusForTest(codebase *model.Codebase, activeJob *model.Job, display displayStatus) string {
+	statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(dependencyHealthy))
+	return render.GetIndex(view.GetIndexView{
+		Tracked:      true,
+		TemplateName: templateName,
+		Status:       statusView,
+	})
+}
+
+func renderActiveStatusForTest(codebase *model.Codebase, activeJob *model.Job) string {
+	return renderStatusForTest(codebase, activeJob, displayIndexing)
+}
+
+func renderReadyStatusForTest(codebase *model.Codebase) string {
+	return renderStatusForTest(codebase, nil, displayIndexed)
+}
+
+func renderGetIndexBodyForTest(requestedPath string, tracked bool, codebase *model.Codebase, activeJob *model.Job, health dependencyHealth) string {
+	getIndex := view.GetIndexView{
+		Tracked:            tracked,
+		RequestedPath:      requestedPath,
+		CanonicalPath:      "",
+		Display:            "",
+		TemplateName:       "",
+		Status:             view.StatusView{},
+		Failure:            view.FailureSurface{},
+		WaitLabel:          "",
+		ClassificationLine: "",
+		ResolutionLines:    nil,
+		CoverageLine:       "",
+		DescendantsHint:    "",
+		SyncNote:           "",
+	}
+	if tracked && codebase != nil {
+		getIndex.CanonicalPath = codebase.CanonicalPath
+		display := computeDisplayStatus(*codebase, activeJob, health.Degraded())
+		getIndex.Display = view.Display(display)
+		getIndex.Failure = resolveCodebaseFailure(*codebase)
+		statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
+		getIndex.Status = statusView
+		getIndex.TemplateName = templateName
+	}
+	return render.GetIndex(getIndex)
+}
 
 // TestRenderSymlinkResolution proves the status output names the real path a
 // symlinked query path resolves to, and adds nothing for a non-symlink path.
@@ -49,7 +112,7 @@ func TestRenderIndexedDetailReady(t *testing.T) {
 			CompletedAt:  renderTestTime,
 		},
 	}
-	out := renderIndexedDetail(codebase)
+	out := renderReadyStatusForTest(codebase)
 	for _, want := range []string{"📁 swift-makefile", "✅ Ready to search", "📊 58 files, 600 chunks"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("ready status missing %q in:\n%s", want, out)
@@ -63,7 +126,7 @@ func TestRenderIndexingActivePreparingSync(t *testing.T) {
 	t.Parallel()
 	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
 	job := &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 0, LastEventAt: renderTestTime}}
-	out := renderIndexingActive(codebase, job)
+	out := renderActiveStatusForTest(codebase, job)
 	if !strings.Contains(out, "📁 swift-makefile") {
 		t.Fatalf("missing title in:\n%s", out)
 	}
@@ -81,7 +144,7 @@ func TestRenderIndexingActivePreparingForced(t *testing.T) {
 	t.Parallel()
 	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
 	job := &model.Job{Operation: "index", Progress: model.Progress{FilesTotal: 0}}
-	out := renderIndexingActive(codebase, job)
+	out := renderActiveStatusForTest(codebase, job)
 	if !strings.Contains(out, "⚙️ Preparing to index") {
 		t.Fatalf("expected plain prepare line in:\n%s", out)
 	}
@@ -99,7 +162,7 @@ func TestRenderIndexingActiveBuilding(t *testing.T) {
 		Operation: "index",
 		Progress:  model.Progress{OverallPercent: 42, FilesTotal: 58, FilesProcessed: 24, ChunksGenerated: 71, LastEventAt: renderTestTime},
 	}
-	out := renderIndexingActive(codebase, job)
+	out := renderActiveStatusForTest(codebase, job)
 	for _, want := range []string{"📁 swift-makefile", "🔄 Building initial index: 42%", "📥 24 of 58 files processed", "🧩 71 chunks total", "♻️ 0 reused", "➕ 71 embedded this run"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("building status missing %q in:\n%s", want, out)
@@ -149,7 +212,7 @@ func TestRenderIndexingActiveIncremental(t *testing.T) {
 			ChunksGenerated: 1043, ChunksTotal: 57240, LastEventAt: renderTestTime,
 		},
 	}
-	out := renderIndexingActive(codebase, job)
+	out := renderActiveStatusForTest(codebase, job)
 	for _, want := range []string{
 		"📁 swift-makefile",
 		"🔄 Indexing new changes: 37%",
@@ -185,7 +248,7 @@ func TestRenderIndexingActiveIncrementalZeroProcessed(t *testing.T) {
 			FilesEmbedded: 0, ChunksGenerated: 0,
 		},
 	}
-	out := renderIndexingActive(codebase, job)
+	out := renderActiveStatusForTest(codebase, job)
 	for _, want := range []string{
 		"🔄 Indexing new changes: 0%",
 		"🔢 4292 files: 118 changed, 4174 unchanged",
@@ -212,7 +275,7 @@ func TestRenderIndexingActiveIncrementalFallsBackToLastTotal(t *testing.T) {
 		Operation: "sync",
 		Progress:  model.Progress{OverallPercent: 10, FilesTotal: 58, FilesProcessed: 1, ChunksTotal: 0},
 	}
-	out := renderIndexingActive(codebase, job)
+	out := renderActiveStatusForTest(codebase, job)
 	if !strings.Contains(out, "🧩 600 chunks total") {
 		t.Fatalf("expected fallback to last recorded total in:\n%s", out)
 	}
@@ -233,7 +296,7 @@ func TestRenderGetIndexBodySyncKeepsReady(t *testing.T) {
 		Operation: "sync",
 		Progress:  model.Progress{OverallPercent: 33, FilesInCodebase: 58, FilesModified: 3, FilesProcessed: 1, LastEventAt: renderTestTime},
 	}
-	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
+	out := renderGetIndexBodyForTest("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
 	for _, want := range []string{"✅ Ready to search", "📊 58 files, 600 chunks", "🔄 Syncing 3 changed files in the background (33%)"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("sync-reconcile status missing %q in:\n%s", want, out)
@@ -256,7 +319,7 @@ func TestRenderGetIndexBodySyncPreDiffKeepsReady(t *testing.T) {
 		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 58, TotalChunks: 600, CompletedAt: renderTestTime},
 	}
 	job := &model.Job{Operation: "sync", Progress: model.Progress{FilesInCodebase: 0, LastEventAt: renderTestTime}}
-	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
+	out := renderGetIndexBodyForTest("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
 	for _, want := range []string{"✅ Ready to search", "🔄 Checking for changes in the background"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("pre-diff sync status missing %q in:\n%s", want, out)
@@ -270,7 +333,7 @@ func TestRenderGetIndexBodyBuildingTakesOver(t *testing.T) {
 	t.Parallel()
 	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile", Status: model.CodebaseStatusIndexing}
 	job := &model.Job{Operation: "index", Progress: model.Progress{OverallPercent: 42, FilesTotal: 58, FilesProcessed: 24, ChunksGenerated: 71}}
-	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
+	out := renderGetIndexBodyForTest("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
 	if !strings.Contains(out, "🔄 Building initial index") {
 		t.Fatalf("expected building takeover in:\n%s", out)
 	}
@@ -289,7 +352,7 @@ func TestRenderGetIndexBodyStreamingReindexTakesOver(t *testing.T) {
 		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 58, TotalChunks: 600, CompletedAt: renderTestTime},
 	}
 	job := &model.Job{Operation: "streaming_reindex", Progress: model.Progress{OverallPercent: 37, FilesInCodebase: 58, FilesModified: 58, FilesProcessed: 20}}
-	out := renderGetIndexBody("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
+	out := renderGetIndexBodyForTest("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
 	if !strings.Contains(out, "🔄 Indexing new changes") {
 		t.Fatalf("expected streaming_reindex takeover in:\n%s", out)
 	}
@@ -298,22 +361,60 @@ func TestRenderGetIndexBodyStreamingReindexTakesOver(t *testing.T) {
 	}
 }
 
-// TestRenderReconcileMagnitude proves the job-view magnitude shows files and
-// chunks, plus the change breakdown for a delta, and nothing when empty.
-func TestRenderReconcileMagnitude(t *testing.T) {
+// TestRenderProgressLines proves the job-view progress lines show typed
+// denominators, chunks, and the typed change breakdown.
+func TestRenderProgressLines(t *testing.T) {
 	t.Parallel()
-	if got := renderReconcileMagnitude(model.Progress{}); got != "" {
-		t.Fatalf("expected empty magnitude for zero progress, got %q", got)
+	empty := view.ProgressSurface{
+		Heading:            "",
+		HasScope:           false,
+		Checked:            0,
+		ScopeTotal:         0,
+		ScopeLabel:         "",
+		CheckVerb:          "",
+		Embedded:           0,
+		AlreadyIndexed:     0,
+		ChunksThisRun:      0,
+		ChunksReused:       0,
+		ChunksInCollection: 0,
+		ScopeLine:          "",
+		PercentLabel:       "",
 	}
-	got := renderReconcileMagnitude(model.Progress{
-		FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84,
-		FilesAdded: 12, FilesModified: 30, FilesRemoved: 5,
-	})
-	if !strings.Contains(got, "📄 7 of 58 files · 🧩 84 chunks") {
+	emptyOut := render.GetJob(view.JobEntryView{ID: "job_empty", Progress: empty}, true)
+	if strings.Contains(emptyOut, "📄") || strings.Contains(emptyOut, "🧩") {
+		t.Fatalf("expected no progress lines for an empty view, got:\n%s", emptyOut)
+	}
+	progress := view.ProgressSurface{
+		Heading:            "",
+		HasScope:           true,
+		Checked:            7,
+		ScopeTotal:         58,
+		ScopeLabel:         "files",
+		CheckVerb:          "embedded",
+		Embedded:           0,
+		AlreadyIndexed:     0,
+		ChunksThisRun:      84,
+		ChunksReused:       0,
+		ChunksInCollection: 84,
+		ScopeLine:          "Changed since last sync: 12 files added · 30 modified · 5 removed",
+		PercentLabel:       "12.1%",
+	}
+	got := render.GetJob(view.JobEntryView{ID: "job_progress", Progress: progress}, true)
+	if !strings.Contains(got, "📄 7 of 58 files embedded") {
 		t.Fatalf("expected files and chunks line, got %q", got)
 	}
-	if !strings.Contains(got, "Added 12 · Modified 30 · Removed 5") {
+	if !strings.Contains(got, "🧩 84 chunks added this run") {
+		t.Fatalf("expected chunk line, got %q", got)
+	}
+	if !strings.Contains(got, "Changed since last sync: 12 files added · 30 modified · 5 removed") {
 		t.Fatalf("expected change breakdown, got %q", got)
+	}
+}
+
+func TestRenderGetJobNotFound(t *testing.T) {
+	t.Parallel()
+	if got := render.GetJob(view.JobEntryView{}, false); got != "Job not found." {
+		t.Fatalf("renderGetJob not found = %q, want %q", got, "Job not found.")
 	}
 }
 
@@ -327,9 +428,12 @@ func TestRenderGetJobShowsMagnitude(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84},
 	}
-	out := renderGetJob(job, false, "")
-	if !strings.Contains(out, "📄 7 of 58 files · 🧩 84 chunks") {
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
+	if !strings.Contains(out, "📄 7 of 58 files embedded") {
 		t.Fatalf("expected magnitude in job view, got:\n%s", out)
+	}
+	if !strings.Contains(out, "🧩 84 chunks added this run") {
+		t.Fatalf("expected chunk line in job view, got:\n%s", out)
 	}
 }
 
@@ -346,7 +450,7 @@ func TestRenderGetJobUsesAmericanCanceledSpelling(t *testing.T) {
 		CompletedAt:   &completedAt,
 		Progress:      model.Progress{Phase: "cancelled"},
 	}
-	out := renderGetJob(job, false, "")
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if strings.Contains(out, "cancelled") {
 		t.Fatalf("job view should use American spelling, got:\n%s", out)
 	}
@@ -392,7 +496,7 @@ func TestRenderListJobsSummarizesHistory(t *testing.T) {
 			Progress:      model.Progress{OverallPercent: 0, Phase: "cancelled"},
 		},
 	}
-	out := renderListJobs(jobs, false)
+	out := renderListJobsForTest(jobs, false)
 	for _, want := range []string{
 		"Tracked jobs: 3 total",
 		"Active: 0 queued, 1 running, 0 canceling",
@@ -440,7 +544,7 @@ func TestRenderListJobsSeparatesSupersededFailures(t *testing.T) {
 			Error:         &model.JobError{Message: "internal error", Retryable: false},
 		},
 	}
-	out := renderListJobs(jobs, false)
+	out := renderListJobsForTest(jobs, false)
 	if want := "Terminal: 0 completed, 1 failed, 1 superseded, 0 canceled"; !strings.Contains(out, want) {
 		t.Fatalf("summary did not separate superseded from failed, want %q in:\n%s", want, out)
 	}
@@ -460,7 +564,7 @@ func TestRenderGetJobPreparingNotZeroPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0, OverallPercent: 0},
 	}
-	out := renderGetJob(job, false, "")
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "Progress: Preparing to index") {
 		t.Fatalf("expected preparing label, got:\n%s", out)
 	}
@@ -479,7 +583,7 @@ func TestRenderListJobsPreparingNotZeroPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0},
 	}}
-	out := renderListJobs(jobs, false)
+	out := renderListJobsForTest(jobs, false)
 	if !strings.Contains(out, "Preparing to index") {
 		t.Fatalf("expected preparing label in list, got:\n%s", out)
 	}
@@ -499,7 +603,7 @@ func TestRenderGetJobSyncPreparingWording(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0},
 	}
-	out := renderGetJob(job, false, "")
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "Changes detected, preparing to index") {
 		t.Fatalf("expected sync preparing wording, got:\n%s", out)
 	}
@@ -516,7 +620,7 @@ func TestRenderGetJobKeepsRealZeroPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 58, OverallPercent: 0},
 	}
-	out := renderGetJob(job, false, "")
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "Progress: 0.0%") {
 		t.Fatalf("known-scope zero should render 0.0%%, got:\n%s", out)
 	}
@@ -535,7 +639,7 @@ func TestRenderGetJobShowsMeasuredPercent(t *testing.T) {
 		State:         model.JobStateRunning,
 		Progress:      model.Progress{FilesTotal: 4292, FilesProcessed: 2139, OverallPercent: 49.8},
 	}
-	out := renderGetJob(job, false, "")
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "Progress: 49.8%") {
 		t.Fatalf("expected 49.8%%, got:\n%s", out)
 	}
@@ -553,7 +657,7 @@ func TestRenderGetJobFailedShowsPercentAndError(t *testing.T) {
 		Progress:      model.Progress{FilesTotal: 0, OverallPercent: 0},
 		Error:         &model.JobError{Message: "embedder_unreachable: dial tcp [::1]:5400: connect: connection refused"},
 	}
-	out := renderGetJob(job, false, "")
+	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
 	if !strings.Contains(out, "Progress: 0.0%") {
 		t.Fatalf("failed job should show its percent, got:\n%s", out)
 	}
@@ -580,10 +684,10 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 		},
 	}
 	cases := map[string]string{
-		"ready":       renderIndexedDetail(codebase),
-		"preparing":   renderIndexingActive(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 0}}),
-		"building":    renderIndexingActive(codebase, &model.Job{Operation: "index", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84}}),
-		"incremental": renderIndexingActive(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, FilesInCodebase: 100, FilesAdded: 5, FilesModified: 50, FilesRemoved: 3, FilesEmbedded: 2, ChunksGenerated: 84, ChunksTotal: 620}}),
+		"ready":       renderReadyStatusForTest(codebase),
+		"preparing":   renderActiveStatusForTest(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 0}}),
+		"building":    renderActiveStatusForTest(codebase, &model.Job{Operation: "index", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84}}),
+		"incremental": renderActiveStatusForTest(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, FilesInCodebase: 100, FilesAdded: 5, FilesModified: 50, FilesRemoved: 3, FilesEmbedded: 2, ChunksGenerated: 84, ChunksTotal: 620}}),
 	}
 	wantLines := map[string]int{"ready": 4, "preparing": 3, "building": 7, "incremental": 11}
 	for name, out := range cases {
@@ -603,7 +707,7 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 func TestRenderClearIndexHasNoRemainLine(t *testing.T) {
 	t.Parallel()
 	codebase := model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
-	out := renderClearIndex(codebase)
+	out := render.MutationAck(view.MutationAckView{Kind: view.AckClear, Path: codebase.CanonicalPath})
 	want := "Successfully cleared codebase '/Users/agoodkind/Sites/swift-makefile'"
 	if out != want {
 		t.Fatalf("renderClearIndex = %q, want %q", out, want)
@@ -617,10 +721,10 @@ func TestRenderClearIndexHasNoRemainLine(t *testing.T) {
 // copy-pasteable id and the header pluralizes the codebase count correctly.
 func TestRenderListIndexesShowsIDAndPluralHeader(t *testing.T) {
 	t.Parallel()
-	single := []CodebaseView{
-		{Codebase: model.Codebase{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: model.CodebaseStatusIndexed}, Display: displayIndexed},
+	single := []view.CodebaseRowView{
+		{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Display: view.Display(displayIndexed)},
 	}
-	out := renderListIndexes(single)
+	out := render.ListIndexes(single)
 	if !strings.Contains(out, "Tracked 1 codebase:") {
 		t.Fatalf("single header not singular:\n%s", out)
 	}
@@ -628,11 +732,11 @@ func TestRenderListIndexesShowsIDAndPluralHeader(t *testing.T) {
 		t.Fatalf("row missing id, path, or display status:\n%s", out)
 	}
 
-	many := []CodebaseView{
-		{Codebase: model.Codebase{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: model.CodebaseStatusIndexed}, Display: displayIndexed},
-		{Codebase: model.Codebase{ID: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: model.CodebaseStatusIndexing}, Display: displayPreparing},
+	many := []view.CodebaseRowView{
+		{ID: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Display: view.Display(displayIndexed)},
+		{ID: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Display: view.Display(displayPreparing)},
 	}
-	outMany := renderListIndexes(many)
+	outMany := render.ListIndexes(many)
 	if !strings.Contains(outMany, "Tracked 2 codebases:") {
 		t.Fatalf("plural header wrong:\n%s", outMany)
 	}

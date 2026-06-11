@@ -16,6 +16,8 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/pbconv"
+	render "goodkind.io/lm-semantic-search/internal/render"
+	"goodkind.io/lm-semantic-search/internal/view"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -64,7 +66,7 @@ func appendCorrelationRef(displayText string, ctx context.Context, extras ...str
 // health snapshot it already read so the banner and the body agree.
 func (server *GRPCServer) envelopeText(ctx context.Context, health dependencyHealth, body string, extras ...string) string {
 	withHeader := appendCorrelationRef(body, ctx, extras...)
-	banner := renderHealthBanner(health, server.manager.config)
+	banner := render.HealthBanner(resolveBannerView(health, server.manager.config))
 	if banner == "" {
 		return withHeader
 	}
@@ -201,7 +203,8 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
 	}
-	mergeNote := server.startIndexMergeNote(request.GetPath(), codebase)
+	startIndexView := server.resolveStartIndexView(request.GetPath(), codebase, job, deduplicated, overlapsCodebaseID)
+	health := server.manager.DependencyHealth()
 	return &pb.StartIndexResponse{
 		JobId:              job.ID,
 		CodebaseId:         codebase.ID,
@@ -209,7 +212,7 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 		Deduplicated:       deduplicated,
 		CanonicalPath:      codebase.CanonicalPath,
 		OverlapsCodebaseId: overlapsCodebaseID,
-		DisplayText:        appendCorrelationRef(renderStartIndex(request.GetPath(), codebase, job, deduplicated, overlapsCodebaseID, mergeNote), ctx, "codebase_id", codebase.ID, "job_id", job.ID),
+		DisplayText:        server.envelopeText(ctx, health, render.StartIndex(startIndexView), "codebase_id", codebase.ID, "job_id", job.ID),
 	}, nil
 }
 
@@ -247,10 +250,26 @@ func (server *GRPCServer) ClearIndex(ctx context.Context, request *pb.ClearIndex
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetPath(), callErr)))
 	}
+	ack := view.MutationAckView{
+		Kind:            view.AckClear,
+		Path:            codebase.CanonicalPath,
+		JobID:           "",
+		StateLabel:      "",
+		AlreadyTerminal: false,
+		Deduplicated:    false,
+		CollectionID:    "",
+		CollectionName:  "",
+		CodebaseID:      codebase.ID,
+		ConversationID:  "",
+		DocumentCount:   0,
+		NeededCount:     0,
+		TotalCount:      0,
+	}
+	health := server.manager.DependencyHealth()
 	return &pb.ClearIndexResponse{
 		CodebaseId:  codebase.ID,
 		Cleared:     true,
-		DisplayText: appendCorrelationRef(renderClearIndex(codebase), ctx, "codebase_id", codebase.ID),
+		DisplayText: server.envelopeText(ctx, health, render.MutationAck(ack), "codebase_id", codebase.ID),
 	}, nil
 }
 
@@ -265,10 +284,12 @@ func (server *GRPCServer) CancelJob(ctx context.Context, request *pb.CancelJobRe
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewJobNotFound(request.GetJobId())))
 	}
+	ack := resolveCancelJobAck(job)
+	health := server.manager.DependencyHealth()
 	return &pb.CancelJobResponse{
 		JobId:       job.ID,
 		Cancelled:   job.State == model.JobStateCancelled,
-		DisplayText: appendCorrelationRef(renderCancelJob(job), ctx, "job_id", job.ID, "codebase_id", job.CodebaseID),
+		DisplayText: server.envelopeText(ctx, health, render.MutationAck(ack), "job_id", job.ID, "codebase_id", job.CodebaseID),
 	}, nil
 }
 
@@ -290,11 +311,27 @@ func (server *GRPCServer) SyncIndex(ctx context.Context, request *pb.SyncIndexRe
 	if operation == "sync" {
 		job.Operation = operation
 	}
+	ack := view.MutationAckView{
+		Kind:            view.AckSync,
+		Path:            codebase.CanonicalPath,
+		JobID:           job.ID,
+		StateLabel:      "",
+		AlreadyTerminal: false,
+		Deduplicated:    deduplicated,
+		CollectionID:    "",
+		CollectionName:  "",
+		CodebaseID:      codebase.ID,
+		ConversationID:  "",
+		DocumentCount:   0,
+		NeededCount:     0,
+		TotalCount:      0,
+	}
+	health := server.manager.DependencyHealth()
 	return &pb.SyncIndexResponse{
 		JobId:       job.ID,
 		CodebaseId:  codebase.ID,
 		State:       string(job.State),
-		DisplayText: appendCorrelationRef(renderSyncIndex(codebase, job, deduplicated), ctx, "codebase_id", codebase.ID, "job_id", job.ID),
+		DisplayText: server.envelopeText(ctx, health, render.MutationAck(ack), "codebase_id", codebase.ID, "job_id", job.ID),
 	}, nil
 }
 
@@ -362,11 +399,12 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 		indexedDescendants = server.manager.IndexedDescendants(request.GetPath())
 	}
 	health := server.manager.DependencyHealth()
+	getIndexView := server.manager.resolveGetIndexView(request.GetPath(), found, codebasePointer(found, codebase), activeJob, health, classification, indexedDescendants)
 	response := &pb.GetIndexResponse{
 		Tracked:          found,
 		Classification:   pbconv.ToPathClassification(classification),
 		DependencyHealth: toDependencyHealth(health),
-		DisplayText:      server.envelopeText(ctx, health, renderGetIndex(request.GetPath(), found, codebasePointer(found, codebase), activeJob, classification, indexedDescendants, health), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
+		DisplayText:      server.envelopeText(ctx, health, render.GetIndex(getIndexView), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
 	if found {
 		pbCodebase := pbconv.ToCodebase(codebase)
@@ -386,14 +424,20 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 	response := &pb.ListIndexesResponse{
 		Indexes: make([]*pb.Codebase, 0, len(views)),
 	}
-	for _, view := range views {
-		pbCodebase := pbconv.ToCodebase(view.Codebase)
-		applyDisplayTokens(pbCodebase, view.Display)
+	rows := make([]view.CodebaseRowView, 0, len(views))
+	for _, codebaseView := range views {
+		pbCodebase := pbconv.ToCodebase(codebaseView.Codebase)
+		applyDisplayTokens(pbCodebase, codebaseView.Display)
 		response.Indexes = append(response.Indexes, pbCodebase)
+		rows = append(rows, view.CodebaseRowView{
+			ID:            codebaseView.Codebase.ID,
+			CanonicalPath: codebaseView.Codebase.CanonicalPath,
+			Display:       view.Display(codebaseView.Display),
+		})
 	}
 	health := server.manager.DependencyHealth()
 	response.DependencyHealth = toDependencyHealth(health)
-	response.DisplayText = server.envelopeText(ctx, health, renderListIndexes(views))
+	response.DisplayText = server.envelopeText(ctx, health, render.ListIndexes(rows))
 	return response, nil
 }
 
@@ -410,10 +454,11 @@ func (server *GRPCServer) GetJob(ctx context.Context, request *pb.GetJobRequest)
 	}
 	health := server.manager.DependencyHealth()
 	successorID := server.manager.JobSuccessorID(job)
+	entry := resolveJobEntry(job, health.Degraded(), successorID)
 	return &pb.GetJobResponse{
 		Job:              toJobWithTokens(job, health.Degraded(), successorID),
 		DependencyHealth: toDependencyHealth(health),
-		DisplayText:      server.envelopeText(ctx, health, renderGetJob(&job, health.Degraded(), successorID), "job_id", job.ID, "codebase_id", job.CodebaseID),
+		DisplayText:      server.envelopeText(ctx, health, render.GetJob(entry, true), "job_id", job.ID, "codebase_id", job.CodebaseID),
 	}, nil
 }
 
@@ -421,18 +466,24 @@ func (server *GRPCServer) GetJob(ctx context.Context, request *pb.GetJobRequest)
 func (server *GRPCServer) ListJobs(ctx context.Context, request *pb.ListJobsRequest) (resp *pb.ListJobsResponse, err error) {
 	ctx, done := beginRPC(ctx, "ListJobs")
 	defer done(&err)
-	_ = ctx
 	jobs := server.manager.ListJobs(request.GetCodebaseId())
 	health := server.manager.DependencyHealth()
 	successors := buildJobSuccessors(jobs)
-	response := &pb.ListJobsResponse{
-		Jobs: make([]*pb.Job, 0, len(jobs)),
-	}
+	summary := resolveListSummary(jobs, health.Degraded())
+	activeEntries := make([]view.JobEntryView, 0, len(jobs))
+	terminalEntries := make([]view.JobEntryView, 0, len(jobs))
+	response := &pb.ListJobsResponse{Jobs: make([]*pb.Job, 0, len(jobs))}
 	for _, job := range jobs {
 		response.Jobs = append(response.Jobs, toJobWithTokens(job, health.Degraded(), successors[job.ID]))
+		entry := resolveJobEntry(job, health.Degraded(), successors[job.ID])
+		if isTerminalJobState(job.State) {
+			terminalEntries = append(terminalEntries, entry)
+		} else {
+			activeEntries = append(activeEntries, entry)
+		}
 	}
 	response.DependencyHealth = toDependencyHealth(health)
-	response.DisplayText = server.envelopeText(ctx, health, renderListJobs(jobs, health.Degraded()), "codebase_id", request.GetCodebaseId())
+	response.DisplayText = server.envelopeText(ctx, health, render.ListJobs(summary, activeEntries, terminalEntries), "codebase_id", request.GetCodebaseId())
 	return response, nil
 }
 
@@ -470,19 +521,28 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	}
 	server.manager.fillLiveChunkTotal(ctx, outcome.Codebase, outcome.ActiveJob)
 	health := server.manager.DependencyHealth()
+	inFlightStatus, inFlightTemplateName, inFlightBackgroundSync := resolveSearchStatusView(outcome.Codebase, outcome.ActiveJob, health)
+	searchView := view.SearchView{
+		RequestedPath:          request.GetPath(),
+		Query:                  request.GetQuery(),
+		CodebaseName:           filepath.Base(outcome.Codebase.CanonicalPath),
+		CodebasePath:           outcome.Codebase.CanonicalPath,
+		Results:                resolveSearchResults(outcome.Results),
+		StateNote:              outcome.StateNote,
+		InFlight:               outcome.ActiveJob != nil,
+		InFlightStatus:         inFlightStatus,
+		InFlightTemplateName:   inFlightTemplateName,
+		InFlightPercent:        0,
+		InFlightBackgroundSync: inFlightBackgroundSync,
+		Degraded:               health.Degraded(),
+		ResolutionLines:        pathResolutionLines(request.GetPath()),
+	}
 	response := &pb.SearchCodeResponse{
 		Results:          make([]*pb.SearchResult, 0, len(outcome.Results)),
 		Codebase:         pbconv.ToCodebase(outcome.Codebase),
 		ActiveJob:        toJobPointerWithTokens(outcome.ActiveJob, health.Degraded(), ""),
 		DependencyHealth: toDependencyHealth(health),
-		DisplayText: server.envelopeText(ctx, health, renderSearch(searchView{
-			RequestedPath: request.GetPath(),
-			Query:         request.GetQuery(),
-			Codebase:      outcome.Codebase,
-			ActiveJob:     outcome.ActiveJob,
-			Results:       outcome.Results,
-			StateNote:     outcome.StateNote,
-		}), "codebase_id", outcome.Codebase.ID, "job_id", jobIDOf(outcome.ActiveJob)),
+		DisplayText:      server.envelopeText(ctx, health, render.Search(searchView), "codebase_id", outcome.Codebase.ID, "job_id", jobIDOf(outcome.ActiveJob)),
 	}
 	for _, result := range outcome.Results {
 		response.Results = append(response.Results, &pb.SearchResult{
@@ -490,7 +550,7 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 			StartLine:    result.StartLine,
 			EndLine:      result.EndLine,
 			Language:     result.Language,
-			Score:        0,
+			Score:        result.Score,
 			Content:      result.Content,
 		})
 	}
@@ -508,12 +568,29 @@ func (server *GRPCServer) RegisterConversationCollection(ctx context.Context, re
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, callErr))
 	}
+	ack := view.MutationAckView{
+		Kind:            view.AckRegisterConversation,
+		Path:            "",
+		JobID:           "",
+		StateLabel:      "",
+		AlreadyTerminal: false,
+		Deduplicated:    false,
+		CollectionID:    request.GetCollectionId(),
+		CollectionName:  codebase.CollectionName,
+		CodebaseID:      codebase.ID,
+		ConversationID:  "",
+		DocumentCount:   0,
+		NeededCount:     0,
+		TotalCount:      0,
+	}
+	health := server.manager.DependencyHealth()
 	return &pb.RegisterConversationCollectionResponse{
 		CodebaseId:     codebase.ID,
 		CollectionName: codebase.CollectionName,
-		DisplayText: appendCorrelationRef(
-			renderRegisterConversationCollection(request.GetCollectionId(), codebase),
+		DisplayText: server.envelopeText(
 			ctx,
+			health,
+			render.MutationAck(ack),
 			"codebase_id",
 			codebase.ID,
 		),
@@ -532,11 +609,28 @@ func (server *GRPCServer) SyncConversationManifest(ctx context.Context, request 
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
 	}
+	ack := view.MutationAckView{
+		Kind:            view.AckManifest,
+		Path:            "",
+		JobID:           "",
+		StateLabel:      "",
+		AlreadyTerminal: false,
+		Deduplicated:    false,
+		CollectionID:    request.GetCollectionId(),
+		CollectionName:  "",
+		CodebaseID:      request.GetCollectionId(),
+		ConversationID:  "",
+		DocumentCount:   0,
+		NeededCount:     len(needed),
+		TotalCount:      len(request.GetManifest()),
+	}
+	health := server.manager.DependencyHealth()
 	return &pb.SyncConversationManifestResponse{
 		NeededConversationIds: needed,
-		DisplayText: appendCorrelationRef(
-			fmt.Sprintf("Conversation collection '%s' needs %d of %d %s.", request.GetCollectionId(), len(needed), len(request.GetManifest()), plural("conversation", len(request.GetManifest()))),
+		DisplayText: server.envelopeText(
 			ctx,
+			health,
+			render.MutationAck(ack),
 			"codebase_id",
 			request.GetCollectionId(),
 		),
@@ -560,11 +654,28 @@ func (server *GRPCServer) UpsertConversationDocuments(ctx context.Context, reque
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
 	}
+	ack := view.MutationAckView{
+		Kind:            view.AckUpsertConversation,
+		Path:            "",
+		JobID:           job.ID,
+		StateLabel:      "",
+		AlreadyTerminal: false,
+		Deduplicated:    false,
+		CollectionID:    request.GetCollectionId(),
+		CollectionName:  "",
+		CodebaseID:      job.CodebaseID,
+		ConversationID:  "",
+		DocumentCount:   len(request.GetDocuments()),
+		NeededCount:     0,
+		TotalCount:      0,
+	}
+	health := server.manager.DependencyHealth()
 	return &pb.UpsertConversationDocumentsResponse{
 		JobId: job.ID,
-		DisplayText: appendCorrelationRef(
-			renderUpsertConversationDocuments(request.GetCollectionId(), job, len(request.GetDocuments())),
+		DisplayText: server.envelopeText(
 			ctx,
+			health,
+			render.MutationAck(ack),
 			"codebase_id",
 			job.CodebaseID,
 			"job_id",
@@ -592,11 +703,28 @@ func (server *GRPCServer) DeleteConversation(ctx context.Context, request *pb.De
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
 	}
+	ack := view.MutationAckView{
+		Kind:            view.AckDeleteConversation,
+		Path:            "",
+		JobID:           job.ID,
+		StateLabel:      "",
+		AlreadyTerminal: false,
+		Deduplicated:    false,
+		CollectionID:    request.GetCollectionId(),
+		CollectionName:  "",
+		CodebaseID:      job.CodebaseID,
+		ConversationID:  request.GetConversationId(),
+		DocumentCount:   0,
+		NeededCount:     0,
+		TotalCount:      0,
+	}
+	health := server.manager.DependencyHealth()
 	return &pb.DeleteConversationResponse{
 		JobId: job.ID,
-		DisplayText: appendCorrelationRef(
-			renderDeleteConversation(request.GetCollectionId(), request.GetConversationId(), job),
+		DisplayText: server.envelopeText(
 			ctx,
+			health,
+			render.MutationAck(ack),
 			"codebase_id",
 			job.CodebaseID,
 			"job_id",
@@ -620,14 +748,16 @@ func (server *GRPCServer) SearchConversations(ctx context.Context, request *pb.S
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
 	}
 	health := server.manager.DependencyHealth()
+	conversationView := view.ConversationSearchView{
+		CollectionID: request.GetCollectionId(),
+		Query:        request.GetQuery(),
+		Results:      resolveConversationSearchResults(results),
+		StateNote:    "",
+	}
 	response := &pb.SearchConversationsResponse{
 		Results:          conversationSearchResults(results),
 		DependencyHealth: toDependencyHealth(health),
-		DisplayText: server.envelopeText(ctx, health, renderConversationSearch(conversationSearchView{
-			CollectionID: request.GetCollectionId(),
-			Query:        request.GetQuery(),
-			Results:      results,
-		})),
+		DisplayText:      server.envelopeText(ctx, health, render.ConversationSearch(conversationView)),
 	}
 	return response, nil
 }
@@ -652,15 +782,17 @@ func (server *GRPCServer) SearchWithinConversation(ctx context.Context, request 
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
 	}
 	health := server.manager.DependencyHealth()
+	conversationView := view.ConversationSearchView{
+		CollectionID: request.GetCollectionId(),
+		Query:        request.GetQuery(),
+		Results:      resolveConversationSearchResults(results),
+		StateNote:    "",
+	}
 	return &pb.SearchWithinConversationResponse{
 		Results:            conversationSearchResults(results),
 		IndexedFingerprint: indexedFingerprint,
 		DependencyHealth:   toDependencyHealth(health),
-		DisplayText: server.envelopeText(ctx, health, renderConversationSearch(conversationSearchView{
-			CollectionID: request.GetCollectionId(),
-			Query:        request.GetQuery(),
-			Results:      results,
-		})),
+		DisplayText:        server.envelopeText(ctx, health, render.ConversationSearch(conversationView)),
 	}, nil
 }
 
@@ -728,8 +860,11 @@ func (server *GRPCServer) Doctor(ctx context.Context, request *pb.DoctorRequest)
 		})
 	}
 	health := server.manager.DependencyHealth()
-	body := renderDoctor(diagnostics) + "\n\n" + renderDroppedSection(server.manager.DroppedCodebases())
-	response.DisplayText = server.envelopeText(ctx, health, body)
+	doctorView := view.DoctorView{
+		Diagnostics: diagnostics,
+		Dropped:     server.manager.DroppedCodebases(),
+	}
+	response.DisplayText = server.envelopeText(ctx, health, render.Doctor(doctorView))
 	return response, nil
 }
 

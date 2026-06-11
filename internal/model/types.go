@@ -59,6 +59,14 @@ const (
 	JobStateCancelled JobState = "cancelled"
 )
 
+// RunMode values for Progress.RunMode.
+const (
+	RunModeFirstBuild    = "first_build"
+	RunModeChanged       = "changed"
+	RunModeForcedReindex = "forced_reindex"
+	RunModeResuming      = "resuming"
+)
+
 // ClientInfo identifies the caller that initiated a daemon request.
 type ClientInfo struct {
 	Name string `json:"name"`
@@ -88,7 +96,14 @@ type Progress struct {
 	// Unit is the human progress noun for the counted items: "file" for a code
 	// index and "document" for a conversation index. An empty value reads as
 	// "file" so older persisted jobs render unchanged.
-	Unit           string `json:"unit,omitempty"`
+	Unit string `json:"unit,omitempty"`
+	// RunMode names the kind of pass: "first_build", "changed",
+	// "forced_reindex", or "resuming". Set when the run plan is decided so
+	// surfaces can label the denominator and name a resume.
+	RunMode string `json:"runMode,omitempty"`
+	// ScopeUnit is the unit of the added/modified/removed classification when
+	// it differs from Unit. Empty means same as Unit.
+	ScopeUnit      string `json:"scopeUnit,omitempty"`
 	FilesTotal     int32  `json:"files_total"`
 	FilesProcessed int32  `json:"files_processed"`
 	// FilesAdded, FilesModified, and FilesRemoved record a delta sync's change
@@ -172,17 +187,21 @@ type IndexRunFailure struct {
 // inodes at registration time. When true, convergence falls back to
 // path-only file tracking instead of (device, inode, contentHash).
 type Codebase struct {
-	ID                    string           `json:"id"`
-	Kind                  CodebaseKind     `json:"kind,omitempty"`
-	CanonicalPath         string           `json:"canonical_path"`
-	Status                CodebaseStatus   `json:"status"`
-	ActiveJobID           string           `json:"active_job_id,omitempty"`
-	LastSuccessfulRun     *IndexRunSummary `json:"last_successful_run,omitempty"`
-	LastFailedRun         *IndexRunFailure `json:"last_failed_run,omitempty"`
-	EffectiveConfig       IndexConfig      `json:"effective_config"`
-	CollectionName        string           `json:"collection_name,omitempty"`
-	LegacyCollectionNames []string         `json:"legacy_collection_names,omitempty"`
-	MerkleSnapshotPath    string           `json:"merkle_snapshot_path,omitempty"`
+	ID                string           `json:"id"`
+	Kind              CodebaseKind     `json:"kind,omitempty"`
+	CanonicalPath     string           `json:"canonical_path"`
+	Status            CodebaseStatus   `json:"status"`
+	ActiveJobID       string           `json:"active_job_id,omitempty"`
+	LastSuccessfulRun *IndexRunSummary `json:"last_successful_run,omitempty"`
+	LastFailedRun     *IndexRunFailure `json:"last_failed_run,omitempty"`
+	// LiveFileTotal and LiveChunkTotal track the latest known corpus size,
+	// updated during runs rather than only at completion.
+	LiveFileTotal         int32       `json:"liveFileTotal,omitempty"`
+	LiveChunkTotal        int32       `json:"liveChunkTotal,omitempty"`
+	EffectiveConfig       IndexConfig `json:"effective_config"`
+	CollectionName        string      `json:"collection_name,omitempty"`
+	LegacyCollectionNames []string    `json:"legacy_collection_names,omitempty"`
+	MerkleSnapshotPath    string      `json:"merkle_snapshot_path,omitempty"`
 	// WorktreeCommonDir is the shared git common dir when this codebase's root
 	// is a linked git worktree, else empty. It lets the daemon recognize a
 	// removed worktree (git deleted its admin entry) after the directory is gone

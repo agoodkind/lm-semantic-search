@@ -12,8 +12,8 @@ import (
 
 func TestListModelViewShowsRecords(t *testing.T) {
 	codebases := []*pb.Codebase{
-		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed", LastSuccessfulRun: &pb.IndexRunSummary{IndexedFiles: 12}},
-		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "stale"},
+		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed", DisplayStatus: "indexed", GlyphToken: "✓", StatusLabel: "indexed", LastSuccessfulRun: &pb.IndexRunSummary{IndexedFiles: 12}},
+		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "stale", DisplayStatus: "stale", GlyphToken: "!", StatusLabel: "stale"},
 	}
 	model := newListModel(cliOptions{}, codebases, nil)
 
@@ -42,17 +42,17 @@ func TestListRowRendersDaemonTokens(t *testing.T) {
 	}
 }
 
-// TestListRowFallsBackToRawStatusWithoutTokens proves a row from an older daemon
-// that omits the glyph and label tokens still renders the raw status word.
-func TestListRowFallsBackToRawStatusWithoutTokens(t *testing.T) {
+// TestListRowDoesNotFallbackToRawStatusWithoutTokens proves a row from an older
+// daemon that omits resolved tokens does not reintroduce the raw status word.
+func TestListRowDoesNotFallbackToRawStatusWithoutTokens(t *testing.T) {
 	codebases := []*pb.Codebase{
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
 	}
 	model := newListModel(cliOptions{}, codebases, nil)
 
 	view := model.View()
-	if !strings.Contains(view, "indexed") {
-		t.Errorf("View() missing fallback raw status:\n%s", view)
+	if strings.Contains(view, "indexed") {
+		t.Errorf("View() rendered fallback raw status:\n%s", view)
 	}
 }
 

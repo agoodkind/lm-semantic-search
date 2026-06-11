@@ -205,7 +205,7 @@ func TestRenderIndexedDescendantsHintNamesSubfolderAndCommand(t *testing.T) {
 			LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 4292},
 		},
 	}
-	out := renderIndexedDescendantsHint("/repo/codex/source", descendants)
+	out := descendantsHint("/repo/codex/source", descendants)
 	for _, want := range []string{"4292", "codex-rs", "index_codebase /repo/codex/source"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("descendants hint missing %q in:\n%s", want, out)
@@ -216,13 +216,13 @@ func TestRenderIndexedDescendantsHintNamesSubfolderAndCommand(t *testing.T) {
 func TestRenderCoveringResolutionNamesLargerIndex(t *testing.T) {
 	parentCanonical, childCanonical := newParentWithChildRepo(t)
 	codebase := &model.Codebase{CanonicalPath: parentCanonical}
-	out := renderCoveringResolution(childCanonical, true, codebase)
+	out := coveringResolutionLine(childCanonical, true, codebase)
 	for _, want := range []string{"Resolved to larger index", parentCanonical, "child/"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("covering resolution missing %q in:\n%s", want, out)
 		}
 	}
-	if got := renderCoveringResolution(parentCanonical, true, codebase); got != "" {
+	if got := coveringResolutionLine(parentCanonical, true, codebase); got != "" {
 		t.Fatalf("covering resolution for the root itself = %q, want empty", got)
 	}
 }
