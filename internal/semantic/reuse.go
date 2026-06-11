@@ -10,6 +10,7 @@ import (
 	"log/slog"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"google.golang.org/grpc/metadata"
 )
 
 // reuseVectorBatchSize bounds one QueryIterator page when streaming a reuse
@@ -36,6 +37,8 @@ func contentVectorKey(content string) string {
 // to indexes built with the current embedding model, so a reused vector is
 // valid for the parent's model.
 func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error) {
+	_, _ = metadata.FromIncomingContext(ctx)
+
 	reuse := make(map[string][]float32)
 	if !service.Available() || len(collectionNames) == 0 {
 		return reuse, nil
@@ -57,6 +60,8 @@ func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []
 // chunks' stored vectors instead of re-embedding the whole conversation. A
 // missing collection or an empty prefix returns an empty map.
 func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
+	_, _ = metadata.FromIncomingContext(ctx)
+
 	reuse := make(map[string][]float32)
 	if !service.Available() || collectionName == "" || relativePathPrefix == "" {
 		return reuse, nil

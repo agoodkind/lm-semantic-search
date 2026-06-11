@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"google.golang.org/grpc/metadata"
 )
 
 // CopyChunks rewrites the relativePath column on every existing chunk row
@@ -24,6 +25,8 @@ import (
 // the collection is hybrid, is re-derived by the BM25 function from the
 // preserved content so no embedding API call is issued.
 func (service *Service) CopyChunks(ctx context.Context, codebasePath string, srcRelativePath string, dstRelativePath string) (int, error) {
+	_, _ = metadata.FromIncomingContext(ctx)
+
 	if !service.Available() {
 		return 0, ErrUnavailable
 	}
@@ -69,6 +72,8 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 // the dense vector so CopyChunks can reinsert under a new key without
 // re-embedding the content.
 func (service *Service) fetchChunksForPath(ctx context.Context, collectionName string, relativePath string) ([]model.StoredChunk, [][]float32, error) {
+	_, _ = metadata.FromIncomingContext(ctx)
+
 	expression := fmt.Sprintf(`%s == %q`, relativePathFieldName, relativePath)
 	outputFields := []string{
 		idFieldName,

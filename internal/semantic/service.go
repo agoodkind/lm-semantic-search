@@ -10,12 +10,10 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"math/rand/v2"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -26,6 +24,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/lm-semantic-search/internal/tshash"
+	"google.golang.org/grpc/metadata"
 )
 
 // Milvus field names match the upstream TS schema at
@@ -46,32 +45,6 @@ const (
 	idFieldName             = "id"
 	countOutputField        = "count(*)"
 )
-
-const (
-	reconnectBackoffBase = 2 * time.Second
-	reconnectBackoffCap  = 5 * time.Minute
-)
-
-var bootDialTimeout = 5 * time.Second
-
-var reconnectSleep = func(ctx context.Context, duration time.Duration) bool {
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-
-var reconnectJitter = func(limit time.Duration) time.Duration {
-	if limit <= 0 {
-		return 0
-	}
-	return time.Duration(rand.Int64N(int64(limit) + 1))
-}
 
 // Progress reports semantic indexing progress after chunk extraction.
 //
@@ -104,9 +77,13 @@ type Service struct {
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
 		return &Service{
-			cfg:      cfg,
-			embedder: nil,
-			milvus:   nil,
+			cfg:             cfg,
+			embedder:        nil,
+			milvus:          nil,
+			available:       atomic.Bool{},
+			reconnectCancel: nil,
+			reconnectDone:   nil,
+			closeOnce:       sync.Once{},
 		}, nil
 	}
 
@@ -117,9 +94,13 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	service := &Service{
-		cfg:      cfg,
-		embedder: embedder,
-		milvus:   nil,
+		cfg:             cfg,
+		embedder:        embedder,
+		milvus:          nil,
+		available:       atomic.Bool{},
+		reconnectCancel: nil,
+		reconnectDone:   nil,
+		closeOnce:       sync.Once{},
 	}
 
 	client, err := service.dialMilvus(ctx)
@@ -163,65 +144,6 @@ func (service *Service) Close(ctx context.Context) error {
 		service.available.Store(false)
 	})
 	return closeErr
-}
-
-func (service *Service) dialMilvus(ctx context.Context) (*milvusclient.Client, error) {
-	dialContext, cancel := context.WithTimeout(ctx, bootDialTimeout)
-	defer cancel()
-
-	clientConfig := &milvusclient.ClientConfig{
-		Address: service.cfg.MilvusAddress,
-		APIKey:  service.cfg.MilvusToken,
-	}
-	client, err := milvusclient.New(dialContext, clientConfig)
-	if err != nil {
-		return nil, fmt.Errorf("connect to Milvus at %s: %w", service.cfg.MilvusAddress, err)
-	}
-	return client, nil
-}
-
-func (service *Service) startReconnector(ctx context.Context) {
-	reconnectContext, cancel := context.WithCancel(ctx)
-	service.reconnectCancel = cancel
-	service.reconnectDone = make(chan struct{})
-
-	go service.reconnectLoop(reconnectContext)
-}
-
-func (service *Service) reconnectLoop(ctx context.Context) {
-	defer close(service.reconnectDone)
-
-	backoffLimit := reconnectBackoffBase
-	for attempt := 1; ; attempt++ {
-		client, err := service.dialMilvus(ctx)
-		if err == nil {
-			service.publishClient(client)
-			slog.InfoContext(ctx, "Milvus reconnect succeeded", "address", service.cfg.MilvusAddress, "attempt", attempt)
-			return
-		}
-		if attempt == 1 || attempt%10 == 0 {
-			slog.WarnContext(ctx, "Milvus reconnect failed", "address", service.cfg.MilvusAddress, "attempt", attempt, "err", err)
-		}
-
-		sleepDuration := reconnectJitter(backoffLimit)
-		if !reconnectSleep(ctx, sleepDuration) {
-			return
-		}
-		backoffLimit = nextReconnectBackoff(backoffLimit)
-	}
-}
-
-func (service *Service) publishClient(client *milvusclient.Client) {
-	service.milvus = client
-	service.available.Store(true)
-}
-
-func nextReconnectBackoff(current time.Duration) time.Duration {
-	next := current * 2
-	if next > reconnectBackoffCap {
-		return reconnectBackoffCap
-	}
-	return next
 }
 
 // Available reports whether semantic indexing is configured.
@@ -446,6 +368,8 @@ func (service *Service) queryTextForEmbedding(query string) string {
 }
 
 func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, extensionFilter []string, relativePathPrefixes []string) ([]model.StoredChunk, error) {
+	_, _ = metadata.FromIncomingContext(ctx)
+
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "check Milvus collection failed", "collection", collectionName, "err", err)
@@ -533,6 +457,8 @@ func (service *Service) Drop(ctx context.Context, codebasePath string) error {
 // and excludes deleted rows. The store is the single source of this number;
 // the daemon keeps no separate running tally that could drift from it.
 func (service *Service) Count(ctx context.Context, codebasePath string) (int32, error) {
+	_, _ = metadata.FromIncomingContext(ctx)
+
 	if !service.Available() {
 		return 0, ErrUnavailable
 	}
@@ -575,6 +501,8 @@ func (service *Service) ListCollections(ctx context.Context) ([]string, error) {
 // HasCollectionForPath reports whether Milvus has the collection for the
 // given codebase path.
 func (service *Service) HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error) {
+	_, _ = metadata.FromIncomingContext(ctx)
+
 	if !service.Available() {
 		return false, ErrUnavailable
 	}
