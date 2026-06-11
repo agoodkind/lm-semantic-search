@@ -65,6 +65,11 @@ resolves and caches rules when a status query arrives for a codebase whose recor
 holds none. That fallback runs outside the registry lock and outside the
 registration call, so it cannot delay registration or block other requests.
 
+The rule cache lives in memory only (`ResolvedIgnoreRules` is excluded from the
+registry JSON), so after a daemon restart every record holds no rules until the
+next capture persists them. The periodic interval sync recaptures each codebase
+within minutes of boot, which repopulates the cache without any boot-time scan.
+
 ### Relative paths resolve against the caller
 
 Every request that carries a path also carries the caller's working directory, in
@@ -100,6 +105,9 @@ renders live progress from the `WatchJobs` stream, the daemon's existing
 job-event subscription. Progress lines show the phase, the percent complete, and
 the file counts the job already reports. Bare `--wait` uses 300 seconds, the same
 default as the MCP tool's `wait_timeout_seconds`. There is no indefinite wait.
+`--wait` requires human output mode; combining it with `--json` or
+`--output single-line` is an error, so machine output never interleaves with
+progress rendering.
 
 While attached, the command exits 0 when the job completes and exits non-zero
 with the job's error message when the job fails or is cancelled. When the timeout
