@@ -158,4 +158,7 @@ func TestStartIndexShowsBannerWhenDegraded(t *testing.T) {
 	if !strings.Contains(resp.GetDisplayText(), "🟥") {
 		t.Fatalf("StartIndex display text lacks the degraded banner:\n%s", resp.GetDisplayText())
 	}
+	// Let the async index job settle before the test returns, so its checkpoint
+	// writes do not race t.TempDir cleanup.
+	waitForCodebaseSettled(t, manager, repoPath)
 }
