@@ -18,6 +18,24 @@ func TestCanonicalizePathRejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestCanonicalizePathRejectsRelative(t *testing.T) {
+	t.Parallel()
+
+	for _, requested := range []string{".", "..", "some/relative/dir", "./x"} {
+		if _, err := canonicalizePath(requested); err == nil {
+			t.Fatalf("canonicalizePath(%q) returned nil error; a relative path must not resolve against the daemon cwd", requested)
+		}
+	}
+}
+
+func TestCanonicalizePathRejectsURI(t *testing.T) {
+	t.Parallel()
+
+	if _, err := canonicalizePath("chat:///clyde-conversations"); err == nil {
+		t.Fatal("canonicalizePath accepted a URI-shaped path")
+	}
+}
+
 func TestCanonicalizePathAcceptsNonEmpty(t *testing.T) {
 	t.Parallel()
 

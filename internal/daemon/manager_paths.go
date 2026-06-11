@@ -132,17 +132,21 @@ func (manager *Manager) resolveCanonicalPath(requestedPath string) (string, erro
 }
 
 func canonicalizePath(requestedPath string) (string, error) {
-	// Reject an empty or whitespace path before filepath.Abs, which would
-	// otherwise resolve "" to the current working directory and let a caller
-	// silently operate on the wrong codebase.
+	// Reject an empty or whitespace path early; "" must never silently
+	// resolve to any directory.
 	if strings.TrimSpace(requestedPath) == "" {
 		return "", errors.New("codebase path is required")
 	}
-	absolutePath, err := filepath.Abs(requestedPath)
-	if err != nil {
-		slog.Error("resolve absolute path failed", "path", requestedPath, "err", err)
-		return "", fmt.Errorf("resolve absolute path for %s: %w", requestedPath, err)
+	if strings.Contains(requestedPath, "://") {
+		return "", fmt.Errorf("path %q looks like a URI; pass a filesystem directory instead", requestedPath)
 	}
+	// A relative path reaching the daemon is unresolvable here: the daemon's
+	// working directory is never the caller's. resolveRequestPath at the gRPC
+	// boundary joins relative paths against the caller's cwd before this point.
+	if !filepath.IsAbs(requestedPath) {
+		return "", fmt.Errorf("path %q is relative; pass an absolute path or send caller_cwd", requestedPath)
+	}
+	absolutePath := filepath.Clean(requestedPath)
 	canonicalPath, err := filepath.EvalSymlinks(absolutePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
