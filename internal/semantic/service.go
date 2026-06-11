@@ -319,6 +319,17 @@ func (service *Service) SearchConversationCollection(ctx context.Context, collec
 	return service.searchCollection(ctx, trimmedCollectionName, query, limit, nil, relativePathPrefixes)
 }
 
+// queryTextForEmbedding applies the configured query instruction prefix to
+// the dense query embed. The sparse (BM25) leg keeps the raw query text, and
+// stored document vectors are never prefixed, so the index stays valid.
+func (service *Service) queryTextForEmbedding(query string) string {
+	prefix := service.cfg.QueryInstructionPrefix
+	if prefix == "" {
+		return query
+	}
+	return prefix + query
+}
+
 func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, extensionFilter []string, relativePathPrefixes []string) ([]model.StoredChunk, error) {
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
@@ -329,7 +340,7 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 		return nil, ErrCollectionMissing
 	}
 
-	queryVector, err := service.embedder.Embed(ctx, query)
+	queryVector, err := service.embedder.Embed(ctx, service.queryTextForEmbedding(query))
 	if err != nil {
 		slog.ErrorContext(ctx, "embed query failed", "err", err)
 		return nil, fmt.Errorf("embed query: %w", err)
