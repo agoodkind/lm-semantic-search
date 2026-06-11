@@ -74,6 +74,9 @@ func newRoot(defaultSocketPath string) *cobra.Command {
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.SilenceErrors = true
 	root.SilenceUsage = false
+	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+		cmd.SilenceUsage = true
+	}
 	root.SetHelpFunc(func(cmd *cobra.Command, _ []string) {
 		_, _ = fmt.Fprint(cmd.OutOrStdout(), helpText(cmd))
 	})

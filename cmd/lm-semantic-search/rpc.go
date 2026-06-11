@@ -65,7 +65,10 @@ func callAndPrint(options cliOptions, call rpcCall) error {
 	if err != nil {
 		return err
 	}
+	return printResponse(options, result)
+}
 
+func printResponse(options cliOptions, result protoMessage) error {
 	formatted, err := response.FormatProto(options.outputMode, result)
 	if err != nil {
 		slog.Error("format response failed", "err", err)
