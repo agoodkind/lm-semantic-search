@@ -1,12 +1,17 @@
 package semantic
 
 import (
+	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"google.golang.org/grpc"
 )
 
 // TestStagingCollectionNameStaysWithinCap proves the rebuild staging name
@@ -141,4 +146,226 @@ func TestEncodeDecodeMetadataConversationFields(t *testing.T) {
 	if !strings.Contains(metadata, `"parent_conversation_id":"thread-root"`) {
 		t.Fatalf("metadata %q omitted parent_conversation_id for a forked conversation chunk", metadata)
 	}
+}
+
+func TestNewServiceBootsDegradedWhenMilvusClosed(t *testing.T) {
+	previousTimeout := bootDialTimeout
+	bootDialTimeout = 20 * time.Millisecond
+	t.Cleanup(func() {
+		bootDialTimeout = previousTimeout
+	})
+
+	address := closedLoopbackAddress(t)
+	startedAt := time.Now()
+	service, err := NewService(context.Background(), testServiceConfig(address))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := service.Close(context.Background()); closeErr != nil {
+			t.Fatalf("Close returned error: %v", closeErr)
+		}
+	})
+
+	if elapsed := time.Since(startedAt); elapsed > 2*time.Second {
+		t.Fatalf("NewService took %s, want a bounded boot dial", elapsed)
+	}
+	if service == nil {
+		t.Fatal("NewService returned nil service")
+	}
+	if service.Available() {
+		t.Fatal("Available() = true, want false while Milvus is unreachable")
+	}
+	if !service.Degraded() {
+		t.Fatal("Degraded() = false, want true for configured but disconnected Milvus")
+	}
+}
+
+func TestReconnectMakesServiceAvailableAgainstFakeMilvus(t *testing.T) {
+	previousTimeout := bootDialTimeout
+	previousSleep := reconnectSleep
+	previousJitter := reconnectJitter
+	bootDialTimeout = 20 * time.Millisecond
+	reconnectSleep = func(ctx context.Context, _ time.Duration) bool {
+		timer := time.NewTimer(time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return true
+		}
+	}
+	reconnectJitter = func(limit time.Duration) time.Duration {
+		_ = limit
+		return time.Millisecond
+	}
+	t.Cleanup(func() {
+		bootDialTimeout = previousTimeout
+		reconnectSleep = previousSleep
+		reconnectJitter = previousJitter
+	})
+
+	address := closedLoopbackAddress(t)
+	service, err := NewService(context.Background(), testServiceConfig(address))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := service.Close(context.Background()); closeErr != nil {
+			t.Fatalf("Close returned error: %v", closeErr)
+		}
+	})
+	if service.Available() {
+		t.Fatal("Available() = true before fake Milvus starts")
+	}
+
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+	})
+	go func() {
+		_ = grpcServer.Serve(listener)
+	}()
+
+	waitForSemanticCondition(t, func() bool {
+		return service.Available() && !service.Degraded()
+	})
+}
+
+func TestReconnectBackoffDoublesAndCaps(t *testing.T) {
+	previousTimeout := bootDialTimeout
+	previousSleep := reconnectSleep
+	previousJitter := reconnectJitter
+	bootDialTimeout = 20 * time.Millisecond
+	sleepDurations := make(chan time.Duration, 16)
+	reconnectSleep = func(ctx context.Context, duration time.Duration) bool {
+		select {
+		case sleepDurations <- duration:
+		case <-ctx.Done():
+			return false
+		}
+		return true
+	}
+	reconnectJitter = func(limit time.Duration) time.Duration {
+		return limit
+	}
+	t.Cleanup(func() {
+		bootDialTimeout = previousTimeout
+		reconnectSleep = previousSleep
+		reconnectJitter = previousJitter
+	})
+
+	service, err := NewService(context.Background(), testServiceConfig(closedLoopbackAddress(t)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := service.Close(context.Background()); closeErr != nil {
+			t.Fatalf("Close returned error: %v", closeErr)
+		}
+	})
+
+	wantDurations := []time.Duration{
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+		16 * time.Second,
+		32 * time.Second,
+		64 * time.Second,
+		128 * time.Second,
+		256 * time.Second,
+		5 * time.Minute,
+		5 * time.Minute,
+	}
+	for index, want := range wantDurations {
+		select {
+		case got := <-sleepDurations:
+			if got != want {
+				t.Fatalf("sleep duration %d = %s, want %s", index, got, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for sleep duration %d", index)
+		}
+	}
+}
+
+func TestCloseCancelsReconnectDuringBackoff(t *testing.T) {
+	previousTimeout := bootDialTimeout
+	previousSleep := reconnectSleep
+	previousJitter := reconnectJitter
+	bootDialTimeout = 20 * time.Millisecond
+	sleepStarted := make(chan struct{})
+	sleepDone := make(chan struct{})
+	reconnectSleep = func(ctx context.Context, _ time.Duration) bool {
+		close(sleepStarted)
+		<-ctx.Done()
+		close(sleepDone)
+		return false
+	}
+	reconnectJitter = func(limit time.Duration) time.Duration {
+		return limit
+	}
+	t.Cleanup(func() {
+		bootDialTimeout = previousTimeout
+		reconnectSleep = previousSleep
+		reconnectJitter = previousJitter
+	})
+
+	service, err := NewService(context.Background(), testServiceConfig(closedLoopbackAddress(t)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	<-sleepStarted
+
+	if err := service.Close(context.Background()); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	select {
+	case <-sleepDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconnector sleep did not observe cancellation")
+	}
+}
+
+func closedLoopbackAddress(t *testing.T) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("Close listener returned error: %v", err)
+	}
+	return address
+}
+
+func testServiceConfig(address string) config.Config {
+	return config.Config{
+		EmbeddingProvider: "OpenAI",
+		EmbeddingModel:    "text-embedding-3-small",
+		OpenAIAPIKey:      "test-key",
+		MilvusAddress:     address,
+		HybridMode:        true,
+	}
+}
+
+func waitForSemanticCondition(t *testing.T, condition func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition did not become true before timeout")
 }

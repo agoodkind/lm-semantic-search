@@ -10,8 +10,12 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -43,6 +47,32 @@ const (
 	countOutputField        = "count(*)"
 )
 
+const (
+	reconnectBackoffBase = 2 * time.Second
+	reconnectBackoffCap  = 5 * time.Minute
+)
+
+var bootDialTimeout = 5 * time.Second
+
+var reconnectSleep = func(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+var reconnectJitter = func(limit time.Duration) time.Duration {
+	if limit <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(limit) + 1))
+}
+
 // Progress reports semantic indexing progress after chunk extraction.
 //
 // ChunksReused counts chunks served a vector from the reuse map (no embedder
@@ -61,20 +91,22 @@ type Progress struct {
 
 // Service owns the embedding provider and Milvus client for semantic search.
 type Service struct {
-	cfg       config.Config
-	embedder  embedding.Provider
-	milvus    *milvusclient.Client
-	available bool
+	cfg             config.Config
+	embedder        embedding.Provider
+	milvus          *milvusclient.Client
+	available       atomic.Bool
+	reconnectCancel context.CancelFunc
+	reconnectDone   chan struct{}
+	closeOnce       sync.Once
 }
 
 // NewService constructs the semantic search runtime.
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
 		return &Service{
-			cfg:       cfg,
-			embedder:  nil,
-			milvus:    nil,
-			available: false,
+			cfg:      cfg,
+			embedder: nil,
+			milvus:   nil,
 		}, nil
 	}
 
@@ -84,39 +116,122 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
 
-	clientConfig := &milvusclient.ClientConfig{
-		Address: cfg.MilvusAddress,
-		APIKey:  cfg.MilvusToken,
-	}
-	client, err := milvusclient.New(ctx, clientConfig)
-	if err != nil {
-		slog.ErrorContext(ctx, "connect to Milvus failed", "address", cfg.MilvusAddress, "err", err)
-		return nil, fmt.Errorf("connect to Milvus at %s: %w", cfg.MilvusAddress, err)
+	service := &Service{
+		cfg:      cfg,
+		embedder: embedder,
+		milvus:   nil,
 	}
 
-	return &Service{
-		cfg:       cfg,
-		embedder:  embedder,
-		milvus:    client,
-		available: true,
-	}, nil
+	client, err := service.dialMilvus(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "connect to Milvus failed; starting degraded semantic service", "address", cfg.MilvusAddress, "err", err)
+		service.startReconnector(context.WithoutCancel(ctx))
+		return service, nil
+	}
+
+	service.publishClient(client)
+	return service, nil
 }
 
 // Close shuts down external resources held by the semantic service.
 func (service *Service) Close(ctx context.Context) error {
-	if service == nil || service.milvus == nil {
+	if service == nil {
 		return nil
 	}
-	if err := service.milvus.Close(ctx); err != nil {
-		slog.ErrorContext(ctx, "close Milvus client failed", "err", err)
-		return fmt.Errorf("close Milvus client: %w", err)
+
+	var closeErr error
+	service.closeOnce.Do(func() {
+		if service.reconnectCancel != nil {
+			service.reconnectCancel()
+		}
+		if service.reconnectDone != nil {
+			select {
+			case <-service.reconnectDone:
+			case <-ctx.Done():
+				closeErr = fmt.Errorf("wait for Milvus reconnect shutdown: %w", ctx.Err())
+				return
+			}
+		}
+		if !service.Available() || service.milvus == nil {
+			return
+		}
+		if err := service.milvus.Close(ctx); err != nil {
+			slog.ErrorContext(ctx, "close Milvus client failed", "err", err)
+			closeErr = fmt.Errorf("close Milvus client: %w", err)
+			return
+		}
+		service.available.Store(false)
+	})
+	return closeErr
+}
+
+func (service *Service) dialMilvus(ctx context.Context) (*milvusclient.Client, error) {
+	dialContext, cancel := context.WithTimeout(ctx, bootDialTimeout)
+	defer cancel()
+
+	clientConfig := &milvusclient.ClientConfig{
+		Address: service.cfg.MilvusAddress,
+		APIKey:  service.cfg.MilvusToken,
 	}
-	return nil
+	client, err := milvusclient.New(dialContext, clientConfig)
+	if err != nil {
+		return nil, fmt.Errorf("connect to Milvus at %s: %w", service.cfg.MilvusAddress, err)
+	}
+	return client, nil
+}
+
+func (service *Service) startReconnector(ctx context.Context) {
+	reconnectContext, cancel := context.WithCancel(ctx)
+	service.reconnectCancel = cancel
+	service.reconnectDone = make(chan struct{})
+
+	go service.reconnectLoop(reconnectContext)
+}
+
+func (service *Service) reconnectLoop(ctx context.Context) {
+	defer close(service.reconnectDone)
+
+	backoffLimit := reconnectBackoffBase
+	for attempt := 1; ; attempt++ {
+		client, err := service.dialMilvus(ctx)
+		if err == nil {
+			service.publishClient(client)
+			slog.InfoContext(ctx, "Milvus reconnect succeeded", "address", service.cfg.MilvusAddress, "attempt", attempt)
+			return
+		}
+		if attempt == 1 || attempt%10 == 0 {
+			slog.WarnContext(ctx, "Milvus reconnect failed", "address", service.cfg.MilvusAddress, "attempt", attempt, "err", err)
+		}
+
+		sleepDuration := reconnectJitter(backoffLimit)
+		if !reconnectSleep(ctx, sleepDuration) {
+			return
+		}
+		backoffLimit = nextReconnectBackoff(backoffLimit)
+	}
+}
+
+func (service *Service) publishClient(client *milvusclient.Client) {
+	service.milvus = client
+	service.available.Store(true)
+}
+
+func nextReconnectBackoff(current time.Duration) time.Duration {
+	next := current * 2
+	if next > reconnectBackoffCap {
+		return reconnectBackoffCap
+	}
+	return next
 }
 
 // Available reports whether semantic indexing is configured.
 func (service *Service) Available() bool {
-	return service != nil && service.available
+	return service != nil && service.available.Load()
+}
+
+// Degraded reports that Milvus is configured but not yet connected.
+func (service *Service) Degraded() bool {
+	return service != nil && strings.TrimSpace(service.cfg.MilvusAddress) != "" && !service.Available()
 }
 
 // conversationPathPrefix marks a virtual conversation collection's canonical
