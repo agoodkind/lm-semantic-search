@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,123 @@ import (
 	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
+
+// treeLines keeps only the file-and-chunk tree lines (the breakdown block) from
+// a rendered status or job output, raw and in order, so two surfaces can be
+// compared byte-for-byte. A divergence in wording or indentation fails.
+func treeLines(out string) []string {
+	kept := []string{}
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "📄") || strings.HasPrefix(trimmed, "🧩") ||
+			strings.HasPrefix(trimmed, "├─") || strings.HasPrefix(trimmed, "└─") {
+			kept = append(kept, line)
+		}
+	}
+	return kept
+}
+
+// TestStatusTreeIdenticalAcrossSurfaces is the structural guard against
+// diverging status output: the compact job surface and the codebase status
+// surface must carry the same resolved tree and render it byte-identically, so
+// a status can never read one way under `job get` and another under
+// `get_indexing_status`.
+func TestStatusTreeIdenticalAcrossSurfaces(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath:     "/Users/agoodkind/Sites/swift-makefile",
+		LastSuccessfulRun: &model.IndexRunSummary{TotalChunks: 57240},
+	}
+	job := model.Job{
+		ID:            "job_ident",
+		CanonicalPath: codebase.CanonicalPath,
+		State:         model.JobStateRunning,
+		Operation:     "streaming_reindex",
+		Progress: model.Progress{
+			RunMode:        model.RunModeChanged,
+			OverallPercent: 37, FilesTotal: 452, FilesProcessed: 290,
+			FilesInCodebase: 4292, FilesAdded: 29, FilesModified: 423, FilesRemoved: 10,
+			FilesEmbedded: 285, FilesSkippedOversize: 3, FilesSkippedUnreadable: 2,
+			ChunksGenerated: 1043, ChunksTotal: 57240, LastEventAt: renderTestTime,
+		},
+	}
+	compact := resolveProgressSurface(job).Breakdown
+	status, _ := resolveStatusView(*codebase, &job, displayIndexing, "")
+	if !reflect.DeepEqual(compact, status.Breakdown) {
+		t.Fatalf("breakdown differs between surfaces:\ncompact=%+v\nstatus =%+v", compact, status.Breakdown)
+	}
+	jobTree := treeLines(render.GetJob(resolveJobEntry(job, false, ""), true))
+	statusTree := treeLines(renderActiveStatusForTest(codebase, &job))
+	if !reflect.DeepEqual(jobTree, statusTree) {
+		t.Fatalf("rendered tree differs between surfaces:\njob:\n%s\nstatus:\n%s",
+			strings.Join(jobTree, "\n"), strings.Join(statusTree, "\n"))
+	}
+	if len(jobTree) == 0 {
+		t.Fatal("no tree lines extracted; the guard would pass vacuously")
+	}
+}
+
+// TestStatusTreeMatchesSessionCases locks the two real cases from the design
+// session to their exact trees: a code delta and a conversation ingest. The
+// file rows sum to the processed count in both.
+func TestStatusTreeMatchesSessionCases(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		job  model.Job
+		want []string
+	}{
+		{
+			name: "code delta 1 of 2",
+			job: model.Job{
+				State: model.JobStateRunning, Operation: "streaming_reindex",
+				Progress: model.Progress{
+					RunMode: model.RunModeChanged, Unit: "file",
+					FilesTotal: 2, FilesProcessed: 1, FilesAdded: 2, FilesEmbedded: 1,
+					ChunksGenerated: 778, ChunksTotal: 778, LastEventAt: renderTestTime,
+				},
+			},
+			want: []string{
+				"📄 1 of 2 changed files processed",
+				"└─ ➕ 1 embedded",
+				"🧩 778 chunks total",
+				"├─ ➕ 778 added",
+				"└─ ♻️ 0 reused",
+			},
+		},
+		{
+			name: "conversation ingest 70 of 72",
+			job: model.Job{
+				State: model.JobStateRunning, Operation: "conversation_ingest",
+				Progress: model.Progress{
+					RunMode: model.RunModeChanged, Unit: "document", ScopeUnit: "conversation",
+					FilesTotal: 72, FilesProcessed: 70, FilesAdded: 63, FilesModified: 9,
+					FilesEmbedded: 9, FilesSkippedUnreadable: 61,
+					ChunksGenerated: 1204, ChunksReused: 2312, ChunksTotal: 3516, LastEventAt: renderTestTime,
+				},
+			},
+			want: []string{
+				"📄 70 of 72 changed documents processed",
+				"├─ ➕ 9 embedded",
+				"└─ ⏳ 61 pending, not sent yet",
+				"🧩 3,516 chunks total",
+				"├─ ➕ 1,204 added",
+				"└─ ♻️ 2,312 reused",
+			},
+		},
+	}
+	for _, testCase := range cases {
+		breakdown := resolveProgressSurface(testCase.job).Breakdown
+		if sum := sumRowCounts(breakdown.FileRows); sum != breakdown.Processed {
+			t.Fatalf("%s: file rows sum to %d, want processed %d", testCase.name, sum, breakdown.Processed)
+		}
+		got := treeLines(render.GetJob(resolveJobEntry(testCase.job, false, ""), true))
+		want := testCase.want
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s tree =\n%s\nwant\n%s", testCase.name, strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
+	}
+}
 
 var renderTestTime = time.Unix(1700000000, 0)
 
