@@ -53,10 +53,29 @@ const (
 )
 
 // OutcomeRow is one child line in an outcome tree: a semantic kind and a count.
-// The render layer derives the glyph and label from the kind.
+// The render layer derives the glyph and label from the kind. Its fields are
+// unexported so a row cannot be hand-assembled as a literal outside this
+// package; NewOutcomeRow is the only constructor, which keeps the breakdown
+// vocabulary funnelled through ResolveBreakdown and pbconv.
 type OutcomeRow struct {
-	Kind  OutcomeKind
-	Count int32
+	kind  OutcomeKind
+	count int32
+}
+
+// NewOutcomeRow builds one outcome row. It is the only way to construct a row
+// outside this package (the proto rebuild in pbconv uses it).
+func NewOutcomeRow(kind OutcomeKind, count int32) OutcomeRow {
+	return OutcomeRow{kind: kind, count: count}
+}
+
+// Kind returns the row's semantic kind.
+func (row OutcomeRow) Kind() OutcomeKind {
+	return row.kind
+}
+
+// Count returns the row's count.
+func (row OutcomeRow) Count() int32 {
+	return row.count
 }
 
 // OutcomeBreakdown is the resolved file-and-chunk outcome tree shared by every
@@ -151,21 +170,21 @@ func breakdownFileRows(hasScope bool, embedded, unchanged, removed, pending, ove
 	if !hasScope {
 		return nil
 	}
-	rows := []OutcomeRow{{Kind: KindEmbedded, Count: embedded}}
+	rows := []OutcomeRow{NewOutcomeRow(KindEmbedded, embedded)}
 	if unchanged > 0 {
-		rows = append(rows, OutcomeRow{Kind: KindUnchanged, Count: unchanged})
+		rows = append(rows, NewOutcomeRow(KindUnchanged, unchanged))
 	}
 	if removed > 0 {
-		rows = append(rows, OutcomeRow{Kind: KindRemoved, Count: removed})
+		rows = append(rows, NewOutcomeRow(KindRemoved, removed))
 	}
 	if pending > 0 {
-		rows = append(rows, OutcomeRow{Kind: KindPending, Count: pending})
+		rows = append(rows, NewOutcomeRow(KindPending, pending))
 	}
 	if oversize > 0 {
-		rows = append(rows, OutcomeRow{Kind: KindOversize, Count: oversize})
+		rows = append(rows, NewOutcomeRow(KindOversize, oversize))
 	}
 	if unreadable > 0 {
-		rows = append(rows, OutcomeRow{Kind: KindUnreadable, Count: unreadable})
+		rows = append(rows, NewOutcomeRow(KindUnreadable, unreadable))
 	}
 	return rows
 }
@@ -176,11 +195,25 @@ func breakdownChunkRows(hasChunks bool, runMode string, added, reused int32) []O
 	if !hasChunks {
 		return nil
 	}
-	rows := []OutcomeRow{{Kind: KindAdded, Count: added}}
+	rows := []OutcomeRow{NewOutcomeRow(KindAdded, added)}
 	if reuseCapableRunMode(runMode) {
-		rows = append(rows, OutcomeRow{Kind: KindReused, Count: reused})
+		rows = append(rows, NewOutcomeRow(KindReused, reused))
 	}
 	return rows
+}
+
+// ZeroBreakdown returns an empty breakdown. It is the one blank constructor, so
+// no caller hand-writes an OutcomeBreakdown literal for the empty case and the
+// construction-site guard can lock every literal to this package and pbconv.
+func ZeroBreakdown() OutcomeBreakdown {
+	return OutcomeBreakdown{
+		ScopeLabel:  "",
+		Processed:   0,
+		ScopeTotal:  0,
+		FileRows:    nil,
+		ChunksTotal: 0,
+		ChunkRows:   nil,
+	}
 }
 
 // reuseCapableRunMode reports whether a pass can serve chunks from already
