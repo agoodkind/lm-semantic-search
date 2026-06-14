@@ -31,6 +31,8 @@ func (embedder *countingEmbedder) EmbedBatch(_ context.Context, texts []string) 
 
 func (embedder *countingEmbedder) ProviderName() string { return "counting" }
 
+func (embedder *countingEmbedder) Health(_ context.Context) error { return nil }
+
 func TestEmbedChunkBatchReusesByContentAndEmbedsOnlyMisses(t *testing.T) {
 	embedder := &countingEmbedder{}
 	service := &Service{embedder: embedder}

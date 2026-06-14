@@ -83,6 +83,8 @@ type Manager struct {
 	// pipeline and the vector store). It is global, not per-codebase, observed
 	// from job outcomes, and drives the status banner. Guarded by mu.
 	health dependencyHealth
+	// lastDepProbeAt debounces refreshDependencyHealth's backend probe. Guarded by mu.
+	lastDepProbeAt time.Time
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -118,6 +120,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		indexSlots:       make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
 		syncLock:         newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
 		health:           dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
+		lastDepProbeAt:   time.Time{},
 	}
 	semanticService, err := semantic.NewService(ctx, cfg)
 	if err != nil {

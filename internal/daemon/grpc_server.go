@@ -426,12 +426,20 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	if !found {
 		indexedDescendants = server.manager.IndexedDescendants(requestedPath)
 	}
+	// An indexed path is only searchable now if the backend also answers, so
+	// actively probe (debounced) before reading health. Non-indexed paths are
+	// never searchable and skip the probe so its cost lands only where it matters.
+	searchableEligible := classification != nil && classification.Kind == model.PathClassificationInScopeIndexed
+	if searchableEligible {
+		server.manager.refreshDependencyHealth(ctx)
+	}
 	health := server.manager.DependencyHealth()
 	getIndexView := server.manager.resolveGetIndexView(requestedPath, found, codebasePointer(found, codebase), activeJob, health, classification, indexedDescendants)
 	response := &pb.GetIndexResponse{
 		Tracked:          found,
 		Classification:   pbconv.ToPathClassification(classification),
 		DependencyHealth: toDependencyHealth(health),
+		Searchable:       searchableEligible && !health.Degraded(),
 		DisplayText:      server.envelopeText(ctx, health, render.GetIndex(getIndexView), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
 	if found {
