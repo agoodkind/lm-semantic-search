@@ -101,6 +101,9 @@ func renderJobUpdate(job *pb.Job) (bool, error) {
 	fmt.Fprintf(os.Stderr, "\r\033[K%s %.1f%% (%d/%d %ss)",
 		progress.GetPhase(), progress.GetOverallPercent(),
 		progress.GetFilesProcessed(), progress.GetFilesTotal(), unit)
+	if reused := progress.GetChunksReused(); reused > 0 {
+		fmt.Fprintf(os.Stderr, " · %d reused", reused)
+	}
 
 	switch jobOutcome(job.GetOutcome()) {
 	case outcomeSucceeded:
