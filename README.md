@@ -1,8 +1,8 @@
 # lm-semantic-search
 
-`lm-semantic-search` provides a local semantic search daemon, operator CLI, and MCP stdio adapter for codebases. VS Code and Chrome extension clients are out of scope here.
+`lm-semantic-search` is a fork and Go rewrite of `zilliztech/claude-context`. It keeps backward compatibility with the Milvus data store used by Claude Context while adding local improvements and features on top.
 
-This project is independent of `zilliztech/claude-context` and is not affiliated with or endorsed by Zilliz. It is provided under the MIT License; see [LICENSE](LICENSE).
+It is provided under the MIT License; see [LICENSE](LICENSE).
 
 ## Where Current Truth Lives
 
