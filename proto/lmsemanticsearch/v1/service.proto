@@ -145,6 +145,11 @@ message Codebase {
   // map. status_label is the human word per display status.
   string glyph_token = 15;
   string status_label = 16;
+  // reuse_sibling_count is the number of indexed sibling worktree collections a
+  // discovered (not-yet-built) worktree will reuse on its deferred build. It is
+  // zero for every other state and lets a list row show that a pending build is
+  // cheap.
+  int32 reuse_sibling_count = 17;
 }
 
 message Job {
