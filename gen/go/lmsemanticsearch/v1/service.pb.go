@@ -851,10 +851,15 @@ type Codebase struct {
 	// glyph_token is the daemon-owned shape per display status (for example ⋯ for
 	// waiting), so list rows render one vocabulary instead of each client owning a
 	// map. status_label is the human word per display status.
-	GlyphToken    string `protobuf:"bytes,15,opt,name=glyph_token,json=glyphToken,proto3" json:"glyph_token,omitempty"`
-	StatusLabel   string `protobuf:"bytes,16,opt,name=status_label,json=statusLabel,proto3" json:"status_label,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	GlyphToken  string `protobuf:"bytes,15,opt,name=glyph_token,json=glyphToken,proto3" json:"glyph_token,omitempty"`
+	StatusLabel string `protobuf:"bytes,16,opt,name=status_label,json=statusLabel,proto3" json:"status_label,omitempty"`
+	// reuse_sibling_count is the number of indexed sibling worktree collections a
+	// discovered (not-yet-built) worktree will reuse on its deferred build. It is
+	// zero for every other state and lets a list row show that a pending build is
+	// cheap.
+	ReuseSiblingCount int32 `protobuf:"varint,17,opt,name=reuse_sibling_count,json=reuseSiblingCount,proto3" json:"reuse_sibling_count,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Codebase) Reset() {
@@ -990,6 +995,13 @@ func (x *Codebase) GetStatusLabel() string {
 		return x.StatusLabel
 	}
 	return ""
+}
+
+func (x *Codebase) GetReuseSiblingCount() int32 {
+	if x != nil {
+		return x.ReuseSiblingCount
+	}
+	return 0
 }
 
 type Job struct {
@@ -3974,7 +3986,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0fIndexRunFailure\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12:\n" +
 	"\x19last_attempted_percentage\x18\x02 \x01(\x05R\x17lastAttemptedPercentage\x127\n" +
-	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\xee\x05\n" +
+	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\x9e\x06\n" +
 	"\bCodebase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0ecanonical_path\x18\x02 \x01(\tR\rcanonicalPath\x12\x16\n" +
@@ -3993,7 +4005,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0edisplay_status\x18\x0e \x01(\tR\rdisplayStatus\x12\x1f\n" +
 	"\vglyph_token\x18\x0f \x01(\tR\n" +
 	"glyphToken\x12!\n" +
-	"\fstatus_label\x18\x10 \x01(\tR\vstatusLabelJ\x04\b\x03\x10\x04R\aaliases\"\xb7\x06\n" +
+	"\fstatus_label\x18\x10 \x01(\tR\vstatusLabel\x12.\n" +
+	"\x13reuse_sibling_count\x18\x11 \x01(\x05R\x11reuseSiblingCountJ\x04\b\x03\x10\x04R\aaliases\"\xb7\x06\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +

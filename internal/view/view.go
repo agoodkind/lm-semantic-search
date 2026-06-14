@@ -123,11 +123,17 @@ type StatusView struct {
 	ChunksReused           int32
 	ChunksEmbeddedThisRun  int32
 	ChunksTotal            int32
-	Files                  int32
-	Chunks                 int32
-	SkippedLine            string
-	SyncNote               string
-	HasStats               bool
+	// ReuseForecastLine is the pre-rendered reuse forecast for a discovered
+	// (not-yet-built) worktree, for example "reuses embeddings from 1 indexed
+	// sibling worktree". Empty for every other state. It is built from git
+	// topology and the registry with no vector-store call, so the status read that
+	// produces it stays cheap.
+	ReuseForecastLine string
+	Files             int32
+	Chunks            int32
+	SkippedLine       string
+	SyncNote          string
+	HasStats          bool
 }
 
 // BannerView is the dependency health banner.
@@ -250,4 +256,8 @@ type CodebaseRowView struct {
 	ID            string
 	CanonicalPath string
 	Display       Display
+	// ReuseSiblingCount surfaces a discovered worktree's reuse forecast in the
+	// list, so a deferred build reads as cheap rather than a blank pending row. It
+	// is zero for codebases that are not discovered worktrees.
+	ReuseSiblingCount int32
 }

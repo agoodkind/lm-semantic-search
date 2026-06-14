@@ -189,6 +189,10 @@ func (manager *Manager) classifyCodebaseRepair(
 	switch codebase.Status {
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed,
 		model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed, model.CodebaseStatusMissing:
+	case model.CodebaseStatusDiscovered:
+		// A discovered worktree has no collection yet by design; its build is
+		// deferred, so the repair pass leaves it alone.
+		return repairOutcome{persist: false, cleanup: false, plan: nil}
 	default:
 		return repairOutcome{persist: false, cleanup: false, plan: nil}
 	}
