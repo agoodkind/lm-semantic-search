@@ -31,6 +31,19 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		return SearchOutcome{}, adapterr.NewNotIndexed(requestedPath, nil)
 	}
 
+	// A worktree the daemon just discovered on this read has no collection yet,
+	// so there is nothing to search and serving the parent's collection would
+	// return wrong-branch content. Return the discovered note with no results; the
+	// deferred build (already scheduled by GetIndex) makes it searchable shortly.
+	if codebase.Status == model.CodebaseStatusDiscovered {
+		return SearchOutcome{
+			Codebase:  codebase,
+			ActiveJob: activeJob,
+			Results:   []model.StoredChunk{},
+			StateNote: discoveredSearchNote(manager.worktreeReuseForecast(codebase)),
+		}, nil
+	}
+
 	// When the query targets a nested directory of a larger covering index, scope
 	// the search to that subtree so results come only from the requested path,
 	// not the whole parent index.
@@ -87,6 +100,17 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		return SearchOutcome{}, fmt.Errorf("read chunk cache for %s: %w", codebase.ID, err)
 	}
 	return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: rankChunks(chunks, query, limit, normalizedExtensions, relativePathPrefix), StateNote: ""}, nil
+}
+
+// discoveredSearchNote is the read-only note a search returns for a worktree the
+// daemon just discovered and has not built yet. It names the reuse the deferred
+// build will get so the cheapness is visible, and tells the caller to retry.
+func discoveredSearchNote(siblingCount int32) string {
+	note := "🔎 This worktree was just discovered and is not indexed yet; its build is starting now"
+	if siblingCount > 0 {
+		note += fmt.Sprintf(" (reuses embeddings from %d indexed sibling %s)", siblingCount, plural("worktree", int(siblingCount)))
+	}
+	return note + ". Search again shortly."
 }
 
 // chunkUnderPrefix reports whether a chunk's relative path equals scopePrefix

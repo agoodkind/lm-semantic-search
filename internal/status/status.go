@@ -20,6 +20,11 @@ const (
 	DisplayStale     Display = "stale"
 	DisplayFailed    Display = "failed"
 	DisplayMissing   Display = "missing"
+	// DisplayDiscovered is a worktree registered by a read but not yet built. It
+	// has no active job and is not searchable yet; the deferred build will move it
+	// to indexing. It reads distinctly from indexing (which implies live work) and
+	// from not_indexed (which the SOT never emits).
+	DisplayDiscovered Display = "discovered"
 )
 
 // DependencyMode names a degraded shared-dependency condition. The empty mode is
@@ -109,6 +114,7 @@ var displayRules = []displayRule{
 	{func(in Inputs) bool { return in.HasActiveJob && in.BackgroundSyncReconcile }, DisplayIndexed},
 	{func(in Inputs) bool { return in.HasActiveJob && in.JobScopeKnown }, DisplayIndexing},
 	{func(in Inputs) bool { return in.HasActiveJob }, DisplayPreparing},
+	{func(in Inputs) bool { return in.Status == model.CodebaseStatusDiscovered }, DisplayDiscovered},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusIndexed }, DisplayIndexed},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusStale }, DisplayStale},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusFailed }, DisplayFailed},

@@ -19,13 +19,14 @@ import (
 type displayStatus = status.Display
 
 const (
-	displayPreparing = status.DisplayPreparing
-	displayIndexing  = status.DisplayIndexing
-	displayIndexed   = status.DisplayIndexed
-	displayWaiting   = status.DisplayWaiting
-	displayStale     = status.DisplayStale
-	displayFailed    = status.DisplayFailed
-	displayMissing   = status.DisplayMissing
+	displayPreparing  = status.DisplayPreparing
+	displayIndexing   = status.DisplayIndexing
+	displayIndexed    = status.DisplayIndexed
+	displayWaiting    = status.DisplayWaiting
+	displayStale      = status.DisplayStale
+	displayFailed     = status.DisplayFailed
+	displayMissing    = status.DisplayMissing
+	displayDiscovered = status.DisplayDiscovered
 )
 
 // computeDisplayStatus resolves the display status through the status package,
@@ -119,6 +120,11 @@ func emptyFailureSurface() view.FailureSurface {
 func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display displayStatus, waitLabel string) (view.StatusView, string) {
 	statusView := blankStatusView(filepath.Base(codebase.CanonicalPath), formatBoundaryStatusTime(codebase.UpdatedAt))
 	switch display {
+	case displayDiscovered:
+		// A discovered worktree is registered and watched but not yet built. The
+		// reuse forecast is attached by resolveGetIndexView, which holds the manager
+		// needed to compute it cheaply.
+		return statusView, "discovered.md.tmpl"
 	case displayWaiting:
 		statusView.WaitLabel = waitLabel
 		return statusView, "waiting.md.tmpl"
@@ -147,27 +153,25 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 		}
 		changed := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
 		statusView.Percent = int32(progress.OverallPercent + 0.5)
-		statusView.FilesProcessed = progress.FilesProcessed
-		statusView.FilesTotal = progress.FilesTotal
 		statusView.FilesInCodebase = progress.FilesInCodebase
 		statusView.FilesChanged = changed
 		statusView.FilesUnchanged = max(progress.FilesInCodebase-changed, 0)
-		statusView.FilesReEmbedded = progress.FilesEmbedded
-		statusView.FilesRemoved = progress.FilesRemoved
-		statusView.FilesSkippedOversize = progress.FilesSkippedOversize
-		statusView.FilesSkippedUnreadable = progress.FilesSkippedUnreadable
-		statusView.FilesProcessedChanged = progress.FilesEmbedded + progress.FilesRemoved + progress.FilesSkippedOversize + progress.FilesSkippedUnreadable
 		statusView.Heading = headingFor(codebase, activeJob)
-		statusView.ChunksAdded = progress.ChunksGenerated
-		statusView.ChunksReused = progress.ChunksReused
-		statusView.ChunksEmbeddedThisRun = progress.ChunksGenerated
-		statusView.ChunksTotal = max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated)
-		if statusView.ChunksTotal == 0 {
-			statusView.ChunksTotal = codebase.LiveChunkTotal
+		// The collection still holds the prior run's chunks until this run
+		// replaces them, so when the live count has not arrived yet the chunk
+		// tree shows the standing total rather than a momentary zero. The floor
+		// is folded into the progress the shared resolver reads, so the status
+		// tree stays byte-identical to the compact job tree once live chunks
+		// arrive.
+		chunkProgress := progress
+		chunkProgress.ChunksTotal = max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated)
+		if chunkProgress.ChunksTotal == 0 {
+			chunkProgress.ChunksTotal = codebase.LiveChunkTotal
 		}
-		if statusView.ChunksTotal == 0 && codebase.LastSuccessfulRun != nil {
-			statusView.ChunksTotal = codebase.LastSuccessfulRun.TotalChunks
+		if chunkProgress.ChunksTotal == 0 && codebase.LastSuccessfulRun != nil {
+			chunkProgress.ChunksTotal = codebase.LastSuccessfulRun.TotalChunks
 		}
+		statusView.Breakdown = resolveOutcomeBreakdown(chunkProgress)
 		embedding = progress.FilesTotal > 0 || progress.FilesInCodebase > 0
 	}
 	if !embedding {
@@ -183,31 +187,22 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 // timestamp set, so each caller fills the subset its template reads.
 func blankStatusView(name string, updatedAt string) view.StatusView {
 	return view.StatusView{
-		Name:                   name,
-		HasStats:               false,
-		Files:                  0,
-		Chunks:                 0,
-		SkippedLine:            "",
-		PrepareLabel:           "",
-		WaitLabel:              "",
-		Percent:                0,
-		Heading:                "",
-		FilesProcessed:         0,
-		FilesTotal:             0,
-		ChunksReused:           0,
-		ChunksEmbeddedThisRun:  0,
-		FilesInCodebase:        0,
-		FilesChanged:           0,
-		FilesUnchanged:         0,
-		FilesProcessedChanged:  0,
-		FilesReEmbedded:        0,
-		FilesRemoved:           0,
-		FilesSkippedOversize:   0,
-		FilesSkippedUnreadable: 0,
-		ChunksAdded:            0,
-		ChunksTotal:            0,
-		UpdatedAt:              updatedAt,
-		SyncNote:               "",
+		Name:              name,
+		HasStats:          false,
+		Files:             0,
+		Chunks:            0,
+		SkippedLine:       "",
+		PrepareLabel:      "",
+		WaitLabel:         "",
+		Percent:           0,
+		Heading:           "",
+		FilesInCodebase:   0,
+		FilesChanged:      0,
+		FilesUnchanged:    0,
+		Breakdown:         view.ZeroBreakdown(),
+		ReuseForecastLine: "",
+		UpdatedAt:         updatedAt,
+		SyncNote:          "",
 	}
 }
 
@@ -347,9 +342,22 @@ func (manager *Manager) resolveGetIndexView(
 	getIndex.Display = view.Display(display)
 	getIndex.Failure = resolveCodebaseFailure(*codebase)
 	statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
+	if display == displayDiscovered {
+		statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
+	}
 	getIndex.Status = statusView
 	getIndex.TemplateName = templateName
 	return getIndex
+}
+
+// reuseForecastLine renders the discovered-worktree reuse forecast, or empty
+// when the worktree has no eligible sibling to reuse from. The count is a sibling
+// collection count, computed without a vector-store call.
+func reuseForecastLine(siblingCount int32) string {
+	if siblingCount <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("♻️ reuses embeddings from %d indexed sibling %s", siblingCount, plural("worktree", int(siblingCount)))
 }
 
 // descendantsHint replaces the bare not-indexed message for a path that already

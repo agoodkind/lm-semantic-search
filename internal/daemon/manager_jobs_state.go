@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"goodkind.io/gklog/correlation"
@@ -61,6 +62,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	job.Progress.FilesEmbedded = progress.FilesEmbedded
 	job.Progress.FilesSkippedOversize = progress.FilesSkippedOversize
 	job.Progress.FilesSkippedUnreadable = progress.FilesSkippedUnreadable
+	job.Progress.FilesPending = progress.FilesPending
 	job.Progress.ChunksReused = progress.ChunksReused
 	job.Progress.ChunksGenerated = progress.ChunksGenerated
 	job.Progress.LastEventAt = now
@@ -329,5 +331,19 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
 		slog.ErrorContext(ctx, "write registry after cancelled job failed", "job_id", jobID, "err", err)
+	}
+}
+
+func waitForJobDone(ctx context.Context, jobDone chan struct{}) error {
+	if jobDone == nil {
+		return nil
+	}
+
+	select {
+	case <-jobDone:
+		return nil
+	case <-ctx.Done():
+		slog.ErrorContext(ctx, "wait for active job cancellation failed", "err", ctx.Err())
+		return fmt.Errorf("wait for active job cancellation: %w", ctx.Err())
 	}
 }

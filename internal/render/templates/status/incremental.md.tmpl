@@ -1,11 +1,5 @@
 📁 {{ .Name }}
 🔄 Indexing new changes: {{ .Percent }}%
 🔢 {{ .FilesInCodebase }} files: {{ .FilesChanged }} changed, {{ .FilesUnchanged }} unchanged
-📄 {{ .FilesProcessedChanged }} of {{ .FilesChanged }} changed files processed
-├─ ♻️ {{ .FilesReEmbedded }} re-embedded
-├─ 🗑️ {{ .FilesRemoved }} removed
-├─ 📏 {{ .FilesSkippedOversize }} skipped, oversize
-└─ 🚫 {{ .FilesSkippedUnreadable }} skipped, unreadable
-🧩 {{ .ChunksTotal }} chunks total
-└─ ➕ {{ .ChunksAdded }} chunks added this scan
+{{ .BreakdownBlock }}
 🕐 Updated {{ .UpdatedAt }}

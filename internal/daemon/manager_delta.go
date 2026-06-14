@@ -69,6 +69,11 @@ type deltaState struct {
 	// embedded. It is a pointer because deltaState is copied by value through the
 	// per-file loop, and the totals must survive each copy.
 	chunkCounts *chunkCounters
+	// seededReuse is the size of the reuse-vector pool loaded at bootstrap seed
+	// time. The building view shows it immediately as the reuse total, so the
+	// displayed reuse does not climb file-by-file from zero; the per-file accrual
+	// can only rise to meet it as matching chunks are served from the pool.
+	seededReuse int32
 }
 
 // chunkCounters accumulates the reuse-vs-embed split across one run's per-file
@@ -159,6 +164,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 			SkippedFiles:      nil,
 			SkippedOversize:   0,
 			SkippedUnreadable: 0,
+			SkippedPending:    0,
 		})
 		return deltaPlan{
 			diff:            diff,
@@ -224,6 +230,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		staging:      false,
 		reuse:        nil,
 		chunkCounts:  &chunkCounters{reused: 0, embedded: 0},
+		seededReuse:  0,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -320,6 +327,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		staging:      true,
 		reuse:        nil,
 		chunkCounts:  &chunkCounters{reused: 0, embedded: 0},
+		seededReuse:  0,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -337,6 +345,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 			slog.WarnContext(ctx, "load reuse vectors failed; embedding shared subtree", "job_id", job.ID, "err", reuseErr)
 		} else {
 			state.reuse = reuse
+			state.seededReuse = safeInt32(len(reuse))
 			slog.InfoContext(ctx, "build.reuse_seeded", "job_id", job.ID, "reuse_collections", len(reuseCollections), "reuse_vectors", len(reuse))
 		}
 	}
@@ -497,6 +506,7 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		SkippedFiles:      []string{},
 		SkippedOversize:   0,
 		SkippedUnreadable: 0,
+		SkippedPending:    0,
 	}
 	for index, relativePath := range changed {
 		if err := ctx.Err(); err != nil {
@@ -547,10 +557,16 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		return deltaOutcome{fallback: false, handled: false, progressed: true}
 	}
 	if fileResult.Skipped {
-		result.SkippedFiles = append(result.SkippedFiles, relativePath)
-		if fileResult.SkipReason == indexer.SkipOversize {
+		switch fileResult.SkipReason {
+		case indexer.SkipOversize:
+			result.SkippedFiles = append(result.SkippedFiles, relativePath)
 			result.SkippedOversize++
-		} else {
+		case indexer.SkipPending:
+			// Transient, not a permanent skip, so it stays out of SkippedFiles (the
+			// ready-view's non-UTF-8 summary) and counts only as pending.
+			result.SkippedPending++
+		case indexer.SkipUnreadable, indexer.SkipNone:
+			result.SkippedFiles = append(result.SkippedFiles, relativePath)
 			result.SkippedUnreadable++
 		}
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
@@ -624,14 +640,16 @@ func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, l
 // shared by every progress update from that loop.
 const phaseReindexingChanged = "Reindexing changed files..."
 
-// chunkSplit returns the run's accumulated reused and embedded chunk counts,
-// or (0, 0) when no accumulator is attached, so callers can pass the split into
-// progress reporting without a nil check.
+// chunkSplit returns the run's reused and embedded chunk counts for progress
+// reporting. The reused figure is the larger of the seeded reuse-vector pool and
+// the per-file accrued count, so the building view shows the full reuse total
+// from the first update rather than a number that climbs from zero. With no
+// accumulator attached it falls back to the seeded total.
 func (state deltaState) chunkSplit() (int32, int32) {
 	if state.chunkCounts == nil {
-		return 0, 0
+		return state.seededReuse, 0
 	}
-	return state.chunkCounts.reused, state.chunkCounts.embedded
+	return max(state.chunkCounts.reused, state.seededReuse), state.chunkCounts.embedded
 }
 
 // reportDeltaProgress publishes one progress update from the per-file embed
@@ -650,6 +668,7 @@ func (manager *Manager) reportDeltaProgress(jobID string, processed int32, total
 		FilesEmbedded:          result.IndexedFiles,
 		FilesSkippedOversize:   result.SkippedOversize,
 		FilesSkippedUnreadable: result.SkippedUnreadable,
+		FilesPending:           result.SkippedPending,
 		ChunksReused:           reused,
 		ChunksGenerated:        embedded,
 	}, unit)

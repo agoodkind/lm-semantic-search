@@ -3,28 +3,38 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"time"
 
+	"goodkind.io/gklog/correlation"
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// worktreeAutoIndexClient labels the index jobs the daemon starts when it
-// auto-creates a worktree index on first use, so the job's origin is legible in
-// status and logs.
-var worktreeAutoIndexClient = model.ClientInfo{Name: "worktree-auto-index", PID: 0}
+// worktreeDeferredBuildClient labels the reuse-seeded index jobs the daemon
+// starts for a worktree it discovered on a read, so the job's origin is legible
+// in status and logs and is distinct from an operator-driven index_codebase.
+var worktreeDeferredBuildClient = model.ClientInfo{Name: "worktree-deferred-build", PID: 0}
 
-// resolveWorktreeIndex implements worktree-bounded resolution. A git worktree is
-// its own codebase: when canonicalPath lives inside a worktree whose root is not
-// yet tracked, and at least one sibling worktree of the same repository is
-// already indexed, the daemon auto-creates the worktree's index and resolves to
-// it instead of letting a covering parent serve another branch's content. The
-// returned bool is false when canonicalPath is not such a worktree, which leaves
-// the caller's normal coverage resolution untouched.
-func (manager *Manager) resolveWorktreeIndex(ctx context.Context, canonicalPath string) (model.Codebase, *model.Job, bool) {
+// defaultDeferredBuildDelay is how long after discovering a worktree on a read
+// the daemon waits before starting its build. It is short enough to be far
+// faster than the periodic sweep, yet keeps the build off the read path so the
+// status or search call that discovered the worktree returns without embedding.
+const defaultDeferredBuildDelay = 3 * time.Second
+
+// resolveWorktreeIndex implements worktree-bounded resolution as a read that
+// discovers but never embeds. When canonicalPath lives inside a worktree whose
+// root is not yet tracked, and at least one sibling worktree of the same
+// repository is already indexed, the daemon registers the worktree as a
+// discovered codebase, starts watching it, and schedules a reuse-seeded build in
+// the background; the read itself launches no embed job. The returned bool is
+// false when canonicalPath is not such a worktree, leaving the caller's normal
+// coverage resolution untouched.
+func (manager *Manager) resolveWorktreeIndex(ctx context.Context, canonicalPath string) (model.Codebase, bool) {
 	var empty model.Codebase
 	info, isWorktree := gitworktree.Resolve(canonicalPath)
 	if !isWorktree {
-		return empty, nil, false
+		return empty, false
 	}
 
 	manager.mu.Lock()
@@ -32,25 +42,110 @@ func (manager *Manager) resolveWorktreeIndex(ctx context.Context, canonicalPath 
 		// The worktree already has its own codebase; longest-prefix coverage
 		// resolves to it without intervention.
 		manager.mu.Unlock()
-		return empty, nil, false
+		return empty, false
 	}
 	hasIndexedSibling := manager.hasIndexedSiblingWorktreeLocked(info.WorktreeRoot, info.CommonDir)
 	manager.mu.Unlock()
 	if !hasIndexedSibling {
-		return empty, nil, false
+		return empty, false
 	}
 
-	job, codebase, _, _, err := manager.StartIndex(ctx, info.WorktreeRoot, worktreeAutoIndexClient, emptyAutoIndexConfig(), false)
-	if err != nil {
-		slog.WarnContext(ctx, "worktree auto-index failed; falling back to normal resolution", "worktree_root", info.WorktreeRoot, "err", err)
-		return empty, nil, false
+	record, ok := manager.discoverWorktree(ctx, info)
+	if !ok {
+		return empty, false
 	}
-	var activeJob *model.Job
-	if job.ID != "" {
-		jobCopy := job
-		activeJob = &jobCopy
+	manager.scheduleDeferredBuild(ctx, record.CanonicalPath)
+	return record, true
+}
+
+// discoverWorktree persists a first-class registry record for a worktree the
+// daemon learned about on a read, in the discovered state, and starts watching
+// it. It mirrors adoptUnregisteredCodebase but creates no job and starts no
+// embed: the reuse-seeded build is deferred to scheduleDeferredBuild. It returns
+// the persisted record and true, or false when the registry write fails so the
+// caller falls back to normal resolution.
+func (manager *Manager) discoverWorktree(ctx context.Context, info gitworktree.Info) (model.Codebase, bool) {
+	indexConfig := manager.enrichIndexConfig(emptyAutoIndexConfig())
+	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
+
+	collectionName := ""
+	if manager.semantic != nil {
+		collectionName = manager.semantic.CollectionName(info.WorktreeRoot)
 	}
-	return codebase, activeJob, true
+
+	manager.mu.Lock()
+	if existing, found := manager.findCodebaseByExactRoot(info.WorktreeRoot); found {
+		manager.mu.Unlock()
+		return existing, true
+	}
+	record := newCodebaseRecord(info.WorktreeRoot)
+	record.Status = model.CodebaseStatusDiscovered
+	record.EffectiveConfig = indexConfig
+	record.CollectionName = collectionName
+	record.WorktreeCommonDir = info.CommonDir
+	record.InodeTrackingDisabled = detectInodeTrackingDisabled(ctx, info.WorktreeRoot)
+	record.MerkleSnapshotPath = manager.merklePath(record.ID)
+	record.UpdatedAt = clock.Now()
+	manager.codebases[record.ID] = record
+	if err := manager.saveLocked(); err != nil {
+		delete(manager.codebases, record.ID)
+		manager.mu.Unlock()
+		slog.ErrorContext(ctx, "discover worktree: persist registry failed", "path", info.WorktreeRoot, "err", err)
+		var empty model.Codebase
+		return empty, false
+	}
+	manager.mu.Unlock()
+
+	notifyCtx := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(notifyCtx, "notify codebase added panic", "codebase_id", record.ID, "err", recovered)
+			}
+		}()
+		manager.notifyCodebaseAdded(notifyCtx, record)
+	}()
+	slog.InfoContext(ctx, "discovered worktree on read; build deferred", "codebase_id", record.ID, "path", info.WorktreeRoot, "common_dir", info.CommonDir)
+	return record, true
+}
+
+// scheduleDeferredBuild starts the reuse-seeded build for a discovered worktree
+// after a short delay, off the read path, in a detached timer. The delay makes
+// the build far faster than the periodic sweep while keeping the read that
+// discovered the worktree free of any embed. The build deduplicates against any
+// job already in flight, so a repeat read or a watcher event cannot double-start.
+func (manager *Manager) scheduleDeferredBuild(ctx context.Context, canonicalPath string) {
+	detached := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
+	delay := manager.deferredBuildDelay
+	if delay <= 0 {
+		delay = defaultDeferredBuildDelay
+	}
+	time.AfterFunc(delay, func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(detached, "deferred worktree build panic", "path", canonicalPath, "err", recovered)
+			}
+		}()
+		manager.startDeferredBuild(detached, canonicalPath)
+	})
+}
+
+// startDeferredBuild starts the reuse-seeded bootstrap for a discovered worktree.
+// It is the body scheduleDeferredBuild fires on its timer, split out so a test
+// can drive it synchronously. StartIndex deduplicates, so calling it for a
+// worktree that already has an in-flight job is a no-op.
+func (manager *Manager) startDeferredBuild(ctx context.Context, canonicalPath string) {
+	if _, _, _, _, err := manager.StartIndex(ctx, canonicalPath, worktreeDeferredBuildClient, emptyAutoIndexConfig(), false); err != nil {
+		slog.WarnContext(ctx, "deferred worktree build failed to start", "path", canonicalPath, "err", err)
+	}
+}
+
+// worktreeReuseForecast reports how many indexed sibling worktree collections a
+// worktree at codebase.CanonicalPath would reuse on its build, for the discovered
+// status and the list. It is cheap: git topology plus an in-memory registry scan,
+// no vector-store call, so a status read that shows the forecast stays cheap.
+func (manager *Manager) worktreeReuseForecast(codebase model.Codebase) int32 {
+	return safeInt32(len(manager.worktreeSiblingReuseCollections(codebase.CanonicalPath, codebase.EffectiveConfig)))
 }
 
 // hasIndexedSiblingWorktreeLocked reports whether any worktree of the same repo

@@ -3,14 +3,200 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/pbconv"
 	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/view"
+	"google.golang.org/protobuf/encoding/protojson"
 )
+
+// treeLines keeps only the file-and-chunk tree lines (the breakdown block) from
+// a rendered status or job output, raw and in order, so two surfaces can be
+// compared byte-for-byte. A divergence in wording or indentation fails.
+func treeLines(out string) []string {
+	kept := []string{}
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "📄") || strings.HasPrefix(trimmed, "🧩") ||
+			strings.HasPrefix(trimmed, "├─") || strings.HasPrefix(trimmed, "└─") {
+			kept = append(kept, line)
+		}
+	}
+	return kept
+}
+
+// TestStatusTreeIdenticalAcrossSurfaces is the structural guard against
+// diverging status output: the compact job surface and the codebase status
+// surface must carry the same resolved tree and render it byte-identically, so
+// a status can never read one way under `job get` and another under
+// `get_indexing_status`.
+func TestStatusTreeIdenticalAcrossSurfaces(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath:     "/Users/agoodkind/Sites/swift-makefile",
+		LastSuccessfulRun: &model.IndexRunSummary{TotalChunks: 57240},
+	}
+	job := model.Job{
+		ID:            "job_ident",
+		CanonicalPath: codebase.CanonicalPath,
+		State:         model.JobStateRunning,
+		Operation:     "streaming_reindex",
+		Progress: model.Progress{
+			RunMode:        model.RunModeChanged,
+			OverallPercent: 37, FilesTotal: 452, FilesProcessed: 290,
+			FilesInCodebase: 4292, FilesAdded: 29, FilesModified: 423, FilesRemoved: 10,
+			FilesEmbedded: 285, FilesSkippedOversize: 3, FilesSkippedUnreadable: 2,
+			ChunksGenerated: 1043, ChunksTotal: 57240, LastEventAt: renderTestTime,
+		},
+	}
+	compact := resolveProgressSurface(job).Breakdown
+	status, _ := resolveStatusView(*codebase, &job, displayIndexing, "")
+	if !reflect.DeepEqual(compact, status.Breakdown) {
+		t.Fatalf("breakdown differs between surfaces:\ncompact=%+v\nstatus =%+v", compact, status.Breakdown)
+	}
+	jobTree := treeLines(render.GetJob(resolveJobEntry(job, false, ""), true))
+	statusTree := treeLines(renderActiveStatusForTest(codebase, &job))
+	if !reflect.DeepEqual(jobTree, statusTree) {
+		t.Fatalf("rendered tree differs between surfaces:\njob:\n%s\nstatus:\n%s",
+			strings.Join(jobTree, "\n"), strings.Join(statusTree, "\n"))
+	}
+	if len(jobTree) == 0 {
+		t.Fatal("no tree lines extracted; the guard would pass vacuously")
+	}
+}
+
+// TestBreakdownIdenticalAcrossAllSurfaces is the single-SOT guard. The daemon
+// text, the proto breakdown rendered back (the TUI path), and the JSON-decoded
+// breakdown rendered back must all equal the one render.BreakdownLines over the
+// one view.ResolveBreakdown. Any surface that re-derives breaks this test.
+func TestBreakdownIdenticalAcrossAllSurfaces(t *testing.T) {
+	t.Parallel()
+	progress := model.Progress{
+		RunMode: model.RunModeChanged, Unit: "document", ScopeUnit: "conversation",
+		FilesTotal: 72, FilesProcessed: 70, FilesAdded: 63, FilesModified: 9,
+		FilesEmbedded: 9, FilesPending: 61,
+		ChunksGenerated: 1204, ChunksReused: 2312, ChunksTotal: 3516,
+		LastEventAt: renderTestTime,
+	}
+
+	// The single source of truth: one resolver, one renderer.
+	want := render.BreakdownLines(view.ResolveBreakdown(pbconv.ProgressCounts(progress)))
+	if len(want) == 0 {
+		t.Fatal("breakdown produced no lines; the guard would pass vacuously")
+	}
+
+	job := model.Job{ID: "j", State: model.JobStateRunning, Operation: "conversation_ingest", Progress: progress}
+
+	// Daemon compact text (job get / job list path).
+	daemonText := treeLines(render.GetJob(resolveJobEntry(job, false, ""), true))
+	if !reflect.DeepEqual(daemonText, want) {
+		t.Fatalf("daemon text differs from SOT:\n%s\nwant\n%s", strings.Join(daemonText, "\n"), strings.Join(want, "\n"))
+	}
+
+	// Proto breakdown rendered back: the path the TUI uses from active_progress.
+	pbJob := pbconv.ToJob(job)
+	protoRender := render.BreakdownLines(pbconv.BreakdownFromProto(pbJob.GetProgress().GetBreakdown()))
+	if !reflect.DeepEqual(protoRender, want) {
+		t.Fatalf("proto-rendered breakdown differs from SOT:\n%s", strings.Join(protoRender, "\n"))
+	}
+
+	// JSON (--json) decoded and rendered back.
+	data, err := protojson.Marshal(pbJob)
+	if err != nil {
+		t.Fatalf("protojson.Marshal returned error: %v", err)
+	}
+	var decoded pb.Job
+	if err := protojson.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("protojson.Unmarshal returned error: %v", err)
+	}
+	jsonRender := render.BreakdownLines(pbconv.BreakdownFromProto(decoded.GetProgress().GetBreakdown()))
+	if !reflect.DeepEqual(jsonRender, want) {
+		t.Fatalf("JSON-decoded breakdown differs from SOT:\n%s", strings.Join(jsonRender, "\n"))
+	}
+
+	// The undelivered conversation is a first-class wire counter, not inferred.
+	if got := decoded.GetProgress().GetBreakdown(); !breakdownHasPending(got) {
+		t.Fatalf("JSON breakdown missing a pending row: %+v", got.GetFileRows())
+	}
+}
+
+// breakdownHasPending reports whether the proto breakdown carries a pending row.
+func breakdownHasPending(breakdown *pb.OutcomeBreakdown) bool {
+	for _, row := range breakdown.GetFileRows() {
+		if row.GetKind() == pb.OutcomeKind_OUTCOME_KIND_PENDING {
+			return true
+		}
+	}
+	return false
+}
+
+// TestStatusTreeMatchesSessionCases locks the two real cases from the design
+// session to their exact trees: a code delta and a conversation ingest. The
+// file rows sum to the processed count in both.
+func TestStatusTreeMatchesSessionCases(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		job  model.Job
+		want []string
+	}{
+		{
+			name: "code delta 1 of 2",
+			job: model.Job{
+				State: model.JobStateRunning, Operation: "streaming_reindex",
+				Progress: model.Progress{
+					RunMode: model.RunModeChanged, Unit: "file",
+					FilesTotal: 2, FilesProcessed: 1, FilesAdded: 2, FilesEmbedded: 1,
+					ChunksGenerated: 778, ChunksTotal: 778, LastEventAt: renderTestTime,
+				},
+			},
+			want: []string{
+				"📄 1 of 2 changed files processed",
+				"└─ ➕ 1 embedded",
+				"🧩 778 chunks total",
+				"├─ ➕ 778 added",
+				"└─ ♻️ 0 reused",
+			},
+		},
+		{
+			name: "conversation ingest 70 of 72",
+			job: model.Job{
+				State: model.JobStateRunning, Operation: "conversation_ingest",
+				Progress: model.Progress{
+					RunMode: model.RunModeChanged, Unit: "document", ScopeUnit: "conversation",
+					FilesTotal: 72, FilesProcessed: 70, FilesAdded: 63, FilesModified: 9,
+					FilesEmbedded: 9, FilesPending: 61,
+					ChunksGenerated: 1204, ChunksReused: 2312, ChunksTotal: 3516, LastEventAt: renderTestTime,
+				},
+			},
+			want: []string{
+				"📄 70 of 72 changed documents processed",
+				"├─ ➕ 9 embedded",
+				"└─ ⏳ 61 pending, not sent yet",
+				"🧩 3,516 chunks total",
+				"├─ ➕ 1,204 added",
+				"└─ ♻️ 2,312 reused",
+			},
+		},
+	}
+	for _, testCase := range cases {
+		breakdown := resolveProgressSurface(testCase.job).Breakdown
+		if sum := sumRowCounts(breakdown.FileRows); sum != breakdown.Processed {
+			t.Fatalf("%s: file rows sum to %d, want processed %d", testCase.name, sum, breakdown.Processed)
+		}
+		got := treeLines(render.GetJob(resolveJobEntry(testCase.job, false, ""), true))
+		want := testCase.want
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s tree =\n%s\nwant\n%s", testCase.name, strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
+	}
+}
 
 var renderTestTime = time.Unix(1700000000, 0)
 
@@ -160,13 +346,17 @@ func TestRenderIndexingActiveBuilding(t *testing.T) {
 	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
 	job := &model.Job{
 		Operation: "index",
-		Progress:  model.Progress{OverallPercent: 42, FilesTotal: 58, FilesProcessed: 24, ChunksGenerated: 71, LastEventAt: renderTestTime},
+		Progress:  model.Progress{RunMode: model.RunModeFirstBuild, OverallPercent: 42, FilesTotal: 58, FilesProcessed: 24, FilesEmbedded: 24, ChunksGenerated: 71, LastEventAt: renderTestTime},
 	}
 	out := renderActiveStatusForTest(codebase, job)
-	for _, want := range []string{"📁 swift-makefile", "🔄 Building initial index: 42%", "📥 24 of 58 files processed", "🧩 71 chunks total", "♻️ 0 reused", "➕ 71 embedded this run"} {
+	for _, want := range []string{"📁 swift-makefile", "🔄 Building initial index: 42%", "📄 24 of 58 files (full build) processed", "└─ ➕ 24 embedded", "🧩 71 chunks total", "└─ ➕ 71 added"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("building status missing %q in:\n%s", want, out)
 		}
+	}
+	// A first build has no prior vectors, so the chunk tree omits the reused row.
+	if strings.Contains(out, "reused") {
+		t.Fatalf("a first build should omit the reused row in:\n%s", out)
 	}
 }
 
@@ -206,7 +396,8 @@ func TestRenderIndexingActiveIncremental(t *testing.T) {
 	job := &model.Job{
 		Operation: "streaming_reindex",
 		Progress: model.Progress{
-			OverallPercent: 37, FilesTotal: 452, FilesProcessed: 285,
+			RunMode:        model.RunModeChanged,
+			OverallPercent: 37, FilesTotal: 452, FilesProcessed: 290,
 			FilesInCodebase: 4292, FilesAdded: 29, FilesModified: 423, FilesRemoved: 10,
 			FilesEmbedded: 285, FilesSkippedOversize: 3, FilesSkippedUnreadable: 2,
 			ChunksGenerated: 1043, ChunksTotal: 57240, LastEventAt: renderTestTime,
@@ -218,16 +409,21 @@ func TestRenderIndexingActiveIncremental(t *testing.T) {
 		"🔄 Indexing new changes: 37%",
 		"🔢 4292 files: 462 changed, 3830 unchanged",
 		"📄 300 of 462 changed files processed",
-		"♻️ 285 re-embedded",
+		"➕ 285 embedded",
 		"🗑️ 10 removed",
-		"📏 3 skipped, oversize",
-		"🚫 2 skipped, unreadable",
-		"🧩 57240 chunks total",
-		"➕ 1043 chunks added this scan",
+		"📏 3 skipped, too large",
+		"⚠️ 2 error, unreadable",
+		"🧩 57,240 chunks total",
+		"➕ 1,043 added",
+		"♻️ 0 reused",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("incremental status missing %q in:\n%s", want, out)
 		}
+	}
+	// The old derived "already indexed" column is gone, and reuse is visible.
+	if strings.Contains(out, "already indexed") {
+		t.Fatalf("status still emits 'already indexed' in:\n%s", out)
 	}
 }
 
@@ -243,6 +439,7 @@ func TestRenderIndexingActiveIncrementalZeroProcessed(t *testing.T) {
 	job := &model.Job{
 		Operation: "sync",
 		Progress: model.Progress{
+			RunMode:        model.RunModeChanged,
 			OverallPercent: 0, FilesTotal: 0, FilesProcessed: 0,
 			FilesInCodebase: 4292, FilesAdded: 0, FilesModified: 118, FilesRemoved: 0,
 			FilesEmbedded: 0, ChunksGenerated: 0,
@@ -366,48 +563,46 @@ func TestRenderGetIndexBodyStreamingReindexTakesOver(t *testing.T) {
 func TestRenderProgressLines(t *testing.T) {
 	t.Parallel()
 	empty := view.ProgressSurface{
-		Heading:            "",
-		HasScope:           false,
-		Checked:            0,
-		ScopeTotal:         0,
-		ScopeLabel:         "",
-		CheckVerb:          "",
-		Embedded:           0,
-		AlreadyIndexed:     0,
-		ChunksThisRun:      0,
-		ChunksReused:       0,
-		ChunksInCollection: 0,
-		ScopeLine:          "",
-		PercentLabel:       "",
+		Heading: "",
+		Breakdown: view.OutcomeBreakdown{
+			ScopeLabel:  "",
+			Processed:   0,
+			ScopeTotal:  0,
+			FileRows:    nil,
+			ChunksTotal: 0,
+			ChunkRows:   nil,
+		},
+		ScopeLine:    "",
+		PercentLabel: "",
 	}
 	emptyOut := render.GetJob(view.JobEntryView{ID: "job_empty", Progress: empty}, true)
 	if strings.Contains(emptyOut, "📄") || strings.Contains(emptyOut, "🧩") {
 		t.Fatalf("expected no progress lines for an empty view, got:\n%s", emptyOut)
 	}
 	progress := view.ProgressSurface{
-		Heading:            "",
-		HasScope:           true,
-		Checked:            7,
-		ScopeTotal:         58,
-		ScopeLabel:         "files",
-		CheckVerb:          "embedded",
-		Embedded:           0,
-		AlreadyIndexed:     0,
-		ChunksThisRun:      84,
-		ChunksReused:       0,
-		ChunksInCollection: 84,
-		ScopeLine:          "Changed since last sync: 12 files added · 30 modified · 5 removed",
-		PercentLabel:       "12.1%",
+		Heading: "",
+		Breakdown: view.OutcomeBreakdown{
+			ScopeLabel:  "files (full build)",
+			Processed:   7,
+			ScopeTotal:  58,
+			FileRows:    []view.OutcomeRow{view.NewOutcomeRow(view.KindEmbedded, 7)},
+			ChunksTotal: 84,
+			ChunkRows:   []view.OutcomeRow{view.NewOutcomeRow(view.KindAdded, 84)},
+		},
+		ScopeLine:    "Changed since last sync: 12 files added · 30 modified · 5 removed",
+		PercentLabel: "12.1%",
 	}
 	got := render.GetJob(view.JobEntryView{ID: "job_progress", Progress: progress}, true)
-	if !strings.Contains(got, "📄 7 of 58 files embedded") {
-		t.Fatalf("expected files and chunks line, got %q", got)
-	}
-	if !strings.Contains(got, "🧩 84 chunks added this run") {
-		t.Fatalf("expected chunk line, got %q", got)
-	}
-	if !strings.Contains(got, "Changed since last sync: 12 files added · 30 modified · 5 removed") {
-		t.Fatalf("expected change breakdown, got %q", got)
+	for _, want := range []string{
+		"📄 7 of 58 files (full build) processed",
+		"└─ ➕ 7 embedded",
+		"🧩 84 chunks total",
+		"└─ ➕ 84 added",
+		"Changed since last sync: 12 files added · 30 modified · 5 removed",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("progress lines missing %q in:\n%s", want, got)
+		}
 	}
 }
 
@@ -426,13 +621,13 @@ func TestRenderGetJobShowsMagnitude(t *testing.T) {
 		CanonicalPath: "/repo",
 		Operation:     "sync",
 		State:         model.JobStateRunning,
-		Progress:      model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84},
+		Progress:      model.Progress{FilesTotal: 58, FilesProcessed: 7, FilesEmbedded: 7, ChunksGenerated: 84},
 	}
 	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
-	if !strings.Contains(out, "📄 7 of 58 files embedded") {
+	if !strings.Contains(out, "📄 7 of 58 files processed") {
 		t.Fatalf("expected magnitude in job view, got:\n%s", out)
 	}
-	if !strings.Contains(out, "🧩 84 chunks added this run") {
+	if !strings.Contains(out, "🧩 84 chunks total") {
 		t.Fatalf("expected chunk line in job view, got:\n%s", out)
 	}
 }
@@ -686,10 +881,10 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 	cases := map[string]string{
 		"ready":       renderReadyStatusForTest(codebase),
 		"preparing":   renderActiveStatusForTest(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 0}}),
-		"building":    renderActiveStatusForTest(codebase, &model.Job{Operation: "index", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, ChunksGenerated: 84}}),
-		"incremental": renderActiveStatusForTest(codebase, &model.Job{Operation: "sync", Progress: model.Progress{FilesTotal: 58, FilesProcessed: 7, FilesInCodebase: 100, FilesAdded: 5, FilesModified: 50, FilesRemoved: 3, FilesEmbedded: 2, ChunksGenerated: 84, ChunksTotal: 620}}),
+		"building":    renderActiveStatusForTest(codebase, &model.Job{Operation: "index", Progress: model.Progress{RunMode: model.RunModeForcedReindex, FilesTotal: 58, FilesProcessed: 7, FilesEmbedded: 7, ChunksGenerated: 84}}),
+		"incremental": renderActiveStatusForTest(codebase, &model.Job{Operation: "sync", Progress: model.Progress{RunMode: model.RunModeChanged, FilesTotal: 58, FilesProcessed: 7, FilesInCodebase: 100, FilesAdded: 5, FilesModified: 50, FilesRemoved: 3, FilesEmbedded: 2, ChunksGenerated: 84, ChunksTotal: 620}}),
 	}
-	wantLines := map[string]int{"ready": 4, "preparing": 3, "building": 7, "incremental": 11}
+	wantLines := map[string]int{"ready": 4, "preparing": 3, "building": 8, "incremental": 11}
 	for name, out := range cases {
 		for _, line := range strings.Split(out, "\n") {
 			if strings.TrimSpace(line) == "" {

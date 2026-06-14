@@ -117,7 +117,8 @@ func logRPCDone(ctx context.Context, method string, started time.Time, err error
 		level = slog.LevelWarn
 		code = status.Code(err).String()
 	}
-	slog.LogAttrs(ctx, level, "daemon.rpc.completed",
+	slog.LogAttrs(
+		ctx, level, "daemon.rpc.completed",
 		slog.String("method", method),
 		slog.String("status", code),
 		slog.Int64("duration_ms", clock.Now().Sub(started).Milliseconds()),
@@ -369,6 +370,14 @@ func applyDisplayTokens(pbCodebase *pb.Codebase, display displayStatus) {
 	pbCodebase.StatusLabel = labelForDisplay(display)
 }
 
+// applyReuseForecast sets the discovered-worktree reuse forecast on the wire
+// codebase so a list client can show that a pending build is cheap. It is zero
+// for every non-discovered codebase. pbconv cannot compute it, so the boundary
+// applies it here from the manager.
+func applyReuseForecast(pbCodebase *pb.Codebase, reuseSiblingCount int32) {
+	pbCodebase.ReuseSiblingCount = reuseSiblingCount
+}
+
 // applyJobDisplayTokens sets the resolved presentation fields on a protobuf job
 // from the daemon's single status vocabulary, so a machine consumer reads the
 // same folded status the human surfaces do instead of re-deriving it from the
@@ -444,36 +453,14 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	}
 	if found {
 		pbCodebase := pbconv.ToCodebase(codebase)
-		applyDisplayTokens(pbCodebase, computeDisplayStatus(codebase, activeJob, health.Degraded()))
+		display := computeDisplayStatus(codebase, activeJob, health.Degraded())
+		applyDisplayTokens(pbCodebase, display)
+		if display == displayDiscovered {
+			applyReuseForecast(pbCodebase, server.manager.worktreeReuseForecast(codebase))
+		}
 		response.Codebase = pbCodebase
 		response.ActiveJob = toJobPointerWithTokens(activeJob, health.Degraded(), "")
 	}
-	return response, nil
-}
-
-// ListIndexes returns all tracked codebases.
-func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndexesRequest) (resp *pb.ListIndexesResponse, err error) {
-	ctx, done := beginRPC(ctx, "ListIndexes")
-	defer done(&err)
-	_ = request
-	views := server.manager.ListIndexesView()
-	response := &pb.ListIndexesResponse{
-		Indexes: make([]*pb.Codebase, 0, len(views)),
-	}
-	rows := make([]view.CodebaseRowView, 0, len(views))
-	for _, codebaseView := range views {
-		pbCodebase := pbconv.ToCodebase(codebaseView.Codebase)
-		applyDisplayTokens(pbCodebase, codebaseView.Display)
-		response.Indexes = append(response.Indexes, pbCodebase)
-		rows = append(rows, view.CodebaseRowView{
-			ID:            codebaseView.Codebase.ID,
-			CanonicalPath: codebaseView.Codebase.CanonicalPath,
-			Display:       view.Display(codebaseView.Display),
-		})
-	}
-	health := server.manager.DependencyHealth()
-	response.DependencyHealth = toDependencyHealth(health)
-	response.DisplayText = server.envelopeText(ctx, health, render.ListIndexes(rows))
 	return response, nil
 }
 
