@@ -73,127 +73,27 @@ func progressHeading(job model.Job) string {
 	}
 }
 
-// scopeLabelFor types the denominator from the run mode and unit.
-func scopeLabelFor(runMode string, unit string, total int32) string {
-	plural := unit
-	if total != 1 {
-		plural = unit + "s"
-	}
-	switch runMode {
-	case model.RunModeFirstBuild:
-		return plural + " (full build)"
-	case model.RunModeForcedReindex:
-		return plural + " (forced reindex)"
-	case model.RunModeResuming, model.RunModeChanged:
-		return "changed " + plural
-	default:
-		return plural
-	}
-}
-
-// Outcome row glyphs. The lead glyph types each child line before its count so
-// a reader sees normal vs transient vs error at a glance.
-const (
-	glyphEmbedded  = "➕"
-	glyphUnchanged = "⏭️"
-	glyphRemoved   = "🗑️"
-	glyphPending   = "⏳"
-	glyphOversize  = "📏"
-	glyphError     = "⚠️"
-	glyphReused    = "♻️"
-)
-
-// reuseCapableRunMode reports whether a pass can serve chunks from already
-// embedded vectors, so the chunk tree shows a reused row even at zero. A first
-// build has no prior vectors, so it omits the row entirely.
-func reuseCapableRunMode(runMode string) bool {
-	switch runMode {
-	case model.RunModeChanged, model.RunModeResuming, model.RunModeForcedReindex:
-		return true
-	default:
-		return false
-	}
-}
-
-// resolveOutcomeBreakdown reduces raw progress counters into the shared outcome
-// tree. It is the single source of truth for the file-and-chunk breakdown, so
-// every status surface renders an identical tree. The file rows partition the
-// processed set: embedded plus the clamped seed-reuse remainder (unchanged) plus
-// removed plus the skip buckets (pending, oversize, unreadable) sum to Processed.
-// Pending is its own counter (FilesPending) from an undelivered conversation,
-// distinct from a real unreadable file, so no unit inference is needed.
+// resolveOutcomeBreakdown adapts a job's model.Progress into the shared resolver
+// in internal/view, the single source of truth for the breakdown. The daemon
+// only copies counters here; the bucket logic, row order, and scope label all
+// live in view.ResolveBreakdown so every surface projects from the same value.
 func resolveOutcomeBreakdown(progress model.Progress) view.OutcomeBreakdown {
-	unit := progress.Unit
-	if unit == "" {
-		unit = "file"
-	}
-
-	embedded := progress.FilesEmbedded
-	oversize := progress.FilesSkippedOversize
-	unreadable := progress.FilesSkippedUnreadable
-	pending := progress.FilesPending
-	removed := progress.FilesRemoved
-	unchanged := max(progress.FilesProcessed-embedded-oversize-unreadable-pending, 0)
-
-	// The changed set is known from the diff before the embed loop reports a
-	// FilesTotal, so the denominator and the scope gate fold it in. This keeps
-	// the file tree showing "0 of N processed" during the brief pre-embed window
-	// rather than vanishing until the first per-file update.
-	changedSet := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
-	hasFileScope := progress.FilesTotal > 0 || progress.FilesProcessed > 0 || removed > 0 || changedSet > 0
-
-	processed := embedded + unchanged + removed + pending + oversize + unreadable
-	scopeTotal := max(progress.FilesTotal+removed, changedSet)
-	chunksTotal := max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated)
-	hasChunks := hasFileScope || chunksTotal > 0 || progress.ChunksGenerated > 0
-
-	return view.OutcomeBreakdown{
-		ScopeLabel:  scopeLabelFor(progress.RunMode, unit, scopeTotal),
-		Processed:   processed,
-		ScopeTotal:  scopeTotal,
-		FileRows:    outcomeFileRows(hasFileScope, embedded, unchanged, removed, pending, oversize, unreadable),
-		ChunksTotal: chunksTotal,
-		ChunkRows:   outcomeChunkRows(hasChunks, progress.RunMode, progress.ChunksGenerated, progress.ChunksReused),
-	}
-}
-
-// outcomeFileRows builds the file children in fixed order, omitting a zero
-// bucket except embedded, which always renders. Pending is transient (an
-// undelivered document), oversize and unreadable are deliberate or error skips.
-func outcomeFileRows(hasScope bool, embedded, unchanged, removed, pending, oversize, unreadable int32) []view.OutcomeRow {
-	if !hasScope {
-		return nil
-	}
-	rows := []view.OutcomeRow{{Glyph: glyphEmbedded, Count: embedded, Label: "embedded"}}
-	if unchanged > 0 {
-		rows = append(rows, view.OutcomeRow{Glyph: glyphUnchanged, Count: unchanged, Label: "unchanged"})
-	}
-	if removed > 0 {
-		rows = append(rows, view.OutcomeRow{Glyph: glyphRemoved, Count: removed, Label: "removed"})
-	}
-	if pending > 0 {
-		rows = append(rows, view.OutcomeRow{Glyph: glyphPending, Count: pending, Label: "pending, not sent yet"})
-	}
-	if oversize > 0 {
-		rows = append(rows, view.OutcomeRow{Glyph: glyphOversize, Count: oversize, Label: "skipped, too large"})
-	}
-	if unreadable > 0 {
-		rows = append(rows, view.OutcomeRow{Glyph: glyphError, Count: unreadable, Label: "error, unreadable"})
-	}
-	return rows
-}
-
-// outcomeChunkRows builds the chunk children: added always, reused on a
-// reuse-capable pass (shown even at zero), omitted for a first build.
-func outcomeChunkRows(hasChunks bool, runMode string, added, reused int32) []view.OutcomeRow {
-	if !hasChunks {
-		return nil
-	}
-	rows := []view.OutcomeRow{{Glyph: glyphEmbedded, Count: added, Label: "added"}}
-	if reuseCapableRunMode(runMode) {
-		rows = append(rows, view.OutcomeRow{Glyph: glyphReused, Count: reused, Label: "reused"})
-	}
-	return rows
+	return view.ResolveBreakdown(view.ProgressCounts{
+		RunMode:                progress.RunMode,
+		Unit:                   progress.Unit,
+		FilesTotal:             progress.FilesTotal,
+		FilesProcessed:         progress.FilesProcessed,
+		FilesAdded:             progress.FilesAdded,
+		FilesModified:          progress.FilesModified,
+		FilesRemoved:           progress.FilesRemoved,
+		FilesEmbedded:          progress.FilesEmbedded,
+		FilesSkippedOversize:   progress.FilesSkippedOversize,
+		FilesSkippedUnreadable: progress.FilesSkippedUnreadable,
+		FilesPending:           progress.FilesPending,
+		ChunksTotal:            progress.ChunksTotal,
+		ChunksReused:           progress.ChunksReused,
+		ChunksGenerated:        progress.ChunksGenerated,
+	})
 }
 
 // resolveProgressSurface reduces a job's progress into the typed view. It is

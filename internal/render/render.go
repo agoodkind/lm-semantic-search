@@ -188,7 +188,7 @@ func renderGetIndexBody(getIndex view.GetIndexView) string {
 }
 
 func renderStatusBody(statusView view.StatusView, templateName string) string {
-	block := strings.Join(renderOutcomeBreakdown(statusView.Breakdown), "\n")
+	block := strings.Join(BreakdownLines(statusView.Breakdown), "\n")
 	return renderStatusTemplate(templateName, statusTemplateData{StatusView: statusView, BreakdownBlock: block})
 }
 
@@ -301,21 +301,42 @@ func renderProgressLines(progress view.ProgressSurface) []string {
 	if progress.Heading != "" {
 		lines = append(lines, "  "+progress.Heading)
 	}
-	lines = append(lines, renderOutcomeBreakdown(progress.Breakdown)...)
+	lines = append(lines, BreakdownLines(progress.Breakdown)...)
 	if progress.ScopeLine != "" {
 		lines = append(lines, "  "+progress.ScopeLine)
 	}
 	return lines
 }
 
-// renderOutcomeBreakdown formats the shared file-and-chunk outcome tree into
-// plain lines. It is the one formatter for the breakdown, called by every
-// status surface, so a tree can never read differently between job get, job
-// list, and get_indexing_status. Lines are unindented so the block is identical
-// whether it is appended to a compact job entry or embedded in a status
-// template. The file header renders only when there is measured scope; the
-// chunk header only when there is chunk activity.
-func renderOutcomeBreakdown(breakdown view.OutcomeBreakdown) []string {
+// outcomePresentation is the glyph and label for one outcome kind. The lead
+// glyph types the row before its count: ➕/⏭️ normal, 🗑️ removed, ⏳ pending
+// (transient, will retry), 📏 skipped (deliberate policy), ⚠️ error.
+type outcomePresentation struct {
+	glyph string
+	label string
+}
+
+// outcomeKindPresentation is the one place a semantic kind maps to its glyph
+// and label. Every surface (text, TUI, the wire breakdown rendered back) reads
+// it, so the vocabulary cannot diverge.
+var outcomeKindPresentation = map[view.OutcomeKind]outcomePresentation{
+	view.KindEmbedded:   {glyph: "➕", label: "embedded"},
+	view.KindUnchanged:  {glyph: "⏭️", label: "unchanged"},
+	view.KindRemoved:    {glyph: "🗑️", label: "removed"},
+	view.KindPending:    {glyph: "⏳", label: "pending, not sent yet"},
+	view.KindOversize:   {glyph: "📏", label: "skipped, too large"},
+	view.KindUnreadable: {glyph: "⚠️", label: "error, unreadable"},
+	view.KindAdded:      {glyph: "➕", label: "added"},
+	view.KindReused:     {glyph: "♻️", label: "reused"},
+}
+
+// BreakdownLines formats the shared file-and-chunk outcome tree into plain
+// lines. It is the one formatter for the breakdown, called by every status
+// surface (compact job views, status templates, and the TUI), so a tree can
+// never read differently across commands. Lines are unindented so the block is
+// identical wherever it is placed. The file header renders only when there is
+// measured scope; the chunk header only when there is chunk activity.
+func BreakdownLines(breakdown view.OutcomeBreakdown) []string {
 	lines := make([]string, 0, 8)
 	if len(breakdown.FileRows) > 0 {
 		lines = append(lines, fmt.Sprintf(
@@ -334,7 +355,7 @@ func renderOutcomeBreakdown(breakdown view.OutcomeBreakdown) []string {
 }
 
 // renderOutcomeRows draws each child row under its tree connector: ├─ for every
-// row except the last, which gets └─.
+// row except the last, which gets └─. The glyph and label come from the kind.
 func renderOutcomeRows(rows []view.OutcomeRow) []string {
 	out := make([]string, 0, len(rows))
 	for index, row := range rows {
@@ -342,7 +363,8 @@ func renderOutcomeRows(rows []view.OutcomeRow) []string {
 		if index == len(rows)-1 {
 			connector = "└─"
 		}
-		out = append(out, fmt.Sprintf("%s %s %s %s", connector, row.Glyph, formatCountString(row.Count), row.Label))
+		pres := outcomeKindPresentation[row.Kind]
+		out = append(out, fmt.Sprintf("%s %s %s %s", connector, pres.glyph, formatCountString(row.Count), pres.label))
 	}
 	return out
 }

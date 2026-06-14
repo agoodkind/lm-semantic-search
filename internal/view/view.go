@@ -35,14 +35,28 @@ const (
 	RunModeResuming      RunMode = "resuming"
 )
 
-// OutcomeRow is one already-resolved child line in an outcome tree: a glyph, a
-// count, and a label. The renderer joins them under a tree connector. The lead
-// glyph carries the status before the count: ➕/⏭️ normal, 🗑️ removed,
-// ⏳ pending (transient, will retry), 📏 skipped (deliberate policy), ⚠️ error.
+// OutcomeKind is the semantic identity of one outcome row. It carries no
+// presentation: the render layer maps a kind to its glyph and label, so the
+// kind is the single wire-safe representation shared by text, the TUI, and JSON.
+type OutcomeKind string
+
+// Outcome kinds, in the fixed display order ResolveBreakdown emits them.
+const (
+	KindEmbedded   OutcomeKind = "embedded"
+	KindUnchanged  OutcomeKind = "unchanged"
+	KindRemoved    OutcomeKind = "removed"
+	KindPending    OutcomeKind = "pending"
+	KindOversize   OutcomeKind = "oversize"
+	KindUnreadable OutcomeKind = "unreadable"
+	KindAdded      OutcomeKind = "added"
+	KindReused     OutcomeKind = "reused"
+)
+
+// OutcomeRow is one child line in an outcome tree: a semantic kind and a count.
+// The render layer derives the glyph and label from the kind.
 type OutcomeRow struct {
-	Glyph string
+	Kind  OutcomeKind
 	Count int32
-	Label string
 }
 
 // OutcomeBreakdown is the resolved file-and-chunk outcome tree shared by every
@@ -71,6 +85,135 @@ type OutcomeBreakdown struct {
 	// pass (shown even at zero), omitted for a first build. Empty when there is
 	// no chunk activity to report.
 	ChunkRows []OutcomeRow
+}
+
+// ProgressCounts is the raw counter input to ResolveBreakdown. It is a plain
+// struct, not a model type, so internal/view keeps its no-model import wall
+// while still owning the one resolver.
+type ProgressCounts struct {
+	RunMode                string
+	Unit                   string
+	FilesTotal             int32
+	FilesProcessed         int32
+	FilesAdded             int32
+	FilesModified          int32
+	FilesRemoved           int32
+	FilesEmbedded          int32
+	FilesSkippedOversize   int32
+	FilesSkippedUnreadable int32
+	FilesPending           int32
+	ChunksTotal            int32
+	ChunksReused           int32
+	ChunksGenerated        int32
+}
+
+// ResolveBreakdown is the single source of truth for the outcome tree. Every
+// surface (CLI text, the TUI, the status templates, and the wire breakdown)
+// projects from the value it returns, so a status can never diverge between
+// commands. The file rows partition the processed set and always sum to
+// Processed; a zero bucket is omitted except embedded and the added chunk row.
+func ResolveBreakdown(counts ProgressCounts) OutcomeBreakdown {
+	unit := counts.Unit
+	if unit == "" {
+		unit = "file"
+	}
+	embedded := counts.FilesEmbedded
+	oversize := counts.FilesSkippedOversize
+	unreadable := counts.FilesSkippedUnreadable
+	pending := counts.FilesPending
+	removed := counts.FilesRemoved
+	unchanged := max(counts.FilesProcessed-embedded-oversize-unreadable-pending, 0)
+
+	// The changed set is known from the diff before the embed loop reports a
+	// FilesTotal, so the denominator and the scope gate fold it in. This keeps
+	// the file tree showing "0 of N processed" during the pre-embed window.
+	changedSet := counts.FilesAdded + counts.FilesModified + counts.FilesRemoved
+	hasFileScope := counts.FilesTotal > 0 || counts.FilesProcessed > 0 || removed > 0 || changedSet > 0
+
+	processed := embedded + unchanged + removed + pending + oversize + unreadable
+	scopeTotal := max(counts.FilesTotal+removed, changedSet)
+	chunksTotal := max(counts.ChunksTotal, counts.ChunksReused+counts.ChunksGenerated)
+	hasChunks := hasFileScope || chunksTotal > 0 || counts.ChunksGenerated > 0
+
+	return OutcomeBreakdown{
+		ScopeLabel:  scopeLabelForRunMode(counts.RunMode, unit, scopeTotal),
+		Processed:   processed,
+		ScopeTotal:  scopeTotal,
+		FileRows:    breakdownFileRows(hasFileScope, embedded, unchanged, removed, pending, oversize, unreadable),
+		ChunksTotal: chunksTotal,
+		ChunkRows:   breakdownChunkRows(hasChunks, counts.RunMode, counts.ChunksGenerated, counts.ChunksReused),
+	}
+}
+
+// breakdownFileRows builds the file children in fixed order, omitting a zero
+// bucket except embedded, which always renders.
+func breakdownFileRows(hasScope bool, embedded, unchanged, removed, pending, oversize, unreadable int32) []OutcomeRow {
+	if !hasScope {
+		return nil
+	}
+	rows := []OutcomeRow{{Kind: KindEmbedded, Count: embedded}}
+	if unchanged > 0 {
+		rows = append(rows, OutcomeRow{Kind: KindUnchanged, Count: unchanged})
+	}
+	if removed > 0 {
+		rows = append(rows, OutcomeRow{Kind: KindRemoved, Count: removed})
+	}
+	if pending > 0 {
+		rows = append(rows, OutcomeRow{Kind: KindPending, Count: pending})
+	}
+	if oversize > 0 {
+		rows = append(rows, OutcomeRow{Kind: KindOversize, Count: oversize})
+	}
+	if unreadable > 0 {
+		rows = append(rows, OutcomeRow{Kind: KindUnreadable, Count: unreadable})
+	}
+	return rows
+}
+
+// breakdownChunkRows builds the chunk children: added always, reused on a
+// reuse-capable pass (shown even at zero), omitted for a first build.
+func breakdownChunkRows(hasChunks bool, runMode string, added, reused int32) []OutcomeRow {
+	if !hasChunks {
+		return nil
+	}
+	rows := []OutcomeRow{{Kind: KindAdded, Count: added}}
+	if reuseCapableRunMode(runMode) {
+		rows = append(rows, OutcomeRow{Kind: KindReused, Count: reused})
+	}
+	return rows
+}
+
+// reuseCapableRunMode reports whether a pass can serve chunks from already
+// embedded vectors, so the chunk tree shows a reused row even at zero. A first
+// build has no prior vectors, so it omits the row entirely.
+func reuseCapableRunMode(runMode string) bool {
+	switch RunMode(runMode) {
+	case RunModeChanged, RunModeResuming, RunModeForcedReindex:
+		return true
+	case RunModeFirstBuild:
+		return false
+	default:
+		return false
+	}
+}
+
+// scopeLabelForRunMode types the "N of M ..." denominator from the run mode and
+// unit, for example "changed files" or "documents (full build)".
+func scopeLabelForRunMode(runMode string, unit string, total int32) string {
+	plural := unit
+	if total != 1 {
+		plural = unit + "s"
+	}
+	switch RunMode(runMode) {
+	case RunModeFirstBuild:
+		return plural + " (full build)"
+	case RunModeForcedReindex:
+		return plural + " (forced reindex)"
+	case RunModeResuming, RunModeChanged:
+		return "changed " + plural
+	default:
+		return plural
+	}
 }
 
 // ProgressSurface is the resolved progress view for the compact job surfaces.
