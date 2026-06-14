@@ -26,6 +26,12 @@ const (
 	// is kept in case the directory returns, and is removed only by an explicit
 	// clear or the removed-worktree auto-clean.
 	CodebaseStatusMissing CodebaseStatus = "missing"
+	// CodebaseStatusDiscovered means the codebase is registered and watched but
+	// its first index has not been built yet. A read (status or search) of an
+	// untracked git worktree of an indexed sibling registers it in this state and
+	// defers the reuse-seeded build to a background trigger, so the read never
+	// launches an embed job. The deferred build flips it to indexing, then indexed.
+	CodebaseStatusDiscovered CodebaseStatus = "discovered"
 )
 
 // CodebaseKind distinguishes filesystem code indexes from virtual document
