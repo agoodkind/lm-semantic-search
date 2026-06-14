@@ -45,6 +45,10 @@ type Result struct {
 	SkippedFiles      []string
 	SkippedOversize   int32
 	SkippedUnreadable int32
+	// SkippedPending counts changed items whose content was not delivered this
+	// pass (the conversation-ingest undelivered case). They are transient, not
+	// errors, and are re-requested on the next sync.
+	SkippedPending int32
 }
 
 // SkipReason names why the indexer declined to embed a changed file. The empty
@@ -58,6 +62,11 @@ const (
 	SkipOversize SkipReason = "oversize"
 	// SkipUnreadable marks a file whose bytes are not valid UTF-8.
 	SkipUnreadable SkipReason = "unreadable"
+	// SkipPending marks a changed item whose content was not delivered this pass,
+	// so it cannot be embedded yet and will be re-requested on the next sync. It
+	// is the conversation-ingest case where clyde listed a conversation as changed
+	// but has not sent its documents. It is transient, not an error.
+	SkipPending SkipReason = "pending"
 )
 
 // Progress describes one visible indexing progress update.
@@ -69,6 +78,9 @@ type Progress struct {
 	FilesEmbedded          int32
 	FilesSkippedOversize   int32
 	FilesSkippedUnreadable int32
+	// FilesPending counts changed items whose content was not delivered this pass
+	// (the conversation-ingest undelivered case). Transient, re-requested next sync.
+	FilesPending int32
 	// ChunksReused counts chunks served from an already-embedded vector this run,
 	// distinct from ChunksGenerated (embedded this run), so total = reused +
 	// embedded is visible on the progress surface.
@@ -262,6 +274,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 			FilesEmbedded:          0,
 			FilesSkippedOversize:   0,
 			FilesSkippedUnreadable: 0,
+			FilesPending:           0,
 			ChunksReused:           0,
 			ChunksGenerated:        0,
 		})
@@ -283,6 +296,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 			FilesEmbedded:          0,
 			FilesSkippedOversize:   0,
 			FilesSkippedUnreadable: 0,
+			FilesPending:           0,
 			ChunksReused:           0,
 			ChunksGenerated:        0,
 		})
@@ -319,6 +333,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 				FilesEmbedded:          safeInt32(index + 1),
 				FilesSkippedOversize:   accumulator.skippedOversize,
 				FilesSkippedUnreadable: accumulator.skippedUnreadable,
+				FilesPending:           0,
 				ChunksReused:           0,
 				ChunksGenerated:        accumulator.totalChunks,
 			})
@@ -334,6 +349,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 			FilesEmbedded:          totalFiles,
 			FilesSkippedOversize:   accumulator.skippedOversize,
 			FilesSkippedUnreadable: accumulator.skippedUnreadable,
+			FilesPending:           0,
 			ChunksReused:           0,
 			ChunksGenerated:        accumulator.totalChunks,
 		})
@@ -347,6 +363,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 		SkippedFiles:      accumulator.skippedFiles,
 		SkippedOversize:   accumulator.skippedOversize,
 		SkippedUnreadable: accumulator.skippedUnreadable,
+		SkippedPending:    0,
 	}, nil
 }
 
@@ -367,6 +384,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 			FilesEmbedded:          0,
 			FilesSkippedOversize:   0,
 			FilesSkippedUnreadable: 0,
+			FilesPending:           0,
 			ChunksReused:           0,
 			ChunksGenerated:        0,
 		})
@@ -399,6 +417,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 				FilesEmbedded:          safeInt32(index + 1),
 				FilesSkippedOversize:   accumulator.skippedOversize,
 				FilesSkippedUnreadable: accumulator.skippedUnreadable,
+				FilesPending:           0,
 				ChunksReused:           0,
 				ChunksGenerated:        accumulator.totalChunks,
 			})
@@ -414,6 +433,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 			FilesEmbedded:          totalFiles,
 			FilesSkippedOversize:   accumulator.skippedOversize,
 			FilesSkippedUnreadable: accumulator.skippedUnreadable,
+			FilesPending:           0,
 			ChunksReused:           0,
 			ChunksGenerated:        accumulator.totalChunks,
 		})
@@ -427,6 +447,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 		SkippedFiles:      accumulator.skippedFiles,
 		SkippedOversize:   accumulator.skippedOversize,
 		SkippedUnreadable: accumulator.skippedUnreadable,
+		SkippedPending:    0,
 	}, nil
 }
 

@@ -17,6 +17,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/pbconv"
+	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/status"
 )
 
@@ -353,12 +355,38 @@ func (m listModel) renderRow(codebase *pb.Codebase, selected bool, widths colWid
 	label := strings.TrimSpace(glyph + " " + labelText)
 	statusText := padTo(fitTail(label, widths.status), widths.status)
 
+	var rowLine string
 	if selected {
-		line := "❯ " + strings.Join([]string{name, statusText, files, id, pathCell}, columnGap)
-		return selectedStyle.Render(line)
+		rowLine = selectedStyle.Render("❯ " + strings.Join([]string{name, statusText, files, id, pathCell}, columnGap))
+	} else {
+		statusCell := lipgloss.NewStyle().Foreground(statusColor(status)).Render(statusText)
+		rowLine = "  " + strings.Join([]string{name, statusCell, files, id, pathCell}, columnGap)
 	}
-	statusCell := lipgloss.NewStyle().Foreground(statusColor(status)).Render(statusText)
-	return "  " + strings.Join([]string{name, statusCell, files, id, pathCell}, columnGap)
+	tree := activeBreakdownLines(codebase)
+	if len(tree) == 0 {
+		return rowLine
+	}
+	return rowLine + "\n" + strings.Join(tree, "\n")
+}
+
+// activeBreakdownLines renders the live breakdown tree for an actively-indexing
+// codebase through the same render.BreakdownLines the daemon and status surface
+// use, so the TUI projects from the one resolver rather than re-deriving. It
+// returns nil when there is no active progress to show.
+func activeBreakdownLines(codebase *pb.Codebase) []string {
+	progress := codebase.GetActiveProgress()
+	if progress == nil {
+		return nil
+	}
+	treeLines := render.BreakdownLines(pbconv.BreakdownFromProto(progress.GetBreakdown()))
+	if len(treeLines) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(treeLines))
+	for _, line := range treeLines {
+		out = append(out, faintStyle.Render("      "+line))
+	}
+	return out
 }
 
 // colWidths holds the computed column widths for one render pass.

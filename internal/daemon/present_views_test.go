@@ -18,8 +18,8 @@ func TestResolveStatusViewFallsBackToLiveChunkTotal(t *testing.T) {
 		Progress:  model.Progress{FilesInCodebase: 100, FilesModified: 2},
 	}
 	statusView, templateName := resolveStatusView(codebase, &job, displayIndexing, "")
-	if statusView.ChunksTotal != 33240 {
-		t.Fatalf("ChunksTotal = %d, want the live total 33240", statusView.ChunksTotal)
+	if statusView.Breakdown.ChunksTotal != 33240 {
+		t.Fatalf("ChunksTotal = %d, want the live total 33240", statusView.Breakdown.ChunksTotal)
 	}
 	if templateName != "incremental.md.tmpl" {
 		t.Fatalf("template = %q, want incremental", templateName)

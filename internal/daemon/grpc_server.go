@@ -117,7 +117,8 @@ func logRPCDone(ctx context.Context, method string, started time.Time, err error
 		level = slog.LevelWarn
 		code = status.Code(err).String()
 	}
-	slog.LogAttrs(ctx, level, "daemon.rpc.completed",
+	slog.LogAttrs(
+		ctx, level, "daemon.rpc.completed",
 		slog.String("method", method),
 		slog.String("status", code),
 		slog.Int64("duration_ms", clock.Now().Sub(started).Milliseconds()),
@@ -452,38 +453,6 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 		response.Codebase = pbCodebase
 		response.ActiveJob = toJobPointerWithTokens(activeJob, health.Degraded(), "")
 	}
-	return response, nil
-}
-
-// ListIndexes returns all tracked codebases.
-func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndexesRequest) (resp *pb.ListIndexesResponse, err error) {
-	ctx, done := beginRPC(ctx, "ListIndexes")
-	defer done(&err)
-	_ = request
-	views := server.manager.ListIndexesView()
-	response := &pb.ListIndexesResponse{
-		Indexes: make([]*pb.Codebase, 0, len(views)),
-	}
-	rows := make([]view.CodebaseRowView, 0, len(views))
-	for _, codebaseView := range views {
-		pbCodebase := pbconv.ToCodebase(codebaseView.Codebase)
-		applyDisplayTokens(pbCodebase, codebaseView.Display)
-		response.Indexes = append(response.Indexes, pbCodebase)
-		reuseSiblingCount := int32(0)
-		if codebaseView.Display == displayDiscovered {
-			reuseSiblingCount = server.manager.worktreeReuseForecast(codebaseView.Codebase)
-		}
-		applyReuseForecast(pbCodebase, reuseSiblingCount)
-		rows = append(rows, view.CodebaseRowView{
-			ID:                codebaseView.Codebase.ID,
-			CanonicalPath:     codebaseView.Codebase.CanonicalPath,
-			Display:           view.Display(codebaseView.Display),
-			ReuseSiblingCount: reuseSiblingCount,
-		})
-	}
-	health := server.manager.DependencyHealth()
-	response.DependencyHealth = toDependencyHealth(health)
-	response.DisplayText = server.envelopeText(ctx, health, render.ListIndexes(rows))
 	return response, nil
 }
 

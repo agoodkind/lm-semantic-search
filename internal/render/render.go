@@ -188,7 +188,8 @@ func renderGetIndexBody(getIndex view.GetIndexView) string {
 }
 
 func renderStatusBody(statusView view.StatusView, templateName string) string {
-	return renderStatusTemplate(templateName, statusView)
+	block := strings.Join(BreakdownLines(statusView.Breakdown), "\n")
+	return renderStatusTemplate(templateName, statusTemplateData{StatusView: statusView, BreakdownBlock: block})
 }
 
 // renderMissingStatus reads as a current condition, not a failure: the source
@@ -267,6 +268,13 @@ func renderListIndexes(views []view.CodebaseRowView) string {
 			line += fmt.Sprintf("  ♻️ reuses %d sibling %s", row.ReuseSiblingCount, plural("collection", int(row.ReuseSiblingCount)))
 		}
 		lines = append(lines, line)
+		// An actively-indexing codebase shows its live breakdown tree inline, the
+		// same tree get_indexing_status renders, indented under the row.
+		if row.Active {
+			for _, treeLine := range BreakdownLines(row.Breakdown) {
+				lines = append(lines, "    "+treeLine)
+			}
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -291,46 +299,81 @@ func renderGetJob(entry view.JobEntryView, found bool) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderProgressLines renders the resolved progress: heading, the typed
-// denominator with the work split, the chunk line with the collection total,
-// and the typed classification line. Each line renders only when its data is
-// present so terminal acks stay compact.
+// renderProgressLines renders the resolved progress: heading, the shared
+// outcome tree (file and chunk breakdown), and the typed classification line.
+// The outcome tree is emitted verbatim from renderOutcomeBreakdown, so the
+// compact job surfaces and the status templates show a byte-identical tree.
 func renderProgressLines(progress view.ProgressSurface) []string {
-	lines := make([]string, 0, 4)
+	lines := make([]string, 0, 8)
 	if progress.Heading != "" {
 		lines = append(lines, "  "+progress.Heading)
 	}
-	if progress.HasScope {
-		main := fmt.Sprintf(
-			"  📄 %s of %s %s %s",
-			formatCountString(progress.Checked),
-			formatCountString(progress.ScopeTotal),
-			progress.ScopeLabel,
-			progress.CheckVerb,
-		)
-		if progress.CheckVerb == "checked" {
-			main += fmt.Sprintf(
-				" · %s embedded · %s already indexed",
-				formatCountString(progress.Embedded),
-				formatCountString(progress.AlreadyIndexed),
-			)
-		}
-		lines = append(lines, main)
-	}
-	if progress.ChunksThisRun > 0 || progress.ChunksInCollection > 0 {
-		chunkLine := fmt.Sprintf("  🧩 %s chunks added this run", formatCountString(progress.ChunksThisRun))
-		if progress.ChunksReused > 0 {
-			chunkLine += fmt.Sprintf(" · %s reused", formatCountString(progress.ChunksReused))
-		}
-		if progress.ChunksInCollection > 0 {
-			chunkLine += fmt.Sprintf(" · %s in collection", formatCountString(progress.ChunksInCollection))
-		}
-		lines = append(lines, chunkLine)
-	}
+	lines = append(lines, BreakdownLines(progress.Breakdown)...)
 	if progress.ScopeLine != "" {
 		lines = append(lines, "  "+progress.ScopeLine)
 	}
 	return lines
+}
+
+// outcomePresentation is the glyph and label for one outcome kind. The lead
+// glyph types the row before its count: ➕/⏭️ normal, 🗑️ removed, ⏳ pending
+// (transient, will retry), 📏 skipped (deliberate policy), ⚠️ error.
+type outcomePresentation struct {
+	glyph string
+	label string
+}
+
+// outcomeKindPresentation is the one place a semantic kind maps to its glyph
+// and label. Every surface (text, TUI, the wire breakdown rendered back) reads
+// it, so the vocabulary cannot diverge.
+var outcomeKindPresentation = map[view.OutcomeKind]outcomePresentation{
+	view.KindEmbedded:   {glyph: "➕", label: "embedded"},
+	view.KindUnchanged:  {glyph: "⏭️", label: "unchanged"},
+	view.KindRemoved:    {glyph: "🗑️", label: "removed"},
+	view.KindPending:    {glyph: "⏳", label: "pending, not sent yet"},
+	view.KindOversize:   {glyph: "📏", label: "skipped, too large"},
+	view.KindUnreadable: {glyph: "⚠️", label: "error, unreadable"},
+	view.KindAdded:      {glyph: "➕", label: "added"},
+	view.KindReused:     {glyph: "♻️", label: "reused"},
+}
+
+// BreakdownLines formats the shared file-and-chunk outcome tree into plain
+// lines. It is the one formatter for the breakdown, called by every status
+// surface (compact job views, status templates, and the TUI), so a tree can
+// never read differently across commands. Lines are unindented so the block is
+// identical wherever it is placed. The file header renders only when there is
+// measured scope; the chunk header only when there is chunk activity.
+func BreakdownLines(breakdown view.OutcomeBreakdown) []string {
+	lines := make([]string, 0, 8)
+	if len(breakdown.FileRows) > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"📄 %s of %s %s processed",
+			formatCountString(breakdown.Processed),
+			formatCountString(breakdown.ScopeTotal),
+			breakdown.ScopeLabel,
+		))
+		lines = append(lines, renderOutcomeRows(breakdown.FileRows)...)
+	}
+	if len(breakdown.ChunkRows) > 0 {
+		lines = append(lines, fmt.Sprintf("🧩 %s chunks total", formatCountString(breakdown.ChunksTotal)))
+		lines = append(lines, renderOutcomeRows(breakdown.ChunkRows)...)
+	}
+	return lines
+}
+
+// renderOutcomeRows draws each child row under its tree connector: ├─ for every
+// row except the last, which gets └─. The glyph and label come from the kind.
+func renderOutcomeRows(rows []view.OutcomeRow) []string {
+	out := make([]string, 0, len(rows))
+	for index, row := range rows {
+		connector := "├─"
+		if index == len(rows)-1 {
+			connector = "└─"
+		}
+		pres := outcomeKindPresentation[row.Kind]
+		out = append(out, fmt.Sprintf("%s %s %s %s", connector, pres.glyph, formatCountString(row.Count), pres.label))
+	}
+	return out
 }
 
 func renderTimingLines(timing view.TimingView) []string {

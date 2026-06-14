@@ -153,27 +153,25 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 		}
 		changed := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
 		statusView.Percent = int32(progress.OverallPercent + 0.5)
-		statusView.FilesProcessed = progress.FilesProcessed
-		statusView.FilesTotal = progress.FilesTotal
 		statusView.FilesInCodebase = progress.FilesInCodebase
 		statusView.FilesChanged = changed
 		statusView.FilesUnchanged = max(progress.FilesInCodebase-changed, 0)
-		statusView.FilesReEmbedded = progress.FilesEmbedded
-		statusView.FilesRemoved = progress.FilesRemoved
-		statusView.FilesSkippedOversize = progress.FilesSkippedOversize
-		statusView.FilesSkippedUnreadable = progress.FilesSkippedUnreadable
-		statusView.FilesProcessedChanged = progress.FilesEmbedded + progress.FilesRemoved + progress.FilesSkippedOversize + progress.FilesSkippedUnreadable
 		statusView.Heading = headingFor(codebase, activeJob)
-		statusView.ChunksAdded = progress.ChunksGenerated
-		statusView.ChunksReused = progress.ChunksReused
-		statusView.ChunksEmbeddedThisRun = progress.ChunksGenerated
-		statusView.ChunksTotal = max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated)
-		if statusView.ChunksTotal == 0 {
-			statusView.ChunksTotal = codebase.LiveChunkTotal
+		// The collection still holds the prior run's chunks until this run
+		// replaces them, so when the live count has not arrived yet the chunk
+		// tree shows the standing total rather than a momentary zero. The floor
+		// is folded into the progress the shared resolver reads, so the status
+		// tree stays byte-identical to the compact job tree once live chunks
+		// arrive.
+		chunkProgress := progress
+		chunkProgress.ChunksTotal = max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated)
+		if chunkProgress.ChunksTotal == 0 {
+			chunkProgress.ChunksTotal = codebase.LiveChunkTotal
 		}
-		if statusView.ChunksTotal == 0 && codebase.LastSuccessfulRun != nil {
-			statusView.ChunksTotal = codebase.LastSuccessfulRun.TotalChunks
+		if chunkProgress.ChunksTotal == 0 && codebase.LastSuccessfulRun != nil {
+			chunkProgress.ChunksTotal = codebase.LastSuccessfulRun.TotalChunks
 		}
+		statusView.Breakdown = resolveOutcomeBreakdown(chunkProgress)
 		embedding = progress.FilesTotal > 0 || progress.FilesInCodebase > 0
 	}
 	if !embedding {
@@ -189,32 +187,29 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 // timestamp set, so each caller fills the subset its template reads.
 func blankStatusView(name string, updatedAt string) view.StatusView {
 	return view.StatusView{
-		Name:                   name,
-		HasStats:               false,
-		Files:                  0,
-		Chunks:                 0,
-		SkippedLine:            "",
-		PrepareLabel:           "",
-		WaitLabel:              "",
-		Percent:                0,
-		Heading:                "",
-		FilesProcessed:         0,
-		FilesTotal:             0,
-		ChunksReused:           0,
-		ChunksEmbeddedThisRun:  0,
-		FilesInCodebase:        0,
-		FilesChanged:           0,
-		FilesUnchanged:         0,
-		FilesProcessedChanged:  0,
-		FilesReEmbedded:        0,
-		FilesRemoved:           0,
-		FilesSkippedOversize:   0,
-		FilesSkippedUnreadable: 0,
-		ChunksAdded:            0,
-		ChunksTotal:            0,
-		ReuseForecastLine:      "",
-		UpdatedAt:              updatedAt,
-		SyncNote:               "",
+		Name:            name,
+		HasStats:        false,
+		Files:           0,
+		Chunks:          0,
+		SkippedLine:     "",
+		PrepareLabel:    "",
+		WaitLabel:       "",
+		Percent:         0,
+		Heading:         "",
+		FilesInCodebase: 0,
+		FilesChanged:    0,
+		FilesUnchanged:  0,
+		Breakdown: view.OutcomeBreakdown{
+			ScopeLabel:  "",
+			Processed:   0,
+			ScopeTotal:  0,
+			FileRows:    nil,
+			ChunksTotal: 0,
+			ChunkRows:   nil,
+		},
+		ReuseForecastLine: "",
+		UpdatedAt:         updatedAt,
+		SyncNote:          "",
 	}
 }
 

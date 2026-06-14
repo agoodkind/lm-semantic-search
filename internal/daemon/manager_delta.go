@@ -164,6 +164,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 			SkippedFiles:      nil,
 			SkippedOversize:   0,
 			SkippedUnreadable: 0,
+			SkippedPending:    0,
 		})
 		return deltaPlan{
 			diff:            diff,
@@ -505,6 +506,7 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		SkippedFiles:      []string{},
 		SkippedOversize:   0,
 		SkippedUnreadable: 0,
+		SkippedPending:    0,
 	}
 	for index, relativePath := range changed {
 		if err := ctx.Err(); err != nil {
@@ -555,10 +557,16 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		return deltaOutcome{fallback: false, handled: false, progressed: true}
 	}
 	if fileResult.Skipped {
-		result.SkippedFiles = append(result.SkippedFiles, relativePath)
-		if fileResult.SkipReason == indexer.SkipOversize {
+		switch fileResult.SkipReason {
+		case indexer.SkipOversize:
+			result.SkippedFiles = append(result.SkippedFiles, relativePath)
 			result.SkippedOversize++
-		} else {
+		case indexer.SkipPending:
+			// Transient, not a permanent skip, so it stays out of SkippedFiles (the
+			// ready-view's non-UTF-8 summary) and counts only as pending.
+			result.SkippedPending++
+		case indexer.SkipUnreadable, indexer.SkipNone:
+			result.SkippedFiles = append(result.SkippedFiles, relativePath)
 			result.SkippedUnreadable++
 		}
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
@@ -660,6 +668,7 @@ func (manager *Manager) reportDeltaProgress(jobID string, processed int32, total
 		FilesEmbedded:          result.IndexedFiles,
 		FilesSkippedOversize:   result.SkippedOversize,
 		FilesSkippedUnreadable: result.SkippedUnreadable,
+		FilesPending:           result.SkippedPending,
 		ChunksReused:           reused,
 		ChunksGenerated:        embedded,
 	}, unit)

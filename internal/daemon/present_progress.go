@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/pbconv"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
 
@@ -73,49 +74,27 @@ func progressHeading(job model.Job) string {
 	}
 }
 
-// scopeLabelFor types the denominator from the run mode and unit.
-func scopeLabelFor(runMode string, unit string, total int32) string {
-	plural := unit
-	if total != 1 {
-		plural = unit + "s"
-	}
-	switch runMode {
-	case model.RunModeFirstBuild:
-		return plural + " (full build)"
-	case model.RunModeForcedReindex:
-		return plural + " (forced reindex)"
-	case model.RunModeResuming, model.RunModeChanged:
-		return "changed " + plural
-	default:
-		return plural
-	}
-}
-
-// checkVerbFor is "checked" for fast-forward passes and "embedded" otherwise.
-func checkVerbFor(runMode string) string {
-	switch runMode {
-	case model.RunModeResuming, model.RunModeChanged:
-		return "checked"
-	default:
-		return "embedded"
-	}
+// resolveOutcomeBreakdown adapts a job's model.Progress into the shared resolver
+// in internal/view, the single source of truth for the breakdown. The daemon
+// only copies counters here; the bucket logic, row order, and scope label all
+// live in view.ResolveBreakdown so every surface projects from the same value.
+func resolveOutcomeBreakdown(progress model.Progress) view.OutcomeBreakdown {
+	return view.ResolveBreakdown(pbconv.ProgressCounts(progress))
 }
 
 // resolveProgressSurface reduces a job's progress into the typed view. It is
-// the only reader of Progress fields for presentation.
+// the only reader of Progress fields for the compact job surfaces.
 func resolveProgressSurface(job model.Job) view.ProgressSurface {
 	progress := job.Progress
-	unit := progress.Unit
-	if unit == "" {
-		unit = "file"
-	}
 	scopeUnit := progress.ScopeUnit
 	if scopeUnit == "" {
-		scopeUnit = unit
+		scopeUnit = progress.Unit
+	}
+	if scopeUnit == "" {
+		scopeUnit = "file"
 	}
 
 	active := job.State == model.JobStateQueued || job.State == model.JobStateRunning || job.State == model.JobStateCancelling
-	hasScope := progress.FilesTotal > 0
 
 	percentLabel := fmt.Sprintf("%.1f%%", progress.OverallPercent)
 	if active && !jobScopeKnown(progress) {
@@ -125,10 +104,6 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 			percentLabel = "Preparing to index"
 		}
 	}
-
-	removedAndSkipped := progress.FilesRemoved + progress.FilesSkippedOversize + progress.FilesSkippedUnreadable
-	alreadyIndexed := progress.FilesProcessed - progress.FilesEmbedded - removedAndSkipped
-	alreadyIndexed = max(alreadyIndexed, 0)
 
 	scopeLine := ""
 	if progress.FilesAdded > 0 || progress.FilesModified > 0 || progress.FilesRemoved > 0 {
@@ -146,19 +121,10 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 	}
 
 	return view.ProgressSurface{
-		Heading:            progressHeading(job),
-		HasScope:           hasScope,
-		Checked:            progress.FilesProcessed,
-		ScopeTotal:         progress.FilesTotal,
-		ScopeLabel:         scopeLabelFor(progress.RunMode, unit, progress.FilesTotal),
-		CheckVerb:          checkVerbFor(progress.RunMode),
-		Embedded:           progress.FilesEmbedded,
-		AlreadyIndexed:     alreadyIndexed,
-		ChunksThisRun:      progress.ChunksGenerated,
-		ChunksReused:       progress.ChunksReused,
-		ChunksInCollection: max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated),
-		ScopeLine:          scopeLine,
-		PercentLabel:       percentLabel,
+		Heading:      progressHeading(job),
+		Breakdown:    resolveOutcomeBreakdown(progress),
+		ScopeLine:    scopeLine,
+		PercentLabel: percentLabel,
 	}
 }
 

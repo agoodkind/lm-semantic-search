@@ -79,9 +79,11 @@ func TestGetIndexAdoptsUnregisteredCollection(t *testing.T) {
 	if !present {
 		t.Fatal("adopted codebase is absent from ListIndexes")
 	}
-	if !hook.wasAdded(first.ID) {
-		t.Fatal("adopted codebase was not handed to the watcher")
-	}
+	// The lifecycle hook is invoked from a detached goroutine after adoption, so
+	// poll for the handoff rather than reading it once, which races on slow CI.
+	waitForCondition(t, func() bool {
+		return hook.wasAdded(first.ID)
+	})
 
 	// The adoption refresh sync runs in a detached goroutine. Wait for it to
 	// complete (LastSuccessfulRun is set only when the job finishes) so its

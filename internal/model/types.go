@@ -129,6 +129,10 @@ type Progress struct {
 	// indexer declined to embed: past the size cap, or not valid UTF-8.
 	FilesSkippedOversize   int32 `json:"files_skipped_oversize"`
 	FilesSkippedUnreadable int32 `json:"files_skipped_unreadable"`
+	// FilesPending counts changed items whose content was not delivered this pass
+	// (the conversation-ingest undelivered case). Transient, not an error; the
+	// daemon re-requests them on the next sync.
+	FilesPending int32 `json:"files_pending"`
 	// ChunksTotal is the live whole-collection chunk count, populated at render
 	// time for an in-flight incremental run so status can show the running total
 	// rather than only the per-run additions. Zero means not populated.
