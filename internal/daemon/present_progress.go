@@ -91,31 +91,124 @@ func scopeLabelFor(runMode string, unit string, total int32) string {
 	}
 }
 
-// checkVerbFor is "checked" for fast-forward passes and "embedded" otherwise.
-func checkVerbFor(runMode string) string {
+// Outcome row glyphs. The lead glyph types each child line before its count so
+// a reader sees normal vs transient vs error at a glance.
+const (
+	glyphEmbedded  = "➕"
+	glyphUnchanged = "⏭️"
+	glyphRemoved   = "🗑️"
+	glyphPending   = "⏳"
+	glyphOversize  = "📏"
+	glyphError     = "⚠️"
+	glyphReused    = "♻️"
+)
+
+// reuseCapableRunMode reports whether a pass can serve chunks from already
+// embedded vectors, so the chunk tree shows a reused row even at zero. A first
+// build has no prior vectors, so it omits the row entirely.
+func reuseCapableRunMode(runMode string) bool {
 	switch runMode {
-	case model.RunModeResuming, model.RunModeChanged:
-		return "checked"
+	case model.RunModeChanged, model.RunModeResuming, model.RunModeForcedReindex:
+		return true
 	default:
-		return "embedded"
+		return false
 	}
 }
 
-// resolveProgressSurface reduces a job's progress into the typed view. It is
-// the only reader of Progress fields for presentation.
-func resolveProgressSurface(job model.Job) view.ProgressSurface {
-	progress := job.Progress
+// resolveOutcomeBreakdown reduces raw progress counters into the shared outcome
+// tree. It is the single source of truth for the file-and-chunk breakdown, so
+// every status surface renders an identical tree. The file rows partition the
+// processed set: embedded plus the clamped seed-reuse remainder (unchanged) plus
+// removed plus the skip buckets sum to Processed. The unreadable bucket labels
+// by unit, since a conversation's only unreadable skip is an undelivered
+// document (verified in item_source.go indexOne), so a document reads as a
+// transient "pending" while a file reads as a real "error".
+func resolveOutcomeBreakdown(progress model.Progress) view.OutcomeBreakdown {
 	unit := progress.Unit
 	if unit == "" {
 		unit = "file"
 	}
+
+	embedded := progress.FilesEmbedded
+	oversize := progress.FilesSkippedOversize
+	unreadable := progress.FilesSkippedUnreadable
+	removed := progress.FilesRemoved
+	unchanged := max(progress.FilesProcessed-embedded-oversize-unreadable, 0)
+
+	// The changed set is known from the diff before the embed loop reports a
+	// FilesTotal, so the denominator and the scope gate fold it in. This keeps
+	// the file tree showing "0 of N processed" during the brief pre-embed window
+	// rather than vanishing until the first per-file update.
+	changedSet := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
+	hasFileScope := progress.FilesTotal > 0 || progress.FilesProcessed > 0 || removed > 0 || changedSet > 0
+
+	processed := embedded + unchanged + removed + oversize + unreadable
+	scopeTotal := max(progress.FilesTotal+removed, changedSet)
+	chunksTotal := max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated)
+	hasChunks := hasFileScope || chunksTotal > 0 || progress.ChunksGenerated > 0
+
+	return view.OutcomeBreakdown{
+		ScopeLabel:  scopeLabelFor(progress.RunMode, unit, scopeTotal),
+		Processed:   processed,
+		ScopeTotal:  scopeTotal,
+		FileRows:    outcomeFileRows(hasFileScope, unit, embedded, unchanged, removed, oversize, unreadable),
+		ChunksTotal: chunksTotal,
+		ChunkRows:   outcomeChunkRows(hasChunks, progress.RunMode, progress.ChunksGenerated, progress.ChunksReused),
+	}
+}
+
+// outcomeFileRows builds the file children in fixed order, omitting a zero
+// bucket except embedded, which always renders. The unreadable bucket labels by
+// unit: a document reads as transient "pending", a file as a real "error".
+func outcomeFileRows(hasScope bool, unit string, embedded, unchanged, removed, oversize, unreadable int32) []view.OutcomeRow {
+	if !hasScope {
+		return nil
+	}
+	rows := []view.OutcomeRow{{Glyph: glyphEmbedded, Count: embedded, Label: "embedded"}}
+	if unchanged > 0 {
+		rows = append(rows, view.OutcomeRow{Glyph: glyphUnchanged, Count: unchanged, Label: "unchanged"})
+	}
+	if removed > 0 {
+		rows = append(rows, view.OutcomeRow{Glyph: glyphRemoved, Count: removed, Label: "removed"})
+	}
+	if unit == "document" && unreadable > 0 {
+		rows = append(rows, view.OutcomeRow{Glyph: glyphPending, Count: unreadable, Label: "pending, not sent yet"})
+	}
+	if oversize > 0 {
+		rows = append(rows, view.OutcomeRow{Glyph: glyphOversize, Count: oversize, Label: "skipped, too large"})
+	}
+	if unit != "document" && unreadable > 0 {
+		rows = append(rows, view.OutcomeRow{Glyph: glyphError, Count: unreadable, Label: "error, unreadable"})
+	}
+	return rows
+}
+
+// outcomeChunkRows builds the chunk children: added always, reused on a
+// reuse-capable pass (shown even at zero), omitted for a first build.
+func outcomeChunkRows(hasChunks bool, runMode string, added, reused int32) []view.OutcomeRow {
+	if !hasChunks {
+		return nil
+	}
+	rows := []view.OutcomeRow{{Glyph: glyphEmbedded, Count: added, Label: "added"}}
+	if reuseCapableRunMode(runMode) {
+		rows = append(rows, view.OutcomeRow{Glyph: glyphReused, Count: reused, Label: "reused"})
+	}
+	return rows
+}
+
+// resolveProgressSurface reduces a job's progress into the typed view. It is
+// the only reader of Progress fields for the compact job surfaces.
+func resolveProgressSurface(job model.Job) view.ProgressSurface {
+	progress := job.Progress
 	scopeUnit := progress.ScopeUnit
 	if scopeUnit == "" {
-		scopeUnit = unit
+		scopeUnit = progress.Unit
+	}
+	if scopeUnit == "" {
+		scopeUnit = "file"
 	}
 
 	active := job.State == model.JobStateQueued || job.State == model.JobStateRunning || job.State == model.JobStateCancelling
-	hasScope := progress.FilesTotal > 0
 
 	percentLabel := fmt.Sprintf("%.1f%%", progress.OverallPercent)
 	if active && !jobScopeKnown(progress) {
@@ -125,10 +218,6 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 			percentLabel = "Preparing to index"
 		}
 	}
-
-	removedAndSkipped := progress.FilesRemoved + progress.FilesSkippedOversize + progress.FilesSkippedUnreadable
-	alreadyIndexed := progress.FilesProcessed - progress.FilesEmbedded - removedAndSkipped
-	alreadyIndexed = max(alreadyIndexed, 0)
 
 	scopeLine := ""
 	if progress.FilesAdded > 0 || progress.FilesModified > 0 || progress.FilesRemoved > 0 {
@@ -146,19 +235,10 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 	}
 
 	return view.ProgressSurface{
-		Heading:            progressHeading(job),
-		HasScope:           hasScope,
-		Checked:            progress.FilesProcessed,
-		ScopeTotal:         progress.FilesTotal,
-		ScopeLabel:         scopeLabelFor(progress.RunMode, unit, progress.FilesTotal),
-		CheckVerb:          checkVerbFor(progress.RunMode),
-		Embedded:           progress.FilesEmbedded,
-		AlreadyIndexed:     alreadyIndexed,
-		ChunksThisRun:      progress.ChunksGenerated,
-		ChunksReused:       progress.ChunksReused,
-		ChunksInCollection: max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated),
-		ScopeLine:          scopeLine,
-		PercentLabel:       percentLabel,
+		Heading:      progressHeading(job),
+		Breakdown:    resolveOutcomeBreakdown(progress),
+		ScopeLine:    scopeLine,
+		PercentLabel: percentLabel,
 	}
 }
 

@@ -6,7 +6,40 @@ import (
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/view"
 )
+
+// findRow returns the outcome row with the given label, or fails the test.
+func findRow(t *testing.T, rows []view.OutcomeRow, label string) view.OutcomeRow {
+	t.Helper()
+	for _, row := range rows {
+		if row.Label == label {
+			return row
+		}
+	}
+	t.Fatalf("row %q not found in %+v", label, rows)
+	return view.OutcomeRow{Glyph: "", Count: 0, Label: ""}
+}
+
+// hasRow reports whether a row with the given label is present.
+func hasRow(rows []view.OutcomeRow, label string) bool {
+	for _, row := range rows {
+		if row.Label == label {
+			return true
+		}
+	}
+	return false
+}
+
+// sumRowCounts totals the counts of every row, the invariant the file tree must
+// satisfy against Processed.
+func sumRowCounts(rows []view.OutcomeRow) int32 {
+	var total int32
+	for _, row := range rows {
+		total += row.Count
+	}
+	return total
+}
 
 func TestFormatCount(t *testing.T) {
 	t.Parallel()
@@ -45,20 +78,31 @@ func TestResolveProgressSurfaceResumingIngest(t *testing.T) {
 		},
 	}
 	got := resolveProgressSurface(job)
+	breakdown := got.Breakdown
 	if got.Heading == "" || !strings.Contains(got.Heading, "Resuming after restart") {
 		t.Fatalf("heading = %q, want the resume heading", got.Heading)
 	}
-	if got.ScopeLabel != "changed documents" {
-		t.Fatalf("scope label = %q, want %q", got.ScopeLabel, "changed documents")
+	if breakdown.ScopeLabel != "changed documents" {
+		t.Fatalf("scope label = %q, want %q", breakdown.ScopeLabel, "changed documents")
 	}
-	if got.CheckVerb != "checked" {
-		t.Fatalf("check verb = %q, want checked", got.CheckVerb)
+	// The 226 that the old derived "already indexed" column carried is now the
+	// honest seed-reuse remainder, shown as an unchanged row, and the file rows
+	// sum to Processed rather than hiding three buckets.
+	if unchanged := findRow(t, breakdown.FileRows, "unchanged").Count; unchanged != 226 {
+		t.Fatalf("unchanged = %d, want 226 (238 processed minus 12 embedded)", unchanged)
 	}
-	if got.AlreadyIndexed != 226 {
-		t.Fatalf("already indexed = %d, want 226 (238 checked minus 12 embedded)", got.AlreadyIndexed)
+	if embedded := findRow(t, breakdown.FileRows, "embedded").Count; embedded != 12 {
+		t.Fatalf("embedded = %d, want 12", embedded)
 	}
-	if got.ChunksInCollection != 33240 {
-		t.Fatalf("collection total = %d, want 33240", got.ChunksInCollection)
+	if breakdown.Processed != 238 || sumRowCounts(breakdown.FileRows) != 238 {
+		t.Fatalf("processed = %d, file rows sum = %d, want both 238", breakdown.Processed, sumRowCounts(breakdown.FileRows))
+	}
+	if breakdown.ChunksTotal != 33240 {
+		t.Fatalf("collection total = %d, want 33240", breakdown.ChunksTotal)
+	}
+	// A resuming pass is reuse-capable, so the reused chunk row shows even at zero.
+	if !hasRow(breakdown.ChunkRows, "reused") {
+		t.Fatalf("reused row missing on a reuse-capable pass: %+v", breakdown.ChunkRows)
 	}
 	if !strings.Contains(got.ScopeLine, "1,004 conversations added · 7 modified") {
 		t.Fatalf("scope line = %q, want the typed classification", got.ScopeLine)
@@ -80,11 +124,19 @@ func TestResolveProgressSurfaceFirstBuild(t *testing.T) {
 		},
 	}
 	got := resolveProgressSurface(job)
-	if got.ScopeLabel != "files (full build)" {
-		t.Fatalf("scope label = %q, want %q", got.ScopeLabel, "files (full build)")
+	breakdown := got.Breakdown
+	if breakdown.ScopeLabel != "files (full build)" {
+		t.Fatalf("scope label = %q, want %q", breakdown.ScopeLabel, "files (full build)")
 	}
-	if got.CheckVerb != "embedded" {
-		t.Fatalf("check verb = %q, want embedded for a full build", got.CheckVerb)
+	if embedded := findRow(t, breakdown.FileRows, "embedded").Count; embedded != 10 {
+		t.Fatalf("embedded = %d, want 10 for a full build", embedded)
+	}
+	if hasRow(breakdown.FileRows, "unchanged") {
+		t.Fatalf("a full build should have no unchanged row: %+v", breakdown.FileRows)
+	}
+	// A first build has no prior vectors, so the chunk tree omits the reused row.
+	if hasRow(breakdown.ChunkRows, "reused") {
+		t.Fatalf("a first build should omit the reused row: %+v", breakdown.ChunkRows)
 	}
 }
 

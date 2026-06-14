@@ -1,7 +1,4 @@
 📁 {{ .Name }}
 🔄 {{ .Heading }}: {{ .Percent }}%
-📥 {{ .FilesProcessed }} of {{ .FilesTotal }} files processed
-🧩 {{ .ChunksTotal }} chunks total
-├─ ♻️ {{ .ChunksReused }} reused
-└─ ➕ {{ .ChunksEmbeddedThisRun }} embedded this run
+{{ .BreakdownBlock }}
 🕐 Updated {{ .UpdatedAt }}

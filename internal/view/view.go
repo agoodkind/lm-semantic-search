@@ -35,31 +35,51 @@ const (
 	RunModeResuming      RunMode = "resuming"
 )
 
-// ProgressSurface is the resolved progress view. Every number carries its
-// label so a bare unlabeled total can never render.
+// OutcomeRow is one already-resolved child line in an outcome tree: a glyph, a
+// count, and a label. The renderer joins them under a tree connector. The lead
+// glyph carries the status before the count: ➕/⏭️ normal, 🗑️ removed,
+// ⏳ pending (transient, will retry), 📏 skipped (deliberate policy), ⚠️ error.
+type OutcomeRow struct {
+	Glyph string
+	Count int32
+	Label string
+}
+
+// OutcomeBreakdown is the resolved file-and-chunk outcome tree shared by every
+// status surface. It is built once at the daemon boundary (resolveOutcomeBreakdown)
+// so the compact job views and the codebase status templates render a
+// byte-identical tree, which is the structural guard against diverging status
+// vocabularies. The file rows always sum to Processed, and a zero bucket is
+// omitted, except the embedded file row and the added chunk row, which always
+// render.
+type OutcomeBreakdown struct {
+	// ScopeLabel types the denominator, for example "changed files" or
+	// "files (full build)".
+	ScopeLabel string
+	// Processed is the N in "N of M ... processed"; it equals the sum of the
+	// FileRows counts.
+	Processed int32
+	// ScopeTotal is the M denominator.
+	ScopeTotal int32
+	// FileRows are the per-outcome file children in fixed order: embedded,
+	// unchanged, removed, pending, too-large, error. Empty when no scope is
+	// measured yet.
+	FileRows []OutcomeRow
+	// ChunksTotal is the whole-collection chunk count for the chunk tree header.
+	ChunksTotal int32
+	// ChunkRows are the chunk children: added always, reused on a reuse-capable
+	// pass (shown even at zero), omitted for a first build. Empty when there is
+	// no chunk activity to report.
+	ChunkRows []OutcomeRow
+}
+
+// ProgressSurface is the resolved progress view for the compact job surfaces.
 type ProgressSurface struct {
 	// Heading names the pass in plain words, empty for terminal entries.
 	Heading string
-	// HasScope reports whether the run has measured its work scope.
-	HasScope bool
-	// Checked of ScopeTotal items walked so far; ScopeLabel types the
-	// denominator (for example "changed documents" or "files (full build)").
-	Checked    int32
-	ScopeTotal int32
-	ScopeLabel string
-	// CheckVerb is "checked" for a pass that fast-forwards through unchanged
-	// work and "embedded" for a pass that embeds everything it walks.
-	CheckVerb string
-	// Embedded and AlreadyIndexed split Checked into real work and
-	// pass-throughs. Shown only when CheckVerb is "checked".
-	Embedded       int32
-	AlreadyIndexed int32
-	// Chunk counts: this run, reused from prior vectors, and the collection
-	// total. ChunksInCollection of zero means unknown and the segment is
-	// omitted rather than rendered as a shrunken corpus.
-	ChunksThisRun      int32
-	ChunksReused       int32
-	ChunksInCollection int32
+	// Breakdown is the shared file-and-chunk outcome tree, rendered identically
+	// here and in the codebase status templates.
+	Breakdown OutcomeBreakdown
 	// ScopeLine is the classification line with its own unit, for example
 	// "Changed since last sync: 1,004 conversations added · 7 modified".
 	// Empty when the run classified nothing.
@@ -103,31 +123,23 @@ type ListSummary struct {
 
 // StatusView is the codebase status template view.
 type StatusView struct {
-	Name                   string
-	UpdatedAt              string
-	PrepareLabel           string
-	WaitLabel              string
-	Heading                string
-	Percent                int32
-	FilesProcessed         int32
-	FilesTotal             int32
-	FilesInCodebase        int32
-	FilesChanged           int32
-	FilesUnchanged         int32
-	FilesReEmbedded        int32
-	FilesRemoved           int32
-	FilesSkippedOversize   int32
-	FilesSkippedUnreadable int32
-	FilesProcessedChanged  int32
-	ChunksAdded            int32
-	ChunksReused           int32
-	ChunksEmbeddedThisRun  int32
-	ChunksTotal            int32
-	Files                  int32
-	Chunks                 int32
-	SkippedLine            string
-	SyncNote               string
-	HasStats               bool
+	Name            string
+	UpdatedAt       string
+	PrepareLabel    string
+	WaitLabel       string
+	Heading         string
+	Percent         int32
+	FilesInCodebase int32
+	FilesChanged    int32
+	FilesUnchanged  int32
+	// Breakdown is the shared outcome tree; the status template emits it as one
+	// block via BreakdownBlock, so it stays identical to the compact job view.
+	Breakdown   OutcomeBreakdown
+	Files       int32
+	Chunks      int32
+	SkippedLine string
+	SyncNote    string
+	HasStats    bool
 }
 
 // BannerView is the dependency health banner.
