@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/pbconv"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
 
@@ -78,22 +79,7 @@ func progressHeading(job model.Job) string {
 // only copies counters here; the bucket logic, row order, and scope label all
 // live in view.ResolveBreakdown so every surface projects from the same value.
 func resolveOutcomeBreakdown(progress model.Progress) view.OutcomeBreakdown {
-	return view.ResolveBreakdown(view.ProgressCounts{
-		RunMode:                progress.RunMode,
-		Unit:                   progress.Unit,
-		FilesTotal:             progress.FilesTotal,
-		FilesProcessed:         progress.FilesProcessed,
-		FilesAdded:             progress.FilesAdded,
-		FilesModified:          progress.FilesModified,
-		FilesRemoved:           progress.FilesRemoved,
-		FilesEmbedded:          progress.FilesEmbedded,
-		FilesSkippedOversize:   progress.FilesSkippedOversize,
-		FilesSkippedUnreadable: progress.FilesSkippedUnreadable,
-		FilesPending:           progress.FilesPending,
-		ChunksTotal:            progress.ChunksTotal,
-		ChunksReused:           progress.ChunksReused,
-		ChunksGenerated:        progress.ChunksGenerated,
-	})
+	return view.ResolveBreakdown(pbconv.ProgressCounts(progress))
 }
 
 // resolveProgressSurface reduces a job's progress into the typed view. It is

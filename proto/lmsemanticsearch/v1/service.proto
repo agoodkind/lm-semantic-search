@@ -85,6 +85,42 @@ message Progress {
   // unit is the human progress noun for the counted items: "file" for a code
   // index and "document" for a conversation index. Empty reads as "file".
   string unit = 13;
+  // breakdown is the resolved file-and-chunk outcome tree, the same structured
+  // value every surface renders, so JSON consumers get the exact tree without
+  // parsing the human text. Its file rows sum to processed.
+  OutcomeBreakdown breakdown = 14;
+}
+
+// OutcomeKind is the semantic identity of one outcome row. The render layer maps
+// a kind to its glyph and label, so the kind is the wire-safe representation.
+enum OutcomeKind {
+  OUTCOME_KIND_UNSPECIFIED = 0;
+  OUTCOME_KIND_EMBEDDED = 1;
+  OUTCOME_KIND_UNCHANGED = 2;
+  OUTCOME_KIND_REMOVED = 3;
+  OUTCOME_KIND_PENDING = 4;
+  OUTCOME_KIND_OVERSIZE = 5;
+  OUTCOME_KIND_UNREADABLE = 6;
+  OUTCOME_KIND_ADDED = 7;
+  OUTCOME_KIND_REUSED = 8;
+}
+
+// OutcomeRow is one child line in an outcome tree: a semantic kind and a count.
+message OutcomeRow {
+  OutcomeKind kind = 1;
+  int32 count = 2;
+}
+
+// OutcomeBreakdown mirrors view.OutcomeBreakdown: the resolved tree shared by
+// every surface. scope_label is the resolved "N of M ..." denominator text;
+// file_rows always sum to processed.
+message OutcomeBreakdown {
+  string scope_label = 1;
+  int32 processed = 2;
+  int32 scope_total = 3;
+  repeated OutcomeRow file_rows = 4;
+  int32 chunks_total = 5;
+  repeated OutcomeRow chunk_rows = 6;
 }
 
 message JobError {

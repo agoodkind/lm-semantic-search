@@ -6,6 +6,7 @@ import (
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/view"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -100,6 +101,7 @@ func ToJob(job model.Job) *pb.Job {
 			CollectionRowsWritten:     job.Progress.CollectionRowsWritten,
 			LastEventAt:               ts(job.Progress.LastEventAt),
 			HeartbeatAt:               ts(job.Progress.HeartbeatAt),
+			Breakdown:                 BreakdownProto(job.Progress),
 		},
 		Config:      toIndexConfig(job.Config),
 		StartedAt:   ts(job.StartedAt),
@@ -114,6 +116,74 @@ func ToJob(job model.Job) *pb.Job {
 		}
 	}
 	return result
+}
+
+// ProgressCounts maps a job's model.Progress into the resolver input. It is the
+// one place the raw counters become view.ProgressCounts, shared by the daemon's
+// human adapter and the wire breakdown, so the breakdown input never diverges.
+func ProgressCounts(p model.Progress) view.ProgressCounts {
+	return view.ProgressCounts{
+		RunMode:                p.RunMode,
+		Unit:                   p.Unit,
+		FilesTotal:             p.FilesTotal,
+		FilesProcessed:         p.FilesProcessed,
+		FilesAdded:             p.FilesAdded,
+		FilesModified:          p.FilesModified,
+		FilesRemoved:           p.FilesRemoved,
+		FilesEmbedded:          p.FilesEmbedded,
+		FilesSkippedOversize:   p.FilesSkippedOversize,
+		FilesSkippedUnreadable: p.FilesSkippedUnreadable,
+		FilesPending:           p.FilesPending,
+		ChunksTotal:            p.ChunksTotal,
+		ChunksReused:           p.ChunksReused,
+		ChunksGenerated:        p.ChunksGenerated,
+	}
+}
+
+// BreakdownProto resolves a job's progress into the proto outcome breakdown, the
+// wire mirror of view.ResolveBreakdown, so JSON consumers read the same tree the
+// human surfaces render.
+func BreakdownProto(p model.Progress) *pb.OutcomeBreakdown {
+	breakdown := view.ResolveBreakdown(ProgressCounts(p))
+	return &pb.OutcomeBreakdown{
+		ScopeLabel:  breakdown.ScopeLabel,
+		Processed:   breakdown.Processed,
+		ScopeTotal:  breakdown.ScopeTotal,
+		FileRows:    outcomeRowsToProto(breakdown.FileRows),
+		ChunksTotal: breakdown.ChunksTotal,
+		ChunkRows:   outcomeRowsToProto(breakdown.ChunkRows),
+	}
+}
+
+func outcomeRowsToProto(rows []view.OutcomeRow) []*pb.OutcomeRow {
+	out := make([]*pb.OutcomeRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, &pb.OutcomeRow{Kind: outcomeKindToProto(row.Kind), Count: row.Count})
+	}
+	return out
+}
+
+func outcomeKindToProto(kind view.OutcomeKind) pb.OutcomeKind {
+	switch kind {
+	case view.KindEmbedded:
+		return pb.OutcomeKind_OUTCOME_KIND_EMBEDDED
+	case view.KindUnchanged:
+		return pb.OutcomeKind_OUTCOME_KIND_UNCHANGED
+	case view.KindRemoved:
+		return pb.OutcomeKind_OUTCOME_KIND_REMOVED
+	case view.KindPending:
+		return pb.OutcomeKind_OUTCOME_KIND_PENDING
+	case view.KindOversize:
+		return pb.OutcomeKind_OUTCOME_KIND_OVERSIZE
+	case view.KindUnreadable:
+		return pb.OutcomeKind_OUTCOME_KIND_UNREADABLE
+	case view.KindAdded:
+		return pb.OutcomeKind_OUTCOME_KIND_ADDED
+	case view.KindReused:
+		return pb.OutcomeKind_OUTCOME_KIND_REUSED
+	default:
+		return pb.OutcomeKind_OUTCOME_KIND_UNSPECIFIED
+	}
 }
 
 // jobOutcome resolves the terminal result token for the wire: "succeeded",
