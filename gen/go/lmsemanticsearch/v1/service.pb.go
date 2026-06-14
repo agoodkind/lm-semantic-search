@@ -1078,8 +1078,13 @@ type Codebase struct {
 	// zero for every other state and lets a list row show that a pending build is
 	// cheap.
 	ReuseSiblingCount int32 `protobuf:"varint,17,opt,name=reuse_sibling_count,json=reuseSiblingCount,proto3" json:"reuse_sibling_count,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// active_progress carries the live job's progress (including its breakdown)
+	// for a codebase that is currently indexing, so the list and the TUI render
+	// the same per-row tree the status surface shows. Nil when there is no active
+	// job.
+	ActiveProgress *Progress `protobuf:"bytes,18,opt,name=active_progress,json=activeProgress,proto3" json:"active_progress,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Codebase) Reset() {
@@ -1222,6 +1227,13 @@ func (x *Codebase) GetReuseSiblingCount() int32 {
 		return x.ReuseSiblingCount
 	}
 	return 0
+}
+
+func (x *Codebase) GetActiveProgress() *Progress {
+	if x != nil {
+		return x.ActiveProgress
+	}
+	return nil
 }
 
 type Job struct {
@@ -4221,7 +4233,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0fIndexRunFailure\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12:\n" +
 	"\x19last_attempted_percentage\x18\x02 \x01(\x05R\x17lastAttemptedPercentage\x127\n" +
-	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\x9e\x06\n" +
+	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\xe6\x06\n" +
 	"\bCodebase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0ecanonical_path\x18\x02 \x01(\tR\rcanonicalPath\x12\x16\n" +
@@ -4241,7 +4253,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\vglyph_token\x18\x0f \x01(\tR\n" +
 	"glyphToken\x12!\n" +
 	"\fstatus_label\x18\x10 \x01(\tR\vstatusLabel\x12.\n" +
-	"\x13reuse_sibling_count\x18\x11 \x01(\x05R\x11reuseSiblingCountJ\x04\b\x03\x10\x04R\aaliases\"\xb7\x06\n" +
+	"\x13reuse_sibling_count\x18\x11 \x01(\x05R\x11reuseSiblingCount\x12F\n" +
+	"\x0factive_progress\x18\x12 \x01(\v2\x1d.lmsemanticsearch.v1.ProgressR\x0eactiveProgressJ\x04\b\x03\x10\x04R\aaliases\"\xb7\x06\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
@@ -4591,93 +4604,94 @@ var file_lmsemanticsearch_v1_service_proto_depIdxs = []int32{
 	13, // 11: lmsemanticsearch.v1.Codebase.last_failed_run:type_name -> lmsemanticsearch.v1.IndexRunFailure
 	6,  // 12: lmsemanticsearch.v1.Codebase.effective_config:type_name -> lmsemanticsearch.v1.IndexConfig
 	59, // 13: lmsemanticsearch.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
-	4,  // 14: lmsemanticsearch.v1.Job.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	7,  // 15: lmsemanticsearch.v1.Job.progress:type_name -> lmsemanticsearch.v1.Progress
-	6,  // 16: lmsemanticsearch.v1.Job.config:type_name -> lmsemanticsearch.v1.IndexConfig
-	59, // 17: lmsemanticsearch.v1.Job.started_at:type_name -> google.protobuf.Timestamp
-	59, // 18: lmsemanticsearch.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
-	59, // 19: lmsemanticsearch.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
-	10, // 20: lmsemanticsearch.v1.Job.error:type_name -> lmsemanticsearch.v1.JobError
-	5,  // 21: lmsemanticsearch.v1.StartIndexRequest.splitter:type_name -> lmsemanticsearch.v1.SplitterConfig
-	4,  // 22: lmsemanticsearch.v1.StartIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	4,  // 23: lmsemanticsearch.v1.ClearIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	4,  // 24: lmsemanticsearch.v1.CancelJobRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	4,  // 25: lmsemanticsearch.v1.SyncIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	4,  // 26: lmsemanticsearch.v1.GetIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	14, // 27: lmsemanticsearch.v1.GetIndexResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
-	15, // 28: lmsemanticsearch.v1.GetIndexResponse.active_job:type_name -> lmsemanticsearch.v1.Job
-	29, // 29: lmsemanticsearch.v1.GetIndexResponse.classification:type_name -> lmsemanticsearch.v1.PathClassification
-	11, // 30: lmsemanticsearch.v1.GetIndexResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	1,  // 31: lmsemanticsearch.v1.PathClassification.kind:type_name -> lmsemanticsearch.v1.PathClassification.Kind
-	14, // 32: lmsemanticsearch.v1.ListIndexesResponse.indexes:type_name -> lmsemanticsearch.v1.Codebase
-	11, // 33: lmsemanticsearch.v1.ListIndexesResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	15, // 34: lmsemanticsearch.v1.GetJobResponse.job:type_name -> lmsemanticsearch.v1.Job
-	11, // 35: lmsemanticsearch.v1.GetJobResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	15, // 36: lmsemanticsearch.v1.ListJobsResponse.jobs:type_name -> lmsemanticsearch.v1.Job
-	11, // 37: lmsemanticsearch.v1.ListJobsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	15, // 38: lmsemanticsearch.v1.WatchJobsResponse.job:type_name -> lmsemanticsearch.v1.Job
-	4,  // 39: lmsemanticsearch.v1.SearchCodeRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	16, // 40: lmsemanticsearch.v1.SearchCodeResponse.results:type_name -> lmsemanticsearch.v1.SearchResult
-	14, // 41: lmsemanticsearch.v1.SearchCodeResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
-	15, // 42: lmsemanticsearch.v1.SearchCodeResponse.active_job:type_name -> lmsemanticsearch.v1.Job
-	11, // 43: lmsemanticsearch.v1.SearchCodeResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	4,  // 44: lmsemanticsearch.v1.RegisterConversationCollectionRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	42, // 45: lmsemanticsearch.v1.SyncConversationManifestRequest.manifest:type_name -> lmsemanticsearch.v1.ConversationFingerprint
-	4,  // 46: lmsemanticsearch.v1.SyncConversationManifestRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	17, // 47: lmsemanticsearch.v1.UpsertConversationDocumentsRequest.documents:type_name -> lmsemanticsearch.v1.ConversationDocument
-	4,  // 48: lmsemanticsearch.v1.UpsertConversationDocumentsRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	42, // 49: lmsemanticsearch.v1.UpsertConversationDocumentsRequest.manifest:type_name -> lmsemanticsearch.v1.ConversationFingerprint
-	4,  // 50: lmsemanticsearch.v1.DeleteConversationRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	49, // 51: lmsemanticsearch.v1.SearchConversationsRequest.filter:type_name -> lmsemanticsearch.v1.ConversationSearchFilter
-	18, // 52: lmsemanticsearch.v1.SearchConversationsResponse.results:type_name -> lmsemanticsearch.v1.ConversationSearchResult
-	11, // 53: lmsemanticsearch.v1.SearchConversationsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	49, // 54: lmsemanticsearch.v1.SearchWithinConversationRequest.filter:type_name -> lmsemanticsearch.v1.ConversationSearchFilter
-	18, // 55: lmsemanticsearch.v1.SearchWithinConversationResponse.results:type_name -> lmsemanticsearch.v1.ConversationSearchResult
-	11, // 56: lmsemanticsearch.v1.SearchWithinConversationResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	54, // 57: lmsemanticsearch.v1.DoctorResponse.diagnostics:type_name -> lmsemanticsearch.v1.Diagnostic
-	2,  // 58: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:input_type -> lmsemanticsearch.v1.VersionRequest
-	19, // 59: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:input_type -> lmsemanticsearch.v1.StartIndexRequest
-	21, // 60: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:input_type -> lmsemanticsearch.v1.ClearIndexRequest
-	23, // 61: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:input_type -> lmsemanticsearch.v1.CancelJobRequest
-	25, // 62: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:input_type -> lmsemanticsearch.v1.SyncIndexRequest
-	27, // 63: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:input_type -> lmsemanticsearch.v1.GetIndexRequest
-	30, // 64: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:input_type -> lmsemanticsearch.v1.ListIndexesRequest
-	32, // 65: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:input_type -> lmsemanticsearch.v1.GetJobRequest
-	34, // 66: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:input_type -> lmsemanticsearch.v1.ListJobsRequest
-	36, // 67: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:input_type -> lmsemanticsearch.v1.WatchJobsRequest
-	38, // 68: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:input_type -> lmsemanticsearch.v1.SearchCodeRequest
-	40, // 69: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterConversationCollection:input_type -> lmsemanticsearch.v1.RegisterConversationCollectionRequest
-	43, // 70: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncConversationManifest:input_type -> lmsemanticsearch.v1.SyncConversationManifestRequest
-	45, // 71: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertConversationDocuments:input_type -> lmsemanticsearch.v1.UpsertConversationDocumentsRequest
-	47, // 72: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteConversation:input_type -> lmsemanticsearch.v1.DeleteConversationRequest
-	50, // 73: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchConversations:input_type -> lmsemanticsearch.v1.SearchConversationsRequest
-	52, // 74: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchWithinConversation:input_type -> lmsemanticsearch.v1.SearchWithinConversationRequest
-	55, // 75: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:input_type -> lmsemanticsearch.v1.DoctorRequest
-	57, // 76: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:input_type -> lmsemanticsearch.v1.ShutdownRequest
-	3,  // 77: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:output_type -> lmsemanticsearch.v1.VersionResponse
-	20, // 78: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:output_type -> lmsemanticsearch.v1.StartIndexResponse
-	22, // 79: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:output_type -> lmsemanticsearch.v1.ClearIndexResponse
-	24, // 80: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:output_type -> lmsemanticsearch.v1.CancelJobResponse
-	26, // 81: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:output_type -> lmsemanticsearch.v1.SyncIndexResponse
-	28, // 82: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:output_type -> lmsemanticsearch.v1.GetIndexResponse
-	31, // 83: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:output_type -> lmsemanticsearch.v1.ListIndexesResponse
-	33, // 84: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:output_type -> lmsemanticsearch.v1.GetJobResponse
-	35, // 85: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:output_type -> lmsemanticsearch.v1.ListJobsResponse
-	37, // 86: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:output_type -> lmsemanticsearch.v1.WatchJobsResponse
-	39, // 87: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:output_type -> lmsemanticsearch.v1.SearchCodeResponse
-	41, // 88: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterConversationCollection:output_type -> lmsemanticsearch.v1.RegisterConversationCollectionResponse
-	44, // 89: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncConversationManifest:output_type -> lmsemanticsearch.v1.SyncConversationManifestResponse
-	46, // 90: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertConversationDocuments:output_type -> lmsemanticsearch.v1.UpsertConversationDocumentsResponse
-	48, // 91: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteConversation:output_type -> lmsemanticsearch.v1.DeleteConversationResponse
-	51, // 92: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchConversations:output_type -> lmsemanticsearch.v1.SearchConversationsResponse
-	53, // 93: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchWithinConversation:output_type -> lmsemanticsearch.v1.SearchWithinConversationResponse
-	56, // 94: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:output_type -> lmsemanticsearch.v1.DoctorResponse
-	58, // 95: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:output_type -> lmsemanticsearch.v1.ShutdownResponse
-	77, // [77:96] is the sub-list for method output_type
-	58, // [58:77] is the sub-list for method input_type
-	58, // [58:58] is the sub-list for extension type_name
-	58, // [58:58] is the sub-list for extension extendee
-	0,  // [0:58] is the sub-list for field type_name
+	7,  // 14: lmsemanticsearch.v1.Codebase.active_progress:type_name -> lmsemanticsearch.v1.Progress
+	4,  // 15: lmsemanticsearch.v1.Job.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	7,  // 16: lmsemanticsearch.v1.Job.progress:type_name -> lmsemanticsearch.v1.Progress
+	6,  // 17: lmsemanticsearch.v1.Job.config:type_name -> lmsemanticsearch.v1.IndexConfig
+	59, // 18: lmsemanticsearch.v1.Job.started_at:type_name -> google.protobuf.Timestamp
+	59, // 19: lmsemanticsearch.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
+	59, // 20: lmsemanticsearch.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
+	10, // 21: lmsemanticsearch.v1.Job.error:type_name -> lmsemanticsearch.v1.JobError
+	5,  // 22: lmsemanticsearch.v1.StartIndexRequest.splitter:type_name -> lmsemanticsearch.v1.SplitterConfig
+	4,  // 23: lmsemanticsearch.v1.StartIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	4,  // 24: lmsemanticsearch.v1.ClearIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	4,  // 25: lmsemanticsearch.v1.CancelJobRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	4,  // 26: lmsemanticsearch.v1.SyncIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	4,  // 27: lmsemanticsearch.v1.GetIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	14, // 28: lmsemanticsearch.v1.GetIndexResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
+	15, // 29: lmsemanticsearch.v1.GetIndexResponse.active_job:type_name -> lmsemanticsearch.v1.Job
+	29, // 30: lmsemanticsearch.v1.GetIndexResponse.classification:type_name -> lmsemanticsearch.v1.PathClassification
+	11, // 31: lmsemanticsearch.v1.GetIndexResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	1,  // 32: lmsemanticsearch.v1.PathClassification.kind:type_name -> lmsemanticsearch.v1.PathClassification.Kind
+	14, // 33: lmsemanticsearch.v1.ListIndexesResponse.indexes:type_name -> lmsemanticsearch.v1.Codebase
+	11, // 34: lmsemanticsearch.v1.ListIndexesResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	15, // 35: lmsemanticsearch.v1.GetJobResponse.job:type_name -> lmsemanticsearch.v1.Job
+	11, // 36: lmsemanticsearch.v1.GetJobResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	15, // 37: lmsemanticsearch.v1.ListJobsResponse.jobs:type_name -> lmsemanticsearch.v1.Job
+	11, // 38: lmsemanticsearch.v1.ListJobsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	15, // 39: lmsemanticsearch.v1.WatchJobsResponse.job:type_name -> lmsemanticsearch.v1.Job
+	4,  // 40: lmsemanticsearch.v1.SearchCodeRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	16, // 41: lmsemanticsearch.v1.SearchCodeResponse.results:type_name -> lmsemanticsearch.v1.SearchResult
+	14, // 42: lmsemanticsearch.v1.SearchCodeResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
+	15, // 43: lmsemanticsearch.v1.SearchCodeResponse.active_job:type_name -> lmsemanticsearch.v1.Job
+	11, // 44: lmsemanticsearch.v1.SearchCodeResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	4,  // 45: lmsemanticsearch.v1.RegisterConversationCollectionRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	42, // 46: lmsemanticsearch.v1.SyncConversationManifestRequest.manifest:type_name -> lmsemanticsearch.v1.ConversationFingerprint
+	4,  // 47: lmsemanticsearch.v1.SyncConversationManifestRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	17, // 48: lmsemanticsearch.v1.UpsertConversationDocumentsRequest.documents:type_name -> lmsemanticsearch.v1.ConversationDocument
+	4,  // 49: lmsemanticsearch.v1.UpsertConversationDocumentsRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	42, // 50: lmsemanticsearch.v1.UpsertConversationDocumentsRequest.manifest:type_name -> lmsemanticsearch.v1.ConversationFingerprint
+	4,  // 51: lmsemanticsearch.v1.DeleteConversationRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	49, // 52: lmsemanticsearch.v1.SearchConversationsRequest.filter:type_name -> lmsemanticsearch.v1.ConversationSearchFilter
+	18, // 53: lmsemanticsearch.v1.SearchConversationsResponse.results:type_name -> lmsemanticsearch.v1.ConversationSearchResult
+	11, // 54: lmsemanticsearch.v1.SearchConversationsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	49, // 55: lmsemanticsearch.v1.SearchWithinConversationRequest.filter:type_name -> lmsemanticsearch.v1.ConversationSearchFilter
+	18, // 56: lmsemanticsearch.v1.SearchWithinConversationResponse.results:type_name -> lmsemanticsearch.v1.ConversationSearchResult
+	11, // 57: lmsemanticsearch.v1.SearchWithinConversationResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	54, // 58: lmsemanticsearch.v1.DoctorResponse.diagnostics:type_name -> lmsemanticsearch.v1.Diagnostic
+	2,  // 59: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:input_type -> lmsemanticsearch.v1.VersionRequest
+	19, // 60: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:input_type -> lmsemanticsearch.v1.StartIndexRequest
+	21, // 61: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:input_type -> lmsemanticsearch.v1.ClearIndexRequest
+	23, // 62: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:input_type -> lmsemanticsearch.v1.CancelJobRequest
+	25, // 63: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:input_type -> lmsemanticsearch.v1.SyncIndexRequest
+	27, // 64: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:input_type -> lmsemanticsearch.v1.GetIndexRequest
+	30, // 65: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:input_type -> lmsemanticsearch.v1.ListIndexesRequest
+	32, // 66: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:input_type -> lmsemanticsearch.v1.GetJobRequest
+	34, // 67: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:input_type -> lmsemanticsearch.v1.ListJobsRequest
+	36, // 68: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:input_type -> lmsemanticsearch.v1.WatchJobsRequest
+	38, // 69: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:input_type -> lmsemanticsearch.v1.SearchCodeRequest
+	40, // 70: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterConversationCollection:input_type -> lmsemanticsearch.v1.RegisterConversationCollectionRequest
+	43, // 71: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncConversationManifest:input_type -> lmsemanticsearch.v1.SyncConversationManifestRequest
+	45, // 72: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertConversationDocuments:input_type -> lmsemanticsearch.v1.UpsertConversationDocumentsRequest
+	47, // 73: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteConversation:input_type -> lmsemanticsearch.v1.DeleteConversationRequest
+	50, // 74: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchConversations:input_type -> lmsemanticsearch.v1.SearchConversationsRequest
+	52, // 75: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchWithinConversation:input_type -> lmsemanticsearch.v1.SearchWithinConversationRequest
+	55, // 76: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:input_type -> lmsemanticsearch.v1.DoctorRequest
+	57, // 77: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:input_type -> lmsemanticsearch.v1.ShutdownRequest
+	3,  // 78: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:output_type -> lmsemanticsearch.v1.VersionResponse
+	20, // 79: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:output_type -> lmsemanticsearch.v1.StartIndexResponse
+	22, // 80: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:output_type -> lmsemanticsearch.v1.ClearIndexResponse
+	24, // 81: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:output_type -> lmsemanticsearch.v1.CancelJobResponse
+	26, // 82: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:output_type -> lmsemanticsearch.v1.SyncIndexResponse
+	28, // 83: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:output_type -> lmsemanticsearch.v1.GetIndexResponse
+	31, // 84: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:output_type -> lmsemanticsearch.v1.ListIndexesResponse
+	33, // 85: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:output_type -> lmsemanticsearch.v1.GetJobResponse
+	35, // 86: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:output_type -> lmsemanticsearch.v1.ListJobsResponse
+	37, // 87: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:output_type -> lmsemanticsearch.v1.WatchJobsResponse
+	39, // 88: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:output_type -> lmsemanticsearch.v1.SearchCodeResponse
+	41, // 89: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterConversationCollection:output_type -> lmsemanticsearch.v1.RegisterConversationCollectionResponse
+	44, // 90: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncConversationManifest:output_type -> lmsemanticsearch.v1.SyncConversationManifestResponse
+	46, // 91: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertConversationDocuments:output_type -> lmsemanticsearch.v1.UpsertConversationDocumentsResponse
+	48, // 92: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteConversation:output_type -> lmsemanticsearch.v1.DeleteConversationResponse
+	51, // 93: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchConversations:output_type -> lmsemanticsearch.v1.SearchConversationsResponse
+	53, // 94: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchWithinConversation:output_type -> lmsemanticsearch.v1.SearchWithinConversationResponse
+	56, // 95: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:output_type -> lmsemanticsearch.v1.DoctorResponse
+	58, // 96: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:output_type -> lmsemanticsearch.v1.ShutdownResponse
+	78, // [78:97] is the sub-list for method output_type
+	59, // [59:78] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_lmsemanticsearch_v1_service_proto_init() }

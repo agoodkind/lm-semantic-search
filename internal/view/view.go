@@ -415,4 +415,9 @@ type CodebaseRowView struct {
 	// list, so a deferred build reads as cheap rather than a blank pending row. It
 	// is zero for codebases that are not discovered worktrees.
 	ReuseSiblingCount int32
+	// Active reports whether the codebase has a live indexing job, so the list
+	// renders its breakdown tree inline. Breakdown is the same value the status
+	// surface shows; it is empty when Active is false.
+	Active    bool
+	Breakdown OutcomeBreakdown
 }

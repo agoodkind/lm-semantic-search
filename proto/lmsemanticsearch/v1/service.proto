@@ -186,6 +186,11 @@ message Codebase {
   // zero for every other state and lets a list row show that a pending build is
   // cheap.
   int32 reuse_sibling_count = 17;
+  // active_progress carries the live job's progress (including its breakdown)
+  // for a codebase that is currently indexing, so the list and the TUI render
+  // the same per-row tree the status surface shows. Nil when there is no active
+  // job.
+  Progress active_progress = 18;
 }
 
 message Job {

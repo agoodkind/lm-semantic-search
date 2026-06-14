@@ -268,6 +268,13 @@ func renderListIndexes(views []view.CodebaseRowView) string {
 			line += fmt.Sprintf("  ♻️ reuses %d sibling %s", row.ReuseSiblingCount, plural("collection", int(row.ReuseSiblingCount)))
 		}
 		lines = append(lines, line)
+		// An actively-indexing codebase shows its live breakdown tree inline, the
+		// same tree get_indexing_status renders, indented under the row.
+		if row.Active {
+			for _, treeLine := range BreakdownLines(row.Breakdown) {
+				lines = append(lines, "    "+treeLine)
+			}
+		}
 	}
 	return strings.Join(lines, "\n")
 }

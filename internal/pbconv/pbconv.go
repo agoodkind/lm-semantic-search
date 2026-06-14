@@ -83,26 +83,11 @@ func ToJob(job model.Job) *pb.Job {
 			Name: job.Client.Name,
 			Pid:  job.Client.PID,
 		},
-		Operation: job.Operation,
-		State:     string(job.State),
-		Forced:    job.Forced,
-		Trigger:   jobTrigger(job),
-		Progress: &pb.Progress{
-			Phase:                     job.Progress.Phase,
-			PhasePercent:              job.Progress.PhasePercent,
-			OverallPercent:            job.Progress.OverallPercent,
-			Unit:                      job.Progress.Unit,
-			FilesTotal:                job.Progress.FilesTotal,
-			FilesProcessed:            job.Progress.FilesProcessed,
-			ChunksReused:              job.Progress.ChunksReused,
-			ChunksGenerated:           job.Progress.ChunksGenerated,
-			EmbeddingBatchesTotal:     job.Progress.EmbeddingBatchesTotal,
-			EmbeddingBatchesCompleted: job.Progress.EmbeddingBatchesCompleted,
-			CollectionRowsWritten:     job.Progress.CollectionRowsWritten,
-			LastEventAt:               ts(job.Progress.LastEventAt),
-			HeartbeatAt:               ts(job.Progress.HeartbeatAt),
-			Breakdown:                 BreakdownProto(job.Progress),
-		},
+		Operation:   job.Operation,
+		State:       string(job.State),
+		Forced:      job.Forced,
+		Trigger:     jobTrigger(job),
+		Progress:    ToProgress(job.Progress),
 		Config:      toIndexConfig(job.Config),
 		StartedAt:   ts(job.StartedAt),
 		UpdatedAt:   ts(job.UpdatedAt),
@@ -116,6 +101,28 @@ func ToJob(job model.Job) *pb.Job {
 		}
 	}
 	return result
+}
+
+// ToProgress converts a job's model.Progress into the proto Progress, including
+// the resolved breakdown, so every response that carries progress carries the
+// same structured tree the human surfaces render.
+func ToProgress(p model.Progress) *pb.Progress {
+	return &pb.Progress{
+		Phase:                     p.Phase,
+		PhasePercent:              p.PhasePercent,
+		OverallPercent:            p.OverallPercent,
+		Unit:                      p.Unit,
+		FilesTotal:                p.FilesTotal,
+		FilesProcessed:            p.FilesProcessed,
+		ChunksReused:              p.ChunksReused,
+		ChunksGenerated:           p.ChunksGenerated,
+		EmbeddingBatchesTotal:     p.EmbeddingBatchesTotal,
+		EmbeddingBatchesCompleted: p.EmbeddingBatchesCompleted,
+		CollectionRowsWritten:     p.CollectionRowsWritten,
+		LastEventAt:               ts(p.LastEventAt),
+		HeartbeatAt:               ts(p.HeartbeatAt),
+		Breakdown:                 BreakdownProto(p),
+	}
 }
 
 // ProgressCounts maps a job's model.Progress into the resolver input. It is the
@@ -155,10 +162,44 @@ func BreakdownProto(p model.Progress) *pb.OutcomeBreakdown {
 	}
 }
 
+// BreakdownFromProto rebuilds the view breakdown from its wire form so a client
+// (the TUI) renders it through the same render.BreakdownLines as the daemon.
+func BreakdownFromProto(breakdown *pb.OutcomeBreakdown) view.OutcomeBreakdown {
+	if breakdown == nil {
+		return view.OutcomeBreakdown{
+			ScopeLabel:  "",
+			Processed:   0,
+			ScopeTotal:  0,
+			FileRows:    nil,
+			ChunksTotal: 0,
+			ChunkRows:   nil,
+		}
+	}
+	return view.OutcomeBreakdown{
+		ScopeLabel:  breakdown.GetScopeLabel(),
+		Processed:   breakdown.GetProcessed(),
+		ScopeTotal:  breakdown.GetScopeTotal(),
+		FileRows:    outcomeRowsFromProto(breakdown.GetFileRows()),
+		ChunksTotal: breakdown.GetChunksTotal(),
+		ChunkRows:   outcomeRowsFromProto(breakdown.GetChunkRows()),
+	}
+}
+
 func outcomeRowsToProto(rows []view.OutcomeRow) []*pb.OutcomeRow {
 	out := make([]*pb.OutcomeRow, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, &pb.OutcomeRow{Kind: outcomeKindToProto(row.Kind), Count: row.Count})
+	}
+	return out
+}
+
+func outcomeRowsFromProto(rows []*pb.OutcomeRow) []view.OutcomeRow {
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make([]view.OutcomeRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, view.OutcomeRow{Kind: outcomeKindFromProto(row.GetKind()), Count: row.GetCount()})
 	}
 	return out
 }
@@ -183,6 +224,31 @@ func outcomeKindToProto(kind view.OutcomeKind) pb.OutcomeKind {
 		return pb.OutcomeKind_OUTCOME_KIND_REUSED
 	default:
 		return pb.OutcomeKind_OUTCOME_KIND_UNSPECIFIED
+	}
+}
+
+func outcomeKindFromProto(kind pb.OutcomeKind) view.OutcomeKind {
+	switch kind {
+	case pb.OutcomeKind_OUTCOME_KIND_EMBEDDED:
+		return view.KindEmbedded
+	case pb.OutcomeKind_OUTCOME_KIND_UNCHANGED:
+		return view.KindUnchanged
+	case pb.OutcomeKind_OUTCOME_KIND_REMOVED:
+		return view.KindRemoved
+	case pb.OutcomeKind_OUTCOME_KIND_PENDING:
+		return view.KindPending
+	case pb.OutcomeKind_OUTCOME_KIND_OVERSIZE:
+		return view.KindOversize
+	case pb.OutcomeKind_OUTCOME_KIND_UNREADABLE:
+		return view.KindUnreadable
+	case pb.OutcomeKind_OUTCOME_KIND_ADDED:
+		return view.KindAdded
+	case pb.OutcomeKind_OUTCOME_KIND_REUSED:
+		return view.KindReused
+	case pb.OutcomeKind_OUTCOME_KIND_UNSPECIFIED:
+		return ""
+	default:
+		return ""
 	}
 }
 
