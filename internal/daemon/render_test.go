@@ -8,9 +8,12 @@ import (
 	"testing"
 	"time"
 
+	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/pbconv"
 	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/view"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // treeLines keeps only the file-and-chunk tree lines (the breakdown block) from
@@ -66,6 +69,71 @@ func TestStatusTreeIdenticalAcrossSurfaces(t *testing.T) {
 	if len(jobTree) == 0 {
 		t.Fatal("no tree lines extracted; the guard would pass vacuously")
 	}
+}
+
+// TestBreakdownIdenticalAcrossAllSurfaces is the single-SOT guard. The daemon
+// text, the proto breakdown rendered back (the TUI path), and the JSON-decoded
+// breakdown rendered back must all equal the one render.BreakdownLines over the
+// one view.ResolveBreakdown. Any surface that re-derives breaks this test.
+func TestBreakdownIdenticalAcrossAllSurfaces(t *testing.T) {
+	t.Parallel()
+	progress := model.Progress{
+		RunMode: model.RunModeChanged, Unit: "document", ScopeUnit: "conversation",
+		FilesTotal: 72, FilesProcessed: 70, FilesAdded: 63, FilesModified: 9,
+		FilesEmbedded: 9, FilesPending: 61,
+		ChunksGenerated: 1204, ChunksReused: 2312, ChunksTotal: 3516,
+		LastEventAt: renderTestTime,
+	}
+
+	// The single source of truth: one resolver, one renderer.
+	want := render.BreakdownLines(view.ResolveBreakdown(pbconv.ProgressCounts(progress)))
+	if len(want) == 0 {
+		t.Fatal("breakdown produced no lines; the guard would pass vacuously")
+	}
+
+	job := model.Job{ID: "j", State: model.JobStateRunning, Operation: "conversation_ingest", Progress: progress}
+
+	// Daemon compact text (job get / job list path).
+	daemonText := treeLines(render.GetJob(resolveJobEntry(job, false, ""), true))
+	if !reflect.DeepEqual(daemonText, want) {
+		t.Fatalf("daemon text differs from SOT:\n%s\nwant\n%s", strings.Join(daemonText, "\n"), strings.Join(want, "\n"))
+	}
+
+	// Proto breakdown rendered back: the path the TUI uses from active_progress.
+	pbJob := pbconv.ToJob(job)
+	protoRender := render.BreakdownLines(pbconv.BreakdownFromProto(pbJob.GetProgress().GetBreakdown()))
+	if !reflect.DeepEqual(protoRender, want) {
+		t.Fatalf("proto-rendered breakdown differs from SOT:\n%s", strings.Join(protoRender, "\n"))
+	}
+
+	// JSON (--json) decoded and rendered back.
+	data, err := protojson.Marshal(pbJob)
+	if err != nil {
+		t.Fatalf("protojson.Marshal returned error: %v", err)
+	}
+	var decoded pb.Job
+	if err := protojson.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("protojson.Unmarshal returned error: %v", err)
+	}
+	jsonRender := render.BreakdownLines(pbconv.BreakdownFromProto(decoded.GetProgress().GetBreakdown()))
+	if !reflect.DeepEqual(jsonRender, want) {
+		t.Fatalf("JSON-decoded breakdown differs from SOT:\n%s", strings.Join(jsonRender, "\n"))
+	}
+
+	// The undelivered conversation is a first-class wire counter, not inferred.
+	if got := decoded.GetProgress().GetBreakdown(); !breakdownHasPending(got) {
+		t.Fatalf("JSON breakdown missing a pending row: %+v", got.GetFileRows())
+	}
+}
+
+// breakdownHasPending reports whether the proto breakdown carries a pending row.
+func breakdownHasPending(breakdown *pb.OutcomeBreakdown) bool {
+	for _, row := range breakdown.GetFileRows() {
+		if row.GetKind() == pb.OutcomeKind_OUTCOME_KIND_PENDING {
+			return true
+		}
+	}
+	return false
 }
 
 // TestStatusTreeMatchesSessionCases locks the two real cases from the design
