@@ -139,6 +139,22 @@ func NewEmbedderUnreachable(cause error) *AdapterError {
 	}
 }
 
+// NewMilvusUnavailable reports a failure reaching the Milvus vector store: a
+// metadata call failed or the connection dropped. It is a shared-infrastructure
+// outage that self-heals when the store returns, so it never marks a codebase
+// failed. The boot-time "not configured" case uses the ErrUnavailable sentinel,
+// which carries the same class.
+func NewMilvusUnavailable(cause error) *AdapterError {
+	return &AdapterError{
+		Class:         ClassMilvusUnavailable,
+		Message:       "vector store is unavailable",
+		Code:          "milvus_unavailable",
+		Hint:          "verify MILVUS_ADDRESS and that the vector store is reachable",
+		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
 // NewEmbedderBusy reports a transient embedding failure where the endpoint
 // answered but is at capacity (rate limited or temporarily unavailable). It is
 // distinct from NewEmbedderUnreachable so a busy endpoint does not read as down.

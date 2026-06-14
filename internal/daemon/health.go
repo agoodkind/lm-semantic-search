@@ -1,12 +1,24 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/status"
+)
+
+const (
+	// dependencyProbeInterval debounces the active backend probe so status reads
+	// poll the store and embedder at most once per interval. Between probes a
+	// status read observes the last probe outcome, which bounds staleness to the
+	// interval rather than waiting for the next real job or search to fail.
+	dependencyProbeInterval = 5 * time.Second
+	// dependencyProbeTimeout bounds one probe so a hung backend cannot stall a
+	// status read waiting on a dependency.
+	dependencyProbeTimeout = 2 * time.Second
 )
 
 // dependencyMode names a degraded shared-dependency condition. The empty mode is
@@ -126,6 +138,42 @@ func (manager *Manager) noteDependencyFailure(err error) {
 func (manager *Manager) noteDependencyHealthy() {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	manager.noteDependencyHealthyLocked()
+}
+
+// refreshDependencyHealth runs an active liveness probe of the search backend
+// when the last probe is older than dependencyProbeInterval, updating the health
+// record so a status read reflects current reachability rather than the last job
+// outcome. The probe runs without manager.mu held so backend I/O never blocks
+// other status reads; the record is updated under the lock afterward. A probe
+// failure caused by the caller's own context going away is ignored so a
+// cancelled status read never records a spurious outage. The debounce timestamp
+// is stamped before the probe so concurrent callers within the interval skip it.
+func (manager *Manager) refreshDependencyHealth(ctx context.Context) {
+	manager.mu.Lock()
+	semantic := manager.semantic
+	stale := manager.lastDepProbeAt.IsZero() || clock.Now().Sub(manager.lastDepProbeAt) >= dependencyProbeInterval
+	if semantic == nil || !stale {
+		manager.mu.Unlock()
+		return
+	}
+	manager.lastDepProbeAt = clock.Now()
+	manager.mu.Unlock()
+
+	probeCtx, cancel := context.WithTimeout(ctx, dependencyProbeTimeout)
+	defer cancel()
+	probeErr := semantic.ProbeHealth(probeCtx)
+
+	if ctx.Err() != nil {
+		return
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if probeErr != nil {
+		manager.noteDependencyFailureLocked(probeErr)
+		return
+	}
 	manager.noteDependencyHealthyLocked()
 }
 

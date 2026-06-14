@@ -83,6 +83,8 @@ type Manager struct {
 	// pipeline and the vector store). It is global, not per-codebase, observed
 	// from job outcomes, and drives the status banner. Guarded by mu.
 	health dependencyHealth
+	// lastDepProbeAt debounces refreshDependencyHealth's backend probe. Guarded by mu.
+	lastDepProbeAt time.Time
 	// deferredBuildDelay is the post-discovery wait before a worktree build starts; settable so a test can keep the timer from firing mid-test.
 	deferredBuildDelay time.Duration
 }
@@ -120,6 +122,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		indexSlots:         make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
 		syncLock:           newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
 		health:             dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
+		lastDepProbeAt:     time.Time{},
 		deferredBuildDelay: defaultDeferredBuildDelay,
 	}
 	semanticService, err := semantic.NewService(ctx, cfg)
@@ -975,20 +978,6 @@ func (manager *Manager) beginActiveJobCancellationLocked(codebase model.Codebase
 	cancel := manager.cancels[job.ID]
 	jobDone := manager.done[job.ID]
 	return jobDone, cancel
-}
-
-func waitForJobDone(ctx context.Context, jobDone chan struct{}) error {
-	if jobDone == nil {
-		return nil
-	}
-
-	select {
-	case <-jobDone:
-		return nil
-	case <-ctx.Done():
-		slog.ErrorContext(ctx, "wait for active job cancellation failed", "err", ctx.Err())
-		return fmt.Errorf("wait for active job cancellation: %w", ctx.Err())
-	}
 }
 
 // Delta sync helpers live in manager_delta.go.

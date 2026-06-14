@@ -47,6 +47,10 @@ type Provider interface {
 	Embed(context.Context, string) ([]float32, error)
 	EmbedBatch(context.Context, []string) ([][]float32, error)
 	ProviderName() string
+	// Health verifies the endpoint is reachable right now without performing an
+	// embedding, so a caller can decide whether search can serve a query. A
+	// non-nil result means the endpoint is unreachable or rejecting.
+	Health(context.Context) error
 }
 
 // NewProvider constructs the configured embedding provider.
@@ -100,6 +104,25 @@ func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, di
 
 func (provider *openAICompatibleProvider) ProviderName() string {
 	return provider.name
+}
+
+// healthProbeTimeout bounds one liveness probe so a hung endpoint cannot stall
+// the caller (a status read) waiting on the embedder.
+const healthProbeTimeout = 2 * time.Second
+
+// Health lists the endpoint's models (GET /v1/models), a metadata call that
+// performs no embedding and so consumes no model capacity. Any error means the
+// endpoint is unreachable or rejecting, which the caller treats as the embedder
+// being unavailable for search. The caller debounces this probe, so a failing
+// endpoint logs at most once per probe interval rather than on every request.
+func (provider *openAICompatibleProvider) Health(ctx context.Context) error {
+	probeCtx, cancel := context.WithTimeout(ctx, healthProbeTimeout)
+	defer cancel()
+	if _, err := provider.client.Models.List(probeCtx); err != nil {
+		slog.WarnContext(ctx, "embedding endpoint health probe failed", "provider", provider.name, "model", provider.model, "err", err)
+		return fmt.Errorf("%s embedding endpoint health probe: %w", provider.name, err)
+	}
+	return nil
 }
 
 func (provider *openAICompatibleProvider) Embed(ctx context.Context, text string) ([]float32, error) {
