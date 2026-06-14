@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
@@ -94,13 +95,18 @@ func (manager *Manager) seedAdoptedMerkle(ctx context.Context, codebase model.Co
 	slog.InfoContext(ctx, "adopt: seeded merkle from TS baseline", "codebase_id", codebase.ID, "files", len(snapshot.Files))
 }
 
-// enqueueAdoptionSync starts one refresh sync for a freshly adopted codebase in
-// a detached goroutine, so the resolve call that triggered adoption returns
-// without waiting on the embed. The sync re-embeds only the files that changed
-// since the seeded baseline.
+// enqueueAdoptionSync schedules one refresh sync for a freshly adopted codebase
+// on the same short deferred timer the daemon uses for a discovered worktree, so
+// the read that triggered adoption starts no refresh job itself. The adopted
+// collection already holds data and is searchable immediately; the deferred sync
+// re-embeds only the files that changed since the seeded baseline.
 func (manager *Manager) enqueueAdoptionSync(ctx context.Context, canonicalPath string) {
 	detached := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
-	go func() {
+	delay := manager.deferredBuildDelay
+	if delay <= 0 {
+		delay = defaultDeferredBuildDelay
+	}
+	time.AfterFunc(delay, func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				slog.ErrorContext(detached, "adopt: refresh sync panic", "err", fmt.Errorf("panic: %v", recovered), "path", canonicalPath)
@@ -109,5 +115,5 @@ func (manager *Manager) enqueueAdoptionSync(ctx context.Context, canonicalPath s
 		if _, _, _, err := manager.SyncIndex(detached, canonicalPath, model.ClientInfo{Name: "adopt-sync", PID: 0}); err != nil {
 			slog.WarnContext(detached, "adopt: refresh sync enqueue failed", "path", canonicalPath, "err", err)
 		}
-	}()
+	})
 }

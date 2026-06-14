@@ -69,6 +69,11 @@ type deltaState struct {
 	// embedded. It is a pointer because deltaState is copied by value through the
 	// per-file loop, and the totals must survive each copy.
 	chunkCounts *chunkCounters
+	// seededReuse is the size of the reuse-vector pool loaded at bootstrap seed
+	// time. The building view shows it immediately as the reuse total, so the
+	// displayed reuse does not climb file-by-file from zero; the per-file accrual
+	// can only rise to meet it as matching chunks are served from the pool.
+	seededReuse int32
 }
 
 // chunkCounters accumulates the reuse-vs-embed split across one run's per-file
@@ -224,6 +229,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		staging:      false,
 		reuse:        nil,
 		chunkCounts:  &chunkCounters{reused: 0, embedded: 0},
+		seededReuse:  0,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -320,6 +326,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		staging:      true,
 		reuse:        nil,
 		chunkCounts:  &chunkCounters{reused: 0, embedded: 0},
+		seededReuse:  0,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -337,6 +344,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 			slog.WarnContext(ctx, "load reuse vectors failed; embedding shared subtree", "job_id", job.ID, "err", reuseErr)
 		} else {
 			state.reuse = reuse
+			state.seededReuse = safeInt32(len(reuse))
 			slog.InfoContext(ctx, "build.reuse_seeded", "job_id", job.ID, "reuse_collections", len(reuseCollections), "reuse_vectors", len(reuse))
 		}
 	}
@@ -624,14 +632,16 @@ func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, l
 // shared by every progress update from that loop.
 const phaseReindexingChanged = "Reindexing changed files..."
 
-// chunkSplit returns the run's accumulated reused and embedded chunk counts,
-// or (0, 0) when no accumulator is attached, so callers can pass the split into
-// progress reporting without a nil check.
+// chunkSplit returns the run's reused and embedded chunk counts for progress
+// reporting. The reused figure is the larger of the seeded reuse-vector pool and
+// the per-file accrued count, so the building view shows the full reuse total
+// from the first update rather than a number that climbs from zero. With no
+// accumulator attached it falls back to the seeded total.
 func (state deltaState) chunkSplit() (int32, int32) {
 	if state.chunkCounts == nil {
-		return 0, 0
+		return state.seededReuse, 0
 	}
-	return state.chunkCounts.reused, state.chunkCounts.embedded
+	return max(state.chunkCounts.reused, state.seededReuse), state.chunkCounts.embedded
 }
 
 // reportDeltaProgress publishes one progress update from the per-file embed

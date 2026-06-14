@@ -19,13 +19,14 @@ import (
 type displayStatus = status.Display
 
 const (
-	displayPreparing = status.DisplayPreparing
-	displayIndexing  = status.DisplayIndexing
-	displayIndexed   = status.DisplayIndexed
-	displayWaiting   = status.DisplayWaiting
-	displayStale     = status.DisplayStale
-	displayFailed    = status.DisplayFailed
-	displayMissing   = status.DisplayMissing
+	displayPreparing  = status.DisplayPreparing
+	displayIndexing   = status.DisplayIndexing
+	displayIndexed    = status.DisplayIndexed
+	displayWaiting    = status.DisplayWaiting
+	displayStale      = status.DisplayStale
+	displayFailed     = status.DisplayFailed
+	displayMissing    = status.DisplayMissing
+	displayDiscovered = status.DisplayDiscovered
 )
 
 // computeDisplayStatus resolves the display status through the status package,
@@ -119,6 +120,11 @@ func emptyFailureSurface() view.FailureSurface {
 func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display displayStatus, waitLabel string) (view.StatusView, string) {
 	statusView := blankStatusView(filepath.Base(codebase.CanonicalPath), formatBoundaryStatusTime(codebase.UpdatedAt))
 	switch display {
+	case displayDiscovered:
+		// A discovered worktree is registered and watched but not yet built. The
+		// reuse forecast is attached by resolveGetIndexView, which holds the manager
+		// needed to compute it cheaply.
+		return statusView, "discovered.md.tmpl"
 	case displayWaiting:
 		statusView.WaitLabel = waitLabel
 		return statusView, "waiting.md.tmpl"
@@ -201,8 +207,9 @@ func blankStatusView(name string, updatedAt string) view.StatusView {
 			ChunksTotal: 0,
 			ChunkRows:   nil,
 		},
-		UpdatedAt: updatedAt,
-		SyncNote:  "",
+		ReuseForecastLine: "",
+		UpdatedAt:         updatedAt,
+		SyncNote:          "",
 	}
 }
 
@@ -342,9 +349,22 @@ func (manager *Manager) resolveGetIndexView(
 	getIndex.Display = view.Display(display)
 	getIndex.Failure = resolveCodebaseFailure(*codebase)
 	statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
+	if display == displayDiscovered {
+		statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
+	}
 	getIndex.Status = statusView
 	getIndex.TemplateName = templateName
 	return getIndex
+}
+
+// reuseForecastLine renders the discovered-worktree reuse forecast, or empty
+// when the worktree has no eligible sibling to reuse from. The count is a sibling
+// collection count, computed without a vector-store call.
+func reuseForecastLine(siblingCount int32) string {
+	if siblingCount <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("♻️ reuses embeddings from %d indexed sibling %s", siblingCount, plural("worktree", int(siblingCount)))
 }
 
 // descendantsHint replaces the bare not-indexed message for a path that already

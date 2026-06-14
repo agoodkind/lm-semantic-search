@@ -198,13 +198,24 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 
 	codebases := syncer.manager.ListIndexes(ctx)
 	for _, codebase := range codebases {
-		if codebase.Status != model.CodebaseStatusIndexed {
-			continue
-		}
 		if codebase.Kind == model.CodebaseKindDocument {
 			continue
 		}
 		if _, err := os.Stat(codebase.CanonicalPath); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		// A discovered worktree whose deferred build never ran (for example the
+		// daemon restarted before the short timer fired) is built here as the
+		// backstop. StartIndex deduplicates, so this never double-starts a build
+		// that the timer already kicked off.
+		if codebase.Status == model.CodebaseStatusDiscovered {
+			discoverCtx := correlation.WithContext(ctx, correlation.FromContext(ctx).Child().WithIdentityAttributes(
+				correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID},
+			))
+			syncer.manager.startDeferredBuild(discoverCtx, codebase.CanonicalPath)
+			continue
+		}
+		if codebase.Status != model.CodebaseStatusIndexed {
 			continue
 		}
 

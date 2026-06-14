@@ -83,6 +83,8 @@ type Manager struct {
 	// pipeline and the vector store). It is global, not per-codebase, observed
 	// from job outcomes, and drives the status banner. Guarded by mu.
 	health dependencyHealth
+	// deferredBuildDelay is the post-discovery wait before a worktree build starts; settable so a test can keep the timer from firing mid-test.
+	deferredBuildDelay time.Duration
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -104,20 +106,21 @@ type indexingRunner interface {
 // NewManager loads persisted daemon state from disk.
 func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	manager := &Manager{
-		config:           cfg,
-		mu:               sync.Mutex{},
-		codebases:        map[string]model.Codebase{},
-		jobs:             map[string]model.Job{},
-		conversationJobs: map[string]conversationJobPayload{},
-		cancels:          map[string]context.CancelFunc{},
-		done:             map[string]chan struct{}{},
-		runner:           indexer.NewRunner(),
-		semantic:         nil,
-		lifecycleHook:    nil,
-		lifecycleMutex:   sync.Mutex{},
-		indexSlots:       make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
-		syncLock:         newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
-		health:           dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
+		config:             cfg,
+		mu:                 sync.Mutex{},
+		codebases:          map[string]model.Codebase{},
+		jobs:               map[string]model.Job{},
+		conversationJobs:   map[string]conversationJobPayload{},
+		cancels:            map[string]context.CancelFunc{},
+		done:               map[string]chan struct{}{},
+		runner:             indexer.NewRunner(),
+		semantic:           nil,
+		lifecycleHook:      nil,
+		lifecycleMutex:     sync.Mutex{},
+		indexSlots:         make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
+		syncLock:           newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
+		health:             dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
+		deferredBuildDelay: defaultDeferredBuildDelay,
 	}
 	semanticService, err := semantic.NewService(ctx, cfg)
 	if err != nil {

@@ -446,13 +446,14 @@ var (
 // statusColors maps each resolved display status to a distinct foreground
 // color. An unknown status falls back to grayStatus.
 var statusColors = map[string]lipgloss.Color{
-	"preparing": lipgloss.Color("12"),
-	"indexed":   lipgloss.Color("10"),
-	"indexing":  lipgloss.Color("11"),
-	"waiting":   lipgloss.Color("214"),
-	"stale":     lipgloss.Color("208"),
-	"failed":    lipgloss.Color("9"),
-	"missing":   lipgloss.Color("245"),
+	"preparing":  lipgloss.Color("12"),
+	"indexed":    lipgloss.Color("10"),
+	"indexing":   lipgloss.Color("11"),
+	"waiting":    lipgloss.Color("214"),
+	"stale":      lipgloss.Color("208"),
+	"failed":     lipgloss.Color("9"),
+	"missing":    lipgloss.Color("245"),
+	"discovered": lipgloss.Color("44"),
 }
 
 const grayStatus = lipgloss.Color("245")
@@ -465,8 +466,16 @@ func statusColor(status string) lipgloss.Color {
 }
 
 // fileCountCell returns the indexed-file count from the last successful run, or
-// a hyphen placeholder when the codebase has never completed a run.
+// a hyphen placeholder when the codebase has never completed a run. A discovered
+// worktree has no run yet, so it shows its reuse forecast (♻N sibling
+// collections) instead, signalling that its pending build is cheap.
 func fileCountCell(codebase *pb.Codebase) string {
+	if codebase.GetDisplayStatus() == "discovered" {
+		if reuse := codebase.GetReuseSiblingCount(); reuse > 0 {
+			return "♻" + strconv.Itoa(int(reuse))
+		}
+		return "-"
+	}
 	run := codebase.GetLastSuccessfulRun()
 	if run == nil {
 		return "-"

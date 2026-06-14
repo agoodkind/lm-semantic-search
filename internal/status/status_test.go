@@ -36,6 +36,29 @@ func TestResolveDisplayBase(t *testing.T) {
 	}
 }
 
+// A discovered codebase with no active job resolves to the discovered display
+// and carries the discovered glyph and label, so the registered-but-unbuilt
+// worktree reads distinctly from indexing and from not_indexed.
+func TestResolveDiscovered(t *testing.T) {
+	t.Parallel()
+	surface := Resolve(Inputs{Status: model.CodebaseStatusDiscovered})
+	if surface.Display != DisplayDiscovered {
+		t.Fatalf("Display = %q, want %q", surface.Display, DisplayDiscovered)
+	}
+	if surface.Glyph != "⊙" {
+		t.Fatalf("Glyph = %q, want ⊙", surface.Glyph)
+	}
+	if surface.Label != "discovered" {
+		t.Fatalf("Label = %q, want discovered", surface.Label)
+	}
+	if GlyphFor(DisplayDiscovered) != "⊙" {
+		t.Fatalf("GlyphFor(discovered) = %q, want ⊙", GlyphFor(DisplayDiscovered))
+	}
+	if LabelFor(DisplayDiscovered) != "discovered" {
+		t.Fatalf("LabelFor(discovered) = %q, want discovered", LabelFor(DisplayDiscovered))
+	}
+}
+
 // The degraded fold turns a not-embedding codebase into waiting (preparing and
 // indexed), while a live scoped job stays indexing and a local terminal state is
 // untouched. This is the rule that keeps a surface from reading "ready" while a

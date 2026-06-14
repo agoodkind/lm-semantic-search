@@ -15,9 +15,10 @@ const (
 )
 
 const (
-	displayFailed  view.Display = "failed"
-	displayMissing view.Display = "missing"
-	displayStale   view.Display = "stale"
+	displayFailed     view.Display = "failed"
+	displayMissing    view.Display = "missing"
+	displayStale      view.Display = "stale"
+	displayDiscovered view.Display = "discovered"
 )
 
 // StartIndex formats the start-index acknowledgment.
@@ -259,7 +260,14 @@ func renderListIndexes(views []view.CodebaseRowView) string {
 	lines := make([]string, 0, len(views)+1)
 	lines = append(lines, "Tracked "+countWord("codebase", len(views))+":")
 	for _, row := range views {
-		lines = append(lines, fmt.Sprintf("- %s  %s  [%s]", row.ID, row.CanonicalPath, row.Display))
+		line := fmt.Sprintf("- %s  %s  [%s]", row.ID, row.CanonicalPath, row.Display)
+		// A discovered worktree is not built yet; surface its reuse forecast so the
+		// row reads as a cheap pending build rather than blank, matching what the
+		// status detail shows.
+		if row.Display == displayDiscovered && row.ReuseSiblingCount > 0 {
+			line += fmt.Sprintf("  ♻️ reuses %d sibling %s", row.ReuseSiblingCount, plural("collection", int(row.ReuseSiblingCount)))
+		}
+		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
 }

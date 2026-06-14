@@ -26,12 +26,14 @@ func (manager *Manager) GetIndex(ctx context.Context, requestedPath string) (mod
 	}
 
 	// Worktree-bounded resolution: a git worktree is its own codebase. When the
-	// queried path lives in a worktree of an indexed repo that is not yet
-	// tracked, this auto-creates and resolves to the worktree's own index rather
-	// than serving a covering parent that holds a different branch's content.
-	if codebase, activeJob, ok := manager.resolveWorktreeIndex(ctx, canonicalPath); ok {
+	// queried path lives in a worktree of an indexed repo that is not yet tracked,
+	// this registers it as a discovered codebase and defers its reuse-seeded build,
+	// rather than serving a covering parent that holds a different branch's
+	// content. The read itself starts no embed job; the discovered codebase has no
+	// active job until the deferred build begins.
+	if codebase, ok := manager.resolveWorktreeIndex(ctx, canonicalPath); ok {
 		classification := manager.classifyTrackedPath(ctx, codebase, canonicalPath)
-		return codebase, activeJob, true, classification, nil
+		return codebase, nil, true, classification, nil
 	}
 
 	manager.mu.Lock()
