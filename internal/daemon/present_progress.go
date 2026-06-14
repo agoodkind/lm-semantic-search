@@ -119,10 +119,9 @@ func reuseCapableRunMode(runMode string) bool {
 // tree. It is the single source of truth for the file-and-chunk breakdown, so
 // every status surface renders an identical tree. The file rows partition the
 // processed set: embedded plus the clamped seed-reuse remainder (unchanged) plus
-// removed plus the skip buckets sum to Processed. The unreadable bucket labels
-// by unit, since a conversation's only unreadable skip is an undelivered
-// document (verified in item_source.go indexOne), so a document reads as a
-// transient "pending" while a file reads as a real "error".
+// removed plus the skip buckets (pending, oversize, unreadable) sum to Processed.
+// Pending is its own counter (FilesPending) from an undelivered conversation,
+// distinct from a real unreadable file, so no unit inference is needed.
 func resolveOutcomeBreakdown(progress model.Progress) view.OutcomeBreakdown {
 	unit := progress.Unit
 	if unit == "" {
@@ -132,8 +131,9 @@ func resolveOutcomeBreakdown(progress model.Progress) view.OutcomeBreakdown {
 	embedded := progress.FilesEmbedded
 	oversize := progress.FilesSkippedOversize
 	unreadable := progress.FilesSkippedUnreadable
+	pending := progress.FilesPending
 	removed := progress.FilesRemoved
-	unchanged := max(progress.FilesProcessed-embedded-oversize-unreadable, 0)
+	unchanged := max(progress.FilesProcessed-embedded-oversize-unreadable-pending, 0)
 
 	// The changed set is known from the diff before the embed loop reports a
 	// FilesTotal, so the denominator and the scope gate fold it in. This keeps
@@ -142,7 +142,7 @@ func resolveOutcomeBreakdown(progress model.Progress) view.OutcomeBreakdown {
 	changedSet := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
 	hasFileScope := progress.FilesTotal > 0 || progress.FilesProcessed > 0 || removed > 0 || changedSet > 0
 
-	processed := embedded + unchanged + removed + oversize + unreadable
+	processed := embedded + unchanged + removed + pending + oversize + unreadable
 	scopeTotal := max(progress.FilesTotal+removed, changedSet)
 	chunksTotal := max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated)
 	hasChunks := hasFileScope || chunksTotal > 0 || progress.ChunksGenerated > 0
@@ -151,16 +151,16 @@ func resolveOutcomeBreakdown(progress model.Progress) view.OutcomeBreakdown {
 		ScopeLabel:  scopeLabelFor(progress.RunMode, unit, scopeTotal),
 		Processed:   processed,
 		ScopeTotal:  scopeTotal,
-		FileRows:    outcomeFileRows(hasFileScope, unit, embedded, unchanged, removed, oversize, unreadable),
+		FileRows:    outcomeFileRows(hasFileScope, embedded, unchanged, removed, pending, oversize, unreadable),
 		ChunksTotal: chunksTotal,
 		ChunkRows:   outcomeChunkRows(hasChunks, progress.RunMode, progress.ChunksGenerated, progress.ChunksReused),
 	}
 }
 
 // outcomeFileRows builds the file children in fixed order, omitting a zero
-// bucket except embedded, which always renders. The unreadable bucket labels by
-// unit: a document reads as transient "pending", a file as a real "error".
-func outcomeFileRows(hasScope bool, unit string, embedded, unchanged, removed, oversize, unreadable int32) []view.OutcomeRow {
+// bucket except embedded, which always renders. Pending is transient (an
+// undelivered document), oversize and unreadable are deliberate or error skips.
+func outcomeFileRows(hasScope bool, embedded, unchanged, removed, pending, oversize, unreadable int32) []view.OutcomeRow {
 	if !hasScope {
 		return nil
 	}
@@ -171,13 +171,13 @@ func outcomeFileRows(hasScope bool, unit string, embedded, unchanged, removed, o
 	if removed > 0 {
 		rows = append(rows, view.OutcomeRow{Glyph: glyphRemoved, Count: removed, Label: "removed"})
 	}
-	if unit == "document" && unreadable > 0 {
-		rows = append(rows, view.OutcomeRow{Glyph: glyphPending, Count: unreadable, Label: "pending, not sent yet"})
+	if pending > 0 {
+		rows = append(rows, view.OutcomeRow{Glyph: glyphPending, Count: pending, Label: "pending, not sent yet"})
 	}
 	if oversize > 0 {
 		rows = append(rows, view.OutcomeRow{Glyph: glyphOversize, Count: oversize, Label: "skipped, too large"})
 	}
-	if unit != "document" && unreadable > 0 {
+	if unreadable > 0 {
 		rows = append(rows, view.OutcomeRow{Glyph: glyphError, Count: unreadable, Label: "error, unreadable"})
 	}
 	return rows

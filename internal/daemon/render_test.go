@@ -103,7 +103,7 @@ func TestStatusTreeMatchesSessionCases(t *testing.T) {
 				Progress: model.Progress{
 					RunMode: model.RunModeChanged, Unit: "document", ScopeUnit: "conversation",
 					FilesTotal: 72, FilesProcessed: 70, FilesAdded: 63, FilesModified: 9,
-					FilesEmbedded: 9, FilesSkippedUnreadable: 61,
+					FilesEmbedded: 9, FilesPending: 61,
 					ChunksGenerated: 1204, ChunksReused: 2312, ChunksTotal: 3516, LastEventAt: renderTestTime,
 				},
 			},

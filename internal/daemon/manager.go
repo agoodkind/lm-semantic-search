@@ -337,6 +337,7 @@ func newQueuedJob(
 			FilesEmbedded:             0,
 			FilesSkippedOversize:      0,
 			FilesSkippedUnreadable:    0,
+			FilesPending:              0,
 			ChunksTotal:               0,
 			ChunksReused:              0,
 			ChunksGenerated:           0,

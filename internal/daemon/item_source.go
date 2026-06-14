@@ -143,9 +143,10 @@ func (source conversationItemSource) indexOne(_ context.Context, conversationID 
 	documents, delivered := source.documents[conversationID]
 	if !delivered || len(documents) == 0 {
 		// clyde asked for this conversation's documents but delivered none, so it
-		// cannot be embedded this pass. Skip it without advancing the checkpoint, so
-		// the next manifest sync still classifies it changed and clyde resends.
-		return indexer.OneFileResult{Chunks: nil, FileHash: "", Skipped: true, SkipReason: indexer.SkipUnreadable, Removed: false}, nil
+		// cannot be embedded this pass. Skip it as pending without advancing the
+		// checkpoint, so the next manifest sync still classifies it changed and clyde
+		// resends. Pending is transient, distinct from an unreadable real error.
+		return indexer.OneFileResult{Chunks: nil, FileHash: "", Skipped: true, SkipReason: indexer.SkipPending, Removed: false}, nil
 	}
 	chunks, err := conversationDocumentsToStoredChunks(documents)
 	if err != nil {
