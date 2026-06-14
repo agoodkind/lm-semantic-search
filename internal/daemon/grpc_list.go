@@ -33,7 +33,7 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 		// resolver. The breakdown rides on active_progress for the TUI and is
 		// resolved here for the text rows.
 		active := false
-		breakdown := view.OutcomeBreakdown{ScopeLabel: "", Processed: 0, ScopeTotal: 0, FileRows: nil, ChunksTotal: 0, ChunkRows: nil}
+		breakdown := view.ZeroBreakdown()
 		if jobID := codebaseView.Codebase.ActiveJobID; jobID != "" {
 			if activeJob, ok := server.manager.GetJob(jobID); ok {
 				pbCodebase.ActiveProgress = pbconv.ToProgress(activeJob.Progress)

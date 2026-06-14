@@ -13,18 +13,18 @@ import (
 func findRow(t *testing.T, rows []view.OutcomeRow, kind view.OutcomeKind) view.OutcomeRow {
 	t.Helper()
 	for _, row := range rows {
-		if row.Kind == kind {
+		if row.Kind() == kind {
 			return row
 		}
 	}
 	t.Fatalf("row %q not found in %+v", kind, rows)
-	return view.OutcomeRow{Kind: "", Count: 0}
+	return view.NewOutcomeRow("", 0)
 }
 
 // hasRow reports whether a row with the given kind is present.
 func hasRow(rows []view.OutcomeRow, kind view.OutcomeKind) bool {
 	for _, row := range rows {
-		if row.Kind == kind {
+		if row.Kind() == kind {
 			return true
 		}
 	}
@@ -36,7 +36,7 @@ func hasRow(rows []view.OutcomeRow, kind view.OutcomeKind) bool {
 func sumRowCounts(rows []view.OutcomeRow) int32 {
 	var total int32
 	for _, row := range rows {
-		total += row.Count
+		total += row.Count()
 	}
 	return total
 }
@@ -88,10 +88,10 @@ func TestResolveProgressSurfaceResumingIngest(t *testing.T) {
 	// The 226 that the old derived "already indexed" column carried is now the
 	// honest seed-reuse remainder, shown as an unchanged row, and the file rows
 	// sum to Processed rather than hiding three buckets.
-	if unchanged := findRow(t, breakdown.FileRows, view.KindUnchanged).Count; unchanged != 226 {
+	if unchanged := findRow(t, breakdown.FileRows, view.KindUnchanged).Count(); unchanged != 226 {
 		t.Fatalf("unchanged = %d, want 226 (238 processed minus 12 embedded)", unchanged)
 	}
-	if embedded := findRow(t, breakdown.FileRows, view.KindEmbedded).Count; embedded != 12 {
+	if embedded := findRow(t, breakdown.FileRows, view.KindEmbedded).Count(); embedded != 12 {
 		t.Fatalf("embedded = %d, want 12", embedded)
 	}
 	if breakdown.Processed != 238 || sumRowCounts(breakdown.FileRows) != 238 {
@@ -128,7 +128,7 @@ func TestResolveProgressSurfaceFirstBuild(t *testing.T) {
 	if breakdown.ScopeLabel != "files (full build)" {
 		t.Fatalf("scope label = %q, want %q", breakdown.ScopeLabel, "files (full build)")
 	}
-	if embedded := findRow(t, breakdown.FileRows, view.KindEmbedded).Count; embedded != 10 {
+	if embedded := findRow(t, breakdown.FileRows, view.KindEmbedded).Count(); embedded != 10 {
 		t.Fatalf("embedded = %d, want 10 for a full build", embedded)
 	}
 	if hasRow(breakdown.FileRows, view.KindUnchanged) {

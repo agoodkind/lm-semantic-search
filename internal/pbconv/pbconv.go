@@ -166,14 +166,7 @@ func BreakdownProto(p model.Progress) *pb.OutcomeBreakdown {
 // (the TUI) renders it through the same render.BreakdownLines as the daemon.
 func BreakdownFromProto(breakdown *pb.OutcomeBreakdown) view.OutcomeBreakdown {
 	if breakdown == nil {
-		return view.OutcomeBreakdown{
-			ScopeLabel:  "",
-			Processed:   0,
-			ScopeTotal:  0,
-			FileRows:    nil,
-			ChunksTotal: 0,
-			ChunkRows:   nil,
-		}
+		return view.ZeroBreakdown()
 	}
 	return view.OutcomeBreakdown{
 		ScopeLabel:  breakdown.GetScopeLabel(),
@@ -188,7 +181,7 @@ func BreakdownFromProto(breakdown *pb.OutcomeBreakdown) view.OutcomeBreakdown {
 func outcomeRowsToProto(rows []view.OutcomeRow) []*pb.OutcomeRow {
 	out := make([]*pb.OutcomeRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, &pb.OutcomeRow{Kind: outcomeKindToProto(row.Kind), Count: row.Count})
+		out = append(out, &pb.OutcomeRow{Kind: outcomeKindToProto(row.Kind()), Count: row.Count()})
 	}
 	return out
 }
@@ -199,7 +192,7 @@ func outcomeRowsFromProto(rows []*pb.OutcomeRow) []view.OutcomeRow {
 	}
 	out := make([]view.OutcomeRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, view.OutcomeRow{Kind: outcomeKindFromProto(row.GetKind()), Count: row.GetCount()})
+		out = append(out, view.NewOutcomeRow(outcomeKindFromProto(row.GetKind()), row.GetCount()))
 	}
 	return out
 }

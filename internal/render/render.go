@@ -370,8 +370,8 @@ func renderOutcomeRows(rows []view.OutcomeRow) []string {
 		if index == len(rows)-1 {
 			connector = "└─"
 		}
-		pres := outcomeKindPresentation[row.Kind]
-		out = append(out, fmt.Sprintf("%s %s %s %s", connector, pres.glyph, formatCountString(row.Count), pres.label))
+		pres := outcomeKindPresentation[row.Kind()]
+		out = append(out, fmt.Sprintf("%s %s %s %s", connector, pres.glyph, formatCountString(row.Count()), pres.label))
 	}
 	return out
 }
