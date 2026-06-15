@@ -1,6 +1,12 @@
 MIT License
 
+Copyright (c) 2025 Zilliz
 Copyright (c) 2026 Alex Goodkind
+
+Portions derived from [zilliztech/claude-context](https://github.com/zilliztech/claude-context)
+are Copyright (c) 2025 Zilliz.
+Original code, modifications, and features authored in this repository
+are Copyright (c) 2026 Alex Goodkind.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

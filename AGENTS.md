@@ -6,7 +6,19 @@ Keep this file short, current, and focused on rules that should affect day-to-da
 
 ## Project purpose
 
-`claude-context-go` is a ground-up Go rewrite of `zilliztech/claude-context`. The repo owns three binaries: the long-lived `claude-contextd` daemon, the `claude-context` operator CLI, and the `claude-context-mcp` stdio adapter. VS Code and Chrome extension clients are intentionally out of scope here. The Go port is independent of and not affiliated with Zilliz. The daemon's service identity is `io.goodkind.claude-contextd` (a launchd agent on macOS, a `claude-contextd.service` systemd user unit on Linux); the only compatibility requirement with the upstream TS tool is the shared Milvus data store (collection names, schema, and chunk ids), not the service identity.
+`lm-semantic-search` is a local Go rewrite of `zilliztech/claude-context`.
+
+The repo builds three binaries:
+
+- `lm-semantic-search-daemon`, the long-lived gRPC daemon
+- `lm-semantic-search`, the operator CLI
+- `lm-semantic-search-mcp`, the stdio MCP adapter
+
+VS Code and Chrome extension clients are intentionally out of scope here.
+
+The daemon's service identity is `io.goodkind.lm-semantic-search-daemon` on macOS launchd and `lm-semantic-search-daemon.service` for a Linux systemd user unit.
+
+The only compatibility requirement with the upstream TypeScript tool is the shared Milvus data store: collection names, schema, and chunk ids. The service identity is not shared with the upstream tool.
 
 ## Transport contract
 
@@ -14,23 +26,48 @@ The daemon transport is gRPC only, with protobuf definitions managed by `buf`. T
 
 Sources of truth:
 
-- `proto/claudecontext/v1/service.proto`
+- `proto/*`
 - `buf.yaml`
 - `buf.gen.yaml`
 
-## TS upstream drop-in compatibility
+## Typescript upstream drop-in compatibility
 
-The Milvus collection is the portable index, shared byte-for-byte with the upstream TS adapter. Both tools name it `hybrid_code_chunks_<md5(path)[:8]>`, use the same schema, and compute the same deterministic chunk id `chunk_<sha256(path:start:end:content)[:16]>`. Each tool keeps its own private bookkeeping outside Milvus: TS at `~/.context/mcp-codebase-snapshot.json` and `~/.context/merkle/<md5(path)>.json`; the Go daemon at `XDG_STATE_HOME/lm-semantic-search/registry.json`, fallback `~/.local/state/lm-semantic-search/registry.json`, and the matching `merkle/<codebase-id>.json` files under that same state root. The `~/.context` directory stays read-only for daemon compatibility inputs such as `.env`, `.sync-trigger`, and TS snapshot or merkle adoption.
+The Milvus collection is the portable index, shared byte-for-byte with the upstream Typescript adapter. Both tools name it `hybrid_code_chunks_<md5(path)[:8]>`, use the same schema, and compute the same deterministic chunk id `chunk_<sha256(path:start:end:content)[:16]>`.
 
-The contract is two-way and reduces to one rule the daemon fully controls: never silently drop or rename a shared collection, and never write TS's bookkeeping files (the daemon only reads the TS merkle, to seed adoption).
+Each tool keeps its own private bookkeeping outside Milvus:
 
-Adoption (TS to Go): when `GetIndex` resolves a path whose collection exists but which has no registry entry, `adoptUnregisteredCodebase` (`internal/daemon/manager_adopt.go`) persists a first-class registry record with a stable id, seeds the Go merkle from the TS merkle via `internal/migrate/snapshot.go` (`LoadTSMerkle`) so the first sync re-embeds only changed files, starts the watcher, and enqueues one refresh sync. The collection is never touched.
+- Typescript at `~/.context/mcp-codebase-snapshot.json` and `~/.context/merkle/<md5(path)>.json`
+- Go daemon at `XDG_STATE_HOME/lm-semantic-search/registry.json`, and `XDG_STATE_HOME/lm-semantic-search/merkle/<codebase-id>.json`
 
-Switch-back (Go to TS): a Go-written or Go-modified collection stays in the shared format and is never dropped or renamed, so TS resolves it by md5 collection name, self-recovers its own snapshot, reuses the collection non-destructively, and re-embeds only changed files. Verified against the TS source at `~/Sites/claude-context`.
+The `~/.context` directory stays read-only for daemon compatibility inputs such as `.env`, `.sync-trigger`, and TS snapshot or merkle adoption.
 
-Rules:
+The contract is two-way and reduces to one rule the daemon fully controls: Never silently drop or rename a shared collection, and never write TS's bookkeeping files (the Go daemon only reads the TS merkle to seed adoption).
 
-- Code that constructs collection names, the schema, or chunk ids must preserve the shared invariant; the tests in `internal/semantic/portability_test.go` lock it.
+### Adoption (TS to Go)
+
+When `lm-semantic-search` resolves a path with a Milvus collection but no registry entry, the daemon adopts that path as a Go-managed codebase.
+
+Adoption persists a registry record with a stable id through `adoptUnregisteredCodebase`. During adoption, the daemon calls `LoadTSMerkle` and tries to seed the Go merkle snapshot from the TypeScript merkle. If that merkle data is missing, empty, unreadable, or cannot be written, the daemon keeps the adopted codebase and continues without the seed.
+
+After the registry update, the daemon notifies the codebase lifecycle hook. When file watching is enabled, the watcher uses that notification to add the codebase root.
+
+To reconcile the adopted collection with the current files on disk, the daemon enqueues a deferred refresh sync. If `LoadTSMerkle` produced a usable seed, the daemon diffs that seed against current files and re-embeds only changed paths. Without a usable seed, the sync treats every current file as changed.
+
+### Switch-back (Go to TS)
+
+When the Go daemon writes or updates a Milvus collection, it keeps that collection compatible with the TypeScript adapter.
+
+A compatible collection uses the same Milvus format as the TypeScript adapter. That format includes the collection name, the collection schema, and the chunk ids.
+
+Both tools name the collection `hybrid_code_chunks_<md5(path)[:8]>`. This shared name lets the TypeScript adapter find a collection that the Go daemon created or updated.
+
+Snapshot files stay outside Milvus. The TypeScript adapter keeps its own snapshot files and can rebuild them when it reads an existing shared collection.
+
+After that rebuild, the TypeScript adapter can reuse the existing Milvus collection and re-embed only changed files.
+
+Only explicit `clear_index` may drop the shared collection. The Go daemon must not otherwise drop or rename it.
+
+- Code that constructs collection names, the schema, or chunk ids must preserve the shared invariant
 - The only collection deletion is explicit `clear_index`. There is no orphan-collection garbage collection; a collection without a registry entry is adopted, never dropped.
 
 ## Path identity
@@ -42,8 +79,6 @@ For a codebase rooted at a symlink the shared-collection invariant does not hold
 ## Embedding
 
 The Go port supports exactly one embedding provider, an OpenAI-compatible HTTP adapter. `OPENAI_BASE_URL` points at any endpoint that speaks the OpenAI embeddings API.
-
-Rules:
 
 - Do not add provider-specific clients for VoyageAI, Gemini, or native Ollama. Anything that speaks OpenAI on a configurable base URL works without code changes.
 - Do not assume an internet connection. Default config should let `claude-context-mcp` start and answer "not indexed" gracefully even when the embedding endpoint is unreachable.
@@ -58,7 +93,7 @@ Rules:
 
 ## Incremental sync
 
-Per-codebase Merkle snapshots live under `XDG_STATE_HOME/lm-semantic-search/merkle/<codebase-id>.json`, fallback `~/.local/state/lm-semantic-search/merkle/<codebase-id>.json`. The sync flow lives in `internal/daemon/background_sync.go` and `internal/daemon/manager.go` (`runDeltaSync`).
+Per-codebase Merkle snapshots live under `XDG_STATE_HOME/lm-semantic-search/merkle/<codebase-id>.json`. The sync flow lives in `internal/daemon/background_sync.go` and `internal/daemon/manager.go` (`runDeltaSync`).
 
 On every sync request:
 
@@ -80,8 +115,6 @@ The mechanism is `Manager.dedupAgainstActiveJob` in `internal/daemon/manager.go`
 
 The MCP tool accepts `wait: true` and `wait_timeout_seconds` (default 300). When `wait=true`, the handler in `internal/mcpserver/server.go` polls `GetJob` every 1.5 seconds until the job reaches `completed`, `failed`, or `cancelled`, then returns the corresponding `GetIndex` response. On timeout the daemon job keeps running and the tool returns the latest progress.
 
-Rules:
-
 - When `wait=true`, always poll through the daemon. Do not subscribe directly to manager state.
 - Concurrent waiters dedupe at the daemon's StartIndex path, so adding extra retry logic in the MCP handler is unnecessary.
 
@@ -101,39 +134,6 @@ The daemon stores every timestamp in UTC (see `internal/clock/clock.go`). Human-
 
 When adding new timestamp output, use `formatLocalTime` for any string headed at a human-facing display path. Anything that flows into JSON or the gRPC wire should stay UTC.
 
-## Style and structural conventions
-
-JavaScript and TypeScript style does not apply here; this is Go.
-
-- Top-level functions declared with `func`, not assigned to variables.
-- Every function, method, parameter, and return type has a concrete Go type. Avoid `any` and `interface{}` unless a real upstream union requires it.
-- Test files live alongside the package source.
-- Wrap errors with operation context and the relevant identifier.
-- Add package doc comments and exported type comments. Add field comments only when the field's meaning is not obvious from its name.
-- Match the existing comment density. The codebase favors comments on the why, not the what.
-
-## Testing and verification
-
-Run all of the following before claiming a change is complete:
-
-- `go test ./...`
-- `make lint` (golangci-lint, gofumpt, gocyclo, deadcode, staticcheck-extra; all five gates must pass)
-- `make build` (also runs vet and govulncheck)
-- For changes that touch the live indexing path, run a live smoke against the user's local Milvus and `lmd-serve` on port 5400.
-
 ### Failing make steps
 
 If any `make` step fails, fix the underlying code, test, configuration, or documentation honestly. Do not disable, silence, weaken, baseline, or otherwise circumvent the check. Do not add `|| true`, ignore exit codes, narrow target scopes, raise thresholds, or remove checks unless the user explicitly asks for that exact policy change.
-
-## Deliberately not supported
-
-The Go port is local- and self-hosted-only. The following upstream surfaces are intentionally absent:
-
-- Zilliz Cloud auto-provisioning, `ClusterManager`, free-cluster creation.
-- `checkCollectionLimit()` and the Zilliz pricing surface.
-- `syncIndexedCodebasesFromCloud()` and description-based recovery.
-- `MILVUS_TOKEN`-based address auto-resolution.
-- The `MilvusRestfulVectorDatabase` REST client.
-- VS Code and Chrome extension packages.
-- Telemetry and hosted-service hooks.
-- Dedicated VoyageAI, Gemini, and Ollama embedding clients. Use an OpenAI-compatible proxy with `OPENAI_BASE_URL` instead.

@@ -1,68 +1,73 @@
-# claude-context-go
+# lm-semantic-search
 
-A ground-up Go rewrite of the Claude Context runtime, owning the daemon, the operator CLI, and the MCP adapter. VS Code and Chrome extension clients are out of scope here.
+A fork and Go rewrite of [zilliztech/claude-context](https://github.com/zilliztech/claude-context) that keeps backward compatibility with the Milvus data store used by Claude Context while adding local improvements and features on top.
 
-Original TypeScript implementation: `github.com/zilliztech/claude-context`. This Go port is independent of, and not affiliated with or endorsed by, Zilliz.
+## Where Current Truth Lives
 
-Provided AS IS under the MIT License with no warranty. See [LICENSE](LICENSE).
-
-Coding agents working in this repository should read [AGENTS.md](AGENTS.md) for architectural rules, conventions, and the testing contract. `CLAUDE.md` is a symlink to `AGENTS.md`.
-
-## Binaries
-
-- `claude-contextd`: long-lived daemon.
-- `claude-context`: operator CLI.
-- `claude-context-mcp`: MCP stdio adapter that forwards every tool call to the daemon over its unix socket.
-
-## TS adapter drop-in
-
-The Go daemon and the upstream TypeScript adapter share one Milvus index per codebase, so a codebase indexed by either tool is searchable through the other with no migration step and neither tool modified. The shared-index contract and the adoption flow are defined in the "TS upstream drop-in compatibility" section of [AGENTS.md](AGENTS.md).
-
-## Build
-
-```sh
-make test
-make build
-```
-
-## Install and deploy
-
-This repo follows the same local deploy shape as `~/Sites/agent-gate`:
-
-- `make install` installs the daemon binary.
-- `make install-clients` installs `claude-context` and `claude-context-mcp`.
-- `make deploy` performs local install, restarts or installs the user service, waits for readiness, then reports daemon status.
-- `make deploy-service` uses the shared `go-service.mk` restart-first, install-on-failure pattern.
-- `make daemon-status` checks the daemon through the installed CLI.
-- `make daemon-wait` polls the installed CLI until the daemon is reachable.
-- `make kill-orphans` SIGKILLs any `claude-context-mcp` process whose PPID is `1`. Live sessions with a real parent stay untouched.
+CLI behavior lives in the current help output, starting with `lm-semantic-search --help` and the grouped subcommand help.
 
 ## Configuration
 
-The daemon reads configuration in this order (highest precedence first):
+The daemon reads `config.json` from `$XDG_CONFIG_HOME/lm-semantic-search/`, or from `~/.config/lm-semantic-search/` when `XDG_CONFIG_HOME` is unset.
 
-1. Process environment variables.
-2. `~/.context/.env` (KEY=VALUE pairs, comments via `#`, respects already-set env vars).
-3. `XDG_CONFIG_HOME/lm-semantic-search/config.json`, fallback `~/.config/lm-semantic-search/config.json` (persisted daemon defaults).
+Use `OPENAI_API_KEY` and `MILVUS_TOKEN` as environment variables or in `~/.context/.env`. Do not put secret values in checked-in files.
 
-The daemon owns its local registry, jobs journal, chunk cache, Merkle snapshots, sockets, locks, and logs under `XDG_STATE_HOME/lm-semantic-search`, fallback `~/.local/state/lm-semantic-search`. The `~/.context` directory remains a compatibility input root for `.env`, `.sync-trigger`, and upstream TS snapshot or merkle adoption.
+Example `config.json`:
 
-Required keys:
+```json
+{
+  "embeddingProvider": "OpenAI",
+  "embeddingModel": "text-embedding-3-small",
+  "embeddingBatchSize": 32,
+  "embeddingBatchTokenBudget": 6000,
+  "openaiBaseUrl": "http://localhost:5400/v1",
+  "milvusAddress": "localhost:19530",
+  "hybridMode": true
+}
+```
 
-- `EMBEDDING_PROVIDER=OpenAI`
-- `OPENAI_API_KEY=<key>`
-- `OPENAI_BASE_URL=<base URL>` (omit when using the public OpenAI endpoint).
-- `EMBEDDING_MODEL=<model id served by the upstream>`
-- `MILVUS_ADDRESS=<host:port>` for the vector backend.
+If both `openaiBaseUrl` and `OPENAI_BASE_URL` are unset, the OpenAI SDK uses its default endpoint. `OPENAI_BASE_URL` overrides `openaiBaseUrl` when both are set.
 
-Optional:
+## MCP Installation
 
-- `EMBEDDING_DIMENSION=<int>` requests a non-default output dimension.
-- `EMBEDDING_BATCH_SIZE=<int>` (default 32) is the number of chunks per embedding HTTP call.
-- `CUSTOM_EXTENSIONS=.ext1,.ext2,...` adds extra file extensions to discovery.
-- `CUSTOM_IGNORE_PATTERNS=glob1,glob2,...` adds extra ignore patterns.
-- `HYBRID_MODE=true|false` (default true) toggles Milvus BM25 + dense hybrid.
-- `CODE_CHUNKS_COLLECTION_NAME_OVERRIDE` adds a readable infix to collection names.
-- `CLAUDE_CONTEXT_BACKGROUND_SYNC=true|false` (default true) enables periodic sync.
-- `CLAUDE_CONTEXT_TRIGGER_WATCHER=true|false` (default true) watches `~/.context/.sync-trigger`.
-- `CLAUDE_CONTEXT_SYNC_INTERVAL_MS` and `CLAUDE_CONTEXT_SYNC_LOCK_STALE_MS` tune sync cadence and lock recovery.
+Build and install the daemon, CLI, and MCP adapter:
+
+```bash
+make install
+```
+
+Install or restart the user service:
+
+```bash
+make deploy-service
+lm-semantic-search daemon status
+```
+
+Add the MCP adapter as a stdio server in the MCP client:
+
+```json
+{
+  "mcpServers": {
+    "lm-semantic-search": {
+      "command": "lm-semantic-search-mcp"
+    }
+  }
+}
+```
+
+If `lm-semantic-search-mcp` is not on the client process `PATH`, set `command` to the installed binary's absolute path.
+
+## Deliberately not supported
+
+The Go port is local- and self-hosted-only. The following upstream surfaces are intentionally absent:
+
+- Zilliz Cloud auto-provisioning, `ClusterManager`, free-cluster creation.
+- `checkCollectionLimit()` and the Zilliz pricing surface.
+- `syncIndexedCodebasesFromCloud()` and description-based recovery.
+- `MILVUS_TOKEN`-based address auto-resolution.
+- The `MilvusRestfulVectorDatabase` REST client.
+- VS Code and Chrome extension packages.
+- Telemetry and hosted-service hooks.
+- Dedicated VoyageAI, Gemini, and Ollama embedding clients. Use an OpenAI-compatible proxy with `OPENAI_BASE_URL` instead.
+
+This fork is independent of and not affiliated with Zilliz.
