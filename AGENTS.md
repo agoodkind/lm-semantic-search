@@ -67,8 +67,6 @@ After that rebuild, the TypeScript adapter can reuse the existing Milvus collect
 
 Only explicit `clear_index` may drop the shared collection. The Go daemon must not otherwise drop or rename it.
 
-### Rules
-
 - Code that constructs collection names, the schema, or chunk ids must preserve the shared invariant
 - The only collection deletion is explicit `clear_index`. There is no orphan-collection garbage collection; a collection without a registry entry is adopted, never dropped.
 
@@ -81,8 +79,6 @@ For a codebase rooted at a symlink the shared-collection invariant does not hold
 ## Embedding
 
 The Go port supports exactly one embedding provider, an OpenAI-compatible HTTP adapter. `OPENAI_BASE_URL` points at any endpoint that speaks the OpenAI embeddings API.
-
-### Rules
 
 - Do not add provider-specific clients for VoyageAI, Gemini, or native Ollama. Anything that speaks OpenAI on a configurable base URL works without code changes.
 - Do not assume an internet connection. Default config should let `claude-context-mcp` start and answer "not indexed" gracefully even when the embedding endpoint is unreachable.
@@ -118,8 +114,6 @@ The mechanism is `Manager.dedupAgainstActiveJob` in `internal/daemon/manager.go`
 ## Blocking `index_codebase`
 
 The MCP tool accepts `wait: true` and `wait_timeout_seconds` (default 300). When `wait=true`, the handler in `internal/mcpserver/server.go` polls `GetJob` every 1.5 seconds until the job reaches `completed`, `failed`, or `cancelled`, then returns the corresponding `GetIndex` response. On timeout the daemon job keeps running and the tool returns the latest progress.
-
-Rules:
 
 - When `wait=true`, always poll through the daemon. Do not subscribe directly to manager state.
 - Concurrent waiters dedupe at the daemon's StartIndex path, so adding extra retry logic in the MCP handler is unnecessary.
