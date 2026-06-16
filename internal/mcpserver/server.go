@@ -271,7 +271,7 @@ func callDaemonDoctor(ctx context.Context, socketPath string, outputMode respons
 		slog.ErrorContext(ctx, "dial daemon for doctor failed", "socket_path", socketPath, "err", err)
 		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	outgoingCtx := grpcutil.WithCorrelation(ctx)
 
