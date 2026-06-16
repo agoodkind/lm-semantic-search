@@ -181,10 +181,18 @@ func (manager *Manager) refreshDependencyHealth(ctx context.Context) {
 // for the render layer. It clears a boot-time store banner when the cached
 // semantic service has already reconnected, so a status read observes recovery
 // without adding a live dependency probe.
+//
+// A reconnected client only proves the metadata channel answers, not that the
+// query plane can serve a search, so this recovery shortcut is suppressed when a
+// data-plane probe ran within the debounce window: that probe is authoritative,
+// including a verdict that the store is unavailable while the client is merely
+// connected (the metadata-up / query-down window after a restart). Without a
+// recent probe the reconnect shortcut still clears the boot banner as before.
 func (manager *Manager) DependencyHealth() dependencyHealth {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.health.Mode == dependencyStoreUnavailable && manager.semantic != nil && manager.semantic.Available() {
+	probeFresh := !manager.lastDepProbeAt.IsZero() && clock.Now().Sub(manager.lastDepProbeAt) < dependencyProbeInterval
+	if !probeFresh && manager.health.Mode == dependencyStoreUnavailable && manager.semantic != nil && manager.semantic.Available() {
 		manager.noteDependencyHealthyLocked()
 	}
 	return manager.health
