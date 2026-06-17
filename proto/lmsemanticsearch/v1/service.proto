@@ -93,7 +93,7 @@ message Progress {
   int32 chunks_processed = 15;
   // chunks_embedded counts chunks sent to the embedder during this run.
   int32 chunks_embedded = 16;
-  // reuse_vectors_loaded counts old vectors loaded as reuse candidates.
+  // reuse_vectors_loaded counts old vectors loaded as reuse candidates during this run.
   int32 reuse_vectors_loaded = 17;
 }
 

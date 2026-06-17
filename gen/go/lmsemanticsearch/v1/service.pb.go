@@ -518,7 +518,7 @@ type Progress struct {
 	ChunksProcessed int32 `protobuf:"varint,15,opt,name=chunks_processed,json=chunksProcessed,proto3" json:"chunks_processed,omitempty"`
 	// chunks_embedded counts chunks sent to the embedder during this run.
 	ChunksEmbedded int32 `protobuf:"varint,16,opt,name=chunks_embedded,json=chunksEmbedded,proto3" json:"chunks_embedded,omitempty"`
-	// reuse_vectors_loaded counts old vectors loaded as reuse candidates.
+	// reuse_vectors_loaded counts old vectors loaded as reuse candidates during this run.
 	ReuseVectorsLoaded int32 `protobuf:"varint,17,opt,name=reuse_vectors_loaded,json=reuseVectorsLoaded,proto3" json:"reuse_vectors_loaded,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
