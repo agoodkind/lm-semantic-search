@@ -181,6 +181,12 @@ func renderGetIndexBody(getIndex view.GetIndexView) string {
 		// These non-template states carry no prose in render: the daemon boundary
 		// builds the display-ready body in resolveStatusNarrative and render only
 		// joins the lines. The status chokepoint keeps prose behind the view wall.
+		if len(getIndex.Narrative.Lines) == 0 {
+			// A non-template state must always arrive with a narrative. An empty one
+			// means a caller skipped resolveStatusNarrative; surface the status word
+			// and path so the gap is visible rather than rendering a blank body.
+			return fmt.Sprintf("Codebase '%s' status: %s", getIndex.CanonicalPath, getIndex.Display)
+		}
 		return strings.Join(getIndex.Narrative.Lines, "\n")
 	default:
 		return renderStatusBody(getIndex.Status, getIndex.TemplateName)

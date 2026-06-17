@@ -40,9 +40,9 @@ type QuarantineSurface struct {
 // StatusNarrative is the boundary-owned, display-ready body for a non-template
 // codebase status (failed, missing, stale, quarantined). The daemon boundary
 // builds each line so the render layer only joins them; render never synthesizes
-// status prose from a raw record. Kind names the state; Lines are pre-rendered.
+// status prose from a raw record. The state itself is carried by
+// GetIndexView.Display, so the narrative holds only the pre-rendered lines.
 type StatusNarrative struct {
-	Kind  string
 	Lines []string
 }
 

@@ -372,7 +372,7 @@ func (manager *Manager) resolveGetIndexView(
 			TotalCount:         0,
 			Trigger:            "",
 		},
-		Narrative:          view.StatusNarrative{Kind: "", Lines: nil},
+		Narrative:          view.StatusNarrative{Lines: nil},
 		WaitLabel:          "",
 		ClassificationLine: classificationLine(classification),
 		ResolutionLines:    pathResolutionLines(requestedPath),

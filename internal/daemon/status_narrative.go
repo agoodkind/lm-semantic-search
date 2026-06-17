@@ -16,15 +16,15 @@ import (
 func resolveStatusNarrative(display displayStatus, canonicalPath string, failure view.FailureSurface, quarantine view.QuarantineSurface, statusView view.StatusView) view.StatusNarrative {
 	switch display {
 	case displayFailed:
-		return view.StatusNarrative{Kind: string(displayFailed), Lines: failedNarrativeLines(canonicalPath, failure)}
+		return view.StatusNarrative{Lines: failedNarrativeLines(canonicalPath, failure)}
 	case displayMissing:
-		return view.StatusNarrative{Kind: string(displayMissing), Lines: missingNarrativeLines(canonicalPath)}
+		return view.StatusNarrative{Lines: missingNarrativeLines(canonicalPath)}
 	case displayStale:
-		return view.StatusNarrative{Kind: string(displayStale), Lines: staleNarrativeLines(canonicalPath, failure)}
+		return view.StatusNarrative{Lines: staleNarrativeLines(canonicalPath, failure)}
 	case displayQuarantined:
-		return view.StatusNarrative{Kind: string(displayQuarantined), Lines: quarantinedNarrativeLines(canonicalPath, quarantine, statusView)}
+		return view.StatusNarrative{Lines: quarantinedNarrativeLines(canonicalPath, quarantine, statusView)}
 	default:
-		return view.StatusNarrative{Kind: "", Lines: nil}
+		return view.StatusNarrative{Lines: nil}
 	}
 }
 

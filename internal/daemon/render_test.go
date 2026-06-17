@@ -566,6 +566,23 @@ func TestRenderGetIndexBodyQuarantinedPreservesSearchabilityMessage(t *testing.T
 	}
 }
 
+// TestRenderGetIndexBodyNonTemplateEmptyNarrativeFallsBack proves the render
+// fallback: a non-template display that arrives without a narrative (a caller
+// that skipped resolveStatusNarrative) surfaces the status word and path rather
+// than a blank body.
+func TestRenderGetIndexBodyNonTemplateEmptyNarrativeFallsBack(t *testing.T) {
+	t.Parallel()
+	out := render.GetIndex(view.GetIndexView{
+		Tracked:       true,
+		RequestedPath: "/repo",
+		CanonicalPath: "/repo",
+		Display:       view.Display(displayQuarantined),
+	})
+	if !strings.Contains(out, "Codebase '/repo' status: quarantined") {
+		t.Fatalf("empty-narrative fallback missing status word in:\n%s", out)
+	}
+}
+
 // TestRenderGetIndexBodyBuildingTakesOver proves a from-scratch build still
 // owns the display, because its staging collection is not promoted yet.
 func TestRenderGetIndexBodyBuildingTakesOver(t *testing.T) {
