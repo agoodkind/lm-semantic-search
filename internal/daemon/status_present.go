@@ -48,7 +48,31 @@ func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, pipelin
 		BackgroundSyncReconcile: activeJob != nil && isBackgroundSyncReconcile(&codebase, activeJob),
 		Dependency:              dependency,
 		Search:                  status.SearchNone,
+		SearchableEligible:      false,
 	}).Display
+}
+
+// computeSearchable resolves whether a path can be searched right now through the
+// status package, the single source of truth, instead of combining the indexed
+// classification with the dependency health inline at the RPC boundary. It is the
+// searchable-bit mirror of computeDisplayStatus: searchableEligible is the
+// per-path indexed precondition and pipelineDegraded carries whether the shared
+// backend is degraded, and status.ResolveSearchable owns the fold so the wire
+// `searchable` field and the displayed status cannot diverge.
+func computeSearchable(searchableEligible bool, pipelineDegraded bool) bool {
+	dependency := status.Healthy
+	if pipelineDegraded {
+		dependency = status.EmbedderBusy
+	}
+	return status.Resolve(status.Inputs{
+		Status:                  "",
+		HasActiveJob:            false,
+		JobScopeKnown:           false,
+		BackgroundSyncReconcile: false,
+		Dependency:              dependency,
+		Search:                  status.SearchNone,
+		SearchableEligible:      searchableEligible,
+	}).Searchable
 }
 
 // resolveJobSurface reduces a raw job and the pipeline-degraded flag into the

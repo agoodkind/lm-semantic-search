@@ -448,7 +448,7 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 		Tracked:          found,
 		Classification:   pbconv.ToPathClassification(classification),
 		DependencyHealth: toDependencyHealth(health),
-		Searchable:       searchableEligible && !health.Degraded(),
+		Searchable:       computeSearchable(searchableEligible, health.Degraded()),
 		DisplayText:      server.envelopeText(ctx, health, render.GetIndex(getIndexView), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
 	if found {
