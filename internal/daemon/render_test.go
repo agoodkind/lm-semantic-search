@@ -269,6 +269,7 @@ func renderGetIndexBodyForTest(requestedPath string, tracked bool, codebase *mod
 		statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
 		getIndex.Status = statusView
 		getIndex.TemplateName = templateName
+		getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, getIndex.Failure, getIndex.Quarantine, statusView)
 	}
 	return render.GetIndex(getIndex)
 }

@@ -372,6 +372,7 @@ func (manager *Manager) resolveGetIndexView(
 			TotalCount:         0,
 			Trigger:            "",
 		},
+		Narrative:          view.StatusNarrative{Kind: "", Lines: nil},
 		WaitLabel:          "",
 		ClassificationLine: classificationLine(classification),
 		ResolutionLines:    pathResolutionLines(requestedPath),
@@ -393,6 +394,7 @@ func (manager *Manager) resolveGetIndexView(
 	}
 	getIndex.Status = statusView
 	getIndex.TemplateName = templateName
+	getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, getIndex.Failure, getIndex.Quarantine, statusView)
 	return getIndex
 }
 

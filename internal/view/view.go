@@ -37,6 +37,15 @@ type QuarantineSurface struct {
 	Trigger            string
 }
 
+// StatusNarrative is the boundary-owned, display-ready body for a non-template
+// codebase status (failed, missing, stale, quarantined). The daemon boundary
+// builds each line so the render layer only joins them; render never synthesizes
+// status prose from a raw record. Kind names the state; Lines are pre-rendered.
+type StatusNarrative struct {
+	Kind  string
+	Lines []string
+}
+
 // RunMode names what kind of pass a job is making.
 type RunMode string
 
@@ -406,6 +415,7 @@ type GetIndexView struct {
 	Status             StatusView
 	Failure            FailureSurface
 	Quarantine         QuarantineSurface
+	Narrative          StatusNarrative
 	WaitLabel          string
 	ClassificationLine string
 	ResolutionLines    []string
