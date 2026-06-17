@@ -23,6 +23,7 @@ import (
 // values so the manager treats the backend as available and empty.
 type fakeSemantic struct {
 	unavailable          bool
+	probeErr             error
 	reindex              func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
 	copyChunks           func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
 	deleteConversation   func(ctx context.Context, collectionName string, conversationID string) error
@@ -60,6 +61,13 @@ type fakeSemantic struct {
 }
 
 func (f *fakeSemantic) Available() bool { return !f.unavailable }
+func (f *fakeSemantic) ProbeHealth(context.Context) error {
+	if f.unavailable {
+		return semantic.ErrUnavailable
+	}
+	return f.probeErr
+}
+
 func (f *fakeSemantic) CollectionName(codebasePath string) string {
 	if f.collectionName != nil {
 		return f.collectionName(codebasePath)

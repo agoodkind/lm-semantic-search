@@ -89,11 +89,11 @@ message Progress {
   // value every surface renders, so JSON consumers get the exact tree without
   // parsing the human text. Its file rows sum to processed.
   OutcomeBreakdown breakdown = 14;
-  // chunks_processed counts chunks produced by this sync pass.
+  // chunks_processed counts chunks produced during this run.
   int32 chunks_processed = 15;
-  // chunks_embedded counts chunks sent to the embedder this sync pass.
+  // chunks_embedded counts chunks sent to the embedder during this run.
   int32 chunks_embedded = 16;
-  // reuse_vectors_loaded counts old vectors loaded as reuse candidates.
+  // reuse_vectors_loaded counts old vectors loaded as reuse candidates during this run.
   int32 reuse_vectors_loaded = 17;
 }
 
@@ -340,6 +340,12 @@ message GetIndexResponse {
   string display_text = 4;
   PathClassification classification = 5;
   DependencyHealth dependency_health = 6;
+  // Searchable is true only when the path is indexed AND the search backend
+  // (store and embedder) answered a liveness probe at status time. It is the
+  // single signal a caller should use to decide whether search_code can serve
+  // this path right now; classification.kind alone reflects only the on-disk
+  // index and stays KIND_IN_SCOPE_INDEXED even when the backend is unreachable.
+  bool searchable = 7;
 }
 
 // PathClassification reports how the daemon sees one queried path with

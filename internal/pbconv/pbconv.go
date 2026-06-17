@@ -107,6 +107,14 @@ func ToJob(job model.Job) *pb.Job {
 // the resolved breakdown, so every response that carries progress carries the
 // same structured tree the human surfaces render.
 func ToProgress(p model.Progress) *pb.Progress {
+	chunksEmbedded := p.ChunksEmbedded
+	if chunksEmbedded == 0 {
+		chunksEmbedded = p.ChunksGenerated
+	}
+	chunksProcessed := p.ChunksProcessed
+	if chunksProcessed == 0 {
+		chunksProcessed = chunksEmbedded + p.ChunksReused
+	}
 	return &pb.Progress{
 		Phase:                     p.Phase,
 		PhasePercent:              p.PhasePercent,
@@ -114,9 +122,9 @@ func ToProgress(p model.Progress) *pb.Progress {
 		Unit:                      p.Unit,
 		FilesTotal:                p.FilesTotal,
 		FilesProcessed:            p.FilesProcessed,
-		ChunksProcessed:           p.ChunksProcessed,
+		ChunksProcessed:           chunksProcessed,
 		ChunksReused:              p.ChunksReused,
-		ChunksEmbedded:            p.ChunksEmbedded,
+		ChunksEmbedded:            chunksEmbedded,
 		ChunksGenerated:           p.ChunksGenerated,
 		ReuseVectorsLoaded:        p.ReuseVectorsLoaded,
 		EmbeddingBatchesTotal:     p.EmbeddingBatchesTotal,

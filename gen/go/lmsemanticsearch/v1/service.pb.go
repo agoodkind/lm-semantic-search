@@ -514,11 +514,11 @@ type Progress struct {
 	// value every surface renders, so JSON consumers get the exact tree without
 	// parsing the human text. Its file rows sum to processed.
 	Breakdown *OutcomeBreakdown `protobuf:"bytes,14,opt,name=breakdown,proto3" json:"breakdown,omitempty"`
-	// chunks_processed counts chunks produced by this sync pass.
+	// chunks_processed counts chunks produced during this run.
 	ChunksProcessed int32 `protobuf:"varint,15,opt,name=chunks_processed,json=chunksProcessed,proto3" json:"chunks_processed,omitempty"`
-	// chunks_embedded counts chunks sent to the embedder this sync pass.
+	// chunks_embedded counts chunks sent to the embedder during this run.
 	ChunksEmbedded int32 `protobuf:"varint,16,opt,name=chunks_embedded,json=chunksEmbedded,proto3" json:"chunks_embedded,omitempty"`
-	// reuse_vectors_loaded counts old vectors loaded as reuse candidates.
+	// reuse_vectors_loaded counts old vectors loaded as reuse candidates during this run.
 	ReuseVectorsLoaded int32 `protobuf:"varint,17,opt,name=reuse_vectors_loaded,json=reuseVectorsLoaded,proto3" json:"reuse_vectors_loaded,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
@@ -2324,8 +2324,14 @@ type GetIndexResponse struct {
 	DisplayText      string                 `protobuf:"bytes,4,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
 	Classification   *PathClassification    `protobuf:"bytes,5,opt,name=classification,proto3" json:"classification,omitempty"`
 	DependencyHealth *DependencyHealth      `protobuf:"bytes,6,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Searchable is true only when the path is indexed AND the search backend
+	// (store and embedder) answered a liveness probe at status time. It is the
+	// single signal a caller should use to decide whether search_code can serve
+	// this path right now; classification.kind alone reflects only the on-disk
+	// index and stays KIND_IN_SCOPE_INDEXED even when the backend is unreachable.
+	Searchable    bool `protobuf:"varint,7,opt,name=searchable,proto3" json:"searchable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetIndexResponse) Reset() {
@@ -2398,6 +2404,13 @@ func (x *GetIndexResponse) GetDependencyHealth() *DependencyHealth {
 		return x.DependencyHealth
 	}
 	return nil
+}
+
+func (x *GetIndexResponse) GetSearchable() bool {
+	if x != nil {
+		return x.Searchable
+	}
+	return false
 }
 
 // PathClassification reports how the daemon sees one queried path with
@@ -4377,7 +4390,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\"^\n" +
 	"\x0fGetIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x127\n" +
-	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\xe8\x02\n" +
+	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\x88\x03\n" +
 	"\x10GetIndexResponse\x129\n" +
 	"\bcodebase\x18\x01 \x01(\v2\x1d.lmsemanticsearch.v1.CodebaseR\bcodebase\x127\n" +
 	"\n" +
@@ -4385,7 +4398,10 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\atracked\x18\x03 \x01(\bR\atracked\x12!\n" +
 	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\x12O\n" +
 	"\x0eclassification\x18\x05 \x01(\v2'.lmsemanticsearch.v1.PathClassificationR\x0eclassification\x12R\n" +
-	"\x11dependency_health\x18\x06 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\"\xf6\x02\n" +
+	"\x11dependency_health\x18\x06 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\x12\x1e\n" +
+	"\n" +
+	"searchable\x18\a \x01(\bR\n" +
+	"searchable\"\xf6\x02\n" +
 	"\x12PathClassification\x12@\n" +
 	"\x04kind\x18\x01 \x01(\x0e2,.lmsemanticsearch.v1.PathClassification.KindR\x04kind\x12.\n" +
 	"\x13excluded_by_pattern\x18\x02 \x01(\tR\x11excludedByPattern\x122\n" +

@@ -81,9 +81,9 @@ type Progress struct {
 	// FilesPending counts changed items whose content was not delivered this pass
 	// (the conversation-ingest undelivered case). Transient, re-requested next sync.
 	FilesPending int32
-	// ChunksReused counts chunks served from an already-embedded vector this run,
-	// distinct from ChunksGenerated (embedded this run), so total = reused +
-	// embedded is visible on the progress surface.
+	// ChunksProcessed counts chunks handled by this run. ChunksEmbedded counts
+	// chunks sent to the embedder, ChunksReused counts chunks served from stored
+	// vectors, and ChunksGenerated is the legacy alias for ChunksEmbedded.
 	ChunksProcessed    int32
 	ChunksReused       int32
 	ChunksEmbedded     int32
