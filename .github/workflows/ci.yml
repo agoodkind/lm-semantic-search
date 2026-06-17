@@ -5,6 +5,7 @@ jobs:
     uses: agoodkind/go-makefile/.github/workflows/_ci.yml@main
     permissions:
       contents: read
+      id-token: write
     with:
       # dart/swift tree-sitter grammar sources live in submodules; the build
       # generates the Swift parser from them.
