@@ -177,14 +177,17 @@ func renderGetIndexBody(getIndex view.GetIndexView) string {
 	// codebase folds to "waiting"; the banner above carries the cause, so the
 	// waiting view names none.
 	switch getIndex.Display {
-	case displayFailed:
-		return renderHistoricalFailure(getIndex.CanonicalPath, getIndex.Failure)
-	case displayMissing:
-		return renderMissingStatus(getIndex.CanonicalPath)
-	case displayQuarantined:
-		return renderQuarantinedStatus(getIndex.CanonicalPath, getIndex.Quarantine, getIndex.Status)
-	case displayStale:
-		return renderStaleStatus(getIndex.CanonicalPath, getIndex.Failure)
+	case displayFailed, displayMissing, displayQuarantined, displayStale:
+		// These non-template states carry no prose in render: the daemon boundary
+		// builds the display-ready body in resolveStatusNarrative and render only
+		// joins the lines. The status chokepoint keeps prose behind the view wall.
+		if len(getIndex.Narrative.Lines) == 0 {
+			// A non-template state must always arrive with a narrative. An empty one
+			// means a caller skipped resolveStatusNarrative; surface the status word
+			// and path so the gap is visible rather than rendering a blank body.
+			return fmt.Sprintf("Codebase '%s' status: %s", getIndex.CanonicalPath, getIndex.Display)
+		}
+		return strings.Join(getIndex.Narrative.Lines, "\n")
 	default:
 		return renderStatusBody(getIndex.Status, getIndex.TemplateName)
 	}
@@ -193,85 +196,6 @@ func renderGetIndexBody(getIndex view.GetIndexView) string {
 func renderStatusBody(statusView view.StatusView, templateName string) string {
 	block := strings.Join(BreakdownLines(statusView.Breakdown), "\n")
 	return renderStatusTemplate(templateName, statusTemplateData{StatusView: statusView, BreakdownBlock: block})
-}
-
-// renderMissingStatus reads as a current condition, not a failure: the source
-// directory is gone, so the index is held until the directory returns or the
-// caller drops it.
-func renderMissingStatus(canonicalPath string) string {
-	return fmt.Sprintf(
-		"🚫 Codebase '%s' source directory is missing.\n💡 Re-create the directory to resume indexing, or call clear_index to drop the index.",
-		canonicalPath,
-	)
-}
-
-func renderQuarantinedStatus(canonicalPath string, quarantine view.QuarantineSurface, statusView view.StatusView) string {
-	lines := []string{
-		fmt.Sprintf("⚠️ Codebase '%s' is quarantined after a suspicious large disappearance.", canonicalPath),
-		"🔒 Search continues to serve the last known-good index while destructive sync is paused.",
-	}
-	if statusView.HasStats {
-		lines = append(lines, fmt.Sprintf("📊 Last known good index: %s files, %s chunks", formatCountString(statusView.Files), formatCountString(statusView.Chunks)))
-	}
-	if quarantine.HasQuarantine {
-		lines = append(lines, fmt.Sprintf("🧾 Last signal: %s of %s tracked files in a %s observation", formatCountString(quarantine.MissingCount), formatCountString(quarantine.TotalCount), orDefault(quarantine.Trigger, "suspicious")))
-		lines = append(lines, fmt.Sprintf("🕐 First observed: %s · Last observed: %s · Observations: %s", orDefault(quarantine.FirstObservedLabel, "unknown"), orDefault(quarantine.LastObservedLabel, "unknown"), formatCountString(quarantine.ObservationCount)))
-		if strings.TrimSpace(quarantine.Reason) != "" {
-			lines = append(lines, "🚧 "+quarantine.Reason)
-		}
-	}
-	lines = append(lines, "💡 The daemon will re-check automatically and only apply deletes after later full-scan corroboration.")
-	return strings.Join(lines, "\n")
-}
-
-// renderHistoricalFailure reads as past tense so callers do not mistake an
-// old failure record for a live one. When the failure carries correlation
-// ids it appends a diagnostics line so the operator can grep the daemon log.
-func renderHistoricalFailure(canonicalPath string, failure view.FailureSurface) string {
-	if !failure.HasFailure {
-		return fmt.Sprintf("❌ Codebase '%s' could not be indexed. Re-run index_codebase to retry.", canonicalPath)
-	}
-	return fmt.Sprintf(
-		"❌ Codebase '%s' could not be indexed.\n🚧 %s\n💡 Re-run index_codebase; if it keeps failing, check the daemon log via the failed-job reference below.%s",
-		canonicalPath,
-		orDefault(failure.Message, "the index could not be built"),
-		renderFailureDiagnostics(failure),
-	)
-}
-
-func renderStaleStatus(canonicalPath string, failure view.FailureSurface) string {
-	if !failure.HasFailure {
-		return fmt.Sprintf(
-			"⚠️ Codebase '%s' is stale because its semantic collection is missing.\n💡 The daemon will rebuild it automatically on the next background repair pass.",
-			canonicalPath,
-		)
-	}
-	return fmt.Sprintf(
-		"⚠️ Codebase '%s' is stale since %s.\n🚨 Repair detail: %s\n💡 The daemon will retry automatic rebuild while the codebase remains stale.%s",
-		canonicalPath,
-		failure.FailedAtLabel,
-		orDefault(failure.Message, "semantic collection is missing"),
-		renderFailureDiagnostics(failure),
-	)
-}
-
-// renderFailureDiagnostics returns a leading-newline line naming the failed job
-// and its trace id, or an empty string when neither is recorded. It leads with
-// the job so it reads as the past failure's reference rather than a second
-// request-trace line, leaving the envelope header as the only "trace_id=" line.
-// It formats the resolved failure view, never the raw failure record.
-func renderFailureDiagnostics(failure view.FailureSurface) string {
-	if failure.JobID == "" && failure.TraceID == "" {
-		return ""
-	}
-	label := "Failed job"
-	if failure.JobID != "" {
-		label = "Failed job " + failure.JobID
-	}
-	if failure.TraceID != "" {
-		label += " (trace_id=" + failure.TraceID + ")"
-	}
-	return "\n🔎 " + label
 }
 
 func renderListIndexes(views []view.CodebaseRowView) string {
@@ -459,6 +383,13 @@ func renderJobListEntry(entry view.JobEntryView) []string {
 		lines = append(lines, "  Error: "+entry.Surface.ErrorLine)
 	}
 	return lines
+}
+
+// FormatCount exposes the thousands-grouping formatter to the daemon boundary,
+// which builds display-ready status narrative lines carrying pre-resolved
+// counts. The value arrives already resolved; only digit grouping happens here.
+func FormatCount(value int32) string {
+	return formatCountString(value)
 }
 
 // formatCountString is the render-side alias for thousands formatting; the

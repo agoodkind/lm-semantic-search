@@ -269,6 +269,7 @@ func renderGetIndexBodyForTest(requestedPath string, tracked bool, codebase *mod
 		statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
 		getIndex.Status = statusView
 		getIndex.TemplateName = templateName
+		getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, getIndex.Failure, getIndex.Quarantine, statusView)
 	}
 	return render.GetIndex(getIndex)
 }
@@ -562,6 +563,23 @@ func TestRenderGetIndexBodyQuarantinedPreservesSearchabilityMessage(t *testing.T
 		if !strings.Contains(out, want) {
 			t.Fatalf("quarantined status missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+// TestRenderGetIndexBodyNonTemplateEmptyNarrativeFallsBack proves the render
+// fallback: a non-template display that arrives without a narrative (a caller
+// that skipped resolveStatusNarrative) surfaces the status word and path rather
+// than a blank body.
+func TestRenderGetIndexBodyNonTemplateEmptyNarrativeFallsBack(t *testing.T) {
+	t.Parallel()
+	out := render.GetIndex(view.GetIndexView{
+		Tracked:       true,
+		RequestedPath: "/repo",
+		CanonicalPath: "/repo",
+		Display:       view.Display(displayQuarantined),
+	})
+	if !strings.Contains(out, "Codebase '/repo' status: quarantined") {
+		t.Fatalf("empty-narrative fallback missing status word in:\n%s", out)
 	}
 }
 
