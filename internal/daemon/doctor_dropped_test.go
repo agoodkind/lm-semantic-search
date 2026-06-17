@@ -78,6 +78,18 @@ func TestRenderDroppedSectionStatesNoneWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestRenderQuarantinedSectionStatesNoneWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	section := render.Doctor(view.DoctorView{})
+	if !strings.Contains(section, "Quarantined codebases") {
+		t.Fatalf("render quarantined section missing = %q", section)
+	}
+	if !strings.Contains(section, "none") {
+		t.Fatalf("render quarantined section empty = %q, want a none statement", section)
+	}
+}
+
 // TestDoctorDisplayTextIncludesDroppedSection proves the daemon's Doctor surface
 // carries the dropped-codebases section, so the MCP adapter no longer computes it
 // client-side. A completed job whose codebase is no longer tracked, while its
@@ -105,5 +117,38 @@ func TestDoctorDisplayTextIncludesDroppedSection(t *testing.T) {
 	}
 	if !strings.Contains(text, repoPath) {
 		t.Fatalf("Doctor display_text missing dropped path %q:\n%s", repoPath, text)
+	}
+}
+
+func TestDoctorDisplayTextIncludesQuarantinedSection(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	manager.mu.Lock()
+	manager.codebases["cb-quarantine"] = model.Codebase{
+		ID:            "cb-quarantine",
+		CanonicalPath: repoPath,
+		Status:        model.CodebaseStatusQuarantined,
+		Quarantine: &model.QuarantineState{
+			Reason:           quarantineReasonWatcherLargeDelete,
+			ObservationCount: 1,
+			LastTrigger:      quarantineTriggerWatcher,
+			LastMissingCount: 400,
+			LastTotalCount:   4292,
+		},
+	}
+	manager.mu.Unlock()
+
+	server := NewGRPCServer(manager, nil)
+	response, err := server.Doctor(context.Background(), &pb.DoctorRequest{})
+	if err != nil {
+		t.Fatalf("Doctor returned error: %v", err)
+	}
+	text := response.GetDisplayText()
+	if !strings.Contains(text, "Quarantined codebases") {
+		t.Fatalf("Doctor display_text missing quarantined section:\n%s", text)
+	}
+	if !strings.Contains(text, repoPath) {
+		t.Fatalf("Doctor display_text missing quarantined path %q:\n%s", repoPath, text)
 	}
 }

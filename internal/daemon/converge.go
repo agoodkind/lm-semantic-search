@@ -39,6 +39,14 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 	if manager.semantic == nil || !manager.semantic.Available() {
 		return nil
 	}
+	if codebase.Status == model.CodebaseStatusQuarantined {
+		return nil
+	}
+	if sourceDirMissing(codebase.CanonicalPath) {
+		manager.markCodebaseMissing(ctx, codebaseID)
+		slog.WarnContext(ctx, "converge.root_missing_hold", "component", "daemon", "subcomponent", "converge", "codebase_id", codebaseID, "root", codebase.CanonicalPath)
+		return nil
+	}
 
 	configDigest := codebase.EffectiveConfig.IgnoreDigest
 	snapshotPath := manager.snapshotPathForCodebase(codebase)
@@ -56,6 +64,26 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 	// destination match the source's inode while it still lives in the
 	// snapshot.
 	orderedPaths := orderPathsByPresence(codebase.CanonicalPath, relativePaths)
+	if signal, suspicious := assessWatcherDeleteWave(codebase, snapshot, codebase.CanonicalPath, orderedPaths); suspicious {
+		observations := manager.quarantineCodebase(ctx, codebaseID, signal)
+		slog.WarnContext(
+			ctx,
+			"converge.quarantined_large_delete",
+			"component",
+			"daemon",
+			"subcomponent",
+			"converge",
+			"codebase_id",
+			codebaseID,
+			"missing_count",
+			signal.missingCount,
+			"total_count",
+			signal.totalCount,
+			"observations",
+			observations,
+		)
+		return nil
+	}
 
 	changed := false
 	for _, relativePath := range orderedPaths {

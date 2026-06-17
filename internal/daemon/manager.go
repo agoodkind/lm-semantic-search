@@ -295,6 +295,7 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 		CollectionName:        "",
 		LegacyCollectionNames: nil,
 		MerkleSnapshotPath:    "",
+		Quarantine:            nil,
 		WorktreeCommonDir:     "",
 		InodeTrackingDisabled: false,
 		ResolvedIgnoreRules:   discovery.IgnoreRules{Nodes: nil},
@@ -993,8 +994,7 @@ func waitForJobDone(ctx context.Context, jobDone chan struct{}) error {
 	}
 }
 
-// Delta sync helpers live in manager_delta.go. Job state mutators live in
-// manager_jobs_state.go. SearchCode and rankChunks live in manager_search.go.
-// Path helpers live in manager_paths.go. Config helpers and id helpers live in
-// manager_config.go. Boundary guards (StateRoot, directory, inode-stability)
-// live in manager_guards.go.
+// Delta sync helpers live in manager_delta.go. Job state mutators live in manager_jobs_state.go.
+// SearchCode and rankChunks live in manager_search.go. Path helpers live in manager_paths.go.
+// Config helpers and id helpers live in manager_config.go. Boundary guards (StateRoot, directory,
+// inode-stability) live in manager_guards.go.

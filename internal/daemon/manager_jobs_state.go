@@ -194,6 +194,7 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	}
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.ActiveJobID = ""
+	codebase.Quarantine = nil
 	codebase.LastSuccessfulRun = &model.IndexRunSummary{
 		IndexedFiles: result.IndexedFiles,
 		TotalChunks:  result.TotalChunks,
