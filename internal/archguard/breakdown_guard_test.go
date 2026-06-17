@@ -56,7 +56,8 @@ func moduleRoot(t *testing.T) string {
 }
 
 // productionGoFiles returns every non-test .go file under the module root,
-// skipping generated and vendored trees, as paths relative to the root.
+// skipping generated, vendored, and workspace-local trees, as paths relative to
+// the root.
 func productionGoFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var files []string
@@ -66,7 +67,7 @@ func productionGoFiles(t *testing.T, root string) []string {
 		}
 		if entry.IsDir() {
 			switch entry.Name() {
-			case "gen", "third_party", "vendor", ".git", "dist":
+			case "gen", "third_party", "vendor", ".git", ".claude", "dist":
 				return filepath.SkipDir
 			default:
 				return nil

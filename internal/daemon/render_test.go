@@ -81,7 +81,8 @@ func TestBreakdownIdenticalAcrossAllSurfaces(t *testing.T) {
 		RunMode: model.RunModeChanged, Unit: "document", ScopeUnit: "conversation",
 		FilesTotal: 72, FilesProcessed: 70, FilesAdded: 63, FilesModified: 9,
 		FilesEmbedded: 9, FilesPending: 61,
-		ChunksGenerated: 1204, ChunksReused: 2312, ChunksTotal: 3516,
+		ChunksProcessed: 3516, ChunksGenerated: 1204, ChunksEmbedded: 1204,
+		ChunksReused: 2312, ChunksTotal: 3516, ReuseVectorsLoaded: 2400,
 		LastEventAt: renderTestTime,
 	}
 
@@ -123,6 +124,15 @@ func TestBreakdownIdenticalAcrossAllSurfaces(t *testing.T) {
 	// The undelivered conversation is a first-class wire counter, not inferred.
 	if got := decoded.GetProgress().GetBreakdown(); !breakdownHasPending(got) {
 		t.Fatalf("JSON breakdown missing a pending row: %+v", got.GetFileRows())
+	}
+	if got := decoded.GetProgress().GetChunksProcessed(); got != 3516 {
+		t.Fatalf("JSON chunks_processed = %d, want 3516", got)
+	}
+	if got := decoded.GetProgress().GetChunksEmbedded(); got != 1204 {
+		t.Fatalf("JSON chunks_embedded = %d, want 1204", got)
+	}
+	if got := decoded.GetProgress().GetReuseVectorsLoaded(); got != 2400 {
+		t.Fatalf("JSON reuse_vectors_loaded = %d, want 2400", got)
 	}
 }
 
@@ -242,6 +252,7 @@ func renderGetIndexBodyForTest(requestedPath string, tracked bool, codebase *mod
 		TemplateName:       "",
 		Status:             view.StatusView{},
 		Failure:            view.FailureSurface{},
+		Quarantine:         view.QuarantineSurface{},
 		WaitLabel:          "",
 		ClassificationLine: "",
 		ResolutionLines:    nil,
@@ -254,9 +265,11 @@ func renderGetIndexBodyForTest(requestedPath string, tracked bool, codebase *mod
 		display := computeDisplayStatus(*codebase, activeJob, health.Degraded())
 		getIndex.Display = view.Display(display)
 		getIndex.Failure = resolveCodebaseFailure(*codebase)
+		getIndex.Quarantine = resolveQuarantineSurface(*codebase)
 		statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
 		getIndex.Status = statusView
 		getIndex.TemplateName = templateName
+		getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, getIndex.Failure, getIndex.Quarantine, statusView)
 	}
 	return render.GetIndex(getIndex)
 }
@@ -521,6 +534,52 @@ func TestRenderGetIndexBodySyncPreDiffKeepsReady(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("pre-diff sync status missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+func TestRenderGetIndexBodyQuarantinedPreservesSearchabilityMessage(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath:     "/Users/agoodkind/Sites/swift-makefile",
+		Status:            model.CodebaseStatusQuarantined,
+		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 58, TotalChunks: 600, CompletedAt: renderTestTime},
+		Quarantine: &model.QuarantineState{
+			Reason:           quarantineReasonWatcherLargeDelete,
+			FirstObservedAt:  renderTestTime,
+			LastObservedAt:   renderTestTime,
+			ObservationCount: 1,
+			LastTrigger:      quarantineTriggerWatcher,
+			LastMissingCount: 400,
+			LastTotalCount:   4292,
+		},
+	}
+	out := renderGetIndexBodyForTest("/Users/agoodkind/Sites/swift-makefile", true, codebase, nil, dependencyHealth{})
+	for _, want := range []string{
+		"is quarantined after a suspicious large disappearance",
+		"Search continues to serve the last known-good index",
+		"Last known good index: 58 files, 600 chunks",
+		"400 of 4,292 tracked files",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("quarantined status missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderGetIndexBodyNonTemplateEmptyNarrativeFallsBack proves the render
+// fallback: a non-template display that arrives without a narrative (a caller
+// that skipped resolveStatusNarrative) surfaces the status word and path rather
+// than a blank body.
+func TestRenderGetIndexBodyNonTemplateEmptyNarrativeFallsBack(t *testing.T) {
+	t.Parallel()
+	out := render.GetIndex(view.GetIndexView{
+		Tracked:       true,
+		RequestedPath: "/repo",
+		CanonicalPath: "/repo",
+		Display:       view.Display(displayQuarantined),
+	})
+	if !strings.Contains(out, "Codebase '/repo' status: quarantined") {
+		t.Fatalf("empty-narrative fallback missing status word in:\n%s", out)
 	}
 }
 

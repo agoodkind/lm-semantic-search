@@ -838,12 +838,14 @@ func TestRenderHistoricalFailureIncludesCorrelationIds(t *testing.T) {
 			JobID:                   "job-xyz",
 		},
 	}
+	failure := resolveCodebaseFailure(codebase)
 	out := render.GetIndex(view.GetIndexView{
 		Tracked:       true,
 		RequestedPath: codebase.CanonicalPath,
 		CanonicalPath: codebase.CanonicalPath,
 		Display:       view.Display(displayFailed),
-		Failure:       resolveCodebaseFailure(codebase),
+		Failure:       failure,
+		Narrative:     resolveStatusNarrative(displayFailed, codebase.CanonicalPath, failure, view.QuarantineSurface{}, view.StatusView{}),
 	})
 	if !strings.Contains(out, "trace_id=trace-abc") {
 		t.Fatalf("render output missing trace_id; got %q", out)
@@ -869,12 +871,14 @@ func TestRenderStaleStatusIncludesRepairReason(t *testing.T) {
 			JobID:                   "job-xyz",
 		},
 	}
+	failure := resolveCodebaseFailure(codebase)
 	out := render.GetIndex(view.GetIndexView{
 		Tracked:       true,
 		RequestedPath: codebase.CanonicalPath,
 		CanonicalPath: codebase.CanonicalPath,
 		Display:       view.Display(displayStale),
-		Failure:       resolveCodebaseFailure(codebase),
+		Failure:       failure,
+		Narrative:     resolveStatusNarrative(displayStale, codebase.CanonicalPath, failure, view.QuarantineSurface{}, view.StatusView{}),
 	})
 	if !strings.Contains(out, "is stale") {
 		t.Fatalf("render output missing stale marker; got %q", out)

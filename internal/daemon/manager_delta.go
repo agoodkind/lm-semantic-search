@@ -79,8 +79,10 @@ type deltaState struct {
 // chunkCounters accumulates the reuse-vs-embed split across one run's per-file
 // reindex calls.
 type chunkCounters struct {
-	reused   int32
-	embedded int32
+	processed          int32
+	reused             int32
+	embedded           int32
+	reuseVectorsLoaded int32
 }
 
 // applyReindexForState runs one per-file delta against the live collection, or
@@ -94,8 +96,9 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 	// Capture the last semantic progress for this one reindex call. The semantic
 	// callback reports cumulative reused/embedded counts within the call, so the
 	// final value is this file's split, which we fold into the run totals.
-	var fileReused, fileEmbedded int32
+	var fileProcessed, fileReused, fileEmbedded int32
 	progressFn := func(progress semantic.Progress) {
+		fileProcessed = progress.ChunksProcessed
 		fileReused = progress.ChunksReused
 		fileEmbedded = progress.ChunksEmbedded
 	}
@@ -109,6 +112,10 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 		return manager.classifyReindexErr(ctx, job, err, phase)
 	}
 	if state.chunkCounts != nil {
+		if fileProcessed == 0 {
+			fileProcessed = fileReused + fileEmbedded
+		}
+		state.chunkCounts.processed += fileProcessed
 		state.chunkCounts.reused += fileReused
 		state.chunkCounts.embedded += fileEmbedded
 	}
@@ -214,6 +221,10 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	if plan.handled {
 		return true
 	}
+	if signal, suspicious := assessDeltaDeleteWave(codebase, plan.diff, plan.seedSnapshot); suspicious {
+		manager.updateJobQuarantined(ctx, job.ID, signal)
+		return true
+	}
 	manager.setJobRunMode(job.ID, model.RunModeChanged)
 
 	// Record the change breakdown so the status and job views can report the
@@ -229,7 +240,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		semantic:     manager.semantic != nil && manager.semantic.Available(),
 		staging:      false,
 		reuse:        nil,
-		chunkCounts:  &chunkCounters{reused: 0, embedded: 0},
+		chunkCounts:  &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
 		seededReuse:  0,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
@@ -326,7 +337,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		semantic:     manager.semantic != nil && manager.semantic.Available(),
 		staging:      true,
 		reuse:        nil,
-		chunkCounts:  &chunkCounters{reused: 0, embedded: 0},
+		chunkCounts:  &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
 		seededReuse:  0,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
@@ -346,6 +357,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		} else {
 			state.reuse = reuse
 			state.seededReuse = safeInt32(len(reuse))
+			state.chunkCounts.reuseVectorsLoaded = safeInt32(len(reuse))
 			slog.InfoContext(ctx, "build.reuse_seeded", "job_id", job.ID, "reuse_collections", len(reuseCollections), "reuse_vectors", len(reuse))
 		}
 	}
@@ -515,8 +527,8 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		}
 		if seedHash, present := state.plan.seedSnapshot.Files[relativePath]; present && seedHash == state.plan.currentSnapshot.Files[relativePath] {
 			state.working[relativePath] = seedHash
-			reused, embedded := state.chunkSplit()
-			manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, reused, embedded, state.source.unit())
+			processed, reused, embedded, loaded := state.chunkSplit()
+			manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, processed, reused, embedded, loaded, state.source.unit())
 			continue
 		}
 		outcome := manager.handleChangedFile(ctx, job, state, relativePath, &result)
@@ -530,8 +542,8 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		if outcome.progressed {
 			manager.writeCheckpoint(ctx, state, relativePath)
 		}
-		reused, embedded := state.chunkSplit()
-		manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, reused, embedded, state.source.unit())
+		processed, reused, embedded, loaded := state.chunkSplit()
+		manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, processed, reused, embedded, loaded, state.source.unit())
 	}
 	return result, deltaOutcome{fallback: false, handled: false, progressed: false}
 }
@@ -572,7 +584,11 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 	if state.semantic {
-		state.reuse = manager.itemReuse(ctx, state, relativePath)
+		reuse, loaded := manager.itemReuse(ctx, state, relativePath)
+		state.reuse = reuse
+		if state.chunkCounts != nil {
+			state.chunkCounts.reuseVectorsLoaded += loaded
+		}
 		if outcome := manager.applyReindexForState(ctx, job, state, fileResult.Chunks, state.source.removalFor([]string{relativePath}), "per-file reindex"); outcome.fallback || outcome.handled {
 			return outcome
 		}
@@ -589,17 +605,35 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 // instead of the embedder. It returns the build-wide reuse map unchanged when
 // the source has no per-item reuse, and on a failed load it logs and falls
 // back to that map so the item embeds every chunk rather than failing.
-func (manager *Manager) itemReuse(ctx context.Context, state deltaState, relativePath string) map[string][]float32 {
-	collectionName, reusePrefix, ok := state.source.reuseSource(relativePath)
-	if !ok {
-		return state.reuse
+func (manager *Manager) itemReuse(ctx context.Context, state deltaState, relativePath string) (map[string][]float32, int32) {
+	// Per-item same-collection reuse is an incremental live-collection feature.
+	// A staging/bootstrap build already has its own build-wide reuse sources, and
+	// probing the live collection file-by-file on a true first build would be
+	// pure overhead when that collection does not exist yet.
+	if state.staging {
+		return state.reuse, 0
 	}
-	itemReuse, err := manager.semantic.LoadReuseVectorsForPrefix(ctx, collectionName, reusePrefix)
+	source := state.source.reuseSource(relativePath)
+	if source.Scope == itemReuseScopeNone {
+		return state.reuse, 0
+	}
+	var itemReuse map[string][]float32
+	var err error
+	switch source.Scope {
+	case itemReuseScopeNone:
+		return state.reuse, 0
+	case itemReuseScopePath:
+		itemReuse, err = manager.semantic.LoadReuseVectorsForPath(ctx, source.CollectionName, source.RelativePath)
+	case itemReuseScopePrefix:
+		itemReuse, err = manager.semantic.LoadReuseVectorsForPrefix(ctx, source.CollectionName, source.RelativePath)
+	default:
+		return state.reuse, 0
+	}
 	if err != nil {
-		slog.WarnContext(ctx, "load item reuse vectors failed; embedding every chunk", "path", relativePath, "collection", collectionName, "err", err)
-		return state.reuse
+		slog.WarnContext(ctx, "load item reuse vectors failed; embedding every chunk", "path", relativePath, "collection", source.CollectionName, "scope", source.Scope, "err", err)
+		return state.reuse, 0
 	}
-	return mergedReuse(state.reuse, itemReuse)
+	return mergedReuse(state.reuse, itemReuse), safeInt32(len(itemReuse))
 }
 
 // mergedReuse overlays an item's own reuse vectors on any build-wide reuse map
@@ -645,11 +679,13 @@ const phaseReindexingChanged = "Reindexing changed files..."
 // the per-file accrued count, so the building view shows the full reuse total
 // from the first update rather than a number that climbs from zero. With no
 // accumulator attached it falls back to the seeded total.
-func (state deltaState) chunkSplit() (int32, int32) {
+func (state deltaState) chunkSplit() (int32, int32, int32, int32) {
 	if state.chunkCounts == nil {
-		return state.seededReuse, 0
+		return 0, state.seededReuse, 0, state.seededReuse
 	}
-	return max(state.chunkCounts.reused, state.seededReuse), state.chunkCounts.embedded
+	reused := max(state.chunkCounts.reused, state.seededReuse)
+	loaded := max(state.chunkCounts.reuseVectorsLoaded, state.seededReuse)
+	return state.chunkCounts.processed, reused, state.chunkCounts.embedded, loaded
 }
 
 // reportDeltaProgress publishes one progress update from the per-file embed
@@ -659,7 +695,7 @@ func (state deltaState) chunkSplit() (int32, int32) {
 // rather than a stalled "Preparing". reused and embedded are the run's
 // accumulated chunk split; ChunksGenerated carries the embedded-this-run total
 // so a surface can show total = reused + embedded.
-func (manager *Manager) reportDeltaProgress(jobID string, processed int32, totalChanged int, totalFiles int32, result indexer.Result, reused int32, embedded int32, unit string) {
+func (manager *Manager) reportDeltaProgress(jobID string, processed int32, totalChanged int, totalFiles int32, result indexer.Result, chunksProcessed int32, reused int32, embedded int32, reuseVectorsLoaded int32, unit string) {
 	manager.updateJobProgress(jobID, indexer.Progress{
 		Phase:                  phaseReindexingChanged,
 		OverallPercent:         float64(processed) / float64(maxInt(totalChanged, 1)) * 100,
@@ -669,8 +705,11 @@ func (manager *Manager) reportDeltaProgress(jobID string, processed int32, total
 		FilesSkippedOversize:   result.SkippedOversize,
 		FilesSkippedUnreadable: result.SkippedUnreadable,
 		FilesPending:           result.SkippedPending,
+		ChunksProcessed:        chunksProcessed,
 		ChunksReused:           reused,
+		ChunksEmbedded:         embedded,
 		ChunksGenerated:        embedded,
+		ReuseVectorsLoaded:     reuseVectorsLoaded,
 	}, unit)
 }
 

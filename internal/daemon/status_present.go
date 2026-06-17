@@ -19,14 +19,15 @@ import (
 type displayStatus = status.Display
 
 const (
-	displayPreparing  = status.DisplayPreparing
-	displayIndexing   = status.DisplayIndexing
-	displayIndexed    = status.DisplayIndexed
-	displayWaiting    = status.DisplayWaiting
-	displayStale      = status.DisplayStale
-	displayFailed     = status.DisplayFailed
-	displayMissing    = status.DisplayMissing
-	displayDiscovered = status.DisplayDiscovered
+	displayPreparing   = status.DisplayPreparing
+	displayIndexing    = status.DisplayIndexing
+	displayIndexed     = status.DisplayIndexed
+	displayQuarantined = status.DisplayQuarantined
+	displayWaiting     = status.DisplayWaiting
+	displayStale       = status.DisplayStale
+	displayFailed      = status.DisplayFailed
+	displayMissing     = status.DisplayMissing
+	displayDiscovered  = status.DisplayDiscovered
 )
 
 // computeDisplayStatus resolves the display status through the status package,
@@ -137,6 +138,31 @@ func emptyFailureSurface() view.FailureSurface {
 	}
 }
 
+func resolveQuarantineSurface(codebase model.Codebase) view.QuarantineSurface {
+	if codebase.Quarantine == nil {
+		return view.QuarantineSurface{
+			HasQuarantine:      false,
+			Reason:             "",
+			FirstObservedLabel: "",
+			LastObservedLabel:  "",
+			ObservationCount:   0,
+			MissingCount:       0,
+			TotalCount:         0,
+			Trigger:            "",
+		}
+	}
+	return view.QuarantineSurface{
+		HasQuarantine:      true,
+		Reason:             codebase.Quarantine.Reason,
+		FirstObservedLabel: formatBoundaryTime(codebase.Quarantine.FirstObservedAt),
+		LastObservedLabel:  formatBoundaryTime(codebase.Quarantine.LastObservedAt),
+		ObservationCount:   codebase.Quarantine.ObservationCount,
+		MissingCount:       codebase.Quarantine.LastMissingCount,
+		TotalCount:         codebase.Quarantine.LastTotalCount,
+		Trigger:            codebase.Quarantine.LastTrigger,
+	}
+}
+
 // resolveStatusView builds the template view for an active or ready codebase.
 // It is the relocated body of the render-side builder, so the templates keep
 // their exact output. templateName selects among preparing, building,
@@ -165,6 +191,15 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 				statusView.UpdatedAt = formatBoundaryStatusTime(activeJob.Progress.LastEventAt)
 			}
 			statusView.SyncNote = backgroundSyncNote(activeJob)
+		}
+		return statusView, "ready.md.tmpl"
+	case displayQuarantined:
+		if run := codebase.LastSuccessfulRun; run != nil {
+			statusView.HasStats = true
+			statusView.Files = run.IndexedFiles
+			statusView.Chunks = run.TotalChunks
+			statusView.SkippedLine = skippedFilesLine(run.SkippedFiles)
+			statusView.UpdatedAt = formatBoundaryStatusTime(run.CompletedAt)
 		}
 		return statusView, "ready.md.tmpl"
 	}
@@ -344,13 +379,24 @@ func (manager *Manager) resolveGetIndexView(
 	descendants []model.Codebase,
 ) view.GetIndexView {
 	getIndex := view.GetIndexView{
-		Tracked:            tracked,
-		RequestedPath:      requestedPath,
-		CanonicalPath:      "",
-		Display:            "",
-		TemplateName:       "",
-		Status:             blankStatusView("", ""),
-		Failure:            emptyFailureSurface(),
+		Tracked:       tracked,
+		RequestedPath: requestedPath,
+		CanonicalPath: "",
+		Display:       "",
+		TemplateName:  "",
+		Status:        blankStatusView("", ""),
+		Failure:       emptyFailureSurface(),
+		Quarantine: view.QuarantineSurface{
+			HasQuarantine:      false,
+			Reason:             "",
+			FirstObservedLabel: "",
+			LastObservedLabel:  "",
+			ObservationCount:   0,
+			MissingCount:       0,
+			TotalCount:         0,
+			Trigger:            "",
+		},
+		Narrative:          view.StatusNarrative{Lines: nil},
 		WaitLabel:          "",
 		ClassificationLine: classificationLine(classification),
 		ResolutionLines:    pathResolutionLines(requestedPath),
@@ -365,12 +411,14 @@ func (manager *Manager) resolveGetIndexView(
 	display := computeDisplayStatus(*codebase, activeJob, health.Degraded())
 	getIndex.Display = view.Display(display)
 	getIndex.Failure = resolveCodebaseFailure(*codebase)
+	getIndex.Quarantine = resolveQuarantineSurface(*codebase)
 	statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
 	if display == displayDiscovered {
 		statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
 	}
 	getIndex.Status = statusView
 	getIndex.TemplateName = templateName
+	getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, getIndex.Failure, getIndex.Quarantine, statusView)
 	return getIndex
 }
 

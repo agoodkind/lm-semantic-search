@@ -32,6 +32,10 @@ const (
 	// defers the reuse-seeded build to a background trigger, so the read never
 	// launches an embed job. The deferred build flips it to indexing, then indexed.
 	CodebaseStatusDiscovered CodebaseStatus = "discovered"
+	// CodebaseStatusQuarantined means destructive sync is paused because the
+	// daemon observed a suspicious large disappearance and is waiting for later
+	// corroboration before deleting live semantic rows.
+	CodebaseStatusQuarantined CodebaseStatus = "quarantined"
 )
 
 // CodebaseKind distinguishes filesystem code indexes from virtual document
@@ -137,12 +141,15 @@ type Progress struct {
 	// time for an in-flight incremental run so status can show the running total
 	// rather than only the per-run additions. Zero means not populated.
 	ChunksTotal int32 `json:"chunks_total"`
-	// ChunksReused counts chunks this run served from an already-embedded vector
-	// (a merge-down child or sibling worktree) instead of calling the embedder,
-	// so a surface can show total = reused + embedded and make the reuse-vs-redo
-	// split visible. ChunksGenerated stays the embedded-this-run total.
+	// ChunksProcessed counts chunks produced by this pass. ChunksReused counts
+	// chunks this run served from an already-embedded vector instead of calling
+	// the embedder. ChunksEmbedded is the chunks sent to the embedder, and
+	// ChunksGenerated is the older wire-compatible alias for ChunksEmbedded.
+	ChunksProcessed           int32     `json:"chunks_processed"`
 	ChunksReused              int32     `json:"chunks_reused"`
+	ChunksEmbedded            int32     `json:"chunks_embedded"`
 	ChunksGenerated           int32     `json:"chunks_generated"`
+	ReuseVectorsLoaded        int32     `json:"reuse_vectors_loaded"`
 	EmbeddingBatchesTotal     int32     `json:"embedding_batches_total"`
 	EmbeddingBatchesCompleted int32     `json:"embedding_batches_completed"`
 	CollectionRowsWritten     int32     `json:"collection_rows_written"`
@@ -206,12 +213,13 @@ type Codebase struct {
 	LastFailedRun     *IndexRunFailure `json:"last_failed_run,omitempty"`
 	// LiveFileTotal and LiveChunkTotal track the latest known corpus size,
 	// updated during runs rather than only at completion.
-	LiveFileTotal         int32       `json:"liveFileTotal,omitempty"`
-	LiveChunkTotal        int32       `json:"liveChunkTotal,omitempty"`
-	EffectiveConfig       IndexConfig `json:"effective_config"`
-	CollectionName        string      `json:"collection_name,omitempty"`
-	LegacyCollectionNames []string    `json:"legacy_collection_names,omitempty"`
-	MerkleSnapshotPath    string      `json:"merkle_snapshot_path,omitempty"`
+	LiveFileTotal         int32            `json:"liveFileTotal,omitempty"`
+	LiveChunkTotal        int32            `json:"liveChunkTotal,omitempty"`
+	EffectiveConfig       IndexConfig      `json:"effective_config"`
+	CollectionName        string           `json:"collection_name,omitempty"`
+	LegacyCollectionNames []string         `json:"legacy_collection_names,omitempty"`
+	MerkleSnapshotPath    string           `json:"merkle_snapshot_path,omitempty"`
+	Quarantine            *QuarantineState `json:"quarantine,omitempty"`
 	// WorktreeCommonDir is the shared git common dir when this codebase's root
 	// is a linked git worktree, else empty. It lets the daemon recognize a
 	// removed worktree (git deleted its admin entry) after the directory is gone
@@ -220,6 +228,18 @@ type Codebase struct {
 	InodeTrackingDisabled bool                  `json:"inode_tracking_disabled,omitempty"`
 	ResolvedIgnoreRules   discovery.IgnoreRules `json:"-"`
 	UpdatedAt             time.Time             `json:"updated_at"`
+}
+
+// QuarantineState records why destructive sync is paused for a codebase and
+// what corroborating observations the daemon has seen so far.
+type QuarantineState struct {
+	Reason           string    `json:"reason,omitempty"`
+	FirstObservedAt  time.Time `json:"first_observed_at"`
+	LastObservedAt   time.Time `json:"last_observed_at"`
+	ObservationCount int32     `json:"observation_count,omitempty"`
+	LastTrigger      string    `json:"last_trigger,omitempty"`
+	LastMissingCount int32     `json:"last_missing_count,omitempty"`
+	LastTotalCount   int32     `json:"last_total_count,omitempty"`
 }
 
 // Job records one daemon job and its latest known state.

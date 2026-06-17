@@ -24,6 +24,28 @@ type FailureSurface struct {
 	TraceID       string
 }
 
+// QuarantineSurface is the resolved detail for a codebase whose destructive
+// sync is paused after a suspicious large disappearance.
+type QuarantineSurface struct {
+	HasQuarantine      bool
+	Reason             string
+	FirstObservedLabel string
+	LastObservedLabel  string
+	ObservationCount   int32
+	MissingCount       int32
+	TotalCount         int32
+	Trigger            string
+}
+
+// StatusNarrative is the boundary-owned, display-ready body for a non-template
+// codebase status (failed, missing, stale, quarantined). The daemon boundary
+// builds each line so the render layer only joins them; render never synthesizes
+// status prose from a raw record. The state itself is carried by
+// GetIndexView.Display, so the narrative holds only the pre-rendered lines.
+type StatusNarrative struct {
+	Lines []string
+}
+
 // RunMode names what kind of pass a job is making.
 type RunMode string
 
@@ -122,8 +144,11 @@ type ProgressCounts struct {
 	FilesSkippedUnreadable int32
 	FilesPending           int32
 	ChunksTotal            int32
+	ChunksProcessed        int32
 	ChunksReused           int32
+	ChunksEmbedded         int32
 	ChunksGenerated        int32
+	ReuseVectorsLoaded     int32
 }
 
 // ResolveBreakdown is the single source of truth for the outcome tree. Every
@@ -151,8 +176,13 @@ func ResolveBreakdown(counts ProgressCounts) OutcomeBreakdown {
 
 	processed := embedded + unchanged + removed + pending + oversize + unreadable
 	scopeTotal := max(counts.FilesTotal+removed, changedSet)
-	chunksTotal := max(counts.ChunksTotal, counts.ChunksReused+counts.ChunksGenerated)
-	hasChunks := hasFileScope || chunksTotal > 0 || counts.ChunksGenerated > 0
+	chunksEmbedded := counts.ChunksEmbedded
+	if chunksEmbedded == 0 && counts.ChunksGenerated > 0 {
+		chunksEmbedded = counts.ChunksGenerated
+	}
+	chunksProcessed := max(counts.ChunksProcessed, counts.ChunksReused+chunksEmbedded)
+	chunksTotal := max(counts.ChunksTotal, chunksProcessed)
+	hasChunks := hasFileScope || chunksTotal > 0 || chunksProcessed > 0
 
 	return OutcomeBreakdown{
 		ScopeLabel:  scopeLabelForRunMode(counts.RunMode, unit, scopeTotal),
@@ -160,7 +190,7 @@ func ResolveBreakdown(counts ProgressCounts) OutcomeBreakdown {
 		ScopeTotal:  scopeTotal,
 		FileRows:    breakdownFileRows(hasFileScope, embedded, unchanged, removed, pending, oversize, unreadable),
 		ChunksTotal: chunksTotal,
-		ChunkRows:   breakdownChunkRows(hasChunks, counts.RunMode, counts.ChunksGenerated, counts.ChunksReused),
+		ChunkRows:   breakdownChunkRows(hasChunks, counts.RunMode, chunksEmbedded, counts.ChunksReused),
 	}
 }
 
@@ -384,6 +414,8 @@ type GetIndexView struct {
 	TemplateName       string
 	Status             StatusView
 	Failure            FailureSurface
+	Quarantine         QuarantineSurface
+	Narrative          StatusNarrative
 	WaitLabel          string
 	ClassificationLine string
 	ResolutionLines    []string
@@ -437,6 +469,7 @@ const (
 type DoctorView struct {
 	Diagnostics []string
 	Dropped     []string
+	Quarantined []string
 }
 
 // CodebaseRowView is one row of the codebase list.

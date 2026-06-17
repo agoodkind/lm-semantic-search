@@ -12,26 +12,28 @@ package status
 // states distinguishable without color, per the don't-rely-on-color-alone
 // guideline.
 var glyphByDisplay = map[Display]string{
-	DisplayPreparing:  "◌",
-	DisplayIndexing:   "◐",
-	DisplayWaiting:    "⋯",
-	DisplayIndexed:    "●",
-	DisplayStale:      "△",
-	DisplayFailed:     "✗",
-	DisplayMissing:    "⊘",
-	DisplayDiscovered: "⊙",
+	DisplayPreparing:   "◌",
+	DisplayIndexing:    "◐",
+	DisplayQuarantined: "⚠",
+	DisplayWaiting:     "⋯",
+	DisplayIndexed:     "●",
+	DisplayStale:       "△",
+	DisplayFailed:      "✗",
+	DisplayMissing:     "⊘",
+	DisplayDiscovered:  "⊙",
 }
 
 // labelByDisplay maps a display status to its human word.
 var labelByDisplay = map[Display]string{
-	DisplayPreparing:  "preparing",
-	DisplayIndexing:   "indexing",
-	DisplayWaiting:    "waiting",
-	DisplayIndexed:    "indexed",
-	DisplayStale:      "stale",
-	DisplayFailed:     "failed",
-	DisplayMissing:    "missing",
-	DisplayDiscovered: "discovered",
+	DisplayPreparing:   "preparing",
+	DisplayIndexing:    "indexing",
+	DisplayQuarantined: "quarantined",
+	DisplayWaiting:     "waiting",
+	DisplayIndexed:     "indexed",
+	DisplayStale:       "stale",
+	DisplayFailed:      "failed",
+	DisplayMissing:     "missing",
+	DisplayDiscovered:  "discovered",
 }
 
 // bannerHeadlineByMode maps a degraded dependency mode to its one-line banner
