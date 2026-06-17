@@ -27,29 +27,50 @@ type itemSource interface {
 	// removalFor maps item ids to the store removal that drops their prior rows.
 	removalFor(itemIDs []string) semantic.Removal
 	// reuseSource names where one item's already-embedded vectors live: the
-	// collection and the relativePath prefix that scopes the read. ok=false
+	// collection and the relativePath scope that limits the read. Scope none
 	// means the item has no per-item reuse source and every chunk embeds. A
-	// conversation returns its live collection and conv/<id>/ prefix, so a
-	// changed conversation re-embeds only its changed chunks.
-	reuseSource(itemID string) (collectionName string, relativePathPrefix string, ok bool)
+	// conversation returns its live collection and conv/<id>/ prefix, while a
+	// code file returns its live collection and exact relativePath so like-prefix
+	// neighbors never seed the file's reuse map.
+	reuseSource(itemID string) itemReuseSource
 	// unit is the human progress noun, "file" or "document".
 	unit() string
+}
+
+type itemReuseScope string
+
+const (
+	itemReuseScopeNone   itemReuseScope = ""
+	itemReuseScopePrefix itemReuseScope = "prefix"
+	itemReuseScopePath   itemReuseScope = "path"
+)
+
+type itemReuseSource struct {
+	CollectionName string
+	RelativePath   string
+	Scope          itemReuseScope
 }
 
 // codeItemSource lists and reads a filesystem codebase. It is the byte-for-byte
 // behavior the daemon ran before the routine became source-driven: capture is a
 // merkle walk and indexOne is one file read and split.
 type codeItemSource struct {
-	runner        indexingRunner
-	canonicalPath string
-	config        model.IndexConfig
+	runner         indexingRunner
+	canonicalPath  string
+	collectionName string
+	config         model.IndexConfig
 	// onRules receives the walk's resolved ignore rules each capture, so the
 	// manager can persist them without a second walk. Nil disables reporting.
 	onRules func(discovery.IgnoreRules)
 }
 
 func newCodeItemSource(runner indexingRunner, canonicalPath string, config model.IndexConfig, onRules func(discovery.IgnoreRules)) codeItemSource {
-	return codeItemSource{runner: runner, canonicalPath: canonicalPath, config: config, onRules: onRules}
+	return codeItemSource{runner: runner, canonicalPath: canonicalPath, collectionName: "", config: config, onRules: onRules}
+}
+
+func (source codeItemSource) withCollectionName(collectionName string) codeItemSource {
+	source.collectionName = collectionName
+	return source
 }
 
 func (source codeItemSource) capture(ctx context.Context) (merkle.Snapshot, error) {
@@ -97,12 +118,18 @@ func (source codeItemSource) removalFor(itemIDs []string) semantic.Removal {
 	return semantic.RemovePaths(itemIDs)
 }
 
-// reuseSource reports no per-item reuse for code files: a code file's chunks
-// share one relativePath and change together, so there is nothing unchanged to
-// reuse within one file. Cross-collection reuse (worktree siblings, merge-down
-// children) stays on the bootstrap path.
-func (source codeItemSource) reuseSource(string) (string, string, bool) {
-	return "", "", false
+// reuseSource points one code file's reuse read at exactly its existing live
+// rows. Loaded before the delete, those vectors let unchanged chunks inside a
+// modified file skip the embedder without reading like-prefix neighbor paths.
+func (source codeItemSource) reuseSource(relativePath string) itemReuseSource {
+	if source.collectionName == "" || relativePath == "" {
+		return itemReuseSource{
+			CollectionName: "",
+			RelativePath:   "",
+			Scope:          itemReuseScopeNone,
+		}
+	}
+	return itemReuseSource{CollectionName: source.collectionName, RelativePath: relativePath, Scope: itemReuseScopePath}
 }
 
 func (source codeItemSource) unit() string {
@@ -172,11 +199,15 @@ func (source conversationItemSource) removalFor(itemIDs []string) semantic.Remov
 // reuseSource points one conversation's reuse read at its own rows in the live
 // collection: the conv/<id>/ prefix the reindex is about to delete. Loaded
 // before the delete, those vectors let unchanged messages skip the embedder.
-func (source conversationItemSource) reuseSource(conversationID string) (string, string, bool) {
+func (source conversationItemSource) reuseSource(conversationID string) itemReuseSource {
 	if source.collectionName == "" {
-		return "", "", false
+		return itemReuseSource{
+			CollectionName: "",
+			RelativePath:   "",
+			Scope:          itemReuseScopeNone,
+		}
 	}
-	return source.collectionName, conversationRelativePathPrefix(conversationID), true
+	return itemReuseSource{CollectionName: source.collectionName, RelativePath: conversationRelativePathPrefix(conversationID), Scope: itemReuseScopePrefix}
 }
 
 func (source conversationItemSource) unit() string {

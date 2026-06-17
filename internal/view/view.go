@@ -122,8 +122,11 @@ type ProgressCounts struct {
 	FilesSkippedUnreadable int32
 	FilesPending           int32
 	ChunksTotal            int32
+	ChunksProcessed        int32
 	ChunksReused           int32
+	ChunksEmbedded         int32
 	ChunksGenerated        int32
+	ReuseVectorsLoaded     int32
 }
 
 // ResolveBreakdown is the single source of truth for the outcome tree. Every
@@ -151,8 +154,13 @@ func ResolveBreakdown(counts ProgressCounts) OutcomeBreakdown {
 
 	processed := embedded + unchanged + removed + pending + oversize + unreadable
 	scopeTotal := max(counts.FilesTotal+removed, changedSet)
-	chunksTotal := max(counts.ChunksTotal, counts.ChunksReused+counts.ChunksGenerated)
-	hasChunks := hasFileScope || chunksTotal > 0 || counts.ChunksGenerated > 0
+	chunksEmbedded := counts.ChunksEmbedded
+	if chunksEmbedded == 0 && counts.ChunksGenerated > 0 {
+		chunksEmbedded = counts.ChunksGenerated
+	}
+	chunksProcessed := max(counts.ChunksProcessed, counts.ChunksReused+chunksEmbedded)
+	chunksTotal := max(counts.ChunksTotal, chunksProcessed)
+	hasChunks := hasFileScope || chunksTotal > 0 || chunksProcessed > 0
 
 	return OutcomeBreakdown{
 		ScopeLabel:  scopeLabelForRunMode(counts.RunMode, unit, scopeTotal),
@@ -160,7 +168,7 @@ func ResolveBreakdown(counts ProgressCounts) OutcomeBreakdown {
 		ScopeTotal:  scopeTotal,
 		FileRows:    breakdownFileRows(hasFileScope, embedded, unchanged, removed, pending, oversize, unreadable),
 		ChunksTotal: chunksTotal,
-		ChunkRows:   breakdownChunkRows(hasChunks, counts.RunMode, counts.ChunksGenerated, counts.ChunksReused),
+		ChunkRows:   breakdownChunkRows(hasChunks, counts.RunMode, chunksEmbedded, counts.ChunksReused),
 	}
 }
 

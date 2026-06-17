@@ -86,6 +86,9 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) {
 	codeSource := newCodeItemSource(manager.runner, job.CanonicalPath, job.Config, func(rules discovery.IgnoreRules) {
 		manager.cacheResolvedRules(job.CodebaseID, rules)
 	})
+	if manager.semantic != nil && manager.semantic.Available() {
+		codeSource = codeSource.withCollectionName(manager.semantic.CollectionName(job.CanonicalPath))
+	}
 	switch jobOperation(job.Operation) {
 	case jobOperationSync:
 		if manager.runDeltaSync(ctx, job, codeSource) {

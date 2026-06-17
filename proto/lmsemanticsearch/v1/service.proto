@@ -89,6 +89,12 @@ message Progress {
   // value every surface renders, so JSON consumers get the exact tree without
   // parsing the human text. Its file rows sum to processed.
   OutcomeBreakdown breakdown = 14;
+  // chunks_processed counts chunks produced by this sync pass.
+  int32 chunks_processed = 15;
+  // chunks_embedded counts chunks sent to the embedder this sync pass.
+  int32 chunks_embedded = 16;
+  // reuse_vectors_loaded counts old vectors loaded as reuse candidates.
+  int32 reuse_vectors_loaded = 17;
 }
 
 // OutcomeKind is the semantic identity of one outcome row. The render layer maps

@@ -114,8 +114,11 @@ func ToProgress(p model.Progress) *pb.Progress {
 		Unit:                      p.Unit,
 		FilesTotal:                p.FilesTotal,
 		FilesProcessed:            p.FilesProcessed,
+		ChunksProcessed:           p.ChunksProcessed,
 		ChunksReused:              p.ChunksReused,
+		ChunksEmbedded:            p.ChunksEmbedded,
 		ChunksGenerated:           p.ChunksGenerated,
+		ReuseVectorsLoaded:        p.ReuseVectorsLoaded,
 		EmbeddingBatchesTotal:     p.EmbeddingBatchesTotal,
 		EmbeddingBatchesCompleted: p.EmbeddingBatchesCompleted,
 		CollectionRowsWritten:     p.CollectionRowsWritten,
@@ -142,8 +145,11 @@ func ProgressCounts(p model.Progress) view.ProgressCounts {
 		FilesSkippedUnreadable: p.FilesSkippedUnreadable,
 		FilesPending:           p.FilesPending,
 		ChunksTotal:            p.ChunksTotal,
+		ChunksProcessed:        p.ChunksProcessed,
 		ChunksReused:           p.ChunksReused,
+		ChunksEmbedded:         p.ChunksEmbedded,
 		ChunksGenerated:        p.ChunksGenerated,
+		ReuseVectorsLoaded:     p.ReuseVectorsLoaded,
 	}
 }
 

@@ -84,8 +84,39 @@ type Progress struct {
 	// ChunksReused counts chunks served from an already-embedded vector this run,
 	// distinct from ChunksGenerated (embedded this run), so total = reused +
 	// embedded is visible on the progress surface.
-	ChunksReused    int32
-	ChunksGenerated int32
+	ChunksProcessed    int32
+	ChunksReused       int32
+	ChunksEmbedded     int32
+	ChunksGenerated    int32
+	ReuseVectorsLoaded int32
+}
+
+func newEmbeddedProgress(
+	phase string,
+	overallPercent float64,
+	filesTotal int32,
+	filesProcessed int32,
+	filesEmbedded int32,
+	filesSkippedOversize int32,
+	filesSkippedUnreadable int32,
+	chunksProcessed int32,
+	chunksEmbedded int32,
+) Progress {
+	return Progress{
+		Phase:                  phase,
+		OverallPercent:         overallPercent,
+		FilesTotal:             filesTotal,
+		FilesProcessed:         filesProcessed,
+		FilesEmbedded:          filesEmbedded,
+		FilesSkippedOversize:   filesSkippedOversize,
+		FilesSkippedUnreadable: filesSkippedUnreadable,
+		FilesPending:           0,
+		ChunksProcessed:        chunksProcessed,
+		ChunksReused:           0,
+		ChunksEmbedded:         chunksEmbedded,
+		ChunksGenerated:        chunksEmbedded,
+		ReuseVectorsLoaded:     0,
+	}
 }
 
 // NewRunner constructs the local indexing runner.
@@ -266,18 +297,7 @@ func (runner *Runner) ingestFile(ctx context.Context, fullPath string, relativeP
 // Index walks the codebase and splits files into chunks.
 func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(Progress)) (Result, error) {
 	if progress != nil {
-		progress(Progress{
-			Phase:                  "Preparing and scanning files...",
-			OverallPercent:         0,
-			FilesTotal:             0,
-			FilesProcessed:         0,
-			FilesEmbedded:          0,
-			FilesSkippedOversize:   0,
-			FilesSkippedUnreadable: 0,
-			FilesPending:           0,
-			ChunksReused:           0,
-			ChunksGenerated:        0,
-		})
+		progress(newEmbeddedProgress("Preparing and scanning files...", 0, 0, 0, 0, 0, 0, 0, 0))
 	}
 
 	discoveryResult, err := discovery.Discover(ctx, root, indexConfig.IgnorePatterns, indexConfig.Extensions)
@@ -288,18 +308,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 
 	totalFiles := safeInt32(len(discoveryResult.Files))
 	if progress != nil {
-		progress(Progress{
-			Phase:                  "Processing files and generating embeddings...",
-			OverallPercent:         10,
-			FilesTotal:             totalFiles,
-			FilesProcessed:         0,
-			FilesEmbedded:          0,
-			FilesSkippedOversize:   0,
-			FilesSkippedUnreadable: 0,
-			FilesPending:           0,
-			ChunksReused:           0,
-			ChunksGenerated:        0,
-		})
+		progress(newEmbeddedProgress("Processing files and generating embeddings...", 10, totalFiles, 0, 0, 0, 0, 0, 0))
 	}
 
 	accumulator := &indexAccumulator{
@@ -325,34 +334,22 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 			return Result{}, err
 		}
 		if progress != nil {
-			progress(Progress{
-				Phase:                  "Processing files and generating embeddings...",
-				OverallPercent:         calculateOverallPercent(index+1, len(discoveryResult.Files)),
-				FilesTotal:             totalFiles,
-				FilesProcessed:         safeInt32(index + 1),
-				FilesEmbedded:          safeInt32(index + 1),
-				FilesSkippedOversize:   accumulator.skippedOversize,
-				FilesSkippedUnreadable: accumulator.skippedUnreadable,
-				FilesPending:           0,
-				ChunksReused:           0,
-				ChunksGenerated:        accumulator.totalChunks,
-			})
+			progress(newEmbeddedProgress(
+				"Processing files and generating embeddings...",
+				calculateOverallPercent(index+1, len(discoveryResult.Files)),
+				totalFiles,
+				safeInt32(index+1),
+				safeInt32(index+1),
+				accumulator.skippedOversize,
+				accumulator.skippedUnreadable,
+				accumulator.totalChunks,
+				accumulator.totalChunks,
+			))
 		}
 	}
 
 	if progress != nil {
-		progress(Progress{
-			Phase:                  "completed",
-			OverallPercent:         100,
-			FilesTotal:             totalFiles,
-			FilesProcessed:         totalFiles,
-			FilesEmbedded:          totalFiles,
-			FilesSkippedOversize:   accumulator.skippedOversize,
-			FilesSkippedUnreadable: accumulator.skippedUnreadable,
-			FilesPending:           0,
-			ChunksReused:           0,
-			ChunksGenerated:        accumulator.totalChunks,
-		})
+		progress(newEmbeddedProgress("completed", 100, totalFiles, totalFiles, totalFiles, accumulator.skippedOversize, accumulator.skippedUnreadable, accumulator.totalChunks, accumulator.totalChunks))
 	}
 
 	return Result{
@@ -376,18 +373,7 @@ func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.
 func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths []string, indexConfig model.IndexConfig, progress func(Progress)) (Result, error) {
 	totalFiles := safeInt32(len(relativePaths))
 	if progress != nil {
-		progress(Progress{
-			Phase:                  "Processing changed files...",
-			OverallPercent:         10,
-			FilesTotal:             totalFiles,
-			FilesProcessed:         0,
-			FilesEmbedded:          0,
-			FilesSkippedOversize:   0,
-			FilesSkippedUnreadable: 0,
-			FilesPending:           0,
-			ChunksReused:           0,
-			ChunksGenerated:        0,
-		})
+		progress(newEmbeddedProgress("Processing changed files...", 10, totalFiles, 0, 0, 0, 0, 0, 0))
 	}
 
 	accumulator := &indexAccumulator{
@@ -409,34 +395,22 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 			return Result{}, err
 		}
 		if progress != nil {
-			progress(Progress{
-				Phase:                  "Processing changed files...",
-				OverallPercent:         calculateOverallPercent(index+1, len(relativePaths)),
-				FilesTotal:             totalFiles,
-				FilesProcessed:         safeInt32(index + 1),
-				FilesEmbedded:          safeInt32(index + 1),
-				FilesSkippedOversize:   accumulator.skippedOversize,
-				FilesSkippedUnreadable: accumulator.skippedUnreadable,
-				FilesPending:           0,
-				ChunksReused:           0,
-				ChunksGenerated:        accumulator.totalChunks,
-			})
+			progress(newEmbeddedProgress(
+				"Processing changed files...",
+				calculateOverallPercent(index+1, len(relativePaths)),
+				totalFiles,
+				safeInt32(index+1),
+				safeInt32(index+1),
+				accumulator.skippedOversize,
+				accumulator.skippedUnreadable,
+				accumulator.totalChunks,
+				accumulator.totalChunks,
+			))
 		}
 	}
 
 	if progress != nil {
-		progress(Progress{
-			Phase:                  "completed",
-			OverallPercent:         100,
-			FilesTotal:             totalFiles,
-			FilesProcessed:         totalFiles,
-			FilesEmbedded:          totalFiles,
-			FilesSkippedOversize:   accumulator.skippedOversize,
-			FilesSkippedUnreadable: accumulator.skippedUnreadable,
-			FilesPending:           0,
-			ChunksReused:           0,
-			ChunksGenerated:        accumulator.totalChunks,
-		})
+		progress(newEmbeddedProgress("completed", 100, totalFiles, totalFiles, totalFiles, accumulator.skippedOversize, accumulator.skippedUnreadable, accumulator.totalChunks, accumulator.totalChunks))
 	}
 
 	return Result{

@@ -57,6 +57,7 @@ type Progress struct {
 	EmbeddingBatchesTotal     int32
 	EmbeddingBatchesCompleted int32
 	CollectionRowsWritten     int32
+	ChunksProcessed           int32
 	ChunksReused              int32
 	ChunksEmbedded            int32
 }

@@ -27,6 +27,7 @@ type semanticReader interface {
 type semanticReuseLoader interface {
 	LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error)
 	LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
+	LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
 }
 
 // semanticWriter is the slice that mutates the live or staging collection.

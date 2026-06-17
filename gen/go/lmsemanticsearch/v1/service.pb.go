@@ -513,9 +513,15 @@ type Progress struct {
 	// breakdown is the resolved file-and-chunk outcome tree, the same structured
 	// value every surface renders, so JSON consumers get the exact tree without
 	// parsing the human text. Its file rows sum to processed.
-	Breakdown     *OutcomeBreakdown `protobuf:"bytes,14,opt,name=breakdown,proto3" json:"breakdown,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Breakdown *OutcomeBreakdown `protobuf:"bytes,14,opt,name=breakdown,proto3" json:"breakdown,omitempty"`
+	// chunks_processed counts chunks produced by this sync pass.
+	ChunksProcessed int32 `protobuf:"varint,15,opt,name=chunks_processed,json=chunksProcessed,proto3" json:"chunks_processed,omitempty"`
+	// chunks_embedded counts chunks sent to the embedder this sync pass.
+	ChunksEmbedded int32 `protobuf:"varint,16,opt,name=chunks_embedded,json=chunksEmbedded,proto3" json:"chunks_embedded,omitempty"`
+	// reuse_vectors_loaded counts old vectors loaded as reuse candidates.
+	ReuseVectorsLoaded int32 `protobuf:"varint,17,opt,name=reuse_vectors_loaded,json=reuseVectorsLoaded,proto3" json:"reuse_vectors_loaded,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *Progress) Reset() {
@@ -644,6 +650,27 @@ func (x *Progress) GetBreakdown() *OutcomeBreakdown {
 		return x.Breakdown
 	}
 	return nil
+}
+
+func (x *Progress) GetChunksProcessed() int32 {
+	if x != nil {
+		return x.ChunksProcessed
+	}
+	return 0
+}
+
+func (x *Progress) GetChunksEmbedded() int32 {
+	if x != nil {
+		return x.ChunksEmbedded
+	}
+	return 0
+}
+
+func (x *Progress) GetReuseVectorsLoaded() int32 {
+	if x != nil {
+		return x.ReuseVectorsLoaded
+	}
+	return 0
 }
 
 // OutcomeRow is one child line in an outcome tree: a semantic kind and a count.
@@ -4184,7 +4211,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x13embedding_dimension\x18\t \x01(\x05R\x12embeddingDimension\x12%\n" +
 	"\x0evector_backend\x18\n" +
 	" \x01(\tR\rvectorBackend\x12\x16\n" +
-	"\x06hybrid\x18\v \x01(\bR\x06hybrid\"\x90\x05\n" +
+	"\x06hybrid\x18\v \x01(\bR\x06hybrid\"\x96\x06\n" +
 	"\bProgress\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12#\n" +
 	"\rphase_percent\x18\x02 \x01(\x01R\fphasePercent\x12'\n" +
@@ -4201,7 +4228,10 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\fheartbeat_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\vheartbeatAt\x12#\n" +
 	"\rchunks_reused\x18\f \x01(\x05R\fchunksReused\x12\x12\n" +
 	"\x04unit\x18\r \x01(\tR\x04unit\x12C\n" +
-	"\tbreakdown\x18\x0e \x01(\v2%.lmsemanticsearch.v1.OutcomeBreakdownR\tbreakdown\"X\n" +
+	"\tbreakdown\x18\x0e \x01(\v2%.lmsemanticsearch.v1.OutcomeBreakdownR\tbreakdown\x12)\n" +
+	"\x10chunks_processed\x18\x0f \x01(\x05R\x0fchunksProcessed\x12'\n" +
+	"\x0fchunks_embedded\x18\x10 \x01(\x05R\x0echunksEmbedded\x120\n" +
+	"\x14reuse_vectors_loaded\x18\x11 \x01(\x05R\x12reuseVectorsLoaded\"X\n" +
 	"\n" +
 	"OutcomeRow\x124\n" +
 	"\x04kind\x18\x01 \x01(\x0e2 .lmsemanticsearch.v1.OutcomeKindR\x04kind\x12\x14\n" +
