@@ -19,6 +19,11 @@ type semanticReader interface {
 	ListCollections(ctx context.Context) ([]string, error)
 	HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error)
 	HasStaging(ctx context.Context, codebasePath string) (bool, error)
+}
+
+// semanticHealthReader probes whether search can serve a query, both globally
+// (store reachability) and per-path (the queried collection's load state).
+type semanticHealthReader interface {
 	// ProbeHealth actively checks that the store is reachable now, returning an
 	// adapterr-classified error when it is not. It is the global shared-dependency
 	// probe for surfaces without a single path.
@@ -60,6 +65,7 @@ type semanticDropper interface {
 // exactly what the daemon calls, no more.
 type semanticIndex interface {
 	semanticReader
+	semanticHealthReader
 	semanticReuseLoader
 	semanticWriter
 	semanticDropper
