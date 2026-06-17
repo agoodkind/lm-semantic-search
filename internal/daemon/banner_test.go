@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -99,7 +100,9 @@ func TestRenderGetJobNoEchoWhenDegraded(t *testing.T) {
 // body, and one correlation header, with no blank lines from the envelope.
 func TestGetIndexDegradedEnvelope(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
-	manager.semantic = &fakeSemantic{}
+	// The active health probe runs on this indexed path, so the fake must report
+	// the same outage the test simulates or the probe would clear the banner.
+	manager.semantic = &fakeSemantic{probeErr: adapterr.NewEmbedderUnreachable(nil)}
 	canonical, err := filepath.EvalSymlinks(repoPath)
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)

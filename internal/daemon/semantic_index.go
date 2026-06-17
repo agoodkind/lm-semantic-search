@@ -19,6 +19,9 @@ type semanticReader interface {
 	ListCollections(ctx context.Context) ([]string, error)
 	HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error)
 	HasStaging(ctx context.Context, codebasePath string) (bool, error)
+	// ProbeHealth actively checks that the store and embedder answer now,
+	// returning an adapterr-classified error when either is unreachable.
+	ProbeHealth(ctx context.Context) error
 }
 
 // semanticReuseLoader is the slice that reads already-embedded vectors back
