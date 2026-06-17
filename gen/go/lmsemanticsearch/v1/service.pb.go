@@ -514,9 +514,9 @@ type Progress struct {
 	// value every surface renders, so JSON consumers get the exact tree without
 	// parsing the human text. Its file rows sum to processed.
 	Breakdown *OutcomeBreakdown `protobuf:"bytes,14,opt,name=breakdown,proto3" json:"breakdown,omitempty"`
-	// chunks_processed counts chunks produced by this sync pass.
+	// chunks_processed counts chunks produced during this run.
 	ChunksProcessed int32 `protobuf:"varint,15,opt,name=chunks_processed,json=chunksProcessed,proto3" json:"chunks_processed,omitempty"`
-	// chunks_embedded counts chunks sent to the embedder this sync pass.
+	// chunks_embedded counts chunks sent to the embedder during this run.
 	ChunksEmbedded int32 `protobuf:"varint,16,opt,name=chunks_embedded,json=chunksEmbedded,proto3" json:"chunks_embedded,omitempty"`
 	// reuse_vectors_loaded counts old vectors loaded as reuse candidates.
 	ReuseVectorsLoaded int32 `protobuf:"varint,17,opt,name=reuse_vectors_loaded,json=reuseVectorsLoaded,proto3" json:"reuse_vectors_loaded,omitempty"`
