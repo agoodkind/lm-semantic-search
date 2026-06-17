@@ -36,15 +36,15 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 	if !found {
 		return nil
 	}
+	if sourceDirMissing(codebase.CanonicalPath) {
+		manager.markCodebaseMissing(ctx, codebaseID)
+		slog.WarnContext(ctx, "converge.root_missing_hold", "component", "daemon", "subcomponent", "converge", "codebase_id", codebaseID, "root", codebase.CanonicalPath)
+		return nil
+	}
 	if manager.semantic == nil || !manager.semantic.Available() {
 		return nil
 	}
 	if codebase.Status == model.CodebaseStatusQuarantined {
-		return nil
-	}
-	if sourceDirMissing(codebase.CanonicalPath) {
-		manager.markCodebaseMissing(ctx, codebaseID)
-		slog.WarnContext(ctx, "converge.root_missing_hold", "component", "daemon", "subcomponent", "converge", "codebase_id", codebaseID, "root", codebase.CanonicalPath)
 		return nil
 	}
 

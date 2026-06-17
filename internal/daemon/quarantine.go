@@ -267,10 +267,11 @@ func (manager *Manager) quarantinedCodebases() []string {
 			continue
 		}
 		line := fmt.Sprintf(
-			"%s: %d of %d tracked files in %s observation(s), last trigger %s",
+			"%s: %d of %d tracked files in %d %s, last trigger %s",
 			codebase.CanonicalPath,
 			codebase.Quarantine.LastMissingCount,
 			codebase.Quarantine.LastTotalCount,
+			codebase.Quarantine.ObservationCount,
 			plural("observation", int(codebase.Quarantine.ObservationCount)),
 			defaultQuarantineTrigger(codebase.Quarantine.LastTrigger),
 		)
