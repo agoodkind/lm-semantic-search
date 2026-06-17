@@ -197,3 +197,28 @@ func (manager *Manager) DependencyHealth() dependencyHealth {
 	}
 	return manager.health
 }
+
+// pathDependencyMode folds the global shared-dependency health with the per-path
+// collection-load check into one dependency mode for a single-path surface
+// (GetIndex). The global probe (refreshDependencyHealth) covers store
+// reachability, and real embed outcomes on the search and index paths cover the
+// embedder; this adds the per-path precondition that the collection serving
+// canonicalPath is loaded into query nodes now. A path whose collection is not
+// loaded, or whose load state the store cannot answer, reads store-unavailable,
+// so the searchable bit and the displayed status both fall to not-searchable /
+// waiting through the one status resolver. A non-indexed path skips the per-path
+// check and reflects only the global mode.
+func (manager *Manager) pathDependencyMode(ctx context.Context, canonicalPath string, searchableEligible bool) dependencyMode {
+	manager.refreshDependencyHealth(ctx)
+	if global := manager.DependencyHealth(); global.Degraded() {
+		return global.Mode
+	}
+	if !searchableEligible || manager.semantic == nil || canonicalPath == "" {
+		return dependencyHealthy
+	}
+	loaded, err := manager.semantic.CollectionSearchable(ctx, canonicalPath)
+	if err != nil || !loaded {
+		return dependencyStoreUnavailable
+	}
+	return dependencyHealthy
+}

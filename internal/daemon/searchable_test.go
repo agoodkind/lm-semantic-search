@@ -71,6 +71,8 @@ func TestGetIndexSearchableReflectsBackendHealth(t *testing.T) {
 		{"healthy backend", &fakeSemantic{}, true},
 		{"embedder down", &fakeSemantic{probeErr: adapterr.NewEmbedderUnreachable(nil)}, false},
 		{"store down", &fakeSemantic{unavailable: true}, false},
+		{"collection not loaded", &fakeSemantic{collectionSearchable: func(context.Context, string) (bool, error) { return false, nil }}, false},
+		{"collection load state unanswerable", &fakeSemantic{collectionSearchable: func(context.Context, string) (bool, error) { return false, adapterr.NewMilvusUnavailable(nil) }}, false},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -87,6 +89,41 @@ func TestGetIndexSearchableReflectsBackendHealth(t *testing.T) {
 				t.Fatalf("searchable = %v, want %v", got, testCase.wantSearchable)
 			}
 		})
+	}
+}
+
+// A per-path collection that is not loaded into query nodes makes the same
+// GetIndex response read not-searchable AND waiting: the searchable bit and the
+// displayed status both derive from the one folded dependency mode, so they
+// cannot diverge even though the store is reachable and the on-disk
+// classification stays indexed.
+func TestGetIndexCollectionNotLoadedReadsWaiting(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusIndexed
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+	resetProbeClock(manager)
+	// Store reachable (ProbeHealth nil) but this collection is not loaded.
+	manager.semantic = &fakeSemantic{collectionSearchable: func(context.Context, string) (bool, error) {
+		return false, nil
+	}}
+
+	server := NewGRPCServer(manager, nil)
+	resp, getErr := server.GetIndex(context.Background(), &pb.GetIndexRequest{Path: repoPath})
+	if getErr != nil {
+		t.Fatalf("GetIndex returned error: %v", getErr)
+	}
+	if resp.GetSearchable() {
+		t.Fatal("searchable = true for a not-loaded collection, want false")
+	}
+	if got := resp.GetCodebase().GetDisplayStatus(); got != "waiting" {
+		t.Fatalf("display status = %q, want waiting (must agree with searchable=false)", got)
 	}
 }
 

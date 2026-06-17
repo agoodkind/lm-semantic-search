@@ -19,9 +19,15 @@ type semanticReader interface {
 	ListCollections(ctx context.Context) ([]string, error)
 	HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error)
 	HasStaging(ctx context.Context, codebasePath string) (bool, error)
-	// ProbeHealth actively checks that the store and embedder answer now,
-	// returning an adapterr-classified error when either is unreachable.
+	// ProbeHealth actively checks that the store is reachable now, returning an
+	// adapterr-classified error when it is not. It is the global shared-dependency
+	// probe for surfaces without a single path.
 	ProbeHealth(ctx context.Context) error
+	// CollectionSearchable reports whether the collection serving codebasePath is
+	// loaded into query nodes now, the deterministic per-path precondition for a
+	// real search. The bool is false (with a classified error) when the store
+	// cannot answer.
+	CollectionSearchable(ctx context.Context, codebasePath string) (bool, error)
 }
 
 // semanticReuseLoader is the slice that reads already-embedded vectors back

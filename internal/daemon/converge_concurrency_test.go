@@ -31,6 +31,7 @@ type fakeSemantic struct {
 	conversationName     func(collectionID string) string
 	listCollections      func(context.Context) ([]string, error)
 	hasCollectionForPath func(context.Context, string) (bool, error)
+	collectionSearchable func(context.Context, string) (bool, error)
 	search               func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
 	conversationSearch   func(context.Context, string, string, int32) ([]model.StoredChunk, error)
 	count                func(context.Context, string) (int32, error)
@@ -118,6 +119,13 @@ func (f *fakeSemantic) ListCollections(ctx context.Context) ([]string, error) {
 func (f *fakeSemantic) HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error) {
 	if f.hasCollectionForPath != nil {
 		return f.hasCollectionForPath(ctx, codebasePath)
+	}
+	return true, nil
+}
+
+func (f *fakeSemantic) CollectionSearchable(ctx context.Context, codebasePath string) (bool, error) {
+	if f.collectionSearchable != nil {
+		return f.collectionSearchable(ctx, codebasePath)
 	}
 	return true, nil
 }
