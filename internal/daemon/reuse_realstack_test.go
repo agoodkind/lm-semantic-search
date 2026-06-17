@@ -16,6 +16,7 @@ import (
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
+	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
@@ -144,6 +145,293 @@ func TestSameCodebaseReuseGRPCE2ERealSemanticService(t *testing.T) {
 	}
 	if progress.GetReuseVectorsLoaded() <= 0 {
 		t.Fatalf("ReuseVectorsLoaded = %d, want > 0 after exact-path reuse load", progress.GetReuseVectorsLoaded())
+	}
+}
+
+func TestQuarantineLargeDeleteIntegrationRealSemanticService(t *testing.T) {
+	requireRealStack(t)
+
+	embedServer := newTestEmbeddingServer(t)
+	manager, repoPath := newRealSemanticManager(t, embedServer.URL)
+	service, ok := manager.semantic.(*semantic.Service)
+	if !ok {
+		t.Fatalf("manager.semantic type = %T, want *semantic.Service", manager.semantic)
+	}
+
+	seeded := seedRealIndexedCodebase(t, manager, repoPath, 120)
+
+	beforeCount, err := service.Count(context.Background(), seeded.CanonicalPath)
+	if err != nil {
+		t.Fatalf("Count(before) returned error: %v", err)
+	}
+	if beforeCount <= 0 {
+		t.Fatalf("Count(before) = %d, want > 0", beforeCount)
+	}
+
+	removeLargeDeleteFixturePrefix(t, repoPath, 110)
+
+	job, _, _, err := manager.SyncIndex(context.Background(), repoPath, testClientInfo())
+	if err != nil {
+		t.Fatalf("SyncIndex returned error: %v", err)
+	}
+	completed := waitForJobTerminal(t, manager, job.ID)
+	if completed.State != model.JobStateFailed {
+		t.Fatalf("job state = %q, want failed quarantine terminal state", completed.State)
+	}
+	if completed.Error == nil || !strings.Contains(completed.Error.Message, "quarantined") {
+		t.Fatalf("job error = %+v, want quarantined message", completed.Error)
+	}
+
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
+	if err != nil || !found {
+		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
+	}
+	if codebase.ID != seeded.ID {
+		t.Fatalf("codebase ID = %q, want seeded ID %q", codebase.ID, seeded.ID)
+	}
+	if codebase.Status != model.CodebaseStatusQuarantined {
+		t.Fatalf("codebase status = %q, want quarantined", codebase.Status)
+	}
+	if codebase.Quarantine == nil {
+		t.Fatal("codebase.Quarantine = nil, want recorded quarantine state")
+	}
+	if codebase.Quarantine.LastMissingCount != 110 || codebase.Quarantine.LastTotalCount != 120 {
+		t.Fatalf("quarantine = %+v, want 110 of 120", codebase.Quarantine)
+	}
+
+	afterCount, err := service.Count(context.Background(), seeded.CanonicalPath)
+	if err != nil {
+		t.Fatalf("Count(after) returned error: %v", err)
+	}
+	if afterCount != beforeCount {
+		t.Fatalf("Count(after) = %d, want unchanged %d while quarantined", afterCount, beforeCount)
+	}
+}
+
+func TestQuarantineLargeDeleteGRPCE2ERealSemanticService(t *testing.T) {
+	requireRealStack(t)
+
+	embedServer := newTestEmbeddingServer(t)
+	manager, repoPath := newRealSemanticManager(t, embedServer.URL)
+	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("lms-%d.sock", time.Now().UnixNano()))
+	stopServer := startGRPCServerForTest(t, manager, socketPath)
+	defer stopServer()
+
+	seeded := seedRealIndexedCodebase(t, manager, repoPath, 120)
+
+	connection, client, err := grpcutil.DialDaemon(context.Background(), socketPath)
+	if err != nil {
+		t.Fatalf("DialDaemon returned error: %v", err)
+	}
+	defer connection.Close()
+
+	removeLargeDeleteFixturePrefix(t, repoPath, 110)
+
+	syncResponse, err := client.SyncIndex(grpcutil.WithCorrelation(context.Background()), &pb.SyncIndexRequest{
+		Path:   repoPath,
+		Client: &pb.ClientInfo{Name: "grpc-e2e"},
+	})
+	if err != nil {
+		t.Fatalf("SyncIndex RPC returned error: %v", err)
+	}
+	completed := waitForRPCJobTerminal(t, client, syncResponse.GetJobId())
+	if completed.GetState() != string(model.JobStateFailed) {
+		t.Fatalf("job state = %q, want failed quarantine terminal state", completed.GetState())
+	}
+
+	indexResponse, err := client.GetIndex(grpcutil.WithCorrelation(context.Background()), &pb.GetIndexRequest{
+		Path: repoPath,
+	})
+	if err != nil {
+		t.Fatalf("GetIndex RPC returned error: %v", err)
+	}
+	if indexResponse.GetCodebase().GetId() != seeded.ID {
+		t.Fatalf("codebase id = %q, want seeded ID %q", indexResponse.GetCodebase().GetId(), seeded.ID)
+	}
+	if indexResponse.GetCodebase().GetStatus() != string(model.CodebaseStatusQuarantined) {
+		t.Fatalf("codebase status = %q, want quarantined", indexResponse.GetCodebase().GetStatus())
+	}
+	if !strings.Contains(indexResponse.GetDisplayText(), "quarantined after a suspicious large disappearance") {
+		t.Fatalf("GetIndex display text missing quarantine explanation:\n%s", indexResponse.GetDisplayText())
+	}
+	if !strings.Contains(indexResponse.GetDisplayText(), "last known-good index") {
+		t.Fatalf("GetIndex display text missing last-known-good wording:\n%s", indexResponse.GetDisplayText())
+	}
+
+	searchResponse, err := client.SearchCode(grpcutil.WithCorrelation(context.Background()), &pb.SearchCodeRequest{
+		Path:   repoPath,
+		Query:  "package main",
+		Limit:  5,
+		Client: &pb.ClientInfo{Name: "grpc-e2e"},
+	})
+	if err != nil {
+		t.Fatalf("SearchCode RPC returned error while quarantined: %v", err)
+	}
+	if !strings.Contains(searchResponse.GetDisplayText(), "last known-good index") {
+		t.Fatalf("SearchCode display text missing quarantine search note:\n%s", searchResponse.GetDisplayText())
+	}
+}
+
+// TestWatcherUntrackedChurnDoesNotQuarantineRealSemanticService is the
+// integration form of the exact failure: a healthy indexed repo whose tracked
+// files are all present, plus a large untracked subtree (.git churn) that is
+// created and deleted. Driving the deleted untracked paths plus the present
+// tracked paths through the watcher converge seam must not quarantine and must
+// not delete any Milvus rows.
+func TestWatcherUntrackedChurnDoesNotQuarantineRealSemanticService(t *testing.T) {
+	requireRealStack(t)
+
+	embedServer := newTestEmbeddingServer(t)
+	manager, repoPath := newRealSemanticManager(t, embedServer.URL)
+	service, ok := manager.semantic.(*semantic.Service)
+	if !ok {
+		t.Fatalf("manager.semantic type = %T, want *semantic.Service", manager.semantic)
+	}
+
+	seeded := seedRealIndexedCodebase(t, manager, repoPath, 120)
+	beforeCount, err := service.Count(context.Background(), seeded.CanonicalPath)
+	if err != nil {
+		t.Fatalf("Count(before) returned error: %v", err)
+	}
+
+	churnPaths, removeAll := createUntrackedChurnSubtree(t, repoPath, ".git/objects/pack", 300)
+	removeAll()
+
+	batch := make([]string, 0, len(churnPaths)+120)
+	batch = append(batch, churnPaths...)
+	for index := 0; index < 120; index++ {
+		batch = append(batch, fmt.Sprintf("f%03d.go", index))
+	}
+	if err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
+	if err != nil || !found {
+		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
+	}
+	if codebase.Status != model.CodebaseStatusIndexed {
+		t.Fatalf("status = %q, want indexed; untracked churn must not quarantine", codebase.Status)
+	}
+	if codebase.Quarantine != nil {
+		t.Fatalf("Quarantine = %+v, want nil for untracked churn", codebase.Quarantine)
+	}
+
+	afterCount, err := service.Count(context.Background(), seeded.CanonicalPath)
+	if err != nil {
+		t.Fatalf("Count(after) returned error: %v", err)
+	}
+	if afterCount != beforeCount {
+		t.Fatalf("Count(after) = %d, want unchanged %d", afterCount, beforeCount)
+	}
+}
+
+// TestWatcherTrackedMassDeleteQuarantinesRealSemanticService is the regression
+// guard for the watcher path: a genuine mass-delete of tracked files driven
+// through converge still quarantines and still serves the last known-good index
+// without dropping rows.
+func TestWatcherTrackedMassDeleteQuarantinesRealSemanticService(t *testing.T) {
+	requireRealStack(t)
+
+	embedServer := newTestEmbeddingServer(t)
+	manager, repoPath := newRealSemanticManager(t, embedServer.URL)
+	service, ok := manager.semantic.(*semantic.Service)
+	if !ok {
+		t.Fatalf("manager.semantic type = %T, want *semantic.Service", manager.semantic)
+	}
+
+	seeded := seedRealIndexedCodebase(t, manager, repoPath, 120)
+	beforeCount, err := service.Count(context.Background(), seeded.CanonicalPath)
+	if err != nil {
+		t.Fatalf("Count(before) returned error: %v", err)
+	}
+
+	removeLargeDeleteFixturePrefix(t, repoPath, 110)
+
+	batch := make([]string, 0, 120)
+	for index := 0; index < 120; index++ {
+		batch = append(batch, fmt.Sprintf("f%03d.go", index))
+	}
+	if err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
+	if err != nil || !found {
+		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
+	}
+	if codebase.Status != model.CodebaseStatusQuarantined {
+		t.Fatalf("status = %q, want quarantined for a genuine tracked mass-delete", codebase.Status)
+	}
+	if codebase.Quarantine == nil || codebase.Quarantine.LastMissingCount != 110 || codebase.Quarantine.LastTotalCount != 120 {
+		t.Fatalf("quarantine = %+v, want 110 of 120", codebase.Quarantine)
+	}
+
+	afterCount, err := service.Count(context.Background(), seeded.CanonicalPath)
+	if err != nil {
+		t.Fatalf("Count(after) returned error: %v", err)
+	}
+	if afterCount != beforeCount {
+		t.Fatalf("Count(after) = %d, want unchanged %d while quarantined", afterCount, beforeCount)
+	}
+}
+
+// TestWatcherUntrackedChurnStaysIndexedGRPCE2ERealSemanticService asserts the
+// gRPC read surface after untracked churn: GetIndex reports indexed with no
+// quarantine prose and SearchCode serves normally with no last-known-good note.
+func TestWatcherUntrackedChurnStaysIndexedGRPCE2ERealSemanticService(t *testing.T) {
+	requireRealStack(t)
+
+	embedServer := newTestEmbeddingServer(t)
+	manager, repoPath := newRealSemanticManager(t, embedServer.URL)
+	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("lms-%d.sock", time.Now().UnixNano()))
+	stopServer := startGRPCServerForTest(t, manager, socketPath)
+	defer stopServer()
+
+	seeded := seedRealIndexedCodebase(t, manager, repoPath, 120)
+
+	connection, client, err := grpcutil.DialDaemon(context.Background(), socketPath)
+	if err != nil {
+		t.Fatalf("DialDaemon returned error: %v", err)
+	}
+	defer connection.Close()
+
+	churnPaths, removeAll := createUntrackedChurnSubtree(t, repoPath, ".git/objects/pack", 300)
+	removeAll()
+	batch := make([]string, 0, len(churnPaths)+120)
+	batch = append(batch, churnPaths...)
+	for index := 0; index < 120; index++ {
+		batch = append(batch, fmt.Sprintf("f%03d.go", index))
+	}
+	if err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+
+	indexResponse, err := client.GetIndex(grpcutil.WithCorrelation(context.Background()), &pb.GetIndexRequest{Path: repoPath})
+	if err != nil {
+		t.Fatalf("GetIndex RPC returned error: %v", err)
+	}
+	if indexResponse.GetCodebase().GetId() != seeded.ID {
+		t.Fatalf("codebase id = %q, want seeded ID %q", indexResponse.GetCodebase().GetId(), seeded.ID)
+	}
+	if indexResponse.GetCodebase().GetStatus() != string(model.CodebaseStatusIndexed) {
+		t.Fatalf("status = %q, want indexed", indexResponse.GetCodebase().GetStatus())
+	}
+	if strings.Contains(indexResponse.GetDisplayText(), "quarantined after a suspicious large disappearance") {
+		t.Fatalf("GetIndex display text wrongly shows quarantine:\n%s", indexResponse.GetDisplayText())
+	}
+
+	searchResponse, err := client.SearchCode(grpcutil.WithCorrelation(context.Background()), &pb.SearchCodeRequest{
+		Path:   repoPath,
+		Query:  "package main",
+		Limit:  5,
+		Client: &pb.ClientInfo{Name: "grpc-e2e"},
+	})
+	if err != nil {
+		t.Fatalf("SearchCode RPC returned error: %v", err)
+	}
+	if strings.Contains(searchResponse.GetDisplayText(), "last known-good index") {
+		t.Fatalf("SearchCode display text wrongly shows the quarantine note:\n%s", searchResponse.GetDisplayText())
 	}
 }
 
@@ -314,6 +602,126 @@ func writeReuseFixture(t *testing.T, repoPath string, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repoPath, "main.go"), []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile(main.go) returned error: %v", err)
+	}
+}
+
+func writeLargeDeleteFixture(t *testing.T, repoPath string, fileCount int) {
+	t.Helper()
+	for index := 0; index < fileCount; index++ {
+		path := filepath.Join(repoPath, fmt.Sprintf("f%03d.go", index))
+		content := fmt.Sprintf("package main\n\nfunc fixture_%03d() string {\n\treturn %q\n}\n", index, strings.Repeat(fmt.Sprintf("fixture-%03d-", index), 12))
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) returned error: %v", path, err)
+		}
+	}
+}
+
+func seedRealIndexedCodebase(t *testing.T, manager *Manager, repoPath string, fileCount int) model.Codebase {
+	t.Helper()
+
+	writeLargeDeleteFixture(t, repoPath, fileCount)
+	service, ok := manager.semantic.(*semantic.Service)
+	if !ok {
+		t.Fatalf("manager.semantic type = %T, want *semantic.Service", manager.semantic)
+	}
+	canonicalPath, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s) returned error: %v", repoPath, err)
+	}
+
+	indexConfig := manager.enrichIndexConfig(defaultIndexConfig())
+	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
+	chunks := make([]model.StoredChunk, 0, fileCount)
+	fileHashes := make(map[string]string, fileCount)
+	for index := 0; index < fileCount; index++ {
+		relativePath := fmt.Sprintf("f%03d.go", index)
+		content := fmt.Sprintf("package main\n\nfunc fixture_%03d() string {\n\treturn %q\n}\n", index, strings.Repeat(fmt.Sprintf("fixture-%03d-", index), 12))
+		fileHashes[relativePath] = hashText(content)
+		chunks = append(chunks, model.StoredChunk{
+			Content:       content,
+			RelativePath:  relativePath,
+			StartLine:     1,
+			EndLine:       5,
+			Language:      "go",
+			FileExtension: ".go",
+		})
+	}
+
+	if err := service.StageReindex(context.Background(), canonicalPath, chunks, semantic.RemovePaths(nil), nil, nil); err != nil {
+		t.Fatalf("semantic.StageReindex seed returned error: %v", err)
+	}
+	if err := service.PromoteStaging(context.Background(), canonicalPath); err != nil {
+		t.Fatalf("semantic.PromoteStaging seed returned error: %v", err)
+	}
+
+	codebase := newCodebaseRecord(canonicalPath)
+	codebase.Status = model.CodebaseStatusIndexed
+	codebase.EffectiveConfig = indexConfig
+	codebase.CollectionName = service.CollectionName(canonicalPath)
+	codebase.MerkleSnapshotPath = manager.snapshotPathForCodebase(codebase)
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{
+		IndexedFiles: int32(fileCount),
+		TotalChunks:  int32(len(chunks)),
+		Status:       "completed",
+		CompletedAt:  time.Now(),
+	}
+	codebase.LiveFileTotal = int32(fileCount)
+	codebase.LiveChunkTotal = int32(len(chunks))
+
+	snapshot := merkle.Snapshot{
+		ConfigDigest: indexConfig.IgnoreDigest,
+		Files:        fileHashes,
+		Inodes:       nil,
+	}
+	if err := merkle.WriteSnapshot(manager.snapshotPathForCodebase(codebase), snapshot); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	if err := manager.saveLocked(); err != nil {
+		manager.mu.Unlock()
+		t.Fatalf("saveLocked returned error: %v", err)
+	}
+	manager.mu.Unlock()
+
+	return codebase
+}
+
+func removeLargeDeleteFixturePrefix(t *testing.T, repoPath string, removeCount int) {
+	t.Helper()
+	for index := 0; index < removeCount; index++ {
+		path := filepath.Join(repoPath, fmt.Sprintf("f%03d.go", index))
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("Remove(%s) returned error: %v", path, err)
+		}
+	}
+}
+
+// createUntrackedChurnSubtree writes count files under an untracked subdir
+// (for example ".git/objects/pack" or "build") that is not part of the indexed
+// snapshot, and returns the slash-separated relative paths plus a closure that
+// deletes the whole subtree. It reproduces the .git and build-artifact churn
+// that historically inflated the watcher delete count.
+func createUntrackedChurnSubtree(t *testing.T, repoPath string, subdir string, count int) ([]string, func()) {
+	t.Helper()
+	base := filepath.Join(repoPath, filepath.FromSlash(subdir))
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) returned error: %v", base, err)
+	}
+	relativePaths := make([]string, 0, count)
+	for index := 0; index < count; index++ {
+		relative := subdir + "/" + fmt.Sprintf("obj%05d.bin", index)
+		full := filepath.Join(repoPath, filepath.FromSlash(relative))
+		if err := os.WriteFile(full, []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) returned error: %v", full, err)
+		}
+		relativePaths = append(relativePaths, relative)
+	}
+	return relativePaths, func() {
+		if err := os.RemoveAll(base); err != nil {
+			t.Fatalf("RemoveAll(%s) returned error: %v", base, err)
+		}
 	}
 }
 
