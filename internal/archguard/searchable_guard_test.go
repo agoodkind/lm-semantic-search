@@ -60,11 +60,21 @@ func TestSearchableNotComputedInline(t *testing.T) {
 	}
 }
 
-// isSearchableIdent reports whether expr is the identifier `Searchable` (the
-// response field) or `searchable` (a local), the names the fold would assign to.
+// isSearchableIdent reports whether expr names the searchable field, covering
+// both a bare identifier (`searchable := ...` or a struct-literal key
+// `Searchable:`) and a selector (`resp.Searchable = ...`). The selector case
+// matters because an inline fold assigned to a response field is a
+// *ast.SelectorExpr, not an *ast.Ident, so matching only identifiers would let
+// `resp.Searchable = eligible && !health.Degraded()` slip past the guard.
 func isSearchableIdent(expr ast.Expr) bool {
-	ident, ok := expr.(*ast.Ident)
-	return ok && strings.EqualFold(ident.Name, "searchable")
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		return strings.EqualFold(typed.Name, "searchable")
+	case *ast.SelectorExpr:
+		return strings.EqualFold(typed.Sel.Name, "searchable")
+	default:
+		return false
+	}
 }
 
 // isBoolExpr reports whether expr is a logical/comparison expression, which is
