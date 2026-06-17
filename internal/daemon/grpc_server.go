@@ -890,7 +890,6 @@ func (server *GRPCServer) Doctor(ctx context.Context, request *pb.DoctorRequest)
 	doctorView := view.DoctorView{
 		Diagnostics: diagnostics,
 		Dropped:     server.manager.DroppedCodebases(),
-		Quarantined: server.manager.quarantinedCodebases(),
 	}
 	response.DisplayText = server.envelopeText(ctx, health, render.Doctor(doctorView))
 	return response, nil

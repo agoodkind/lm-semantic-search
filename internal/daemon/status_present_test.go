@@ -58,7 +58,6 @@ func TestComputeDisplayStatusNeverNotIndexed(t *testing.T) {
 		{"embedding job", model.Codebase{Status: model.CodebaseStatusIndexing}, embeddingJob, displayIndexing},
 		{"queued job, scope unknown", model.Codebase{Status: model.CodebaseStatusIndexing}, queuedJob, displayPreparing},
 		{"background sync over indexed", model.Codebase{Status: model.CodebaseStatusIndexed, LastSuccessfulRun: indexedRun}, backgroundSyncJob, displayIndexed},
-		{"no job, quarantined", model.Codebase{Status: model.CodebaseStatusQuarantined}, nil, displayQuarantined},
 		{"no job, indexed", model.Codebase{Status: model.CodebaseStatusIndexed}, nil, displayIndexed},
 		{"no job, stale", model.Codebase{Status: model.CodebaseStatusStale}, nil, displayStale},
 		{"no job, failed", model.Codebase{Status: model.CodebaseStatusFailed}, nil, displayFailed},
@@ -101,7 +100,6 @@ func TestComputeDisplayStatusWaitingFold(t *testing.T) {
 		{"live scoped job stays indexing", model.Codebase{Status: model.CodebaseStatusIndexing}, embeddingJob, displayIndexing},
 		{"already indexed folds to waiting", model.Codebase{Status: model.CodebaseStatusIndexed}, nil, displayWaiting},
 		{"background sync over indexed folds to waiting", model.Codebase{Status: model.CodebaseStatusIndexed, LastSuccessfulRun: indexedRun}, backgroundSyncJob, displayWaiting},
-		{"quarantined stays quarantined", model.Codebase{Status: model.CodebaseStatusQuarantined}, nil, displayQuarantined},
 		{"stale stays stale", model.Codebase{Status: model.CodebaseStatusStale}, nil, displayStale},
 		{"missing stays missing", model.Codebase{Status: model.CodebaseStatusMissing}, nil, displayMissing},
 	}
@@ -123,7 +121,6 @@ func TestShouldResumeInterruptedBuild(t *testing.T) {
 		{model.CodebaseStatusIndexing, false, true},
 		{model.CodebaseStatusNotIndexed, false, true},
 		{model.CodebaseStatusIndexing, true, false},
-		{model.CodebaseStatusQuarantined, false, false},
 		{model.CodebaseStatusIndexed, false, false},
 		{model.CodebaseStatusStale, false, false},
 		{model.CodebaseStatusFailed, false, false},

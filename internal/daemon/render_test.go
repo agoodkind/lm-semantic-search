@@ -252,7 +252,6 @@ func renderGetIndexBodyForTest(requestedPath string, tracked bool, codebase *mod
 		TemplateName:       "",
 		Status:             view.StatusView{},
 		Failure:            view.FailureSurface{},
-		Quarantine:         view.QuarantineSurface{},
 		WaitLabel:          "",
 		ClassificationLine: "",
 		ResolutionLines:    nil,
@@ -265,7 +264,6 @@ func renderGetIndexBodyForTest(requestedPath string, tracked bool, codebase *mod
 		display := computeDisplayStatus(*codebase, activeJob, health.Degraded())
 		getIndex.Display = view.Display(display)
 		getIndex.Failure = resolveCodebaseFailure(*codebase)
-		getIndex.Quarantine = resolveQuarantineSurface(*codebase)
 		statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
 		getIndex.Status = statusView
 		getIndex.TemplateName = templateName
@@ -532,35 +530,6 @@ func TestRenderGetIndexBodySyncPreDiffKeepsReady(t *testing.T) {
 	for _, want := range []string{"✅ Ready to search", "🔄 Checking for changes in the background"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("pre-diff sync status missing %q in:\n%s", want, out)
-		}
-	}
-}
-
-func TestRenderGetIndexBodyQuarantinedPreservesSearchabilityMessage(t *testing.T) {
-	t.Parallel()
-	codebase := &model.Codebase{
-		CanonicalPath:     "/Users/agoodkind/Sites/swift-makefile",
-		Status:            model.CodebaseStatusQuarantined,
-		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 58, TotalChunks: 600, CompletedAt: renderTestTime},
-		Quarantine: &model.QuarantineState{
-			Reason:           quarantineReasonWatcherLargeDelete,
-			FirstObservedAt:  renderTestTime,
-			LastObservedAt:   renderTestTime,
-			ObservationCount: 1,
-			LastTrigger:      quarantineTriggerWatcher,
-			LastMissingCount: 400,
-			LastTotalCount:   4292,
-		},
-	}
-	out := renderGetIndexBodyForTest("/Users/agoodkind/Sites/swift-makefile", true, codebase, nil, dependencyHealth{})
-	for _, want := range []string{
-		"is quarantined after a suspicious large disappearance",
-		"Search continues to serve the last known-good index",
-		"Last known good index: 58 files, 600 chunks",
-		"400 of 4,292 tracked files",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("quarantined status missing %q in:\n%s", want, out)
 		}
 	}
 }
