@@ -19,13 +19,16 @@ func storeUnavailable(err error) bool {
 }
 
 // collectionNotLoadedMessage is the stable milvus error text for a collection
-// that exists but is not loaded into query nodes. The readiness probe decides
-// load state deterministically from [GetLoadState]; this single message match
-// exists only so a user-facing search that races a just-unloaded collection
-// returns the ErrCollectionNotReady retry hint instead of an opaque internal
-// error. It is not part of the searchable gating decision. The typed milvus
-// sentinel (merr.ErrCollectionNotLoaded) would be exact, but importing milvus's
-// merr package crashes the gate's govulncheck on its generics, so this keeps the
+// that exists but is not loaded into query nodes. It is matched
+// case-insensitively (against a lowercased error string) so a capitalized
+// milvus variant still maps to the retry hint rather than falling through to a
+// generic internal error. The readiness probe decides load state
+// deterministically from [GetLoadState]; this single message match exists only
+// so a user-facing search that races a just-unloaded collection returns the
+// ErrCollectionNotReady retry hint instead of an opaque internal error. It is
+// not part of the searchable gating decision. The typed milvus sentinel
+// (merr.ErrCollectionNotLoaded) would be exact, but importing milvus's merr
+// package crashes the gate's govulncheck on its generics, so this keeps the
 // single stable message instead.
 const collectionNotLoadedMessage = "collection not loaded"
 
@@ -40,7 +43,7 @@ func storeSearchSentinel(err error) error {
 	if err == nil {
 		return nil
 	}
-	if strings.Contains(err.Error(), collectionNotLoadedMessage) {
+	if strings.Contains(strings.ToLower(err.Error()), collectionNotLoadedMessage) {
 		return ErrCollectionNotReady
 	}
 	if storeUnavailable(err) {
