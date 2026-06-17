@@ -169,6 +169,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 				EmbeddingBatchesTotal:     safeInt32FromInt(totalBatches),
 				EmbeddingBatchesCompleted: safeInt32FromInt(batchIndex + 1),
 				CollectionRowsWritten:     writtenRows,
+				ChunksProcessed:           writtenRows,
 				ChunksReused:              reusedRows,
 				ChunksEmbedded:            embeddedRows,
 			})

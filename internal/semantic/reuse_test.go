@@ -135,6 +135,22 @@ func TestBuildRelativePathPrefixFilterMatchesSubtree(t *testing.T) {
 	}
 }
 
+func TestRelativePathExpressionMatchesOnlyExactPath(t *testing.T) {
+	got := relativePathExpression(`src/file.go`)
+	want := `relativePath == "src/file.go"`
+	if got != want {
+		t.Fatalf("relativePathExpression = %q, want %q", got, want)
+	}
+	if got == relativePathPrefixExpression(`src/file.go`) {
+		t.Fatalf("exact-path expression matched prefix expression %q; code reuse must not read prefix neighbors", got)
+	}
+	quoted := relativePathExpression(`src/"quoted".go`)
+	quotedWant := `relativePath == "src/\"quoted\".go"`
+	if quoted != quotedWant {
+		t.Fatalf("escaped exact-path expression = %q, want %q", quoted, quotedWant)
+	}
+}
+
 func TestBuildSearchFilterCombinesExtensionAndPrefix(t *testing.T) {
 	got := buildSearchFilter([]string{".go"}, []string{"codex-rs"})
 	want := `fileExtension in [".go"] and (relativePath == "codex-rs" or relativePath like "codex-rs/%")`

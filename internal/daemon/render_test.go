@@ -81,7 +81,8 @@ func TestBreakdownIdenticalAcrossAllSurfaces(t *testing.T) {
 		RunMode: model.RunModeChanged, Unit: "document", ScopeUnit: "conversation",
 		FilesTotal: 72, FilesProcessed: 70, FilesAdded: 63, FilesModified: 9,
 		FilesEmbedded: 9, FilesPending: 61,
-		ChunksGenerated: 1204, ChunksReused: 2312, ChunksTotal: 3516,
+		ChunksProcessed: 3516, ChunksGenerated: 1204, ChunksEmbedded: 1204,
+		ChunksReused: 2312, ChunksTotal: 3516, ReuseVectorsLoaded: 2400,
 		LastEventAt: renderTestTime,
 	}
 
@@ -123,6 +124,15 @@ func TestBreakdownIdenticalAcrossAllSurfaces(t *testing.T) {
 	// The undelivered conversation is a first-class wire counter, not inferred.
 	if got := decoded.GetProgress().GetBreakdown(); !breakdownHasPending(got) {
 		t.Fatalf("JSON breakdown missing a pending row: %+v", got.GetFileRows())
+	}
+	if got := decoded.GetProgress().GetChunksProcessed(); got != 3516 {
+		t.Fatalf("JSON chunks_processed = %d, want 3516", got)
+	}
+	if got := decoded.GetProgress().GetChunksEmbedded(); got != 1204 {
+		t.Fatalf("JSON chunks_embedded = %d, want 1204", got)
+	}
+	if got := decoded.GetProgress().GetReuseVectorsLoaded(); got != 2400 {
+		t.Fatalf("JSON reuse_vectors_loaded = %d, want 2400", got)
 	}
 }
 

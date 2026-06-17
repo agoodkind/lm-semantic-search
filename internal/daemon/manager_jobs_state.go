@@ -63,8 +63,11 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	job.Progress.FilesSkippedOversize = progress.FilesSkippedOversize
 	job.Progress.FilesSkippedUnreadable = progress.FilesSkippedUnreadable
 	job.Progress.FilesPending = progress.FilesPending
+	job.Progress.ChunksProcessed = progress.ChunksProcessed
 	job.Progress.ChunksReused = progress.ChunksReused
+	job.Progress.ChunksEmbedded = progress.ChunksEmbedded
 	job.Progress.ChunksGenerated = progress.ChunksGenerated
+	job.Progress.ReuseVectorsLoaded = progress.ReuseVectorsLoaded
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
 	manager.jobs[jobID] = job
@@ -104,7 +107,7 @@ func (manager *Manager) updateCodebaseLiveTotalsLocked(job model.Job) {
 		codebase.LiveFileTotal = liveFiles
 		changed = true
 	}
-	liveChunks := max(job.Progress.ChunksTotal, job.Progress.ChunksReused+job.Progress.ChunksGenerated)
+	liveChunks := max(job.Progress.ChunksTotal, max(job.Progress.ChunksProcessed, job.Progress.ChunksReused+job.Progress.ChunksEmbedded))
 	if liveChunks > codebase.LiveChunkTotal {
 		codebase.LiveChunkTotal = liveChunks
 		changed = true
@@ -174,7 +177,12 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	job.Progress.OverallPercent = 100
 	job.Progress.FilesProcessed = result.IndexedFiles
 	job.Progress.FilesTotal = result.IndexedFiles
-	job.Progress.ChunksGenerated = result.TotalChunks
+	job.Progress.ChunksTotal = result.TotalChunks
+	if job.Progress.ChunksProcessed == 0 && job.Progress.ChunksReused == 0 && job.Progress.ChunksEmbedded == 0 {
+		job.Progress.ChunksProcessed = result.TotalChunks
+		job.Progress.ChunksEmbedded = result.TotalChunks
+	}
+	job.Progress.ChunksGenerated = job.Progress.ChunksEmbedded
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
 	if err := manager.appendJobLocked("job_completed", job); err != nil {

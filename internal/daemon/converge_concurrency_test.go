@@ -45,6 +45,8 @@ type fakeSemantic struct {
 	// Reindex actually received.
 	loadReuseForPrefix func(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
 	reusePrefixCalls   []reusePrefixCall
+	loadReuseForPath   func(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
+	reusePathCalls     []reusePathCall
 	reindexReuse       map[string]map[string][]float32
 	// conversationSearchPrefixes records the scope prefixes each conversation
 	// search received, so tests can prove id-set pushdown.
@@ -139,6 +141,12 @@ type reusePrefixCall struct {
 	Prefix     string
 }
 
+// reusePathCall records one exact-path reuse load.
+type reusePathCall struct {
+	Collection string
+	Path       string
+}
+
 func (f *fakeSemantic) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
 	f.mu.Lock()
 	f.reusePrefixCalls = append(f.reusePrefixCalls, reusePrefixCall{Collection: collectionName, Prefix: relativePathPrefix})
@@ -149,11 +157,27 @@ func (f *fakeSemantic) LoadReuseVectorsForPrefix(ctx context.Context, collection
 	return map[string][]float32{}, nil
 }
 
+func (f *fakeSemantic) LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error) {
+	f.mu.Lock()
+	f.reusePathCalls = append(f.reusePathCalls, reusePathCall{Collection: collectionName, Path: relativePath})
+	f.mu.Unlock()
+	if f.loadReuseForPath != nil {
+		return f.loadReuseForPath(ctx, collectionName, relativePath)
+	}
+	return map[string][]float32{}, nil
+}
+
 // reusePrefixCallsSnapshot returns a copy of the recorded prefix reuse loads.
 func (f *fakeSemantic) reusePrefixCallsSnapshot() []reusePrefixCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]reusePrefixCall(nil), f.reusePrefixCalls...)
+}
+
+func (f *fakeSemantic) reusePathCallsSnapshot() []reusePathCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]reusePathCall(nil), f.reusePathCalls...)
 }
 
 // reindexReuseSnapshot returns, per conversation id, a copy of the reuse map

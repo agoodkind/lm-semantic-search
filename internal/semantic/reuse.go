@@ -73,9 +73,38 @@ func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectio
 	return reuse, nil
 }
 
+// LoadReuseVectorsForPath reads one collection's chunks whose relativePath
+// exactly equals relativePath and returns the contentVectorKey -> vector map for
+// them. Code delta syncs load a changed file's current rows before the exact
+// path delete runs, so unchanged chunks inside the same file skip embedding
+// without reading prefix neighbors such as foo.go.backup.
+func (service *Service) LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error) {
+	reuse := make(map[string][]float32)
+	if !service.Available() || collectionName == "" || relativePath == "" {
+		return reuse, nil
+	}
+	if err := service.loadReuseVectorsFiltered(ctx, collectionName, relativePathExpression(relativePath), reuse); err != nil {
+		return nil, err
+	}
+	slog.DebugContext(
+		ctx, "semantic.reuse_vectors_loaded_for_path",
+		"collection", collectionName,
+		"path", relativePath,
+		"chunks", len(reuse),
+	)
+	return reuse, nil
+}
+
 // loadReuseVectorsFromCollection streams one whole source collection into reuse.
 func (service *Service) loadReuseVectorsFromCollection(ctx context.Context, collectionName string, reuse map[string][]float32) error {
 	return service.loadReuseVectorsFiltered(ctx, collectionName, relativePathFieldName+` != ""`, reuse)
+}
+
+// relativePathExpression renders a Milvus filter matching exactly one
+// relativePath value. Code-file reuse uses this instead of a prefix expression
+// so like-named neighbors never seed reuse for the target file.
+func relativePathExpression(relativePath string) string {
+	return fmt.Sprintf(`%s == "%s"`, relativePathFieldName, escapeMilvusString(relativePath))
 }
 
 // loadReuseVectorsFiltered streams the rows of one collection matching
