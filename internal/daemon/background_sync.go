@@ -201,6 +201,10 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 		if codebase.Kind == model.CodebaseKindDocument {
 			continue
 		}
+		if codebase.Status == model.CodebaseStatusQuarantined {
+			syncer.handleQuarantinedCodebase(ctx, codebase)
+			continue
+		}
 		if _, err := os.Stat(codebase.CanonicalPath); errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -246,6 +250,57 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 			}
 			slog.ErrorContext(iterCtx, "start sync job failed", "path", codebase.CanonicalPath, "err", err)
 		}
+	}
+}
+
+func (syncer *BackgroundSync) handleQuarantinedCodebase(ctx context.Context, codebase model.Codebase) {
+	if sourceDirMissing(codebase.CanonicalPath) {
+		syncer.manager.markCodebaseMissing(ctx, codebase.ID)
+		return
+	}
+
+	snapshotPath := syncer.manager.snapshotPathForCodebase(codebase)
+	snapshot := merkle.LoadSnapshotForConfig(snapshotPath, codebase.EffectiveConfig.IgnoreDigest, syncer.manager.legacyDigestForCodebase(codebase.ID))
+	currentSnapshot, rules, err := merkle.Capture(ctx, codebase.CanonicalPath, codebase.EffectiveConfig)
+	if err != nil {
+		slog.ErrorContext(ctx, "quarantine capture failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
+		return
+	}
+	syncer.manager.cacheResolvedRules(codebase.ID, rules)
+	diff := merkle.DiffSnapshots(snapshot, currentSnapshot)
+	signal, suspicious := assessDeltaDeleteWave(codebase, diff, snapshot)
+	if !suspicious {
+		syncer.manager.clearCodebaseQuarantine(ctx, codebase.ID, model.CodebaseStatusIndexed)
+		if diff.Empty() {
+			return
+		}
+		_, _, _, err = syncer.manager.SyncIndex(
+			ctx,
+			codebase.CanonicalPath,
+			model.ClientInfo{Name: "daemon-quarantine-release", PID: 0},
+		)
+		if err != nil && !syncConflictError(err) {
+			slog.ErrorContext(ctx, "start sync job after clearing quarantine failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
+		}
+		return
+	}
+
+	observations := syncer.manager.quarantineCodebase(ctx, codebase.ID, signal)
+	if observations < quarantineConfirmationObservations {
+		slog.WarnContext(ctx, "quarantine held after corroborating full scan", "codebase_id", codebase.ID, "missing_count", signal.missingCount, "total_count", signal.totalCount, "observations", observations)
+		return
+	}
+
+	job, codebase, deduplicated, err := syncer.manager.SyncIndex(
+		ctx,
+		codebase.CanonicalPath,
+		model.ClientInfo{Name: "daemon-quarantine-release", PID: 0},
+	)
+	_ = job
+	_ = codebase
+	_ = deduplicated
+	if err != nil && !syncConflictError(err) {
+		slog.ErrorContext(ctx, "start destructive sync after quarantine confirmation failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
 	}
 }
 

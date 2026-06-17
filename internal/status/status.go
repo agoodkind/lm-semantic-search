@@ -13,13 +13,14 @@ type Display string
 
 // Display values.
 const (
-	DisplayPreparing Display = "preparing"
-	DisplayIndexing  Display = "indexing"
-	DisplayIndexed   Display = "indexed"
-	DisplayWaiting   Display = "waiting"
-	DisplayStale     Display = "stale"
-	DisplayFailed    Display = "failed"
-	DisplayMissing   Display = "missing"
+	DisplayPreparing   Display = "preparing"
+	DisplayIndexing    Display = "indexing"
+	DisplayIndexed     Display = "indexed"
+	DisplayQuarantined Display = "quarantined"
+	DisplayWaiting     Display = "waiting"
+	DisplayStale       Display = "stale"
+	DisplayFailed      Display = "failed"
+	DisplayMissing     Display = "missing"
 	// DisplayDiscovered is a worktree registered by a read but not yet built. It
 	// has no active job and is not searchable yet; the deferred build will move it
 	// to indexing. It reads distinctly from indexing (which implies live work) and
@@ -115,6 +116,7 @@ var displayRules = []displayRule{
 	{func(in Inputs) bool { return in.HasActiveJob && in.JobScopeKnown }, DisplayIndexing},
 	{func(in Inputs) bool { return in.HasActiveJob }, DisplayPreparing},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusDiscovered }, DisplayDiscovered},
+	{func(in Inputs) bool { return in.Status == model.CodebaseStatusQuarantined }, DisplayQuarantined},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusIndexed }, DisplayIndexed},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusStale }, DisplayStale},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusFailed }, DisplayFailed},

@@ -221,6 +221,10 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	if plan.handled {
 		return true
 	}
+	if signal, suspicious := assessDeltaDeleteWave(codebase, plan.diff, plan.seedSnapshot); suspicious {
+		manager.updateJobQuarantined(ctx, job.ID, signal)
+		return true
+	}
 	manager.setJobRunMode(job.ID, model.RunModeChanged)
 
 	// Record the change breakdown so the status and job views can report the

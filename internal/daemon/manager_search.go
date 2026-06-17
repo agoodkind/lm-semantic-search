@@ -43,6 +43,10 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 			StateNote: discoveredSearchNote(manager.worktreeReuseForecast(codebase)),
 		}, nil
 	}
+	stateNote := ""
+	if codebase.Status == model.CodebaseStatusQuarantined {
+		stateNote = quarantinedSearchNote(codebase.Quarantine)
+	}
 
 	// When the query targets a nested directory of a larger covering index, scope
 	// the search to that subtree so results come only from the requested path,
@@ -61,12 +65,12 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 				Codebase:  codebase,
 				ActiveJob: activeJob,
 				Results:   semantic.DeduplicateChunks(chunks),
-				StateNote: "",
+				StateNote: stateNote,
 			}, nil
 		case (errors.Is(semanticErr, semantic.ErrCollectionNotReady) ||
 			errors.Is(semanticErr, semantic.ErrSearchResultIncomplete)) &&
 			codebase.Status == model.CodebaseStatusIndexing:
-			return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: []model.StoredChunk{}, StateNote: ""}, nil
+			return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: []model.StoredChunk{}, StateNote: stateNote}, nil
 		case errors.Is(semanticErr, semantic.ErrCollectionMissing):
 			switch decideSearchCollectionMode(codebase, activeJob, collectionPresenceMissing) {
 			case searchCollectionModeAutomaticRepair:
@@ -94,12 +98,12 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 	chunks, err := store.ReadChunks(manager.chunkPath(codebase.ID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) && codebase.Status == model.CodebaseStatusIndexing {
-			return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: []model.StoredChunk{}, StateNote: ""}, nil
+			return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: []model.StoredChunk{}, StateNote: stateNote}, nil
 		}
 		slog.ErrorContext(ctx, "read chunk cache failed", "codebase_id", codebase.ID, "err", err)
 		return SearchOutcome{}, fmt.Errorf("read chunk cache for %s: %w", codebase.ID, err)
 	}
-	return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: rankChunks(chunks, query, limit, normalizedExtensions, relativePathPrefix), StateNote: ""}, nil
+	return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: rankChunks(chunks, query, limit, normalizedExtensions, relativePathPrefix), StateNote: stateNote}, nil
 }
 
 // discoveredSearchNote is the read-only note a search returns for a worktree the
@@ -111,6 +115,18 @@ func discoveredSearchNote(siblingCount int32) string {
 		note += fmt.Sprintf(" (reuses embeddings from %d indexed sibling %s)", siblingCount, plural("worktree", int(siblingCount)))
 	}
 	return note + ". Search again shortly."
+}
+
+func quarantinedSearchNote(quarantine *model.QuarantineState) string {
+	if quarantine == nil {
+		return "🔎 Search is serving the last known-good index while destructive sync is paused after a suspicious large disappearance."
+	}
+	return fmt.Sprintf(
+		"🔎 Search is serving the last known-good index while destructive sync is paused after a suspicious large disappearance (%d of %d tracked files in the last %s observation).",
+		quarantine.LastMissingCount,
+		quarantine.LastTotalCount,
+		defaultQuarantineTrigger(quarantine.LastTrigger),
+	)
 }
 
 // chunkUnderPrefix reports whether a chunk's relative path equals scopePrefix
