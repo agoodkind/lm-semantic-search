@@ -193,10 +193,6 @@ func (manager *Manager) classifyCodebaseRepair(
 		// A discovered worktree has no collection yet by design; its build is
 		// deferred, so the repair pass leaves it alone.
 		return repairOutcome{persist: false, cleanup: false, plan: nil}
-	case model.CodebaseStatusQuarantined:
-		// Quarantined codebases are owned by the background-sync corroboration
-		// loop, which decides whether to hold, clear, or resume destructive sync.
-		return repairOutcome{persist: false, cleanup: false, plan: nil}
 	default:
 		return repairOutcome{persist: false, cleanup: false, plan: nil}
 	}

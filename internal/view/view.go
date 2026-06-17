@@ -24,19 +24,6 @@ type FailureSurface struct {
 	TraceID       string
 }
 
-// QuarantineSurface is the resolved detail for a codebase whose destructive
-// sync is paused after a suspicious large disappearance.
-type QuarantineSurface struct {
-	HasQuarantine      bool
-	Reason             string
-	FirstObservedLabel string
-	LastObservedLabel  string
-	ObservationCount   int32
-	MissingCount       int32
-	TotalCount         int32
-	Trigger            string
-}
-
 // RunMode names what kind of pass a job is making.
 type RunMode string
 
@@ -405,7 +392,6 @@ type GetIndexView struct {
 	TemplateName       string
 	Status             StatusView
 	Failure            FailureSurface
-	Quarantine         QuarantineSurface
 	WaitLabel          string
 	ClassificationLine string
 	ResolutionLines    []string
@@ -459,7 +445,6 @@ const (
 type DoctorView struct {
 	Diagnostics []string
 	Dropped     []string
-	Quarantined []string
 }
 
 // CodebaseRowView is one row of the codebase list.

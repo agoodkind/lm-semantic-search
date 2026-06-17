@@ -18,7 +18,6 @@ func TestResolveDisplayBase(t *testing.T) {
 		{"active reconcile", Inputs{HasActiveJob: true, BackgroundSyncReconcile: true}, DisplayIndexed},
 		{"active scoped", Inputs{HasActiveJob: true, JobScopeKnown: true}, DisplayIndexing},
 		{"active preparing", Inputs{HasActiveJob: true}, DisplayPreparing},
-		{"quarantined", Inputs{Status: model.CodebaseStatusQuarantined}, DisplayQuarantined},
 		{"indexed", Inputs{Status: model.CodebaseStatusIndexed}, DisplayIndexed},
 		{"stale", Inputs{Status: model.CodebaseStatusStale}, DisplayStale},
 		{"failed", Inputs{Status: model.CodebaseStatusFailed}, DisplayFailed},
@@ -34,20 +33,6 @@ func TestResolveDisplayBase(t *testing.T) {
 		if string(got) == string(model.CodebaseStatusNotIndexed) {
 			t.Errorf("%s: a tracked codebase must never present as not_indexed", testCase.name)
 		}
-	}
-}
-
-func TestResolveQuarantined(t *testing.T) {
-	t.Parallel()
-	surface := Resolve(Inputs{Status: model.CodebaseStatusQuarantined})
-	if surface.Display != DisplayQuarantined {
-		t.Fatalf("Display = %q, want %q", surface.Display, DisplayQuarantined)
-	}
-	if surface.Glyph != "⚠" {
-		t.Fatalf("Glyph = %q, want ⚠", surface.Glyph)
-	}
-	if surface.Label != "quarantined" {
-		t.Fatalf("Label = %q, want quarantined", surface.Label)
 	}
 }
 

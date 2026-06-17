@@ -15,11 +15,10 @@ const (
 )
 
 const (
-	displayFailed      view.Display = "failed"
-	displayMissing     view.Display = "missing"
-	displayQuarantined view.Display = "quarantined"
-	displayStale       view.Display = "stale"
-	displayDiscovered  view.Display = "discovered"
+	displayFailed     view.Display = "failed"
+	displayMissing    view.Display = "missing"
+	displayStale      view.Display = "stale"
+	displayDiscovered view.Display = "discovered"
 )
 
 // StartIndex formats the start-index acknowledgment.
@@ -181,8 +180,6 @@ func renderGetIndexBody(getIndex view.GetIndexView) string {
 		return renderHistoricalFailure(getIndex.CanonicalPath, getIndex.Failure)
 	case displayMissing:
 		return renderMissingStatus(getIndex.CanonicalPath)
-	case displayQuarantined:
-		return renderQuarantinedStatus(getIndex.CanonicalPath, getIndex.Quarantine, getIndex.Status)
 	case displayStale:
 		return renderStaleStatus(getIndex.CanonicalPath, getIndex.Failure)
 	default:
@@ -203,25 +200,6 @@ func renderMissingStatus(canonicalPath string) string {
 		"🚫 Codebase '%s' source directory is missing.\n💡 Re-create the directory to resume indexing, or call clear_index to drop the index.",
 		canonicalPath,
 	)
-}
-
-func renderQuarantinedStatus(canonicalPath string, quarantine view.QuarantineSurface, statusView view.StatusView) string {
-	lines := []string{
-		fmt.Sprintf("⚠️ Codebase '%s' is quarantined after a suspicious large disappearance.", canonicalPath),
-		"🔒 Search continues to serve the last known-good index while destructive sync is paused.",
-	}
-	if statusView.HasStats {
-		lines = append(lines, fmt.Sprintf("📊 Last known good index: %s files, %s chunks", formatCountString(statusView.Files), formatCountString(statusView.Chunks)))
-	}
-	if quarantine.HasQuarantine {
-		lines = append(lines, fmt.Sprintf("🧾 Last signal: %s of %s tracked files in a %s observation", formatCountString(quarantine.MissingCount), formatCountString(quarantine.TotalCount), orDefault(quarantine.Trigger, "suspicious")))
-		lines = append(lines, fmt.Sprintf("🕐 First observed: %s · Last observed: %s · Observations: %s", orDefault(quarantine.FirstObservedLabel, "unknown"), orDefault(quarantine.LastObservedLabel, "unknown"), formatCountString(quarantine.ObservationCount)))
-		if strings.TrimSpace(quarantine.Reason) != "" {
-			lines = append(lines, "🚧 "+quarantine.Reason)
-		}
-	}
-	lines = append(lines, "💡 The daemon will re-check automatically and only apply deletes after later full-scan corroboration.")
-	return strings.Join(lines, "\n")
 }
 
 // renderHistoricalFailure reads as past tense so callers do not mistake an
@@ -497,19 +475,7 @@ func renderDoctor(doctor view.DoctorView) string {
 		}
 		body = strings.Join(lines, "\n")
 	}
-	return body + "\n\n" + renderQuarantinedSection(doctor) + "\n\n" + renderDroppedSection(doctor)
-}
-
-func renderQuarantinedSection(doctor view.DoctorView) string {
-	if len(doctor.Quarantined) == 0 {
-		return "Quarantined codebases (destructive sync paused after suspicious disappearance): none"
-	}
-	lines := make([]string, 0, len(doctor.Quarantined)+1)
-	lines = append(lines, fmt.Sprintf("Quarantined codebases (destructive sync paused after suspicious disappearance): %d", len(doctor.Quarantined)))
-	for _, diagnostic := range doctor.Quarantined {
-		lines = append(lines, "- "+diagnostic)
-	}
-	return strings.Join(lines, "\n")
+	return body + "\n\n" + renderDroppedSection(doctor)
 }
 
 func renderDroppedSection(doctor view.DoctorView) string {

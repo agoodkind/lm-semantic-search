@@ -46,7 +46,7 @@ func decideStartIndexMode(codebaseFound bool, status model.CodebaseStatus, confi
 
 	switch status {
 	case model.CodebaseStatusFailed, model.CodebaseStatusStale, model.CodebaseStatusIndexing,
-		model.CodebaseStatusMissing, model.CodebaseStatusQuarantined:
+		model.CodebaseStatusMissing:
 		if presence == collectionPresenceMissing {
 			return startIndexModeBootstrap
 		}
@@ -89,7 +89,7 @@ func shouldResumeInterruptedBuild(codebase model.Codebase, hasActiveJob bool) bo
 	case model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed, model.CodebaseStatusMissing:
 		return true
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed,
-		model.CodebaseStatusDiscovered, model.CodebaseStatusQuarantined:
+		model.CodebaseStatusDiscovered:
 		// A discovered worktree's build is driven by the deferred timer and the
 		// periodic sweep, not the interrupted-build resume path.
 		return false
@@ -106,7 +106,7 @@ func shouldQueueMissingCollectionRepair(codebase model.Codebase, hasActiveJob bo
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale:
 		return true
 	case model.CodebaseStatusNotIndexed, model.CodebaseStatusIndexing, model.CodebaseStatusFailed,
-		model.CodebaseStatusMissing, model.CodebaseStatusDiscovered, model.CodebaseStatusQuarantined:
+		model.CodebaseStatusMissing, model.CodebaseStatusDiscovered:
 		return false
 	default:
 		return false
