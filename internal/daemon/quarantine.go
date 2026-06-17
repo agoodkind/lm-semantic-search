@@ -24,6 +24,7 @@ const (
 	quarantineTriggerFullScan                 = "full_scan"
 	quarantineReasonWatcherLargeDelete        = "Watcher reported a suspiciously large delete wave, so destructive sync is paused until a full scan corroborates it."
 	quarantineReasonFullScanLargeDelete       = "A full scan still sees a suspiciously large delete wave, so destructive sync remains paused until the signal repeats."
+	quarantineReasonVCSTransient              = "A git operation (checkout, rebase, merge, or similar) is in progress, so a large disappearance is treated as transient and destructive sync is paused until it settles."
 )
 
 type quarantineSignal struct {
@@ -78,13 +79,30 @@ func assessWatcherDeleteWave(codebase model.Codebase, snapshot merkle.Snapshot, 
 	if sourceDirMissing(root) {
 		return emptyQuarantineSignal(), false
 	}
+	// Count only paths that are BOTH tracked in the snapshot AND now absent on
+	// disk. The raw watcher batch can carry untracked churn (.git, node_modules,
+	// build output) that floods in while ResolvedIgnoreRules is still empty at
+	// watcher-add time; counting those inflates missingCount past the tracked
+	// total and produces the impossible "N of M" where N exceeds M. The
+	// full-scan path already restricts to tracked files via diff.Removed.
 	missingCount := int32(0)
 	for _, relativePath := range relativePaths {
+		if !snapshot.HasFile(relativePath) {
+			continue
+		}
 		if !fileExists(filepath.Join(root, relativePath)) {
 			missingCount++
 		}
 	}
 	totalCount := trackedFileTotalForSuspicion(codebase, snapshot)
+	if vcsLargeRemovalInProgress(codebase, root, missingCount) {
+		return quarantineSignal{
+			reason:       quarantineReasonVCSTransient,
+			trigger:      quarantineTriggerWatcher,
+			missingCount: missingCount,
+			totalCount:   totalCount,
+		}, true
+	}
 	if !shouldQuarantineLargeRemoval(codebase, missingCount, totalCount) {
 		return emptyQuarantineSignal(), false
 	}
@@ -94,6 +112,45 @@ func assessWatcherDeleteWave(codebase model.Codebase, snapshot merkle.Snapshot, 
 		missingCount: missingCount,
 		totalCount:   totalCount,
 	}, true
+}
+
+// vcsLargeRemovalInProgress reports whether a meaningful number of tracked
+// files are missing while a git operation that transiently removes files is
+// mid-flight. Such removals are expected to reverse when the operation
+// finishes, so the daemon pauses (quarantines) instead of deleting index rows,
+// even when the removal is below the normal suspicious ratio.
+func vcsLargeRemovalInProgress(codebase model.Codebase, root string, missingCount int32) bool {
+	if codebase.Kind != model.CodebaseKindCode {
+		return false
+	}
+	if missingCount < suspiciousRemovalAbsoluteThreshold {
+		return false
+	}
+	return vcsOperationInProgress(root)
+}
+
+// vcsOperationInProgress reports whether a git operation that transiently
+// removes or rewrites tracked files is mid-flight (checkout, rebase, merge,
+// cherry-pick, revert, bisect). Files vanish and reappear during these, so a
+// disappearance observed while one is active must pause, never drive deletes.
+// It assumes a regular .git directory; worktrees and submodules that use a
+// .git file pointing elsewhere are not resolved here.
+func vcsOperationInProgress(root string) bool {
+	gitDir := filepath.Join(root, ".git")
+	for _, marker := range []string{
+		"index.lock",
+		"MERGE_HEAD",
+		"CHERRY_PICK_HEAD",
+		"REVERT_HEAD",
+		"BISECT_LOG",
+		"rebase-apply",
+		"rebase-merge",
+	} {
+		if fileExists(filepath.Join(gitDir, marker)) {
+			return true
+		}
+	}
+	return false
 }
 
 func assessDeltaDeleteWave(codebase model.Codebase, diff merkle.Diff, snapshot merkle.Snapshot) (quarantineSignal, bool) {

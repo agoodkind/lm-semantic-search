@@ -272,6 +272,169 @@ func TestQuarantineLargeDeleteGRPCE2ERealSemanticService(t *testing.T) {
 	}
 }
 
+// TestWatcherUntrackedChurnDoesNotQuarantineRealSemanticService is the
+// integration form of the exact failure: a healthy indexed repo whose tracked
+// files are all present, plus a large untracked subtree (.git churn) that is
+// created and deleted. Driving the deleted untracked paths plus the present
+// tracked paths through the watcher converge seam must not quarantine and must
+// not delete any Milvus rows.
+func TestWatcherUntrackedChurnDoesNotQuarantineRealSemanticService(t *testing.T) {
+	requireRealStack(t)
+
+	embedServer := newTestEmbeddingServer(t)
+	manager, repoPath := newRealSemanticManager(t, embedServer.URL)
+	service, ok := manager.semantic.(*semantic.Service)
+	if !ok {
+		t.Fatalf("manager.semantic type = %T, want *semantic.Service", manager.semantic)
+	}
+
+	seeded := seedRealIndexedCodebase(t, manager, repoPath, 120)
+	beforeCount, err := service.Count(context.Background(), seeded.CanonicalPath)
+	if err != nil {
+		t.Fatalf("Count(before) returned error: %v", err)
+	}
+
+	churnPaths, removeAll := createUntrackedChurnSubtree(t, repoPath, ".git/objects/pack", 300)
+	removeAll()
+
+	batch := make([]string, 0, len(churnPaths)+120)
+	batch = append(batch, churnPaths...)
+	for index := 0; index < 120; index++ {
+		batch = append(batch, fmt.Sprintf("f%03d.go", index))
+	}
+	if err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
+	if err != nil || !found {
+		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
+	}
+	if codebase.Status != model.CodebaseStatusIndexed {
+		t.Fatalf("status = %q, want indexed; untracked churn must not quarantine", codebase.Status)
+	}
+	if codebase.Quarantine != nil {
+		t.Fatalf("Quarantine = %+v, want nil for untracked churn", codebase.Quarantine)
+	}
+
+	afterCount, err := service.Count(context.Background(), seeded.CanonicalPath)
+	if err != nil {
+		t.Fatalf("Count(after) returned error: %v", err)
+	}
+	if afterCount != beforeCount {
+		t.Fatalf("Count(after) = %d, want unchanged %d", afterCount, beforeCount)
+	}
+}
+
+// TestWatcherTrackedMassDeleteQuarantinesRealSemanticService is the regression
+// guard for the watcher path: a genuine mass-delete of tracked files driven
+// through converge still quarantines and still serves the last known-good index
+// without dropping rows.
+func TestWatcherTrackedMassDeleteQuarantinesRealSemanticService(t *testing.T) {
+	requireRealStack(t)
+
+	embedServer := newTestEmbeddingServer(t)
+	manager, repoPath := newRealSemanticManager(t, embedServer.URL)
+	service, ok := manager.semantic.(*semantic.Service)
+	if !ok {
+		t.Fatalf("manager.semantic type = %T, want *semantic.Service", manager.semantic)
+	}
+
+	seeded := seedRealIndexedCodebase(t, manager, repoPath, 120)
+	beforeCount, err := service.Count(context.Background(), seeded.CanonicalPath)
+	if err != nil {
+		t.Fatalf("Count(before) returned error: %v", err)
+	}
+
+	removeLargeDeleteFixturePrefix(t, repoPath, 110)
+
+	batch := make([]string, 0, 120)
+	for index := 0; index < 120; index++ {
+		batch = append(batch, fmt.Sprintf("f%03d.go", index))
+	}
+	if err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
+	if err != nil || !found {
+		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
+	}
+	if codebase.Status != model.CodebaseStatusQuarantined {
+		t.Fatalf("status = %q, want quarantined for a genuine tracked mass-delete", codebase.Status)
+	}
+	if codebase.Quarantine == nil || codebase.Quarantine.LastMissingCount != 110 || codebase.Quarantine.LastTotalCount != 120 {
+		t.Fatalf("quarantine = %+v, want 110 of 120", codebase.Quarantine)
+	}
+
+	afterCount, err := service.Count(context.Background(), seeded.CanonicalPath)
+	if err != nil {
+		t.Fatalf("Count(after) returned error: %v", err)
+	}
+	if afterCount != beforeCount {
+		t.Fatalf("Count(after) = %d, want unchanged %d while quarantined", afterCount, beforeCount)
+	}
+}
+
+// TestWatcherUntrackedChurnStaysIndexedGRPCE2ERealSemanticService asserts the
+// gRPC read surface after untracked churn: GetIndex reports indexed with no
+// quarantine prose and SearchCode serves normally with no last-known-good note.
+func TestWatcherUntrackedChurnStaysIndexedGRPCE2ERealSemanticService(t *testing.T) {
+	requireRealStack(t)
+
+	embedServer := newTestEmbeddingServer(t)
+	manager, repoPath := newRealSemanticManager(t, embedServer.URL)
+	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("lms-%d.sock", time.Now().UnixNano()))
+	stopServer := startGRPCServerForTest(t, manager, socketPath)
+	defer stopServer()
+
+	seeded := seedRealIndexedCodebase(t, manager, repoPath, 120)
+
+	connection, client, err := grpcutil.DialDaemon(context.Background(), socketPath)
+	if err != nil {
+		t.Fatalf("DialDaemon returned error: %v", err)
+	}
+	defer connection.Close()
+
+	churnPaths, removeAll := createUntrackedChurnSubtree(t, repoPath, ".git/objects/pack", 300)
+	removeAll()
+	batch := make([]string, 0, len(churnPaths)+120)
+	batch = append(batch, churnPaths...)
+	for index := 0; index < 120; index++ {
+		batch = append(batch, fmt.Sprintf("f%03d.go", index))
+	}
+	if err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+
+	indexResponse, err := client.GetIndex(grpcutil.WithCorrelation(context.Background()), &pb.GetIndexRequest{Path: repoPath})
+	if err != nil {
+		t.Fatalf("GetIndex RPC returned error: %v", err)
+	}
+	if indexResponse.GetCodebase().GetId() != seeded.ID {
+		t.Fatalf("codebase id = %q, want seeded ID %q", indexResponse.GetCodebase().GetId(), seeded.ID)
+	}
+	if indexResponse.GetCodebase().GetStatus() != string(model.CodebaseStatusIndexed) {
+		t.Fatalf("status = %q, want indexed", indexResponse.GetCodebase().GetStatus())
+	}
+	if strings.Contains(indexResponse.GetDisplayText(), "quarantined after a suspicious large disappearance") {
+		t.Fatalf("GetIndex display text wrongly shows quarantine:\n%s", indexResponse.GetDisplayText())
+	}
+
+	searchResponse, err := client.SearchCode(grpcutil.WithCorrelation(context.Background()), &pb.SearchCodeRequest{
+		Path:   repoPath,
+		Query:  "package main",
+		Limit:  5,
+		Client: &pb.ClientInfo{Name: "grpc-e2e"},
+	})
+	if err != nil {
+		t.Fatalf("SearchCode RPC returned error: %v", err)
+	}
+	if strings.Contains(searchResponse.GetDisplayText(), "last known-good index") {
+		t.Fatalf("SearchCode display text wrongly shows the quarantine note:\n%s", searchResponse.GetDisplayText())
+	}
+}
+
 func requireRealStack(t *testing.T) {
 	t.Helper()
 	if os.Getenv(realStackReuseEnv) != "1" {
@@ -531,6 +694,33 @@ func removeLargeDeleteFixturePrefix(t *testing.T, repoPath string, removeCount i
 		path := filepath.Join(repoPath, fmt.Sprintf("f%03d.go", index))
 		if err := os.Remove(path); err != nil {
 			t.Fatalf("Remove(%s) returned error: %v", path, err)
+		}
+	}
+}
+
+// createUntrackedChurnSubtree writes count files under an untracked subdir
+// (for example ".git/objects/pack" or "build") that is not part of the indexed
+// snapshot, and returns the slash-separated relative paths plus a closure that
+// deletes the whole subtree. It reproduces the .git and build-artifact churn
+// that historically inflated the watcher delete count.
+func createUntrackedChurnSubtree(t *testing.T, repoPath string, subdir string, count int) ([]string, func()) {
+	t.Helper()
+	base := filepath.Join(repoPath, filepath.FromSlash(subdir))
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) returned error: %v", base, err)
+	}
+	relativePaths := make([]string, 0, count)
+	for index := 0; index < count; index++ {
+		relative := subdir + "/" + fmt.Sprintf("obj%05d.bin", index)
+		full := filepath.Join(repoPath, filepath.FromSlash(relative))
+		if err := os.WriteFile(full, []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) returned error: %v", full, err)
+		}
+		relativePaths = append(relativePaths, relative)
+	}
+	return relativePaths, func() {
+		if err := os.RemoveAll(base); err != nil {
+			t.Fatalf("RemoveAll(%s) returned error: %v", base, err)
 		}
 	}
 }

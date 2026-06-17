@@ -259,6 +259,15 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(ctx context.Context, cod
 		return
 	}
 
+	// Never advance toward destructive sync or clear quarantine while a git
+	// operation is mid-flight: tracked files legitimately vanish during a
+	// checkout, rebase, or merge and reappear when it finishes. Hold the
+	// quarantine and re-evaluate on a later sweep once the tree settles.
+	if vcsOperationInProgress(codebase.CanonicalPath) {
+		slog.WarnContext(ctx, "quarantine held during vcs operation", "codebase_id", codebase.ID, "path", codebase.CanonicalPath)
+		return
+	}
+
 	snapshotPath := syncer.manager.snapshotPathForCodebase(codebase)
 	snapshot := merkle.LoadSnapshotForConfig(snapshotPath, codebase.EffectiveConfig.IgnoreDigest, syncer.manager.legacyDigestForCodebase(codebase.ID))
 	currentSnapshot, rules, err := merkle.Capture(ctx, codebase.CanonicalPath, codebase.EffectiveConfig)
