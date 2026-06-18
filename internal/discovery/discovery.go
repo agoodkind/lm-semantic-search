@@ -500,14 +500,7 @@ func (walker *combinedWalker) readIgnoreEntries(ctx context.Context, currentDir 
 // codebase root) disables the check. Submodules and unrelated nested repos
 // resolve to a different common dir and are not treated as boundaries.
 func isSameRepoWorktree(dir string, rootCommonDir string) bool {
-	if rootCommonDir == "" {
-		return false
-	}
-	dirCommon, ok := gitworktree.CommonDirAt(dir)
-	if !ok {
-		return false
-	}
-	return dirCommon == rootCommonDir
+	return gitworktree.WorktreeOfRepo(dir, rootCommonDir)
 }
 
 // walkGitignore reads every .gitignore file under root (recursively) and
