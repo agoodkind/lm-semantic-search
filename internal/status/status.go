@@ -79,6 +79,10 @@ type Inputs struct {
 	Dependency DependencyMode
 	// Search is the resolved search outcome, or SearchNone outside a search call.
 	Search SearchOutcome
+	// SearchableEligible reports whether the queried path is in-scope indexed, so
+	// search could serve it when the backend is up. It is the per-path precondition
+	// the searchable fold combines with the dependency health.
+	SearchableEligible bool
 }
 
 // Surface is the fully resolved view model. Every field is decided here so the
@@ -97,6 +101,10 @@ type Surface struct {
 	BannerHeadline string
 	// StateNote is the read-only search note for the outcome, empty when none.
 	StateNote string
+	// Searchable reports whether a search can serve the path right now: it is
+	// in-scope indexed and the shared backend is not degraded. The wire
+	// `searchable` field and any "ready to search" surface read this one value.
+	Searchable bool
 }
 
 // displayRule is one row of the declarative display table: a predicate over the
@@ -147,6 +155,16 @@ func ResolveDisplay(in Inputs) Display {
 	return base
 }
 
+// ResolveSearchable reports whether a path can serve a search right now. A path
+// is searchable only when it is in-scope indexed (SearchableEligible) AND the
+// shared backend is not degraded, so a store or embedder outage flips it false
+// even while the on-disk classification stays indexed. This is the single place
+// the searchable fold lives, so the wire `searchable` field and the display
+// status both derive from one resolution and cannot disagree.
+func ResolveSearchable(in Inputs) bool {
+	return in.SearchableEligible && !in.Dependency.Degraded()
+}
+
 // Resolve turns the normalized inputs into the fully resolved surface.
 func Resolve(in Inputs) Surface {
 	display := ResolveDisplay(in)
@@ -157,6 +175,7 @@ func Resolve(in Inputs) Surface {
 		BannerPresent:  in.Dependency.Degraded(),
 		BannerHeadline: BannerHeadlineFor(in.Dependency),
 		StateNote:      StateNoteFor(in.Search),
+		Searchable:     ResolveSearchable(in),
 	}
 }
 

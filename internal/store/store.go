@@ -112,7 +112,7 @@ func ReadJobEvents(path string) (map[string]model.Job, error) {
 		slog.Error("open jobs journal failed", "path", path, "err", err)
 		return nil, fmt.Errorf("open jobs journal %s: %w", path, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	jobs := map[string]model.Job{}
 	scanner := bufio.NewScanner(file)

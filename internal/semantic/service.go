@@ -19,6 +19,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -413,8 +414,8 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...))
 		if err != nil {
 			slog.ErrorContext(ctx, "hybrid search failed", "collection", collectionName, "err", err)
-			if strings.Contains(err.Error(), "collection not loaded") {
-				return nil, ErrCollectionNotReady
+			if sentinel := storeSearchSentinel(err); sentinel != nil {
+				return nil, sentinel
 			}
 			return nil, fmt.Errorf("hybrid search collection %s: %w", collectionName, err)
 		}
@@ -433,8 +434,8 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 	resultSets, err := service.milvus.Search(ctx, searchOption)
 	if err != nil {
 		slog.ErrorContext(ctx, "dense search failed", "collection", collectionName, "err", err)
-		if strings.Contains(err.Error(), "collection not loaded") {
-			return nil, ErrCollectionNotReady
+		if sentinel := storeSearchSentinel(err); sentinel != nil {
+			return nil, sentinel
 		}
 		return nil, fmt.Errorf("search collection %s: %w", collectionName, err)
 	}
@@ -504,6 +505,9 @@ func (service *Service) HasCollectionForPath(ctx context.Context, codebasePath s
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "check Milvus collection presence failed", "collection", collectionName, "err", err)
+		if storeUnavailable(err) {
+			return false, adapterr.NewMilvusUnavailable(fmt.Errorf("check Milvus collection %s: %w", collectionName, err))
+		}
 		return false, fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
 	}
 	return hasCollection, nil

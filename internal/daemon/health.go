@@ -181,11 +181,44 @@ func (manager *Manager) refreshDependencyHealth(ctx context.Context) {
 // for the render layer. It clears a boot-time store banner when the cached
 // semantic service has already reconnected, so a status read observes recovery
 // without adding a live dependency probe.
+//
+// A reconnected client only proves the metadata channel answers, not that the
+// query plane can serve a search, so this recovery shortcut is suppressed when a
+// data-plane probe ran within the debounce window: that probe is authoritative,
+// including a verdict that the store is unavailable while the client is merely
+// connected (the metadata-up / query-down window after a restart). Without a
+// recent probe the reconnect shortcut still clears the boot banner as before.
 func (manager *Manager) DependencyHealth() dependencyHealth {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.health.Mode == dependencyStoreUnavailable && manager.semantic != nil && manager.semantic.Available() {
+	probeFresh := !manager.lastDepProbeAt.IsZero() && clock.Now().Sub(manager.lastDepProbeAt) < dependencyProbeInterval
+	if !probeFresh && manager.health.Mode == dependencyStoreUnavailable && manager.semantic != nil && manager.semantic.Available() {
 		manager.noteDependencyHealthyLocked()
 	}
 	return manager.health
+}
+
+// pathDependencyMode folds the global shared-dependency health with the per-path
+// collection-load check into one dependency mode for a single-path surface
+// (GetIndex). The global probe (refreshDependencyHealth) covers store
+// reachability, and real embed outcomes on the search and index paths cover the
+// embedder; this adds the per-path precondition that the collection serving
+// canonicalPath is loaded into query nodes now. A path whose collection is not
+// loaded, or whose load state the store cannot answer, reads store-unavailable,
+// so the searchable bit and the displayed status both fall to not-searchable /
+// waiting through the one status resolver. A non-indexed path skips the per-path
+// check and reflects only the global mode.
+func (manager *Manager) pathDependencyMode(ctx context.Context, canonicalPath string, searchableEligible bool) dependencyMode {
+	manager.refreshDependencyHealth(ctx)
+	if global := manager.DependencyHealth(); global.Degraded() {
+		return global.Mode
+	}
+	if !searchableEligible || manager.semantic == nil || canonicalPath == "" {
+		return dependencyHealthy
+	}
+	loaded, err := manager.semantic.CollectionSearchable(ctx, canonicalPath)
+	if err != nil || !loaded {
+		return dependencyStoreUnavailable
+	}
+	return dependencyHealthy
 }

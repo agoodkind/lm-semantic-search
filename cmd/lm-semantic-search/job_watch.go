@@ -41,7 +41,7 @@ func watchJob(options cliOptions, jobID string, timeout time.Duration) error {
 		slog.Error("dial daemon for job watch failed", "socket_path", options.socketPath, "err", err)
 		return fmt.Errorf("dial daemon: %w", err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	ticker := time.NewTicker(watchPollInterval)
 	defer ticker.Stop()

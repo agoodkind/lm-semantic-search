@@ -106,7 +106,7 @@ func run(rootContext context.Context) error {
 		slog.ErrorContext(rootContext, "listen on unix socket failed", "path", cfg.SocketPath, "err", err)
 		return fmt.Errorf("listen on unix socket %s: %w", cfg.SocketPath, err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	manager, err := daemon.NewManager(rootContext, cfg)
 	if err != nil {

@@ -50,7 +50,7 @@ func callDaemon(options cliOptions, call rpcCall) (protoMessage, error) {
 		slog.Error("dial daemon failed", "socket_path", options.socketPath, "err", err)
 		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	result, err := call(ctx, client)
 	if err != nil {
