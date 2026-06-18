@@ -157,10 +157,11 @@ func (watcher *Watcher) dispatch(event notify.EventInfo) {
 		return
 	}
 	for _, root := range covers {
-		if coveredByNestedWorktree(root, covers) {
-			// A nested same-repo worktree (its own codebase) owns this path, so
-			// the parent root must not also index it, matching the discovery walk
-			// boundary that stops the parent scan at a sibling worktree.
+		if gitworktree.PathInsideNestedWorktree(root.root, root.commonDir, path) {
+			// A nested same-repo worktree owns this path, so the parent root must
+			// not also index it. This reads the on-disk .git topology, so the
+			// boundary holds whether or not the worktree is registered as its own
+			// codebase yet, matching the discovery walk boundary.
 			continue
 		}
 		relativePath, err := filepath.Rel(root.root, path)
@@ -176,31 +177,6 @@ func (watcher *Watcher) dispatch(event notify.EventInfo) {
 		}
 		watcher.queue.Enqueue(root.codebaseID, relativePath)
 	}
-}
-
-// coveredByNestedWorktree reports whether the event path, already covered by
-// root, actually belongs to a nested git worktree of root's repository that is
-// its own tracked codebase. covers holds every root covering the path. A nested
-// covering root that shares root's non-empty common dir is a sibling worktree of
-// the same repo, so that worktree owns the path and the parent root skips it.
-// This mirrors the discovery walk, which stops the parent index at a same-repo
-// nested worktree (isSameRepoWorktree).
-func coveredByNestedWorktree(root watchRoot, covers []watchRoot) bool {
-	if root.commonDir == "" {
-		return false
-	}
-	for _, other := range covers {
-		if other.codebaseID == root.codebaseID {
-			continue
-		}
-		if other.commonDir != root.commonDir {
-			continue
-		}
-		if strings.HasPrefix(other.root, root.root+string(os.PathSeparator)) {
-			return true
-		}
-	}
-	return false
 }
 
 func covering(roots []watchRoot, path string) []watchRoot {
