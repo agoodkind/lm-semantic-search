@@ -336,6 +336,25 @@ func renderTimingLines(timing view.TimingView) []string {
 	return lines
 }
 
+// jobListDivider is the thin rule drawn between consecutive jobs in the human
+// `job list` output. It is a bare box-drawing dash, not the ├─/└─ tree
+// connectors, so it stays clear of the breakdown vocabulary guard.
+var jobListDivider = strings.Repeat("─", 40)
+
+// appendJobEntries appends each job block, separating consecutive blocks with a
+// blank line, the divider, and a blank line. The separator sits only between
+// jobs, never before the first or after the last, so each job reads as its own
+// group.
+func appendJobEntries(lines []string, entries []view.JobEntryView) []string {
+	for index, entry := range entries {
+		if index > 0 {
+			lines = append(lines, "", jobListDivider, "")
+		}
+		lines = append(lines, renderJobListEntry(entry)...)
+	}
+	return lines
+}
+
 func renderListJobs(summary view.ListSummary, active []view.JobEntryView, terminal []view.JobEntryView) string {
 	if summary.Total == 0 {
 		return "No tracked jobs."
@@ -349,10 +368,8 @@ func renderListJobs(summary view.ListSummary, active []view.JobEntryView, termin
 	if len(active) == 0 {
 		lines = append(lines, "", "No active jobs.")
 	} else {
-		lines = append(lines, "", "Active jobs:")
-		for _, entry := range active {
-			lines = append(lines, renderJobListEntry(entry)...)
-		}
+		lines = append(lines, "", "Active jobs:", "")
+		lines = appendJobEntries(lines, active)
 	}
 	const recentTerminalLimit = 8
 	if len(terminal) == 0 {
@@ -360,17 +377,13 @@ func renderListJobs(summary view.ListSummary, active []view.JobEntryView, termin
 	}
 	lines = append(lines, "")
 	if len(terminal) > recentTerminalLimit {
-		lines = append(lines, fmt.Sprintf("Recent terminal jobs: showing %d of %d", recentTerminalLimit, len(terminal)))
-		for _, entry := range terminal[:recentTerminalLimit] {
-			lines = append(lines, renderJobListEntry(entry)...)
-		}
-		lines = append(lines, "Use `job get JOB_ID` or `--json` for full history.")
+		lines = append(lines, fmt.Sprintf("Recent terminal jobs: showing %d of %d", recentTerminalLimit, len(terminal)), "")
+		lines = appendJobEntries(lines, terminal[:recentTerminalLimit])
+		lines = append(lines, "", "Use `job get JOB_ID` or `--json` for full history.")
 		return strings.Join(lines, "\n")
 	}
-	lines = append(lines, fmt.Sprintf("Terminal jobs: %d", len(terminal)))
-	for _, entry := range terminal {
-		lines = append(lines, renderJobListEntry(entry)...)
-	}
+	lines = append(lines, fmt.Sprintf("Terminal jobs: %d", len(terminal)), "")
+	lines = appendJobEntries(lines, terminal)
 	return strings.Join(lines, "\n")
 }
 
