@@ -236,6 +236,91 @@ func TestSiblingWorktreeRootsOmitsMissingDir(t *testing.T) {
 	}
 }
 
+func TestWorktreeOfRepo(t *testing.T) {
+	base := t.TempDir()
+	linkedDir := filepath.Join(base, "feature")
+	mainRoot, commonDir := buildRepo(t, "ref: refs/heads/main\n", []linkedSpec{
+		{name: "feature", dir: linkedDir, head: "ref: refs/heads/feature\n"},
+	})
+
+	if !WorktreeOfRepo(linkedDir, commonDir) {
+		t.Errorf("WorktreeOfRepo(linked, commonDir) = false, want true")
+	}
+	if !WorktreeOfRepo(mainRoot, commonDir) {
+		t.Errorf("WorktreeOfRepo(main, commonDir) = false, want true")
+	}
+	if WorktreeOfRepo(base, commonDir) {
+		t.Errorf("WorktreeOfRepo(non-git dir, commonDir) = true, want false")
+	}
+	if WorktreeOfRepo(linkedDir, "") {
+		t.Errorf("WorktreeOfRepo(linked, empty commonDir) = true, want false")
+	}
+
+	// A submodule's .git resolves to a different common dir, so it must not match
+	// the superproject's common dir.
+	superRoot := filepath.Join(base, "super")
+	writeFile(t, filepath.Join(superRoot, ".git", "HEAD"), "ref: refs/heads/main\n")
+	superCommon := resolved(t, filepath.Join(superRoot, ".git"))
+	subModuleDir := filepath.Join(superRoot, "vendor", "lib")
+	moduleGitDir := filepath.Join(superRoot, ".git", "modules", "lib")
+	writeFile(t, filepath.Join(moduleGitDir, "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(subModuleDir, ".git"), "gitdir: "+moduleGitDir+"\n")
+	if WorktreeOfRepo(subModuleDir, superCommon) {
+		t.Errorf("WorktreeOfRepo(submodule, superproject commonDir) = true, want false")
+	}
+}
+
+func TestPathInsideNestedWorktree(t *testing.T) {
+	// Build the fixture manually so the main root and the nested worktree share
+	// one base (buildRepo allocates its own TempDir, which would put a passed-in
+	// nested dir under a different root and defeat the prefix walk). The watcher
+	// scenario is a linked worktree nested under the repo's own .claude/worktrees.
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "repo")
+	gitDir := filepath.Join(mainRoot, ".git")
+	writeFile(t, filepath.Join(gitDir, "HEAD"), "ref: refs/heads/main\n")
+	commonDir := resolved(t, gitDir)
+
+	nestedWt := filepath.Join(mainRoot, ".claude", "worktrees", "feature")
+	perWt := filepath.Join(gitDir, "worktrees", "feature")
+	writeFile(t, filepath.Join(perWt, "commondir"), "../..\n")
+	writeFile(t, filepath.Join(perWt, "gitdir"), filepath.Join(nestedWt, ".git")+"\n")
+	writeFile(t, filepath.Join(perWt, "HEAD"), "ref: refs/heads/feature\n")
+	writeFile(t, filepath.Join(nestedWt, ".git"), "gitdir: "+perWt+"\n")
+
+	// A submodule nested inside the main worktree (different common dir).
+	subModuleDir := filepath.Join(mainRoot, "vendor", "lib")
+	moduleGitDir := filepath.Join(gitDir, "modules", "lib")
+	writeFile(t, filepath.Join(moduleGitDir, "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(subModuleDir, ".git"), "gitdir: "+moduleGitDir+"\n")
+
+	cases := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"file inside nested worktree", filepath.Join(nestedWt, "internal", "x.go"), true},
+		{"file nested at depth", filepath.Join(nestedWt, "a", "b", "c", "file.go"), true},
+		{"worktree .git pointer", filepath.Join(nestedWt, ".git"), true},
+		{"worktree root itself", nestedWt, true},
+		{"repo root itself", mainRoot, false},
+		{"parent file", filepath.Join(mainRoot, "main.go"), false},
+		{"plain nested dir file", filepath.Join(mainRoot, "internal", "x.go"), false},
+		{"submodule file", filepath.Join(subModuleDir, "lib.go"), false},
+		{"path outside root", filepath.Join(base, "elsewhere", "x.go"), false},
+	}
+	for _, testCase := range cases {
+		got := PathInsideNestedWorktree(mainRoot, commonDir, testCase.path)
+		if got != testCase.want {
+			t.Errorf("PathInsideNestedWorktree(%q) = %v, want %v", testCase.name, got, testCase.want)
+		}
+	}
+
+	if PathInsideNestedWorktree(mainRoot, "", filepath.Join(nestedWt, "x.go")) {
+		t.Errorf("PathInsideNestedWorktree with empty commonDir = true, want false")
+	}
+}
+
 func TestWorktreeTrackedTrueThenFalseAfterRemoval(t *testing.T) {
 	base := t.TempDir()
 	wtDir := filepath.Join(base, "feat")

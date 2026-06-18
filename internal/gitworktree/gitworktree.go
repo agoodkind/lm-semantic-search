@@ -89,6 +89,42 @@ func CommonDirAt(dir string) (string, bool) {
 	return commonDirFor(gitDirPath)
 }
 
+// WorktreeOfRepo reports whether dir is itself the root of a worktree belonging
+// to the repository identified by commonDir. It reads dir's own .git entry (no
+// upwalk) and compares its resolved common dir to commonDir, so a worktree of
+// the same repo matches while a submodule (a different common dir) and a plain
+// or non-git directory do not. This is the form a file scanner asks while
+// descending a tree.
+func WorktreeOfRepo(dir string, commonDir string) bool {
+	if commonDir == "" {
+		return false
+	}
+	dirCommon, ok := CommonDirAt(dir)
+	return ok && dirCommon == commonDir
+}
+
+// PathInsideNestedWorktree reports whether path lies inside a worktree of the
+// repository identified by rootCommonDir that is itself nested below rootPath.
+// It walks the directories from path up toward rootPath and returns true at the
+// first level that is a worktree of the same repo. rootPath itself is excluded
+// from the walk, so the repository's own .git never matches; a submodule
+// resolves to a different common dir and never matches. This is the form an
+// event handler asks about an arbitrary file path, the watcher's boundary.
+func PathInsideNestedWorktree(rootPath string, rootCommonDir string, path string) bool {
+	if rootCommonDir == "" {
+		return false
+	}
+	rootClean := filepath.Clean(rootPath)
+	current := filepath.Clean(path)
+	for current != rootClean && strings.HasPrefix(current, rootClean+string(os.PathSeparator)) {
+		if WorktreeOfRepo(current, rootCommonDir) {
+			return true
+		}
+		current = filepath.Dir(current)
+	}
+	return false
+}
+
 // WorktreeTracked reports whether commonDir still holds a linked-worktree admin
 // entry for worktreeRoot. git records one pointer per linked worktree at
 // commonDir/worktrees/<name>/gitdir, and `git worktree remove` deletes it, so a
