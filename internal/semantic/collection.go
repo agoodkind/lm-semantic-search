@@ -137,6 +137,21 @@ func (service *Service) ensureConversationScalarColumns(ctx context.Context, col
 	}
 	if len(added) > 0 {
 		slog.InfoContext(ctx, "semantic.conversation_scalar_columns_added", "collection", collectionName, "fields", strings.Join(added, ","), "count", len(added))
+		// Columns were just added to a collection that already holds rows, so
+		// those rows read null until backfilled. Run the no-reindex backfill in
+		// the background, detached from this request's cancellation, so this call
+		// returns promptly.
+		detached := context.WithoutCancel(ctx)
+		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.ErrorContext(detached, "conversation scalar backfill panic", "collection", collectionName, "err", fmt.Sprintf("panic: %v", recovered))
+				}
+			}()
+			if rows, backfillErr := service.BackfillConversationScalarColumns(detached, collectionName); backfillErr != nil {
+				slog.ErrorContext(detached, "conversation scalar backfill failed", "collection", collectionName, "rows", rows, "err", backfillErr)
+			}
+		}()
 	}
 	return nil
 }
