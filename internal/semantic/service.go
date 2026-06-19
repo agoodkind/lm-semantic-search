@@ -541,6 +541,7 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 	defer done(&err)
 
 	insertOption := milvusclient.NewColumnBasedInsertOption(collectionName)
+	conversationCollection := isConversationCollection(collectionName)
 
 	ids := make([]string, 0, len(chunks))
 	contents := make([]string, 0, len(chunks))
@@ -549,6 +550,7 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 	endLines := make([]int64, 0, len(chunks))
 	fileExtensions := make([]string, 0, len(chunks))
 	metadataValues := make([]string, 0, len(chunks))
+	scalars := newConversationScalarColumns(conversationCollection, len(chunks))
 
 	sanitizedCount := 0
 	for index, chunk := range chunks {
@@ -567,6 +569,7 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 		endLines = append(endLines, int64(chunk.EndLine))
 		fileExtensions = append(fileExtensions, fileExtension)
 		metadataValues = append(metadataValues, metadataValue)
+		scalars.append(chunk)
 	}
 	if sanitizedCount > 0 {
 		slog.WarnContext(ctx, "semantic.insertBatch sanitized chunks before Milvus marshal", "collection", collectionName, "sanitized", sanitizedCount, "batch_size", len(chunks))
@@ -581,6 +584,15 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 		WithVarcharColumn(fileExtensionFieldName, fileExtensions).
 		WithVarcharColumn(metadataFieldName, metadataValues).
 		WithFloatVectorColumn(denseVectorFieldName, len(vectors[0]), vectors)
+	if conversationCollection {
+		insertOption = insertOption.
+			WithVarcharColumn(conversationIDFieldName, scalars.conversationIDs).
+			WithVarcharColumn(parentConversationIDFieldName, scalars.parentConversationIDs).
+			WithVarcharColumn(roleFieldName, scalars.roles).
+			WithVarcharColumn(providerFieldName, scalars.providers).
+			WithInt64Column(timestampUnixFieldName, scalars.timestamps).
+			WithInt64Column(messageIndexFieldName, scalars.messageIndexes)
+	}
 
 	if _, err := service.milvus.Insert(ctx, insertOption); err != nil {
 		slog.ErrorContext(ctx, "insert Milvus batch failed", "collection", collectionName, "err", err)
