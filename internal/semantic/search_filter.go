@@ -49,8 +49,21 @@ func buildRelativePathPrefixFilter(relativePathPrefix string) string {
 	if trimmed == "" || trimmed == "." {
 		return ""
 	}
-	escaped := escapeMilvusString(trimmed)
-	return fmt.Sprintf(`(%s == "%s" or %s like "%s/%%")`, relativePathFieldName, escaped, relativePathFieldName, escaped)
+	return fmt.Sprintf(`(%s == "%s" or %s like "%s/%%")`, relativePathFieldName, escapeMilvusString(trimmed), relativePathFieldName, escapeMilvusLikePattern(trimmed))
+}
+
+// escapeMilvusLikePattern escapes a value for the literal portion of a Milvus
+// LIKE pattern: backslash and double-quote for the surrounding string literal,
+// plus the LIKE wildcards % and _ so they match literally. Without escaping the
+// wildcards, a conversation id containing _ or % would over-match neighbors,
+// which on the delete path could drop another conversation's rows. Backslash is
+// escaped first so the escape characters added for the other cases survive.
+func escapeMilvusLikePattern(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	value = strings.ReplaceAll(value, "%", `\%`)
+	value = strings.ReplaceAll(value, "_", `\_`)
+	return value
 }
 
 func buildExtensionFilter(extensionFilter []string) string {

@@ -5,15 +5,19 @@ import (
 	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
 // conversationSearchFilter narrows conversation retrieval by row attributes.
-// ConversationIDs additionally pushes into the vector store as path-prefix
-// scopes; every condition also applies to the decoded chunk after retrieval,
-// because role, timestamp, and message index live in the JSON metadata column
-// and are not filterable in Milvus, and the literal chunk-cache fallback has
-// no pushdown at all.
+// On the Milvus path every dimension except MinScore is pushed down as a native
+// scalar-column expression (see toSemanticFilter), so the vector search returns
+// the true top-K among matching rows. On the literal chunk-cache fallback, where
+// there is no pushdown, matches applies the same conditions per row before
+// ranking. MinScore is always a post-filter because it is the retrieval score,
+// not stored data.
 type conversationSearchFilter struct {
+	Providers            []string
+	WorkspaceRoots       []string
 	Roles                []string
 	FromUnix             int64
 	UntilUnix            int64
@@ -24,23 +28,34 @@ type conversationSearchFilter struct {
 	MessageIndexUntil    int32
 }
 
-// hasRowConditions reports whether any condition applies per row after
-// retrieval, which is what makes fetching more than the requested limit
-// worthwhile before filtering.
-func (filter conversationSearchFilter) hasRowConditions() bool {
-	return len(filter.Roles) > 0 ||
-		filter.FromUnix > 0 ||
-		filter.UntilUnix > 0 ||
-		len(filter.ConversationIDs) > 0 ||
-		filter.ParentConversationID != "" ||
-		filter.MinScore > 0 ||
-		filter.MessageIndexFrom > 0 ||
-		filter.MessageIndexUntil > 0
+// toSemanticFilter maps the request filter onto the engine's native scalar
+// filter. MinScore is intentionally excluded: it is applied as a post-filter on
+// the returned score, not as a column expression.
+func (filter conversationSearchFilter) toSemanticFilter() semantic.ConversationFilter {
+	return semantic.ConversationFilter{
+		Providers:            filter.Providers,
+		WorkspaceRoots:       filter.WorkspaceRoots,
+		Roles:                filter.Roles,
+		ConversationIDs:      filter.ConversationIDs,
+		ParentConversationID: filter.ParentConversationID,
+		FromUnix:             filter.FromUnix,
+		UntilUnix:            filter.UntilUnix,
+		MessageIndexFrom:     filter.MessageIndexFrom,
+		MessageIndexUntil:    filter.MessageIndexUntil,
+	}
 }
 
-// matches reports whether one retrieved chunk satisfies every set condition.
-// Time and index bounds are inclusive at from and exclusive at until.
-func (filter conversationSearchFilter) matches(chunk model.StoredChunk) bool {
+// matchesScope reports whether one chunk satisfies every set condition except
+// MinScore. The literal cache fallback applies it BEFORE ranking, so the scope
+// pre-filters the candidate set rather than truncating an unfiltered ranking.
+// MinScore is excluded here because a chunk's Score is only set by ranking.
+func (filter conversationSearchFilter) matchesScope(chunk model.StoredChunk) bool {
+	if len(filter.Providers) > 0 && !slices.Contains(filter.Providers, providerFromConversationID(chunk.ConversationID)) {
+		return false
+	}
+	if len(filter.WorkspaceRoots) > 0 && !slices.Contains(filter.WorkspaceRoots, chunk.WorkspaceRoot) {
+		return false
+	}
 	if len(filter.ConversationIDs) > 0 && !slices.Contains(filter.ConversationIDs, chunk.ConversationID) {
 		return false
 	}
@@ -56,9 +71,6 @@ func (filter conversationSearchFilter) matches(chunk model.StoredChunk) bool {
 	if filter.ParentConversationID != "" && chunk.ParentConversationID != filter.ParentConversationID {
 		return false
 	}
-	if filter.MinScore > 0 && chunk.Score < filter.MinScore {
-		return false
-	}
 	if filter.MessageIndexFrom > 0 && chunk.MessageIndex < filter.MessageIndexFrom {
 		return false
 	}
@@ -66,6 +78,29 @@ func (filter conversationSearchFilter) matches(chunk model.StoredChunk) bool {
 		return false
 	}
 	return true
+}
+
+// matches reports whether one retrieved chunk satisfies every set condition,
+// including MinScore. Applied after ranking has set the score.
+func (filter conversationSearchFilter) matches(chunk model.StoredChunk) bool {
+	if !filter.matchesScope(chunk) {
+		return false
+	}
+	if filter.MinScore > 0 && chunk.Score < filter.MinScore {
+		return false
+	}
+	return true
+}
+
+// providerFromConversationID returns the provider encoded as the prefix of a
+// clyde conversation id (claude:<id> -> "claude"). Empty when the id has no
+// provider separator.
+func providerFromConversationID(conversationID string) string {
+	separator := strings.IndexByte(conversationID, ':')
+	if separator <= 0 {
+		return ""
+	}
+	return conversationID[:separator]
 }
 
 // containsRole matches a chunk role against the filter set case-insensitively,

@@ -18,6 +18,7 @@ type conversationScalarColumns struct {
 	parentConversationIDs []string
 	roles                 []string
 	providers             []string
+	workspaceRoots        []string
 	timestamps            []int64
 	messageIndexes        []int64
 }
@@ -30,6 +31,7 @@ func newConversationScalarColumns(enabled bool, capacity int) conversationScalar
 			parentConversationIDs: nil,
 			roles:                 nil,
 			providers:             nil,
+			workspaceRoots:        nil,
 			timestamps:            nil,
 			messageIndexes:        nil,
 		}
@@ -40,6 +42,7 @@ func newConversationScalarColumns(enabled bool, capacity int) conversationScalar
 		parentConversationIDs: make([]string, 0, capacity),
 		roles:                 make([]string, 0, capacity),
 		providers:             make([]string, 0, capacity),
+		workspaceRoots:        make([]string, 0, capacity),
 		timestamps:            make([]int64, 0, capacity),
 		messageIndexes:        make([]int64, 0, capacity),
 	}
@@ -51,8 +54,9 @@ func (columns *conversationScalarColumns) append(chunk model.StoredChunk) {
 	}
 	columns.conversationIDs = append(columns.conversationIDs, chunk.ConversationID)
 	columns.parentConversationIDs = append(columns.parentConversationIDs, chunk.ParentConversationID)
-	columns.roles = append(columns.roles, chunk.Role)
+	columns.roles = append(columns.roles, strings.ToLower(chunk.Role))
 	columns.providers = append(columns.providers, providerFromConversationID(chunk.ConversationID))
+	columns.workspaceRoots = append(columns.workspaceRoots, chunk.WorkspaceRoot)
 	columns.timestamps = append(columns.timestamps, chunk.TimestampUnix)
 	columns.messageIndexes = append(columns.messageIndexes, int64(chunk.MessageIndex))
 }

@@ -292,6 +292,10 @@ type StoredChunk struct {
 	MessageIndex         int32  `json:"message_index"`
 	Role                 string `json:"role"`
 	TimestampUnix        int64  `json:"timestamp_unix"`
+	// WorkspaceRoot is the workspace a conversation chunk belongs to, stored as a
+	// native scalar column so a search can filter by it. Empty for code chunks
+	// and for conversation chunks whose caller did not supply it.
+	WorkspaceRoot string `json:"workspace_root,omitempty"`
 	// Score is the retrieval relevance for this chunk: the vector similarity
 	// from a semantic search, or the keyword rank from the literal fallback.
 	// Zero on chunks that did not come from a search.
@@ -308,6 +312,9 @@ type ConversationDocument struct {
 	Role                 string `json:"role"`
 	TimestampUnix        int64  `json:"timestamp_unix"`
 	Text                 string `json:"text"`
+	// WorkspaceRoot is the workspace the conversation belongs to. clyde supplies
+	// it so the engine can store it as a filterable scalar column.
+	WorkspaceRoot string `json:"workspace_root,omitempty"`
 }
 
 // PathClassificationKind reports the daemon's verdict about one queried path.

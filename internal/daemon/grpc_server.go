@@ -848,6 +848,8 @@ func conversationSearchResults(results []model.StoredChunk) []*pb.ConversationSe
 func pbConversationSearchFilter(filter *pb.ConversationSearchFilter) conversationSearchFilter {
 	if filter == nil {
 		return conversationSearchFilter{
+			Providers:            nil,
+			WorkspaceRoots:       nil,
 			Roles:                nil,
 			FromUnix:             0,
 			UntilUnix:            0,
@@ -859,6 +861,8 @@ func pbConversationSearchFilter(filter *pb.ConversationSearchFilter) conversatio
 		}
 	}
 	return conversationSearchFilter{
+		Providers:            filter.GetProviders(),
+		WorkspaceRoots:       filter.GetWorkspaceRoots(),
 		Roles:                filter.GetRoles(),
 		FromUnix:             filter.GetFromUnix(),
 		UntilUnix:            filter.GetUntilUnix(),
@@ -945,6 +949,7 @@ func pbConversationDocuments(documents []*pb.ConversationDocument) []model.Conve
 			Role:                 document.GetRole(),
 			TimestampUnix:        document.GetTimestampUnix(),
 			Text:                 document.GetText(),
+			WorkspaceRoot:        document.GetWorkspaceRoot(),
 		})
 	}
 	return result

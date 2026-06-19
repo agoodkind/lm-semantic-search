@@ -143,6 +143,7 @@ func (service *Service) fetchChunksForPath(ctx context.Context, collectionName s
 			MessageIndex:         0,
 			Role:                 "",
 			TimestampUnix:        0,
+			WorkspaceRoot:        "",
 			Score:                0,
 		})
 		vectors = append(vectors, vector)

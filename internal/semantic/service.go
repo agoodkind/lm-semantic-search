@@ -343,14 +343,14 @@ func (service *Service) Search(ctx context.Context, codebasePath string, query s
 	}
 
 	collectionName := service.CollectionName(codebasePath)
-	return service.searchCollection(ctx, collectionName, query, limit, extensionFilter, []string{relativePathPrefix})
+	return service.searchCollection(ctx, collectionName, query, limit, buildSearchFilter(extensionFilter, []string{relativePathPrefix}))
 }
 
 // SearchConversationCollection executes semantic or hybrid search against a
 // registered virtual conversation collection name. relativePathPrefixes scopes
 // retrieval to the given path subtrees (a conversation's rows live under its
 // conv/<id>/ prefix); an empty set searches the whole collection.
-func (service *Service) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32, relativePathPrefixes []string) ([]model.StoredChunk, error) {
+func (service *Service) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32, filter ConversationFilter) ([]model.StoredChunk, error) {
 	if !service.Available() {
 		return nil, nil
 	}
@@ -361,7 +361,7 @@ func (service *Service) SearchConversationCollection(ctx context.Context, collec
 	if err := service.ensureConversationScalarColumnsOnce(ctx, trimmedCollectionName); err != nil {
 		return nil, err
 	}
-	return service.searchCollection(ctx, trimmedCollectionName, query, limit, nil, relativePathPrefixes)
+	return service.searchConversationBatched(ctx, trimmedCollectionName, query, limit, filter)
 }
 
 // queryTextForEmbedding applies the configured query instruction prefix to
@@ -375,7 +375,7 @@ func (service *Service) queryTextForEmbedding(query string) string {
 	return prefix + query
 }
 
-func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, extensionFilter []string, relativePathPrefixes []string) ([]model.StoredChunk, error) {
+func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, filterExpr string) ([]model.StoredChunk, error) {
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "check Milvus collection failed", "collection", collectionName, "err", err)
@@ -395,7 +395,6 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 	if searchLimit <= 0 {
 		searchLimit = 10
 	}
-	filterExpr := buildSearchFilter(extensionFilter, relativePathPrefixes)
 
 	outputFields := []string{
 		contentFieldName,
@@ -590,6 +589,7 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 			WithVarcharColumn(parentConversationIDFieldName, scalars.parentConversationIDs).
 			WithVarcharColumn(roleFieldName, scalars.roles).
 			WithVarcharColumn(providerFieldName, scalars.providers).
+			WithVarcharColumn(workspaceRootFieldName, scalars.workspaceRoots).
 			WithInt64Column(timestampUnixFieldName, scalars.timestamps).
 			WithInt64Column(messageIndexFieldName, scalars.messageIndexes)
 	}
@@ -671,6 +671,7 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			MessageIndex:         metadataValue.messageIndex(),
 			Role:                 metadataValue.Role,
 			TimestampUnix:        metadataValue.timestampUnix(),
+			WorkspaceRoot:        "",
 			Score:                score,
 		})
 	}
