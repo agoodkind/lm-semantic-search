@@ -67,7 +67,7 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		WithField(entity.NewField().WithName(endLineFieldName).WithDataType(entity.FieldTypeInt64)).
 		WithField(entity.NewField().WithName(fileExtensionFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(32)).
 		WithField(entity.NewField().WithName(metadataFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
-		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)))
+		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)).WithTypeParams(mmapEnabledKey, mmapEnabledValue))
 
 	if isConversationCollection(collectionName) {
 		for _, field := range conversationScalarFields() {
@@ -75,9 +75,14 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		}
 	}
 
-	indexOptions := []milvusclient.CreateIndexOption{
-		milvusclient.NewCreateIndexOption(collectionName, denseVectorFieldName, index.NewAutoIndex(entity.COSINE)),
-	}
+	// Born mmapped: the dense vector field carries its mmap type param above and
+	// the dense index carries the matching index-level mmap here, so a freshly
+	// created collection never needs the in-place migration sweep. WithExtraParam
+	// mutates in place and returns nothing, so the option is built as a variable
+	// rather than chained into the slice literal.
+	denseIndexOption := milvusclient.NewCreateIndexOption(collectionName, denseVectorFieldName, index.NewAutoIndex(entity.COSINE))
+	denseIndexOption.WithExtraParam(mmapEnabledKey, mmapEnabledValue)
+	indexOptions := []milvusclient.CreateIndexOption{denseIndexOption}
 
 	if service.cfg.HybridMode {
 		schema = schema.
