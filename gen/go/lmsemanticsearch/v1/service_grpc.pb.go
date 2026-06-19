@@ -32,7 +32,6 @@ const (
 	SemanticSearchDaemonService_SearchCode_FullMethodName                        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCode"
 	SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterConversationCollection"
 	SemanticSearchDaemonService_SyncConversationManifest_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncConversationManifest"
-	SemanticSearchDaemonService_UpsertConversationDocuments_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocuments"
 	SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocumentsStream"
 	SemanticSearchDaemonService_DeleteConversation_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteConversation"
 	SemanticSearchDaemonService_SearchConversations_FullMethodName               = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchConversations"
@@ -58,12 +57,11 @@ type SemanticSearchDaemonServiceClient interface {
 	SearchCode(ctx context.Context, in *SearchCodeRequest, opts ...grpc.CallOption) (*SearchCodeResponse, error)
 	RegisterConversationCollection(ctx context.Context, in *RegisterConversationCollectionRequest, opts ...grpc.CallOption) (*RegisterConversationCollectionResponse, error)
 	SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error)
-	UpsertConversationDocuments(ctx context.Context, in *UpsertConversationDocumentsRequest, opts ...grpc.CallOption) (*UpsertConversationDocumentsResponse, error)
-	// UpsertConversationDocumentsStream is the client-streaming form of the upsert
-	// above. clyde sends one header chunk, then document chunks, then one manifest
+	// UpsertConversationDocumentsStream is the client-streaming conversation
+	// upsert. clyde sends one header chunk, then document chunks, then one manifest
 	// chunk, so the document set and manifest are not bounded by the gRPC max
-	// message size. The engine accumulates the chunks and queues the same async
-	// job the unary RPC queues.
+	// message size. The engine accumulates the chunks and queues an async ingest
+	// job.
 	UpsertConversationDocumentsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse], error)
 	DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
@@ -219,16 +217,6 @@ func (c *semanticSearchDaemonServiceClient) SyncConversationManifest(ctx context
 	return out, nil
 }
 
-func (c *semanticSearchDaemonServiceClient) UpsertConversationDocuments(ctx context.Context, in *UpsertConversationDocumentsRequest, opts ...grpc.CallOption) (*UpsertConversationDocumentsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UpsertConversationDocumentsResponse)
-	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_UpsertConversationDocuments_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *semanticSearchDaemonServiceClient) UpsertConversationDocumentsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[1], SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName, cOpts...)
@@ -309,12 +297,11 @@ type SemanticSearchDaemonServiceServer interface {
 	SearchCode(context.Context, *SearchCodeRequest) (*SearchCodeResponse, error)
 	RegisterConversationCollection(context.Context, *RegisterConversationCollectionRequest) (*RegisterConversationCollectionResponse, error)
 	SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error)
-	UpsertConversationDocuments(context.Context, *UpsertConversationDocumentsRequest) (*UpsertConversationDocumentsResponse, error)
-	// UpsertConversationDocumentsStream is the client-streaming form of the upsert
-	// above. clyde sends one header chunk, then document chunks, then one manifest
+	// UpsertConversationDocumentsStream is the client-streaming conversation
+	// upsert. clyde sends one header chunk, then document chunks, then one manifest
 	// chunk, so the document set and manifest are not bounded by the gRPC max
-	// message size. The engine accumulates the chunks and queues the same async
-	// job the unary RPC queues.
+	// message size. The engine accumulates the chunks and queues an async ingest
+	// job.
 	UpsertConversationDocumentsStream(grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]) error
 	DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
@@ -368,9 +355,6 @@ func (UnimplementedSemanticSearchDaemonServiceServer) RegisterConversationCollec
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SyncConversationManifest not implemented")
-}
-func (UnimplementedSemanticSearchDaemonServiceServer) UpsertConversationDocuments(context.Context, *UpsertConversationDocumentsRequest) (*UpsertConversationDocumentsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UpsertConversationDocuments not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) UpsertConversationDocumentsStream(grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]) error {
 	return status.Error(codes.Unimplemented, "method UpsertConversationDocumentsStream not implemented")
@@ -637,24 +621,6 @@ func _SemanticSearchDaemonService_SyncConversationManifest_Handler(srv interface
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SemanticSearchDaemonService_UpsertConversationDocuments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpsertConversationDocumentsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SemanticSearchDaemonServiceServer).UpsertConversationDocuments(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SemanticSearchDaemonService_UpsertConversationDocuments_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SemanticSearchDaemonServiceServer).UpsertConversationDocuments(ctx, req.(*UpsertConversationDocumentsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _SemanticSearchDaemonService_UpsertConversationDocumentsStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(SemanticSearchDaemonServiceServer).UpsertConversationDocumentsStream(&grpc.GenericServerStream[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]{ServerStream: stream})
 }
@@ -806,10 +772,6 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SyncConversationManifest",
 			Handler:    _SemanticSearchDaemonService_SyncConversationManifest_Handler,
-		},
-		{
-			MethodName: "UpsertConversationDocuments",
-			Handler:    _SemanticSearchDaemonService_UpsertConversationDocuments_Handler,
 		},
 		{
 			MethodName: "DeleteConversation",

@@ -666,53 +666,6 @@ func (server *GRPCServer) SyncConversationManifest(ctx context.Context, request 
 	}, nil
 }
 
-// UpsertConversationDocuments reserves the conversation document upsert RPC surface.
-func (server *GRPCServer) UpsertConversationDocuments(ctx context.Context, request *pb.UpsertConversationDocumentsRequest) (resp *pb.UpsertConversationDocumentsResponse, err error) {
-	ctx, done := beginRPC(ctx, "UpsertConversationDocuments")
-	defer done(&err)
-	if argErr := requireNonEmpty(ctx, request.GetCollectionId(), "collection_id", false); argErr != nil {
-		return nil, argErr
-	}
-	job, callErr := server.manager.upsertConversationDocuments(
-		ctx,
-		request.GetCollectionId(),
-		pbConversationDocuments(request.GetDocuments()),
-		pbConversationManifest(request.GetManifest()),
-		pbClient(request.GetClient()),
-	)
-	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
-	}
-	ack := view.MutationAckView{
-		Kind:            view.AckUpsertConversation,
-		Path:            "",
-		JobID:           job.ID,
-		StateLabel:      "",
-		AlreadyTerminal: false,
-		Deduplicated:    false,
-		CollectionID:    request.GetCollectionId(),
-		CollectionName:  "",
-		CodebaseID:      job.CodebaseID,
-		ConversationID:  "",
-		DocumentCount:   len(request.GetDocuments()),
-		NeededCount:     0,
-		TotalCount:      0,
-	}
-	health := server.manager.DependencyHealth()
-	return &pb.UpsertConversationDocumentsResponse{
-		JobId: job.ID,
-		DisplayText: server.envelopeText(
-			ctx,
-			health,
-			render.MutationAck(ack),
-			"codebase_id",
-			job.CodebaseID,
-			"job_id",
-			job.ID,
-		),
-	}, nil
-}
-
 // DeleteConversation reserves the conversation deletion RPC surface.
 func (server *GRPCServer) DeleteConversation(ctx context.Context, request *pb.DeleteConversationRequest) (resp *pb.DeleteConversationResponse, err error) {
 	ctx, done := beginRPC(ctx, "DeleteConversation")

@@ -20,12 +20,11 @@ service SemanticSearchDaemonService {
   rpc SearchCode(SearchCodeRequest) returns (SearchCodeResponse);
   rpc RegisterConversationCollection(RegisterConversationCollectionRequest) returns (RegisterConversationCollectionResponse);
   rpc SyncConversationManifest(SyncConversationManifestRequest) returns (SyncConversationManifestResponse);
-  rpc UpsertConversationDocuments(UpsertConversationDocumentsRequest) returns (UpsertConversationDocumentsResponse);
-  // UpsertConversationDocumentsStream is the client-streaming form of the upsert
-  // above. clyde sends one header chunk, then document chunks, then one manifest
+  // UpsertConversationDocumentsStream is the client-streaming conversation
+  // upsert. clyde sends one header chunk, then document chunks, then one manifest
   // chunk, so the document set and manifest are not bounded by the gRPC max
-  // message size. The engine accumulates the chunks and queues the same async
-  // job the unary RPC queues.
+  // message size. The engine accumulates the chunks and queues an async ingest
+  // job.
   rpc UpsertConversationDocumentsStream(stream UpsertConversationDocumentsChunk) returns (UpsertConversationDocumentsResponse);
   rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
@@ -463,17 +462,6 @@ message SyncConversationManifestResponse {
   // last ingest. clyde sends documents for only these.
   repeated string needed_conversation_ids = 1;
   string display_text = 2;
-}
-
-message UpsertConversationDocumentsRequest {
-  string collection_id = 1;
-  repeated ConversationDocument documents = 2;
-  ClientInfo client = 3;
-  // manifest is the full current conversation set with fingerprints. The engine
-  // diffs it against its checkpoint to embed the delivered documents, drop
-  // conversations no longer present, and skip unchanged ones. Empty means the
-  // delivered documents are the complete set and fingerprints are derived.
-  repeated ConversationFingerprint manifest = 4;
 }
 
 message UpsertConversationDocumentsResponse {

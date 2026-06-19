@@ -109,13 +109,9 @@ func (manager *Manager) SyncConversationManifest(ctx context.Context, collection
 	return needed, nil
 }
 
-// UpsertConversationDocuments queues an asynchronous ingest. When manifest is
+// upsertConversationDocuments queues an asynchronous ingest. When manifest is
 // nil it is derived from the delivered documents, so a caller that hands over a
 // complete set need not compute fingerprints itself.
-func (manager *Manager) UpsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument) (model.Job, error) {
-	return manager.upsertConversationDocuments(ctx, collectionID, documents, nil, model.ClientInfo{Name: "", PID: 0})
-}
-
 func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo) (model.Job, error) {
 	for _, document := range documents {
 		if strings.TrimSpace(document.ConversationID) == "" {

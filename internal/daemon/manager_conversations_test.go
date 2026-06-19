@@ -524,21 +524,35 @@ func TestConversationRPCsQueueJournaledJobs(t *testing.T) {
 	}
 	server := NewGRPCServer(manager, nil)
 
-	upsertResponse, err := server.UpsertConversationDocuments(context.Background(), &pb.UpsertConversationDocumentsRequest{
-		CollectionId: "thread-rpc-jobs",
-		Documents: []*pb.ConversationDocument{{
-			ConversationId: "conv-rpc",
-			MessageIndex:   0,
-			Role:           "user",
-			TimestampUnix:  1712345678,
-			Text:           "hello",
-		}},
-	})
-	if err != nil {
-		t.Fatalf("UpsertConversationDocuments returned error: %v", err)
+	upsertStream := &fakeUpsertStreamServer{
+		ClientStreamingServer: nil,
+		chunks: []*pb.UpsertConversationDocumentsChunk{
+			{Chunk: &pb.UpsertConversationDocumentsChunk_Header{Header: &pb.UpsertConversationDocumentsHeader{
+				CollectionId: "thread-rpc-jobs",
+				Client:       nil,
+			}}},
+			{Chunk: &pb.UpsertConversationDocumentsChunk_Documents{Documents: &pb.UpsertConversationDocumentsDocuments{
+				Documents: []*pb.ConversationDocument{{
+					ConversationId: "conv-rpc",
+					MessageIndex:   0,
+					Role:           "user",
+					TimestampUnix:  1712345678,
+					Text:           "hello",
+				}},
+			}}},
+		},
+		cursor:   0,
+		response: nil,
+	}
+	if err := server.UpsertConversationDocumentsStream(upsertStream); err != nil {
+		t.Fatalf("UpsertConversationDocumentsStream returned error: %v", err)
+	}
+	upsertResponse := upsertStream.response
+	if upsertResponse == nil {
+		t.Fatal("UpsertConversationDocumentsStream sent no response")
 	}
 	if upsertResponse.GetJobId() == "" {
-		t.Fatal("UpsertConversationDocuments returned an empty job id")
+		t.Fatal("UpsertConversationDocumentsStream returned an empty job id")
 	}
 	if !strings.Contains(upsertResponse.GetDisplayText(), "Started conversation ingest job") {
 		t.Fatalf("upsert DisplayText = %q, want ingest start text", upsertResponse.GetDisplayText())
@@ -553,7 +567,7 @@ func TestConversationRPCsQueueJournaledJobs(t *testing.T) {
 			t.Fatalf("upsert chunk RelativePath = %q, want conv/conv-rpc/0", chunks[0].RelativePath)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("UpsertConversationDocuments did not call semantic upsert")
+		t.Fatal("UpsertConversationDocumentsStream did not call semantic upsert")
 	}
 	waitForCondition(t, func() bool {
 		job, found := manager.GetJob(upsertResponse.GetJobId())
