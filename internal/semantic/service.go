@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -72,19 +71,23 @@ type Service struct {
 	reconnectCancel context.CancelFunc
 	reconnectDone   chan struct{}
 	closeOnce       sync.Once
+	// ensuredConvColumns gates the one-time scalar-column migration to once per
+	// conversation collection per process. See ensureConversationScalarColumnsOnce.
+	ensuredConvColumns sync.Map
 }
 
 // NewService constructs the semantic search runtime.
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
 		return &Service{
-			cfg:             cfg,
-			embedder:        nil,
-			milvus:          nil,
-			available:       atomic.Bool{},
-			reconnectCancel: nil,
-			reconnectDone:   nil,
-			closeOnce:       sync.Once{},
+			cfg:                cfg,
+			embedder:           nil,
+			milvus:             nil,
+			available:          atomic.Bool{},
+			reconnectCancel:    nil,
+			reconnectDone:      nil,
+			closeOnce:          sync.Once{},
+			ensuredConvColumns: sync.Map{},
 		}, nil
 	}
 
@@ -95,13 +98,14 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	service := &Service{
-		cfg:             cfg,
-		embedder:        embedder,
-		milvus:          nil,
-		available:       atomic.Bool{},
-		reconnectCancel: nil,
-		reconnectDone:   nil,
-		closeOnce:       sync.Once{},
+		cfg:                cfg,
+		embedder:           embedder,
+		milvus:             nil,
+		available:          atomic.Bool{},
+		reconnectCancel:    nil,
+		reconnectDone:      nil,
+		closeOnce:          sync.Once{},
+		ensuredConvColumns: sync.Map{},
 	}
 
 	client, err := service.dialMilvus(ctx)
@@ -353,6 +357,9 @@ func (service *Service) SearchConversationCollection(ctx context.Context, collec
 	trimmedCollectionName := strings.TrimSpace(collectionName)
 	if trimmedCollectionName == "" {
 		return nil, errors.New("conversation collection name is required")
+	}
+	if err := service.ensureConversationScalarColumnsOnce(ctx, trimmedCollectionName); err != nil {
+		return nil, err
 	}
 	return service.searchCollection(ctx, trimmedCollectionName, query, limit, nil, relativePathPrefixes)
 }
@@ -656,96 +663,6 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 		})
 	}
 	return chunks, nil
-}
-
-// chunkMetadata mirrors the JSON shape the TS adapter writes into the
-// Milvus `metadata` field. The Go daemon adds a language hint so search
-// results can resurface the splitter-derived language without a dedicated
-// column.
-type chunkMetadata struct {
-	Language             string `json:"language,omitempty"`
-	ConversationID       string `json:"conversation_id,omitempty"`
-	ParentConversationID string `json:"parent_conversation_id,omitempty"`
-	MessageIndex         *int32 `json:"message_index,omitempty"`
-	Role                 string `json:"role,omitempty"`
-	TimestampUnix        *int64 `json:"timestamp_unix,omitempty"`
-}
-
-func encodeMetadata(chunk model.StoredChunk) string {
-	if chunk.Language == "" &&
-		chunk.ConversationID == "" &&
-		chunk.ParentConversationID == "" &&
-		chunk.MessageIndex == 0 &&
-		chunk.Role == "" &&
-		chunk.TimestampUnix == 0 {
-		return "{}"
-	}
-	metadata := chunkMetadata{
-		Language:             chunk.Language,
-		ConversationID:       chunk.ConversationID,
-		ParentConversationID: chunk.ParentConversationID,
-		MessageIndex:         nil,
-		Role:                 chunk.Role,
-		TimestampUnix:        nil,
-	}
-	if hasConversationMetadata(chunk) {
-		messageIndex := chunk.MessageIndex
-		timestampUnix := chunk.TimestampUnix
-		metadata.MessageIndex = &messageIndex
-		metadata.TimestampUnix = &timestampUnix
-	}
-	encoded, err := json.Marshal(metadata)
-	if err != nil {
-		return "{}"
-	}
-	return string(encoded)
-}
-
-func hasConversationMetadata(chunk model.StoredChunk) bool {
-	return chunk.ConversationID != "" ||
-		chunk.MessageIndex != 0 ||
-		chunk.Role != "" ||
-		chunk.TimestampUnix != 0
-}
-
-func decodeMetadataLanguage(metadata string) string {
-	return decodeMetadata(metadata).Language
-}
-
-func decodeMetadata(metadata string) chunkMetadata {
-	if metadata == "" {
-		return emptyChunkMetadata()
-	}
-	var parsed chunkMetadata
-	if err := json.Unmarshal([]byte(metadata), &parsed); err != nil {
-		return emptyChunkMetadata()
-	}
-	return parsed
-}
-
-func emptyChunkMetadata() chunkMetadata {
-	return chunkMetadata{
-		Language:             "",
-		ConversationID:       "",
-		ParentConversationID: "",
-		MessageIndex:         nil,
-		Role:                 "",
-		TimestampUnix:        nil,
-	}
-}
-
-func (metadata chunkMetadata) messageIndex() int32 {
-	if metadata.MessageIndex == nil {
-		return 0
-	}
-	return *metadata.MessageIndex
-}
-
-func (metadata chunkMetadata) timestampUnix() int64 {
-	if metadata.TimestampUnix == nil {
-		return 0
-	}
-	return *metadata.TimestampUnix
 }
 
 // sanitizeUTF8 returns a copy of value with invalid UTF-8 byte sequences
