@@ -1571,8 +1571,13 @@ type ConversationDocument struct {
 	// index can group a fork with its parent. Empty when the conversation has no
 	// parent.
 	ParentConversationId string `protobuf:"bytes,6,opt,name=parent_conversation_id,json=parentConversationId,proto3" json:"parent_conversation_id,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// workspace_root is the workspace the conversation belongs to, stored as a
+	// native scalar column so a search can filter by it. clyde owns the value;
+	// empty when unknown. provider is derived from the conversation_id prefix and
+	// is not carried here.
+	WorkspaceRoot string `protobuf:"bytes,7,opt,name=workspace_root,json=workspaceRoot,proto3" json:"workspace_root,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConversationDocument) Reset() {
@@ -1643,6 +1648,13 @@ func (x *ConversationDocument) GetText() string {
 func (x *ConversationDocument) GetParentConversationId() string {
 	if x != nil {
 		return x.ParentConversationId
+	}
+	return ""
+}
+
+func (x *ConversationDocument) GetWorkspaceRoot() string {
+	if x != nil {
+		return x.WorkspaceRoot
 	}
 	return ""
 }
@@ -3574,8 +3586,15 @@ type ConversationSearchFilter struct {
 	// (inclusive from, exclusive until). until zero means unbounded.
 	MessageIndexFrom  int32 `protobuf:"varint,7,opt,name=message_index_from,json=messageIndexFrom,proto3" json:"message_index_from,omitempty"`
 	MessageIndexUntil int32 `protobuf:"varint,8,opt,name=message_index_until,json=messageIndexUntil,proto3" json:"message_index_until,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// providers keeps only hits whose provider is in the set, e.g. "claude".
+	// Filtered natively on the provider scalar column.
+	Providers []string `protobuf:"bytes,9,rep,name=providers,proto3" json:"providers,omitempty"`
+	// workspace_roots keeps only hits whose workspace_root is in the set. clyde
+	// resolves a workspace prefix filter into the small set of matching roots
+	// (one value per workspace directory) so the engine does an exact IN.
+	WorkspaceRoots []string `protobuf:"bytes,10,rep,name=workspace_roots,json=workspaceRoots,proto3" json:"workspace_roots,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ConversationSearchFilter) Reset() {
@@ -3662,6 +3681,20 @@ func (x *ConversationSearchFilter) GetMessageIndexUntil() int32 {
 		return x.MessageIndexUntil
 	}
 	return 0
+}
+
+func (x *ConversationSearchFilter) GetProviders() []string {
+	if x != nil {
+		return x.Providers
+	}
+	return nil
+}
+
+func (x *ConversationSearchFilter) GetWorkspaceRoots() []string {
+	if x != nil {
+		return x.WorkspaceRoots
+	}
+	return nil
 }
 
 type SearchConversationsRequest struct {
@@ -4332,14 +4365,15 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\bend_line\x18\x03 \x01(\x05R\aendLine\x12\x1a\n" +
 	"\blanguage\x18\x04 \x01(\tR\blanguage\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
-	"\acontent\x18\x06 \x01(\tR\acontent\"\xe9\x01\n" +
+	"\acontent\x18\x06 \x01(\tR\acontent\"\x90\x02\n" +
 	"\x14ConversationDocument\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12%\n" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x12\n" +
 	"\x04text\x18\x05 \x01(\tR\x04text\x124\n" +
-	"\x16parent_conversation_id\x18\x06 \x01(\tR\x14parentConversationId\"\x89\x02\n" +
+	"\x16parent_conversation_id\x18\x06 \x01(\tR\x14parentConversationId\x12%\n" +
+	"\x0eworkspace_root\x18\a \x01(\tR\rworkspaceRoot\"\x89\x02\n" +
 	"\x18ConversationSearchResult\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +
@@ -4480,7 +4514,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x06client\x18\x03 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"V\n" +
 	"\x1aDeleteConversationResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\xc8\x02\n" +
+	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\x8f\x03\n" +
 	"\x18ConversationSearchFilter\x12\x14\n" +
 	"\x05roles\x18\x01 \x03(\tR\x05roles\x12\x1b\n" +
 	"\tfrom_unix\x18\x02 \x01(\x03R\bfromUnix\x12\x1d\n" +
@@ -4490,7 +4524,10 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x16parent_conversation_id\x18\x05 \x01(\tR\x14parentConversationId\x12\x1b\n" +
 	"\tmin_score\x18\x06 \x01(\x01R\bminScore\x12,\n" +
 	"\x12message_index_from\x18\a \x01(\x05R\x10messageIndexFrom\x12.\n" +
-	"\x13message_index_until\x18\b \x01(\x05R\x11messageIndexUntil\"\xea\x01\n" +
+	"\x13message_index_until\x18\b \x01(\x05R\x11messageIndexUntil\x12\x1c\n" +
+	"\tproviders\x18\t \x03(\tR\tproviders\x12'\n" +
+	"\x0fworkspace_roots\x18\n" +
+	" \x03(\tR\x0eworkspaceRoots\"\xea\x01\n" +
 	"\x1aSearchConversationsRequest\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x14\n" +
 	"\x05query\x18\x02 \x01(\tR\x05query\x12\x14\n" +

@@ -258,6 +258,11 @@ message ConversationDocument {
   // index can group a fork with its parent. Empty when the conversation has no
   // parent.
   string parent_conversation_id = 6;
+  // workspace_root is the workspace the conversation belongs to, stored as a
+  // native scalar column so a search can filter by it. clyde owns the value;
+  // empty when unknown. provider is derived from the conversation_id prefix and
+  // is not carried here.
+  string workspace_root = 7;
 }
 
 message ConversationSearchResult {
@@ -504,6 +509,13 @@ message ConversationSearchFilter {
   // (inclusive from, exclusive until). until zero means unbounded.
   int32 message_index_from = 7;
   int32 message_index_until = 8;
+  // providers keeps only hits whose provider is in the set, e.g. "claude".
+  // Filtered natively on the provider scalar column.
+  repeated string providers = 9;
+  // workspace_roots keeps only hits whose workspace_root is in the set. clyde
+  // resolves a workspace prefix filter into the small set of matching roots
+  // (one value per workspace directory) so the engine does an exact IN.
+  repeated string workspace_roots = 10;
 }
 
 message SearchConversationsRequest {
