@@ -18,8 +18,9 @@ import (
 // whole conversation's documents in a single message because the engine
 // replaces a conversation atomically, and a long transcript exceeds gRPC's
 // 4 MiB default, so the local-socket ceiling is raised instead of splitting
-// a conversation across messages.
-const MaxMessageBytes = 64 << 20
+// a conversation across messages. The largest real conversation is well under
+// this, so the headroom covers future growth without a streaming RPC.
+const MaxMessageBytes = 128 << 20
 
 // DialDaemon creates a gRPC client connection to the local daemon
 // socket. Callers should wrap their context with [WithCorrelation]
