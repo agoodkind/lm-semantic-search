@@ -21,6 +21,12 @@ service SemanticSearchDaemonService {
   rpc RegisterConversationCollection(RegisterConversationCollectionRequest) returns (RegisterConversationCollectionResponse);
   rpc SyncConversationManifest(SyncConversationManifestRequest) returns (SyncConversationManifestResponse);
   rpc UpsertConversationDocuments(UpsertConversationDocumentsRequest) returns (UpsertConversationDocumentsResponse);
+  // UpsertConversationDocumentsStream is the client-streaming form of the upsert
+  // above. clyde sends one header chunk, then document chunks, then one manifest
+  // chunk, so the document set and manifest are not bounded by the gRPC max
+  // message size. The engine accumulates the chunks and queues the same async
+  // job the unary RPC queues.
+  rpc UpsertConversationDocumentsStream(stream UpsertConversationDocumentsChunk) returns (UpsertConversationDocumentsResponse);
   rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
   rpc SearchWithinConversation(SearchWithinConversationRequest) returns (SearchWithinConversationResponse);
@@ -473,6 +479,38 @@ message UpsertConversationDocumentsRequest {
 message UpsertConversationDocumentsResponse {
   string job_id = 1;
   string display_text = 2;
+}
+
+// UpsertConversationDocumentsHeader opens a streamed upsert. It carries the
+// collection id and the caller info once, before any documents.
+message UpsertConversationDocumentsHeader {
+  string collection_id = 1;
+  ClientInfo client = 2;
+}
+
+// UpsertConversationDocumentsDocuments is one batch of documents in a streamed
+// upsert. The engine concatenates the documents from every documents chunk in
+// receive order into the full document set.
+message UpsertConversationDocumentsDocuments {
+  repeated ConversationDocument documents = 1;
+}
+
+// UpsertConversationDocumentsManifest carries the full current conversation set
+// with fingerprints. The manifest is authoritative for deletion, so it is sent
+// whole as one chunk under the per-chunk size bound rather than split.
+message UpsertConversationDocumentsManifest {
+  repeated ConversationFingerprint manifest = 1;
+}
+
+// UpsertConversationDocumentsChunk is one frame of a streamed upsert: a header,
+// a batch of documents, or the manifest. The stream sends exactly one header
+// first, then zero or more documents chunks, then exactly one manifest chunk.
+message UpsertConversationDocumentsChunk {
+  oneof chunk {
+    UpsertConversationDocumentsHeader header = 1;
+    UpsertConversationDocumentsDocuments documents = 2;
+    UpsertConversationDocumentsManifest manifest = 3;
+  }
 }
 
 message DeleteConversationRequest {

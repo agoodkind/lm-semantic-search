@@ -19,25 +19,26 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SemanticSearchDaemonService_Version_FullMethodName                        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Version"
-	SemanticSearchDaemonService_StartIndex_FullMethodName                     = "/lmsemanticsearch.v1.SemanticSearchDaemonService/StartIndex"
-	SemanticSearchDaemonService_ClearIndex_FullMethodName                     = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ClearIndex"
-	SemanticSearchDaemonService_CancelJob_FullMethodName                      = "/lmsemanticsearch.v1.SemanticSearchDaemonService/CancelJob"
-	SemanticSearchDaemonService_SyncIndex_FullMethodName                      = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncIndex"
-	SemanticSearchDaemonService_GetIndex_FullMethodName                       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetIndex"
-	SemanticSearchDaemonService_ListIndexes_FullMethodName                    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ListIndexes"
-	SemanticSearchDaemonService_GetJob_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetJob"
-	SemanticSearchDaemonService_ListJobs_FullMethodName                       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ListJobs"
-	SemanticSearchDaemonService_WatchJobs_FullMethodName                      = "/lmsemanticsearch.v1.SemanticSearchDaemonService/WatchJobs"
-	SemanticSearchDaemonService_SearchCode_FullMethodName                     = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCode"
-	SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterConversationCollection"
-	SemanticSearchDaemonService_SyncConversationManifest_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncConversationManifest"
-	SemanticSearchDaemonService_UpsertConversationDocuments_FullMethodName    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocuments"
-	SemanticSearchDaemonService_DeleteConversation_FullMethodName             = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteConversation"
-	SemanticSearchDaemonService_SearchConversations_FullMethodName            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchConversations"
-	SemanticSearchDaemonService_SearchWithinConversation_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchWithinConversation"
-	SemanticSearchDaemonService_Doctor_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Doctor"
-	SemanticSearchDaemonService_Shutdown_FullMethodName                       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Shutdown"
+	SemanticSearchDaemonService_Version_FullMethodName                           = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Version"
+	SemanticSearchDaemonService_StartIndex_FullMethodName                        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/StartIndex"
+	SemanticSearchDaemonService_ClearIndex_FullMethodName                        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ClearIndex"
+	SemanticSearchDaemonService_CancelJob_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/CancelJob"
+	SemanticSearchDaemonService_SyncIndex_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncIndex"
+	SemanticSearchDaemonService_GetIndex_FullMethodName                          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetIndex"
+	SemanticSearchDaemonService_ListIndexes_FullMethodName                       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ListIndexes"
+	SemanticSearchDaemonService_GetJob_FullMethodName                            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetJob"
+	SemanticSearchDaemonService_ListJobs_FullMethodName                          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ListJobs"
+	SemanticSearchDaemonService_WatchJobs_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/WatchJobs"
+	SemanticSearchDaemonService_SearchCode_FullMethodName                        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCode"
+	SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterConversationCollection"
+	SemanticSearchDaemonService_SyncConversationManifest_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncConversationManifest"
+	SemanticSearchDaemonService_UpsertConversationDocuments_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocuments"
+	SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocumentsStream"
+	SemanticSearchDaemonService_DeleteConversation_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteConversation"
+	SemanticSearchDaemonService_SearchConversations_FullMethodName               = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchConversations"
+	SemanticSearchDaemonService_SearchWithinConversation_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchWithinConversation"
+	SemanticSearchDaemonService_Doctor_FullMethodName                            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Doctor"
+	SemanticSearchDaemonService_Shutdown_FullMethodName                          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Shutdown"
 )
 
 // SemanticSearchDaemonServiceClient is the client API for SemanticSearchDaemonService service.
@@ -58,6 +59,12 @@ type SemanticSearchDaemonServiceClient interface {
 	RegisterConversationCollection(ctx context.Context, in *RegisterConversationCollectionRequest, opts ...grpc.CallOption) (*RegisterConversationCollectionResponse, error)
 	SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error)
 	UpsertConversationDocuments(ctx context.Context, in *UpsertConversationDocumentsRequest, opts ...grpc.CallOption) (*UpsertConversationDocumentsResponse, error)
+	// UpsertConversationDocumentsStream is the client-streaming form of the upsert
+	// above. clyde sends one header chunk, then document chunks, then one manifest
+	// chunk, so the document set and manifest are not bounded by the gRPC max
+	// message size. The engine accumulates the chunks and queues the same async
+	// job the unary RPC queues.
+	UpsertConversationDocumentsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse], error)
 	DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
 	SearchWithinConversation(ctx context.Context, in *SearchWithinConversationRequest, opts ...grpc.CallOption) (*SearchWithinConversationResponse, error)
@@ -222,6 +229,19 @@ func (c *semanticSearchDaemonServiceClient) UpsertConversationDocuments(ctx cont
 	return out, nil
 }
 
+func (c *semanticSearchDaemonServiceClient) UpsertConversationDocumentsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[1], SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_UpsertConversationDocumentsStreamClient = grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]
+
 func (c *semanticSearchDaemonServiceClient) DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteConversationResponse)
@@ -290,6 +310,12 @@ type SemanticSearchDaemonServiceServer interface {
 	RegisterConversationCollection(context.Context, *RegisterConversationCollectionRequest) (*RegisterConversationCollectionResponse, error)
 	SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error)
 	UpsertConversationDocuments(context.Context, *UpsertConversationDocumentsRequest) (*UpsertConversationDocumentsResponse, error)
+	// UpsertConversationDocumentsStream is the client-streaming form of the upsert
+	// above. clyde sends one header chunk, then document chunks, then one manifest
+	// chunk, so the document set and manifest are not bounded by the gRPC max
+	// message size. The engine accumulates the chunks and queues the same async
+	// job the unary RPC queues.
+	UpsertConversationDocumentsStream(grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]) error
 	DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
 	SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error)
@@ -345,6 +371,9 @@ func (UnimplementedSemanticSearchDaemonServiceServer) SyncConversationManifest(c
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) UpsertConversationDocuments(context.Context, *UpsertConversationDocumentsRequest) (*UpsertConversationDocumentsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpsertConversationDocuments not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) UpsertConversationDocumentsStream(grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]) error {
+	return status.Error(codes.Unimplemented, "method UpsertConversationDocumentsStream not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteConversation not implemented")
@@ -626,6 +655,13 @@ func _SemanticSearchDaemonService_UpsertConversationDocuments_Handler(srv interf
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SemanticSearchDaemonService_UpsertConversationDocumentsStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SemanticSearchDaemonServiceServer).UpsertConversationDocumentsStream(&grpc.GenericServerStream[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_UpsertConversationDocumentsStreamServer = grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]
+
 func _SemanticSearchDaemonService_DeleteConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteConversationRequest)
 	if err := dec(in); err != nil {
@@ -801,6 +837,11 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "WatchJobs",
 			Handler:       _SemanticSearchDaemonService_WatchJobs_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "UpsertConversationDocumentsStream",
+			Handler:       _SemanticSearchDaemonService_UpsertConversationDocumentsStream_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "lmsemanticsearch/v1/service.proto",
