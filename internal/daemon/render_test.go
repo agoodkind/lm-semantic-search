@@ -805,6 +805,9 @@ func TestRenderListJobsSeparatesSupersededFailures(t *testing.T) {
 	if want := "superseded by job_new"; !strings.Contains(out, want) {
 		t.Fatalf("superseded entry did not name its successor, want %q in:\n%s", want, out)
 	}
+	if want := strings.Repeat("─", 40); !strings.Contains(out, want) {
+		t.Fatalf("two jobs in a section must be separated by the divider in:\n%s", out)
+	}
 }
 
 // TestRenderGetJobPreparingNotZeroPercent proves a running index job whose work
@@ -843,6 +846,9 @@ func TestRenderListJobsPreparingNotZeroPercent(t *testing.T) {
 	}
 	if strings.Contains(out, "0.0%") {
 		t.Fatalf("list entry with unknown scope must not show 0.0%%, got:\n%s", out)
+	}
+	if strings.Contains(out, strings.Repeat("─", 40)) {
+		t.Fatalf("a single job must not be wrapped by a divider, got:\n%s", out)
 	}
 }
 

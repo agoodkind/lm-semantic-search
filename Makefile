@@ -92,7 +92,10 @@ gksyntax-grammars:
 
 # Building, installing, testing, vetting, linting, and govulncheck all compile
 # the swift grammar package inside gksyntax, so they need the generated parser.
-build build-check check test lint vet govulncheck install release: | gksyntax-grammars
+# The CI quality matrix runs the lint sub-targets directly rather than the
+# aggregate `lint`, so they are listed here too or they would analyze a swift
+# package that has no generated parser and fail to compile.
+build build-check check test lint lint-golangci lint-deadcode staticcheck-extra vet govulncheck install release: | gksyntax-grammars
 
 deploy:
 	$(MAKE) install
