@@ -15,6 +15,13 @@ import (
 // across several searches whose results are merged by score.
 const conversationFilterIDBatchSize = 256
 
+// conversationSearchWindowMax bounds the paged cap-fill to the Milvus
+// single-search ceiling, where offset + limit must stay under 16384.
+// Conversation limits never approach this, so the bound is reached only when a
+// corpus cannot supply enough per-conversation-distinct matches, in which case
+// the honest partial result is returned.
+const conversationSearchWindowMax = 16384
+
 type conversationSearchFunc func(ctx context.Context, collectionName string, query string, limit int32, expr string) ([]model.StoredChunk, error)
 
 // ConversationFilter carries the native-filterable attributes of a conversation
@@ -152,4 +159,92 @@ func batchConversationIDs(ids []string, size int) [][]string {
 		batches = append(batches, ids[start:end])
 	}
 	return batches
+}
+
+// conversationPageSearch fetches one ranked page of at most pageLimit rows
+// starting at offset, in descending score order. fillCappedConversationSearchWith
+// drives it until the per-conversation cap yields the requested limit.
+type conversationPageSearch func(ctx context.Context, offset int, pageLimit int) ([]model.StoredChunk, error)
+
+// fillCappedConversationSearch pages the ranked search by offset, reusing one
+// precomputed query vector across pages, and reduces each accumulated window
+// until the per-conversation cap yields limit survivors. The common case fills
+// on the first page and runs exactly one search.
+func (service *Service) fillCappedConversationSearch(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, filterExpr string, limit int32, perConversationLimit int32, minScore float64) ([]model.StoredChunk, error) {
+	return fillCappedConversationSearchWith(ctx, limit, perConversationLimit, minScore, func(ctx context.Context, offset int, pageLimit int) ([]model.StoredChunk, error) {
+		return service.searchCollectionWithVector(ctx, collectionName, queryVector, rawQuery, pageLimit, offset, filterExpr)
+	})
+}
+
+// fillCappedConversationSearchWith pages pageSearch by offset and reduces each
+// accumulated window with capConversationChunks until limit survivors are
+// collected, the score frontier drops below minScore, the search is exhausted
+// (an empty or short page), or the 16384 window is reached. It returns the honest
+// partial result when the corpus cannot supply enough per-conversation-distinct
+// matches.
+func fillCappedConversationSearchWith(ctx context.Context, limit int32, perConversationLimit int32, minScore float64, pageSearch conversationPageSearch) ([]model.StoredChunk, error) {
+	pageSize := int(limit)
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	buffer := make([]model.StoredChunk, 0, pageSize*2)
+	survivors := make([]model.StoredChunk, 0, pageSize)
+	for offset := 0; offset < conversationSearchWindowMax; offset += pageSize {
+		pageLimit := pageSize
+		if offset+pageLimit > conversationSearchWindowMax {
+			pageLimit = conversationSearchWindowMax - offset
+		}
+		if pageLimit <= 0 {
+			break
+		}
+		page, err := pageSearch(ctx, offset, pageLimit)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		buffer = append(buffer, page...)
+		survivors = capConversationChunks(buffer, perConversationLimit, minScore, limit)
+		if len(survivors) >= int(limit) {
+			break
+		}
+		// Results descend by score, so once a page ends below the floor no later
+		// page can clear it.
+		if minScore > 0 && page[len(page)-1].Score < minScore {
+			break
+		}
+		// A short page means the ranked results are exhausted.
+		if len(page) < pageLimit {
+			break
+		}
+	}
+	return survivors, nil
+}
+
+// capConversationChunks keeps score-ordered chunks above minScore, at most
+// perConversationLimit per conversation, up to limit total. It is the store-up
+// reduction: every scope dimension is already enforced natively by the Milvus
+// filter expression, so only the cap and the score floor apply here. It mirrors
+// the daemon's applyConversationSearchFilter, which still reduces the literal
+// cache fallback where there is no native pushdown.
+func capConversationChunks(chunks []model.StoredChunk, perConversationLimit int32, minScore float64, limit int32) []model.StoredChunk {
+	kept := make([]model.StoredChunk, 0, len(chunks))
+	perConversation := make(map[string]int32)
+	for _, chunk := range chunks {
+		if minScore > 0 && chunk.Score < minScore {
+			continue
+		}
+		if perConversationLimit > 0 {
+			if perConversation[chunk.ConversationID] >= perConversationLimit {
+				continue
+			}
+			perConversation[chunk.ConversationID]++
+		}
+		kept = append(kept, chunk)
+		if limit > 0 && len(kept) >= int(limit) {
+			break
+		}
+	}
+	return kept
 }

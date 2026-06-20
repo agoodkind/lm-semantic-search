@@ -212,30 +212,29 @@ func inflatedConversationSearchLimit(limit int32, perConversationLimit int32) in
 }
 
 // searchConversationCollectionFiltered is the one retrieval path under both
-// conversation search RPCs. When the vector store is up, every dimension except
-// min_score is pushed into Milvus as a native scalar-column expression, so the
-// search returns the true top-K among matching rows; the post-filter then
-// applies min_score and the per-conversation cap. When the per-conversation cap
-// is set, the fetch over-fetches by a bounded factor so the cap does not starve
-// the result below the requested limit. When the store is down, the literal
-// chunk cache pre-filters by the same conditions before ranking, so it scopes
-// correctly rather than scanning the whole corpus.
+// conversation search RPCs. When the vector store is up, every scope dimension
+// is pushed into Milvus as a native scalar-column expression and the engine
+// returns the result already reduced to the requested limit: it pages the ranked
+// search by offset so the per-conversation cap and min_score fill the limit
+// deterministically instead of starving it, reusing one query embedding across
+// pages. When the store is down, the literal chunk cache ranks a bounded
+// over-fetch and reduces it in process.
 func (manager *Manager) searchConversationCollectionFiltered(ctx context.Context, codebase model.Codebase, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	fetchLimit := inflatedConversationSearchLimit(limit, perConversationLimit)
 
 	if manager.semantic != nil && manager.semantic.Available() {
-		chunks, err := manager.semantic.SearchConversationCollection(ctx, codebase.CollectionName, query, fetchLimit, filter.toSemanticFilter())
+		chunks, err := manager.semantic.SearchConversationCollectionCapped(ctx, codebase.CollectionName, query, limit, perConversationLimit, filter.MinScore, filter.toSemanticFilter())
 		if err == nil {
 			manager.noteDependencyHealthy()
-			return applyConversationSearchFilter(chunks, filter, perConversationLimit, limit), nil
+			return chunks, nil
 		}
 		manager.noteDependencyFailure(err)
 		slog.ErrorContext(ctx, "search conversation collection failed", "collection", codebase.CollectionName, "err", err)
 	}
 
+	fetchLimit := inflatedConversationSearchLimit(limit, perConversationLimit)
 	return manager.searchConversationChunkCache(ctx, codebase, query, limit, fetchLimit, filter, perConversationLimit)
 }
 

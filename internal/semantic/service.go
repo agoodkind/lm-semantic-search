@@ -359,24 +359,6 @@ func (service *Service) Search(ctx context.Context, codebasePath string, query s
 	return service.searchCollection(ctx, collectionName, query, limit, buildSearchFilter(extensionFilter, []string{relativePathPrefix}))
 }
 
-// SearchConversationCollection executes semantic or hybrid search against a
-// registered virtual conversation collection name. relativePathPrefixes scopes
-// retrieval to the given path subtrees (a conversation's rows live under its
-// conv/<id>/ prefix); an empty set searches the whole collection.
-func (service *Service) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32, filter ConversationFilter) ([]model.StoredChunk, error) {
-	if !service.Available() {
-		return nil, nil
-	}
-	trimmedCollectionName := strings.TrimSpace(collectionName)
-	if trimmedCollectionName == "" {
-		return nil, errors.New("conversation collection name is required")
-	}
-	if err := service.ensureConversationScalarColumnsOnce(ctx, trimmedCollectionName); err != nil {
-		return nil, err
-	}
-	return service.searchConversationBatched(ctx, trimmedCollectionName, query, limit, filter)
-}
-
 // queryTextForEmbedding applies the configured query instruction prefix to
 // the dense query embed. The sparse (BM25) leg keeps the raw query text, and
 // stored document vectors are never prefixed, so the index stays valid.
@@ -404,7 +386,16 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
-	searchLimit := int(limit)
+	return service.searchCollectionWithVector(ctx, collectionName, queryVector, query, int(limit), 0, filterExpr)
+}
+
+// searchCollectionWithVector runs one search at the given offset using a
+// precomputed dense query vector, so a paged caller embeds the query exactly
+// once and reuses the vector across pages. rawQuery feeds the BM25 sparse leg,
+// which is lexical and never embeds. The caller confirms the collection exists;
+// offset zero is an ordinary first-page search.
+func (service *Service) searchCollectionWithVector(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, limit int, offset int, filterExpr string) ([]model.StoredChunk, error) {
+	searchLimit := limit
 	if searchLimit <= 0 {
 		searchLimit = 10
 	}
@@ -427,23 +418,23 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 
 	if service.cfg.HybridMode {
 		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, maxInt(searchLimit, 10), entity.FloatVector(queryVector))
-		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, maxInt(searchLimit, 10), entity.Text(query))
+		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, maxInt(searchLimit, 10), entity.Text(rawQuery))
 		if filterExpr != "" {
 			denseRequest = denseRequest.WithFilter(filterExpr)
 			sparseRequest = sparseRequest.WithFilter(filterExpr)
 		}
-		resultSets, err := service.milvus.HybridSearch(ctx, milvusclient.NewHybridSearchOption(
+		hybridOption := milvusclient.NewHybridSearchOption(
 			collectionName,
 			searchLimit,
 			denseRequest,
 			sparseRequest,
-		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...))
+		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...)
+		if offset > 0 {
+			hybridOption = hybridOption.WithOffset(offset)
+		}
+		resultSets, err := service.milvus.HybridSearch(ctx, hybridOption)
 		if err != nil {
-			slog.ErrorContext(ctx, "hybrid search failed", "collection", collectionName, "err", err)
-			if sentinel := storeSearchSentinel(err); sentinel != nil {
-				return nil, sentinel
-			}
-			return nil, fmt.Errorf("hybrid search collection %s: %w", collectionName, err)
+			return nil, searchErr(ctx, "hybrid search", collectionName, err)
 		}
 		return resultSetsToChunks(resultSets)
 	}
@@ -456,16 +447,26 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 	if filterExpr != "" {
 		searchOption = searchOption.WithFilter(filterExpr)
 	}
+	if offset > 0 {
+		searchOption = searchOption.WithOffset(offset)
+	}
 
 	resultSets, err := service.milvus.Search(ctx, searchOption)
 	if err != nil {
-		slog.ErrorContext(ctx, "dense search failed", "collection", collectionName, "err", err)
-		if sentinel := storeSearchSentinel(err); sentinel != nil {
-			return nil, sentinel
-		}
-		return nil, fmt.Errorf("search collection %s: %w", collectionName, err)
+		return nil, searchErr(ctx, "dense search", collectionName, err)
 	}
 	return resultSetsToChunks(resultSets)
+}
+
+// searchErr logs a Milvus search failure and maps it to a typed store sentinel
+// when one applies, otherwise wraps it with the operation and collection for
+// context.
+func searchErr(ctx context.Context, operation string, collectionName string, err error) error {
+	slog.ErrorContext(ctx, operation+" failed", "collection", collectionName, "err", err)
+	if sentinel := storeSearchSentinel(err); sentinel != nil {
+		return sentinel
+	}
+	return fmt.Errorf("%s collection %s: %w", operation, collectionName, err)
 }
 
 // Drop removes one semantic index collection.
