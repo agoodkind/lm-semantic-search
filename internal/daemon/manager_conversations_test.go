@@ -3,12 +3,14 @@ package daemon
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/indexer"
+	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
@@ -912,5 +914,120 @@ func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
 	}
 	if len(soloReuse) != 0 {
 		t.Fatalf("conv-solo reindex reuse = %v, want empty after load failure", soloReuse)
+	}
+}
+
+// TestItemSourceAbsencePolicy proves the two sources declare opposite policies:
+// a code source deletes a file the walk no longer finds, while a conversation
+// source retains a conversation missing from a push.
+func TestItemSourceAbsencePolicy(t *testing.T) {
+	t.Parallel()
+
+	code := newCodeItemSource(fakeRunner{}, "/repo", defaultIndexConfig(), nil)
+	if code.absencePolicy() != absenceDeleteGuarded {
+		t.Fatalf("code absencePolicy = %v, want absenceDeleteGuarded", code.absencePolicy())
+	}
+	conversation := newConversationItemSource("conv_chunks_test", map[string]string{}, nil)
+	if conversation.absencePolicy() != absenceRetain {
+		t.Fatalf("conversation absencePolicy = %v, want absenceRetain", conversation.absencePolicy())
+	}
+}
+
+// TestConversationIngestRetainsConversationsAbsentFromManifest proves the
+// retain-on-absence policy: a conversation missing from a later push is kept,
+// not deleted. Its chunks stay in the literal cache, its id stays in the
+// snapshot, a restoring push is a no-op, and only an explicit delete removes a
+// conversation. This guards the index against a transient mass disappearance of
+// transcript files.
+func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{unavailable: true}
+	ctx := context.Background()
+	collectionID := "thread-retain"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+
+	fullManifest := map[string]string{
+		"conv-0": "fp-0",
+		"conv-1": "fp-1",
+		"conv-2": "fp-2",
+		"conv-3": "fp-3",
+		"conv-4": "fp-4",
+	}
+	fullDocuments := []model.ConversationDocument{
+		{ConversationID: "conv-0", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "zero"},
+		{ConversationID: "conv-1", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "one"},
+		{ConversationID: "conv-2", MessageIndex: 0, Role: "user", TimestampUnix: 1712345002, Text: "two"},
+		{ConversationID: "conv-3", MessageIndex: 0, Role: "user", TimestampUnix: 1712345003, Text: "three"},
+		{ConversationID: "conv-4", MessageIndex: 0, Role: "user", TimestampUnix: 1712345004, Text: "four"},
+	}
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, fullDocuments, fullManifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("first upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
+
+	if chunks := readConversationChunkCache(t, manager, codebase.ID); len(chunks) != 5 {
+		t.Fatalf("after full push cache has %d conversations, want 5", len(chunks))
+	}
+
+	// The second push omits conv-2, conv-3, and conv-4 and delivers no documents.
+	// Retain-on-absence keeps them: no removal runs, the cache keeps all five, and
+	// the snapshot still lists the omitted ids.
+	reducedManifest := map[string]string{"conv-0": "fp-0", "conv-1": "fp-1"}
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, reducedManifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, secondJob.ID, model.JobStateCompleted)
+
+	cache := readConversationChunkCache(t, manager, codebase.ID)
+	if len(cache) != 5 {
+		t.Fatalf("after omitting three conversations cache has %d, want 5 retained", len(cache))
+	}
+	retained := conversationIDsFromChunks(cache)
+	for _, conversationID := range []string{"conv-2", "conv-3", "conv-4"} {
+		if !slices.Contains(retained, conversationID) {
+			t.Fatalf("cache dropped %s on absence; have %v", conversationID, retained)
+		}
+	}
+
+	snapshot, err := merkle.ReadSnapshot(manager.merklePath(codebase.ID))
+	if err != nil {
+		t.Fatalf("ReadSnapshot returned error: %v", err)
+	}
+	for _, conversationID := range []string{"conv-2", "conv-3", "conv-4"} {
+		if _, present := snapshot.Files[conversationID]; !present {
+			t.Fatalf("snapshot dropped %s on absence; have %v", conversationID, snapshot.Files)
+		}
+	}
+
+	// A restoring push sends the full manifest again with no documents. The ids and
+	// fingerprints already match, so nothing re-embeds and the cache is unchanged.
+	thirdJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, fullManifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("third upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, thirdJob.ID, model.JobStateCompleted)
+	if chunks := readConversationChunkCache(t, manager, codebase.ID); len(chunks) != 5 {
+		t.Fatalf("after restoring push cache has %d, want 5", len(chunks))
+	}
+
+	// An explicit single-conversation delete still removes one conversation.
+	deleteJob, err := manager.DeleteConversation(ctx, collectionID, "conv-2")
+	if err != nil {
+		t.Fatalf("DeleteConversation returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, deleteJob.ID, model.JobStateCompleted)
+	cache = readConversationChunkCache(t, manager, codebase.ID)
+	if len(cache) != 4 {
+		t.Fatalf("after explicit delete cache has %d, want 4", len(cache))
+	}
+	if slices.Contains(conversationIDsFromChunks(cache), "conv-2") {
+		t.Fatalf("explicit delete left conv-2 in the cache; have %v", conversationIDsFromChunks(cache))
 	}
 }

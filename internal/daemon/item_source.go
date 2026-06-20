@@ -26,6 +26,12 @@ type itemSource interface {
 	indexOne(ctx context.Context, itemID string) (indexer.OneFileResult, error)
 	// removalFor maps item ids to the store removal that drops their prior rows.
 	removalFor(itemIDs []string) semantic.Removal
+	// absencePolicy reports what the delta routine does with an item the store
+	// holds that the current capture omits. A code source deletes the missing
+	// item under the large-delete quarantine guard. A conversation source
+	// retains it, because a transcript missing from a push is almost always a
+	// transient disappearance rather than an intended deletion.
+	absencePolicy() absencePolicy
 	// reuseSource names where one item's already-embedded vectors live: the
 	// collection and the relativePath scope that limits the read. Scope none
 	// means the item has no per-item reuse source and every chunk embeds. A
@@ -36,6 +42,17 @@ type itemSource interface {
 	// unit is the human progress noun, "file" or "document".
 	unit() string
 }
+
+// absencePolicy is what runDeltaSync does with an item the store holds that the
+// current capture omits. absenceDeleteGuarded removes the item, gated by the
+// large-delete quarantine. absenceRetain keeps the item and its rows so a
+// transient mass disappearance cannot wipe the index.
+type absencePolicy int
+
+const (
+	absenceDeleteGuarded absencePolicy = iota
+	absenceRetain
+)
 
 type itemReuseScope string
 
@@ -118,6 +135,12 @@ func (source codeItemSource) removalFor(itemIDs []string) semantic.Removal {
 	return semantic.RemovePaths(itemIDs)
 }
 
+// absencePolicy deletes a file the walk no longer finds, under the large-delete
+// quarantine guard, because an absent file is a real filesystem deletion.
+func (source codeItemSource) absencePolicy() absencePolicy {
+	return absenceDeleteGuarded
+}
+
 // reuseSource points one code file's reuse read at exactly its existing live
 // rows. Loaded before the delete, those vectors let unchanged chunks inside a
 // modified file skip the embedder without reading like-prefix neighbor paths.
@@ -194,6 +217,15 @@ func (source conversationItemSource) removalFor(itemIDs []string) semantic.Remov
 		prefixes = append(prefixes, conversationRelativePathPrefix(conversationID))
 	}
 	return semantic.RemovePrefixes(prefixes)
+}
+
+// absencePolicy retains a conversation missing from the manifest rather than
+// deleting it. A transcript absent from a push is almost always a transient
+// disappearance, so the rows stay and a later restoring push is a no-op. The
+// explicit single-conversation delete is the only path that removes a
+// conversation.
+func (source conversationItemSource) absencePolicy() absencePolicy {
+	return absenceRetain
 }
 
 // reuseSource points one conversation's reuse read at its own rows in the live
