@@ -653,6 +653,7 @@ func conversationDocumentsToStoredChunks(documents []model.ConversationDocument)
 				Role:                 document.Role,
 				TimestampUnix:        document.TimestampUnix,
 				WorkspaceRoot:        document.WorkspaceRoot,
+				Archived:             document.Archived,
 				Score:                0,
 			})
 		}

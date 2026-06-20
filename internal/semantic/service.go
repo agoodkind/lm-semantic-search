@@ -620,6 +620,7 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 			WithVarcharColumn(roleFieldName, scalars.roles).
 			WithVarcharColumn(providerFieldName, scalars.providers).
 			WithVarcharColumn(workspaceRootFieldName, scalars.workspaceRoots).
+			WithBoolColumn(archivedFieldName, scalars.archiveds).
 			WithInt64Column(timestampUnixFieldName, scalars.timestamps).
 			WithInt64Column(messageIndexFieldName, scalars.messageIndexes)
 	}
@@ -714,6 +715,7 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			Role:                 metadataValue.Role,
 			TimestampUnix:        metadataValue.timestampUnix(),
 			WorkspaceRoot:        workspaceRootValue,
+			Archived:             false,
 			Score:                score,
 		})
 	}

@@ -19,6 +19,7 @@ type conversationScalarColumns struct {
 	roles                 []string
 	providers             []string
 	workspaceRoots        []string
+	archiveds             []bool
 	timestamps            []int64
 	messageIndexes        []int64
 }
@@ -32,6 +33,7 @@ func newConversationScalarColumns(enabled bool, capacity int) conversationScalar
 			roles:                 nil,
 			providers:             nil,
 			workspaceRoots:        nil,
+			archiveds:             nil,
 			timestamps:            nil,
 			messageIndexes:        nil,
 		}
@@ -43,6 +45,7 @@ func newConversationScalarColumns(enabled bool, capacity int) conversationScalar
 		roles:                 make([]string, 0, capacity),
 		providers:             make([]string, 0, capacity),
 		workspaceRoots:        make([]string, 0, capacity),
+		archiveds:             make([]bool, 0, capacity),
 		timestamps:            make([]int64, 0, capacity),
 		messageIndexes:        make([]int64, 0, capacity),
 	}
@@ -57,6 +60,7 @@ func (columns *conversationScalarColumns) append(chunk model.StoredChunk) {
 	columns.roles = append(columns.roles, strings.ToLower(chunk.Role))
 	columns.providers = append(columns.providers, providerFromConversationID(chunk.ConversationID))
 	columns.workspaceRoots = append(columns.workspaceRoots, chunk.WorkspaceRoot)
+	columns.archiveds = append(columns.archiveds, chunk.Archived)
 	columns.timestamps = append(columns.timestamps, chunk.TimestampUnix)
 	columns.messageIndexes = append(columns.messageIndexes, int64(chunk.MessageIndex))
 }

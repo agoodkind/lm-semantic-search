@@ -273,6 +273,9 @@ message ConversationDocument {
   // empty when unknown. provider is derived from the conversation_id prefix and
   // is not carried here.
   string workspace_root = 7;
+  // archived marks a conversation hidden from normal clyde lists. clyde owns
+  // this value, and it defaults false when unset.
+  bool archived = 8;
 }
 
 message ConversationSearchResult {

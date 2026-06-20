@@ -903,6 +903,7 @@ func pbConversationDocuments(documents []*pb.ConversationDocument) []model.Conve
 			TimestampUnix:        document.GetTimestampUnix(),
 			Text:                 document.GetText(),
 			WorkspaceRoot:        document.GetWorkspaceRoot(),
+			Archived:             document.GetArchived(),
 		})
 	}
 	return result
