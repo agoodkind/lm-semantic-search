@@ -4097,8 +4097,14 @@ type ConversationSearchFilter struct {
 	// resolves a workspace prefix filter into the small set of matching roots
 	// (one value per workspace directory) so the engine does an exact IN.
 	WorkspaceRoots []string `protobuf:"bytes,10,rep,name=workspace_roots,json=workspaceRoots,proto3" json:"workspace_roots,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// archived, when set, keeps only hits whose archived column equals the value.
+	// It filters the nullable archived scalar, so a row whose archived is still
+	// NULL (an old row the enrichment backfill has not reached) is excluded by
+	// either value; clyde should send it only after the backfill populates
+	// archived across the corpus.
+	Archived      *bool `protobuf:"varint,11,opt,name=archived,proto3,oneof" json:"archived,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConversationSearchFilter) Reset() {
@@ -4199,6 +4205,13 @@ func (x *ConversationSearchFilter) GetWorkspaceRoots() []string {
 		return x.WorkspaceRoots
 	}
 	return nil
+}
+
+func (x *ConversationSearchFilter) GetArchived() bool {
+	if x != nil && x.Archived != nil {
+		return *x.Archived
+	}
+	return false
 }
 
 type SearchConversationsRequest struct {
@@ -5044,7 +5057,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x06client\x18\x03 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"V\n" +
 	"\x1aDeleteConversationResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\x8f\x03\n" +
+	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\xbd\x03\n" +
 	"\x18ConversationSearchFilter\x12\x14\n" +
 	"\x05roles\x18\x01 \x03(\tR\x05roles\x12\x1b\n" +
 	"\tfrom_unix\x18\x02 \x01(\x03R\bfromUnix\x12\x1d\n" +
@@ -5057,7 +5070,9 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x13message_index_until\x18\b \x01(\x05R\x11messageIndexUntil\x12\x1c\n" +
 	"\tproviders\x18\t \x03(\tR\tproviders\x12'\n" +
 	"\x0fworkspace_roots\x18\n" +
-	" \x03(\tR\x0eworkspaceRoots\"\xea\x01\n" +
+	" \x03(\tR\x0eworkspaceRoots\x12\x1f\n" +
+	"\barchived\x18\v \x01(\bH\x00R\barchived\x88\x01\x01B\v\n" +
+	"\t_archived\"\xea\x01\n" +
 	"\x1aSearchConversationsRequest\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x14\n" +
 	"\x05query\x18\x02 \x01(\tR\x05query\x12\x14\n" +
@@ -5339,6 +5354,7 @@ func file_lmsemanticsearch_v1_service_proto_init() {
 		(*BackfillConversationScalarsChunk_Header)(nil),
 		(*BackfillConversationScalarsChunk_Entries)(nil),
 	}
+	file_lmsemanticsearch_v1_service_proto_msgTypes[55].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

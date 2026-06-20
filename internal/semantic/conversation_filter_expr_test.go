@@ -47,6 +47,34 @@ func TestConversationFilterBuildExprEscapesStrings(t *testing.T) {
 	}
 }
 
+func TestConversationFilterBuildExprArchived(t *testing.T) {
+	t.Parallel()
+
+	archivedFalse := false
+	archivedTrue := true
+	tests := []struct {
+		name     string
+		archived *bool
+		want     string
+	}{
+		{name: "nil archived adds no clause", archived: nil, want: ""},
+		{name: "false keeps non-archived rows", archived: &archivedFalse, want: "archived == false"},
+		{name: "true keeps archived rows", archived: &archivedTrue, want: "archived == true"},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ConversationFilter{Archived: test.archived}.buildExpr()
+			if got != test.want {
+				t.Fatalf("buildExpr() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestBatchConversationIDs(t *testing.T) {
 	t.Parallel()
 

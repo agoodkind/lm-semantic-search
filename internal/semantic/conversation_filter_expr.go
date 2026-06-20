@@ -40,6 +40,12 @@ type ConversationFilter struct {
 	UntilUnix            int64
 	MessageIndexFrom     int32
 	MessageIndexUntil    int32
+	// Archived, when non-nil, keeps only rows whose archived column equals the
+	// pointed-to value. It filters on the nullable archived scalar, so a row
+	// whose archived is still NULL (an old row not yet reached by the enrichment
+	// backfill) is excluded by either value; callers should send it only once
+	// the backfill has populated archived across the corpus.
+	Archived *bool
 }
 
 // HasConversationScope reports whether the filter restricts retrieval to a
@@ -54,7 +60,7 @@ func (filter ConversationFilter) HasConversationScope() bool {
 // collection. Role values are lowercased to match the lowercased role column,
 // so role filtering is case-insensitive across providers.
 func (filter ConversationFilter) buildExpr() string {
-	clauses := make([]string, 0, 9)
+	clauses := make([]string, 0, 10)
 	if clause := inStringClause(providerFieldName, filter.Providers); clause != "" {
 		clauses = append(clauses, clause)
 	}
@@ -81,6 +87,9 @@ func (filter ConversationFilter) buildExpr() string {
 	}
 	if filter.MessageIndexUntil > 0 {
 		clauses = append(clauses, fmt.Sprintf("%s < %d", messageIndexFieldName, filter.MessageIndexUntil))
+	}
+	if filter.Archived != nil {
+		clauses = append(clauses, fmt.Sprintf("%s == %t", archivedFieldName, *filter.Archived))
 	}
 	return strings.Join(clauses, " and ")
 }

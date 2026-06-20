@@ -590,6 +590,12 @@ message ConversationSearchFilter {
   // resolves a workspace prefix filter into the small set of matching roots
   // (one value per workspace directory) so the engine does an exact IN.
   repeated string workspace_roots = 10;
+  // archived, when set, keeps only hits whose archived column equals the value.
+  // It filters the nullable archived scalar, so a row whose archived is still
+  // NULL (an old row the enrichment backfill has not reached) is excluded by
+  // either value; clyde should send it only after the backfill populates
+  // archived across the corpus.
+  optional bool archived = 11;
 }
 
 message SearchConversationsRequest {

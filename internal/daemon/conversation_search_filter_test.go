@@ -149,6 +149,43 @@ func TestConversationSearchFilterWorkspaceRoots(t *testing.T) {
 	}
 }
 
+// TestConversationSearchFilterArchived proves the Archived branch matches a
+// chunk by its archived value when the filter is set, and ignores archived
+// entirely when the filter is nil.
+func TestConversationSearchFilterArchived(t *testing.T) {
+	t.Parallel()
+
+	archivedChunk := filterTestChunk("claude:thread-a", 0, "user", 1000, 0.8)
+	archivedChunk.Archived = true
+	liveChunk := filterTestChunk("claude:thread-b", 0, "user", 1000, 0.8)
+	liveChunk.Archived = false
+
+	nilFilter := emptyConversationSearchFilter()
+	if !nilFilter.matchesScope(archivedChunk) || !nilFilter.matchesScope(liveChunk) {
+		t.Fatal("nil archived filter rejected a chunk, want match-everything")
+	}
+
+	wantLive := false
+	liveFilter := emptyConversationSearchFilter()
+	liveFilter.Archived = &wantLive
+	if !liveFilter.matchesScope(liveChunk) {
+		t.Fatal("archived=false filter rejected a non-archived chunk")
+	}
+	if liveFilter.matchesScope(archivedChunk) {
+		t.Fatal("archived=false filter matched an archived chunk")
+	}
+
+	wantArchived := true
+	archivedFilter := emptyConversationSearchFilter()
+	archivedFilter.Archived = &wantArchived
+	if !archivedFilter.matchesScope(archivedChunk) {
+		t.Fatal("archived=true filter rejected an archived chunk")
+	}
+	if archivedFilter.matchesScope(liveChunk) {
+		t.Fatal("archived=true filter matched a non-archived chunk")
+	}
+}
+
 // TestApplyConversationSearchFilterCapsPerConversation proves the
 // per-conversation cap keeps each conversation's earliest (highest-ranked)
 // hits and the overall limit truncates the final list.
