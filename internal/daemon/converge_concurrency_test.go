@@ -94,7 +94,7 @@ func (f *fakeSemantic) Search(ctx context.Context, codebasePath string, query st
 	return nil, nil
 }
 
-func (f *fakeSemantic) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32, filter semantic.ConversationFilter) ([]model.StoredChunk, error) {
+func (f *fakeSemantic) SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, _ int32, _ float64, filter semantic.ConversationFilter) ([]model.StoredChunk, error) {
 	f.mu.Lock()
 	f.conversationSearchScopes = append(f.conversationSearchScopes, append([]string(nil), filter.ConversationIDs...))
 	f.mu.Unlock()
