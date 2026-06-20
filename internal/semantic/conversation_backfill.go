@@ -190,6 +190,7 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 	fileExtensionColumn := resultSet.GetColumn(fileExtensionFieldName)
 	metadataColumn := resultSet.GetColumn(metadataFieldName)
 	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
+	workspaceRootColumn := resultSet.GetColumn(workspaceRootFieldName)
 	if idColumn == nil || contentColumn == nil || relativePathColumn == nil || vectorColumn == nil {
 		return nil, nil, nil, ErrSearchResultIncomplete
 	}
@@ -242,7 +243,7 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 			MessageIndex:         metadata.messageIndex(),
 			Role:                 metadata.Role,
 			TimestampUnix:        metadata.timestampUnix(),
-			WorkspaceRoot:        "",
+			WorkspaceRoot:        backfillString(workspaceRootColumn, rowIndex),
 			Archived:             false,
 			Score:                0,
 		})
@@ -340,10 +341,12 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 }
 
 // partitionConversationEnrichment splits one backfill page into the rows whose
-// conversation has a clyde-supplied workspace, setting chunk.WorkspaceRoot and
-// chunk.Archived from the enrichment, and counts the rest as orphans whose
-// artifact is gone. The caller writes only the resolvable rows and leaves
-// orphans empty. The chunks slice is mutated in place for the resolvable rows.
+// conversation clyde still knows and the orphans whose conversation is absent
+// from the enrichment (its artifact is gone). For a known conversation it sets
+// chunk.Archived from the enrichment and fills chunk.WorkspaceRoot from the
+// enrichment only when the row's own workspace is empty, so a row that already
+// carries a workspace keeps it. The chunks slice is mutated in place for the
+// resolvable rows; orphans are left untouched.
 func partitionConversationEnrichment(ids []string, chunks []model.StoredChunk, vectors [][]float32, enrichment ConversationEnrichment) ([]string, []model.StoredChunk, [][]float32, int) {
 	fillIDs := make([]string, 0, len(ids))
 	fillChunks := make([]model.StoredChunk, 0, len(chunks))
@@ -351,11 +354,13 @@ func partitionConversationEnrichment(ids []string, chunks []model.StoredChunk, v
 	orphan := 0
 	for index := range ids {
 		value, ok := enrichment[chunks[index].ConversationID]
-		if !ok || value.WorkspaceRoot == "" {
+		if !ok {
 			orphan++
 			continue
 		}
-		chunks[index].WorkspaceRoot = value.WorkspaceRoot
+		if chunks[index].WorkspaceRoot == "" {
+			chunks[index].WorkspaceRoot = value.WorkspaceRoot
+		}
 		chunks[index].Archived = value.Archived
 		fillIDs = append(fillIDs, ids[index])
 		fillChunks = append(fillChunks, chunks[index])
@@ -365,13 +370,16 @@ func partitionConversationEnrichment(ids []string, chunks []model.StoredChunk, v
 }
 
 // BackfillConversationEnrichment writes the clyde-supplied enrichment columns
-// (workspaceRoot and archived) onto rows that have workspaceRoot empty, from an
-// enrichment keyed by conversation id, preserving each row's dense vector so
-// nothing is re-embedded. It iterates only the empty rows (WithFilter), so it
-// never re-touches the whole collection. A row whose conversation id is absent
-// from the enrichment is an orphan (its artifact is gone) and is left empty.
-// When dryRun is true it counts the would-change and orphan rows and writes
-// nothing. Returns (changed, orphan).
+// (workspaceRoot and archived) onto the rows missing either, from an enrichment
+// keyed by conversation id, preserving each row's dense vector so nothing is
+// re-embedded. It iterates only the rows whose workspaceRoot is empty or whose
+// archived is still null (WithFilter), so it touches a row only while it needs
+// enrichment, never a fully-populated row. It reads each row's existing
+// workspaceRoot so filling archived on a row that already has a workspace keeps
+// that workspace. A row whose conversation id is absent from the enrichment is
+// an orphan (its artifact is gone) and is left untouched. When dryRun is true it
+// counts the would-change and orphan rows and writes nothing. Returns
+// (changed, orphan).
 func (service *Service) BackfillConversationEnrichment(ctx context.Context, collectionName string, enrichment ConversationEnrichment, dryRun bool) (int, int, error) {
 	if !service.Available() {
 		return 0, 0, ErrUnavailable
@@ -387,8 +395,8 @@ func (service *Service) BackfillConversationEnrichment(ctx context.Context, coll
 	}
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(conversationBackfillBatchSize).
-		WithFilter(workspaceRootFieldName+` == ""`).
-		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName))
+		WithFilter(workspaceRootFieldName+` == "" or `+archivedFieldName+` is null`).
+		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName, workspaceRootFieldName))
 	if err != nil {
 		slog.ErrorContext(ctx, "open conversation workspace backfill iterator failed", "collection", collectionName, "err", err)
 		return 0, 0, fmt.Errorf("open workspace backfill iterator for %s: %w", collectionName, err)
