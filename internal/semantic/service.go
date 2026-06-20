@@ -75,6 +75,10 @@ type Service struct {
 	// *conversationScalarMigration, gating the one-time scalar-column migration to
 	// once per collection per process. See ensureConversationScalarColumnsOnce.
 	ensuredConvColumns sync.Map
+	// ensuredMmapEnabled records the collections this process has confirmed
+	// mmap-migrated, so the daemon's periodic mmap sweep skips them with no RPC.
+	// See ensureMmapEnabledOnce.
+	ensuredMmapEnabled sync.Map
 }
 
 // NewService constructs the semantic search runtime.
@@ -89,6 +93,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			reconnectDone:      nil,
 			closeOnce:          sync.Once{},
 			ensuredConvColumns: sync.Map{},
+			ensuredMmapEnabled: sync.Map{},
 		}, nil
 	}
 
@@ -107,6 +112,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		reconnectDone:      nil,
 		closeOnce:          sync.Once{},
 		ensuredConvColumns: sync.Map{},
+		ensuredMmapEnabled: sync.Map{},
 	}
 
 	client, err := service.dialMilvus(ctx)

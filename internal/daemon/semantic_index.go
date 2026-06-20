@@ -60,6 +60,15 @@ type semanticDropper interface {
 	DropStaging(ctx context.Context, codebasePath string) error
 }
 
+// semanticMaintainer runs background store-maintenance migrations that change
+// collection storage layout in place without re-embedding. The daemon's periodic
+// sync loop drives these; they are idempotent and safe to call every tick.
+type semanticMaintainer interface {
+	// EnsureMmapEnabledAllCollections enables dense-vector mmap on every
+	// collection, converging across ticks and skipping already-migrated ones.
+	EnsureMmapEnabledAllCollections(ctx context.Context)
+}
+
 // semanticIndex is the full embedding-and-vector-store surface the manager
 // depends on. It exists so tests can substitute a fake for the Milvus-backed
 // [semantic.Service]; the concrete service satisfies it. The method set is
@@ -70,4 +79,5 @@ type semanticIndex interface {
 	semanticReuseLoader
 	semanticWriter
 	semanticDropper
+	semanticMaintainer
 }

@@ -262,6 +262,9 @@ func (f *fakeSemantic) CopyChunks(ctx context.Context, codebasePath string, src 
 }
 
 func (f *fakeSemantic) PruneToCurrent(context.Context, string, []string) error { return nil }
+
+func (f *fakeSemantic) EnsureMmapEnabledAllCollections(context.Context) {}
+
 func (f *fakeSemantic) Drop(_ context.Context, codebasePath string) error {
 	f.mu.Lock()
 	f.dropped = append(f.dropped, codebasePath)

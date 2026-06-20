@@ -124,11 +124,26 @@ func (syncer *BackgroundSync) runPeriodicSync(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-initialTimer.C:
+			syncer.ensureMmapEnabled(ctx)
 			syncer.runSyncAll(ctx, "startup")
 		case <-ticker.C:
+			syncer.ensureMmapEnabled(ctx)
 			syncer.runSyncAll(ctx, "interval")
 		}
 	}
+}
+
+// ensureMmapEnabled drives the idempotent dense-vector mmap migration across all
+// collections once per periodic tick. It is a no-op when Milvus is unavailable
+// and near-free after the first successful sweep (already-migrated collections
+// are in-memory guard hits), so it is safe to run on every tick. Running it from
+// the periodic loop gives the migration convergence and self-heal without putting
+// migration policy in the semantic connection layer.
+func (syncer *BackgroundSync) ensureMmapEnabled(ctx context.Context) {
+	if syncer.manager == nil || syncer.manager.semantic == nil {
+		return
+	}
+	syncer.manager.semantic.EnsureMmapEnabledAllCollections(ctx)
 }
 
 func (syncer *BackgroundSync) watchTrigger(ctx context.Context) {
