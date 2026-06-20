@@ -71,8 +71,9 @@ type Service struct {
 	reconnectCancel context.CancelFunc
 	reconnectDone   chan struct{}
 	closeOnce       sync.Once
-	// ensuredConvColumns gates the one-time scalar-column migration to once per
-	// conversation collection per process. See ensureConversationScalarColumnsOnce.
+	// ensuredConvColumns maps a conversation collection name to its
+	// *conversationScalarMigration, gating the one-time scalar-column migration to
+	// once per collection per process. See ensureConversationScalarColumnsOnce.
 	ensuredConvColumns sync.Map
 }
 
@@ -404,6 +405,13 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 		fileExtensionFieldName,
 		metadataFieldName,
 	}
+	if isConversationCollection(collectionName) {
+		// Conversation collections carry workspaceRoot as a native scalar column.
+		// Request it so a workspace_roots post-filter on the daemon side sees the
+		// real value rather than the empty default; code collections have no such
+		// column, so they keep the base output set.
+		outputFields = append(outputFields, workspaceRootFieldName)
+	}
 
 	if service.cfg.HybridMode {
 		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, maxInt(searchLimit, 10), entity.FloatVector(queryVector))
@@ -541,6 +549,15 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 
 	insertOption := milvusclient.NewColumnBasedInsertOption(collectionName)
 	conversationCollection := isConversationCollection(collectionName)
+	if conversationCollection {
+		// A pre-existing conv_chunks_* collection created before the scalar columns
+		// existed has no conversationId/provider/etc. fields, so an insert that
+		// populates them fails with unknown fields. Run the once-guarded migration
+		// first so the columns exist before this batch references them.
+		if err := service.ensureConversationScalarColumnsOnce(ctx, collectionName); err != nil {
+			return err
+		}
+	}
 
 	ids := make([]string, 0, len(chunks))
 	contents := make([]string, 0, len(chunks))
@@ -616,6 +633,11 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 	endLineColumn := resultSet.GetColumn(endLineFieldName)
 	fileExtensionColumn := resultSet.GetColumn(fileExtensionFieldName)
 	metadataColumn := resultSet.GetColumn(metadataFieldName)
+	// workspaceRoot is only present on conversation-collection result sets, where
+	// the search requests the native scalar column. It is nil for code
+	// collections and on rows that never carried a workspace root, so reads stay
+	// optional and default to empty.
+	workspaceRootColumn := resultSet.GetColumn(workspaceRootFieldName)
 	if contentColumn == nil || relativePathColumn == nil || startLineColumn == nil || endLineColumn == nil || fileExtensionColumn == nil {
 		return nil, ErrSearchResultIncomplete
 	}
@@ -655,6 +677,13 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			}
 		}
 
+		workspaceRootValue := ""
+		if workspaceRootColumn != nil {
+			if rootValue, rootErr := workspaceRootColumn.GetAsString(index); rootErr == nil {
+				workspaceRootValue = rootValue
+			}
+		}
+
 		score := 0.0
 		if index < len(resultSet.Scores) {
 			score = float64(resultSet.Scores[index])
@@ -671,7 +700,7 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			MessageIndex:         metadataValue.messageIndex(),
 			Role:                 metadataValue.Role,
 			TimestampUnix:        metadataValue.timestampUnix(),
-			WorkspaceRoot:        "",
+			WorkspaceRoot:        workspaceRootValue,
 			Score:                score,
 		})
 	}

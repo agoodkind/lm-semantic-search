@@ -192,6 +192,11 @@ func (service *Service) upsertConversationBackfillBatch(ctx context.Context, col
 		scalars.append(chunk)
 	}
 
+	// workspaceRoot is intentionally omitted from the backfill upsert: it is not
+	// carried in the stored metadata JSON, so a backfilled value would be the
+	// empty string, which writes a non-NULL "" and contradicts the "stays null on
+	// old rows" contract. Leaving the nullable column out of the upsert preserves
+	// NULL, and workspace filtering falls back to the conversation_id column.
 	option := milvusclient.NewColumnBasedInsertOption(collectionName).
 		WithVarcharColumn(idFieldName, ids).
 		WithVarcharColumn(contentFieldName, contents).
@@ -205,7 +210,6 @@ func (service *Service) upsertConversationBackfillBatch(ctx context.Context, col
 		WithVarcharColumn(parentConversationIDFieldName, scalars.parentConversationIDs).
 		WithVarcharColumn(roleFieldName, scalars.roles).
 		WithVarcharColumn(providerFieldName, scalars.providers).
-		WithVarcharColumn(workspaceRootFieldName, scalars.workspaceRoots).
 		WithInt64Column(timestampUnixFieldName, scalars.timestamps).
 		WithInt64Column(messageIndexFieldName, scalars.messageIndexes)
 

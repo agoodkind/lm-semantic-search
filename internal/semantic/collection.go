@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
@@ -156,23 +157,43 @@ func (service *Service) ensureConversationScalarColumns(ctx context.Context, col
 	return nil
 }
 
+// conversationScalarMigration guards the one-time scalar-column migration for a
+// single conversation collection. The [sync.Once] runs the migration exactly once
+// even when several goroutines race, and err caches the result so every waiter
+// observes the same outcome. A failed migration is not cached as done, so a
+// later call retries it.
+type conversationScalarMigration struct {
+	once sync.Once
+	err  error
+}
+
 // ensureConversationScalarColumnsOnce runs the scalar-column migration at most
 // once per conversation collection per process. The search and insert paths
 // both call it so a pre-migration collection gains its native filter columns
 // before the first native-filtered search or scalar-populated insert, without
-// paying a DescribeCollection on every call.
+// paying a DescribeCollection on every call. The per-collection [sync.Once] makes
+// concurrent callers safe: only one runs DescribeCollection/AddCollectionField,
+// and the rest wait and observe its result. A migration error is not retained as
+// a success, so a transient failure can be retried on the next call.
 func (service *Service) ensureConversationScalarColumnsOnce(ctx context.Context, collectionName string) error {
 	if !isConversationCollection(collectionName) {
 		return nil
 	}
-	if _, done := service.ensuredConvColumns.Load(collectionName); done {
-		return nil
+	loaded, _ := service.ensuredConvColumns.LoadOrStore(collectionName, &conversationScalarMigration{once: sync.Once{}, err: nil})
+	migration, ok := loaded.(*conversationScalarMigration)
+	if !ok {
+		return fmt.Errorf("conversation scalar migration guard for %s has unexpected type %T", collectionName, loaded)
 	}
-	if err := service.ensureConversationScalarColumns(ctx, collectionName); err != nil {
-		return err
-	}
-	service.ensuredConvColumns.Store(collectionName, struct{}{})
-	return nil
+	migration.once.Do(func() {
+		migration.err = service.ensureConversationScalarColumns(ctx, collectionName)
+		if migration.err != nil {
+			// Drop the failed guard so a later call retries the migration instead of
+			// returning the cached error forever. A concurrent waiter that already
+			// observed this run still sees migration.err below.
+			service.ensuredConvColumns.CompareAndDelete(collectionName, loaded)
+		}
+	})
+	return migration.err
 }
 
 // loadCollection loads collectionName into memory and waits for the load to
