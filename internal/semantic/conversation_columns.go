@@ -72,3 +72,24 @@ func providerFromConversationID(conversationID string) string {
 	}
 	return conversationID[:separator]
 }
+
+// conversationUpsertOptions controls which enrichment-sourced scalar columns a
+// conversation column-upsert writes. The metadata-only sweep leaves these false
+// so a re-upsert preserves the existing value on columns it cannot source
+// (workspaceRoot stays NULL); the enrichment-driven backfill sets them true to
+// write clyde-supplied values onto the targeted rows.
+type conversationUpsertOptions struct {
+	WriteWorkspaceRoot bool
+}
+
+// ConversationEnrichment maps a conversation id to the externally-sourced scalar
+// values clyde supplies for a vector-preserving backfill. The engine cannot
+// recover these from the stored metadata JSON. PR 1.2 populates
+// chunk.WorkspaceRoot from this before the column-upsert writes it.
+type ConversationEnrichment map[string]ConversationEnrichmentValue
+
+// ConversationEnrichmentValue carries the per-conversation scalar values that
+// are not derivable from a stored row, sourced from clyde.
+type ConversationEnrichmentValue struct {
+	WorkspaceRoot string
+}
