@@ -221,9 +221,22 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	if plan.handled {
 		return true
 	}
-	if signal, suspicious := assessDeltaDeleteWave(codebase, plan.diff, plan.seedSnapshot); suspicious {
-		manager.updateJobQuarantined(ctx, job.ID, signal)
-		return true
+	// The source's absence policy decides what a large disappearance means here.
+	// A code source deletes the missing files, guarded by the large-delete
+	// quarantine. A conversation source retains them, because a transcript
+	// missing from a push is almost always a transient disappearance, so the
+	// removals are dropped from this run and the rows stay.
+	switch source.absencePolicy() {
+	case absenceDeleteGuarded:
+		if signal, suspicious := assessDeltaDeleteWave(codebase, plan.diff, plan.seedSnapshot); suspicious {
+			manager.updateJobQuarantined(ctx, job.ID, signal)
+			return true
+		}
+	case absenceRetain:
+		if retained := len(plan.diff.Removed); retained > 0 {
+			slog.InfoContext(ctx, "converge.retain_absent", "component", "daemon", "subcomponent", "delta", "collection", codebase.CollectionName, "retained", retained)
+		}
+		plan.diff.Removed = nil
 	}
 	manager.setJobRunMode(job.ID, model.RunModeChanged)
 
