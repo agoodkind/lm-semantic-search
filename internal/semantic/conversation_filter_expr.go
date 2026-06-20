@@ -188,7 +188,7 @@ func fillCappedConversationSearchWith(ctx context.Context, limit int32, perConve
 		pageSize = 10
 	}
 	buffer := make([]model.StoredChunk, 0, pageSize*2)
-	survivors := make([]model.StoredChunk, 0, limit)
+	survivors := make([]model.StoredChunk, 0, pageSize)
 	for offset := 0; offset < conversationSearchWindowMax; offset += pageSize {
 		pageLimit := pageSize
 		if offset+pageLimit > conversationSearchWindowMax {
