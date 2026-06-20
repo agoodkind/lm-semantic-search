@@ -334,3 +334,84 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 	}
 	return nil
 }
+
+// partitionConversationEnrichment splits one backfill page into the rows whose
+// conversation has a clyde-supplied workspace, setting chunk.WorkspaceRoot from
+// the enrichment, and counts the rest as orphans whose artifact is gone. The
+// caller writes only the resolvable rows and leaves orphans empty. The chunks
+// slice is mutated in place for the resolvable rows.
+func partitionConversationEnrichment(ids []string, chunks []model.StoredChunk, vectors [][]float32, enrichment ConversationEnrichment) ([]string, []model.StoredChunk, [][]float32, int) {
+	fillIDs := make([]string, 0, len(ids))
+	fillChunks := make([]model.StoredChunk, 0, len(chunks))
+	fillVectors := make([][]float32, 0, len(vectors))
+	orphan := 0
+	for index := range ids {
+		value, ok := enrichment[chunks[index].ConversationID]
+		if !ok || value.WorkspaceRoot == "" {
+			orphan++
+			continue
+		}
+		chunks[index].WorkspaceRoot = value.WorkspaceRoot
+		fillIDs = append(fillIDs, ids[index])
+		fillChunks = append(fillChunks, chunks[index])
+		fillVectors = append(fillVectors, vectors[index])
+	}
+	return fillIDs, fillChunks, fillVectors, orphan
+}
+
+// BackfillConversationWorkspaceRoots writes the workspaceRoot column onto rows
+// that have it empty, from a clyde-supplied enrichment keyed by conversation id,
+// preserving each row's dense vector so nothing is re-embedded. It iterates only
+// the empty rows (WithFilter), so it never re-touches the whole collection. A
+// row whose conversation id is absent from the enrichment is an orphan (its
+// artifact is gone) and is left empty. When dryRun is true it counts the
+// would-change and orphan rows and writes nothing. Returns (changed, orphan).
+func (service *Service) BackfillConversationWorkspaceRoots(ctx context.Context, collectionName string, enrichment ConversationEnrichment, dryRun bool) (int, int, error) {
+	if !service.Available() {
+		return 0, 0, ErrUnavailable
+	}
+	if !isConversationCollection(collectionName) {
+		return 0, 0, fmt.Errorf("workspace backfill: %s is not a conversation collection", collectionName)
+	}
+	if _, err := service.addMissingConversationScalarColumns(ctx, collectionName); err != nil {
+		return 0, 0, err
+	}
+	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
+		return 0, 0, err
+	}
+	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
+		WithBatchSize(conversationBackfillBatchSize).
+		WithFilter(workspaceRootFieldName+` == ""`).
+		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName))
+	if err != nil {
+		slog.ErrorContext(ctx, "open conversation workspace backfill iterator failed", "collection", collectionName, "err", err)
+		return 0, 0, fmt.Errorf("open workspace backfill iterator for %s: %w", collectionName, err)
+	}
+	changed := 0
+	orphan := 0
+	for {
+		resultSet, nextErr := iterator.Next(ctx)
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			slog.ErrorContext(ctx, "conversation workspace backfill iterator next failed", "collection", collectionName, "changed", changed, "err", nextErr)
+			return changed, orphan, fmt.Errorf("iterate %s for workspace backfill: %w", collectionName, nextErr)
+		}
+		ids, chunks, vectors, buildErr := readBackfillRows(resultSet)
+		if buildErr != nil {
+			return changed, orphan, buildErr
+		}
+		fillIDs, fillChunks, fillVectors, pageOrphans := partitionConversationEnrichment(ids, chunks, vectors, enrichment)
+		orphan += pageOrphans
+		changed += len(fillIDs)
+		if dryRun || len(fillIDs) == 0 {
+			continue
+		}
+		if err := service.upsertConversationColumns(ctx, collectionName, fillIDs, fillChunks, fillVectors, conversationUpsertOptions{WriteWorkspaceRoot: true}); err != nil {
+			return changed, orphan, err
+		}
+	}
+	slog.InfoContext(ctx, "semantic.conversation_workspace_backfill_complete", "collection", collectionName, "changed", changed, "orphan", orphan, "dry_run", dryRun)
+	return changed, orphan, nil
+}
