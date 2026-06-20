@@ -32,6 +32,13 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 	if !isConversationCollection(collectionName) {
 		return 0, fmt.Errorf("backfill: %s is not a conversation collection", collectionName)
 	}
+	// A dormant conversation collection that never went through the on-access
+	// column migration lacks the scalar columns, so the upsert below would reject
+	// every batch with a schema mismatch. Add the columns first; this is a no-op
+	// when they already exist.
+	if _, err := service.addMissingConversationScalarColumns(ctx, collectionName); err != nil {
+		return 0, err
+	}
 	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
 		return 0, err
 	}
@@ -66,6 +73,107 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 	}
 	slog.InfoContext(ctx, "semantic.conversation_scalar_backfill_complete", "collection", collectionName, "rows", total)
 	return total, nil
+}
+
+// BackfillConversationCollectionsOnce runs the metadata-only scalar-column
+// backfill once per conversation collection per process. It populates the native
+// scalar columns (provider, role, conversation lineage, message index, timestamp)
+// on rows written before those columns existed, keeping each row's dense vector
+// so nothing is re-embedded. The daemon's periodic sync drives it; the
+// per-collection guard makes later ticks a no-op. It is fault-tolerant per
+// collection: one failure is logged and the sweep continues. This is the
+// deliberate run the on-column-add trigger cannot do once the columns already
+// exist, which is the case after a backfill that failed before the collection
+// could load (the pre-mmap 28 GB load error).
+func (service *Service) BackfillConversationCollectionsOnce(ctx context.Context) {
+	if !service.Available() {
+		return
+	}
+	collections, err := service.ListCollections(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "semantic.conversation_backfill_list_failed", "err", err)
+		return
+	}
+	swept := 0
+	totalRows := 0
+	for _, collectionName := range collections {
+		if !isConversationCollection(collectionName) {
+			continue
+		}
+		if _, done := service.ensuredBackfill.Load(collectionName); done {
+			continue
+		}
+		needs, err := service.conversationCollectionNeedsBackfill(ctx, collectionName)
+		if err != nil {
+			slog.ErrorContext(ctx, "semantic.conversation_backfill_check_failed", "collection", collectionName, "err", err)
+			continue
+		}
+		if !needs {
+			// Already fully backfilled (every row has provider). Mark done so this
+			// process does not re-upsert ~600k rows and re-inflate the collection.
+			service.ensuredBackfill.Store(collectionName, struct{}{})
+			continue
+		}
+		rows, err := service.BackfillConversationScalarColumns(ctx, collectionName)
+		if err != nil {
+			slog.ErrorContext(ctx, "semantic.conversation_backfill_failed", "collection", collectionName, "rows", rows, "err", err)
+			continue
+		}
+		service.ensuredBackfill.Store(collectionName, struct{}{})
+		swept++
+		totalRows += rows
+	}
+	// Per-collection detail is logged by BackfillConversationScalarColumns; this
+	// is the once-per-sweep summary, kept out of the loop.
+	if swept > 0 {
+		slog.InfoContext(ctx, "semantic.conversation_backfill_sweep_done", "collections", swept, "rows", totalRows)
+	}
+}
+
+// conversationCollectionNeedsBackfill reports whether collectionName still needs
+// the scalar-column backfill. It returns true when the collection lacks the
+// provider column entirely (a dormant collection that never went through the
+// on-access column migration) or has the column with at least one row where
+// provider is null. A fully-backfilled collection returns false, so the sweep
+// skips re-upserting every row on a later process.
+func (service *Service) conversationCollectionNeedsBackfill(ctx context.Context, collectionName string) (bool, error) {
+	collection, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
+	if err != nil {
+		slog.ErrorContext(ctx, "describe conversation collection for backfill check failed", "collection", collectionName, "err", err)
+		return false, fmt.Errorf("describe %s for backfill check: %w", collectionName, err)
+	}
+	hasProvider := false
+	if collection.Schema != nil {
+		for _, field := range collection.Schema.Fields {
+			if field.Name == providerFieldName {
+				hasProvider = true
+				break
+			}
+		}
+	}
+	if !hasProvider {
+		return true, nil
+	}
+	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
+		return false, err
+	}
+	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
+		WithBatchSize(1).
+		WithFilter(providerFieldName+" is null").
+		WithOutputFields(idFieldName))
+	if err != nil {
+		slog.ErrorContext(ctx, "open null-provider probe failed", "collection", collectionName, "err", err)
+		return false, fmt.Errorf("open null-provider probe for %s: %w", collectionName, err)
+	}
+	resultSet, nextErr := iterator.Next(ctx)
+	if errors.Is(nextErr, io.EOF) {
+		return false, nil
+	}
+	if nextErr != nil {
+		slog.ErrorContext(ctx, "null-provider probe failed", "collection", collectionName, "err", nextErr)
+		return false, fmt.Errorf("probe null provider in %s: %w", collectionName, nextErr)
+	}
+	return resultSet.ResultCount > 0, nil
 }
 
 // resultSetToBackfillRows decodes one iterator page into the existing primary

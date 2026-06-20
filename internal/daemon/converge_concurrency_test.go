@@ -265,6 +265,8 @@ func (f *fakeSemantic) PruneToCurrent(context.Context, string, []string) error {
 
 func (f *fakeSemantic) EnsureMmapEnabledAllCollections(context.Context) {}
 
+func (f *fakeSemantic) BackfillConversationCollectionsOnce(context.Context) {}
+
 func (f *fakeSemantic) Drop(_ context.Context, codebasePath string) error {
 	f.mu.Lock()
 	f.dropped = append(f.dropped, codebasePath)

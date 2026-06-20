@@ -107,22 +107,17 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 // freshly created collection already has the columns from createCollection, so
 // this finds nothing to add. Backfilling the column values onto existing rows
 // is a separate step; the columns read null until then.
-func (service *Service) ensureConversationScalarColumns(ctx context.Context, collectionName string) error {
-	if !isConversationCollection(collectionName) {
-		return nil
-	}
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
-	if err != nil {
-		slog.ErrorContext(ctx, "check conversation collection for scalar migration failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("check conversation collection %s: %w", collectionName, err)
-	}
-	if !hasCollection {
-		return nil
-	}
+// addMissingConversationScalarColumns describes the collection and adds, via the
+// Milvus AddCollectionField API, any conversation scalar column it is missing,
+// returning the names it added. It does not backfill values, so a caller can add
+// the columns and then decide how to populate them without recursing through the
+// on-add backfill trigger. Every added column is nullable, which AddCollectionField
+// requires for a collection that already holds rows.
+func (service *Service) addMissingConversationScalarColumns(ctx context.Context, collectionName string) ([]string, error) {
 	collection, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "describe conversation collection for scalar migration failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("describe conversation collection %s: %w", collectionName, err)
+		return nil, fmt.Errorf("describe conversation collection %s: %w", collectionName, err)
 	}
 	existing := make(map[string]struct{})
 	if collection.Schema != nil {
@@ -137,9 +132,28 @@ func (service *Service) ensureConversationScalarColumns(ctx context.Context, col
 		}
 		if err := service.milvus.AddCollectionField(ctx, milvusclient.NewAddCollectionFieldOption(collectionName, field)); err != nil {
 			slog.ErrorContext(ctx, "add conversation scalar column failed", "collection", collectionName, "field", field.Name, "err", err)
-			return fmt.Errorf("add scalar column %s to %s: %w", field.Name, collectionName, err)
+			return added, fmt.Errorf("add scalar column %s to %s: %w", field.Name, collectionName, err)
 		}
 		added = append(added, field.Name)
+	}
+	return added, nil
+}
+
+func (service *Service) ensureConversationScalarColumns(ctx context.Context, collectionName string) error {
+	if !isConversationCollection(collectionName) {
+		return nil
+	}
+	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	if err != nil {
+		slog.ErrorContext(ctx, "check conversation collection for scalar migration failed", "collection", collectionName, "err", err)
+		return fmt.Errorf("check conversation collection %s: %w", collectionName, err)
+	}
+	if !hasCollection {
+		return nil
+	}
+	added, err := service.addMissingConversationScalarColumns(ctx, collectionName)
+	if err != nil {
+		return err
 	}
 	if len(added) > 0 {
 		slog.InfoContext(ctx, "semantic.conversation_scalar_columns_added", "collection", collectionName, "fields", strings.Join(added, ","), "count", len(added))
