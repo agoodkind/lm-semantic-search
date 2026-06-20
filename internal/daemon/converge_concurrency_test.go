@@ -22,19 +22,20 @@ import (
 // copyChunks are the only behaviors a converge exercises; the rest return inert
 // values so the manager treats the backend as available and empty.
 type fakeSemantic struct {
-	unavailable          bool
-	probeErr             error
-	reindex              func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
-	copyChunks           func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
-	deleteConversation   func(ctx context.Context, collectionName string, conversationID string) error
-	collectionName       func(codebasePath string) string
-	conversationName     func(collectionID string) string
-	listCollections      func(context.Context) ([]string, error)
-	hasCollectionForPath func(context.Context, string) (bool, error)
-	collectionSearchable func(context.Context, string) (bool, error)
-	search               func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
-	conversationSearch   func(context.Context, string, string, int32) ([]model.StoredChunk, error)
-	count                func(context.Context, string) (int32, error)
+	unavailable           bool
+	probeErr              error
+	reindex               func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
+	copyChunks            func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
+	deleteConversation    func(ctx context.Context, collectionName string, conversationID string) error
+	backfillConversations func(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
+	collectionName        func(codebasePath string) string
+	conversationName      func(collectionID string) string
+	listCollections       func(context.Context) ([]string, error)
+	hasCollectionForPath  func(context.Context, string) (bool, error)
+	collectionSearchable  func(context.Context, string) (bool, error)
+	search                func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
+	conversationSearch    func(context.Context, string, string, int32) ([]model.StoredChunk, error)
+	count                 func(context.Context, string) (int32, error)
 	// loadReuse, when set, supplies the reuse map a merge-down build receives and
 	// records which collections were asked for. dropped records every Drop call
 	// so a test can prove an absorb never drops the absorbed child collection.
@@ -252,6 +253,13 @@ func (f *fakeSemantic) DeleteConversation(ctx context.Context, collectionName st
 		return f.deleteConversation(ctx, collectionName, conversationID)
 	}
 	return nil
+}
+
+func (f *fakeSemantic) BackfillConversationWorkspaceRoots(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error) {
+	if f.backfillConversations != nil {
+		return f.backfillConversations(ctx, collectionName, enrichment, dryRun)
+	}
+	return 0, 0, nil
 }
 
 func (f *fakeSemantic) CopyChunks(ctx context.Context, codebasePath string, src string, dst string) (int, error) {
