@@ -15,6 +15,8 @@ import (
 // across several searches whose results are merged by score.
 const conversationFilterIDBatchSize = 256
 
+type conversationSearchFunc func(ctx context.Context, collectionName string, query string, limit int32, expr string) ([]model.StoredChunk, error)
+
 // ConversationFilter carries the native-filterable attributes of a conversation
 // search. The daemon maps its request filter onto this, and buildExpr renders a
 // Milvus boolean expression over the conversation scalar columns so the vector
@@ -107,15 +109,19 @@ func lowercaseAll(values []string) []string {
 // large scope never overflows the Milvus expression-size limit. The common case
 // (no or small scope) is a single search.
 func (service *Service) searchConversationBatched(ctx context.Context, collectionName string, query string, limit int32, filter ConversationFilter) ([]model.StoredChunk, error) {
-	batches := batchConversationIDs(filter.ConversationIDs, conversationFilterIDBatchSize)
+	return searchConversationBatchedWith(ctx, collectionName, query, limit, filter, conversationFilterIDBatchSize, service.searchCollection)
+}
+
+func searchConversationBatchedWith(ctx context.Context, collectionName string, query string, limit int32, filter ConversationFilter, batchSize int, search conversationSearchFunc) ([]model.StoredChunk, error) {
+	batches := batchConversationIDs(filter.ConversationIDs, batchSize)
 	if len(batches) <= 1 {
-		return service.searchCollection(ctx, collectionName, query, limit, filter.buildExpr())
+		return search(ctx, collectionName, query, limit, filter.buildExpr())
 	}
 	merged := make([]model.StoredChunk, 0, len(batches)*int(maxInt32(limit, 10)))
 	for _, batch := range batches {
 		batchFilter := filter
 		batchFilter.ConversationIDs = batch
-		chunks, err := service.searchCollection(ctx, collectionName, query, limit, batchFilter.buildExpr())
+		chunks, err := search(ctx, collectionName, query, limit, batchFilter.buildExpr())
 		if err != nil {
 			return nil, err
 		}
