@@ -39,12 +39,29 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 		}
 		switch payload := chunk.GetChunk().(type) {
 		case *pb.UpsertConversationDocumentsChunk_Header:
+			if headerSeen {
+				// A second header could silently swap the target collection mid-stream.
+				// Reject it so the stream binds to one collection for its lifetime.
+				return status.Error(adapterr.Respond(ctx, adapterr.NewInvalidArgument("duplicate header in conversation upsert stream")))
+			}
 			collectionID = payload.Header.GetCollectionId()
 			client = pbClient(payload.Header.GetClient())
 			headerSeen = true
+			// Validate the header before accepting any documents so a header-less or
+			// empty-collection_id stream cannot accumulate documents unbounded in
+			// memory before failing.
+			if argErr := requireNonEmpty(ctx, collectionID, "collection_id", false); argErr != nil {
+				return argErr
+			}
 		case *pb.UpsertConversationDocumentsChunk_Documents:
+			if !headerSeen {
+				return status.Error(adapterr.Respond(ctx, adapterr.NewMissingArgument("header")))
+			}
 			documents = append(documents, pbConversationDocuments(payload.Documents.GetDocuments())...)
 		case *pb.UpsertConversationDocumentsChunk_Manifest:
+			if !headerSeen {
+				return status.Error(adapterr.Respond(ctx, adapterr.NewMissingArgument("header")))
+			}
 			manifest = pbConversationManifest(payload.Manifest.GetManifest())
 		default:
 			// An unset oneof carries no payload. Ignore it rather than fail, since a
@@ -53,9 +70,6 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 	}
 	if !headerSeen {
 		return status.Error(adapterr.Respond(ctx, adapterr.NewMissingArgument("header")))
-	}
-	if argErr := requireNonEmpty(ctx, collectionID, "collection_id", false); argErr != nil {
-		return argErr
 	}
 
 	job, callErr := server.manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, client)

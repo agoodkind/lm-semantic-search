@@ -93,6 +93,62 @@ func TestConversationSearchFilterMatches(t *testing.T) {
 	}
 }
 
+// TestConversationSearchFilterProviders proves the Providers branch matches a
+// chunk by the provider prefix parsed from its conversation id, and rejects a
+// chunk whose provider is outside the set or whose id carries no provider
+// separator.
+func TestConversationSearchFilterProviders(t *testing.T) {
+	t.Parallel()
+
+	claudeChunk := filterTestChunk("claude:thread-a", 0, "user", 1000, 0.8)
+	codexChunk := filterTestChunk("codex:thread-b", 0, "user", 1000, 0.8)
+	prefixlessChunk := filterTestChunk("thread-c", 0, "user", 1000, 0.8)
+
+	providerFilter := emptyConversationSearchFilter()
+	providerFilter.Providers = []string{"claude"}
+	if !providerFilter.matchesScope(claudeChunk) {
+		t.Fatal("provider filter rejected a claude: chunk for provider claude")
+	}
+	if providerFilter.matchesScope(codexChunk) {
+		t.Fatal("provider filter matched a codex: chunk for provider claude")
+	}
+	if providerFilter.matchesScope(prefixlessChunk) {
+		t.Fatal("provider filter matched a chunk whose id has no provider separator")
+	}
+
+	multiFilter := emptyConversationSearchFilter()
+	multiFilter.Providers = []string{"claude", "codex"}
+	if !multiFilter.matchesScope(claudeChunk) || !multiFilter.matchesScope(codexChunk) {
+		t.Fatal("multi-provider filter rejected a member provider")
+	}
+}
+
+// TestConversationSearchFilterWorkspaceRoots proves the WorkspaceRoots branch
+// matches a chunk by its WorkspaceRoot value, which the semantic path now
+// populates from the Milvus scalar column, and rejects a chunk whose workspace
+// is outside the set or empty.
+func TestConversationSearchFilterWorkspaceRoots(t *testing.T) {
+	t.Parallel()
+
+	inWorkspace := filterTestChunk("claude:thread-a", 0, "user", 1000, 0.8)
+	inWorkspace.WorkspaceRoot = "/work/alpha"
+	otherWorkspace := filterTestChunk("claude:thread-b", 0, "user", 1000, 0.8)
+	otherWorkspace.WorkspaceRoot = "/work/beta"
+	noWorkspace := filterTestChunk("claude:thread-c", 0, "user", 1000, 0.8)
+
+	workspaceFilter := emptyConversationSearchFilter()
+	workspaceFilter.WorkspaceRoots = []string{"/work/alpha"}
+	if !workspaceFilter.matchesScope(inWorkspace) {
+		t.Fatal("workspace filter rejected a chunk in the requested workspace")
+	}
+	if workspaceFilter.matchesScope(otherWorkspace) {
+		t.Fatal("workspace filter matched a chunk in a different workspace")
+	}
+	if workspaceFilter.matchesScope(noWorkspace) {
+		t.Fatal("workspace filter matched a chunk with an empty workspace root")
+	}
+}
+
 // TestApplyConversationSearchFilterCapsPerConversation proves the
 // per-conversation cap keeps each conversation's earliest (highest-ranked)
 // hits and the overall limit truncates the final list.

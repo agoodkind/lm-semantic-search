@@ -187,20 +187,47 @@ func (manager *Manager) conversationIndexedFingerprint(codebase model.Codebase, 
 	return snapshot.Files[conversationID]
 }
 
+const (
+	// conversationSearchInflationFactor over-fetches before the per-conversation
+	// cap drops rows, so the cap does not starve the final result list below the
+	// requested limit when more matching rows exist.
+	conversationSearchInflationFactor = 4
+	// conversationSearchInflationCap bounds the over-fetch so it never grows
+	// unbounded with the requested limit.
+	conversationSearchInflationCap = int32(500)
+)
+
+// inflatedConversationSearchLimit returns how many rows to fetch before
+// post-retrieval filtering. Every scope dimension is now pushed into Milvus, so
+// the only post-retrieval row-dropper that can starve the result is the
+// per-conversation cap. When that cap is off, the requested limit is exact;
+// when it is on, the fetch is inflated by a bounded factor so the cap has a
+// surplus to draw the final limit from.
+func inflatedConversationSearchLimit(limit int32, perConversationLimit int32) int32 {
+	if perConversationLimit <= 0 {
+		return limit
+	}
+	inflated := min(limit*conversationSearchInflationFactor, conversationSearchInflationCap)
+	return max(inflated, limit)
+}
+
 // searchConversationCollectionFiltered is the one retrieval path under both
 // conversation search RPCs. When the vector store is up, every dimension except
 // min_score is pushed into Milvus as a native scalar-column expression, so the
-// search returns the true top-K among matching rows with no over-fetch; the
-// post-filter then applies only min_score and the per-conversation cap. When the
-// store is down, the literal chunk cache pre-filters by the same conditions
-// before ranking, so it scopes correctly rather than scanning the whole corpus.
+// search returns the true top-K among matching rows; the post-filter then
+// applies min_score and the per-conversation cap. When the per-conversation cap
+// is set, the fetch over-fetches by a bounded factor so the cap does not starve
+// the result below the requested limit. When the store is down, the literal
+// chunk cache pre-filters by the same conditions before ranking, so it scopes
+// correctly rather than scanning the whole corpus.
 func (manager *Manager) searchConversationCollectionFiltered(ctx context.Context, codebase model.Codebase, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
 	if limit <= 0 {
 		limit = 10
 	}
+	fetchLimit := inflatedConversationSearchLimit(limit, perConversationLimit)
 
 	if manager.semantic != nil && manager.semantic.Available() {
-		chunks, err := manager.semantic.SearchConversationCollection(ctx, codebase.CollectionName, query, limit, filter.toSemanticFilter())
+		chunks, err := manager.semantic.SearchConversationCollection(ctx, codebase.CollectionName, query, fetchLimit, filter.toSemanticFilter())
 		if err == nil {
 			manager.noteDependencyHealthy()
 			return applyConversationSearchFilter(chunks, filter, perConversationLimit, limit), nil
@@ -209,7 +236,7 @@ func (manager *Manager) searchConversationCollectionFiltered(ctx context.Context
 		slog.ErrorContext(ctx, "search conversation collection failed", "collection", codebase.CollectionName, "err", err)
 	}
 
-	return manager.searchConversationChunkCache(ctx, codebase, query, limit, filter, perConversationLimit)
+	return manager.searchConversationChunkCache(ctx, codebase, query, limit, fetchLimit, filter, perConversationLimit)
 }
 
 func (manager *Manager) deleteConversation(ctx context.Context, collectionID string, conversationID string, client model.ClientInfo) (model.Job, error) {
@@ -392,7 +419,7 @@ func (manager *Manager) finishConversationDelete(jobID string) {
 	}
 }
 
-func (manager *Manager) searchConversationChunkCache(ctx context.Context, codebase model.Codebase, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
+func (manager *Manager) searchConversationChunkCache(ctx context.Context, codebase model.Codebase, query string, limit int32, fetchLimit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
 	chunks, err := store.ReadChunks(manager.chunkPath(codebase.ID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -407,7 +434,10 @@ func (manager *Manager) searchConversationChunkCache(ctx context.Context, codeba
 			scoped = append(scoped, chunk)
 		}
 	}
-	ranked := rankChunks(scoped, query, limit, nil, "")
+	// Rank fetchLimit rows, not limit, so the per-conversation cap has a surplus
+	// to draw the final limit from rather than truncating an already-limited
+	// ranking. fetchLimit equals limit when the cap is off.
+	ranked := rankChunks(scoped, query, fetchLimit, nil, "")
 	return applyConversationSearchFilter(ranked, filter, perConversationLimit, limit), nil
 }
 
