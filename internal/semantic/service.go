@@ -79,6 +79,10 @@ type Service struct {
 	// mmap-migrated, so the daemon's periodic mmap sweep skips them with no RPC.
 	// See ensureMmapEnabledOnce.
 	ensuredMmapEnabled sync.Map
+	// ensuredBackfill records the conversation collections this process has
+	// scalar-column backfilled, so the daemon's periodic backfill sweep runs the
+	// metadata-only backfill at most once per collection per process.
+	ensuredBackfill sync.Map
 }
 
 // NewService constructs the semantic search runtime.
@@ -94,6 +98,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			closeOnce:          sync.Once{},
 			ensuredConvColumns: sync.Map{},
 			ensuredMmapEnabled: sync.Map{},
+			ensuredBackfill:    sync.Map{},
 		}, nil
 	}
 
@@ -113,6 +118,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		closeOnce:          sync.Once{},
 		ensuredConvColumns: sync.Map{},
 		ensuredMmapEnabled: sync.Map{},
+		ensuredBackfill:    sync.Map{},
 	}
 
 	client, err := service.dialMilvus(ctx)

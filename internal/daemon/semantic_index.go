@@ -67,6 +67,10 @@ type semanticMaintainer interface {
 	// EnsureMmapEnabledAllCollections enables dense-vector mmap on every
 	// collection, converging across ticks and skipping already-migrated ones.
 	EnsureMmapEnabledAllCollections(ctx context.Context)
+	// BackfillConversationCollectionsOnce populates the native scalar columns on
+	// pre-existing conversation rows from stored metadata, preserving each dense
+	// vector, at most once per collection per process.
+	BackfillConversationCollectionsOnce(ctx context.Context)
 }
 
 // semanticIndex is the full embedding-and-vector-store surface the manager

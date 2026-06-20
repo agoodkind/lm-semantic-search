@@ -125,9 +125,11 @@ func (syncer *BackgroundSync) runPeriodicSync(ctx context.Context) {
 			return
 		case <-initialTimer.C:
 			syncer.ensureMmapEnabled(ctx)
+			syncer.backfillConversationColumns(ctx)
 			syncer.runSyncAll(ctx, "startup")
 		case <-ticker.C:
 			syncer.ensureMmapEnabled(ctx)
+			syncer.backfillConversationColumns(ctx)
 			syncer.runSyncAll(ctx, "interval")
 		}
 	}
@@ -144,6 +146,18 @@ func (syncer *BackgroundSync) ensureMmapEnabled(ctx context.Context) {
 		return
 	}
 	syncer.manager.semantic.EnsureMmapEnabledAllCollections(ctx)
+}
+
+// backfillConversationColumns drives the metadata-only conversation scalar-column
+// backfill once per conversation collection per process. It is a no-op when
+// Milvus is unavailable and a guard hit after the first successful run per
+// collection, so it is safe to run on every tick. It preserves each dense vector,
+// so no chunk is re-embedded.
+func (syncer *BackgroundSync) backfillConversationColumns(ctx context.Context) {
+	if syncer.manager == nil || syncer.manager.semantic == nil {
+		return
+	}
+	syncer.manager.semantic.BackfillConversationCollectionsOnce(ctx)
 }
 
 func (syncer *BackgroundSync) watchTrigger(ctx context.Context) {
