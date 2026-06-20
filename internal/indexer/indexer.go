@@ -233,6 +233,7 @@ func (runner *Runner) processFile(ctx context.Context, fullPath string, relative
 			MessageIndex:         0,
 			Role:                 "",
 			TimestampUnix:        0,
+			WorkspaceRoot:        "",
 			Score:                0,
 		})
 	}

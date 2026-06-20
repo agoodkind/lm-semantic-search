@@ -237,6 +237,20 @@ func NewMissingArgument(name string) *AdapterError {
 	}
 }
 
+// NewInvalidArgument reports a request argument that is present but invalid,
+// distinct from NewMissingArgument's empty-or-omitted case. message states the
+// specific violation so the caller can correct the request.
+func NewInvalidArgument(message string) *AdapterError {
+	return &AdapterError{
+		Class:         ClassInvalidArgument,
+		Message:       message,
+		Code:          "invalid_argument",
+		Hint:          "",
+		Cause:         nil,
+		SafeForClient: true,
+	}
+}
+
 // NewConflictingJob reports a duplicate indexing request the daemon
 // rejects in favor of an in-flight job.
 func NewConflictingJob(message string, cause error) *AdapterError {

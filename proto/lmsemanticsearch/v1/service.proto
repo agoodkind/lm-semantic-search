@@ -20,7 +20,12 @@ service SemanticSearchDaemonService {
   rpc SearchCode(SearchCodeRequest) returns (SearchCodeResponse);
   rpc RegisterConversationCollection(RegisterConversationCollectionRequest) returns (RegisterConversationCollectionResponse);
   rpc SyncConversationManifest(SyncConversationManifestRequest) returns (SyncConversationManifestResponse);
-  rpc UpsertConversationDocuments(UpsertConversationDocumentsRequest) returns (UpsertConversationDocumentsResponse);
+  // UpsertConversationDocumentsStream is the client-streaming conversation
+  // upsert. clyde sends one header chunk, then document chunks, then one manifest
+  // chunk, so the document set and manifest are not bounded by the gRPC max
+  // message size. The engine accumulates the chunks and queues an async ingest
+  // job.
+  rpc UpsertConversationDocumentsStream(stream UpsertConversationDocumentsChunk) returns (UpsertConversationDocumentsResponse);
   rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
   rpc SearchWithinConversation(SearchWithinConversationRequest) returns (SearchWithinConversationResponse);
@@ -258,6 +263,11 @@ message ConversationDocument {
   // index can group a fork with its parent. Empty when the conversation has no
   // parent.
   string parent_conversation_id = 6;
+  // workspace_root is the workspace the conversation belongs to, stored as a
+  // native scalar column so a search can filter by it. clyde owns the value;
+  // empty when unknown. provider is derived from the conversation_id prefix and
+  // is not carried here.
+  string workspace_root = 7;
 }
 
 message ConversationSearchResult {
@@ -454,20 +464,41 @@ message SyncConversationManifestResponse {
   string display_text = 2;
 }
 
-message UpsertConversationDocumentsRequest {
-  string collection_id = 1;
-  repeated ConversationDocument documents = 2;
-  ClientInfo client = 3;
-  // manifest is the full current conversation set with fingerprints. The engine
-  // diffs it against its checkpoint to embed the delivered documents, drop
-  // conversations no longer present, and skip unchanged ones. Empty means the
-  // delivered documents are the complete set and fingerprints are derived.
-  repeated ConversationFingerprint manifest = 4;
-}
-
 message UpsertConversationDocumentsResponse {
   string job_id = 1;
   string display_text = 2;
+}
+
+// UpsertConversationDocumentsHeader opens a streamed upsert. It carries the
+// collection id and the caller info once, before any documents.
+message UpsertConversationDocumentsHeader {
+  string collection_id = 1;
+  ClientInfo client = 2;
+}
+
+// UpsertConversationDocumentsDocuments is one batch of documents in a streamed
+// upsert. The engine concatenates the documents from every documents chunk in
+// receive order into the full document set.
+message UpsertConversationDocumentsDocuments {
+  repeated ConversationDocument documents = 1;
+}
+
+// UpsertConversationDocumentsManifest carries the full current conversation set
+// with fingerprints. The manifest is authoritative for deletion, so it is sent
+// whole as one chunk under the per-chunk size bound rather than split.
+message UpsertConversationDocumentsManifest {
+  repeated ConversationFingerprint manifest = 1;
+}
+
+// UpsertConversationDocumentsChunk is one frame of a streamed upsert: a header,
+// a batch of documents, or the manifest. The stream sends exactly one header
+// first, then zero or more documents chunks, then exactly one manifest chunk.
+message UpsertConversationDocumentsChunk {
+  oneof chunk {
+    UpsertConversationDocumentsHeader header = 1;
+    UpsertConversationDocumentsDocuments documents = 2;
+    UpsertConversationDocumentsManifest manifest = 3;
+  }
 }
 
 message DeleteConversationRequest {
@@ -504,6 +535,13 @@ message ConversationSearchFilter {
   // (inclusive from, exclusive until). until zero means unbounded.
   int32 message_index_from = 7;
   int32 message_index_until = 8;
+  // providers keeps only hits whose provider is in the set, e.g. "claude".
+  // Filtered natively on the provider scalar column.
+  repeated string providers = 9;
+  // workspace_roots keeps only hits whose workspace_root is in the set. clyde
+  // resolves a workspace prefix filter into the small set of matching roots
+  // (one value per workspace directory) so the engine does an exact IN.
+  repeated string workspace_roots = 10;
 }
 
 message SearchConversationsRequest {

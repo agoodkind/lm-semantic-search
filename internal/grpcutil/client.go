@@ -14,12 +14,13 @@ import (
 )
 
 // MaxMessageBytes is the gRPC message ceiling for the daemon socket on both
-// the client send and server receive sides. A conversation upsert carries one
-// whole conversation's documents in a single message because the engine
-// replaces a conversation atomically, and a long transcript exceeds gRPC's
-// 4 MiB default, so the local-socket ceiling is raised instead of splitting
-// a conversation across messages.
-const MaxMessageBytes = 64 << 20
+// the client send and server receive sides, raised well above gRPC's 4 MiB
+// default. Conversation upserts now use a client-streaming RPC that frames the
+// header, document batches, and manifest separately, so the document set is no
+// longer bound by one message. The ceiling still covers large unary responses
+// and large per-chunk frames within the stream that would otherwise exceed the
+// default over the local socket.
+const MaxMessageBytes = 128 << 20
 
 // DialDaemon creates a gRPC client connection to the local daemon
 // socket. Callers should wrap their context with [WithCorrelation]

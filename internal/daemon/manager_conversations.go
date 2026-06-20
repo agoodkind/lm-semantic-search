@@ -109,13 +109,9 @@ func (manager *Manager) SyncConversationManifest(ctx context.Context, collection
 	return needed, nil
 }
 
-// UpsertConversationDocuments queues an asynchronous ingest. When manifest is
+// upsertConversationDocuments queues an asynchronous ingest. When manifest is
 // nil it is derived from the delivered documents, so a caller that hands over a
 // complete set need not compute fingerprints itself.
-func (manager *Manager) UpsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument) (model.Job, error) {
-	return manager.upsertConversationDocuments(ctx, collectionID, documents, nil, model.ClientInfo{Name: "", PID: 0})
-}
-
 func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo) (model.Job, error) {
 	for _, document := range documents {
 		if strings.TrimSpace(document.ConversationID) == "" {
@@ -192,18 +188,23 @@ func (manager *Manager) conversationIndexedFingerprint(codebase model.Codebase, 
 }
 
 const (
-	// conversationSearchInflationFactor over-fetches before post-retrieval
-	// filtering so row conditions do not starve the final result list.
+	// conversationSearchInflationFactor over-fetches before the per-conversation
+	// cap drops rows, so the cap does not starve the final result list below the
+	// requested limit when more matching rows exist.
 	conversationSearchInflationFactor = 4
-	// conversationSearchInflationCap bounds the over-fetch.
+	// conversationSearchInflationCap bounds the over-fetch so it never grows
+	// unbounded with the requested limit.
 	conversationSearchInflationCap = int32(500)
 )
 
 // inflatedConversationSearchLimit returns how many rows to fetch before
-// post-filtering: the requested limit when nothing filters per row, otherwise
-// the inflated, capped fetch size.
-func inflatedConversationSearchLimit(limit int32, filter conversationSearchFilter, perConversationLimit int32) int32 {
-	if !filter.hasRowConditions() && perConversationLimit <= 0 {
+// post-retrieval filtering. Every scope dimension is now pushed into Milvus, so
+// the only post-retrieval row-dropper that can starve the result is the
+// per-conversation cap. When that cap is off, the requested limit is exact;
+// when it is on, the fetch is inflated by a bounded factor so the cap has a
+// surplus to draw the final limit from.
+func inflatedConversationSearchLimit(limit int32, perConversationLimit int32) int32 {
+	if perConversationLimit <= 0 {
 		return limit
 	}
 	inflated := min(limit*conversationSearchInflationFactor, conversationSearchInflationCap)
@@ -211,18 +212,22 @@ func inflatedConversationSearchLimit(limit int32, filter conversationSearchFilte
 }
 
 // searchConversationCollectionFiltered is the one retrieval path under both
-// conversation search RPCs: a semantic search scoped by the filter's
-// conversation-id prefixes when the vector store is up, the literal chunk
-// cache otherwise, with the same row filtering applied to either source.
+// conversation search RPCs. When the vector store is up, every dimension except
+// min_score is pushed into Milvus as a native scalar-column expression, so the
+// search returns the true top-K among matching rows; the post-filter then
+// applies min_score and the per-conversation cap. When the per-conversation cap
+// is set, the fetch over-fetches by a bounded factor so the cap does not starve
+// the result below the requested limit. When the store is down, the literal
+// chunk cache pre-filters by the same conditions before ranking, so it scopes
+// correctly rather than scanning the whole corpus.
 func (manager *Manager) searchConversationCollectionFiltered(ctx context.Context, codebase model.Codebase, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	fetchLimit := inflatedConversationSearchLimit(limit, filter, perConversationLimit)
+	fetchLimit := inflatedConversationSearchLimit(limit, perConversationLimit)
 
 	if manager.semantic != nil && manager.semantic.Available() {
-		prefixes := conversationRelativePathPrefixes(filter.ConversationIDs)
-		chunks, err := manager.semantic.SearchConversationCollection(ctx, codebase.CollectionName, query, fetchLimit, prefixes)
+		chunks, err := manager.semantic.SearchConversationCollection(ctx, codebase.CollectionName, query, fetchLimit, filter.toSemanticFilter())
 		if err == nil {
 			manager.noteDependencyHealthy()
 			return applyConversationSearchFilter(chunks, filter, perConversationLimit, limit), nil
@@ -423,7 +428,16 @@ func (manager *Manager) searchConversationChunkCache(ctx context.Context, codeba
 		slog.ErrorContext(ctx, "read conversation chunk cache failed", "codebase_id", codebase.ID, "err", err)
 		return nil, fmt.Errorf("read conversation chunk cache for %s: %w", codebase.ID, err)
 	}
-	ranked := rankChunks(chunks, query, fetchLimit, nil, "")
+	scoped := make([]model.StoredChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if filter.matchesScope(chunk) {
+			scoped = append(scoped, chunk)
+		}
+	}
+	// Rank fetchLimit rows, not limit, so the per-conversation cap has a surplus
+	// to draw the final limit from rather than truncating an already-limited
+	// ranking. fetchLimit equals limit when the cap is off.
+	ranked := rankChunks(scoped, query, fetchLimit, nil, "")
 	return applyConversationSearchFilter(ranked, filter, perConversationLimit, limit), nil
 }
 
@@ -622,6 +636,7 @@ func conversationDocumentsToStoredChunks(documents []model.ConversationDocument)
 				MessageIndex:         document.MessageIndex,
 				Role:                 document.Role,
 				TimestampUnix:        document.TimestampUnix,
+				WorkspaceRoot:        document.WorkspaceRoot,
 				Score:                0,
 			})
 		}

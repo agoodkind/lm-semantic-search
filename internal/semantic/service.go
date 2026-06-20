@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -72,19 +71,24 @@ type Service struct {
 	reconnectCancel context.CancelFunc
 	reconnectDone   chan struct{}
 	closeOnce       sync.Once
+	// ensuredConvColumns maps a conversation collection name to its
+	// *conversationScalarMigration, gating the one-time scalar-column migration to
+	// once per collection per process. See ensureConversationScalarColumnsOnce.
+	ensuredConvColumns sync.Map
 }
 
 // NewService constructs the semantic search runtime.
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
 		return &Service{
-			cfg:             cfg,
-			embedder:        nil,
-			milvus:          nil,
-			available:       atomic.Bool{},
-			reconnectCancel: nil,
-			reconnectDone:   nil,
-			closeOnce:       sync.Once{},
+			cfg:                cfg,
+			embedder:           nil,
+			milvus:             nil,
+			available:          atomic.Bool{},
+			reconnectCancel:    nil,
+			reconnectDone:      nil,
+			closeOnce:          sync.Once{},
+			ensuredConvColumns: sync.Map{},
 		}, nil
 	}
 
@@ -95,13 +99,14 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	service := &Service{
-		cfg:             cfg,
-		embedder:        embedder,
-		milvus:          nil,
-		available:       atomic.Bool{},
-		reconnectCancel: nil,
-		reconnectDone:   nil,
-		closeOnce:       sync.Once{},
+		cfg:                cfg,
+		embedder:           embedder,
+		milvus:             nil,
+		available:          atomic.Bool{},
+		reconnectCancel:    nil,
+		reconnectDone:      nil,
+		closeOnce:          sync.Once{},
+		ensuredConvColumns: sync.Map{},
 	}
 
 	client, err := service.dialMilvus(ctx)
@@ -339,14 +344,14 @@ func (service *Service) Search(ctx context.Context, codebasePath string, query s
 	}
 
 	collectionName := service.CollectionName(codebasePath)
-	return service.searchCollection(ctx, collectionName, query, limit, extensionFilter, []string{relativePathPrefix})
+	return service.searchCollection(ctx, collectionName, query, limit, buildSearchFilter(extensionFilter, []string{relativePathPrefix}))
 }
 
 // SearchConversationCollection executes semantic or hybrid search against a
 // registered virtual conversation collection name. relativePathPrefixes scopes
 // retrieval to the given path subtrees (a conversation's rows live under its
 // conv/<id>/ prefix); an empty set searches the whole collection.
-func (service *Service) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32, relativePathPrefixes []string) ([]model.StoredChunk, error) {
+func (service *Service) SearchConversationCollection(ctx context.Context, collectionName string, query string, limit int32, filter ConversationFilter) ([]model.StoredChunk, error) {
 	if !service.Available() {
 		return nil, nil
 	}
@@ -354,7 +359,10 @@ func (service *Service) SearchConversationCollection(ctx context.Context, collec
 	if trimmedCollectionName == "" {
 		return nil, errors.New("conversation collection name is required")
 	}
-	return service.searchCollection(ctx, trimmedCollectionName, query, limit, nil, relativePathPrefixes)
+	if err := service.ensureConversationScalarColumnsOnce(ctx, trimmedCollectionName); err != nil {
+		return nil, err
+	}
+	return service.searchConversationBatched(ctx, trimmedCollectionName, query, limit, filter)
 }
 
 // queryTextForEmbedding applies the configured query instruction prefix to
@@ -368,7 +376,7 @@ func (service *Service) queryTextForEmbedding(query string) string {
 	return prefix + query
 }
 
-func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, extensionFilter []string, relativePathPrefixes []string) ([]model.StoredChunk, error) {
+func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, filterExpr string) ([]model.StoredChunk, error) {
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "check Milvus collection failed", "collection", collectionName, "err", err)
@@ -388,7 +396,6 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 	if searchLimit <= 0 {
 		searchLimit = 10
 	}
-	filterExpr := buildSearchFilter(extensionFilter, relativePathPrefixes)
 
 	outputFields := []string{
 		contentFieldName,
@@ -397,6 +404,13 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 		endLineFieldName,
 		fileExtensionFieldName,
 		metadataFieldName,
+	}
+	if isConversationCollection(collectionName) {
+		// Conversation collections carry workspaceRoot as a native scalar column.
+		// Request it so a workspace_roots post-filter on the daemon side sees the
+		// real value rather than the empty default; code collections have no such
+		// column, so they keep the base output set.
+		outputFields = append(outputFields, workspaceRootFieldName)
 	}
 
 	if service.cfg.HybridMode {
@@ -534,6 +548,16 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 	defer done(&err)
 
 	insertOption := milvusclient.NewColumnBasedInsertOption(collectionName)
+	conversationCollection := isConversationCollection(collectionName)
+	if conversationCollection {
+		// A pre-existing conv_chunks_* collection created before the scalar columns
+		// existed has no conversationId/provider/etc. fields, so an insert that
+		// populates them fails with unknown fields. Run the once-guarded migration
+		// first so the columns exist before this batch references them.
+		if err := service.ensureConversationScalarColumnsOnce(ctx, collectionName); err != nil {
+			return err
+		}
+	}
 
 	ids := make([]string, 0, len(chunks))
 	contents := make([]string, 0, len(chunks))
@@ -542,6 +566,7 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 	endLines := make([]int64, 0, len(chunks))
 	fileExtensions := make([]string, 0, len(chunks))
 	metadataValues := make([]string, 0, len(chunks))
+	scalars := newConversationScalarColumns(conversationCollection, len(chunks))
 
 	sanitizedCount := 0
 	for index, chunk := range chunks {
@@ -560,6 +585,7 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 		endLines = append(endLines, int64(chunk.EndLine))
 		fileExtensions = append(fileExtensions, fileExtension)
 		metadataValues = append(metadataValues, metadataValue)
+		scalars.append(chunk)
 	}
 	if sanitizedCount > 0 {
 		slog.WarnContext(ctx, "semantic.insertBatch sanitized chunks before Milvus marshal", "collection", collectionName, "sanitized", sanitizedCount, "batch_size", len(chunks))
@@ -574,6 +600,16 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 		WithVarcharColumn(fileExtensionFieldName, fileExtensions).
 		WithVarcharColumn(metadataFieldName, metadataValues).
 		WithFloatVectorColumn(denseVectorFieldName, len(vectors[0]), vectors)
+	if conversationCollection {
+		insertOption = insertOption.
+			WithVarcharColumn(conversationIDFieldName, scalars.conversationIDs).
+			WithVarcharColumn(parentConversationIDFieldName, scalars.parentConversationIDs).
+			WithVarcharColumn(roleFieldName, scalars.roles).
+			WithVarcharColumn(providerFieldName, scalars.providers).
+			WithVarcharColumn(workspaceRootFieldName, scalars.workspaceRoots).
+			WithInt64Column(timestampUnixFieldName, scalars.timestamps).
+			WithInt64Column(messageIndexFieldName, scalars.messageIndexes)
+	}
 
 	if _, err := service.milvus.Insert(ctx, insertOption); err != nil {
 		slog.ErrorContext(ctx, "insert Milvus batch failed", "collection", collectionName, "err", err)
@@ -597,6 +633,11 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 	endLineColumn := resultSet.GetColumn(endLineFieldName)
 	fileExtensionColumn := resultSet.GetColumn(fileExtensionFieldName)
 	metadataColumn := resultSet.GetColumn(metadataFieldName)
+	// workspaceRoot is only present on conversation-collection result sets, where
+	// the search requests the native scalar column. It is nil for code
+	// collections and on rows that never carried a workspace root, so reads stay
+	// optional and default to empty.
+	workspaceRootColumn := resultSet.GetColumn(workspaceRootFieldName)
 	if contentColumn == nil || relativePathColumn == nil || startLineColumn == nil || endLineColumn == nil || fileExtensionColumn == nil {
 		return nil, ErrSearchResultIncomplete
 	}
@@ -636,6 +677,13 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			}
 		}
 
+		workspaceRootValue := ""
+		if workspaceRootColumn != nil {
+			if rootValue, rootErr := workspaceRootColumn.GetAsString(index); rootErr == nil {
+				workspaceRootValue = rootValue
+			}
+		}
+
 		score := 0.0
 		if index < len(resultSet.Scores) {
 			score = float64(resultSet.Scores[index])
@@ -652,100 +700,11 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			MessageIndex:         metadataValue.messageIndex(),
 			Role:                 metadataValue.Role,
 			TimestampUnix:        metadataValue.timestampUnix(),
+			WorkspaceRoot:        workspaceRootValue,
 			Score:                score,
 		})
 	}
 	return chunks, nil
-}
-
-// chunkMetadata mirrors the JSON shape the TS adapter writes into the
-// Milvus `metadata` field. The Go daemon adds a language hint so search
-// results can resurface the splitter-derived language without a dedicated
-// column.
-type chunkMetadata struct {
-	Language             string `json:"language,omitempty"`
-	ConversationID       string `json:"conversation_id,omitempty"`
-	ParentConversationID string `json:"parent_conversation_id,omitempty"`
-	MessageIndex         *int32 `json:"message_index,omitempty"`
-	Role                 string `json:"role,omitempty"`
-	TimestampUnix        *int64 `json:"timestamp_unix,omitempty"`
-}
-
-func encodeMetadata(chunk model.StoredChunk) string {
-	if chunk.Language == "" &&
-		chunk.ConversationID == "" &&
-		chunk.ParentConversationID == "" &&
-		chunk.MessageIndex == 0 &&
-		chunk.Role == "" &&
-		chunk.TimestampUnix == 0 {
-		return "{}"
-	}
-	metadata := chunkMetadata{
-		Language:             chunk.Language,
-		ConversationID:       chunk.ConversationID,
-		ParentConversationID: chunk.ParentConversationID,
-		MessageIndex:         nil,
-		Role:                 chunk.Role,
-		TimestampUnix:        nil,
-	}
-	if hasConversationMetadata(chunk) {
-		messageIndex := chunk.MessageIndex
-		timestampUnix := chunk.TimestampUnix
-		metadata.MessageIndex = &messageIndex
-		metadata.TimestampUnix = &timestampUnix
-	}
-	encoded, err := json.Marshal(metadata)
-	if err != nil {
-		return "{}"
-	}
-	return string(encoded)
-}
-
-func hasConversationMetadata(chunk model.StoredChunk) bool {
-	return chunk.ConversationID != "" ||
-		chunk.MessageIndex != 0 ||
-		chunk.Role != "" ||
-		chunk.TimestampUnix != 0
-}
-
-func decodeMetadataLanguage(metadata string) string {
-	return decodeMetadata(metadata).Language
-}
-
-func decodeMetadata(metadata string) chunkMetadata {
-	if metadata == "" {
-		return emptyChunkMetadata()
-	}
-	var parsed chunkMetadata
-	if err := json.Unmarshal([]byte(metadata), &parsed); err != nil {
-		return emptyChunkMetadata()
-	}
-	return parsed
-}
-
-func emptyChunkMetadata() chunkMetadata {
-	return chunkMetadata{
-		Language:             "",
-		ConversationID:       "",
-		ParentConversationID: "",
-		MessageIndex:         nil,
-		Role:                 "",
-		TimestampUnix:        nil,
-	}
-}
-
-func (metadata chunkMetadata) messageIndex() int32 {
-	if metadata.MessageIndex == nil {
-		return 0
-	}
-	return *metadata.MessageIndex
-}
-
-func (metadata chunkMetadata) timestampUnix() int64 {
-	if metadata.TimestampUnix == nil {
-		return 0
-	}
-	return *metadata.TimestampUnix
 }
 
 // sanitizeUTF8 returns a copy of value with invalid UTF-8 byte sequences

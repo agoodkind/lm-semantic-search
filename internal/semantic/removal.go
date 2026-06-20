@@ -78,5 +78,5 @@ func (service *Service) deleteByRelativePathPrefix(ctx context.Context, collecti
 // every row whose relativePath begins with prefix. The prefix delete and the
 // prefix-scoped reuse read share it so both name the same row set.
 func relativePathPrefixExpression(prefix string) string {
-	return fmt.Sprintf(`%s like "%s%%"`, relativePathFieldName, escapeMilvusString(prefix))
+	return fmt.Sprintf(`%s like "%s%%"`, relativePathFieldName, escapeMilvusLikePattern(prefix))
 }
