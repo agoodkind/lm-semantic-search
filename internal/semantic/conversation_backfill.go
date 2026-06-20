@@ -66,7 +66,7 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 		if len(ids) == 0 {
 			continue
 		}
-		if err := service.upsertConversationColumns(ctx, collectionName, ids, chunks, vectors, conversationUpsertOptions{WriteWorkspaceRoot: false}); err != nil {
+		if err := service.upsertConversationColumns(ctx, collectionName, ids, chunks, vectors, conversationUpsertOptions{WriteWorkspaceRoot: false, WriteArchived: false}); err != nil {
 			return total, err
 		}
 		total += len(ids)
@@ -328,6 +328,9 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 	if opts.WriteWorkspaceRoot {
 		option = option.WithVarcharColumn(workspaceRootFieldName, scalars.workspaceRoots)
 	}
+	if opts.WriteArchived {
+		option = option.WithBoolColumn(archivedFieldName, scalars.archiveds)
+	}
 
 	if _, err := service.milvus.Upsert(ctx, option); err != nil {
 		slog.ErrorContext(ctx, "conversation backfill upsert failed", "collection", collectionName, "rows", len(ids), "err", err)
@@ -337,10 +340,10 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 }
 
 // partitionConversationEnrichment splits one backfill page into the rows whose
-// conversation has a clyde-supplied workspace, setting chunk.WorkspaceRoot from
-// the enrichment, and counts the rest as orphans whose artifact is gone. The
-// caller writes only the resolvable rows and leaves orphans empty. The chunks
-// slice is mutated in place for the resolvable rows.
+// conversation has a clyde-supplied workspace, setting chunk.WorkspaceRoot and
+// chunk.Archived from the enrichment, and counts the rest as orphans whose
+// artifact is gone. The caller writes only the resolvable rows and leaves
+// orphans empty. The chunks slice is mutated in place for the resolvable rows.
 func partitionConversationEnrichment(ids []string, chunks []model.StoredChunk, vectors [][]float32, enrichment ConversationEnrichment) ([]string, []model.StoredChunk, [][]float32, int) {
 	fillIDs := make([]string, 0, len(ids))
 	fillChunks := make([]model.StoredChunk, 0, len(chunks))
@@ -353,6 +356,7 @@ func partitionConversationEnrichment(ids []string, chunks []model.StoredChunk, v
 			continue
 		}
 		chunks[index].WorkspaceRoot = value.WorkspaceRoot
+		chunks[index].Archived = value.Archived
 		fillIDs = append(fillIDs, ids[index])
 		fillChunks = append(fillChunks, chunks[index])
 		fillVectors = append(fillVectors, vectors[index])
@@ -360,14 +364,15 @@ func partitionConversationEnrichment(ids []string, chunks []model.StoredChunk, v
 	return fillIDs, fillChunks, fillVectors, orphan
 }
 
-// BackfillConversationWorkspaceRoots writes the workspaceRoot column onto rows
-// that have it empty, from a clyde-supplied enrichment keyed by conversation id,
-// preserving each row's dense vector so nothing is re-embedded. It iterates only
-// the empty rows (WithFilter), so it never re-touches the whole collection. A
-// row whose conversation id is absent from the enrichment is an orphan (its
-// artifact is gone) and is left empty. When dryRun is true it counts the
-// would-change and orphan rows and writes nothing. Returns (changed, orphan).
-func (service *Service) BackfillConversationWorkspaceRoots(ctx context.Context, collectionName string, enrichment ConversationEnrichment, dryRun bool) (int, int, error) {
+// BackfillConversationEnrichment writes the clyde-supplied enrichment columns
+// (workspaceRoot and archived) onto rows that have workspaceRoot empty, from an
+// enrichment keyed by conversation id, preserving each row's dense vector so
+// nothing is re-embedded. It iterates only the empty rows (WithFilter), so it
+// never re-touches the whole collection. A row whose conversation id is absent
+// from the enrichment is an orphan (its artifact is gone) and is left empty.
+// When dryRun is true it counts the would-change and orphan rows and writes
+// nothing. Returns (changed, orphan).
+func (service *Service) BackfillConversationEnrichment(ctx context.Context, collectionName string, enrichment ConversationEnrichment, dryRun bool) (int, int, error) {
 	if !service.Available() {
 		return 0, 0, ErrUnavailable
 	}
@@ -409,7 +414,7 @@ func (service *Service) BackfillConversationWorkspaceRoots(ctx context.Context, 
 		if dryRun || len(fillIDs) == 0 {
 			continue
 		}
-		if err := service.upsertConversationColumns(ctx, collectionName, fillIDs, fillChunks, fillVectors, conversationUpsertOptions{WriteWorkspaceRoot: true}); err != nil {
+		if err := service.upsertConversationColumns(ctx, collectionName, fillIDs, fillChunks, fillVectors, conversationUpsertOptions{WriteWorkspaceRoot: true, WriteArchived: true}); err != nil {
 			return changed, orphan, err
 		}
 	}

@@ -16,8 +16,8 @@ func TestPartitionConversationEnrichmentFillsAndCountsOrphans(t *testing.T) {
 	}
 	vectors := [][]float32{{1}, {2}, {3}}
 	enrichment := ConversationEnrichment{
-		"claude:1":    {WorkspaceRoot: "/repo/one"},
-		"codex:2":     {WorkspaceRoot: "/repo/two"},
+		"claude:1":    {WorkspaceRoot: "/repo/one", Archived: true},
+		"codex:2":     {WorkspaceRoot: "/repo/two", Archived: false},
 		"claude:gone": {WorkspaceRoot: ""}, // present but empty counts as orphan
 	}
 
@@ -34,6 +34,9 @@ func TestPartitionConversationEnrichmentFillsAndCountsOrphans(t *testing.T) {
 	}
 	if fillChunks[0].WorkspaceRoot != "/repo/one" || fillChunks[1].WorkspaceRoot != "/repo/two" {
 		t.Fatalf("workspace roots = %q, %q, want /repo/one, /repo/two", fillChunks[0].WorkspaceRoot, fillChunks[1].WorkspaceRoot)
+	}
+	if !fillChunks[0].Archived || fillChunks[1].Archived {
+		t.Fatalf("archived = %t, %t, want true, false", fillChunks[0].Archived, fillChunks[1].Archived)
 	}
 }
 

@@ -255,7 +255,7 @@ func (f *fakeSemantic) DeleteConversation(ctx context.Context, collectionName st
 	return nil
 }
 
-func (f *fakeSemantic) BackfillConversationWorkspaceRoots(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error) {
+func (f *fakeSemantic) BackfillConversationEnrichment(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error) {
 	if f.backfillConversations != nil {
 		return f.backfillConversations(ctx, collectionName, enrichment, dryRun)
 	}
