@@ -96,6 +96,7 @@ func addConversationScalarEntries(enrichment semantic.ConversationEnrichment, en
 		}
 		enrichment[conversationID] = semantic.ConversationEnrichmentValue{
 			WorkspaceRoot: entry.GetWorkspaceRoot(),
+			Archived:      entry.GetArchived(),
 		}
 	}
 }

@@ -184,7 +184,7 @@ func (manager *Manager) backfillConversationScalars(ctx context.Context, collect
 	if manager.semantic == nil {
 		return 0, 0, semantic.ErrUnavailable
 	}
-	changed, orphan, err = manager.semantic.BackfillConversationWorkspaceRoots(ctx, codebase.CollectionName, enrichment, dryRun)
+	changed, orphan, err = manager.semantic.BackfillConversationEnrichment(ctx, codebase.CollectionName, enrichment, dryRun)
 	if err != nil {
 		slog.ErrorContext(ctx, "backfill conversation scalars failed", "collection_id", collectionID, "collection", codebase.CollectionName, "changed", changed, "orphan", orphan, "err", err)
 		return changed, orphan, fmt.Errorf("backfill conversation scalars for %s: %w", collectionID, err)

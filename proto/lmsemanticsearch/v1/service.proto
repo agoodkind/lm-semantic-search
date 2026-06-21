@@ -535,10 +535,11 @@ message BackfillConversationScalarsEntries {
 }
 
 // BackfillConversationScalarEntry maps one conversation id to the workspace root
-// that clyde observed for that conversation.
+// and archived status that clyde observed for that conversation.
 message BackfillConversationScalarEntry {
   string conversation_id = 1;
   string workspace_root = 2;
+  bool archived = 3;
 }
 
 // BackfillConversationScalarsResponse reports the scalar backfill result.

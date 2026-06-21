@@ -3832,11 +3832,12 @@ func (x *BackfillConversationScalarsEntries) GetEntries() []*BackfillConversatio
 }
 
 // BackfillConversationScalarEntry maps one conversation id to the workspace root
-// that clyde observed for that conversation.
+// and archived status that clyde observed for that conversation.
 type BackfillConversationScalarEntry struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
 	WorkspaceRoot  string                 `protobuf:"bytes,2,opt,name=workspace_root,json=workspaceRoot,proto3" json:"workspace_root,omitempty"`
+	Archived       bool                   `protobuf:"varint,3,opt,name=archived,proto3" json:"archived,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -3883,6 +3884,13 @@ func (x *BackfillConversationScalarEntry) GetWorkspaceRoot() string {
 		return x.WorkspaceRoot
 	}
 	return ""
+}
+
+func (x *BackfillConversationScalarEntry) GetArchived() bool {
+	if x != nil {
+		return x.Archived
+	}
+	return false
 }
 
 // BackfillConversationScalarsResponse reports the scalar backfill result.
@@ -5021,10 +5029,11 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\adry_run\x18\x02 \x01(\bR\x06dryRun\x127\n" +
 	"\x06client\x18\x03 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"t\n" +
 	"\"BackfillConversationScalarsEntries\x12N\n" +
-	"\aentries\x18\x01 \x03(\v24.lmsemanticsearch.v1.BackfillConversationScalarEntryR\aentries\"q\n" +
+	"\aentries\x18\x01 \x03(\v24.lmsemanticsearch.v1.BackfillConversationScalarEntryR\aentries\"\x8d\x01\n" +
 	"\x1fBackfillConversationScalarEntry\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12%\n" +
-	"\x0eworkspace_root\x18\x02 \x01(\tR\rworkspaceRoot\"z\n" +
+	"\x0eworkspace_root\x18\x02 \x01(\tR\rworkspaceRoot\x12\x1a\n" +
+	"\barchived\x18\x03 \x01(\bR\barchived\"z\n" +
 	"#BackfillConversationScalarsResponse\x12\x18\n" +
 	"\achanged\x18\x01 \x01(\x03R\achanged\x12\x16\n" +
 	"\x06orphan\x18\x02 \x01(\x03R\x06orphan\x12!\n" +

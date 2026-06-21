@@ -84,6 +84,7 @@ func providerFromConversationID(conversationID string) string {
 // write clyde-supplied values onto the targeted rows.
 type conversationUpsertOptions struct {
 	WriteWorkspaceRoot bool
+	WriteArchived      bool
 }
 
 // ConversationEnrichment maps a conversation id to the externally-sourced scalar
@@ -96,4 +97,5 @@ type ConversationEnrichment map[string]ConversationEnrichmentValue
 // are not derivable from a stored row, sourced from clyde.
 type ConversationEnrichmentValue struct {
 	WorkspaceRoot string
+	Archived      bool
 }
