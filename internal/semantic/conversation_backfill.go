@@ -243,6 +243,7 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 			Role:                 metadata.Role,
 			TimestampUnix:        metadata.timestampUnix(),
 			WorkspaceRoot:        "",
+			Archived:             false,
 			Score:                0,
 		})
 	}

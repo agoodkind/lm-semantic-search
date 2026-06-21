@@ -1576,6 +1576,9 @@ type ConversationDocument struct {
 	// empty when unknown. provider is derived from the conversation_id prefix and
 	// is not carried here.
 	WorkspaceRoot string `protobuf:"bytes,7,opt,name=workspace_root,json=workspaceRoot,proto3" json:"workspace_root,omitempty"`
+	// archived marks a conversation hidden from normal clyde lists. clyde owns
+	// this value, and it defaults false when unset.
+	Archived      bool `protobuf:"varint,8,opt,name=archived,proto3" json:"archived,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1657,6 +1660,13 @@ func (x *ConversationDocument) GetWorkspaceRoot() string {
 		return x.WorkspaceRoot
 	}
 	return ""
+}
+
+func (x *ConversationDocument) GetArchived() bool {
+	if x != nil {
+		return x.Archived
+	}
+	return false
 }
 
 type ConversationSearchResult struct {
@@ -4851,7 +4861,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\bend_line\x18\x03 \x01(\x05R\aendLine\x12\x1a\n" +
 	"\blanguage\x18\x04 \x01(\tR\blanguage\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
-	"\acontent\x18\x06 \x01(\tR\acontent\"\x90\x02\n" +
+	"\acontent\x18\x06 \x01(\tR\acontent\"\xac\x02\n" +
 	"\x14ConversationDocument\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +
@@ -4859,7 +4869,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x12\n" +
 	"\x04text\x18\x05 \x01(\tR\x04text\x124\n" +
 	"\x16parent_conversation_id\x18\x06 \x01(\tR\x14parentConversationId\x12%\n" +
-	"\x0eworkspace_root\x18\a \x01(\tR\rworkspaceRoot\"\x89\x02\n" +
+	"\x0eworkspace_root\x18\a \x01(\tR\rworkspaceRoot\x12\x1a\n" +
+	"\barchived\x18\b \x01(\bR\barchived\"\x89\x02\n" +
 	"\x18ConversationSearchResult\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +

@@ -28,6 +28,7 @@ const (
 	messageIndexFieldName          = "messageIndex"
 	providerFieldName              = "provider"
 	workspaceRootFieldName         = "workspaceRoot"
+	archivedFieldName              = "archived"
 	conversationIDFieldMaxLength   = 256
 	conversationRoleFieldMaxLength = 64
 	conversationProviderMaxLength  = 32
@@ -53,6 +54,7 @@ func conversationScalarFields() []*entity.Field {
 		entity.NewField().WithName(roleFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(conversationRoleFieldMaxLength).WithNullable(true),
 		entity.NewField().WithName(providerFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(conversationProviderMaxLength).WithNullable(true),
 		entity.NewField().WithName(workspaceRootFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(conversationWorkspaceMaxLength).WithNullable(true),
+		entity.NewField().WithName(archivedFieldName).WithDataType(entity.FieldTypeBool).WithNullable(true),
 		entity.NewField().WithName(timestampUnixFieldName).WithDataType(entity.FieldTypeInt64).WithNullable(true),
 		entity.NewField().WithName(messageIndexFieldName).WithDataType(entity.FieldTypeInt64).WithNullable(true),
 	}
@@ -157,6 +159,14 @@ func (service *Service) ensureConversationScalarColumns(ctx context.Context, col
 	}
 	if len(added) > 0 {
 		slog.InfoContext(ctx, "semantic.conversation_scalar_columns_added", "collection", collectionName, "fields", strings.Join(added, ","), "count", len(added))
+		needsBackfill, backfillCheckErr := service.conversationCollectionNeedsBackfill(ctx, collectionName)
+		if backfillCheckErr != nil {
+			slog.ErrorContext(ctx, "check conversation scalar backfill need failed", "collection", collectionName, "err", backfillCheckErr)
+			return nil
+		}
+		if !needsBackfill {
+			return nil
+		}
 		// Columns were just added to a collection that already holds rows, so
 		// those rows read null until backfilled. Run the no-reindex backfill in
 		// the background, detached from this request's cancellation, so this call
