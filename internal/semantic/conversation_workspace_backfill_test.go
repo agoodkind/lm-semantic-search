@@ -6,37 +6,41 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-func TestPartitionConversationEnrichmentFillsAndCountsOrphans(t *testing.T) {
+func TestPartitionConversationEnrichmentFillsKnownAndOrphansUnknown(t *testing.T) {
 	t.Parallel()
-	ids := []string{"a", "b", "c"}
+	ids := []string{"a", "b", "c", "d"}
 	chunks := []model.StoredChunk{
-		{ConversationID: "claude:1"},
-		{ConversationID: "codex:2"},
-		{ConversationID: "claude:gone"},
+		{ConversationID: "claude:1"},                           // empty workspace, filled from enrichment
+		{ConversationID: "codex:2", WorkspaceRoot: "/already"}, // workspace already set, preserved
+		{ConversationID: "claude:noworkspace"},                 // known but enrichment has no workspace
+		{ConversationID: "claude:gone"},                        // unknown -> orphan
 	}
-	vectors := [][]float32{{1}, {2}, {3}}
+	vectors := [][]float32{{1}, {2}, {3}, {4}}
 	enrichment := ConversationEnrichment{
-		"claude:1":    {WorkspaceRoot: "/repo/one", Archived: true},
-		"codex:2":     {WorkspaceRoot: "/repo/two", Archived: false},
-		"claude:gone": {WorkspaceRoot: ""}, // present but empty counts as orphan
+		"claude:1":           {WorkspaceRoot: "/repo/one", Archived: true},
+		"codex:2":            {WorkspaceRoot: "/repo/two", Archived: true},
+		"claude:noworkspace": {WorkspaceRoot: "", Archived: true},
 	}
 
 	fillIDs, fillChunks, fillVectors, orphan := partitionConversationEnrichment(ids, chunks, vectors, enrichment)
 
 	if orphan != 1 {
-		t.Fatalf("orphan = %d, want 1", orphan)
+		t.Fatalf("orphan = %d, want 1 (claude:gone is unknown)", orphan)
 	}
-	if len(fillIDs) != 2 || len(fillChunks) != 2 || len(fillVectors) != 2 {
-		t.Fatalf("fill lengths = %d/%d/%d, want 2/2/2", len(fillIDs), len(fillChunks), len(fillVectors))
+	if len(fillIDs) != 3 || len(fillChunks) != 3 || len(fillVectors) != 3 {
+		t.Fatalf("fill lengths = %d/%d/%d, want 3/3/3", len(fillIDs), len(fillChunks), len(fillVectors))
 	}
-	if fillIDs[0] != "a" || fillIDs[1] != "b" {
-		t.Fatalf("fill ids = %v, want [a b]", fillIDs)
+	// Empty workspace is filled from the enrichment, and archived is set.
+	if fillChunks[0].WorkspaceRoot != "/repo/one" || !fillChunks[0].Archived {
+		t.Fatalf("fillChunks[0] = %+v, want workspace /repo/one archived true", fillChunks[0])
 	}
-	if fillChunks[0].WorkspaceRoot != "/repo/one" || fillChunks[1].WorkspaceRoot != "/repo/two" {
-		t.Fatalf("workspace roots = %q, %q, want /repo/one, /repo/two", fillChunks[0].WorkspaceRoot, fillChunks[1].WorkspaceRoot)
+	// A row that already carries a workspace keeps it; archived is still filled.
+	if fillChunks[1].WorkspaceRoot != "/already" || !fillChunks[1].Archived {
+		t.Fatalf("fillChunks[1] = %+v, want workspace /already preserved archived true", fillChunks[1])
 	}
-	if !fillChunks[0].Archived || fillChunks[1].Archived {
-		t.Fatalf("archived = %t, %t, want true, false", fillChunks[0].Archived, fillChunks[1].Archived)
+	// A known conversation with no workspace stays empty but still gets archived.
+	if fillChunks[2].WorkspaceRoot != "" || !fillChunks[2].Archived {
+		t.Fatalf("fillChunks[2] = %+v, want empty workspace archived true", fillChunks[2])
 	}
 }
 
