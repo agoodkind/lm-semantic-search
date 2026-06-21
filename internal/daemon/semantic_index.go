@@ -50,6 +50,7 @@ type semanticWriter interface {
 	StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32) error
 	PromoteStaging(ctx context.Context, codebasePath string) error
 	DeleteConversation(ctx context.Context, collectionName string, conversationID string) error
+	BackfillConversationWorkspaceRoots(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
 	CopyChunks(ctx context.Context, codebasePath string, srcRelativePath string, dstRelativePath string) (int, error)
 	PruneToCurrent(ctx context.Context, codebasePath string, currentRelativePaths []string) error
 }

@@ -26,6 +26,11 @@ service SemanticSearchDaemonService {
   // message size. The engine accumulates the chunks and queues an async ingest
   // job.
   rpc UpsertConversationDocumentsStream(stream UpsertConversationDocumentsChunk) returns (UpsertConversationDocumentsResponse);
+  // BackfillConversationScalars is the client-streaming conversation scalar
+  // backfill. clyde sends one header chunk, then enrichment entry chunks, so the
+  // conversation id to workspace root map is not bounded by the gRPC max message
+  // size. The engine writes only empty scalar columns and returns row counts.
+  rpc BackfillConversationScalars(stream BackfillConversationScalarsChunk) returns (BackfillConversationScalarsResponse);
   rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
   rpc SearchWithinConversation(SearchWithinConversationRequest) returns (SearchWithinConversationResponse);
@@ -499,6 +504,45 @@ message UpsertConversationDocumentsChunk {
     UpsertConversationDocumentsDocuments documents = 2;
     UpsertConversationDocumentsManifest manifest = 3;
   }
+}
+
+// BackfillConversationScalarsChunk is one frame of a streamed scalar backfill:
+// a header or a batch of enrichment entries. The stream sends exactly one header
+// first, then zero or more entries chunks.
+message BackfillConversationScalarsChunk {
+  oneof chunk {
+    BackfillConversationScalarsHeader header = 1;
+    BackfillConversationScalarsEntries entries = 2;
+  }
+}
+
+// BackfillConversationScalarsHeader opens a streamed scalar backfill. It
+// carries the collection id, dry-run flag, and caller info once, before any
+// entries.
+message BackfillConversationScalarsHeader {
+  string collection_id = 1;
+  bool dry_run = 2;
+  ClientInfo client = 3;
+}
+
+// BackfillConversationScalarsEntries is one batch of conversation scalar
+// enrichment entries in a streamed scalar backfill.
+message BackfillConversationScalarsEntries {
+  repeated BackfillConversationScalarEntry entries = 1;
+}
+
+// BackfillConversationScalarEntry maps one conversation id to the workspace root
+// that clyde observed for that conversation.
+message BackfillConversationScalarEntry {
+  string conversation_id = 1;
+  string workspace_root = 2;
+}
+
+// BackfillConversationScalarsResponse reports the scalar backfill result.
+message BackfillConversationScalarsResponse {
+  int64 changed = 1;
+  int64 orphan = 2;
+  string display_text = 3;
 }
 
 message DeleteConversationRequest {

@@ -33,6 +33,7 @@ const (
 	SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterConversationCollection"
 	SemanticSearchDaemonService_SyncConversationManifest_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncConversationManifest"
 	SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocumentsStream"
+	SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/BackfillConversationScalars"
 	SemanticSearchDaemonService_DeleteConversation_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteConversation"
 	SemanticSearchDaemonService_SearchConversations_FullMethodName               = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchConversations"
 	SemanticSearchDaemonService_SearchWithinConversation_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchWithinConversation"
@@ -63,6 +64,11 @@ type SemanticSearchDaemonServiceClient interface {
 	// message size. The engine accumulates the chunks and queues an async ingest
 	// job.
 	UpsertConversationDocumentsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse], error)
+	// BackfillConversationScalars is the client-streaming conversation scalar
+	// backfill. clyde sends one header chunk, then enrichment entry chunks, so the
+	// conversation id to workspace root map is not bounded by the gRPC max message
+	// size. The engine writes only empty scalar columns and returns row counts.
+	BackfillConversationScalars(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse], error)
 	DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
 	SearchWithinConversation(ctx context.Context, in *SearchWithinConversationRequest, opts ...grpc.CallOption) (*SearchWithinConversationResponse, error)
@@ -230,6 +236,19 @@ func (c *semanticSearchDaemonServiceClient) UpsertConversationDocumentsStream(ct
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type SemanticSearchDaemonService_UpsertConversationDocumentsStreamClient = grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]
 
+func (c *semanticSearchDaemonServiceClient) BackfillConversationScalars(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[2], SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_BackfillConversationScalarsClient = grpc.ClientStreamingClient[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]
+
 func (c *semanticSearchDaemonServiceClient) DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteConversationResponse)
@@ -303,6 +322,11 @@ type SemanticSearchDaemonServiceServer interface {
 	// message size. The engine accumulates the chunks and queues an async ingest
 	// job.
 	UpsertConversationDocumentsStream(grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]) error
+	// BackfillConversationScalars is the client-streaming conversation scalar
+	// backfill. clyde sends one header chunk, then enrichment entry chunks, so the
+	// conversation id to workspace root map is not bounded by the gRPC max message
+	// size. The engine writes only empty scalar columns and returns row counts.
+	BackfillConversationScalars(grpc.ClientStreamingServer[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]) error
 	DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
 	SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error)
@@ -358,6 +382,9 @@ func (UnimplementedSemanticSearchDaemonServiceServer) SyncConversationManifest(c
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) UpsertConversationDocumentsStream(grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]) error {
 	return status.Error(codes.Unimplemented, "method UpsertConversationDocumentsStream not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) BackfillConversationScalars(grpc.ClientStreamingServer[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]) error {
+	return status.Error(codes.Unimplemented, "method BackfillConversationScalars not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteConversation not implemented")
@@ -628,6 +655,13 @@ func _SemanticSearchDaemonService_UpsertConversationDocumentsStream_Handler(srv 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type SemanticSearchDaemonService_UpsertConversationDocumentsStreamServer = grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]
 
+func _SemanticSearchDaemonService_BackfillConversationScalars_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SemanticSearchDaemonServiceServer).BackfillConversationScalars(&grpc.GenericServerStream[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_BackfillConversationScalarsServer = grpc.ClientStreamingServer[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]
+
 func _SemanticSearchDaemonService_DeleteConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteConversationRequest)
 	if err := dec(in); err != nil {
@@ -803,6 +837,11 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "UpsertConversationDocumentsStream",
 			Handler:       _SemanticSearchDaemonService_UpsertConversationDocumentsStream_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "BackfillConversationScalars",
+			Handler:       _SemanticSearchDaemonService_BackfillConversationScalars_Handler,
 			ClientStreams: true,
 		},
 	},

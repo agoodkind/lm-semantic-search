@@ -17,6 +17,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
@@ -173,6 +174,22 @@ func (manager *Manager) SearchWithinConversation(ctx context.Context, collection
 		return nil, "", err
 	}
 	return chunks, manager.conversationIndexedFingerprint(codebase, trimmedConversationID), nil
+}
+
+func (manager *Manager) backfillConversationScalars(ctx context.Context, collectionID string, enrichment semantic.ConversationEnrichment, dryRun bool) (changed int, orphan int, err error) {
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if manager.semantic == nil {
+		return 0, 0, semantic.ErrUnavailable
+	}
+	changed, orphan, err = manager.semantic.BackfillConversationWorkspaceRoots(ctx, codebase.CollectionName, enrichment, dryRun)
+	if err != nil {
+		slog.ErrorContext(ctx, "backfill conversation scalars failed", "collection_id", collectionID, "collection", codebase.CollectionName, "changed", changed, "orphan", orphan, "err", err)
+		return changed, orphan, fmt.Errorf("backfill conversation scalars for %s: %w", collectionID, err)
+	}
+	return changed, orphan, nil
 }
 
 // conversationIndexedFingerprint reads the checkpointed content fingerprint
