@@ -26,6 +26,7 @@ type conversationSearchFilter struct {
 	MinScore             float64
 	MessageIndexFrom     int32
 	MessageIndexUntil    int32
+	Archived             *bool
 }
 
 // toSemanticFilter maps the request filter onto the engine's native scalar
@@ -42,6 +43,7 @@ func (filter conversationSearchFilter) toSemanticFilter() semantic.ConversationF
 		UntilUnix:            filter.UntilUnix,
 		MessageIndexFrom:     filter.MessageIndexFrom,
 		MessageIndexUntil:    filter.MessageIndexUntil,
+		Archived:             filter.Archived,
 	}
 }
 
@@ -75,6 +77,9 @@ func (filter conversationSearchFilter) matchesScope(chunk model.StoredChunk) boo
 		return false
 	}
 	if filter.MessageIndexUntil > 0 && chunk.MessageIndex >= filter.MessageIndexUntil {
+		return false
+	}
+	if filter.Archived != nil && chunk.Archived != *filter.Archived {
 		return false
 	}
 	return true

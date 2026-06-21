@@ -811,6 +811,7 @@ func pbConversationSearchFilter(filter *pb.ConversationSearchFilter) conversatio
 			MinScore:             0,
 			MessageIndexFrom:     0,
 			MessageIndexUntil:    0,
+			Archived:             nil,
 		}
 	}
 	return conversationSearchFilter{
@@ -824,7 +825,19 @@ func pbConversationSearchFilter(filter *pb.ConversationSearchFilter) conversatio
 		MinScore:             filter.GetMinScore(),
 		MessageIndexFrom:     filter.GetMessageIndexFrom(),
 		MessageIndexUntil:    filter.GetMessageIndexUntil(),
+		Archived:             cloneOptionalBool(filter.Archived),
 	}
+}
+
+// cloneOptionalBool copies a proto3 optional bool into a freshly allocated
+// pointer so the manager filter does not alias the wire message's memory. A nil
+// input (the field was unset) stays nil, meaning no archived filter.
+func cloneOptionalBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 // Doctor reports daemon-local diagnostics.
