@@ -66,7 +66,7 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 		if len(ids) == 0 {
 			continue
 		}
-		if err := service.upsertConversationBackfillBatch(ctx, collectionName, ids, chunks, vectors); err != nil {
+		if err := service.upsertConversationColumns(ctx, collectionName, ids, chunks, vectors, conversationUpsertOptions{WriteWorkspaceRoot: false}); err != nil {
 			return total, err
 		}
 		total += len(ids)
@@ -271,11 +271,14 @@ func backfillString(col column.Column, rowIndex int) string {
 	return value
 }
 
-// upsertConversationBackfillBatch overwrites each row in place: it keeps the
-// existing primary key, content, path, and dense vector, and adds the native
-// scalar columns derived from the chunk. Upsert matches by primary key, so no
-// row is duplicated and no vector is regenerated.
-func (service *Service) upsertConversationBackfillBatch(ctx context.Context, collectionName string, ids []string, chunks []model.StoredChunk, vectors [][]float32) error {
+// upsertConversationColumns overwrites each row in place: it keeps the existing
+// primary key, content, path, and dense vector, and writes the native scalar
+// columns derived from the chunk. Upsert matches by primary key, so no row is
+// duplicated and no vector is regenerated. opts gates the enrichment-sourced
+// columns: workspaceRoot is written only when opts.WriteWorkspaceRoot is true
+// (the caller populated chunk.WorkspaceRoot from a clyde enrichment); otherwise
+// it is omitted so the nullable column keeps its existing value.
+func (service *Service) upsertConversationColumns(ctx context.Context, collectionName string, ids []string, chunks []model.StoredChunk, vectors [][]float32, opts conversationUpsertOptions) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -300,11 +303,12 @@ func (service *Service) upsertConversationBackfillBatch(ctx context.Context, col
 		scalars.append(chunk)
 	}
 
-	// workspaceRoot is intentionally omitted from the backfill upsert: it is not
-	// carried in the stored metadata JSON, so a backfilled value would be the
-	// empty string, which writes a non-NULL "" and contradicts the "stays null on
-	// old rows" contract. Leaving the nullable column out of the upsert preserves
-	// NULL, and workspace filtering falls back to the conversation_id column.
+	// workspaceRoot is written only when opts.WriteWorkspaceRoot is set. The
+	// metadata-only sweep cannot source it (it is not carried in the stored
+	// metadata JSON), so it leaves the nullable column out of the upsert to
+	// preserve the row's existing value (NULL on old rows), and workspace
+	// filtering falls back to the conversation_id column. The enrichment-driven
+	// backfill sets the flag after populating chunk.WorkspaceRoot from clyde.
 	option := milvusclient.NewColumnBasedInsertOption(collectionName).
 		WithVarcharColumn(idFieldName, ids).
 		WithVarcharColumn(contentFieldName, contents).
@@ -320,6 +324,9 @@ func (service *Service) upsertConversationBackfillBatch(ctx context.Context, col
 		WithVarcharColumn(providerFieldName, scalars.providers).
 		WithInt64Column(timestampUnixFieldName, scalars.timestamps).
 		WithInt64Column(messageIndexFieldName, scalars.messageIndexes)
+	if opts.WriteWorkspaceRoot {
+		option = option.WithVarcharColumn(workspaceRootFieldName, scalars.workspaceRoots)
+	}
 
 	if _, err := service.milvus.Upsert(ctx, option); err != nil {
 		slog.ErrorContext(ctx, "conversation backfill upsert failed", "collection", collectionName, "rows", len(ids), "err", err)
