@@ -69,7 +69,7 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		WithField(entity.NewField().WithName(endLineFieldName).WithDataType(entity.FieldTypeInt64)).
 		WithField(entity.NewField().WithName(fileExtensionFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(32)).
 		WithField(entity.NewField().WithName(metadataFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
-		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)).WithTypeParams(mmapEnabledKey, mmapEnabledValue))
+		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)))
 
 	if isConversationCollection(collectionName) {
 		for _, field := range conversationScalarFields() {
@@ -77,14 +77,16 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		}
 	}
 
-	// Born mmapped: the dense vector field carries its mmap type param above and
-	// the dense index carries the matching index-level mmap here, so a freshly
-	// created collection never needs the in-place migration sweep. WithExtraParam
-	// mutates in place and returns nothing, so the option is built as a variable
-	// rather than chained into the slice literal.
-	denseIndexOption := milvusclient.NewCreateIndexOption(collectionName, denseVectorFieldName, index.NewAutoIndex(entity.COSINE))
-	denseIndexOption.WithExtraParam(mmapEnabledKey, mmapEnabledValue)
-	indexOptions := []milvusclient.CreateIndexOption{denseIndexOption}
+	// The dense AutoIndex is created with its metric type only. Milvus rejects any
+	// extra index param on AutoIndex ("only metric type can be passed when use
+	// AutoIndex"), so mmap is NOT set in the create call. mmap is enabled on the
+	// dense field and dense index after creation through the supported
+	// alter-properties path (ensureMmapEnabledOnce below), which matches the
+	// migration sweep and the documented restore recipe. Setting mmap here is the
+	// one mistake that breaks every new-collection build on Milvus 2.6.
+	indexOptions := []milvusclient.CreateIndexOption{
+		milvusclient.NewCreateIndexOption(collectionName, denseVectorFieldName, index.NewAutoIndex(entity.COSINE)),
+	}
 
 	if service.cfg.HybridMode {
 		schema = schema.
@@ -94,10 +96,23 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 	}
 
 	if err := service.milvus.CreateCollection(ctx, milvusclient.NewCreateCollectionOption(collectionName, schema).WithIndexOptions(indexOptions...)); err != nil {
-		slog.ErrorContext(ctx, "create Milvus collection failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("create Milvus collection %s: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "create Milvus collection "+collectionName)
 	}
-	return service.loadCollection(ctx, collectionName)
+	// Enable mmap on the dense field and index through the supported alter path,
+	// which also loads the collection. A freshly created collection is unloaded, so
+	// the alter needs no release first, and enabling mmap before any rows load keeps
+	// load memory flat (the dense vectors are the memory hog that caused the S0).
+	// If the dense index is not yet visible the enable skips without mmapping; in
+	// that case load the collection directly so it is usable and let the periodic
+	// sweep mmap it on a later tick.
+	outcome, err := service.ensureMmapEnabledOnce(ctx, collectionName)
+	if err != nil {
+		return err
+	}
+	if outcome == mmapOutcomeSkipped {
+		return service.loadCollection(ctx, collectionName)
+	}
+	return nil
 }
 
 // ensureConversationScalarColumns adds any conversation scalar column the
@@ -237,12 +252,10 @@ func (service *Service) ensureConversationScalarColumnsOnce(ctx context.Context,
 func (service *Service) loadCollection(ctx context.Context, collectionName string) error {
 	loadTask, err := service.milvus.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName))
 	if err != nil {
-		slog.ErrorContext(ctx, "load Milvus collection failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("load Milvus collection %s: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "load Milvus collection "+collectionName)
 	}
 	if err := loadTask.Await(ctx); err != nil {
-		slog.ErrorContext(ctx, "await Milvus collection load failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("await Milvus collection load %s: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "await Milvus collection load "+collectionName)
 	}
 	return nil
 }
