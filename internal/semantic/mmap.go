@@ -47,8 +47,7 @@ const (
 // released and loaded again.
 func (service *Service) releaseCollection(ctx context.Context, collectionName string) error {
 	if err := service.milvus.ReleaseCollection(ctx, milvusclient.NewReleaseCollectionOption(collectionName)); err != nil {
-		slog.ErrorContext(ctx, "release Milvus collection failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("release Milvus collection %s: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "release Milvus collection "+collectionName)
 	}
 	return nil
 }
@@ -59,8 +58,7 @@ func (service *Service) releaseCollection(ctx context.Context, collectionName st
 func (service *Service) collectionLoaded(ctx context.Context, collectionName string) (bool, error) {
 	state, err := service.milvus.GetLoadState(ctx, milvusclient.NewGetLoadStateOption(collectionName))
 	if err != nil {
-		slog.ErrorContext(ctx, "get collection load state for mmap failed", "collection", collectionName, "err", err)
-		return false, fmt.Errorf("get load state for %s: %w", collectionName, err)
+		return false, wrapStoreError(ctx, err, "get load state for "+collectionName)
 	}
 	return state.State == entity.LoadStateLoaded, nil
 }
@@ -75,8 +73,7 @@ func (service *Service) awaitCollectionReleased(ctx context.Context, collectionN
 	for {
 		state, err := service.milvus.GetLoadState(pollCtx, milvusclient.NewGetLoadStateOption(collectionName))
 		if err != nil {
-			slog.ErrorContext(ctx, "poll release load state failed", "collection", collectionName, "err", err)
-			return fmt.Errorf("poll release state for %s: %w", collectionName, err)
+			return wrapStoreError(ctx, err, "poll release state for "+collectionName)
 		}
 		if state.State == entity.LoadStateNotLoad {
 			return nil
@@ -104,8 +101,7 @@ func (service *Service) awaitCollectionReleased(ctx context.Context, collectionN
 func (service *Service) ensureMmapEnabledOnCollection(ctx context.Context, collectionName string) (mmapOutcome, error) {
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
-		slog.ErrorContext(ctx, "check collection for mmap failed", "collection", collectionName, "err", err)
-		return mmapOutcomeUnknown, fmt.Errorf("check collection %s for mmap: %w", collectionName, err)
+		return mmapOutcomeUnknown, wrapStoreError(ctx, err, "check collection "+collectionName+" for mmap")
 	}
 	if !hasCollection {
 		return mmapOutcomeSkipped, nil
@@ -113,8 +109,7 @@ func (service *Service) ensureMmapEnabledOnCollection(ctx context.Context, colle
 
 	indexNames, err := service.milvus.ListIndexes(ctx, milvusclient.NewListIndexOption(collectionName).WithFieldName(denseVectorFieldName))
 	if err != nil {
-		slog.ErrorContext(ctx, "list dense indexes for mmap failed", "collection", collectionName, "err", err)
-		return mmapOutcomeUnknown, fmt.Errorf("list dense indexes for %s: %w", collectionName, err)
+		return mmapOutcomeUnknown, wrapStoreError(ctx, err, "list dense indexes for "+collectionName)
 	}
 	if len(indexNames) == 0 {
 		slog.DebugContext(ctx, "semantic.mmap_skip_no_dense_index", "collection", collectionName)
@@ -124,8 +119,7 @@ func (service *Service) ensureMmapEnabledOnCollection(ctx context.Context, colle
 
 	indexDesc, err := service.milvus.DescribeIndex(ctx, milvusclient.NewDescribeIndexOption(collectionName, indexName))
 	if err != nil {
-		slog.ErrorContext(ctx, "describe dense index for mmap failed", "collection", collectionName, "index", indexName, "err", err)
-		return mmapOutcomeUnknown, fmt.Errorf("describe index %s on %s: %w", indexName, collectionName, err)
+		return mmapOutcomeUnknown, wrapStoreError(ctx, err, "describe index "+indexName+" on "+collectionName)
 	}
 	alreadyMmapped := indexDesc.Params()[mmapEnabledKey] == mmapEnabledValue
 
@@ -160,12 +154,10 @@ func (service *Service) ensureMmapEnabledOnCollection(ctx context.Context, colle
 		}
 	}
 	if err := service.milvus.AlterCollectionFieldProperty(ctx, milvusclient.NewAlterCollectionFieldPropertiesOption(collectionName, denseVectorFieldName).WithProperty(mmapEnabledKey, mmapEnabledValue)); err != nil {
-		slog.ErrorContext(ctx, "enable mmap on dense field failed", "collection", collectionName, "err", err)
-		return mmapOutcomeUnknown, fmt.Errorf("enable mmap on dense field of %s: %w", collectionName, err)
+		return mmapOutcomeUnknown, wrapStoreError(ctx, err, "enable mmap on dense field of "+collectionName)
 	}
 	if err := service.milvus.AlterIndexProperties(ctx, milvusclient.NewAlterIndexPropertiesOption(collectionName, indexName).WithProperty(mmapEnabledKey, mmapEnabledValue)); err != nil {
-		slog.ErrorContext(ctx, "enable mmap on dense index failed", "collection", collectionName, "index", indexName, "err", err)
-		return mmapOutcomeUnknown, fmt.Errorf("enable mmap on dense index %s of %s: %w", indexName, collectionName, err)
+		return mmapOutcomeUnknown, wrapStoreError(ctx, err, "enable mmap on dense index "+indexName+" of "+collectionName)
 	}
 	if err := service.loadCollection(ctx, collectionName); err != nil {
 		return mmapOutcomeUnknown, err
