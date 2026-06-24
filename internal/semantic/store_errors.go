@@ -1,6 +1,9 @@
 package semantic
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
 	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
@@ -50,4 +53,24 @@ func storeSearchSentinel(err error) error {
 		return adapterr.NewMilvusUnavailable(err)
 	}
 	return nil
+}
+
+// wrapStoreError logs and classifies a write/index-path milvus error. operation
+// names the failing call (for example "create Milvus collection <name>"). A
+// transport-unavailable store outage becomes a ClassMilvusUnavailable adapter
+// error, which the daemon treats as a shared-infrastructure outage that keeps the
+// codebase resumable behind the health banner rather than marking it failed.
+// Every other error is wrapped plainly so it keeps its existing classification (a
+// real per-collection fault). The cause is appended with %w so [errors.Is] and
+// [errors.As] still reach it. It logs the failure once so call sites do not, and
+// a nil err returns nil.
+func wrapStoreError(ctx context.Context, err error, operation string) error {
+	if err == nil {
+		return nil
+	}
+	slog.ErrorContext(ctx, "milvus write operation failed", "operation", operation, "err", err)
+	if storeUnavailable(err) {
+		return adapterr.NewMilvusUnavailable(fmt.Errorf("%s: %w", operation, err))
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
