@@ -42,6 +42,14 @@ func isConversationCollection(collectionName string) bool {
 	return strings.HasPrefix(collectionName, conversationCollectionPrefix)
 }
 
+// isStagingCollection reports whether a collection name is a transient rebuild
+// staging collection, by its suffix. The mmap sweep skips these: a staging
+// collection is promoted onto its live name or dropped, may carry no dense index
+// yet, and is not a durable surface to migrate, so sweeping it only logs noise.
+func isStagingCollection(collectionName string) bool {
+	return strings.HasSuffix(collectionName, stagingCollectionSuffix)
+}
+
 // conversationScalarFields returns the native scalar columns a conversation
 // collection carries so Milvus can pre-filter a search by provider, workspace,
 // role, time, message index, and conversation lineage. Every field is nullable

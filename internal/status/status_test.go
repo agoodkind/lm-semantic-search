@@ -37,6 +37,35 @@ func TestResolveDisplayBase(t *testing.T) {
 	}
 }
 
+// A just-requested codebase reads as pending: a queued live job, the persisted
+// pending status, and a discovered worktree all present as pending or discovered,
+// never as waiting or store-down. An indexed codebase whose own collection is not
+// loaded (store healthy) reads as loading, also not store-down.
+func TestResolvePendingAndLoading(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   Inputs
+		want Display
+	}{
+		{"queued job is pending", Inputs{HasActiveJob: true, JobQueued: true}, DisplayPending},
+		{"pending status is pending", Inputs{Status: model.CodebaseStatusPending}, DisplayPending},
+		{"running scoped is indexing", Inputs{HasActiveJob: true, JobScopeKnown: true}, DisplayIndexing},
+		{"indexed collection loading reads loading", Inputs{Status: model.CodebaseStatusIndexed, Collection: CollectionLoading}, DisplayLoading},
+		{"indexed collection absent reads loading", Inputs{Status: model.CodebaseStatusIndexed, Collection: CollectionAbsent}, DisplayLoading},
+		{"indexed collection ready stays indexed", Inputs{Status: model.CodebaseStatusIndexed, Collection: CollectionReady}, DisplayIndexed},
+	}
+	for _, testCase := range cases {
+		got := ResolveDisplay(testCase.in)
+		if got != testCase.want {
+			t.Errorf("%s: ResolveDisplay = %q, want %q", testCase.name, got, testCase.want)
+		}
+		if surface := Resolve(testCase.in); surface.BannerPresent {
+			t.Errorf("%s: pending/loading must not raise the global banner", testCase.name)
+		}
+	}
+}
+
 func TestResolveQuarantined(t *testing.T) {
 	t.Parallel()
 	surface := Resolve(Inputs{Status: model.CodebaseStatusQuarantined})

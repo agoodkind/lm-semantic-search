@@ -28,11 +28,13 @@ type semanticHealthReader interface {
 	// adapterr-classified error when it is not. It is the global shared-dependency
 	// probe for surfaces without a single path.
 	ProbeHealth(ctx context.Context) error
-	// CollectionSearchable reports whether the collection serving codebasePath is
-	// loaded into query nodes now, the deterministic per-path precondition for a
-	// real search. The bool is false (with a classified error) when the store
-	// cannot answer.
-	CollectionSearchable(ctx context.Context, codebasePath string) (bool, error)
+	// CollectionState reports the per-path collection facts the daemon maps to a
+	// status.CollectionReadiness: whether the collection exists and whether it is
+	// loaded into query nodes now. A store that cannot answer returns a classified
+	// error; the daemon treats that as unknown readiness without raising the global
+	// banner (the global ProbeHealth covers a real outage). It returns
+	// (false, false, nil) when semantic is not configured.
+	CollectionState(ctx context.Context, codebasePath string) (exists bool, loaded bool, err error)
 }
 
 // semanticReuseLoader is the slice that reads already-embedded vectors back

@@ -26,6 +26,15 @@ const (
 	// to indexing. It reads distinctly from indexing (which implies live work) and
 	// from not_indexed (which the SOT never emits).
 	DisplayDiscovered Display = "discovered"
+	// DisplayPending is a codebase whose index was requested but whose build has
+	// not started running yet: a queued job, or a discovered worktree awaiting its
+	// deferred build. It reads distinctly from indexing (live work) and from
+	// waiting (a real shared-dependency outage).
+	DisplayPending Display = "pending"
+	// DisplayLoading is an indexed codebase whose own collection is not loaded into
+	// query nodes right now while the shared store is reachable. It is a per-path,
+	// self-healing condition, never the global store-down banner.
+	DisplayLoading Display = "loading"
 )
 
 // DependencyMode names a degraded shared-dependency condition. The empty mode is
@@ -44,6 +53,49 @@ const (
 // Degraded reports whether the mode is any non-healthy condition.
 func (mode DependencyMode) Degraded() bool {
 	return mode != Healthy
+}
+
+// CollectionReadiness is the per-path readiness of one codebase's own Milvus
+// collection. It is deliberately a separate type from DependencyMode so a
+// per-path fact can never be assigned into the global dependency channel: the
+// compiler rejects `health.Mode = <CollectionReadiness>`. The global store
+// banner is reserved for an actual ProbeHealth failure, never a single
+// collection that is missing or still loading.
+type CollectionReadiness string
+
+// CollectionReadiness values.
+const (
+	// CollectionNotApplicable is the zero value: the caller did not probe per-path
+	// readiness (for example a list view, or a path that is not in-scope indexed).
+	// It neither blocks search nor changes the display.
+	CollectionNotApplicable CollectionReadiness = ""
+	// CollectionAbsent means the collection does not exist yet (a first build that
+	// has not created or promoted it).
+	CollectionAbsent CollectionReadiness = "absent"
+	// CollectionBuilding means a build is writing the collection (staging) now.
+	CollectionBuilding CollectionReadiness = "building"
+	// CollectionLoading means the collection exists but is not loaded into query
+	// nodes yet, while the store itself is reachable.
+	CollectionLoading CollectionReadiness = "loading"
+	// CollectionReady means the collection is loaded and can serve a search.
+	CollectionReady CollectionReadiness = "ready"
+	// CollectionUnknown means the store could not answer the load state, a real
+	// transport problem distinct from a known not-ready collection.
+	CollectionUnknown CollectionReadiness = "unknown"
+)
+
+// blocksSearch reports whether this readiness should hold back a search. Only an
+// explicit not-ready state blocks; the zero value (not probed) and ready do not,
+// so a caller that never sets readiness behaves exactly as before.
+func (readiness CollectionReadiness) blocksSearch() bool {
+	switch readiness {
+	case CollectionAbsent, CollectionBuilding, CollectionLoading, CollectionUnknown:
+		return true
+	case CollectionNotApplicable, CollectionReady:
+		return false
+	default:
+		return false
+	}
 }
 
 // SearchOutcome names the resolved shape of a search call so the state note is
@@ -69,14 +121,23 @@ type Inputs struct {
 	Status model.CodebaseStatus
 	// HasActiveJob reports whether a live job owns this codebase right now.
 	HasActiveJob bool
+	// JobQueued reports whether the live job is queued but not yet running, so it
+	// reads as pending rather than preparing.
+	JobQueued bool
 	// JobScopeKnown reports whether the live job has measured its file scope, so
 	// it reads as indexing rather than preparing.
 	JobScopeKnown bool
 	// BackgroundSyncReconcile reports whether the live job is a background sync
 	// over an already-indexed codebase, which keeps reading indexed.
 	BackgroundSyncReconcile bool
-	// Dependency is the daemon's shared-dependency health mode.
+	// Dependency is the daemon's GLOBAL shared-dependency health mode. It carries
+	// store-reachability and embedder health only, never a per-path collection
+	// fact; that separation is what keeps a single not-ready collection from
+	// raising the global store banner.
 	Dependency DependencyMode
+	// Collection is the per-path readiness of this codebase's own collection,
+	// separate from Dependency. The zero value means the caller did not probe it.
+	Collection CollectionReadiness
 	// Search is the resolved search outcome, or SearchNone outside a search call.
 	Search SearchOutcome
 	// SearchableEligible reports whether the queried path is in-scope indexed, so
@@ -121,8 +182,10 @@ type displayRule struct {
 // interrupted build the background pass re-queues) defaults to preparing.
 var displayRules = []displayRule{
 	{func(in Inputs) bool { return in.HasActiveJob && in.BackgroundSyncReconcile }, DisplayIndexed},
+	{func(in Inputs) bool { return in.HasActiveJob && in.JobQueued }, DisplayPending},
 	{func(in Inputs) bool { return in.HasActiveJob && in.JobScopeKnown }, DisplayIndexing},
 	{func(in Inputs) bool { return in.HasActiveJob }, DisplayPreparing},
+	{func(in Inputs) bool { return in.Status == model.CodebaseStatusPending }, DisplayPending},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusDiscovered }, DisplayDiscovered},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusQuarantined }, DisplayQuarantined},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusIndexed }, DisplayIndexed},
@@ -152,6 +215,12 @@ func ResolveDisplay(in Inputs) Display {
 	if in.Dependency.Degraded() && (base == DisplayPreparing || base == DisplayIndexed) {
 		return DisplayWaiting
 	}
+	// Store globally healthy, but this codebase's own collection is not loaded yet:
+	// a per-path, self-healing condition, so an indexed base reads loading rather
+	// than indexed. This never raises the global store banner.
+	if !in.Dependency.Degraded() && base == DisplayIndexed && in.Collection.blocksSearch() {
+		return DisplayLoading
+	}
 	return base
 }
 
@@ -162,7 +231,7 @@ func ResolveDisplay(in Inputs) Display {
 // the searchable fold lives, so the wire `searchable` field and the display
 // status both derive from one resolution and cannot disagree.
 func ResolveSearchable(in Inputs) bool {
-	return in.SearchableEligible && !in.Dependency.Degraded()
+	return in.SearchableEligible && !in.Dependency.Degraded() && !in.Collection.blocksSearch()
 }
 
 // Resolve turns the normalized inputs into the fully resolved surface.

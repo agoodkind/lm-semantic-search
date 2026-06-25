@@ -56,7 +56,7 @@ func TestComputeDisplayStatusNeverNotIndexed(t *testing.T) {
 		want     displayStatus
 	}{
 		{"embedding job", model.Codebase{Status: model.CodebaseStatusIndexing}, embeddingJob, displayIndexing},
-		{"queued job, scope unknown", model.Codebase{Status: model.CodebaseStatusIndexing}, queuedJob, displayPreparing},
+		{"queued job reads pending", model.Codebase{Status: model.CodebaseStatusIndexing}, queuedJob, displayPending},
 		{"background sync over indexed", model.Codebase{Status: model.CodebaseStatusIndexed, LastSuccessfulRun: indexedRun}, backgroundSyncJob, displayIndexed},
 		{"no job, quarantined", model.Codebase{Status: model.CodebaseStatusQuarantined}, nil, displayQuarantined},
 		{"no job, indexed", model.Codebase{Status: model.CodebaseStatusIndexed}, nil, displayIndexed},
@@ -67,7 +67,7 @@ func TestComputeDisplayStatusNeverNotIndexed(t *testing.T) {
 		{"interrupted: not_indexed, no job", model.Codebase{Status: model.CodebaseStatusNotIndexed}, nil, displayPreparing},
 	}
 	for _, testCase := range cases {
-		got := computeDisplayStatus(testCase.codebase, testCase.job, false)
+		got := computeDisplayStatus(testCase.codebase, testCase.job, dependencyHealthy, collectionNotApplicable)
 		if got != testCase.want {
 			t.Errorf("%s: computeDisplayStatus = %q, want %q", testCase.name, got, testCase.want)
 		}
@@ -106,7 +106,7 @@ func TestComputeDisplayStatusWaitingFold(t *testing.T) {
 		{"missing stays missing", model.Codebase{Status: model.CodebaseStatusMissing}, nil, displayMissing},
 	}
 	for _, testCase := range cases {
-		got := computeDisplayStatus(testCase.codebase, testCase.job, true)
+		got := computeDisplayStatus(testCase.codebase, testCase.job, dependencyEmbedderBusy, collectionNotApplicable)
 		if got != testCase.want {
 			t.Errorf("%s: computeDisplayStatus(degraded) = %q, want %q", testCase.name, got, testCase.want)
 		}

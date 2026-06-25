@@ -212,6 +212,12 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 	skipped := 0
 	failed := 0
 	for _, collectionName := range collections {
+		// Skip transient staging collections: they are promoted or dropped, may have
+		// no dense index yet, and migrating them only logs sweep failures every tick.
+		if isStagingCollection(collectionName) {
+			skipped++
+			continue
+		}
 		// ensureMmapEnabledOnce logs the specific failing operation at its source;
 		// here we only count it so one collection's failure never blocks the rest
 		// and the end-of-sweep summary still surfaces a non-zero failed count.
