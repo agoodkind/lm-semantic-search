@@ -248,6 +248,13 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 			syncer.manager.startDeferredBuild(discoverCtx, codebase.CanonicalPath)
 			continue
 		}
+		if codebase.Status == model.CodebaseStatusFailed {
+			retryCtx := correlation.WithContext(ctx, correlation.FromContext(ctx).Child().WithIdentityAttributes(
+				correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID},
+			))
+			syncer.manager.retryFailedBuild(retryCtx, codebase)
+			continue
+		}
 		if codebase.Status != model.CodebaseStatusIndexed {
 			continue
 		}

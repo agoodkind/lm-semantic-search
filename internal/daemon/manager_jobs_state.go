@@ -203,6 +203,7 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	if !found {
 		return
 	}
+	delete(manager.failedBuildRetries, codebase.ID)
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.ActiveJobID = ""
 	codebase.Quarantine = nil
