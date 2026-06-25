@@ -435,27 +435,28 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	if !found {
 		indexedDescendants = server.manager.IndexedDescendants(requestedPath)
 	}
-	// An indexed path is searchable now only if the backend answers and this
-	// codebase's collection is loaded into query nodes, so fold the global
-	// dependency health with the per-path load check into one mode. Every field
-	// below (searchable, display, banner) reads that one mode through the status
-	// resolver, so they cannot diverge. Non-indexed paths skip the per-path probe
-	// and reflect only the global mode.
+	// The global dependency health (store reachability, embedder) owns the banner.
+	// The per-path collection readiness is computed separately and is never folded
+	// into the global mode, so a single not-ready collection reads as loading or
+	// pending, not as a store outage. Searchable and display both flow through the
+	// status resolver with these two inputs kept distinct. Non-indexed paths get a
+	// not-applicable readiness and reflect only the global mode.
 	searchableEligible := classification != nil && classification.Kind == model.PathClassificationInScopeIndexed
-	depMode := server.manager.pathDependencyMode(ctx, codebase.CanonicalPath, searchableEligible)
+	server.manager.refreshDependencyHealth(ctx)
 	health := server.manager.DependencyHealth()
-	health.Mode = depMode
-	getIndexView := server.manager.resolveGetIndexView(requestedPath, found, codebasePointer(found, codebase), activeJob, health, classification, indexedDescendants)
+	readiness := server.manager.pathCollectionReadiness(ctx, codebase.CanonicalPath, searchableEligible)
+	getIndexView := server.manager.resolveGetIndexView(requestedPath, found, codebasePointer(found, codebase), activeJob, health, readiness, classification, indexedDescendants)
 	response := &pb.GetIndexResponse{
-		Tracked:          found,
-		Classification:   pbconv.ToPathClassification(classification),
-		DependencyHealth: toDependencyHealth(health),
-		Searchable:       computeSearchable(searchableEligible, health.Degraded()),
-		DisplayText:      server.envelopeText(ctx, health, render.GetIndex(getIndexView), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
+		Tracked:             found,
+		Classification:      pbconv.ToPathClassification(classification),
+		DependencyHealth:    toDependencyHealth(health),
+		Searchable:          computeSearchable(searchableEligible, health.Mode, readiness),
+		CollectionReadiness: string(readiness),
+		DisplayText:         server.envelopeText(ctx, health, render.GetIndex(getIndexView), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
 	if found {
 		pbCodebase := pbconv.ToCodebase(codebase)
-		display := computeDisplayStatus(codebase, activeJob, health.Degraded())
+		display := computeDisplayStatus(codebase, activeJob, health.Mode, readiness)
 		applyDisplayTokens(pbCodebase, display)
 		if display == displayDiscovered {
 			applyReuseForecast(pbCodebase, server.manager.worktreeReuseForecast(codebase))

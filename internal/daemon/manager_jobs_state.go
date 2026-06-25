@@ -30,6 +30,16 @@ func (manager *Manager) updateJobRunning(job model.Job) {
 	currentJob.Progress.LastEventAt = now
 	currentJob.Progress.HeartbeatAt = now
 	currentJob.Progress.OverallPercent = 0
+	manager.jobs[currentJob.ID] = currentJob
+	// A first build was pending while its job sat queued; now that the job is
+	// running, the codebase is actively indexing. A rebuild was already indexing.
+	// The flip is in-memory so live status reads see it at once; the next registry
+	// save on completion persists it, and an interrupted run re-queues on resume.
+	if codebase, ok := manager.codebases[currentJob.CodebaseID]; ok && codebase.Status == model.CodebaseStatusPending {
+		codebase.Status = model.CodebaseStatusIndexing
+		codebase.UpdatedAt = now
+		manager.codebases[codebase.ID] = codebase
+	}
 	_ = manager.appendJobLocked("job_running", currentJob)
 }
 

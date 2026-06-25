@@ -88,6 +88,20 @@ func (manager *Manager) GetIndex(ctx context.Context, requestedPath string) (mod
 // matched pattern and the gitignore source so callers can name the rule
 // that masked the file.
 func (manager *Manager) classifyTrackedPath(ctx context.Context, codebase model.Codebase, canonicalPath string) *model.PathClassification {
+	// A codebase that has not built its first index yet (pending, discovered, or
+	// not-indexed) has no searchable collection, so even its root classifies as
+	// in-scope unindexed. That keeps GetIndex from probing an absent collection and
+	// reading the result as a store outage; the status reads pending or discovered.
+	if codebase.Status == model.CodebaseStatusPending ||
+		codebase.Status == model.CodebaseStatusDiscovered ||
+		codebase.Status == model.CodebaseStatusNotIndexed {
+		return &model.PathClassification{
+			Kind:                model.PathClassificationInScopeUnindexed,
+			ExcludedByPattern:   "",
+			ExcludedByGitignore: "",
+			CoveringCodebaseID:  codebase.ID,
+		}
+	}
 	classification := &model.PathClassification{
 		Kind:                model.PathClassificationInScopeIndexed,
 		ExcludedByPattern:   "",

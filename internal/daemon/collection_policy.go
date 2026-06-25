@@ -51,7 +51,7 @@ func decideStartIndexMode(codebaseFound bool, status model.CodebaseStatus, confi
 			return startIndexModeBootstrap
 		}
 		return startIndexModeIncremental
-	case model.CodebaseStatusNotIndexed, model.CodebaseStatusDiscovered:
+	case model.CodebaseStatusNotIndexed, model.CodebaseStatusPending, model.CodebaseStatusDiscovered:
 		return startIndexModeBootstrap
 	case model.CodebaseStatusIndexed:
 		if !force && configMatches && presence != collectionPresenceMissing {
@@ -86,7 +86,7 @@ func shouldResumeInterruptedBuild(codebase model.Codebase, hasActiveJob bool) bo
 		return false
 	}
 	switch codebase.Status {
-	case model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed, model.CodebaseStatusMissing:
+	case model.CodebaseStatusPending, model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed, model.CodebaseStatusMissing:
 		return true
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed,
 		model.CodebaseStatusDiscovered, model.CodebaseStatusQuarantined:
@@ -105,8 +105,9 @@ func shouldQueueMissingCollectionRepair(codebase model.Codebase, hasActiveJob bo
 	switch codebase.Status {
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale:
 		return true
-	case model.CodebaseStatusNotIndexed, model.CodebaseStatusIndexing, model.CodebaseStatusFailed,
-		model.CodebaseStatusMissing, model.CodebaseStatusDiscovered, model.CodebaseStatusQuarantined:
+	case model.CodebaseStatusNotIndexed, model.CodebaseStatusPending, model.CodebaseStatusIndexing,
+		model.CodebaseStatusFailed, model.CodebaseStatusMissing, model.CodebaseStatusDiscovered,
+		model.CodebaseStatusQuarantined:
 		return false
 	default:
 		return false

@@ -262,7 +262,7 @@ func renderGetIndexBodyForTest(requestedPath string, tracked bool, codebase *mod
 	}
 	if tracked && codebase != nil {
 		getIndex.CanonicalPath = codebase.CanonicalPath
-		display := computeDisplayStatus(*codebase, activeJob, health.Degraded())
+		display := computeDisplayStatus(*codebase, activeJob, health.Mode, collectionNotApplicable)
 		getIndex.Display = view.Display(display)
 		getIndex.Failure = resolveCodebaseFailure(*codebase)
 		getIndex.Quarantine = resolveQuarantineSurface(*codebase)

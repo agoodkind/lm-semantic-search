@@ -2351,9 +2351,15 @@ type GetIndexResponse struct {
 	// single signal a caller should use to decide whether search_code can serve
 	// this path right now; classification.kind alone reflects only the on-disk
 	// index and stays KIND_IN_SCOPE_INDEXED even when the backend is unreachable.
-	Searchable    bool `protobuf:"varint,7,opt,name=searchable,proto3" json:"searchable,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Searchable bool `protobuf:"varint,7,opt,name=searchable,proto3" json:"searchable,omitempty"`
+	// CollectionReadiness is the per-path readiness of this codebase's own Milvus
+	// collection, distinct from dependency_health (a global fact). One of "",
+	// "absent", "building", "loading", "ready", or "unknown". A not-ready
+	// collection here means this codebase is still indexing or its collection is
+	// loading; it is never a global store outage, which dependency_health reports.
+	CollectionReadiness string `protobuf:"bytes,8,opt,name=collection_readiness,json=collectionReadiness,proto3" json:"collection_readiness,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *GetIndexResponse) Reset() {
@@ -2433,6 +2439,13 @@ func (x *GetIndexResponse) GetSearchable() bool {
 		return x.Searchable
 	}
 	return false
+}
+
+func (x *GetIndexResponse) GetCollectionReadiness() string {
+	if x != nil {
+		return x.CollectionReadiness
+	}
+	return ""
 }
 
 // PathClassification reports how the daemon sees one queried path with
@@ -4942,7 +4955,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\"^\n" +
 	"\x0fGetIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x127\n" +
-	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\x88\x03\n" +
+	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\xbb\x03\n" +
 	"\x10GetIndexResponse\x129\n" +
 	"\bcodebase\x18\x01 \x01(\v2\x1d.lmsemanticsearch.v1.CodebaseR\bcodebase\x127\n" +
 	"\n" +
@@ -4953,7 +4966,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x11dependency_health\x18\x06 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\x12\x1e\n" +
 	"\n" +
 	"searchable\x18\a \x01(\bR\n" +
-	"searchable\"\xf6\x02\n" +
+	"searchable\x121\n" +
+	"\x14collection_readiness\x18\b \x01(\tR\x13collectionReadiness\"\xf6\x02\n" +
 	"\x12PathClassification\x12@\n" +
 	"\x04kind\x18\x01 \x01(\x0e2,.lmsemanticsearch.v1.PathClassification.KindR\x04kind\x12.\n" +
 	"\x13excluded_by_pattern\x18\x02 \x01(\tR\x11excludedByPattern\x122\n" +

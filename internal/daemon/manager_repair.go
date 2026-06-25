@@ -189,9 +189,9 @@ func (manager *Manager) classifyCodebaseRepair(
 	switch codebase.Status {
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed,
 		model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed, model.CodebaseStatusMissing:
-	case model.CodebaseStatusDiscovered:
-		// A discovered worktree has no collection yet by design; its build is
-		// deferred, so the repair pass leaves it alone.
+	case model.CodebaseStatusDiscovered, model.CodebaseStatusPending:
+		// A discovered or pending codebase has no collection yet by design; its
+		// build is deferred or queued, so the repair pass leaves it alone.
 		return repairOutcome{persist: false, cleanup: false, plan: nil}
 	case model.CodebaseStatusQuarantined:
 		// Quarantined codebases are owned by the background-sync corroboration

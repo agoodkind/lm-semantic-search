@@ -28,7 +28,14 @@ const (
 	displayFailed      = status.DisplayFailed
 	displayMissing     = status.DisplayMissing
 	displayDiscovered  = status.DisplayDiscovered
+	displayPending     = status.DisplayPending
+	displayLoading     = status.DisplayLoading
 )
+
+// collectionNotApplicable is the daemon's short name for a surface that does not
+// probe per-path collection readiness (the list view, the search status view).
+// Such a surface reflects only the global dependency mode.
+const collectionNotApplicable = status.CollectionNotApplicable
 
 // computeDisplayStatus resolves the display status through the status package,
 // the single source of truth for every surface (list, detail, MCP, CLI). It
@@ -37,17 +44,15 @@ const (
 // status. pipelineDegraded carries only whether a shared dependency is degraded;
 // ResolveDisplay reads it through Degraded(), so the specific mode does not
 // matter here and the banner names the cause separately.
-func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, pipelineDegraded bool) displayStatus {
-	dependency := status.Healthy
-	if pipelineDegraded {
-		dependency = status.EmbedderBusy
-	}
+func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, dependency dependencyMode, readiness status.CollectionReadiness) displayStatus {
 	return status.Resolve(status.Inputs{
 		Status:                  codebase.Status,
 		HasActiveJob:            activeJob != nil,
+		JobQueued:               activeJob != nil && activeJob.State == model.JobStateQueued,
 		JobScopeKnown:           activeJob != nil && jobScopeKnown(activeJob.Progress),
 		BackgroundSyncReconcile: activeJob != nil && isBackgroundSyncReconcile(&codebase, activeJob),
 		Dependency:              dependency,
+		Collection:              readiness,
 		Search:                  status.SearchNone,
 		SearchableEligible:      false,
 	}).Display
@@ -60,17 +65,15 @@ func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, pipelin
 // per-path indexed precondition and pipelineDegraded carries whether the shared
 // backend is degraded, and status.ResolveSearchable owns the fold so the wire
 // `searchable` field and the displayed status cannot diverge.
-func computeSearchable(searchableEligible bool, pipelineDegraded bool) bool {
-	dependency := status.Healthy
-	if pipelineDegraded {
-		dependency = status.EmbedderBusy
-	}
+func computeSearchable(searchableEligible bool, dependency dependencyMode, readiness status.CollectionReadiness) bool {
 	return status.Resolve(status.Inputs{
 		Status:                  "",
 		HasActiveJob:            false,
+		JobQueued:               false,
 		JobScopeKnown:           false,
 		BackgroundSyncReconcile: false,
 		Dependency:              dependency,
+		Collection:              readiness,
 		Search:                  status.SearchNone,
 		SearchableEligible:      searchableEligible,
 	}).Searchable
@@ -175,6 +178,17 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 		// reuse forecast is attached by resolveGetIndexView, which holds the manager
 		// needed to compute it cheaply.
 		return statusView, "discovered.md.tmpl"
+	case displayPending:
+		// A requested index whose build has not started running yet (a queued job
+		// or a discovered worktree awaiting its deferred build). It is not a store
+		// outage; the build will move it to indexing.
+		statusView.PrepareLabel = prepareLabel(activeJob)
+		return statusView, "pending.md.tmpl"
+	case displayLoading:
+		// This codebase's own collection is not loaded into query nodes yet while
+		// the store itself is reachable. A per-path, self-healing condition, never
+		// the global store banner.
+		return statusView, "loading.md.tmpl"
 	case displayWaiting:
 		statusView.WaitLabel = waitLabel
 		return statusView, "waiting.md.tmpl"
@@ -375,6 +389,7 @@ func (manager *Manager) resolveGetIndexView(
 	codebase *model.Codebase,
 	activeJob *model.Job,
 	health dependencyHealth,
+	readiness status.CollectionReadiness,
 	classification *model.PathClassification,
 	descendants []model.Codebase,
 ) view.GetIndexView {
@@ -408,7 +423,7 @@ func (manager *Manager) resolveGetIndexView(
 		return getIndex
 	}
 	getIndex.CanonicalPath = codebase.CanonicalPath
-	display := computeDisplayStatus(*codebase, activeJob, health.Degraded())
+	display := computeDisplayStatus(*codebase, activeJob, health.Mode, readiness)
 	getIndex.Display = view.Display(display)
 	getIndex.Failure = resolveCodebaseFailure(*codebase)
 	getIndex.Quarantine = resolveQuarantineSurface(*codebase)
@@ -598,7 +613,7 @@ func resolveSearchStatusView(codebase model.Codebase, activeJob *model.Job, heal
 	if activeJob == nil {
 		return blankStatusView("", ""), "", false
 	}
-	display := computeDisplayStatus(codebase, activeJob, health.Degraded())
+	display := computeDisplayStatus(codebase, activeJob, health.Mode, status.CollectionNotApplicable)
 	statusView, templateName := resolveStatusView(codebase, activeJob, display, waitingLabel(health.Mode))
 	return statusView, templateName, isBackgroundSyncReconcile(&codebase, activeJob)
 }

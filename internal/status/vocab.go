@@ -21,6 +21,8 @@ var glyphByDisplay = map[Display]string{
 	DisplayFailed:      "✗",
 	DisplayMissing:     "⊘",
 	DisplayDiscovered:  "⊙",
+	DisplayPending:     "◔",
+	DisplayLoading:     "◓",
 }
 
 // labelByDisplay maps a display status to its human word.
@@ -34,6 +36,8 @@ var labelByDisplay = map[Display]string{
 	DisplayFailed:      "failed",
 	DisplayMissing:     "missing",
 	DisplayDiscovered:  "discovered",
+	DisplayPending:     "pending",
+	DisplayLoading:     "loading",
 }
 
 // bannerHeadlineByMode maps a degraded dependency mode to its one-line banner

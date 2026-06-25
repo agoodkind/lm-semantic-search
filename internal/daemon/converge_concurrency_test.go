@@ -32,7 +32,7 @@ type fakeSemantic struct {
 	conversationName      func(collectionID string) string
 	listCollections       func(context.Context) ([]string, error)
 	hasCollectionForPath  func(context.Context, string) (bool, error)
-	collectionSearchable  func(context.Context, string) (bool, error)
+	collectionState       func(context.Context, string) (bool, bool, error)
 	search                func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
 	conversationSearch    func(context.Context, string, string, int32) ([]model.StoredChunk, error)
 	count                 func(context.Context, string) (int32, error)
@@ -126,11 +126,11 @@ func (f *fakeSemantic) HasCollectionForPath(ctx context.Context, codebasePath st
 	return true, nil
 }
 
-func (f *fakeSemantic) CollectionSearchable(ctx context.Context, codebasePath string) (bool, error) {
-	if f.collectionSearchable != nil {
-		return f.collectionSearchable(ctx, codebasePath)
+func (f *fakeSemantic) CollectionState(ctx context.Context, codebasePath string) (bool, bool, error) {
+	if f.collectionState != nil {
+		return f.collectionState(ctx, codebasePath)
 	}
-	return true, nil
+	return true, true, nil
 }
 
 func (f *fakeSemantic) LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error) {

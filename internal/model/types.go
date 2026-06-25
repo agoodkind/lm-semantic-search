@@ -13,6 +13,11 @@ type CodebaseStatus string
 const (
 	// CodebaseStatusNotIndexed means the codebase has no active index.
 	CodebaseStatusNotIndexed CodebaseStatus = "not_indexed"
+	// CodebaseStatusPending means an index was requested and a job is queued, but
+	// the build has not started running yet. It is distinct from indexing (live
+	// work) so a just-requested codebase reads as pending, not as a store outage.
+	// updateJobRunning flips it to indexing when the job acquires a slot.
+	CodebaseStatusPending CodebaseStatus = "pending"
 	// CodebaseStatusIndexing means the codebase currently has an active job.
 	CodebaseStatusIndexing CodebaseStatus = "indexing"
 	// CodebaseStatusIndexed means the codebase has a completed index.

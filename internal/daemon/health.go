@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
@@ -108,6 +109,7 @@ func (manager *Manager) noteDependencyFailureLocked(err error) {
 		return
 	}
 	if manager.health.Mode != mode {
+		slog.Warn("dependency.health.degraded", "component", "daemon", "subcomponent", "health", "from", string(manager.health.Mode), "to", string(mode))
 		manager.health.Mode = mode
 		manager.health.Since = clock.Now()
 	}
@@ -115,11 +117,29 @@ func (manager *Manager) noteDependencyFailureLocked(err error) {
 
 // noteDependencyHealthyLocked clears the health record after a dependency
 // interaction succeeds, so the banner stops showing within the cycle that first
-// reaches a recovered dependency. The caller holds manager.mu.
+// reaches a recovered dependency. It clears any mode, so callers must use it only
+// when the success proves the whole pipeline (a real embed plus store write), not
+// for a store-only probe. The caller holds manager.mu.
 func (manager *Manager) noteDependencyHealthyLocked() {
+	if manager.health.Degraded() {
+		slog.Info("dependency.health.recovered", "component", "daemon", "subcomponent", "health", "from", string(manager.health.Mode))
+	}
 	manager.health.Mode = dependencyHealthy
 	manager.health.Since = time.Time{}
 	manager.health.LastHealthyAt = clock.Now()
+}
+
+// noteStoreHealthyLocked records that the store probe answered. It clears a
+// store-unavailable mode only and never an embedder mode, because the store probe
+// does not exercise the embedder; an embedder outage is observed from real embed
+// outcomes and must survive a clean store probe. The caller holds manager.mu.
+func (manager *Manager) noteStoreHealthyLocked() {
+	manager.health.LastHealthyAt = clock.Now()
+	if manager.health.Mode == dependencyStoreUnavailable {
+		slog.Info("dependency.health.recovered", "component", "daemon", "subcomponent", "health", "from", string(manager.health.Mode), "via", "store_probe")
+		manager.health.Mode = dependencyHealthy
+		manager.health.Since = time.Time{}
+	}
 }
 
 // noteDependencyFailure records a shared-infrastructure outage on the health
@@ -174,7 +194,10 @@ func (manager *Manager) refreshDependencyHealth(ctx context.Context) {
 		manager.noteDependencyFailureLocked(probeErr)
 		return
 	}
-	manager.noteDependencyHealthyLocked()
+	// ProbeHealth checks store reachability only, so a clean probe clears a
+	// store-unavailable mode but must not clear an embedder outage observed from
+	// real embed outcomes.
+	manager.noteStoreHealthyLocked()
 }
 
 // DependencyHealth returns a snapshot of the current shared-dependency health
@@ -198,27 +221,27 @@ func (manager *Manager) DependencyHealth() dependencyHealth {
 	return manager.health
 }
 
-// pathDependencyMode folds the global shared-dependency health with the per-path
-// collection-load check into one dependency mode for a single-path surface
-// (GetIndex). The global probe (refreshDependencyHealth) covers store
-// reachability, and real embed outcomes on the search and index paths cover the
-// embedder; this adds the per-path precondition that the collection serving
-// canonicalPath is loaded into query nodes now. A path whose collection is not
-// loaded, or whose load state the store cannot answer, reads store-unavailable,
-// so the searchable bit and the displayed status both fall to not-searchable /
-// waiting through the one status resolver. A non-indexed path skips the per-path
-// check and reflects only the global mode.
-func (manager *Manager) pathDependencyMode(ctx context.Context, canonicalPath string, searchableEligible bool) dependencyMode {
-	manager.refreshDependencyHealth(ctx)
-	if global := manager.DependencyHealth(); global.Degraded() {
-		return global.Mode
-	}
+// pathCollectionReadiness maps the per-path collection facts to a
+// status.CollectionReadiness, kept entirely separate from the global dependency
+// mode. A non-eligible path is not-applicable. An eligible path reads absent,
+// loading, or ready from CollectionState; a store that cannot answer the load
+// state reads unknown. This never returns or touches a dependencyMode, so a
+// per-path not-ready collection can never raise the global store banner. The
+// global banner is owned by refreshDependencyHealth and ProbeHealth alone, which
+// the caller consults separately for shared-dependency health.
+func (manager *Manager) pathCollectionReadiness(ctx context.Context, canonicalPath string, searchableEligible bool) status.CollectionReadiness {
 	if !searchableEligible || manager.semantic == nil || canonicalPath == "" {
-		return dependencyHealthy
+		return status.CollectionNotApplicable
 	}
-	loaded, err := manager.semantic.CollectionSearchable(ctx, canonicalPath)
-	if err != nil || !loaded {
-		return dependencyStoreUnavailable
+	exists, loaded, err := manager.semantic.CollectionState(ctx, canonicalPath)
+	switch {
+	case err != nil:
+		return status.CollectionUnknown
+	case !exists:
+		return status.CollectionAbsent
+	case !loaded:
+		return status.CollectionLoading
+	default:
+		return status.CollectionReady
 	}
-	return dependencyHealthy
 }

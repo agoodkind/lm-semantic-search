@@ -364,6 +364,12 @@ message GetIndexResponse {
   // this path right now; classification.kind alone reflects only the on-disk
   // index and stays KIND_IN_SCOPE_INDEXED even when the backend is unreachable.
   bool searchable = 7;
+  // CollectionReadiness is the per-path readiness of this codebase's own Milvus
+  // collection, distinct from dependency_health (a global fact). One of "",
+  // "absent", "building", "loading", "ready", or "unknown". A not-ready
+  // collection here means this codebase is still indexing or its collection is
+  // loading; it is never a global store outage, which dependency_health reports.
+  string collection_readiness = 8;
 }
 
 // PathClassification reports how the daemon sees one queried path with

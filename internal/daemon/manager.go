@@ -534,7 +534,13 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	}
 
 	codebase := decision.codebase
-	codebase.Status = model.CodebaseStatusIndexing
+	// A first build is pending until its queued job acquires a slot; updateJobRunning
+	// flips it to indexing. A rebuild of an already-indexed codebase stays indexing so
+	// it keeps reading as active work over the prior index, not as a fresh request.
+	codebase.Status = model.CodebaseStatusPending
+	if codebase.LastSuccessfulRun != nil {
+		codebase.Status = model.CodebaseStatusIndexing
+	}
 	codebase.EffectiveConfig = indexConfig
 	codebase.InodeTrackingDisabled = detectInodeTrackingDisabled(ctx, canonicalPath)
 	if manager.semantic != nil && manager.semantic.Available() {
@@ -772,13 +778,13 @@ func (manager *Manager) ListIndexesView() []CodebaseView {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
-	degraded := manager.health.Degraded()
+	globalMode := manager.health.Mode
 	views := make([]CodebaseView, 0, len(manager.codebases))
 	for _, codebase := range manager.codebases {
 		activeJob := manager.activeJobSnapshotLocked(codebase)
 		views = append(views, CodebaseView{
 			Codebase: codebase,
-			Display:  computeDisplayStatus(codebase, activeJob, degraded),
+			Display:  computeDisplayStatus(codebase, activeJob, globalMode, collectionNotApplicable),
 		})
 	}
 	sort.Slice(views, func(i int, j int) bool {
