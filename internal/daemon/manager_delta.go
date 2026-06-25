@@ -264,7 +264,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		return true
 	}
 
-	if len(plan.diff.Added) > 0 && state.semantic {
+	if codebase.Kind == model.CodebaseKindCode && len(plan.diff.Added) > 0 && state.semantic {
 		reuse, seeded := manager.resolveReuseSeed(ctx, job)
 		state.reuse = reuse
 		state.seededReuse = seeded
@@ -407,7 +407,7 @@ func (manager *Manager) resolveReuseSeed(ctx context.Context, job model.Job) (ma
 	}
 	loadedReuse, err := manager.semantic.LoadReuseVectors(ctx, reuseCollections)
 	if err != nil {
-		slog.WarnContext(ctx, "load reuse vectors failed; embedding shared subtree", "job_id", job.ID, "err", err)
+		slog.WarnContext(ctx, "load reuse vectors failed; building without the reuse seed", "job_id", job.ID, "err", err)
 		return reuse, 0
 	}
 	seeded := safeInt32(len(loadedReuse))

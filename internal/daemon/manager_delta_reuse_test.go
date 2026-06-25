@@ -15,8 +15,10 @@ import (
 
 func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 	t.Run("added file reuses sibling vectors", func(t *testing.T) {
-		manager, codebase, job, fake := newWorktreeDeltaReuseFixture(t)
 		addedContent := "package feature\n\nfunc Added() string { return \"shared\" }\n"
+		manager, codebase, job, fake := newWorktreeDeltaReuseFixture(t, map[string][]float32{
+			hashText(addedContent): {1, 2, 3},
+		})
 		writeDeltaFixtureFile(t, job.CanonicalPath, "added.go", addedContent)
 		manager.runner = deltaReuseRunner(map[string]string{"added.go": addedContent})
 		source := newCodeItemSource(manager.runner, job.CanonicalPath, job.Config, nil).withCollectionName(codebase.CollectionName)
@@ -56,7 +58,7 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 	})
 
 	t.Run("modified only does not seed siblings", func(t *testing.T) {
-		manager, codebase, job, fake := newWorktreeDeltaReuseFixture(t)
+		manager, codebase, job, fake := newWorktreeDeltaReuseFixture(t, nil)
 		modifiedContent := "package feature\n\nfunc Modified() string { return \"changed\" }\n"
 		writeDeltaFixtureFile(t, job.CanonicalPath, "feature.go", modifiedContent)
 		manager.runner = deltaReuseRunner(map[string]string{"feature.go": modifiedContent})
@@ -78,9 +80,47 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 			t.Fatalf("modified-only delta loaded sibling reuse collections: %v", calls)
 		}
 	})
+
+	t.Run("non-code added delta does not seed siblings", func(t *testing.T) {
+		addedContent := "package feature\n\nfunc AddedDocumentKind() string { return \"shared\" }\n"
+		manager, codebase, job, fake := newWorktreeDeltaReuseFixture(t, map[string][]float32{
+			hashText(addedContent): {1, 2, 3},
+		})
+		manager.mu.Lock()
+		documentCodebase := manager.codebases[codebase.ID]
+		documentCodebase.Kind = model.CodebaseKindDocument
+		manager.codebases[codebase.ID] = documentCodebase
+		manager.mu.Unlock()
+
+		writeDeltaFixtureFile(t, job.CanonicalPath, "document-kind.go", addedContent)
+		manager.runner = deltaReuseRunner(map[string]string{"document-kind.go": addedContent})
+		source := newCodeItemSource(manager.runner, job.CanonicalPath, job.Config, nil).withCollectionName(codebase.CollectionName)
+
+		handled := manager.runDeltaSync(context.Background(), job, source)
+		if !handled {
+			t.Fatal("runDeltaSync returned false, want it to handle the added document-kind delta")
+		}
+
+		completed, found := manager.GetJob(job.ID)
+		if !found {
+			t.Fatalf("job %s was not found after runDeltaSync", job.ID)
+		}
+		if completed.State != model.JobStateCompleted {
+			t.Fatalf("job state = %q, want completed", completed.State)
+		}
+		if calls := fake.reuseCollectionsSnapshot(); len(calls) != 0 {
+			t.Fatalf("non-code delta loaded sibling reuse collections: %v", calls)
+		}
+		if completed.Progress.ReuseVectorsLoaded != 0 {
+			t.Fatalf("ReuseVectorsLoaded = %d, want 0 for non-code delta", completed.Progress.ReuseVectorsLoaded)
+		}
+		if completed.Progress.ChunksEmbedded <= 0 {
+			t.Fatalf("ChunksEmbedded = %d, want > 0 when non-code delta skips sibling seed", completed.Progress.ChunksEmbedded)
+		}
+	})
 }
 
-func newWorktreeDeltaReuseFixture(t *testing.T) (*Manager, model.Codebase, model.Job, *fakeSemantic) {
+func newWorktreeDeltaReuseFixture(t *testing.T, loadReuse map[string][]float32) (*Manager, model.Codebase, model.Job, *fakeSemantic) {
 	t.Helper()
 
 	manager, _, _ := newTestManager(t)
@@ -91,18 +131,23 @@ func newWorktreeDeltaReuseFixture(t *testing.T) (*Manager, model.Codebase, model
 		collectionName:       func(path string) string { return "cc_" + filepath.Base(path) },
 		hasCollectionForPath: func(context.Context, string) (bool, error) { return true, nil },
 		loadReuse: func(context.Context, []string) (map[string][]float32, error) {
-			return map[string][]float32{"shared-content": {1, 2, 3}}, nil
+			return cloneReuseVectors(loadReuse), nil
 		},
 		reindexWithReuse: func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string][]float32) error {
 			if progress == nil {
 				return nil
 			}
 			chunkCount := safeInt32(len(chunks))
-			if len(reuse) > 0 {
-				progress(semantic.Progress{ChunksProcessed: chunkCount, ChunksReused: chunkCount, ChunksEmbedded: 0})
-				return nil
+			var reused int32
+			var embedded int32
+			for _, chunk := range chunks {
+				if _, present := reuse[hashText(chunk.Content)]; present {
+					reused++
+				} else {
+					embedded++
+				}
 			}
-			progress(semantic.Progress{ChunksProcessed: chunkCount, ChunksReused: 0, ChunksEmbedded: chunkCount})
+			progress(semantic.Progress{ChunksProcessed: chunkCount, ChunksReused: reused, ChunksEmbedded: embedded})
 			return nil
 		},
 	}
@@ -147,6 +192,14 @@ func newWorktreeDeltaReuseFixture(t *testing.T) (*Manager, model.Codebase, model
 	manager.mu.Unlock()
 
 	return manager, worktreeCodebase, job, fake
+}
+
+func cloneReuseVectors(reuse map[string][]float32) map[string][]float32 {
+	cloned := make(map[string][]float32, len(reuse))
+	for key, vector := range reuse {
+		cloned[key] = append([]float32(nil), vector...)
+	}
+	return cloned
 }
 
 func deltaReuseRunner(contents map[string]string) fakeRunner {
