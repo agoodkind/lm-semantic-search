@@ -35,8 +35,7 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 	stagingName := stagingCollectionName(service.CollectionName(codebasePath))
 	hasStaging, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(stagingName))
 	if err != nil {
-		slog.ErrorContext(ctx, "check staging collection failed", "collection", stagingName, "err", err)
-		return fmt.Errorf("check staging collection %s: %w", stagingName, err)
+		return wrapStoreError(ctx, err, "check staging collection "+stagingName)
 	}
 
 	if hasStaging && !removal.Empty() {
@@ -68,8 +67,7 @@ func (service *Service) PromoteStaging(ctx context.Context, codebasePath string)
 	stagingName := stagingCollectionName(collectionName)
 	hasStaging, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(stagingName))
 	if err != nil {
-		slog.ErrorContext(ctx, "check staging collection before promote failed", "collection", stagingName, "err", err)
-		return fmt.Errorf("check staging collection %s: %w", stagingName, err)
+		return wrapStoreError(ctx, err, "check staging collection "+stagingName)
 	}
 	if !hasStaging {
 		return ErrCollectionMissing

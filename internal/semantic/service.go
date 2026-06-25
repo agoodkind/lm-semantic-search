@@ -18,7 +18,6 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -238,8 +237,7 @@ func (service *Service) ConversationCollectionName(collectionID string) string {
 
 func (service *Service) renameCollection(ctx context.Context, oldName string, newName string) error {
 	if err := service.milvus.RenameCollection(ctx, milvusclient.NewRenameCollectionOption(oldName, newName)); err != nil {
-		slog.ErrorContext(ctx, "rename Milvus collection failed", "from", oldName, "to", newName, "err", err)
-		return fmt.Errorf("rename Milvus collection %s to %s: %w", oldName, newName, err)
+		return wrapStoreError(ctx, err, "rename Milvus collection "+oldName+" to "+newName)
 	}
 	return nil
 }
@@ -262,8 +260,7 @@ func (service *Service) Reindex(ctx context.Context, codebasePath string, addedO
 	collectionName := service.CollectionName(codebasePath)
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
-		slog.ErrorContext(ctx, "check Milvus collection for reindex failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "check Milvus collection "+collectionName)
 	}
 	if !hasCollection {
 		return ErrCollectionMissing
@@ -295,8 +292,7 @@ func (service *Service) PruneToCurrent(ctx context.Context, codebasePath string,
 	collectionName := service.CollectionName(codebasePath)
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
-		slog.ErrorContext(ctx, "check Milvus collection for prune failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "check Milvus collection "+collectionName)
 	}
 	if !hasCollection {
 		return ErrCollectionMissing
@@ -309,8 +305,7 @@ func (service *Service) PruneToCurrent(ctx context.Context, codebasePath string,
 	expression := fmt.Sprintf(`%s not in [%s]`, relativePathFieldName, strings.Join(quoted, ","))
 
 	if _, err := service.milvus.Delete(ctx, milvusclient.NewDeleteOption(collectionName).WithExpr(expression)); err != nil {
-		slog.ErrorContext(ctx, "prune orphans failed", "collection", collectionName, "current_count", len(currentRelativePaths), "err", err)
-		return fmt.Errorf("prune orphans from %s: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "prune orphans from "+collectionName)
 	}
 	return nil
 }
@@ -329,8 +324,7 @@ func (service *Service) deleteByRelativePaths(ctx context.Context, collectionNam
 	expression := fmt.Sprintf(`%s in [%s]`, relativePathFieldName, strings.Join(quoted, ","))
 
 	if _, err := service.milvus.Delete(ctx, milvusclient.NewDeleteOption(collectionName).WithExpr(expression)); err != nil {
-		slog.ErrorContext(ctx, "delete by relative path failed", "collection", collectionName, "count", len(relativePaths), "err", err)
-		return fmt.Errorf("delete from %s by relative path: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "delete from "+collectionName+" by relative path")
 	}
 	return nil
 }
@@ -531,11 +525,7 @@ func (service *Service) HasCollectionForPath(ctx context.Context, codebasePath s
 	collectionName := service.CollectionName(codebasePath)
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
-		slog.ErrorContext(ctx, "check Milvus collection presence failed", "collection", collectionName, "err", err)
-		if storeUnavailable(err) {
-			return false, adapterr.NewMilvusUnavailable(fmt.Errorf("check Milvus collection %s: %w", collectionName, err))
-		}
-		return false, fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
+		return false, wrapStoreError(ctx, err, "check Milvus collection "+collectionName)
 	}
 	return hasCollection, nil
 }
@@ -543,15 +533,13 @@ func (service *Service) HasCollectionForPath(ctx context.Context, codebasePath s
 func (service *Service) dropIfExists(ctx context.Context, collectionName string) error {
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
-		slog.ErrorContext(ctx, "check Milvus collection before drop failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "check Milvus collection "+collectionName)
 	}
 	if !hasCollection {
 		return nil
 	}
 	if err := service.milvus.DropCollection(ctx, milvusclient.NewDropCollectionOption(collectionName)); err != nil {
-		slog.ErrorContext(ctx, "drop Milvus collection failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("drop Milvus collection %s: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "drop Milvus collection "+collectionName)
 	}
 	return nil
 }
@@ -626,8 +614,7 @@ func (service *Service) insertBatch(ctx context.Context, collectionName string, 
 	}
 
 	if _, err := service.milvus.Insert(ctx, insertOption); err != nil {
-		slog.ErrorContext(ctx, "insert Milvus batch failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("insert Milvus batch into %s: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "insert Milvus batch into "+collectionName)
 	}
 	return nil
 }

@@ -3,7 +3,6 @@ package semantic
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 )
@@ -68,8 +67,7 @@ func (service *Service) deleteByRelativePathPrefix(ctx context.Context, collecti
 	}
 	expression := relativePathPrefixExpression(prefix)
 	if _, err := service.milvus.Delete(ctx, milvusclient.NewDeleteOption(collectionName).WithExpr(expression)); err != nil {
-		slog.ErrorContext(ctx, "delete by relative path prefix failed", "collection", collectionName, "prefix", prefix, "err", err)
-		return fmt.Errorf("delete from %s by relative path prefix: %w", collectionName, err)
+		return wrapStoreError(ctx, err, "delete from "+collectionName+" by relative path prefix "+prefix)
 	}
 	return nil
 }

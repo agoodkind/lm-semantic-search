@@ -1,8 +1,12 @@
 package semantic
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 )
 
 // storeSearchSentinel keeps the retry hint for a still-loading collection and
@@ -34,5 +38,30 @@ func TestStoreUnavailableIgnoresPlainErrors(t *testing.T) {
 	}
 	if storeUnavailable(nil) {
 		t.Fatal("nil must not read as store-unavailable")
+	}
+}
+
+// wrapStoreError must NOT label a real per-collection fault (for example a schema
+// mismatch) as a shared-infrastructure outage, so a write-path failure that is
+// genuinely the collection's fault still marks the codebase failed. It also
+// attaches the operation context and preserves the cause chain. The
+// store-unavailable branch needs a real gRPC error and is covered externally in
+// TestWrapStoreErrorClassifiesTransportOutage so this package stays grpc-free.
+func TestWrapStoreErrorPlainError(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("collection schema mismatch[field conversationId does not exist]")
+	wrapped := wrapStoreError(context.Background(), cause, "insert Milvus batch into conv_chunks_x")
+	if adapterr.IsInfraFailure(wrapped) {
+		t.Fatalf("a non-transport error must not be classified as an infra outage: %v", wrapped)
+	}
+	if !errors.Is(wrapped, cause) {
+		t.Fatal("wrapStoreError must preserve the cause chain")
+	}
+	if !strings.Contains(wrapped.Error(), "conv_chunks_x") {
+		t.Fatalf("wrapStoreError must include the operation context, got %q", wrapped.Error())
+	}
+	if wrapStoreError(context.Background(), nil, "insert into x") != nil {
+		t.Fatal("nil error must wrap to nil")
 	}
 }
