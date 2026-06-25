@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/fileset"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
@@ -141,13 +141,33 @@ func Capture(
 	}
 
 	files := make(map[string]string, len(discoveryResult.Files))
+	maxFileBytes := fileset.MaxFileBytes()
 	for _, path := range discoveryResult.Files {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("capture snapshot cancelled: %w", err)
 		}
 
+		info, err := os.Stat(path)
+		if err != nil {
+			// A file the walk listed can vanish before the stat (a delete or a
+			// dangling symlink between discovery and capture). Skip it like the
+			// indexer does for an absent file rather than failing the whole
+			// snapshot, so the sync still converges on the files that remain.
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			slog.ErrorContext(ctx, "stat file for snapshot failed", "path", path, "err", err)
+			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("stat file for snapshot %s: %w", path, err)
+		}
+		if keep, _ := fileset.EligibleByStat(info, maxFileBytes); !keep {
+			continue
+		}
+
 		data, err := os.ReadFile(path)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || skipReadFailureForSnapshot(path) {
+				continue
+			}
 			slog.ErrorContext(ctx, "read file for snapshot failed", "path", path, "err", err)
 			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("read file for snapshot %s: %w", path, err)
 		}
@@ -171,9 +191,9 @@ func Capture(
 			)
 		}
 		// Skip files the indexer will also skip so the indexer and merkle
-		// agree on the file set. Otherwise every sync treats the same bad
+		// agree on the file set. Otherwise every sync treats the same skipped
 		// file as "modified" forever and the delta loop never converges.
-		if !utf8.Valid(data) {
+		if keep, _ := fileset.EligibleContent(data); !keep {
 			continue
 		}
 		files[relativePath] = digestBytes(data)
@@ -181,6 +201,17 @@ func Capture(
 
 	snapshot := Snapshot{ConfigDigest: "", Files: files, Inodes: nil}
 	return snapshot, discoveryResult.Rules, nil
+}
+
+func skipReadFailureForSnapshot(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		// The file can vanish between the failed read and this stat. A gone file
+		// is skipped so the snapshot still converges; any other stat error is a
+		// real read failure that should surface.
+		return errors.Is(err, os.ErrNotExist)
+	}
+	return !info.Mode().IsRegular()
 }
 
 // WriteSnapshot persists a snapshot atomically.

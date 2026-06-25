@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -162,5 +164,61 @@ func TestIndexFilesExcludesMissingFile(t *testing.T) {
 	}
 	if _, found := result.FileHashes["gone.go"]; found {
 		t.Fatal("FileHashes contains gone.go; a vanished file must not be recorded as indexed")
+	}
+}
+
+func TestIndexOneAndMerkleCaptureAgreeOnEligibleFiles(t *testing.T) {
+	t.Setenv("INDEX_MAX_FILE_BYTES", "12")
+
+	tempDirectory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDirectory, "small.go"), []byte("package p\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDirectory, "oversize.go"), []byte("package p\nfunc oversized() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDirectory, "invalid.go"), []byte{'p', 'a', 'c', 'k', 'a', 'g', 'e', ' ', 0xff, '\n'}, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	directoryPath := filepath.Join(tempDirectory, "actual-dir")
+	if err := os.Mkdir(directoryPath, 0o755); err != nil {
+		t.Fatalf("Mkdir returned error: %v", err)
+	}
+	if err := os.Symlink(directoryPath, filepath.Join(tempDirectory, "linked-dir.go")); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+
+	config := model.IndexConfig{
+		SplitterType:      "langchain",
+		SplitterChunkSize: 1000,
+		SplitterOverlap:   200,
+	}
+	snapshot, _, err := merkle.Capture(context.Background(), tempDirectory, config)
+	if err != nil {
+		t.Fatalf("Capture returned error: %v", err)
+	}
+
+	runner := NewRunner()
+	relativePaths := []string{
+		"small.go",
+		"oversize.go",
+		"invalid.go",
+		"actual-dir",
+		"linked-dir.go",
+	}
+	indexerKept := map[string]string{}
+	for _, relativePath := range relativePaths {
+		result, indexErr := runner.IndexOne(context.Background(), tempDirectory, relativePath, config)
+		if indexErr != nil {
+			t.Fatalf("IndexOne(%q) returned error: %v", relativePath, indexErr)
+		}
+		if result.Skipped || result.Removed {
+			continue
+		}
+		indexerKept[relativePath] = result.FileHash
+	}
+
+	if !reflect.DeepEqual(snapshot.Files, indexerKept) {
+		t.Fatalf("Capture files = %#v, want indexer kept files %#v", snapshot.Files, indexerKept)
 	}
 }
