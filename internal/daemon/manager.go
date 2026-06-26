@@ -66,10 +66,12 @@ type Manager struct {
 	conversationJobs map[string]conversationJobPayload
 	cancels          map[string]context.CancelFunc
 	done             map[string]chan struct{}
-	runner           indexingRunner
-	semantic         semanticIndex
-	lifecycleHook    CodebaseLifecycleHook
-	lifecycleMutex   sync.Mutex
+	// failedBuildRetries caps automatic retries for terminal failed builds per daemon lifetime; not persisted, guarded by mu.
+	failedBuildRetries map[string]int
+	runner             indexingRunner
+	semantic           semanticIndex
+	lifecycleHook      CodebaseLifecycleHook
+	lifecycleMutex     sync.Mutex
 	// indexSlots caps concurrently running index jobs. Each runJob holds one
 	// buffered slot for its duration; jobs that cannot acquire a slot stay
 	// queued until one frees.
@@ -115,6 +117,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		conversationJobs:   map[string]conversationJobPayload{},
 		cancels:            map[string]context.CancelFunc{},
 		done:               map[string]chan struct{}{},
+		failedBuildRetries: map[string]int{},
 		runner:             indexer.NewRunner(),
 		semantic:           nil,
 		lifecycleHook:      nil,
