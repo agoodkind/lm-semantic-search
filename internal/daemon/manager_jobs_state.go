@@ -82,6 +82,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	job.Progress.HeartbeatAt = now
 	manager.jobs[jobID] = job
 	manager.updateCodebaseLiveTotalsLocked(job)
+	manager.journalJobProgressLocked(job)
 
 	// A progress update that embedded a file proves the embedding pipeline is
 	// reachable right now, so clear a degraded banner as soon as embedding
@@ -203,6 +204,7 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 		slog.ErrorContext(ctx, "append completed job event failed", "job_id", jobID, "err", err)
 	}
 
+	manager.forgetJobJournalLocked(jobID)
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
 		return
@@ -257,6 +259,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 		return
 	}
 	delete(manager.conversationJobs, jobID)
+	manager.forgetJobJournalLocked(jobID)
 
 	traceID := string(correlation.FromContext(ctx).TraceID)
 	now := clock.Now()
@@ -331,6 +334,7 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 		return
 	}
 	delete(manager.conversationJobs, jobID)
+	manager.forgetJobJournalLocked(jobID)
 
 	now := clock.Now()
 	metrics.JobCancelled()
