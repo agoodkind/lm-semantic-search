@@ -264,6 +264,13 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		return true
 	}
 
+	if codebase.Kind == model.CodebaseKindCode && len(plan.diff.Added) > 0 && state.semantic {
+		reuse, seeded := manager.resolveReuseSeed(ctx, job)
+		state.reuse = reuse
+		state.seededReuse = seeded
+		state.chunkCounts.reuseVectorsLoaded = seeded
+	}
+
 	result, outcome := manager.applyDeltaChanges(ctx, job, state)
 	if outcome.fallback {
 		return false
@@ -355,25 +362,11 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
-	// Reuse stored embeddings instead of re-embedding shared content. Two
-	// sources contribute: merge-down children this build roots above (absorbed
-	// after promotion) and sibling worktrees of the same repo (a linked clone
-	// where only the branch diff is embedded). Reuse is keyed on content hash, so
-	// both sources compose into one map.
 	descendants := manager.descendantReuseCandidates(job.CanonicalPath, job.Config)
-	reuseCollections := collectionNamesOf(descendants)
-	reuseCollections = append(reuseCollections, manager.worktreeSiblingReuseCollections(job.CanonicalPath, job.Config)...)
-	if len(reuseCollections) > 0 && state.semantic {
-		reuse, reuseErr := manager.semantic.LoadReuseVectors(ctx, reuseCollections)
-		if reuseErr != nil {
-			slog.WarnContext(ctx, "load reuse vectors failed; embedding shared subtree", "job_id", job.ID, "err", reuseErr)
-		} else {
-			state.reuse = reuse
-			state.seededReuse = safeInt32(len(reuse))
-			state.chunkCounts.reuseVectorsLoaded = safeInt32(len(reuse))
-			slog.InfoContext(ctx, "build.reuse_seeded", "job_id", job.ID, "reuse_collections", len(reuseCollections), "reuse_vectors", len(reuse))
-		}
-	}
+	reuse, seeded := manager.resolveReuseSeed(ctx, job)
+	state.reuse = reuse
+	state.seededReuse = seeded
+	state.chunkCounts.reuseVectorsLoaded = seeded
 
 	result, outcome := manager.applyDeltaChanges(ctx, job, state)
 	if outcome.handled {
@@ -397,6 +390,29 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	result.IndexedFiles = fileCount
 	result.TotalChunks = chunkCount
 	manager.updateJobCompleted(ctx, job.ID, result)
+}
+
+// resolveReuseSeed loads build-wide reuse vectors from indexed descendants and
+// sibling worktrees that share the requested embedding model.
+func (manager *Manager) resolveReuseSeed(ctx context.Context, job model.Job) (map[string][]float32, int32) {
+	reuse := map[string][]float32{}
+	if manager.semantic == nil || !manager.semantic.Available() {
+		return reuse, 0
+	}
+	descendants := manager.descendantReuseCandidates(job.CanonicalPath, job.Config)
+	reuseCollections := collectionNamesOf(descendants)
+	reuseCollections = append(reuseCollections, manager.worktreeSiblingReuseCollections(job.CanonicalPath, job.Config)...)
+	if len(reuseCollections) == 0 {
+		return reuse, 0
+	}
+	loadedReuse, err := manager.semantic.LoadReuseVectors(ctx, reuseCollections)
+	if err != nil {
+		slog.WarnContext(ctx, "load reuse vectors failed; building without the reuse seed", "job_id", job.ID, "err", err)
+		return reuse, 0
+	}
+	seeded := safeInt32(len(loadedReuse))
+	slog.InfoContext(ctx, "build.reuse_seeded", "job_id", job.ID, "reuse_collections", len(reuseCollections), "reuse_vectors", len(loadedReuse))
+	return loadedReuse, seeded
 }
 
 // planBootstrap captures a fresh snapshot for a from-scratch build and decides
