@@ -68,10 +68,12 @@ type Manager struct {
 	done             map[string]chan struct{}
 	// failedBuildRetries caps automatic retries for terminal failed builds per daemon lifetime; not persisted, guarded by mu.
 	failedBuildRetries map[string]int
-	runner             indexingRunner
-	semantic           semanticIndex
-	lifecycleHook      CodebaseLifecycleHook
-	lifecycleMutex     sync.Mutex
+	// lastJobJournalAt throttles periodic job-progress journaling; not persisted, guarded by mu.
+	lastJobJournalAt map[string]time.Time
+	runner           indexingRunner
+	semantic         semanticIndex
+	lifecycleHook    CodebaseLifecycleHook
+	lifecycleMutex   sync.Mutex
 	// indexSlots caps concurrently running index jobs. Each runJob holds one
 	// buffered slot for its duration; jobs that cannot acquire a slot stay
 	// queued until one frees.
@@ -118,6 +120,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		cancels:            map[string]context.CancelFunc{},
 		done:               map[string]chan struct{}{},
 		failedBuildRetries: map[string]int{},
+		lastJobJournalAt:   map[string]time.Time{},
 		runner:             indexer.NewRunner(),
 		semantic:           nil,
 		lifecycleHook:      nil,
@@ -180,55 +183,6 @@ func dropGhostURICodebases(codebases map[string]model.Codebase) {
 		if len(segments) > 0 && strings.HasSuffix(segments[0], ":") {
 			slog.Warn("dropping ghost URI codebase record", "codebase_id", id, "path", codebase.CanonicalPath)
 			delete(codebases, id)
-		}
-	}
-}
-
-// reconcileJournalOnStartLocked sanitizes the job journal after the previous
-// daemon process exited. Any queued, running, or cancelling job becomes
-// cancelled in the journal because its goroutine is gone. Codebase records
-// keep Status=Indexing when they were mid-flight so ResumeOrphanedJobs can
-// pick them back up on boot; the registry already holds the canonical path
-// and effective config that resume needs.
-func (manager *Manager) reconcileJournalOnStartLocked() {
-	now := clock.Now()
-	documentCodebaseChanged := false
-	for id, job := range manager.jobs {
-		switch job.State {
-		case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
-		case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
-			continue
-		default:
-			continue
-		}
-		job.State = model.JobStateCancelled
-		job.UpdatedAt = now
-		completedAt := now
-		job.CompletedAt = &completedAt
-		job.Progress.Phase = "cancelled"
-		job.Progress.LastEventAt = now
-		job.Progress.HeartbeatAt = now
-		manager.jobs[id] = job
-		if err := store.AppendJobEvent(manager.config.JobsPath, model.JobEvent{
-			Event:      "job_orphan_recovered",
-			OccurredAt: now,
-			Job:        job,
-		}); err != nil {
-			slog.Error("append orphan recovery event failed", "job_id", id, "err", err)
-		}
-		codebase, found := manager.codebases[job.CodebaseID]
-		if found && codebase.Kind == model.CodebaseKindDocument && codebase.ActiveJobID == id {
-			codebase.Status = model.CodebaseStatusIndexed
-			codebase.ActiveJobID = ""
-			codebase.UpdatedAt = now
-			manager.codebases[codebase.ID] = codebase
-			documentCodebaseChanged = true
-		}
-		slog.Warn("orphan job sanitized in journal after restart", "job_id", id, "codebase_id", job.CodebaseID)
-	}
-	if documentCodebaseChanged {
-		if err := manager.saveLocked(); err != nil {
-			slog.Error("write registry after document orphan recovery failed", "err", err)
 		}
 	}
 }
