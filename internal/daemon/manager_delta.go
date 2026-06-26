@@ -703,18 +703,18 @@ func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, l
 // shared by every progress update from that loop.
 const phaseReindexingChanged = "Reindexing changed files..."
 
-// chunkSplit returns the run's reused and embedded chunk counts for progress
-// reporting. The reused figure is the larger of the seeded reuse-vector pool and
-// the per-file accrued count, so the building view shows the full reuse total
-// from the first update rather than a number that climbs from zero. With no
-// accumulator attached it falls back to the seeded total.
+// chunkSplit returns the run's processed, reused, embedded, and
+// reuse-vectors-loaded counts for progress reporting. reused is the chunks
+// actually served from the reuse pool this run, so it never exceeds processed.
+// The seeded pool size is reported separately as the reuse-vectors-loaded
+// figure, which the building view can show immediately for context without
+// inflating the reused count.
 func (state deltaState) chunkSplit() (int32, int32, int32, int32) {
 	if state.chunkCounts == nil {
-		return 0, state.seededReuse, 0, state.seededReuse
+		return 0, 0, 0, state.seededReuse
 	}
-	reused := max(state.chunkCounts.reused, state.seededReuse)
 	loaded := max(state.chunkCounts.reuseVectorsLoaded, state.seededReuse)
-	return state.chunkCounts.processed, reused, state.chunkCounts.embedded, loaded
+	return state.chunkCounts.processed, state.chunkCounts.reused, state.chunkCounts.embedded, loaded
 }
 
 // reportDeltaProgress publishes one progress update from the per-file embed

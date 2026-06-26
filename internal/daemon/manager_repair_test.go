@@ -317,6 +317,9 @@ func TestForceReindexUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.
 				return false, nil
 			}
 		},
+		reindexEmit: func(progress func(semantic.Progress)) {
+			progress(semantic.Progress{ChunksProcessed: 1, ChunksReused: 0, ChunksEmbedded: 1})
+		},
 	}
 	manager.runner = fakeRunner{
 		indexOne: func(ctx context.Context, root string, relativePath string, cfg model.IndexConfig) (indexer.OneFileResult, error) {
@@ -395,6 +398,9 @@ func TestStaleRetryUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.T)
 		collectionName:       func(string) string { return "stale_collection" },
 		count:                func(context.Context, string) (int32, error) { return 1, nil },
 		hasCollectionForPath: func(context.Context, string) (bool, error) { return false, nil },
+		reindexEmit: func(progress func(semantic.Progress)) {
+			progress(semantic.Progress{ChunksProcessed: 1, ChunksReused: 0, ChunksEmbedded: 1})
+		},
 	}
 	manager.runner = fakeRunner{
 		indexOne: func(ctx context.Context, root string, relativePath string, cfg model.IndexConfig) (indexer.OneFileResult, error) {
@@ -446,6 +452,9 @@ func TestStaleRetryUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.T)
 			default:
 				return false, nil
 			}
+		},
+		reindexEmit: func(progress func(semantic.Progress)) {
+			progress(semantic.Progress{ChunksProcessed: 1, ChunksReused: 0, ChunksEmbedded: 1})
 		},
 	}
 

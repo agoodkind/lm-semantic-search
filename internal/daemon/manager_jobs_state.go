@@ -187,11 +187,12 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	job.Progress.OverallPercent = 100
 	job.Progress.FilesProcessed = result.IndexedFiles
 	job.Progress.FilesTotal = result.IndexedFiles
+	// ChunksTotal is the codebase's collection size. ChunksProcessed, ChunksReused,
+	// and ChunksEmbedded stay at the real per-run values the embed loop recorded,
+	// which are zero for a completion that embedded nothing (an empty-diff no-op or
+	// a skipped-only sync). Reporting the collection total as embedded here would
+	// make a no-embed run look like a full re-embed.
 	job.Progress.ChunksTotal = result.TotalChunks
-	if job.Progress.ChunksProcessed == 0 && job.Progress.ChunksReused == 0 && job.Progress.ChunksEmbedded == 0 {
-		job.Progress.ChunksProcessed = result.TotalChunks
-		job.Progress.ChunksEmbedded = result.TotalChunks
-	}
 	job.Progress.ChunksGenerated = job.Progress.ChunksEmbedded
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
