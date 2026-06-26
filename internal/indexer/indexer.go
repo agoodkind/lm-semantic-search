@@ -11,19 +11,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
-	"unicode/utf8"
 
 	"goodkind.io/gksyntax/chunk"
 	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/fileset"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
-
-// defaultMaxFileBytes caps a single file at 2 MiB before it reaches the
-// splitter. Larger files are skipped so a stray generated dump or vendored
-// blob cannot inflate one embedding batch into something Milvus refuses.
-// Override at runtime with INDEX_MAX_FILE_BYTES (set to 0 to disable).
-const defaultMaxFileBytes int64 = 2 * 1024 * 1024
 
 // Runner executes the local discovery and splitting pipeline for one codebase.
 type Runner struct {
@@ -123,23 +116,8 @@ func newEmbeddedProgress(
 func NewRunner() *Runner {
 	return &Runner{
 		dispatcher:   chunk.NewDispatcher(),
-		maxFileBytes: resolveMaxFileBytes(),
+		maxFileBytes: fileset.MaxFileBytes(),
 	}
-}
-
-// resolveMaxFileBytes reads INDEX_MAX_FILE_BYTES from the environment. An
-// unset or unparseable value falls back to defaultMaxFileBytes. A value of
-// 0 or below disables the cap.
-func resolveMaxFileBytes() int64 {
-	raw := os.Getenv("INDEX_MAX_FILE_BYTES")
-	if raw == "" {
-		return defaultMaxFileBytes
-	}
-	parsed, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil {
-		return defaultMaxFileBytes
-	}
-	return parsed
 }
 
 // processedFile is the per-file output of one splitter pass. Skipped=true
@@ -165,19 +143,25 @@ type OneFileResult = processedFile
 // successful semantic.Reindex call.
 func (runner *Runner) IndexOne(ctx context.Context, root string, relativePath string, cfg model.IndexConfig) (OneFileResult, error) {
 	fullPath := filepath.Join(root, relativePath)
-	if oversize, err := runner.isOversize(ctx, fullPath, relativePath); err != nil {
+	statResult, keep, err := runner.statEligibility(ctx, fullPath, relativePath)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent; converging to removal", "path", fullPath)
 			return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, nil
 		}
 		return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, err
-	} else if oversize {
-		return OneFileResult{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipOversize, Removed: false}, nil
+	}
+	if !keep {
+		return statResult, nil
 	}
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent; converging to removal", "path", fullPath)
+			return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, nil
+		}
+		if readErrorMeansRemoved(fullPath) {
+			slog.DebugContext(ctx, "source path is no longer a regular file; converging to removal", "path", fullPath)
 			return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, nil
 		}
 		slog.ErrorContext(ctx, "read source file failed", "path", fullPath, "err", err)
@@ -186,24 +170,41 @@ func (runner *Runner) IndexOne(ctx context.Context, root string, relativePath st
 	return runner.processFile(ctx, fullPath, relativePath, data, cfg.SplitterType)
 }
 
-// isOversize reports whether the file at fullPath exceeds the runner's
-// per-file size cap. A cap of 0 or below disables the check.
-func (runner *Runner) isOversize(ctx context.Context, fullPath string, relativePath string) (bool, error) {
-	if runner.maxFileBytes <= 0 {
-		return false, nil
-	}
+func (runner *Runner) statEligibility(ctx context.Context, fullPath string, relativePath string) (processedFile, bool, error) {
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			slog.ErrorContext(ctx, "stat source file failed", "path", fullPath, "err", err)
 		}
-		return false, fmt.Errorf("stat source file %s: %w", fullPath, err)
+		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("stat source file %s: %w", fullPath, err)
 	}
-	if info.Size() <= runner.maxFileBytes {
-		return false, nil
+	keep, reason := fileset.EligibleByStat(info, runner.maxFileBytes)
+	if keep {
+		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, true, nil
 	}
-	slog.WarnContext(ctx, "indexer.skipped_oversize", "path", relativePath, "bytes", info.Size(), "limit", runner.maxFileBytes)
-	return true, nil
+	switch reason {
+	case fileset.SkipOversize:
+		slog.WarnContext(ctx, "indexer.skipped_oversize", "path", relativePath, "bytes", info.Size(), "limit", runner.maxFileBytes)
+		return processedFile{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipOversize, Removed: false}, false, nil
+	case fileset.SkipNotRegular:
+		slog.DebugContext(ctx, "source path is not a regular file; converging to removal", "path", fullPath)
+		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, false, nil
+	case fileset.SkipKeep, fileset.SkipNonUTF8:
+		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("unexpected stat-stage file eligibility reason %q for %s", reason, fullPath)
+	default:
+		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("unknown file eligibility reason %q for %s", reason, fullPath)
+	}
+}
+
+func readErrorMeansRemoved(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		// The file can vanish between the failed read and this stat. A gone file
+		// converges to removal; any other stat error is treated as a real read
+		// failure to surface.
+		return errors.Is(err, os.ErrNotExist)
+	}
+	return !info.Mode().IsRegular()
 }
 
 // processFile splits one file into chunks. When the file's bytes are not
@@ -211,7 +212,7 @@ func (runner *Runner) isOversize(ctx context.Context, fullPath string, relativeP
 // rejects non-UTF-8 VarChar payloads at the gRPC marshal boundary, so the
 // skip happens at the indexer boundary.
 func (runner *Runner) processFile(ctx context.Context, fullPath string, relativePath string, data []byte, splitterType string) (processedFile, error) {
-	if !utf8.Valid(data) {
+	if keep, _ := fileset.EligibleContent(data); !keep {
 		slog.WarnContext(ctx, "indexer.skipped_invalid_utf8", "path", relativePath, "bytes", len(data))
 		return processedFile{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipUnreadable, Removed: false}, nil
 	}
@@ -255,21 +256,26 @@ type indexAccumulator struct {
 // ingestFile reads one file, checks size and UTF-8 gates, and routes the
 // result into the accumulator. It returns false when the file was skipped.
 func (runner *Runner) ingestFile(ctx context.Context, fullPath string, relativePath string, splitterType string, accumulator *indexAccumulator) error {
-	if oversize, sizeErr := runner.isOversize(ctx, fullPath, relativePath); sizeErr != nil {
-		if errors.Is(sizeErr, os.ErrNotExist) {
+	statResult, keep, err := runner.statEligibility(ctx, fullPath, relativePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent during walk; excluding from rebuild", "path", fullPath)
 			return nil
 		}
-		return sizeErr
-	} else if oversize {
-		accumulator.skippedFiles = append(accumulator.skippedFiles, relativePath)
-		accumulator.skippedOversize++
+		return err
+	}
+	if !keep {
+		accumulator.addSkipped(relativePath, statResult)
 		return nil
 	}
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent during walk; excluding from rebuild", "path", fullPath)
+			return nil
+		}
+		if readErrorMeansRemoved(fullPath) {
+			slog.DebugContext(ctx, "source path is no longer a regular file during walk; excluding from rebuild", "path", fullPath)
 			return nil
 		}
 		slog.ErrorContext(ctx, "read source file failed", "path", fullPath, "err", err)
@@ -281,12 +287,7 @@ func (runner *Runner) ingestFile(ctx context.Context, fullPath string, relativeP
 		return err
 	}
 	if processed.Skipped {
-		accumulator.skippedFiles = append(accumulator.skippedFiles, relativePath)
-		if processed.SkipReason == SkipOversize {
-			accumulator.skippedOversize++
-		} else {
-			accumulator.skippedUnreadable++
-		}
+		accumulator.addSkipped(relativePath, processed)
 		return nil
 	}
 	accumulator.totalChunks += safeInt32(len(processed.Chunks))
@@ -294,6 +295,18 @@ func (runner *Runner) ingestFile(ctx context.Context, fullPath string, relativeP
 	accumulator.fileHashes[relativePath] = processed.FileHash
 	accumulator.storedChunks = append(accumulator.storedChunks, processed.Chunks...)
 	return nil
+}
+
+func (accumulator *indexAccumulator) addSkipped(relativePath string, processed processedFile) {
+	if !processed.Skipped {
+		return
+	}
+	accumulator.skippedFiles = append(accumulator.skippedFiles, relativePath)
+	if processed.SkipReason == SkipOversize {
+		accumulator.skippedOversize++
+		return
+	}
+	accumulator.skippedUnreadable++
 }
 
 // Index walks the codebase and splits files into chunks.
