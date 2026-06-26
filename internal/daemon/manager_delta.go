@@ -265,7 +265,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	}
 
 	if codebase.Kind == model.CodebaseKindCode && len(plan.diff.Added) > 0 && state.semantic {
-		reuse, seeded := manager.resolveReuseSeed(ctx, job)
+		reuse, seeded, _ := manager.resolveReuseSeed(ctx, job)
 		state.reuse = reuse
 		state.seededReuse = seeded
 		state.chunkCounts.reuseVectorsLoaded = seeded
@@ -362,8 +362,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
-	descendants := manager.descendantReuseCandidates(job.CanonicalPath, job.Config)
-	reuse, seeded := manager.resolveReuseSeed(ctx, job)
+	reuse, seeded, descendants := manager.resolveReuseSeed(ctx, job)
 	state.reuse = reuse
 	state.seededReuse = seeded
 	state.chunkCounts.reuseVectorsLoaded = seeded
@@ -393,26 +392,29 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 }
 
 // resolveReuseSeed loads build-wide reuse vectors from indexed descendants and
-// sibling worktrees that share the requested embedding model.
-func (manager *Manager) resolveReuseSeed(ctx context.Context, job model.Job) (map[string][]float32, int32) {
+// sibling worktrees that share the requested embedding model. It also returns
+// the descendant candidates it scanned so a from-scratch build can absorb them
+// without re-scanning the registry, keeping the reuse seed and the absorb list
+// derived from one consistent snapshot.
+func (manager *Manager) resolveReuseSeed(ctx context.Context, job model.Job) (map[string][]float32, int32, []model.Codebase) {
+	descendants := manager.descendantReuseCandidates(job.CanonicalPath, job.Config)
 	reuse := map[string][]float32{}
 	if manager.semantic == nil || !manager.semantic.Available() {
-		return reuse, 0
+		return reuse, 0, descendants
 	}
-	descendants := manager.descendantReuseCandidates(job.CanonicalPath, job.Config)
 	reuseCollections := collectionNamesOf(descendants)
 	reuseCollections = append(reuseCollections, manager.worktreeSiblingReuseCollections(job.CanonicalPath, job.Config)...)
 	if len(reuseCollections) == 0 {
-		return reuse, 0
+		return reuse, 0, descendants
 	}
 	loadedReuse, err := manager.semantic.LoadReuseVectors(ctx, reuseCollections)
 	if err != nil {
 		slog.WarnContext(ctx, "load reuse vectors failed; building without the reuse seed", "job_id", job.ID, "err", err)
-		return reuse, 0
+		return reuse, 0, descendants
 	}
 	seeded := safeInt32(len(loadedReuse))
 	slog.InfoContext(ctx, "build.reuse_seeded", "job_id", job.ID, "reuse_collections", len(reuseCollections), "reuse_vectors", len(loadedReuse))
-	return loadedReuse, seeded
+	return loadedReuse, seeded, descendants
 }
 
 // planBootstrap captures a fresh snapshot for a from-scratch build and decides

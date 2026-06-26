@@ -101,6 +101,60 @@ func TestMerkleCaptureConvergesAndAgreesWithIndexerFileSet(t *testing.T) {
 			result.Removed,
 		)
 	}
+
+	// The full bootstrap walk (Runner.Index) must agree with Capture too: it skips
+	// the oversize, binary, directory, and symlink-to-directory entries without a
+	// fatal error and indexes exactly the regular files Capture kept.
+	walkResult, walkErr := runner.Index(context.Background(), root, config, nil)
+	if walkErr != nil {
+		t.Fatalf("Runner.Index walk returned error over the fixture: %v", walkErr)
+	}
+	if int(walkResult.IndexedFiles) != len(wantSnapshotPaths) {
+		t.Fatalf("Runner.Index IndexedFiles = %d, want %d (the captured regular files)", walkResult.IndexedFiles, len(wantSnapshotPaths))
+	}
+	if walkResult.SkippedOversize < 1 {
+		t.Fatalf("Runner.Index SkippedOversize = %d, want >= 1 (oversize.go)", walkResult.SkippedOversize)
+	}
+}
+
+// TestMerkleCaptureExcludesIgnoredFilesAndConverges proves an ignored file is
+// kept out of the snapshot and that the tree still converges on a second
+// capture, so an ignore rule cannot reintroduce the re-sync loop.
+func TestMerkleCaptureExcludesIgnoredFilesAndConverges(t *testing.T) {
+	root := t.TempDir()
+	writeFixtureFile(t, root, "keep.go", []byte("package p\nfunc keep() {}\n"))
+	writeFixtureFile(t, root, "skip.log", []byte("log noise\n"))
+	config := model.IndexConfig{
+		SplitterType:       "langchain",
+		SplitterChunkSize:  1000,
+		SplitterOverlap:    200,
+		Extensions:         nil,
+		IgnorePatterns:     []string{"*.log"},
+		IgnoreDigest:       "",
+		EmbeddingProvider:  "",
+		EmbeddingModel:     "",
+		EmbeddingDimension: 0,
+		VectorBackend:      "",
+		Hybrid:             false,
+	}
+
+	first, _, err := merkle.Capture(context.Background(), root, config)
+	if err != nil {
+		t.Fatalf("first Capture returned error: %v", err)
+	}
+	if first.HasFile("skip.log") {
+		t.Fatalf("ignored file skip.log was captured into the snapshot")
+	}
+	if !first.HasFile("keep.go") {
+		t.Fatalf("keep.go was not captured")
+	}
+	second, _, err := merkle.Capture(context.Background(), root, config)
+	if err != nil {
+		t.Fatalf("second Capture returned error: %v", err)
+	}
+	if diff := merkle.DiffSnapshots(first, second); !diff.Empty() {
+		t.Fatalf("tree with an ignored file did not converge: %#v", diff)
+	}
 }
 
 func writeFilesetFixture(t *testing.T, root string) []filesetFixtureEntry {
@@ -109,6 +163,7 @@ func writeFilesetFixture(t *testing.T, root string) []filesetFixtureEntry {
 	writeFixtureFile(t, root, "small.go", []byte("package p\nfunc small() {}\n"))
 	writeFixtureFile(t, root, "oversize.go", []byte(strings.Repeat("a", 65)))
 	writeFixtureFile(t, root, "invalid.go", []byte{'p', 'a', 'c', 'k', 'a', 'g', 'e', ' ', 0xff, '\n'})
+	writeFixtureFile(t, root, "data.bin", []byte{0x00, 0x01, 0xff, 0xfe, 0x00, 'x'})
 
 	nestedDir := filepath.Join(root, "nested")
 	if err := os.Mkdir(nestedDir, 0o755); err != nil {
@@ -120,6 +175,7 @@ func writeFilesetFixture(t *testing.T, root string) []filesetFixtureEntry {
 		{relativePath: "small.go", wantCaptured: true, wantSkipped: false, wantRemoved: false},
 		{relativePath: "oversize.go", wantCaptured: false, wantSkipped: true, wantRemoved: false},
 		{relativePath: "invalid.go", wantCaptured: false, wantSkipped: true, wantRemoved: false},
+		{relativePath: "data.bin", wantCaptured: false, wantSkipped: true, wantRemoved: false},
 		{relativePath: "nested", wantCaptured: false, wantSkipped: false, wantRemoved: true},
 		{relativePath: "nested/nested.go", wantCaptured: true, wantSkipped: false, wantRemoved: false},
 	}
