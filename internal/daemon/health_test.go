@@ -68,6 +68,15 @@ func TestNoOpCompletionKeepsBanner(t *testing.T) {
 		t.Fatal("a no-op completion cleared the banner; want it kept during the outage")
 	}
 
+	// A real completion records embedded files through the per-file progress loop;
+	// model that so the clear gate sees genuine embed work rather than the codebase
+	// file count a no-op completion also carries.
+	manager.mu.Lock()
+	embeddedJob := manager.jobs[job.ID]
+	embeddedJob.Progress.FilesEmbedded = 3
+	manager.jobs[job.ID] = embeddedJob
+	manager.mu.Unlock()
+
 	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 3, TotalChunks: 12})
 
 	if manager.DependencyHealth().Degraded() {
@@ -135,6 +144,14 @@ func TestDependencyHealthFollowsJobOutcomes(t *testing.T) {
 	if health.Since.IsZero() {
 		t.Fatal("health Since is zero after degrading, want a timestamp")
 	}
+
+	// A real recovery completion records embedded files through the per-file
+	// progress loop; model that so the clear gate sees genuine embed work.
+	manager.mu.Lock()
+	recoveredJob := manager.jobs[job.ID]
+	recoveredJob.Progress.FilesEmbedded = 1
+	manager.jobs[job.ID] = recoveredJob
+	manager.mu.Unlock()
 
 	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 1, TotalChunks: 1})
 

@@ -173,11 +173,14 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 
 	now := clock.Now()
 	metrics.JobCompleted()
-	// Clear the degraded banner only when this run actually embedded against the
-	// pipeline, which proves the dependency is reachable. A no-op sync that found
-	// no changed files completes without touching the embedder, so it must not
-	// wipe a banner raised by a real outage on another codebase.
-	if result.IndexedFiles > 0 {
+	// Clear the degraded banner only when this run actually embedded a file this
+	// run, which proves the dependency is reachable, matching the embed-progress
+	// clear path. FilesEmbedded is the per-run embedded count the embed loop
+	// recorded, zero for an empty-diff no-op or a skipped-only sync. Gating on
+	// result.IndexedFiles instead would clear the banner for a no-op completion,
+	// because that path reports the whole codebase file count without touching the
+	// store, and could wipe a banner raised by a real outage on another codebase.
+	if job.Progress.FilesEmbedded > 0 {
 		manager.noteDependencyHealthyLocked()
 	}
 	job.State = model.JobStateCompleted
