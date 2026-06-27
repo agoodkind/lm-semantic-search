@@ -182,6 +182,17 @@ func (manager *Manager) cacheResolvedRules(codebaseID string, rules discovery.Ig
 	manager.codebases[codebaseID] = codebase
 }
 
+// ResolvedRulesFor returns a codebase's current ignore rules from the record,
+// the single source of truth the indexing and sync jobs maintain via
+// cacheResolvedRules. The file watcher reads through this on each event so it
+// filters against the same rules the converge pass uses, with no private copy.
+// An unknown codebase yields the empty tree, which excludes nothing.
+func (manager *Manager) ResolvedRulesFor(codebaseID string) discovery.IgnoreRules {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.codebases[codebaseID].ResolvedIgnoreRules
+}
+
 // synthesizeUnregisteredCodebase builds an in-memory codebase record for a
 // path whose Milvus collection exists without a registry entry.
 func (manager *Manager) synthesizeUnregisteredCodebase(canonicalPath string) model.Codebase {

@@ -25,7 +25,6 @@ type watchRoot struct {
 	// repository; dispatch uses that to keep a parent root from re-indexing a
 	// nested sibling worktree's files, mirroring the discovery walk boundary.
 	commonDir string
-	rules     discovery.IgnoreRules
 }
 
 // Watcher converts filesystem events under tracked codebases into per-path
@@ -89,18 +88,13 @@ func (watcher *Watcher) AddCodebase(ctx context.Context, codebase model.Codebase
 		return
 	}
 
-	// The record's rules are the walk-resolved cache the jobs maintain.
-	// Empty rules mean no capture has run yet; dispatch passes a few extra
-	// events until the first capture persists rules, and converge drops them.
-	rules := codebase.ResolvedIgnoreRules
-
 	watcher.mu.Lock()
 	if _, found := watcher.roots[codebase.ID]; found {
 		watcher.mu.Unlock()
 		return
 	}
 	commonDir, _ := gitworktree.CommonDirAt(codebase.CanonicalPath)
-	watcher.roots[codebase.ID] = watchRoot{codebaseID: codebase.ID, root: codebase.CanonicalPath, commonDir: commonDir, rules: rules}
+	watcher.roots[codebase.ID] = watchRoot{codebaseID: codebase.ID, root: codebase.CanonicalPath, commonDir: commonDir}
 	watcher.mu.Unlock()
 
 	recursivePath := filepath.Join(codebase.CanonicalPath, "...")
@@ -172,7 +166,11 @@ func (watcher *Watcher) dispatch(event notify.EventInfo) {
 		if relativePath == "." || relativePath == "" {
 			continue
 		}
-		if excluded, _, _ := discovery.PathIgnored(relativePath, root.rules); excluded {
+		// Read the codebase's current ignore rules from the manager record, the
+		// single source of truth the indexing and sync jobs keep up to date. The
+		// watcher holds no rules copy of its own, so dispatch self-heals the moment
+		// a job resolves rules, and never filters against a stale snapshot.
+		if excluded, _, _ := discovery.PathIgnored(relativePath, watcher.manager.ResolvedRulesFor(root.codebaseID)); excluded {
 			continue
 		}
 		watcher.queue.Enqueue(root.codebaseID, relativePath)

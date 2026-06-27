@@ -46,30 +46,88 @@ func TestWatcherAddCodebaseIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestWatcherAddCodebaseDoesNotResolveRules proves AddCodebase never scans
-// the tree itself: a codebase whose record holds no rules is registered with
-// empty rules even when a .gitignore exists on disk.
-func TestWatcherAddCodebaseDoesNotResolveRules(t *testing.T) {
+// TestWatcherDispatchReadsRecordRules proves dispatch filters against the
+// codebase record's current ignore rules (the single source of truth) rather
+// than any copy held by the watcher, and that updating the record's rules
+// changes dispatch behavior with no watcher re-add. With empty record rules an
+// event passes through; after the record resolves rules that ignore the path,
+// the same watcher drops it.
+func TestWatcherDispatchReadsRecordRules(t *testing.T) {
 	t.Parallel()
 	manager, _, _ := newTestManager(t)
-	queue := NewEventQueue(time.Millisecond, func(_ string, _ []string) {})
+
+	var observedMu sync.Mutex
+	observed := map[string]struct{}{}
+	queue := NewEventQueue(5*time.Millisecond, func(_ string, relativePaths []string) {
+		observedMu.Lock()
+		for _, relativePath := range relativePaths {
+			observed[relativePath] = struct{}{}
+		}
+		observedMu.Unlock()
+	})
 	watcher := NewWatcher(manager, queue)
 
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored/\n"), 0o644); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
 	}
+	for _, name := range []string{"ignored/a.txt", "ignored/b.txt", "keep/c.go"} {
+		full := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(full, []byte{}, 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
 	codebase := model.Codebase{
-		ID:                  "cb_test_no_resolve",
+		ID:                  "cb_test_record_rules",
 		CanonicalPath:       root,
 		ResolvedIgnoreRules: discovery.IgnoreRules{Nodes: nil},
 	}
+	manager.codebases[codebase.ID] = codebase
 	watcher.AddCodebase(context.Background(), codebase)
 
-	for _, watchRoot := range watcher.snapshotRoots() {
-		if watchRoot.codebaseID == codebase.ID && !watchRoot.rules.IsEmpty() {
-			t.Fatal("AddCodebase resolved rules from disk; it must reuse the record")
+	waitObserved := func(relativePath string) bool {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			observedMu.Lock()
+			_, ok := observed[relativePath]
+			observedMu.Unlock()
+			if ok {
+				return true
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
+		return false
+	}
+
+	// Empty record rules: an ignored-by-gitignore path still passes through.
+	watcher.dispatch(stubNotifyEvent{path: filepath.Join(root, "ignored/a.txt")})
+	if !waitObserved("ignored/a.txt") {
+		t.Fatal("with empty record rules, dispatch should enqueue ignored/a.txt")
+	}
+
+	// Resolve the real rules and fold them into the record. No watcher re-add.
+	rules, err := discovery.EffectiveIgnorePatterns(context.Background(), root, nil)
+	if err != nil {
+		t.Fatalf("resolve rules: %v", err)
+	}
+	manager.cacheResolvedRules(codebase.ID, rules)
+
+	// Now dispatch a fresh ignored path and a kept path. keep/c.go must enqueue;
+	// ignored/b.txt must not, proving dispatch reads the updated record.
+	watcher.dispatch(stubNotifyEvent{path: filepath.Join(root, "ignored/b.txt")})
+	watcher.dispatch(stubNotifyEvent{path: filepath.Join(root, "keep/c.go")})
+	if !waitObserved("keep/c.go") {
+		t.Fatal("dispatch should enqueue keep/c.go after rules resolve")
+	}
+	observedMu.Lock()
+	_, leaked := observed["ignored/b.txt"]
+	observedMu.Unlock()
+	if leaked {
+		t.Fatal("dispatch enqueued ignored/b.txt after the record resolved rules that exclude it")
 	}
 }
 
