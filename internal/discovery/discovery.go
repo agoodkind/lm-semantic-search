@@ -700,20 +700,27 @@ func isDefaultExcludedDir(name string) bool {
 	return found
 }
 
+// globMetaReplacer escapes regex metacharacters in a glob pattern. It is built
+// once at package scope rather than rebuilt on every simpleGlobMatch call, which
+// the file-watch converge invokes per path and made the dominant allocation
+// source under build-driven event floods. [strings.Replacer] is safe for
+// concurrent use.
+var globMetaReplacer = strings.NewReplacer(
+	".", "\\.",
+	"+", "\\+",
+	"^", "\\^",
+	"$", "\\$",
+	"(", "\\(",
+	")", "\\)",
+	"[", "\\[",
+	"]", "\\]",
+	"{", "\\{",
+	"}", "\\}",
+	"|", "\\|",
+)
+
 func simpleGlobMatch(text string, pattern string) bool {
-	quoted := strings.NewReplacer(
-		".", "\\.",
-		"+", "\\+",
-		"^", "\\^",
-		"$", "\\$",
-		"(", "\\(",
-		")", "\\)",
-		"[", "\\[",
-		"]", "\\]",
-		"{", "\\{",
-		"}", "\\}",
-		"|", "\\|",
-	).Replace(pattern)
+	quoted := globMetaReplacer.Replace(pattern)
 	regexPattern := "^" + strings.ReplaceAll(quoted, "*", ".*") + "$"
 	matched, _ := filepath.Match(regexPattern, text)
 	if matched {
