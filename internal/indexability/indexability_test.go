@@ -215,3 +215,32 @@ func TestInvalidateRulesPicksUpDiskChange(t *testing.T) {
 	resolver.InvalidateRules("cb")
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "x.tmp", statInfo(t, filepath.Join(root, "x.tmp"))), true, Keep)
 }
+
+func TestGlobalExcludePathsHonorsXDGConfigHome(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "absent-gitconfig"))
+	t.Setenv("XDG_CONFIG_HOME", "/xdg")
+
+	paths := globalExcludePaths(context.Background())
+	if len(paths) == 0 || paths[0] != filepath.Join("/xdg", "git", "ignore") {
+		t.Fatalf("globalExcludePaths = %v, want first %q", paths, "/xdg/git/ignore")
+	}
+}
+
+func TestUnquoteConfigValueStripsMatchingQuotes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{`"~/path"`, "~/path"},
+		{`'~/path'`, "~/path"},
+		{"~/path", "~/path"},
+		{`"mismatch'`, `"mismatch'`},
+		{`"`, `"`},
+	}
+	for _, testCase := range cases {
+		if got := unquoteConfigValue(testCase.in); got != testCase.want {
+			t.Errorf("unquoteConfigValue(%q) = %q, want %q", testCase.in, got, testCase.want)
+		}
+	}
+}

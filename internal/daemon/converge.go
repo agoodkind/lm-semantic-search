@@ -127,7 +127,10 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 	// A path present on disk runs the indexability gate first: a tracked path
 	// that has become excluded, out of scope, or oversize is removed. A stat
 	// miss falls through to the IndexOne path below, which reports the removal.
-	if info, statErr := os.Stat(filepath.Join(root, relativePath)); statErr == nil {
+	// os.Lstat does not follow symlinks, so a symlink is seen as non-regular and
+	// rejected by the resolver's ReasonNotRegular gate rather than indexed as its
+	// target.
+	if info, statErr := os.Lstat(filepath.Join(root, relativePath)); statErr == nil {
 		if decision := manager.indexability.Decide(ctx, codebase.ID, root, relativePath, info); !decision.Indexed {
 			return manager.convergeRemoveExcluded(ctx, root, relativePath, string(decision.Reason), snapshot)
 		}

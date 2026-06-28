@@ -1,6 +1,6 @@
 // Package indexability is the single source of truth for whether a path should
-// be indexed. It resolves git-style ignore rules with a go-git matcher and then
-// applies the content and size gates that decide a file's eligibility.
+// be indexed. It resolves git-style ignore rules with a git-pkgs matcher and
+// then applies the content and size gates that decide a file's eligibility.
 package indexability
 
 import (
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
+	"github.com/git-pkgs/gitignore"
 	"goodkind.io/lm-semantic-search/internal/fileset"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 )
@@ -69,7 +69,7 @@ func NewResolver() *Resolver {
 
 // builtRules is the cached, resolved ignore state for one codebase.
 type builtRules struct {
-	matcher   gitignore.Matcher
+	matcher   *gitignore.Matcher
 	commonDir string
 	maxBytes  int64
 }
@@ -165,18 +165,20 @@ func (r *Resolver) rulesFor(ctx context.Context, codebaseID string, root string)
 // pathIgnored reports whether relPath is excluded by matcher. It honors git's
 // rule that a file under an excluded directory stays excluded even when a later
 // pattern tries to re-include it, by checking every ancestor directory first.
-func pathIgnored(matcher gitignore.Matcher, relPath string, isDir bool) bool {
+// git-pkgs leaves that rule to the caller: its MatchPath re-includes a file
+// under an excluded directory, so the ancestor walk here enforces it.
+func pathIgnored(matcher *gitignore.Matcher, relPath string, isDir bool) bool {
 	normalized := strings.Trim(strings.ReplaceAll(relPath, "\\", "/"), "/")
 	if normalized == "" {
 		return false
 	}
 	parts := strings.Split(normalized, "/")
 	for index := 1; index < len(parts); index++ {
-		if matcher.Match(parts[:index], true) {
+		if matcher.MatchPath(strings.Join(parts[:index], "/"), true) {
 			return true
 		}
 	}
-	return matcher.Match(parts, isDir)
+	return matcher.MatchPath(normalized, isDir)
 }
 
 // hasGitComponent reports whether relPath has a path component exactly equal to
@@ -193,35 +195,36 @@ func hasGitComponent(relPath string) bool {
 }
 
 // buildRules resolves the ignore matcher and size cap for the codebase rooted at
-// root. Patterns are appended in order of increasing priority, which is the
-// order go-git's matcher expects: global excludes, the project ignore, the
-// built-in content denylist, the repo info/exclude, then each .gitignore from
-// the root down the tree.
+// root. Sources are added in order of increasing priority, which is the order
+// git-pkgs matches in (last match wins): global excludes, the project ignore,
+// the built-in content denylist, the repo info/exclude, then each .gitignore
+// from the root down the tree. The content denylist stays below .gitignore so a
+// repository's own re-include rule can still index a denylisted name.
 func buildRules(ctx context.Context, root string) *builtRules {
 	commonDir, _ := gitworktree.CommonDirAt(root)
 
-	patterns := make([]gitignore.Pattern, 0)
-	patterns = append(patterns, globalExcludePatterns(ctx)...)
-	patterns = append(patterns, contextIgnorePatterns(ctx)...)
-	patterns = append(patterns, contentDenylistPatterns()...)
-	patterns = append(patterns, infoExcludePatterns(ctx, commonDir)...)
-	patterns = gatherGitignorePatterns(ctx, root, commonDir, patterns)
+	matcher := gitignore.New("")
+	addGlobalExcludes(ctx, matcher)
+	matcher.AddFromFile(contextIgnorePath(ctx), "")
+	matcher.AddPatterns([]byte(strings.Join(contentBuiltinPatterns, "\n")), "")
+	if commonDir != "" {
+		matcher.AddFromFile(filepath.Join(commonDir, "info", "exclude"), "")
+	}
+	addGitignoreFiles(ctx, matcher, root, commonDir)
 
 	return &builtRules{
-		matcher:   gitignore.NewMatcher(patterns),
+		matcher:   matcher,
 		commonDir: commonDir,
 		maxBytes:  fileset.MaxFileBytes(),
 	}
 }
 
-// gatherGitignorePatterns walks root top-down, appending each directory's
-// .gitignore patterns to the running list. It prunes a child directory when the
-// patterns gathered so far already exclude it, mirroring git's refusal to
-// descend into an ignored directory, and it stops at a nested same-repo worktree
-// boundary. The codebase root's own .git entry is skipped because it is never
-// content.
-func gatherGitignorePatterns(ctx context.Context, root string, commonDir string, base []gitignore.Pattern) []gitignore.Pattern {
-	patterns := base
+// addGitignoreFiles walks root top-down, adding each directory's .gitignore to
+// matcher scoped to that directory. It prunes a child directory when the rules
+// gathered so far already exclude it, mirroring git's refusal to descend into an
+// ignored directory, and it stops at a nested same-repo worktree boundary. The
+// codebase root's own .git entry is skipped because it is never content.
+func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root string, commonDir string) {
 	var walk func(relDir string)
 	walk = func(relDir string) {
 		if ctx.Err() != nil {
@@ -233,8 +236,7 @@ func gatherGitignorePatterns(ctx context.Context, root string, commonDir string,
 			slog.WarnContext(ctx, "indexability: read directory failed", "path", currentDir, "err", err)
 			return
 		}
-		patterns = append(patterns, gitignoreInDir(ctx, currentDir, relDir)...)
-		matcher := gitignore.NewMatcher(patterns)
+		matcher.AddFromFile(filepath.Join(currentDir, ".gitignore"), relDir)
 		for _, entry := range entries {
 			if !entry.IsDir() || entry.Name() == ".git" {
 				continue
@@ -247,72 +249,46 @@ func gatherGitignorePatterns(ctx context.Context, root string, commonDir string,
 			if gitworktree.WorktreeOfRepo(childAbs, commonDir) {
 				continue
 			}
-			if matcher.Match(strings.Split(childRel, "/"), true) {
+			if matcher.MatchPath(childRel, true) {
 				continue
 			}
 			walk(childRel)
 		}
 	}
 	walk("")
-	return patterns
 }
 
-// gitignoreInDir parses the .gitignore file in currentDir, if present, with the
-// directory's relative path as the pattern domain so the patterns apply only
-// under that directory.
-func gitignoreInDir(ctx context.Context, currentDir string, relDir string) []gitignore.Pattern {
-	lines := readIgnoreLines(ctx, filepath.Join(currentDir, ".gitignore"))
-	return parsePatterns(lines, domainFor(relDir))
-}
-
-// domainFor splits a slash-separated relative directory into the path-component
-// domain go-git expects, returning nil for the root.
-func domainFor(relDir string) []string {
-	if relDir == "" {
-		return nil
-	}
-	return strings.Split(relDir, "/")
-}
-
-// infoExcludePatterns reads the repository's info/exclude file. For a linked
-// worktree the file lives under the shared common dir, which commonDir already
-// resolves to.
-func infoExcludePatterns(ctx context.Context, commonDir string) []gitignore.Pattern {
-	if commonDir == "" {
-		return nil
-	}
-	lines := readIgnoreLines(ctx, filepath.Join(commonDir, "info", "exclude"))
-	return parsePatterns(lines, nil)
-}
-
-// contextIgnorePatterns reads the project-global ignore file at
-// ~/.context/.contextignore, matching the discovery package's loader.
-func contextIgnorePatterns(ctx context.Context) []gitignore.Pattern {
+// contextIgnorePath returns the project-global ignore file at
+// ~/.context/.contextignore, matching the discovery package's loader. It returns
+// an empty path when the home directory cannot be resolved; AddFromFile treats
+// an empty or missing path as a no-op.
+func contextIgnorePath(ctx context.Context) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		slog.WarnContext(ctx, "indexability: resolve home directory failed", "err", err)
-		return nil
+		return ""
 	}
-	lines := readIgnoreLines(ctx, filepath.Join(home, ".context", ".contextignore"))
-	return parsePatterns(lines, nil)
+	return filepath.Join(home, ".context", ".contextignore")
 }
 
-// globalExcludePatterns reads git's global excludes. It honors a
+// addGlobalExcludes adds git's global excludes to matcher. It honors a
 // core.excludesFile configured in $GIT_CONFIG_GLOBAL or ~/.gitconfig and also
-// reads the default ~/.config/git/ignore location.
-func globalExcludePatterns(ctx context.Context) []gitignore.Pattern {
-	patterns := make([]gitignore.Pattern, 0)
+// reads the default ~/.config/git/ignore location, lowest priority first.
+func addGlobalExcludes(ctx context.Context, matcher *gitignore.Matcher) {
 	for _, path := range globalExcludePaths(ctx) {
-		patterns = append(patterns, parsePatterns(readIgnoreLines(ctx, path), nil)...)
+		matcher.AddFromFile(path, "")
 	}
-	return patterns
 }
 
 // globalExcludePaths returns the candidate global excludes files in increasing
 // priority: the default XDG location first, then any configured excludesFile.
+// The default honors git's order: $XDG_CONFIG_HOME/git/ignore when XDG_CONFIG_HOME
+// is set, otherwise ~/.config/git/ignore.
 func globalExcludePaths(ctx context.Context) []string {
 	paths := make([]string, 0, 2)
-	if home, err := os.UserHomeDir(); err == nil {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		paths = append(paths, filepath.Join(xdg, "git", "ignore"))
+	} else if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths, filepath.Join(home, ".config", "git", "ignore"))
 	}
 	if configured := excludesFileFromConfig(ctx); configured != "" {
@@ -369,7 +345,7 @@ func readExcludesFileKey(configPath string) string {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(key), "excludesfile") {
-			return strings.TrimSpace(value)
+			return unquoteConfigValue(strings.TrimSpace(value))
 		}
 	}
 	return ""
@@ -383,6 +359,19 @@ func sectionName(line string) string {
 		return name
 	}
 	return trimmed
+}
+
+// unquoteConfigValue strips one matching pair of surrounding double or single
+// quotes from a git config value, so excludesfile = "~/path" resolves to ~/path.
+func unquoteConfigValue(value string) string {
+	if len(value) >= 2 {
+		first := value[0]
+		last := value[len(value)-1]
+		if (first == '"' || first == '\'') && last == first {
+			return value[1 : len(value)-1]
+		}
+	}
+	return value
 }
 
 // tildeMarker is the leading byte git config uses to abbreviate the user's home
@@ -403,42 +392,6 @@ func expandHome(path string) string {
 		return path
 	}
 	return filepath.Join(home, path[1:])
-}
-
-// readIgnoreLines reads a .gitignore-style file and returns its significant
-// lines, dropping blank lines and comments. A missing file yields no lines.
-func readIgnoreLines(ctx context.Context, path string) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.WarnContext(ctx, "indexability: read ignore file failed", "path", path, "err", err)
-		}
-		return nil
-	}
-	lines := make([]string, 0)
-	for raw := range strings.SplitSeq(string(data), "\n") {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		lines = append(lines, trimmed)
-	}
-	return lines
-}
-
-// parsePatterns parses each line into a go-git pattern bound to domain.
-func parsePatterns(lines []string, domain []string) []gitignore.Pattern {
-	patterns := make([]gitignore.Pattern, 0, len(lines))
-	for _, line := range lines {
-		patterns = append(patterns, gitignore.ParsePattern(line, domain))
-	}
-	return patterns
-}
-
-// contentDenylistPatterns parses the built-in content denylist into root-domain
-// patterns.
-func contentDenylistPatterns() []gitignore.Pattern {
-	return parsePatterns(contentBuiltinPatterns, nil)
 }
 
 // contentBuiltinPatterns is the built-in content denylist: file-extension,
