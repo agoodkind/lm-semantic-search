@@ -923,7 +923,7 @@ func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
 func TestItemSourceAbsencePolicy(t *testing.T) {
 	t.Parallel()
 
-	code := newCodeItemSource(fakeRunner{}, "/repo", defaultIndexConfig(), nil)
+	code := newCodeItemSource(fakeRunner{}, nil, "cb", "/repo", defaultIndexConfig())
 	if code.absencePolicy() != absenceDeleteGuarded {
 		t.Fatalf("code absencePolicy = %v, want absenceDeleteGuarded", code.absencePolicy())
 	}

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
@@ -23,7 +24,7 @@ func TestIndexUsesRequestedLangchainSplitter(t *testing.T) {
 	}
 
 	runner := NewRunner()
-	result, err := runner.Index(context.Background(), tempDirectory, model.IndexConfig{
+	result, err := runner.Index(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, model.IndexConfig{
 		SplitterType:      "langchain",
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
@@ -56,7 +57,7 @@ func TestIndexSkipsInvalidUTF8File(t *testing.T) {
 	}
 
 	runner := NewRunner()
-	result, err := runner.Index(context.Background(), tempDirectory, model.IndexConfig{
+	result, err := runner.Index(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, model.IndexConfig{
 		SplitterType:      "langchain",
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
@@ -193,7 +194,7 @@ func TestIndexOneAndMerkleCaptureAgreeOnEligibleFiles(t *testing.T) {
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
 	}
-	snapshot, _, err := merkle.Capture(context.Background(), tempDirectory, config)
+	snapshot, err := merkle.Capture(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, config)
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}

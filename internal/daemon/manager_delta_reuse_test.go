@@ -21,7 +21,7 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 		})
 		writeDeltaFixtureFile(t, job.CanonicalPath, "added.go", addedContent)
 		manager.runner = deltaReuseRunner(map[string]string{"added.go": addedContent})
-		source := newCodeItemSource(manager.runner, job.CanonicalPath, job.Config, nil).withCollectionName(codebase.CollectionName)
+		source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
 
 		handled := manager.runDeltaSync(context.Background(), job, source)
 		if !handled {
@@ -62,7 +62,7 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 		modifiedContent := "package feature\n\nfunc Modified() string { return \"changed\" }\n"
 		writeDeltaFixtureFile(t, job.CanonicalPath, "feature.go", modifiedContent)
 		manager.runner = deltaReuseRunner(map[string]string{"feature.go": modifiedContent})
-		source := newCodeItemSource(manager.runner, job.CanonicalPath, job.Config, nil).withCollectionName(codebase.CollectionName)
+		source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
 
 		handled := manager.runDeltaSync(context.Background(), job, source)
 		if !handled {
@@ -94,7 +94,7 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 
 		writeDeltaFixtureFile(t, job.CanonicalPath, "document-kind.go", addedContent)
 		manager.runner = deltaReuseRunner(map[string]string{"document-kind.go": addedContent})
-		source := newCodeItemSource(manager.runner, job.CanonicalPath, job.Config, nil).withCollectionName(codebase.CollectionName)
+		source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
 
 		handled := manager.runDeltaSync(context.Background(), job, source)
 		if !handled {
@@ -173,7 +173,7 @@ func newWorktreeDeltaReuseFixture(t *testing.T, loadReuse map[string][]float32) 
 	worktreeCodebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
 	worktreeCodebase.MerkleSnapshotPath = manager.merklePath(worktreeCodebase.ID)
 
-	initialSnapshot, _, err := merkle.Capture(context.Background(), worktreeRoot, cfg)
+	initialSnapshot, err := merkle.Capture(context.Background(), manager.indexability, worktreeCodebase.ID, worktreeRoot, cfg)
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}

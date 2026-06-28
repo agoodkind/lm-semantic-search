@@ -6,35 +6,45 @@ import (
 	"path/filepath"
 	"testing"
 
-	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// TestCodeItemSourceCaptureReportsRules proves one capture both snapshots the
-// tree and hands the resolved ignore rules to the registered callback, so the
-// daemon can persist them without a second walk.
-func TestCodeItemSourceCaptureReportsRules(t *testing.T) {
-	t.Parallel()
+// TestCodeItemSourceCaptureExcludesIgnoredFiles proves a code source capture
+// routes its file set through the indexability resolver: a file a .gitignore
+// excludes never reaches the snapshot, while a tracked source file does. The
+// source no longer reports a resolved rule tree; the resolver owns matching.
+func TestCodeItemSourceCaptureExcludesIgnoredFiles(t *testing.T) {
+	// Isolate HOME and the global git config so the developer's real global
+	// excludes and ~/.context/.contextignore cannot change the verdict. t.Setenv
+	// forbids t.Parallel, so this test runs serially.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "absent-gitconfig"))
 	tempDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tempDir, ".gitignore"), []byte("skipped/\n"), 0o644); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tempDir, "skipped"), 0o755); err != nil {
+		t.Fatalf("mkdir skipped: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "skipped", "ignored.go"), []byte("package skipped\n"), 0o644); err != nil {
+		t.Fatalf("write ignored.go: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(tempDir, "kept.go"), []byte("package x\n"), 0o644); err != nil {
 		t.Fatalf("write kept.go: %v", err)
 	}
 
-	var reported discovery.IgnoreRules
-	source := newCodeItemSource(nil, tempDir, model.IndexConfig{}, func(rules discovery.IgnoreRules) {
-		reported = rules
-	})
+	source := newCodeItemSource(nil, indexability.NewResolver(nil), "cb", tempDir, model.IndexConfig{})
 
-	if _, err := source.capture(context.Background()); err != nil {
+	snapshot, err := source.capture(context.Background())
+	if err != nil {
 		t.Fatalf("capture returned error: %v", err)
 	}
-	if reported.IsEmpty() {
-		t.Fatal("capture did not report the resolved ignore rules")
+	if !snapshot.HasFile("kept.go") {
+		t.Fatal("capture dropped the tracked file kept.go")
 	}
-	if excluded, _, _ := discovery.PathIgnored("skipped/file.go", reported); !excluded {
-		t.Fatal("reported rules do not contain the root .gitignore pattern")
+	if snapshot.HasFile("skipped/ignored.go") {
+		t.Fatal("capture kept a gitignored file the resolver should exclude")
 	}
 }

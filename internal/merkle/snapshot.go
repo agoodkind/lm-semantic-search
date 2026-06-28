@@ -123,28 +123,28 @@ func (snapshot *Snapshot) CoversPath(relativePath string) bool {
 }
 
 // Capture walks a codebase once and records content hashes for the tracked
-// files. The returned rule tree is the walk's resolved ignore rules, handed
-// back so the caller can persist them instead of re-walking.
+// files. The walk lists files through discovery, which defers every scope and
+// ignore decision to internal/indexability; Capture then applies the size and
+// content gates so the snapshot's file set matches the indexer's. The resolver
+// and codebaseID are threaded into discovery so the walk uses the daemon's one
+// shared indexability resolver.
 func Capture(
 	ctx context.Context,
+	resolver *indexability.Resolver,
+	codebaseID string,
 	root string,
-	indexConfig model.IndexConfig,
-) (Snapshot, discovery.IgnoreRules, error) {
-	discoveryResult, err := discovery.Discover(
-		ctx,
-		root,
-		indexConfig.IgnorePatterns,
-		indexConfig.Extensions,
-	)
+	_ model.IndexConfig,
+) (Snapshot, error) {
+	discoveryResult, err := discovery.Discover(ctx, resolver, codebaseID, root)
 	if err != nil {
-		return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("discover sync files under %s: %w", root, err)
+		return Snapshot{}, fmt.Errorf("discover sync files under %s: %w", root, err)
 	}
 
 	files := make(map[string]string, len(discoveryResult.Files))
 	maxFileBytes := indexability.MaxFileBytes()
 	for _, path := range discoveryResult.Files {
 		if err := ctx.Err(); err != nil {
-			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("capture snapshot cancelled: %w", err)
+			return Snapshot{}, fmt.Errorf("capture snapshot cancelled: %w", err)
 		}
 
 		info, err := os.Stat(path)
@@ -157,7 +157,7 @@ func Capture(
 				continue
 			}
 			slog.ErrorContext(ctx, "stat file for snapshot failed", "path", path, "err", err)
-			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("stat file for snapshot %s: %w", path, err)
+			return Snapshot{}, fmt.Errorf("stat file for snapshot %s: %w", path, err)
 		}
 		if keep, _ := indexability.EligibleByStat(info, maxFileBytes); !keep {
 			continue
@@ -169,7 +169,7 @@ func Capture(
 				continue
 			}
 			slog.ErrorContext(ctx, "read file for snapshot failed", "path", path, "err", err)
-			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("read file for snapshot %s: %w", path, err)
+			return Snapshot{}, fmt.Errorf("read file for snapshot %s: %w", path, err)
 		}
 
 		relativePath, err := filepath.Rel(root, path)
@@ -184,7 +184,7 @@ func Capture(
 				"err",
 				err,
 			)
-			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf(
+			return Snapshot{}, fmt.Errorf(
 				"compute snapshot relative path for %s: %w",
 				path,
 				err,
@@ -200,7 +200,7 @@ func Capture(
 	}
 
 	snapshot := Snapshot{ConfigDigest: "", Files: files, Inodes: nil}
-	return snapshot, discoveryResult.Rules, nil
+	return snapshot, nil
 }
 
 func skipReadFailureForSnapshot(path string) bool {

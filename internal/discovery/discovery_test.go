@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/indexability"
 )
 
 func writeFile(t *testing.T, path string, content string) {
@@ -25,11 +27,37 @@ func mkdir(t *testing.T, path string) {
 	}
 }
 
-// TestDiscoverReturnsRulesMatchingEffectiveIgnorePatterns proves the
-// single-pass walk produces verdicts identical to the standalone rules
-// resolver for the same tree.
-func TestDiscoverReturnsRulesMatchingEffectiveIgnorePatterns(t *testing.T) {
-	t.Parallel()
+// isolateHome points HOME and GIT_CONFIG_GLOBAL at empty temp locations so the
+// resolver's global excludes, git config, and ~/.context/.contextignore add
+// nothing and the walk only sees the rules the test writes. It sets process
+// environment, so a test that uses it must not run in parallel.
+func isolateHome(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "absent-gitconfig"))
+}
+
+func relativeFiles(t *testing.T, root string, files []string) []string {
+	t.Helper()
+	out := make([]string, 0, len(files))
+	for _, file := range files {
+		rel, err := filepath.Rel(root, file)
+		if err != nil {
+			t.Fatalf("rel for %s: %v", file, err)
+		}
+		out = append(out, filepath.ToSlash(rel))
+	}
+	slices.Sort(out)
+	return out
+}
+
+// TestDiscoverRoutesIgnoreDecisionsThroughResolver proves the walk lists only
+// the files the indexability resolver keeps in scope: a directory ignore, a
+// glob ignore, and a nested .gitignore all prune their matches, while the
+// .gitignore files themselves and the tracked source files remain.
+func TestDiscoverRoutesIgnoreDecisionsThroughResolver(t *testing.T) {
+	isolateHome(t)
 	tempDir := t.TempDir()
 	writeFile(t, filepath.Join(tempDir, ".gitignore"), "ignored-dir/\n*.tmp\n")
 	mkdir(t, filepath.Join(tempDir, "ignored-dir"))
@@ -41,42 +69,22 @@ func TestDiscoverReturnsRulesMatchingEffectiveIgnorePatterns(t *testing.T) {
 	writeFile(t, filepath.Join(tempDir, "kept.go"), "package x\n")
 	writeFile(t, filepath.Join(tempDir, "scratch.tmp"), "x\n")
 
-	result, err := Discover(context.Background(), tempDir, nil, nil)
+	result, err := Discover(context.Background(), indexability.NewResolver(nil), "cb", tempDir)
 	if err != nil {
 		t.Fatalf("Discover returned error: %v", err)
 	}
-	standalone, err := EffectiveIgnorePatterns(context.Background(), tempDir, nil)
-	if err != nil {
-		t.Fatalf("EffectiveIgnorePatterns returned error: %v", err)
-	}
 
-	candidates := []string{
-		"kept.go", "scratch.tmp", "ignored-dir/inside.go",
-		"nested/local-only.go", "nested/kept.go",
-	}
-	for _, candidate := range candidates {
-		fromWalk, _, _ := PathIgnored(candidate, result.Rules)
-		fromStandalone, _, _ := PathIgnored(candidate, standalone)
-		if fromWalk != fromStandalone {
-			t.Fatalf("verdict for %q diverged: walk=%v standalone=%v", candidate, fromWalk, fromStandalone)
-		}
-	}
-
-	wantFiles := []string{
-		filepath.Join(tempDir, ".gitignore"),
-		filepath.Join(tempDir, "kept.go"),
-		filepath.Join(tempDir, "nested", ".gitignore"),
-		filepath.Join(tempDir, "nested", "kept.go"),
-	}
-	if !slices.Equal(result.Files, wantFiles) {
-		t.Fatalf("Files = %v, want %v", result.Files, wantFiles)
+	got := relativeFiles(t, tempDir, result.Files)
+	want := []string{".gitignore", "kept.go", "nested/.gitignore", "nested/kept.go"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Discover files = %v, want %v", got, want)
 	}
 }
 
 // TestDiscoverDoesNotDescendIntoIgnoredDirectories proves the walk prunes:
 // an unreadable directory that the rules exclude must not fail discovery.
 func TestDiscoverDoesNotDescendIntoIgnoredDirectories(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 	tempDir := t.TempDir()
 	writeFile(t, filepath.Join(tempDir, ".gitignore"), "sealed/\n")
 	mkdir(t, filepath.Join(tempDir, "sealed"))
@@ -86,126 +94,8 @@ func TestDiscoverDoesNotDescendIntoIgnoredDirectories(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(tempDir, "sealed"), 0o755) })
 
-	if _, err := Discover(context.Background(), tempDir, nil, nil); err != nil {
+	if _, err := Discover(context.Background(), indexability.NewResolver(nil), "cb", tempDir); err != nil {
 		t.Fatalf("Discover failed on a pruned unreadable directory: %v", err)
-	}
-}
-
-// TestEffectiveIgnorePatternsReadsNestedGitignore proves the discovery
-// walker picks up patterns declared in a nested .gitignore and scopes them
-// to the directory that owns the file. Patterns at the root and patterns
-// in a subdirectory are both reported through PathIgnored verdicts.
-func TestEffectiveIgnorePatternsReadsNestedGitignore(t *testing.T) {
-	t.Parallel()
-	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".gitignore"), "root-only.txt\n")
-	writeFile(t, filepath.Join(tempDir, "pkg", ".gitignore"), "pkg-only.txt\n")
-	writeFile(t, filepath.Join(tempDir, "pkg", "pkg-only.txt"), "x")
-	writeFile(t, filepath.Join(tempDir, "pkg", "kept.go"), "x")
-
-	rules, err := EffectiveIgnorePatterns(context.Background(), tempDir, nil)
-	if err != nil {
-		t.Fatalf("EffectiveIgnorePatterns returned error: %v", err)
-	}
-	if rules.IsEmpty() {
-		t.Fatal("rules unexpectedly empty after reading two .gitignore files")
-	}
-	if excluded, _, _ := PathIgnored("root-only.txt", rules); !excluded {
-		t.Fatal("root pattern did not exclude root-only.txt")
-	}
-	if excluded, _, _ := PathIgnored("pkg/pkg-only.txt", rules); !excluded {
-		t.Fatal("nested pattern did not exclude pkg/pkg-only.txt")
-	}
-	if excluded, _, _ := PathIgnored("pkg/kept.go", rules); excluded {
-		t.Fatal("nested pattern unexpectedly excluded pkg/kept.go")
-	}
-}
-
-// TestPathIgnoredLastMatchWins exercises the rule that the final matching
-// pattern in declaration order determines the verdict; a negation pattern
-// declared after an exclusion pattern flips the result back to included.
-func TestPathIgnoredLastMatchWins(t *testing.T) {
-	t.Parallel()
-	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".gitignore"), "*.txt\n!keep.txt\n")
-	rules, err := EffectiveIgnorePatterns(context.Background(), tempDir, nil)
-	if err != nil {
-		t.Fatalf("EffectiveIgnorePatterns returned error: %v", err)
-	}
-	if excluded, _, _ := PathIgnored("trash.txt", rules); !excluded {
-		t.Fatal("expected trash.txt to be excluded by *.txt")
-	}
-	if excluded, _, _ := PathIgnored("keep.txt", rules); excluded {
-		t.Fatal("expected keep.txt to be re-included by !keep.txt")
-	}
-}
-
-// TestPathIgnoredDirectoryExclusionBlocksNegation proves Git's
-// directory-exclusion rule: once an ancestor directory is excluded by an
-// unnegated pattern, a negation pattern on a descendant cannot re-include
-// the file.
-func TestPathIgnoredDirectoryExclusionBlocksNegation(t *testing.T) {
-	t.Parallel()
-	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".gitignore"), "dropme/\n!dropme/secret.txt\n")
-	rules, err := EffectiveIgnorePatterns(context.Background(), tempDir, nil)
-	if err != nil {
-		t.Fatalf("EffectiveIgnorePatterns returned error: %v", err)
-	}
-	excluded, matched, _ := PathIgnored("dropme/secret.txt", rules)
-	if !excluded {
-		t.Fatalf("expected dropme/secret.txt to stay excluded under directory rule (matched=%q)", matched)
-	}
-}
-
-// TestPathIgnoredReportsMatchedPatternAndSource verifies the second and
-// third return of PathIgnored: the matched pattern (raw text) and the
-// source label.
-func TestPathIgnoredReportsMatchedPatternAndSource(t *testing.T) {
-	t.Parallel()
-	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".gitignore"), "logs/\n")
-	rules, err := EffectiveIgnorePatterns(context.Background(), tempDir, nil)
-	if err != nil {
-		t.Fatalf("EffectiveIgnorePatterns returned error: %v", err)
-	}
-	excluded, matched, source := PathIgnored("logs/app.log", rules)
-	if !excluded {
-		t.Fatal("expected logs/app.log to be excluded")
-	}
-	if matched == "" {
-		t.Fatal("matched pattern was empty")
-	}
-	if source == "" {
-		t.Fatal("source label was empty")
-	}
-}
-
-// TestPathIgnoredOutsideRulesReturnsFalse proves a path with no ignore
-// rules tree returns (false, "", "") and never panics.
-func TestPathIgnoredOutsideRulesReturnsFalse(t *testing.T) {
-	t.Parallel()
-	excluded, matched, source := PathIgnored("any/file", IgnoreRules{Nodes: nil})
-	if excluded {
-		t.Fatal("empty rules unexpectedly excluded a path")
-	}
-	if matched != "" || source != "" {
-		t.Fatalf("empty rules returned non-empty match: pattern=%q source=%q", matched, source)
-	}
-}
-
-// TestEffectiveIgnorePatternsAdditionalOverrides confirms user overrides
-// are recorded in the root node alongside the built-in defaults so an
-// override like "research/" is picked up without a .gitignore on disk.
-func TestEffectiveIgnorePatternsAdditionalOverrides(t *testing.T) {
-	t.Parallel()
-	tempDir := t.TempDir()
-	rules, err := EffectiveIgnorePatterns(context.Background(), tempDir, []string{"research/"})
-	if err != nil {
-		t.Fatalf("EffectiveIgnorePatterns returned error: %v", err)
-	}
-	if excluded, _, _ := PathIgnored("research/file.txt", rules); !excluded {
-		t.Fatal("override pattern did not exclude research/file.txt")
 	}
 }
 
@@ -214,7 +104,7 @@ func TestEffectiveIgnorePatternsAdditionalOverrides(t *testing.T) {
 // root, so worktree files never leak into the parent index, while a submodule
 // (a different common dir) keeps today's behavior of being included.
 func TestDiscoverExcludesNestedSameRepoWorktree(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 	repo := filepath.Join(t.TempDir(), "repo")
 
 	// main worktree
@@ -229,13 +119,13 @@ func TestDiscoverExcludesNestedSameRepoWorktree(t *testing.T) {
 	writeFile(t, filepath.Join(repo, "wt", ".git"), "gitdir: "+perWorktree+"\n")
 	writeFile(t, filepath.Join(repo, "wt", "feature.go"), "package feature\n")
 
-	// nested submodule (a different common dir) at repo/vendor/lib
+	// nested submodule (a different common dir) at repo/extern/lib
 	moduleGitDir := filepath.Join(repo, ".git", "modules", "lib")
 	writeFile(t, filepath.Join(moduleGitDir, "HEAD"), "ref: refs/heads/main\n")
 	writeFile(t, filepath.Join(repo, "extern", "lib", ".git"), "gitdir: "+moduleGitDir+"\n")
 	writeFile(t, filepath.Join(repo, "extern", "lib", "sub.go"), "package lib\n")
 
-	result, err := Discover(context.Background(), repo, nil, nil)
+	result, err := Discover(context.Background(), indexability.NewResolver(nil), "cb", repo)
 	if err != nil {
 		t.Fatalf("Discover returned error: %v", err)
 	}

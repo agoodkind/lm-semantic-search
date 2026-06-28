@@ -3,8 +3,6 @@ package model
 
 import (
 	"time"
-
-	"goodkind.io/lm-semantic-search/internal/discovery"
 )
 
 // CodebaseStatus captures the lifecycle state of one tracked codebase.
@@ -199,12 +197,6 @@ type IndexRunFailure struct {
 
 // Codebase records one canonical indexed codebase.
 //
-// ResolvedIgnoreRules is the runtime cache of the ignore rules that apply to
-// this codebase. The discovery package computes it at registration and on
-// periodic sync; the field is not persisted because it is derived from disk
-// (built-in defaults, nested .gitignore files, repo ignore files, global
-// ~/.context/.contextignore, and user overrides).
-//
 // InodeTrackingDisabled records that the root filesystem reported unstable
 // inodes at registration time. When true, convergence falls back to
 // path-only file tracking instead of (device, inode, contentHash).
@@ -229,10 +221,9 @@ type Codebase struct {
 	// is a linked git worktree, else empty. It lets the daemon recognize a
 	// removed worktree (git deleted its admin entry) after the directory is gone
 	// and auto-clean the disposable index.
-	WorktreeCommonDir     string                `json:"worktree_common_dir,omitempty"`
-	InodeTrackingDisabled bool                  `json:"inode_tracking_disabled,omitempty"`
-	ResolvedIgnoreRules   discovery.IgnoreRules `json:"-"`
-	UpdatedAt             time.Time             `json:"updated_at"`
+	WorktreeCommonDir     string    `json:"worktree_common_dir,omitempty"`
+	InodeTrackingDisabled bool      `json:"inode_tracking_disabled,omitempty"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 // QuarantineState records why destructive sync is paused for a codebase and

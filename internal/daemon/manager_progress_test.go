@@ -103,7 +103,7 @@ func TestCodeItemReuseLoadsExactPath(t *testing.T) {
 	}
 	manager.semantic = fake
 
-	source := newCodeItemSource(manager.runner, "/tmp/code", defaultIndexConfig(), nil).withCollectionName("code_chunks_live")
+	source := newCodeItemSource(manager.runner, manager.indexability, "cb", "/tmp/code", defaultIndexConfig()).withCollectionName("code_chunks_live")
 	state := deltaState{
 		source:      source,
 		semantic:    true,
@@ -147,7 +147,7 @@ func TestItemReuseSkipsPerFileLoadsDuringBootstrap(t *testing.T) {
 	}
 	manager.semantic = fake
 
-	source := newCodeItemSource(manager.runner, "/tmp/code", defaultIndexConfig(), nil).withCollectionName("code_chunks_live")
+	source := newCodeItemSource(manager.runner, manager.indexability, "cb", "/tmp/code", defaultIndexConfig()).withCollectionName("code_chunks_live")
 	state := deltaState{
 		source:      source,
 		semantic:    true,

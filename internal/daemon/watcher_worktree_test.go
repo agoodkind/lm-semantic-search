@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -63,9 +62,8 @@ func slicesContains(paths []string, want string) bool {
 
 func parentCodebase(root string) model.Codebase {
 	return model.Codebase{
-		ID:                  "cb_parent",
-		CanonicalPath:       root,
-		ResolvedIgnoreRules: discovery.IgnoreRules{Nodes: nil},
+		ID:            "cb_parent",
+		CanonicalPath: root,
 	}
 }
 
@@ -116,9 +114,8 @@ func TestDispatchRegisteredWorktreeRoutesToWorktree(t *testing.T) {
 	watcher, snapshot := newRecordingWatcher(t, manager)
 	watcher.AddCodebase(context.Background(), parentCodebase(mainRoot))
 	watcher.AddCodebase(context.Background(), model.Codebase{
-		ID:                  "cb_worktree",
-		CanonicalPath:       worktreeDir,
-		ResolvedIgnoreRules: discovery.IgnoreRules{Nodes: nil},
+		ID:            "cb_worktree",
+		CanonicalPath: worktreeDir,
 	})
 
 	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(worktreeDir, "feature.go")})

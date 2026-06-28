@@ -177,9 +177,10 @@ func (watcher *Watcher) dispatch(ctx context.Context, event notify.EventInfo) {
 		// Decide scope and ignore without file info, so delete and rename events
 		// (where os.Lstat fails) are filtered too. Otherwise .git lock-file churn
 		// would enqueue on removal. The size gate is left to converge and the
-		// indexer; the watcher only needs the ignore and scope verdict.
-		isDir := statErr == nil && info.IsDir()
-		if watcher.manager.indexability.Ignored(ctx, root.codebaseID, root.root, relativePath, isDir) {
+		// indexer; the watcher only needs the ignore and scope verdict. Directory
+		// events already returned above, so isDir is false here; pathIgnored's
+		// ancestor walk still excludes paths under an ignored directory.
+		if watcher.manager.indexability.Ignored(ctx, root.codebaseID, root.root, relativePath, false) {
 			continue
 		}
 		watcher.queue.Enqueue(root.codebaseID, relativePath)
