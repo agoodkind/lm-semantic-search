@@ -128,7 +128,6 @@ func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMod
 			mcp.WithString("absolutePath", mcp.Required(), mcp.Description("absolute path to the codebase directory")),
 			mcp.WithBoolean("force", mcp.Description("force reindex even if already indexed")),
 			mcp.WithString("splitter", mcp.Description("splitter type, typically ast")),
-			mcp.WithArray("customExtensions", mcp.Description("extra file extensions to include"), mcp.WithStringItems()),
 			mcp.WithArray("ignorePatterns", mcp.Description("extra ignore patterns to exclude"), mcp.WithStringItems()),
 			mcp.WithBoolean("wait", mcp.Description("block this tool call until the indexing job reaches a terminal state (completed, failed, or canceled)")),
 			mcp.WithNumber("wait_timeout_seconds", mcp.Description("max seconds to wait when wait=true; on timeout the daemon job keeps running and the tool returns the current progress (default 300)")),
@@ -139,12 +138,11 @@ func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMod
 				return errResult, nil
 			}
 			startRequest := &pb.StartIndexRequest{
-				Path:             absolutePath,
-				Force:            req.GetBool("force", false),
-				CustomExtensions: req.GetStringSlice("customExtensions", []string{}),
-				IgnorePatterns:   req.GetStringSlice("ignorePatterns", []string{}),
-				Splitter:         &pb.SplitterConfig{Type: req.GetString("splitter", "")},
-				Client:           mcpClientInfo(),
+				Path:           absolutePath,
+				Force:          req.GetBool("force", false),
+				IgnorePatterns: req.GetStringSlice("ignorePatterns", []string{}),
+				Splitter:       &pb.SplitterConfig{Type: req.GetString("splitter", "")},
+				Client:         mcpClientInfo(),
 			}
 			if !req.GetBool("wait", false) {
 				return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {

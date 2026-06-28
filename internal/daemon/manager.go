@@ -263,7 +263,6 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 			SplitterType:       "",
 			SplitterChunkSize:  0,
 			SplitterOverlap:    0,
-			Extensions:         nil,
 			IgnorePatterns:     nil,
 			IgnoreDigest:       "",
 			EmbeddingProvider:  "",

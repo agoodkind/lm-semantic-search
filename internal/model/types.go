@@ -91,7 +91,6 @@ type IndexConfig struct {
 	SplitterType       string   `json:"splitter_type"`
 	SplitterChunkSize  int32    `json:"splitter_chunk_size"`
 	SplitterOverlap    int32    `json:"splitter_overlap"`
-	Extensions         []string `json:"extensions,omitempty"`
 	IgnorePatterns     []string `json:"ignore_patterns,omitempty"`
 	IgnoreDigest       string   `json:"ignore_digest"`
 	EmbeddingProvider  string   `json:"embedding_provider,omitempty"`

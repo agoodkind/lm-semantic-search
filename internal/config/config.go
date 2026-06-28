@@ -57,7 +57,6 @@ type Config struct {
 	// QueryInstructionPrefix is prepended to query-time embedding text only.
 	// Stored document vectors are embedded bare and stay valid.
 	QueryInstructionPrefix string
-	CustomExtensions       []string
 	CustomIgnorePatterns   []string
 	MilvusAddress          string
 	MilvusToken            string
@@ -174,7 +173,6 @@ func Default() (Config, error) {
 		OpenAIAPIKey:              envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
 		OpenAIBaseURL:             envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),
 		QueryInstructionPrefix:    queryPrefix,
-		CustomExtensions:          parseCommaSeparated(os.Getenv("CUSTOM_EXTENSIONS")),
 		CustomIgnorePatterns:      parseCommaSeparated(os.Getenv("CUSTOM_IGNORE_PATTERNS")),
 		MilvusAddress:             envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),
 		MilvusToken:               envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),

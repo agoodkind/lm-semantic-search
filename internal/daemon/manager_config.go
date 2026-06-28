@@ -90,7 +90,6 @@ func (manager *Manager) enrichIndexConfig(indexConfig model.IndexConfig) model.I
 	}
 	indexConfig.VectorBackend = "milvus"
 	indexConfig.Hybrid = manager.config.HybridMode
-	indexConfig.Extensions = mergeDistinct(indexConfig.Extensions, manager.config.CustomExtensions)
 	indexConfig.IgnorePatterns = mergeDistinct(indexConfig.IgnorePatterns, manager.config.CustomIgnorePatterns)
 	return indexConfig
 }
