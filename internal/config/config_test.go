@@ -73,20 +73,16 @@ OPENAI_API_KEY='sk-fromfile'
 	}
 }
 
-func TestDefaultReadsCustomExtensionAndIgnoreEnvVars(t *testing.T) {
+func TestDefaultReadsCustomIgnoreEnvVar(t *testing.T) {
 	tempState := t.TempDir()
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	t.Setenv("CLAUDE_CONTEXTD_STATE_ROOT", tempState)
-	t.Setenv("CUSTOM_EXTENSIONS", ".toml,.yaml")
 	t.Setenv("CUSTOM_IGNORE_PATTERNS", "vendor/**, third_party/**")
 
 	cfg, err := Default()
 	if err != nil {
 		t.Fatalf("Default returned error: %v", err)
-	}
-	if !reflect.DeepEqual(cfg.CustomExtensions, []string{".toml", ".yaml"}) {
-		t.Errorf("CustomExtensions = %#v", cfg.CustomExtensions)
 	}
 	if !reflect.DeepEqual(cfg.CustomIgnorePatterns, []string{"vendor/**", "third_party/**"}) {
 		t.Errorf("CustomIgnorePatterns = %#v", cfg.CustomIgnorePatterns)

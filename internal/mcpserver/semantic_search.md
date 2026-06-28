@@ -70,14 +70,14 @@ comma-separated string.
 - get_indexing_status(absolutePath: string) reports status and file or chunk
   counts.
 - index_codebase(absolutePath: string, force?: boolean, splitter?: string,
-  customExtensions?: string[], ignorePatterns?: string[], wait?: boolean,
+  ignorePatterns?: string[], wait?: boolean,
   wait_timeout_seconds?: number) bootstraps the index when the codebase is not
   tracked, or runs a streaming reindex against the existing Milvus collection
   when the codebase is already indexed with a different config or when
   force=true. The streaming path replaces chunks file by file so search results
-  stay available throughout the upgrade. `customExtensions` and `ignorePatterns`
-  are string arrays. When `wait` is true the call blocks until the job reaches a
-  terminal state or `wait_timeout_seconds` (default 300) elapses, after which it
-  returns current progress while the job keeps running.
+  stay available throughout the upgrade. `ignorePatterns` is a string array of
+  extra ignore patterns to exclude. When `wait` is true the call blocks until the
+  job reaches a terminal state or `wait_timeout_seconds` (default 300) elapses,
+  after which it returns current progress while the job keeps running.
 - clear_index(absolutePath: string) removes the index and should only be used
   when the user explicitly wants a full wipe.

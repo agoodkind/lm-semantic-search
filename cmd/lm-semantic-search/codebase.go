@@ -82,7 +82,6 @@ func newCodebaseStatusCmd(options *rootOptions) *cobra.Command {
 func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 	var force bool
 	var splitterType string
-	var customExtensions []string
 	var ignorePatterns []string
 	var waitTimeout time.Duration
 
@@ -111,11 +110,10 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 				return errors.New("--wait requires human output mode")
 			}
 			request := &pb.StartIndexRequest{
-				Path:             args[0],
-				Force:            force,
-				CustomExtensions: customExtensions,
-				IgnorePatterns:   ignorePatterns,
-				Client:           clientInfo,
+				Path:           args[0],
+				Force:          force,
+				IgnorePatterns: ignorePatterns,
+				Client:         clientInfo,
 			}
 			if splitterType != "" {
 				request.Splitter = &pb.SplitterConfig{Type: splitterType}
@@ -141,7 +139,6 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "force reindex even if already indexed")
 	cmd.Flags().StringVar(&splitterType, "splitter", "", "splitter type: ast|langchain")
-	cmd.Flags().StringArrayVar(&customExtensions, "extension", nil, "custom file extension to include")
 	cmd.Flags().StringArrayVar(&ignorePatterns, "ignore", nil, "ignore pattern to exclude")
 	cmd.Flags().DurationVar(&waitTimeout, "wait", 0, "attach to the job and render progress; value needs the = form (--wait=30s), bare --wait uses 5m")
 	cmd.Flags().Lookup("wait").NoOptDefVal = "5m"

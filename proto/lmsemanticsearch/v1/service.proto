@@ -66,14 +66,13 @@ message IndexConfig {
   string splitter_type = 1;
   int32 splitter_chunk_size = 2;
   int32 splitter_overlap = 3;
-  repeated string extensions = 4;
-  repeated string ignore_patterns = 5;
-  string ignore_digest = 6;
-  string embedding_provider = 7;
-  string embedding_model = 8;
-  int32 embedding_dimension = 9;
-  string vector_backend = 10;
-  bool hybrid = 11;
+  repeated string ignore_patterns = 4;
+  string ignore_digest = 5;
+  string embedding_provider = 6;
+  string embedding_model = 7;
+  int32 embedding_dimension = 8;
+  string vector_backend = 9;
+  bool hybrid = 10;
 }
 
 message Progress {
@@ -294,9 +293,8 @@ message StartIndexRequest {
   string path = 1;
   bool force = 2;
   SplitterConfig splitter = 3;
-  repeated string custom_extensions = 4;
-  repeated string ignore_patterns = 5;
-  ClientInfo client = 6;
+  repeated string ignore_patterns = 4;
+  ClientInfo client = 5;
 }
 
 message StartIndexResponse {

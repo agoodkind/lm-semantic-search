@@ -26,7 +26,7 @@ import (
 func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonicalPath string) (model.Codebase, bool) {
 	indexConfig := manager.enrichIndexConfig(model.IndexConfig{
 		SplitterType: "", SplitterChunkSize: 0, SplitterOverlap: 0,
-		Extensions: nil, IgnorePatterns: nil, IgnoreDigest: "",
+		IgnorePatterns: nil, IgnoreDigest: "",
 		EmbeddingProvider: "", EmbeddingModel: "", EmbeddingDimension: 0,
 		VectorBackend: "", Hybrid: false,
 	})

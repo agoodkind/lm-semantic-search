@@ -266,7 +266,7 @@ func isSameRepoSiblingWorktree(parentPath string, childPath string) bool {
 func emptyAutoIndexConfig() model.IndexConfig {
 	return model.IndexConfig{
 		SplitterType: "", SplitterChunkSize: 0, SplitterOverlap: 0,
-		Extensions: nil, IgnorePatterns: nil, IgnoreDigest: "",
+		IgnorePatterns: nil, IgnoreDigest: "",
 		EmbeddingProvider: "", EmbeddingModel: "", EmbeddingDimension: 0,
 		VectorBackend: "", Hybrid: false,
 	}

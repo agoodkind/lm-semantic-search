@@ -371,14 +371,13 @@ type IndexConfig struct {
 	SplitterType       string                 `protobuf:"bytes,1,opt,name=splitter_type,json=splitterType,proto3" json:"splitter_type,omitempty"`
 	SplitterChunkSize  int32                  `protobuf:"varint,2,opt,name=splitter_chunk_size,json=splitterChunkSize,proto3" json:"splitter_chunk_size,omitempty"`
 	SplitterOverlap    int32                  `protobuf:"varint,3,opt,name=splitter_overlap,json=splitterOverlap,proto3" json:"splitter_overlap,omitempty"`
-	Extensions         []string               `protobuf:"bytes,4,rep,name=extensions,proto3" json:"extensions,omitempty"`
-	IgnorePatterns     []string               `protobuf:"bytes,5,rep,name=ignore_patterns,json=ignorePatterns,proto3" json:"ignore_patterns,omitempty"`
-	IgnoreDigest       string                 `protobuf:"bytes,6,opt,name=ignore_digest,json=ignoreDigest,proto3" json:"ignore_digest,omitempty"`
-	EmbeddingProvider  string                 `protobuf:"bytes,7,opt,name=embedding_provider,json=embeddingProvider,proto3" json:"embedding_provider,omitempty"`
-	EmbeddingModel     string                 `protobuf:"bytes,8,opt,name=embedding_model,json=embeddingModel,proto3" json:"embedding_model,omitempty"`
-	EmbeddingDimension int32                  `protobuf:"varint,9,opt,name=embedding_dimension,json=embeddingDimension,proto3" json:"embedding_dimension,omitempty"`
-	VectorBackend      string                 `protobuf:"bytes,10,opt,name=vector_backend,json=vectorBackend,proto3" json:"vector_backend,omitempty"`
-	Hybrid             bool                   `protobuf:"varint,11,opt,name=hybrid,proto3" json:"hybrid,omitempty"`
+	IgnorePatterns     []string               `protobuf:"bytes,4,rep,name=ignore_patterns,json=ignorePatterns,proto3" json:"ignore_patterns,omitempty"`
+	IgnoreDigest       string                 `protobuf:"bytes,5,opt,name=ignore_digest,json=ignoreDigest,proto3" json:"ignore_digest,omitempty"`
+	EmbeddingProvider  string                 `protobuf:"bytes,6,opt,name=embedding_provider,json=embeddingProvider,proto3" json:"embedding_provider,omitempty"`
+	EmbeddingModel     string                 `protobuf:"bytes,7,opt,name=embedding_model,json=embeddingModel,proto3" json:"embedding_model,omitempty"`
+	EmbeddingDimension int32                  `protobuf:"varint,8,opt,name=embedding_dimension,json=embeddingDimension,proto3" json:"embedding_dimension,omitempty"`
+	VectorBackend      string                 `protobuf:"bytes,9,opt,name=vector_backend,json=vectorBackend,proto3" json:"vector_backend,omitempty"`
+	Hybrid             bool                   `protobuf:"varint,10,opt,name=hybrid,proto3" json:"hybrid,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -432,13 +431,6 @@ func (x *IndexConfig) GetSplitterOverlap() int32 {
 		return x.SplitterOverlap
 	}
 	return 0
-}
-
-func (x *IndexConfig) GetExtensions() []string {
-	if x != nil {
-		return x.Extensions
-	}
-	return nil
 }
 
 func (x *IndexConfig) GetIgnorePatterns() []string {
@@ -1764,15 +1756,14 @@ func (x *ConversationSearchResult) GetParentConversationId() string {
 }
 
 type StartIndexRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Path             string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Force            bool                   `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
-	Splitter         *SplitterConfig        `protobuf:"bytes,3,opt,name=splitter,proto3" json:"splitter,omitempty"`
-	CustomExtensions []string               `protobuf:"bytes,4,rep,name=custom_extensions,json=customExtensions,proto3" json:"custom_extensions,omitempty"`
-	IgnorePatterns   []string               `protobuf:"bytes,5,rep,name=ignore_patterns,json=ignorePatterns,proto3" json:"ignore_patterns,omitempty"`
-	Client           *ClientInfo            `protobuf:"bytes,6,opt,name=client,proto3" json:"client,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Path           string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Force          bool                   `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	Splitter       *SplitterConfig        `protobuf:"bytes,3,opt,name=splitter,proto3" json:"splitter,omitempty"`
+	IgnorePatterns []string               `protobuf:"bytes,4,rep,name=ignore_patterns,json=ignorePatterns,proto3" json:"ignore_patterns,omitempty"`
+	Client         *ClientInfo            `protobuf:"bytes,5,opt,name=client,proto3" json:"client,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StartIndexRequest) Reset() {
@@ -1822,13 +1813,6 @@ func (x *StartIndexRequest) GetForce() bool {
 func (x *StartIndexRequest) GetSplitter() *SplitterConfig {
 	if x != nil {
 		return x.Splitter
-	}
-	return nil
-}
-
-func (x *StartIndexRequest) GetCustomExtensions() []string {
-	if x != nil {
-		return x.CustomExtensions
 	}
 	return nil
 }
@@ -4772,22 +4756,19 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1d\n" +
 	"\n" +
 	"chunk_size\x18\x02 \x01(\x05R\tchunkSize\x12\x18\n" +
-	"\aoverlap\x18\x03 \x01(\x05R\aoverlap\"\xc3\x03\n" +
+	"\aoverlap\x18\x03 \x01(\x05R\aoverlap\"\xa3\x03\n" +
 	"\vIndexConfig\x12#\n" +
 	"\rsplitter_type\x18\x01 \x01(\tR\fsplitterType\x12.\n" +
 	"\x13splitter_chunk_size\x18\x02 \x01(\x05R\x11splitterChunkSize\x12)\n" +
-	"\x10splitter_overlap\x18\x03 \x01(\x05R\x0fsplitterOverlap\x12\x1e\n" +
-	"\n" +
-	"extensions\x18\x04 \x03(\tR\n" +
-	"extensions\x12'\n" +
-	"\x0fignore_patterns\x18\x05 \x03(\tR\x0eignorePatterns\x12#\n" +
-	"\rignore_digest\x18\x06 \x01(\tR\fignoreDigest\x12-\n" +
-	"\x12embedding_provider\x18\a \x01(\tR\x11embeddingProvider\x12'\n" +
-	"\x0fembedding_model\x18\b \x01(\tR\x0eembeddingModel\x12/\n" +
-	"\x13embedding_dimension\x18\t \x01(\x05R\x12embeddingDimension\x12%\n" +
-	"\x0evector_backend\x18\n" +
-	" \x01(\tR\rvectorBackend\x12\x16\n" +
-	"\x06hybrid\x18\v \x01(\bR\x06hybrid\"\x96\x06\n" +
+	"\x10splitter_overlap\x18\x03 \x01(\x05R\x0fsplitterOverlap\x12'\n" +
+	"\x0fignore_patterns\x18\x04 \x03(\tR\x0eignorePatterns\x12#\n" +
+	"\rignore_digest\x18\x05 \x01(\tR\fignoreDigest\x12-\n" +
+	"\x12embedding_provider\x18\x06 \x01(\tR\x11embeddingProvider\x12'\n" +
+	"\x0fembedding_model\x18\a \x01(\tR\x0eembeddingModel\x12/\n" +
+	"\x13embedding_dimension\x18\b \x01(\x05R\x12embeddingDimension\x12%\n" +
+	"\x0evector_backend\x18\t \x01(\tR\rvectorBackend\x12\x16\n" +
+	"\x06hybrid\x18\n" +
+	" \x01(\bR\x06hybrid\"\x96\x06\n" +
 	"\bProgress\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12#\n" +
 	"\rphase_percent\x18\x02 \x01(\x01R\fphasePercent\x12'\n" +
@@ -4912,14 +4893,13 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
 	"\acontent\x18\x06 \x01(\tR\acontent\x124\n" +
-	"\x16parent_conversation_id\x18\a \x01(\tR\x14parentConversationId\"\x8d\x02\n" +
+	"\x16parent_conversation_id\x18\a \x01(\tR\x14parentConversationId\"\xe0\x01\n" +
 	"\x11StartIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x12?\n" +
-	"\bsplitter\x18\x03 \x01(\v2#.lmsemanticsearch.v1.SplitterConfigR\bsplitter\x12+\n" +
-	"\x11custom_extensions\x18\x04 \x03(\tR\x10customExtensions\x12'\n" +
-	"\x0fignore_patterns\x18\x05 \x03(\tR\x0eignorePatterns\x127\n" +
-	"\x06client\x18\x06 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\x82\x02\n" +
+	"\bsplitter\x18\x03 \x01(\v2#.lmsemanticsearch.v1.SplitterConfigR\bsplitter\x12'\n" +
+	"\x0fignore_patterns\x18\x04 \x03(\tR\x0eignorePatterns\x127\n" +
+	"\x06client\x18\x05 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\x82\x02\n" +
 	"\x12StartIndexResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
