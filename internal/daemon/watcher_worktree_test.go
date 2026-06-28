@@ -87,8 +87,8 @@ func TestDispatchSkipsUnregisteredSameRepoWorktree(t *testing.T) {
 	watcher.AddCodebase(context.Background(), parentCodebase(mainRoot))
 
 	// Event for a real worktree file, then a sentinel event for a real parent file.
-	watcher.dispatch(stubNotifyEvent{path: filepath.Join(worktreeDir, "feature.go")})
-	watcher.dispatch(stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(worktreeDir, "feature.go")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")})
 
 	paths := waitForRelativePath(t, snapshot, "cb_parent", "main.go")
 	if !slicesContains(paths, "main.go") {
@@ -121,8 +121,8 @@ func TestDispatchRegisteredWorktreeRoutesToWorktree(t *testing.T) {
 		ResolvedIgnoreRules: discovery.IgnoreRules{Nodes: nil},
 	})
 
-	watcher.dispatch(stubNotifyEvent{path: filepath.Join(worktreeDir, "feature.go")})
-	watcher.dispatch(stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(worktreeDir, "feature.go")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")})
 
 	worktreePaths := waitForRelativePath(t, snapshot, "cb_worktree", "feature.go")
 	if !slicesContains(worktreePaths, "feature.go") {
@@ -155,7 +155,7 @@ func TestDispatchSubmoduleStillEnqueuesForParent(t *testing.T) {
 	watcher, snapshot := newRecordingWatcher(t, manager)
 	watcher.AddCodebase(context.Background(), parentCodebase(mainRoot))
 
-	watcher.dispatch(stubNotifyEvent{path: filepath.Join(subModuleDir, "lib.go")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(subModuleDir, "lib.go")})
 
 	want := filepath.ToSlash(filepath.Join("vendor", "lib", "lib.go"))
 	paths := waitForRelativePath(t, snapshot, "cb_parent", want)

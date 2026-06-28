@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 
-	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -108,8 +107,8 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 //
 // The decision routine:
 //
-//  1. PathIgnored rules trump everything; a tracked path that has
-//     become excluded is removed.
+//  1. The indexability resolver gates a present path first; a tracked
+//     path that has become excluded, out of scope, or oversize is removed.
 //  2. A missing file is removed.
 //  3. A file whose (device, inode) matches a different path already in
 //     the snapshot with the same content hash is treated as a rename or
@@ -124,21 +123,14 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Codebase, relativePath string, snapshot *merkle.Snapshot) bool {
 	root := codebase.CanonicalPath
 	cfg := codebase.EffectiveConfig
-	rules := codebase.ResolvedIgnoreRules
 
-	if excluded, matchedPattern, gitignoreSource := discovery.PathIgnored(relativePath, rules); excluded {
-		if !snapshot.HasFile(relativePath) {
-			return false
+	// A path present on disk runs the indexability gate first: a tracked path
+	// that has become excluded, out of scope, or oversize is removed. A stat
+	// miss falls through to the IndexOne path below, which reports the removal.
+	if info, statErr := os.Stat(filepath.Join(root, relativePath)); statErr == nil {
+		if decision := manager.indexability.Decide(ctx, codebase.ID, root, relativePath, info); !decision.Indexed {
+			return manager.convergeRemoveExcluded(ctx, root, relativePath, string(decision.Reason), snapshot)
 		}
-		if rmErr := manager.semantic.Reindex(ctx, root, nil, semantic.RemovePaths([]string{relativePath}), nil, nil); rmErr != nil {
-			manager.logConvergeReindexErr(ctx, relativePath, "remove_excluded", rmErr)
-			return false
-		}
-		delete(snapshot.Files, relativePath)
-		snapshot.ForgetInode(relativePath)
-		metrics.ConvergeRemove()
-		slog.InfoContext(ctx, "converge.remove_excluded", "component", "daemon", "subcomponent", "converge", "path", relativePath, "matched_pattern", matchedPattern, "gitignore", gitignoreSource)
-		return true
 	}
 	fileResult, indexErr := manager.runner.IndexOne(ctx, root, relativePath, cfg)
 	if indexErr != nil {
@@ -186,6 +178,24 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 	snapshot.RecordInode(relativePath, currentInode)
 	metrics.ConvergeUpsert()
 	slog.InfoContext(ctx, "converge.upsert", "component", "daemon", "subcomponent", "converge", "path", relativePath, "chunks", len(fileResult.Chunks))
+	return true
+}
+
+// convergeRemoveExcluded removes a path the indexability resolver declined and
+// updates the snapshot to match. It returns true when the snapshot was mutated.
+// reason names the gate that declined the path and is logged for diagnosis.
+func (manager *Manager) convergeRemoveExcluded(ctx context.Context, root string, relativePath string, reason string, snapshot *merkle.Snapshot) bool {
+	if !snapshot.HasFile(relativePath) {
+		return false
+	}
+	if rmErr := manager.semantic.Reindex(ctx, root, nil, semantic.RemovePaths([]string{relativePath}), nil, nil); rmErr != nil {
+		manager.logConvergeReindexErr(ctx, relativePath, "remove_excluded", rmErr)
+		return false
+	}
+	delete(snapshot.Files, relativePath)
+	snapshot.ForgetInode(relativePath)
+	metrics.ConvergeRemove()
+	slog.InfoContext(ctx, "converge.remove_excluded", "component", "daemon", "subcomponent", "converge", "path", relativePath, "reason", reason)
 	return true
 }
 

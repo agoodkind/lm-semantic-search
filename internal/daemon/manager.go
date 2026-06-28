@@ -19,6 +19,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
+	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -91,6 +92,10 @@ type Manager struct {
 	lastDepProbeAt time.Time
 	// deferredBuildDelay is the post-discovery wait before a worktree build starts; settable so a test can keep the timer from firing mid-test.
 	deferredBuildDelay time.Duration
+	// indexability resolves whether a path should be indexed, caching one
+	// git-style ignore matcher per codebase id. Converge and the watcher both
+	// route their ignore and scope decisions through it.
+	indexability *indexability.Resolver
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -130,6 +135,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		health:             dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
 		lastDepProbeAt:     time.Time{},
 		deferredBuildDelay: defaultDeferredBuildDelay,
+		indexability:       indexability.NewResolver(),
 	}
 	semanticService, err := semantic.NewService(ctx, cfg)
 	if err != nil {
