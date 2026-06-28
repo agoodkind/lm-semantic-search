@@ -1,4 +1,4 @@
-package fileset
+package indexability
 
 import (
 	"os"

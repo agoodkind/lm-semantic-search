@@ -32,8 +32,8 @@ func TestFilesetEligibilityRoutesThroughSharedPackage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse imports %s: %v", rel, err)
 		}
-		if !importsFileset(parsed) {
-			violations = append(violations, rel+": does not import internal/fileset")
+		if !importsIndexability(parsed) {
+			violations = append(violations, rel+": does not import internal/indexability")
 			continue
 		}
 
@@ -41,24 +41,24 @@ func TestFilesetEligibilityRoutesThroughSharedPackage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-		if !callsFilesetGate(parsed) {
-			violations = append(violations, rel+": imports fileset but does not call an eligibility gate")
+		if !callsIndexabilityGate(parsed) {
+			violations = append(violations, rel+": imports indexability but does not call an eligibility gate")
 		}
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf("file eligibility must route through internal/fileset:\n%s", strings.Join(violations, "\n"))
+		t.Fatalf("file eligibility must route through internal/indexability:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
-func TestMaxFileBytesConstantOnlyInFileset(t *testing.T) {
+func TestMaxFileBytesConstantOnlyInIndexability(t *testing.T) {
 	t.Parallel()
 	root := moduleRoot(t)
 	fset := token.NewFileSet()
 	var violations []string
 
 	for _, rel := range productionGoFiles(t, root) {
-		if strings.HasPrefix(rel, "internal/fileset/") {
+		if strings.HasPrefix(rel, "internal/indexability/") {
 			continue
 		}
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
@@ -76,11 +76,11 @@ func TestMaxFileBytesConstantOnlyInFileset(t *testing.T) {
 					continue
 				}
 				if maxFileBytesConstNames(valueSpec) {
-					violations = append(violations, rel+": declares a max-file-bytes const outside internal/fileset")
+					violations = append(violations, rel+": declares a max-file-bytes const outside internal/indexability")
 					continue
 				}
 				if constDeclContainsTwoMiBLiteral(valueSpec) {
-					violations = append(violations, rel+": declares the 2 MiB file cap literal outside internal/fileset")
+					violations = append(violations, rel+": declares the 2 MiB file cap literal outside internal/indexability")
 				}
 			}
 		}
@@ -91,20 +91,20 @@ func TestMaxFileBytesConstantOnlyInFileset(t *testing.T) {
 	}
 }
 
-func importsFileset(file *ast.File) bool {
+func importsIndexability(file *ast.File) bool {
 	for _, importSpec := range file.Imports {
 		path, err := strconv.Unquote(importSpec.Path.Value)
 		if err != nil {
 			continue
 		}
-		if path == "goodkind.io/lm-semantic-search/internal/fileset" {
+		if path == "goodkind.io/lm-semantic-search/internal/indexability" {
 			return true
 		}
 	}
 	return false
 }
 
-func callsFilesetGate(file *ast.File) bool {
+func callsIndexabilityGate(file *ast.File) bool {
 	callsGate := false
 	ast.Inspect(file, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
@@ -116,7 +116,7 @@ func callsFilesetGate(file *ast.File) bool {
 			return true
 		}
 		receiver, ok := selector.X.(*ast.Ident)
-		if !ok || receiver.Name != "fileset" {
+		if !ok || receiver.Name != "indexability" {
 			return true
 		}
 		if filesetGateFunctions[selector.Sel.Name] {

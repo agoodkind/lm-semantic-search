@@ -14,7 +14,7 @@ import (
 
 	"goodkind.io/gksyntax/chunk"
 	"goodkind.io/lm-semantic-search/internal/discovery"
-	"goodkind.io/lm-semantic-search/internal/fileset"
+	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -116,7 +116,7 @@ func newEmbeddedProgress(
 func NewRunner() *Runner {
 	return &Runner{
 		dispatcher:   chunk.NewDispatcher(),
-		maxFileBytes: fileset.MaxFileBytes(),
+		maxFileBytes: indexability.MaxFileBytes(),
 	}
 }
 
@@ -178,18 +178,18 @@ func (runner *Runner) statEligibility(ctx context.Context, fullPath string, rela
 		}
 		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("stat source file %s: %w", fullPath, err)
 	}
-	keep, reason := fileset.EligibleByStat(info, runner.maxFileBytes)
+	keep, reason := indexability.EligibleByStat(info, runner.maxFileBytes)
 	if keep {
 		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, true, nil
 	}
 	switch reason {
-	case fileset.SkipOversize:
+	case indexability.SkipOversize:
 		slog.WarnContext(ctx, "indexer.skipped_oversize", "path", relativePath, "bytes", info.Size(), "limit", runner.maxFileBytes)
 		return processedFile{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipOversize, Removed: false}, false, nil
-	case fileset.SkipNotRegular:
+	case indexability.SkipNotRegular:
 		slog.DebugContext(ctx, "source path is not a regular file; converging to removal", "path", fullPath)
 		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, false, nil
-	case fileset.SkipKeep, fileset.SkipNonUTF8:
+	case indexability.SkipKeep, indexability.SkipNonUTF8:
 		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("unexpected stat-stage file eligibility reason %q for %s", reason, fullPath)
 	default:
 		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("unknown file eligibility reason %q for %s", reason, fullPath)
@@ -212,7 +212,7 @@ func readErrorMeansRemoved(path string) bool {
 // rejects non-UTF-8 VarChar payloads at the gRPC marshal boundary, so the
 // skip happens at the indexer boundary.
 func (runner *Runner) processFile(ctx context.Context, fullPath string, relativePath string, data []byte, splitterType string) (processedFile, error) {
-	if keep, _ := fileset.EligibleContent(data); !keep {
+	if keep, _ := indexability.EligibleContent(data); !keep {
 		slog.WarnContext(ctx, "indexer.skipped_invalid_utf8", "path", relativePath, "bytes", len(data))
 		return processedFile{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipUnreadable, Removed: false}, nil
 	}
