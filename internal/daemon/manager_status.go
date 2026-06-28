@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 
-	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
@@ -83,7 +83,7 @@ func (manager *Manager) GetIndex(ctx context.Context, requestedPath string) (mod
 
 // classifyTrackedPath maps a covered canonical path into a classification.
 // When the path equals the codebase root, it is treated as in-scope and
-// indexed. The resolved ignore rules then decide between excluded and
+// indexed. The indexability resolver then decides between excluded and
 // unindexed for any subpath; an excluded subpath is reported with the
 // matched pattern and the gitignore source so callers can name the rule
 // that masked the file.
@@ -115,20 +115,14 @@ func (manager *Manager) classifyTrackedPath(ctx context.Context, codebase model.
 	if err != nil || relative == "" || relative == "." {
 		return classification
 	}
-	rules := codebase.ResolvedIgnoreRules
-	if rules.IsEmpty() {
-		resolved, resolveErr := discovery.EffectiveIgnorePatterns(ctx, codebase.CanonicalPath, codebase.EffectiveConfig.IgnorePatterns)
-		if resolveErr == nil {
-			rules = resolved
-			manager.cacheResolvedRules(codebase.ID, resolved)
-		} else {
-			slog.DebugContext(ctx, "classifyTrackedPath ignore-resolve failed", "codebase_id", codebase.ID, "err", resolveErr)
-		}
+	isDir := false
+	if info, statErr := os.Stat(canonicalPath); statErr == nil {
+		isDir = info.IsDir()
 	}
-	if excluded, matchedPattern, gitignoreSource := discovery.PathIgnored(filepath.ToSlash(relative), rules); excluded {
+	if detail, excluded := manager.indexability.IgnoreDetail(ctx, codebase.ID, codebase.CanonicalPath, filepath.ToSlash(relative), isDir); excluded {
 		classification.Kind = model.PathClassificationInScopeExcluded
-		classification.ExcludedByPattern = matchedPattern
-		classification.ExcludedByGitignore = gitignoreSource
+		classification.ExcludedByPattern = detail.Pattern
+		classification.ExcludedByGitignore = detail.Source
 		return classification
 	}
 	// The merkle files map mirrors the file set that has chunks in the
@@ -165,21 +159,6 @@ func (manager *Manager) snapshotPathForCodebase(codebase model.Codebase) string 
 		return path
 	}
 	return manager.merklePath(codebase.ID)
-}
-
-// cacheResolvedRules folds a lazily-resolved IgnoreRules tree back into
-// the codebase record so subsequent classification calls do not re-walk
-// the codebase. The call is best-effort: a codebase that was deleted
-// concurrently is left untouched.
-func (manager *Manager) cacheResolvedRules(codebaseID string, rules discovery.IgnoreRules) {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	codebase, found := manager.codebases[codebaseID]
-	if !found {
-		return
-	}
-	codebase.ResolvedIgnoreRules = rules
-	manager.codebases[codebaseID] = codebase
 }
 
 // synthesizeUnregisteredCodebase builds an in-memory codebase record for a

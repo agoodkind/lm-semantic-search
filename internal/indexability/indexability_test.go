@@ -52,7 +52,7 @@ func TestDecideNestedGitignoreScopesToSubdir(t *testing.T) {
 	writeFile(t, filepath.Join(root, "sub", "b.go"), "package b\n")
 	writeFile(t, filepath.Join(root, "a.tmp"), "y")
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	ctx := context.Background()
 
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "sub/a.tmp", statInfo(t, filepath.Join(root, "sub", "a.tmp"))), false, ReasonIgnored)
@@ -68,7 +68,7 @@ func TestDecideNegationReincludesFile(t *testing.T) {
 	writeFile(t, filepath.Join(root, "keep.log"), "x")
 	writeFile(t, filepath.Join(root, "skip.log"), "y")
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	ctx := context.Background()
 
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "keep.log", statInfo(t, filepath.Join(root, "keep.log"))), true, Keep)
@@ -81,7 +81,7 @@ func TestDecideDirectoryExclusionWinsOverReinclude(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".gitignore"), "build/\n!build/keep.txt\n")
 	writeFile(t, filepath.Join(root, "build", "keep.txt"), "x")
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	ctx := context.Background()
 
 	// keep.txt cannot be re-included because its parent directory is excluded.
@@ -96,7 +96,7 @@ func TestDecideHonorsInfoExclude(t *testing.T) {
 	writeFile(t, filepath.Join(root, "secret.txt"), "x")
 	writeFile(t, filepath.Join(root, "main.go"), "package main\n")
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	ctx := context.Background()
 
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "secret.txt", statInfo(t, filepath.Join(root, "secret.txt"))), false, ReasonIgnored)
@@ -128,7 +128,7 @@ func TestDecideLinkedWorktreeResolvesInfoExcludeViaCommonDir(t *testing.T) {
 	isolateHome(t)
 	_, worktreeDir := makeNestedWorktree(t)
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	ctx := context.Background()
 
 	// The linked worktree's .git is a file, so info/exclude lives under the
@@ -141,7 +141,7 @@ func TestDecideNestedSameRepoWorktreeIsOutOfScope(t *testing.T) {
 	isolateHome(t)
 	mainRoot, worktreeDir := makeNestedWorktree(t)
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	ctx := context.Background()
 
 	relPath := ".claude/worktrees/wt/feature.go"
@@ -157,7 +157,7 @@ func TestDecideContentDenylistAndStatGates(t *testing.T) {
 		t.Fatalf("mkdir src: %v", err)
 	}
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	ctx := context.Background()
 
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "image.png", statInfo(t, filepath.Join(root, "image.png"))), false, ReasonIgnored)
@@ -172,7 +172,7 @@ func TestDecideExcludesGitDirAsOutOfScope(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".gitignore"), "secret/\n")
 	writeFile(t, filepath.Join(root, "pkg", "main.go"), "package pkg\n")
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	ctx := context.Background()
 
 	// .git content is git metadata and is never indexed, even though .gitignore
@@ -189,7 +189,7 @@ func TestDecideOversizeRejectsLargeFile(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "big.txt"), "0123456789")
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	ctx := context.Background()
 
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "big.txt", statInfo(t, filepath.Join(root, "big.txt"))), false, ReasonOversize)
@@ -201,7 +201,7 @@ func TestInvalidateRulesPicksUpDiskChange(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".gitignore"), "*.tmp\n")
 	writeFile(t, filepath.Join(root, "x.tmp"), "x")
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	ctx := context.Background()
 
 	// First call resolves and caches the rule that ignores *.tmp.
@@ -243,4 +243,69 @@ func TestUnquoteConfigValueStripsMatchingQuotes(t *testing.T) {
 			t.Errorf("unquoteConfigValue(%q) = %q, want %q", testCase.in, got, testCase.want)
 		}
 	}
+}
+
+// TestResolverAppliesCustomOverrides proves a pattern that exists only in the
+// per-codebase override provider excludes a path no other ignore source touches,
+// across Decide, Ignored, and IgnoreDetail, and that changing what the provider
+// returns plus InvalidateRules makes the next decision reflect the new set.
+func TestResolverAppliesCustomOverrides(t *testing.T) {
+	isolateHome(t)
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "keep.go"), "package x\n")
+	writeFile(t, filepath.Join(root, "custom.secret"), "x")
+
+	var overrides []string
+	resolver := NewResolver(func(codebaseID string) []string {
+		if codebaseID != "cb" {
+			return nil
+		}
+		return overrides
+	})
+	ctx := context.Background()
+	secretInfo := statInfo(t, filepath.Join(root, "custom.secret"))
+
+	// No override yet: nothing ignores *.secret, so the file is indexable.
+	assertDecision(t, resolver.Decide(ctx, "cb", root, "custom.secret", secretInfo), true, Keep)
+	if resolver.Ignored(ctx, "cb", root, "custom.secret", false) {
+		t.Fatal("Ignored reported custom.secret excluded before any override was set")
+	}
+
+	// Add the override and invalidate; the rebuilt matcher now excludes it.
+	overrides = []string{"*.secret"}
+	resolver.InvalidateRules("cb")
+	assertDecision(t, resolver.Decide(ctx, "cb", root, "custom.secret", secretInfo), false, ReasonIgnored)
+	assertDecision(t, resolver.Decide(ctx, "cb", root, "keep.go", statInfo(t, filepath.Join(root, "keep.go"))), true, Keep)
+	if !resolver.Ignored(ctx, "cb", root, "custom.secret", false) {
+		t.Fatal("Ignored did not report custom.secret excluded after the override was set")
+	}
+	detail, excluded := resolver.IgnoreDetail(ctx, "cb", root, "custom.secret", false)
+	if !excluded {
+		t.Fatal("IgnoreDetail did not report custom.secret excluded under the override")
+	}
+	if detail.Pattern != "*.secret" {
+		t.Fatalf("IgnoreDetail pattern = %q, want %q", detail.Pattern, "*.secret")
+	}
+
+	// Drop the override and invalidate; the file is indexable again.
+	overrides = nil
+	resolver.InvalidateRules("cb")
+	assertDecision(t, resolver.Decide(ctx, "cb", root, "custom.secret", secretInfo), true, Keep)
+}
+
+// TestResolverCustomOverrideBeatsReinclude proves a custom override pattern is
+// applied after the repository's .gitignore, so it wins over a re-include rule
+// the repository declares for the same path.
+func TestResolverCustomOverrideBeatsReinclude(t *testing.T) {
+	isolateHome(t)
+	root := t.TempDir()
+	// The repo ignores *.log but re-includes keep.log; the override re-ignores it.
+	writeFile(t, filepath.Join(root, ".gitignore"), "*.log\n!keep.log\n")
+	writeFile(t, filepath.Join(root, "keep.log"), "x")
+
+	resolver := NewResolver(func(string) []string { return []string{"keep.log"} })
+	ctx := context.Background()
+
+	// Without the override keep.log would be re-included; the override wins.
+	assertDecision(t, resolver.Decide(ctx, "cb", root, "keep.log", statInfo(t, filepath.Join(root, "keep.log"))), false, ReasonIgnored)
 }

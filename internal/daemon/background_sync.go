@@ -306,12 +306,11 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(ctx context.Context, cod
 
 	snapshotPath := syncer.manager.snapshotPathForCodebase(codebase)
 	snapshot := merkle.LoadSnapshotForConfig(snapshotPath, codebase.EffectiveConfig.IgnoreDigest, syncer.manager.legacyDigestForCodebase(codebase.ID))
-	currentSnapshot, rules, err := merkle.Capture(ctx, codebase.CanonicalPath, codebase.EffectiveConfig)
+	currentSnapshot, err := merkle.Capture(ctx, syncer.manager.indexability, codebase.ID, codebase.CanonicalPath, codebase.EffectiveConfig)
 	if err != nil {
 		slog.ErrorContext(ctx, "quarantine capture failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
 		return
 	}
-	syncer.manager.cacheResolvedRules(codebase.ID, rules)
 	diff := merkle.DiffSnapshots(snapshot, currentSnapshot)
 	signal, suspicious := assessDeltaDeleteWave(codebase, diff, snapshot)
 	if !suspicious {
@@ -441,8 +440,10 @@ func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase mode
 		return false, fmt.Errorf("read Merkle snapshot %s: %w", snapshotPath, err)
 	}
 
-	currentSnapshot, rules, err := merkle.Capture(
+	currentSnapshot, err := merkle.Capture(
 		ctx,
+		syncer.manager.indexability,
+		codebase.ID,
 		codebase.CanonicalPath,
 		codebase.EffectiveConfig,
 	)
@@ -450,7 +451,6 @@ func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase mode
 		slog.ErrorContext(ctx, "capture Merkle snapshot failed", "path", codebase.CanonicalPath, "err", err)
 		return false, fmt.Errorf("capture Merkle snapshot for %s: %w", codebase.CanonicalPath, err)
 	}
-	syncer.manager.cacheResolvedRules(codebase.ID, rules)
 	return !merkle.Equal(existingSnapshot, currentSnapshot), nil
 }
 

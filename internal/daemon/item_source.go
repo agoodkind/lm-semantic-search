@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"maps"
 
-	"goodkind.io/lm-semantic-search/internal/discovery"
+	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -73,16 +73,15 @@ type itemReuseSource struct {
 // merkle walk and indexOne is one file read and split.
 type codeItemSource struct {
 	runner         indexingRunner
+	resolver       *indexability.Resolver
+	codebaseID     string
 	canonicalPath  string
 	collectionName string
 	config         model.IndexConfig
-	// onRules receives the walk's resolved ignore rules each capture, so the
-	// manager can persist them without a second walk. Nil disables reporting.
-	onRules func(discovery.IgnoreRules)
 }
 
-func newCodeItemSource(runner indexingRunner, canonicalPath string, config model.IndexConfig, onRules func(discovery.IgnoreRules)) codeItemSource {
-	return codeItemSource{runner: runner, canonicalPath: canonicalPath, collectionName: "", config: config, onRules: onRules}
+func newCodeItemSource(runner indexingRunner, resolver *indexability.Resolver, codebaseID string, canonicalPath string, config model.IndexConfig) codeItemSource {
+	return codeItemSource{runner: runner, resolver: resolver, codebaseID: codebaseID, canonicalPath: canonicalPath, collectionName: "", config: config}
 }
 
 func (source codeItemSource) withCollectionName(collectionName string) codeItemSource {
@@ -91,13 +90,10 @@ func (source codeItemSource) withCollectionName(collectionName string) codeItemS
 }
 
 func (source codeItemSource) capture(ctx context.Context) (merkle.Snapshot, error) {
-	snapshot, rules, err := merkle.Capture(ctx, source.canonicalPath, source.config)
+	snapshot, err := merkle.Capture(ctx, source.resolver, source.codebaseID, source.canonicalPath, source.config)
 	if err != nil {
 		slog.ErrorContext(ctx, "capture code snapshot failed", "path", source.canonicalPath, "err", err)
 		return merkle.Snapshot{}, fmt.Errorf("capture code snapshot for %s: %w", source.canonicalPath, err)
-	}
-	if source.onRules != nil {
-		source.onRules(rules)
 	}
 	return snapshot, nil
 }

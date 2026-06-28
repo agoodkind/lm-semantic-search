@@ -16,6 +16,7 @@ import (
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -30,7 +31,7 @@ type fakeRunner struct {
 	indexOne   func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error)
 }
 
-func (runner fakeRunner) Index(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+func (runner fakeRunner) Index(ctx context.Context, _ *indexability.Resolver, _ string, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
 	return runner.index(ctx, root, indexConfig, progress)
 }
 

@@ -81,10 +81,10 @@ func assessWatcherDeleteWave(codebase model.Codebase, snapshot merkle.Snapshot, 
 	}
 	// Count only paths that are BOTH tracked in the snapshot AND now absent on
 	// disk. The raw watcher batch can carry untracked churn (.git, node_modules,
-	// build output) that floods in while ResolvedIgnoreRules is still empty at
-	// watcher-add time; counting those inflates missingCount past the tracked
-	// total and produces the impossible "N of M" where N exceeds M. The
-	// full-scan path already restricts to tracked files via diff.Removed.
+	// build output) that floods in before the resolver's matcher is built for the
+	// codebase; counting those inflates missingCount past the tracked total and
+	// produces the impossible "N of M" where N exceeds M. The full-scan path
+	// already restricts to tracked files via diff.Removed.
 	missingCount := int32(0)
 	for _, relativePath := range relativePaths {
 		if !snapshot.HasFile(relativePath) {

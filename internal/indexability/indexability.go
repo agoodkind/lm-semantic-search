@@ -41,13 +41,21 @@ type Decision struct {
 	Reason Reason
 }
 
+// IgnoreOverrides supplies the per-codebase custom ignore patterns the daemon
+// merged from --ignore, the MCP ignorePatterns argument, and the
+// CUSTOM_IGNORE_PATTERNS env var. The resolver calls it while building a
+// codebase's matcher and appends the returned patterns last, so a custom
+// pattern wins over a repository re-include. A nil func means no overrides.
+type IgnoreOverrides func(codebaseID string) []string
+
 // Resolver answers indexability questions for many codebases. It caches one
 // built ignore matcher per codebase id and rebuilds it lazily after
 // InvalidateRules. Each codebase builds under its own once, so a slow first
 // build for one codebase never blocks Decide for another.
 type Resolver struct {
-	mu      sync.Mutex
-	entries map[string]*ruleEntry
+	mu        sync.Mutex
+	entries   map[string]*ruleEntry
+	overrides IgnoreOverrides
 }
 
 // ruleEntry holds one codebase's lazily built rules. once guards the build so a
@@ -58,11 +66,14 @@ type ruleEntry struct {
 	built *builtRules
 }
 
-// NewResolver returns a Resolver with an empty per-codebase rule cache.
-func NewResolver() *Resolver {
+// NewResolver returns a Resolver with an empty per-codebase rule cache. The
+// overrides func supplies each codebase's custom ignore patterns; pass nil when
+// there are none.
+func NewResolver(overrides IgnoreOverrides) *Resolver {
 	return &Resolver{
-		mu:      sync.Mutex{},
-		entries: map[string]*ruleEntry{},
+		mu:        sync.Mutex{},
+		entries:   map[string]*ruleEntry{},
+		overrides: overrides,
 	}
 }
 
@@ -133,6 +144,51 @@ func (rules *builtRules) scopeOrIgnore(root string, relPath string, isDir bool) 
 	return Keep
 }
 
+// IgnoreDetail reports whether relPath is excluded for the codebase and names
+// the git-style rule that excluded it. It mirrors Ignored's verdict and adds
+// the matched-pattern detail the status surface shows, so no caller runs its
+// own matcher. The returned [gitignore.MatchResult] carries the matched pattern
+// text and its source file. An out-of-scope path (a nested same-repo worktree
+// or the .git directory) reports excluded with an empty pattern, because no
+// .gitignore line names it. relPath is slash-separated and relative to root;
+// pass isDir for a directory so a directory-only pattern matches.
+func (r *Resolver) IgnoreDetail(ctx context.Context, codebaseID string, root string, relPath string, isDir bool) (gitignore.MatchResult, bool) {
+	rules := r.rulesFor(ctx, codebaseID, root)
+	reason := rules.scopeOrIgnore(root, relPath, isDir)
+	if reason == Keep {
+		return gitignore.MatchResult{}, false
+	}
+	if reason != ReasonIgnored {
+		return gitignore.MatchResult{Ignored: true}, true
+	}
+	return ignoreDetail(rules.matcher, relPath, isDir), true
+}
+
+// ignoreDetail returns the matched-pattern detail for relPath, honoring git's
+// directory-exclusion rule by reporting the first excluded ancestor directory's
+// pattern before the leaf's own. It mirrors pathIgnored's ancestor walk so the
+// detail names the same rule that decided the verdict. The matcher uses the
+// trailing-slash convention to recognize directories, so each ancestor and an
+// isDir leaf carry a trailing slash.
+func ignoreDetail(matcher *gitignore.Matcher, relPath string, isDir bool) gitignore.MatchResult {
+	normalized := strings.Trim(strings.ReplaceAll(relPath, "\\", "/"), "/")
+	if normalized == "" {
+		return gitignore.MatchResult{}
+	}
+	parts := strings.Split(normalized, "/")
+	for index := 1; index < len(parts); index++ {
+		ancestor := strings.Join(parts[:index], "/") + "/"
+		if detail := matcher.MatchDetail(ancestor); detail.Ignored {
+			return detail
+		}
+	}
+	leaf := normalized
+	if isDir {
+		leaf += "/"
+	}
+	return matcher.MatchDetail(leaf)
+}
+
 // InvalidateRules drops the cached matcher for codebaseID so the next Decide
 // rebuilds it. Callers invalidate after a .gitignore or other ignore source
 // changes on disk.
@@ -156,7 +212,7 @@ func (r *Resolver) rulesFor(ctx context.Context, codebaseID string, root string)
 	r.mu.Unlock()
 
 	entry.once.Do(func() {
-		entry.built = buildRules(ctx, root)
+		entry.built = r.buildRules(ctx, codebaseID, root)
 	})
 	return entry.built
 }
@@ -196,10 +252,12 @@ func hasGitComponent(relPath string) bool {
 // buildRules resolves the ignore matcher and size cap for the codebase rooted at
 // root. Sources are added in order of increasing priority, which is the order
 // git-pkgs matches in (last match wins): global excludes, the project ignore,
-// the built-in content denylist, the repo info/exclude, then each .gitignore
-// from the root down the tree. The content denylist stays below .gitignore so a
-// repository's own re-include rule can still index a denylisted name.
-func buildRules(ctx context.Context, root string) *builtRules {
+// the built-in content denylist, the repo info/exclude, each .gitignore from the
+// root down the tree, then the per-codebase custom override patterns. The
+// content denylist stays below .gitignore so a repository's own re-include rule
+// can still index a denylisted name; the custom overrides stay above .gitignore
+// so a user-supplied pattern wins over a repository re-include.
+func (r *Resolver) buildRules(ctx context.Context, codebaseID string, root string) *builtRules {
 	commonDir, _ := gitworktree.CommonDirAt(root)
 
 	matcher := gitignore.New("")
@@ -210,6 +268,11 @@ func buildRules(ctx context.Context, root string) *builtRules {
 		matcher.AddFromFile(filepath.Join(commonDir, "info", "exclude"), "")
 	}
 	addGitignoreFiles(ctx, matcher, root, commonDir)
+	if r.overrides != nil {
+		if extra := r.overrides(codebaseID); len(extra) > 0 {
+			matcher.AddPatterns([]byte(strings.Join(extra, "\n")), "")
+		}
+	}
 
 	return &builtRules{
 		matcher:   matcher,

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/rjeczalik/notify"
-	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -34,9 +33,8 @@ func TestWatcherAddCodebaseIsIdempotent(t *testing.T) {
 	watcher := NewWatcher(manager, queue)
 
 	codebase := model.Codebase{
-		ID:                  "cb_test_idempotent",
-		CanonicalPath:       t.TempDir(),
-		ResolvedIgnoreRules: discovery.IgnoreRules{Nodes: nil},
+		ID:            "cb_test_idempotent",
+		CanonicalPath: t.TempDir(),
 	}
 	watcher.AddCodebase(context.Background(), codebase)
 	watcher.AddCodebase(context.Background(), codebase)
@@ -186,9 +184,8 @@ func TestWatcherRemoveCodebaseDropsRoot(t *testing.T) {
 	watcher := NewWatcher(manager, queue)
 
 	codebase := model.Codebase{
-		ID:                  "cb_test_remove",
-		CanonicalPath:       t.TempDir(),
-		ResolvedIgnoreRules: discovery.IgnoreRules{Nodes: nil},
+		ID:            "cb_test_remove",
+		CanonicalPath: t.TempDir(),
 	}
 	watcher.AddCodebase(context.Background(), codebase)
 	watcher.RemoveCodebase(context.Background(), codebase.ID)
@@ -221,14 +218,12 @@ func TestWatcherDispatchBroadcastsToAllCovering(t *testing.T) {
 	}
 
 	outer := model.Codebase{
-		ID:                  "cb_outer",
-		CanonicalPath:       rootDir,
-		ResolvedIgnoreRules: discovery.IgnoreRules{Nodes: nil},
+		ID:            "cb_outer",
+		CanonicalPath: rootDir,
 	}
 	inner := model.Codebase{
-		ID:                  "cb_inner",
-		CanonicalPath:       nestedDir,
-		ResolvedIgnoreRules: discovery.IgnoreRules{Nodes: nil},
+		ID:            "cb_inner",
+		CanonicalPath: nestedDir,
 	}
 	watcher.AddCodebase(context.Background(), outer)
 	watcher.AddCodebase(context.Background(), inner)

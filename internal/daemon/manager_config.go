@@ -7,11 +7,40 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
+
+// refreshIgnoreOverridesLocked rebuilds the lock-free custom-ignore snapshot
+// from the current codebases map and stores it for the resolver's provider to
+// read. The caller holds manager.mu. A codebase with no custom patterns is
+// omitted, so the provider returns nil for it.
+func (manager *Manager) refreshIgnoreOverridesLocked() {
+	overrides := make(map[string][]string, len(manager.codebases))
+	for id, codebase := range manager.codebases {
+		patterns := codebase.EffectiveConfig.IgnorePatterns
+		if len(patterns) == 0 {
+			continue
+		}
+		overrides[id] = slices.Clone(patterns)
+	}
+	manager.ignoreOverrides.Store(&overrides)
+}
+
+// ignoreOverridesFor returns one codebase's custom ignore patterns from the
+// lock-free snapshot. It is the provider the resolver calls while building a
+// codebase's matcher, so it must never take manager.mu. A nil snapshot or a
+// codebase absent from it returns nil.
+func (manager *Manager) ignoreOverridesFor(codebaseID string) []string {
+	snapshot := manager.ignoreOverrides.Load()
+	if snapshot == nil {
+		return nil
+	}
+	return (*snapshot)[codebaseID]
+}
 
 // legacyDigestForCodebase returns the canonical digest of the codebase's
 // stored EffectiveConfig. The plan helpers pass this to

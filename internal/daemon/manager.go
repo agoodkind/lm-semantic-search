@@ -12,12 +12,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
-	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/indexer"
@@ -96,6 +96,13 @@ type Manager struct {
 	// git-style ignore matcher per codebase id. Converge and the watcher both
 	// route their ignore and scope decisions through it.
 	indexability *indexability.Resolver
+	// ignoreOverrides is the lock-free snapshot of each codebase's custom ignore
+	// patterns (codebase id -> EffectiveConfig.IgnorePatterns). The resolver's
+	// provider reads it via an atomic load and never takes manager.mu, so a
+	// Decide or IgnoreDetail call can never deadlock against the manager lock no
+	// matter which path invokes it. saveLocked rebuilds it after every registry
+	// write, and load() seeds it at boot.
+	ignoreOverrides atomic.Pointer[map[string][]string]
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -109,7 +116,7 @@ type SearchOutcome struct {
 }
 
 type indexingRunner interface {
-	Index(context.Context, string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error)
+	Index(context.Context, *indexability.Resolver, string, string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error)
 	IndexFiles(context.Context, string, []string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error)
 	IndexOne(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error)
 }
@@ -135,8 +142,13 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		health:             dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
 		lastDepProbeAt:     time.Time{},
 		deferredBuildDelay: defaultDeferredBuildDelay,
-		indexability:       indexability.NewResolver(),
+		indexability:       nil,
+		ignoreOverrides:    atomic.Pointer[map[string][]string]{},
 	}
+	// The resolver reads each codebase's custom ignore patterns through a lock-free
+	// provider that snapshots manager.codebases, so an ignore decision never takes
+	// manager.mu (which Decide can run under) and never drifts from the registry.
+	manager.indexability = indexability.NewResolver(manager.ignoreOverridesFor)
 	semanticService, err := semantic.NewService(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create semantic service: %w", err)
@@ -165,6 +177,7 @@ func (manager *Manager) load(ctx context.Context) error {
 		manager.codebases[codebase.ID] = codebase
 	}
 	dropGhostURICodebases(manager.codebases)
+	manager.refreshIgnoreOverridesLocked()
 
 	jobs, err := store.ReadJobEvents(manager.config.JobsPath)
 	if err != nil {
@@ -209,6 +222,7 @@ func (manager *Manager) saveLocked() error {
 		slog.Error("write registry failed", "path", manager.config.RegistryPath, "err", err)
 		return fmt.Errorf("write registry %s: %w", manager.config.RegistryPath, err)
 	}
+	manager.refreshIgnoreOverridesLocked()
 	return nil
 }
 
@@ -264,7 +278,6 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 		Quarantine:            nil,
 		WorktreeCommonDir:     "",
 		InodeTrackingDisabled: false,
-		ResolvedIgnoreRules:   discovery.IgnoreRules{Nodes: nil},
 		UpdatedAt:             clock.Now(),
 	}
 }
@@ -527,6 +540,10 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	if err := manager.appendJobLocked("start_index", job); err != nil {
 		return emptyJob, emptyCodebase, false, "", err
 	}
+	// The committed EffectiveConfig may carry new custom ignore patterns, so drop
+	// the cached matcher and let the next live decision rebuild it from the
+	// refreshed override snapshot.
+	manager.indexability.InvalidateRules(codebase.ID)
 	return job, codebase, false, overlapsCodebaseID, nil
 }
 
@@ -594,6 +611,9 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 		var emptyCodebase model.Codebase
 		return emptyJob, emptyCodebase, false, err
 	}
+	// The re-enriched EffectiveConfig may carry new custom ignore patterns, so
+	// drop the cached matcher and rebuild from the refreshed override snapshot.
+	manager.indexability.InvalidateRules(codebase.ID)
 	manager.mu.Unlock()
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)

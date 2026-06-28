@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -40,11 +41,12 @@ func TestMerkleCaptureConvergesAndAgreesWithIndexerFileSet(t *testing.T) {
 		Hybrid:             false,
 	}
 
-	first, _, err := merkle.Capture(context.Background(), root, config)
+	resolver := indexability.NewResolver(nil)
+	first, err := merkle.Capture(context.Background(), resolver, "cb", root, config)
 	if err != nil {
 		t.Fatalf("first Capture returned error: %v", err)
 	}
-	second, _, err := merkle.Capture(context.Background(), root, config)
+	second, err := merkle.Capture(context.Background(), resolver, "cb", root, config)
 	if err != nil {
 		t.Fatalf("second Capture returned error: %v", err)
 	}
@@ -105,7 +107,7 @@ func TestMerkleCaptureConvergesAndAgreesWithIndexerFileSet(t *testing.T) {
 	// The full bootstrap walk (Runner.Index) must agree with Capture too: it skips
 	// the oversize, binary, directory, and symlink-to-directory entries without a
 	// fatal error and indexes exactly the regular files Capture kept.
-	walkResult, walkErr := runner.Index(context.Background(), root, config, nil)
+	walkResult, walkErr := runner.Index(context.Background(), resolver, "cb", root, config, nil)
 	if walkErr != nil {
 		t.Fatalf("Runner.Index walk returned error over the fixture: %v", walkErr)
 	}
@@ -138,7 +140,8 @@ func TestMerkleCaptureExcludesIgnoredFilesAndConverges(t *testing.T) {
 		Hybrid:             false,
 	}
 
-	first, _, err := merkle.Capture(context.Background(), root, config)
+	resolver := indexability.NewResolver(nil)
+	first, err := merkle.Capture(context.Background(), resolver, "cb", root, config)
 	if err != nil {
 		t.Fatalf("first Capture returned error: %v", err)
 	}
@@ -148,7 +151,7 @@ func TestMerkleCaptureExcludesIgnoredFilesAndConverges(t *testing.T) {
 	if !first.HasFile("keep.go") {
 		t.Fatalf("keep.go was not captured")
 	}
-	second, _, err := merkle.Capture(context.Background(), root, config)
+	second, err := merkle.Capture(context.Background(), resolver, "cb", root, config)
 	if err != nil {
 		t.Fatalf("second Capture returned error: %v", err)
 	}

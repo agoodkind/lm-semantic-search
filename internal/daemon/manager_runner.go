@@ -6,7 +6,6 @@ import (
 	"log/slog"
 
 	"goodkind.io/gklog/correlation"
-	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
@@ -83,9 +82,7 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) {
 	// rebuild take. A code job walks the filesystem through the code source; a
 	// conversation ingest feeds the manifest and documents through its own source
 	// in runConversationIngest, then shares the same delta-then-bootstrap routine.
-	codeSource := newCodeItemSource(manager.runner, job.CanonicalPath, job.Config, func(rules discovery.IgnoreRules) {
-		manager.cacheResolvedRules(job.CodebaseID, rules)
-	})
+	codeSource := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config)
 	if manager.semantic != nil && manager.semantic.Available() {
 		codeSource = codeSource.withCollectionName(manager.semantic.CollectionName(job.CanonicalPath))
 	}

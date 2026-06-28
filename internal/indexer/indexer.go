@@ -309,13 +309,15 @@ func (accumulator *indexAccumulator) addSkipped(relativePath string, processed p
 	accumulator.skippedUnreadable++
 }
 
-// Index walks the codebase and splits files into chunks.
-func (runner *Runner) Index(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(Progress)) (Result, error) {
+// Index walks the codebase and splits files into chunks. The resolver and
+// codebaseID are threaded into discovery so the walk routes its scope and ignore
+// decisions through the daemon's one shared indexability resolver.
+func (runner *Runner) Index(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, indexConfig model.IndexConfig, progress func(Progress)) (Result, error) {
 	if progress != nil {
 		progress(newEmbeddedProgress("Preparing and scanning files...", 0, 0, 0, 0, 0, 0, 0, 0))
 	}
 
-	discoveryResult, err := discovery.Discover(ctx, root, indexConfig.IgnorePatterns, indexConfig.Extensions)
+	discoveryResult, err := discovery.Discover(ctx, resolver, codebaseID, root)
 	if err != nil {
 		slog.ErrorContext(ctx, "discover source files failed", "root", root, "err", err)
 		return Result{}, fmt.Errorf("discover source files under %s: %w", root, err)
