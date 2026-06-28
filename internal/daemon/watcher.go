@@ -5,12 +5,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/rjeczalik/notify"
-	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
@@ -25,7 +25,6 @@ type watchRoot struct {
 	// repository; dispatch uses that to keep a parent root from re-indexing a
 	// nested sibling worktree's files, mirroring the discovery walk boundary.
 	commonDir string
-	rules     discovery.IgnoreRules
 }
 
 // Watcher converts filesystem events under tracked codebases into per-path
@@ -77,7 +76,7 @@ func (watcher *Watcher) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case event := <-watcher.events:
-			watcher.dispatch(event)
+			watcher.dispatch(ctx, event)
 		}
 	}
 }
@@ -89,18 +88,13 @@ func (watcher *Watcher) AddCodebase(ctx context.Context, codebase model.Codebase
 		return
 	}
 
-	// The record's rules are the walk-resolved cache the jobs maintain.
-	// Empty rules mean no capture has run yet; dispatch passes a few extra
-	// events until the first capture persists rules, and converge drops them.
-	rules := codebase.ResolvedIgnoreRules
-
 	watcher.mu.Lock()
 	if _, found := watcher.roots[codebase.ID]; found {
 		watcher.mu.Unlock()
 		return
 	}
 	commonDir, _ := gitworktree.CommonDirAt(codebase.CanonicalPath)
-	watcher.roots[codebase.ID] = watchRoot{codebaseID: codebase.ID, root: codebase.CanonicalPath, commonDir: commonDir, rules: rules}
+	watcher.roots[codebase.ID] = watchRoot{codebaseID: codebase.ID, root: codebase.CanonicalPath, commonDir: commonDir}
 	watcher.mu.Unlock()
 
 	recursivePath := filepath.Join(codebase.CanonicalPath, "...")
@@ -144,18 +138,20 @@ func (watcher *Watcher) snapshotRoots() []watchRoot {
 	return roots
 }
 
-func (watcher *Watcher) dispatch(event notify.EventInfo) {
+func (watcher *Watcher) dispatch(ctx context.Context, event notify.EventInfo) {
 	path := event.Path()
 	roots := watcher.snapshotRoots()
 	covers := covering(roots, path)
 	if len(covers) == 0 {
 		return
 	}
-	if info, statErr := os.Lstat(path); statErr == nil && info.IsDir() {
+	info, statErr := os.Lstat(path)
+	if statErr == nil && info.IsDir() {
 		// A directory event; the recursive watch already covers its files,
 		// and the contained files raise their own events.
 		return
 	}
+	ignoreSource := isIgnoreSource(path)
 	for _, root := range covers {
 		if gitworktree.PathInsideNestedWorktree(root.root, root.commonDir, path) {
 			// A nested same-repo worktree owns this path, so the parent root must
@@ -172,11 +168,36 @@ func (watcher *Watcher) dispatch(event notify.EventInfo) {
 		if relativePath == "." || relativePath == "" {
 			continue
 		}
-		if excluded, _, _ := discovery.PathIgnored(relativePath, root.rules); excluded {
+		if ignoreSource {
+			// A changed ignore source re-resolves this codebase's rules so the
+			// next decision reflects the edit, independent of whether the source
+			// file itself is enqueued below.
+			watcher.manager.indexability.InvalidateRules(root.codebaseID)
+		}
+		// Decide scope and ignore without file info, so delete and rename events
+		// (where os.Lstat fails) are filtered too. Otherwise .git lock-file churn
+		// would enqueue on removal. The size gate is left to converge and the
+		// indexer; the watcher only needs the ignore and scope verdict.
+		isDir := statErr == nil && info.IsDir()
+		if watcher.manager.indexability.Ignored(ctx, root.codebaseID, root.root, relativePath, isDir) {
 			continue
 		}
 		watcher.queue.Enqueue(root.codebaseID, relativePath)
 	}
+}
+
+// isIgnoreSource reports whether path is a git-style ignore source whose edit
+// can change which files are indexable: a .gitignore file, or a repository's
+// .git/info/exclude. A change to either invalidates the resolver's cached rules.
+func isIgnoreSource(path string) bool {
+	if filepath.Base(path) == ".gitignore" {
+		return true
+	}
+	slashed := filepath.ToSlash(path)
+	if !strings.HasSuffix(slashed, "info/exclude") {
+		return false
+	}
+	return slices.Contains(strings.Split(slashed, "/"), ".git")
 }
 
 func covering(roots []watchRoot, path string) []watchRoot {
