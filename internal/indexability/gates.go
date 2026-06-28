@@ -1,5 +1,4 @@
-// Package fileset defines the shared file eligibility gates for indexing.
-package fileset
+package indexability
 
 import (
 	"os"

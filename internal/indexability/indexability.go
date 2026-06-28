@@ -13,7 +13,6 @@ import (
 	"sync"
 
 	"github.com/git-pkgs/gitignore"
-	"goodkind.io/lm-semantic-search/internal/fileset"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 )
 
@@ -215,7 +214,7 @@ func buildRules(ctx context.Context, root string) *builtRules {
 	return &builtRules{
 		matcher:   matcher,
 		commonDir: commonDir,
-		maxBytes:  fileset.MaxFileBytes(),
+		maxBytes:  MaxFileBytes(),
 	}
 }
 

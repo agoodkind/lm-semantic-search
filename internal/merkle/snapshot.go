@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/discovery"
-	"goodkind.io/lm-semantic-search/internal/fileset"
+	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
@@ -141,7 +141,7 @@ func Capture(
 	}
 
 	files := make(map[string]string, len(discoveryResult.Files))
-	maxFileBytes := fileset.MaxFileBytes()
+	maxFileBytes := indexability.MaxFileBytes()
 	for _, path := range discoveryResult.Files {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("capture snapshot cancelled: %w", err)
@@ -159,7 +159,7 @@ func Capture(
 			slog.ErrorContext(ctx, "stat file for snapshot failed", "path", path, "err", err)
 			return Snapshot{}, discovery.IgnoreRules{}, fmt.Errorf("stat file for snapshot %s: %w", path, err)
 		}
-		if keep, _ := fileset.EligibleByStat(info, maxFileBytes); !keep {
+		if keep, _ := indexability.EligibleByStat(info, maxFileBytes); !keep {
 			continue
 		}
 
@@ -193,7 +193,7 @@ func Capture(
 		// Skip files the indexer will also skip so the indexer and merkle
 		// agree on the file set. Otherwise every sync treats the same skipped
 		// file as "modified" forever and the delta loop never converges.
-		if keep, _ := fileset.EligibleContent(data); !keep {
+		if keep, _ := indexability.EligibleContent(data); !keep {
 			continue
 		}
 		files[relativePath] = digestBytes(data)
