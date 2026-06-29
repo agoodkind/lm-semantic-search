@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -151,8 +150,14 @@ func (watcher *Watcher) dispatch(ctx context.Context, event notify.EventInfo) {
 		// and the contained files raise their own events.
 		return
 	}
-	ignoreSource := isIgnoreSource(path)
 	for _, root := range covers {
+		// A changed ignore source re-resolves this covering codebase's rules. The
+		// check is a cheap per-event predicate over the loop's covering root, so
+		// the hot path takes no manager lock and walks no tree. It runs
+		// independent of whether the path is also enqueued below.
+		if watcher.manager.indexability.IsIgnoreSourcePath(path, root.commonDir) {
+			watcher.manager.observer.Invalidate(root.codebaseID)
+		}
 		if gitworktree.PathInsideNestedWorktree(root.root, root.commonDir, path) {
 			// A nested same-repo worktree owns this path, so the parent root must
 			// not also index it. This reads the on-disk .git topology, so the
@@ -168,12 +173,6 @@ func (watcher *Watcher) dispatch(ctx context.Context, event notify.EventInfo) {
 		if relativePath == "." || relativePath == "" {
 			continue
 		}
-		if ignoreSource {
-			// A changed ignore source re-resolves this codebase's rules so the
-			// next decision reflects the edit, independent of whether the source
-			// file itself is enqueued below.
-			watcher.manager.indexability.InvalidateRules(root.codebaseID)
-		}
 		// Decide scope and ignore without file info, so delete and rename events
 		// (where os.Lstat fails) are filtered too. Otherwise .git lock-file churn
 		// would enqueue on removal. The size gate is left to converge and the
@@ -185,20 +184,6 @@ func (watcher *Watcher) dispatch(ctx context.Context, event notify.EventInfo) {
 		}
 		watcher.queue.Enqueue(root.codebaseID, relativePath)
 	}
-}
-
-// isIgnoreSource reports whether path is a git-style ignore source whose edit
-// can change which files are indexable: a .gitignore file, or a repository's
-// .git/info/exclude. A change to either invalidates the resolver's cached rules.
-func isIgnoreSource(path string) bool {
-	if filepath.Base(path) == ".gitignore" {
-		return true
-	}
-	slashed := filepath.ToSlash(path)
-	if !strings.HasSuffix(slashed, "info/exclude") {
-		return false
-	}
-	return slices.Contains(strings.Split(slashed, "/"), ".git")
 }
 
 func covering(roots []watchRoot, path string) []watchRoot {
