@@ -14,32 +14,33 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// refreshIgnoreOverridesLocked rebuilds the lock-free custom-ignore snapshot
-// from the current codebases map and stores it for the resolver's provider to
-// read. The caller holds manager.mu. A codebase with no custom patterns is
-// omitted, so the provider returns nil for it.
-func (manager *Manager) refreshIgnoreOverridesLocked() {
-	overrides := make(map[string][]string, len(manager.codebases))
-	for id, codebase := range manager.codebases {
-		patterns := codebase.EffectiveConfig.IgnorePatterns
-		if len(patterns) == 0 {
-			continue
-		}
-		overrides[id] = slices.Clone(patterns)
-	}
-	manager.ignoreOverrides.Store(&overrides)
-}
-
-// ignoreOverridesFor returns one codebase's custom ignore patterns from the
-// lock-free snapshot. It is the provider the resolver calls while building a
-// codebase's matcher, so it must never take manager.mu. A nil snapshot or a
-// codebase absent from it returns nil.
-func (manager *Manager) ignoreOverridesFor(codebaseID string) []string {
-	snapshot := manager.ignoreOverrides.Load()
-	if snapshot == nil {
+// ignoreOverridesFromRegistry returns one codebase's custom ignore patterns
+// from the registry source of truth, which is the single home for per-codebase
+// ignore state. It is the provider the resolver calls while building a
+// codebase's matcher, and the resolver calls it only inside buildRules on a
+// cache miss, which is off the hot path, so taking manager.mu here is
+// acceptable.
+//
+// This relies on a narrower invariant than "the resolver is never called under
+// manager.mu". The decision methods are the only entry points that can trigger
+// buildRules and so call back into this provider: Decide, Ignored, IgnoreDetail,
+// and DecideContent. None of them runs while the caller holds manager.mu. Every
+// such site releases manager.mu first: converge (ConvergePaths unlocks before
+// the per-path loop), the watcher dispatch (the watcher never takes manager.mu),
+// status classifyTrackedPath (called after GetIndex unlocks), discovery, and
+// merkle Capture. So this lock can never deadlock against an in-flight decision.
+// InvalidateRules is exempt and may run under manager.mu, because it only drops
+// the cached rules and never calls this provider. A codebase absent from the registry
+// returns nil. The returned slice is a clone so the caller cannot mutate the
+// stored config.
+func (manager *Manager) ignoreOverridesFromRegistry(codebaseID string) []string {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	codebase, found := manager.codebases[codebaseID]
+	if !found {
 		return nil
 	}
-	return (*snapshot)[codebaseID]
+	return slices.Clone(codebase.EffectiveConfig.IgnorePatterns)
 }
 
 // legacyDigestForCodebase returns the canonical digest of the codebase's
