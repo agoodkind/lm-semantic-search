@@ -35,7 +35,7 @@ func (runner fakeRunner) Index(ctx context.Context, _ *indexability.Resolver, _ 
 	return runner.index(ctx, root, indexConfig, progress)
 }
 
-func (runner fakeRunner) IndexFiles(ctx context.Context, root string, relativePaths []string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+func (runner fakeRunner) IndexFiles(ctx context.Context, _ *indexability.Resolver, _ string, root string, relativePaths []string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
 	if runner.indexFiles != nil {
 		return runner.indexFiles(ctx, root, relativePaths, indexConfig, progress)
 	}
@@ -49,11 +49,11 @@ func (runner fakeRunner) IndexFiles(ctx context.Context, root string, relativePa
 // snapshot, which keeps a follow-up sync from re-detecting unchanged files.
 var fakeRunnerRealIndexer = indexer.NewRunner()
 
-func (runner fakeRunner) IndexOne(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+func (runner fakeRunner) IndexOne(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
 	if runner.indexOne != nil {
 		return runner.indexOne(ctx, root, relativePath, indexConfig)
 	}
-	return fakeRunnerRealIndexer.IndexOne(ctx, root, relativePath, indexConfig)
+	return fakeRunnerRealIndexer.IndexOne(ctx, resolver, codebaseID, root, relativePath, indexConfig)
 }
 
 func TestGetIndexNotTrackedReturnsFriendlyStatus(t *testing.T) {

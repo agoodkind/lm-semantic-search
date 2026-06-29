@@ -117,8 +117,8 @@ type SearchOutcome struct {
 
 type indexingRunner interface {
 	Index(context.Context, *indexability.Resolver, string, string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error)
-	IndexFiles(context.Context, string, []string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error)
-	IndexOne(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error)
+	IndexFiles(context.Context, *indexability.Resolver, string, string, []string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error)
+	IndexOne(context.Context, *indexability.Resolver, string, string, string, model.IndexConfig) (indexer.OneFileResult, error)
 }
 
 // NewManager loads persisted daemon state from disk.

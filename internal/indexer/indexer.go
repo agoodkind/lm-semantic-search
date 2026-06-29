@@ -19,9 +19,11 @@ import (
 )
 
 // Runner executes the local discovery and splitting pipeline for one codebase.
+// The size and content gates are not held here; every gate decision routes
+// through the indexability resolver the caller threads in, so the resolver is
+// the single owner of the file-set verdict.
 type Runner struct {
-	dispatcher   *chunk.Dispatcher
-	maxFileBytes int64
+	dispatcher *chunk.Dispatcher
 }
 
 // Result captures file and chunk totals for one indexing pass.
@@ -115,8 +117,7 @@ func newEmbeddedProgress(
 // NewRunner constructs the local indexing runner.
 func NewRunner() *Runner {
 	return &Runner{
-		dispatcher:   chunk.NewDispatcher(),
-		maxFileBytes: indexability.MaxFileBytes(),
+		dispatcher: chunk.NewDispatcher(),
 	}
 }
 
@@ -140,10 +141,11 @@ type OneFileResult = processedFile
 
 // IndexOne reads, gates, and splits a single file. The daemon's per-file
 // delta loop calls this so the merkle snapshot can be flushed after each
-// successful semantic.Reindex call.
-func (runner *Runner) IndexOne(ctx context.Context, root string, relativePath string, cfg model.IndexConfig) (OneFileResult, error) {
+// successful semantic.Reindex call. The resolver and codebaseID let the stat
+// and content gates route through the shared indexability decider.
+func (runner *Runner) IndexOne(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, relativePath string, cfg model.IndexConfig) (OneFileResult, error) {
 	fullPath := filepath.Join(root, relativePath)
-	statResult, keep, err := runner.statEligibility(ctx, fullPath, relativePath)
+	statResult, keep, err := runner.statEligibility(ctx, resolver, codebaseID, root, relativePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent; converging to removal", "path", fullPath)
@@ -167,10 +169,17 @@ func (runner *Runner) IndexOne(ctx context.Context, root string, relativePath st
 		slog.ErrorContext(ctx, "read source file failed", "path", fullPath, "err", err)
 		return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, fmt.Errorf("read source file %s: %w", fullPath, err)
 	}
-	return runner.processFile(ctx, fullPath, relativePath, data, cfg.SplitterType)
+	return runner.processFile(ctx, resolver, fullPath, relativePath, data, cfg.SplitterType)
 }
 
-func (runner *Runner) statEligibility(ctx context.Context, fullPath string, relativePath string) (processedFile, bool, error) {
+// statEligibility routes the pre-read file-set verdict through the resolver's
+// Decide. Discovery and the converge gate already applied scope and ignore, so
+// a path reaches here only for its size and not-regular verdict, but routing the
+// whole Decision keeps the indexer from owning a second copy of any gate. An
+// oversize file is a recorded skip; a not-regular, out-of-scope, or ignored
+// path converges to a removal.
+func (runner *Runner) statEligibility(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, relativePath string) (processedFile, bool, error) {
+	fullPath := filepath.Join(root, relativePath)
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -178,21 +187,21 @@ func (runner *Runner) statEligibility(ctx context.Context, fullPath string, rela
 		}
 		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("stat source file %s: %w", fullPath, err)
 	}
-	keep, reason := indexability.EligibleByStat(info, runner.maxFileBytes)
-	if keep {
+	decision := resolver.Decide(ctx, codebaseID, root, filepath.ToSlash(relativePath), info)
+	if decision.Indexed {
 		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, true, nil
 	}
-	switch reason {
-	case indexability.SkipOversize:
-		slog.WarnContext(ctx, "indexer.skipped_oversize", "path", relativePath, "bytes", info.Size(), "limit", runner.maxFileBytes)
+	switch decision.Reason {
+	case indexability.ReasonOversize:
+		slog.WarnContext(ctx, "indexer.skipped_oversize", "path", relativePath, "bytes", info.Size())
 		return processedFile{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipOversize, Removed: false}, false, nil
-	case indexability.SkipNotRegular:
-		slog.DebugContext(ctx, "source path is not a regular file; converging to removal", "path", fullPath)
+	case indexability.ReasonNotRegular, indexability.ReasonOutOfScope, indexability.ReasonIgnored:
+		slog.DebugContext(ctx, "source path is not indexable; converging to removal", "path", fullPath, "reason", string(decision.Reason))
 		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, false, nil
-	case indexability.SkipKeep, indexability.SkipNonUTF8:
-		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("unexpected stat-stage file eligibility reason %q for %s", reason, fullPath)
+	case indexability.Keep, indexability.ReasonNonUTF8:
+		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("unexpected stat-stage indexability reason %q for %s", decision.Reason, fullPath)
 	default:
-		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("unknown file eligibility reason %q for %s", reason, fullPath)
+		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("unknown indexability reason %q for %s", decision.Reason, fullPath)
 	}
 }
 
@@ -211,8 +220,8 @@ func readErrorMeansRemoved(path string) bool {
 // valid UTF-8 the splitter is skipped and Skipped=true is returned. Milvus
 // rejects non-UTF-8 VarChar payloads at the gRPC marshal boundary, so the
 // skip happens at the indexer boundary.
-func (runner *Runner) processFile(ctx context.Context, fullPath string, relativePath string, data []byte, splitterType string) (processedFile, error) {
-	if keep, _ := indexability.EligibleContent(data); !keep {
+func (runner *Runner) processFile(ctx context.Context, resolver *indexability.Resolver, fullPath string, relativePath string, data []byte, splitterType string) (processedFile, error) {
+	if !resolver.DecideContent(data).Indexed {
 		slog.WarnContext(ctx, "indexer.skipped_invalid_utf8", "path", relativePath, "bytes", len(data))
 		return processedFile{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipUnreadable, Removed: false}, nil
 	}
@@ -253,10 +262,12 @@ type indexAccumulator struct {
 	skippedUnreadable int32
 }
 
-// ingestFile reads one file, checks size and UTF-8 gates, and routes the
-// result into the accumulator. It returns false when the file was skipped.
-func (runner *Runner) ingestFile(ctx context.Context, fullPath string, relativePath string, splitterType string, accumulator *indexAccumulator) error {
-	statResult, keep, err := runner.statEligibility(ctx, fullPath, relativePath)
+// ingestFile reads one file, routes the size and UTF-8 gates through the
+// resolver, and routes the result into the accumulator. It returns false when
+// the file was skipped.
+func (runner *Runner) ingestFile(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, relativePath string, splitterType string, accumulator *indexAccumulator) error {
+	fullPath := filepath.Join(root, relativePath)
+	statResult, keep, err := runner.statEligibility(ctx, resolver, codebaseID, root, relativePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent during walk; excluding from rebuild", "path", fullPath)
@@ -281,7 +292,7 @@ func (runner *Runner) ingestFile(ctx context.Context, fullPath string, relativeP
 		slog.ErrorContext(ctx, "read source file failed", "path", fullPath, "err", err)
 		return fmt.Errorf("read source file %s: %w", fullPath, err)
 	}
-	processed, err := runner.processFile(ctx, fullPath, relativePath, data, splitterType)
+	processed, err := runner.processFile(ctx, resolver, fullPath, relativePath, data, splitterType)
 	if err != nil {
 		slog.ErrorContext(ctx, "split source file failed", "path", fullPath, "err", err)
 		return err
@@ -347,7 +358,7 @@ func (runner *Runner) Index(ctx context.Context, resolver *indexability.Resolver
 			slog.ErrorContext(ctx, "compute relative chunk path failed", "root", root, "path", path, "err", err)
 			return Result{}, fmt.Errorf("compute relative chunk path for %s: %w", path, err)
 		}
-		if err := runner.ingestFile(ctx, path, relativePath, indexConfig.SplitterType, accumulator); err != nil {
+		if err := runner.ingestFile(ctx, resolver, codebaseID, root, relativePath, indexConfig.SplitterType, accumulator); err != nil {
 			return Result{}, err
 		}
 		if progress != nil {
@@ -386,8 +397,9 @@ func (runner *Runner) Index(ctx context.Context, resolver *indexability.Resolver
 // has already computed the changed-file set (via merkle.DiffSnapshots).
 //
 // FileHashes in the result covers only the supplied files. Callers should
-// merge this map into the previous snapshot before persisting.
-func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths []string, indexConfig model.IndexConfig, progress func(Progress)) (Result, error) {
+// merge this map into the previous snapshot before persisting. The resolver and
+// codebaseID route the per-file gates through the shared indexability decider.
+func (runner *Runner) IndexFiles(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, relativePaths []string, indexConfig model.IndexConfig, progress func(Progress)) (Result, error) {
 	totalFiles := safeInt32(len(relativePaths))
 	if progress != nil {
 		progress(newEmbeddedProgress("Processing changed files...", 10, totalFiles, 0, 0, 0, 0, 0, 0))
@@ -407,8 +419,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, root string, relativePaths
 			slog.ErrorContext(ctx, "delta indexing cancelled before file read", "path", relativePath, "err", err)
 			return Result{}, fmt.Errorf("delta indexing cancelled before file read %s: %w", relativePath, err)
 		}
-		fullPath := filepath.Join(root, relativePath)
-		if err := runner.ingestFile(ctx, fullPath, relativePath, indexConfig.SplitterType, accumulator); err != nil {
+		if err := runner.ingestFile(ctx, resolver, codebaseID, root, relativePath, indexConfig.SplitterType, accumulator); err != nil {
 			return Result{}, err
 		}
 		if progress != nil {

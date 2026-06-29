@@ -66,7 +66,7 @@ func TestMerkleCaptureConvergesAndAgreesWithIndexerFileSet(t *testing.T) {
 
 	runner := indexer.NewRunner()
 	for _, entry := range entries {
-		result, indexErr := runner.IndexOne(context.Background(), root, entry.relativePath, config)
+		result, indexErr := runner.IndexOne(context.Background(), resolver, "cb", root, entry.relativePath, config)
 		if indexErr != nil {
 			t.Fatalf("IndexOne(%q) returned error: %v", entry.relativePath, indexErr)
 		}
@@ -176,7 +176,11 @@ func writeFilesetFixture(t *testing.T, root string) []filesetFixtureEntry {
 		{relativePath: "small.go", wantCaptured: true, wantSkipped: false, wantRemoved: false},
 		{relativePath: "oversize.go", wantCaptured: false, wantSkipped: true, wantRemoved: false},
 		{relativePath: "invalid.go", wantCaptured: false, wantSkipped: true, wantRemoved: false},
-		{relativePath: "data.bin", wantCaptured: false, wantSkipped: true, wantRemoved: false},
+		// data.bin matches the *.bin content denylist, so the resolver excludes it
+		// as an ignore decision before its bytes are read. The indexer converges it
+		// to a removal rather than a post-read content skip, the same verdict the
+		// converge gate reaches for any ignored path; it is still not captured.
+		{relativePath: "data.bin", wantCaptured: false, wantSkipped: false, wantRemoved: true},
 		{relativePath: "nested", wantCaptured: false, wantSkipped: false, wantRemoved: true},
 		{relativePath: "nested/nested.go", wantCaptured: true, wantSkipped: false, wantRemoved: false},
 	}
