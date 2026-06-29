@@ -19,10 +19,17 @@ const watcherEventBuffer = 4096
 type watchRoot struct {
 	codebaseID string
 	root       string
-	// commonDir is the git common dir when root is a worktree root, else "".
-	// Two roots that share a non-empty commonDir are worktrees of the same
-	// repository; dispatch uses that to keep a parent root from re-indexing a
-	// nested sibling worktree's files, mirroring the discovery walk boundary.
+	// commonDir is root's git common dir: <root>/.git for a main worktree (set
+	// by AddCodebase's CommonDirAt fallback) or the shared dir for a linked
+	// worktree, and "" only when no git dir resolves. dispatch passes it to the
+	// resolver's IsIgnoreSourcePath so an edit to <commonDir>/info/exclude
+	// invalidates the codebase's rules. That per-event path fires only when
+	// <commonDir>/info/exclude sits inside the watched root, which holds for a
+	// main worktree. For a linked worktree commonDir points at the main repo's
+	// shared .git outside this root, so those edits raise no watcher event and
+	// the observer's periodic CheckSources backstop catches them instead.
+	// Nested-worktree scope is no longer decided here; the resolver owns that
+	// through Ignored.
 	commonDir string
 }
 
@@ -176,13 +183,6 @@ func (watcher *Watcher) dispatch(ctx context.Context, event notify.EventInfo) {
 		// independent of whether the path is also enqueued below.
 		if watcher.manager.indexability.IsIgnoreSourcePath(path, root.commonDir) {
 			watcher.manager.observer.Invalidate(root.codebaseID)
-		}
-		if gitworktree.PathInsideNestedWorktree(root.root, root.commonDir, path) {
-			// A nested same-repo worktree owns this path, so the parent root must
-			// not also index it. This reads the on-disk .git topology, so the
-			// boundary holds whether or not the worktree is registered as its own
-			// codebase yet, matching the discovery walk boundary.
-			continue
 		}
 		relativePath, err := filepath.Rel(root.root, path)
 		if err != nil {
