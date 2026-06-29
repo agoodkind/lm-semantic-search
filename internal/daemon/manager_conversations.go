@@ -80,9 +80,17 @@ func (manager *Manager) RegisterConversationCollection(ctx context.Context, coll
 	codebase.UpdatedAt = clock.Now()
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
+		// Roll the in-memory record back when the registry write fails, mirroring
+		// the adopt and worktree paths, so a failed persist does not leave a
+		// codebase that later lookups treat as registered until restart.
+		delete(manager.codebases, codebase.ID)
 		slog.ErrorContext(ctx, "persist conversation collection registration failed", "collection_id", trimmedCollectionID, "err", err)
 		return model.Codebase{}, fmt.Errorf("persist conversation collection %s: %w", trimmedCollectionID, err)
 	}
+	// A persisted codebase record pairs with one observer signal so no saveLocked
+	// path silently skips invalidation; for a document collection it is a no-op
+	// delete, which keeps the invariant uniform across every record write.
+	manager.observer.Invalidate(codebase.ID)
 	return codebase, nil
 }
 
@@ -312,6 +320,9 @@ func (manager *Manager) queueConversationJob(ctx context.Context, codebase model
 		manager.mu.Unlock()
 		return emptyJob, err
 	}
+	// Pair the record write with one observer signal so no saveLocked path skips
+	// invalidation; for a document collection it is a no-op delete.
+	manager.observer.Invalidate(current.ID)
 	if err := manager.appendJobLocked("conversation_ingest", job); err != nil {
 		delete(manager.conversationJobs, job.ID)
 		manager.mu.Unlock()
@@ -433,6 +444,9 @@ func (manager *Manager) finishConversationDelete(jobID string) {
 	if err := manager.saveLocked(); err != nil {
 		slog.Error("write registry after conversation delete failed", "job_id", jobID, "err", err)
 	}
+	// Pair the record write with one observer signal so no saveLocked path skips
+	// invalidation; for a document collection it is a no-op delete.
+	manager.observer.Invalidate(codebase.ID)
 }
 
 func (manager *Manager) searchConversationChunkCache(ctx context.Context, codebase model.Codebase, query string, limit int32, fetchLimit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
