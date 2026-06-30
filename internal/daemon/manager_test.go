@@ -1289,6 +1289,9 @@ func newTestManager(t *testing.T) (*Manager, config.Config, string) {
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
+	// Close cached graph engines before the t.TempDir cleanup removes the graph
+	// db, otherwise the open SQLite handle races RemoveAll ("directory not empty").
+	t.Cleanup(manager.CloseGraphEngines)
 	return manager, cfg, repoPath
 }
 

@@ -58,6 +58,7 @@ func newTestManagerWithCap(t *testing.T, maxConcurrent int) (*Manager, config.Co
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
+	t.Cleanup(manager.CloseGraphEngines)
 	return manager, cfg
 }
 
