@@ -7,6 +7,7 @@ import (
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
@@ -102,4 +103,19 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) {
 	case jobOperationConversationIngest:
 		manager.runConversationIngest(ctx, job)
 	}
+}
+
+// JobSuccessorID returns the id of the immediate next terminal job for job's
+// codebase, or empty when job is the latest terminal job. The single-job views
+// use it since they do not hold the full job set the list view does.
+func (manager *Manager) JobSuccessorID(job model.Job) string {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	codebaseJobs := make([]model.Job, 0)
+	for _, candidate := range manager.jobs {
+		if candidate.CodebaseID == job.CodebaseID {
+			codebaseJobs = append(codebaseJobs, candidate)
+		}
+	}
+	return buildJobSuccessors(codebaseJobs)[job.ID]
 }

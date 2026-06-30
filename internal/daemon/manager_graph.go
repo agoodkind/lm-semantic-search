@@ -3,11 +3,16 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 
 	"goodkind.io/lm-semantic-search/internal/cbm"
+	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/merkle"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
 
@@ -82,6 +87,147 @@ func (manager *Manager) removeGraphFiles(ctx context.Context, codebaseID string)
 		}
 	}
 	return nil
+}
+
+func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID string, canonicalPath string) error {
+	engine, err := manager.graphEngine(ctx, codebaseID)
+	if err != nil {
+		if errors.Is(err, cbm.ErrUnsupportedPlatform) {
+			slog.InfoContext(ctx, "graph engine unsupported; continuing without graph index", "codebase_id", codebaseID)
+			return cbm.ErrUnsupportedPlatform
+		}
+		slog.WarnContext(ctx, "open graph engine failed; continuing without graph index", "codebase_id", codebaseID, "err", err)
+		return fmt.Errorf("open graph engine: %w", err)
+	}
+	if err = engine.Index(ctx, canonicalPath, "fast"); err != nil {
+		if errors.Is(err, cbm.ErrUnsupportedPlatform) {
+			slog.InfoContext(ctx, "graph indexing unsupported; continuing with semantic index", "codebase_id", codebaseID)
+			return cbm.ErrUnsupportedPlatform
+		}
+		slog.WarnContext(ctx, "graph indexing failed; continuing with semantic index", "codebase_id", codebaseID, "path", canonicalPath, "err", err)
+		return fmt.Errorf("index graph: %w", err)
+	}
+	return nil
+}
+
+func (manager *Manager) recordGraphIndexNonFatal(ctx context.Context, codebaseID string, canonicalPath string, snapshotHash string) {
+	err := manager.indexGraphNonFatal(ctx, codebaseID, canonicalPath)
+	switch {
+	case err == nil:
+		manager.updateGraphState(ctx, codebaseID, model.GraphStateReady, snapshotHash)
+	case errors.Is(err, cbm.ErrUnsupportedPlatform):
+		manager.updateGraphState(ctx, codebaseID, model.GraphStateUnsupported, "")
+	default:
+		manager.updateGraphState(ctx, codebaseID, model.GraphStateStale, "")
+	}
+}
+
+func (manager *Manager) updateGraphState(ctx context.Context, codebaseID string, graphState model.GraphState, snapshotHash string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	codebase, found := manager.codebases[codebaseID]
+	if !found {
+		return
+	}
+	codebase.GraphState = graphState
+	if snapshotHash != "" {
+		codebase.GraphSnapshotHash = snapshotHash
+	}
+	codebase.UpdatedAt = clock.Now()
+	manager.codebases[codebaseID] = codebase
+	if err := manager.saveLocked(); err != nil {
+		slog.ErrorContext(ctx, "write registry after graph state update failed", "codebase_id", codebaseID, "err", err)
+	}
+}
+
+func (manager *Manager) shouldReconcileGraph(codebaseID string, currentSnapshotHash string, presence collectionPresence) bool {
+	if presence != collectionPresencePresent {
+		return false
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	codebase, found := manager.codebases[codebaseID]
+	if !found {
+		return false
+	}
+	if codebase.Kind != model.CodebaseKindCode {
+		return false
+	}
+	if codebase.GraphState == model.GraphStateUnsupported {
+		return false
+	}
+	graphState := codebase.GraphState
+	if graphState == "" {
+		graphState = model.GraphStateAbsent
+	}
+	return graphState != model.GraphStateReady || codebase.GraphSnapshotHash != currentSnapshotHash
+}
+
+func snapshotHashForGraph(snapshot merkle.Snapshot, configDigest string) string {
+	snapshot.ConfigDigest = configDigest
+	return snapshot.Hash()
+}
+
+func (manager *Manager) graphStatusLine(codebase model.Codebase) string {
+	if codebase.Kind != model.CodebaseKindCode {
+		return ""
+	}
+	graphState := codebase.GraphState
+	if graphState == "" {
+		graphState = model.GraphStateAbsent
+	}
+	if graphState == model.GraphStateUnsupported {
+		return "🕸️ Graph: unsupported on this platform"
+	}
+
+	matchLabel := "semantic snapshot unknown"
+	snapshot, err := merkle.ReadSnapshot(manager.snapshotPathForCodebase(codebase))
+	if err == nil {
+		currentHash := snapshotHashForGraph(snapshot, codebase.EffectiveConfig.IgnoreDigest)
+		if codebase.GraphSnapshotHash == currentHash {
+			matchLabel = "matches semantic snapshot"
+		} else {
+			matchLabel = "does not match semantic snapshot"
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		matchLabel = "semantic snapshot unreadable"
+	}
+	return fmt.Sprintf("🕸️ Graph: %s, %s", graphState, matchLabel)
+}
+
+func (manager *Manager) graphDiagnostic(codebase model.Codebase) string {
+	if codebase.Kind != model.CodebaseKindCode {
+		return ""
+	}
+	graphState := codebase.GraphState
+	if graphState == "" {
+		graphState = model.GraphStateAbsent
+	}
+	if graphState == model.GraphStateUnsupported {
+		return codebase.CanonicalPath + ": graph unsupported on this platform"
+	}
+
+	snapshot, err := merkle.ReadSnapshot(manager.snapshotPathForCodebase(codebase))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if graphState == model.GraphStateReady {
+				return codebase.CanonicalPath + ": graph ready but semantic snapshot is missing"
+			}
+			return fmt.Sprintf("%s: graph %s and semantic snapshot is missing", codebase.CanonicalPath, graphState)
+		}
+		return fmt.Sprintf("%s: graph %s and semantic snapshot is unreadable", codebase.CanonicalPath, graphState)
+	}
+	currentHash := snapshotHashForGraph(snapshot, codebase.EffectiveConfig.IgnoreDigest)
+	if graphState == model.GraphStateReady && codebase.GraphSnapshotHash == currentHash {
+		return ""
+	}
+	if codebase.GraphSnapshotHash == currentHash {
+		return fmt.Sprintf("%s: graph %s but matches the semantic snapshot", codebase.CanonicalPath, graphState)
+	}
+	return fmt.Sprintf("%s: graph %s and does not match the semantic snapshot", codebase.CanonicalPath, graphState)
 }
 
 func (manager *Manager) graphPaths(codebaseID string) []string {

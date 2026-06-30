@@ -162,6 +162,10 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 				handled:         false,
 			}
 		}
+		snapshotHash := snapshotHashForGraph(captured, configDigest)
+		if manager.shouldReconcileGraph(codebaseID, snapshotHash, presence) {
+			manager.recordGraphIndexNonFatal(ctx, codebaseID, job.CanonicalPath, snapshotHash)
+		}
 		fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, captured.Files, 0)
 		manager.updateJobCompleted(ctx, job.ID, indexer.Result{
 			IndexedFiles:      fileCount,
@@ -289,7 +293,9 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, state.working, result.TotalChunks)
 	result.IndexedFiles = fileCount
 	result.TotalChunks = chunkCount
-	manager.indexGraphNonFatal(ctx, codebase.ID, job.CanonicalPath)
+	if codebase.Kind == model.CodebaseKindCode {
+		manager.recordGraphIndexNonFatal(ctx, codebase.ID, job.CanonicalPath, snapshotHashForGraph(plan.currentSnapshot, plan.configDigest))
+	}
 	manager.updateJobCompleted(ctx, job.ID, result)
 	return true
 }
@@ -384,24 +390,15 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	}
 
 	manager.absorbDescendants(ctx, descendants)
-	manager.indexGraphNonFatal(ctx, job.CodebaseID, job.CanonicalPath)
+	if codebase.Kind == model.CodebaseKindCode {
+		manager.recordGraphIndexNonFatal(ctx, job.CodebaseID, job.CanonicalPath, snapshotHashForGraph(plan.currentSnapshot, plan.configDigest))
+	}
 
 	result.FileHashes = state.working
 	fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, state.working, result.TotalChunks)
 	result.IndexedFiles = fileCount
 	result.TotalChunks = chunkCount
 	manager.updateJobCompleted(ctx, job.ID, result)
-}
-
-func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID string, canonicalPath string) {
-	engine, err := manager.graphEngine(ctx, codebaseID)
-	if err != nil {
-		slog.WarnContext(ctx, "open graph engine failed; continuing without graph index", "codebase_id", codebaseID, "err", err)
-		return
-	}
-	if err = engine.Index(ctx, canonicalPath, "fast"); err != nil {
-		slog.WarnContext(ctx, "graph indexing failed; continuing with semantic index", "codebase_id", codebaseID, "path", canonicalPath, "err", err)
-	}
 }
 
 // resolveReuseSeed loads build-wide reuse vectors from indexed descendants and

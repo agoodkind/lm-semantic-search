@@ -159,6 +159,14 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		slog.ErrorContext(ctx, "set cbm graph cache directory failed", "path", cfg.GraphDir, "err", err)
 		return nil, fmt.Errorf("set cbm graph cache directory: %w", err)
 	}
+	// Force the cbm engine to a single worker. Its parallel extraction worker
+	// pool aborts inside cgo when driven repeatedly from this long-lived daemon
+	// process, so the graph engine runs sequentially. Graph indexing is a
+	// background, non-fatal pass, so the lost parallelism is acceptable.
+	if err := os.Setenv("CBM_WORKERS", "1"); err != nil {
+		slog.ErrorContext(ctx, "set cbm worker count failed", "err", err)
+		return nil, fmt.Errorf("set cbm worker count: %w", err)
+	}
 	// The resolver reads each codebase's custom ignore patterns straight from the
 	// registry source of truth at build time, so per-codebase ignore state has no
 	// second copy and never drifts from the registry.
@@ -289,6 +297,8 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 		CollectionName:        "",
 		LegacyCollectionNames: nil,
 		MerkleSnapshotPath:    "",
+		GraphState:            "",
+		GraphSnapshotHash:     "",
 		Quarantine:            nil,
 		WorktreeCommonDir:     "",
 		InodeTrackingDisabled: false,
@@ -820,21 +830,6 @@ func (manager *Manager) ListJobs(codebaseID string) []model.Job {
 	return jobs
 }
 
-// JobSuccessorID returns the id of the immediate next terminal job for job's
-// codebase, or empty when job is the latest terminal job. The single-job views
-// use it since they do not hold the full job set the list view does.
-func (manager *Manager) JobSuccessorID(job model.Job) string {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	codebaseJobs := make([]model.Job, 0)
-	for _, candidate := range manager.jobs {
-		if candidate.CodebaseID == job.CodebaseID {
-			codebaseJobs = append(codebaseJobs, candidate)
-		}
-	}
-	return buildJobSuccessors(codebaseJobs)[job.ID]
-}
-
 // Doctor reports basic local state-path diagnostics.
 func (manager *Manager) Doctor() []string {
 	diagnostics := []string{}
@@ -858,6 +853,9 @@ func (manager *Manager) Doctor() []string {
 		return codebases[i].CanonicalPath < codebases[j].CanonicalPath
 	})
 	for _, codebase := range codebases {
+		if diagnostic := manager.graphDiagnostic(codebase); diagnostic != "" {
+			diagnostics = append(diagnostics, diagnostic)
+		}
 		if codebase.LastSuccessfulRun == nil {
 			continue
 		}
