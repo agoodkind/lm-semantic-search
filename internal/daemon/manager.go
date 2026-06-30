@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"goodkind.io/gklog/correlation"
@@ -94,15 +93,11 @@ type Manager struct {
 	deferredBuildDelay time.Duration
 	// indexability resolves whether a path should be indexed, caching one
 	// git-style ignore matcher per codebase id. Converge and the watcher both
-	// route their ignore and scope decisions through it.
+	// route their ignore and scope decisions through it. It reads each codebase's
+	// custom ignore patterns straight from the registry source of truth through
+	// ignoreOverridesFromRegistry, so per-codebase ignore state lives only in the
+	// registry and the matcher cache, never in a third copy.
 	indexability *indexability.Resolver
-	// ignoreOverrides is the lock-free snapshot of each codebase's custom ignore
-	// patterns (codebase id -> EffectiveConfig.IgnorePatterns). The resolver's
-	// provider reads it via an atomic load and never takes manager.mu, so a
-	// Decide or IgnoreDetail call can never deadlock against the manager lock no
-	// matter which path invokes it. saveLocked rebuilds it after every registry
-	// write, and load() seeds it at boot.
-	ignoreOverrides atomic.Pointer[map[string][]string]
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -143,12 +138,11 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		lastDepProbeAt:     time.Time{},
 		deferredBuildDelay: defaultDeferredBuildDelay,
 		indexability:       nil,
-		ignoreOverrides:    atomic.Pointer[map[string][]string]{},
 	}
-	// The resolver reads each codebase's custom ignore patterns through a lock-free
-	// provider that snapshots manager.codebases, so an ignore decision never takes
-	// manager.mu (which Decide can run under) and never drifts from the registry.
-	manager.indexability = indexability.NewResolver(manager.ignoreOverridesFor)
+	// The resolver reads each codebase's custom ignore patterns straight from the
+	// registry source of truth at build time, so per-codebase ignore state has no
+	// second copy and never drifts from the registry.
+	manager.indexability = indexability.NewResolver(manager.ignoreOverridesFromRegistry)
 	semanticService, err := semantic.NewService(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create semantic service: %w", err)
@@ -177,7 +171,6 @@ func (manager *Manager) load(ctx context.Context) error {
 		manager.codebases[codebase.ID] = codebase
 	}
 	dropGhostURICodebases(manager.codebases)
-	manager.refreshIgnoreOverridesLocked()
 
 	jobs, err := store.ReadJobEvents(manager.config.JobsPath)
 	if err != nil {
@@ -222,7 +215,6 @@ func (manager *Manager) saveLocked() error {
 		slog.Error("write registry failed", "path", manager.config.RegistryPath, "err", err)
 		return fmt.Errorf("write registry %s: %w", manager.config.RegistryPath, err)
 	}
-	manager.refreshIgnoreOverridesLocked()
 	return nil
 }
 
