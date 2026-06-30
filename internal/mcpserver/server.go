@@ -3,6 +3,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -63,6 +64,7 @@ func Run(ctx context.Context) error {
 	registerGetJobTool(mcpServer, cfg.SocketPath, outputMode)
 	registerDoctorTool(mcpServer, cfg.SocketPath, outputMode)
 	registerSearchTool(mcpServer, cfg.SocketPath, outputMode)
+	registerQueryGraphTool(mcpServer, cfg.SocketPath, outputMode)
 
 	stdioServer := server.NewStdioServer(mcpServer)
 
@@ -312,6 +314,59 @@ func registerSearchTool(mcpServer *server.MCPServer, socketPath string, outputMo
 			})
 		}),
 	)
+}
+
+func registerQueryGraphTool(mcpServer *server.MCPServer, socketPath string, outputMode response.Mode) {
+	mcpServer.AddTool(
+		mcp.NewTool(
+			"query_graph",
+			mcp.WithDescription("Query the indexed code graph through the daemon"),
+			mcp.WithString("absolutePath", mcp.Required(), mcp.Description("absolute path to the codebase directory")),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Cypher graph query")),
+		),
+		wrapTool("query_graph", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			absolutePath, errResult, ok := requireNonEmptyArg(req, "absolutePath")
+			if !ok {
+				return errResult, nil
+			}
+			query, errResult, ok := requireNonEmptyArg(req, "query")
+			if !ok {
+				return errResult, nil
+			}
+
+			argsJSON, err := MarshalQueryGraphArguments(query)
+			if err != nil {
+				return nil, err
+			}
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
+				return client.GraphTool(ctx, &pb.GraphToolRequest{
+					Path:     absolutePath,
+					Client:   mcpClientInfo(),
+					ToolName: "query_graph",
+					ArgsJson: argsJSON,
+				})
+			})
+		}),
+	)
+}
+
+// MarshalQueryGraphArguments builds query_graph arguments for the daemon RPC.
+func MarshalQueryGraphArguments(query string) (string, error) {
+	args := struct {
+		Query   string `json:"query"`
+		Project string `json:"project"`
+		MaxRows int    `json:"max_rows"`
+	}{
+		Query:   query,
+		Project: "",
+		MaxRows: 200,
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		slog.Error("marshal query_graph arguments failed", "err", err)
+		return "", fmt.Errorf("marshal query_graph arguments: %w", err)
+	}
+	return string(data), nil
 }
 
 // callDaemonIndexAndWait starts an index job through StartIndex and polls
