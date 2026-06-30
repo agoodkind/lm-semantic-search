@@ -38,7 +38,7 @@ endif
 # generates the tree-sitter parser; GO_MK_WORKSPACE_USE materializes a gitignored
 # go.work that routes the gksyntax submodule into the build, so both exist before
 # any target compiles the grammar packages.
-GO_MK_GENERATE := gksyntax-grammars
+GO_MK_GENERATE := gksyntax-grammars cbm-engine
 GO_MK_GENERATE_INPUTS := third_party/gksyntax
 GO_MK_GENERATE_OUTPUTS := \
 	third_party/gksyntax/treesitter/grammars/swift/upstream/src/parser.c \
@@ -58,7 +58,7 @@ include bootstrap.mk
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: deploy deploy-service daemon-wait daemon-status kill-orphans
+.PHONY: cbm-engine deploy deploy-service daemon-wait daemon-status kill-orphans
 
 # daemon-status and daemon-wait call the installed CLI; kill-orphans matches the
 # installed MCP binary by name.
@@ -107,6 +107,11 @@ gksyntax-grammars:
 # The order-only prerequisite that runs gksyntax-grammars before every compile,
 # vet, lint, test, install, and release target is wired centrally in go.mk via
 # GO_MK_GENERATE (set above), so no per-target list is maintained here.
+
+cbm-engine: build/libcbm_engine.a
+
+build/libcbm_engine.a: scripts/build-cbm-engine.sh third_party/cbm/Makefile.cbm
+	"$(CURDIR)/scripts/build-cbm-engine.sh"
 
 deploy:
 	$(MAKE) install
