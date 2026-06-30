@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/lm-semantic-search/internal/cbm"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
@@ -72,6 +73,8 @@ type Manager struct {
 	lastJobJournalAt map[string]time.Time
 	runner           indexingRunner
 	semantic         semanticIndex
+	graphEngines     map[string]*cbm.Engine
+	graphMutex       sync.Mutex
 	lifecycleHook    CodebaseLifecycleHook
 	lifecycleMutex   sync.Mutex
 	// indexSlots caps concurrently running index jobs. Each runJob holds one
@@ -136,6 +139,8 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		lastJobJournalAt:   map[string]time.Time{},
 		runner:             indexer.NewRunner(),
 		semantic:           nil,
+		graphEngines:       map[string]*cbm.Engine{},
+		graphMutex:         sync.Mutex{},
 		lifecycleHook:      nil,
 		lifecycleMutex:     sync.Mutex{},
 		indexSlots:         make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
@@ -145,6 +150,14 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		deferredBuildDelay: defaultDeferredBuildDelay,
 		indexability:       nil,
 		observer:           nil,
+	}
+	if err := store.EnsureDir(cfg.GraphDir); err != nil {
+		slog.ErrorContext(ctx, "create graph cache directory failed", "path", cfg.GraphDir, "err", err)
+		return nil, fmt.Errorf("create graph cache directory: %w", err)
+	}
+	if err := os.Setenv("CBM_CACHE_DIR", cfg.GraphDir); err != nil {
+		slog.ErrorContext(ctx, "set cbm graph cache directory failed", "path", cfg.GraphDir, "err", err)
+		return nil, fmt.Errorf("set cbm graph cache directory: %w", err)
 	}
 	// The resolver reads each codebase's custom ignore patterns straight from the
 	// registry source of truth at build time, so per-codebase ignore state has no
@@ -654,6 +667,10 @@ func (manager *Manager) ClearIndex(ctx context.Context, requestedPath string, cl
 	}
 	if err := store.RemoveFile(manager.merklePath(codebase.ID)); err != nil {
 		return model.Codebase{}, fmt.Errorf("remove Merkle snapshot for %s: %w", codebase.ID, err)
+	}
+	manager.closeGraphEngine(codebase.ID)
+	if err := manager.removeGraphFiles(ctx, codebase.ID); err != nil {
+		return model.Codebase{}, fmt.Errorf("remove graph cache for %s: %w", codebase.ID, err)
 	}
 	if manager.semantic != nil {
 		if err := manager.semantic.Drop(ctx, codebase.CanonicalPath); err != nil && !errors.Is(err, semantic.ErrUnavailable) {

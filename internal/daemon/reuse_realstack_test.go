@@ -471,6 +471,7 @@ func newRealSemanticManager(t *testing.T, openAIBaseURL string) (*Manager, strin
 		LocksDir:                  filepath.Join(stateRoot, "locks"),
 		SocketsDir:                filepath.Join(stateRoot, "sockets"),
 		ChunksDir:                 filepath.Join(stateRoot, "chunks"),
+		GraphDir:                  filepath.Join(stateRoot, "graph"),
 		ContextRoot:               filepath.Join(stateRoot, "context"),
 		EmbeddingProvider:         "OpenAI",
 		EmbeddingModel:            "text-embedding-3-small",
@@ -501,6 +502,7 @@ func newRealSemanticManager(t *testing.T, openAIBaseURL string) (*Manager, strin
 		cfg.LocksDir,
 		cfg.SocketsDir,
 		cfg.ChunksDir,
+		cfg.GraphDir,
 		cfg.ContextRoot,
 	} {
 		if err := store.EnsureDir(path); err != nil {

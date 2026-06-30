@@ -1268,6 +1268,7 @@ func newTestManager(t *testing.T) (*Manager, config.Config, string) {
 		LocksDir:          filepath.Join(stateRoot, "locks"),
 		SocketsDir:        filepath.Join(stateRoot, "sockets"),
 		ChunksDir:         filepath.Join(stateRoot, "chunks"),
+		GraphDir:          filepath.Join(stateRoot, "graph"),
 		ContextRoot:       filepath.Join(stateRoot, "context"),
 		EmbeddingProvider: "OpenAI",
 		EmbeddingModel:    "nvidia/NV-EmbedCode-7b-v1",
@@ -1275,7 +1276,7 @@ func newTestManager(t *testing.T) (*Manager, config.Config, string) {
 		SyncIntervalMS:    300000,
 		SyncLockStaleMS:   600000,
 	}
-	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.ContextRoot} {
+	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot} {
 		if err := store.EnsureDir(path); err != nil {
 			t.Fatalf("EnsureDir returned error: %v", err)
 		}

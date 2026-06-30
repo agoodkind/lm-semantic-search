@@ -177,6 +177,7 @@ func TestNewManagerMarksStoreUnavailableWhenMilvusBootDialFails(t *testing.T) {
 		LocksDir:               filepath.Join(stateRoot, "locks"),
 		SocketsDir:             filepath.Join(stateRoot, "sockets"),
 		ChunksDir:              filepath.Join(stateRoot, "chunks"),
+		GraphDir:               filepath.Join(stateRoot, "graph"),
 		ContextRoot:            filepath.Join(stateRoot, "context"),
 		EmbeddingProvider:      "OpenAI",
 		EmbeddingModel:         "text-embedding-3-small",
@@ -187,7 +188,7 @@ func TestNewManagerMarksStoreUnavailableWhenMilvusBootDialFails(t *testing.T) {
 		SyncLockStaleMS:        600000,
 		MaxConcurrentIndexJobs: 1,
 	}
-	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.ContextRoot} {
+	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot} {
 		if err := store.EnsureDir(path); err != nil {
 			t.Fatalf("EnsureDir returned error: %v", err)
 		}

@@ -383,12 +383,24 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	}
 
 	manager.absorbDescendants(ctx, descendants)
+	manager.indexGraphNonFatal(ctx, job.CodebaseID, job.CanonicalPath)
 
 	result.FileHashes = state.working
 	fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, state.working, result.TotalChunks)
 	result.IndexedFiles = fileCount
 	result.TotalChunks = chunkCount
 	manager.updateJobCompleted(ctx, job.ID, result)
+}
+
+func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID string, canonicalPath string) {
+	engine, err := manager.graphEngine(ctx, codebaseID)
+	if err != nil {
+		slog.WarnContext(ctx, "open graph engine failed; continuing without graph index", "codebase_id", codebaseID, "err", err)
+		return
+	}
+	if err = engine.Index(ctx, canonicalPath, "fast"); err != nil {
+		slog.WarnContext(ctx, "graph indexing failed; continuing with semantic index", "codebase_id", codebaseID, "path", canonicalPath, "err", err)
+	}
 }
 
 // resolveReuseSeed loads build-wide reuse vectors from indexed descendants and
