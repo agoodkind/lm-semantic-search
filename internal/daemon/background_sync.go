@@ -225,6 +225,13 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 
 	syncer.manager.RepairMissingCollections(ctx)
 
+	// embedderDegraded snapshots shared-dependency health once per sweep to drive
+	// the canary backoff below. When the embedding pipeline last failed, a sync
+	// that must embed fails again immediately, so the sweep attempts only one
+	// changed codebase per interval instead of one per changed codebase.
+	embedderDegraded := syncer.manager.DependencyHealth().Degraded()
+	canarySpent := false
+
 	codebases := syncer.manager.ListIndexes(ctx)
 	for _, codebase := range codebases {
 		if codebase.Kind == model.CodebaseKindDocument {
@@ -280,6 +287,22 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 		metrics.SweepRan(changed)
 		if !changed {
 			continue
+		}
+
+		// When the embedding pipeline is degraded, a sync that must embed fails
+		// immediately and is superseded next interval, so syncing every changed
+		// codebase would churn enqueue-fail-supersede once per codebase per
+		// interval. Attempt at most one changed codebase as a canary while
+		// degraded and skip the rest: the outage then costs one failed job per
+		// interval, and the canary's job outcome refreshes dependency health, so a
+		// recovered embedder is detected within one interval and the next sweep
+		// resumes every changed codebase (bounded by the index-slot semaphore).
+		if embedderDegraded {
+			if canarySpent {
+				continue
+			}
+			canarySpent = true
+			slog.InfoContext(iterCtx, "sync.embedder_degraded_canary", "component", "daemon", "subcomponent", "sync", "path", codebase.CanonicalPath)
 		}
 
 		_, _, _, err = syncer.manager.SyncIndex(
