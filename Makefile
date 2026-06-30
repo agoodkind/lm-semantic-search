@@ -86,7 +86,9 @@ TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
 
 .PHONY: gksyntax-grammars
 gksyntax-grammars:
-	@git submodule update --init --recursive $(GKS_DIR)
+	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
+		git submodule update --init --recursive $(GKS_DIR); \
+	fi
 	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
 		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
 		exit 1; \

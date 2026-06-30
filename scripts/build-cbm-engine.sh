@@ -11,14 +11,9 @@ ARCHIVE_PATH="${ROOT_DIR}/build/libcbm_engine.a"
 CC="${CC:-cc}"
 CXX="${CXX:-c++}"
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-    echo "build-cbm-engine: darwin/arm64 is required" >&2
-    exit 1
-fi
-
-if [[ "$(uname -m)" != "arm64" ]]; then
-    echo "build-cbm-engine: darwin/arm64 is required" >&2
-    exit 1
+if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+    echo "build-cbm-engine: skipping archive build on non-darwin/arm64; the engine stub is used on this platform" >&2
+    exit 0
 fi
 
 if [[ ! -f "${CBM_DIR}/Makefile.cbm" ]]; then
