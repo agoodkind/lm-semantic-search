@@ -98,6 +98,12 @@ type Manager struct {
 	// ignoreOverridesFromRegistry, so per-codebase ignore state lives only in the
 	// registry and the matcher cache, never in a third copy.
 	indexability *indexability.Resolver
+	// observer is the single owner of resolver-cache invalidation. Every path that
+	// changes a codebase's ignore rules (a committed config, an adopted or
+	// discovered codebase, a live ignore-source edit, or a backstop sweep) routes
+	// through it instead of calling the resolver's invalidate directly, so
+	// invalidation has exactly one home.
+	observer *ignoreObserver
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -138,11 +144,15 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		lastDepProbeAt:     time.Time{},
 		deferredBuildDelay: defaultDeferredBuildDelay,
 		indexability:       nil,
+		observer:           nil,
 	}
 	// The resolver reads each codebase's custom ignore patterns straight from the
 	// registry source of truth at build time, so per-codebase ignore state has no
 	// second copy and never drifts from the registry.
 	manager.indexability = indexability.NewResolver(manager.ignoreOverridesFromRegistry)
+	// The observer is the sole caller of the resolver's invalidate, so every
+	// consumer signals it instead of invalidating the cache itself.
+	manager.observer = newIgnoreObserver(manager.indexability)
 	semanticService, err := semantic.NewService(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create semantic service: %w", err)
@@ -531,10 +541,10 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	if err := manager.appendJobLocked("start_index", job); err != nil {
 		return emptyJob, emptyCodebase, false, "", err
 	}
-	// The committed EffectiveConfig may carry new custom ignore patterns, so drop
-	// the cached matcher and let the next live decision rebuild it from the
-	// refreshed override snapshot.
-	manager.indexability.InvalidateRules(codebase.ID)
+	// The committed EffectiveConfig may carry new custom ignore patterns, so signal
+	// the observer to invalidate the cached matcher; the next live decision rebuilds
+	// it from the registry source of truth.
+	manager.observer.Invalidate(codebase.ID)
 	return job, codebase, false, overlapsCodebaseID, nil
 }
 
@@ -603,8 +613,9 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 		return emptyJob, emptyCodebase, false, err
 	}
 	// The re-enriched EffectiveConfig may carry new custom ignore patterns, so
-	// drop the cached matcher and rebuild from the refreshed override snapshot.
-	manager.indexability.InvalidateRules(codebase.ID)
+	// signal the observer to invalidate; the next decision rebuilds from the
+	// registry source of truth.
+	manager.observer.Invalidate(codebase.ID)
 	manager.mu.Unlock()
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)

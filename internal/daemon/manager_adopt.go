@@ -57,9 +57,10 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 		var empty model.Codebase
 		return empty, false
 	}
-	// The adopted EffectiveConfig may carry custom ignore patterns, so drop any
-	// stale cached matcher and rebuild from the refreshed override snapshot.
-	manager.indexability.InvalidateRules(record.ID)
+	// The adopted EffectiveConfig may carry custom ignore patterns, so signal the
+	// observer to invalidate any stale cached matcher; the next decision rebuilds
+	// from the registry source of truth.
+	manager.observer.Invalidate(record.ID)
 	manager.mu.Unlock()
 
 	manager.seedAdoptedMerkle(ctx, record)
