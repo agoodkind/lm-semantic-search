@@ -289,6 +289,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, state.working, result.TotalChunks)
 	result.IndexedFiles = fileCount
 	result.TotalChunks = chunkCount
+	manager.indexGraphNonFatal(ctx, codebase.ID, job.CanonicalPath)
 	manager.updateJobCompleted(ctx, job.ID, result)
 	return true
 }
