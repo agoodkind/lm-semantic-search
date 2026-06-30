@@ -1,3 +1,6 @@
 [submodule "third_party/gksyntax"]
 	path = third_party/gksyntax
 	url = https://github.com/agoodkind/gksyntax.git
+[submodule "third_party/cbm"]
+	path = third_party/cbm
+	url = git@github.com:DeusData/codebase-memory-mcp.git
