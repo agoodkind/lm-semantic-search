@@ -1,4 +1,7 @@
 📁 {{ .Name }}
 🔄 {{ .Heading }}: {{ .Percent }}%
 {{ .BreakdownBlock }}
+{{- if .GraphLine }}
+{{ .GraphLine }}
+{{- end }}
 🕐 Updated {{ .UpdatedAt }}
