@@ -223,6 +223,19 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 		}
 	}()
 
+	// Skip the sweep whenever the embedder is already recorded unreachable. That
+	// one fact is recorded reactively by whatever first fails an embed against the
+	// down endpoint (a search, an index job, or an earlier sweep that attempted
+	// before the fact was set). Once it is set, every sweep reads it here and
+	// enqueues nothing, so a sustained outage stops re-recording itself as a fresh
+	// failed and superseded job per codebase per interval. The fact clears through
+	// the existing embed-success signals (a search query embed or a real embed),
+	// after which the next sweep resumes. This only reads the shared health owner;
+	// it adds no probe and no second source of truth.
+	if syncer.manager.DependencyHealth().Mode == dependencyEmbedderUnreachable {
+		return
+	}
+
 	syncer.manager.RepairMissingCollections(ctx)
 
 	codebases := syncer.manager.ListIndexes(ctx)
