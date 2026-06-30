@@ -92,12 +92,31 @@ func (watcher *Watcher) AddCodebase(ctx context.Context, codebase model.Codebase
 		watcher.mu.Unlock()
 		return
 	}
-	commonDir, _ := gitworktree.CommonDirAt(codebase.CanonicalPath)
+	// WorktreeCommonDir is persisted only for linked worktrees (per
+	// model.Codebase), so it is the source of truth for a linked worktree's
+	// shared git common dir and the watcher reads it rather than recomputing. It
+	// is empty by design for a main worktree and for a Go-adopted linked worktree
+	// (the adopt path does not populate it), so fall back to CommonDirAt when the
+	// record value is empty. commonDir feeds IsIgnoreSourcePath's repo
+	// info/exclude check and dispatch's nested-worktree scoping. CommonDirAt can
+	// still fail for a non-git or malformed root, leaving commonDir empty; both
+	// callers degrade safely, treating empty as no info/exclude and no nested
+	// scoping.
+	commonDir := codebase.WorktreeCommonDir
+	if commonDir == "" {
+		commonDir, _ = gitworktree.CommonDirAt(codebase.CanonicalPath)
+	}
 	watcher.roots[codebase.ID] = watchRoot{codebaseID: codebase.ID, root: codebase.CanonicalPath, commonDir: commonDir}
 	watcher.mu.Unlock()
 
 	recursivePath := filepath.Join(codebase.CanonicalPath, "...")
 	if err := notify.Watch(recursivePath, watcher.events, notify.Create, notify.Remove, notify.Write, notify.Rename); err != nil {
+		// Roll the roots entry back so a failed registration does not leave the
+		// codebase recorded with no OS watch installed, which would make a later
+		// AddCodebase a no-op and block any retry.
+		watcher.mu.Lock()
+		delete(watcher.roots, codebase.ID)
+		watcher.mu.Unlock()
 		slog.ErrorContext(ctx, "watcher.register_failed", "component", "daemon", "subcomponent", "watcher", "root", codebase.CanonicalPath, "err", err)
 		return
 	}
