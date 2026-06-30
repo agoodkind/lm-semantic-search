@@ -54,6 +54,21 @@ const (
 	CodebaseKindDocument CodebaseKind = "document"
 )
 
+// GraphState captures the best-known state of the per-codebase graph store.
+// The empty value is accepted as absent for older registry records.
+type GraphState string
+
+const (
+	// GraphStateUnsupported means the cbm graph engine cannot run on this platform.
+	GraphStateUnsupported GraphState = "unsupported"
+	// GraphStateAbsent means no successful graph build has been recorded.
+	GraphStateAbsent GraphState = "absent"
+	// GraphStateReady means the graph was built from GraphSnapshotHash.
+	GraphStateReady GraphState = "ready"
+	// GraphStateStale means a graph build failed or no longer matches the semantic snapshot.
+	GraphStateStale GraphState = "stale"
+)
+
 // JobState captures the lifecycle state of one daemon job.
 type JobState string
 
@@ -215,6 +230,8 @@ type Codebase struct {
 	CollectionName        string           `json:"collection_name,omitempty"`
 	LegacyCollectionNames []string         `json:"legacy_collection_names,omitempty"`
 	MerkleSnapshotPath    string           `json:"merkle_snapshot_path,omitempty"`
+	GraphState            GraphState       `json:"graph_state,omitempty"`
+	GraphSnapshotHash     string           `json:"graph_snapshot_hash,omitempty"`
 	Quarantine            *QuarantineState `json:"quarantine,omitempty"`
 	// WorktreeCommonDir is the shared git common dir when this codebase's root
 	// is a linked git worktree, else empty. It lets the daemon recognize a
