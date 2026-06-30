@@ -265,6 +265,13 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 			correlation.IdentityAttribute{Key: "job_id", Value: syntheticJobID},
 		))
 
+		// Keep this codebase's ignore rules fresh independent of the file watcher.
+		// CheckSources stats the codebase's ignore sources and invalidates the
+		// resolver when any changed, so an edit to a non-indexed source or any edit
+		// made while the watcher is disabled is caught on this sweep. It runs before
+		// and independent of the change detection below.
+		syncer.manager.observer.CheckSources(iterCtx, codebase.ID, codebase.CanonicalPath)
+
 		changed, err := syncer.codebaseChanged(iterCtx, codebase)
 		if err != nil {
 			slog.ErrorContext(iterCtx, "check sync state failed", "path", codebase.CanonicalPath, "err", err)

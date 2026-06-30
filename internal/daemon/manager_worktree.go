@@ -94,6 +94,10 @@ func (manager *Manager) discoverWorktree(ctx context.Context, info gitworktree.I
 		var empty model.Codebase
 		return empty, false
 	}
+	// A discovered worktree persists a fresh EffectiveConfig, so signal the
+	// observer to invalidate rather than relying on the id being new; the next
+	// decision rebuilds from the registry source of truth.
+	manager.observer.Invalidate(record.ID)
 	manager.mu.Unlock()
 
 	notifyCtx := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
