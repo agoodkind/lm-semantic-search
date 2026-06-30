@@ -15,10 +15,13 @@ var filesetRoutedFiles = []string{
 	"internal/indexer/indexer.go",
 }
 
-var filesetGateFunctions = map[string]bool{
-	"EligibleByStat":  true,
-	"EligibleContent": true,
-	"MaxFileBytes":    true,
+// filesetDecisionMethods names the resolver entry points that own the file-set
+// verdict. The gate helpers (EligibleByStat, EligibleContent, MaxFileBytes) are
+// unexported inside internal/indexability, so the routed files must reach the
+// size and content gates only through these resolver decisions.
+var filesetDecisionMethods = map[string]bool{
+	"Decide":        true,
+	"DecideContent": true,
 }
 
 func TestFilesetEligibilityRoutesThroughSharedPackage(t *testing.T) {
@@ -41,8 +44,8 @@ func TestFilesetEligibilityRoutesThroughSharedPackage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-		if !callsIndexabilityGate(parsed) {
-			violations = append(violations, rel+": imports indexability but does not call an eligibility gate")
+		if !callsResolverDecision(parsed) {
+			violations = append(violations, rel+": imports indexability but does not route the file-set verdict through a resolver decision")
 		}
 	}
 
@@ -104,8 +107,9 @@ func importsIndexability(file *ast.File) bool {
 	return false
 }
 
-func callsIndexabilityGate(file *ast.File) bool {
-	callsGate := false
+func callsResolverDecision(file *ast.File) bool {
+	resolverNames := resolverTypedNames(file)
+	callsDecision := false
 	ast.Inspect(file, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
@@ -115,17 +119,69 @@ func callsIndexabilityGate(file *ast.File) bool {
 		if !ok {
 			return true
 		}
-		receiver, ok := selector.X.(*ast.Ident)
-		if !ok || receiver.Name != "indexability" {
+		if !filesetDecisionMethods[selector.Sel.Name] {
 			return true
 		}
-		if filesetGateFunctions[selector.Sel.Name] {
-			callsGate = true
+		// Require the receiver be an identifier declared with the resolver type,
+		// so a same-named Decide/DecideContent method on some other type cannot
+		// satisfy the guard. Type info is unavailable in this AST-only check, so
+		// the receiver name set is gathered from declarations in the same file.
+		receiver, ok := selector.X.(*ast.Ident)
+		if ok && resolverNames[receiver.Name] {
+			callsDecision = true
 			return false
 		}
 		return true
 	})
-	return callsGate
+	return callsDecision
+}
+
+// resolverTypedNames returns the identifier names in file that are declared with
+// type indexability.Resolver or *indexability.Resolver, across function
+// parameters, struct fields, and var declarations. callsResolverDecision uses
+// the set to confirm a Decide/DecideContent call's receiver is a resolver.
+func resolverTypedNames(file *ast.File) map[string]bool {
+	names := make(map[string]bool)
+	ast.Inspect(file, func(node ast.Node) bool {
+		field, ok := node.(*ast.Field)
+		if !ok || !isIndexabilityResolverType(field.Type) {
+			return true
+		}
+		for _, name := range field.Names {
+			names[name.Name] = true
+		}
+		return true
+	})
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok || !isIndexabilityResolverType(valueSpec.Type) {
+				continue
+			}
+			for _, name := range valueSpec.Names {
+				names[name.Name] = true
+			}
+		}
+	}
+	return names
+}
+
+// isIndexabilityResolverType reports whether expr is indexability.Resolver or
+// *indexability.Resolver.
+func isIndexabilityResolverType(expr ast.Expr) bool {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		return isIndexabilityResolverType(star.X)
+	}
+	selector, ok := expr.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Resolver" {
+		return false
+	}
+	pkg, ok := selector.X.(*ast.Ident)
+	return ok && pkg.Name == "indexability"
 }
 
 func maxFileBytesConstNames(valueSpec *ast.ValueSpec) bool {

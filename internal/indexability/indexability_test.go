@@ -7,14 +7,18 @@ import (
 	"testing"
 )
 
-// isolateHome points HOME and GIT_CONFIG_GLOBAL at empty temp locations so the
-// global excludes, the git config, and ~/.context/.contextignore contribute
-// nothing and the test only sees the rules it writes. It cannot run in parallel
-// because it sets process environment.
+// isolateHome points HOME, XDG_CONFIG_HOME, and GIT_CONFIG_GLOBAL at empty temp
+// locations so the global excludes, the git config, and ~/.context/.contextignore
+// contribute nothing and the test only sees the rules it writes. Pinning
+// XDG_CONFIG_HOME under the temp home keeps the resolver's global-excludes path
+// (which honors XDG_CONFIG_HOME, like git) HOME-derived, so a runner that exports
+// XDG_CONFIG_HOME cannot leak its real ~/.config into the test. It cannot run in
+// parallel because it sets process environment.
 func isolateHome(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "absent-gitconfig"))
 }
 
@@ -163,6 +167,17 @@ func TestDecideContentDenylistAndStatGates(t *testing.T) {
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "image.png", statInfo(t, filepath.Join(root, "image.png"))), false, ReasonIgnored)
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "main.go", statInfo(t, filepath.Join(root, "main.go"))), true, Keep)
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "src", statInfo(t, filepath.Join(root, "src"))), false, ReasonNotRegular)
+}
+
+// TestDecideContentGate proves DecideContent wraps the post-read content gate:
+// valid UTF-8 stays indexable while invalid UTF-8 is rejected with the content
+// reason, so callers route the content stage through the resolver.
+func TestDecideContentGate(t *testing.T) {
+	t.Parallel()
+	resolver := NewResolver(nil)
+
+	assertDecision(t, resolver.DecideContent([]byte("package main\n")), true, Keep)
+	assertDecision(t, resolver.DecideContent([]byte{'g', 'o', 0xff}), false, ReasonNonUTF8)
 }
 
 func TestDecideExcludesGitDirAsOutOfScope(t *testing.T) {

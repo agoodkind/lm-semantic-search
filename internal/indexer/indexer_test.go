@@ -94,7 +94,7 @@ func TestIndexFilesSkipsInvalidUTF8File(t *testing.T) {
 	}
 
 	runner := NewRunner()
-	result, err := runner.IndexFiles(context.Background(), tempDirectory, []string{"valid.go", "invalid.go"}, model.IndexConfig{
+	result, err := runner.IndexFiles(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, []string{"valid.go", "invalid.go"}, model.IndexConfig{
 		SplitterType:      "langchain",
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
@@ -121,7 +121,7 @@ func TestIndexOneReportsRemovedForMissingFile(t *testing.T) {
 
 	tempDirectory := t.TempDir()
 	runner := NewRunner()
-	result, err := runner.IndexOne(context.Background(), tempDirectory, "gone.go", model.IndexConfig{
+	result, err := runner.IndexOne(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, "gone.go", model.IndexConfig{
 		SplitterType:      "langchain",
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
@@ -152,7 +152,7 @@ func TestIndexFilesExcludesMissingFile(t *testing.T) {
 	}
 
 	runner := NewRunner()
-	result, err := runner.IndexFiles(context.Background(), tempDirectory, []string{"valid.go", "gone.go"}, model.IndexConfig{
+	result, err := runner.IndexFiles(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, []string{"valid.go", "gone.go"}, model.IndexConfig{
 		SplitterType:      "langchain",
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
@@ -208,8 +208,9 @@ func TestIndexOneAndMerkleCaptureAgreeOnEligibleFiles(t *testing.T) {
 		"linked-dir.go",
 	}
 	indexerKept := map[string]string{}
+	resolver := indexability.NewResolver(nil)
 	for _, relativePath := range relativePaths {
-		result, indexErr := runner.IndexOne(context.Background(), tempDirectory, relativePath, config)
+		result, indexErr := runner.IndexOne(context.Background(), resolver, "cb", tempDirectory, relativePath, config)
 		if indexErr != nil {
 			t.Fatalf("IndexOne(%q) returned error: %v", relativePath, indexErr)
 		}

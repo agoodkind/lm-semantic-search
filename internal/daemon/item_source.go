@@ -111,7 +111,7 @@ func (source codeItemSource) indexOne(ctx context.Context, relativePath string) 
 				done <- indexOneOutcome{result: empty, err: fmt.Errorf("index code file panic: %v", recovered)}
 			}
 		}()
-		result, err := source.runner.IndexOne(ctx, source.canonicalPath, relativePath, source.config)
+		result, err := source.runner.IndexOne(ctx, source.resolver, source.codebaseID, source.canonicalPath, relativePath, source.config)
 		done <- indexOneOutcome{result: result, err: err}
 	}()
 

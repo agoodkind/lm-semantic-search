@@ -124,10 +124,11 @@ func (snapshot *Snapshot) CoversPath(relativePath string) bool {
 
 // Capture walks a codebase once and records content hashes for the tracked
 // files. The walk lists files through discovery, which defers every scope and
-// ignore decision to internal/indexability; Capture then applies the size and
-// content gates so the snapshot's file set matches the indexer's. The resolver
-// and codebaseID are threaded into discovery so the walk uses the daemon's one
-// shared indexability resolver.
+// ignore decision to internal/indexability; Capture then routes the size and
+// content gates back through the same resolver so the snapshot's file set
+// matches the indexer's. The resolver and codebaseID are threaded into
+// discovery and the gate choke so the walk uses the daemon's one shared
+// indexability resolver.
 func Capture(
 	ctx context.Context,
 	resolver *indexability.Resolver,
@@ -141,7 +142,6 @@ func Capture(
 	}
 
 	files := make(map[string]string, len(discoveryResult.Files))
-	maxFileBytes := indexability.MaxFileBytes()
 	for _, path := range discoveryResult.Files {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, fmt.Errorf("capture snapshot cancelled: %w", err)
@@ -158,18 +158,6 @@ func Capture(
 			}
 			slog.ErrorContext(ctx, "stat file for snapshot failed", "path", path, "err", err)
 			return Snapshot{}, fmt.Errorf("stat file for snapshot %s: %w", path, err)
-		}
-		if keep, _ := indexability.EligibleByStat(info, maxFileBytes); !keep {
-			continue
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) || skipReadFailureForSnapshot(path) {
-				continue
-			}
-			slog.ErrorContext(ctx, "read file for snapshot failed", "path", path, "err", err)
-			return Snapshot{}, fmt.Errorf("read file for snapshot %s: %w", path, err)
 		}
 
 		relativePath, err := filepath.Rel(root, path)
@@ -190,10 +178,26 @@ func Capture(
 				err,
 			)
 		}
-		// Skip files the indexer will also skip so the indexer and merkle
-		// agree on the file set. Otherwise every sync treats the same skipped
-		// file as "modified" forever and the delta loop never converges.
-		if keep, _ := indexability.EligibleContent(data); !keep {
+		// Route the stat-stage gate through the resolver so the snapshot's file
+		// set matches the indexer's; discovery already applied scope and ignore,
+		// so this re-check only adds the size and not-regular verdicts.
+		if !resolver.Decide(ctx, codebaseID, root, filepath.ToSlash(relativePath), info).Indexed {
+			continue
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || skipReadFailureForSnapshot(path) {
+				continue
+			}
+			slog.ErrorContext(ctx, "read file for snapshot failed", "path", path, "err", err)
+			return Snapshot{}, fmt.Errorf("read file for snapshot %s: %w", path, err)
+		}
+
+		// Route the content gate through the same resolver so the indexer and
+		// merkle agree on the file set. Otherwise every sync treats the same
+		// skipped file as "modified" forever and the delta loop never converges.
+		if !resolver.DecideContent(data).Indexed {
 			continue
 		}
 		files[relativePath] = digestBytes(data)

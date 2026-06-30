@@ -22,9 +22,11 @@ const (
 	SkipNonUTF8 SkipReason = "non-utf-8"
 )
 
-// MaxFileBytes reads INDEX_MAX_FILE_BYTES. An unset or unparseable value falls
-// back to 2 MiB. A value of 0 or below disables the size cap.
-func MaxFileBytes() int64 {
+// maxFileBytes reads INDEX_MAX_FILE_BYTES. An unset or unparseable value falls
+// back to 2 MiB. A value of 0 or below disables the size cap. It is unexported
+// so the size cap is reachable only through Decide; buildRules bakes the value
+// into each codebase's rules.
+func maxFileBytes() int64 {
 	raw := os.Getenv("INDEX_MAX_FILE_BYTES")
 	if raw == "" {
 		return defaultMaxFileBytes
@@ -36,8 +38,9 @@ func MaxFileBytes() int64 {
 	return parsed
 }
 
-// EligibleByStat reports whether file metadata is eligible for indexing.
-func EligibleByStat(info os.FileInfo, maxBytes int64) (bool, SkipReason) {
+// eligibleByStat reports whether file metadata is eligible for indexing. It is
+// unexported so the stat-stage gate is reachable only through Decide.
+func eligibleByStat(info os.FileInfo, maxBytes int64) (bool, SkipReason) {
 	if !info.Mode().IsRegular() {
 		return false, SkipNotRegular
 	}
@@ -47,10 +50,28 @@ func EligibleByStat(info os.FileInfo, maxBytes int64) (bool, SkipReason) {
 	return true, SkipKeep
 }
 
-// EligibleContent reports whether file bytes are eligible for indexing.
-func EligibleContent(data []byte) (bool, SkipReason) {
+// eligibleContent reports whether file bytes are eligible for indexing. It is
+// unexported so the content-stage gate is reachable only through DecideContent.
+func eligibleContent(data []byte) (bool, SkipReason) {
 	if !utf8.Valid(data) {
 		return false, SkipNonUTF8
 	}
 	return true, SkipKeep
+}
+
+// reasonForSkip maps a stat or content gate SkipReason to the Decision Reason
+// the resolver returns from Decide and DecideContent.
+func reasonForSkip(skip SkipReason) Reason {
+	switch skip {
+	case SkipNotRegular:
+		return ReasonNotRegular
+	case SkipOversize:
+		return ReasonOversize
+	case SkipNonUTF8:
+		return ReasonNonUTF8
+	case SkipKeep:
+		return Keep
+	default:
+		return Keep
+	}
 }

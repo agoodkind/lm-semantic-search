@@ -135,7 +135,7 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 			return manager.convergeRemoveExcluded(ctx, root, relativePath, string(decision.Reason), snapshot)
 		}
 	}
-	fileResult, indexErr := manager.runner.IndexOne(ctx, root, relativePath, cfg)
+	fileResult, indexErr := manager.runner.IndexOne(ctx, manager.indexability, codebase.ID, root, relativePath, cfg)
 	if indexErr != nil {
 		slog.ErrorContext(ctx, "converge.index_failed", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", indexErr)
 		return false

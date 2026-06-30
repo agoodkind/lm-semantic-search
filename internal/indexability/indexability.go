@@ -31,6 +31,9 @@ const (
 	ReasonNotRegular Reason = "not-regular"
 	// ReasonOversize marks regular files above the configured byte cap.
 	ReasonOversize Reason = "oversize"
+	// ReasonNonUTF8 marks files whose content is not valid UTF-8, the post-read
+	// content gate DecideContent applies.
+	ReasonNonUTF8 Reason = "non-utf-8"
 )
 
 // Decision is the indexability verdict for one path.
@@ -96,14 +99,24 @@ func (r *Resolver) Decide(ctx context.Context, codebaseID string, root string, r
 		return Decision{Indexed: false, Reason: reason}
 	}
 
-	if !info.Mode().IsRegular() {
-		return Decision{Indexed: false, Reason: ReasonNotRegular}
+	if keep, skip := eligibleByStat(info, rules.maxBytes); !keep {
+		return Decision{Indexed: false, Reason: reasonForSkip(skip)}
 	}
 
-	if rules.maxBytes > 0 && info.Size() > rules.maxBytes {
-		return Decision{Indexed: false, Reason: ReasonOversize}
-	}
+	return Decision{Indexed: true, Reason: Keep}
+}
 
+// DecideContent applies the post-read content gate to data: a file whose bytes
+// are not valid UTF-8 is rejected, because Milvus requires every VarChar field
+// to be valid UTF-8 on the gRPC wire. Decide already covers the pre-read
+// size, scope, and not-regular gates; DecideContent is the second half of the
+// file-set choke for the bytes only the caller can read, so merkle.Capture and
+// the indexer route their content decision here instead of running the gate
+// themselves.
+func (r *Resolver) DecideContent(data []byte) Decision {
+	if keep, skip := eligibleContent(data); !keep {
+		return Decision{Indexed: false, Reason: reasonForSkip(skip)}
+	}
 	return Decision{Indexed: true, Reason: Keep}
 }
 
@@ -277,7 +290,7 @@ func (r *Resolver) buildRules(ctx context.Context, codebaseID string, root strin
 	return &builtRules{
 		matcher:   matcher,
 		commonDir: commonDir,
-		maxBytes:  MaxFileBytes(),
+		maxBytes:  maxFileBytes(),
 	}
 }
 
