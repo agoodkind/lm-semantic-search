@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -178,6 +180,64 @@ func TestDecideContentGate(t *testing.T) {
 
 	assertDecision(t, resolver.DecideContent([]byte("package main\n")), true, Keep)
 	assertDecision(t, resolver.DecideContent([]byte{'g', 'o', 0xff}), false, ReasonNonUTF8)
+}
+
+// TestIgnoreSourcesListsReadOrderAndPrunes proves IgnoreSources reports the one
+// ordered set of ignore-source files the resolver reads: the global excludes,
+// the contextignore path, the repo info/exclude, then each nested .gitignore the
+// pruned walk visits. A .gitignore inside a directory the rules already exclude
+// is pruned, so it is absent from the set.
+func TestIgnoreSourcesListsReadOrderAndPrunes(t *testing.T) {
+	isolateHome(t)
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".git", "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(root, ".git", "info", "exclude"), "secret.txt\n")
+	writeFile(t, filepath.Join(root, ".gitignore"), "ignored_dir/\n")
+	writeFile(t, filepath.Join(root, "sub", ".gitignore"), "*.tmp\n")
+	writeFile(t, filepath.Join(root, "sub", "keep.go"), "package sub\n")
+	writeFile(t, filepath.Join(root, "ignored_dir", ".gitignore"), "*.x\n")
+
+	resolver := NewResolver(nil)
+	sources := resolver.IgnoreSources(context.Background(), root)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir returned error: %v", err)
+	}
+	wantPresent := []string{
+		filepath.Join(home, ".config", "git", "ignore"),
+		filepath.Join(home, ".context", ".contextignore"),
+		filepath.Join(root, ".gitignore"),
+		filepath.Join(root, "sub", ".gitignore"),
+	}
+	for _, want := range wantPresent {
+		if !slices.Contains(sources, want) {
+			t.Fatalf("IgnoreSources = %v, want to contain %q", sources, want)
+		}
+	}
+
+	pruned := filepath.Join(root, "ignored_dir", ".gitignore")
+	if slices.Contains(sources, pruned) {
+		t.Fatalf("IgnoreSources = %v, want pruned .gitignore %q absent", sources, pruned)
+	}
+
+	hasInfoExclude := false
+	for _, source := range sources {
+		if strings.HasSuffix(filepath.ToSlash(source), "info/exclude") {
+			hasInfoExclude = true
+		}
+	}
+	if !hasInfoExclude {
+		t.Fatalf("IgnoreSources = %v, want to contain a repo info/exclude path", sources)
+	}
+
+	// The root .gitignore precedes the nested sub/.gitignore, mirroring the
+	// top-down walk order buildRules relies on (last match wins).
+	rootIndex := slices.Index(sources, filepath.Join(root, ".gitignore"))
+	subIndex := slices.Index(sources, filepath.Join(root, "sub", ".gitignore"))
+	if rootIndex < 0 || subIndex < 0 || rootIndex > subIndex {
+		t.Fatalf("IgnoreSources order = %v, want root .gitignore before sub/.gitignore", sources)
+	}
 }
 
 func TestDecideExcludesGitDirAsOutOfScope(t *testing.T) {

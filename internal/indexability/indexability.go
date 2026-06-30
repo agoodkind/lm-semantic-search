@@ -271,15 +271,12 @@ func hasGitComponent(relPath string) bool {
 // can still index a denylisted name; the custom overrides stay above .gitignore
 // so a user-supplied pattern wins over a repository re-include.
 func (r *Resolver) buildRules(ctx context.Context, codebaseID string, root string) *builtRules {
+	// The registry's WorktreeCommonDir is the source of truth, but the resolver
+	// derives commonDir from the path here because CommonDirAt is a deterministic
+	// function of root's on-disk .git topology and so cannot drift from it.
 	commonDir, _ := gitworktree.CommonDirAt(root)
 
-	matcher := gitignore.New("")
-	addGlobalExcludes(ctx, matcher)
-	matcher.AddFromFile(contextIgnorePath(ctx), "")
-	matcher.AddPatterns([]byte(strings.Join(contentBuiltinPatterns, "\n")), "")
-	if commonDir != "" {
-		matcher.AddFromFile(filepath.Join(commonDir, "info", "exclude"), "")
-	}
+	matcher := seedMatcher(ctx, commonDir)
 	addGitignoreFiles(ctx, matcher, root, commonDir)
 	if r.overrides != nil {
 		if extra := r.overrides(codebaseID); len(extra) > 0 {
@@ -294,12 +291,98 @@ func (r *Resolver) buildRules(ctx context.Context, codebaseID string, root strin
 	}
 }
 
+// seedMatcher builds the matcher with every ignore source that precedes the
+// nested .gitignore walk and the per-codebase overrides, in the increasing
+// priority order git-pkgs matches in: global excludes, the project ignore, the
+// built-in content denylist, then the repo info/exclude. Both buildRules and
+// IgnoreSources seed from here so the walk's pruning is identical in both.
+func seedMatcher(ctx context.Context, commonDir string) *gitignore.Matcher {
+	matcher := gitignore.New("")
+	addGlobalExcludes(ctx, matcher)
+	matcher.AddFromFile(contextIgnorePath(ctx), "")
+	matcher.AddPatterns([]byte(strings.Join(contentBuiltinPatterns, "\n")), "")
+	if commonDir != "" {
+		matcher.AddFromFile(filepath.Join(commonDir, "info", "exclude"), "")
+	}
+	return matcher
+}
+
+// IgnoreSources returns the ordered set of ignore-source file paths the
+// resolver reads when it builds rules for a codebase rooted at root: the global
+// excludes files, the ~/.context/.contextignore path, the repo
+// .git/info/exclude resolved through the common dir, then a candidate
+// .gitignore path for each directory the same pruned walk buildRules uses
+// visits. The paths are candidates: like globalExcludePaths, a per-directory
+// .gitignore path is listed whether or not the file exists on disk, so a
+// missing file is a source the observer still watches for creation. It is the
+// one definition of which on-disk files decide indexability, so a freshness
+// observer learns the set to watch from here rather than keeping its own. The
+// walk is read-only and mutates no cache; per-codebase override patterns are
+// not files and are excluded. Empty candidate paths are dropped, and duplicate
+// paths are removed preserving first-occurrence order, since git's
+// core.excludesFile can resolve to the same path as the default XDG location.
+func (r *Resolver) IgnoreSources(ctx context.Context, root string) []string {
+	commonDir, _ := gitworktree.CommonDirAt(root)
+
+	sources := make([]string, 0)
+	for _, path := range globalExcludePaths(ctx) {
+		if path != "" {
+			sources = append(sources, path)
+		}
+	}
+	if contextIgnore := contextIgnorePath(ctx); contextIgnore != "" {
+		sources = append(sources, contextIgnore)
+	}
+	if commonDir != "" {
+		sources = append(sources, filepath.Join(commonDir, "info", "exclude"))
+	}
+	matcher := seedMatcher(ctx, commonDir)
+	sources = append(sources, addGitignoreFiles(ctx, matcher, root, commonDir)...)
+	return dedupeStringsPreservingOrder(sources)
+}
+
+// dedupeStringsPreservingOrder returns values with later duplicates removed,
+// keeping first-occurrence order. IgnoreSources uses it to honor its ordered-set
+// contract when two ignore-source candidates resolve to the same path.
+func dedupeStringsPreservingOrder(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	deduped := make([]string, 0, len(values))
+	for _, value := range values {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		deduped = append(deduped, value)
+	}
+	return deduped
+}
+
+// IsIgnoreSourcePath reports, without a tree walk, whether an in-tree path is one
+// of a codebase's ignore sources: any .gitignore file, or the repo
+// <commonDir>/info/exclude. The common dir is <root>/.git for a normal repo and
+// the shared dir for a linked worktree, so this matches IgnoreSources, which
+// also lists info/exclude only when the common dir resolves. It is the
+// per-event variant of IgnoreSources for the watcher hot path; out-of-tree
+// sources (global excludes, ~/.context/.contextignore) are caught by the
+// periodic CheckSources backstop. Conservative: any .gitignore edit
+// invalidates, since a parent rule change can make a nested .gitignore relevant.
+func (r *Resolver) IsIgnoreSourcePath(path string, commonDir string) bool {
+	if filepath.Base(path) == ".gitignore" {
+		return true
+	}
+	return commonDir != "" && path == filepath.Join(commonDir, "info", "exclude")
+}
+
 // addGitignoreFiles walks root top-down, adding each directory's .gitignore to
 // matcher scoped to that directory. It prunes a child directory when the rules
 // gathered so far already exclude it, mirroring git's refusal to descend into an
 // ignored directory, and it stops at a nested same-repo worktree boundary. The
-// codebase root's own .git entry is skipped because it is never content.
-func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root string, commonDir string) {
+// codebase root's own .git entry is skipped because it is never content. It
+// returns the .gitignore path it visited for each walked directory, so
+// IgnoreSources can report the same set this walk reads without a second walk
+// definition.
+func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root string, commonDir string) []string {
+	sources := make([]string, 0)
 	var walk func(relDir string)
 	walk = func(relDir string) {
 		if ctx.Err() != nil {
@@ -311,7 +394,9 @@ func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root str
 			slog.WarnContext(ctx, "indexability: read directory failed", "path", currentDir, "err", err)
 			return
 		}
-		matcher.AddFromFile(filepath.Join(currentDir, ".gitignore"), relDir)
+		gitignorePath := filepath.Join(currentDir, ".gitignore")
+		matcher.AddFromFile(gitignorePath, relDir)
+		sources = append(sources, gitignorePath)
 		for _, entry := range entries {
 			if !entry.IsDir() || entry.Name() == ".git" {
 				continue
@@ -331,6 +416,7 @@ func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root str
 		}
 	}
 	walk("")
+	return sources
 }
 
 // contextIgnorePath returns the project-global ignore file at
