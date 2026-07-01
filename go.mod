@@ -15,7 +15,7 @@ require (
 	golang.org/x/term v0.44.0
 	goodkind.io/gklog v0.4.4
 	goodkind.io/gksyntax v0.0.0-20260608044551-dcae2f033996
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11
 )
 
