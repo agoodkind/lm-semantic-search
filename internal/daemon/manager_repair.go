@@ -241,6 +241,9 @@ func (manager *Manager) reconcileCodebaseCollection(
 	}
 	presence := presenceFromCollectionSet(expectedCollectionName, collectionSet)
 	hasActiveJob := manager.activeJobSnapshotLocked(codebase) != nil
+	if shouldSkipForActiveFirstBuildStaging(codebase, hasActiveJob) {
+		return repairOutcome{persist: persist, cleanup: false, plan: nil}
+	}
 
 	// Reconcile the other direction: a codebase marked failed or stale whose
 	// collection is present now is usable, so heal it to indexed and clear the

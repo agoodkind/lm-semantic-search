@@ -301,7 +301,7 @@ func (server *GRPCServer) CancelJob(ctx context.Context, request *pb.CancelJobRe
 	if argErr := requireNonEmpty(ctx, request.GetJobId(), "job_id", false); argErr != nil {
 		return nil, argErr
 	}
-	job, callErr := server.manager.CancelJob(request.GetJobId())
+	job, callErr := server.manager.CancelJob(ctx, request.GetJobId())
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewJobNotFound(request.GetJobId())))
 	}

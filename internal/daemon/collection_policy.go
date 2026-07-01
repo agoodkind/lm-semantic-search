@@ -98,6 +98,42 @@ func shouldResumeInterruptedBuild(codebase model.Codebase, hasActiveJob bool) bo
 	}
 }
 
+func shouldDeferWatcherConvergeForFirstBuild(codebase model.Codebase) bool {
+	if codebase.Kind == model.CodebaseKindDocument {
+		return false
+	}
+	if codebase.LastSuccessfulRun != nil {
+		return false
+	}
+	return isPreIndexedStatus(codebase.Status)
+}
+
+// shouldSkipForActiveFirstBuildStaging reports whether a codebase has an
+// active first build whose collection is still staging, so callers should skip
+// work that assumes a live collection.
+func shouldSkipForActiveFirstBuildStaging(codebase model.Codebase, hasActiveJob bool) bool {
+	if !hasActiveJob {
+		return false
+	}
+	return shouldDeferWatcherConvergeForFirstBuild(codebase)
+}
+
+func isPreIndexedStatus(status model.CodebaseStatus) bool {
+	switch status {
+	case model.CodebaseStatusNotIndexed, model.CodebaseStatusPending, model.CodebaseStatusIndexing,
+		model.CodebaseStatusDiscovered:
+		// Discovered worktrees have no collection yet and the watcher is active
+		// for them, so a watcher converge before the first build promotes would
+		// hit collection_missing; treat discovered as pre-indexed so it defers.
+		return true
+	case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed,
+		model.CodebaseStatusMissing, model.CodebaseStatusQuarantined:
+		return false
+	default:
+		return false
+	}
+}
+
 func shouldQueueMissingCollectionRepair(codebase model.Codebase, hasActiveJob bool, presence collectionPresence) bool {
 	if hasActiveJob || presence != collectionPresenceMissing {
 		return false

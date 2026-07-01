@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,9 @@ type BackgroundSync struct {
 	convergeMu sync.Mutex
 	converging map[string]struct{}
 
+	deferredWatcherMu    sync.Mutex
+	deferredWatcherPaths map[string]map[string]struct{}
+
 	queue   *EventQueue
 	watcher *Watcher
 }
@@ -56,15 +60,17 @@ type BackgroundSync struct {
 // NewBackgroundSync constructs the daemon background sync coordinator.
 func NewBackgroundSync(cfg config.Config, manager *Manager) *BackgroundSync {
 	return &BackgroundSync{
-		cfg:          cfg,
-		manager:      manager,
-		mu:           sync.Mutex{},
-		triggerTimer: nil,
-		lastTrigger:  time.Time{},
-		convergeMu:   sync.Mutex{},
-		converging:   make(map[string]struct{}),
-		queue:        nil,
-		watcher:      nil,
+		cfg:                  cfg,
+		manager:              manager,
+		mu:                   sync.Mutex{},
+		triggerTimer:         nil,
+		lastTrigger:          time.Time{},
+		convergeMu:           sync.Mutex{},
+		converging:           make(map[string]struct{}),
+		deferredWatcherMu:    sync.Mutex{},
+		deferredWatcherPaths: make(map[string]map[string]struct{}),
+		queue:                nil,
+		watcher:              nil,
 	}
 }
 
@@ -76,7 +82,7 @@ func (syncer *BackgroundSync) Start(ctx context.Context) {
 			syncer.convergeViaWatcher(ctx, codebaseID, relativePaths)
 		})
 		syncer.watcher = NewWatcher(syncer.manager, syncer.queue)
-		syncer.manager.SetCodebaseLifecycleHook(syncer.watcher)
+		syncer.manager.SetCodebaseLifecycleHook(syncer)
 		go func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
@@ -106,6 +112,52 @@ func (syncer *BackgroundSync) Start(ctx context.Context) {
 			syncer.runPeriodicSync(ctx)
 		}()
 	}
+}
+
+// AddCodebase forwards a newly registered codebase to the underlying watcher so
+// its file events are tracked.
+func (syncer *BackgroundSync) AddCodebase(ctx context.Context, codebase model.Codebase) {
+	if syncer.watcher == nil {
+		return
+	}
+	syncer.watcher.AddCodebase(ctx, codebase)
+}
+
+// RemoveCodebase drops any deferred first-build watcher paths for the codebase
+// and stops the underlying watcher from tracking it.
+func (syncer *BackgroundSync) RemoveCodebase(ctx context.Context, codebaseID string) {
+	syncer.IndexStopped(ctx, codebaseID)
+	if syncer.watcher == nil {
+		return
+	}
+	syncer.watcher.RemoveCodebase(ctx, codebaseID)
+}
+
+// IndexReady flushes the watcher paths deferred during a codebase's first build
+// once that build has promoted, so edits made while the live collection did not
+// yet exist converge exactly once.
+func (syncer *BackgroundSync) IndexReady(ctx context.Context, codebase model.Codebase) {
+	relativePaths := syncer.takeDeferredWatcherPaths(codebase.ID)
+	if len(relativePaths) == 0 {
+		return
+	}
+	flushCtx := context.WithoutCancel(ctx)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(flushCtx, "background sync loop panic", "loop", "indexReadyFlush", "err", recovered)
+			}
+		}()
+		syncer.convergeViaWatcher(flushCtx, codebase.ID, relativePaths)
+	}()
+}
+
+// IndexStopped drops any watcher paths deferred for a codebase whose first build
+// failed or was cancelled, so a failed build does not later replay churn.
+func (syncer *BackgroundSync) IndexStopped(_ context.Context, codebaseID string) {
+	syncer.deferredWatcherMu.Lock()
+	defer syncer.deferredWatcherMu.Unlock()
+	delete(syncer.deferredWatcherPaths, codebaseID)
 }
 
 func (syncer *BackgroundSync) runPeriodicSync(ctx context.Context) {
@@ -250,6 +302,10 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 		if _, err := os.Stat(codebase.CanonicalPath); errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+		hasActiveJob := syncer.hasActiveJob(codebase)
+		if shouldSkipForActiveFirstBuildStaging(codebase, hasActiveJob) {
+			continue
+		}
 		// A discovered worktree whose deferred build never ran (for example the
 		// daemon restarted before the short timer fired) is built here as the
 		// backstop. StartIndex deduplicates, so this never double-starts a build
@@ -385,6 +441,11 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	)
 	ctx = correlation.WithContext(ctx, corr)
 
+	if codebase, found := syncer.watcherCodebase(codebaseID); found && shouldDeferWatcherConvergeForFirstBuild(codebase) {
+		syncer.deferWatcherPaths(codebaseID, relativePaths)
+		return
+	}
+
 	// Serialize converges of the same codebase so two never race on its
 	// snapshot; a concurrent one requeues rather than waits.
 	if !syncer.beginConverge(codebaseID) {
@@ -415,6 +476,55 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	if err := syncer.manager.ConvergePaths(ctx, codebaseID, relativePaths); err != nil {
 		slog.ErrorContext(ctx, "watcher.converge_failed", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebaseID, "err", err)
 	}
+}
+
+func (syncer *BackgroundSync) watcherCodebase(codebaseID string) (model.Codebase, bool) {
+	syncer.manager.mu.Lock()
+	defer syncer.manager.mu.Unlock()
+	codebase, found := syncer.manager.codebases[codebaseID]
+	return codebase, found
+}
+
+func (syncer *BackgroundSync) hasActiveJob(codebase model.Codebase) bool {
+	syncer.manager.mu.Lock()
+	defer syncer.manager.mu.Unlock()
+	current, found := syncer.manager.codebases[codebase.ID]
+	if !found {
+		return false
+	}
+	return syncer.manager.activeJobSnapshotLocked(current) != nil
+}
+
+func (syncer *BackgroundSync) deferWatcherPaths(codebaseID string, relativePaths []string) {
+	if len(relativePaths) == 0 {
+		return
+	}
+	syncer.deferredWatcherMu.Lock()
+	defer syncer.deferredWatcherMu.Unlock()
+	buffered, found := syncer.deferredWatcherPaths[codebaseID]
+	if !found {
+		buffered = make(map[string]struct{}, len(relativePaths))
+		syncer.deferredWatcherPaths[codebaseID] = buffered
+	}
+	for _, relativePath := range relativePaths {
+		buffered[relativePath] = struct{}{}
+	}
+}
+
+func (syncer *BackgroundSync) takeDeferredWatcherPaths(codebaseID string) []string {
+	syncer.deferredWatcherMu.Lock()
+	defer syncer.deferredWatcherMu.Unlock()
+	buffered := syncer.deferredWatcherPaths[codebaseID]
+	if len(buffered) == 0 {
+		return nil
+	}
+	relativePaths := make([]string, 0, len(buffered))
+	for relativePath := range buffered {
+		relativePaths = append(relativePaths, relativePath)
+	}
+	sort.Strings(relativePaths)
+	delete(syncer.deferredWatcherPaths, codebaseID)
+	return relativePaths
 }
 
 // beginConverge claims the per-codebase converge slot, returning false when a

@@ -165,10 +165,10 @@ func (manager *Manager) setJobRunMode(jobID string, runMode string) {
 
 func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, result indexer.Result) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 
 	job, found := manager.jobs[jobID]
 	if !found {
+		manager.mu.Unlock()
 		return
 	}
 
@@ -207,6 +207,7 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	manager.forgetJobJournalLocked(jobID)
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
+		manager.mu.Unlock()
 		return
 	}
 	delete(manager.failedBuildRetries, codebase.ID)
@@ -243,14 +244,16 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	if err := manager.saveLocked(); err != nil {
 		slog.ErrorContext(ctx, "write registry after completed job failed", "job_id", jobID, "err", err)
 	}
+	manager.mu.Unlock()
+	manager.notifyIndexReady(ctx, codebase)
 }
 
 func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runErr error) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 
 	job, found := manager.jobs[jobID]
 	if !found {
+		manager.mu.Unlock()
 		return
 	}
 	delete(manager.conversationJobs, jobID)
@@ -290,6 +293,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
+		manager.mu.Unlock()
 		return
 	}
 	codebase.ActiveJobID = ""
@@ -321,14 +325,17 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	if err := manager.saveLocked(); err != nil {
 		slog.ErrorContext(ctx, "write registry after failed job failed", "job_id", jobID, "err", err)
 	}
+	codebaseID := codebase.ID
+	manager.mu.Unlock()
+	manager.notifyIndexStopped(ctx, codebaseID)
 }
 
 func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 
 	job, found := manager.jobs[jobID]
 	if !found {
+		manager.mu.Unlock()
 		return
 	}
 	delete(manager.conversationJobs, jobID)
@@ -348,6 +355,7 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
+		manager.mu.Unlock()
 		return
 	}
 	// A cancellation is not a failure: leave the codebase at its last-good state
@@ -358,6 +366,9 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 	if err := manager.saveLocked(); err != nil {
 		slog.ErrorContext(ctx, "write registry after cancelled job failed", "job_id", jobID, "err", err)
 	}
+	codebaseID := codebase.ID
+	manager.mu.Unlock()
+	manager.notifyIndexStopped(ctx, codebaseID)
 }
 
 func waitForJobDone(ctx context.Context, jobDone chan struct{}) error {

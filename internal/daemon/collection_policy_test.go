@@ -72,6 +72,59 @@ func TestShouldQueueMissingCollectionRepair(t *testing.T) {
 	}
 }
 
+func TestShouldDeferWatcherConvergeForFirstBuild(t *testing.T) {
+	t.Parallel()
+
+	firstBuild := model.Codebase{
+		Kind:              model.CodebaseKindCode,
+		Status:            model.CodebaseStatusIndexing,
+		LastSuccessfulRun: nil,
+	}
+	if !shouldDeferWatcherConvergeForFirstBuild(firstBuild) {
+		t.Fatal("code first build in pre-indexed status should defer watcher converge")
+	}
+
+	discovered := firstBuild
+	discovered.Status = model.CodebaseStatusDiscovered
+	if !shouldDeferWatcherConvergeForFirstBuild(discovered) {
+		t.Fatal("discovered worktree has no collection yet and should defer watcher converge")
+	}
+
+	document := firstBuild
+	document.Kind = model.CodebaseKindDocument
+	if shouldDeferWatcherConvergeForFirstBuild(document) {
+		t.Fatal("document codebase should not defer watcher converge")
+	}
+
+	indexed := firstBuild
+	indexed.Status = model.CodebaseStatusIndexed
+	if shouldDeferWatcherConvergeForFirstBuild(indexed) {
+		t.Fatal("indexed codebase should not defer watcher converge")
+	}
+
+	rebuilt := firstBuild
+	rebuilt.LastSuccessfulRun = &model.IndexRunSummary{}
+	if shouldDeferWatcherConvergeForFirstBuild(rebuilt) {
+		t.Fatal("codebase with prior successful run should not defer watcher converge")
+	}
+}
+
+func TestShouldSkipForActiveFirstBuildStagingRequiresActiveJob(t *testing.T) {
+	t.Parallel()
+
+	firstBuild := model.Codebase{
+		Kind:              model.CodebaseKindCode,
+		Status:            model.CodebaseStatusIndexing,
+		LastSuccessfulRun: nil,
+	}
+	if !shouldSkipForActiveFirstBuildStaging(firstBuild, true) {
+		t.Fatal("active code first build should skip work that assumes a live collection")
+	}
+	if shouldSkipForActiveFirstBuildStaging(firstBuild, false) {
+		t.Fatal("interrupted first build without active job should not skip live-collection work")
+	}
+}
+
 func TestDecideSearchCollectionMode(t *testing.T) {
 	t.Parallel()
 
