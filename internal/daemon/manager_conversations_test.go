@@ -3,7 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
-	"slices"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +12,10 @@ import (
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestRegisterConversationCollectionIsIdempotent(t *testing.T) {
@@ -66,7 +69,7 @@ func TestConversationManifestSyncReturnsNeededIDs(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
-	manager.semantic = &fakeSemantic{unavailable: true}
+	manager.semantic = &fakeSemantic{}
 	ctx := context.Background()
 	collectionID := "thread-manifest"
 
@@ -295,11 +298,11 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 	}
 }
 
-func TestConversationIngestMaintainsChunkCache(t *testing.T) {
+func TestConversationIngestDoesNotWriteChunkCache(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
-	manager.semantic = &fakeSemantic{unavailable: true}
+	manager.semantic = &fakeSemantic{}
 	ctx := context.Background()
 	collectionID := "thread-cache"
 	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
@@ -329,14 +332,12 @@ func TestConversationIngestMaintainsChunkCache(t *testing.T) {
 	}
 	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
 
-	chunks := readConversationChunkCache(t, manager, codebase.ID)
-	if len(chunks) != 2 {
-		t.Fatalf("first cache write stored %d chunks, want 2", len(chunks))
+	if _, err := os.Stat(manager.chunkPath(codebase.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("document ingest chunk cache stat error = %v, want not exist", err)
 	}
 
 	// conv-beta is unchanged, so its fingerprint stays and clyde sends no
-	// document for it. conv-alpha changed, so only its document is delivered. The
-	// merge must keep conv-beta's prior chunk and replace conv-alpha's.
+	// document for it. conv-alpha changed, so only its document is delivered.
 	secondManifest := map[string]string{"conv-alpha": "alpha-2", "conv-beta": "beta-1"}
 	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{{
 		ConversationID: "conv-alpha",
@@ -350,53 +351,12 @@ func TestConversationIngestMaintainsChunkCache(t *testing.T) {
 	}
 	waitForConversationJobState(t, manager, secondJob.ID, model.JobStateCompleted)
 
-	chunks = readConversationChunkCache(t, manager, codebase.ID)
-	if len(chunks) != 2 {
-		t.Fatalf("re-upsert cache stored %d chunks, want 2", len(chunks))
-	}
-	alphaCount := 0
-	for _, chunk := range chunks {
-		if strings.Contains(chunk.Content, "old needle") {
-			t.Fatalf("re-upsert left stale chunk content %q", chunk.Content)
-		}
-		if strings.HasPrefix(chunk.RelativePath, "conv/conv-alpha/") {
-			alphaCount++
-			if chunk.Content != "fresh needle cache entry" {
-				t.Fatalf("conv-alpha cached content = %q, want fresh needle cache entry", chunk.Content)
-			}
-		}
-	}
-	if alphaCount != 1 {
-		t.Fatalf("re-upsert stored %d conv-alpha chunks, want 1", alphaCount)
-	}
-
-	results, err := manager.SearchConversations(ctx, collectionID, "fresh needle", 5, conversationSearchFilter{Roles: nil, FromUnix: 0, UntilUnix: 0, ConversationIDs: nil, ParentConversationID: "", MinScore: 0, MessageIndexFrom: 0, MessageIndexUntil: 0}, 0)
-	if err != nil {
-		t.Fatalf("SearchConversations returned error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("fallback SearchConversations returned %d chunks, want 1", len(results))
-	}
-	if results[0].ConversationID != "conv-alpha" {
-		t.Fatalf("fallback result ConversationID = %q, want conv-alpha", results[0].ConversationID)
-	}
-
-	deleteJob, err := manager.DeleteConversation(ctx, collectionID, "conv-alpha")
-	if err != nil {
-		t.Fatalf("DeleteConversation returned error: %v", err)
-	}
-	waitForConversationJobState(t, manager, deleteJob.ID, model.JobStateCompleted)
-
-	chunks = readConversationChunkCache(t, manager, codebase.ID)
-	if len(chunks) != 1 {
-		t.Fatalf("delete cache stored %d chunks, want 1", len(chunks))
-	}
-	if chunks[0].ConversationID != "conv-beta" {
-		t.Fatalf("remaining cached ConversationID = %q, want conv-beta", chunks[0].ConversationID)
+	if _, err := os.Stat(manager.chunkPath(codebase.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("document re-ingest chunk cache stat error = %v, want not exist", err)
 	}
 }
 
-func TestSearchConversationsFallsBackToChunkCacheAfterSemanticError(t *testing.T) {
+func TestSearchConversationsReturnsUnavailableWhenSemanticUnavailable(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
@@ -405,17 +365,7 @@ func TestSearchConversationsFallsBackToChunkCacheAfterSemanticError(t *testing.T
 	if err != nil {
 		t.Fatalf("RegisterConversationCollection returned error: %v", err)
 	}
-	searchCalls := 0
-	manager.semantic = &fakeSemantic{
-		conversationSearch: func(ctx context.Context, collectionName string, query string, limit int32) ([]model.StoredChunk, error) {
-			_ = ctx
-			_ = collectionName
-			_ = query
-			_ = limit
-			searchCalls++
-			return nil, errors.New("semantic search unavailable")
-		},
-	}
+	manager.semantic = &fakeSemantic{unavailable: true}
 	if err := store.WriteChunks(manager.chunkPath(codebase.ID), []model.StoredChunk{
 		{
 			Content:        "needle cache fallback result",
@@ -438,18 +388,131 @@ func TestSearchConversationsFallsBackToChunkCacheAfterSemanticError(t *testing.T
 	}
 
 	results, err := manager.SearchConversations(context.Background(), collectionID, "needle", 5, conversationSearchFilter{Roles: nil, FromUnix: 0, UntilUnix: 0, ConversationIDs: nil, ParentConversationID: "", MinScore: 0, MessageIndexFrom: 0, MessageIndexUntil: 0}, 0)
+	if !errors.Is(err, semantic.ErrUnavailable) {
+		t.Fatalf("SearchConversations error = %v, want semantic.ErrUnavailable", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("SearchConversations returned %d chunks, want none", len(results))
+	}
+}
+
+func TestSearchConversationsRPCReturnsUnavailableWhenSemanticUnavailable(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{unavailable: true}
+	server := NewGRPCServer(manager, nil)
+	ctx := context.Background()
+
+	if _, err := manager.RegisterConversationCollection(ctx, "thread-rpc-unavailable"); err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+
+	_, err := server.SearchConversations(ctx, &pb.SearchConversationsRequest{
+		CollectionId: "thread-rpc-unavailable",
+		Query:        "needle",
+		Limit:        5,
+	})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("SearchConversations RPC status = %v, want %v (err=%v)", status.Code(err), codes.Unavailable, err)
+	}
+}
+
+func TestConversationDeleteFailsWhenSemanticUnavailableWithoutReadingChunkCache(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{unavailable: true}
+	ctx := context.Background()
+	collectionID := "thread-delete-unavailable"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
 	if err != nil {
-		t.Fatalf("SearchConversations returned error: %v", err)
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
 	}
-	if searchCalls != 1 {
-		t.Fatalf("semantic search calls = %d, want 1", searchCalls)
+	if err := store.WriteChunks(manager.chunkPath(codebase.ID), []model.StoredChunk{{
+		Content:        "cached chunk must stay untouched",
+		RelativePath:   "conv/conv-delete/0",
+		ConversationID: "conv-delete",
+	}}); err != nil {
+		t.Fatalf("WriteChunks returned error: %v", err)
 	}
-	if len(results) != 1 {
-		t.Fatalf("fallback SearchConversations returned %d chunks, want 1", len(results))
+
+	deleteJob, err := manager.DeleteConversation(ctx, collectionID, "conv-delete")
+	if err != nil {
+		t.Fatalf("DeleteConversation returned error: %v", err)
 	}
-	if results[0].ConversationID != "conv-cache" {
-		t.Fatalf("fallback result ConversationID = %q, want conv-cache", results[0].ConversationID)
+	waitForConversationJobState(t, manager, deleteJob.ID, model.JobStateFailed)
+
+	job, found := manager.GetJob(deleteJob.ID)
+	if !found {
+		t.Fatal("delete job not found")
 	}
+	if job.Error == nil || !strings.Contains(job.Error.Message, "semantic backend is unavailable") {
+		t.Fatalf("delete job error = %+v, want semantic backend unavailable", job.Error)
+	}
+
+	chunks := readConversationChunkCache(t, manager, codebase.ID)
+	if len(chunks) != 1 || chunks[0].ConversationID != "conv-delete" {
+		t.Fatalf("delete touched cache chunks = %+v, want original conv-delete chunk", chunks)
+	}
+}
+
+func TestCancelledConversationIngestReportsCancelledWhenSemanticUnavailable(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	ctx := context.Background()
+	codebase, err := manager.RegisterConversationCollection(ctx, "thread-cancel-ingest")
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	manager.semantic = &fakeSemantic{unavailable: true}
+	job := stageConversationJob(t, manager, codebase, conversationJobPayload{
+		Kind:           conversationJobKindUpsert,
+		CollectionName: codebase.CollectionName,
+		Manifest:       map[string]string{"conv-cancel": "fp-cancel"},
+		Documents: []model.ConversationDocument{{
+			ConversationID: "conv-cancel",
+			MessageIndex:   0,
+			Role:           "user",
+			Text:           "cancelled ingest",
+		}},
+	})
+
+	cancelledContext, cancel := context.WithCancel(ctx)
+	cancel()
+	manager.runConversationIngest(cancelledContext, job)
+
+	assertConversationJobCancelled(t, manager, job.ID)
+}
+
+func TestCancelledConversationDeleteReportsCancelledWhenSemanticUnavailable(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	ctx := context.Background()
+	codebase, err := manager.RegisterConversationCollection(ctx, "thread-cancel-delete")
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	manager.semantic = &fakeSemantic{unavailable: true}
+	job := stageConversationJob(t, manager, codebase, conversationJobPayload{
+		Kind:           conversationJobKindDelete,
+		CollectionName: codebase.CollectionName,
+		ConversationID: "conv-cancel-delete",
+	})
+
+	cancelledContext, cancel := context.WithCancel(ctx)
+	cancel()
+	manager.runConversationDelete(cancelledContext, job, conversationJobPayload{
+		Kind:           conversationJobKindDelete,
+		CollectionName: codebase.CollectionName,
+		ConversationID: "conv-cancel-delete",
+	})
+
+	assertConversationJobCancelled(t, manager, job.ID)
 }
 
 func TestConversationDocumentsToStoredChunksSplitsOversizedMessage(t *testing.T) {
@@ -640,6 +703,44 @@ func waitForConversationJobState(t *testing.T, manager *Manager, jobID string, s
 	})
 }
 
+func stageConversationJob(t *testing.T, manager *Manager, codebase model.Codebase, payload conversationJobPayload) model.Job {
+	t.Helper()
+
+	job := model.Job{
+		ID:            "job-" + string(payload.Kind) + "-" + codebase.ID,
+		CodebaseID:    codebase.ID,
+		CanonicalPath: codebase.CanonicalPath,
+		RequestedPath: codebase.CanonicalPath,
+		Operation:     string(jobOperationConversationIngest),
+		State:         model.JobStateRunning,
+		Config:        codebase.EffectiveConfig,
+	}
+	codebase.Status = model.CodebaseStatusIndexing
+	codebase.ActiveJobID = job.ID
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.jobs[job.ID] = job
+	manager.codebases[codebase.ID] = codebase
+	manager.conversationJobs[job.ID] = payload
+	return job
+}
+
+func assertConversationJobCancelled(t *testing.T, manager *Manager, jobID string) {
+	t.Helper()
+
+	job, found := manager.GetJob(jobID)
+	if !found {
+		t.Fatal("conversation job not found")
+	}
+	if job.State != model.JobStateCancelled {
+		t.Fatalf("conversation job state = %q, want %q", job.State, model.JobStateCancelled)
+	}
+	if job.Error != nil {
+		t.Fatalf("conversation job error = %+v, want nil", job.Error)
+	}
+}
+
 // TestSearchWithinConversationScopesAndReportsFingerprint proves the within
 // search returns only the target conversation's rows and the checkpointed
 // fingerprint for it, while an unknown conversation returns empty hits with an
@@ -648,7 +749,24 @@ func TestSearchWithinConversationScopesAndReportsFingerprint(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
-	manager.semantic = &fakeSemantic{unavailable: true}
+	searchCalls := 0
+	manager.semantic = &fakeSemantic{
+		conversationSearch: func(_ context.Context, _ string, _ string, _ int32) ([]model.StoredChunk, error) {
+			searchCalls++
+			if searchCalls > 1 {
+				return []model.StoredChunk{}, nil
+			}
+			return []model.StoredChunk{{
+				Content:        "needle in alpha",
+				RelativePath:   "conv/conv-a/0",
+				ConversationID: "conv-a",
+				MessageIndex:   0,
+				Role:           "user",
+				TimestampUnix:  1712345000,
+				Score:          0.7,
+			}}, nil
+		},
+	}
 	ctx := context.Background()
 	collectionID := "thread-within"
 
@@ -669,7 +787,7 @@ func TestSearchWithinConversationScopesAndReportsFingerprint(t *testing.T) {
 		t.Fatalf("within hits = %+v, want only conv-a", hits)
 	}
 	if hits[0].Score <= 0 {
-		t.Fatalf("within hit score = %v, want a positive literal rank", hits[0].Score)
+		t.Fatalf("within hit score = %v, want a positive semantic score", hits[0].Score)
 	}
 	if indexedFingerprint != "fp-a-1" {
 		t.Fatalf("indexed fingerprint = %q, want fp-a-1", indexedFingerprint)
@@ -724,7 +842,19 @@ func TestSearchWithinConversationRPCBoundary(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
-	manager.semantic = &fakeSemantic{unavailable: true}
+	manager.semantic = &fakeSemantic{
+		conversationSearch: func(_ context.Context, _ string, _ string, _ int32) ([]model.StoredChunk, error) {
+			return []model.StoredChunk{{
+				Content:        "needle on the wire",
+				RelativePath:   "conv/conv-rpc/3",
+				ConversationID: "conv-rpc",
+				MessageIndex:   3,
+				Role:           "assistant",
+				TimestampUnix:  1712345002,
+				Score:          0.9,
+			}}, nil
+		},
+	}
 	server := NewGRPCServer(manager, nil)
 	ctx := context.Background()
 	collectionID := "thread-within-rpc"
@@ -935,21 +1065,16 @@ func TestItemSourceAbsencePolicy(t *testing.T) {
 
 // TestConversationIngestRetainsConversationsAbsentFromManifest proves the
 // retain-on-absence policy: a conversation missing from a later push is kept,
-// not deleted. Its chunks stay in the literal cache, its id stays in the
-// snapshot, a restoring push is a no-op, and only an explicit delete removes a
-// conversation. This guards the index against a transient mass disappearance of
-// transcript files.
+// not deleted. Its id stays in the snapshot, a restoring push is a no-op, and
+// an explicit delete completes through the vector store. This guards the index
+// against a transient mass disappearance of transcript files.
 func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
-	manager.semantic = &fakeSemantic{unavailable: true}
+	manager.semantic = &fakeSemantic{}
 	ctx := context.Background()
 	collectionID := "thread-retain"
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
 
 	fullManifest := map[string]string{
 		"conv-0": "fp-0",
@@ -971,13 +1096,9 @@ func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) 
 	}
 	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
 
-	if chunks := readConversationChunkCache(t, manager, codebase.ID); len(chunks) != 5 {
-		t.Fatalf("after full push cache has %d conversations, want 5", len(chunks))
-	}
-
 	// The second push omits conv-2, conv-3, and conv-4 and delivers no documents.
-	// Retain-on-absence keeps them: no removal runs, the cache keeps all five, and
-	// the snapshot still lists the omitted ids.
+	// Retain-on-absence keeps them: no removal runs and the snapshot still lists
+	// the omitted ids.
 	reducedManifest := map[string]string{"conv-0": "fp-0", "conv-1": "fp-1"}
 	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, reducedManifest, testClientInfo())
 	if err != nil {
@@ -985,22 +1106,15 @@ func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) 
 	}
 	waitForConversationJobState(t, manager, secondJob.ID, model.JobStateCompleted)
 
-	cache := readConversationChunkCache(t, manager, codebase.ID)
-	if len(cache) != 5 {
-		t.Fatalf("after omitting three conversations cache has %d, want 5 retained", len(cache))
-	}
-	retained := conversationIDsFromChunks(cache)
-	for _, conversationID := range []string{"conv-2", "conv-3", "conv-4"} {
-		if !slices.Contains(retained, conversationID) {
-			t.Fatalf("cache dropped %s on absence; have %v", conversationID, retained)
-		}
-	}
-
-	snapshot, err := merkle.ReadSnapshot(manager.merklePath(codebase.ID))
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
 	if err != nil {
-		t.Fatalf("ReadSnapshot returned error: %v", err)
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
 	}
 	for _, conversationID := range []string{"conv-2", "conv-3", "conv-4"} {
+		snapshot, err := merkle.ReadSnapshot(manager.merklePath(codebase.ID))
+		if err != nil {
+			t.Fatalf("ReadSnapshot returned error: %v", err)
+		}
 		if _, present := snapshot.Files[conversationID]; !present {
 			t.Fatalf("snapshot dropped %s on absence; have %v", conversationID, snapshot.Files)
 		}
@@ -1013,21 +1127,12 @@ func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) 
 		t.Fatalf("third upsertConversationDocuments returned error: %v", err)
 	}
 	waitForConversationJobState(t, manager, thirdJob.ID, model.JobStateCompleted)
-	if chunks := readConversationChunkCache(t, manager, codebase.ID); len(chunks) != 5 {
-		t.Fatalf("after restoring push cache has %d, want 5", len(chunks))
-	}
 
-	// An explicit single-conversation delete still removes one conversation.
+	// An explicit single-conversation delete still completes through semantic
+	// storage; the manifest checkpoint is converged by later manifest syncs.
 	deleteJob, err := manager.DeleteConversation(ctx, collectionID, "conv-2")
 	if err != nil {
 		t.Fatalf("DeleteConversation returned error: %v", err)
 	}
 	waitForConversationJobState(t, manager, deleteJob.ID, model.JobStateCompleted)
-	cache = readConversationChunkCache(t, manager, codebase.ID)
-	if len(cache) != 4 {
-		t.Fatalf("after explicit delete cache has %d, want 4", len(cache))
-	}
-	if slices.Contains(conversationIDsFromChunks(cache), "conv-2") {
-		t.Fatalf("explicit delete left conv-2 in the cache; have %v", conversationIDsFromChunks(cache))
-	}
 }

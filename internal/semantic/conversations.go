@@ -19,7 +19,7 @@ func (service *Service) DeleteConversation(ctx context.Context, collectionName s
 	defer done(&err)
 
 	if !service.Available() {
-		return nil
+		return ErrUnavailable
 	}
 	trimmedCollectionName := strings.TrimSpace(collectionName)
 	if trimmedCollectionName == "" {

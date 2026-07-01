@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,7 +18,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/spans"
-	"goodkind.io/lm-semantic-search/internal/store"
 )
 
 const (
@@ -166,7 +164,7 @@ func (manager *Manager) SearchConversations(ctx context.Context, collectionID st
 // content fingerprint the engine has embedded for it. An empty fingerprint
 // means the conversation is not indexed; a fingerprint differing from the
 // conversation's current one means the index trails the transcript. Either way
-// the caller decides whether to literal-scan newer content.
+// the caller decides whether to refresh newer content.
 func (manager *Manager) SearchWithinConversation(ctx context.Context, collectionID string, conversationID string, query string, limit int32, filter conversationSearchFilter) ([]model.StoredChunk, string, error) {
 	trimmedConversationID := strings.TrimSpace(conversationID)
 	if trimmedConversationID == "" {
@@ -212,55 +210,29 @@ func (manager *Manager) conversationIndexedFingerprint(codebase model.Codebase, 
 	return snapshot.Files[conversationID]
 }
 
-const (
-	// conversationSearchInflationFactor over-fetches before the per-conversation
-	// cap drops rows, so the cap does not starve the final result list below the
-	// requested limit when more matching rows exist.
-	conversationSearchInflationFactor = 4
-	// conversationSearchInflationCap bounds the over-fetch so it never grows
-	// unbounded with the requested limit.
-	conversationSearchInflationCap = int32(500)
-)
-
-// inflatedConversationSearchLimit returns how many rows to fetch before
-// post-retrieval filtering. Every scope dimension is now pushed into Milvus, so
-// the only post-retrieval row-dropper that can starve the result is the
-// per-conversation cap. When that cap is off, the requested limit is exact;
-// when it is on, the fetch is inflated by a bounded factor so the cap has a
-// surplus to draw the final limit from.
-func inflatedConversationSearchLimit(limit int32, perConversationLimit int32) int32 {
-	if perConversationLimit <= 0 {
-		return limit
-	}
-	inflated := min(limit*conversationSearchInflationFactor, conversationSearchInflationCap)
-	return max(inflated, limit)
-}
-
 // searchConversationCollectionFiltered is the one retrieval path under both
-// conversation search RPCs. When the vector store is up, every scope dimension
-// is pushed into Milvus as a native scalar-column expression and the engine
-// returns the result already reduced to the requested limit: it pages the ranked
-// search by offset so the per-conversation cap and min_score fill the limit
-// deterministically instead of starving it, reusing one query embedding across
-// pages. When the store is down, the literal chunk cache ranks a bounded
-// over-fetch and reduces it in process.
+// conversation search RPCs. Every scope dimension is pushed into Milvus as a
+// native scalar-column expression and the engine returns the result already
+// reduced to the requested limit: it pages the ranked search by offset so the
+// per-conversation cap and min_score fill the limit deterministically instead
+// of starving it, reusing one query embedding across pages.
 func (manager *Manager) searchConversationCollectionFiltered(ctx context.Context, codebase model.Codebase, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	if manager.semantic != nil && manager.semantic.Available() {
-		chunks, err := manager.semantic.SearchConversationCollectionCapped(ctx, codebase.CollectionName, query, limit, perConversationLimit, filter.MinScore, filter.toSemanticFilter())
-		if err == nil {
-			manager.noteDependencyHealthy()
-			return chunks, nil
-		}
+	if manager.semantic == nil || !manager.semantic.Available() {
+		manager.noteDependencyFailure(semantic.ErrUnavailable)
+		return nil, semantic.ErrUnavailable
+	}
+	chunks, err := manager.semantic.SearchConversationCollectionCapped(ctx, codebase.CollectionName, query, limit, perConversationLimit, filter.MinScore, filter.toSemanticFilter())
+	if err != nil {
 		manager.noteDependencyFailure(err)
 		slog.ErrorContext(ctx, "search conversation collection failed", "collection", codebase.CollectionName, "err", err)
+		return nil, fmt.Errorf("search conversation collection %s: %w", codebase.CollectionName, err)
 	}
-
-	fetchLimit := inflatedConversationSearchLimit(limit, perConversationLimit)
-	return manager.searchConversationChunkCache(ctx, codebase, query, limit, fetchLimit, filter, perConversationLimit)
+	manager.noteDependencyHealthy()
+	return chunks, nil
 }
 
 func (manager *Manager) deleteConversation(ctx context.Context, collectionID string, conversationID string, client model.ClientInfo) (model.Job, error) {
@@ -376,6 +348,11 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	default:
 	}
 
+	if manager.semantic == nil || !manager.semantic.Available() {
+		manager.updateJobFailed(ctx, job.ID, semantic.ErrUnavailable)
+		return
+	}
+
 	switch payload.Kind {
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
@@ -390,22 +367,26 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	}
 }
 
-// runConversationDelete drops one conversation's rows from the live collection
-// and the literal-fallback chunk cache, then marks the job complete. It does not
-// touch the merkle checkpoint: a later manifest sync that omits the id converges
-// the same removal idempotently.
+// runConversationDelete drops one conversation's rows from the live collection,
+// then marks the job complete. It does not touch the merkle checkpoint: a later
+// manifest sync that omits the id converges the same removal idempotently.
 func (manager *Manager) runConversationDelete(ctx context.Context, job model.Job, payload conversationJobPayload) {
-	if manager.semantic != nil {
-		if err := manager.semantic.DeleteConversation(ctx, payload.CollectionName, payload.ConversationID); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				manager.updateJobCancelled(ctx, job.ID)
-				return
-			}
-			manager.updateJobFailed(ctx, job.ID, err)
+	select {
+	case <-ctx.Done():
+		manager.updateJobCancelled(ctx, job.ID)
+		return
+	default:
+	}
+
+	if manager.semantic == nil || !manager.semantic.Available() {
+		manager.updateJobFailed(ctx, job.ID, semantic.ErrUnavailable)
+		return
+	}
+	if err := manager.semantic.DeleteConversation(ctx, payload.CollectionName, payload.ConversationID); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			manager.updateJobCancelled(ctx, job.ID)
 			return
 		}
-	}
-	if err := manager.dropConversationFromChunkCache(ctx, job.CodebaseID, payload.ConversationID); err != nil {
 		manager.updateJobFailed(ctx, job.ID, err)
 		return
 	}
@@ -448,152 +429,6 @@ func (manager *Manager) finishConversationDelete(jobID string) {
 	// Pair the record write with one observer signal so no saveLocked path skips
 	// invalidation; for a document collection it is a no-op delete.
 	manager.observer.Invalidate(codebase.ID)
-}
-
-func (manager *Manager) searchConversationChunkCache(ctx context.Context, codebase model.Codebase, query string, limit int32, fetchLimit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
-	chunks, err := store.ReadChunks(manager.chunkPath(codebase.ID))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []model.StoredChunk{}, nil
-		}
-		slog.ErrorContext(ctx, "read conversation chunk cache failed", "codebase_id", codebase.ID, "err", err)
-		return nil, fmt.Errorf("read conversation chunk cache for %s: %w", codebase.ID, err)
-	}
-	scoped := make([]model.StoredChunk, 0, len(chunks))
-	for _, chunk := range chunks {
-		if filter.matchesScope(chunk) {
-			scoped = append(scoped, chunk)
-		}
-	}
-	// Rank fetchLimit rows, not limit, so the per-conversation cap has a surplus
-	// to draw the final limit from rather than truncating an already-limited
-	// ranking. fetchLimit equals limit when the cap is off.
-	ranked := rankChunks(scoped, query, fetchLimit, nil, "")
-	return applyConversationSearchFilter(ranked, filter, perConversationLimit, limit), nil
-}
-
-// mergeConversationChunkCache keeps the literal-fallback chunk cache complete
-// across an incremental ingest. It keeps the prior chunks for conversations
-// still present in the manifest and not re-sent this run, drops conversations no
-// longer in the manifest, replaces re-sent conversations with their fresh
-// chunks, and writes the union back. The cache backs conversation search when
-// the vector store is down.
-func (manager *Manager) mergeConversationChunkCache(ctx context.Context, codebaseID string, newChunks []model.StoredChunk, manifest map[string]string) error {
-	chunkPath := manager.chunkPath(codebaseID)
-	existing, err := store.ReadChunks(chunkPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			existing = []model.StoredChunk{}
-		} else {
-			slog.ErrorContext(ctx, "read conversation chunk cache failed", "codebase_id", codebaseID, "err", err)
-			return fmt.Errorf("read conversation chunk cache for %s: %w", codebaseID, err)
-		}
-	}
-
-	resentIDs := make(map[string]struct{})
-	for _, conversationID := range conversationIDsFromChunks(newChunks) {
-		resentIDs[conversationID] = struct{}{}
-	}
-
-	kept := make([]model.StoredChunk, 0, len(existing)+len(newChunks))
-	for _, chunk := range existing {
-		conversationID := strings.TrimSpace(chunk.ConversationID)
-		if conversationID == "" {
-			continue
-		}
-		if _, stillPresent := manifest[conversationID]; !stillPresent {
-			continue
-		}
-		if _, resent := resentIDs[conversationID]; resent {
-			continue
-		}
-		kept = append(kept, chunk)
-	}
-	kept = append(kept, newChunks...)
-
-	if err := store.WriteChunks(chunkPath, kept); err != nil {
-		slog.ErrorContext(ctx, "write conversation chunk cache failed", "codebase_id", codebaseID, "err", err)
-		return fmt.Errorf("write conversation chunk cache for %s: %w", codebaseID, err)
-	}
-	return nil
-}
-
-func (manager *Manager) dropConversationFromChunkCache(ctx context.Context, codebaseID string, conversationID string) error {
-	chunkPath := manager.chunkPath(codebaseID)
-	chunks, err := store.ReadChunks(chunkPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		slog.ErrorContext(ctx, "read conversation chunk cache failed", "codebase_id", codebaseID, "err", err)
-		return fmt.Errorf("read conversation chunk cache for %s: %w", codebaseID, err)
-	}
-	chunks = dropConversationChunks(chunks, []string{conversationID})
-	if err := store.WriteChunks(chunkPath, chunks); err != nil {
-		slog.ErrorContext(ctx, "write conversation chunk cache failed", "codebase_id", codebaseID, "err", err)
-		return fmt.Errorf("write conversation chunk cache for %s: %w", codebaseID, err)
-	}
-	return nil
-}
-
-func conversationIDsFromChunks(chunks []model.StoredChunk) []string {
-	seen := make(map[string]struct{})
-	conversationIDs := make([]string, 0)
-	for _, chunk := range chunks {
-		conversationID := strings.TrimSpace(chunk.ConversationID)
-		if conversationID == "" {
-			continue
-		}
-		if _, found := seen[conversationID]; found {
-			continue
-		}
-		seen[conversationID] = struct{}{}
-		conversationIDs = append(conversationIDs, conversationID)
-	}
-	return conversationIDs
-}
-
-func dropConversationChunks(chunks []model.StoredChunk, conversationIDs []string) []model.StoredChunk {
-	prefixes := conversationRelativePathPrefixes(conversationIDs)
-	if len(prefixes) == 0 {
-		return chunks
-	}
-
-	kept := make([]model.StoredChunk, 0, len(chunks))
-	for _, chunk := range chunks {
-		if chunkHasConversationPrefix(chunk, prefixes) {
-			continue
-		}
-		kept = append(kept, chunk)
-	}
-	return kept
-}
-
-func conversationRelativePathPrefixes(conversationIDs []string) []string {
-	seen := make(map[string]struct{})
-	prefixes := make([]string, 0, len(conversationIDs))
-	for _, conversationID := range conversationIDs {
-		trimmedConversationID := strings.TrimSpace(conversationID)
-		if trimmedConversationID == "" {
-			continue
-		}
-		prefix := conversationRelativePathPrefix(trimmedConversationID)
-		if _, found := seen[prefix]; found {
-			continue
-		}
-		seen[prefix] = struct{}{}
-		prefixes = append(prefixes, prefix)
-	}
-	return prefixes
-}
-
-func chunkHasConversationPrefix(chunk model.StoredChunk, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(chunk.RelativePath, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func (manager *Manager) conversationJobPayload(jobID string) (conversationJobPayload, bool) {
