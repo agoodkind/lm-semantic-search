@@ -23,10 +23,11 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 		manager.runner = deltaReuseRunner(map[string]string{"added.go": addedContent})
 		source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
 
-		handled := manager.runDeltaSync(context.Background(), job, source)
+		handled, graphTask := manager.runDeltaSync(context.Background(), job, source)
 		if !handled {
 			t.Fatal("runDeltaSync returned false, want it to handle the added-file delta")
 		}
+		manager.runGraphIndexTask(context.Background(), graphTask)
 
 		completed, found := manager.GetJob(job.ID)
 		if !found {
@@ -64,10 +65,11 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 		manager.runner = deltaReuseRunner(map[string]string{"feature.go": modifiedContent})
 		source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
 
-		handled := manager.runDeltaSync(context.Background(), job, source)
+		handled, graphTask := manager.runDeltaSync(context.Background(), job, source)
 		if !handled {
 			t.Fatal("runDeltaSync returned false, want it to handle the modified-only delta")
 		}
+		manager.runGraphIndexTask(context.Background(), graphTask)
 
 		completed, found := manager.GetJob(job.ID)
 		if !found {
@@ -96,10 +98,11 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 		manager.runner = deltaReuseRunner(map[string]string{"document-kind.go": addedContent})
 		source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
 
-		handled := manager.runDeltaSync(context.Background(), job, source)
+		handled, graphTask := manager.runDeltaSync(context.Background(), job, source)
 		if !handled {
 			t.Fatal("runDeltaSync returned false, want it to handle the added document-kind delta")
 		}
+		manager.runGraphIndexTask(context.Background(), graphTask)
 
 		completed, found := manager.GetJob(job.ID)
 		if !found {

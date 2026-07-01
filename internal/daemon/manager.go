@@ -75,6 +75,7 @@ type Manager struct {
 	semantic         semanticIndex
 	graphEngines     map[string]*cbm.Engine
 	graphMutex       sync.Mutex
+	graphIndexHook   func()
 	lifecycleHook    CodebaseLifecycleHook
 	lifecycleMutex   sync.Mutex
 	// indexSlots caps concurrently running index jobs. Each runJob holds one
@@ -141,6 +142,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		semantic:           nil,
 		graphEngines:       map[string]*cbm.Engine{},
 		graphMutex:         sync.Mutex{},
+		graphIndexHook:     nil,
 		lifecycleHook:      nil,
 		lifecycleMutex:     sync.Mutex{},
 		indexSlots:         make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),

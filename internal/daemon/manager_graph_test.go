@@ -3,10 +3,14 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
@@ -18,6 +22,26 @@ type graphToolEnvelope struct {
 
 type graphToolResult struct {
 	Rows []json.RawMessage `json:"rows"`
+}
+
+func TestValidateGraphToolNameAllowsReadOnlyToolsOnly(t *testing.T) {
+	for _, toolName := range []string{"query_graph", "trace_path", "get_architecture", "manage_adr"} {
+		if err := validateGraphToolName(toolName); err != nil {
+			t.Fatalf("validateGraphToolName(%q) returned error: %v", toolName, err)
+		}
+	}
+
+	err := validateGraphToolName("delete_project")
+	if err == nil {
+		t.Fatal("validateGraphToolName accepted delete_project, want invalid argument")
+	}
+	var adapterErr *adapterr.AdapterError
+	if !errors.As(err, &adapterErr) {
+		t.Fatalf("validateGraphToolName returned %T, want AdapterError", err)
+	}
+	if adapterErr.Class != adapterr.ClassInvalidArgument {
+		t.Fatalf("adapter error class = %q, want %q", adapterErr.Class, adapterr.ClassInvalidArgument)
+	}
 }
 
 func TestManagerGraphToolIndexesAndQueriesCodebase(t *testing.T) {
@@ -70,6 +94,43 @@ func TestManagerGraphToolIndexesAndQueriesCodebase(t *testing.T) {
 	}
 
 	t.Logf("query_graph JSON: %s", resultJSON)
+}
+
+func TestRunJobAsyncRunsGraphIndexAfterSemanticLockAndSlotRelease(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 1)
+	manager.semantic = &fakeSemantic{
+		count: func(context.Context, string) (int32, error) {
+			return 1, nil
+		},
+	}
+
+	observed := make(chan string, 1)
+	manager.graphIndexHook = func() {
+		manager.syncLock.mu.Lock()
+		refcount := manager.syncLock.refcount
+		manager.syncLock.mu.Unlock()
+		slotCount := len(manager.indexSlots)
+		if refcount != 0 || slotCount != 0 {
+			observed <- fmt.Sprintf("syncLock refcount = %d, index slot count = %d", refcount, slotCount)
+			return
+		}
+		observed <- ""
+	}
+
+	repoPath := newCapTestRepo(t)
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+		t.Fatalf("StartIndex returned error: %v", err)
+	}
+
+	select {
+	case message := <-observed:
+		if message != "" {
+			t.Fatal(message)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("graph index hook was not called")
+	}
+	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 }
 
 func TestGraphStateRecordsReadyAndReconcilesStaleGraph(t *testing.T) {

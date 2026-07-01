@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/cbm"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/merkle"
@@ -16,10 +17,29 @@ import (
 	"goodkind.io/lm-semantic-search/internal/store"
 )
 
-type graphToolArguments map[string]json.RawMessage
+type (
+	graphToolArguments map[string]json.RawMessage
+	graphIndexTask     struct {
+		codebaseID    string
+		canonicalPath string
+		snapshotHash  string
+		complete      func(context.Context)
+	}
+)
+
+var allowedGraphTools = map[string]struct{}{
+	"query_graph":      {},
+	"trace_path":       {},
+	"get_architecture": {},
+	"manage_adr":       {},
+}
 
 // GraphTool calls a cbm graph engine tool for a tracked codebase.
 func (manager *Manager) GraphTool(ctx context.Context, codebaseID string, toolName string, argsJSON string) (string, error) {
+	if err := validateGraphToolName(toolName); err != nil {
+		return "", err
+	}
+
 	engine, err := manager.graphEngine(ctx, codebaseID)
 	if err != nil {
 		slog.ErrorContext(ctx, "open graph engine failed", "codebase_id", codebaseID, "err", err)
@@ -36,6 +56,32 @@ func (manager *Manager) GraphTool(ctx context.Context, codebaseID string, toolNa
 		return "", fmt.Errorf("call graph tool %s for %s: %w", toolName, codebaseID, err)
 	}
 	return resultJSON, nil
+}
+
+func validateGraphToolName(toolName string) error {
+	if _, found := allowedGraphTools[toolName]; found {
+		return nil
+	}
+	return adapterr.NewInvalidArgument(fmt.Sprintf("unsupported graph tool_name %q", toolName))
+}
+
+func newGraphIndexTask(codebaseID string, canonicalPath string, snapshotHash string, complete func(context.Context)) *graphIndexTask {
+	return &graphIndexTask{
+		codebaseID:    codebaseID,
+		canonicalPath: canonicalPath,
+		snapshotHash:  snapshotHash,
+		complete:      complete,
+	}
+}
+
+func (manager *Manager) runGraphIndexTask(ctx context.Context, task *graphIndexTask) {
+	if task == nil {
+		return
+	}
+	manager.recordGraphIndexNonFatal(ctx, task.codebaseID, task.canonicalPath, task.snapshotHash)
+	if task.complete != nil {
+		task.complete(ctx)
+	}
 }
 
 func (manager *Manager) graphEngine(ctx context.Context, codebaseID string) (*cbm.Engine, error) {
@@ -103,6 +149,9 @@ func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID strin
 }
 
 func (manager *Manager) recordGraphIndexNonFatal(ctx context.Context, codebaseID string, canonicalPath string, snapshotHash string) {
+	if manager.graphIndexHook != nil {
+		manager.graphIndexHook()
+	}
 	err := manager.indexGraphNonFatal(ctx, codebaseID, canonicalPath)
 	if err == nil {
 		manager.updateGraphState(ctx, codebaseID, model.GraphStateReady, snapshotHash)
