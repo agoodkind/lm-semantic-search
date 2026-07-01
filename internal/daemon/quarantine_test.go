@@ -286,7 +286,7 @@ func TestAssessDeltaDeleteWaveFlagsLargeRemoval(t *testing.T) {
 	for i := 0; i < 110; i++ {
 		diff.Removed[i] = fmt.Sprintf("f%03d.go", i)
 	}
-	signal, suspicious := assessDeltaDeleteWave(codebase, diff, snapshot)
+	signal, suspicious := assessDeltaDeleteWave(codebase, diff, snapshot, t.TempDir())
 	if !suspicious {
 		t.Fatal("assessDeltaDeleteWave returned suspicious=false, want true for 110 of 120 removed")
 	}
@@ -316,8 +316,43 @@ func TestAssessDeltaDeleteWaveSkipsAfterFullScanConfirmation(t *testing.T) {
 	for i := 0; i < 110; i++ {
 		diff.Removed[i] = fmt.Sprintf("f%03d.go", i)
 	}
-	if _, suspicious := assessDeltaDeleteWave(codebase, diff, snapshot); suspicious {
+	if _, suspicious := assessDeltaDeleteWave(codebase, diff, snapshot, t.TempDir()); suspicious {
 		t.Fatal("assessDeltaDeleteWave returned suspicious=true after confirmation, want false so destructive sync can proceed")
+	}
+}
+
+func TestAssessDeltaDeleteWaveIgnoresPhysicallyPresentRemovedPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	codebase := model.Codebase{
+		Kind:              model.CodebaseKindCode,
+		Status:            model.CodebaseStatusIndexed,
+		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 120, TotalChunks: 120},
+		LiveFileTotal:     120,
+	}
+	snapshot := merkle.Snapshot{Files: make(map[string]string, 120)}
+	diff := merkle.Diff{Added: nil, Modified: nil, Removed: make([]string, 110)}
+	for i := 0; i < 120; i++ {
+		relativePath := fmt.Sprintf("vendor/lib/f%03d.go", i)
+		snapshot.Files[relativePath] = fmt.Sprintf("hash-%03d", i)
+		if i < 110 {
+			diff.Removed[i] = relativePath
+		}
+	}
+	for i := 0; i < 110; i++ {
+		path := filepath.Join(root, diff.Removed[i])
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll returned error: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("package lib\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+	}
+
+	signal, suspicious := assessDeltaDeleteWave(codebase, diff, snapshot, root)
+	if suspicious {
+		t.Fatalf("assessDeltaDeleteWave quarantined physically present newly-excluded files: signal = %+v", signal)
 	}
 }
 

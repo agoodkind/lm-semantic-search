@@ -92,6 +92,7 @@ type IndexConfig struct {
 	SplitterChunkSize  int32    `json:"splitter_chunk_size"`
 	SplitterOverlap    int32    `json:"splitter_overlap"`
 	IgnorePatterns     []string `json:"ignore_patterns,omitempty"`
+	IncludeSubmodules  []string `json:"include_submodules,omitempty"`
 	IgnoreDigest       string   `json:"ignore_digest"`
 	EmbeddingProvider  string   `json:"embedding_provider,omitempty"`
 	EmbeddingModel     string   `json:"embedding_model,omitempty"`

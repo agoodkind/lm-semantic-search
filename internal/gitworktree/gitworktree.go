@@ -125,6 +125,31 @@ func PathInsideNestedWorktree(rootPath string, rootCommonDir string, path string
 	return false
 }
 
+// PathInsideSubmodule reports whether path lies inside a child git repository
+// below rootPath whose common dir differs from rootCommonDir. It returns the
+// child repository root relative to rootPath, slash-separated. rootPath itself is
+// excluded from the walk, so indexing a submodule as its own codebase still keeps
+// that root in scope.
+func PathInsideSubmodule(rootPath string, rootCommonDir string, path string) (string, bool) {
+	if rootCommonDir == "" {
+		return "", false
+	}
+	rootClean := filepath.Clean(rootPath)
+	current := filepath.Clean(path)
+	for current != rootClean && strings.HasPrefix(current, rootClean+string(os.PathSeparator)) {
+		currentCommon, ok := CommonDirAt(current)
+		if ok && currentCommon != rootCommonDir {
+			relativeRoot, err := filepath.Rel(rootClean, current)
+			if err != nil {
+				return "", false
+			}
+			return filepath.ToSlash(relativeRoot), true
+		}
+		current = filepath.Dir(current)
+	}
+	return "", false
+}
+
 // WorktreeTracked reports whether commonDir still holds a linked-worktree admin
 // entry for worktreeRoot. git records one pointer per linked worktree at
 // commonDir/worktrees/<name>/gitdir, and `git worktree remove` deletes it, so a

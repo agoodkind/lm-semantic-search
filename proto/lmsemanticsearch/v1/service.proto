@@ -73,6 +73,7 @@ message IndexConfig {
   int32 embedding_dimension = 8;
   string vector_backend = 9;
   bool hybrid = 10;
+  repeated string include_submodules = 11;
 }
 
 message Progress {
@@ -295,6 +296,7 @@ message StartIndexRequest {
   SplitterConfig splitter = 3;
   repeated string ignore_patterns = 4;
   ClientInfo client = 5;
+  repeated string include_submodules = 6;
 }
 
 message StartIndexResponse {

@@ -332,7 +332,7 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(ctx context.Context, cod
 		return
 	}
 	diff := merkle.DiffSnapshots(snapshot, currentSnapshot)
-	signal, suspicious := assessDeltaDeleteWave(codebase, diff, snapshot)
+	signal, suspicious := assessDeltaDeleteWave(codebase, diff, snapshot, codebase.CanonicalPath)
 	if !suspicious {
 		syncer.manager.clearCodebaseQuarantine(ctx, codebase.ID, model.CodebaseStatusIndexed)
 		if diff.Empty() {

@@ -40,7 +40,7 @@ func TestMerkleCaptureConvergesAndAgreesWithIndexerFileSet(t *testing.T) {
 		Hybrid:             false,
 	}
 
-	resolver := indexability.NewResolver(nil)
+	resolver := indexability.NewResolver(nil, nil)
 	first, err := merkle.Capture(context.Background(), resolver, "cb", root, config)
 	if err != nil {
 		t.Fatalf("first Capture returned error: %v", err)
@@ -138,7 +138,7 @@ func TestMerkleCaptureExcludesIgnoredFilesAndConverges(t *testing.T) {
 		Hybrid:             false,
 	}
 
-	resolver := indexability.NewResolver(nil)
+	resolver := indexability.NewResolver(nil, nil)
 	first, err := merkle.Capture(context.Background(), resolver, "cb", root, config)
 	if err != nil {
 		t.Fatalf("first Capture returned error: %v", err)

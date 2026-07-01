@@ -153,11 +153,12 @@ func vcsOperationInProgress(root string) bool {
 	return false
 }
 
-func assessDeltaDeleteWave(codebase model.Codebase, diff merkle.Diff, snapshot merkle.Snapshot) (quarantineSignal, bool) {
+func assessDeltaDeleteWave(codebase model.Codebase, diff merkle.Diff, snapshot merkle.Snapshot, root string) (quarantineSignal, bool) {
 	if quarantineConfirmed(codebase) {
 		return emptyQuarantineSignal(), false
 	}
-	missingCount := safeInt32(len(diff.Removed))
+	missingPaths := physicallyMissingPaths(root, diff.Removed)
+	missingCount := safeInt32(len(missingPaths))
 	totalCount := trackedFileTotalForSuspicion(codebase, snapshot)
 	if !shouldQuarantineLargeRemoval(codebase, missingCount, totalCount) {
 		return emptyQuarantineSignal(), false
@@ -168,6 +169,17 @@ func assessDeltaDeleteWave(codebase model.Codebase, diff merkle.Diff, snapshot m
 		missingCount: missingCount,
 		totalCount:   totalCount,
 	}, true
+}
+
+func physicallyMissingPaths(root string, relativePaths []string) []string {
+	missing := make([]string, 0, len(relativePaths))
+	for _, relativePath := range relativePaths {
+		if fileExists(filepath.Join(root, relativePath)) {
+			continue
+		}
+		missing = append(missing, relativePath)
+	}
+	return missing
 }
 
 func (manager *Manager) markCodebaseMissing(ctx context.Context, codebaseID string) {

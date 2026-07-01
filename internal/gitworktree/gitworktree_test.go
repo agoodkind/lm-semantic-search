@@ -321,6 +321,36 @@ func TestPathInsideNestedWorktree(t *testing.T) {
 	}
 }
 
+func TestPathInsideSubmodule(t *testing.T) {
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "repo")
+	gitDir := filepath.Join(mainRoot, ".git")
+	writeFile(t, filepath.Join(gitDir, "HEAD"), "ref: refs/heads/main\n")
+	commonDir := resolved(t, gitDir)
+
+	subModuleDir := filepath.Join(mainRoot, "vendor", "lib")
+	moduleGitDir := filepath.Join(gitDir, "modules", "vendor", "lib")
+	writeFile(t, filepath.Join(moduleGitDir, "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(subModuleDir, ".git"), "gitdir: "+moduleGitDir+"\n")
+
+	relRoot, ok := PathInsideSubmodule(mainRoot, commonDir, filepath.Join(subModuleDir, "internal", "lib.go"))
+	if !ok {
+		t.Fatal("PathInsideSubmodule returned ok=false for a file inside a submodule")
+	}
+	if relRoot != "vendor/lib" {
+		t.Fatalf("relRoot = %q, want vendor/lib", relRoot)
+	}
+	if _, ok := PathInsideSubmodule(mainRoot, commonDir, mainRoot); ok {
+		t.Fatal("PathInsideSubmodule reported the root itself as a submodule")
+	}
+	if _, ok := PathInsideSubmodule(mainRoot, commonDir, filepath.Join(mainRoot, "main.go")); ok {
+		t.Fatal("PathInsideSubmodule reported a parent repo file as a submodule")
+	}
+	if _, ok := PathInsideSubmodule(mainRoot, "", filepath.Join(subModuleDir, "internal", "lib.go")); ok {
+		t.Fatal("PathInsideSubmodule with empty commonDir = ok, want false")
+	}
+}
+
 func TestWorktreeTrackedTrueThenFalseAfterRemoval(t *testing.T) {
 	base := t.TempDir()
 	wtDir := filepath.Join(base, "feat")

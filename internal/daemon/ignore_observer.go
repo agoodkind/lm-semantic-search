@@ -11,7 +11,7 @@ import (
 // definition of which on-disk files are ignore sources, and the cache
 // invalidation the observer alone now triggers.
 type ignoreSourceResolver interface {
-	IgnoreSources(ctx context.Context, root string) []string
+	IgnoreSources(ctx context.Context, codebaseID string, root string) []string
 	InvalidateRules(codebaseID string)
 }
 
@@ -79,7 +79,7 @@ func (observer *ignoreObserver) Invalidate(codebaseID string) {
 // .git/info/exclude) and any source edit made while CLAUDE_CONTEXT_FILE_WATCHER is
 // disabled, which is the watcher-off staleness fix.
 func (observer *ignoreObserver) CheckSources(ctx context.Context, codebaseID string, root string) {
-	sources := observer.resolver.IgnoreSources(ctx, root)
+	sources := observer.resolver.IgnoreSources(ctx, codebaseID, root)
 	current := make(map[string]sourceStamp, len(sources))
 	for _, source := range sources {
 		current[source] = stampForSource(source)

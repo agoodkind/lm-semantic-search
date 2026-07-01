@@ -149,7 +149,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	// The resolver reads each codebase's custom ignore patterns straight from the
 	// registry source of truth at build time, so per-codebase ignore state has no
 	// second copy and never drifts from the registry.
-	manager.indexability = indexability.NewResolver(manager.ignoreOverridesFromRegistry)
+	manager.indexability = indexability.NewResolver(manager.ignoreOverridesFromRegistry, manager.submoduleAllowlistFromRegistry)
 	// The observer is the sole caller of the resolver's invalidate, so every
 	// consumer signals it instead of invalidating the cache itself.
 	manager.observer = newIgnoreObserver(manager.indexability)
@@ -266,6 +266,7 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 			SplitterChunkSize:  0,
 			SplitterOverlap:    0,
 			IgnorePatterns:     nil,
+			IncludeSubmodules:  nil,
 			IgnoreDigest:       "",
 			EmbeddingProvider:  "",
 			EmbeddingModel:     "",

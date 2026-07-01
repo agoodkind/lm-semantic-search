@@ -228,7 +228,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	// removals are dropped from this run and the rows stay.
 	switch source.absencePolicy() {
 	case absenceDeleteGuarded:
-		if signal, suspicious := assessDeltaDeleteWave(codebase, plan.diff, plan.seedSnapshot); suspicious {
+		if signal, suspicious := assessDeltaDeleteWave(codebase, plan.diff, plan.seedSnapshot, job.CanonicalPath); suspicious {
 			manager.updateJobQuarantined(ctx, job.ID, signal)
 			return true
 		}

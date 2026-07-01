@@ -195,7 +195,7 @@ func (runner *Runner) statEligibility(ctx context.Context, resolver *indexabilit
 	case indexability.ReasonOversize:
 		slog.WarnContext(ctx, "indexer.skipped_oversize", "path", relativePath, "bytes", info.Size())
 		return processedFile{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipOversize, Removed: false}, false, nil
-	case indexability.ReasonNotRegular, indexability.ReasonOutOfScope, indexability.ReasonIgnored:
+	case indexability.ReasonNotRegular, indexability.ReasonOutOfScope, indexability.ReasonIgnored, indexability.ReasonSubmodule:
 		slog.DebugContext(ctx, "source path is not indexable; converging to removal", "path", fullPath, "reason", string(decision.Reason))
 		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, false, nil
 	case indexability.Keep, indexability.ReasonNonUTF8:

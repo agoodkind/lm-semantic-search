@@ -27,6 +27,9 @@ const (
 	ReasonOutOfScope Reason = "out-of-scope"
 	// ReasonIgnored marks a path excluded by a git-style ignore rule.
 	ReasonIgnored Reason = "ignored"
+	// ReasonSubmodule marks a path inside a git submodule excluded from the
+	// parent index by default.
+	ReasonSubmodule Reason = "submodule"
 	// ReasonNotRegular marks directories, symlinks, and other non-regular files.
 	ReasonNotRegular Reason = "not-regular"
 	// ReasonOversize marks regular files above the configured byte cap.
@@ -51,14 +54,19 @@ type Decision struct {
 // pattern wins over a repository re-include. A nil func means no overrides.
 type IgnoreOverrides func(codebaseID string) []string
 
+// SubmoduleAllowlist supplies per-codebase submodule names or paths that should
+// be included in the parent index. A nil func means no submodules are included.
+type SubmoduleAllowlist func(codebaseID string) []string
+
 // Resolver answers indexability questions for many codebases. It caches one
 // built ignore matcher per codebase id and rebuilds it lazily after
 // InvalidateRules. Each codebase builds under its own once, so a slow first
 // build for one codebase never blocks Decide for another.
 type Resolver struct {
-	mu        sync.Mutex
-	entries   map[string]*ruleEntry
-	overrides IgnoreOverrides
+	mu         sync.Mutex
+	entries    map[string]*ruleEntry
+	overrides  IgnoreOverrides
+	submodules SubmoduleAllowlist
 }
 
 // ruleEntry holds one codebase's lazily built rules. once guards the build so a
@@ -70,21 +78,24 @@ type ruleEntry struct {
 }
 
 // NewResolver returns a Resolver with an empty per-codebase rule cache. The
-// overrides func supplies each codebase's custom ignore patterns; pass nil when
-// there are none.
-func NewResolver(overrides IgnoreOverrides) *Resolver {
+// overrides func supplies each codebase's custom ignore patterns, and submodules
+// supplies the submodule names or paths allowed back into the parent index. Pass
+// nil for either provider when there are none.
+func NewResolver(overrides IgnoreOverrides, submodules SubmoduleAllowlist) *Resolver {
 	return &Resolver{
-		mu:        sync.Mutex{},
-		entries:   map[string]*ruleEntry{},
-		overrides: overrides,
+		mu:         sync.Mutex{},
+		entries:    map[string]*ruleEntry{},
+		overrides:  overrides,
+		submodules: submodules,
 	}
 }
 
 // builtRules is the cached, resolved ignore state for one codebase.
 type builtRules struct {
-	matcher   *gitignore.Matcher
-	commonDir string
-	maxBytes  int64
+	matcher    *gitignore.Matcher
+	commonDir  string
+	submodules submoduleRules
+	maxBytes   int64
 }
 
 // Decide applies the pre-read gates to relPath in this order: a path inside a
@@ -146,6 +157,9 @@ func (rules *builtRules) scopeOrIgnore(root string, relPath string, isDir bool) 
 		absPath := filepath.Join(root, filepath.FromSlash(relPath))
 		if gitworktree.PathInsideNestedWorktree(root, rules.commonDir, absPath) {
 			return ReasonOutOfScope
+		}
+		if submoduleRoot, ok := rules.submodules.containing(root, rules.commonDir, relPath, absPath); ok && !rules.submodules.allowed(submoduleRoot) {
+			return ReasonSubmodule
 		}
 	}
 	if hasGitComponent(relPath) {
@@ -276,8 +290,14 @@ func (r *Resolver) buildRules(ctx context.Context, codebaseID string, root strin
 	// function of root's on-disk .git topology and so cannot drift from it.
 	commonDir, _ := gitworktree.CommonDirAt(root)
 
+	allowlist := []string(nil)
+	if r.submodules != nil {
+		allowlist = r.submodules(codebaseID)
+	}
+	submodules := buildSubmoduleRules(ctx, root, allowlist)
+
 	matcher := seedMatcher(ctx, commonDir)
-	addGitignoreFiles(ctx, matcher, root, commonDir)
+	addGitignoreFiles(ctx, matcher, root, commonDir, submodules)
 	if r.overrides != nil {
 		if extra := r.overrides(codebaseID); len(extra) > 0 {
 			matcher.AddPatterns([]byte(strings.Join(extra, "\n")), "")
@@ -285,9 +305,10 @@ func (r *Resolver) buildRules(ctx context.Context, codebaseID string, root strin
 	}
 
 	return &builtRules{
-		matcher:   matcher,
-		commonDir: commonDir,
-		maxBytes:  maxFileBytes(),
+		matcher:    matcher,
+		commonDir:  commonDir,
+		submodules: submodules,
+		maxBytes:   maxFileBytes(),
 	}
 }
 
@@ -321,7 +342,7 @@ func seedMatcher(ctx context.Context, commonDir string) *gitignore.Matcher {
 // not files and are excluded. Empty candidate paths are dropped, and duplicate
 // paths are removed preserving first-occurrence order, since git's
 // core.excludesFile can resolve to the same path as the default XDG location.
-func (r *Resolver) IgnoreSources(ctx context.Context, root string) []string {
+func (r *Resolver) IgnoreSources(ctx context.Context, codebaseID string, root string) []string {
 	commonDir, _ := gitworktree.CommonDirAt(root)
 
 	sources := make([]string, 0)
@@ -336,8 +357,18 @@ func (r *Resolver) IgnoreSources(ctx context.Context, root string) []string {
 	if commonDir != "" {
 		sources = append(sources, filepath.Join(commonDir, "info", "exclude"))
 	}
+	// Resolve the submodule allowlist from the same provider buildRules uses, so
+	// the walk visits an allowlisted (indexed) submodule and lists its .gitignore
+	// files. Otherwise the periodic CheckSources backstop would never watch those
+	// files and a change inside an allowlisted submodule could leave the cache
+	// stale when the watcher is off or misses the event.
+	allowlist := []string(nil)
+	if r.submodules != nil {
+		allowlist = r.submodules(codebaseID)
+	}
+	submodules := buildSubmoduleRules(ctx, root, allowlist)
 	matcher := seedMatcher(ctx, commonDir)
-	sources = append(sources, addGitignoreFiles(ctx, matcher, root, commonDir)...)
+	sources = append(sources, addGitignoreFiles(ctx, matcher, root, commonDir, submodules)...)
 	return dedupeStringsPreservingOrder(sources)
 }
 
@@ -367,7 +398,8 @@ func dedupeStringsPreservingOrder(values []string) []string {
 // periodic CheckSources backstop. Conservative: any .gitignore edit
 // invalidates, since a parent rule change can make a nested .gitignore relevant.
 func (r *Resolver) IsIgnoreSourcePath(path string, commonDir string) bool {
-	if filepath.Base(path) == ".gitignore" {
+	base := filepath.Base(path)
+	if base == ".gitignore" || base == ".gitmodules" {
 		return true
 	}
 	return commonDir != "" && path == filepath.Join(commonDir, "info", "exclude")
@@ -381,7 +413,7 @@ func (r *Resolver) IsIgnoreSourcePath(path string, commonDir string) bool {
 // returns the .gitignore path it visited for each walked directory, so
 // IgnoreSources can report the same set this walk reads without a second walk
 // definition.
-func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root string, commonDir string) []string {
+func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root string, commonDir string, submodules submoduleRules) []string {
 	sources := make([]string, 0)
 	var walk func(relDir string)
 	walk = func(relDir string) {
@@ -397,6 +429,16 @@ func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root str
 		gitignorePath := filepath.Join(currentDir, ".gitignore")
 		matcher.AddFromFile(gitignorePath, relDir)
 		sources = append(sources, gitignorePath)
+		// Git only reads .gitmodules at a repo root: the codebase root, or an
+		// allowlisted submodule's own root whose nested submodules it declares.
+		// Parsing it in every directory does a wasted os.ReadFile per dir and
+		// doubles the IgnoreSources list, so limit it to those roots and only when
+		// the file is actually present in this directory's already-read entries.
+		atAllowedSubmoduleRoot := relDir != "" && submodules.isRoot(relDir) && submodules.allowed(relDir)
+		if (relDir == "" || atAllowedSubmoduleRoot) && dirEntriesContain(entries, ".gitmodules") {
+			submodules.addGitmodules(ctx, currentDir, relDir)
+			sources = append(sources, filepath.Join(currentDir, ".gitmodules"))
+		}
 		for _, entry := range entries {
 			if !entry.IsDir() || entry.Name() == ".git" {
 				continue
@@ -406,10 +448,7 @@ func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root str
 				childRel = relDir + "/" + entry.Name()
 			}
 			childAbs := filepath.Join(currentDir, entry.Name())
-			if gitworktree.WorktreeOfRepo(childAbs, commonDir) {
-				continue
-			}
-			if matcher.MatchPath(childRel, true) {
+			if childWalkBlocked(matcher, root, commonDir, submodules, childRel, childAbs) {
 				continue
 			}
 			walk(childRel)
@@ -417,6 +456,39 @@ func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root str
 	}
 	walk("")
 	return sources
+}
+
+// childWalkBlocked reports whether the top-down walk must not descend into a
+// child directory: a nested same-repo worktree boundary, a submodule root that
+// is not allowlisted, or a directory the gathered .gitignore rules already
+// exclude. It registers a filesystem-detected submodule root as a side effect so
+// a later isRoot check sees it.
+func childWalkBlocked(matcher *gitignore.Matcher, root string, commonDir string, submodules submoduleRules, childRel string, childAbs string) bool {
+	if gitworktree.WorktreeOfRepo(childAbs, commonDir) {
+		return true
+	}
+	if relRoot, ok := submodules.containing(root, commonDir, childRel, childAbs); ok {
+		submodules.add(relRoot, "")
+		if !submodules.allowed(relRoot) {
+			return true
+		}
+	}
+	if submodules.isRoot(childRel) && !submodules.allowed(childRel) {
+		return true
+	}
+	return matcher.MatchPath(childRel, true)
+}
+
+// dirEntriesContain reports whether name is present as a non-directory entry in
+// an already-read directory listing, letting a caller test for a file like
+// .gitmodules without a separate stat.
+func dirEntriesContain(entries []os.DirEntry, name string) bool {
+	for _, entry := range entries {
+		if entry.Name() == name && !entry.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 // contextIgnorePath returns the project-global ignore file at

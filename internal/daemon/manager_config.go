@@ -43,6 +43,16 @@ func (manager *Manager) ignoreOverridesFromRegistry(codebaseID string) []string 
 	return slices.Clone(codebase.EffectiveConfig.IgnorePatterns)
 }
 
+func (manager *Manager) submoduleAllowlistFromRegistry(codebaseID string) []string {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	codebase, found := manager.codebases[codebaseID]
+	if !found {
+		return nil
+	}
+	return slices.Clone(codebase.EffectiveConfig.IncludeSubmodules)
+}
+
 // legacyDigestForCodebase returns the canonical digest of the codebase's
 // stored EffectiveConfig. The plan helpers pass this to
 // merkle.LoadSnapshotForConfig so a pre-config-digest snapshot is salvaged
@@ -92,6 +102,7 @@ func (manager *Manager) enrichIndexConfig(indexConfig model.IndexConfig) model.I
 	indexConfig.VectorBackend = "milvus"
 	indexConfig.Hybrid = manager.config.HybridMode
 	indexConfig.IgnorePatterns = mergeDistinct(indexConfig.IgnorePatterns, manager.config.CustomIgnorePatterns)
+	indexConfig.IncludeSubmodules = mergeNormalizedSubmodules(indexConfig.IncludeSubmodules, manager.config.IncludeSubmodules)
 	return indexConfig
 }
 
@@ -118,6 +129,27 @@ func mergeDistinct(base []string, extras []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func mergeNormalizedSubmodules(base []string, extras []string) []string {
+	return mergeDistinct(normalizeSubmoduleList(base), normalizeSubmoduleList(extras))
+}
+
+func normalizeSubmoduleList(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+		if trimmed == "" || trimmed == "." {
+			continue
+		}
+		cleanedNative := filepath.Clean(filepath.FromSlash(trimmed))
+		cleaned := filepath.ToSlash(cleanedNative)
+		if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || filepath.IsAbs(cleanedNative) {
+			continue
+		}
+		normalized = append(normalized, cleaned)
+	}
+	return normalized
 }
 
 func (manager *Manager) chunkPath(codebaseID string) string {

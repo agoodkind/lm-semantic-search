@@ -133,10 +133,11 @@ func TestDispatchRegisteredWorktreeRoutesToWorktree(t *testing.T) {
 	}
 }
 
-// TestDispatchSubmoduleStillEnqueuesForParent guards the preserved invariant: a
-// submodule resolves to a different common dir, so it is NOT a boundary and its
-// files still index into the parent.
-func TestDispatchSubmoduleStillEnqueuesForParent(t *testing.T) {
+// TestDispatchSubmoduleExcludedFromParent verifies the D1 default: a submodule
+// resolves to a different common dir, so its files are a gitlink to the parent,
+// not parent source, and a watcher event for a submodule file is not enqueued
+// for the parent by default.
+func TestDispatchSubmoduleExcludedFromParent(t *testing.T) {
 	t.Parallel()
 	manager, _, _ := newTestManager(t)
 	base := t.TempDir()
@@ -153,10 +154,13 @@ func TestDispatchSubmoduleStillEnqueuesForParent(t *testing.T) {
 	watcher.AddCodebase(context.Background(), parentCodebase(mainRoot))
 
 	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(subModuleDir, "lib.go")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")})
 
-	want := filepath.ToSlash(filepath.Join("vendor", "lib", "lib.go"))
-	paths := waitForRelativePath(t, snapshot, "cb_parent", want)
-	if !slicesContains(paths, want) {
-		t.Fatalf("parent did not index submodule file %q; got %v", want, paths)
+	// The control event confirms the dispatch pipeline ran before asserting the
+	// submodule file is absent.
+	parentPaths := waitForRelativePath(t, snapshot, "cb_parent", "main.go")
+	submodulePath := filepath.ToSlash(filepath.Join("vendor", "lib", "lib.go"))
+	if slicesContains(parentPaths, submodulePath) {
+		t.Fatalf("parent enqueued submodule file %q; it should be excluded by default", submodulePath)
 	}
 }

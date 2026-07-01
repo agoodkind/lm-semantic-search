@@ -21,7 +21,7 @@ type fakeIgnoreResolver struct {
 	invalidated []string
 }
 
-func (resolver *fakeIgnoreResolver) IgnoreSources(_ context.Context, _ string) []string {
+func (resolver *fakeIgnoreResolver) IgnoreSources(_ context.Context, _ string, _ string) []string {
 	resolver.mu.Lock()
 	defer resolver.mu.Unlock()
 	return slices.Clone(resolver.sources)
@@ -129,7 +129,7 @@ func TestInvalidateInvalidatesGivenCodebase(t *testing.T) {
 // without a tree walk.
 func TestIsIgnoreSourcePath(t *testing.T) {
 	t.Parallel()
-	resolver := indexability.NewResolver(nil)
+	resolver := indexability.NewResolver(nil, nil)
 	root := "/repo"
 	commonDir := filepath.Join(root, ".git")
 

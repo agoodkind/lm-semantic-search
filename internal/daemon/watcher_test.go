@@ -117,6 +117,89 @@ func TestWatcherDispatchHonorsResolverRules(t *testing.T) {
 	}
 }
 
+func TestWatcherDispatchSkipsDefaultSubmodule(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+
+	var observedMu sync.Mutex
+	observed := map[string][]string{}
+	queue := NewEventQueue(time.Millisecond, func(codebaseID string, relativePaths []string) {
+		observedMu.Lock()
+		observed[codebaseID] = append(observed[codebaseID], relativePaths...)
+		observedMu.Unlock()
+	})
+	watcher := NewWatcher(manager, queue)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatalf("write HEAD: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitmodules"), []byte("[submodule \"lib\"]\n\tpath = extern/lib\n\turl = ../lib.git\n"), 0o644); err != nil {
+		t.Fatalf("write .gitmodules: %v", err)
+	}
+	moduleGitDir := filepath.Join(root, ".git", "modules", "extern", "lib")
+	if err := os.MkdirAll(moduleGitDir, 0o755); err != nil {
+		t.Fatalf("mkdir module git dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleGitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatalf("write module HEAD: %v", err)
+	}
+	submoduleDir := filepath.Join(root, "extern", "lib")
+	if err := os.MkdirAll(submoduleDir, 0o755); err != nil {
+		t.Fatalf("mkdir submodule: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(submoduleDir, ".git"), []byte("gitdir: "+moduleGitDir+"\n"), 0o644); err != nil {
+		t.Fatalf("write submodule .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(submoduleDir, "lib.go"), []byte("package lib\n"), 0o644); err != nil {
+		t.Fatalf("write submodule file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main file: %v", err)
+	}
+
+	codebase := model.Codebase{
+		ID:            "cb_submodule_skip",
+		CanonicalPath: root,
+	}
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+	watcher.AddCodebase(context.Background(), codebase)
+
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(submoduleDir, "lib.go")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(root, "main.go")})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		observedMu.Lock()
+		mainObserved := len(observed[codebase.ID]) > 0
+		observedMu.Unlock()
+		if mainObserved {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	observedMu.Lock()
+	defer observedMu.Unlock()
+	paths := observed[codebase.ID]
+	foundMain := false
+	for _, enqueued := range paths {
+		if enqueued == "extern/lib/lib.go" {
+			t.Fatalf("dispatch enqueued a default-excluded submodule path: %v", paths)
+		}
+		if enqueued == "main.go" {
+			foundMain = true
+		}
+	}
+	if !foundMain {
+		t.Fatalf("dispatch did not enqueue main.go: %v", paths)
+	}
+}
+
 // TestWatcherDispatchFiltersDeletedGitPath confirms a delete/rename event, where
 // os.Lstat fails because the file is gone, still routes through the resolver: a
 // deleted .git path is dropped (no git lock-file churn on removal) while a
