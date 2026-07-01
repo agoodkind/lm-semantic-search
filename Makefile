@@ -22,6 +22,7 @@ INSTALL_BINS := $(BINARY):$(CMD) $(CLI_BINARY):$(CLI_CMD) $(MCP_BINARY):$(MCP_CM
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 BUILD_CHECKS := true
 STATICCHECK_EXTRA_FLAGS = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_STRICT_FLAGS)
+GO_MK_CGO_DEPS := cbm
 
 LAUNCHD_LABEL := io.goodkind.lm-semantic-search-daemon
 SYSTEMD_UNIT := lm-semantic-search-daemon.service
@@ -38,7 +39,7 @@ endif
 # generates the tree-sitter parser; GO_MK_WORKSPACE_USE materializes a gitignored
 # go.work that routes the gksyntax submodule into the build, so both exist before
 # any target compiles the grammar packages.
-GO_MK_GENERATE := gksyntax-grammars cbm-engine
+GO_MK_GENERATE := gksyntax-grammars
 GO_MK_GENERATE_INPUTS := third_party/gksyntax
 GO_MK_GENERATE_OUTPUTS := \
 	third_party/gksyntax/treesitter/grammars/swift/upstream/src/parser.c \
@@ -47,6 +48,9 @@ GO_MK_GENERATE_OUTPUTS := \
 	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/alloc.h
 GO_MK_WORKSPACE_USE := . third_party/gksyntax
 
+go-mk-cgo-dep-cbm: scripts/setup-cgo-cbm.sh third_party/cbm/Makefile.cbm
+	"$(CURDIR)/scripts/setup-cgo-cbm.sh"
+
 # bootstrap.mk fetches go.mk + golangci.yml + every module in GO_MK_MODULES
 # at parse time and -includes them. Update path: edit go-makefile/bootstrap.mk,
 # then refresh consumer copies (one-off cp; not enshrined as infrastructure).
@@ -54,11 +58,14 @@ include bootstrap.mk
 
 .DEFAULT_GOAL := check
 
+export PKG_CONFIG_PATH := $(GO_MK_CGO_PREFIX)/lib/pkgconfig$(if $(strip $(PKG_CONFIG_PATH)),:$(PKG_CONFIG_PATH))
+build build-check check lint lint-golangci lint-deadcode staticcheck-extra vet test govulncheck: | go-mk-cgo-deps
+
 # ---------------------------------------------------------------------------
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: cbm-engine deploy deploy-service daemon-wait daemon-status kill-orphans
+.PHONY: go-mk-cgo-dep-cbm deploy deploy-service daemon-wait daemon-status kill-orphans
 
 # daemon-status and daemon-wait call the installed CLI; kill-orphans matches the
 # installed MCP binary by name.
@@ -109,11 +116,6 @@ gksyntax-grammars:
 # The order-only prerequisite that runs gksyntax-grammars before every compile,
 # vet, lint, test, install, and release target is wired centrally in go.mk via
 # GO_MK_GENERATE (set above), so no per-target list is maintained here.
-
-cbm-engine: build/libcbm_engine.a
-
-build/libcbm_engine.a: scripts/build-cbm-engine.sh third_party/cbm/Makefile.cbm
-	"$(CURDIR)/scripts/build-cbm-engine.sh"
 
 deploy:
 	$(MAKE) install

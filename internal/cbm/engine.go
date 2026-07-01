@@ -1,13 +1,10 @@
-//go:build darwin && arm64
-
 // Package cbm wraps the codebase-memory-mcp C engine, linked as a localized
 // static archive, behind a small Go API with the locking the engine's
 // process-global pipeline state requires.
 package cbm
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../third_party/cbm/src -I${SRCDIR}/../../third_party/cbm/internal/cbm -I${SRCDIR}/../../third_party/cbm/internal/cbm/vendored/ts_runtime/include
-#cgo darwin LDFLAGS: ${SRCDIR}/../../build/libcbm_engine.a -lc++ -lm -lz
+#cgo pkg-config: cbm
 #include <stdlib.h>
 #include "cbm.h"
 #include "mcp/mcp.h"

@@ -3,35 +3,38 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CBM_DIR="${ROOT_DIR}/third_party/cbm"
-BUILD_DIR="${ROOT_DIR}/build/cbm-engine"
+TARGET_GOOS="${GO_MK_TARGET_GOOS:-$(go env GOOS)}"
+TARGET_GOARCH="${GO_MK_TARGET_GOARCH:-$(go env GOARCH)}"
+PREFIX="${GO_MK_CGO_PREFIX:-${ROOT_DIR}/.make/cgo/${TARGET_GOOS}-${TARGET_GOARCH}}"
+BUILD_DIR="${ROOT_DIR}/.make/cbm-engine/${TARGET_GOOS}-${TARGET_GOARCH}"
 OBJECT_DIR="${BUILD_DIR}/obj"
 KEEP_LIST="${BUILD_DIR}/cbm-exported-symbols.txt"
 COMBINED_OBJECT="${BUILD_DIR}/libcbm_engine.o"
-ARCHIVE_PATH="${ROOT_DIR}/build/libcbm_engine.a"
+ARCHIVE_PATH="${PREFIX}/lib/libcbm_engine.a"
 CC="${CC:-cc}"
 CXX="${CXX:-c++}"
 
-if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
-    echo "build-cbm-engine: skipping archive build on non-darwin/arm64; the engine stub is used on this platform" >&2
-    exit 0
+if [[ -z "${TARGET_GOOS}" ]]; then
+    TARGET_GOOS="$(go env GOOS)"
+fi
+if [[ -z "${TARGET_GOARCH}" ]]; then
+    TARGET_GOARCH="$(go env GOARCH)"
 fi
 
 if [[ ! -f "${CBM_DIR}/Makefile.cbm" ]]; then
-    echo "build-cbm-engine: ${CBM_DIR}/Makefile.cbm is missing" >&2
+    echo "setup-cgo-cbm: ${CBM_DIR}/Makefile.cbm is missing" >&2
     exit 1
 fi
 
-mkdir -p "${OBJECT_DIR}"
+mkdir -p "${OBJECT_DIR}" "${PREFIX}/lib/pkgconfig" "${PREFIX}/include/mcp" \
+    "${PREFIX}/include/tree_sitter"
 rm -rf "${OBJECT_DIR:?}"/*
 
 makefile_var() {
     local variable_name="$1"
     local print_makefile="${BUILD_DIR}/print-${variable_name}.mk"
 
-    cat >"${print_makefile}" <<'MAKE'
-print-%:
-	@printf '%s\n' "$($*)"
-MAKE
+    printf '%s\n' 'print-%:' '	@printf '\''%s\n'\'' "$($*)"' >"${print_makefile}"
     MAKEFLAGS= make -C "${CBM_DIR}" -f Makefile.cbm -f "${print_makefile}" \
         --no-print-directory PKG_CONFIG=/usr/bin/false "print-${variable_name}"
 }
@@ -79,6 +82,161 @@ compile_cxx() {
 
     mkdir -p "$(dirname "${object_path}")"
     (cd "${CBM_DIR}" && "${CXX}" "$@" -c -o "${object_path}" "${source_path}")
+}
+
+tool_for_cc() {
+    local tool_name="$1"
+    local compiler_basename
+    local compiler_dir
+    local candidate
+    local executable_name
+
+    if [[ -n "${!tool_name:-}" ]]; then
+        printf '%s\n' "${!tool_name}"
+        return
+    fi
+
+    case "${tool_name}" in
+        AR)
+            executable_name="ar"
+            ;;
+        OBJCOPY)
+            executable_name="objcopy"
+            ;;
+        *)
+            executable_name="${tool_name}"
+            ;;
+    esac
+
+    compiler_basename="$(basename "${CC}")"
+    compiler_dir="$(dirname "${CC}")"
+    for suffix in clang gcc cc; do
+        if [[ "${compiler_basename}" == *"${suffix}" ]]; then
+            candidate="${compiler_dir}/${compiler_basename%"${suffix}"}${executable_name}"
+            if command -v "${candidate}" >/dev/null 2>&1; then
+                printf '%s\n' "${candidate}"
+                return
+            fi
+        fi
+    done
+
+    printf '%s\n' "${executable_name}"
+}
+
+archive_tool() {
+    if [[ -n "${AR:-}" ]]; then
+        printf '%s\n' "${AR}"
+        return
+    fi
+    tool_for_cc "AR"
+}
+
+objcopy_tool() {
+    if [[ -n "${OBJCOPY:-}" ]]; then
+        printf '%s\n' "${OBJCOPY}"
+        return
+    fi
+    tool_for_cc "OBJCOPY"
+}
+
+link_darwin_relocatable() {
+    local arch_flag
+
+    case "${TARGET_GOARCH}" in
+        arm64)
+            arch_flag="arm64"
+            ;;
+        amd64)
+            arch_flag="x86_64"
+            ;;
+        *)
+            echo "setup-cgo-cbm: unsupported darwin GOARCH ${TARGET_GOARCH}" >&2
+            exit 1
+            ;;
+    esac
+
+    "${CC}" -r -arch "${arch_flag}" -Wl,-exported_symbols_list,"${KEEP_LIST}" \
+        -o "${COMBINED_OBJECT}" "${objects[@]}"
+}
+
+link_linux_relocatable() {
+    local objcopy_bin
+
+    "${CC}" -r -nostdlib -o "${COMBINED_OBJECT}" "${objects[@]}"
+    objcopy_bin="$(objcopy_tool)"
+    "${objcopy_bin}" --keep-global-symbols="${KEEP_LIST}" "${COMBINED_OBJECT}"
+}
+
+create_archive() {
+    local archive_bin
+
+    rm -f "${ARCHIVE_PATH}"
+    archive_bin="$(archive_tool)"
+    "${archive_bin}" crs "${ARCHIVE_PATH}" "${COMBINED_OBJECT}"
+}
+
+write_keep_list() {
+    local symbol_prefix=""
+
+    if [[ "${TARGET_GOOS}" == "darwin" ]]; then
+        symbol_prefix="_"
+    fi
+
+    for symbol_name in \
+        cbm_alloc_init \
+        cbm_store_open_path \
+        cbm_store_open_path_query \
+        cbm_store_close \
+        cbm_pipeline_new \
+        cbm_pipeline_run \
+        cbm_pipeline_free \
+        cbm_mcp_server_new \
+        cbm_mcp_server_set_project \
+        cbm_mcp_server_set_config \
+        cbm_mcp_handle_tool \
+        cbm_mcp_server_free \
+        cbm_cypher_execute \
+        cbm_cypher_result_free; do
+        printf '%s%s\n' "${symbol_prefix}" "${symbol_name}"
+    done >"${KEEP_LIST}"
+}
+
+install_headers() {
+    cp "${CBM_DIR}/internal/cbm/cbm.h" "${PREFIX}/include/cbm.h"
+    cp "${CBM_DIR}/internal/cbm/arena.h" "${PREFIX}/include/arena.h"
+    cp "${CBM_DIR}/src/mcp/mcp.h" "${PREFIX}/include/mcp/mcp.h"
+    cp "${CBM_DIR}/internal/cbm/vendored/ts_runtime/include/tree_sitter/api.h" \
+        "${PREFIX}/include/tree_sitter/api.h"
+}
+
+write_pkg_config() {
+    local cxx_runtime
+
+    case "${TARGET_GOOS}" in
+        darwin)
+            cxx_runtime="-lc++"
+            ;;
+        linux)
+            cxx_runtime="-lstdc++"
+            ;;
+        *)
+            echo "setup-cgo-cbm: unsupported GOOS ${TARGET_GOOS}" >&2
+            exit 1
+            ;;
+    esac
+
+    cat >"${PREFIX}/lib/pkgconfig/cbm.pc" <<PC
+prefix=${PREFIX}
+exec_prefix=\${prefix}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: cbm
+Description: codebase-memory graph engine
+Version: 0
+Cflags: -I\${includedir}
+Libs: -L\${libdir} -lcbm_engine ${cxx_runtime} -lm -lz
+PC
 }
 
 normal_cflags=(
@@ -259,36 +417,21 @@ unixcoder_object="$(object_path_for_source "${unixcoder_blob_source}")"
 (cd "${CBM_DIR}" && "${CC}" -c -o "${unixcoder_object}" "${unixcoder_blob_source}")
 objects+=("${unixcoder_object}")
 
-cat >"${KEEP_LIST}" <<'EOF'
-_cbm_alloc_init
-_cbm_store_open_path
-_cbm_store_open_path_query
-_cbm_store_close
-_cbm_pipeline_new
-_cbm_pipeline_run
-_cbm_pipeline_free
-_cbm_mcp_server_new
-_cbm_mcp_server_set_project
-_cbm_mcp_server_set_config
-_cbm_mcp_handle_tool
-_cbm_mcp_server_free
-_cbm_cypher_execute
-_cbm_cypher_result_free
-EOF
+write_keep_list
+case "${TARGET_GOOS}" in
+    darwin)
+        link_darwin_relocatable
+        ;;
+    linux)
+        link_linux_relocatable
+        ;;
+    *)
+        echo "setup-cgo-cbm: unsupported GOOS ${TARGET_GOOS}" >&2
+        exit 1
+        ;;
+esac
+create_archive
+install_headers
+write_pkg_config
 
-ld -arch arm64 -r -exported_symbols_list "${KEEP_LIST}" -o "${COMBINED_OBJECT}" "${objects[@]}"
-libtool -static -o "${ARCHIVE_PATH}" "${COMBINED_OBJECT}"
-
-nm_output="$(nm -gU "${ARCHIVE_PATH}")"
-printf '%s\n' "${nm_output}"
-
-non_cbm_symbols="$(
-    printf '%s\n' "${nm_output}" |
-        awk '/ _/ { symbol = $NF; sub(/^_/, "", symbol); if (symbol !~ /^cbm_/) print symbol }'
-)"
-
-if [[ -n "${non_cbm_symbols}" ]]; then
-    echo "build-cbm-engine: non-cbm global symbols remain:" >&2
-    printf '%s\n' "${non_cbm_symbols}" >&2
-    exit 1
-fi
+echo "setup-cgo-cbm: installed ${ARCHIVE_PATH}"

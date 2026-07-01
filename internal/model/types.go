@@ -59,8 +59,6 @@ const (
 type GraphState string
 
 const (
-	// GraphStateUnsupported means the cbm graph engine cannot run on this platform.
-	GraphStateUnsupported GraphState = "unsupported"
 	// GraphStateAbsent means no successful graph build has been recorded.
 	GraphStateAbsent GraphState = "absent"
 	// GraphStateReady means the graph was built from GraphSnapshotHash.

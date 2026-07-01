@@ -92,18 +92,10 @@ func (manager *Manager) removeGraphFiles(ctx context.Context, codebaseID string)
 func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID string, canonicalPath string) error {
 	engine, err := manager.graphEngine(ctx, codebaseID)
 	if err != nil {
-		if errors.Is(err, cbm.ErrUnsupportedPlatform) {
-			slog.InfoContext(ctx, "graph engine unsupported; continuing without graph index", "codebase_id", codebaseID)
-			return cbm.ErrUnsupportedPlatform
-		}
 		slog.WarnContext(ctx, "open graph engine failed; continuing without graph index", "codebase_id", codebaseID, "err", err)
 		return fmt.Errorf("open graph engine: %w", err)
 	}
 	if err = engine.Index(ctx, canonicalPath, "fast"); err != nil {
-		if errors.Is(err, cbm.ErrUnsupportedPlatform) {
-			slog.InfoContext(ctx, "graph indexing unsupported; continuing with semantic index", "codebase_id", codebaseID)
-			return cbm.ErrUnsupportedPlatform
-		}
 		slog.WarnContext(ctx, "graph indexing failed; continuing with semantic index", "codebase_id", codebaseID, "path", canonicalPath, "err", err)
 		return fmt.Errorf("index graph: %w", err)
 	}
@@ -112,14 +104,11 @@ func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID strin
 
 func (manager *Manager) recordGraphIndexNonFatal(ctx context.Context, codebaseID string, canonicalPath string, snapshotHash string) {
 	err := manager.indexGraphNonFatal(ctx, codebaseID, canonicalPath)
-	switch {
-	case err == nil:
+	if err == nil {
 		manager.updateGraphState(ctx, codebaseID, model.GraphStateReady, snapshotHash)
-	case errors.Is(err, cbm.ErrUnsupportedPlatform):
-		manager.updateGraphState(ctx, codebaseID, model.GraphStateUnsupported, "")
-	default:
-		manager.updateGraphState(ctx, codebaseID, model.GraphStateStale, "")
+		return
 	}
+	manager.updateGraphState(ctx, codebaseID, model.GraphStateStale, "")
 }
 
 func (manager *Manager) updateGraphState(ctx context.Context, codebaseID string, graphState model.GraphState, snapshotHash string) {
@@ -156,9 +145,6 @@ func (manager *Manager) shouldReconcileGraph(codebaseID string, currentSnapshotH
 	if codebase.Kind != model.CodebaseKindCode {
 		return false
 	}
-	if codebase.GraphState == model.GraphStateUnsupported {
-		return false
-	}
 	graphState := codebase.GraphState
 	if graphState == "" {
 		graphState = model.GraphStateAbsent
@@ -178,9 +164,6 @@ func (manager *Manager) graphStatusLine(codebase model.Codebase) string {
 	graphState := codebase.GraphState
 	if graphState == "" {
 		graphState = model.GraphStateAbsent
-	}
-	if graphState == model.GraphStateUnsupported {
-		return "🕸️ Graph: unsupported on this platform"
 	}
 
 	matchLabel := "semantic snapshot unknown"
@@ -205,9 +188,6 @@ func (manager *Manager) graphDiagnostic(codebase model.Codebase) string {
 	graphState := codebase.GraphState
 	if graphState == "" {
 		graphState = model.GraphStateAbsent
-	}
-	if graphState == model.GraphStateUnsupported {
-		return codebase.CanonicalPath + ": graph unsupported on this platform"
 	}
 
 	snapshot, err := merkle.ReadSnapshot(manager.snapshotPathForCodebase(codebase))
