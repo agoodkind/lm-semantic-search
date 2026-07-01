@@ -142,6 +142,7 @@ message OutcomeBreakdown {
 message JobError {
   string message = 1;
   bool retryable = 2;
+  string code = 3;
 }
 
 // DependencyHealth reports the daemon's view of shared-infrastructure health
@@ -164,12 +165,14 @@ message IndexRunSummary {
   string status = 3;
   google.protobuf.Timestamp completed_at = 4;
   repeated string skipped_files = 5;
+  int64 total_bytes = 6;
 }
 
 message IndexRunFailure {
   string message = 1;
   int32 last_attempted_percentage = 2;
   google.protobuf.Timestamp failed_at = 3;
+  string code = 4;
 }
 
 message Codebase {
@@ -297,6 +300,8 @@ message StartIndexRequest {
   repeated string ignore_patterns = 4;
   ClientInfo client = 5;
   repeated string include_submodules = 6;
+  int32 max_job_chunks = 7;
+  int64 max_job_bytes = 8;
 }
 
 message StartIndexResponse {

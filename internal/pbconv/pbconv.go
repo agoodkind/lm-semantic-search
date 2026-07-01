@@ -39,6 +39,18 @@ func FromStartIndexConfig(request *pb.StartIndexRequest) model.IndexConfig {
 	return config
 }
 
+// FromStartIndexBudget maps request-local admission overrides outside
+// IndexConfig, so budget changes do not invalidate merkle reuse. The proto
+// fields are signed, so a negative value is clamped to 0 (unset) at the
+// boundary, keeping the stored Job.Budget and the echoed-back record consistent
+// with admission, which treats a non-positive budget as "no override".
+func FromStartIndexBudget(request *pb.StartIndexRequest) model.AdmissionBudget {
+	return model.AdmissionBudget{
+		MaxJobChunks: max(request.GetMaxJobChunks(), 0),
+		MaxJobBytes:  max(request.GetMaxJobBytes(), 0),
+	}
+}
+
 // ToCodebase converts one daemon codebase record into its protobuf form.
 func ToCodebase(codebase model.Codebase) *pb.Codebase {
 	result := &pb.Codebase{
@@ -57,6 +69,7 @@ func ToCodebase(codebase model.Codebase) *pb.Codebase {
 		result.LastSuccessfulRun = &pb.IndexRunSummary{
 			IndexedFiles: codebase.LastSuccessfulRun.IndexedFiles,
 			TotalChunks:  codebase.LastSuccessfulRun.TotalChunks,
+			TotalBytes:   codebase.LastSuccessfulRun.TotalBytes,
 			Status:       codebase.LastSuccessfulRun.Status,
 			CompletedAt:  ts(codebase.LastSuccessfulRun.CompletedAt),
 			SkippedFiles: append([]string{}, codebase.LastSuccessfulRun.SkippedFiles...),
@@ -65,6 +78,7 @@ func ToCodebase(codebase model.Codebase) *pb.Codebase {
 	if codebase.LastFailedRun != nil {
 		result.LastFailedRun = &pb.IndexRunFailure{
 			Message:                 codebase.LastFailedRun.Message,
+			Code:                    codebase.LastFailedRun.Code,
 			LastAttemptedPercentage: codebase.LastFailedRun.LastAttemptedPercentage,
 			FailedAt:                ts(codebase.LastFailedRun.FailedAt),
 		}
@@ -97,6 +111,7 @@ func ToJob(job model.Job) *pb.Job {
 	if job.Error != nil {
 		result.Error = &pb.JobError{
 			Message:   job.Error.Message,
+			Code:      job.Error.Code,
 			Retryable: job.Error.Retryable,
 		}
 	}

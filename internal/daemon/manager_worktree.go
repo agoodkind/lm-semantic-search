@@ -139,7 +139,7 @@ func (manager *Manager) scheduleDeferredBuild(ctx context.Context, canonicalPath
 // can drive it synchronously. StartIndex deduplicates, so calling it for a
 // worktree that already has an in-flight job is a no-op.
 func (manager *Manager) startDeferredBuild(ctx context.Context, canonicalPath string) {
-	if _, _, _, _, err := manager.StartIndex(ctx, canonicalPath, worktreeDeferredBuildClient, emptyAutoIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(ctx, canonicalPath, worktreeDeferredBuildClient, emptyAutoIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		slog.WarnContext(ctx, "deferred worktree build failed to start", "path", canonicalPath, "err", err)
 	}
 }

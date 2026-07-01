@@ -17,7 +17,7 @@ func TestJobProgressIsJournaledAndThrottled(t *testing.T) {
 
 	manager, _, repoPath := newTestManager(t)
 	cfg := defaultIndexConfig()
-	job := newQueuedJob("cb-progress", repoPath, repoPath, testClientInfo(), string(jobOperationSync), false, cfg, clock.Now())
+	job := newQueuedJob("cb-progress", repoPath, repoPath, testClientInfo(), string(jobOperationSync), false, cfg, emptyAdmissionBudget, clock.Now())
 
 	manager.mu.Lock()
 	manager.jobs[job.ID] = job

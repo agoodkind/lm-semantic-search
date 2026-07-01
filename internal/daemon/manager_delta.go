@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"math"
+	"os"
 	"sort"
 
 	"goodkind.io/lm-semantic-search/internal/indexer"
@@ -14,6 +15,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/spans"
+	"goodkind.io/lm-semantic-search/internal/store"
 )
 
 // deltaPlan packages the file-set decision for one runDeltaSync invocation.
@@ -74,6 +76,7 @@ type deltaState struct {
 	// displayed reuse does not climb file-by-file from zero; the per-file accrual
 	// can only rise to meet it as matching chunks are served from the pool.
 	seededReuse int32
+	admission   *admissionState
 }
 
 // chunkCounters accumulates the reuse-vs-embed split across one run's per-file
@@ -93,6 +96,11 @@ type chunkCounters struct {
 // continue; a non-zero outcome means the step already resolved the job
 // (failed, cancelled) or signalled a fallback to a full build.
 func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job, state deltaState, chunks []model.StoredChunk, removal semantic.Removal, phase string) deltaOutcome {
+	if state.admission != nil {
+		if err := state.admission.Admit(chunks); err != nil {
+			return manager.handleAdmissionHalt(ctx, job, state, err)
+		}
+	}
 	// Capture the last semantic progress for this one reindex call. The semantic
 	// callback reports cumulative reused/embedded counts within the call, so the
 	// final value is this file's split, which we fold into the run totals.
@@ -120,6 +128,31 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 		state.chunkCounts.embedded += fileEmbedded
 	}
 	return deltaOutcome{fallback: false, handled: false, progressed: false}
+}
+
+func (manager *Manager) handleAdmissionHalt(ctx context.Context, job model.Job, state deltaState, err error) deltaOutcome {
+	if state.staging {
+		manager.cleanupHaltedStaging(ctx, job, state)
+	}
+	manager.updateJobFailed(ctx, job.ID, err)
+	return deltaOutcome{fallback: false, handled: true, progressed: false}
+}
+
+// cleanupHaltedStaging drops the staging collection and removes the staging
+// merkle checkpoint after an admission halt, so a halted bootstrap or forced
+// rebuild leaves no partial staging state and never promotes over the live
+// collection.
+func (manager *Manager) cleanupHaltedStaging(ctx context.Context, job model.Job, state deltaState) {
+	if manager.semantic != nil && manager.semantic.Available() {
+		if dropErr := manager.semantic.DropStaging(ctx, job.CanonicalPath); dropErr != nil {
+			slog.WarnContext(ctx, "drop staging after admission halt failed", "path", job.CanonicalPath, "err", dropErr)
+		}
+	}
+	if state.snapshotPath != "" {
+		if removeErr := store.RemoveFile(state.snapshotPath); removeErr != nil {
+			slog.WarnContext(ctx, "remove staging checkpoint after admission halt failed", "path", state.snapshotPath, "err", removeErr)
+		}
+	}
 }
 
 // planSyncDiff loads the previous snapshot under the requested config
@@ -163,9 +196,16 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 			}
 		}
 		fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, captured.Files, 0)
+		var totalBytes int64
+		manager.mu.Lock()
+		if codebase, found := manager.codebases[codebaseID]; found && codebase.LastSuccessfulRun != nil {
+			totalBytes = codebase.LastSuccessfulRun.TotalBytes
+		}
+		manager.mu.Unlock()
 		manager.updateJobCompleted(ctx, job.ID, indexer.Result{
 			IndexedFiles:      fileCount,
 			TotalChunks:       chunkCount,
+			TotalBytes:        totalBytes,
 			Chunks:            nil,
 			FileHashes:        captured.Files,
 			SkippedFiles:      nil,
@@ -255,6 +295,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		reuse:        nil,
 		chunkCounts:  &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
 		seededReuse:  0,
+		admission:    manager.admissionForJob(job),
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -289,6 +330,12 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, state.working, result.TotalChunks)
 	result.IndexedFiles = fileCount
 	result.TotalChunks = chunkCount
+	var normalizeErr error
+	result, normalizeErr = manager.normalizeDeltaTotalBytes(ctx, codebase, state, result)
+	if normalizeErr != nil {
+		manager.updateJobFailed(ctx, job.ID, normalizeErr)
+		return true
+	}
 	manager.updateJobCompleted(ctx, job.ID, result)
 	return true
 }
@@ -315,6 +362,79 @@ func (manager *Manager) codebaseTotals(ctx context.Context, canonicalPath string
 		return fileCount, fallbackChunks
 	}
 	return fileCount, count
+}
+
+func (manager *Manager) normalizeDeltaTotalBytes(ctx context.Context, codebase model.Codebase, state deltaState, result indexer.Result) (indexer.Result, error) {
+	if codebase.Kind == model.CodebaseKindCode {
+		normalizedChunks, ok, err := manager.deltaChunkCache(ctx, codebase, state, result.Chunks)
+		if err != nil {
+			return result, err
+		}
+		if ok {
+			result.Chunks = normalizedChunks
+			result.TotalBytes = storedChunkBytes(normalizedChunks)
+			return result, nil
+		}
+	}
+	if codebase.LastSuccessfulRun != nil && result.TotalBytes < codebase.LastSuccessfulRun.TotalBytes {
+		result.TotalBytes = codebase.LastSuccessfulRun.TotalBytes
+	}
+	return result, nil
+}
+
+func (manager *Manager) deltaChunkCache(ctx context.Context, codebase model.Codebase, state deltaState, changedChunks []model.StoredChunk) ([]model.StoredChunk, bool, error) {
+	existingChunks, err := store.ReadChunks(manager.chunkPath(codebase.ID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// A delta runs only against a previously-indexed codebase, so a
+			// missing chunk cache means it was deleted or never written, not that
+			// the codebase is empty. Report the cache as unavailable so the caller
+			// carries forward the prior whole-codebase byte total instead of
+			// computing one from only the delta chunks and claiming it as the
+			// whole-codebase total.
+			return nil, false, nil
+		}
+		slog.ErrorContext(ctx, "read chunk cache for delta byte total failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
+		return nil, false, fmt.Errorf("read chunk cache for delta byte total: %w", err)
+	}
+
+	replacedPaths := replacedDeltaPaths(state, changedChunks)
+	normalizedChunks := make([]model.StoredChunk, 0, len(existingChunks)+len(changedChunks))
+	for _, chunk := range existingChunks {
+		if _, replaced := replacedPaths[chunk.RelativePath]; replaced {
+			continue
+		}
+		normalizedChunks = append(normalizedChunks, chunk)
+	}
+	normalizedChunks = append(normalizedChunks, changedChunks...)
+	return normalizedChunks, true, nil
+}
+
+func replacedDeltaPaths(state deltaState, changedChunks []model.StoredChunk) map[string]struct{} {
+	replacedPaths := make(map[string]struct{}, len(state.plan.diff.Added)+len(state.plan.diff.Modified)+len(state.plan.diff.Removed))
+	for _, relativePath := range state.plan.diff.Removed {
+		replacedPaths[relativePath] = struct{}{}
+	}
+	for _, chunk := range changedChunks {
+		replacedPaths[chunk.RelativePath] = struct{}{}
+	}
+	for _, relativePath := range state.plan.diff.Added {
+		if _, present := state.working[relativePath]; !present {
+			replacedPaths[relativePath] = struct{}{}
+		}
+	}
+	for _, relativePath := range state.plan.diff.Modified {
+		seedHash, seeded := state.plan.seedSnapshot.Files[relativePath]
+		workingHash, present := state.working[relativePath]
+		if !present {
+			replacedPaths[relativePath] = struct{}{}
+			continue
+		}
+		if seeded && workingHash != seedHash {
+			replacedPaths[relativePath] = struct{}{}
+		}
+	}
+	return replacedPaths
 }
 
 // runBootstrap builds a codebase index from scratch into a staging collection
@@ -351,7 +471,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 
 	state := deltaState{
 		plan:         plan,
-		snapshotPath: manager.merklePath(codebase.ID),
+		snapshotPath: manager.stagingMerklePath(codebase.ID),
 		working:      make(map[string]string, len(plan.currentSnapshot.Files)),
 		source:       source,
 		semantic:     manager.semantic != nil && manager.semantic.Available(),
@@ -359,6 +479,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		reuse:        nil,
 		chunkCounts:  &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
 		seededReuse:  0,
+		admission:    manager.admissionForJob(job),
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -381,6 +502,9 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	if promote := manager.promoteBootstrap(ctx, job, state); promote.handled {
 		return
 	}
+	if promote := manager.promoteStagingMerkle(ctx, job, state); promote.handled {
+		return
+	}
 
 	manager.absorbDescendants(ctx, descendants)
 
@@ -388,6 +512,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, state.working, result.TotalChunks)
 	result.IndexedFiles = fileCount
 	result.TotalChunks = chunkCount
+	result.FileHashes = nil
 	manager.updateJobCompleted(ctx, job.ID, result)
 }
 
@@ -426,7 +551,8 @@ func (manager *Manager) resolveReuseSeed(ctx context.Context, job model.Job) (ma
 func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codebaseID string, source itemSource) deltaPlan {
 	configDigest := job.Config.IgnoreDigest
 	legacyDigest := manager.legacyDigestForCodebase(codebaseID)
-	seed := merkle.LoadSnapshotForConfig(manager.merklePath(codebaseID), configDigest, legacyDigest)
+	stagingSnapshotPath := manager.stagingMerklePath(codebaseID)
+	seed := merkle.LoadSnapshotForConfig(stagingSnapshotPath, configDigest, legacyDigest)
 	semanticReady := manager.semantic != nil && manager.semantic.Available()
 
 	captured, err := source.capture(ctx)
@@ -453,6 +579,9 @@ func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codeba
 			}
 		}
 		seed = merkle.Snapshot{ConfigDigest: configDigest, Files: nil, Inodes: nil}
+		if removeErr := store.RemoveFile(stagingSnapshotPath); removeErr != nil {
+			slog.WarnContext(ctx, "remove stale bootstrap checkpoint failed", "path", stagingSnapshotPath, "err", removeErr)
+		}
 	}
 
 	addedFiles := make([]string, 0, len(captured.Files))
@@ -468,6 +597,26 @@ func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codeba
 		fallback:        false,
 		handled:         false,
 	}
+}
+
+func (manager *Manager) promoteStagingMerkle(ctx context.Context, job model.Job, state deltaState) deltaOutcome {
+	if !state.staging {
+		return deltaOutcome{fallback: false, handled: false, progressed: false}
+	}
+	if state.snapshotPath == "" {
+		return deltaOutcome{fallback: false, handled: false, progressed: false}
+	}
+	livePath := manager.merklePath(job.CodebaseID)
+	if err := os.Rename(state.snapshotPath, livePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) && len(state.working) == 0 {
+			return deltaOutcome{fallback: false, handled: false, progressed: false}
+		}
+		manager.cleanupHaltedStaging(ctx, job, state)
+		manager.updateJobFailed(ctx, job.ID, fmt.Errorf("promote staging Merkle snapshot: %w", err))
+		return deltaOutcome{fallback: false, handled: true, progressed: false}
+	}
+	slog.InfoContext(ctx, "promoted staging Merkle snapshot to live", "component", "daemon", "subcomponent", "delta", "codebase_id", job.CodebaseID, "path", livePath)
+	return deltaOutcome{fallback: false, handled: false, progressed: false}
 }
 
 // canResumeStaging reports whether a persisted checkpoint can seed a resumed
@@ -509,6 +658,7 @@ func (manager *Manager) promoteBootstrap(ctx context.Context, job model.Job, sta
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 	if err := manager.semantic.PromoteStaging(ctx, job.CanonicalPath); err != nil {
+		manager.cleanupHaltedStaging(ctx, job, state)
 		if errors.Is(err, context.Canceled) {
 			manager.updateJobCancelled(ctx, job.ID)
 		} else {
@@ -544,6 +694,7 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 	result := indexer.Result{
 		IndexedFiles:      0,
 		TotalChunks:       0,
+		TotalBytes:        0,
 		Chunks:            make([]model.StoredChunk, 0),
 		FileHashes:        nil,
 		SkippedFiles:      []string{},
@@ -627,6 +778,7 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 	state.working[relativePath] = fileResult.FileHash
 	result.Chunks = append(result.Chunks, fileResult.Chunks...)
 	result.TotalChunks += safeInt32(len(fileResult.Chunks))
+	result.TotalBytes += storedChunkBytes(fileResult.Chunks)
 	result.IndexedFiles++
 	return deltaOutcome{fallback: false, handled: false, progressed: true}
 }

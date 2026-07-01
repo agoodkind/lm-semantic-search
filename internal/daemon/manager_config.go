@@ -160,6 +160,10 @@ func (manager *Manager) merklePath(codebaseID string) string {
 	return filepath.Join(manager.config.MerkleDir, codebaseID+".json")
 }
 
+func (manager *Manager) stagingMerklePath(codebaseID string) string {
+	return filepath.Join(manager.config.MerkleDir, codebaseID+".staging.json")
+}
+
 func newID(prefix string) string {
 	randomBytes := make([]byte, 6)
 	if _, err := rand.Read(randomBytes); err != nil {

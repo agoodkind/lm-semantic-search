@@ -43,6 +43,10 @@ const (
 	// retryable, distinct from ClassEmbedderUnreachable.
 	ClassEmbedderBusy Class = "embedder_busy"
 
+	// ClassIndexBudgetExceeded reports that admission control halted an index job
+	// because its per-job resource budget was exceeded.
+	ClassIndexBudgetExceeded Class = "index_budget_exceeded"
+
 	// ClassEmbedderRejected reports that the embedding endpoint answered
 	// with a non-429 HTTP error (for example 400/401/500): reachable but
 	// rejecting the request, which usually points at a misconfigured model,
@@ -76,6 +80,11 @@ const (
 	ClassInternal Class = "internal_error"
 )
 
+// CodeIndexBudgetExceeded is the persisted failure code for an admission budget
+// halt, so the failed-build retry path can skip a codebase that halted on budget
+// instead of re-running the same pathological build.
+const CodeIndexBudgetExceeded = "index_budget_exceeded"
+
 // CodeFor maps a class to its gRPC status code.
 func CodeFor(class Class) codes.Code {
 	switch class {
@@ -85,7 +94,7 @@ func CodeFor(class Class) codes.Code {
 		return codes.FailedPrecondition
 	case ClassMilvusUnavailable, ClassEmbedderUnreachable:
 		return codes.Unavailable
-	case ClassEmbedderBusy:
+	case ClassEmbedderBusy, ClassIndexBudgetExceeded:
 		return codes.ResourceExhausted
 	case ClassEmbedCancelled:
 		return codes.Canceled
@@ -165,6 +174,18 @@ func NewEmbedderBusy(cause error) *AdapterError {
 		Code:          "embedder_busy",
 		Hint:          "the endpoint is busy; this retries automatically and the job can be re-run",
 		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
+// NewIndexBudgetExceeded reports an admission-control halt for an indexing job.
+func NewIndexBudgetExceeded(message string) *AdapterError {
+	return &AdapterError{
+		Class:         ClassIndexBudgetExceeded,
+		Message:       "index budget exceeded",
+		Code:          CodeIndexBudgetExceeded,
+		Hint:          message,
+		Cause:         nil,
 		SafeForClient: true,
 	}
 }

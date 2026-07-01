@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -18,6 +19,10 @@ func (manager *Manager) retryFailedBuild(ctx context.Context, codebase model.Cod
 		manager.mu.Unlock()
 		return
 	}
+	if codebase.LastFailedRun != nil && codebase.LastFailedRun.Code == adapterr.CodeIndexBudgetExceeded {
+		manager.mu.Unlock()
+		return
+	}
 	manager.mu.Unlock()
 
 	startedJob, startedCodebase, deduplicated, _, err := manager.StartIndex(
@@ -26,6 +31,7 @@ func (manager *Manager) retryFailedBuild(ctx context.Context, codebase model.Cod
 		model.ClientInfo{Name: "daemon-failed-retry", PID: 0},
 		codebase.EffectiveConfig,
 		false,
+		emptyAdmissionBudget,
 	)
 	if err != nil {
 		slog.WarnContext(ctx, "failed build retry could not start", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)

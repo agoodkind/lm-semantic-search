@@ -34,6 +34,7 @@ type fakeSemantic struct {
 	listCollections       func(context.Context) ([]string, error)
 	hasCollectionForPath  func(context.Context, string) (bool, error)
 	collectionState       func(context.Context, string) (bool, bool, error)
+	hasStaging            func(context.Context, string) (bool, error)
 	search                func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
 	conversationSearch    func(context.Context, string, string, int32) ([]model.StoredChunk, error)
 	count                 func(context.Context, string) (int32, error)
@@ -56,11 +57,20 @@ type fakeSemantic struct {
 	conversationSearchScopes [][]string
 	dropped                  []string
 	droppedStaging           []string
+	reindexCalls             []reindexCall
+	stageCalls               []reindexCall
+	promoted                 []string
 	// reindexEmit, when set, is invoked with the live progress callback during
 	// Reindex and StageReindex so a test can drive reuse-vs-embed progress
 	// reporting, including a conversation ingest's batch progress.
 	reindexEmit func(progress func(semantic.Progress))
 	mu          sync.Mutex
+}
+
+type reindexCall struct {
+	CodebasePath string
+	Chunks       int
+	Removed      []string
 }
 
 func (f *fakeSemantic) Available() bool { return !f.unavailable }
@@ -85,7 +95,10 @@ func (f *fakeSemantic) ConversationCollectionName(collectionID string) string {
 	return "conv_chunks_" + tshash.PathPrefix(collectionID)
 }
 
-func (f *fakeSemantic) HasStaging(context.Context, string) (bool, error) {
+func (f *fakeSemantic) HasStaging(ctx context.Context, codebasePath string) (bool, error) {
+	if f.hasStaging != nil {
+		return f.hasStaging(ctx, codebasePath)
+	}
 	return false, nil
 }
 
@@ -222,6 +235,9 @@ func (f *fakeSemantic) recordReindexReuse(chunks []model.StoredChunk, reuse map[
 }
 
 func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32) error {
+	f.mu.Lock()
+	f.reindexCalls = append(f.reindexCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(removal)})
+	f.mu.Unlock()
 	f.recordReindexReuse(chunks, reuse)
 	if f.reindexWithReuse != nil {
 		return f.reindexWithReuse(ctx, codebasePath, chunks, removalPaths(removal), progress, reuse)
@@ -235,13 +251,22 @@ func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks 
 	return nil
 }
 
-func (f *fakeSemantic) StageReindex(ctx context.Context, _ string, _ []model.StoredChunk, _ semantic.Removal, progress func(semantic.Progress), _ map[string][]float32) error {
+func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), _ map[string][]float32) error {
+	f.mu.Lock()
+	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(removal)})
+	f.mu.Unlock()
 	if f.reindexEmit != nil && progress != nil {
 		f.reindexEmit(progress)
 	}
 	return nil
 }
-func (f *fakeSemantic) PromoteStaging(context.Context, string) error { return nil }
+
+func (f *fakeSemantic) PromoteStaging(_ context.Context, codebasePath string) error {
+	f.mu.Lock()
+	f.promoted = append(f.promoted, codebasePath)
+	f.mu.Unlock()
+	return nil
+}
 
 // removalPaths flattens a removal into the legacy path list the converge tests
 // assert on: exact paths first, then prefixes.

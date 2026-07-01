@@ -54,6 +54,7 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 		snapshot.Files = make(map[string]string)
 	}
 	snapshot.ConfigDigest = configDigest
+	admission := manager.admissionForCodebase(codebase)
 
 	// Sort so present files converge before missing ones. A rename pairs a
 	// delete on the source with a create on the destination; if the source
@@ -86,7 +87,7 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 
 	changed := false
 	for _, relativePath := range orderedPaths {
-		if converged := manager.convergeOnePath(ctx, codebase, relativePath, &snapshot); converged {
+		if converged := manager.convergeOnePath(ctx, codebase, relativePath, &snapshot, admission); converged {
 			changed = true
 		}
 	}
@@ -120,7 +121,7 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 // InodeTrackingDisabled on the codebase short-circuits steps 3 and the
 // inode-stamp branch so unstable-inode filesystems still converge
 // correctly using path + content-hash identity.
-func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Codebase, relativePath string, snapshot *merkle.Snapshot) bool {
+func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Codebase, relativePath string, snapshot *merkle.Snapshot, admission *admissionState) bool {
 	root := codebase.CanonicalPath
 	cfg := codebase.EffectiveConfig
 
@@ -173,6 +174,10 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 		return true
 	}
 
+	if admissionErr := admission.Admit(fileResult.Chunks); admissionErr != nil {
+		slog.WarnContext(ctx, "converge.admission_halt", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", admissionErr)
+		return false
+	}
 	if upErr := manager.semantic.Reindex(ctx, root, fileResult.Chunks, semantic.RemovePaths([]string{relativePath}), nil, nil); upErr != nil {
 		manager.logConvergeReindexErr(ctx, relativePath, "upsert", upErr)
 		return false

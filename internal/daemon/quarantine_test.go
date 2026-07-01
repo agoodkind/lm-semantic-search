@@ -161,7 +161,7 @@ func TestSyncIndexLargeRemovalQuarantinesBeforeDelete(t *testing.T) {
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), indexConfig, false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), indexConfig, false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
 	indexed := waitForCodebaseSettled(t, manager, repoPath)

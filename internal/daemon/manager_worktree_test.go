@@ -73,7 +73,7 @@ func TestGetIndexResolvesNestedWorktreeToOwnCodebase(t *testing.T) {
 	worktreeDir := filepath.Join(mainRoot, ".claude", "worktrees", "foo")
 	makeLinkedWorktree(t, mainRoot, "foo", worktreeDir, "feature")
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(main) returned error: %v", err)
 	}
 	mainCodebase := waitForCodebaseSettled(t, manager, mainRoot)
@@ -109,7 +109,7 @@ func TestGetIndexResolvesExternalWorktreeToOwnCodebase(t *testing.T) {
 	worktreeDir := filepath.Join(base, "feature")
 	makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(main) returned error: %v", err)
 	}
 	mainCodebase := waitForCodebaseSettled(t, manager, mainRoot)
@@ -152,12 +152,12 @@ func TestStartIndexParentDoesNotAbsorbNestedWorktree(t *testing.T) {
 	makeLinkedWorktree(t, mainRoot, "foo", worktreeDir, "feature")
 
 	// index the worktree first so it is its own codebase, then index the parent.
-	if _, _, _, _, err := manager.StartIndex(context.Background(), worktreeDir, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), worktreeDir, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(worktree) returned error: %v", err)
 	}
 	worktreeCodebase := waitForCodebaseSettled(t, manager, worktreeDir)
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), true); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(main, force) returned error: %v", err)
 	}
 	waitForCodebaseSettled(t, manager, mainRoot)
@@ -192,12 +192,12 @@ func TestWorktreeBuildReusesSiblingCollection(t *testing.T) {
 	worktreeDir := filepath.Join(base, "feature")
 	makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(main) returned error: %v", err)
 	}
 	waitForCodebaseSettled(t, manager, mainRoot)
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), worktreeDir, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), worktreeDir, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(worktree) returned error: %v", err)
 	}
 	waitForCodebaseSettled(t, manager, worktreeDir)

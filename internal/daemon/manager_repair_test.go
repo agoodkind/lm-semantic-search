@@ -340,7 +340,7 @@ func TestForceReindexUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -366,7 +366,7 @@ func TestForceReindexUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.
 		},
 	}
 
-	job, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
+	job, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("force StartIndex returned error: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestStaleRetryUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.T)
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -479,7 +479,7 @@ func TestStaleRetryUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.T)
 		},
 	}
 
-	job, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	job, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("stale retry StartIndex returned error: %v", err)
 	}
@@ -610,7 +610,7 @@ func TestCollectionLossDoesNotPruneUntilClearIndex(t *testing.T) {
 		},
 	}
 
-	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}

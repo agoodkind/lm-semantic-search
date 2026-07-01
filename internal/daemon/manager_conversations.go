@@ -308,6 +308,7 @@ func (manager *Manager) queueConversationJob(ctx context.Context, codebase model
 		string(jobOperationConversationIngest),
 		false,
 		current.EffectiveConfig,
+		emptyAdmissionBudget,
 		now,
 	)
 	current.Status = model.CodebaseStatusIndexing

@@ -216,6 +216,7 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	codebase.LastSuccessfulRun = &model.IndexRunSummary{
 		IndexedFiles: result.IndexedFiles,
 		TotalChunks:  result.TotalChunks,
+		TotalBytes:   result.TotalBytes,
 		Status:       "completed",
 		CompletedAt:  now,
 		SkippedFiles: result.SkippedFiles,
@@ -274,6 +275,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	transient := adapterr.IsTransient(runErr)
 	infra := adapterr.IsInfraFailure(runErr)
 	safeMessage := adapterr.SafeMessage(runErr)
+	errorCode := adapterr.Code(runErr)
 	job.State = model.JobStateFailed
 	job.UpdatedAt = now
 	job.CompletedAt = &now
@@ -282,6 +284,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	job.Progress.HeartbeatAt = now
 	job.Error = &model.JobError{
 		Message:   safeMessage,
+		Code:      errorCode,
 		Retryable: transient,
 		TraceID:   traceID,
 		JobID:     jobID,
@@ -312,6 +315,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 		codebase.Status = model.CodebaseStatusFailed
 		codebase.LastFailedRun = &model.IndexRunFailure{
 			Message:                 safeMessage,
+			Code:                    errorCode,
 			LastAttemptedPercentage: 0,
 			FailedAt:                now,
 			TraceID:                 traceID,

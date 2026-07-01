@@ -90,6 +90,7 @@ func TestStartIndexStoresFullyQualifiedEmbeddingConfig(t *testing.T) {
 		testClientInfo(),
 		defaultIndexConfig(),
 		false,
+		emptyAdmissionBudget,
 	)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
@@ -137,7 +138,7 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 		},
 	}
 
-	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
@@ -201,7 +202,7 @@ func TestClearIndexCancelsActiveJob(t *testing.T) {
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
 	<-started
@@ -238,7 +239,7 @@ func TestStartIndexRecordsForceFlagOnJob(t *testing.T) {
 		},
 	}
 
-	plainJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	plainJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("StartIndex(force=false) returned error: %v", err)
 	}
@@ -247,7 +248,7 @@ func TestStartIndexRecordsForceFlagOnJob(t *testing.T) {
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	forcedJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
+	forcedJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("StartIndex(force=true) returned error: %v", err)
 	}
@@ -281,7 +282,7 @@ func TestForceReindexStartsFreshJobAndSearchShowsIndexingWarning(t *testing.T) {
 		},
 	}
 
-	initialJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	initialJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
@@ -314,7 +315,7 @@ func TestForceReindexStartsFreshJobAndSearchShowsIndexingWarning(t *testing.T) {
 		},
 	}
 
-	reindexJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
+	reindexJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("force StartIndex returned error: %v", err)
 	}
@@ -399,7 +400,7 @@ func TestStartIndexPersistsSkippedFiles(t *testing.T) {
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -459,7 +460,7 @@ func TestStartIndexForceDeduplicatesAgainstInFlightJob(t *testing.T) {
 		},
 	}
 
-	firstJob, _, deduplicated, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
+	firstJob, _, deduplicated, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("first force StartIndex returned error: %v", err)
 	}
@@ -479,7 +480,7 @@ func TestStartIndexForceDeduplicatesAgainstInFlightJob(t *testing.T) {
 	for i := 0; i < concurrentForceCallers; i++ {
 		go func(slot int) {
 			defer wg.Done()
-			job, _, dedup, _, callErr := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true)
+			job, _, dedup, _, callErr := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
 			results[slot] = startResult{job: job, deduplicated: dedup, err: callErr}
 		}(i)
 	}
@@ -557,14 +558,14 @@ func TestStartIndexStreamingReindexUpgradesSplitterInPlace(t *testing.T) {
 
 	initialConfig := defaultIndexConfig()
 	initialConfig.SplitterType = "langchain"
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), initialConfig, false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), initialConfig, false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	upgradedConfig := defaultIndexConfig()
 	upgradedConfig.SplitterType = "ast"
-	upgradeJob, _, deduplicated, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), upgradedConfig, false)
+	upgradeJob, _, deduplicated, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), upgradedConfig, false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("upgrade StartIndex returned error: %v", err)
 	}
@@ -616,7 +617,7 @@ func TestRunDeltaSyncCheckpointsPerFile(t *testing.T) {
 
 	// The initial index uses the real per-file indexer, establishing a
 	// checkpoint whose hashes match disk.
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -651,7 +652,7 @@ func TestRunDeltaSyncCheckpointsPerFile(t *testing.T) {
 	}
 
 	// Force a streaming reindex by passing force=true (matching config).
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget); err != nil {
 		t.Fatalf("streaming StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -735,7 +736,7 @@ func TestRunDeltaSyncReportsCodebaseTotalsAfterSync(t *testing.T) {
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -761,6 +762,101 @@ func TestRunDeltaSyncReportsCodebaseTotalsAfterSync(t *testing.T) {
 	}
 }
 
+func TestRunDeltaSyncPreservesWholeCodebaseTotalBytesAfterSmallEdit(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	extras := []string{"a.go", "b.go", "c.go", "d.go"}
+	for _, name := range extras {
+		path := filepath.Join(repoPath, name)
+		content := "package main\n// " + strings.Repeat(name+"\n", 4)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+	}
+
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
+		t.Fatalf("initial StartIndex returned error: %v", err)
+	}
+	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
+
+	initialCodebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
+	if err != nil || !found {
+		t.Fatalf("initial GetIndex returned err=%v found=%v", err, found)
+	}
+	if initialCodebase.LastSuccessfulRun == nil {
+		t.Fatal("initial LastSuccessfulRun is nil")
+	}
+	initialTotalBytes := initialCodebase.LastSuccessfulRun.TotalBytes
+	if initialTotalBytes == 0 {
+		t.Fatal("initial LastSuccessfulRun.TotalBytes is 0; test requires a non-zero byte total")
+	}
+	initialChunks, err := store.ReadChunks(manager.chunkPath(initialCodebase.ID))
+	if err != nil {
+		t.Fatalf("ReadChunks returned error: %v", err)
+	}
+	initialMainBytes := storedChunkBytesForPath(initialChunks, "main.go")
+	if initialMainBytes == 0 {
+		t.Fatal("initial chunk cache has no bytes for main.go")
+	}
+
+	changedContent := "package main\nfunc Edited() {}\n"
+	manager.runner = fakeRunner{
+		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+			if relativePath != "main.go" {
+				t.Errorf("IndexOne called for %s, want only main.go", relativePath)
+			}
+			return indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:       changedContent,
+					RelativePath:  relativePath,
+					StartLine:     1,
+					EndLine:       2,
+					Language:      "go",
+					FileExtension: ".go",
+				}},
+				FileHash: hashText(changedContent),
+				Skipped:  false,
+				Removed:  false,
+			}, nil
+		},
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "main.go"), []byte(changedContent), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	if _, _, _, err := manager.SyncIndex(context.Background(), repoPath, model.ClientInfo{Name: "test-sync"}); err != nil {
+		t.Fatalf("SyncIndex returned error: %v", err)
+	}
+	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
+
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
+	if err != nil || !found {
+		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
+	}
+	if codebase.LastSuccessfulRun == nil {
+		t.Fatal("LastSuccessfulRun is nil after sync")
+	}
+	expectedTotalBytes := initialTotalBytes - initialMainBytes + int64(len(changedContent))
+	if codebase.LastSuccessfulRun.TotalBytes != expectedTotalBytes {
+		t.Fatalf("LastSuccessfulRun.TotalBytes = %d, want %d (whole codebase total after one-file edit)", codebase.LastSuccessfulRun.TotalBytes, expectedTotalBytes)
+	}
+	if codebase.LastSuccessfulRun.TotalBytes < initialTotalBytes {
+		t.Fatalf("LastSuccessfulRun.TotalBytes shrank from %d to %d after a small edit", initialTotalBytes, codebase.LastSuccessfulRun.TotalBytes)
+	}
+}
+
+func storedChunkBytesForPath(chunks []model.StoredChunk, relativePath string) int64 {
+	var total int64
+	for _, chunk := range chunks {
+		if chunk.RelativePath != relativePath {
+			continue
+		}
+		total += int64(len(chunk.Content))
+	}
+	return total
+}
+
 // TestRunDeltaSyncConvergesDeletedFileToRemoval proves that a file present at
 // capture time but reported absent when its converge task runs is treated as
 // a removal: the job completes, and the path is dropped from the snapshot so
@@ -780,7 +876,7 @@ func TestRunDeltaSyncConvergesDeletedFileToRemoval(t *testing.T) {
 
 	// The initial index uses the real per-file indexer so the checkpoint records
 	// all five files with hashes that match disk.
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -893,9 +989,9 @@ func TestRenderStaleStatusIncludesRepairReason(t *testing.T) {
 }
 
 // TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals proves the empty-diff
-// fast path no longer re-zeros LastSuccessfulRun.IndexedFiles every time a
-// background sync runs against an unchanged codebase. The test indexes
-// five files, runs a no-op sync, and asserts IndexedFiles still reports 5.
+// fast path no longer re-zeros LastSuccessfulRun every time a background
+// sync runs against an unchanged codebase. The test indexes five files,
+// runs a no-op sync, and asserts the stored file and byte totals survive.
 func TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals(t *testing.T) {
 	t.Parallel()
 
@@ -910,10 +1006,21 @@ func TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals(t *testing.T) {
 
 	// The initial index uses the real per-file indexer so the checkpoint hashes
 	// match disk; a follow-up sync with no changes then yields an empty diff.
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
+	initialCodebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
+	if err != nil || !found {
+		t.Fatalf("initial GetIndex returned err=%v found=%v", err, found)
+	}
+	if initialCodebase.LastSuccessfulRun == nil {
+		t.Fatal("initial LastSuccessfulRun is nil")
+	}
+	initialTotalBytes := initialCodebase.LastSuccessfulRun.TotalBytes
+	if initialTotalBytes == 0 {
+		t.Fatal("initial LastSuccessfulRun.TotalBytes is 0; test requires a non-zero byte total")
+	}
 
 	// Any per-file embed on the unchanged codebase is a bug: the empty-diff fast
 	// path must skip every file.
@@ -941,6 +1048,9 @@ func TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals(t *testing.T) {
 	}
 	if codebase.LastSuccessfulRun.IndexedFiles != 5 {
 		t.Fatalf("LastSuccessfulRun.IndexedFiles = %d, want 5 (empty-diff should preserve totals)", codebase.LastSuccessfulRun.IndexedFiles)
+	}
+	if codebase.LastSuccessfulRun.TotalBytes != initialTotalBytes {
+		t.Fatalf("LastSuccessfulRun.TotalBytes = %d, want %d (empty-diff should preserve totals)", codebase.LastSuccessfulRun.TotalBytes, initialTotalBytes)
 	}
 }
 
@@ -988,7 +1098,7 @@ func TestRunDeltaSyncInvalidatesSnapshotOnConfigChange(t *testing.T) {
 
 	initialConfig := defaultIndexConfig()
 	initialConfig.SplitterType = "langchain"
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), initialConfig, false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), initialConfig, false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -1006,7 +1116,7 @@ func TestRunDeltaSyncInvalidatesSnapshotOnConfigChange(t *testing.T) {
 
 	upgradedConfig := defaultIndexConfig()
 	upgradedConfig.SplitterType = "ast"
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), upgradedConfig, false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), upgradedConfig, false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("upgrade StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -1053,13 +1163,13 @@ func TestStartIndexReRegistrationIsIdempotent(t *testing.T) {
 		},
 	}
 
-	_, firstCodebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	_, firstCodebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	job, secondCodebase, deduplicated, overlapsCodebaseID, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	job, secondCodebase, deduplicated, overlapsCodebaseID, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("re-register returned error, want idempotent success: %v", err)
 	}
@@ -1101,7 +1211,7 @@ func TestSyncIndexStartsFreshJobForChangedCodebase(t *testing.T) {
 		},
 	}
 
-	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false)
+	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
@@ -1176,7 +1286,7 @@ func TestBackgroundSyncSkipsUnchangedCodebase(t *testing.T) {
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
@@ -1218,7 +1328,7 @@ func TestGetIndexMatchesTrackedParentForSubdirectory(t *testing.T) {
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)

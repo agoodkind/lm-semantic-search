@@ -101,6 +101,13 @@ type IndexConfig struct {
 	Hybrid             bool     `json:"hybrid"`
 }
 
+// AdmissionBudget carries per-request fixed caps that must not enter
+// IndexConfig, because IndexConfig is digested for merkle reuse.
+type AdmissionBudget struct {
+	MaxJobChunks int32 `json:"max_job_chunks,omitempty"`
+	MaxJobBytes  int64 `json:"max_job_bytes,omitempty"`
+}
+
 // Progress records daemon-visible structured progress for a job.
 type Progress struct {
 	Phase          string  `json:"phase"`
@@ -165,6 +172,7 @@ type Progress struct {
 // full context behind a reported error.
 type JobError struct {
 	Message   string `json:"message"`
+	Code      string `json:"code,omitempty"`
 	Retryable bool   `json:"retryable"`
 	TraceID   string `json:"trace_id,omitempty"`
 	JobID     string `json:"job_id,omitempty"`
@@ -179,6 +187,7 @@ type JobError struct {
 type IndexRunSummary struct {
 	IndexedFiles int32     `json:"indexed_files"`
 	TotalChunks  int32     `json:"total_chunks"`
+	TotalBytes   int64     `json:"total_bytes"`
 	Status       string    `json:"status"`
 	CompletedAt  time.Time `json:"completed_at"`
 	SkippedFiles []string  `json:"skipped_files,omitempty"`
@@ -189,6 +198,7 @@ type IndexRunSummary struct {
 // reported error resolves to the full context by a log lookup.
 type IndexRunFailure struct {
 	Message                 string    `json:"message"`
+	Code                    string    `json:"code,omitempty"`
 	LastAttemptedPercentage int32     `json:"last_attempted_percentage"`
 	FailedAt                time.Time `json:"failed_at"`
 	TraceID                 string    `json:"trace_id,omitempty"`
@@ -250,13 +260,14 @@ type Job struct {
 	// Forced records that the caller passed force=true on the index request, so a
 	// trigger-aware heading can tell a forced reindex apart from a first build or
 	// a changed-files sync, which otherwise share the same operation.
-	Forced      bool        `json:"forced"`
-	Progress    Progress    `json:"progress"`
-	Config      IndexConfig `json:"config"`
-	StartedAt   time.Time   `json:"started_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
-	CompletedAt *time.Time  `json:"completed_at,omitempty"`
-	Error       *JobError   `json:"error,omitempty"`
+	Forced      bool            `json:"forced"`
+	Progress    Progress        `json:"progress"`
+	Config      IndexConfig     `json:"config"`
+	Budget      AdmissionBudget `json:"budget,omitzero"`
+	StartedAt   time.Time       `json:"started_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	CompletedAt *time.Time      `json:"completed_at,omitempty"`
+	Error       *JobError       `json:"error,omitempty"`
 }
 
 // RegistryFile is the durable JSON representation of tracked codebases.

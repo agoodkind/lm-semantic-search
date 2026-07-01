@@ -37,7 +37,7 @@ func TestSameCodebaseReuseIntegrationRealSemanticService(t *testing.T) {
 	indexConfig.SplitterChunkSize = 180
 	indexConfig.SplitterOverlap = 40
 
-	_, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), indexConfig, false)
+	_, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), indexConfig, false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}

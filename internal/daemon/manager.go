@@ -292,6 +292,7 @@ func newQueuedJob(
 	operation string,
 	forced bool,
 	indexConfig model.IndexConfig,
+	budget model.AdmissionBudget,
 	now time.Time,
 ) model.Job {
 	return model.Job{
@@ -333,6 +334,7 @@ func newQueuedJob(
 			HeartbeatAt:               now,
 		},
 		Config:      indexConfig,
+		Budget:      budget,
 		StartedAt:   now,
 		UpdatedAt:   now,
 		CompletedAt: nil,
@@ -400,7 +402,7 @@ func (manager *Manager) decideStartIndexLocked(canonicalPath string, indexConfig
 // deduplicated flag (true when the call matched an in-flight job), and the
 // id of any existing codebase whose canonical path strictly prefix-covers
 // the new registration (empty when no overlap).
-func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, client model.ClientInfo, indexConfig model.IndexConfig, force bool) (model.Job, model.Codebase, bool, string, error) {
+func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, client model.ClientInfo, indexConfig model.IndexConfig, force bool, budget model.AdmissionBudget) (model.Job, model.Codebase, bool, string, error) {
 	var emptyJob model.Job
 	var emptyCodebase model.Codebase
 
@@ -445,7 +447,7 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 
 	presence := manager.probeCollectionPresence(ctx, canonicalPath, "StartIndex")
 
-	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(ctx, canonicalPath, requestedPath, client, indexConfig, force, presence)
+	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(ctx, canonicalPath, requestedPath, client, indexConfig, force, presence, budget)
 	if err != nil || deduped {
 		return job, codebase, deduped, overlapsCodebaseID, err
 	}
@@ -489,7 +491,7 @@ func (manager *Manager) probeCollectionPresence(ctx context.Context, canonicalPa
 // and queues the job event. The returned job has an empty ID when the
 // decision resolved as already-indexed; the caller treats that as a no-op
 // success.
-func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPath string, requestedPath string, client model.ClientInfo, indexConfig model.IndexConfig, force bool, presence collectionPresence) (model.Job, model.Codebase, bool, string, error) {
+func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPath string, requestedPath string, client model.ClientInfo, indexConfig model.IndexConfig, force bool, presence collectionPresence, budget model.AdmissionBudget) (model.Job, model.Codebase, bool, string, error) {
 	var emptyJob model.Job
 	var emptyCodebase model.Codebase
 	manager.mu.Lock()
@@ -533,7 +535,7 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	if decision.mode == startIndexModeIncremental {
 		operation = jobOperationStreamingReindex
 	}
-	job := newQueuedJob(codebase.ID, requestedPath, canonicalPath, client, string(operation), force, indexConfig, clock.Now())
+	job := newQueuedJob(codebase.ID, requestedPath, canonicalPath, client, string(operation), force, indexConfig, budget, clock.Now())
 	codebase.ActiveJobID = job.ID
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
@@ -597,7 +599,7 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 	codebase.UpdatedAt = clock.Now()
 
 	now := clock.Now()
-	job := newQueuedJob(codebase.ID, requestedPath, canonicalPath, client, string(jobOperationSync), false, indexConfig, now)
+	job := newQueuedJob(codebase.ID, requestedPath, canonicalPath, client, string(jobOperationSync), false, indexConfig, emptyAdmissionBudget, now)
 
 	codebase.ActiveJobID = job.ID
 	manager.codebases[codebase.ID] = codebase

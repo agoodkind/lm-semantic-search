@@ -35,6 +35,7 @@ type Runner struct {
 type Result struct {
 	IndexedFiles      int32
 	TotalChunks       int32
+	TotalBytes        int64
 	Chunks            []model.StoredChunk
 	FileHashes        map[string]string
 	SkippedFiles      []string
@@ -254,6 +255,7 @@ func (runner *Runner) processFile(ctx context.Context, resolver *indexability.Re
 // indexAccumulator collects per-file output across one indexing pass.
 type indexAccumulator struct {
 	totalChunks       int32
+	totalBytes        int64
 	indexedCount      int32
 	storedChunks      []model.StoredChunk
 	fileHashes        map[string]string
@@ -302,6 +304,7 @@ func (runner *Runner) ingestFile(ctx context.Context, resolver *indexability.Res
 		return nil
 	}
 	accumulator.totalChunks += safeInt32(len(processed.Chunks))
+	accumulator.totalBytes += chunkContentBytes(processed.Chunks)
 	accumulator.indexedCount++
 	accumulator.fileHashes[relativePath] = processed.FileHash
 	accumulator.storedChunks = append(accumulator.storedChunks, processed.Chunks...)
@@ -341,6 +344,7 @@ func (runner *Runner) Index(ctx context.Context, resolver *indexability.Resolver
 
 	accumulator := &indexAccumulator{
 		totalChunks:       0,
+		totalBytes:        0,
 		indexedCount:      0,
 		storedChunks:      make([]model.StoredChunk, 0),
 		fileHashes:        make(map[string]string, len(discoveryResult.Files)),
@@ -383,6 +387,7 @@ func (runner *Runner) Index(ctx context.Context, resolver *indexability.Resolver
 	return Result{
 		IndexedFiles:      accumulator.indexedCount,
 		TotalChunks:       accumulator.totalChunks,
+		TotalBytes:        accumulator.totalBytes,
 		Chunks:            accumulator.storedChunks,
 		FileHashes:        accumulator.fileHashes,
 		SkippedFiles:      accumulator.skippedFiles,
@@ -407,6 +412,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, resolver *indexability.Res
 
 	accumulator := &indexAccumulator{
 		totalChunks:       0,
+		totalBytes:        0,
 		indexedCount:      0,
 		storedChunks:      make([]model.StoredChunk, 0),
 		fileHashes:        make(map[string]string, len(relativePaths)),
@@ -444,6 +450,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, resolver *indexability.Res
 	return Result{
 		IndexedFiles:      accumulator.indexedCount,
 		TotalChunks:       accumulator.totalChunks,
+		TotalBytes:        accumulator.totalBytes,
 		Chunks:            accumulator.storedChunks,
 		FileHashes:        accumulator.fileHashes,
 		SkippedFiles:      accumulator.skippedFiles,
@@ -451,6 +458,14 @@ func (runner *Runner) IndexFiles(ctx context.Context, resolver *indexability.Res
 		SkippedUnreadable: accumulator.skippedUnreadable,
 		SkippedPending:    0,
 	}, nil
+}
+
+func chunkContentBytes(chunks []model.StoredChunk) int64 {
+	var total int64
+	for _, chunk := range chunks {
+		total += int64(len(chunk.Content))
+	}
+	return total
 }
 
 func digestFileBytes(data []byte) string {

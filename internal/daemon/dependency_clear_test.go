@@ -37,7 +37,7 @@ func TestUpdateJobCompletedClearsDependencyOnlyWhenFilesEmbedded(t *testing.T) {
 		codebase.EffectiveConfig = indexConfig
 		codebase.UpdatedAt = clock.Now()
 
-		job := newQueuedJob(codebase.ID, canonicalPath, canonicalPath, testClientInfo(), string(jobOperationSync), false, indexConfig, clock.Now())
+		job := newQueuedJob(codebase.ID, canonicalPath, canonicalPath, testClientInfo(), string(jobOperationSync), false, indexConfig, emptyAdmissionBudget, clock.Now())
 		job.State = model.JobStateRunning
 		job.Progress.FilesEmbedded = filesEmbedded
 

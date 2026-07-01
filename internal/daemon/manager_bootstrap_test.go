@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -73,7 +74,7 @@ func seedBootstrapCodebase(t *testing.T, manager *Manager, canonical string, cfg
 	}
 	manager.mu.Unlock()
 
-	job := newQueuedJob(codebaseID, canonical, canonical, testClientInfo(), string(jobOperationIndex), false, cfg, clock.Now())
+	job := newQueuedJob(codebaseID, canonical, canonical, testClientInfo(), string(jobOperationIndex), false, cfg, emptyAdmissionBudget, clock.Now())
 	manager.mu.Lock()
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
@@ -104,7 +105,7 @@ func TestRunBootstrapResumesSkippingEmbeddedFiles(t *testing.T) {
 		Files:        map[string]string{"a.go": captured.Files["a.go"]},
 		Inodes:       nil,
 	}
-	if err := merkle.WriteSnapshot(manager.merklePath(codebaseID), checkpoint); err != nil {
+	if err := merkle.WriteSnapshot(manager.stagingMerklePath(codebaseID), checkpoint); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
@@ -152,6 +153,114 @@ func TestRunBootstrapEmbedsEveryFileWithoutCheckpoint(t *testing.T) {
 	waitForCodebaseStatus(t, manager, canonical, model.CodebaseStatusIndexed)
 }
 
+func TestRunBootstrapPromotesCollectionBeforeCommittingMerkle(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 2)
+	fake := &fakeSemantic{
+		hasStaging: func(context.Context, string) (bool, error) { return true, nil },
+	}
+	manager.semantic = fake
+
+	var mu sync.Mutex
+	embedded := make([]string, 0)
+	manager.runner = recordingRunner(&mu, &embedded)
+
+	canonical := newMultiFileRepo(t, "main.go")
+	cfg := defaultIndexConfig()
+	cfg.IgnoreDigest = "sha256:bootstrap-promote-order"
+	codebaseID, job := seedBootstrapCodebase(t, manager, canonical, cfg)
+
+	liveMerklePath := manager.merklePath(codebaseID)
+	if err := os.MkdirAll(liveMerklePath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) returned error: %v", liveMerklePath, err)
+	}
+
+	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+
+	completed, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatalf("job %s was not found", job.ID)
+	}
+	if completed.State != model.JobStateFailed {
+		t.Fatalf("job state = %q, want failed", completed.State)
+	}
+	if len(fake.stageCallsSnapshot()) == 0 {
+		t.Fatal("StageReindex was not called before the Merkle rename failure")
+	}
+	if promoted := fake.promotedSnapshot(); !slices.Equal(promoted, []string{canonical}) {
+		t.Fatalf("PromoteStaging calls = %v, want [%s] before Merkle rename", promoted, canonical)
+	}
+	if dropped := fake.droppedStagingSnapshot(); len(dropped) == 0 {
+		t.Fatal("DropStaging was not called after Merkle rename failure")
+	}
+	if _, err := os.Stat(manager.stagingMerklePath(codebaseID)); !os.IsNotExist(err) {
+		t.Fatalf("staging Merkle path still exists after failed promotion: %v", err)
+	}
+}
+
+func TestRunBootstrapSemanticPromotionFailureLeavesLiveMerkleUnchanged(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 2)
+	fake := &fakeSemantic{
+		hasStaging: func(context.Context, string) (bool, error) { return true, nil },
+	}
+	manager.semantic = &failingPromoteSemantic{
+		fakeSemantic: fake,
+		err:          errors.New("semantic promotion failed"),
+	}
+
+	var mu sync.Mutex
+	embedded := make([]string, 0)
+	manager.runner = recordingRunner(&mu, &embedded)
+
+	canonical := newMultiFileRepo(t, "main.go")
+	cfg := defaultIndexConfig()
+	cfg.IgnoreDigest = "sha256:bootstrap-semantic-promote-failure"
+	codebaseID, job := seedBootstrapCodebase(t, manager, canonical, cfg)
+
+	liveSnapshot := merkle.Snapshot{
+		ConfigDigest: cfg.IgnoreDigest,
+		Files:        map[string]string{"main.go": hashText("old live content")},
+		Inodes:       nil,
+	}
+	if err := merkle.WriteSnapshot(manager.merklePath(codebaseID), liveSnapshot); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+
+	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+
+	completed, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatalf("job %s was not found", job.ID)
+	}
+	if completed.State != model.JobStateFailed {
+		t.Fatalf("job state = %q, want failed", completed.State)
+	}
+	after, err := merkle.ReadSnapshot(manager.merklePath(codebaseID))
+	if err != nil {
+		t.Fatalf("ReadSnapshot returned error: %v", err)
+	}
+	if !merkle.Equal(after, liveSnapshot) {
+		t.Fatalf("live snapshot changed after semantic promotion failure: got %+v want %+v", after, liveSnapshot)
+	}
+	if dropped := fake.droppedStagingSnapshot(); len(dropped) == 0 || dropped[len(dropped)-1] != canonical {
+		t.Fatalf("DropStaging calls = %v, want final drop for %s", dropped, canonical)
+	}
+	if _, err := os.Stat(manager.stagingMerklePath(codebaseID)); !os.IsNotExist(err) {
+		t.Fatalf("staging Merkle path still exists after semantic promotion failure: %v", err)
+	}
+}
+
+type failingPromoteSemantic struct {
+	*fakeSemantic
+	err error
+}
+
+func (semantic *failingPromoteSemantic) PromoteStaging(_ context.Context, path string) error {
+	semantic.fakeSemantic.mu.Lock()
+	semantic.fakeSemantic.promoted = append(semantic.fakeSemantic.promoted, path)
+	semantic.fakeSemantic.mu.Unlock()
+	return semantic.err
+}
+
 func TestResumeOrphanedJobsParksNoCheckpointInterruptedForRetry(t *testing.T) {
 	manager, _ := newTestManagerWithCap(t, 2)
 	manager.config.ResumeIndexingOnBoot = true
@@ -188,5 +297,66 @@ func TestResumeOrphanedJobsParksNoCheckpointInterruptedForRetry(t *testing.T) {
 	}
 	if codebase.LastFailedRun != nil {
 		t.Fatalf("LastFailedRun = %+v, want nil; an interrupted build is not a failure", codebase.LastFailedRun)
+	}
+}
+
+func TestResumeOrphanedJobsResumesFromStagingCheckpoint(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 2)
+	manager.config.ResumeIndexingOnBoot = true
+	manager.semantic = &fakeSemantic{
+		hasCollectionForPath: func(context.Context, string) (bool, error) { return false, nil },
+		hasStaging:           func(context.Context, string) (bool, error) { return true, nil },
+	}
+	var mu sync.Mutex
+	embedded := make([]string, 0)
+	manager.runner = recordingRunner(&mu, &embedded)
+
+	canonical := newMultiFileRepo(t, "a.go", "b.go", "c.go")
+	cfg := manager.enrichIndexConfig(defaultIndexConfig())
+	cfg.IgnoreDigest = digestIndexConfig(cfg)
+	captured, err := merkle.Capture(context.Background(), manager.indexability, "cb-staging-resume", canonical, cfg)
+	if err != nil {
+		t.Fatalf("Capture returned error: %v", err)
+	}
+
+	codebaseID := "cb-staging-resume"
+	manager.mu.Lock()
+	manager.codebases[codebaseID] = model.Codebase{
+		ID:              codebaseID,
+		CanonicalPath:   canonical,
+		Status:          model.CodebaseStatusIndexing,
+		ActiveJobID:     "stale-orphan-job",
+		EffectiveConfig: cfg,
+	}
+	manager.mu.Unlock()
+	checkpoint := merkle.Snapshot{
+		ConfigDigest: cfg.IgnoreDigest,
+		Files:        map[string]string{"a.go": captured.Files["a.go"]},
+		Inodes:       nil,
+	}
+	if err := merkle.WriteSnapshot(manager.stagingMerklePath(codebaseID), checkpoint); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+	staleLive := merkle.Snapshot{
+		ConfigDigest: cfg.IgnoreDigest,
+		Files:        map[string]string{"old.go": hashText("stale live")},
+		Inodes:       nil,
+	}
+	if err := merkle.WriteSnapshot(manager.merklePath(codebaseID), staleLive); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+	if manager.resumableCheckpointKind(codebaseID, cfg.IgnoreDigest) != resumeCheckpointStaging {
+		t.Fatal("resumableCheckpointKind did not report a staging checkpoint")
+	}
+
+	manager.ResumeOrphanedJobs(context.Background())
+	waitForCodebaseStatus(t, manager, canonical, model.CodebaseStatusIndexed)
+
+	mu.Lock()
+	slices.Sort(embedded)
+	got := slices.Clone(embedded)
+	mu.Unlock()
+	if want := []string{"b.go", "c.go"}; !slices.Equal(got, want) {
+		t.Fatalf("embedded files = %v, want %v (a.go must be skipped via staging checkpoint)", got, want)
 	}
 }
