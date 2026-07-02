@@ -186,6 +186,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 	if diff.Empty() {
 		evidence := manager.probeCollectionEvidence(ctx, job.CanonicalPath, "planSyncDiff")
 		if decideEmptyDiffMode(evidence, len(seed.Files)) == emptyDiffModeFallbackBootstrap {
+			manager.routeToBootstrap(ctx, job.ID, bootstrapReasonForEmptyDiffFallback(evidence))
 			return deltaPlan{
 				diff:            diff,
 				currentSnapshot: captured,
@@ -250,6 +251,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	codebase, codebaseFound := manager.codebases[job.CodebaseID]
 	manager.mu.Unlock()
 	if !codebaseFound {
+		manager.routeToBootstrap(ctx, job.ID, bootstrapReasonDeltaCodebaseMissing)
 		return false
 	}
 
@@ -835,6 +837,7 @@ func mergedReuse(base map[string][]float32, item map[string][]float32) map[strin
 func (manager *Manager) classifyReindexErr(ctx context.Context, job model.Job, err error, phase string) deltaOutcome {
 	switch {
 	case errors.Is(err, semantic.ErrCollectionMissing):
+		manager.routeToBootstrap(ctx, job.ID, bootstrapReasonDeltaCollectionMissing)
 		slog.WarnContext(ctx, "semantic collection missing; falling back to full reindex", "job_id", job.ID, "phase", phase)
 		return deltaOutcome{fallback: true, handled: false, progressed: false}
 	case errors.Is(err, context.Canceled):
@@ -844,6 +847,13 @@ func (manager *Manager) classifyReindexErr(ctx context.Context, job model.Job, e
 		manager.updateJobFailed(ctx, job.ID, err)
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
+}
+
+func bootstrapReasonForEmptyDiffFallback(evidence collectionEvidence) bootstrapReason {
+	if evidence.presence == collectionPresencePresent && evidence.rowsKnown && evidence.rows == 0 {
+		return bootstrapReasonEmptyDiffCollectionEmpty
+	}
+	return bootstrapReasonEmptyDiffCollectionMissing
 }
 
 func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, label string) {
