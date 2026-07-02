@@ -17,6 +17,7 @@ type semanticReader interface {
 	SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, perConversationLimit int32, minScore float64, filter semantic.ConversationFilter) ([]model.StoredChunk, error)
 	Count(ctx context.Context, codebasePath string) (int32, error)
 	ListCollections(ctx context.Context) ([]string, error)
+	InspectCollection(ctx context.Context, collectionName string) (semantic.CollectionFacts, error)
 	HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error)
 	HasStaging(ctx context.Context, codebasePath string) (bool, error)
 }
