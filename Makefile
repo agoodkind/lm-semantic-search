@@ -124,9 +124,8 @@ deploy-service:
 			$(MAKE) service-restart; \
 		else \
 			echo "deploy-service: $(LAUNCHD_LABEL) not loaded; installing user service"; \
-			$(MAKE) service-install; \
 			launchctl enable "$(LAUNCHD_DOMAIN)/$(LAUNCHD_LABEL)" || true; \
-			$(MAKE) service-restart; \
+			$(MAKE) service-install; \
 		fi; \
 	else \
 		if systemctl --user cat "$(SYSTEMD_UNIT)" >/dev/null 2>&1; then \
