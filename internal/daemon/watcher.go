@@ -144,6 +144,14 @@ func (watcher *Watcher) RemoveCodebase(ctx context.Context, codebaseID string) {
 	slog.InfoContext(ctx, "watcher.codebase_removed", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebaseID)
 }
 
+// IndexReady is a no-op: the watcher does not buffer deferred first-build paths,
+// so it has nothing to flush when a build promotes. BackgroundSync owns that.
+func (watcher *Watcher) IndexReady(context.Context, model.Codebase) {}
+
+// IndexStopped is a no-op for the same reason: the watcher holds no deferred
+// first-build paths to drop.
+func (watcher *Watcher) IndexStopped(context.Context, string) {}
+
 func (watcher *Watcher) activeRootCount() int {
 	watcher.mu.Lock()
 	defer watcher.mu.Unlock()

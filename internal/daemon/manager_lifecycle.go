@@ -34,3 +34,21 @@ func (manager *Manager) notifyCodebaseRemoved(ctx context.Context, codebaseID st
 		hook.RemoveCodebase(ctx, codebaseID)
 	}
 }
+
+func (manager *Manager) notifyIndexReady(ctx context.Context, codebase model.Codebase) {
+	manager.lifecycleMutex.Lock()
+	hook := manager.lifecycleHook
+	manager.lifecycleMutex.Unlock()
+	if hook != nil {
+		hook.IndexReady(ctx, codebase)
+	}
+}
+
+func (manager *Manager) notifyIndexStopped(ctx context.Context, codebaseID string) {
+	manager.lifecycleMutex.Lock()
+	hook := manager.lifecycleHook
+	manager.lifecycleMutex.Unlock()
+	if hook != nil {
+		hook.IndexStopped(ctx, codebaseID)
+	}
+}

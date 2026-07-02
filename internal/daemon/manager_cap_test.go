@@ -229,7 +229,7 @@ func TestCancelQueuedJobBehindCapReachesCancelled(t *testing.T) {
 		t.Fatal("queued job has no done channel")
 	}
 
-	if _, err := manager.CancelJob(secondJob.ID); err != nil {
+	if _, err := manager.CancelJob(context.Background(), secondJob.ID); err != nil {
 		t.Fatalf("CancelJob returned error: %v", err)
 	}
 

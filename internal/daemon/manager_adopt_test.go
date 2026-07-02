@@ -24,6 +24,10 @@ func (hook *recordingLifecycleHook) AddCodebase(_ context.Context, codebase mode
 
 func (hook *recordingLifecycleHook) RemoveCodebase(_ context.Context, _ string) {}
 
+func (hook *recordingLifecycleHook) IndexReady(_ context.Context, _ model.Codebase) {}
+
+func (hook *recordingLifecycleHook) IndexStopped(_ context.Context, _ string) {}
+
 func (hook *recordingLifecycleHook) wasAdded(id string) bool {
 	hook.mu.Lock()
 	defer hook.mu.Unlock()

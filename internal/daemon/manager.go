@@ -48,13 +48,19 @@ const (
 	jobOperationConversationIngest jobOperation = "conversation_ingest"
 )
 
-// CodebaseLifecycleHook is the watcher-side interface the manager calls so
-// new codebases start receiving filesystem events without a restart. The
-// hook is plugged in via SetCodebaseLifecycleHook; until then the manager
-// is a no-op for these callbacks.
+// CodebaseLifecycleHook is the watcher-side interface the manager calls so a
+// codebase's background wiring stays in sync with its lifecycle without a
+// restart. AddCodebase and RemoveCodebase start and stop filesystem-event
+// watching. IndexReady and IndexStopped report a codebase's first build
+// promoting or ending (failed or cancelled), so a deferred-converge implementer
+// can flush or drop the watcher paths it buffered during that first build. The
+// hook is plugged in via SetCodebaseLifecycleHook; until then the manager is a
+// no-op for these callbacks.
 type CodebaseLifecycleHook interface {
 	AddCodebase(ctx context.Context, codebase model.Codebase)
 	RemoveCodebase(ctx context.Context, codebaseID string)
+	IndexReady(ctx context.Context, codebase model.Codebase)
+	IndexStopped(ctx context.Context, codebaseID string)
 }
 
 // Manager coordinates persisted codebase and job state for the daemon.
@@ -687,15 +693,16 @@ func (manager *Manager) ClearIndex(ctx context.Context, requestedPath string, cl
 }
 
 // CancelJob marks a tracked job as cancelled.
-func (manager *Manager) CancelJob(jobID string) (model.Job, error) {
+func (manager *Manager) CancelJob(ctx context.Context, jobID string) (model.Job, error) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 
 	job, found := manager.jobs[jobID]
 	if !found {
+		manager.mu.Unlock()
 		return model.Job{}, fmt.Errorf("job not found: %s", jobID)
 	}
 	if job.State == model.JobStateCompleted || job.State == model.JobStateFailed || job.State == model.JobStateCancelled {
+		manager.mu.Unlock()
 		return job, nil
 	}
 	delete(manager.conversationJobs, jobID)
@@ -714,9 +721,12 @@ func (manager *Manager) CancelJob(jobID string) (model.Job, error) {
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
 	if err := manager.appendJobLocked("cancel_job", job); err != nil {
+		manager.mu.Unlock()
 		return model.Job{}, err
 	}
 
+	codebaseID := job.CodebaseID
+	var saveErr error
 	codebase, found := manager.codebases[job.CodebaseID]
 	if found && codebase.ActiveJobID == job.ID {
 		// A cancellation is not a failure: leave the codebase at its last-good
@@ -725,10 +735,15 @@ func (manager *Manager) CancelJob(jobID string) (model.Job, error) {
 		codebase.UpdatedAt = now
 		manager.codebases[codebase.ID] = codebase
 		if err := manager.saveLocked(); err != nil {
-			return model.Job{}, err
+			saveErr = err
 		}
 	}
 
+	manager.mu.Unlock()
+	manager.notifyIndexStopped(ctx, codebaseID)
+	if saveErr != nil {
+		return model.Job{}, saveErr
+	}
 	return job, nil
 }
 
