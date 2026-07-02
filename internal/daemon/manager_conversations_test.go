@@ -107,6 +107,164 @@ func TestConversationManifestSyncReturnsNeededIDs(t *testing.T) {
 	}
 }
 
+func TestSyncConversationManifestCapsNeededReply(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	manager.config.MaxConversationsPerIngest = 3
+	ctx := context.Background()
+	collectionID := "thread-manifest-cap"
+	manifest := testConversationManifest(
+		"conv-01",
+		"conv-02",
+		"conv-03",
+		"conv-04",
+		"conv-05",
+		"conv-06",
+		"conv-07",
+		"conv-08",
+	)
+
+	needed, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("first SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, needed, []string{"conv-01", "conv-02", "conv-03"})
+
+	upsertConversationsForManifest(t, manager, ctx, collectionID, manifest, needed)
+
+	needed, err = manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("second SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, needed, []string{"conv-04", "conv-05", "conv-06"})
+
+	upsertConversationsForManifest(t, manager, ctx, collectionID, manifest, needed)
+
+	needed, err = manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("third SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, needed, []string{"conv-07", "conv-08"})
+
+	upsertConversationsForManifest(t, manager, ctx, collectionID, manifest, needed)
+
+	needed, err = manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("fourth SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, needed, nil)
+}
+
+func TestSyncConversationManifestPrefersModified(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	manager.config.MaxConversationsPerIngest = 3
+	ctx := context.Background()
+	collectionID := "thread-manifest-modified"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	checkpoint := map[string]string{
+		"conv-mod-a": "fp-mod-a-old",
+		"conv-mod-b": "fp-mod-b-old",
+	}
+	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        checkpoint,
+		Inodes:       nil,
+	}); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+	manifest := testConversationManifest(
+		"conv-added-01",
+		"conv-added-02",
+		"conv-added-03",
+		"conv-added-04",
+		"conv-added-05",
+		"conv-mod-a",
+		"conv-mod-b",
+	)
+
+	needed, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("SyncConversationManifest returned error: %v", err)
+	}
+
+	if len(needed) != 3 {
+		t.Fatalf("needed = %v, want 3 ids", needed)
+	}
+	assertStringSliceContains(t, needed, "conv-mod-a")
+	assertStringSliceContains(t, needed, "conv-mod-b")
+}
+
+func TestSyncConversationManifestRotatesAddedWindow(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	manager.config.MaxConversationsPerIngest = 3
+	ctx := context.Background()
+	collectionID := "thread-manifest-rotate"
+	manifest := testConversationManifest(
+		"conv-01",
+		"conv-02",
+		"conv-03",
+		"conv-04",
+		"conv-05",
+		"conv-06",
+		"conv-07",
+		"conv-08",
+	)
+
+	first, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("first SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, first, []string{"conv-01", "conv-02", "conv-03"})
+
+	second, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("second SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, second, []string{"conv-04", "conv-05", "conv-06"})
+}
+
+func TestSyncConversationManifestUncappedWhenZero(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	manager.config.MaxConversationsPerIngest = 0
+	ctx := context.Background()
+	collectionID := "thread-manifest-uncapped"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	checkpoint := map[string]string{
+		"conv-mod": "fp-mod-old",
+	}
+	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        checkpoint,
+		Inodes:       nil,
+	}); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+	manifest := testConversationManifest("conv-added-a", "conv-added-b", "conv-added-c", "conv-mod")
+
+	needed, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, needed, []string{"conv-added-a", "conv-added-b", "conv-added-c", "conv-mod"})
+}
+
 func TestRegisterConversationCollectionRPC(t *testing.T) {
 	t.Parallel()
 
@@ -692,6 +850,57 @@ func readConversationChunkCache(t *testing.T, manager *Manager, codebaseID strin
 		t.Fatalf("ReadChunks returned error: %v", err)
 	}
 	return chunks
+}
+
+func testConversationManifest(conversationIDs ...string) map[string]string {
+	manifest := make(map[string]string, len(conversationIDs))
+	for _, conversationID := range conversationIDs {
+		manifest[conversationID] = "fp-" + conversationID
+	}
+	return manifest
+}
+
+func upsertConversationsForManifest(t *testing.T, manager *Manager, ctx context.Context, collectionID string, manifest map[string]string, conversationIDs []string) {
+	t.Helper()
+
+	documents := make([]model.ConversationDocument, 0, len(conversationIDs))
+	for _, conversationID := range conversationIDs {
+		documents = append(documents, model.ConversationDocument{
+			ConversationID: conversationID,
+			MessageIndex:   0,
+			Role:           "user",
+			Text:           "body " + conversationID,
+		})
+	}
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+}
+
+func assertStringSliceEqual(t *testing.T, got []string, want []string) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for index, gotValue := range got {
+		if gotValue != want[index] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+func assertStringSliceContains(t *testing.T, values []string, want string) {
+	t.Helper()
+
+	for _, value := range values {
+		if value == want {
+			return
+		}
+	}
+	t.Fatalf("values %v missing %q", values, want)
 }
 
 func waitForConversationJobState(t *testing.T, manager *Manager, jobID string, state model.JobState) {

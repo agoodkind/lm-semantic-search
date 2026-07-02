@@ -109,11 +109,64 @@ func (manager *Manager) SyncConversationManifest(ctx context.Context, collection
 	current := merkle.Snapshot{ConfigDigest: configDigest, Files: manifest, Inodes: nil}
 	diff := merkle.DiffSnapshots(seed, current)
 
-	needed := make([]string, 0, len(diff.Added)+len(diff.Modified))
-	needed = append(needed, diff.Added...)
-	needed = append(needed, diff.Modified...)
-	sort.Strings(needed)
+	manager.mu.Lock()
+	cursor := manager.conversationSyncCursors[codebase.ID]
+	needed := capNeededConversations(diff.Added, diff.Modified, manager.config.MaxConversationsPerIngest, cursor)
+	if len(needed) > 0 {
+		manager.conversationSyncCursors[codebase.ID] = needed[len(needed)-1]
+	}
+	manager.mu.Unlock()
 	return needed, nil
+}
+
+func capNeededConversations(added []string, modified []string, limit int, cursor string) []string {
+	if limit <= 0 {
+		needed := make([]string, 0, len(added)+len(modified))
+		needed = append(needed, added...)
+		needed = append(needed, modified...)
+		sort.Strings(needed)
+		return needed
+	}
+
+	capped := make([]string, 0, min(limit, len(added)+len(modified)))
+	if len(modified) > limit {
+		capped = append(capped, firstN(rotateAfter(modified, cursor), limit)...)
+		sort.Strings(capped)
+		return capped
+	}
+
+	sortedModified := append([]string(nil), modified...)
+	sort.Strings(sortedModified)
+	capped = append(capped, sortedModified...)
+	remainder := limit - len(capped)
+	if remainder > 0 {
+		capped = append(capped, firstN(rotateAfter(added, cursor), remainder)...)
+	}
+	sort.Strings(capped)
+	return capped
+}
+
+func rotateAfter(values []string, cursor string) []string {
+	rotated := append([]string(nil), values...)
+	sort.Strings(rotated)
+	if len(rotated) == 0 || cursor == "" {
+		return rotated
+	}
+	start := sort.SearchStrings(rotated, cursor)
+	if start < len(rotated) && rotated[start] == cursor {
+		start++
+	}
+	if start >= len(rotated) {
+		return rotated
+	}
+	return append(append([]string(nil), rotated[start:]...), rotated[:start]...)
+}
+
+func firstN(values []string, limit int) []string {
+	if limit >= len(values) {
+		return values
+	}
+	return values[:limit]
 }
 
 // upsertConversationDocuments queues an asynchronous ingest. When manifest is
