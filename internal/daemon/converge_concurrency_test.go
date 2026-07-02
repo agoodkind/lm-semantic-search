@@ -26,6 +26,7 @@ type fakeSemantic struct {
 	probeErr              error
 	reindex               func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
 	reindexWithReuse      func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
+	stageReindexWithReuse func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
 	copyChunks            func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
 	deleteConversation    func(ctx context.Context, collectionName string, conversationID string) error
 	backfillConversations func(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
@@ -271,10 +272,14 @@ func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks 
 	return nil
 }
 
-func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), _ map[string][]float32) error {
+func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32) error {
 	f.mu.Lock()
 	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(removal)})
 	f.mu.Unlock()
+	f.recordReindexReuse(chunks, reuse)
+	if f.stageReindexWithReuse != nil {
+		return f.stageReindexWithReuse(ctx, codebasePath, chunks, removalPaths(removal), progress, reuse)
+	}
 	if f.reindexEmit != nil && progress != nil {
 		f.reindexEmit(progress)
 	}
