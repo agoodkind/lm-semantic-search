@@ -65,13 +65,14 @@ type CodebaseLifecycleHook interface {
 
 // Manager coordinates persisted codebase and job state for the daemon.
 type Manager struct {
-	config           config.Config
-	mu               sync.Mutex
-	codebases        map[string]model.Codebase
-	jobs             map[string]model.Job
-	conversationJobs map[string]conversationJobPayload
-	cancels          map[string]context.CancelFunc
-	done             map[string]chan struct{}
+	config                  config.Config
+	mu                      sync.Mutex
+	codebases               map[string]model.Codebase
+	jobs                    map[string]model.Job
+	conversationJobs        map[string]conversationJobPayload
+	conversationSyncCursors map[string]string
+	cancels                 map[string]context.CancelFunc
+	done                    map[string]chan struct{}
 	// failedBuildRetries caps automatic retries for terminal failed builds per daemon lifetime; not persisted, guarded by mu.
 	failedBuildRetries map[string]int
 	// lastJobJournalAt throttles periodic job-progress journaling; not persisted, guarded by mu.
@@ -131,26 +132,27 @@ type indexingRunner interface {
 // NewManager loads persisted daemon state from disk.
 func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	manager := &Manager{
-		config:             cfg,
-		mu:                 sync.Mutex{},
-		codebases:          map[string]model.Codebase{},
-		jobs:               map[string]model.Job{},
-		conversationJobs:   map[string]conversationJobPayload{},
-		cancels:            map[string]context.CancelFunc{},
-		done:               map[string]chan struct{}{},
-		failedBuildRetries: map[string]int{},
-		lastJobJournalAt:   map[string]time.Time{},
-		runner:             indexer.NewRunner(),
-		semantic:           nil,
-		lifecycleHook:      nil,
-		lifecycleMutex:     sync.Mutex{},
-		indexSlots:         make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
-		syncLock:           newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
-		health:             dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
-		lastDepProbeAt:     time.Time{},
-		deferredBuildDelay: defaultDeferredBuildDelay,
-		indexability:       nil,
-		observer:           nil,
+		config:                  cfg,
+		mu:                      sync.Mutex{},
+		codebases:               map[string]model.Codebase{},
+		jobs:                    map[string]model.Job{},
+		conversationJobs:        map[string]conversationJobPayload{},
+		conversationSyncCursors: map[string]string{},
+		cancels:                 map[string]context.CancelFunc{},
+		done:                    map[string]chan struct{}{},
+		failedBuildRetries:      map[string]int{},
+		lastJobJournalAt:        map[string]time.Time{},
+		runner:                  indexer.NewRunner(),
+		semantic:                nil,
+		lifecycleHook:           nil,
+		lifecycleMutex:          sync.Mutex{},
+		indexSlots:              make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
+		syncLock:                newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
+		health:                  dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
+		lastDepProbeAt:          time.Time{},
+		deferredBuildDelay:      defaultDeferredBuildDelay,
+		indexability:            nil,
+		observer:                nil,
 	}
 	// The resolver reads each codebase's custom ignore patterns straight from the
 	// registry source of truth at build time, so per-codebase ignore state has no
@@ -956,11 +958,9 @@ func (manager *Manager) cancelActiveJobForPath(ctx context.Context, canonicalPat
 	}
 	jobDone, cancel := manager.beginActiveJobCancellationLocked(codebase)
 	manager.mu.Unlock()
-
 	if cancel == nil {
 		return nil
 	}
-
 	cancel()
 	if err := waitForJobDone(ctx, jobDone); err != nil {
 		return err

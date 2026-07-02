@@ -22,6 +22,7 @@ const (
 	defaultMaxConcurrentIndexJobs    = 3
 	defaultEmbeddingBatchTokenBudget = 6000
 	defaultMaxJobChunks              = 200000
+	defaultMaxConversationsPerIngest = 100
 	defaultMaxJobBytes               = 1073741824
 	defaultExpectedJobGrowthFactor   = 4
 	defaultExpectedJobGrowthFloor    = 10000
@@ -91,6 +92,8 @@ type Config struct {
 	MaxConcurrentIndexJobs int
 	// MaxJobChunks caps the chunks one job may write before admission halts it.
 	MaxJobChunks int32
+	// MaxConversationsPerIngest caps the conversation ids one manifest sync may request.
+	MaxConversationsPerIngest int
 	// MaxJobBytes caps the chunk content bytes one job may write.
 	MaxJobBytes int64
 	// ExpectedJobGrowthFactor caps growth relative to the last successful run
@@ -204,6 +207,7 @@ func Default() (Config, error) {
 		PerfCountersIntervalMS:    envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),
 		MaxConcurrentIndexJobs:    envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
 		MaxJobChunks:              envInt32OrDefault("CLAUDE_CONTEXT_MAX_JOB_CHUNKS", defaultMaxJobChunks),
+		MaxConversationsPerIngest: envIntOrDefault("CLAUDE_CONTEXT_MAX_CONVERSATIONS_PER_INGEST", defaultMaxConversationsPerIngest),
 		MaxJobBytes:               envInt64OrDefault("CLAUDE_CONTEXT_MAX_JOB_BYTES", defaultMaxJobBytes),
 		ExpectedJobGrowthFactor:   envFloat64OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FACTOR", defaultExpectedJobGrowthFactor),
 		ExpectedJobGrowthFloor:    envInt32OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FLOOR", defaultExpectedJobGrowthFloor),
