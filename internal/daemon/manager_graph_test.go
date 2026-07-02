@@ -272,7 +272,7 @@ func TestIndexGraphNonFatalReturnsOnCancelAndClearWaitsForWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		result <- manager.indexGraphNonFatal(ctx, codebaseID, repoPath)
+		result <- manager.indexGraphNonFatal(ctx, codebaseID, repoPath, nil)
 	}()
 
 	select {
