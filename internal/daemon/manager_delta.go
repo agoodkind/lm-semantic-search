@@ -744,6 +744,8 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 func (manager *Manager) handleRemovedFile(ctx context.Context, job model.Job, state deltaState, relativePath string, fileResult indexer.OneFileResult) deltaOutcome {
 	slog.InfoContext(ctx, "converge.remove", "component", "daemon", "subcomponent", "delta", "path", relativePath, "semantic", state.semantic)
 	removal := effectiveRemoval(state.source, fileResult, relativePath)
+	// Empty removals are valid delete-nothing overrides, so they advance state
+	// without a semantic write.
 	if state.semantic && !removal.Empty() {
 		if outcome := manager.applyReindexForState(ctx, job, state, nil, removal, "per-file removal"); outcome.fallback || outcome.handled {
 			return outcome

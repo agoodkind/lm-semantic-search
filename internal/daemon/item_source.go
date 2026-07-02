@@ -68,6 +68,10 @@ type itemReuseSource struct {
 	Scope          itemReuseScope
 }
 
+type conversationRowReader interface {
+	LoadConversationMessageState(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error)
+}
+
 // codeItemSource lists and reads a filesystem codebase. It is the byte-for-byte
 // behavior the daemon ran before the routine became source-driven: capture is a
 // merkle walk and indexOne is one file read and split.
@@ -157,26 +161,27 @@ func (source codeItemSource) unit() string {
 
 // conversationItemSource lists and reads conversation documents the daemon was
 // handed over the wire. capture returns the manifest clyde sent (every
-// conversation id with its content fingerprint), and indexOne returns the chunks
-// for the documents clyde delivered for one conversation. A conversation's
-// messages span many rows under one conv/<id>/ prefix, so its removal is a
-// prefix delete rather than the code file's exact path.
+// conversation id with its content fingerprint), and indexOne returns the row
+// delta for the documents clyde delivered for one conversation. A conversation's
+// messages span many rows under one conv/<id>/ prefix, so whole-conversation
+// fallback removal is a prefix delete rather than the code file's exact path.
 type conversationItemSource struct {
 	// collectionName is the live conversation collection, the reuse source for
 	// a changed conversation's already-embedded vectors.
 	collectionName string
 	manifest       map[string]string
 	documents      map[string][]model.ConversationDocument
+	rowReader      conversationRowReader
 	splitterID     string
 }
 
-func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument) conversationItemSource {
+func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader) conversationItemSource {
 	byID := make(map[string][]model.ConversationDocument, len(manifest))
 	for _, document := range documents {
 		conversationID := document.ConversationID
 		byID[conversationID] = append(byID[conversationID], document)
 	}
-	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, splitterID: ""}
+	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: ""}
 }
 
 func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot, error) {
@@ -185,7 +190,7 @@ func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot
 	return merkle.Snapshot{ConfigDigest: "", Files: files, Inodes: nil}, nil
 }
 
-func (source conversationItemSource) indexOne(_ context.Context, conversationID string) (indexer.OneFileResult, error) {
+func (source conversationItemSource) indexOne(ctx context.Context, conversationID string) (indexer.OneFileResult, error) {
 	documents, delivered := source.documents[conversationID]
 	if !delivered || len(documents) == 0 {
 		// clyde asked for this conversation's documents but delivered none, so it
@@ -204,7 +209,25 @@ func (source conversationItemSource) indexOne(_ context.Context, conversationID 
 			ReuseVectors:    nil,
 		}, nil
 	}
-	chunks, err := conversationDocumentsToStoredChunks(documents)
+	if source.rowReader == nil || source.collectionName == "" {
+		return source.fullConversationResult(conversationID, documents, false)
+	}
+
+	conversationPrefix := conversationRelativePathPrefix(conversationID)
+	storedState, reuse, err := source.rowReader.LoadConversationMessageState(ctx, source.collectionName, conversationPrefix)
+	if err != nil {
+		slog.WarnContext(ctx, "load conversation message state failed; falling back to full conversation reindex", "conversation_id", conversationID, "collection", source.collectionName, "err", err)
+		return source.fullConversationResult(conversationID, documents, true)
+	}
+	if storedState == nil {
+		storedState = map[int32]semantic.StoredMessageState{}
+	}
+	if reuse == nil {
+		reuse = map[string][]float32{}
+	}
+
+	delta := diffConversationMessages(conversationID, documents, storedState)
+	chunks, err := conversationDocumentsToStoredChunks(delta.documents)
 	if err != nil {
 		return indexer.OneFileResult{
 			Chunks:          nil,
@@ -224,11 +247,44 @@ func (source conversationItemSource) indexOne(_ context.Context, conversationID 
 		Skipped:         false,
 		SkipReason:      indexer.SkipNone,
 		Removed:         false,
+		RemovalOverride: true,
+		RemovalPaths:    delta.removalPaths,
+		RemovalPrefixes: delta.removalPrefixes,
+		ReuseVectors:    reuse,
+	}, nil
+}
+
+func (source conversationItemSource) fullConversationResult(conversationID string, documents []model.ConversationDocument, removalOverride bool) (indexer.OneFileResult, error) {
+	chunks, err := conversationDocumentsToStoredChunks(documents)
+	if err != nil {
+		return indexer.OneFileResult{
+			Chunks:          nil,
+			FileHash:        "",
+			Skipped:         false,
+			SkipReason:      indexer.SkipNone,
+			Removed:         false,
+			RemovalOverride: false,
+			RemovalPaths:    nil,
+			RemovalPrefixes: nil,
+			ReuseVectors:    nil,
+		}, err
+	}
+	result := indexer.OneFileResult{
+		Chunks:          chunks,
+		FileHash:        source.manifest[conversationID],
+		Skipped:         false,
+		SkipReason:      indexer.SkipNone,
+		Removed:         false,
 		RemovalOverride: false,
 		RemovalPaths:    nil,
 		RemovalPrefixes: nil,
 		ReuseVectors:    nil,
-	}, nil
+	}
+	if removalOverride {
+		result.RemovalOverride = true
+		result.RemovalPrefixes = []string{conversationRelativePathPrefix(conversationID)}
+	}
+	return result, nil
 }
 
 func (source conversationItemSource) removalFor(itemIDs []string) semantic.Removal {
@@ -248,9 +304,9 @@ func (source conversationItemSource) absencePolicy() absencePolicy {
 	return absenceRetain
 }
 
-// reuseSource points one conversation's reuse read at its own rows in the live
-// collection: the conv/<id>/ prefix the reindex is about to delete. Loaded
-// before the delete, those vectors let unchanged messages skip the embedder.
+// reuseSource stays prefix scoped for loader-error fallback. The normal
+// message-delta path carries reuse in OneFileResult and skips this per-item
+// load, but a full fallback still needs the existing conv/<id>/ rows.
 func (source conversationItemSource) reuseSource(conversationID string) itemReuseSource {
 	if source.collectionName == "" {
 		return itemReuseSource{
