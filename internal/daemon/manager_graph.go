@@ -92,7 +92,7 @@ func (manager *Manager) graphEngine(ctx context.Context, codebaseID string) (*cb
 		return engine, nil
 	}
 
-	engine, err := cbm.Open(codebaseID)
+	engine, err := cbm.Open(codebaseID, manager.config.GraphDir)
 	if err != nil {
 		slog.ErrorContext(ctx, "open cbm engine failed", "codebase_id", codebaseID, "err", err)
 		return nil, fmt.Errorf("open cbm engine: %w", err)

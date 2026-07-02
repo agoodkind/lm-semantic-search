@@ -30,9 +30,10 @@ func TestEngineRoundTripIndexesAndQueriesGraph(t *testing.T) {
 	repositoryPath := t.TempDir()
 	writeTestRepository(t, repositoryPath, "roundtrip")
 
-	t.Setenv("CBM_CACHE_DIR", t.TempDir())
+	cacheDir := t.TempDir()
+	t.Setenv("CBM_CACHE_DIR", cacheDir)
 
-	engine, errorMessage := Open("rt")
+	engine, errorMessage := Open("rt", cacheDir)
 	if errorMessage != nil {
 		t.Fatal(errorMessage)
 	}
@@ -62,7 +63,7 @@ func TestEngineSerializesConcurrentIndexesAndSingleHandleQueries(t *testing.T) {
 	repositoryPaths := make([]string, 0, engineCount)
 	for i := 0; i < engineCount; i++ {
 		projectName := fmt.Sprintf("concurrent_%d", i)
-		engine, errorMessage := Open(projectName)
+		engine, errorMessage := Open(projectName, t.TempDir())
 		if errorMessage != nil {
 			t.Fatalf("Open(%q): %v", projectName, errorMessage)
 		}
@@ -133,6 +134,35 @@ func TestEngineSerializesConcurrentIndexesAndSingleHandleQueries(t *testing.T) {
 	}
 }
 
+func TestEngineIndexesIntoItsCacheDirDespiteEnvChange(t *testing.T) {
+	repositoryPath := t.TempDir()
+	writeTestRepository(t, repositoryPath, "envrace")
+
+	cacheDir := t.TempDir()
+	processEnvDir := t.TempDir()
+	t.Setenv("CBM_CACHE_DIR", processEnvDir)
+
+	engine, errorMessage := Open("envrace", cacheDir)
+	if errorMessage != nil {
+		t.Fatal(errorMessage)
+	}
+	defer engine.Close()
+
+	if errorMessage = engine.Index(context.Background(), repositoryPath, "fast"); errorMessage != nil {
+		t.Fatalf("Index returned error: %v", errorMessage)
+	}
+
+	cacheEntries := readDirectoryEntries(t, cacheDir)
+	if len(cacheEntries) == 0 {
+		t.Fatalf("expected engine cache directory %s to be non-empty", cacheDir)
+	}
+
+	processEnvEntries := readDirectoryEntries(t, processEnvDir)
+	if len(processEnvEntries) != 0 {
+		t.Fatalf("expected process-env cache directory %s to stay empty; found %d entries", processEnvDir, len(processEnvEntries))
+	}
+}
+
 func callTool(t *testing.T, engine *Engine, toolName string, argumentsJSON string) toolResponse {
 	t.Helper()
 
@@ -150,6 +180,16 @@ func callTool(t *testing.T, engine *Engine, toolName string, argumentsJSON strin
 		RawJSON:      rawJSON,
 		toolEnvelope: envelope,
 	}
+}
+
+func readDirectoryEntries(t *testing.T, path string) []os.DirEntry {
+	t.Helper()
+
+	entries, errorMessage := os.ReadDir(path)
+	if errorMessage != nil {
+		t.Fatalf("read directory %s: %v", path, errorMessage)
+	}
+	return entries
 }
 
 func writeTestRepository(t *testing.T, repositoryPath string, packageName string) {

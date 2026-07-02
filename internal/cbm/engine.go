@@ -16,21 +16,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"unsafe"
 )
 
 var (
-	globalIndexMutex sync.Mutex
-	allocatorOnce    sync.Once
+	globalEngineMutex sync.Mutex
+	allocatorOnce     sync.Once
 )
 
 // Engine wraps one cbm MCP server handle.
 type Engine struct {
-	pointer *C.cbm_mcp_server_t
-	project string
-	mutex   sync.Mutex
+	pointer  *C.cbm_mcp_server_t
+	project  string
+	cacheDir string
+	mutex    sync.Mutex
 }
 
 type indexArguments struct {
@@ -49,10 +51,17 @@ type mcpContent struct {
 }
 
 // Open initializes and returns an Engine for project.
-//
-// The caller must set CBM_CACHE_DIR in the environment before Open when the
-// store must land in a daemon-controlled directory.
-func Open(project string) (*Engine, error) {
+func Open(project string, cacheDir string) (*Engine, error) {
+	globalEngineMutex.Lock()
+	defer globalEngineMutex.Unlock()
+
+	restoreCacheDir, err := setCacheDirLocked(cacheDir)
+	if err != nil {
+		slog.Error("set cbm cache directory failed", "project", project, "cache_dir", cacheDir, "err", err)
+		return nil, fmt.Errorf("set cbm cache directory: %w", err)
+	}
+	defer restoreCacheDir()
+
 	allocatorOnce.Do(func() {
 		C.cbm_alloc_init()
 	})
@@ -68,19 +77,26 @@ func Open(project string) (*Engine, error) {
 	C.cbm_mcp_server_set_project(pointer, cProject)
 
 	return &Engine{
-		pointer: pointer,
-		project: project,
-		mutex:   sync.Mutex{},
+		pointer:  pointer,
+		project:  project,
+		cacheDir: cacheDir,
+		mutex:    sync.Mutex{},
 	}, nil
 }
 
 // Index indexes repositoryPath into the engine project using mode. The global
-// index lock serializes Index across the process because the engine's pipeline
-// keeps process-global state; the per-handle lock serializes calls on this one
-// engine.
+// engine lock serializes C calls across the process because the engine reads
+// process-global cache directory state on each operation. The per-handle lock
+// serializes calls on this one engine.
 func (engine *Engine) Index(ctx context.Context, repositoryPath string, mode string) error {
-	globalIndexMutex.Lock()
-	defer globalIndexMutex.Unlock()
+	globalEngineMutex.Lock()
+	defer globalEngineMutex.Unlock()
+
+	restoreCacheDir, err := setCacheDirLocked(engine.cacheDir)
+	if err != nil {
+		return fmt.Errorf("set cbm cache directory: %w", err)
+	}
+	defer restoreCacheDir()
 
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
@@ -121,6 +137,16 @@ func (engine *Engine) Index(ctx context.Context, repositoryPath string, mode str
 
 // Tool calls toolName with argumentsJSON and returns the raw MCP envelope JSON.
 func (engine *Engine) Tool(toolName string, argumentsJSON string) (string, error) {
+	globalEngineMutex.Lock()
+	defer globalEngineMutex.Unlock()
+
+	restoreCacheDir, err := setCacheDirLocked(engine.cacheDir)
+	if err != nil {
+		slog.Error("set cbm cache directory failed", "project", engine.project, "cache_dir", engine.cacheDir, "err", err)
+		return "", fmt.Errorf("set cbm cache directory: %w", err)
+	}
+	defer restoreCacheDir()
+
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
 
@@ -177,4 +203,27 @@ func envelopeText(envelope mcpEnvelope) string {
 	}
 
 	return strings.Join(textParts, "\n")
+}
+
+func setCacheDirLocked(cacheDir string) (func(), error) {
+	if cacheDir == "" {
+		return func() {}, nil
+	}
+
+	previousValue, hadPreviousValue := os.LookupEnv("CBM_CACHE_DIR")
+	if err := os.Setenv("CBM_CACHE_DIR", cacheDir); err != nil {
+		return nil, fmt.Errorf("set CBM_CACHE_DIR: %w", err)
+	}
+
+	return func() {
+		if hadPreviousValue {
+			if err := os.Setenv("CBM_CACHE_DIR", previousValue); err != nil {
+				slog.Error("restore CBM_CACHE_DIR failed", "err", err)
+			}
+			return
+		}
+		if err := os.Unsetenv("CBM_CACHE_DIR"); err != nil {
+			slog.Error("unset CBM_CACHE_DIR failed", "err", err)
+		}
+	}, nil
 }

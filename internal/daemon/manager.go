@@ -157,10 +157,6 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		slog.ErrorContext(ctx, "create graph cache directory failed", "path", cfg.GraphDir, "err", err)
 		return nil, fmt.Errorf("create graph cache directory: %w", err)
 	}
-	if err := os.Setenv("CBM_CACHE_DIR", cfg.GraphDir); err != nil {
-		slog.ErrorContext(ctx, "set cbm graph cache directory failed", "path", cfg.GraphDir, "err", err)
-		return nil, fmt.Errorf("set cbm graph cache directory: %w", err)
-	}
 	// Force the cbm engine to a single worker. Its parallel extraction worker
 	// pool aborts inside cgo when driven repeatedly from this long-lived daemon
 	// process, so the graph engine runs sequentially. Graph indexing is a
