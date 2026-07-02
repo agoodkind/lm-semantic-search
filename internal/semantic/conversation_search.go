@@ -22,7 +22,7 @@ import (
 // only the cap and the score floor.
 func (service *Service) SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, perConversationLimit int32, minScore float64, filter ConversationFilter) ([]model.StoredChunk, error) {
 	if !service.Available() {
-		return nil, nil
+		return nil, ErrUnavailable
 	}
 	trimmedCollectionName := strings.TrimSpace(collectionName)
 	if trimmedCollectionName == "" {

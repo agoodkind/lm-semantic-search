@@ -304,9 +304,9 @@ type StoredChunk struct {
 	// and for conversation chunks whose caller did not supply it.
 	WorkspaceRoot string `json:"workspace_root,omitempty"`
 	Archived      bool   `json:"archived,omitempty"`
-	// Score is the retrieval relevance for this chunk: the vector similarity
-	// from a semantic search, or the keyword rank from the literal fallback.
-	// Zero on chunks that did not come from a search.
+	// Score is the retrieval relevance for this chunk: the vector similarity for
+	// a semantic search, or the keyword rank the code literal-fallback search
+	// (rankChunks) assigns. Zero on chunks that did not come from a search.
 	Score float64 `json:"score,omitempty"`
 }
 

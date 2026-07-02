@@ -226,15 +226,9 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	codebase.MerkleSnapshotPath = manager.merklePath(codebase.ID)
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
-	// A conversation collection's literal-fallback cache must stay complete across
-	// an incremental ingest, so a delta merges into the prior cache rather than
-	// overwriting it with only the changed conversations. A code codebase keeps
-	// the existing whole-result write.
-	if codebase.Kind == model.CodebaseKindDocument {
-		if err := manager.mergeConversationChunkCache(ctx, codebase.ID, result.Chunks, result.FileHashes); err != nil {
-			slog.ErrorContext(ctx, "merge conversation chunk cache failed", "job_id", jobID, "err", err)
-		}
-	} else {
+	// Code codebases keep the existing whole-result chunk cache write. Legacy
+	// registry entries have an empty Kind and are treated as code.
+	if codebase.Kind != model.CodebaseKindDocument {
 		chunkPath := manager.chunkPath(codebase.ID)
 		if err := store.WriteChunks(chunkPath, result.Chunks); err != nil {
 			slog.ErrorContext(ctx, "write chunk cache failed", "job_id", jobID, "err", err)
