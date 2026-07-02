@@ -111,41 +111,54 @@ func (manager *Manager) SyncConversationManifest(ctx context.Context, collection
 
 	manager.mu.Lock()
 	cursor := manager.conversationSyncCursors[codebase.ID]
-	needed := capNeededConversations(diff.Added, diff.Modified, manager.config.MaxConversationsPerIngest, cursor)
-	if len(needed) > 0 {
-		manager.conversationSyncCursors[codebase.ID] = needed[len(needed)-1]
+	needed, nextCursor := capNeededConversations(diff.Added, diff.Modified, manager.config.MaxConversationsPerIngest, cursor)
+	if nextCursor != "" {
+		manager.conversationSyncCursors[codebase.ID] = nextCursor
 	}
 	manager.mu.Unlock()
 	return needed, nil
 }
 
-// One cursor advances both modified overflow and added windows. A cursor past a
-// list's end wraps to that list's start so rotation stays live without per-list cursors.
-func capNeededConversations(added []string, modified []string, limit int, cursor string) []string {
+// One shared cursor tracks pre-sort rotation order across modified overflow and
+// added windows. A cursor past a list's end wraps to that list's start so
+// rotation stays live without per-list cursors.
+func capNeededConversations(added []string, modified []string, limit int, cursor string) ([]string, string) {
 	if limit <= 0 {
 		needed := make([]string, 0, len(added)+len(modified))
 		needed = append(needed, added...)
 		needed = append(needed, modified...)
 		sort.Strings(needed)
-		return needed
+		return needed, cursor
 	}
 
 	capped := make([]string, 0, min(limit, len(added)+len(modified)))
+	nextCursor := ""
 	if len(modified) > limit {
-		capped = append(capped, firstN(rotateAfter(modified, cursor), limit)...)
+		modifiedWindow := firstN(rotateAfter(modified, cursor), limit)
+		capped = append(capped, modifiedWindow...)
+		if len(modifiedWindow) > 0 {
+			nextCursor = modifiedWindow[len(modifiedWindow)-1]
+		}
 		sort.Strings(capped)
-		return capped
+		return capped, nextCursor
 	}
 
 	sortedModified := append([]string(nil), modified...)
 	sort.Strings(sortedModified)
 	capped = append(capped, sortedModified...)
+	if len(sortedModified) > 0 {
+		nextCursor = sortedModified[len(sortedModified)-1]
+	}
 	remainder := limit - len(capped)
 	if remainder > 0 {
-		capped = append(capped, firstN(rotateAfter(added, cursor), remainder)...)
+		addedWindow := firstN(rotateAfter(added, cursor), remainder)
+		capped = append(capped, addedWindow...)
+		if len(addedWindow) > 0 {
+			nextCursor = addedWindow[len(addedWindow)-1]
+		}
 	}
 	sort.Strings(capped)
-	return capped
+	return capped, nextCursor
 }
 
 func rotateAfter(values []string, cursor string) []string {

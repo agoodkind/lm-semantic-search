@@ -242,11 +242,26 @@ func TestSyncConversationManifestRotatesModifiedOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second SyncConversationManifest returned error: %v", err)
 	}
-	if strings.Join(first, "\x00") == strings.Join(second, "\x00") {
-		t.Fatalf("second sync returned %v, want different membership from %v", second, first)
+	third, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("third SyncConversationManifest returned error: %v", err)
+	}
+	fourth, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("fourth SyncConversationManifest returned error: %v", err)
+	}
+	expectedReplies := [][]string{
+		{"conv-mod-01", "conv-mod-02", "conv-mod-03"},
+		{"conv-mod-01", "conv-mod-04", "conv-mod-05"},
+		{"conv-mod-02", "conv-mod-03", "conv-mod-04"},
+		{"conv-mod-01", "conv-mod-02", "conv-mod-05"},
+	}
+	for i, expectedReply := range expectedReplies {
+		reply := [][]string{first, second, third, fourth}[i]
+		assertStringSliceEqual(t, reply, expectedReply)
 	}
 
-	replies := [][]string{first, second}
+	replies := [][]string{first, second, third, fourth}
 	for i := 0; i < len(modifiedIDs); i++ {
 		reply, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
 		if err != nil {
@@ -308,6 +323,31 @@ func TestSyncConversationManifestRotatesAddedWindow(t *testing.T) {
 		t.Fatalf("second SyncConversationManifest returned error: %v", err)
 	}
 	assertStringSliceEqual(t, second, []string{"conv-04", "conv-05", "conv-06"})
+
+	third, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("third SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, third, []string{"conv-01", "conv-07", "conv-08"})
+
+	fourth, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("fourth SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, fourth, []string{"conv-02", "conv-03", "conv-04"})
+
+	replies := [][]string{first, second, third, fourth}
+	seen := make(map[string]bool, len(manifest))
+	for _, reply := range replies {
+		for _, conversationID := range reply {
+			seen[conversationID] = true
+		}
+	}
+	for conversationID := range manifest {
+		if !seen[conversationID] {
+			t.Fatalf("conversation id %q never appeared across replies %v", conversationID, replies)
+		}
+	}
 }
 
 func TestSyncConversationManifestUncappedWhenZero(t *testing.T) {
