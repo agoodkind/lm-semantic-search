@@ -228,8 +228,33 @@ func TestLoadConversationMessageStateFromIteratorReuseMapMatchesContentKeysPerRo
 	assertReuseMap(t, reuse, wantReuse)
 }
 
+func TestLoadConversationMessageStateRejectsNegativePathIndexes(t *testing.T) {
+	tests := []struct {
+		name         string
+		relativePath string
+	}{
+		{
+			name:         "message index",
+			relativePath: "conv/reject/-1",
+		},
+		{
+			name:         "part index",
+			relativePath: "conv/reject/1/-2",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := conversationMessagePartIndex(test.relativePath, "conv/reject/")
+			if err == nil {
+				t.Fatalf("conversationMessagePartIndex(%q) returned nil error, want error", test.relativePath)
+			}
+		})
+	}
+}
+
 func conversationStateResultSet(t *testing.T, rows []conversationStateTestRow, includeMessageIndex bool) milvusclient.ResultSet {
 	t.Helper()
+	vectorDimension := conversationStateVectorDimension(t, rows)
 	relativePaths := make([]string, 0, len(rows))
 	roles := make([]string, 0, len(rows))
 	contents := make([]string, 0, len(rows))
@@ -245,24 +270,41 @@ func conversationStateResultSet(t *testing.T, rows []conversationStateTestRow, i
 		column.NewColumnVarChar(relativePathFieldName, relativePaths),
 		column.NewColumnVarChar(roleFieldName, roles),
 		column.NewColumnVarChar(contentFieldName, contents),
-		column.NewColumnFloatVector(denseVectorFieldName, 1, vectors),
+		column.NewColumnFloatVector(denseVectorFieldName, vectorDimension, vectors),
 	}
 	if includeMessageIndex {
 		values := make([]int64, 0, len(rows))
 		validData := make([]bool, 0, len(rows))
 		for _, row := range rows {
 			validData = append(validData, row.hasMessageIndex)
-			if row.hasMessageIndex {
-				values = append(values, row.messageIndex)
-			}
+			values = append(values, row.messageIndex)
 		}
-		messageIndexes, err := column.NewNullableColumnInt64(messageIndexFieldName, values, validData)
+		messageIndexes, err := column.NewNullableColumnInt64(messageIndexFieldName, values, validData, column.WithSparseNullableMode[int64](true))
 		if err != nil {
 			t.Fatalf("NewNullableColumnInt64 returned error: %v", err)
 		}
 		fields = append(fields, messageIndexes)
 	}
 	return milvusclient.ResultSet{ResultCount: len(rows), Fields: fields}
+}
+
+func conversationStateVectorDimension(t *testing.T, rows []conversationStateTestRow) int {
+	t.Helper()
+	vectorDimension := 0
+	for rowIndex, row := range rows {
+		rowDimension := len(row.vector)
+		if rowDimension == 0 {
+			t.Fatalf("row %d vector dimension = 0, want positive dimension", rowIndex)
+		}
+		if vectorDimension == 0 {
+			vectorDimension = rowDimension
+			continue
+		}
+		if rowDimension != vectorDimension {
+			t.Fatalf("row %d vector dimension = %d, want %d", rowIndex, rowDimension, vectorDimension)
+		}
+	}
+	return vectorDimension
 }
 
 func captureConversationStateLogs(t *testing.T) *bytes.Buffer {

@@ -226,7 +226,13 @@ func conversationMessagePartIndex(relativePath string, conversationPrefix string
 		slog.Error("conversation state relative path missing message index", "relative_path", relativePath, "prefix", conversationPrefix, "err", err)
 		return 0, err
 	}
-	if _, err := strconv.ParseInt(parts[0], 10, 32); err != nil {
+	messageIndex, err := strconv.ParseInt(parts[0], 10, 32)
+	if err != nil {
+		slog.Error("conversation state relative path message index invalid", "relative_path", relativePath, "remainder", remainder, "err", err)
+		return 0, fmt.Errorf("parse message index from %q: %w", remainder, err)
+	}
+	if messageIndex < 0 {
+		err := fmt.Errorf("negative message index %d", messageIndex)
 		slog.Error("conversation state relative path message index invalid", "relative_path", relativePath, "remainder", remainder, "err", err)
 		return 0, fmt.Errorf("parse message index from %q: %w", remainder, err)
 	}
@@ -240,6 +246,11 @@ func conversationMessagePartIndex(relativePath string, conversationPrefix string
 	}
 	partIndex, err := strconv.Atoi(parts[1])
 	if err != nil {
+		slog.Error("conversation state relative path part index invalid", "relative_path", relativePath, "remainder", remainder, "err", err)
+		return 0, fmt.Errorf("parse message part index from %q: %w", remainder, err)
+	}
+	if partIndex < 0 {
+		err := fmt.Errorf("negative message part index %d", partIndex)
 		slog.Error("conversation state relative path part index invalid", "relative_path", relativePath, "remainder", remainder, "err", err)
 		return 0, fmt.Errorf("parse message part index from %q: %w", remainder, err)
 	}
