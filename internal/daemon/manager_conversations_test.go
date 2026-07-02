@@ -107,6 +107,72 @@ func TestConversationManifestSyncReturnsNeededIDs(t *testing.T) {
 	}
 }
 
+func TestConversationEmptyDiffStoredNamePresentCompletesNoop(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	fake := &fakeSemantic{}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-stored-name"
+	manifest := map[string]string{"conv-stored": "fp-stored-1"}
+	documents := []model.ConversationDocument{{
+		ConversationID: "conv-stored",
+		MessageIndex:   0,
+		Role:           "user",
+		TimestampUnix:  1712346000,
+		Text:           "stored collection regression",
+	}}
+
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("first upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
+
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	storedCollection := codebase.CollectionName
+	derivedCollection := fake.CollectionName(codebase.CanonicalPath)
+	if storedCollection == derivedCollection {
+		t.Fatalf("stored collection unexpectedly equals derived collection %q", storedCollection)
+	}
+
+	fake.mu.Lock()
+	fake.reindexCalls = nil
+	fake.stageCalls = nil
+	fake.promoted = nil
+	fake.droppedStaging = nil
+	fake.inspectCollection = func(_ context.Context, collectionName string) (semantic.CollectionFacts, error) {
+		if collectionName == storedCollection {
+			return semantic.CollectionFacts{Exists: true, Rows: 3, RowsKnown: true}, nil
+		}
+		return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
+	}
+	fake.mu.Unlock()
+
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, manifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, secondJob.ID, model.JobStateCompleted)
+
+	if got := fake.reindexCallsSnapshot(); len(got) != 0 {
+		t.Fatalf("reindex calls after empty diff = %d, want 0: %+v", len(got), got)
+	}
+	if got := fake.stageCallsSnapshot(); len(got) != 0 {
+		t.Fatalf("stage calls after empty diff = %d, want 0: %+v", len(got), got)
+	}
+	if got := fake.promotedSnapshot(); len(got) != 0 {
+		t.Fatalf("promoted staging collections after empty diff = %d, want 0: %v", len(got), got)
+	}
+	if got := fake.droppedStagingSnapshot(); len(got) != 0 {
+		t.Fatalf("dropped staging collections after empty diff = %d, want 0: %v", len(got), got)
+	}
+}
+
 func TestSyncConversationManifestCapsNeededReply(t *testing.T) {
 	t.Parallel()
 
