@@ -13,6 +13,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
 // recordingRunner returns a fakeRunner whose IndexOne appends each embedded
@@ -304,8 +305,10 @@ func TestResumeOrphanedJobsResumesFromStagingCheckpoint(t *testing.T) {
 	manager, _ := newTestManagerWithCap(t, 2)
 	manager.config.ResumeIndexingOnBoot = true
 	manager.semantic = &fakeSemantic{
-		hasCollectionForPath: func(context.Context, string) (bool, error) { return false, nil },
-		hasStaging:           func(context.Context, string) (bool, error) { return true, nil },
+		inspectCollection: func(context.Context, string) (semantic.CollectionFacts, error) {
+			return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
+		},
+		hasStaging: func(context.Context, string) (bool, error) { return true, nil },
 	}
 	var mu sync.Mutex
 	embedded := make([]string, 0)

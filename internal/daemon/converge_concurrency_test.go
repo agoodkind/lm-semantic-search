@@ -31,6 +31,7 @@ type fakeSemantic struct {
 	backfillConversations func(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
 	collectionName        func(codebasePath string) string
 	conversationName      func(collectionID string) string
+	inspectCollection     func(context.Context, string) (semantic.CollectionFacts, error)
 	listCollections       func(context.Context) ([]string, error)
 	hasCollectionForPath  func(context.Context, string) (bool, error)
 	collectionState       func(context.Context, string) (bool, bool, error)
@@ -131,6 +132,25 @@ func (f *fakeSemantic) ListCollections(ctx context.Context) ([]string, error) {
 		return f.listCollections(ctx)
 	}
 	return []string{"code_chunks_test"}, nil
+}
+
+func (f *fakeSemantic) InspectCollection(ctx context.Context, collectionName string) (semantic.CollectionFacts, error) {
+	if f.inspectCollection != nil {
+		return f.inspectCollection(ctx, collectionName)
+	}
+	if f.hasCollectionForPath != nil {
+		// This fallback preserves older repair-test fixtures, but this path
+		// passes a collection name. Fixtures keyed by codebase path must set
+		// inspectCollection explicitly so they do not compare unlike values.
+		exists, err := f.hasCollectionForPath(ctx, collectionName)
+		if err != nil {
+			return semantic.CollectionFacts{}, err
+		}
+		if !exists {
+			return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
+		}
+	}
+	return semantic.CollectionFacts{Exists: true, Rows: 1, RowsKnown: true}, nil
 }
 
 func (f *fakeSemantic) HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error) {
