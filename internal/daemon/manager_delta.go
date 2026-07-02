@@ -727,8 +727,8 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		}
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
-	removal := effectiveRemoval(state.source, fileResult, relativePath)
 	if state.semantic {
+		removal := effectiveRemoval(state.source, fileResult, relativePath)
 		if outcome := manager.applyChangedFileSemantic(ctx, job, state, relativePath, fileResult, removal); outcome.fallback || outcome.handled {
 			return outcome
 		}
@@ -743,10 +743,12 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 
 func (manager *Manager) handleRemovedFile(ctx context.Context, job model.Job, state deltaState, relativePath string, fileResult indexer.OneFileResult) deltaOutcome {
 	slog.InfoContext(ctx, "converge.remove", "component", "daemon", "subcomponent", "delta", "path", relativePath, "semantic", state.semantic)
-	removal := effectiveRemoval(state.source, fileResult, relativePath)
-	if state.semantic && !removal.Empty() {
-		if outcome := manager.applyReindexForState(ctx, job, state, nil, removal, "per-file removal"); outcome.fallback || outcome.handled {
-			return outcome
+	if state.semantic {
+		removal := effectiveRemoval(state.source, fileResult, relativePath)
+		if !removal.Empty() {
+			if outcome := manager.applyReindexForState(ctx, job, state, nil, removal, "per-file removal"); outcome.fallback || outcome.handled {
+				return outcome
+			}
 		}
 	}
 	delete(state.working, relativePath)

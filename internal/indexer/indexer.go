@@ -123,13 +123,13 @@ func NewRunner() *Runner {
 }
 
 // OneFileResult is the per-file output of one splitter pass. Skipped=true
-// means the file's bytes are not valid UTF-8; Chunks and FileHash are then
-// empty and callers add the path to Result.SkippedFiles. Removed=true means
-// the file was absent on disk when the task ran, so the converge operation
-// for this path is a removal: callers delete its rows and drop it from the
-// snapshot rather than treating the absence as an error. RemovalOverride true
-// makes RemovalPaths and RemovalPrefixes replace the caller's default removal;
-// when both slices are empty, the item deletes nothing.
+// means SkipReason names why no chunks were produced; callers route each
+// SkipReason into the matching Result counter. Removed=true means the file was
+// absent on disk when the task ran, so the converge operation for this path is
+// a removal: callers delete its rows and drop it from the snapshot rather than
+// treating the absence as an error. RemovalOverride true makes RemovalPaths and
+// RemovalPrefixes replace the caller's default removal; when both slices are
+// empty, the item deletes nothing.
 type OneFileResult struct {
 	Chunks     []model.StoredChunk
 	FileHash   string
