@@ -190,6 +190,14 @@ func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot
 	return merkle.Snapshot{ConfigDigest: "", Files: files, Inodes: nil}, nil
 }
 
+// indexOne diffs the delivered messages against the LIVE collection's rows.
+// A bootstrap writes into a staging collection, so this is safe only because
+// every route into a conversation bootstrap guarantees the live collection is
+// missing or empty (decideEmptyDiffMode requires definitive evidence, the
+// delta fallback fires on ErrCollectionMissing, and a first ingest has no
+// collection), which degrades the diff to full delivery. A bootstrap over a
+// populated live collection would drop unchanged rows at promote; do not
+// create such a route.
 func (source conversationItemSource) indexOne(ctx context.Context, conversationID string) (indexer.OneFileResult, error) {
 	documents, delivered := source.documents[conversationID]
 	if !delivered || len(documents) == 0 {
