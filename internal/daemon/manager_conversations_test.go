@@ -1364,6 +1364,217 @@ func TestHandleChangedFileProgressReflectsRealWork(t *testing.T) {
 	}
 }
 
+func TestHandleChangedFileHonorsOneFileResultOverrides(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reuse override skips item reuse load", func(t *testing.T) {
+		t.Parallel()
+
+		manager, cfg, _ := newTestManager(t)
+		var reindexReuse map[string][]float32
+		fake := &fakeSemantic{
+			loadReuseForPrefix: func(context.Context, string, string) (map[string][]float32, error) {
+				t.Fatal("LoadReuseVectorsForPrefix was called despite a OneFileResult reuse override")
+				return nil, nil
+			},
+			reindexWithReuse: func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string][]float32) error {
+				reindexReuse = cloneReuseVectors(reuse)
+				if progress != nil {
+					progress(semantic.Progress{ChunksProcessed: safeInt32(len(chunks)), ChunksReused: 1, ChunksEmbedded: 0})
+				}
+				return nil
+			},
+		}
+		manager.semantic = fake
+		state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
+			result: indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:        "reuse override content",
+					RelativePath:   "conv/conv-reuse/0",
+					ConversationID: "conv-reuse",
+					MessageIndex:   0,
+				}},
+				FileHash:     "fp-reuse",
+				ReuseVectors: map[string][]float32{"override-hash": {2, 3}},
+			},
+			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/conv-reuse/"}),
+			reuse: itemReuseSource{
+				CollectionName: "conv_chunks_test",
+				RelativePath:   "conv/conv-reuse/",
+				Scope:          itemReuseScopePrefix,
+			},
+		})
+		state.reuse = map[string][]float32{"base-hash": {1}}
+		state.itemReuseEnabled = true
+		result := emptyOverrideResult()
+
+		outcome := manager.handleChangedFile(context.Background(), model.Job{ID: "job-reuse-override"}, state, "conv-reuse", &result)
+
+		if outcome.fallback || outcome.handled || !outcome.progressed {
+			t.Fatalf("outcome = %+v, want progressed without fallback or handled", outcome)
+		}
+		if calls := fake.reusePrefixCallsSnapshot(); len(calls) != 0 {
+			t.Fatalf("reuse prefix calls = %v, want none", calls)
+		}
+		assertReuseVector(t, reindexReuse, "base-hash", []float32{1})
+		assertReuseVector(t, reindexReuse, "override-hash", []float32{2, 3})
+		if state.chunkCounts.reuseVectorsLoaded != 1 {
+			t.Fatalf("reuseVectorsLoaded = %d, want 1", state.chunkCounts.reuseVectorsLoaded)
+		}
+	})
+
+	t.Run("removal override preserves paths and prefixes", func(t *testing.T) {
+		t.Parallel()
+
+		manager, cfg, _ := newTestManager(t)
+		fake := &fakeSemantic{}
+		manager.semantic = fake
+		state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
+			result: indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:        "removal override content",
+					RelativePath:   "conv/conv-remove/0",
+					ConversationID: "conv-remove",
+					MessageIndex:   0,
+				}},
+				FileHash:        "fp-remove",
+				RemovalOverride: true,
+				RemovalPaths:    []string{"conv/conv-remove/legacy"},
+				RemovalPrefixes: []string{"conv/conv-remove/messages/"},
+			},
+			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/fallback/"}),
+		})
+		result := emptyOverrideResult()
+
+		outcome := manager.handleChangedFile(context.Background(), model.Job{ID: "job-removal-override"}, state, "conv-remove", &result)
+
+		if outcome.fallback || outcome.handled || !outcome.progressed {
+			t.Fatalf("outcome = %+v, want progressed without fallback or handled", outcome)
+		}
+		calls := fake.reindexCallsSnapshot()
+		if len(calls) != 1 {
+			t.Fatalf("Reindex calls = %v, want exactly one", calls)
+		}
+		assertRemovalEqual(t, calls[0].Removal, semantic.Removal{
+			Paths:    []string{"conv/conv-remove/legacy"},
+			Prefixes: []string{"conv/conv-remove/messages/"},
+		})
+	})
+
+	t.Run("empty chunks and empty removal progress without reindex", func(t *testing.T) {
+		t.Parallel()
+
+		manager, cfg, _ := newTestManager(t)
+		fake := &fakeSemantic{}
+		manager.semantic = fake
+		state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
+			result: indexer.OneFileResult{
+				Chunks:          nil,
+				FileHash:        "fp-zero",
+				RemovalOverride: true,
+				RemovalPaths:    nil,
+				RemovalPrefixes: nil,
+			},
+			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/conv-zero/"}),
+		})
+		result := emptyOverrideResult()
+
+		outcome := manager.handleChangedFile(context.Background(), model.Job{ID: "job-zero-override"}, state, "conv-zero", &result)
+
+		if outcome.fallback || outcome.handled || !outcome.progressed {
+			t.Fatalf("outcome = %+v, want progressed without fallback or handled", outcome)
+		}
+		if calls := fake.reindexCallsSnapshot(); len(calls) != 0 {
+			t.Fatalf("Reindex calls = %v, want none", calls)
+		}
+		if state.working["conv-zero"] != "fp-zero" {
+			t.Fatalf("working fingerprint = %q, want fp-zero", state.working["conv-zero"])
+		}
+		if result.IndexedFiles != 1 {
+			t.Fatalf("IndexedFiles = %d, want 1", result.IndexedFiles)
+		}
+	})
+}
+
+type oneFileResultOverrideSource struct {
+	result          indexer.OneFileResult
+	fallbackRemoval semantic.Removal
+	reuse           itemReuseSource
+}
+
+func (source oneFileResultOverrideSource) capture(context.Context) (merkle.Snapshot, error) {
+	return merkle.Snapshot{}, nil
+}
+
+func (source oneFileResultOverrideSource) indexOne(context.Context, string) (indexer.OneFileResult, error) {
+	return source.result, nil
+}
+
+func (source oneFileResultOverrideSource) removalFor([]string) semantic.Removal {
+	return source.fallbackRemoval
+}
+
+func (source oneFileResultOverrideSource) absencePolicy() absencePolicy {
+	return absenceRetain
+}
+
+func (source oneFileResultOverrideSource) reuseSource(string) itemReuseSource {
+	return source.reuse
+}
+
+func (source oneFileResultOverrideSource) unit() string {
+	return "document"
+}
+
+func overrideDeltaState(merkleDir string, source oneFileResultOverrideSource) deltaState {
+	return deltaState{
+		plan:         deltaPlan{},
+		snapshotPath: merkleDir + "/override-checkpoint-test.json",
+		working:      map[string]string{},
+		source:       source,
+		semantic:     true,
+		staging:      false,
+		reuse:        nil,
+		chunkCounts:  &chunkCounters{},
+	}
+}
+
+func emptyOverrideResult() indexer.Result {
+	return indexer.Result{
+		IndexedFiles:      0,
+		TotalChunks:       0,
+		Chunks:            []model.StoredChunk{},
+		FileHashes:        nil,
+		SkippedFiles:      []string{},
+		SkippedOversize:   0,
+		SkippedUnreadable: 0,
+	}
+}
+
+func assertReuseVector(t *testing.T, reuse map[string][]float32, key string, want []float32) {
+	t.Helper()
+
+	got, present := reuse[key]
+	if !present {
+		t.Fatalf("reuse missing key %q in %v", key, reuse)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("reuse[%q] = %v, want %v", key, got, want)
+	}
+	for index, gotValue := range got {
+		if gotValue != want[index] {
+			t.Fatalf("reuse[%q] = %v, want %v", key, got, want)
+		}
+	}
+}
+
+func assertRemovalEqual(t *testing.T, got semantic.Removal, want semantic.Removal) {
+	t.Helper()
+
+	assertStringSliceEqual(t, got.Paths, want.Paths)
+	assertStringSliceEqual(t, got.Prefixes, want.Prefixes)
+}
+
 // TestConversationIngestReuseLoadFailureFallsBackToFullEmbed proves a failed
 // reuse load does not fail the job: the conversation reindexes with a nil reuse
 // map, so every chunk embeds fresh, and the job still completes.

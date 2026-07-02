@@ -75,6 +75,7 @@ type reindexCall struct {
 	CodebasePath string
 	Chunks       int
 	Removed      []string
+	Removal      semantic.Removal
 }
 
 func (f *fakeSemantic) Available() bool { return !f.unavailable }
@@ -277,8 +278,9 @@ func (f *fakeSemantic) recordReindexReuse(chunks []model.StoredChunk, reuse map[
 }
 
 func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32) error {
+	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
-	f.reindexCalls = append(f.reindexCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(removal)})
+	f.reindexCalls = append(f.reindexCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval})
 	f.mu.Unlock()
 	f.recordReindexReuse(chunks, reuse)
 	if f.reindexWithReuse != nil {
@@ -294,8 +296,9 @@ func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks 
 }
 
 func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32) error {
+	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
-	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(removal)})
+	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval})
 	f.mu.Unlock()
 	f.recordReindexReuse(chunks, reuse)
 	if f.stageReindexWithReuse != nil {
@@ -321,6 +324,13 @@ func removalPaths(removal semantic.Removal) []string {
 	combined = append(combined, removal.Paths...)
 	combined = append(combined, removal.Prefixes...)
 	return combined
+}
+
+func copyRemoval(removal semantic.Removal) semantic.Removal {
+	return semantic.Removal{
+		Paths:    append([]string(nil), removal.Paths...),
+		Prefixes: append([]string(nil), removal.Prefixes...),
+	}
 }
 
 func (f *fakeSemantic) DeleteConversation(ctx context.Context, collectionName string, conversationID string) error {
