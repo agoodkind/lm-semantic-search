@@ -626,6 +626,11 @@ func diffConversationMessages(conversationID string, documents []model.Conversat
 	return diff
 }
 
+// addRemoval emits both the exact path and the slash-suffixed prefix for one
+// message. The pair is load-bearing: the exact path deletes a single-part
+// row, the slash prefix deletes multipart part rows across shape transitions,
+// and a bare prefix without the slash would like-match sibling indices
+// (conv/x/12 matches conv/x/120).
 func (diff *conversationMessageDiff) addRemoval(conversationID string, messageIndex int32) {
 	relativePath := conversationRelativePath(conversationID, messageIndex, 0, false)
 	diff.removalPaths = append(diff.removalPaths, relativePath)
