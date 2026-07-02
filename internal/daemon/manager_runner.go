@@ -98,6 +98,11 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) {
 		}
 		manager.runBootstrap(ctx, job, codeSource)
 	case jobOperationIndex:
+		reason := bootstrapReasonFirstIndex
+		if job.Forced {
+			reason = bootstrapReasonForcedReindex
+		}
+		manager.routeToBootstrap(ctx, job.ID, reason)
 		manager.runBootstrap(ctx, job, codeSource)
 	case jobOperationConversationIngest:
 		manager.runConversationIngest(ctx, job)
