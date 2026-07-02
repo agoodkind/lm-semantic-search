@@ -46,6 +46,9 @@ tool_for_compiler() {
     local suffix
     local candidate_basename
     local candidate
+    local triple
+    local arch
+    local resolved_compiler
 
     compiler="$(last_word "${CC}")"
     compiler_basename="$(basename "${compiler}")"
@@ -65,6 +68,23 @@ tool_for_compiler() {
             fi
         fi
     done
+
+    # osxcross names its cctools by full target triple (arm64-apple-darwin26.1-ar)
+    # and only aliases the clang wrappers with the o64/oa64 shorthand, so the
+    # suffix swap above misses them. Derive the triple from the compiler and
+    # search the compiler's own directory; the GNU ar fallback would build an
+    # archive whose index ld64 rejects ("archive has no table of contents").
+    triple="$("${compiler}" -print-target-triple 2>/dev/null || true)"
+    resolved_compiler="$(command -v "${compiler}" 2>/dev/null || true)"
+    if [[ -n "${triple}" && -n "${resolved_compiler}" ]]; then
+        arch="${triple%%-*}"
+        local -a triple_candidates
+        triple_candidates=( "$(dirname "${resolved_compiler}")/${arch}"-*-"${fallback_tool}" )
+        if [[ -e "${triple_candidates[0]}" ]]; then
+            printf '%s\n' "${triple_candidates[0]}"
+            return
+        fi
+    fi
 
     printf '%s\n' "${fallback_tool}"
 }
