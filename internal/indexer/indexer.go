@@ -122,23 +122,43 @@ func NewRunner() *Runner {
 	}
 }
 
-// processedFile is the per-file output of one splitter pass. Skipped=true
-// means the file's bytes are not valid UTF-8; Chunks and FileHash are then
-// empty and callers add the path to Result.SkippedFiles. Removed=true means
-// the file was absent on disk when the task ran, so the converge operation
-// for this path is a removal: callers delete its rows and drop it from the
-// snapshot rather than treating the absence as an error.
-type processedFile struct {
+// OneFileResult is the per-file output of one splitter pass. Skipped=true
+// means SkipReason names why no chunks were produced; callers route each
+// SkipReason into the matching Result counter. Removed=true means the file was
+// absent on disk when the task ran, so the converge operation for this path is
+// a removal: callers delete its rows and drop it from the snapshot rather than
+// treating the absence as an error. RemovalOverride true makes RemovalPaths and
+// RemovalPrefixes replace the caller's default removal; when both slices are
+// empty, the item deletes nothing.
+type OneFileResult struct {
 	Chunks     []model.StoredChunk
 	FileHash   string
 	Skipped    bool
 	SkipReason SkipReason
 	Removed    bool
+
+	RemovalOverride bool
+	RemovalPaths    []string
+	RemovalPrefixes []string
+	ReuseVectors    map[string][]float32
 }
 
-// OneFileResult mirrors the per-file accumulator output for callers that
-// drive their own iteration (the daemon's per-file delta loop).
-type OneFileResult = processedFile
+// processedFile mirrors OneFileResult for the runner's internal accumulator.
+type processedFile = OneFileResult
+
+func newProcessedFile(chunks []model.StoredChunk, fileHash string, skipped bool, skipReason SkipReason, removed bool) processedFile {
+	return processedFile{
+		Chunks:          chunks,
+		FileHash:        fileHash,
+		Skipped:         skipped,
+		SkipReason:      skipReason,
+		Removed:         removed,
+		RemovalOverride: false,
+		RemovalPaths:    nil,
+		RemovalPrefixes: nil,
+		ReuseVectors:    nil,
+	}
+}
 
 // IndexOne reads, gates, and splits a single file. The daemon's per-file
 // delta loop calls this so the merkle snapshot can be flushed after each
@@ -150,9 +170,9 @@ func (runner *Runner) IndexOne(ctx context.Context, resolver *indexability.Resol
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent; converging to removal", "path", fullPath)
-			return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, nil
+			return newProcessedFile(nil, "", false, SkipNone, true), nil
 		}
-		return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, err
+		return newProcessedFile(nil, "", false, SkipNone, false), err
 	}
 	if !keep {
 		return statResult, nil
@@ -161,14 +181,14 @@ func (runner *Runner) IndexOne(ctx context.Context, resolver *indexability.Resol
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent; converging to removal", "path", fullPath)
-			return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, nil
+			return newProcessedFile(nil, "", false, SkipNone, true), nil
 		}
 		if readErrorMeansRemoved(fullPath) {
 			slog.DebugContext(ctx, "source path is no longer a regular file; converging to removal", "path", fullPath)
-			return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, nil
+			return newProcessedFile(nil, "", false, SkipNone, true), nil
 		}
 		slog.ErrorContext(ctx, "read source file failed", "path", fullPath, "err", err)
-		return OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, fmt.Errorf("read source file %s: %w", fullPath, err)
+		return newProcessedFile(nil, "", false, SkipNone, false), fmt.Errorf("read source file %s: %w", fullPath, err)
 	}
 	return runner.processFile(ctx, resolver, fullPath, relativePath, data, cfg.SplitterType)
 }
@@ -186,23 +206,23 @@ func (runner *Runner) statEligibility(ctx context.Context, resolver *indexabilit
 		if !errors.Is(err, os.ErrNotExist) {
 			slog.ErrorContext(ctx, "stat source file failed", "path", fullPath, "err", err)
 		}
-		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("stat source file %s: %w", fullPath, err)
+		return newProcessedFile(nil, "", false, SkipNone, false), false, fmt.Errorf("stat source file %s: %w", fullPath, err)
 	}
 	decision := resolver.Decide(ctx, codebaseID, root, filepath.ToSlash(relativePath), info)
 	if decision.Indexed {
-		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, true, nil
+		return newProcessedFile(nil, "", false, SkipNone, false), true, nil
 	}
 	switch decision.Reason {
 	case indexability.ReasonOversize:
 		slog.WarnContext(ctx, "indexer.skipped_oversize", "path", relativePath, "bytes", info.Size())
-		return processedFile{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipOversize, Removed: false}, false, nil
+		return newProcessedFile(nil, "", true, SkipOversize, false), false, nil
 	case indexability.ReasonNotRegular, indexability.ReasonOutOfScope, indexability.ReasonIgnored, indexability.ReasonSubmodule:
 		slog.DebugContext(ctx, "source path is not indexable; converging to removal", "path", fullPath, "reason", string(decision.Reason))
-		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: true}, false, nil
+		return newProcessedFile(nil, "", false, SkipNone, true), false, nil
 	case indexability.Keep, indexability.ReasonNonUTF8:
-		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("unexpected stat-stage indexability reason %q for %s", decision.Reason, fullPath)
+		return newProcessedFile(nil, "", false, SkipNone, false), false, fmt.Errorf("unexpected stat-stage indexability reason %q for %s", decision.Reason, fullPath)
 	default:
-		return processedFile{Chunks: nil, FileHash: "", Skipped: false, SkipReason: SkipNone, Removed: false}, false, fmt.Errorf("unknown indexability reason %q for %s", decision.Reason, fullPath)
+		return newProcessedFile(nil, "", false, SkipNone, false), false, fmt.Errorf("unknown indexability reason %q for %s", decision.Reason, fullPath)
 	}
 }
 
@@ -224,7 +244,7 @@ func readErrorMeansRemoved(path string) bool {
 func (runner *Runner) processFile(ctx context.Context, resolver *indexability.Resolver, fullPath string, relativePath string, data []byte, splitterType string) (processedFile, error) {
 	if !resolver.DecideContent(data).Indexed {
 		slog.WarnContext(ctx, "indexer.skipped_invalid_utf8", "path", relativePath, "bytes", len(data))
-		return processedFile{Chunks: nil, FileHash: "", Skipped: true, SkipReason: SkipUnreadable, Removed: false}, nil
+		return newProcessedFile(nil, "", true, SkipUnreadable, false), nil
 	}
 	splitResult, err := runner.dispatcher.SplitFileWithType(ctx, fullPath, data, splitterType)
 	if err != nil {
@@ -249,7 +269,7 @@ func (runner *Runner) processFile(ctx context.Context, resolver *indexability.Re
 			Score:                0,
 		})
 	}
-	return processedFile{Chunks: chunks, FileHash: digestFileBytes(data), Skipped: false, SkipReason: SkipNone, Removed: false}, nil
+	return newProcessedFile(chunks, digestFileBytes(data), false, SkipNone, false), nil
 }
 
 // indexAccumulator collects per-file output across one indexing pass.

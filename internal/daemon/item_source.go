@@ -192,18 +192,42 @@ func (source conversationItemSource) indexOne(_ context.Context, conversationID 
 		// cannot be embedded this pass. Skip it as pending without advancing the
 		// checkpoint, so the next manifest sync still classifies it changed and clyde
 		// resends. Pending is transient, distinct from an unreadable real error.
-		return indexer.OneFileResult{Chunks: nil, FileHash: "", Skipped: true, SkipReason: indexer.SkipPending, Removed: false}, nil
+		return indexer.OneFileResult{
+			Chunks:          nil,
+			FileHash:        "",
+			Skipped:         true,
+			SkipReason:      indexer.SkipPending,
+			Removed:         false,
+			RemovalOverride: false,
+			RemovalPaths:    nil,
+			RemovalPrefixes: nil,
+			ReuseVectors:    nil,
+		}, nil
 	}
 	chunks, err := conversationDocumentsToStoredChunks(documents)
 	if err != nil {
-		return indexer.OneFileResult{Chunks: nil, FileHash: "", Skipped: false, SkipReason: indexer.SkipNone, Removed: false}, err
+		return indexer.OneFileResult{
+			Chunks:          nil,
+			FileHash:        "",
+			Skipped:         false,
+			SkipReason:      indexer.SkipNone,
+			Removed:         false,
+			RemovalOverride: false,
+			RemovalPaths:    nil,
+			RemovalPrefixes: nil,
+			ReuseVectors:    nil,
+		}, err
 	}
 	return indexer.OneFileResult{
-		Chunks:     chunks,
-		FileHash:   source.manifest[conversationID],
-		Skipped:    false,
-		SkipReason: indexer.SkipNone,
-		Removed:    false,
+		Chunks:          chunks,
+		FileHash:        source.manifest[conversationID],
+		Skipped:         false,
+		SkipReason:      indexer.SkipNone,
+		Removed:         false,
+		RemovalOverride: false,
+		RemovalPaths:    nil,
+		RemovalPrefixes: nil,
+		ReuseVectors:    nil,
 	}, nil
 }
 
