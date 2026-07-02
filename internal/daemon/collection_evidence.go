@@ -13,6 +13,11 @@ type collectionEvidence struct {
 	nameSource string
 }
 
+// probeCollectionEvidence owns the routing invariant: existence and row
+// evidence is judged against the STORED codebase.CollectionName whenever the
+// registry has one, and a derived name is only a fallback for untracked
+// paths. Store errors stay Unknown, and Unknown never routes a job to
+// bootstrap, so a transient Milvus failure can never trigger a full rebuild.
 func (manager *Manager) probeCollectionEvidence(ctx context.Context, canonicalPath string, caller string) collectionEvidence {
 	evidence := collectionEvidence{
 		presence:   collectionPresenceUnknown,
@@ -65,6 +70,10 @@ func (manager *Manager) probeCollectionEvidence(ctx context.Context, canonicalPa
 	return evidence
 }
 
+// storedCollectionNameForPath prefers the registry's persisted collection
+// name because it is the name rows were actually written under; deriving
+// from the path can diverge from it, and a divergence must never be judged
+// as a missing collection.
 func (manager *Manager) storedCollectionNameForPath(canonicalPath string) string {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()

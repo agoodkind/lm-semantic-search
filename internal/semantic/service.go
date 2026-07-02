@@ -536,6 +536,9 @@ func (service *Service) InspectCollection(ctx context.Context, collectionName st
 	return CollectionFacts{Exists: true, Rows: rows, RowsKnown: true}, nil
 }
 
+// collectionExistsWithUnknownRows keeps Exists true when only the row count
+// failed, because a count error must never demote a Present collection: a
+// false Missing verdict is what routes callers into a full rebuild.
 func collectionExistsWithUnknownRows() (CollectionFacts, error) {
 	return CollectionFacts{Exists: true, Rows: 0, RowsKnown: false}, nil
 }
