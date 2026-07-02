@@ -24,7 +24,7 @@ func TestIndexUsesRequestedLangchainSplitter(t *testing.T) {
 	}
 
 	runner := NewRunner()
-	result, err := runner.Index(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, model.IndexConfig{
+	result, err := runner.Index(context.Background(), indexability.NewResolver(nil, nil), "cb", tempDirectory, model.IndexConfig{
 		SplitterType:      "langchain",
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
@@ -57,7 +57,7 @@ func TestIndexSkipsInvalidUTF8File(t *testing.T) {
 	}
 
 	runner := NewRunner()
-	result, err := runner.Index(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, model.IndexConfig{
+	result, err := runner.Index(context.Background(), indexability.NewResolver(nil, nil), "cb", tempDirectory, model.IndexConfig{
 		SplitterType:      "langchain",
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
@@ -94,7 +94,7 @@ func TestIndexFilesSkipsInvalidUTF8File(t *testing.T) {
 	}
 
 	runner := NewRunner()
-	result, err := runner.IndexFiles(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, []string{"valid.go", "invalid.go"}, model.IndexConfig{
+	result, err := runner.IndexFiles(context.Background(), indexability.NewResolver(nil, nil), "cb", tempDirectory, []string{"valid.go", "invalid.go"}, model.IndexConfig{
 		SplitterType:      "langchain",
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
@@ -121,7 +121,7 @@ func TestIndexOneReportsRemovedForMissingFile(t *testing.T) {
 
 	tempDirectory := t.TempDir()
 	runner := NewRunner()
-	result, err := runner.IndexOne(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, "gone.go", model.IndexConfig{
+	result, err := runner.IndexOne(context.Background(), indexability.NewResolver(nil, nil), "cb", tempDirectory, "gone.go", model.IndexConfig{
 		SplitterType:      "langchain",
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
@@ -152,7 +152,7 @@ func TestIndexFilesExcludesMissingFile(t *testing.T) {
 	}
 
 	runner := NewRunner()
-	result, err := runner.IndexFiles(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, []string{"valid.go", "gone.go"}, model.IndexConfig{
+	result, err := runner.IndexFiles(context.Background(), indexability.NewResolver(nil, nil), "cb", tempDirectory, []string{"valid.go", "gone.go"}, model.IndexConfig{
 		SplitterType:      "langchain",
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
@@ -165,6 +165,46 @@ func TestIndexFilesExcludesMissingFile(t *testing.T) {
 	}
 	if _, found := result.FileHashes["gone.go"]; found {
 		t.Fatal("FileHashes contains gone.go; a vanished file must not be recorded as indexed")
+	}
+}
+
+func TestIndexOneReportsRemovedForDefaultSubmoduleFile(t *testing.T) {
+	tempDirectory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDirectory, ".gitmodules"), []byte("[submodule \"lib\"]\n\tpath = extern/lib\n\turl = ../lib.git\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	moduleGitDir := filepath.Join(tempDirectory, ".git", "modules", "extern", "lib")
+	if err := os.MkdirAll(moduleGitDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleGitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	submoduleDir := filepath.Join(tempDirectory, "extern", "lib")
+	if err := os.MkdirAll(submoduleDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(submoduleDir, ".git"), []byte("gitdir: "+moduleGitDir+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(submoduleDir, "lib.go"), []byte("package lib\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	runner := NewRunner()
+	result, err := runner.IndexOne(context.Background(), indexability.NewResolver(nil, nil), "cb", tempDirectory, filepath.Join("extern", "lib", "lib.go"), model.IndexConfig{
+		SplitterType:      "langchain",
+		SplitterChunkSize: 1000,
+		SplitterOverlap:   200,
+	})
+	if err != nil {
+		t.Fatalf("IndexOne returned error: %v", err)
+	}
+	if !result.Removed {
+		t.Fatal("Removed = false, want true for a file inside a default-excluded submodule")
+	}
+	if result.Skipped {
+		t.Fatal("Skipped = true, want false; a submodule exclusion is a removal")
 	}
 }
 
@@ -194,7 +234,7 @@ func TestIndexOneAndMerkleCaptureAgreeOnEligibleFiles(t *testing.T) {
 		SplitterChunkSize: 1000,
 		SplitterOverlap:   200,
 	}
-	snapshot, err := merkle.Capture(context.Background(), indexability.NewResolver(nil), "cb", tempDirectory, config)
+	snapshot, err := merkle.Capture(context.Background(), indexability.NewResolver(nil, nil), "cb", tempDirectory, config)
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}
@@ -208,7 +248,7 @@ func TestIndexOneAndMerkleCaptureAgreeOnEligibleFiles(t *testing.T) {
 		"linked-dir.go",
 	}
 	indexerKept := map[string]string{}
-	resolver := indexability.NewResolver(nil)
+	resolver := indexability.NewResolver(nil, nil)
 	for _, relativePath := range relativePaths {
 		result, indexErr := runner.IndexOne(context.Background(), resolver, "cb", tempDirectory, relativePath, config)
 		if indexErr != nil {

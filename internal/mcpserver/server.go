@@ -129,6 +129,7 @@ func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMod
 			mcp.WithBoolean("force", mcp.Description("force reindex even if already indexed")),
 			mcp.WithString("splitter", mcp.Description("splitter type, typically ast")),
 			mcp.WithArray("ignorePatterns", mcp.Description("extra ignore patterns to exclude"), mcp.WithStringItems()),
+			mcp.WithArray("includeSubmodules", mcp.Description("submodule names or paths to include"), mcp.WithStringItems()),
 			mcp.WithBoolean("wait", mcp.Description("block this tool call until the indexing job reaches a terminal state (completed, failed, or canceled)")),
 			mcp.WithNumber("wait_timeout_seconds", mcp.Description("max seconds to wait when wait=true; on timeout the daemon job keeps running and the tool returns the current progress (default 300)")),
 		),
@@ -138,11 +139,12 @@ func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMod
 				return errResult, nil
 			}
 			startRequest := &pb.StartIndexRequest{
-				Path:           absolutePath,
-				Force:          req.GetBool("force", false),
-				IgnorePatterns: req.GetStringSlice("ignorePatterns", []string{}),
-				Splitter:       &pb.SplitterConfig{Type: req.GetString("splitter", "")},
-				Client:         mcpClientInfo(),
+				Path:              absolutePath,
+				Force:             req.GetBool("force", false),
+				IgnorePatterns:    req.GetStringSlice("ignorePatterns", []string{}),
+				IncludeSubmodules: req.GetStringSlice("includeSubmodules", []string{}),
+				Splitter:          &pb.SplitterConfig{Type: req.GetString("splitter", "")},
+				Client:            mcpClientInfo(),
 			}
 			if !req.GetBool("wait", false) {
 				return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {

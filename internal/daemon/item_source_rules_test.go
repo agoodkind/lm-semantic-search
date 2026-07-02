@@ -35,7 +35,7 @@ func TestCodeItemSourceCaptureExcludesIgnoredFiles(t *testing.T) {
 		t.Fatalf("write kept.go: %v", err)
 	}
 
-	source := newCodeItemSource(nil, indexability.NewResolver(nil), "cb", tempDir, model.IndexConfig{})
+	source := newCodeItemSource(nil, indexability.NewResolver(nil, nil), "cb", tempDir, model.IndexConfig{})
 
 	snapshot, err := source.capture(context.Background())
 	if err != nil {

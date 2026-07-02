@@ -34,6 +34,21 @@ func writeFile(t *testing.T, path string, content string) {
 	}
 }
 
+func makeGitRoot(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, filepath.Join(root, ".git", "HEAD"), "ref: refs/heads/main\n")
+}
+
+func makeSubmodule(t *testing.T, root string, relPath string, name string) {
+	t.Helper()
+	makeGitRoot(t, root)
+	gitmodules := "[submodule \"" + name + "\"]\n\tpath = " + relPath + "\n\turl = ../" + name + ".git\n"
+	writeFile(t, filepath.Join(root, ".gitmodules"), gitmodules)
+	moduleGitDir := filepath.Join(root, ".git", "modules", filepath.FromSlash(relPath))
+	writeFile(t, filepath.Join(moduleGitDir, "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(root, filepath.FromSlash(relPath), ".git"), "gitdir: "+moduleGitDir+"\n")
+}
+
 func statInfo(t *testing.T, path string) os.FileInfo {
 	t.Helper()
 	info, err := os.Stat(path)
@@ -58,7 +73,7 @@ func TestDecideNestedGitignoreScopesToSubdir(t *testing.T) {
 	writeFile(t, filepath.Join(root, "sub", "b.go"), "package b\n")
 	writeFile(t, filepath.Join(root, "a.tmp"), "y")
 
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 	ctx := context.Background()
 
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "sub/a.tmp", statInfo(t, filepath.Join(root, "sub", "a.tmp"))), false, ReasonIgnored)
@@ -74,7 +89,7 @@ func TestDecideNegationReincludesFile(t *testing.T) {
 	writeFile(t, filepath.Join(root, "keep.log"), "x")
 	writeFile(t, filepath.Join(root, "skip.log"), "y")
 
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 	ctx := context.Background()
 
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "keep.log", statInfo(t, filepath.Join(root, "keep.log"))), true, Keep)
@@ -87,7 +102,7 @@ func TestDecideDirectoryExclusionWinsOverReinclude(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".gitignore"), "build/\n!build/keep.txt\n")
 	writeFile(t, filepath.Join(root, "build", "keep.txt"), "x")
 
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 	ctx := context.Background()
 
 	// keep.txt cannot be re-included because its parent directory is excluded.
@@ -102,7 +117,7 @@ func TestDecideHonorsInfoExclude(t *testing.T) {
 	writeFile(t, filepath.Join(root, "secret.txt"), "x")
 	writeFile(t, filepath.Join(root, "main.go"), "package main\n")
 
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 	ctx := context.Background()
 
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "secret.txt", statInfo(t, filepath.Join(root, "secret.txt"))), false, ReasonIgnored)
@@ -134,7 +149,7 @@ func TestDecideLinkedWorktreeResolvesInfoExcludeViaCommonDir(t *testing.T) {
 	isolateHome(t)
 	_, worktreeDir := makeNestedWorktree(t)
 
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 	ctx := context.Background()
 
 	// The linked worktree's .git is a file, so info/exclude lives under the
@@ -147,7 +162,7 @@ func TestDecideNestedSameRepoWorktreeIsOutOfScope(t *testing.T) {
 	isolateHome(t)
 	mainRoot, worktreeDir := makeNestedWorktree(t)
 
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 	ctx := context.Background()
 
 	relPath := ".claude/worktrees/wt/feature.go"
@@ -163,7 +178,7 @@ func TestDecideContentDenylistAndStatGates(t *testing.T) {
 		t.Fatalf("mkdir src: %v", err)
 	}
 
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 	ctx := context.Background()
 
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "image.png", statInfo(t, filepath.Join(root, "image.png"))), false, ReasonIgnored)
@@ -176,7 +191,7 @@ func TestDecideContentDenylistAndStatGates(t *testing.T) {
 // reason, so callers route the content stage through the resolver.
 func TestDecideContentGate(t *testing.T) {
 	t.Parallel()
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 
 	assertDecision(t, resolver.DecideContent([]byte("package main\n")), true, Keep)
 	assertDecision(t, resolver.DecideContent([]byte{'g', 'o', 0xff}), false, ReasonNonUTF8)
@@ -197,8 +212,8 @@ func TestIgnoreSourcesListsReadOrderAndPrunes(t *testing.T) {
 	writeFile(t, filepath.Join(root, "sub", "keep.go"), "package sub\n")
 	writeFile(t, filepath.Join(root, "ignored_dir", ".gitignore"), "*.x\n")
 
-	resolver := NewResolver(nil)
-	sources := resolver.IgnoreSources(context.Background(), root)
+	resolver := NewResolver(nil, nil)
+	sources := resolver.IgnoreSources(context.Background(), "cb", root)
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -247,7 +262,7 @@ func TestDecideExcludesGitDirAsOutOfScope(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".gitignore"), "secret/\n")
 	writeFile(t, filepath.Join(root, "pkg", "main.go"), "package pkg\n")
 
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 	ctx := context.Background()
 
 	// .git content is git metadata and is never indexed, even though .gitignore
@@ -264,7 +279,7 @@ func TestDecideOversizeRejectsLargeFile(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "big.txt"), "0123456789")
 
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 	ctx := context.Background()
 
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "big.txt", statInfo(t, filepath.Join(root, "big.txt"))), false, ReasonOversize)
@@ -276,7 +291,7 @@ func TestInvalidateRulesPicksUpDiskChange(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".gitignore"), "*.tmp\n")
 	writeFile(t, filepath.Join(root, "x.tmp"), "x")
 
-	resolver := NewResolver(nil)
+	resolver := NewResolver(nil, nil)
 	ctx := context.Background()
 
 	// First call resolves and caches the rule that ignores *.tmp.
@@ -336,7 +351,7 @@ func TestResolverAppliesCustomOverrides(t *testing.T) {
 			return nil
 		}
 		return overrides
-	})
+	}, nil)
 	ctx := context.Background()
 	secretInfo := statInfo(t, filepath.Join(root, "custom.secret"))
 
@@ -378,9 +393,159 @@ func TestResolverCustomOverrideBeatsReinclude(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".gitignore"), "*.log\n!keep.log\n")
 	writeFile(t, filepath.Join(root, "keep.log"), "x")
 
-	resolver := NewResolver(func(string) []string { return []string{"keep.log"} })
+	resolver := NewResolver(func(string) []string { return []string{"keep.log"} }, nil)
 	ctx := context.Background()
 
 	// Without the override keep.log would be re-included; the override wins.
 	assertDecision(t, resolver.Decide(ctx, "cb", root, "keep.log", statInfo(t, filepath.Join(root, "keep.log"))), false, ReasonIgnored)
+}
+
+func TestDecideExcludesDeclaredSubmoduleByDefault(t *testing.T) {
+	isolateHome(t)
+	root := t.TempDir()
+	makeSubmodule(t, root, "third_party/lib", "lib")
+	writeFile(t, filepath.Join(root, "third_party", "lib", "lib.go"), "package lib\n")
+
+	resolver := NewResolver(nil, nil)
+	ctx := context.Background()
+
+	assertDecision(t, resolver.Decide(ctx, "cb", root, "third_party/lib/lib.go", statInfo(t, filepath.Join(root, "third_party", "lib", "lib.go"))), false, ReasonSubmodule)
+	if !resolver.Ignored(ctx, "cb", root, "third_party/lib/lib.go", false) {
+		t.Fatal("Ignored returned false for a file inside a default-excluded submodule")
+	}
+}
+
+func TestDecideAllowsSubmoduleByName(t *testing.T) {
+	isolateHome(t)
+	root := t.TempDir()
+	makeSubmodule(t, root, "third_party/lib", "lib")
+	writeFile(t, filepath.Join(root, "third_party", "lib", ".gitignore"), "ignored.go\n")
+	writeFile(t, filepath.Join(root, "third_party", "lib", "lib.go"), "package lib\n")
+	writeFile(t, filepath.Join(root, "third_party", "lib", "ignored.go"), "package lib\n")
+
+	resolver := NewResolver(nil, func(codebaseID string) []string {
+		if codebaseID != "cb" {
+			return nil
+		}
+		return []string{"lib"}
+	})
+	ctx := context.Background()
+
+	assertDecision(t, resolver.Decide(ctx, "cb", root, "third_party/lib/lib.go", statInfo(t, filepath.Join(root, "third_party", "lib", "lib.go"))), true, Keep)
+	assertDecision(t, resolver.Decide(ctx, "cb", root, "third_party/lib/ignored.go", statInfo(t, filepath.Join(root, "third_party", "lib", "ignored.go"))), false, ReasonIgnored)
+}
+
+func TestDecideAllowsSubmoduleByPath(t *testing.T) {
+	isolateHome(t)
+	root := t.TempDir()
+	makeSubmodule(t, root, "third_party/lib", "lib")
+	writeFile(t, filepath.Join(root, "third_party", "lib", "lib.go"), "package lib\n")
+
+	resolver := NewResolver(nil, func(string) []string { return []string{"third_party/lib"} })
+	ctx := context.Background()
+
+	assertDecision(t, resolver.Decide(ctx, "cb", root, "third_party/lib/lib.go", statInfo(t, filepath.Join(root, "third_party", "lib", "lib.go"))), true, Keep)
+}
+
+func TestNormalizeSubmoduleTokenRejectsRootEscapesAndAbsolutePaths(t *testing.T) {
+	cases := []string{
+		"a/..",
+		"..",
+		"../outside",
+		"/tmp/lib",
+	}
+	for _, value := range cases {
+		if got := normalizeSubmoduleToken(value); got != "" {
+			t.Fatalf("normalizeSubmoduleToken(%q) = %q, want empty", value, got)
+		}
+	}
+}
+
+func TestParseGitmodulesIgnoresPathOutsideSubmoduleSection(t *testing.T) {
+	root := t.TempDir()
+	gitmodulesPath := filepath.Join(root, ".gitmodules")
+	writeFile(t, gitmodulesPath, "[core]\n\tpath = not-a-submodule\n[submodule \"lib\"]\n\tpath = third_party/lib\n")
+
+	decls := parseGitmodules(context.Background(), gitmodulesPath, "")
+	if len(decls) != 1 {
+		t.Fatalf("parseGitmodules returned %d decls, want 1: %+v", len(decls), decls)
+	}
+	if decls[0].name != "lib" || decls[0].path != "third_party/lib" {
+		t.Fatalf("parseGitmodules decl = %+v, want lib at third_party/lib", decls[0])
+	}
+}
+
+func TestDecideRootSubmoduleStillIndexes(t *testing.T) {
+	isolateHome(t)
+	parent := t.TempDir()
+	root := filepath.Join(parent, "modules", "lib")
+	moduleGitDir := filepath.Join(parent, ".git", "modules", "lib")
+	writeFile(t, filepath.Join(moduleGitDir, "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(root, ".git"), "gitdir: "+moduleGitDir+"\n")
+	writeFile(t, filepath.Join(root, "lib.go"), "package lib\n")
+
+	resolver := NewResolver(nil, nil)
+	ctx := context.Background()
+
+	assertDecision(t, resolver.Decide(ctx, "cb", root, "lib.go", statInfo(t, filepath.Join(root, "lib.go"))), true, Keep)
+}
+
+func TestIgnoreSourcesIncludesGitmodulesAndPrunesDefaultSubmodule(t *testing.T) {
+	isolateHome(t)
+	root := t.TempDir()
+	makeSubmodule(t, root, "third_party/lib", "lib")
+	writeFile(t, filepath.Join(root, "third_party", "lib", ".gitignore"), "*.tmp\n")
+
+	resolver := NewResolver(nil, nil)
+	sources := resolver.IgnoreSources(context.Background(), "cb", root)
+
+	if !slices.Contains(sources, filepath.Join(root, ".gitmodules")) {
+		t.Fatalf("IgnoreSources = %v, want root .gitmodules", sources)
+	}
+	if slices.Contains(sources, filepath.Join(root, "third_party", "lib", ".gitignore")) {
+		t.Fatalf("IgnoreSources = %v, want default-excluded submodule .gitignore pruned", sources)
+	}
+}
+
+// TestIgnoreSourcesIncludesAllowlistedSubmoduleGitignore proves IgnoreSources
+// lists the .gitignore inside a submodule the codebase includes via the
+// allowlist, so the periodic CheckSources backstop watches it. Without this the
+// resolver cache could stay stale after a .gitignore edit inside an included
+// submodule when the watcher is off or misses the event.
+func TestIgnoreSourcesIncludesAllowlistedSubmoduleGitignore(t *testing.T) {
+	isolateHome(t)
+	root := t.TempDir()
+	makeSubmodule(t, root, "third_party/lib", "lib")
+	writeFile(t, filepath.Join(root, "third_party", "lib", ".gitignore"), "*.tmp\n")
+
+	resolver := NewResolver(nil, func(string) []string { return []string{"third_party/lib"} })
+	sources := resolver.IgnoreSources(context.Background(), "cb", root)
+
+	if !slices.Contains(sources, filepath.Join(root, "third_party", "lib", ".gitignore")) {
+		t.Fatalf("IgnoreSources = %v, want allowlisted submodule .gitignore included", sources)
+	}
+}
+
+// TestIgnoreSourcesReadsGitmodulesOnlyAtRoots proves IgnoreSources consults
+// .gitmodules only at the codebase root (and allowlisted submodule roots), not
+// in every walked directory. Git itself reads .gitmodules only at a repo root,
+// and listing a candidate per directory did a wasted read per dir and doubled
+// the watched-source set, so a stray .gitmodules in an ordinary subdirectory is
+// neither parsed nor listed.
+func TestIgnoreSourcesReadsGitmodulesOnlyAtRoots(t *testing.T) {
+	isolateHome(t)
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".gitmodules"), "[submodule \"lib\"]\n\tpath = third_party/lib\n")
+	writeFile(t, filepath.Join(root, "pkg", "code.go"), "package pkg\n")
+	writeFile(t, filepath.Join(root, "pkg", ".gitmodules"), "[submodule \"stray\"]\n\tpath = nested\n")
+
+	resolver := NewResolver(nil, nil)
+	sources := resolver.IgnoreSources(context.Background(), "cb", root)
+
+	if !slices.Contains(sources, filepath.Join(root, ".gitmodules")) {
+		t.Fatalf("IgnoreSources = %v, want root .gitmodules listed", sources)
+	}
+	if slices.Contains(sources, filepath.Join(root, "pkg", ".gitmodules")) {
+		t.Fatalf("IgnoreSources = %v, want stray subdirectory .gitmodules not parsed or listed", sources)
+	}
 }

@@ -58,6 +58,7 @@ type Config struct {
 	// Stored document vectors are embedded bare and stay valid.
 	QueryInstructionPrefix string
 	CustomIgnorePatterns   []string
+	IncludeSubmodules      []string
 	MilvusAddress          string
 	MilvusToken            string
 	CollectionNameOverride string
@@ -174,6 +175,7 @@ func Default() (Config, error) {
 		OpenAIBaseURL:             envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),
 		QueryInstructionPrefix:    queryPrefix,
 		CustomIgnorePatterns:      parseCommaSeparated(os.Getenv("CUSTOM_IGNORE_PATTERNS")),
+		IncludeSubmodules:         parseCommaSeparated(os.Getenv("CLAUDE_CONTEXT_INCLUDE_SUBMODULES")),
 		MilvusAddress:             envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),
 		MilvusToken:               envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),
 		CollectionNameOverride:    envOrDefault("CODE_CHUNKS_COLLECTION_NAME_OVERRIDE", fileConfig.CollectionNameOverride),

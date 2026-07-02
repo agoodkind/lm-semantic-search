@@ -69,7 +69,7 @@ func TestDiscoverRoutesIgnoreDecisionsThroughResolver(t *testing.T) {
 	writeFile(t, filepath.Join(tempDir, "kept.go"), "package x\n")
 	writeFile(t, filepath.Join(tempDir, "scratch.tmp"), "x\n")
 
-	result, err := Discover(context.Background(), indexability.NewResolver(nil), "cb", tempDir)
+	result, err := Discover(context.Background(), indexability.NewResolver(nil, nil), "cb", tempDir)
 	if err != nil {
 		t.Fatalf("Discover returned error: %v", err)
 	}
@@ -94,15 +94,14 @@ func TestDiscoverDoesNotDescendIntoIgnoredDirectories(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(tempDir, "sealed"), 0o755) })
 
-	if _, err := Discover(context.Background(), indexability.NewResolver(nil), "cb", tempDir); err != nil {
+	if _, err := Discover(context.Background(), indexability.NewResolver(nil, nil), "cb", tempDir); err != nil {
 		t.Fatalf("Discover failed on a pruned unreadable directory: %v", err)
 	}
 }
 
 // TestDiscoverExcludesNestedSameRepoWorktree proves the walk stops at a nested
-// directory that is a git worktree of the same repository as the codebase
-// root, so worktree files never leak into the parent index, while a submodule
-// (a different common dir) keeps today's behavior of being included.
+// directory that is a git worktree of the same repository as the codebase root,
+// so worktree files never leak into the parent index.
 func TestDiscoverExcludesNestedSameRepoWorktree(t *testing.T) {
 	isolateHome(t)
 	repo := filepath.Join(t.TempDir(), "repo")
@@ -125,7 +124,7 @@ func TestDiscoverExcludesNestedSameRepoWorktree(t *testing.T) {
 	writeFile(t, filepath.Join(repo, "extern", "lib", ".git"), "gitdir: "+moduleGitDir+"\n")
 	writeFile(t, filepath.Join(repo, "extern", "lib", "sub.go"), "package lib\n")
 
-	result, err := Discover(context.Background(), indexability.NewResolver(nil), "cb", repo)
+	result, err := Discover(context.Background(), indexability.NewResolver(nil, nil), "cb", repo)
 	if err != nil {
 		t.Fatalf("Discover returned error: %v", err)
 	}
@@ -142,13 +141,35 @@ func TestDiscoverExcludesNestedSameRepoWorktree(t *testing.T) {
 	if !got["main.go"] {
 		t.Errorf("main.go missing from discovery; got %v", got)
 	}
-	if !got["extern/lib/sub.go"] {
-		t.Errorf("submodule file extern/lib/sub.go should be included (today's behavior); got %v", got)
-	}
 	if got["wt/feature.go"] {
 		t.Errorf("nested worktree file wt/feature.go must be excluded; got %v", got)
 	}
 	if got["wt/.git"] {
 		t.Errorf("nested worktree .git pointer must never be indexed; got %v", got)
+	}
+}
+
+func TestDiscoverPrunesSubmoduleByDefault(t *testing.T) {
+	isolateHome(t)
+	repo := filepath.Join(t.TempDir(), "repo")
+	writeFile(t, filepath.Join(repo, ".git", "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(repo, ".gitmodules"), "[submodule \"lib\"]\n\tpath = extern/lib\n\turl = ../lib.git\n")
+	writeFile(t, filepath.Join(repo, "main.go"), "package main\n")
+
+	moduleGitDir := filepath.Join(repo, ".git", "modules", "extern", "lib")
+	writeFile(t, filepath.Join(moduleGitDir, "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(repo, "extern", "lib", ".git"), "gitdir: "+moduleGitDir+"\n")
+	writeFile(t, filepath.Join(repo, "extern", "lib", ".gitignore"), "*.tmp\n")
+	writeFile(t, filepath.Join(repo, "extern", "lib", "sub.go"), "package lib\n")
+
+	result, err := Discover(context.Background(), indexability.NewResolver(nil, nil), "cb", repo)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+
+	got := relativeFiles(t, repo, result.Files)
+	want := []string{".gitmodules", "main.go"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Discover files = %v, want %v", got, want)
 	}
 }

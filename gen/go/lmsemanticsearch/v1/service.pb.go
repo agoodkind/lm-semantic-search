@@ -378,6 +378,7 @@ type IndexConfig struct {
 	EmbeddingDimension int32                  `protobuf:"varint,8,opt,name=embedding_dimension,json=embeddingDimension,proto3" json:"embedding_dimension,omitempty"`
 	VectorBackend      string                 `protobuf:"bytes,9,opt,name=vector_backend,json=vectorBackend,proto3" json:"vector_backend,omitempty"`
 	Hybrid             bool                   `protobuf:"varint,10,opt,name=hybrid,proto3" json:"hybrid,omitempty"`
+	IncludeSubmodules  []string               `protobuf:"bytes,11,rep,name=include_submodules,json=includeSubmodules,proto3" json:"include_submodules,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -480,6 +481,13 @@ func (x *IndexConfig) GetHybrid() bool {
 		return x.Hybrid
 	}
 	return false
+}
+
+func (x *IndexConfig) GetIncludeSubmodules() []string {
+	if x != nil {
+		return x.IncludeSubmodules
+	}
+	return nil
 }
 
 type Progress struct {
@@ -1756,14 +1764,15 @@ func (x *ConversationSearchResult) GetParentConversationId() string {
 }
 
 type StartIndexRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Path           string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Force          bool                   `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
-	Splitter       *SplitterConfig        `protobuf:"bytes,3,opt,name=splitter,proto3" json:"splitter,omitempty"`
-	IgnorePatterns []string               `protobuf:"bytes,4,rep,name=ignore_patterns,json=ignorePatterns,proto3" json:"ignore_patterns,omitempty"`
-	Client         *ClientInfo            `protobuf:"bytes,5,opt,name=client,proto3" json:"client,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Path              string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Force             bool                   `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	Splitter          *SplitterConfig        `protobuf:"bytes,3,opt,name=splitter,proto3" json:"splitter,omitempty"`
+	IgnorePatterns    []string               `protobuf:"bytes,4,rep,name=ignore_patterns,json=ignorePatterns,proto3" json:"ignore_patterns,omitempty"`
+	Client            *ClientInfo            `protobuf:"bytes,5,opt,name=client,proto3" json:"client,omitempty"`
+	IncludeSubmodules []string               `protobuf:"bytes,6,rep,name=include_submodules,json=includeSubmodules,proto3" json:"include_submodules,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *StartIndexRequest) Reset() {
@@ -1827,6 +1836,13 @@ func (x *StartIndexRequest) GetIgnorePatterns() []string {
 func (x *StartIndexRequest) GetClient() *ClientInfo {
 	if x != nil {
 		return x.Client
+	}
+	return nil
+}
+
+func (x *StartIndexRequest) GetIncludeSubmodules() []string {
+	if x != nil {
+		return x.IncludeSubmodules
 	}
 	return nil
 }
@@ -4756,7 +4772,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1d\n" +
 	"\n" +
 	"chunk_size\x18\x02 \x01(\x05R\tchunkSize\x12\x18\n" +
-	"\aoverlap\x18\x03 \x01(\x05R\aoverlap\"\xa3\x03\n" +
+	"\aoverlap\x18\x03 \x01(\x05R\aoverlap\"\xd2\x03\n" +
 	"\vIndexConfig\x12#\n" +
 	"\rsplitter_type\x18\x01 \x01(\tR\fsplitterType\x12.\n" +
 	"\x13splitter_chunk_size\x18\x02 \x01(\x05R\x11splitterChunkSize\x12)\n" +
@@ -4768,7 +4784,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x13embedding_dimension\x18\b \x01(\x05R\x12embeddingDimension\x12%\n" +
 	"\x0evector_backend\x18\t \x01(\tR\rvectorBackend\x12\x16\n" +
 	"\x06hybrid\x18\n" +
-	" \x01(\bR\x06hybrid\"\x96\x06\n" +
+	" \x01(\bR\x06hybrid\x12-\n" +
+	"\x12include_submodules\x18\v \x03(\tR\x11includeSubmodules\"\x96\x06\n" +
 	"\bProgress\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12#\n" +
 	"\rphase_percent\x18\x02 \x01(\x01R\fphasePercent\x12'\n" +
@@ -4893,13 +4910,14 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
 	"\acontent\x18\x06 \x01(\tR\acontent\x124\n" +
-	"\x16parent_conversation_id\x18\a \x01(\tR\x14parentConversationId\"\xe0\x01\n" +
+	"\x16parent_conversation_id\x18\a \x01(\tR\x14parentConversationId\"\x8f\x02\n" +
 	"\x11StartIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x12?\n" +
 	"\bsplitter\x18\x03 \x01(\v2#.lmsemanticsearch.v1.SplitterConfigR\bsplitter\x12'\n" +
 	"\x0fignore_patterns\x18\x04 \x03(\tR\x0eignorePatterns\x127\n" +
-	"\x06client\x18\x05 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\x82\x02\n" +
+	"\x06client\x18\x05 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\x12-\n" +
+	"\x12include_submodules\x18\x06 \x03(\tR\x11includeSubmodules\"\x82\x02\n" +
 	"\x12StartIndexResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
