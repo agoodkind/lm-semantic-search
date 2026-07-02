@@ -22,13 +22,11 @@ INSTALL_BINS := $(BINARY):$(CMD) $(CLI_BINARY):$(CLI_CMD) $(MCP_BINARY):$(MCP_CM
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 BUILD_CHECKS := true
 STATICCHECK_EXTRA_FLAGS = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_STRICT_FLAGS)
+# go.mk owns the rest of the cgo contract: the per-target GO_MK_CGO_PREFIX with
+# its host fallback, the PKG_CONFIG_PATH export, the go-mk-cgo-deps prerequisite
+# on every compile-bearing target, and the GO_MK_CC/GO_MK_CXX toolchain
+# resolution into CC/CXX for the dep recipe.
 GO_MK_CGO_DEPS := cbm
-# Mirror go-makefile's own default (absolute, keyed by the per-target
-# GO_MK_TARGET_GOOS/GOARCH the release command sets), but fall back to the host
-# os/arch when they are empty so a plain host build lands under
-# .make/cgo/<goos>-<goarch> instead of .make/cgo/-. Keep this recursively
-# expanded (?=) so a per-target release still resolves its own prefix live.
-GO_MK_CGO_PREFIX ?= $(CURDIR)/.make/cgo/$(or $(GO_MK_TARGET_GOOS),$(shell go env GOOS))-$(or $(GO_MK_TARGET_GOARCH),$(shell go env GOARCH))
 
 LAUNCHD_LABEL := io.goodkind.lm-semantic-search-daemon
 SYSTEMD_UNIT := lm-semantic-search-daemon.service
@@ -63,9 +61,6 @@ go-mk-cgo-dep-cbm: scripts/setup-cgo-cbm.sh scripts/cbm-lib.mk third_party/cbm/M
 include bootstrap.mk
 
 .DEFAULT_GOAL := check
-
-export PKG_CONFIG_PATH := $(GO_MK_CGO_PREFIX)/lib/pkgconfig$(if $(strip $(PKG_CONFIG_PATH)),:$(PKG_CONFIG_PATH))
-build build-check check lint lint-golangci lint-deadcode staticcheck-extra vet test govulncheck install release: | go-mk-cgo-deps
 
 # ---------------------------------------------------------------------------
 # Project-local

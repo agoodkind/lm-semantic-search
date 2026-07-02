@@ -6,13 +6,12 @@ CBM_DIR="${ROOT_DIR}/third_party/cbm"
 TARGET_GOOS="${GO_MK_TARGET_GOOS:-$(go env GOOS)}"
 TARGET_GOARCH="${GO_MK_TARGET_GOARCH:-$(go env GOARCH)}"
 PREFIX="${GO_MK_CGO_PREFIX:-${ROOT_DIR}/.make/cgo/${TARGET_GOOS}-${TARGET_GOARCH}}"
-# The go-makefile release workflow provides the per-target cross toolchain as
-# GO_MK_CC/GO_MK_CXX (e.g. oa64-clang for a darwin cross build), while CC/CXX
-# stay the container's host gcc/g++. Prefer the go-mk primitives so the archive
-# is built for the target, not the host; fall back to CC/CXX then cc/c++ for a
-# plain native build.
-CC="${GO_MK_CC:-${CC:-cc}}"
-CXX="${GO_MK_CXX:-${CXX:-c++}}"
+# go.mk resolves the workflow-provided cross toolchain (GO_MK_CC/GO_MK_CXX)
+# into CC/CXX at the go-mk-cgo-deps hook, so plain CC/CXX is already the
+# target's compiler in every invocation context; cc/c++ covers a direct
+# script run outside make.
+CC="${CC:-cc}"
+CXX="${CXX:-c++}"
 
 if [[ -z "${TARGET_GOOS}" ]]; then
     TARGET_GOOS="$(go env GOOS)"
@@ -47,6 +46,9 @@ tool_for_compiler() {
     local suffix
     local candidate_basename
     local candidate
+    local triple
+    local arch
+    local resolved_compiler
 
     compiler="$(last_word "${CC}")"
     compiler_basename="$(basename "${compiler}")"
@@ -66,6 +68,23 @@ tool_for_compiler() {
             fi
         fi
     done
+
+    # osxcross names its cctools by full target triple (arm64-apple-darwin26.1-ar)
+    # and only aliases the clang wrappers with the o64/oa64 shorthand, so the
+    # suffix swap above misses them. Derive the triple from the compiler and
+    # search the compiler's own directory; the GNU ar fallback would build an
+    # archive whose index ld64 rejects ("archive has no table of contents").
+    triple="$("${compiler}" -print-target-triple 2>/dev/null || true)"
+    resolved_compiler="$(command -v "${compiler}" 2>/dev/null || true)"
+    if [[ -n "${triple}" && -n "${resolved_compiler}" ]]; then
+        arch="${triple%%-*}"
+        local -a triple_candidates
+        triple_candidates=( "$(dirname "${resolved_compiler}")/${arch}"-*-"${fallback_tool}" )
+        if [[ -e "${triple_candidates[0]}" ]]; then
+            printf '%s\n' "${triple_candidates[0]}"
+            return
+        fi
+    fi
 
     printf '%s\n' "${fallback_tool}"
 }
