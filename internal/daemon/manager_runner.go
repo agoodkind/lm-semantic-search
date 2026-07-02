@@ -7,6 +7,7 @@ import (
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
@@ -39,8 +40,16 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 		// updateJobRunning, so a queued-behind-the-cap job reports queued.
 		select {
 		case manager.indexSlots <- struct{}{}:
-			defer func() { <-manager.indexSlots }()
-			manager.runJob(backgroundContext, jobID)
+			slotReleased := false
+			defer func() {
+				if !slotReleased {
+					<-manager.indexSlots
+				}
+			}()
+			graphTask := manager.runJob(backgroundContext, jobID)
+			<-manager.indexSlots
+			slotReleased = true
+			manager.runGraphIndexTask(backgroundContext, graphTask)
 		case <-backgroundContext.Done():
 			manager.updateJobCancelled(backgroundContext, jobID)
 			return
@@ -48,7 +57,7 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 	}()
 }
 
-func (manager *Manager) runJob(ctx context.Context, jobID string) {
+func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTask {
 	ctx, done := spans.Open(ctx, "daemon.runJob")
 	defer done(nil)
 
@@ -59,7 +68,7 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) {
 	job, found := manager.jobs[jobID]
 	manager.mu.Unlock()
 	if !found {
-		return
+		return nil
 	}
 
 	manager.updateJobRunning(job)
@@ -70,7 +79,7 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) {
 	if manager.semantic != nil && manager.semantic.Available() {
 		if !manager.syncLock.acquireBlocking(ctx) {
 			manager.updateJobCancelled(ctx, job.ID)
-			return
+			return nil
 		}
 		defer manager.syncLock.release(ctx)
 	}
@@ -88,18 +97,36 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) {
 	}
 	switch jobOperation(job.Operation) {
 	case jobOperationSync:
-		if manager.runDeltaSync(ctx, job, codeSource) {
-			return
+		handled, graphTask := manager.runDeltaSync(ctx, job, codeSource)
+		if handled {
+			return graphTask
 		}
-		manager.runBootstrap(ctx, job, codeSource)
+		return manager.runBootstrap(ctx, job, codeSource)
 	case jobOperationStreamingReindex:
-		if manager.runDeltaSync(ctx, job, codeSource) {
-			return
+		handled, graphTask := manager.runDeltaSync(ctx, job, codeSource)
+		if handled {
+			return graphTask
 		}
-		manager.runBootstrap(ctx, job, codeSource)
+		return manager.runBootstrap(ctx, job, codeSource)
 	case jobOperationIndex:
-		manager.runBootstrap(ctx, job, codeSource)
+		return manager.runBootstrap(ctx, job, codeSource)
 	case jobOperationConversationIngest:
 		manager.runConversationIngest(ctx, job)
 	}
+	return nil
+}
+
+// JobSuccessorID returns the id of the immediate next terminal job for job's
+// codebase, or empty when job is the latest terminal job. The single-job views
+// use it since they do not hold the full job set the list view does.
+func (manager *Manager) JobSuccessorID(job model.Job) string {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	codebaseJobs := make([]model.Job, 0)
+	for _, candidate := range manager.jobs {
+		if candidate.CodebaseID == job.CodebaseID {
+			codebaseJobs = append(codebaseJobs, candidate)
+		}
+	}
+	return buildJobSuccessors(codebaseJobs)[job.ID]
 }

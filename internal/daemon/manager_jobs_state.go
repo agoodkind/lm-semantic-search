@@ -171,6 +171,15 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 		manager.mu.Unlock()
 		return
 	}
+	if job.State == model.JobStateCancelled {
+		manager.mu.Unlock()
+		return
+	}
+	if job.State == model.JobStateCancelling {
+		manager.mu.Unlock()
+		manager.updateJobCancelled(ctx, jobID)
+		return
+	}
 
 	now := clock.Now()
 	metrics.JobCompleted()

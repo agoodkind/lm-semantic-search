@@ -113,6 +113,7 @@ func run(rootContext context.Context) error {
 		slog.ErrorContext(rootContext, "create manager failed", "err", err)
 		return fmt.Errorf("create manager: %w", err)
 	}
+	defer manager.CloseGraphEngines()
 
 	runtimeContext, cancelRuntime := context.WithCancel(rootContext)
 	defer cancelRuntime()

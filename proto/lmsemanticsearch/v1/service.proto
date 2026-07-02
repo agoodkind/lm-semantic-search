@@ -18,6 +18,7 @@ service SemanticSearchDaemonService {
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
   rpc WatchJobs(WatchJobsRequest) returns (stream WatchJobsResponse);
   rpc SearchCode(SearchCodeRequest) returns (SearchCodeResponse);
+  rpc GraphTool(GraphToolRequest) returns (GraphToolResponse);
   rpc RegisterConversationCollection(RegisterConversationCollectionRequest) returns (RegisterConversationCollectionResponse);
   rpc SyncConversationManifest(SyncConversationManifestRequest) returns (SyncConversationManifestResponse);
   // UpsertConversationDocumentsStream is the client-streaming conversation
@@ -446,6 +447,18 @@ message SearchCodeResponse {
   Job active_job = 3;
   string display_text = 4;
   DependencyHealth dependency_health = 5;
+}
+
+message GraphToolRequest {
+  string path = 1;
+  ClientInfo client = 2;
+  string tool_name = 3;
+  string args_json = 4;
+}
+
+message GraphToolResponse {
+  string result_json = 1;
+  string display_text = 2;
 }
 
 message RegisterConversationCollectionRequest {

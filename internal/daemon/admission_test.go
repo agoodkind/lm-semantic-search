@@ -110,7 +110,7 @@ func TestDeltaAdmissionHaltDoesNotWriteOffendingFile(t *testing.T) {
 	}
 	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
 
-	handled := manager.runDeltaSync(context.Background(), job, source)
+	handled, _ := manager.runDeltaSync(context.Background(), job, source)
 	if !handled {
 		t.Fatal("runDeltaSync returned false, want handled admission halt")
 	}

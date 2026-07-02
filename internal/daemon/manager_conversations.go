@@ -358,10 +358,10 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
 		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents)
-		if manager.runDeltaSync(ctx, job, source) {
+		if handled, _ := manager.runDeltaSync(ctx, job, source); handled {
 			return
 		}
-		manager.runBootstrap(ctx, job, source)
+		_ = manager.runBootstrap(ctx, job, source)
 	default:
 		manager.updateJobFailed(ctx, job.ID, fmt.Errorf("unknown conversation job kind %s", payload.Kind))
 	}
