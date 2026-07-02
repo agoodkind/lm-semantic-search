@@ -6,13 +6,12 @@ CBM_DIR="${ROOT_DIR}/third_party/cbm"
 TARGET_GOOS="${GO_MK_TARGET_GOOS:-$(go env GOOS)}"
 TARGET_GOARCH="${GO_MK_TARGET_GOARCH:-$(go env GOARCH)}"
 PREFIX="${GO_MK_CGO_PREFIX:-${ROOT_DIR}/.make/cgo/${TARGET_GOOS}-${TARGET_GOARCH}}"
-# The go-makefile release workflow provides the per-target cross toolchain as
-# GO_MK_CC/GO_MK_CXX (e.g. oa64-clang for a darwin cross build), while CC/CXX
-# stay the container's host gcc/g++. Prefer the go-mk primitives so the archive
-# is built for the target, not the host; fall back to CC/CXX then cc/c++ for a
-# plain native build.
-CC="${GO_MK_CC:-${CC:-cc}}"
-CXX="${GO_MK_CXX:-${CXX:-c++}}"
+# go.mk resolves the workflow-provided cross toolchain (GO_MK_CC/GO_MK_CXX)
+# into CC/CXX at the go-mk-cgo-deps hook, so plain CC/CXX is already the
+# target's compiler in every invocation context; cc/c++ covers a direct
+# script run outside make.
+CC="${CC:-cc}"
+CXX="${CXX:-c++}"
 
 if [[ -z "${TARGET_GOOS}" ]]; then
     TARGET_GOOS="$(go env GOOS)"
