@@ -53,6 +53,8 @@ type fakeSemantic struct {
 	reusePrefixCalls   []reusePrefixCall
 	loadReuseForPath   func(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
 	reusePathCalls     []reusePathCall
+	loadMessageState   func(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error)
+	messageStateCalls  []messageStateCall
 	reindexReuse       map[string]map[string][]float32
 	// conversationSearchScopes records the conversation-id scope each
 	// conversation search received, so tests can prove native scoping.
@@ -188,6 +190,12 @@ type reusePathCall struct {
 	Path       string
 }
 
+// messageStateCall records one per-message state load.
+type messageStateCall struct {
+	Collection string
+	Prefix     string
+}
+
 func (f *fakeSemantic) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
 	f.mu.Lock()
 	f.reusePrefixCalls = append(f.reusePrefixCalls, reusePrefixCall{Collection: collectionName, Prefix: relativePathPrefix})
@@ -208,6 +216,16 @@ func (f *fakeSemantic) LoadReuseVectorsForPath(ctx context.Context, collectionNa
 	return map[string][]float32{}, nil
 }
 
+func (f *fakeSemantic) LoadConversationMessageState(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
+	f.mu.Lock()
+	f.messageStateCalls = append(f.messageStateCalls, messageStateCall{Collection: collectionName, Prefix: conversationPrefix})
+	f.mu.Unlock()
+	if f.loadMessageState != nil {
+		return f.loadMessageState(ctx, collectionName, conversationPrefix)
+	}
+	return map[int32]semantic.StoredMessageState{}, map[string][]float32{}, nil
+}
+
 // reusePrefixCallsSnapshot returns a copy of the recorded prefix reuse loads.
 func (f *fakeSemantic) reusePrefixCallsSnapshot() []reusePrefixCall {
 	f.mu.Lock()
@@ -219,6 +237,12 @@ func (f *fakeSemantic) reusePathCallsSnapshot() []reusePathCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]reusePathCall(nil), f.reusePathCalls...)
+}
+
+func (f *fakeSemantic) messageStateCallsSnapshot() []messageStateCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]messageStateCall(nil), f.messageStateCalls...)
 }
 
 // reindexReuseSnapshot returns, per conversation id, a copy of the reuse map
