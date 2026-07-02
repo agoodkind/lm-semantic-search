@@ -453,9 +453,9 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 		}
 	}
 
-	presence := manager.probeCollectionPresence(ctx, canonicalPath, "StartIndex")
+	evidence := manager.probeCollectionEvidence(ctx, canonicalPath, "StartIndex")
 
-	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(ctx, canonicalPath, requestedPath, client, indexConfig, force, presence, budget)
+	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(ctx, canonicalPath, requestedPath, client, indexConfig, force, evidence.presence, budget)
 	if err != nil || deduped {
 		return job, codebase, deduped, overlapsCodebaseID, err
 	}
@@ -474,24 +474,6 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)
 	return job, codebase, false, overlapsCodebaseID, nil
-}
-
-// probeCollectionPresence asks Milvus whether canonicalPath already has a live
-// collection and preserves the distinction between missing and unknown
-// backend state. Unknown must not be treated as definite collection loss.
-func (manager *Manager) probeCollectionPresence(ctx context.Context, canonicalPath string, caller string) collectionPresence {
-	if manager.semantic == nil || !manager.semantic.Available() {
-		return collectionPresenceUnknown
-	}
-	present, hasErr := manager.semantic.HasCollectionForPath(ctx, canonicalPath)
-	if hasErr != nil {
-		slog.WarnContext(ctx, "Milvus HasCollection failed", "caller", caller, "path", canonicalPath, "err", hasErr)
-		return collectionPresenceUnknown
-	}
-	if present {
-		return collectionPresencePresent
-	}
-	return collectionPresenceMissing
 }
 
 // commitStartIndexLocked acquires the registry lock, runs the decision

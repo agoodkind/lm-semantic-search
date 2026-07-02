@@ -61,6 +61,13 @@ type Progress struct {
 	ChunksEmbedded            int32
 }
 
+// CollectionFacts reports the live store facts for one collection name.
+type CollectionFacts struct {
+	Exists    bool
+	Rows      int32
+	RowsKnown bool
+}
+
 // Service owns the embedding provider and Milvus client for semantic search.
 type Service struct {
 	cfg             config.Config
@@ -482,6 +489,10 @@ func (service *Service) Count(ctx context.Context, codebasePath string) (int32, 
 	}
 
 	collectionName := service.CollectionName(codebasePath)
+	return service.collectionRowCount(ctx, collectionName)
+}
+
+func (service *Service) collectionRowCount(ctx context.Context, collectionName string) (int32, error) {
 	resultSet, err := service.milvus.Query(ctx, milvusclient.NewQueryOption(collectionName).
 		WithOutputFields(countOutputField).
 		WithConsistencyLevel(entity.ClStrong))
@@ -501,6 +512,32 @@ func (service *Service) Count(ctx context.Context, codebasePath string) (int32, 
 		return 0, fmt.Errorf("read count(*) column for %s: %w", collectionName, err)
 	}
 	return safeInt32FromInt64(total), nil
+}
+
+// InspectCollection reports whether one collection exists and, when possible,
+// how many rows it currently holds.
+func (service *Service) InspectCollection(ctx context.Context, collectionName string) (CollectionFacts, error) {
+	if !service.Available() {
+		return CollectionFacts{}, ErrUnavailable
+	}
+
+	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	if err != nil {
+		return CollectionFacts{}, wrapStoreError(ctx, err, "check Milvus collection "+collectionName)
+	}
+	if !hasCollection {
+		return CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
+	}
+
+	rows, err := service.collectionRowCount(ctx, collectionName)
+	if err != nil {
+		return collectionExistsWithUnknownRows()
+	}
+	return CollectionFacts{Exists: true, Rows: rows, RowsKnown: true}, nil
+}
+
+func collectionExistsWithUnknownRows() (CollectionFacts, error) {
+	return CollectionFacts{Exists: true, Rows: 0, RowsKnown: false}, nil
 }
 
 // ListCollections returns the current semantic collection names from Milvus.

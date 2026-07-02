@@ -1,9 +1,12 @@
 package daemon
 
 import (
+	"context"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
 func TestDecideStartIndexMode(t *testing.T) {
@@ -41,17 +44,122 @@ func TestDecideStartIndexMode(t *testing.T) {
 	}
 }
 
+func emptyDiffEvidence(presence collectionPresence, rows int32, rowsKnown bool) collectionEvidence {
+	return collectionEvidence{
+		presence:   presence,
+		rows:       rows,
+		rowsKnown:  rowsKnown,
+		collection: "",
+		nameSource: "",
+	}
+}
+
 func TestDecideEmptyDiffMode(t *testing.T) {
 	t.Parallel()
 
-	if got := decideEmptyDiffMode(collectionPresencePresent); got != emptyDiffModeCompleteNoop {
-		t.Fatalf("present empty diff = %v, want %v", got, emptyDiffModeCompleteNoop)
+	cases := []struct {
+		name          string
+		evidence      collectionEvidence
+		seedFileCount int
+		want          emptyDiffMode
+	}{
+		{
+			name:          "present populated collection completes noop",
+			evidence:      emptyDiffEvidence(collectionPresencePresent, 7, true),
+			seedFileCount: 4,
+			want:          emptyDiffModeCompleteNoop,
+		},
+		{
+			name:          "present emptied collection with seed bootstraps",
+			evidence:      emptyDiffEvidence(collectionPresencePresent, 0, true),
+			seedFileCount: 4,
+			want:          emptyDiffModeFallbackBootstrap,
+		},
+		{
+			name:          "present collection with unknown rows completes noop",
+			evidence:      emptyDiffEvidence(collectionPresencePresent, 0, false),
+			seedFileCount: 4,
+			want:          emptyDiffModeCompleteNoop,
+		},
+		{
+			name:          "missing collection bootstraps",
+			evidence:      emptyDiffEvidence(collectionPresenceMissing, 0, false),
+			seedFileCount: 0,
+			want:          emptyDiffModeFallbackBootstrap,
+		},
+		{
+			name:          "unknown collection completes noop",
+			evidence:      emptyDiffEvidence(collectionPresenceUnknown, 0, false),
+			seedFileCount: 4,
+			want:          emptyDiffModeCompleteNoop,
+		},
+		{
+			name:          "present empty collection with empty seed completes noop",
+			evidence:      emptyDiffEvidence(collectionPresencePresent, 0, true),
+			seedFileCount: 0,
+			want:          emptyDiffModeCompleteNoop,
+		},
 	}
-	if got := decideEmptyDiffMode(collectionPresenceUnknown); got != emptyDiffModeCompleteNoop {
-		t.Fatalf("unknown empty diff = %v, want %v", got, emptyDiffModeCompleteNoop)
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := decideEmptyDiffMode(testCase.evidence, testCase.seedFileCount)
+			if got != testCase.want {
+				t.Fatalf("decideEmptyDiffMode() = %v, want %v", got, testCase.want)
+			}
+		})
 	}
-	if got := decideEmptyDiffMode(collectionPresenceMissing); got != emptyDiffModeFallbackBootstrap {
-		t.Fatalf("missing empty diff = %v, want %v", got, emptyDiffModeFallbackBootstrap)
+}
+
+func TestPlanSyncDiffEmptyCollectionWithSeedFallsBack(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	manager, _, repoPath := newTestManager(t)
+	config := manager.enrichIndexConfig(defaultIndexConfig())
+	config.IgnoreDigest = digestIndexConfig(config)
+	codebaseID := "cb-empty-collection"
+	storedCollection := "stored_collection_empty"
+	manager.semantic = &fakeSemantic{
+		inspectCollection: func(_ context.Context, collectionName string) (semantic.CollectionFacts, error) {
+			if collectionName != storedCollection {
+				t.Fatalf("InspectCollection collection = %q, want %q", collectionName, storedCollection)
+			}
+			return semantic.CollectionFacts{Exists: true, Rows: 0, RowsKnown: true}, nil
+		},
+	}
+	manager.mu.Lock()
+	manager.codebases[codebaseID] = model.Codebase{
+		ID:              codebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusIndexed,
+		EffectiveConfig: config,
+		CollectionName:  storedCollection,
+	}
+	manager.mu.Unlock()
+
+	seed, err := merkle.Capture(ctx, manager.indexability, codebaseID, repoPath, config)
+	if err != nil {
+		t.Fatalf("Capture returned error: %v", err)
+	}
+	seed.ConfigDigest = config.IgnoreDigest
+	if err := merkle.WriteSnapshot(manager.merklePath(codebaseID), seed); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+
+	job := model.Job{
+		ID:            "job-empty-collection",
+		CodebaseID:    codebaseID,
+		CanonicalPath: repoPath,
+		Config:        config,
+	}
+	source := newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, config)
+	plan := manager.planSyncDiff(ctx, job, codebaseID, source)
+	if !plan.fallback {
+		t.Fatalf("plan.fallback = false, want true")
+	}
+	if plan.handled {
+		t.Fatalf("plan.handled = true, want false")
 	}
 }
 

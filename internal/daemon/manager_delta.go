@@ -184,8 +184,8 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 	}
 	diff := merkle.DiffSnapshots(seed, captured)
 	if diff.Empty() {
-		presence := manager.probeCollectionPresence(ctx, job.CanonicalPath, "planSyncDiff")
-		if decideEmptyDiffMode(presence) == emptyDiffModeFallbackBootstrap {
+		evidence := manager.probeCollectionEvidence(ctx, job.CanonicalPath, "planSyncDiff")
+		if decideEmptyDiffMode(evidence, len(seed.Files)) == emptyDiffModeFallbackBootstrap {
 			return deltaPlan{
 				diff:            diff,
 				currentSnapshot: captured,
