@@ -781,6 +781,9 @@ func (manager *Manager) itemReuse(ctx context.Context, state deltaState, relativ
 		slog.WarnContext(ctx, "load item reuse vectors failed; embedding every chunk", "path", relativePath, "collection", source.CollectionName, "scope", source.Scope, "err", err)
 		return state.reuse, 0
 	}
+	if len(itemReuse) == 0 {
+		return state.reuse, 0
+	}
 	return mergedReuse(state.reuse, itemReuse), safeInt32(len(itemReuse))
 }
 
