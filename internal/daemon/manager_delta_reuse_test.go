@@ -163,7 +163,7 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 		}
 	})
 
-	t.Run("non-code added delta does not seed siblings", func(t *testing.T) {
+	t.Run("document-kind added delta seeds siblings like code", func(t *testing.T) {
 		addedContent := "package feature\n\nfunc AddedDocumentKind() string { return \"shared\" }\n"
 		manager, codebase, job, fake := newWorktreeDeltaReuseFixture(t, map[string][]float32{
 			hashText(addedContent): {1, 2, 3},
@@ -190,14 +190,20 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 		if completed.State != model.JobStateCompleted {
 			t.Fatalf("job state = %q, want completed", completed.State)
 		}
-		if calls := fake.reuseCollectionsSnapshot(); len(calls) != 0 {
-			t.Fatalf("non-code delta loaded sibling reuse collections: %v", calls)
+		// A chat:/// document collection has no git siblings in practice, so
+		// conversations still rely on per-item reuse. This fixture uses a linked
+		// worktree to pin that the build-wide rule itself is Kind neutral.
+		if !fake.requestedReuseCollection("cc_repo") {
+			t.Fatalf("sibling collection cc_repo was not loaded; calls = %v", fake.reuseCollectionsSnapshot())
 		}
-		if completed.Progress.ReuseVectorsLoaded != 0 {
-			t.Fatalf("ReuseVectorsLoaded = %d, want 0 for non-code delta", completed.Progress.ReuseVectorsLoaded)
+		if completed.Progress.ReuseVectorsLoaded <= 0 {
+			t.Fatalf("ReuseVectorsLoaded = %d, want > 0 from sibling seed", completed.Progress.ReuseVectorsLoaded)
 		}
-		if completed.Progress.ChunksEmbedded <= 0 {
-			t.Fatalf("ChunksEmbedded = %d, want > 0 when non-code delta skips sibling seed", completed.Progress.ChunksEmbedded)
+		if completed.Progress.ChunksEmbedded != 0 {
+			t.Fatalf("ChunksEmbedded = %d, want 0 for identical document-kind content", completed.Progress.ChunksEmbedded)
+		}
+		if completed.Progress.ChunksReused <= 0 {
+			t.Fatalf("ChunksReused = %d, want > 0 for identical document-kind content", completed.Progress.ChunksReused)
 		}
 	})
 }

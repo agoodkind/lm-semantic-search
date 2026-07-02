@@ -105,10 +105,11 @@ func TestCodeItemReuseLoadsExactPath(t *testing.T) {
 
 	source := newCodeItemSource(manager.runner, manager.indexability, "cb", "/tmp/code", defaultIndexConfig()).withCollectionName("code_chunks_live")
 	state := deltaState{
-		source:      source,
-		semantic:    true,
-		reuse:       map[string][]float32{"base-hash": {9}},
-		chunkCounts: &chunkCounters{},
+		source:           source,
+		semantic:         true,
+		itemReuseEnabled: true,
+		reuse:            map[string][]float32{"base-hash": {9}},
+		chunkCounts:      &chunkCounters{},
 	}
 
 	reuse, loaded := manager.itemReuse(context.Background(), state, "src/file.go")

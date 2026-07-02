@@ -54,8 +54,9 @@ type deltaState struct {
 	// source lists items and produces one item's chunks. It is the only
 	// kind-specific part of the routine: a code source walks the filesystem, a
 	// conversation source reads the manifest and documents handed over the wire.
-	source   itemSource
-	semantic bool
+	source           itemSource
+	semantic         bool
+	itemReuseEnabled bool
 	// staging routes per-file embeds into the staging collection that a
 	// from-scratch build promotes onto the live name at the end, instead of
 	// the live collection an incremental sync writes to directly.
@@ -285,17 +286,19 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	// touch only the embed counters, so these counts persist for the run.
 	manager.setJobDeltaCounts(job.ID, len(plan.diff.Added), len(plan.diff.Modified), len(plan.diff.Removed), len(plan.currentSnapshot.Files))
 
+	semanticReady := manager.semantic != nil && manager.semantic.Available()
 	state := deltaState{
-		plan:         plan,
-		snapshotPath: manager.merklePath(codebase.ID),
-		working:      make(map[string]string, len(plan.seedSnapshot.Files)),
-		source:       source,
-		semantic:     manager.semantic != nil && manager.semantic.Available(),
-		staging:      false,
-		reuse:        nil,
-		chunkCounts:  &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
-		seededReuse:  0,
-		admission:    manager.admissionForJob(job),
+		plan:             plan,
+		snapshotPath:     manager.merklePath(codebase.ID),
+		working:          make(map[string]string, len(plan.seedSnapshot.Files)),
+		source:           source,
+		semantic:         semanticReady,
+		itemReuseEnabled: manager.resolveItemReusePolicy(ctx, job, false, semanticReady),
+		staging:          false,
+		reuse:            nil,
+		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
+		seededReuse:      0,
+		admission:        manager.admissionForJob(job),
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -305,7 +308,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		return true
 	}
 
-	if codebase.Kind == model.CodebaseKindCode && len(plan.diff.Added) > 0 && state.semantic {
+	if len(plan.diff.Added) > 0 && state.semantic {
 		reuse, seeded, _ := manager.resolveReuseSeed(ctx, job)
 		state.reuse = reuse
 		state.seededReuse = seeded
@@ -469,17 +472,19 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	}
 	manager.setJobRunMode(job.ID, runMode)
 
+	semanticReady := manager.semantic != nil && manager.semantic.Available()
 	state := deltaState{
-		plan:         plan,
-		snapshotPath: manager.stagingMerklePath(codebase.ID),
-		working:      make(map[string]string, len(plan.currentSnapshot.Files)),
-		source:       source,
-		semantic:     manager.semantic != nil && manager.semantic.Available(),
-		staging:      true,
-		reuse:        nil,
-		chunkCounts:  &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
-		seededReuse:  0,
-		admission:    manager.admissionForJob(job),
+		plan:             plan,
+		snapshotPath:     manager.stagingMerklePath(codebase.ID),
+		working:          make(map[string]string, len(plan.currentSnapshot.Files)),
+		source:           source,
+		semantic:         semanticReady,
+		itemReuseEnabled: manager.resolveItemReusePolicy(ctx, job, true, semanticReady),
+		staging:          true,
+		reuse:            nil,
+		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
+		seededReuse:      0,
+		admission:        manager.admissionForJob(job),
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -753,11 +758,7 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 // the source has no per-item reuse, and on a failed load it logs and falls
 // back to that map so the item embeds every chunk rather than failing.
 func (manager *Manager) itemReuse(ctx context.Context, state deltaState, relativePath string) (map[string][]float32, int32) {
-	// Per-item same-collection reuse is an incremental live-collection feature.
-	// A staging/bootstrap build already has its own build-wide reuse sources, and
-	// probing the live collection file-by-file on a true first build would be
-	// pure overhead when that collection does not exist yet.
-	if state.staging {
+	if !state.itemReuseEnabled {
 		return state.reuse, 0
 	}
 	source := state.source.reuseSource(relativePath)
@@ -778,6 +779,9 @@ func (manager *Manager) itemReuse(ctx context.Context, state deltaState, relativ
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "load item reuse vectors failed; embedding every chunk", "path", relativePath, "collection", source.CollectionName, "scope", source.Scope, "err", err)
+		return state.reuse, 0
+	}
+	if len(itemReuse) == 0 {
 		return state.reuse, 0
 	}
 	return mergedReuse(state.reuse, itemReuse), safeInt32(len(itemReuse))
