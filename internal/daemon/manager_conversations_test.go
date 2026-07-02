@@ -937,8 +937,8 @@ func TestConversationIndexOneEmbedsOnlyAppendedMessage(t *testing.T) {
 	if !result.RemovalOverride {
 		t.Fatal("RemovalOverride = false, want true")
 	}
-	assertStringSliceEqual(t, result.RemovalPaths, nil)
-	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
+	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-append/2"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-append/2/"})
 	assertReuseVector(t, result.ReuseVectors, "reuse-alpha", []float32{1, 2})
 	assertMessageStateCalls(t, reader.callsSnapshot(), []messageStateCall{{
 		Collection: "conv_chunks_live",
@@ -1259,8 +1259,43 @@ func TestConversationIndexOneHealsMissingRows(t *testing.T) {
 	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
 		{relativePath: "conv/conv-heal/1", messageIndex: 1, role: "assistant", content: "restored"},
 	})
-	assertStringSliceEqual(t, result.RemovalPaths, nil)
-	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
+	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-heal/1"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-heal/1/"})
+}
+
+func TestConversationIndexOneHealsLegacyRowsWithoutDuplicates(t *testing.T) {
+	t.Parallel()
+
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{},
+		reuse: map[string][]float32{
+			"legacy-zero": {1},
+			"legacy-one":  {2},
+		},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{"conv-legacy": "fp-legacy"},
+		[]model.ConversationDocument{
+			{ConversationID: "conv-legacy", MessageIndex: 0, Role: "user", Text: "hello"},
+			{ConversationID: "conv-legacy", MessageIndex: 1, Role: "assistant", Text: "answer"},
+		},
+		reader,
+	)
+
+	result, err := source.indexOne(context.Background(), "conv-legacy")
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+
+	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+		{relativePath: "conv/conv-legacy/0", messageIndex: 0, role: "user", content: "hello"},
+		{relativePath: "conv/conv-legacy/1", messageIndex: 1, role: "assistant", content: "answer"},
+	})
+	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-legacy/0", "conv/conv-legacy/1"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-legacy/0/", "conv/conv-legacy/1/"})
+	assertReuseVector(t, result.ReuseVectors, "legacy-zero", []float32{1})
+	assertReuseVector(t, result.ReuseVectors, "legacy-one", []float32{2})
 }
 
 func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
@@ -1285,7 +1320,10 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	}
 	runConversationDeltaIngest(t, manager, ctx, collectionID, coldDocuments, map[string]string{conversationID: "fp-cold"})
 	assertReindexCallCount(t, fake, 1)
-	assertReindexCall(t, fake.reindexCallsSnapshot()[0], 2, semantic.Removal{})
+	assertReindexCall(t, fake.reindexCallsSnapshot()[0], 2, semantic.Removal{
+		Paths:    []string{"conv/conv-e2e/0", "conv/conv-e2e/1"},
+		Prefixes: []string{"conv/conv-e2e/0/", "conv/conv-e2e/1/"},
+	})
 	stateStore.setFromDocuments(prefix, coldDocuments)
 
 	runConversationDeltaIngest(t, manager, ctx, collectionID, coldDocuments, map[string]string{conversationID: "fp-unchanged"})
@@ -1311,7 +1349,10 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	})
 	runConversationDeltaIngest(t, manager, ctx, collectionID, appendedDocuments, map[string]string{conversationID: "fp-appended"})
 	assertReindexCallCount(t, fake, 2)
-	assertReindexCall(t, fake.reindexCallsSnapshot()[1], 1, semantic.Removal{})
+	assertReindexCall(t, fake.reindexCallsSnapshot()[1], 1, semantic.Removal{
+		Paths:    []string{"conv/conv-e2e/2"},
+		Prefixes: []string{"conv/conv-e2e/2/"},
+	})
 	stateStore.setFromDocuments(prefix, appendedDocuments)
 
 	editedDocuments := append([]model.ConversationDocument{}, appendedDocuments...)

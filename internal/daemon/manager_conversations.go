@@ -592,6 +592,9 @@ type conversationMessageDiff struct {
 // stores after multipart splitting. Stale stored indices must be deleted here
 // because the conversation source uses absenceRetain, so an absent message row
 // would otherwise survive forever once the conversation fingerprint advances.
+// New messages also carry exact removals because legacy rows without
+// messageIndex are invisible to storedState but still live under the same
+// conv/<id>/<message> paths; genuinely new messages pay one no-op delete.
 func diffConversationMessages(conversationID string, documents []model.ConversationDocument, storedState map[int32]semantic.StoredMessageState) conversationMessageDiff {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
@@ -606,9 +609,7 @@ func diffConversationMessages(conversationID string, documents []model.Conversat
 			continue
 		}
 		diff.documents = append(diff.documents, document)
-		if found {
-			diff.addRemoval(conversationID, document.MessageIndex)
-		}
+		diff.addRemoval(conversationID, document.MessageIndex)
 	}
 
 	staleIndexes := make([]int32, 0)
