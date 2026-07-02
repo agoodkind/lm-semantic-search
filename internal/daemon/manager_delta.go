@@ -710,14 +710,7 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
 	if fileResult.Removed {
-		slog.InfoContext(ctx, "converge.remove", "component", "daemon", "subcomponent", "delta", "path", relativePath, "semantic", state.semantic)
-		if state.semantic {
-			if outcome := manager.applyReindexForState(ctx, job, state, nil, state.source.removalFor([]string{relativePath}), "per-file removal"); outcome.fallback || outcome.handled {
-				return outcome
-			}
-		}
-		delete(state.working, relativePath)
-		return deltaOutcome{fallback: false, handled: false, progressed: true}
+		return manager.handleRemovedFile(ctx, job, state, relativePath, fileResult)
 	}
 	if fileResult.Skipped {
 		switch fileResult.SkipReason {
@@ -734,13 +727,9 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		}
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
+	removal := effectiveRemoval(state.source, fileResult, relativePath)
 	if state.semantic {
-		reuse, loaded := manager.itemReuse(ctx, state, relativePath)
-		state.reuse = reuse
-		if state.chunkCounts != nil {
-			state.chunkCounts.reuseVectorsLoaded += loaded
-		}
-		if outcome := manager.applyReindexForState(ctx, job, state, fileResult.Chunks, state.source.removalFor([]string{relativePath}), "per-file reindex"); outcome.fallback || outcome.handled {
+		if outcome := manager.applyChangedFileSemantic(ctx, job, state, relativePath, fileResult, removal); outcome.fallback || outcome.handled {
 			return outcome
 		}
 	}
@@ -750,6 +739,52 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 	result.TotalBytes += storedChunkBytes(fileResult.Chunks)
 	result.IndexedFiles++
 	return deltaOutcome{fallback: false, handled: false, progressed: true}
+}
+
+func (manager *Manager) handleRemovedFile(ctx context.Context, job model.Job, state deltaState, relativePath string, fileResult indexer.OneFileResult) deltaOutcome {
+	slog.InfoContext(ctx, "converge.remove", "component", "daemon", "subcomponent", "delta", "path", relativePath, "semantic", state.semantic)
+	removal := effectiveRemoval(state.source, fileResult, relativePath)
+	if state.semantic && !removal.Empty() {
+		if outcome := manager.applyReindexForState(ctx, job, state, nil, removal, "per-file removal"); outcome.fallback || outcome.handled {
+			return outcome
+		}
+	}
+	delete(state.working, relativePath)
+	return deltaOutcome{fallback: false, handled: false, progressed: true}
+}
+
+func (manager *Manager) applyChangedFileSemantic(ctx context.Context, job model.Job, state deltaState, relativePath string, fileResult indexer.OneFileResult, removal semantic.Removal) deltaOutcome {
+	state = manager.reuseStateForChangedFile(ctx, state, relativePath, fileResult, removal)
+	if len(fileResult.Chunks) == 0 && removal.Empty() {
+		return deltaOutcome{fallback: false, handled: false, progressed: false}
+	}
+	return manager.applyReindexForState(ctx, job, state, fileResult.Chunks, removal, "per-file reindex")
+}
+
+func (manager *Manager) reuseStateForChangedFile(ctx context.Context, state deltaState, relativePath string, fileResult indexer.OneFileResult, removal semantic.Removal) deltaState {
+	if fileResult.ReuseVectors != nil {
+		state.reuse = mergedReuse(state.reuse, fileResult.ReuseVectors)
+		if state.chunkCounts != nil {
+			state.chunkCounts.reuseVectorsLoaded += safeInt32(len(fileResult.ReuseVectors))
+		}
+		return state
+	}
+	if len(fileResult.Chunks) == 0 && removal.Empty() {
+		return state
+	}
+	reuse, loaded := manager.itemReuse(ctx, state, relativePath)
+	state.reuse = reuse
+	if state.chunkCounts != nil {
+		state.chunkCounts.reuseVectorsLoaded += loaded
+	}
+	return state
+}
+
+func effectiveRemoval(source itemSource, fileResult indexer.OneFileResult, relativePath string) semantic.Removal {
+	if fileResult.RemovalOverride {
+		return semantic.Removal{Paths: fileResult.RemovalPaths, Prefixes: fileResult.RemovalPrefixes}
+	}
+	return source.removalFor([]string{relativePath})
 }
 
 // itemReuse loads one item's own stored vectors before the reindex deletes
