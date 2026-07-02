@@ -649,6 +649,9 @@ func (manager *Manager) ClearIndex(ctx context.Context, requestedPath string, cl
 	if err := store.RemoveFile(manager.merklePath(codebase.ID)); err != nil {
 		return model.Codebase{}, fmt.Errorf("remove Merkle snapshot for %s: %w", codebase.ID, err)
 	}
+	if err := store.RemoveFile(manager.stagingMerklePath(codebase.ID)); err != nil {
+		return model.Codebase{}, fmt.Errorf("remove staging Merkle snapshot for %s: %w", codebase.ID, err)
+	}
 	if manager.semantic != nil {
 		if err := manager.semantic.Drop(ctx, codebase.CanonicalPath); err != nil && !errors.Is(err, semantic.ErrUnavailable) {
 			return model.Codebase{}, fmt.Errorf("drop semantic index for %s: %w", codebase.CanonicalPath, err)
