@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
@@ -13,6 +14,17 @@ import (
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
+)
+
+type bootstrapReason string
+
+const (
+	bootstrapReasonFirstIndex                 bootstrapReason = "first_index"
+	bootstrapReasonForcedReindex              bootstrapReason = "forced_reindex"
+	bootstrapReasonStagingResume              bootstrapReason = "staging_resume"
+	bootstrapReasonEmptyDiffCollectionMissing bootstrapReason = "empty_diff_collection_missing"
+	bootstrapReasonEmptyDiffCollectionEmpty   bootstrapReason = "empty_diff_collection_empty"
+	bootstrapReasonDeltaCollectionMissing     bootstrapReason = "delta_collection_missing"
 )
 
 func (manager *Manager) updateJobRunning(job model.Job) {
@@ -161,6 +173,54 @@ func (manager *Manager) setJobRunMode(jobID string, runMode string) {
 	}
 	job.Progress.RunMode = runMode
 	manager.jobs[jobID] = job
+}
+
+// routeToBootstrap records the machine-readable reason before a job enters the
+// expensive bootstrap path.
+func (manager *Manager) routeToBootstrap(ctx context.Context, jobID string, reason bootstrapReason) {
+	caller := bootstrapRouteCaller()
+	if !reason.known() {
+		slog.WarnContext(ctx, "unknown bootstrap reason", "reason", reason, "caller", caller, "job_id", jobID)
+	}
+
+	manager.mu.Lock()
+	job, found := manager.jobs[jobID]
+	if !found {
+		manager.mu.Unlock()
+		return
+	}
+	job.Progress.BootstrapReason = string(reason)
+	codebaseID := job.CodebaseID
+	manager.jobs[jobID] = job
+	manager.mu.Unlock()
+
+	slog.InfoContext(ctx, "bootstrap.route", "reason", reason, "caller", caller, "codebase_id", codebaseID, "job_id", jobID)
+}
+
+func (reason bootstrapReason) known() bool {
+	switch reason {
+	case bootstrapReasonFirstIndex,
+		bootstrapReasonForcedReindex,
+		bootstrapReasonStagingResume,
+		bootstrapReasonEmptyDiffCollectionMissing,
+		bootstrapReasonEmptyDiffCollectionEmpty,
+		bootstrapReasonDeltaCollectionMissing:
+		return true
+	default:
+		return false
+	}
+}
+
+func bootstrapRouteCaller() string {
+	pc, _, _, ok := runtime.Caller(2)
+	if !ok {
+		return ""
+	}
+	function := runtime.FuncForPC(pc)
+	if function == nil {
+		return ""
+	}
+	return function.Name()
 }
 
 func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, result indexer.Result) {
