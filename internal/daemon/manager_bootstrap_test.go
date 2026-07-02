@@ -276,7 +276,7 @@ func TestRunBootstrapMissingLiveCollectionEmbedsEverything(t *testing.T) {
 			Manifest:       manifest,
 			Documents:      documents,
 		})
-		source := newConversationItemSource(liveCollection, manifest, documents)
+		source := newConversationItemSource(liveCollection, manifest, documents, nil)
 
 		manager.runBootstrap(context.Background(), job, source)
 
