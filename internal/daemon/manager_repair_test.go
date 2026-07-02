@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -301,23 +303,78 @@ func TestForceReindexUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.
 	t.Parallel()
 
 	manager, _, repoPath := newTestManager(t)
-	collectionProbeCount := atomic.Int32{}
+	type collectionProbeAnswer struct {
+		productionCall string
+		stackFunction  string
+		exists         bool
+	}
+	collectionProbeAnswers := []collectionProbeAnswer{
+		{
+			productionCall: "initial StartIndex presence probe",
+			stackFunction:  "(*Manager).StartIndex",
+			exists:         false,
+		},
+		{
+			productionCall: "bootstrap reuse-eligibility probe from resolveItemReusePolicy",
+			stackFunction:  "(*Manager).resolveItemReusePolicy",
+			// A staging bootstrap only reuses per-item vectors when the live collection still exists.
+			exists: false,
+		},
+		{
+			productionCall: "force StartIndex presence probe",
+			stackFunction:  "(*Manager).StartIndex",
+			// The force request must choose streaming reindex before the later empty-diff fallback.
+			exists: true,
+		},
+		{
+			productionCall: "post-disappearance empty-diff probe from planSyncDiff",
+			stackFunction:  "(*Manager).planSyncDiff",
+			exists:         false,
+		},
+	}
+	collectionProbeNames := func(answers []collectionProbeAnswer) []string {
+		names := make([]string, 0, len(answers))
+		for _, answer := range answers {
+			names = append(names, answer.productionCall)
+		}
+		return names
+	}
+	stackHasFunction := func(functionName string) bool {
+		programCounters := make([]uintptr, 32)
+		frameCount := runtime.Callers(0, programCounters)
+		frames := runtime.CallersFrames(programCounters[:frameCount])
+		for {
+			frame, more := frames.Next()
+			if strings.Contains(frame.Function, functionName) {
+				return true
+			}
+			if !more {
+				return false
+			}
+		}
+	}
+	collectionProbeMutex := sync.Mutex{}
+	collectionProbeCursor := 0
+	collectionProbeErrors := []string{}
 	manager.semantic = &fakeSemantic{
 		collectionName: func(string) string { return "force_collection" },
 		count:          func(context.Context, string) (int32, error) { return 1, nil },
 		hasCollectionForPath: func(context.Context, string) (bool, error) {
-			switch collectionProbeCount.Add(1) {
-			case 1:
-				return false, nil
-			case 2:
-				return false, nil
-			case 3:
-				return true, nil
-			case 4:
-				return false, nil
-			default:
+			collectionProbeMutex.Lock()
+			defer collectionProbeMutex.Unlock()
+			if collectionProbeCursor >= len(collectionProbeAnswers) {
+				collectionProbeErrors = append(collectionProbeErrors, "unexpected collection probe after "+strings.Join(collectionProbeNames(collectionProbeAnswers), ", "))
 				return false, nil
 			}
+			answer := collectionProbeAnswers[collectionProbeCursor]
+			collectionProbeCursor++
+			if !stackHasFunction(answer.stackFunction) {
+				collectionProbeErrors = append(
+					collectionProbeErrors,
+					"probe for "+answer.productionCall+" did not come from "+answer.stackFunction,
+				)
+			}
+			return answer.exists, nil
 		},
 		reindexEmit: func(progress func(semantic.Progress)) {
 			progress(semantic.Progress{ChunksProcessed: 1, ChunksReused: 0, ChunksEmbedded: 1})
@@ -389,6 +446,26 @@ func TestForceReindexUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.
 	}
 	if completedJob.Progress.ChunksGenerated == 0 {
 		t.Fatalf("completed job ChunksGenerated = %d, want > 0", completedJob.Progress.ChunksGenerated)
+	}
+
+	collectionProbeMutex.Lock()
+	consumedProbeCount := collectionProbeCursor
+	probeErrors := append([]string(nil), collectionProbeErrors...)
+	remainingProbes := collectionProbeNames(collectionProbeAnswers[collectionProbeCursor:])
+	collectionProbeMutex.Unlock()
+	if len(probeErrors) > 0 {
+		t.Fatalf(
+			"production probe sequence changed and this fixture must be re-derived deliberately: %s",
+			strings.Join(probeErrors, "; "),
+		)
+	}
+	if consumedProbeCount != len(collectionProbeAnswers) {
+		t.Fatalf(
+			"production probe sequence changed and this fixture must be re-derived deliberately: consumed %d collection probes, want %d; remaining probes: %s",
+			consumedProbeCount,
+			len(collectionProbeAnswers),
+			strings.Join(remainingProbes, ", "),
+		)
 	}
 }
 
