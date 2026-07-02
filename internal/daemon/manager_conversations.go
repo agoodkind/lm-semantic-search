@@ -109,11 +109,79 @@ func (manager *Manager) SyncConversationManifest(ctx context.Context, collection
 	current := merkle.Snapshot{ConfigDigest: configDigest, Files: manifest, Inodes: nil}
 	diff := merkle.DiffSnapshots(seed, current)
 
-	needed := make([]string, 0, len(diff.Added)+len(diff.Modified))
-	needed = append(needed, diff.Added...)
-	needed = append(needed, diff.Modified...)
-	sort.Strings(needed)
+	manager.mu.Lock()
+	cursor := manager.conversationSyncCursors[codebase.ID]
+	needed, nextCursor := capNeededConversations(diff.Added, diff.Modified, manager.config.MaxConversationsPerIngest, cursor)
+	if nextCursor != "" {
+		manager.conversationSyncCursors[codebase.ID] = nextCursor
+	}
+	manager.mu.Unlock()
 	return needed, nil
+}
+
+// One shared cursor tracks pre-sort rotation order across modified overflow and
+// added windows. A cursor past a list's end wraps to that list's start so
+// rotation stays live without per-list cursors.
+func capNeededConversations(added []string, modified []string, limit int, cursor string) ([]string, string) {
+	if limit <= 0 {
+		needed := make([]string, 0, len(added)+len(modified))
+		needed = append(needed, added...)
+		needed = append(needed, modified...)
+		sort.Strings(needed)
+		return needed, cursor
+	}
+
+	capped := make([]string, 0, min(limit, len(added)+len(modified)))
+	nextCursor := ""
+	if len(modified) > limit {
+		modifiedWindow := firstN(rotateAfter(modified, cursor), limit)
+		capped = append(capped, modifiedWindow...)
+		if len(modifiedWindow) > 0 {
+			nextCursor = modifiedWindow[len(modifiedWindow)-1]
+		}
+		sort.Strings(capped)
+		return capped, nextCursor
+	}
+
+	sortedModified := append([]string(nil), modified...)
+	sort.Strings(sortedModified)
+	capped = append(capped, sortedModified...)
+	if len(sortedModified) > 0 {
+		nextCursor = sortedModified[len(sortedModified)-1]
+	}
+	remainder := limit - len(capped)
+	if remainder > 0 {
+		addedWindow := firstN(rotateAfter(added, cursor), remainder)
+		capped = append(capped, addedWindow...)
+		if len(addedWindow) > 0 {
+			nextCursor = addedWindow[len(addedWindow)-1]
+		}
+	}
+	sort.Strings(capped)
+	return capped, nextCursor
+}
+
+func rotateAfter(values []string, cursor string) []string {
+	rotated := append([]string(nil), values...)
+	sort.Strings(rotated)
+	if len(rotated) == 0 || cursor == "" {
+		return rotated
+	}
+	start := sort.SearchStrings(rotated, cursor)
+	if start < len(rotated) && rotated[start] == cursor {
+		start++
+	}
+	if start >= len(rotated) {
+		return rotated
+	}
+	return append(append([]string(nil), rotated[start:]...), rotated[:start]...)
+}
+
+func firstN(values []string, limit int) []string {
+	if limit >= len(values) {
+		return values
+	}
+	return values[:limit]
 }
 
 // upsertConversationDocuments queues an asynchronous ingest. When manifest is
