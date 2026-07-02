@@ -163,9 +163,7 @@ func (manager *Manager) cleanupHaltedStaging(ctx context.Context, job model.Job,
 // every file as Added, which the per-file loop handles uniformly.
 func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebaseID string, source itemSource) deltaPlan {
 	configDigest := job.Config.IgnoreDigest
-	snapshotPath := manager.merklePath(codebaseID)
-	legacyDigest := manager.legacyDigestForCodebase(codebaseID)
-	seed := merkle.LoadSnapshotForConfig(snapshotPath, configDigest, legacyDigest)
+	seed := manager.resolveSeed(ctx, job, codebaseID, false, false).seed
 	captured, err := source.capture(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -552,9 +550,6 @@ func (manager *Manager) resolveReuseSeed(ctx context.Context, job model.Job) (ma
 // first file and any stale staging is dropped first.
 func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codebaseID string, source itemSource) deltaPlan {
 	configDigest := job.Config.IgnoreDigest
-	legacyDigest := manager.legacyDigestForCodebase(codebaseID)
-	stagingSnapshotPath := manager.stagingMerklePath(codebaseID)
-	seed := merkle.LoadSnapshotForConfig(stagingSnapshotPath, configDigest, legacyDigest)
 	semanticReady := manager.semantic != nil && manager.semantic.Available()
 
 	captured, err := source.capture(ctx)
@@ -567,24 +562,13 @@ func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codeba
 		return deltaPlan{
 			diff:            merkle.Diff{Added: nil, Modified: nil, Removed: nil},
 			currentSnapshot: merkle.Snapshot{ConfigDigest: "", Files: nil, Inodes: nil},
-			seedSnapshot:    seed,
+			seedSnapshot:    merkle.Snapshot{ConfigDigest: configDigest, Files: nil, Inodes: nil},
 			configDigest:    configDigest,
 			fallback:        false,
 			handled:         true,
 		}
 	}
-
-	if !manager.canResumeStaging(ctx, job.CanonicalPath, seed, semanticReady) {
-		if semanticReady {
-			if dropErr := manager.semantic.DropStaging(ctx, job.CanonicalPath); dropErr != nil {
-				slog.WarnContext(ctx, "drop stale staging before bootstrap failed", "path", job.CanonicalPath, "err", dropErr)
-			}
-		}
-		seed = merkle.Snapshot{ConfigDigest: configDigest, Files: nil, Inodes: nil}
-		if removeErr := store.RemoveFile(stagingSnapshotPath); removeErr != nil {
-			slog.WarnContext(ctx, "remove stale bootstrap checkpoint failed", "path", stagingSnapshotPath, "err", removeErr)
-		}
-	}
+	seedDecision := manager.resolveSeed(ctx, job, codebaseID, true, semanticReady)
 
 	addedFiles := make([]string, 0, len(captured.Files))
 	for relativePath := range captured.Files {
@@ -594,7 +578,7 @@ func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codeba
 	return deltaPlan{
 		diff:            merkle.Diff{Added: addedFiles, Modified: nil, Removed: nil},
 		currentSnapshot: captured,
-		seedSnapshot:    seed,
+		seedSnapshot:    seedDecision.seed,
 		configDigest:    configDigest,
 		fallback:        false,
 		handled:         false,
@@ -619,28 +603,6 @@ func (manager *Manager) promoteStagingMerkle(ctx context.Context, job model.Job,
 	}
 	slog.InfoContext(ctx, "promoted staging Merkle snapshot to live", "component", "daemon", "subcomponent", "delta", "codebase_id", job.CodebaseID, "path", livePath)
 	return deltaOutcome{fallback: false, handled: false, progressed: false}
-}
-
-// canResumeStaging reports whether a persisted checkpoint can seed a resumed
-// build. A checkpoint with no files cannot. When the semantic backend is
-// configured the staging collection must still exist, because that is where
-// the embedded vectors for the checkpointed files live; without it the
-// checkpoint describes work whose vectors were lost, so the build restarts.
-// When the backend is unavailable the checkpoint is the only state and is
-// trusted on its own.
-func (manager *Manager) canResumeStaging(ctx context.Context, canonicalPath string, seed merkle.Snapshot, semanticReady bool) bool {
-	if len(seed.Files) == 0 {
-		return false
-	}
-	if !semanticReady {
-		return true
-	}
-	hasStaging, err := manager.semantic.HasStaging(ctx, canonicalPath)
-	if err != nil {
-		slog.WarnContext(ctx, "check staging for resume failed; restarting build", "path", canonicalPath, "err", err)
-		return false
-	}
-	return hasStaging
 }
 
 // promoteBootstrap swaps the freshly built staging collection onto the live
