@@ -276,6 +276,7 @@ func blankStatusView(name string, updatedAt string) view.StatusView {
 		ReuseForecastLine: "",
 		UpdatedAt:         updatedAt,
 		SyncNote:          "",
+		GraphLine:         "",
 	}
 }
 
@@ -431,6 +432,7 @@ func (manager *Manager) resolveGetIndexView(
 	if display == displayDiscovered {
 		statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
 	}
+	statusView.GraphLine = manager.graphStatusLine(*codebase)
 	getIndex.Status = statusView
 	getIndex.TemplateName = templateName
 	getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, getIndex.Failure, getIndex.Quarantine, statusView)

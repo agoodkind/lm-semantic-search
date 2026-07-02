@@ -22,6 +22,13 @@ INSTALL_BINS := $(BINARY):$(CMD) $(CLI_BINARY):$(CLI_CMD) $(MCP_BINARY):$(MCP_CM
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 BUILD_CHECKS := true
 STATICCHECK_EXTRA_FLAGS = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_STRICT_FLAGS)
+GO_MK_CGO_DEPS := cbm
+# Mirror go-makefile's own default (absolute, keyed by the per-target
+# GO_MK_TARGET_GOOS/GOARCH the release command sets), but fall back to the host
+# os/arch when they are empty so a plain host build lands under
+# .make/cgo/<goos>-<goarch> instead of .make/cgo/-. Keep this recursively
+# expanded (?=) so a per-target release still resolves its own prefix live.
+GO_MK_CGO_PREFIX ?= $(CURDIR)/.make/cgo/$(or $(GO_MK_TARGET_GOOS),$(shell go env GOOS))-$(or $(GO_MK_TARGET_GOARCH),$(shell go env GOARCH))
 
 LAUNCHD_LABEL := io.goodkind.lm-semantic-search-daemon
 SYSTEMD_UNIT := lm-semantic-search-daemon.service
@@ -47,6 +54,9 @@ GO_MK_GENERATE_OUTPUTS := \
 	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/alloc.h
 GO_MK_WORKSPACE_USE := . third_party/gksyntax
 
+go-mk-cgo-dep-cbm: scripts/setup-cgo-cbm.sh scripts/cbm-lib.mk third_party/cbm/Makefile.cbm
+	"$(CURDIR)/scripts/setup-cgo-cbm.sh"
+
 # bootstrap.mk fetches go.mk + golangci.yml + every module in GO_MK_MODULES
 # at parse time and -includes them. Update path: edit go-makefile/bootstrap.mk,
 # then refresh consumer copies (one-off cp; not enshrined as infrastructure).
@@ -54,11 +64,14 @@ include bootstrap.mk
 
 .DEFAULT_GOAL := check
 
+export PKG_CONFIG_PATH := $(GO_MK_CGO_PREFIX)/lib/pkgconfig$(if $(strip $(PKG_CONFIG_PATH)),:$(PKG_CONFIG_PATH))
+build build-check check lint lint-golangci lint-deadcode staticcheck-extra vet test govulncheck install release: | go-mk-cgo-deps
+
 # ---------------------------------------------------------------------------
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: deploy deploy-service daemon-wait daemon-status kill-orphans
+.PHONY: go-mk-cgo-dep-cbm deploy deploy-service daemon-wait daemon-status kill-orphans
 
 # daemon-status and daemon-wait call the installed CLI; kill-orphans matches the
 # installed MCP binary by name.
@@ -86,7 +99,14 @@ TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
 
 .PHONY: gksyntax-grammars
 gksyntax-grammars:
-	@git submodule update --init --recursive $(GKS_DIR)
+	@status="$$(git submodule status --recursive $(GKS_DIR))"; \
+	if printf '%s\n' "$$status" | grep -q '^U'; then \
+		echo "gksyntax-grammars: $(GKS_DIR) has unresolved submodule conflicts"; \
+		exit 1; \
+	fi; \
+	if printf '%s\n' "$$status" | grep -Eq '^[+-]'; then \
+		git submodule update --init --recursive $(GKS_DIR); \
+	fi
 	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
 		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
 		exit 1; \

@@ -3,6 +3,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -63,6 +64,10 @@ func Run(ctx context.Context) error {
 	registerGetJobTool(mcpServer, cfg.SocketPath, outputMode)
 	registerDoctorTool(mcpServer, cfg.SocketPath, outputMode)
 	registerSearchTool(mcpServer, cfg.SocketPath, outputMode)
+	registerQueryGraphTool(mcpServer, cfg.SocketPath, outputMode)
+	registerTracePathTool(mcpServer, cfg.SocketPath, outputMode)
+	registerGetArchitectureTool(mcpServer, cfg.SocketPath, outputMode)
+	registerManageADRTool(mcpServer, cfg.SocketPath, outputMode)
 
 	stdioServer := server.NewStdioServer(mcpServer)
 
@@ -314,6 +319,222 @@ func registerSearchTool(mcpServer *server.MCPServer, socketPath string, outputMo
 			})
 		}),
 	)
+}
+
+func registerQueryGraphTool(mcpServer *server.MCPServer, socketPath string, outputMode response.Mode) {
+	mcpServer.AddTool(
+		mcp.NewTool(
+			"query_graph",
+			mcp.WithDescription("Query the indexed code graph through the daemon"),
+			mcp.WithString("absolutePath", mcp.Required(), mcp.Description("absolute path to the codebase directory")),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Cypher graph query")),
+		),
+		wrapTool("query_graph", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			absolutePath, errResult, ok := requireNonEmptyArg(req, "absolutePath")
+			if !ok {
+				return errResult, nil
+			}
+			query, errResult, ok := requireNonEmptyArg(req, "query")
+			if !ok {
+				return errResult, nil
+			}
+
+			argsJSON, err := MarshalQueryGraphArguments(query)
+			if err != nil {
+				return nil, err
+			}
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
+				return client.GraphTool(ctx, &pb.GraphToolRequest{
+					Path:     absolutePath,
+					Client:   mcpClientInfo(),
+					ToolName: "query_graph",
+					ArgsJson: argsJSON,
+				})
+			})
+		}),
+	)
+}
+
+func registerTracePathTool(mcpServer *server.MCPServer, socketPath string, outputMode response.Mode) {
+	mcpServer.AddTool(
+		mcp.NewTool(
+			"trace_path",
+			mcp.WithDescription("Trace callers and callees of a function in the code graph"),
+			mcp.WithString("absolutePath", mcp.Required(), mcp.Description("absolute path to the codebase directory")),
+			mcp.WithString("functionName", mcp.Required(), mcp.Description("function name to trace")),
+			mcp.WithString("direction", mcp.Description("trace direction"), mcp.Enum("inbound", "outbound", "both")),
+			mcp.WithNumber("depth", mcp.Description("maximum traversal depth")),
+		),
+		wrapTool("trace_path", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			absolutePath, errResult, ok := requireNonEmptyArg(req, "absolutePath")
+			if !ok {
+				return errResult, nil
+			}
+			functionName, errResult, ok := requireNonEmptyArg(req, "functionName")
+			if !ok {
+				return errResult, nil
+			}
+
+			argsJSON, err := MarshalTracePathArguments(functionName, req.GetString("direction", ""), optionalIntArgument(req, "depth"))
+			if err != nil {
+				return nil, err
+			}
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
+				return client.GraphTool(ctx, &pb.GraphToolRequest{
+					Path:     absolutePath,
+					Client:   mcpClientInfo(),
+					ToolName: "trace_path",
+					ArgsJson: argsJSON,
+				})
+			})
+		}),
+	)
+}
+
+func registerGetArchitectureTool(mcpServer *server.MCPServer, socketPath string, outputMode response.Mode) {
+	mcpServer.AddTool(
+		mcp.NewTool(
+			"get_architecture",
+			mcp.WithDescription("Return a structural overview of the indexed codebase (languages, entry points, hotspots, clusters)"),
+			mcp.WithString("absolutePath", mcp.Required(), mcp.Description("absolute path to the codebase directory")),
+			mcp.WithString("path", mcp.Description("directory prefix to scope the summary")),
+		),
+		wrapTool("get_architecture", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			absolutePath, errResult, ok := requireNonEmptyArg(req, "absolutePath")
+			if !ok {
+				return errResult, nil
+			}
+
+			argsJSON, err := MarshalGetArchitectureArguments(req.GetString("path", ""))
+			if err != nil {
+				return nil, err
+			}
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
+				return client.GraphTool(ctx, &pb.GraphToolRequest{
+					Path:     absolutePath,
+					Client:   mcpClientInfo(),
+					ToolName: "get_architecture",
+					ArgsJson: argsJSON,
+				})
+			})
+		}),
+	)
+}
+
+func registerManageADRTool(mcpServer *server.MCPServer, socketPath string, outputMode response.Mode) {
+	mcpServer.AddTool(
+		mcp.NewTool(
+			"manage_adr",
+			mcp.WithDescription("Get or update the codebase Architecture Decision Record"),
+			mcp.WithString("absolutePath", mcp.Required(), mcp.Description("absolute path to the codebase directory")),
+			mcp.WithString("mode", mcp.Required(), mcp.Description("ADR operation mode"), mcp.Enum("get", "update", "sections")),
+			mcp.WithString("content", mcp.Description("ADR content for update")),
+			mcp.WithArray("sections", mcp.Description("ADR sections to inspect or update"), mcp.WithStringItems()),
+		),
+		wrapTool("manage_adr", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			absolutePath, errResult, ok := requireNonEmptyArg(req, "absolutePath")
+			if !ok {
+				return errResult, nil
+			}
+			mode, errResult, ok := requireNonEmptyArg(req, "mode")
+			if !ok {
+				return errResult, nil
+			}
+
+			argsJSON, err := MarshalManageADRArguments(mode, req.GetString("content", ""), req.GetStringSlice("sections", nil))
+			if err != nil {
+				return nil, err
+			}
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
+				return client.GraphTool(ctx, &pb.GraphToolRequest{
+					Path:     absolutePath,
+					Client:   mcpClientInfo(),
+					ToolName: "manage_adr",
+					ArgsJson: argsJSON,
+				})
+			})
+		}),
+	)
+}
+
+// MarshalQueryGraphArguments builds query_graph arguments for the daemon RPC.
+func MarshalQueryGraphArguments(query string) (string, error) {
+	args := struct {
+		Query   string `json:"query"`
+		Project string `json:"project"`
+		MaxRows int    `json:"max_rows"`
+	}{
+		Query:   query,
+		Project: "",
+		MaxRows: 200,
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		slog.Error("marshal query_graph arguments failed", "err", err)
+		return "", fmt.Errorf("marshal query_graph arguments: %w", err)
+	}
+	return string(data), nil
+}
+
+// MarshalTracePathArguments builds trace_path arguments for the daemon RPC.
+func MarshalTracePathArguments(functionName string, direction string, depth *int) (string, error) {
+	args := struct {
+		FunctionName string `json:"function_name"`
+		Direction    string `json:"direction,omitempty"`
+		Depth        *int   `json:"depth,omitempty"`
+	}{
+		FunctionName: functionName,
+		Direction:    direction,
+		Depth:        depth,
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		slog.Error("marshal trace_path arguments failed", "err", err)
+		return "", fmt.Errorf("marshal trace_path arguments: %w", err)
+	}
+	return string(data), nil
+}
+
+// MarshalGetArchitectureArguments builds get_architecture arguments for the daemon RPC.
+func MarshalGetArchitectureArguments(path string) (string, error) {
+	args := struct {
+		Path string `json:"path,omitempty"`
+	}{
+		Path: path,
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		slog.Error("marshal get_architecture arguments failed", "err", err)
+		return "", fmt.Errorf("marshal get_architecture arguments: %w", err)
+	}
+	return string(data), nil
+}
+
+// MarshalManageADRArguments builds manage_adr arguments for the daemon RPC.
+func MarshalManageADRArguments(mode string, content string, sections []string) (string, error) {
+	args := struct {
+		Mode     string   `json:"mode"`
+		Content  string   `json:"content,omitempty"`
+		Sections []string `json:"sections,omitempty"`
+	}{
+		Mode:     mode,
+		Content:  content,
+		Sections: sections,
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		slog.Error("marshal manage_adr arguments failed", "err", err)
+		return "", fmt.Errorf("marshal manage_adr arguments: %w", err)
+	}
+	return string(data), nil
+}
+
+func optionalIntArgument(req mcp.CallToolRequest, key string) *int {
+	if _, found := req.GetArguments()[key]; !found {
+		return nil
+	}
+	value := req.GetInt(key, 0)
+	return &value
 }
 
 // callDaemonIndexAndWait starts an index job through StartIndex and polls

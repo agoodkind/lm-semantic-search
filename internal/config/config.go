@@ -47,6 +47,7 @@ type Config struct {
 	LocksDir     string
 	SocketsDir   string
 	ChunksDir    string
+	GraphDir     string
 	ContextRoot  string
 
 	EmbeddingProvider  string
@@ -179,6 +180,7 @@ func Default() (Config, error) {
 		LocksDir:                  filepath.Join(stateRoot, "locks"),
 		SocketsDir:                socketsDir,
 		ChunksDir:                 filepath.Join(stateRoot, "chunks"),
+		GraphDir:                  filepath.Join(stateRoot, "graph"),
 		ContextRoot:               contextRoot,
 		EmbeddingProvider:         envOrDefault("EMBEDDING_PROVIDER", defaultProvider),
 		EmbeddingModel:            envOrDefault("EMBEDDING_MODEL", defaultModel),

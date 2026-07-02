@@ -239,6 +239,9 @@ func TestDefaultKeepsDaemonStateAndCompatRootsSplit(t *testing.T) {
 	if cfg.ChunksDir != filepath.Join(wantStateRoot, "chunks") {
 		t.Fatalf("ChunksDir = %q", cfg.ChunksDir)
 	}
+	if cfg.GraphDir != filepath.Join(wantStateRoot, "graph") {
+		t.Fatalf("GraphDir = %q", cfg.GraphDir)
+	}
 	if cfg.SocketPath != filepath.Join(wantStateRoot, "sockets", "lm-semantic-search-daemon.sock") {
 		t.Fatalf("SocketPath = %q", cfg.SocketPath)
 	}

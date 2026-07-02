@@ -52,6 +52,30 @@ type Snapshot struct {
 	Inodes       map[string]InodeRef `json:"inodes,omitempty"`
 }
 
+// Hash returns a deterministic digest for the snapshot content that drives both
+// the semantic index and the graph index. It intentionally includes the config
+// digest and tracked file hashes, which are the inputs that make one indexed
+// corpus differ from another.
+func (snapshot *Snapshot) Hash() string {
+	hash := sha256.New()
+	hash.Write([]byte("config:"))
+	hash.Write([]byte(snapshot.ConfigDigest))
+	hash.Write([]byte{0})
+
+	paths := make([]string, 0, len(snapshot.Files))
+	for path := range snapshot.Files {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	for _, path := range paths {
+		hash.Write([]byte(path))
+		hash.Write([]byte{0})
+		hash.Write([]byte(snapshot.Files[path]))
+		hash.Write([]byte{0})
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
 // LookupByInode returns every recorded path whose (device, inode) matches
 // the supplied reference. An empty result means the inode has not been
 // observed under another path in this codebase.

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/lm-semantic-search/internal/cbm"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
@@ -78,6 +79,11 @@ type Manager struct {
 	lastJobJournalAt map[string]time.Time
 	runner           indexingRunner
 	semantic         semanticIndex
+	graphEngines     map[string]*cbm.Engine
+	graphLifecycle   map[string]*graphLifecycleState
+	graphMutex       sync.Mutex
+	graphIndex       func(context.Context, *cbm.Engine, string, string) error
+	graphIndexHook   func()
 	lifecycleHook    CodebaseLifecycleHook
 	lifecycleMutex   sync.Mutex
 	// indexSlots caps concurrently running index jobs. Each runJob holds one
@@ -142,6 +148,11 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		lastJobJournalAt:   map[string]time.Time{},
 		runner:             indexer.NewRunner(),
 		semantic:           nil,
+		graphEngines:       map[string]*cbm.Engine{},
+		graphLifecycle:     map[string]*graphLifecycleState{},
+		graphMutex:         sync.Mutex{},
+		graphIndex:         defaultGraphIndex,
+		graphIndexHook:     nil,
 		lifecycleHook:      nil,
 		lifecycleMutex:     sync.Mutex{},
 		indexSlots:         make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
@@ -151,6 +162,18 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		deferredBuildDelay: defaultDeferredBuildDelay,
 		indexability:       nil,
 		observer:           nil,
+	}
+	if err := store.EnsureDir(cfg.GraphDir); err != nil {
+		slog.ErrorContext(ctx, "create graph cache directory failed", "path", cfg.GraphDir, "err", err)
+		return nil, fmt.Errorf("create graph cache directory: %w", err)
+	}
+	// Force the cbm engine to a single worker. Its parallel extraction worker
+	// pool aborts inside cgo when driven repeatedly from this long-lived daemon
+	// process, so the graph engine runs sequentially. Graph indexing is a
+	// background, non-fatal pass, so the lost parallelism is acceptable.
+	if err := os.Setenv("CBM_WORKERS", "1"); err != nil {
+		slog.ErrorContext(ctx, "set cbm worker count failed", "err", err)
+		return nil, fmt.Errorf("set cbm worker count: %w", err)
 	}
 	// The resolver reads each codebase's custom ignore patterns straight from the
 	// registry source of truth at build time, so per-codebase ignore state has no
@@ -283,6 +306,8 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 		CollectionName:        "",
 		LegacyCollectionNames: nil,
 		MerkleSnapshotPath:    "",
+		GraphState:            "",
+		GraphSnapshotHash:     "",
 		Quarantine:            nil,
 		WorktreeCommonDir:     "",
 		InodeTrackingDisabled: false,
@@ -664,6 +689,9 @@ func (manager *Manager) ClearIndex(ctx context.Context, requestedPath string, cl
 	if err := store.RemoveFile(manager.merklePath(codebase.ID)); err != nil {
 		return model.Codebase{}, fmt.Errorf("remove Merkle snapshot for %s: %w", codebase.ID, err)
 	}
+	if err := manager.clearGraphCache(ctx, codebase.ID); err != nil {
+		return model.Codebase{}, fmt.Errorf("remove graph cache for %s: %w", codebase.ID, err)
+	}
 	if manager.semantic != nil {
 		if err := manager.semantic.Drop(ctx, codebase.CanonicalPath); err != nil && !errors.Is(err, semantic.ErrUnavailable) {
 			return model.Codebase{}, fmt.Errorf("drop semantic index for %s: %w", codebase.CanonicalPath, err)
@@ -821,21 +849,6 @@ func (manager *Manager) ListJobs(codebaseID string) []model.Job {
 	return jobs
 }
 
-// JobSuccessorID returns the id of the immediate next terminal job for job's
-// codebase, or empty when job is the latest terminal job. The single-job views
-// use it since they do not hold the full job set the list view does.
-func (manager *Manager) JobSuccessorID(job model.Job) string {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	codebaseJobs := make([]model.Job, 0)
-	for _, candidate := range manager.jobs {
-		if candidate.CodebaseID == job.CodebaseID {
-			codebaseJobs = append(codebaseJobs, candidate)
-		}
-	}
-	return buildJobSuccessors(codebaseJobs)[job.ID]
-}
-
 // Doctor reports basic local state-path diagnostics.
 func (manager *Manager) Doctor() []string {
 	diagnostics := []string{}
@@ -859,6 +872,9 @@ func (manager *Manager) Doctor() []string {
 		return codebases[i].CanonicalPath < codebases[j].CanonicalPath
 	})
 	for _, codebase := range codebases {
+		if diagnostic := manager.graphDiagnostic(codebase); diagnostic != "" {
+			diagnostics = append(diagnostics, diagnostic)
+		}
 		if codebase.LastSuccessfulRun == nil {
 			continue
 		}
@@ -927,74 +943,9 @@ func (manager *Manager) activeJobLocked(codebase model.Codebase, canonicalPath s
 	return emptyJob, false, fmt.Errorf("conflicting active job %s for canonical path %s", activeJob.ID, canonicalPath)
 }
 
-func (manager *Manager) activeJobSnapshotLocked(codebase model.Codebase) *model.Job {
-	if codebase.ActiveJobID == "" {
-		return nil
-	}
-
-	job, found := manager.jobs[codebase.ActiveJobID]
-	if !found {
-		return nil
-	}
-	switch job.State {
-	case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
-		jobCopy := job
-		return &jobCopy
-	case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
-		return nil
-	default:
-		return nil
-	}
-}
-
-func (manager *Manager) cancelActiveJobForPath(ctx context.Context, canonicalPath string) error {
-	manager.mu.Lock()
-	codebase, found := manager.findCodebaseByExactRoot(canonicalPath)
-	if !found {
-		manager.mu.Unlock()
-		return nil
-	}
-	jobDone, cancel := manager.beginActiveJobCancellationLocked(codebase)
-	manager.mu.Unlock()
-
-	if cancel == nil {
-		return nil
-	}
-
-	cancel()
-	if err := waitForJobDone(ctx, jobDone); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (manager *Manager) beginActiveJobCancellationLocked(codebase model.Codebase) (chan struct{}, context.CancelFunc) {
-	if codebase.ActiveJobID == "" {
-		return nil, nil
-	}
-
-	job, found := manager.jobs[codebase.ActiveJobID]
-	if !found {
-		return nil, nil
-	}
-	if job.State == model.JobStateCompleted || job.State == model.JobStateFailed || job.State == model.JobStateCancelled {
-		return nil, nil
-	}
-
-	now := clock.Now()
-	job.State = model.JobStateCancelling
-	job.UpdatedAt = now
-	job.Progress.Phase = "cancelling"
-	job.Progress.LastEventAt = now
-	job.Progress.HeartbeatAt = now
-	manager.jobs[job.ID] = job
-	cancel := manager.cancels[job.ID]
-	jobDone := manager.done[job.ID]
-	return jobDone, cancel
-}
-
 // Delta sync helpers live in manager_delta.go. Job state mutators live in
 // manager_jobs_state.go. SearchCode and rankChunks live in manager_search.go.
 // Path helpers live in manager_paths.go. Config helpers and id helpers live in
 // manager_config.go. Boundary guards (StateRoot, directory, inode-stability)
-// live in manager_guards.go.
+// live in manager_guards.go. Active-job snapshot and cancellation helpers live
+// in manager_active_job.go.

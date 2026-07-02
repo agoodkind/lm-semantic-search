@@ -1,3 +1,6 @@
 📁 {{ .Name }}
 ⏳ Indexing is queued but has not started yet.
+{{- if .GraphLine }}
+{{ .GraphLine }}
+{{- end }}
 🕐 Updated {{ .UpdatedAt }}
