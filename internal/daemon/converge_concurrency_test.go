@@ -139,6 +139,9 @@ func (f *fakeSemantic) InspectCollection(ctx context.Context, collectionName str
 		return f.inspectCollection(ctx, collectionName)
 	}
 	if f.hasCollectionForPath != nil {
+		// This fallback preserves older repair-test fixtures, but this path
+		// passes a collection name. Fixtures keyed by codebase path must set
+		// inspectCollection explicitly so they do not compare unlike values.
 		exists, err := f.hasCollectionForPath(ctx, collectionName)
 		if err != nil {
 			return semantic.CollectionFacts{}, err
