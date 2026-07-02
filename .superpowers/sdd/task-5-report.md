@@ -222,3 +222,17 @@ The per-item load-failure fallback remains unchanged.
 No known code concerns.
 
 A read-only reviewer subagent was spawned after gates passed, but it did not finish before the closeout window and was closed. The self-review and required local gates completed.
+
+## Fix round 1
+
+`TestForceReindexUnchangedRepoBootstrapsWhenCollectionDisappears` now uses an explicit answer queue for the fake collection presence probes.
+
+The first answer serves the initial `StartIndex` presence probe. It returns missing so the first request bootstraps a new index.
+
+The second answer serves the bootstrap reuse-eligibility probe from `resolveItemReusePolicy`. The one-reuse-rule change added this run-level probe because a staging bootstrap only enables per-item reuse when the live counterpart collection still exists.
+
+The third answer serves the forced `StartIndex` presence probe. It returns present so the force request chooses `streaming_reindex`, which preserves the test path that later discovers collection loss during the run.
+
+The fourth answer serves the empty-diff probe from `planSyncDiff`. It returns missing so the streaming reindex falls back to bootstrap and embeds files after the collection disappears.
+
+The fixture now checks that every queued answer is consumed and that no extra probe appears. It also checks the stack for each queued answer, so a same-count production probe shift must be re-derived deliberately instead of silently consuming the next boolean.
