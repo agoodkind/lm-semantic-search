@@ -108,21 +108,34 @@ gksyntax-grammars:
 # vet, lint, test, install, and release target is wired centrally in go.mk via
 # GO_MK_GENERATE (set above), so no per-target list is maintained here.
 
+# install runs as the inherited `deploy: install` prerequisite from
+# go-build.mk; repeating it here as a recipe line runs the whole
+# build-check + codesign pipeline a second time in a fresh sub-make.
 deploy:
-	$(MAKE) install
 	$(MAKE) deploy-service
 	$(MAKE) daemon-wait
 	$(MAKE) daemon-status
 
+# Probe loadedness silently instead of letting service-restart fail with
+# a make error on a host where the service is not installed yet.
 deploy-service:
-	@$(MAKE) service-restart || { \
-		echo "service restart failed; installing user service"; \
-		$(MAKE) service-install; \
-		if [ "$$(uname)" = "Darwin" ]; then \
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		if launchctl print "$(LAUNCHD_DOMAIN)/$(LAUNCHD_LABEL)" >/dev/null 2>&1; then \
+			$(MAKE) service-restart; \
+		else \
+			echo "deploy-service: $(LAUNCHD_LABEL) not loaded; installing user service"; \
+			$(MAKE) service-install; \
 			launchctl enable "$(LAUNCHD_DOMAIN)/$(LAUNCHD_LABEL)" || true; \
+			$(MAKE) service-restart; \
 		fi; \
-		$(MAKE) service-restart; \
-	}
+	else \
+		if systemctl --user cat "$(SYSTEMD_UNIT)" >/dev/null 2>&1; then \
+			$(MAKE) service-restart; \
+		else \
+			echo "deploy-service: $(SYSTEMD_UNIT) not installed; installing user service"; \
+			$(MAKE) service-install; \
+		fi; \
+	fi
 
 daemon-status:
 	"$(CLI_INSTALL_BIN)" daemon status
