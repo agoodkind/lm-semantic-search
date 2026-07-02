@@ -318,6 +318,7 @@ func newQueuedJob(
 			OverallPercent:            0,
 			Unit:                      "",
 			RunMode:                   "",
+			BootstrapReason:           "",
 			ScopeUnit:                 "",
 			FilesTotal:                0,
 			FilesProcessed:            0,
