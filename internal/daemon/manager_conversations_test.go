@@ -202,6 +202,82 @@ func TestSyncConversationManifestPrefersModified(t *testing.T) {
 	assertStringSliceContains(t, needed, "conv-mod-b")
 }
 
+func TestSyncConversationManifestRotatesModifiedOverflow(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	manager.config.MaxConversationsPerIngest = 3
+	ctx := context.Background()
+	collectionID := "thread-manifest-modified-overflow"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	modifiedIDs := []string{
+		"conv-mod-01",
+		"conv-mod-02",
+		"conv-mod-03",
+		"conv-mod-04",
+		"conv-mod-05",
+	}
+	checkpoint := make(map[string]string, len(modifiedIDs))
+	for _, conversationID := range modifiedIDs {
+		checkpoint[conversationID] = "old-" + conversationID
+	}
+	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        checkpoint,
+		Inodes:       nil,
+	}); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+	manifest := testConversationManifest(modifiedIDs...)
+
+	first, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("first SyncConversationManifest returned error: %v", err)
+	}
+	second, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("second SyncConversationManifest returned error: %v", err)
+	}
+	if strings.Join(first, "\x00") == strings.Join(second, "\x00") {
+		t.Fatalf("second sync returned %v, want different membership from %v", second, first)
+	}
+
+	replies := [][]string{first, second}
+	for i := 0; i < len(modifiedIDs); i++ {
+		reply, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+		if err != nil {
+			t.Fatalf("repeat SyncConversationManifest returned error: %v", err)
+		}
+		replies = append(replies, reply)
+	}
+
+	expected := make(map[string]bool, len(modifiedIDs))
+	seen := make(map[string]bool, len(modifiedIDs))
+	for _, conversationID := range modifiedIDs {
+		expected[conversationID] = true
+	}
+	for _, reply := range replies {
+		if len(reply) != 3 {
+			t.Fatalf("reply = %v, want exactly 3 ids", reply)
+		}
+		for _, conversationID := range reply {
+			if !expected[conversationID] {
+				t.Fatalf("reply = %v, contains unexpected id %q", reply, conversationID)
+			}
+			seen[conversationID] = true
+		}
+	}
+	for _, conversationID := range modifiedIDs {
+		if !seen[conversationID] {
+			t.Fatalf("modified id %q never appeared across replies %v", conversationID, replies)
+		}
+	}
+}
+
 func TestSyncConversationManifestRotatesAddedWindow(t *testing.T) {
 	t.Parallel()
 

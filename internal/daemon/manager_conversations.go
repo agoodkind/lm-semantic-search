@@ -119,6 +119,8 @@ func (manager *Manager) SyncConversationManifest(ctx context.Context, collection
 	return needed, nil
 }
 
+// One cursor advances both modified overflow and added windows. A cursor past a
+// list's end wraps to that list's start so rotation stays live without per-list cursors.
 func capNeededConversations(added []string, modified []string, limit int, cursor string) []string {
 	if limit <= 0 {
 		needed := make([]string, 0, len(added)+len(modified))
