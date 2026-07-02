@@ -251,6 +251,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	codebase, codebaseFound := manager.codebases[job.CodebaseID]
 	manager.mu.Unlock()
 	if !codebaseFound {
+		manager.routeToBootstrap(ctx, job.ID, bootstrapReasonDeltaCodebaseMissing)
 		return false
 	}
 

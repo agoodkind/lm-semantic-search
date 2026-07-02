@@ -19,6 +19,7 @@ func TestBootstrapReasonVocabulary(t *testing.T) {
 		bootstrapReasonEmptyDiffCollectionMissing,
 		bootstrapReasonEmptyDiffCollectionEmpty,
 		bootstrapReasonDeltaCollectionMissing,
+		bootstrapReasonDeltaCodebaseMissing,
 	}
 	want := []string{
 		"first_index",
@@ -27,6 +28,7 @@ func TestBootstrapReasonVocabulary(t *testing.T) {
 		"empty_diff_collection_missing",
 		"empty_diff_collection_empty",
 		"delta_collection_missing",
+		"delta_codebase_missing",
 	}
 
 	for index, reason := range reasons {
@@ -108,6 +110,30 @@ func TestClassifyReindexErrCollectionMissingStampsBootstrapReason(t *testing.T) 
 			got.Progress.BootstrapReason,
 			bootstrapReasonDeltaCollectionMissing,
 		)
+	}
+}
+
+func TestRunDeltaSyncMissingCodebaseStampsBootstrapReason(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	job := model.Job{ID: "job-delta-codebase-missing", CodebaseID: "cb-delta-codebase-missing"}
+	manager.mu.Lock()
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+
+	handled := manager.runDeltaSync(context.Background(), job, nil)
+
+	if handled {
+		t.Fatal("runDeltaSync returned true, want false")
+	}
+	got, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatalf("GetJob(%s) not found", job.ID)
+	}
+	const wantReason = string(bootstrapReasonDeltaCodebaseMissing)
+	if got.Progress.BootstrapReason != wantReason {
+		t.Fatalf("BootstrapReason = %q, want %q", got.Progress.BootstrapReason, wantReason)
 	}
 }
 

@@ -25,6 +25,7 @@ const (
 	bootstrapReasonEmptyDiffCollectionMissing bootstrapReason = "empty_diff_collection_missing"
 	bootstrapReasonEmptyDiffCollectionEmpty   bootstrapReason = "empty_diff_collection_empty"
 	bootstrapReasonDeltaCollectionMissing     bootstrapReason = "delta_collection_missing"
+	bootstrapReasonDeltaCodebaseMissing       bootstrapReason = "delta_codebase_missing"
 )
 
 func (manager *Manager) updateJobRunning(job model.Job) {
@@ -204,7 +205,8 @@ func (reason bootstrapReason) known() bool {
 		bootstrapReasonStagingResume,
 		bootstrapReasonEmptyDiffCollectionMissing,
 		bootstrapReasonEmptyDiffCollectionEmpty,
-		bootstrapReasonDeltaCollectionMissing:
+		bootstrapReasonDeltaCollectionMissing,
+		bootstrapReasonDeltaCodebaseMissing:
 		return true
 	default:
 		return false
