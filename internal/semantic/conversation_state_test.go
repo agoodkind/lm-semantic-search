@@ -37,6 +37,22 @@ type conversationStateTestRow struct {
 	vector          []float32
 }
 
+func TestLoadConversationMessageStateReturnsEmptyForEmptyPrefix(t *testing.T) {
+	service := &Service{}
+	service.available.Store(true)
+
+	state, reuse, err := service.LoadConversationMessageState(context.Background(), "conv_chunks_test", "")
+	if err != nil {
+		t.Fatalf("LoadConversationMessageState returned error: %v", err)
+	}
+	if len(state) != 0 {
+		t.Fatalf("state len = %d, want 0", len(state))
+	}
+	if len(reuse) != 0 {
+		t.Fatalf("reuse len = %d, want 0", len(reuse))
+	}
+}
+
 func TestLoadConversationMessageStateFromIteratorAssemblesSinglePart(t *testing.T) {
 	rows := []conversationStateTestRow{
 		{

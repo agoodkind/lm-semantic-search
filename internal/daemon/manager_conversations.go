@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -425,7 +426,7 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
-		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents)
+		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic)
 		if manager.runDeltaSync(ctx, job, source) {
 			return
 		}
@@ -577,6 +578,57 @@ func conversationDocumentsToStoredChunks(documents []model.ConversationDocument)
 		}
 	}
 	return chunks, nil
+}
+
+type conversationMessageDiff struct {
+	documents       []model.ConversationDocument
+	removalPaths    []string
+	removalPrefixes []string
+}
+
+// diffConversationMessages treats a delivered message as unchanged only when
+// the stored role equals document.Role and the assembled stored text equals
+// document.Text, which is also the text conversationDocumentsToStoredChunks
+// stores after multipart splitting. Stale stored indices must be deleted here
+// because the conversation source uses absenceRetain, so an absent message row
+// would otherwise survive forever once the conversation fingerprint advances.
+func diffConversationMessages(conversationID string, documents []model.ConversationDocument, storedState map[int32]semantic.StoredMessageState) conversationMessageDiff {
+	diff := conversationMessageDiff{
+		documents:       make([]model.ConversationDocument, 0, len(documents)),
+		removalPaths:    make([]string, 0),
+		removalPrefixes: make([]string, 0),
+	}
+	delivered := make(map[int32]struct{}, len(documents))
+	for _, document := range documents {
+		delivered[document.MessageIndex] = struct{}{}
+		stored, found := storedState[document.MessageIndex]
+		if found && stored.Role == document.Role && stored.Text == document.Text {
+			continue
+		}
+		diff.documents = append(diff.documents, document)
+		if found {
+			diff.addRemoval(conversationID, document.MessageIndex)
+		}
+	}
+
+	staleIndexes := make([]int32, 0)
+	for messageIndex := range storedState {
+		if _, found := delivered[messageIndex]; found {
+			continue
+		}
+		staleIndexes = append(staleIndexes, messageIndex)
+	}
+	slices.Sort(staleIndexes)
+	for _, staleIndex := range staleIndexes {
+		diff.addRemoval(conversationID, staleIndex)
+	}
+	return diff
+}
+
+func (diff *conversationMessageDiff) addRemoval(conversationID string, messageIndex int32) {
+	relativePath := conversationRelativePath(conversationID, messageIndex, 0, false)
+	diff.removalPaths = append(diff.removalPaths, relativePath)
+	diff.removalPrefixes = append(diff.removalPrefixes, relativePath+"/")
 }
 
 func conversationRelativePath(conversationID string, messageIndex int32, partIndex int, multipart bool) string {
