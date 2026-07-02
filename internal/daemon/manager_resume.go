@@ -5,10 +5,26 @@ import (
 	"log/slog"
 
 	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
+
+type resumeCheckpointKind int
+
+const (
+	resumeCheckpointNone resumeCheckpointKind = iota
+	resumeCheckpointLive
+	resumeCheckpointStaging
+)
+
+type resumePlan struct {
+	canonicalPath string
+	config        model.IndexConfig
+	codebaseID    string
+	checkpoint    resumeCheckpointKind
+}
 
 // ResumeOrphanedJobs re-queues indexing for every codebase whose previous job
 // was still running when the daemon exited, but only when a merkle checkpoint
@@ -20,11 +36,6 @@ import (
 // Call this once after NewManager returns and before the daemon advertises ready.
 func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	manager.mu.Lock()
-	type resumePlan struct {
-		canonicalPath string
-		config        model.IndexConfig
-		codebaseID    string
-	}
 	plans := make([]resumePlan, 0)
 	for _, codebase := range manager.codebases {
 		if codebase.Kind == model.CodebaseKindDocument {
@@ -39,6 +50,7 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 			canonicalPath: codebase.CanonicalPath,
 			config:        codebase.EffectiveConfig,
 			codebaseID:    codebase.ID,
+			checkpoint:    resumeCheckpointNone,
 		})
 	}
 	manager.mu.Unlock()
@@ -52,7 +64,8 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 
 	resumable := make([]resumePlan, 0, len(plans))
 	for _, plan := range plans {
-		if manager.hasResumableCheckpoint(plan.codebaseID, plan.config.IgnoreDigest) {
+		plan.checkpoint = manager.resumableCheckpointKind(plan.codebaseID, plan.config.IgnoreDigest)
+		if plan.checkpoint != resumeCheckpointNone {
 			resumable = append(resumable, plan)
 			continue
 		}
@@ -70,7 +83,12 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	slog.InfoContext(ctx, "resuming orphaned indexing jobs", "count", len(resumable), "paths", paths)
 	for _, plan := range resumable {
 		client := model.ClientInfo{Name: "daemon-resume", PID: 0}
-		_, _, _, _, err := manager.StartIndex(ctx, plan.canonicalPath, client, plan.config, false)
+		var err error
+		if plan.checkpoint == resumeCheckpointStaging {
+			err = manager.startStagingResume(ctx, plan, client)
+		} else {
+			_, _, _, _, err = manager.StartIndex(ctx, plan.canonicalPath, client, plan.config, false, emptyAdmissionBudget)
+		}
 		if err != nil {
 			slog.ErrorContext(ctx, "resume orphaned job failed", "codebase_id", plan.codebaseID, "path", plan.canonicalPath, "err", err)
 			continue
@@ -80,13 +98,72 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	}
 }
 
-// hasResumableCheckpoint reports whether a codebase left mid-index persisted a
-// merkle checkpoint valid for its current config. Resuming without one would
-// re-embed every file from scratch, so the daemon treats a missing checkpoint
-// as not resumable.
-func (manager *Manager) hasResumableCheckpoint(codebaseID string, configDigest string) bool {
-	snapshot := merkle.LoadSnapshotForConfig(manager.merklePath(codebaseID), configDigest, manager.legacyDigestForCodebase(codebaseID))
-	return len(snapshot.Files) > 0
+// resumableCheckpointKind reports which merkle checkpoint a codebase left
+// mid-index persisted for its current config: the live snapshot, the staging
+// bootstrap snapshot, or none. Resuming without one would re-embed every file
+// from scratch, so the daemon treats a missing checkpoint as not resumable.
+func (manager *Manager) resumableCheckpointKind(codebaseID string, configDigest string) resumeCheckpointKind {
+	legacyDigest := manager.legacyDigestForCodebase(codebaseID)
+	stagingSnapshot := merkle.LoadSnapshotForConfig(manager.stagingMerklePath(codebaseID), configDigest, legacyDigest)
+	if len(stagingSnapshot.Files) > 0 {
+		return resumeCheckpointStaging
+	}
+	liveSnapshot := merkle.LoadSnapshotForConfig(manager.merklePath(codebaseID), configDigest, legacyDigest)
+	if len(liveSnapshot.Files) > 0 {
+		return resumeCheckpointLive
+	}
+	return resumeCheckpointNone
+}
+
+func (manager *Manager) startStagingResume(ctx context.Context, plan resumePlan, client model.ClientInfo) error {
+	indexConfig := manager.enrichIndexConfig(plan.config)
+	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
+
+	manager.mu.Lock()
+	codebase, found := manager.codebases[plan.codebaseID]
+	if !found {
+		manager.mu.Unlock()
+		return nil
+	}
+	_, deduplicated, err := manager.activeJobLocked(codebase, plan.canonicalPath, indexConfig)
+	if err != nil {
+		manager.mu.Unlock()
+		return err
+	}
+	if deduplicated {
+		manager.mu.Unlock()
+		return nil
+	}
+
+	codebase.Status = model.CodebaseStatusPending
+	if codebase.LastSuccessfulRun != nil {
+		codebase.Status = model.CodebaseStatusIndexing
+	}
+	codebase.EffectiveConfig = indexConfig
+	if manager.semantic != nil && manager.semantic.Available() {
+		codebase.CollectionName = manager.semantic.CollectionName(plan.canonicalPath)
+	}
+	if info, ok := gitworktree.Resolve(plan.canonicalPath); ok && info.Linked {
+		codebase.WorktreeCommonDir = info.CommonDir
+	}
+	codebase.UpdatedAt = clock.Now()
+
+	job := newQueuedJob(codebase.ID, plan.canonicalPath, plan.canonicalPath, client, string(jobOperationIndex), false, indexConfig, emptyAdmissionBudget, clock.Now())
+	codebase.ActiveJobID = job.ID
+	manager.codebases[codebase.ID] = codebase
+	if err := manager.saveLocked(); err != nil {
+		manager.mu.Unlock()
+		return err
+	}
+	if err := manager.appendJobLocked("resume_staging_index", job); err != nil {
+		manager.mu.Unlock()
+		return err
+	}
+	manager.observer.Invalidate(codebase.ID)
+	manager.mu.Unlock()
+
+	manager.runJobAsync(ctx, job.ID)
+	return nil
 }
 
 // parkUnresumableForRetry leaves an interrupted codebase that has no checkpoint

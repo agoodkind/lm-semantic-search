@@ -817,6 +817,7 @@ type JobError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Message       string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
 	Retryable     bool                   `protobuf:"varint,2,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	Code          string                 `protobuf:"bytes,3,opt,name=code,proto3" json:"code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -863,6 +864,13 @@ func (x *JobError) GetRetryable() bool {
 		return x.Retryable
 	}
 	return false
+}
+
+func (x *JobError) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
 }
 
 // DependencyHealth reports the daemon's view of shared-infrastructure health
@@ -947,6 +955,7 @@ type IndexRunSummary struct {
 	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
 	CompletedAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
 	SkippedFiles  []string               `protobuf:"bytes,5,rep,name=skipped_files,json=skippedFiles,proto3" json:"skipped_files,omitempty"`
+	TotalBytes    int64                  `protobuf:"varint,6,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1016,11 +1025,19 @@ func (x *IndexRunSummary) GetSkippedFiles() []string {
 	return nil
 }
 
+func (x *IndexRunSummary) GetTotalBytes() int64 {
+	if x != nil {
+		return x.TotalBytes
+	}
+	return 0
+}
+
 type IndexRunFailure struct {
 	state                   protoimpl.MessageState `protogen:"open.v1"`
 	Message                 string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
 	LastAttemptedPercentage int32                  `protobuf:"varint,2,opt,name=last_attempted_percentage,json=lastAttemptedPercentage,proto3" json:"last_attempted_percentage,omitempty"`
 	FailedAt                *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=failed_at,json=failedAt,proto3" json:"failed_at,omitempty"`
+	Code                    string                 `protobuf:"bytes,4,opt,name=code,proto3" json:"code,omitempty"`
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -1074,6 +1091,13 @@ func (x *IndexRunFailure) GetFailedAt() *timestamppb.Timestamp {
 		return x.FailedAt
 	}
 	return nil
+}
+
+func (x *IndexRunFailure) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
 }
 
 type Codebase struct {
@@ -1771,6 +1795,8 @@ type StartIndexRequest struct {
 	IgnorePatterns    []string               `protobuf:"bytes,4,rep,name=ignore_patterns,json=ignorePatterns,proto3" json:"ignore_patterns,omitempty"`
 	Client            *ClientInfo            `protobuf:"bytes,5,opt,name=client,proto3" json:"client,omitempty"`
 	IncludeSubmodules []string               `protobuf:"bytes,6,rep,name=include_submodules,json=includeSubmodules,proto3" json:"include_submodules,omitempty"`
+	MaxJobChunks      int32                  `protobuf:"varint,7,opt,name=max_job_chunks,json=maxJobChunks,proto3" json:"max_job_chunks,omitempty"`
+	MaxJobBytes       int64                  `protobuf:"varint,8,opt,name=max_job_bytes,json=maxJobBytes,proto3" json:"max_job_bytes,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -1845,6 +1871,20 @@ func (x *StartIndexRequest) GetIncludeSubmodules() []string {
 		return x.IncludeSubmodules
 	}
 	return nil
+}
+
+func (x *StartIndexRequest) GetMaxJobChunks() int32 {
+	if x != nil {
+		return x.MaxJobChunks
+	}
+	return 0
+}
+
+func (x *StartIndexRequest) GetMaxJobBytes() int64 {
+	if x != nil {
+		return x.MaxJobBytes
+	}
+	return 0
 }
 
 type StartIndexResponse struct {
@@ -4819,25 +4859,29 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\tfile_rows\x18\x04 \x03(\v2\x1f.lmsemanticsearch.v1.OutcomeRowR\bfileRows\x12!\n" +
 	"\fchunks_total\x18\x05 \x01(\x05R\vchunksTotal\x12>\n" +
 	"\n" +
-	"chunk_rows\x18\x06 \x03(\v2\x1f.lmsemanticsearch.v1.OutcomeRowR\tchunkRows\"B\n" +
+	"chunk_rows\x18\x06 \x03(\v2\x1f.lmsemanticsearch.v1.OutcomeRowR\tchunkRows\"V\n" +
 	"\bJobError\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12\x1c\n" +
-	"\tretryable\x18\x02 \x01(\bR\tretryable\"\xb8\x01\n" +
+	"\tretryable\x18\x02 \x01(\bR\tretryable\x12\x12\n" +
+	"\x04code\x18\x03 \x01(\tR\x04code\"\xb8\x01\n" +
 	"\x10DependencyHealth\x12\x1a\n" +
 	"\bdegraded\x18\x01 \x01(\bR\bdegraded\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\tR\x04mode\x120\n" +
 	"\x05since\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\x12B\n" +
-	"\x0flast_healthy_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\rlastHealthyAt\"\xd5\x01\n" +
+	"\x0flast_healthy_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\rlastHealthyAt\"\xf6\x01\n" +
 	"\x0fIndexRunSummary\x12#\n" +
 	"\rindexed_files\x18\x01 \x01(\x05R\findexedFiles\x12!\n" +
 	"\ftotal_chunks\x18\x02 \x01(\x05R\vtotalChunks\x12\x16\n" +
 	"\x06status\x18\x03 \x01(\tR\x06status\x12=\n" +
 	"\fcompleted_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x12#\n" +
-	"\rskipped_files\x18\x05 \x03(\tR\fskippedFiles\"\xa0\x01\n" +
+	"\rskipped_files\x18\x05 \x03(\tR\fskippedFiles\x12\x1f\n" +
+	"\vtotal_bytes\x18\x06 \x01(\x03R\n" +
+	"totalBytes\"\xb4\x01\n" +
 	"\x0fIndexRunFailure\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12:\n" +
 	"\x19last_attempted_percentage\x18\x02 \x01(\x05R\x17lastAttemptedPercentage\x127\n" +
-	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\"\xe6\x06\n" +
+	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\x12\x12\n" +
+	"\x04code\x18\x04 \x01(\tR\x04code\"\xe6\x06\n" +
 	"\bCodebase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0ecanonical_path\x18\x02 \x01(\tR\rcanonicalPath\x12\x16\n" +
@@ -4910,14 +4954,16 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
 	"\acontent\x18\x06 \x01(\tR\acontent\x124\n" +
-	"\x16parent_conversation_id\x18\a \x01(\tR\x14parentConversationId\"\x8f\x02\n" +
+	"\x16parent_conversation_id\x18\a \x01(\tR\x14parentConversationId\"\xd9\x02\n" +
 	"\x11StartIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x12?\n" +
 	"\bsplitter\x18\x03 \x01(\v2#.lmsemanticsearch.v1.SplitterConfigR\bsplitter\x12'\n" +
 	"\x0fignore_patterns\x18\x04 \x03(\tR\x0eignorePatterns\x127\n" +
 	"\x06client\x18\x05 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\x12-\n" +
-	"\x12include_submodules\x18\x06 \x03(\tR\x11includeSubmodules\"\x82\x02\n" +
+	"\x12include_submodules\x18\x06 \x03(\tR\x11includeSubmodules\x12$\n" +
+	"\x0emax_job_chunks\x18\a \x01(\x05R\fmaxJobChunks\x12\"\n" +
+	"\rmax_job_bytes\x18\b \x01(\x03R\vmaxJobBytes\"\x82\x02\n" +
 	"\x12StartIndexResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +

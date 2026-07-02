@@ -21,6 +21,10 @@ const (
 	defaultPerfCountersIntervalMS    = 60000
 	defaultMaxConcurrentIndexJobs    = 3
 	defaultEmbeddingBatchTokenBudget = 6000
+	defaultMaxJobChunks              = 200000
+	defaultMaxJobBytes               = 1073741824
+	defaultExpectedJobGrowthFactor   = 4
+	defaultExpectedJobGrowthFloor    = 10000
 	nvEmbedCodeQueryPrefix           = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
 )
 
@@ -85,6 +89,16 @@ type Config struct {
 	// their embedding pass simultaneously, bounding peak memory and load on
 	// the embedding endpoint.
 	MaxConcurrentIndexJobs int
+	// MaxJobChunks caps the chunks one job may write before admission halts it.
+	MaxJobChunks int32
+	// MaxJobBytes caps the chunk content bytes one job may write.
+	MaxJobBytes int64
+	// ExpectedJobGrowthFactor caps growth relative to the last successful run
+	// or largest matching sibling worktree.
+	ExpectedJobGrowthFactor float64
+	// ExpectedJobGrowthFloor gives normal growth a fixed chunk allowance above
+	// the expected baseline.
+	ExpectedJobGrowthFloor int32
 	// ResumeIndexingOnBoot controls whether daemon startup relaunches
 	// codebases that were left mid-index when the daemon last stopped.
 	ResumeIndexingOnBoot bool
@@ -189,6 +203,10 @@ func Default() (Config, error) {
 		DebugListenAddr:           envOrDefault("CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR", defaultDebugListenAddr),
 		PerfCountersIntervalMS:    envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),
 		MaxConcurrentIndexJobs:    envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
+		MaxJobChunks:              envInt32OrDefault("CLAUDE_CONTEXT_MAX_JOB_CHUNKS", defaultMaxJobChunks),
+		MaxJobBytes:               envInt64OrDefault("CLAUDE_CONTEXT_MAX_JOB_BYTES", defaultMaxJobBytes),
+		ExpectedJobGrowthFactor:   envFloat64OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FACTOR", defaultExpectedJobGrowthFactor),
+		ExpectedJobGrowthFloor:    envInt32OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FLOOR", defaultExpectedJobGrowthFloor),
 		ResumeIndexingOnBoot:      envBoolOrDefault("CLAUDE_CONTEXT_RESUME_ON_BOOT", true),
 	}, nil
 }
@@ -233,6 +251,32 @@ func envInt32OrDefault(name string, fallback int32) int32 {
 		return fallback
 	}
 	return int32(parsedValue)
+}
+
+func envInt64OrDefault(name string, fallback int64) int64 {
+	rawValue := os.Getenv(name)
+	if rawValue == "" {
+		return fallback
+	}
+
+	parsedValue, err := strconv.ParseInt(rawValue, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsedValue
+}
+
+func envFloat64OrDefault(name string, fallback float64) float64 {
+	rawValue := os.Getenv(name)
+	if rawValue == "" {
+		return fallback
+	}
+
+	parsedValue, err := strconv.ParseFloat(rawValue, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsedValue
 }
 
 func envBoolOrDefault(name string, fallback bool) bool {

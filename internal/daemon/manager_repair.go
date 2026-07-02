@@ -44,6 +44,7 @@ func (manager *Manager) RepairMissingCollections(ctx context.Context) {
 			model.ClientInfo{Name: "daemon-repair", PID: 0},
 			plan.config,
 			false,
+			emptyAdmissionBudget,
 		)
 		if err != nil {
 			manager.noteAutomaticRepairStartFailure(ctx, plan.codebaseID, err)
@@ -298,6 +299,7 @@ func (manager *Manager) noteAutomaticRepairStartFailure(ctx context.Context, cod
 	codebase.ActiveJobID = ""
 	codebase.LastFailedRun = &model.IndexRunFailure{
 		Message:                 "semantic collection is missing and automatic rebuild could not start",
+		Code:                    "",
 		LastAttemptedPercentage: 0,
 		FailedAt:                now,
 		TraceID:                 string(correlation.FromContext(ctx).TraceID),

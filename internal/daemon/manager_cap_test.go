@@ -131,7 +131,7 @@ func TestStartIndexCapsConcurrentRunningJobs(t *testing.T) {
 	repos := make([]string, totalJobs)
 	for i := range repos {
 		repos[i] = newCapTestRepo(t)
-		if _, _, _, _, err := manager.StartIndex(context.Background(), repos[i], testClientInfo(), defaultIndexConfig(), false); err != nil {
+		if _, _, _, _, err := manager.StartIndex(context.Background(), repos[i], testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 			t.Fatalf("StartIndex %d returned error: %v", i, err)
 		}
 	}
@@ -172,12 +172,12 @@ func TestStartIndexQueuedBehindCapReportsQueuedThenRunning(t *testing.T) {
 	firstRepo := newCapTestRepo(t)
 	secondRepo := newCapTestRepo(t)
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), firstRepo, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), firstRepo, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("first StartIndex returned error: %v", err)
 	}
 	<-entered
 
-	secondJob, _, _, _, err := manager.StartIndex(context.Background(), secondRepo, testClientInfo(), defaultIndexConfig(), false)
+	secondJob, _, _, _, err := manager.StartIndex(context.Background(), secondRepo, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("second StartIndex returned error: %v", err)
 	}
@@ -212,12 +212,12 @@ func TestCancelQueuedJobBehindCapReachesCancelled(t *testing.T) {
 	firstRepo := newCapTestRepo(t)
 	secondRepo := newCapTestRepo(t)
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), firstRepo, testClientInfo(), defaultIndexConfig(), false); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), firstRepo, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("first StartIndex returned error: %v", err)
 	}
 	<-entered
 
-	secondJob, _, _, _, err := manager.StartIndex(context.Background(), secondRepo, testClientInfo(), defaultIndexConfig(), false)
+	secondJob, _, _, _, err := manager.StartIndex(context.Background(), secondRepo, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("second StartIndex returned error: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestCancelQueuedJobBehindCapReachesCancelled(t *testing.T) {
 	forceDone := make(chan struct{})
 	go func() {
 		defer close(forceDone)
-		_, _, _, _, _ = manager.StartIndex(context.Background(), secondRepo, testClientInfo(), defaultIndexConfig(), true)
+		_, _, _, _, _ = manager.StartIndex(context.Background(), secondRepo, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
 	}()
 	select {
 	case <-forceDone:

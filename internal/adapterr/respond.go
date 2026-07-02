@@ -76,6 +76,14 @@ func SafeMessage(err error) string {
 	return adapterErr.Message
 }
 
+// Code returns the stable class code for err, or empty for nil.
+func Code(err error) string {
+	if err == nil {
+		return ""
+	}
+	return classify(err).Code
+}
+
 // IsTransient reports whether err is a self-healing condition: the next sync or
 // index attempt resolves it on its own once the dependency recovers. It marks a
 // job retryable and, like every shared-infrastructure failure, must not be
@@ -95,7 +103,7 @@ func IsTransient(err error) bool {
 	case ClassNotIndexed, ClassUnknownCodebaseID, ClassCollectionMissing,
 		ClassCollectionNotReady, ClassSearchResultIncomplete, ClassEmbedderRejected,
 		ClassInvalidPath, ClassInvalidArgument, ClassConflictingJob, ClassJobNotFound,
-		ClassInternal:
+		ClassIndexBudgetExceeded, ClassInternal:
 		return false
 	default:
 		return false

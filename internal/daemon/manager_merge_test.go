@@ -138,7 +138,7 @@ func TestMergeUpRedirectsNestedIndexToParent(t *testing.T) {
 	}
 	manager.mu.Unlock()
 
-	job, codebase, deduped, _, err := manager.StartIndex(context.Background(), childCanonical, testClientInfo(), defaultIndexConfig(), false)
+	job, codebase, deduped, _, err := manager.StartIndex(context.Background(), childCanonical, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}

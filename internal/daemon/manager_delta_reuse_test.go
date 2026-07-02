@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/clock"
@@ -12,6 +13,87 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
+
+func TestRunDeltaSyncFailsWhenChunkCacheUnreadable(t *testing.T) {
+	manager, codebase, job, _ := newAdmissionDeltaFixture(t)
+	manager.runner = runnerWithChunks(map[string][]string{
+		"main.go": {"replacement chunk"},
+	})
+	if err := os.WriteFile(filepath.Join(job.CanonicalPath, "main.go"), []byte("package main\nfunc Changed() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	corruptCache := []byte("{not-json")
+	if err := os.WriteFile(manager.chunkPath(codebase.ID), corruptCache, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
+
+	handled := manager.runDeltaSync(context.Background(), job, source)
+	if !handled {
+		t.Fatal("runDeltaSync returned false, want handled failure")
+	}
+
+	completed, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatalf("job %s was not found", job.ID)
+	}
+	if completed.State != model.JobStateFailed {
+		t.Fatalf("job state = %q, want failed", completed.State)
+	}
+	afterCache, err := os.ReadFile(manager.chunkPath(codebase.ID))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if !slices.Equal(afterCache, corruptCache) {
+		t.Fatalf("chunk cache was rewritten after read failure: got %q want %q", string(afterCache), string(corruptCache))
+	}
+}
+
+// TestRunDeltaSyncKeepsPriorTotalBytesWhenChunkCacheMissing proves that when the
+// code chunk cache file is missing (deleted externally), a delta carries the
+// prior whole-codebase TotalBytes forward instead of recomputing it from only
+// the changed files, which would shrink the reported total dramatically.
+func TestRunDeltaSyncKeepsPriorTotalBytesWhenChunkCacheMissing(t *testing.T) {
+	manager, codebase, job, _ := newAdmissionDeltaFixture(t)
+	const priorBytes = 10000
+	manager.mu.Lock()
+	stored := manager.codebases[codebase.ID]
+	stored.LastSuccessfulRun.TotalBytes = priorBytes
+	manager.codebases[codebase.ID] = stored
+	manager.mu.Unlock()
+
+	manager.runner = runnerWithChunks(map[string][]string{
+		"main.go": {"replacement chunk"},
+	})
+	if err := os.WriteFile(filepath.Join(job.CanonicalPath, "main.go"), []byte("package main\nfunc Changed() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	// No chunk cache file is written, so store.ReadChunks reports os.ErrNotExist.
+	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
+
+	handled := manager.runDeltaSync(context.Background(), job, source)
+	if !handled {
+		t.Fatal("runDeltaSync returned false, want handled completion")
+	}
+
+	completed, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatalf("job %s was not found", job.ID)
+	}
+	if completed.State != model.JobStateCompleted {
+		t.Fatalf("job state = %q, want completed", completed.State)
+	}
+
+	manager.mu.Lock()
+	after := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if after.LastSuccessfulRun == nil {
+		t.Fatal("LastSuccessfulRun is nil after delta sync")
+	}
+	if after.LastSuccessfulRun.TotalBytes != priorBytes {
+		t.Fatalf("LastSuccessfulRun.TotalBytes = %d, want prior %d carried forward when the chunk cache is missing", after.LastSuccessfulRun.TotalBytes, priorBytes)
+	}
+}
 
 func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 	t.Run("added file reuses sibling vectors", func(t *testing.T) {
@@ -182,7 +264,7 @@ func newWorktreeDeltaReuseFixture(t *testing.T, loadReuse map[string][]float32) 
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	job := newQueuedJob(worktreeCodebase.ID, worktreeRoot, worktreeRoot, testClientInfo(), string(jobOperationSync), false, cfg, clock.Now())
+	job := newQueuedJob(worktreeCodebase.ID, worktreeRoot, worktreeRoot, testClientInfo(), string(jobOperationSync), false, cfg, emptyAdmissionBudget, clock.Now())
 	job.State = model.JobStateRunning
 	worktreeCodebase.ActiveJobID = job.ID
 

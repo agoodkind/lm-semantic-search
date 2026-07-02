@@ -276,6 +276,7 @@ func (manager *Manager) updateJobQuarantined(ctx context.Context, jobID string, 
 	job.Progress.HeartbeatAt = now
 	job.Error = &model.JobError{
 		Message:   quarantineJobMessage(signal),
+		Code:      "",
 		Retryable: false,
 		TraceID:   traceID,
 		JobID:     jobID,

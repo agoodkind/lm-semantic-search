@@ -216,7 +216,7 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 	if pathErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
 	}
-	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndex(ctx, requestedPath, pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce())
+	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndex(ctx, requestedPath, pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce(), pbconv.FromStartIndexBudget(request))
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}

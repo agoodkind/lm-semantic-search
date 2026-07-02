@@ -74,7 +74,7 @@ func setupThreeChangedCodebases(t *testing.T) (*Manager, []string) {
 
 	repos := []string{repo1, repo2, repo3}
 	for _, repo := range repos {
-		if _, _, _, _, err := manager.StartIndex(context.Background(), repo, testClientInfo(), defaultIndexConfig(), false); err != nil {
+		if _, _, _, _, err := manager.StartIndex(context.Background(), repo, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 			t.Fatalf("StartIndex(%s): %v", repo, err)
 		}
 		waitForCodebaseStatus(t, manager, repo, model.CodebaseStatusIndexed)
