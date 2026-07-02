@@ -310,8 +310,10 @@ func TestForceReindexUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.
 			case 1:
 				return false, nil
 			case 2:
-				return true, nil
+				return false, nil
 			case 3:
+				return true, nil
+			case 4:
 				return false, nil
 			default:
 				return false, nil
