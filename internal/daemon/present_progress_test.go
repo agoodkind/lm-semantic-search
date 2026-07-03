@@ -109,7 +109,7 @@ func TestResolveProgressSurfaceResumingIngest(t *testing.T) {
 	}
 }
 
-func TestResolveProgressSurfaceFirstBuild(t *testing.T) {
+func TestResolveProgressSurfaceColdFirstBuild(t *testing.T) {
 	t.Parallel()
 	job := model.Job{
 		ID:        "job-fb",
@@ -134,9 +134,36 @@ func TestResolveProgressSurfaceFirstBuild(t *testing.T) {
 	if hasRow(breakdown.FileRows, view.KindUnchanged) {
 		t.Fatalf("a full build should have no unchanged row: %+v", breakdown.FileRows)
 	}
-	// A first build has no prior vectors, so the chunk tree omits the reused row.
 	if hasRow(breakdown.ChunkRows, view.KindReused) {
-		t.Fatalf("a first build should omit the reused row: %+v", breakdown.ChunkRows)
+		t.Fatalf("a cold first build should omit the reused row: %+v", breakdown.ChunkRows)
+	}
+}
+
+func TestResolveProgressSurfaceSeededFirstBuild(t *testing.T) {
+	t.Parallel()
+	job := model.Job{
+		ID:        "job-fb-seeded",
+		State:     model.JobStateRunning,
+		Operation: "index",
+		Progress: model.Progress{
+			RunMode:            model.RunModeFirstBuild,
+			FilesTotal:         100,
+			FilesProcessed:     1,
+			FilesEmbedded:      1,
+			ChunksProcessed:    678,
+			ChunksReused:       623,
+			ChunksEmbedded:     55,
+			ReuseVectorsLoaded: 2316,
+			OverallPercent:     10,
+		},
+	}
+	got := resolveProgressSurface(job)
+	breakdown := got.Breakdown
+	if breakdown.ScopeLabel != "files (first build, reusing prior vectors)" {
+		t.Fatalf("scope label = %q, want seeded first build label", breakdown.ScopeLabel)
+	}
+	if reused := findRow(t, breakdown.ChunkRows, view.KindReused).Count(); reused != 623 {
+		t.Fatalf("reused chunks = %d, want 623", reused)
 	}
 }
 

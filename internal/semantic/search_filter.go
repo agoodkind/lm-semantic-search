@@ -53,17 +53,21 @@ func buildRelativePathPrefixFilter(relativePathPrefix string) string {
 }
 
 // escapeMilvusLikePattern escapes a value for the literal portion of a Milvus
-// LIKE pattern: backslash and double-quote for the surrounding string literal,
-// plus the LIKE wildcards % and _ so they match literally. Without escaping the
-// wildcards, a conversation id containing _ or % would over-match neighbors,
-// which on the delete path could drop another conversation's rows. Backslash is
-// escaped first so the escape characters added for the other cases survive.
+// LIKE pattern. Ordering is load-bearing: the wildcard escapes must be applied
+// to the raw value FIRST and then pass through the string-literal escaping,
+// because Milvus's expression lexer (Plan.g4 EscapeSequence) only accepts
+// C-style escapes, so a literal wildcard must reach the parser as \\% or \\_
+// (an escaped backslash followed by the wildcard), which the pattern matcher
+// (planparserv2 optimizeLikePattern) then reads as an escaped literal. The
+// reverse order emits \% and \_, which the lexer rejects with a token
+// recognition error; that failed live on a cursor conversation id containing
+// an underscore. Without the wildcard escapes, an id containing _ or % would
+// over-match neighbors, which on the delete path could drop another
+// conversation's rows.
 func escapeMilvusLikePattern(value string) string {
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, `"`, `\"`)
 	value = strings.ReplaceAll(value, "%", `\%`)
 	value = strings.ReplaceAll(value, "_", `\_`)
-	return value
+	return escapeMilvusString(value)
 }
 
 func buildExtensionFilter(extensionFilter []string) string {

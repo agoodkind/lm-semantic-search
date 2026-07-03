@@ -3,6 +3,7 @@ package semantic
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -135,6 +136,106 @@ func TestBuildRelativePathPrefixFilterMatchesSubtree(t *testing.T) {
 	}
 }
 
+func TestReusePrefixFilterEscapesNewlineConversationPrefix(t *testing.T) {
+	prefix := "conv/cursor:task-call_0mtc\nfc_00729/"
+
+	got := relativePathPrefixExpression(prefix)
+	// A literal wildcard reaches the parser as an escaped backslash plus the
+	// wildcard, because the lexer has no \_ or \% escape sequence.
+	want := `relativePath like "conv/cursor:task-call\\_0mtc\nfc\\_00729/%"`
+
+	if got != want {
+		t.Fatalf("reuse prefix expression = %q, want %q", got, want)
+	}
+	assertNoRawControlBytes(t, got)
+}
+
+func TestRelativePathExpressionsEscapeMilvusStringBytes(t *testing.T) {
+	tests := []struct {
+		name       string
+		exactPath  string
+		exactWant  string
+		prefix     string
+		prefixWant string
+		filter     string
+		filterWant string
+	}{
+		{
+			name:       "newline",
+			exactPath:  "conv/cursor:task-call_0mtc\nfc_00729/0",
+			exactWant:  `relativePath == "conv/cursor:task-call_0mtc\nfc_00729/0"`,
+			prefix:     "conv/cursor:task-call_0mtc\nfc_00729/",
+			prefixWant: `relativePath like "conv/cursor:task-call\\_0mtc\nfc\\_00729/%"`,
+			filter:     "conv/cursor:task-call_0mtc\nfc_00729",
+			filterWant: `(relativePath == "conv/cursor:task-call_0mtc\nfc_00729" or relativePath like "conv/cursor:task-call\\_0mtc\nfc\\_00729/%")`,
+		},
+		{
+			name:       "double quote",
+			exactPath:  `conv/cursor:"quoted"/0`,
+			exactWant:  `relativePath == "conv/cursor:\"quoted\"/0"`,
+			prefix:     `conv/cursor:"quoted"/`,
+			prefixWant: `relativePath like "conv/cursor:\"quoted\"/%"`,
+			filter:     `conv/cursor:"quoted"`,
+			filterWant: `(relativePath == "conv/cursor:\"quoted\"" or relativePath like "conv/cursor:\"quoted\"/%")`,
+		},
+		{
+			name:       "backslash",
+			exactPath:  `conv/cursor:\slash/0`,
+			exactWant:  `relativePath == "conv/cursor:\\slash/0"`,
+			prefix:     `conv/cursor:\slash/`,
+			prefixWant: `relativePath like "conv/cursor:\\slash/%"`,
+			filter:     `conv/cursor:\slash`,
+			filterWant: `(relativePath == "conv/cursor:\\slash" or relativePath like "conv/cursor:\\slash/%")`,
+		},
+		{
+			name:       "tab",
+			exactPath:  "conv/cursor:\tthread/0",
+			exactWant:  `relativePath == "conv/cursor:\tthread/0"`,
+			prefix:     "conv/cursor:\tthread/",
+			prefixWant: `relativePath like "conv/cursor:\tthread/%"`,
+			filter:     "conv/cursor:\tthread",
+			filterWant: `(relativePath == "conv/cursor:\tthread" or relativePath like "conv/cursor:\tthread/%")`,
+		},
+		{
+			name:       "percent",
+			exactPath:  "conv/cursor:100%/0",
+			exactWant:  `relativePath == "conv/cursor:100%/0"`,
+			prefix:     "conv/cursor:100%/",
+			prefixWant: `relativePath like "conv/cursor:100\\%/%"`,
+			filter:     "conv/cursor:100%",
+			filterWant: `(relativePath == "conv/cursor:100%" or relativePath like "conv/cursor:100\\%/%")`,
+		},
+		{
+			name:       "other control byte",
+			exactPath:  "conv/cursor:\x01thread/0",
+			exactWant:  `relativePath == "conv/cursor:\001thread/0"`,
+			prefix:     "conv/cursor:\x01thread/",
+			prefixWant: `relativePath like "conv/cursor:\001thread/%"`,
+			filter:     "conv/cursor:\x01thread",
+			filterWant: `(relativePath == "conv/cursor:\001thread" or relativePath like "conv/cursor:\001thread/%")`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exact := relativePathExpression(test.exactPath)
+			if exact != test.exactWant {
+				t.Fatalf("relativePathExpression = %q, want %q", exact, test.exactWant)
+			}
+			prefix := relativePathPrefixExpression(test.prefix)
+			if prefix != test.prefixWant {
+				t.Fatalf("relativePathPrefixExpression = %q, want %q", prefix, test.prefixWant)
+			}
+			filter := buildRelativePathPrefixFilter(test.filter)
+			if filter != test.filterWant {
+				t.Fatalf("buildRelativePathPrefixFilter = %q, want %q", filter, test.filterWant)
+			}
+			assertNoRawControlBytes(t, exact)
+			assertNoRawControlBytes(t, prefix)
+			assertNoRawControlBytes(t, filter)
+		})
+	}
+}
+
 func TestRelativePathExpressionMatchesOnlyExactPath(t *testing.T) {
 	got := relativePathExpression(`src/file.go`)
 	want := `relativePath == "src/file.go"`
@@ -159,5 +260,17 @@ func TestBuildSearchFilterCombinesExtensionAndPrefix(t *testing.T) {
 	}
 	if got := buildSearchFilter(nil, nil); got != "" {
 		t.Fatalf("no extension and no prefix produced %q, want empty", got)
+	}
+}
+
+func assertNoRawControlBytes(t *testing.T, expression string) {
+	t.Helper()
+	if strings.ContainsAny(expression, "\n\r\t") {
+		t.Fatalf("expression contains a raw newline, carriage return, or tab: %q", expression)
+	}
+	for index := range len(expression) {
+		if expression[index] < 0x20 {
+			t.Fatalf("expression contains raw control byte 0x%02x: %q", expression[index], expression)
+		}
 	}
 }

@@ -1,0 +1,238 @@
+name: cbm submodule auto-bump
+
+# Bumps the third_party/cbm pin to the newest upstream commit that still builds
+# and passes the cbm engine round-trip, then opens an auto-merge PR. The build
+# gate runs in-workflow because a PR opened with the default GITHUB_TOKEN does
+# not trigger the repo's CI; validating here keeps the bump honest regardless of
+# the token. Provide a CBM_AUTOBUMP_TOKEN PAT secret to also let the repo's CI
+# re-run on the PR so required-status-check branch protection gates the merge.
+#
+# Two jobs on purpose: the search job compiles arbitrary upstream cbm commits,
+# so it runs unprivileged (contents: read, no token anywhere), and anything it
+# could persist ($GITHUB_PATH, $GITHUB_ENV, git or home config) dies with its
+# runner. The PR job starts from a fresh runner and clean checkout, re-verifies
+# the chosen commit's ancestry, and only then authenticates and pushes.
+
+on:
+  schedule:
+    # Weekly, Monday 06:00 UTC. The cbm fork's own daily upstream sync keeps the
+    # remote current between runs.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      max_candidates:
+        description: Number of newest upstream commits to try, newest first
+        default: '5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cbm-autobump
+  cancel-in-progress: false
+
+env:
+  SUBMODULE_PATH: third_party/cbm
+
+jobs:
+  search:
+    runs-on: macos-14
+    permissions:
+      contents: read
+    outputs:
+      bumped: ${{ steps.search.outputs.bumped }}
+      green_sha: ${{ steps.search.outputs.green_sha }}
+      short_sha: ${{ steps.search.outputs.short_sha }}
+    env:
+      MAX_CANDIDATES: ${{ github.event.inputs.max_candidates || '5' }}
+    steps:
+      - name: Check out with submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          # This job builds arbitrary upstream cbm commits, so the checkout
+          # must not leave a token in .git/config where build code could read
+          # it. The PR job authenticates separately on a fresh runner.
+          persist-credentials: false
+
+      - name: Validate max_candidates
+        run: |
+          set -euo pipefail
+          if ! [[ "${MAX_CANDIDATES}" =~ ^[1-9][0-9]*$ ]] || [[ "${MAX_CANDIDATES}" -gt 25 ]]; then
+              echo "max_candidates must be an integer between 1 and 25, got: ${MAX_CANDIDATES}" >&2
+              exit 1
+          fi
+
+      - name: Disable git hooks before building untrusted commits
+        # Build code could plant hooks; nothing in this job should ever run
+        # them, and the runner is discarded afterwards.
+        run: git config --global core.hooksPath /dev/null
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          # Read from go.mod so the workflow tracks the repo toolchain.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install tree-sitter CLI
+        # Pinned so grammar generation cannot drift with whatever version
+        # Homebrew happens to ship on a given day.
+        run: npm install --global tree-sitter-cli@0.26.9
+
+      - name: Find the newest cbm commit that builds and passes the round-trip
+        id: search
+        # Defense-in-depth for the untrusted build: keep token variables blank
+        # in this step's environment even if a future edit adds one job-wide.
+        env:
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
+        run: |
+          set -euo pipefail
+
+          current_sha="$(git -C "${SUBMODULE_PATH}" rev-parse HEAD)"
+          echo "current pin: ${current_sha}"
+
+          # Fetch the submodule's default branch with full history so the
+          # ancestry check below can verify the bump only ever moves forward.
+          git -C "${SUBMODULE_PATH}" fetch origin HEAD
+
+          # Never move the gitlink backwards or sideways: a manually advanced
+          # or divergent pin must not be replaced by an older upstream tip.
+          if ! git -C "${SUBMODULE_PATH}" merge-base --is-ancestor "${current_sha}" FETCH_HEAD; then
+              echo "current pin ${current_sha} is not an ancestor of upstream HEAD; skipping to avoid a downgrade"
+              echo "bumped=false" >>"${GITHUB_OUTPUT}"
+              exit 0
+          fi
+          # macOS runners ship bash 3.2, which has no mapfile; use a portable
+          # read loop over process substitution instead. --first-parent walks
+          # the mainline only, so merged side-branch commits never enter the
+          # candidate list.
+          candidates=()
+          while IFS= read -r candidate_sha; do
+              candidates+=("${candidate_sha}")
+          done < <(git -C "${SUBMODULE_PATH}" rev-list --first-parent -n "${MAX_CANDIDATES}" FETCH_HEAD)
+
+          if [[ "${#candidates[@]}" -eq 0 ]]; then
+              echo "no upstream commits found" >&2
+              exit 1
+          fi
+
+          if [[ "${candidates[0]}" == "${current_sha}" ]]; then
+              echo "already at newest upstream commit; nothing to bump"
+              echo "bumped=false" >>"${GITHUB_OUTPUT}"
+              exit 0
+          fi
+
+          pkg_config_path="${PWD}/.make/cgo/$(go env GOOS)-$(go env GOARCH)/lib/pkgconfig"
+
+          green_sha=""
+          for candidate in "${candidates[@]}"; do
+              if [[ "${candidate}" == "${current_sha}" ]]; then
+                  # Reached the current pin without a newer green commit.
+                  break
+              fi
+              # Per-candidate guard for the never-backwards-or-sideways rule: a
+              # candidate that does not contain the current pin would move the
+              # gitlink sideways even though upstream HEAD contains it.
+              if ! git -C "${SUBMODULE_PATH}" merge-base --is-ancestor "${current_sha}" "${candidate}"; then
+                  echo "skipping ${candidate}: does not contain the current pin"
+                  continue
+              fi
+              echo "::group::try ${candidate}"
+              git -C "${SUBMODULE_PATH}" checkout --quiet "${candidate}"
+              git -C "${SUBMODULE_PATH}" submodule update --init --recursive
+
+              build_ok=true
+              make build || build_ok=false
+              if [[ "${build_ok}" == true ]]; then
+                  PKG_CONFIG_PATH="${pkg_config_path}" go test ./internal/cbm/ || build_ok=false
+              fi
+              echo "::endgroup::"
+
+              if [[ "${build_ok}" == true ]]; then
+                  green_sha="${candidate}"
+                  echo "newest green commit: ${green_sha}"
+                  break
+              fi
+              echo "candidate ${candidate} failed build or round-trip; trying older"
+          done
+
+          if [[ -z "${green_sha}" ]]; then
+              echo "no newer commit built cleanly within ${MAX_CANDIDATES} candidates"
+              echo "bumped=false" >>"${GITHUB_OUTPUT}"
+              exit 0
+          fi
+
+          {
+              echo "bumped=true"
+              echo "green_sha=${green_sha}"
+              echo "short_sha=${green_sha:0:12}"
+          } >>"${GITHUB_OUTPUT}"
+
+  open-pr:
+    needs: search
+    if: needs.search.outputs.bumped == 'true'
+    # Fresh runner and clean checkout: nothing the untrusted build touched
+    # survives into this job, and only trusted repo code runs here.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.CBM_AUTOBUMP_TOKEN || secrets.GITHUB_TOKEN }}
+      GREEN_SHA: ${{ needs.search.outputs.green_sha }}
+      SHORT_SHA: ${{ needs.search.outputs.short_sha }}
+    steps:
+      - name: Check out with submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: true
+          # Full history so the merge-base ancestry re-check below cannot fail
+          # on a shallow clone.
+          fetch-depth: 0
+          token: ${{ secrets.CBM_AUTOBUMP_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Bump the pin and open the auto-merge PR
+        run: |
+          set -euo pipefail
+
+          # Re-verify the search job's answer against this clean checkout: the
+          # chosen commit must exist upstream and contain the current pin.
+          current_sha="$(git -C "${SUBMODULE_PATH}" rev-parse HEAD)"
+          git -C "${SUBMODULE_PATH}" fetch origin "${GREEN_SHA}"
+          if ! git -C "${SUBMODULE_PATH}" merge-base --is-ancestor "${current_sha}" "${GREEN_SHA}"; then
+              echo "refusing bump: ${GREEN_SHA} does not contain current pin ${current_sha}" >&2
+              exit 1
+          fi
+
+          branch="cbm-autobump/${SHORT_SHA}"
+          open_prs="$(gh pr list --head "${branch}" --state open --json number -q 'length')"
+          if [[ "${open_prs}" -gt 0 ]]; then
+              echo "an open PR for ${branch} already exists; nothing to do"
+              exit 0
+          fi
+          # A stale branch without an open PR (a prior run died between push and
+          # PR creation, or its PR was closed) would otherwise block the bump
+          # forever; delete it and rebuild it from this run's state.
+          if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
+              echo "deleting stale remote branch ${branch} with no open PR"
+              git push origin --delete "${branch}"
+          fi
+
+          git -C "${SUBMODULE_PATH}" checkout --quiet "${GREEN_SHA}"
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git switch -c "${branch}"
+          git add "${SUBMODULE_PATH}"
+          git commit -m "Bump third_party/cbm to ${SHORT_SHA}"
+          git push origin "${branch}"
+
+          pr_url="$(gh pr create \
+              --base main \
+              --head "${branch}" \
+              --title "Bump third_party/cbm to ${SHORT_SHA}" \
+              --body "Automated bump of the cbm submodule to upstream ${GREEN_SHA}, verified to build and pass the cbm engine round-trip in the auto-bump search job.")"
+          echo "opened ${pr_url}"
+          gh pr merge --auto --squash "${pr_url}"
