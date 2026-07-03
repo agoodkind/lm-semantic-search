@@ -15,7 +15,11 @@ import (
 	daemonclient "goodkind.io/lm-semantic-search/client"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/updateopts"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+var dialDaemon = daemonclient.DialDaemon
 
 func newUpdateCmd(options *rootOptions) *cobra.Command {
 	update := &cobra.Command{
@@ -172,13 +176,18 @@ func printUpdateStatus(cmd *cobra.Command, state selfupdate.State) {
 }
 
 func requestDaemonShutdown(ctx context.Context, socketPath string) (bool, error) {
-	connection, client, err := daemonclient.DialDaemon(ctx, socketPath)
+	connection, client, err := dialDaemon(ctx, socketPath)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial daemon: %w", err)
 	}
-	defer func() { _ = connection.Close() }()
+	if connection != nil {
+		defer func() { _ = connection.Close() }()
+	}
 	_, err = client.Shutdown(ctx, &pb.ShutdownRequest{})
 	if err != nil {
+		if status.Code(err) == codes.Unavailable {
+			return false, nil
+		}
 		slog.ErrorContext(ctx, "shutdown daemon after update failed", "err", err)
 		return false, fmt.Errorf("shutdown daemon: %w", err)
 	}
