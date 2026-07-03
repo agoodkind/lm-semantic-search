@@ -122,9 +122,9 @@ type OutcomeBreakdown struct {
 	FileRows []OutcomeRow
 	// ChunksTotal is the whole-collection chunk count for the chunk tree header.
 	ChunksTotal int32
-	// ChunkRows are the chunk children: added always, reused on a reuse-capable
-	// pass (shown even at zero), omitted for a first build. Empty when there is
-	// no chunk activity to report.
+	// ChunkRows are the chunk children: added always, reused on reuse-capable
+	// passes and on first builds that loaded or served reuse. Empty when there
+	// is no chunk activity to report.
 	ChunkRows []OutcomeRow
 }
 
@@ -182,15 +182,16 @@ func ResolveBreakdown(counts ProgressCounts) OutcomeBreakdown {
 	}
 	chunksProcessed := max(counts.ChunksProcessed, counts.ChunksReused+chunksEmbedded)
 	chunksTotal := max(counts.ChunksTotal, chunksProcessed)
-	hasChunks := hasFileScope || chunksTotal > 0 || chunksProcessed > 0
+	reuse := resolveReusePresentation(counts.RunMode, counts.ChunksReused, counts.ReuseVectorsLoaded)
+	hasChunks := hasFileScope || chunksTotal > 0 || chunksProcessed > 0 || reuse.hasReuse
 
 	return OutcomeBreakdown{
-		ScopeLabel:  scopeLabelForRunMode(counts.RunMode, unit, scopeTotal),
+		ScopeLabel:  scopeLabelForRunMode(counts.RunMode, unit, scopeTotal, reuse.seededFirstBuild),
 		Processed:   processed,
 		ScopeTotal:  scopeTotal,
 		FileRows:    breakdownFileRows(hasFileScope, embedded, unchanged, removed, pending, oversize, unreadable),
 		ChunksTotal: chunksTotal,
-		ChunkRows:   breakdownChunkRows(hasChunks, counts.RunMode, chunksEmbedded, counts.ChunksReused),
+		ChunkRows:   breakdownChunkRows(hasChunks, chunksEmbedded, counts.ChunksReused, reuse.showReuseRow),
 	}
 }
 
@@ -219,14 +220,14 @@ func breakdownFileRows(hasScope bool, embedded, unchanged, removed, pending, ove
 	return rows
 }
 
-// breakdownChunkRows builds the chunk children: added always, reused on a
-// reuse-capable pass (shown even at zero), omitted for a first build.
-func breakdownChunkRows(hasChunks bool, runMode string, added, reused int32) []OutcomeRow {
+// breakdownChunkRows builds the chunk children: added always, reused when the
+// run mode or reuse counters make that bucket meaningful.
+func breakdownChunkRows(hasChunks bool, added, reused int32, showReused bool) []OutcomeRow {
 	if !hasChunks {
 		return nil
 	}
 	rows := []OutcomeRow{NewOutcomeRow(KindAdded, added)}
-	if reuseCapableRunMode(runMode) {
+	if showReused {
 		rows = append(rows, NewOutcomeRow(KindReused, reused))
 	}
 	return rows
@@ -246,29 +247,51 @@ func ZeroBreakdown() OutcomeBreakdown {
 	}
 }
 
-// reuseCapableRunMode reports whether a pass can serve chunks from already
-// embedded vectors, so the chunk tree shows a reused row even at zero. A first
-// build has no prior vectors, so it omits the row entirely.
-func reuseCapableRunMode(runMode string) bool {
+type reusePresentation struct {
+	hasReuse         bool
+	seededFirstBuild bool
+	showReuseRow     bool
+}
+
+// resolveReusePresentation reports how reuse should appear in the shared
+// breakdown. A first build can now load sibling vectors, so first-build reuse is
+// driven by the counters instead of the run mode alone.
+func resolveReusePresentation(runMode string, chunksReused int32, reuseVectorsLoaded int32) reusePresentation {
+	hasReuse := chunksReused > 0 || reuseVectorsLoaded > 0
 	switch RunMode(runMode) {
 	case RunModeChanged, RunModeResuming, RunModeForcedReindex:
-		return true
+		return reusePresentation{
+			hasReuse:         hasReuse,
+			seededFirstBuild: false,
+			showReuseRow:     true,
+		}
 	case RunModeFirstBuild:
-		return false
+		return reusePresentation{
+			hasReuse:         hasReuse,
+			seededFirstBuild: reuseVectorsLoaded > 0,
+			showReuseRow:     hasReuse,
+		}
 	default:
-		return false
+		return reusePresentation{
+			hasReuse:         hasReuse,
+			seededFirstBuild: false,
+			showReuseRow:     hasReuse,
+		}
 	}
 }
 
 // scopeLabelForRunMode types the "N of M ..." denominator from the run mode and
 // unit, for example "changed files" or "documents (full build)".
-func scopeLabelForRunMode(runMode string, unit string, total int32) string {
+func scopeLabelForRunMode(runMode string, unit string, total int32, seededFirstBuild bool) string {
 	plural := unit
 	if total != 1 {
 		plural = unit + "s"
 	}
 	switch RunMode(runMode) {
 	case RunModeFirstBuild:
+		if seededFirstBuild {
+			return plural + " (first build, reusing prior vectors)"
+		}
 		return plural + " (full build)"
 	case RunModeForcedReindex:
 		return plural + " (forced reindex)"
