@@ -56,11 +56,9 @@ func buildRelativePathPrefixFilter(relativePathPrefix string) string {
 // LIKE pattern: backslash and double-quote for the surrounding string literal,
 // plus the LIKE wildcards % and _ so they match literally. Without escaping the
 // wildcards, a conversation id containing _ or % would over-match neighbors,
-// which on the delete path could drop another conversation's rows. Backslash is
-// escaped first so the escape characters added for the other cases survive.
+// which on the delete path could drop another conversation's rows.
 func escapeMilvusLikePattern(value string) string {
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, `"`, `\"`)
+	value = escapeMilvusString(value)
 	value = strings.ReplaceAll(value, "%", `\%`)
 	value = strings.ReplaceAll(value, "_", `\_`)
 	return value

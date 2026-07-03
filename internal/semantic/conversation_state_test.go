@@ -80,6 +80,34 @@ func TestLoadConversationMessageStateFromIteratorAssemblesSinglePart(t *testing.
 	assertReuseVector(t, reuse, "hello", []float32{1, 2})
 }
 
+func TestLoadConversationMessageStateFromIteratorAcceptsNewlineConversationPrefix(t *testing.T) {
+	prefix := "conv/cursor:task-call_0mtc\nfc_00729/"
+	rows := []conversationStateTestRow{
+		{
+			relativePath:    prefix + "7/0",
+			role:            "assistant",
+			content:         "newline prefix content",
+			messageIndex:    7,
+			hasMessageIndex: true,
+			vector:          []float32{7},
+		},
+	}
+	iterator := &conversationStateTestIterator{
+		pages: []milvusclient.ResultSet{conversationStateResultSet(t, rows, true)},
+	}
+
+	state, reuse, err := loadConversationMessageStateFromIterator(context.Background(), "conv_chunks_test", prefix, iterator)
+	if err != nil {
+		t.Fatalf("loadConversationMessageStateFromIterator returned error: %v", err)
+	}
+
+	wantState := map[int32]StoredMessageState{
+		7: {Role: "assistant", Text: "newline prefix content"},
+	}
+	assertStoredMessageState(t, state, wantState)
+	assertReuseVector(t, reuse, "newline prefix content", []float32{7})
+}
+
 func TestLoadConversationMessageStateFromIteratorAssemblesMultipartInPartOrder(t *testing.T) {
 	prefix := "conv/codex/provider/thread/with/slash/"
 	firstPage := conversationStateResultSet(t, []conversationStateTestRow{
