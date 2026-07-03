@@ -336,14 +336,6 @@ func (service *Service) deleteByRelativePaths(ctx context.Context, collectionNam
 	return nil
 }
 
-// escapeMilvusString matches the TS escape rule at context.ts:412 and quotes
-// any backslash or double quote in a filter string.
-func escapeMilvusString(value string) string {
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, `"`, `\"`)
-	return value
-}
-
 // Search executes semantic or hybrid search against the configured collection.
 //
 // relativePathPrefix scopes the search to one subtree of the collection: when

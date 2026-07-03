@@ -69,7 +69,7 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 // the dense vector so CopyChunks can reinsert under a new key without
 // re-embedding the content.
 func (service *Service) fetchChunksForPath(ctx context.Context, collectionName string, relativePath string) ([]model.StoredChunk, [][]float32, error) {
-	expression := fmt.Sprintf(`%s == %q`, relativePathFieldName, relativePath)
+	expression := relativePathExpression(relativePath)
 	outputFields := []string{
 		idFieldName,
 		contentFieldName,
