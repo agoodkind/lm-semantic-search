@@ -351,6 +351,7 @@ type StatusView struct {
 	Chunks            int32
 	SkippedLine       string
 	SyncNote          string
+	GraphLine         string
 	HasStats          bool
 }
 

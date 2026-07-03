@@ -30,6 +30,7 @@ type deltaPlan struct {
 	currentSnapshot merkle.Snapshot
 	seedSnapshot    merkle.Snapshot
 	configDigest    string
+	graphTask       *graphIndexTask
 	fallback        bool
 	handled         bool
 }
@@ -177,6 +178,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 			currentSnapshot: merkle.Snapshot{ConfigDigest: "", Files: nil, Inodes: nil},
 			seedSnapshot:    seed,
 			configDigest:    configDigest,
+			graphTask:       nil,
 			fallback:        false,
 			handled:         true,
 		}
@@ -191,10 +193,12 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 				currentSnapshot: captured,
 				seedSnapshot:    seed,
 				configDigest:    configDigest,
+				graphTask:       nil,
 				fallback:        true,
 				handled:         false,
 			}
 		}
+		snapshotHash := snapshotHashForGraph(captured, configDigest)
 		fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, captured.Files, 0)
 		var totalBytes int64
 		manager.mu.Lock()
@@ -202,7 +206,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 			totalBytes = codebase.LastSuccessfulRun.TotalBytes
 		}
 		manager.mu.Unlock()
-		manager.updateJobCompleted(ctx, job.ID, indexer.Result{
+		emptyDiffResult := indexer.Result{
 			IndexedFiles:      fileCount,
 			TotalChunks:       chunkCount,
 			TotalBytes:        totalBytes,
@@ -212,12 +216,22 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 			SkippedOversize:   0,
 			SkippedUnreadable: 0,
 			SkippedPending:    0,
-		})
+		}
+		var graphTask *graphIndexTask
+		if manager.shouldReconcileGraph(codebaseID, snapshotHash, evidence.presence) {
+			graphTask = newGraphIndexTask(codebaseID, job.CanonicalPath, snapshotHash, func(completeCtx context.Context) {
+				manager.updateJobCompleted(completeCtx, job.ID, emptyDiffResult)
+			})
+		}
+		if graphTask == nil {
+			manager.updateJobCompleted(ctx, job.ID, emptyDiffResult)
+		}
 		return deltaPlan{
 			diff:            diff,
 			currentSnapshot: captured,
 			seedSnapshot:    seed,
 			configDigest:    configDigest,
+			graphTask:       graphTask,
 			fallback:        false,
 			handled:         true,
 		}
@@ -227,6 +241,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 		currentSnapshot: captured,
 		seedSnapshot:    seed,
 		configDigest:    configDigest,
+		graphTask:       nil,
 		fallback:        false,
 		handled:         false,
 	}
@@ -242,7 +257,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 // modified files. The streaming operation differs only in a post-pass prune
 // that drops rows for files no longer present, which covers the splitter
 // upgrade where the empty seed re-embeds everything.
-func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source itemSource) bool {
+func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source itemSource) (bool, *graphIndexTask) {
 	ctx, done := spans.Open(ctx, "daemon.runDeltaSync")
 	defer done(nil)
 
@@ -251,16 +266,16 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	manager.mu.Unlock()
 	if !codebaseFound {
 		manager.routeToBootstrap(ctx, job.ID, bootstrapReasonDeltaCodebaseMissing)
-		return false
+		return false, nil
 	}
 
 	streamingReindex := jobOperation(job.Operation) == jobOperationStreamingReindex
 	plan := manager.planSyncDiff(ctx, job, codebase.ID, source)
 	if plan.fallback {
-		return false
+		return false, nil
 	}
 	if plan.handled {
-		return true
+		return true, plan.graphTask
 	}
 	// The source's absence policy decides what a large disappearance means here.
 	// A code source deletes the missing files, guarded by the large-delete
@@ -271,7 +286,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	case absenceDeleteGuarded:
 		if signal, suspicious := assessDeltaDeleteWave(codebase, plan.diff, plan.seedSnapshot, job.CanonicalPath); suspicious {
 			manager.updateJobQuarantined(ctx, job.ID, signal)
-			return true
+			return true, nil
 		}
 	case absenceRetain:
 		if retained := len(plan.diff.Removed); retained > 0 {
@@ -303,9 +318,9 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
 	if outcome := manager.applyDeltaRemovals(ctx, job, state); outcome.fallback {
-		return false
+		return false, nil
 	} else if outcome.handled {
-		return true
+		return true, nil
 	}
 
 	if len(plan.diff.Added) > 0 && state.semantic {
@@ -317,15 +332,15 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 
 	result, outcome := manager.applyDeltaChanges(ctx, job, state)
 	if outcome.fallback {
-		return false
+		return false, nil
 	}
 	if outcome.handled {
-		return true
+		return true, nil
 	}
 
 	if streamingReindex && state.semantic {
 		if outcome := manager.pruneAfterStreaming(ctx, job, plan.currentSnapshot); outcome.handled {
-			return true
+			return true, nil
 		}
 	}
 
@@ -337,10 +352,23 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	result, normalizeErr = manager.normalizeDeltaTotalBytes(ctx, codebase, state, result)
 	if normalizeErr != nil {
 		manager.updateJobFailed(ctx, job.ID, normalizeErr)
-		return true
+		return true, nil
 	}
-	manager.updateJobCompleted(ctx, job.ID, result)
-	return true
+	var graphTask *graphIndexTask
+	if codebase.Kind == model.CodebaseKindCode {
+		// The graph task is stamped with the hash of the snapshot this run
+		// committed (the working set), not the captured one: skipped, pending,
+		// or unreadable paths can leave the checkpoint behind the capture, and
+		// reconciliation compares against the committed checkpoint.
+		committedSnapshot := merkle.Snapshot{ConfigDigest: plan.configDigest, Files: state.working, Inodes: nil}
+		graphTask = newGraphIndexTask(codebase.ID, job.CanonicalPath, snapshotHashForGraph(committedSnapshot, plan.configDigest), func(completeCtx context.Context) {
+			manager.updateJobCompleted(completeCtx, job.ID, result)
+		})
+	}
+	if graphTask == nil {
+		manager.updateJobCompleted(ctx, job.ID, result)
+	}
+	return true, graphTask
 }
 
 // codebaseTotals reports the file and chunk totals that represent the
@@ -448,7 +476,7 @@ func replacedDeltaPaths(state deltaState, changedChunks []model.StoredChunk) map
 // operation that lacks a usable incremental delta routes here: a true first
 // index, a forced rebuild, and a sync or streaming reindex whose live
 // collection has gone missing.
-func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source itemSource) {
+func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source itemSource) *graphIndexTask {
 	ctx, done := spans.Open(ctx, "daemon.runBootstrap")
 	defer done(nil)
 
@@ -456,12 +484,12 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	codebase, codebaseFound := manager.codebases[job.CodebaseID]
 	manager.mu.Unlock()
 	if !codebaseFound {
-		return
+		return nil
 	}
 
 	plan := manager.planBootstrap(ctx, job, codebase.ID, source)
 	if plan.handled {
-		return
+		return nil
 	}
 	runMode := model.RunModeFirstBuild
 	if len(plan.seedSnapshot.Files) > 0 {
@@ -495,30 +523,39 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 
 	result, outcome := manager.applyDeltaChanges(ctx, job, state)
 	if outcome.handled {
-		return
+		return nil
 	}
 	if outcome.fallback {
 		// A from-scratch build has no further fallback; treat one as a failure
 		// so the job reaches a terminal state instead of stalling in running.
 		manager.updateJobFailed(ctx, job.ID, errors.New("bootstrap build could not complete against the semantic backend"))
-		return
+		return nil
 	}
 
 	if promote := manager.promoteBootstrap(ctx, job, state); promote.handled {
-		return
+		return nil
 	}
 	if promote := manager.promoteStagingMerkle(ctx, job, state); promote.handled {
-		return
+		return nil
 	}
 
 	manager.absorbDescendants(ctx, descendants)
+	var graphTask *graphIndexTask
+	if codebase.Kind == model.CodebaseKindCode {
+		graphTask = newGraphIndexTask(job.CodebaseID, job.CanonicalPath, snapshotHashForGraph(plan.currentSnapshot, plan.configDigest), func(completeCtx context.Context) {
+			manager.updateJobCompleted(completeCtx, job.ID, result)
+		})
+	}
 
 	result.FileHashes = state.working
 	fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, state.working, result.TotalChunks)
 	result.IndexedFiles = fileCount
 	result.TotalChunks = chunkCount
 	result.FileHashes = nil
-	manager.updateJobCompleted(ctx, job.ID, result)
+	if graphTask == nil {
+		manager.updateJobCompleted(ctx, job.ID, result)
+	}
+	return graphTask
 }
 
 // resolveReuseSeed loads build-wide reuse vectors from indexed descendants and
@@ -569,6 +606,7 @@ func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codeba
 			currentSnapshot: merkle.Snapshot{ConfigDigest: "", Files: nil, Inodes: nil},
 			seedSnapshot:    merkle.Snapshot{ConfigDigest: configDigest, Files: nil, Inodes: nil},
 			configDigest:    configDigest,
+			graphTask:       nil,
 			fallback:        false,
 			handled:         true,
 		}
@@ -585,6 +623,7 @@ func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codeba
 		currentSnapshot: captured,
 		seedSnapshot:    seedDecision.seed,
 		configDigest:    configDigest,
+		graphTask:       nil,
 		fallback:        false,
 		handled:         false,
 	}

@@ -16,16 +16,23 @@ import (
 func resolveStatusNarrative(display displayStatus, canonicalPath string, failure view.FailureSurface, quarantine view.QuarantineSurface, statusView view.StatusView) view.StatusNarrative {
 	switch display {
 	case displayFailed:
-		return view.StatusNarrative{Lines: failedNarrativeLines(canonicalPath, failure)}
+		return view.StatusNarrative{Lines: withGraphLine(failedNarrativeLines(canonicalPath, failure), statusView)}
 	case displayMissing:
-		return view.StatusNarrative{Lines: missingNarrativeLines(canonicalPath)}
+		return view.StatusNarrative{Lines: withGraphLine(missingNarrativeLines(canonicalPath), statusView)}
 	case displayStale:
-		return view.StatusNarrative{Lines: staleNarrativeLines(canonicalPath, failure)}
+		return view.StatusNarrative{Lines: withGraphLine(staleNarrativeLines(canonicalPath, failure), statusView)}
 	case displayQuarantined:
-		return view.StatusNarrative{Lines: quarantinedNarrativeLines(canonicalPath, quarantine, statusView)}
+		return view.StatusNarrative{Lines: withGraphLine(quarantinedNarrativeLines(canonicalPath, quarantine, statusView), statusView)}
 	default:
 		return view.StatusNarrative{Lines: nil}
 	}
+}
+
+func withGraphLine(lines []string, statusView view.StatusView) []string {
+	if statusView.GraphLine == "" {
+		return lines
+	}
+	return append(lines, statusView.GraphLine)
 }
 
 // missingNarrativeLines reads as a current condition, not a failure: the source

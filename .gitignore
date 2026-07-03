@@ -1,5 +1,7 @@
 .make/
 .bin/
+.cache/
+build/
 dist/
 go.work
 go.work.sum

@@ -90,6 +90,9 @@ func (manager *Manager) absorbDescendants(ctx context.Context, descendants []mod
 	manager.mu.Unlock()
 
 	for _, id := range removed {
+		if err := manager.clearGraphCache(ctx, id); err != nil {
+			slog.WarnContext(ctx, "remove absorbed child graph failed", "child_codebase_id", id, "err", err)
+		}
 		manager.notifyCodebaseRemoved(ctx, id)
 	}
 	if len(removed) > 0 {

@@ -4,4 +4,7 @@
 {{ .ReuseForecastLine }}
 {{- end }}
 💡 builds shortly, or run index_codebase
+{{- if .GraphLine }}
+{{ .GraphLine }}
+{{- end }}
 🕐 Updated {{ .UpdatedAt }}

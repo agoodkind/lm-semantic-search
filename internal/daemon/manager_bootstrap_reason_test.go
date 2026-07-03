@@ -122,7 +122,7 @@ func TestRunDeltaSyncMissingCodebaseStampsBootstrapReason(t *testing.T) {
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
 
-	handled := manager.runDeltaSync(context.Background(), job, nil)
+	handled, _ := manager.runDeltaSync(context.Background(), job, nil)
 
 	if handled {
 		t.Fatal("runDeltaSync returned true, want false")

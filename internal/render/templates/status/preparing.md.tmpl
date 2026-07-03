@@ -1,3 +1,6 @@
 📁 {{ .Name }}
 ⚙️ {{ .PrepareLabel }}
+{{- if .GraphLine }}
+{{ .GraphLine }}
+{{- end }}
 🕐 Updated {{ .UpdatedAt }}

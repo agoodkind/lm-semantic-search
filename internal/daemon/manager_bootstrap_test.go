@@ -380,7 +380,8 @@ func TestRunBootstrapResumesSkippingEmbeddedFiles(t *testing.T) {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+	graphTask := manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+	manager.runGraphIndexTask(context.Background(), graphTask)
 
 	mu.Lock()
 	slices.Sort(embedded)
@@ -412,7 +413,8 @@ func TestRunBootstrapEmbedsEveryFileWithoutCheckpoint(t *testing.T) {
 
 	_, job := seedBootstrapCodebase(t, manager, canonical, cfg)
 
-	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+	graphTask := manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+	manager.runGraphIndexTask(context.Background(), graphTask)
 
 	mu.Lock()
 	slices.Sort(embedded)

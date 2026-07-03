@@ -30,6 +30,7 @@ const (
 	SemanticSearchDaemonService_ListJobs_FullMethodName                          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ListJobs"
 	SemanticSearchDaemonService_WatchJobs_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/WatchJobs"
 	SemanticSearchDaemonService_SearchCode_FullMethodName                        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCode"
+	SemanticSearchDaemonService_GraphTool_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GraphTool"
 	SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterConversationCollection"
 	SemanticSearchDaemonService_SyncConversationManifest_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncConversationManifest"
 	SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocumentsStream"
@@ -56,6 +57,7 @@ type SemanticSearchDaemonServiceClient interface {
 	ListJobs(ctx context.Context, in *ListJobsRequest, opts ...grpc.CallOption) (*ListJobsResponse, error)
 	WatchJobs(ctx context.Context, in *WatchJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchJobsResponse], error)
 	SearchCode(ctx context.Context, in *SearchCodeRequest, opts ...grpc.CallOption) (*SearchCodeResponse, error)
+	GraphTool(ctx context.Context, in *GraphToolRequest, opts ...grpc.CallOption) (*GraphToolResponse, error)
 	RegisterConversationCollection(ctx context.Context, in *RegisterConversationCollectionRequest, opts ...grpc.CallOption) (*RegisterConversationCollectionResponse, error)
 	SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error)
 	// UpsertConversationDocumentsStream is the client-streaming conversation
@@ -203,6 +205,16 @@ func (c *semanticSearchDaemonServiceClient) SearchCode(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *semanticSearchDaemonServiceClient) GraphTool(ctx context.Context, in *GraphToolRequest, opts ...grpc.CallOption) (*GraphToolResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GraphToolResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_GraphTool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *semanticSearchDaemonServiceClient) RegisterConversationCollection(ctx context.Context, in *RegisterConversationCollectionRequest, opts ...grpc.CallOption) (*RegisterConversationCollectionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterConversationCollectionResponse)
@@ -314,6 +326,7 @@ type SemanticSearchDaemonServiceServer interface {
 	ListJobs(context.Context, *ListJobsRequest) (*ListJobsResponse, error)
 	WatchJobs(*WatchJobsRequest, grpc.ServerStreamingServer[WatchJobsResponse]) error
 	SearchCode(context.Context, *SearchCodeRequest) (*SearchCodeResponse, error)
+	GraphTool(context.Context, *GraphToolRequest) (*GraphToolResponse, error)
 	RegisterConversationCollection(context.Context, *RegisterConversationCollectionRequest) (*RegisterConversationCollectionResponse, error)
 	SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error)
 	// UpsertConversationDocumentsStream is the client-streaming conversation
@@ -373,6 +386,9 @@ func (UnimplementedSemanticSearchDaemonServiceServer) WatchJobs(*WatchJobsReques
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) SearchCode(context.Context, *SearchCodeRequest) (*SearchCodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchCode not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) GraphTool(context.Context, *GraphToolRequest) (*GraphToolResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GraphTool not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) RegisterConversationCollection(context.Context, *RegisterConversationCollectionRequest) (*RegisterConversationCollectionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterConversationCollection not implemented")
@@ -612,6 +628,24 @@ func _SemanticSearchDaemonService_SearchCode_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SemanticSearchDaemonService_GraphTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GraphToolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).GraphTool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_GraphTool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).GraphTool(ctx, req.(*GraphToolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SemanticSearchDaemonService_RegisterConversationCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterConversationCollectionRequest)
 	if err := dec(in); err != nil {
@@ -798,6 +832,10 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SearchCode",
 			Handler:    _SemanticSearchDaemonService_SearchCode_Handler,
+		},
+		{
+			MethodName: "GraphTool",
+			Handler:    _SemanticSearchDaemonService_GraphTool_Handler,
 		},
 		{
 			MethodName: "RegisterConversationCollection",
