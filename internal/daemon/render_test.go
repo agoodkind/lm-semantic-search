@@ -352,7 +352,7 @@ func TestRenderIndexingActivePreparingForced(t *testing.T) {
 	}
 }
 
-// TestRenderIndexingActiveBuilding proves a from-scratch build reads as
+// TestRenderIndexingActiveBuilding proves a cold from-scratch build reads as
 // "Building initial index" with the percent, files embedded, and chunks so far.
 func TestRenderIndexingActiveBuilding(t *testing.T) {
 	t.Parallel()
@@ -367,9 +367,49 @@ func TestRenderIndexingActiveBuilding(t *testing.T) {
 			t.Fatalf("building status missing %q in:\n%s", want, out)
 		}
 	}
-	// A first build has no prior vectors, so the chunk tree omits the reused row.
+	// A cold first build loads and serves no reuse vectors, so the chunk tree
+	// omits the reused row; a seeded first build shows it (see the next test).
 	if strings.Contains(out, "reused") {
-		t.Fatalf("a first build should omit the reused row in:\n%s", out)
+		t.Fatalf("a cold first build should omit the reused row in:\n%s", out)
+	}
+}
+
+// TestRenderIndexingActiveSeededFirstBuild proves a first build that loads
+// sibling vectors does not read like a cold full build.
+func TestRenderIndexingActiveSeededFirstBuild(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
+	job := &model.Job{
+		Operation: "index",
+		Progress: model.Progress{
+			RunMode:            model.RunModeFirstBuild,
+			OverallPercent:     42,
+			FilesTotal:         58,
+			FilesProcessed:     1,
+			FilesEmbedded:      1,
+			ChunksProcessed:    678,
+			ChunksReused:       623,
+			ChunksEmbedded:     55,
+			ReuseVectorsLoaded: 2316,
+			LastEventAt:        renderTestTime,
+		},
+	}
+	out := renderActiveStatusForTest(codebase, job)
+	for _, want := range []string{
+		"📁 swift-makefile",
+		"🔄 Building initial index: 42%",
+		"📄 1 of 58 files (first build, reusing prior vectors) processed",
+		"└─ ➕ 1 embedded",
+		"🧩 678 chunks total",
+		"├─ ➕ 55 added",
+		"└─ ♻️ 623 reused",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("seeded building status missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "(full build)") {
+		t.Fatalf("seeded first build should not use the cold full-build label in:\n%s", out)
 	}
 }
 
