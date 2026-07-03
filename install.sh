@@ -477,7 +477,7 @@ After=network.target
 
 [Service]
 ExecStart=$installed_path
-Restart=on-failure
+Restart=always
 RestartSec=2
 Environment=HOME=$HOME
 
