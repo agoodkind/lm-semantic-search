@@ -584,7 +584,7 @@ func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase mode
 	if !merkle.Equal(existingSnapshot, currentSnapshot) {
 		return true, nil
 	}
-	presence := syncer.manager.probeCollectionPresence(ctx, codebase.CanonicalPath, "backgroundSync")
+	presence := syncer.manager.probeCollectionEvidence(ctx, codebase.CanonicalPath, "backgroundSync").presence
 	currentSnapshotHash := snapshotHashForGraph(currentSnapshot, codebase.EffectiveConfig.IgnoreDigest)
 	return syncer.manager.shouldReconcileGraph(codebase.ID, currentSnapshotHash, presence), nil
 }

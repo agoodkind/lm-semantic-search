@@ -55,8 +55,9 @@ type deltaState struct {
 	// source lists items and produces one item's chunks. It is the only
 	// kind-specific part of the routine: a code source walks the filesystem, a
 	// conversation source reads the manifest and documents handed over the wire.
-	source   itemSource
-	semantic bool
+	source           itemSource
+	semantic         bool
+	itemReuseEnabled bool
 	// staging routes per-file embeds into the staging collection that a
 	// from-scratch build promotes onto the live name at the end, instead of
 	// the live collection an incremental sync writes to directly.
@@ -164,9 +165,7 @@ func (manager *Manager) cleanupHaltedStaging(ctx context.Context, job model.Job,
 // every file as Added, which the per-file loop handles uniformly.
 func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebaseID string, source itemSource) deltaPlan {
 	configDigest := job.Config.IgnoreDigest
-	snapshotPath := manager.merklePath(codebaseID)
-	legacyDigest := manager.legacyDigestForCodebase(codebaseID)
-	seed := merkle.LoadSnapshotForConfig(snapshotPath, configDigest, legacyDigest)
+	seed := manager.resolveSeed(ctx, job, codebaseID, false, false).seed
 	captured, err := source.capture(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -186,8 +185,9 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 	}
 	diff := merkle.DiffSnapshots(seed, captured)
 	if diff.Empty() {
-		presence := manager.probeCollectionPresence(ctx, job.CanonicalPath, "planSyncDiff")
-		if decideEmptyDiffMode(presence) == emptyDiffModeFallbackBootstrap {
+		evidence := manager.probeCollectionEvidence(ctx, job.CanonicalPath, "planSyncDiff")
+		if decideEmptyDiffMode(evidence, len(seed.Files)) == emptyDiffModeFallbackBootstrap {
+			manager.routeToBootstrap(ctx, job.ID, bootstrapReasonForEmptyDiffFallback(evidence))
 			return deltaPlan{
 				diff:            diff,
 				currentSnapshot: captured,
@@ -218,7 +218,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 			SkippedPending:    0,
 		}
 		var graphTask *graphIndexTask
-		if manager.shouldReconcileGraph(codebaseID, snapshotHash, presence) {
+		if manager.shouldReconcileGraph(codebaseID, snapshotHash, evidence.presence) {
 			graphTask = newGraphIndexTask(codebaseID, job.CanonicalPath, snapshotHash, func(completeCtx context.Context) {
 				manager.updateJobCompleted(completeCtx, job.ID, emptyDiffResult)
 			})
@@ -265,6 +265,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	codebase, codebaseFound := manager.codebases[job.CodebaseID]
 	manager.mu.Unlock()
 	if !codebaseFound {
+		manager.routeToBootstrap(ctx, job.ID, bootstrapReasonDeltaCodebaseMissing)
 		return false, nil
 	}
 
@@ -300,17 +301,19 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	// touch only the embed counters, so these counts persist for the run.
 	manager.setJobDeltaCounts(job.ID, len(plan.diff.Added), len(plan.diff.Modified), len(plan.diff.Removed), len(plan.currentSnapshot.Files))
 
+	semanticReady := manager.semantic != nil && manager.semantic.Available()
 	state := deltaState{
-		plan:         plan,
-		snapshotPath: manager.merklePath(codebase.ID),
-		working:      make(map[string]string, len(plan.seedSnapshot.Files)),
-		source:       source,
-		semantic:     manager.semantic != nil && manager.semantic.Available(),
-		staging:      false,
-		reuse:        nil,
-		chunkCounts:  &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
-		seededReuse:  0,
-		admission:    manager.admissionForJob(job),
+		plan:             plan,
+		snapshotPath:     manager.merklePath(codebase.ID),
+		working:          make(map[string]string, len(plan.seedSnapshot.Files)),
+		source:           source,
+		semantic:         semanticReady,
+		itemReuseEnabled: manager.resolveItemReusePolicy(ctx, job, false, semanticReady),
+		staging:          false,
+		reuse:            nil,
+		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
+		seededReuse:      0,
+		admission:        manager.admissionForJob(job),
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -320,7 +323,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		return true, nil
 	}
 
-	if codebase.Kind == model.CodebaseKindCode && len(plan.diff.Added) > 0 && state.semantic {
+	if len(plan.diff.Added) > 0 && state.semantic {
 		reuse, seeded, _ := manager.resolveReuseSeed(ctx, job)
 		state.reuse = reuse
 		state.seededReuse = seeded
@@ -492,17 +495,19 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	}
 	manager.setJobRunMode(job.ID, runMode)
 
+	semanticReady := manager.semantic != nil && manager.semantic.Available()
 	state := deltaState{
-		plan:         plan,
-		snapshotPath: manager.stagingMerklePath(codebase.ID),
-		working:      make(map[string]string, len(plan.currentSnapshot.Files)),
-		source:       source,
-		semantic:     manager.semantic != nil && manager.semantic.Available(),
-		staging:      true,
-		reuse:        nil,
-		chunkCounts:  &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
-		seededReuse:  0,
-		admission:    manager.admissionForJob(job),
+		plan:             plan,
+		snapshotPath:     manager.stagingMerklePath(codebase.ID),
+		working:          make(map[string]string, len(plan.currentSnapshot.Files)),
+		source:           source,
+		semantic:         semanticReady,
+		itemReuseEnabled: manager.resolveItemReusePolicy(ctx, job, true, semanticReady),
+		staging:          true,
+		reuse:            nil,
+		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
+		seededReuse:      0,
+		admission:        manager.admissionForJob(job),
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -582,9 +587,6 @@ func (manager *Manager) resolveReuseSeed(ctx context.Context, job model.Job) (ma
 // first file and any stale staging is dropped first.
 func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codebaseID string, source itemSource) deltaPlan {
 	configDigest := job.Config.IgnoreDigest
-	legacyDigest := manager.legacyDigestForCodebase(codebaseID)
-	stagingSnapshotPath := manager.stagingMerklePath(codebaseID)
-	seed := merkle.LoadSnapshotForConfig(stagingSnapshotPath, configDigest, legacyDigest)
 	semanticReady := manager.semantic != nil && manager.semantic.Available()
 
 	captured, err := source.capture(ctx)
@@ -597,25 +599,14 @@ func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codeba
 		return deltaPlan{
 			diff:            merkle.Diff{Added: nil, Modified: nil, Removed: nil},
 			currentSnapshot: merkle.Snapshot{ConfigDigest: "", Files: nil, Inodes: nil},
-			seedSnapshot:    seed,
+			seedSnapshot:    merkle.Snapshot{ConfigDigest: configDigest, Files: nil, Inodes: nil},
 			configDigest:    configDigest,
 			graphTask:       nil,
 			fallback:        false,
 			handled:         true,
 		}
 	}
-
-	if !manager.canResumeStaging(ctx, job.CanonicalPath, seed, semanticReady) {
-		if semanticReady {
-			if dropErr := manager.semantic.DropStaging(ctx, job.CanonicalPath); dropErr != nil {
-				slog.WarnContext(ctx, "drop stale staging before bootstrap failed", "path", job.CanonicalPath, "err", dropErr)
-			}
-		}
-		seed = merkle.Snapshot{ConfigDigest: configDigest, Files: nil, Inodes: nil}
-		if removeErr := store.RemoveFile(stagingSnapshotPath); removeErr != nil {
-			slog.WarnContext(ctx, "remove stale bootstrap checkpoint failed", "path", stagingSnapshotPath, "err", removeErr)
-		}
-	}
+	seedDecision := manager.resolveSeed(ctx, job, codebaseID, true, semanticReady)
 
 	addedFiles := make([]string, 0, len(captured.Files))
 	for relativePath := range captured.Files {
@@ -625,7 +616,7 @@ func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codeba
 	return deltaPlan{
 		diff:            merkle.Diff{Added: addedFiles, Modified: nil, Removed: nil},
 		currentSnapshot: captured,
-		seedSnapshot:    seed,
+		seedSnapshot:    seedDecision.seed,
 		configDigest:    configDigest,
 		graphTask:       nil,
 		fallback:        false,
@@ -651,28 +642,6 @@ func (manager *Manager) promoteStagingMerkle(ctx context.Context, job model.Job,
 	}
 	slog.InfoContext(ctx, "promoted staging Merkle snapshot to live", "component", "daemon", "subcomponent", "delta", "codebase_id", job.CodebaseID, "path", livePath)
 	return deltaOutcome{fallback: false, handled: false, progressed: false}
-}
-
-// canResumeStaging reports whether a persisted checkpoint can seed a resumed
-// build. A checkpoint with no files cannot. When the semantic backend is
-// configured the staging collection must still exist, because that is where
-// the embedded vectors for the checkpointed files live; without it the
-// checkpoint describes work whose vectors were lost, so the build restarts.
-// When the backend is unavailable the checkpoint is the only state and is
-// trusted on its own.
-func (manager *Manager) canResumeStaging(ctx context.Context, canonicalPath string, seed merkle.Snapshot, semanticReady bool) bool {
-	if len(seed.Files) == 0 {
-		return false
-	}
-	if !semanticReady {
-		return true
-	}
-	hasStaging, err := manager.semantic.HasStaging(ctx, canonicalPath)
-	if err != nil {
-		slog.WarnContext(ctx, "check staging for resume failed; restarting build", "path", canonicalPath, "err", err)
-		return false
-	}
-	return hasStaging
 }
 
 // promoteBootstrap swaps the freshly built staging collection onto the live
@@ -775,14 +744,7 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
 	if fileResult.Removed {
-		slog.InfoContext(ctx, "converge.remove", "component", "daemon", "subcomponent", "delta", "path", relativePath, "semantic", state.semantic)
-		if state.semantic {
-			if outcome := manager.applyReindexForState(ctx, job, state, nil, state.source.removalFor([]string{relativePath}), "per-file removal"); outcome.fallback || outcome.handled {
-				return outcome
-			}
-		}
-		delete(state.working, relativePath)
-		return deltaOutcome{fallback: false, handled: false, progressed: true}
+		return manager.handleRemovedFile(ctx, job, state, relativePath, fileResult)
 	}
 	if fileResult.Skipped {
 		switch fileResult.SkipReason {
@@ -800,12 +762,8 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 	if state.semantic {
-		reuse, loaded := manager.itemReuse(ctx, state, relativePath)
-		state.reuse = reuse
-		if state.chunkCounts != nil {
-			state.chunkCounts.reuseVectorsLoaded += loaded
-		}
-		if outcome := manager.applyReindexForState(ctx, job, state, fileResult.Chunks, state.source.removalFor([]string{relativePath}), "per-file reindex"); outcome.fallback || outcome.handled {
+		removal := effectiveRemoval(state.source, fileResult, relativePath)
+		if outcome := manager.applyChangedFileSemantic(ctx, job, state, relativePath, fileResult, removal); outcome.fallback || outcome.handled {
 			return outcome
 		}
 	}
@@ -817,17 +775,63 @@ func (manager *Manager) handleChangedFile(ctx context.Context, job model.Job, st
 	return deltaOutcome{fallback: false, handled: false, progressed: true}
 }
 
+func (manager *Manager) handleRemovedFile(ctx context.Context, job model.Job, state deltaState, relativePath string, fileResult indexer.OneFileResult) deltaOutcome {
+	slog.InfoContext(ctx, "converge.remove", "component", "daemon", "subcomponent", "delta", "path", relativePath, "semantic", state.semantic)
+	if state.semantic {
+		removal := effectiveRemoval(state.source, fileResult, relativePath)
+		// Empty removals are valid delete-nothing overrides, so they advance state
+		// without a semantic write.
+		if !removal.Empty() {
+			if outcome := manager.applyReindexForState(ctx, job, state, nil, removal, "per-file removal"); outcome.fallback || outcome.handled {
+				return outcome
+			}
+		}
+	}
+	delete(state.working, relativePath)
+	return deltaOutcome{fallback: false, handled: false, progressed: true}
+}
+
+func (manager *Manager) applyChangedFileSemantic(ctx context.Context, job model.Job, state deltaState, relativePath string, fileResult indexer.OneFileResult, removal semantic.Removal) deltaOutcome {
+	state = manager.reuseStateForChangedFile(ctx, state, relativePath, fileResult, removal)
+	if len(fileResult.Chunks) == 0 && removal.Empty() {
+		return deltaOutcome{fallback: false, handled: false, progressed: false}
+	}
+	return manager.applyReindexForState(ctx, job, state, fileResult.Chunks, removal, "per-file reindex")
+}
+
+func (manager *Manager) reuseStateForChangedFile(ctx context.Context, state deltaState, relativePath string, fileResult indexer.OneFileResult, removal semantic.Removal) deltaState {
+	if fileResult.ReuseVectors != nil {
+		state.reuse = mergedReuse(state.reuse, fileResult.ReuseVectors)
+		if state.chunkCounts != nil {
+			state.chunkCounts.reuseVectorsLoaded += safeInt32(len(fileResult.ReuseVectors))
+		}
+		return state
+	}
+	if len(fileResult.Chunks) == 0 && removal.Empty() {
+		return state
+	}
+	reuse, loaded := manager.itemReuse(ctx, state, relativePath)
+	state.reuse = reuse
+	if state.chunkCounts != nil {
+		state.chunkCounts.reuseVectorsLoaded += loaded
+	}
+	return state
+}
+
+func effectiveRemoval(source itemSource, fileResult indexer.OneFileResult, relativePath string) semantic.Removal {
+	if fileResult.RemovalOverride {
+		return semantic.Removal{Paths: fileResult.RemovalPaths, Prefixes: fileResult.RemovalPrefixes}
+	}
+	return source.removalFor([]string{relativePath})
+}
+
 // itemReuse loads one item's own stored vectors before the reindex deletes
 // them, so chunks whose content is unchanged take their vector from the store
 // instead of the embedder. It returns the build-wide reuse map unchanged when
 // the source has no per-item reuse, and on a failed load it logs and falls
 // back to that map so the item embeds every chunk rather than failing.
 func (manager *Manager) itemReuse(ctx context.Context, state deltaState, relativePath string) (map[string][]float32, int32) {
-	// Per-item same-collection reuse is an incremental live-collection feature.
-	// A staging/bootstrap build already has its own build-wide reuse sources, and
-	// probing the live collection file-by-file on a true first build would be
-	// pure overhead when that collection does not exist yet.
-	if state.staging {
+	if !state.itemReuseEnabled {
 		return state.reuse, 0
 	}
 	source := state.source.reuseSource(relativePath)
@@ -850,6 +854,9 @@ func (manager *Manager) itemReuse(ctx context.Context, state deltaState, relativ
 		slog.WarnContext(ctx, "load item reuse vectors failed; embedding every chunk", "path", relativePath, "collection", source.CollectionName, "scope", source.Scope, "err", err)
 		return state.reuse, 0
 	}
+	if len(itemReuse) == 0 {
+		return state.reuse, 0
+	}
 	return mergedReuse(state.reuse, itemReuse), safeInt32(len(itemReuse))
 }
 
@@ -869,6 +876,7 @@ func mergedReuse(base map[string][]float32, item map[string][]float32) map[strin
 func (manager *Manager) classifyReindexErr(ctx context.Context, job model.Job, err error, phase string) deltaOutcome {
 	switch {
 	case errors.Is(err, semantic.ErrCollectionMissing):
+		manager.routeToBootstrap(ctx, job.ID, bootstrapReasonDeltaCollectionMissing)
 		slog.WarnContext(ctx, "semantic collection missing; falling back to full reindex", "job_id", job.ID, "phase", phase)
 		return deltaOutcome{fallback: true, handled: false, progressed: false}
 	case errors.Is(err, context.Canceled):
@@ -878,6 +886,13 @@ func (manager *Manager) classifyReindexErr(ctx context.Context, job model.Job, e
 		manager.updateJobFailed(ctx, job.ID, err)
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
+}
+
+func bootstrapReasonForEmptyDiffFallback(evidence collectionEvidence) bootstrapReason {
+	if evidence.presence == collectionPresencePresent && evidence.rowsKnown && evidence.rows == 0 {
+		return bootstrapReasonEmptyDiffCollectionEmpty
+	}
+	return bootstrapReasonEmptyDiffCollectionMissing
 }
 
 func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, label string) {

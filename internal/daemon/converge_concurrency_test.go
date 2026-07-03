@@ -26,11 +26,13 @@ type fakeSemantic struct {
 	probeErr              error
 	reindex               func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
 	reindexWithReuse      func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
+	stageReindexWithReuse func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
 	copyChunks            func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
 	deleteConversation    func(ctx context.Context, collectionName string, conversationID string) error
 	backfillConversations func(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
 	collectionName        func(codebasePath string) string
 	conversationName      func(collectionID string) string
+	inspectCollection     func(context.Context, string) (semantic.CollectionFacts, error)
 	listCollections       func(context.Context) ([]string, error)
 	hasCollectionForPath  func(context.Context, string) (bool, error)
 	collectionState       func(context.Context, string) (bool, bool, error)
@@ -51,6 +53,8 @@ type fakeSemantic struct {
 	reusePrefixCalls   []reusePrefixCall
 	loadReuseForPath   func(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
 	reusePathCalls     []reusePathCall
+	loadMessageState   func(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error)
+	messageStateCalls  []messageStateCall
 	reindexReuse       map[string]map[string][]float32
 	// conversationSearchScopes records the conversation-id scope each
 	// conversation search received, so tests can prove native scoping.
@@ -71,6 +75,7 @@ type reindexCall struct {
 	CodebasePath string
 	Chunks       int
 	Removed      []string
+	Removal      semantic.Removal
 }
 
 func (f *fakeSemantic) Available() bool { return !f.unavailable }
@@ -133,6 +138,25 @@ func (f *fakeSemantic) ListCollections(ctx context.Context) ([]string, error) {
 	return []string{"code_chunks_test"}, nil
 }
 
+func (f *fakeSemantic) InspectCollection(ctx context.Context, collectionName string) (semantic.CollectionFacts, error) {
+	if f.inspectCollection != nil {
+		return f.inspectCollection(ctx, collectionName)
+	}
+	if f.hasCollectionForPath != nil {
+		// This fallback preserves older repair-test fixtures, but this path
+		// passes a collection name. Fixtures keyed by codebase path must set
+		// inspectCollection explicitly so they do not compare unlike values.
+		exists, err := f.hasCollectionForPath(ctx, collectionName)
+		if err != nil {
+			return semantic.CollectionFacts{}, err
+		}
+		if !exists {
+			return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
+		}
+	}
+	return semantic.CollectionFacts{Exists: true, Rows: 1, RowsKnown: true}, nil
+}
+
 func (f *fakeSemantic) HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error) {
 	if f.hasCollectionForPath != nil {
 		return f.hasCollectionForPath(ctx, codebasePath)
@@ -170,6 +194,12 @@ type reusePathCall struct {
 	Path       string
 }
 
+// messageStateCall records one per-message state load.
+type messageStateCall struct {
+	Collection string
+	Prefix     string
+}
+
 func (f *fakeSemantic) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
 	f.mu.Lock()
 	f.reusePrefixCalls = append(f.reusePrefixCalls, reusePrefixCall{Collection: collectionName, Prefix: relativePathPrefix})
@@ -190,6 +220,16 @@ func (f *fakeSemantic) LoadReuseVectorsForPath(ctx context.Context, collectionNa
 	return map[string][]float32{}, nil
 }
 
+func (f *fakeSemantic) LoadConversationMessageState(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
+	f.mu.Lock()
+	f.messageStateCalls = append(f.messageStateCalls, messageStateCall{Collection: collectionName, Prefix: conversationPrefix})
+	f.mu.Unlock()
+	if f.loadMessageState != nil {
+		return f.loadMessageState(ctx, collectionName, conversationPrefix)
+	}
+	return map[int32]semantic.StoredMessageState{}, map[string][]float32{}, nil
+}
+
 // reusePrefixCallsSnapshot returns a copy of the recorded prefix reuse loads.
 func (f *fakeSemantic) reusePrefixCallsSnapshot() []reusePrefixCall {
 	f.mu.Lock()
@@ -201,6 +241,12 @@ func (f *fakeSemantic) reusePathCallsSnapshot() []reusePathCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]reusePathCall(nil), f.reusePathCalls...)
+}
+
+func (f *fakeSemantic) messageStateCallsSnapshot() []messageStateCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]messageStateCall(nil), f.messageStateCalls...)
 }
 
 // reindexReuseSnapshot returns, per conversation id, a copy of the reuse map
@@ -235,8 +281,9 @@ func (f *fakeSemantic) recordReindexReuse(chunks []model.StoredChunk, reuse map[
 }
 
 func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32) error {
+	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
-	f.reindexCalls = append(f.reindexCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(removal)})
+	f.reindexCalls = append(f.reindexCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval})
 	f.mu.Unlock()
 	f.recordReindexReuse(chunks, reuse)
 	if f.reindexWithReuse != nil {
@@ -251,10 +298,15 @@ func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks 
 	return nil
 }
 
-func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), _ map[string][]float32) error {
+func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32) error {
+	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
-	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(removal)})
+	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval})
 	f.mu.Unlock()
+	f.recordReindexReuse(chunks, reuse)
+	if f.stageReindexWithReuse != nil {
+		return f.stageReindexWithReuse(ctx, codebasePath, chunks, removalPaths(removal), progress, reuse)
+	}
 	if f.reindexEmit != nil && progress != nil {
 		f.reindexEmit(progress)
 	}
@@ -275,6 +327,13 @@ func removalPaths(removal semantic.Removal) []string {
 	combined = append(combined, removal.Paths...)
 	combined = append(combined, removal.Prefixes...)
 	return combined
+}
+
+func copyRemoval(removal semantic.Removal) semantic.Removal {
+	return semantic.Removal{
+		Paths:    append([]string(nil), removal.Paths...),
+		Prefixes: append([]string(nil), removal.Prefixes...),
+	}
 }
 
 func (f *fakeSemantic) DeleteConversation(ctx context.Context, collectionName string, conversationID string) error {

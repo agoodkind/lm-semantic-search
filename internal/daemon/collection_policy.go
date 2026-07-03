@@ -66,8 +66,11 @@ func decideStartIndexMode(codebaseFound bool, status model.CodebaseStatus, confi
 	}
 }
 
-func decideEmptyDiffMode(presence collectionPresence) emptyDiffMode {
-	if presence == collectionPresenceMissing {
+func decideEmptyDiffMode(evidence collectionEvidence, seedFileCount int) emptyDiffMode {
+	if evidence.presence == collectionPresenceMissing {
+		return emptyDiffModeFallbackBootstrap
+	}
+	if evidence.presence == collectionPresencePresent && evidence.rowsKnown && evidence.rows == 0 && seedFileCount > 0 {
 		return emptyDiffModeFallbackBootstrap
 	}
 	return emptyDiffModeCompleteNoop

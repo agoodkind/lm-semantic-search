@@ -17,6 +17,7 @@ type semanticReader interface {
 	SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, perConversationLimit int32, minScore float64, filter semantic.ConversationFilter) ([]model.StoredChunk, error)
 	Count(ctx context.Context, codebasePath string) (int32, error)
 	ListCollections(ctx context.Context) ([]string, error)
+	InspectCollection(ctx context.Context, collectionName string) (semantic.CollectionFacts, error)
 	HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error)
 	HasStaging(ctx context.Context, codebasePath string) (bool, error)
 }
@@ -44,6 +45,7 @@ type semanticReuseLoader interface {
 	LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error)
 	LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
 	LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
+	LoadConversationMessageState(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error)
 }
 
 // semanticWriter is the slice that mutates the live or staging collection.

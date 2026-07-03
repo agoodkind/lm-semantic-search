@@ -66,13 +66,14 @@ type CodebaseLifecycleHook interface {
 
 // Manager coordinates persisted codebase and job state for the daemon.
 type Manager struct {
-	config           config.Config
-	mu               sync.Mutex
-	codebases        map[string]model.Codebase
-	jobs             map[string]model.Job
-	conversationJobs map[string]conversationJobPayload
-	cancels          map[string]context.CancelFunc
-	done             map[string]chan struct{}
+	config                  config.Config
+	mu                      sync.Mutex
+	codebases               map[string]model.Codebase
+	jobs                    map[string]model.Job
+	conversationJobs        map[string]conversationJobPayload
+	conversationSyncCursors map[string]string
+	cancels                 map[string]context.CancelFunc
+	done                    map[string]chan struct{}
 	// failedBuildRetries caps automatic retries for terminal failed builds per daemon lifetime; not persisted, guarded by mu.
 	failedBuildRetries map[string]int
 	// lastJobJournalAt throttles periodic job-progress journaling; not persisted, guarded by mu.
@@ -137,31 +138,32 @@ type indexingRunner interface {
 // NewManager loads persisted daemon state from disk.
 func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	manager := &Manager{
-		config:             cfg,
-		mu:                 sync.Mutex{},
-		codebases:          map[string]model.Codebase{},
-		jobs:               map[string]model.Job{},
-		conversationJobs:   map[string]conversationJobPayload{},
-		cancels:            map[string]context.CancelFunc{},
-		done:               map[string]chan struct{}{},
-		failedBuildRetries: map[string]int{},
-		lastJobJournalAt:   map[string]time.Time{},
-		runner:             indexer.NewRunner(),
-		semantic:           nil,
-		graphEngines:       map[string]*cbm.Engine{},
-		graphLifecycle:     map[string]*graphLifecycleState{},
-		graphMutex:         sync.Mutex{},
-		graphIndex:         defaultGraphIndex,
-		graphIndexHook:     nil,
-		lifecycleHook:      nil,
-		lifecycleMutex:     sync.Mutex{},
-		indexSlots:         make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
-		syncLock:           newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
-		health:             dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
-		lastDepProbeAt:     time.Time{},
-		deferredBuildDelay: defaultDeferredBuildDelay,
-		indexability:       nil,
-		observer:           nil,
+		config:                  cfg,
+		mu:                      sync.Mutex{},
+		codebases:               map[string]model.Codebase{},
+		jobs:                    map[string]model.Job{},
+		conversationJobs:        map[string]conversationJobPayload{},
+		conversationSyncCursors: map[string]string{},
+		cancels:                 map[string]context.CancelFunc{},
+		done:                    map[string]chan struct{}{},
+		failedBuildRetries:      map[string]int{},
+		lastJobJournalAt:        map[string]time.Time{},
+		runner:                  indexer.NewRunner(),
+		semantic:                nil,
+		graphEngines:            map[string]*cbm.Engine{},
+		graphLifecycle:          map[string]*graphLifecycleState{},
+		graphMutex:              sync.Mutex{},
+		graphIndex:              defaultGraphIndex,
+		graphIndexHook:          nil,
+		lifecycleHook:           nil,
+		lifecycleMutex:          sync.Mutex{},
+		indexSlots:              make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
+		syncLock:                newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
+		health:                  dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
+		lastDepProbeAt:          time.Time{},
+		deferredBuildDelay:      defaultDeferredBuildDelay,
+		indexability:            nil,
+		observer:                nil,
 	}
 	if err := store.EnsureDir(cfg.GraphDir); err != nil {
 		slog.ErrorContext(ctx, "create graph cache directory failed", "path", cfg.GraphDir, "err", err)
@@ -341,6 +343,7 @@ func newQueuedJob(
 			OverallPercent:            0,
 			Unit:                      "",
 			RunMode:                   "",
+			BootstrapReason:           "",
 			ScopeUnit:                 "",
 			FilesTotal:                0,
 			FilesProcessed:            0,
@@ -476,9 +479,9 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 		}
 	}
 
-	presence := manager.probeCollectionPresence(ctx, canonicalPath, "StartIndex")
+	evidence := manager.probeCollectionEvidence(ctx, canonicalPath, "StartIndex")
 
-	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(ctx, canonicalPath, requestedPath, client, indexConfig, force, presence, budget)
+	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(ctx, canonicalPath, requestedPath, client, indexConfig, force, evidence.presence, budget)
 	if err != nil || deduped {
 		return job, codebase, deduped, overlapsCodebaseID, err
 	}
@@ -497,24 +500,6 @@ func (manager *Manager) StartIndex(ctx context.Context, requestedPath string, cl
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)
 	return job, codebase, false, overlapsCodebaseID, nil
-}
-
-// probeCollectionPresence asks Milvus whether canonicalPath already has a live
-// collection and preserves the distinction between missing and unknown
-// backend state. Unknown must not be treated as definite collection loss.
-func (manager *Manager) probeCollectionPresence(ctx context.Context, canonicalPath string, caller string) collectionPresence {
-	if manager.semantic == nil || !manager.semantic.Available() {
-		return collectionPresenceUnknown
-	}
-	present, hasErr := manager.semantic.HasCollectionForPath(ctx, canonicalPath)
-	if hasErr != nil {
-		slog.WarnContext(ctx, "Milvus HasCollection failed", "caller", caller, "path", canonicalPath, "err", hasErr)
-		return collectionPresenceUnknown
-	}
-	if present {
-		return collectionPresencePresent
-	}
-	return collectionPresenceMissing
 }
 
 // commitStartIndexLocked acquires the registry lock, runs the decision
@@ -691,6 +676,9 @@ func (manager *Manager) ClearIndex(ctx context.Context, requestedPath string, cl
 	}
 	if err := manager.clearGraphCache(ctx, codebase.ID); err != nil {
 		return model.Codebase{}, fmt.Errorf("remove graph cache for %s: %w", codebase.ID, err)
+	}
+	if err := store.RemoveFile(manager.stagingMerklePath(codebase.ID)); err != nil {
+		return model.Codebase{}, fmt.Errorf("remove staging Merkle snapshot for %s: %w", codebase.ID, err)
 	}
 	if manager.semantic != nil {
 		if err := manager.semantic.Drop(ctx, codebase.CanonicalPath); err != nil && !errors.Is(err, semantic.ErrUnavailable) {

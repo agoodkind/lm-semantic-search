@@ -109,6 +109,11 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 		}
 		return manager.runBootstrap(ctx, job, codeSource)
 	case jobOperationIndex:
+		reason := bootstrapReasonFirstIndex
+		if job.Forced {
+			reason = bootstrapReasonForcedReindex
+		}
+		manager.routeToBootstrap(ctx, job.ID, reason)
 		return manager.runBootstrap(ctx, job, codeSource)
 	case jobOperationConversationIngest:
 		manager.runConversationIngest(ctx, job)

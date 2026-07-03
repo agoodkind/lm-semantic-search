@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -105,6 +106,346 @@ func TestConversationManifestSyncReturnsNeededIDs(t *testing.T) {
 	if len(needed) != 0 {
 		t.Fatalf("unchanged re-sync needed %v, want none", needed)
 	}
+}
+
+func TestConversationEmptyDiffStoredNamePresentCompletesNoop(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	fake := &fakeSemantic{}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-stored-name"
+	manifest := map[string]string{"conv-stored": "fp-stored-1"}
+	documents := []model.ConversationDocument{{
+		ConversationID: "conv-stored",
+		MessageIndex:   0,
+		Role:           "user",
+		TimestampUnix:  1712346000,
+		Text:           "stored collection regression",
+	}}
+
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("first upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
+
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	storedCollection := codebase.CollectionName
+	derivedCollection := fake.CollectionName(codebase.CanonicalPath)
+	if storedCollection == derivedCollection {
+		t.Fatalf("stored collection unexpectedly equals derived collection %q", storedCollection)
+	}
+
+	fake.mu.Lock()
+	fake.reindexCalls = nil
+	fake.stageCalls = nil
+	fake.promoted = nil
+	fake.droppedStaging = nil
+	fake.inspectCollection = func(_ context.Context, collectionName string) (semantic.CollectionFacts, error) {
+		if collectionName == storedCollection {
+			return semantic.CollectionFacts{Exists: true, Rows: 3, RowsKnown: true}, nil
+		}
+		return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
+	}
+	fake.mu.Unlock()
+
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, manifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, secondJob.ID, model.JobStateCompleted)
+
+	if got := fake.reindexCallsSnapshot(); len(got) != 0 {
+		t.Fatalf("reindex calls after empty diff = %d, want 0: %+v", len(got), got)
+	}
+	if got := fake.stageCallsSnapshot(); len(got) != 0 {
+		t.Fatalf("stage calls after empty diff = %d, want 0: %+v", len(got), got)
+	}
+	if got := fake.promotedSnapshot(); len(got) != 0 {
+		t.Fatalf("promoted staging collections after empty diff = %d, want 0: %v", len(got), got)
+	}
+	if got := fake.droppedStagingSnapshot(); len(got) != 0 {
+		t.Fatalf("dropped staging collections after empty diff = %d, want 0: %v", len(got), got)
+	}
+}
+
+func TestSyncConversationManifestCapsNeededReply(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	manager.config.MaxConversationsPerIngest = 3
+	ctx := context.Background()
+	collectionID := "thread-manifest-cap"
+	manifest := testConversationManifest(
+		"conv-01",
+		"conv-02",
+		"conv-03",
+		"conv-04",
+		"conv-05",
+		"conv-06",
+		"conv-07",
+		"conv-08",
+	)
+
+	needed, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("first SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, needed, []string{"conv-01", "conv-02", "conv-03"})
+
+	upsertConversationsForManifest(t, manager, ctx, collectionID, manifest, needed)
+
+	needed, err = manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("second SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, needed, []string{"conv-04", "conv-05", "conv-06"})
+
+	upsertConversationsForManifest(t, manager, ctx, collectionID, manifest, needed)
+
+	needed, err = manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("third SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, needed, []string{"conv-07", "conv-08"})
+
+	upsertConversationsForManifest(t, manager, ctx, collectionID, manifest, needed)
+
+	needed, err = manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("fourth SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, needed, nil)
+}
+
+func TestSyncConversationManifestPrefersModified(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	manager.config.MaxConversationsPerIngest = 3
+	ctx := context.Background()
+	collectionID := "thread-manifest-modified"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	checkpoint := map[string]string{
+		"conv-mod-a": "fp-mod-a-old",
+		"conv-mod-b": "fp-mod-b-old",
+	}
+	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        checkpoint,
+		Inodes:       nil,
+	}); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+	manifest := testConversationManifest(
+		"conv-added-01",
+		"conv-added-02",
+		"conv-added-03",
+		"conv-added-04",
+		"conv-added-05",
+		"conv-mod-a",
+		"conv-mod-b",
+	)
+
+	needed, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("SyncConversationManifest returned error: %v", err)
+	}
+
+	if len(needed) != 3 {
+		t.Fatalf("needed = %v, want 3 ids", needed)
+	}
+	assertStringSliceContains(t, needed, "conv-mod-a")
+	assertStringSliceContains(t, needed, "conv-mod-b")
+}
+
+func TestSyncConversationManifestRotatesModifiedOverflow(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	manager.config.MaxConversationsPerIngest = 3
+	ctx := context.Background()
+	collectionID := "thread-manifest-modified-overflow"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	modifiedIDs := []string{
+		"conv-mod-01",
+		"conv-mod-02",
+		"conv-mod-03",
+		"conv-mod-04",
+		"conv-mod-05",
+	}
+	checkpoint := make(map[string]string, len(modifiedIDs))
+	for _, conversationID := range modifiedIDs {
+		checkpoint[conversationID] = "old-" + conversationID
+	}
+	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        checkpoint,
+		Inodes:       nil,
+	}); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+	manifest := testConversationManifest(modifiedIDs...)
+
+	first, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("first SyncConversationManifest returned error: %v", err)
+	}
+	second, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("second SyncConversationManifest returned error: %v", err)
+	}
+	third, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("third SyncConversationManifest returned error: %v", err)
+	}
+	fourth, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("fourth SyncConversationManifest returned error: %v", err)
+	}
+	expectedReplies := [][]string{
+		{"conv-mod-01", "conv-mod-02", "conv-mod-03"},
+		{"conv-mod-01", "conv-mod-04", "conv-mod-05"},
+		{"conv-mod-02", "conv-mod-03", "conv-mod-04"},
+		{"conv-mod-01", "conv-mod-02", "conv-mod-05"},
+	}
+	for i, expectedReply := range expectedReplies {
+		reply := [][]string{first, second, third, fourth}[i]
+		assertStringSliceEqual(t, reply, expectedReply)
+	}
+
+	replies := [][]string{first, second, third, fourth}
+	for i := 0; i < len(modifiedIDs); i++ {
+		reply, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+		if err != nil {
+			t.Fatalf("repeat SyncConversationManifest returned error: %v", err)
+		}
+		replies = append(replies, reply)
+	}
+
+	expected := make(map[string]bool, len(modifiedIDs))
+	seen := make(map[string]bool, len(modifiedIDs))
+	for _, conversationID := range modifiedIDs {
+		expected[conversationID] = true
+	}
+	for _, reply := range replies {
+		if len(reply) != 3 {
+			t.Fatalf("reply = %v, want exactly 3 ids", reply)
+		}
+		for _, conversationID := range reply {
+			if !expected[conversationID] {
+				t.Fatalf("reply = %v, contains unexpected id %q", reply, conversationID)
+			}
+			seen[conversationID] = true
+		}
+	}
+	for _, conversationID := range modifiedIDs {
+		if !seen[conversationID] {
+			t.Fatalf("modified id %q never appeared across replies %v", conversationID, replies)
+		}
+	}
+}
+
+func TestSyncConversationManifestRotatesAddedWindow(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	manager.config.MaxConversationsPerIngest = 3
+	ctx := context.Background()
+	collectionID := "thread-manifest-rotate"
+	manifest := testConversationManifest(
+		"conv-01",
+		"conv-02",
+		"conv-03",
+		"conv-04",
+		"conv-05",
+		"conv-06",
+		"conv-07",
+		"conv-08",
+	)
+
+	first, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("first SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, first, []string{"conv-01", "conv-02", "conv-03"})
+
+	second, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("second SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, second, []string{"conv-04", "conv-05", "conv-06"})
+
+	third, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("third SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, third, []string{"conv-01", "conv-07", "conv-08"})
+
+	fourth, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("fourth SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, fourth, []string{"conv-02", "conv-03", "conv-04"})
+
+	replies := [][]string{first, second, third, fourth}
+	seen := make(map[string]bool, len(manifest))
+	for _, reply := range replies {
+		for _, conversationID := range reply {
+			seen[conversationID] = true
+		}
+	}
+	for conversationID := range manifest {
+		if !seen[conversationID] {
+			t.Fatalf("conversation id %q never appeared across replies %v", conversationID, replies)
+		}
+	}
+}
+
+func TestSyncConversationManifestUncappedWhenZero(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	manager.config.MaxConversationsPerIngest = 0
+	ctx := context.Background()
+	collectionID := "thread-manifest-uncapped"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	checkpoint := map[string]string{
+		"conv-mod": "fp-mod-old",
+	}
+	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        checkpoint,
+		Inodes:       nil,
+	}); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+	manifest := testConversationManifest("conv-added-a", "conv-added-b", "conv-added-c", "conv-mod")
+
+	needed, err := manager.SyncConversationManifest(ctx, collectionID, manifest)
+	if err != nil {
+		t.Fatalf("SyncConversationManifest returned error: %v", err)
+	}
+	assertStringSliceEqual(t, needed, []string{"conv-added-a", "conv-added-b", "conv-added-c", "conv-mod"})
 }
 
 func TestRegisterConversationCollectionRPC(t *testing.T) {
@@ -561,6 +902,478 @@ func TestConversationDocumentsToStoredChunksSplitsOversizedMessage(t *testing.T)
 	}
 }
 
+func TestConversationIndexOneEmbedsOnlyAppendedMessage(t *testing.T) {
+	t.Parallel()
+
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{
+			0: {Role: "user", Text: "hello"},
+			1: {Role: "assistant", Text: "old answer"},
+		},
+		reuse: map[string][]float32{"reuse-alpha": {1, 2}},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{"conv-append": "fp-append"},
+		[]model.ConversationDocument{
+			{ConversationID: "conv-append", MessageIndex: 0, Role: "user", Text: "hello"},
+			{ConversationID: "conv-append", MessageIndex: 1, Role: "assistant", Text: "old answer"},
+			{ConversationID: "conv-append", MessageIndex: 2, Role: "user", Text: "new question"},
+		},
+		reader,
+	)
+
+	result, err := source.indexOne(context.Background(), "conv-append")
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+
+	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+		{relativePath: "conv/conv-append/2", messageIndex: 2, role: "user", content: "new question"},
+	})
+	if result.FileHash != "fp-append" {
+		t.Fatalf("FileHash = %q, want fp-append", result.FileHash)
+	}
+	if !result.RemovalOverride {
+		t.Fatal("RemovalOverride = false, want true")
+	}
+	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-append/2"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-append/2/"})
+	assertReuseVector(t, result.ReuseVectors, "reuse-alpha", []float32{1, 2})
+	assertMessageStateCalls(t, reader.callsSnapshot(), []messageStateCall{{
+		Collection: "conv_chunks_live",
+		Prefix:     "conv/conv-append/",
+	}})
+}
+
+func TestConversationIndexOneReindexesOnlyEditedMessage(t *testing.T) {
+	t.Parallel()
+
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{
+			0: {Role: "user", Text: "hello"},
+			1: {Role: "assistant", Text: "old answer"},
+			2: {Role: "user", Text: "follow up"},
+		},
+		reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{"conv-edit": "fp-edit"},
+		[]model.ConversationDocument{
+			{ConversationID: "conv-edit", MessageIndex: 0, Role: "user", Text: "hello"},
+			{ConversationID: "conv-edit", MessageIndex: 1, Role: "assistant", Text: "new answer"},
+			{ConversationID: "conv-edit", MessageIndex: 2, Role: "user", Text: "follow up"},
+		},
+		reader,
+	)
+
+	result, err := source.indexOne(context.Background(), "conv-edit")
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+
+	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+		{relativePath: "conv/conv-edit/1", messageIndex: 1, role: "assistant", content: "new answer"},
+	})
+	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-edit/1"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-edit/1/"})
+}
+
+func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
+	t.Parallel()
+
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{
+			0: {Role: "user", Text: "hello"},
+			1: {Role: "assistant", Text: "answer"},
+			2: {Role: "user", Text: "stale"},
+		},
+		reuse: map[string][]float32{"reuse-stale": {3}},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{"conv-stale": "fp-stale"},
+		[]model.ConversationDocument{
+			{ConversationID: "conv-stale", MessageIndex: 0, Role: "user", Text: "hello"},
+			{ConversationID: "conv-stale", MessageIndex: 1, Role: "assistant", Text: "answer"},
+		},
+		reader,
+	)
+
+	result, err := source.indexOne(context.Background(), "conv-stale")
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+
+	if len(result.Chunks) != 0 {
+		t.Fatalf("Chunks = %+v, want none for stale-only delta", result.Chunks)
+	}
+	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-stale/2"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-stale/2/"})
+	assertReuseVector(t, result.ReuseVectors, "reuse-stale", []float32{3})
+
+	manager, _, _ := newTestManager(t)
+	fake := &fakeSemantic{
+		loadMessageState: func(context.Context, string, string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
+			return cloneStoredMessageState(reader.state), map[string][]float32{}, nil
+		},
+	}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-stale-checkpoint"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        map[string]string{"conv-stale": "fp-stale-old"},
+		Inodes:       nil,
+	}); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, source.documents["conv-stale"], source.manifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+
+	snapshot, err := merkle.ReadSnapshot(manager.merklePath(codebase.ID))
+	if err != nil {
+		t.Fatalf("ReadSnapshot returned error: %v", err)
+	}
+	if snapshot.Files["conv-stale"] != "fp-stale" {
+		t.Fatalf("checkpoint fingerprint = %q, want fp-stale", snapshot.Files["conv-stale"])
+	}
+	calls := fake.reindexCallsSnapshot()
+	if len(calls) != 1 {
+		t.Fatalf("Reindex calls = %+v, want one stale removal call", calls)
+	}
+	if calls[0].Chunks != 0 {
+		t.Fatalf("stale removal chunks = %d, want 0", calls[0].Chunks)
+	}
+	assertRemovalEqual(t, calls[0].Removal, semantic.Removal{
+		Paths:    []string{"conv/conv-stale/2"},
+		Prefixes: []string{"conv/conv-stale/2/"},
+	})
+}
+
+func TestConversationIndexOneMultipartTransitions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("multipart stored row becomes single part", func(t *testing.T) {
+		t.Parallel()
+
+		reader := &testConversationRowReader{
+			state: map[int32]semantic.StoredMessageState{
+				7: {Role: "assistant", Text: strings.Repeat("a", conversationChunkMaxBytes+5)},
+			},
+			reuse: map[string][]float32{},
+		}
+		source := newConversationItemSource(
+			"conv_chunks_live",
+			map[string]string{"conv-shape": "fp-shape-single"},
+			[]model.ConversationDocument{
+				{ConversationID: "conv-shape", MessageIndex: 7, Role: "assistant", Text: "short"},
+			},
+			reader,
+		)
+
+		result, err := source.indexOne(context.Background(), "conv-shape")
+		if err != nil {
+			t.Fatalf("indexOne returned error: %v", err)
+		}
+
+		assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+			{relativePath: "conv/conv-shape/7", messageIndex: 7, role: "assistant", content: "short"},
+		})
+		assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-shape/7"})
+		assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-shape/7/"})
+	})
+
+	t.Run("single stored row becomes multipart", func(t *testing.T) {
+		t.Parallel()
+
+		text := strings.Repeat("b", conversationChunkMaxBytes+5)
+		reader := &testConversationRowReader{
+			state: map[int32]semantic.StoredMessageState{
+				8: {Role: "assistant", Text: "short"},
+			},
+			reuse: map[string][]float32{},
+		}
+		source := newConversationItemSource(
+			"conv_chunks_live",
+			map[string]string{"conv-shape": "fp-shape-multipart"},
+			[]model.ConversationDocument{
+				{ConversationID: "conv-shape", MessageIndex: 8, Role: "assistant", Text: text},
+			},
+			reader,
+		)
+
+		result, err := source.indexOne(context.Background(), "conv-shape")
+		if err != nil {
+			t.Fatalf("indexOne returned error: %v", err)
+		}
+
+		if len(result.Chunks) != 2 {
+			t.Fatalf("chunks = %d, want 2 multipart chunks", len(result.Chunks))
+		}
+		assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+			{relativePath: "conv/conv-shape/8/0", messageIndex: 8, role: "assistant", content: result.Chunks[0].Content},
+			{relativePath: "conv/conv-shape/8/1", messageIndex: 8, role: "assistant", content: result.Chunks[1].Content},
+		})
+		if result.Chunks[0].Content+result.Chunks[1].Content != text {
+			t.Fatalf("multipart content did not round trip to delivered text")
+		}
+		assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-shape/8"})
+		assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-shape/8/"})
+	})
+}
+
+func TestConversationIndexOneSiblingIndexSafety(t *testing.T) {
+	t.Parallel()
+
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{
+			12:  {Role: "user", Text: "old twelve"},
+			120: {Role: "user", Text: "one twenty"},
+		},
+		reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{"conv-sibling": "fp-sibling"},
+		[]model.ConversationDocument{
+			{ConversationID: "conv-sibling", MessageIndex: 12, Role: "user", Text: "new twelve"},
+			{ConversationID: "conv-sibling", MessageIndex: 120, Role: "user", Text: "one twenty"},
+		},
+		reader,
+	)
+
+	result, err := source.indexOne(context.Background(), "conv-sibling")
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+
+	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+		{relativePath: "conv/conv-sibling/12", messageIndex: 12, role: "user", content: "new twelve"},
+	})
+	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-sibling/12"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-sibling/12/"})
+}
+
+func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T) {
+	t.Parallel()
+
+	reader := &testConversationRowReader{err: errors.New("state load failed")}
+	documents := []model.ConversationDocument{
+		{ConversationID: "conv-load-failure", MessageIndex: 0, Role: "user", Text: "hello"},
+		{ConversationID: "conv-load-failure", MessageIndex: 1, Role: "assistant", Text: "answer"},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{"conv-load-failure": "fp-load-failure"},
+		documents,
+		reader,
+	)
+
+	result, err := source.indexOne(context.Background(), "conv-load-failure")
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+
+	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+		{relativePath: "conv/conv-load-failure/0", messageIndex: 0, role: "user", content: "hello"},
+		{relativePath: "conv/conv-load-failure/1", messageIndex: 1, role: "assistant", content: "answer"},
+	})
+	assertStringSliceEqual(t, result.RemovalPaths, nil)
+	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-load-failure/"})
+	if result.ReuseVectors != nil {
+		t.Fatalf("ReuseVectors = %v, want nil on loader-error fallback", result.ReuseVectors)
+	}
+
+	manager, _, _ := newTestManager(t)
+	fake := &fakeSemantic{
+		loadMessageState: func(context.Context, string, string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
+			return nil, nil, errors.New("state load failed")
+		},
+		loadReuseForPrefix: func(context.Context, string, string) (map[string][]float32, error) {
+			return map[string][]float32{"fallback-reuse": {5}}, nil
+		},
+	}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-load-failure"
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        map[string]string{"conv-load-failure": "fp-load-failure-old"},
+		Inodes:       nil,
+	}); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, map[string]string{"conv-load-failure": "fp-load-failure"}, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+
+	prefixCalls := fake.reusePrefixCallsSnapshot()
+	if len(prefixCalls) != 1 || prefixCalls[0].Prefix != "conv/conv-load-failure/" {
+		t.Fatalf("reuse prefix calls = %+v, want one fallback prefix load", prefixCalls)
+	}
+	reuseByConversation := fake.reindexReuseSnapshot()
+	assertReuseVector(t, reuseByConversation["conv-load-failure"], "fallback-reuse", []float32{5})
+}
+
+func TestConversationIndexOneHealsMissingRows(t *testing.T) {
+	t.Parallel()
+
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{
+			0: {Role: "user", Text: "hello"},
+		},
+		reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{"conv-heal": "fp-heal"},
+		[]model.ConversationDocument{
+			{ConversationID: "conv-heal", MessageIndex: 0, Role: "user", Text: "hello"},
+			{ConversationID: "conv-heal", MessageIndex: 1, Role: "assistant", Text: "restored"},
+		},
+		reader,
+	)
+
+	result, err := source.indexOne(context.Background(), "conv-heal")
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+
+	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+		{relativePath: "conv/conv-heal/1", messageIndex: 1, role: "assistant", content: "restored"},
+	})
+	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-heal/1"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-heal/1/"})
+}
+
+func TestConversationIndexOneHealsLegacyRowsWithoutDuplicates(t *testing.T) {
+	t.Parallel()
+
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{},
+		reuse: map[string][]float32{
+			"legacy-zero": {1},
+			"legacy-one":  {2},
+		},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{"conv-legacy": "fp-legacy"},
+		[]model.ConversationDocument{
+			{ConversationID: "conv-legacy", MessageIndex: 0, Role: "user", Text: "hello"},
+			{ConversationID: "conv-legacy", MessageIndex: 1, Role: "assistant", Text: "answer"},
+		},
+		reader,
+	)
+
+	result, err := source.indexOne(context.Background(), "conv-legacy")
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+
+	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+		{relativePath: "conv/conv-legacy/0", messageIndex: 0, role: "user", content: "hello"},
+		{relativePath: "conv/conv-legacy/1", messageIndex: 1, role: "assistant", content: "answer"},
+	})
+	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-legacy/0", "conv/conv-legacy/1"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-legacy/0/", "conv/conv-legacy/1/"})
+	assertReuseVector(t, result.ReuseVectors, "legacy-zero", []float32{1})
+	assertReuseVector(t, result.ReuseVectors, "legacy-one", []float32{2})
+}
+
+func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	stateStore := newConversationStateStore()
+	fake := &fakeSemantic{
+		loadMessageState: func(_ context.Context, _ string, prefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
+			return stateStore.state(prefix), map[string][]float32{}, nil
+		},
+	}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-message-delta"
+	conversationID := "conv-e2e"
+	prefix := conversationRelativePathPrefix(conversationID)
+
+	coldDocuments := []model.ConversationDocument{
+		{ConversationID: conversationID, MessageIndex: 0, Role: "user", Text: "hello"},
+		{ConversationID: conversationID, MessageIndex: 1, Role: "assistant", Text: "answer"},
+	}
+	runConversationDeltaIngest(t, manager, ctx, collectionID, coldDocuments, map[string]string{conversationID: "fp-cold"})
+	assertReindexCallCount(t, fake, 1)
+	assertReindexCall(t, fake.reindexCallsSnapshot()[0], 2, semantic.Removal{
+		Paths:    []string{"conv/conv-e2e/0", "conv/conv-e2e/1"},
+		Prefixes: []string{"conv/conv-e2e/0/", "conv/conv-e2e/1/"},
+	})
+	stateStore.setFromDocuments(prefix, coldDocuments)
+
+	runConversationDeltaIngest(t, manager, ctx, collectionID, coldDocuments, map[string]string{conversationID: "fp-unchanged"})
+	assertReindexCallCount(t, fake, 1)
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	snapshot, err := merkle.ReadSnapshot(manager.merklePath(codebase.ID))
+	if err != nil {
+		t.Fatalf("ReadSnapshot returned error: %v", err)
+	}
+	if snapshot.Files[conversationID] != "fp-unchanged" {
+		t.Fatalf("unchanged-message checkpoint = %q, want fp-unchanged", snapshot.Files[conversationID])
+	}
+
+	appendedDocuments := append([]model.ConversationDocument{}, coldDocuments...)
+	appendedDocuments = append(appendedDocuments, model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   2,
+		Role:           "user",
+		Text:           "next question",
+	})
+	runConversationDeltaIngest(t, manager, ctx, collectionID, appendedDocuments, map[string]string{conversationID: "fp-appended"})
+	assertReindexCallCount(t, fake, 2)
+	assertReindexCall(t, fake.reindexCallsSnapshot()[1], 1, semantic.Removal{
+		Paths:    []string{"conv/conv-e2e/2"},
+		Prefixes: []string{"conv/conv-e2e/2/"},
+	})
+	stateStore.setFromDocuments(prefix, appendedDocuments)
+
+	editedDocuments := append([]model.ConversationDocument{}, appendedDocuments...)
+	editedDocuments[1].Text = "edited answer"
+	runConversationDeltaIngest(t, manager, ctx, collectionID, editedDocuments, map[string]string{conversationID: "fp-edited"})
+	assertReindexCallCount(t, fake, 3)
+	assertReindexCall(t, fake.reindexCallsSnapshot()[2], 1, semantic.Removal{
+		Paths:    []string{"conv/conv-e2e/1"},
+		Prefixes: []string{"conv/conv-e2e/1/"},
+	})
+	stateStore.setFromDocuments(prefix, editedDocuments)
+
+	staleDocuments := []model.ConversationDocument{editedDocuments[0], editedDocuments[1]}
+	runConversationDeltaIngest(t, manager, ctx, collectionID, staleDocuments, map[string]string{conversationID: "fp-stale"})
+	assertReindexCallCount(t, fake, 4)
+	assertReindexCall(t, fake.reindexCallsSnapshot()[3], 0, semantic.Removal{
+		Paths:    []string{"conv/conv-e2e/2"},
+		Prefixes: []string{"conv/conv-e2e/2/"},
+	})
+}
+
 func TestConversationRPCsQueueJournaledJobs(t *testing.T) {
 	t.Parallel()
 
@@ -692,6 +1505,181 @@ func readConversationChunkCache(t *testing.T, manager *Manager, codebaseID strin
 		t.Fatalf("ReadChunks returned error: %v", err)
 	}
 	return chunks
+}
+
+func testConversationManifest(conversationIDs ...string) map[string]string {
+	manifest := make(map[string]string, len(conversationIDs))
+	for _, conversationID := range conversationIDs {
+		manifest[conversationID] = "fp-" + conversationID
+	}
+	return manifest
+}
+
+func upsertConversationsForManifest(t *testing.T, manager *Manager, ctx context.Context, collectionID string, manifest map[string]string, conversationIDs []string) {
+	t.Helper()
+
+	documents := make([]model.ConversationDocument, 0, len(conversationIDs))
+	for _, conversationID := range conversationIDs {
+		documents = append(documents, model.ConversationDocument{
+			ConversationID: conversationID,
+			MessageIndex:   0,
+			Role:           "user",
+			Text:           "body " + conversationID,
+		})
+	}
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+}
+
+func assertStringSliceEqual(t *testing.T, got []string, want []string) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for index, gotValue := range got {
+		if gotValue != want[index] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+func assertStringSliceContains(t *testing.T, values []string, want string) {
+	t.Helper()
+
+	for _, value := range values {
+		if value == want {
+			return
+		}
+	}
+	t.Fatalf("values %v missing %q", values, want)
+}
+
+type testConversationRowReader struct {
+	state map[int32]semantic.StoredMessageState
+	reuse map[string][]float32
+	err   error
+	calls []messageStateCall
+}
+
+func (reader *testConversationRowReader) LoadConversationMessageState(_ context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
+	reader.calls = append(reader.calls, messageStateCall{Collection: collectionName, Prefix: conversationPrefix})
+	if reader.err != nil {
+		return nil, nil, reader.err
+	}
+	return cloneStoredMessageState(reader.state), cloneReuseVectors(reader.reuse), nil
+}
+
+func (reader *testConversationRowReader) callsSnapshot() []messageStateCall {
+	return append([]messageStateCall(nil), reader.calls...)
+}
+
+type conversationDeltaChunkWant struct {
+	relativePath string
+	messageIndex int32
+	role         string
+	content      string
+}
+
+func assertConversationDeltaChunks(t *testing.T, got []model.StoredChunk, want []conversationDeltaChunkWant) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("chunks = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for index, wantChunk := range want {
+		gotChunk := got[index]
+		if gotChunk.RelativePath != wantChunk.relativePath {
+			t.Fatalf("chunk %d RelativePath = %q, want %q", index, gotChunk.RelativePath, wantChunk.relativePath)
+		}
+		if gotChunk.MessageIndex != wantChunk.messageIndex {
+			t.Fatalf("chunk %d MessageIndex = %d, want %d", index, gotChunk.MessageIndex, wantChunk.messageIndex)
+		}
+		if gotChunk.Role != wantChunk.role {
+			t.Fatalf("chunk %d Role = %q, want %q", index, gotChunk.Role, wantChunk.role)
+		}
+		if gotChunk.Content != wantChunk.content {
+			t.Fatalf("chunk %d Content = %q, want %q", index, gotChunk.Content, wantChunk.content)
+		}
+	}
+}
+
+func assertMessageStateCalls(t *testing.T, got []messageStateCall, want []messageStateCall) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("message state calls = %+v, want %+v", got, want)
+	}
+	for index, wantCall := range want {
+		gotCall := got[index]
+		if gotCall != wantCall {
+			t.Fatalf("message state calls = %+v, want %+v", got, want)
+		}
+	}
+}
+
+func cloneStoredMessageState(state map[int32]semantic.StoredMessageState) map[int32]semantic.StoredMessageState {
+	copied := make(map[int32]semantic.StoredMessageState, len(state))
+	for messageIndex, stored := range state {
+		copied[messageIndex] = stored
+	}
+	return copied
+}
+
+type conversationStateStore struct {
+	mu     sync.Mutex
+	states map[string]map[int32]semantic.StoredMessageState
+}
+
+func newConversationStateStore() *conversationStateStore {
+	return &conversationStateStore{states: map[string]map[int32]semantic.StoredMessageState{}}
+}
+
+func (store *conversationStateStore) state(prefix string) map[int32]semantic.StoredMessageState {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return cloneStoredMessageState(store.states[prefix])
+}
+
+func (store *conversationStateStore) setFromDocuments(prefix string, documents []model.ConversationDocument) {
+	next := make(map[int32]semantic.StoredMessageState, len(documents))
+	for _, document := range documents {
+		next[document.MessageIndex] = semantic.StoredMessageState{Role: document.Role, Text: document.Text}
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.states[prefix] = next
+}
+
+func runConversationDeltaIngest(t *testing.T, manager *Manager, ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string) {
+	t.Helper()
+
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo())
+	if err != nil {
+		t.Fatalf("upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+}
+
+func assertReindexCallCount(t *testing.T, fake *fakeSemantic, want int) {
+	t.Helper()
+
+	calls := fake.reindexCallsSnapshot()
+	if len(calls) != want {
+		t.Fatalf("Reindex calls = %+v, want %d call(s)", calls, want)
+	}
+}
+
+func assertReindexCall(t *testing.T, call reindexCall, wantChunks int, wantRemoval semantic.Removal) {
+	t.Helper()
+
+	if call.Chunks != wantChunks {
+		t.Fatalf("Reindex chunks = %d, want %d", call.Chunks, wantChunks)
+	}
+	assertRemovalEqual(t, call.Removal, wantRemoval)
 }
 
 func waitForConversationJobState(t *testing.T, manager *Manager, jobID string, state model.JobState) {
@@ -899,9 +1887,9 @@ func TestSearchWithinConversationRPCBoundary(t *testing.T) {
 }
 
 // TestConversationIngestLoadsReuseVectorsPerConversation proves the upsert path
-// loads each delivered conversation's existing vectors from the live collection,
-// scoped to its conv/<id>/ prefix, and hands that exact map to the reindex, so
-// unchanged chunks take their stored vector instead of the embedder.
+// loads each delivered conversation's existing message state and vectors from
+// the live collection, scoped to its conv/<id>/ prefix, and hands that exact
+// reuse map to the reindex.
 func TestConversationIngestLoadsReuseVectorsPerConversation(t *testing.T) {
 	t.Parallel()
 
@@ -911,8 +1899,8 @@ func TestConversationIngestLoadsReuseVectorsPerConversation(t *testing.T) {
 		"conv/conv-beta/":  {"hash-beta": {0.2}},
 	}
 	fake := &fakeSemantic{
-		loadReuseForPrefix: func(_ context.Context, _ string, prefix string) (map[string][]float32, error) {
-			return reuseByPrefix[prefix], nil
+		loadMessageState: func(_ context.Context, _ string, prefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
+			return map[int32]semantic.StoredMessageState{}, reuseByPrefix[prefix], nil
 		},
 	}
 	manager.semantic = fake
@@ -932,19 +1920,22 @@ func TestConversationIngestLoadsReuseVectorsPerConversation(t *testing.T) {
 	}
 	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
 
-	prefixCalls := fake.reusePrefixCallsSnapshot()
-	if len(prefixCalls) != 2 {
-		t.Fatalf("reuse prefix loads = %d, want 2 (one per delivered conversation): %+v", len(prefixCalls), prefixCalls)
+	stateCalls := fake.messageStateCallsSnapshot()
+	if len(stateCalls) != 2 {
+		t.Fatalf("message state loads = %d, want 2 (one per delivered conversation): %+v", len(stateCalls), stateCalls)
 	}
 	seenPrefixes := map[string]bool{}
-	for _, call := range prefixCalls {
+	for _, call := range stateCalls {
 		if call.Collection != codebase.CollectionName {
-			t.Fatalf("reuse load collection = %q, want live collection %q", call.Collection, codebase.CollectionName)
+			t.Fatalf("message state load collection = %q, want live collection %q", call.Collection, codebase.CollectionName)
 		}
 		seenPrefixes[call.Prefix] = true
 	}
 	if !seenPrefixes["conv/conv-alpha/"] || !seenPrefixes["conv/conv-beta/"] {
-		t.Fatalf("reuse load prefixes = %v, want conv/conv-alpha/ and conv/conv-beta/", seenPrefixes)
+		t.Fatalf("message state load prefixes = %v, want conv/conv-alpha/ and conv/conv-beta/", seenPrefixes)
+	}
+	if prefixCalls := fake.reusePrefixCallsSnapshot(); len(prefixCalls) != 0 {
+		t.Fatalf("separate reuse prefix loads = %+v, want none on the combined loader path", prefixCalls)
 	}
 
 	reuseByConversation := fake.reindexReuseSnapshot()
@@ -974,6 +1965,7 @@ func TestHandleChangedFileProgressReflectsRealWork(t *testing.T) {
 		[]model.ConversationDocument{
 			{ConversationID: "conv-delivered", MessageIndex: 0, Role: "user", TimestampUnix: 1712345003, Text: "delivered"},
 		},
+		nil,
 	)
 	state := deltaState{
 		plan:         deltaPlan{},
@@ -1013,14 +2005,333 @@ func TestHandleChangedFileProgressReflectsRealWork(t *testing.T) {
 	}
 }
 
+func TestHandleChangedFileHonorsOneFileResultOverrides(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reuse override skips item reuse load", func(t *testing.T) {
+		t.Parallel()
+
+		manager, cfg, _ := newTestManager(t)
+		var reindexReuse map[string][]float32
+		fake := &fakeSemantic{
+			loadReuseForPrefix: func(context.Context, string, string) (map[string][]float32, error) {
+				t.Fatal("LoadReuseVectorsForPrefix was called despite a OneFileResult reuse override")
+				return nil, nil
+			},
+			reindexWithReuse: func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string][]float32) error {
+				reindexReuse = cloneReuseVectors(reuse)
+				if progress != nil {
+					progress(semantic.Progress{ChunksProcessed: safeInt32(len(chunks)), ChunksReused: 1, ChunksEmbedded: 0})
+				}
+				return nil
+			},
+		}
+		manager.semantic = fake
+		state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
+			result: indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:        "reuse override content",
+					RelativePath:   "conv/conv-reuse/0",
+					ConversationID: "conv-reuse",
+					MessageIndex:   0,
+				}},
+				FileHash:     "fp-reuse",
+				ReuseVectors: map[string][]float32{"override-hash": {2, 3}},
+			},
+			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/conv-reuse/"}),
+			reuse: itemReuseSource{
+				CollectionName: "conv_chunks_test",
+				RelativePath:   "conv/conv-reuse/",
+				Scope:          itemReuseScopePrefix,
+			},
+		})
+		state.reuse = map[string][]float32{"base-hash": {1}}
+		state.itemReuseEnabled = true
+		result := emptyOverrideResult()
+
+		outcome := manager.handleChangedFile(context.Background(), model.Job{ID: "job-reuse-override"}, state, "conv-reuse", &result)
+
+		if outcome.fallback || outcome.handled || !outcome.progressed {
+			t.Fatalf("outcome = %+v, want progressed without fallback or handled", outcome)
+		}
+		if calls := fake.reusePrefixCallsSnapshot(); len(calls) != 0 {
+			t.Fatalf("reuse prefix calls = %v, want none", calls)
+		}
+		assertReuseVector(t, reindexReuse, "base-hash", []float32{1})
+		assertReuseVector(t, reindexReuse, "override-hash", []float32{2, 3})
+		if state.chunkCounts.reuseVectorsLoaded != 1 {
+			t.Fatalf("reuseVectorsLoaded = %d, want 1", state.chunkCounts.reuseVectorsLoaded)
+		}
+	})
+
+	t.Run("removal override preserves paths and prefixes", func(t *testing.T) {
+		t.Parallel()
+
+		manager, cfg, _ := newTestManager(t)
+		fake := &fakeSemantic{}
+		manager.semantic = fake
+		state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
+			result: indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:        "removal override content",
+					RelativePath:   "conv/conv-remove/0",
+					ConversationID: "conv-remove",
+					MessageIndex:   0,
+				}},
+				FileHash:        "fp-remove",
+				RemovalOverride: true,
+				RemovalPaths:    []string{"conv/conv-remove/legacy"},
+				RemovalPrefixes: []string{"conv/conv-remove/messages/"},
+			},
+			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/fallback/"}),
+		})
+		result := emptyOverrideResult()
+
+		outcome := manager.handleChangedFile(context.Background(), model.Job{ID: "job-removal-override"}, state, "conv-remove", &result)
+
+		if outcome.fallback || outcome.handled || !outcome.progressed {
+			t.Fatalf("outcome = %+v, want progressed without fallback or handled", outcome)
+		}
+		calls := fake.reindexCallsSnapshot()
+		if len(calls) != 1 {
+			t.Fatalf("Reindex calls = %v, want exactly one", calls)
+		}
+		assertRemovalEqual(t, calls[0].Removal, semantic.Removal{
+			Paths:    []string{"conv/conv-remove/legacy"},
+			Prefixes: []string{"conv/conv-remove/messages/"},
+		})
+	})
+
+	t.Run("removal override can reindex chunks with empty removal", func(t *testing.T) {
+		t.Parallel()
+
+		manager, cfg, _ := newTestManager(t)
+		fake := &fakeSemantic{}
+		manager.semantic = fake
+		state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
+			result: indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:        "empty removal content",
+					RelativePath:   "conv/conv-empty-removal/0",
+					ConversationID: "conv-empty-removal",
+					MessageIndex:   0,
+				}},
+				FileHash:        "fp-empty-removal",
+				RemovalOverride: true,
+				RemovalPaths:    nil,
+				RemovalPrefixes: nil,
+			},
+			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/conv-empty-removal/"}),
+		})
+		result := emptyOverrideResult()
+
+		outcome := manager.handleChangedFile(context.Background(), model.Job{ID: "job-empty-removal"}, state, "conv-empty-removal", &result)
+
+		if outcome.fallback || outcome.handled || !outcome.progressed {
+			t.Fatalf("outcome = %+v, want progressed without fallback or handled", outcome)
+		}
+		calls := fake.reindexCallsSnapshot()
+		if len(calls) != 1 {
+			t.Fatalf("Reindex calls = %v, want exactly one", calls)
+		}
+		if calls[0].Chunks != 1 {
+			t.Fatalf("Reindex chunks = %d, want 1", calls[0].Chunks)
+		}
+		assertRemovalEqual(t, calls[0].Removal, semantic.Removal{})
+	})
+
+	t.Run("empty reuse override skips item reuse load", func(t *testing.T) {
+		t.Parallel()
+
+		manager, cfg, _ := newTestManager(t)
+		fake := &fakeSemantic{
+			loadReuseForPrefix: func(context.Context, string, string) (map[string][]float32, error) {
+				t.Fatal("LoadReuseVectorsForPrefix was called despite an empty OneFileResult reuse override")
+				return nil, nil
+			},
+		}
+		manager.semantic = fake
+		state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
+			result: indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:        "empty reuse override content",
+					RelativePath:   "conv/conv-empty-reuse/0",
+					ConversationID: "conv-empty-reuse",
+					MessageIndex:   0,
+				}},
+				FileHash:     "fp-empty-reuse",
+				ReuseVectors: map[string][]float32{},
+			},
+			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/conv-empty-reuse/"}),
+			reuse: itemReuseSource{
+				CollectionName: "conv_chunks_test",
+				RelativePath:   "conv/conv-empty-reuse/",
+				Scope:          itemReuseScopePrefix,
+			},
+		})
+		state.itemReuseEnabled = true
+		result := emptyOverrideResult()
+
+		outcome := manager.handleChangedFile(context.Background(), model.Job{ID: "job-empty-reuse"}, state, "conv-empty-reuse", &result)
+
+		if outcome.fallback || outcome.handled || !outcome.progressed {
+			t.Fatalf("outcome = %+v, want progressed without fallback or handled", outcome)
+		}
+		if calls := fake.reusePrefixCallsSnapshot(); len(calls) != 0 {
+			t.Fatalf("reuse prefix calls = %v, want none", calls)
+		}
+	})
+
+	t.Run("empty chunks and empty removal progress without reindex", func(t *testing.T) {
+		t.Parallel()
+
+		manager, cfg, _ := newTestManager(t)
+		fake := &fakeSemantic{}
+		manager.semantic = fake
+		state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
+			result: indexer.OneFileResult{
+				Chunks:          nil,
+				FileHash:        "fp-zero",
+				RemovalOverride: true,
+				RemovalPaths:    nil,
+				RemovalPrefixes: nil,
+			},
+			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/conv-zero/"}),
+		})
+		result := emptyOverrideResult()
+
+		outcome := manager.handleChangedFile(context.Background(), model.Job{ID: "job-zero-override"}, state, "conv-zero", &result)
+
+		if outcome.fallback || outcome.handled || !outcome.progressed {
+			t.Fatalf("outcome = %+v, want progressed without fallback or handled", outcome)
+		}
+		if calls := fake.reindexCallsSnapshot(); len(calls) != 0 {
+			t.Fatalf("Reindex calls = %v, want none", calls)
+		}
+		if state.working["conv-zero"] != "fp-zero" {
+			t.Fatalf("working fingerprint = %q, want fp-zero", state.working["conv-zero"])
+		}
+		if result.IndexedFiles != 1 {
+			t.Fatalf("IndexedFiles = %d, want 1", result.IndexedFiles)
+		}
+	})
+}
+
+func TestHandleRemovedFileSkipsSemanticForEmptyRemoval(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, _ := newTestManager(t)
+	fake := &fakeSemantic{}
+	manager.semantic = fake
+	state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
+		fallbackRemoval: semantic.Removal{},
+	})
+	state.working["conv-empty-delete"] = "fp-empty-delete"
+
+	outcome := manager.handleRemovedFile(context.Background(), model.Job{ID: "job-empty-delete"}, state, "conv-empty-delete", indexer.OneFileResult{Removed: true})
+
+	if outcome.fallback || outcome.handled || !outcome.progressed {
+		t.Fatalf("outcome = %+v, want progressed without fallback or handled", outcome)
+	}
+	if calls := fake.reindexCallsSnapshot(); len(calls) != 0 {
+		t.Fatalf("Reindex calls = %v, want none for empty removal", calls)
+	}
+	if _, present := state.working["conv-empty-delete"]; present {
+		t.Fatalf("working still contains removed item")
+	}
+}
+
+type oneFileResultOverrideSource struct {
+	result          indexer.OneFileResult
+	fallbackRemoval semantic.Removal
+	reuse           itemReuseSource
+}
+
+func (source oneFileResultOverrideSource) capture(context.Context) (merkle.Snapshot, error) {
+	return merkle.Snapshot{}, nil
+}
+
+func (source oneFileResultOverrideSource) indexOne(context.Context, string) (indexer.OneFileResult, error) {
+	return source.result, nil
+}
+
+func (source oneFileResultOverrideSource) removalFor([]string) semantic.Removal {
+	return source.fallbackRemoval
+}
+
+func (source oneFileResultOverrideSource) absencePolicy() absencePolicy {
+	return absenceRetain
+}
+
+func (source oneFileResultOverrideSource) reuseSource(string) itemReuseSource {
+	return source.reuse
+}
+
+func (source oneFileResultOverrideSource) unit() string {
+	return "document"
+}
+
+func overrideDeltaState(merkleDir string, source oneFileResultOverrideSource) deltaState {
+	return deltaState{
+		plan:         deltaPlan{},
+		snapshotPath: merkleDir + "/override-checkpoint-test.json",
+		working:      map[string]string{},
+		source:       source,
+		semantic:     true,
+		staging:      false,
+		reuse:        nil,
+		chunkCounts:  &chunkCounters{},
+	}
+}
+
+func emptyOverrideResult() indexer.Result {
+	return indexer.Result{
+		IndexedFiles:      0,
+		TotalChunks:       0,
+		Chunks:            []model.StoredChunk{},
+		FileHashes:        nil,
+		SkippedFiles:      []string{},
+		SkippedOversize:   0,
+		SkippedUnreadable: 0,
+	}
+}
+
+func assertReuseVector(t *testing.T, reuse map[string][]float32, key string, want []float32) {
+	t.Helper()
+
+	got, present := reuse[key]
+	if !present {
+		t.Fatalf("reuse missing key %q in %v", key, reuse)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("reuse[%q] = %v, want %v", key, got, want)
+	}
+	for index, gotValue := range got {
+		if gotValue != want[index] {
+			t.Fatalf("reuse[%q] = %v, want %v", key, got, want)
+		}
+	}
+}
+
+func assertRemovalEqual(t *testing.T, got semantic.Removal, want semantic.Removal) {
+	t.Helper()
+
+	assertStringSliceEqual(t, got.Paths, want.Paths)
+	assertStringSliceEqual(t, got.Prefixes, want.Prefixes)
+}
+
 // TestConversationIngestReuseLoadFailureFallsBackToFullEmbed proves a failed
-// reuse load does not fail the job: the conversation reindexes with a nil reuse
-// map, so every chunk embeds fresh, and the job still completes.
+// message state and reuse load does not fail the job: the conversation falls
+// back to a full prefix reindex with nil override reuse, and the per-item reuse
+// load can fail independently without failing the job.
 func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
 	fake := &fakeSemantic{
+		loadMessageState: func(_ context.Context, _ string, _ string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
+			return nil, nil, errors.New("message state read failed")
+		},
 		loadReuseForPrefix: func(_ context.Context, _ string, _ string) (map[string][]float32, error) {
 			return nil, errors.New("milvus read failed")
 		},
@@ -1045,6 +2356,14 @@ func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
 	if len(soloReuse) != 0 {
 		t.Fatalf("conv-solo reindex reuse = %v, want empty after load failure", soloReuse)
 	}
+	stateCalls := fake.messageStateCallsSnapshot()
+	if len(stateCalls) != 1 || stateCalls[0].Prefix != "conv/conv-solo/" {
+		t.Fatalf("message state loads = %+v, want one conv/conv-solo/ load", stateCalls)
+	}
+	prefixCalls := fake.reusePrefixCallsSnapshot()
+	if len(prefixCalls) != 1 || prefixCalls[0].Prefix != "conv/conv-solo/" {
+		t.Fatalf("fallback reuse prefix loads = %+v, want one conv/conv-solo/ load", prefixCalls)
+	}
 }
 
 // TestItemSourceAbsencePolicy proves the two sources declare opposite policies:
@@ -1057,7 +2376,7 @@ func TestItemSourceAbsencePolicy(t *testing.T) {
 	if code.absencePolicy() != absenceDeleteGuarded {
 		t.Fatalf("code absencePolicy = %v, want absenceDeleteGuarded", code.absencePolicy())
 	}
-	conversation := newConversationItemSource("conv_chunks_test", map[string]string{}, nil)
+	conversation := newConversationItemSource("conv_chunks_test", map[string]string{}, nil, nil)
 	if conversation.absencePolicy() != absenceRetain {
 		t.Fatalf("conversation absencePolicy = %v, want absenceRetain", conversation.absencePolicy())
 	}

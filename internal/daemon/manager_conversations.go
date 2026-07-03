@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -109,11 +110,79 @@ func (manager *Manager) SyncConversationManifest(ctx context.Context, collection
 	current := merkle.Snapshot{ConfigDigest: configDigest, Files: manifest, Inodes: nil}
 	diff := merkle.DiffSnapshots(seed, current)
 
-	needed := make([]string, 0, len(diff.Added)+len(diff.Modified))
-	needed = append(needed, diff.Added...)
-	needed = append(needed, diff.Modified...)
-	sort.Strings(needed)
+	manager.mu.Lock()
+	cursor := manager.conversationSyncCursors[codebase.ID]
+	needed, nextCursor := capNeededConversations(diff.Added, diff.Modified, manager.config.MaxConversationsPerIngest, cursor)
+	if nextCursor != "" {
+		manager.conversationSyncCursors[codebase.ID] = nextCursor
+	}
+	manager.mu.Unlock()
 	return needed, nil
+}
+
+// One shared cursor tracks pre-sort rotation order across modified overflow and
+// added windows. A cursor past a list's end wraps to that list's start so
+// rotation stays live without per-list cursors.
+func capNeededConversations(added []string, modified []string, limit int, cursor string) ([]string, string) {
+	if limit <= 0 {
+		needed := make([]string, 0, len(added)+len(modified))
+		needed = append(needed, added...)
+		needed = append(needed, modified...)
+		sort.Strings(needed)
+		return needed, cursor
+	}
+
+	capped := make([]string, 0, min(limit, len(added)+len(modified)))
+	nextCursor := ""
+	if len(modified) > limit {
+		modifiedWindow := firstN(rotateAfter(modified, cursor), limit)
+		capped = append(capped, modifiedWindow...)
+		if len(modifiedWindow) > 0 {
+			nextCursor = modifiedWindow[len(modifiedWindow)-1]
+		}
+		sort.Strings(capped)
+		return capped, nextCursor
+	}
+
+	sortedModified := append([]string(nil), modified...)
+	sort.Strings(sortedModified)
+	capped = append(capped, sortedModified...)
+	if len(sortedModified) > 0 {
+		nextCursor = sortedModified[len(sortedModified)-1]
+	}
+	remainder := limit - len(capped)
+	if remainder > 0 {
+		addedWindow := firstN(rotateAfter(added, cursor), remainder)
+		capped = append(capped, addedWindow...)
+		if len(addedWindow) > 0 {
+			nextCursor = addedWindow[len(addedWindow)-1]
+		}
+	}
+	sort.Strings(capped)
+	return capped, nextCursor
+}
+
+func rotateAfter(values []string, cursor string) []string {
+	rotated := append([]string(nil), values...)
+	sort.Strings(rotated)
+	if len(rotated) == 0 || cursor == "" {
+		return rotated
+	}
+	start := sort.SearchStrings(rotated, cursor)
+	if start < len(rotated) && rotated[start] == cursor {
+		start++
+	}
+	if start >= len(rotated) {
+		return rotated
+	}
+	return append(append([]string(nil), rotated[start:]...), rotated[:start]...)
+}
+
+func firstN(values []string, limit int) []string {
+	if limit >= len(values) {
+		return values
+	}
+	return values[:limit]
 }
 
 // upsertConversationDocuments queues an asynchronous ingest. When manifest is
@@ -357,7 +426,9 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
-		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents)
+		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic)
+		// The second return is the code path's graph-index task; a conversation
+		// collection never produces one, so there is nothing to discard here.
 		if handled, _ := manager.runDeltaSync(ctx, job, source); handled {
 			return
 		}
@@ -509,6 +580,63 @@ func conversationDocumentsToStoredChunks(documents []model.ConversationDocument)
 		}
 	}
 	return chunks, nil
+}
+
+type conversationMessageDiff struct {
+	documents       []model.ConversationDocument
+	removalPaths    []string
+	removalPrefixes []string
+}
+
+// diffConversationMessages treats a delivered message as unchanged only when
+// the stored role equals document.Role and the assembled stored text equals
+// document.Text, which is also the text conversationDocumentsToStoredChunks
+// stores after multipart splitting. Stale stored indices must be deleted here
+// because the conversation source uses absenceRetain, so an absent message row
+// would otherwise survive forever once the conversation fingerprint advances.
+// New messages also carry exact removals because legacy rows without
+// messageIndex are invisible to storedState but still live under the same
+// conv/<id>/<message> paths; genuinely new messages pay one no-op delete.
+func diffConversationMessages(conversationID string, documents []model.ConversationDocument, storedState map[int32]semantic.StoredMessageState) conversationMessageDiff {
+	diff := conversationMessageDiff{
+		documents:       make([]model.ConversationDocument, 0, len(documents)),
+		removalPaths:    make([]string, 0),
+		removalPrefixes: make([]string, 0),
+	}
+	delivered := make(map[int32]struct{}, len(documents))
+	for _, document := range documents {
+		delivered[document.MessageIndex] = struct{}{}
+		stored, found := storedState[document.MessageIndex]
+		if found && stored.Role == document.Role && stored.Text == document.Text {
+			continue
+		}
+		diff.documents = append(diff.documents, document)
+		diff.addRemoval(conversationID, document.MessageIndex)
+	}
+
+	staleIndexes := make([]int32, 0)
+	for messageIndex := range storedState {
+		if _, found := delivered[messageIndex]; found {
+			continue
+		}
+		staleIndexes = append(staleIndexes, messageIndex)
+	}
+	slices.Sort(staleIndexes)
+	for _, staleIndex := range staleIndexes {
+		diff.addRemoval(conversationID, staleIndex)
+	}
+	return diff
+}
+
+// addRemoval emits both the exact path and the slash-suffixed prefix for one
+// message. The pair is load-bearing: the exact path deletes a single-part
+// row, the slash prefix deletes multipart part rows across shape transitions,
+// and a bare prefix without the slash would like-match sibling indices
+// (conv/x/12 matches conv/x/120).
+func (diff *conversationMessageDiff) addRemoval(conversationID string, messageIndex int32) {
+	relativePath := conversationRelativePath(conversationID, messageIndex, 0, false)
+	diff.removalPaths = append(diff.removalPaths, relativePath)
+	diff.removalPrefixes = append(diff.removalPrefixes, relativePath+"/")
 }
 
 func conversationRelativePath(conversationID string, messageIndex int32, partIndex int, multipart bool) string {

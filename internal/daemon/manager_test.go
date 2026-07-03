@@ -146,11 +146,22 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 
 	chunkPath := filepath.Join(cfg.ChunksDir, codebase.ID+".json")
 	merklePath := filepath.Join(cfg.MerkleDir, codebase.ID+".json")
+	stagingMerklePath := manager.stagingMerklePath(codebase.ID)
 	if _, err := os.Stat(chunkPath); err != nil {
 		t.Fatalf("chunk file missing before clear: %v", err)
 	}
 	if _, err := os.Stat(merklePath); err != nil {
 		t.Fatalf("merkle file missing before clear: %v", err)
+	}
+	stagingCheckpoint := merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        map[string]string{"main.go": "stale-checkpoint"},
+	}
+	if err := merkle.WriteSnapshot(stagingMerklePath, stagingCheckpoint); err != nil {
+		t.Fatalf("WriteSnapshot returned error: %v", err)
+	}
+	if _, err := os.Stat(stagingMerklePath); err != nil {
+		t.Fatalf("staging merkle file missing before clear: %v", err)
 	}
 	stagingDropsBeforeClear := len(semanticDouble.droppedStaging)
 
@@ -163,6 +174,9 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 	}
 	if _, err := os.Stat(merklePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("merkle file still present after clear: %v", err)
+	}
+	if _, err := os.Stat(stagingMerklePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging merkle file still present after clear: %v", err)
 	}
 	if len(semanticDouble.dropped) != 1 || semanticDouble.dropped[0] != codebase.CanonicalPath {
 		t.Fatalf("semantic drop calls = %v, want [%s]", semanticDouble.dropped, codebase.CanonicalPath)

@@ -134,6 +134,9 @@ type Progress struct {
 	// "forced_reindex", or "resuming". Set when the run plan is decided so
 	// surfaces can label the denominator and name a resume.
 	RunMode string `json:"runMode,omitempty"`
+	// BootstrapReason names why a run routed to the full rebuild path. It is
+	// empty for delta runs; values come from internal/daemon's vocabulary.
+	BootstrapReason string `json:"bootstrapReason,omitempty"`
 	// ScopeUnit is the unit of the added/modified/removed classification when
 	// it differs from Unit. Empty means same as Unit.
 	ScopeUnit      string `json:"scopeUnit,omitempty"`
