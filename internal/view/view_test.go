@@ -10,7 +10,7 @@ func findTestRow(t *testing.T, rows []OutcomeRow, kind OutcomeKind) OutcomeRow {
 		}
 	}
 	t.Fatalf("row %q not found in %+v", kind, rows)
-	return NewOutcomeRow("", 0)
+	return OutcomeRow{}
 }
 
 func hasTestRow(rows []OutcomeRow, kind OutcomeKind) bool {

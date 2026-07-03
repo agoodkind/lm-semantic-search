@@ -122,9 +122,9 @@ type OutcomeBreakdown struct {
 	FileRows []OutcomeRow
 	// ChunksTotal is the whole-collection chunk count for the chunk tree header.
 	ChunksTotal int32
-	// ChunkRows are the chunk children: added always, reused on reuse-capable
-	// passes and on first builds that loaded or served reuse. Empty when there
-	// is no chunk activity to report.
+	// ChunkRows are the chunk children: added always (even at zero), reused on
+	// reuse-capable passes and on first builds that loaded or served reuse. Nil
+	// only when chunks are not being reported at all.
 	ChunkRows []OutcomeRow
 }
 

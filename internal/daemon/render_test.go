@@ -367,9 +367,10 @@ func TestRenderIndexingActiveBuilding(t *testing.T) {
 			t.Fatalf("building status missing %q in:\n%s", want, out)
 		}
 	}
-	// A first build has no prior vectors, so the chunk tree omits the reused row.
+	// A cold first build loads and serves no reuse vectors, so the chunk tree
+	// omits the reused row; a seeded first build shows it (see the next test).
 	if strings.Contains(out, "reused") {
-		t.Fatalf("a first build should omit the reused row in:\n%s", out)
+		t.Fatalf("a cold first build should omit the reused row in:\n%s", out)
 	}
 }
 
