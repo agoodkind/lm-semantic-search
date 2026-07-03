@@ -29,6 +29,7 @@ type (
 	}
 	graphLifecycleState struct {
 		clearing bool
+		indexing bool
 		active   int
 		idle     *sync.Cond
 	}
@@ -105,11 +106,36 @@ func (manager *Manager) graphLifecycleStateLocked(codebaseID string) *graphLifec
 	}
 	state = &graphLifecycleState{
 		clearing: false,
+		indexing: false,
 		active:   0,
 		idle:     sync.NewCond(&manager.graphMutex),
 	}
 	manager.graphLifecycle[codebaseID] = state
 	return state
+}
+
+// beginGraphIndex claims the single in-flight graph-index slot for codebaseID.
+// It returns ok=false when an index for this codebase is already running, so a
+// redundant concurrent trigger (for example a sync sweep overlapping a manual
+// build) skips instead of parsing the same tree twice into the same db. The
+// release closure frees the slot. The daemon already dedups same-codebase index
+// jobs, so this is a defensive guard against overlapping graph passes rather
+// than the primary serialization.
+func (manager *Manager) beginGraphIndex(codebaseID string) (func(), bool) {
+	manager.graphMutex.Lock()
+	defer manager.graphMutex.Unlock()
+
+	state := manager.graphLifecycleStateLocked(codebaseID)
+	if state.indexing {
+		return nil, false
+	}
+	state.indexing = true
+
+	return func() {
+		manager.graphMutex.Lock()
+		defer manager.graphMutex.Unlock()
+		state.indexing = false
+	}, true
 }
 
 func (manager *Manager) beginGraphOperation(codebaseID string) (func(), error) {
@@ -214,14 +240,24 @@ func (manager *Manager) clearGraphCache(ctx context.Context, codebaseID string) 
 	return removeErr
 }
 
-func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID string, canonicalPath string) error {
+// indexGraphNonFatal runs one bounded graph index pass. releaseIndex frees the
+// caller's in-flight dupe-guard slot and runs when the worker goroutine exits,
+// not when this function returns: a cancel or timeout detaches from the
+// blocking C call, and the slot must stay held until that call actually
+// finishes so a new trigger cannot start a second parse alongside it.
+func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID string, canonicalPath string, releaseIndex func()) error {
+	if releaseIndex == nil {
+		releaseIndex = func() {}
+	}
 	if err := ctx.Err(); err != nil {
+		releaseIndex()
 		slog.WarnContext(ctx, "graph indexing skipped because job is cancelled", "codebase_id", codebaseID, "path", canonicalPath, "err", err)
 		return fmt.Errorf("index graph cancelled before start: %w", err)
 	}
 
 	engine, release, err := manager.graphEngine(ctx, codebaseID)
 	if err != nil {
+		releaseIndex()
 		slog.WarnContext(ctx, "open graph engine failed; continuing without graph index", "codebase_id", codebaseID, "err", err)
 		return fmt.Errorf("open graph engine: %w", err)
 	}
@@ -234,6 +270,7 @@ func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID strin
 				result <- fmt.Errorf("graph index worker panicked: %v", recovered)
 			}
 		}()
+		defer releaseIndex()
 		defer release()
 		result <- manager.graphIndex(ctx, engine, canonicalPath, "fast")
 	}()
@@ -256,10 +293,16 @@ func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID strin
 }
 
 func (manager *Manager) recordGraphIndexNonFatal(ctx context.Context, codebaseID string, canonicalPath string, snapshotHash string) {
+	releaseIndex, ok := manager.beginGraphIndex(codebaseID)
+	if !ok {
+		slog.InfoContext(ctx, "graph index already in flight; skipping duplicate", "codebase_id", codebaseID, "path", canonicalPath)
+		return
+	}
+
 	if manager.graphIndexHook != nil {
 		manager.graphIndexHook()
 	}
-	err := manager.indexGraphNonFatal(ctx, codebaseID, canonicalPath)
+	err := manager.indexGraphNonFatal(ctx, codebaseID, canonicalPath, releaseIndex)
 	if err == nil {
 		manager.updateGraphState(ctx, codebaseID, model.GraphStateReady, snapshotHash)
 		return
