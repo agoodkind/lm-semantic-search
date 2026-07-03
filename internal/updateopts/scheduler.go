@@ -12,20 +12,20 @@ import (
 
 const updateInitialDelay = time.Minute
 
+var (
+	nextUpdateDelayFunc   = nextUpdateDelay
+	runScheduledApplyFunc = runScheduledApply
+)
+
 // RunApplyScheduler runs the daemon-owned multi-binary update loop.
 func RunApplyScheduler(ctx context.Context, overrides Overrides, stopForRelaunch func()) {
 	log := overrides.Log
 	if log == nil {
 		log = slog.Default()
 	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			log.ErrorContext(ctx, "update scheduler panic", "err", recovered)
-		}
-	}()
 
 	for {
-		delay := nextUpdateDelay(overrides)
+		delay := nextUpdateDelayFunc(overrides)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -34,7 +34,7 @@ func RunApplyScheduler(ctx context.Context, overrides Overrides, stopForRelaunch
 		case <-timer.C:
 		}
 
-		applied, err := runScheduledApply(ctx, overrides, log)
+		applied, err := runScheduledApplyIteration(ctx, overrides, log)
 		if err != nil {
 			log.WarnContext(ctx, "scheduled update failed", "err", err)
 			continue
@@ -46,6 +46,17 @@ func RunApplyScheduler(ctx context.Context, overrides Overrides, stopForRelaunch
 			return
 		}
 	}
+}
+
+func runScheduledApplyIteration(ctx context.Context, overrides Overrides, log *slog.Logger) (applied bool, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.ErrorContext(ctx, "update scheduler panic", "err", recovered)
+			applied = false
+			err = nil
+		}
+	}()
+	return runScheduledApplyFunc(ctx, overrides, log)
 }
 
 func nextUpdateDelay(overrides Overrides) time.Duration {
