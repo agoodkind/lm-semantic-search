@@ -91,8 +91,17 @@ func Open(project string, cacheDir string) (*Engine, error) {
 // process-global cache directory state on each operation. The per-handle lock
 // serializes calls on this one engine.
 func (engine *Engine) Index(ctx context.Context, repositoryPath string, mode string) error {
+	// A cancelled caller must not enter the uninterruptible C call: check once
+	// before queueing on the global lock and again after acquiring it, because
+	// the wait behind another engine's long call is where cancellation lands.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("index cancelled before start: %w", err)
+	}
 	globalEngineMutex.Lock()
 	defer globalEngineMutex.Unlock()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("index cancelled while waiting for engine lock: %w", err)
+	}
 
 	restoreCacheDir, err := setCacheDirLocked(engine.cacheDir)
 	if err != nil {
