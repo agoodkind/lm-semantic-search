@@ -47,7 +47,7 @@ jobs:
       MAX_CANDIDATES: ${{ github.event.inputs.max_candidates || '5' }}
     steps:
       - name: Check out with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0
@@ -186,7 +186,7 @@ jobs:
       SHORT_SHA: ${{ needs.search.outputs.short_sha }}
     steps:
       - name: Check out with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: true
           # Full history so the merge-base ancestry re-check below cannot fail
