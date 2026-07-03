@@ -471,7 +471,7 @@ install_systemd_service() {
     tmp_unit="$(mktemp -t "$unit_name.XXXXXX")" || install_error "could not create systemd temp unit"
     cat >"$tmp_unit" <<UNIT
 [Unit]
-Description=Claude Context daemon
+Description=lm-semantic-search daemon
 Documentation=https://github.com/agoodkind/lm-semantic-search
 After=network.target
 
