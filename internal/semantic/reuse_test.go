@@ -140,7 +140,9 @@ func TestReusePrefixFilterEscapesNewlineConversationPrefix(t *testing.T) {
 	prefix := "conv/cursor:task-call_0mtc\nfc_00729/"
 
 	got := relativePathPrefixExpression(prefix)
-	want := `relativePath like "conv/cursor:task-call\_0mtc\nfc\_00729/%"`
+	// A literal wildcard reaches the parser as an escaped backslash plus the
+	// wildcard, because the lexer has no \_ or \% escape sequence.
+	want := `relativePath like "conv/cursor:task-call\\_0mtc\nfc\\_00729/%"`
 
 	if got != want {
 		t.Fatalf("reuse prefix expression = %q, want %q", got, want)
@@ -163,9 +165,9 @@ func TestRelativePathExpressionsEscapeMilvusStringBytes(t *testing.T) {
 			exactPath:  "conv/cursor:task-call_0mtc\nfc_00729/0",
 			exactWant:  `relativePath == "conv/cursor:task-call_0mtc\nfc_00729/0"`,
 			prefix:     "conv/cursor:task-call_0mtc\nfc_00729/",
-			prefixWant: `relativePath like "conv/cursor:task-call\_0mtc\nfc\_00729/%"`,
+			prefixWant: `relativePath like "conv/cursor:task-call\\_0mtc\nfc\\_00729/%"`,
 			filter:     "conv/cursor:task-call_0mtc\nfc_00729",
-			filterWant: `(relativePath == "conv/cursor:task-call_0mtc\nfc_00729" or relativePath like "conv/cursor:task-call\_0mtc\nfc\_00729/%")`,
+			filterWant: `(relativePath == "conv/cursor:task-call_0mtc\nfc_00729" or relativePath like "conv/cursor:task-call\\_0mtc\nfc\\_00729/%")`,
 		},
 		{
 			name:       "double quote",
@@ -199,9 +201,9 @@ func TestRelativePathExpressionsEscapeMilvusStringBytes(t *testing.T) {
 			exactPath:  "conv/cursor:100%/0",
 			exactWant:  `relativePath == "conv/cursor:100%/0"`,
 			prefix:     "conv/cursor:100%/",
-			prefixWant: `relativePath like "conv/cursor:100\%/%"`,
+			prefixWant: `relativePath like "conv/cursor:100\\%/%"`,
 			filter:     "conv/cursor:100%",
-			filterWant: `(relativePath == "conv/cursor:100%" or relativePath like "conv/cursor:100\%/%")`,
+			filterWant: `(relativePath == "conv/cursor:100%" or relativePath like "conv/cursor:100\\%/%")`,
 		},
 		{
 			name:       "other control byte",
