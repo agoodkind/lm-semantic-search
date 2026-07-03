@@ -35,6 +35,7 @@ func newTestManagerWithCap(t *testing.T, maxConcurrent int) (*Manager, config.Co
 		LocksDir:               filepath.Join(stateRoot, "locks"),
 		SocketsDir:             filepath.Join(stateRoot, "sockets"),
 		ChunksDir:              filepath.Join(stateRoot, "chunks"),
+		GraphDir:               filepath.Join(stateRoot, "graph"),
 		ContextRoot:            filepath.Join(stateRoot, "context"),
 		EmbeddingProvider:      "OpenAI",
 		EmbeddingModel:         "nvidia/NV-EmbedCode-7b-v1",
@@ -44,7 +45,7 @@ func newTestManagerWithCap(t *testing.T, maxConcurrent int) (*Manager, config.Co
 		MaxConcurrentIndexJobs: maxConcurrent,
 		ResumeIndexingOnBoot:   true,
 	}
-	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.ContextRoot} {
+	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot} {
 		if err := store.EnsureDir(path); err != nil {
 			t.Fatalf("EnsureDir returned error: %v", err)
 		}
@@ -57,6 +58,7 @@ func newTestManagerWithCap(t *testing.T, maxConcurrent int) (*Manager, config.Co
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
+	t.Cleanup(manager.CloseGraphEngines)
 	return manager, cfg
 }
 
