@@ -89,6 +89,7 @@ func newRoot(defaultSocketPath string) *cobra.Command {
 	root.AddCommand(newCodebaseCmd(options))
 	root.AddCommand(newJobCmd(options))
 	root.AddCommand(newDaemonCmd(options))
+	root.AddCommand(newUpdateCmd(options))
 	return root
 }
 
