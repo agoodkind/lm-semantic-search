@@ -244,6 +244,7 @@ type Codebase struct {
 	MerkleSnapshotPath    string           `json:"merkle_snapshot_path,omitempty"`
 	GraphState            GraphState       `json:"graph_state,omitempty"`
 	GraphSnapshotHash     string           `json:"graph_snapshot_hash,omitempty"`
+	GraphUpdatedAt        time.Time        `json:"graph_updated_at,omitzero"`
 	Quarantine            *QuarantineState `json:"quarantine,omitempty"`
 	// WorktreeCommonDir is the shared git common dir when this codebase's root
 	// is a linked git worktree, else empty. It lets the daemon recognize a

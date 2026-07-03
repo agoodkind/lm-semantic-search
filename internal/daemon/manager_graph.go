@@ -318,13 +318,17 @@ func (manager *Manager) updateGraphState(ctx context.Context, codebaseID string,
 	if !found {
 		return
 	}
+	now := clock.Now()
 	codebase.GraphState = graphState
 	if graphState != model.GraphStateReady {
 		codebase.GraphSnapshotHash = ""
 	} else if snapshotHash != "" {
 		codebase.GraphSnapshotHash = snapshotHash
 	}
-	codebase.UpdatedAt = clock.Now()
+	if graphState == model.GraphStateReady {
+		codebase.GraphUpdatedAt = now
+	}
+	codebase.UpdatedAt = now
 	manager.codebases[codebaseID] = codebase
 	if err := manager.saveLocked(); err != nil {
 		slog.ErrorContext(ctx, "write registry after graph state update failed", "codebase_id", codebaseID, "err", err)

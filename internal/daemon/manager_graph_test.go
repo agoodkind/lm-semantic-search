@@ -355,6 +355,40 @@ func TestUpdateGraphStateClearsSnapshotHashWhenNotReady(t *testing.T) {
 	}
 }
 
+func TestUpdateGraphStateRecordsSuccessfulBuildTime(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	codebase := newCodebaseRecord(repoPath)
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	untouched := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if !untouched.GraphUpdatedAt.IsZero() {
+		t.Fatalf("GraphUpdatedAt = %v, want zero before graph state update", untouched.GraphUpdatedAt)
+	}
+
+	manager.updateGraphState(context.Background(), codebase.ID, model.GraphStateReady, "ready-hash")
+
+	manager.mu.Lock()
+	ready := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if ready.GraphUpdatedAt.IsZero() {
+		t.Fatal("GraphUpdatedAt is zero after ready graph state update")
+	}
+	successfulBuildTime := ready.GraphUpdatedAt
+
+	manager.updateGraphState(context.Background(), codebase.ID, model.GraphStateStale, "")
+
+	manager.mu.Lock()
+	stale := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if !stale.GraphUpdatedAt.Equal(successfulBuildTime) {
+		t.Fatalf("GraphUpdatedAt = %v, want preserved successful build time %v", stale.GraphUpdatedAt, successfulBuildTime)
+	}
+	if stale.GraphSnapshotHash != "" {
+		t.Fatalf("GraphSnapshotHash = %q, want empty", stale.GraphSnapshotHash)
+	}
+}
+
 func TestGraphStatusReportsSnapshotMatchOnlyWhenReady(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	codebase := newCodebaseRecord(repoPath)
