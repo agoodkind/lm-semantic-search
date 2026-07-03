@@ -1,7 +1,7 @@
 📁 {{ .Name }}
 🔄 {{ .Heading }}: {{ .Percent }}%
 {{ .BreakdownBlock }}
-{{- if .GraphLine }}
-{{ .GraphLine }}
+{{- if or .GraphUpdatedAt .GraphReadyNoTime .GraphNotBuilt }}
+{{ template "graphLine" . }}
 {{- end }}
 🕐 Updated {{ .UpdatedAt }}

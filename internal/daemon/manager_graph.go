@@ -362,34 +362,6 @@ func snapshotHashForGraph(snapshot merkle.Snapshot, configDigest string) string 
 	return snapshot.Hash()
 }
 
-func (manager *Manager) graphStatusLine(codebase model.Codebase) string {
-	if codebase.Kind != model.CodebaseKindCode {
-		return ""
-	}
-	graphState := codebase.GraphState
-	if graphState == "" {
-		graphState = model.GraphStateAbsent
-	}
-
-	matchLabel := "semantic snapshot unknown"
-	snapshotPath := manager.snapshotPathForCodebase(codebase)
-	if _, statErr := os.Stat(snapshotPath); errors.Is(statErr, os.ErrNotExist) {
-		return fmt.Sprintf("🕸️ Graph: %s, %s", graphState, matchLabel)
-	}
-	snapshot, err := merkle.ReadSnapshot(snapshotPath)
-	if err == nil {
-		currentHash := snapshotHashForGraph(snapshot, codebase.EffectiveConfig.IgnoreDigest)
-		if graphState == model.GraphStateReady && codebase.GraphSnapshotHash == currentHash {
-			matchLabel = "matches semantic snapshot"
-		} else {
-			matchLabel = "does not match semantic snapshot"
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		matchLabel = "semantic snapshot unreadable"
-	}
-	return fmt.Sprintf("🕸️ Graph: %s, %s", graphState, matchLabel)
-}
-
 func (manager *Manager) graphDiagnostic(codebase model.Codebase) string {
 	if codebase.Kind != model.CodebaseKindCode {
 		return ""

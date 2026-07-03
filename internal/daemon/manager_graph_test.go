@@ -389,7 +389,92 @@ func TestUpdateGraphStateRecordsSuccessfulBuildTime(t *testing.T) {
 	}
 }
 
-func TestGraphStatusReportsSnapshotMatchOnlyWhenReady(t *testing.T) {
+func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	useRelativeTimeNowForTest(t, now)
+
+	cases := []struct {
+		name               string
+		codebase           model.Codebase
+		wantUpdatedAt      string
+		wantReadyNoTime    bool
+		wantNotBuilt       bool
+		wantAllFieldsEmpty bool
+	}{
+		{
+			name: "ever built",
+			codebase: model.Codebase{
+				CanonicalPath:  repoPath,
+				Kind:           model.CodebaseKindCode,
+				Status:         model.CodebaseStatusIndexed,
+				GraphState:     model.GraphStateStale,
+				GraphUpdatedAt: now.Add(-6 * time.Minute),
+				LastSuccessfulRun: &model.IndexRunSummary{
+					CompletedAt: now,
+				},
+			},
+			wantUpdatedAt: "6 minutes ago",
+		},
+		{
+			name: "ready no time",
+			codebase: model.Codebase{
+				CanonicalPath: repoPath,
+				Kind:          model.CodebaseKindCode,
+				Status:        model.CodebaseStatusIndexed,
+				GraphState:    model.GraphStateReady,
+			},
+			wantReadyNoTime: true,
+		},
+		{
+			name: "never built",
+			codebase: model.Codebase{
+				CanonicalPath: repoPath,
+				Kind:          model.CodebaseKindCode,
+				Status:        model.CodebaseStatusIndexed,
+				GraphState:    model.GraphStateAbsent,
+			},
+			wantNotBuilt: true,
+		},
+		{
+			name: "non code",
+			codebase: model.Codebase{
+				CanonicalPath: "chat:///thread-alpha",
+				Kind:          model.CodebaseKindDocument,
+				Status:        model.CodebaseStatusIndexed,
+			},
+			wantAllFieldsEmpty: true,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := manager.resolveGetIndexView(
+				testCase.codebase.CanonicalPath,
+				true,
+				&testCase.codebase,
+				nil,
+				dependencyHealth{},
+				collectionNotApplicable,
+				nil,
+				nil,
+			)
+			if got.Status.GraphUpdatedAt != testCase.wantUpdatedAt {
+				t.Fatalf("GraphUpdatedAt = %q, want %q", got.Status.GraphUpdatedAt, testCase.wantUpdatedAt)
+			}
+			if got.Status.GraphReadyNoTime != testCase.wantReadyNoTime {
+				t.Fatalf("GraphReadyNoTime = %t, want %t", got.Status.GraphReadyNoTime, testCase.wantReadyNoTime)
+			}
+			if got.Status.GraphNotBuilt != testCase.wantNotBuilt {
+				t.Fatalf("GraphNotBuilt = %t, want %t", got.Status.GraphNotBuilt, testCase.wantNotBuilt)
+			}
+			if testCase.wantAllFieldsEmpty && (got.Status.GraphUpdatedAt != "" || got.Status.GraphReadyNoTime || got.Status.GraphNotBuilt) {
+				t.Fatalf("non-code graph fields = %+v, want all zero", got.Status)
+			}
+		})
+	}
+}
+
+func TestGraphDiagnosticReportsSnapshotMatchOnlyWhenReady(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	codebase := newCodebaseRecord(repoPath)
 	codebase.Status = model.CodebaseStatusIndexed
@@ -414,10 +499,6 @@ func TestGraphStatusReportsSnapshotMatchOnlyWhenReady(t *testing.T) {
 	codebase.GraphState = model.GraphStateStale
 	codebase.GraphSnapshotHash = snapshotHash
 
-	statusLine := manager.graphStatusLine(codebase)
-	if strings.Contains(statusLine, "matches semantic snapshot") {
-		t.Fatalf("graphStatusLine = %q, want no ready-only match label", statusLine)
-	}
 	diagnostic := manager.graphDiagnostic(codebase)
 	if strings.Contains(diagnostic, "but matches the semantic snapshot") {
 		t.Fatalf("graphDiagnostic = %q, want no ready-only match label", diagnostic)
@@ -436,7 +517,6 @@ func TestGraphStatusMissingSnapshotDoesNotLogError(t *testing.T) {
 		slog.SetDefault(previousLogger)
 	})
 
-	_ = manager.graphStatusLine(codebase)
 	_ = manager.graphDiagnostic(codebase)
 
 	if handler.errorCount() != 0 {

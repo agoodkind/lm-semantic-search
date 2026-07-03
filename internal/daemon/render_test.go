@@ -1002,6 +1002,58 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 	}
 }
 
+func TestStatusTemplateRendersStructuredGraphLine(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		statusView view.StatusView
+		want       string
+	}{
+		{
+			name: "updated",
+			statusView: view.StatusView{
+				Name:           "repo",
+				UpdatedAt:      "4:10 PM PDT",
+				GraphUpdatedAt: "6 minutes ago",
+			},
+			want: "🕸️ Code graph updated 6 minutes ago",
+		},
+		{
+			name: "ready no time",
+			statusView: view.StatusView{
+				Name:             "repo",
+				UpdatedAt:        "4:10 PM PDT",
+				GraphReadyNoTime: true,
+			},
+			want: "🕸️ Code graph: ready",
+		},
+		{
+			name: "not built",
+			statusView: view.StatusView{
+				Name:          "repo",
+				UpdatedAt:     "4:10 PM PDT",
+				GraphNotBuilt: true,
+			},
+			want: "🕸️ Code graph: builds shortly, or run index_codebase",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			out := render.GetIndex(view.GetIndexView{
+				Tracked:      true,
+				TemplateName: "ready.md.tmpl",
+				Status:       testCase.statusView,
+			})
+			if !strings.Contains(out, testCase.want) {
+				t.Fatalf("status output missing graph line %q:\n%s", testCase.want, out)
+			}
+			if strings.Contains(out, "semantic snapshot") {
+				t.Fatalf("status output still mentions semantic snapshot:\n%s", out)
+			}
+		})
+	}
+}
+
 // TestRenderClearIndexHasNoRemainLine proves the clear output is just the
 // success line, with no trailing "other ... remain" count.
 func TestRenderClearIndexHasNoRemainLine(t *testing.T) {
