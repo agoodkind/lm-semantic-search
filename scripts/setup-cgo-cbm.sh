@@ -80,9 +80,39 @@ tool_for_compiler() {
         arch="${triple%%-*}"
         local -a triple_candidates
         triple_candidates=( "$(dirname "${resolved_compiler}")/${arch}"-*-"${fallback_tool}" )
-        if [[ -e "${triple_candidates[0]}" ]]; then
+        if [[ "${#triple_candidates[@]}" -gt 0 && -e "${triple_candidates[0]}" ]]; then
             printf '%s\n' "${triple_candidates[0]}"
             return
+        fi
+    fi
+
+    # The compiler's own directory is not always the cctools directory: the CI
+    # ccache masquerade prepends a wrapper dir to PATH, so the compiler resolves
+    # there while the triple-named cctools stay in the osxcross bin dir. For a
+    # darwin target, derive the arch from the go-mk target tuple and search every
+    # PATH entry for the triple-prefixed tool.
+    if [[ "${TARGET_GOOS}" == "darwin" ]]; then
+        local target_arch
+        case "${TARGET_GOARCH}" in
+            arm64) target_arch="arm64" ;;
+            amd64) target_arch="x86_64" ;;
+            *) target_arch="" ;;
+        esac
+        if [[ -n "${target_arch}" ]]; then
+            local path_dir
+            local -a path_dirs
+            local -a path_candidates
+            IFS=':' read -r -a path_dirs <<<"${PATH}"
+            for path_dir in "${path_dirs[@]}"; do
+                if [[ -z "${path_dir}" ]]; then
+                    continue
+                fi
+                path_candidates=( "${path_dir}/${target_arch}-apple-darwin"*"-${fallback_tool}" )
+                if [[ "${#path_candidates[@]}" -gt 0 && -e "${path_candidates[0]}" ]]; then
+                    printf '%s\n' "${path_candidates[0]}"
+                    return
+                fi
+            done
         fi
     fi
 
