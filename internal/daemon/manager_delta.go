@@ -356,7 +356,12 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	}
 	var graphTask *graphIndexTask
 	if codebase.Kind == model.CodebaseKindCode {
-		graphTask = newGraphIndexTask(codebase.ID, job.CanonicalPath, snapshotHashForGraph(plan.currentSnapshot, plan.configDigest), func(completeCtx context.Context) {
+		// The graph task is stamped with the hash of the snapshot this run
+		// committed (the working set), not the captured one: skipped, pending,
+		// or unreadable paths can leave the checkpoint behind the capture, and
+		// reconciliation compares against the committed checkpoint.
+		committedSnapshot := merkle.Snapshot{ConfigDigest: plan.configDigest, Files: state.working, Inodes: nil}
+		graphTask = newGraphIndexTask(codebase.ID, job.CanonicalPath, snapshotHashForGraph(committedSnapshot, plan.configDigest), func(completeCtx context.Context) {
 			manager.updateJobCompleted(completeCtx, job.ID, result)
 		})
 	}
