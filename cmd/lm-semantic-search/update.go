@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -114,6 +115,10 @@ func newUpdateStatusCmd() *cobra.Command {
 			}
 			state, err := selfupdate.LoadState(statePath)
 			if err != nil {
+				if os.IsNotExist(err) {
+					printUpdateStatus(cmd, selfupdate.State{})
+					return nil
+				}
 				slog.Error("load update state failed", "err", err)
 				return fmt.Errorf("load update state: %w", err)
 			}
