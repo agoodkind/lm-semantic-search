@@ -146,7 +146,11 @@ func ApplyAll(ctx context.Context, overrides Overrides) (ApplyAllResult, error) 
 		result.Applied = result.Applied || applyResult.Applied
 		result.DryRun = result.DryRun || applyResult.DryRun
 		if applyErr != nil {
-			slog.WarnContext(ctx, "apply binary update failed", "binary", option.Config.Binary, "err", applyErr)
+			log := option.Log
+			if log == nil {
+				log = slog.Default()
+			}
+			log.WarnContext(ctx, "apply binary update failed", "binary", option.Config.Binary, "err", applyErr)
 			return result, fmt.Errorf("apply %s: %w", option.Config.Binary, applyErr)
 		}
 	}
