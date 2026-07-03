@@ -14,19 +14,37 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/gklog/version"
 	"goodkind.io/lm-semantic-search/internal/mcpserver"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		if err := writeVersion(os.Stdout); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "write version output: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	rootContext := installCorrelationLogger("mcp-boot")
 	slog.InfoContext(rootContext, "lm-semantic-search-mcp starting", "pid", os.Getpid(), "parent_pid", os.Getppid())
 	exitCode := run(rootContext)
 	slog.InfoContext(rootContext, "lm-semantic-search-mcp stopping", "exit_code", exitCode)
 	os.Exit(exitCode)
+}
+
+func writeVersion(writer io.Writer) error {
+	_, err := fmt.Fprintf(writer, "version: %s commit=%s build_time=%s\n", version.String(), version.Commit, version.BuildTime)
+	if err != nil {
+		slog.Error("write version output failed", "err", err)
+		return fmt.Errorf("write version output: %w", err)
+	}
+	return nil
 }
 
 // installCorrelationLogger wraps the default JSON slog handler with a

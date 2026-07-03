@@ -29,7 +29,7 @@ define _go_mk_fetch
 	elif curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_BASE_URL)/$(1)" -o "$(2)" 2>/dev/null && [ -s "$(2)" ]; then \
 		: ; \
 	else \
-		printf '%s\n' "error: $(1) fetch failed; no cache fallback (moratorium). Run: gh auth login" >&2; \
+		printf '%s\n' "error: $(1) fetch failed; no cache fallback (moratorium). Set GO_MK_DEV_DIR, install/authenticate gh, or check curl access to $(GO_MK_BASE_URL)" >&2; \
 		exit 1; \
 	fi
 endef
@@ -53,6 +53,6 @@ $(foreach m,$(GO_MK_MODULES),$(shell { $(call _go_mk_fetch,$(m),.make/$(m)); } 1
 endif
 
 # go.mk handles -including the modules at its tail (after all its variables
-# are defined), so the modules see default-build-deps etc. Don't duplicate
+# are defined), so the modules see build-check etc. Don't duplicate
 # the include here or every module target gets overriding-commands warnings.
 -include $(GO_MK)

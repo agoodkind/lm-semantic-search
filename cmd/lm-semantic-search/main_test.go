@@ -53,6 +53,9 @@ func TestRootRegistersGroupedCommands(t *testing.T) {
 		{"daemon", "status"},
 		{"daemon", "stop"},
 		{"daemon", "doctor"},
+		{"update", "check"},
+		{"update", "apply"},
+		{"update", "status"},
 	}
 	for _, path := range expected {
 		if _, _, err := root.Find(path); err != nil {
@@ -112,6 +115,25 @@ func TestJobGetRequiresID(t *testing.T) {
 	}
 	if err.Error() != "job get requires JOB_ID" {
 		t.Fatalf("error = %q", err.Error())
+	}
+}
+
+func TestVersionCommandPrintsValidatorToken(t *testing.T) {
+	root, stdout, _ := testRoot()
+	root.SetArgs([]string{"version"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("version command returned error: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "version:") {
+		t.Fatalf("version output = %q, want version: token", output)
+	}
+	if !strings.Contains(output, "commit=") {
+		t.Fatalf("version output = %q, want commit field", output)
+	}
+	if !strings.Contains(output, "build_time=") {
+		t.Fatalf("version output = %q, want build_time field", output)
 	}
 }
 

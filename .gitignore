@@ -6,3 +6,8 @@ dist/
 go.work
 go.work.sum
 .superpowers/
+!.golangci-lint-baseline.txt
+!.gocyclo-baseline.txt
+!.deadcode-baseline.txt
+!.staticcheck-extra-baseline.txt
+!.go-mk-applied-notices

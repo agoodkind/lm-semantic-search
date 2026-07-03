@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -23,15 +24,32 @@ import (
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/store"
+	"goodkind.io/lm-semantic-search/internal/updateopts"
 	"google.golang.org/grpc"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		if err := writeVersion(os.Stdout); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "write version output: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	rootContext := installCorrelationLogger("daemon-boot")
 	if err := run(rootContext); err != nil {
 		slog.ErrorContext(rootContext, "daemon failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+func writeVersion(writer io.Writer) error {
+	_, err := fmt.Fprintf(writer, "version: %s commit=%s build_time=%s\n", version.String(), version.Commit, version.BuildTime)
+	if err != nil {
+		slog.Error("write version output failed", "err", err)
+		return fmt.Errorf("write version output: %w", err)
+	}
+	return nil
 }
 
 func correlationHandlerOptions() correlation.HandlerOptions {
@@ -140,6 +158,7 @@ func run(rootContext context.Context) error {
 		default:
 		}
 	}))
+	startUpdateScheduler(runtimeContext, cfg, shutdownCh)
 
 	serveErrCh := make(chan error, 1)
 	goSafe(rootContext, func() {
@@ -163,6 +182,30 @@ func run(rootContext context.Context) error {
 	cancelRuntime()
 	server.GracefulStop()
 	return nil
+}
+
+func startUpdateScheduler(ctx context.Context, cfg config.Config, shutdownCh chan<- struct{}) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		slog.WarnContext(ctx, "update scheduler disabled; executable path unavailable", "err", err)
+		return
+	}
+	overrides := updateopts.Overrides{
+		Client:     nil,
+		InstallDir: filepath.Dir(executablePath),
+		StateRoot:  cfg.StateRoot,
+		CacheDir:   "",
+		DryRun:     false,
+		Log:        slog.Default(),
+	}
+	goSafe(ctx, func() {
+		updateopts.RunApplyScheduler(ctx, overrides, func() {
+			select {
+			case shutdownCh <- struct{}{}:
+			default:
+			}
+		})
+	})
 }
 
 // applyStatePaths derives every state-relative path from the resolved state

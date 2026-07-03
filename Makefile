@@ -16,6 +16,7 @@ MCP_CMD := ./cmd/$(MCP_BINARY)
 
 # make install builds and installs the daemon plus both client binaries.
 INSTALL_BINS := $(BINARY):$(CMD) $(CLI_BINARY):$(CLI_CMD) $(MCP_BINARY):$(MCP_CMD)
+RELEASE_BINS := $(INSTALL_BINS)
 
 # Pipeline modules. Add go-service.mk if this binary ships as a daemon and
 # set LAUNCHD_LABEL, SYSTEMD_UNIT, LOG_PATH before -include $(GO_MK).

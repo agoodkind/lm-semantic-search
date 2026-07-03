@@ -14,3 +14,4 @@ jobs:
     with:
       cgo: true
       submodules: recursive
+      binary: lm-semantic-search-daemon
