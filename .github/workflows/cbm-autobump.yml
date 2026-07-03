@@ -70,7 +70,7 @@ jobs:
         run: git config --global core.hooksPath /dev/null
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           # Read from go.mod so the workflow tracks the repo toolchain.
           go-version-file: go.mod
