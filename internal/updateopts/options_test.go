@@ -44,8 +44,11 @@ func TestOptionsForInstallDirBuildsSharedStateOptionsInApplyOrder(t *testing.T) 
 		if option.Config.CurrentCommit != version.Commit {
 			t.Fatalf("CurrentCommit = %q, want %q", option.Config.CurrentCommit, version.Commit)
 		}
-		if option.Config.CurrentBuildHash != version.BinHash {
-			t.Fatalf("CurrentBuildHash = %q, want %q", option.Config.CurrentBuildHash, version.BinHash)
+		if option.Config.CurrentBuildHash != version.BuildHash() {
+			t.Fatalf("CurrentBuildHash = %q, want %q", option.Config.CurrentBuildHash, version.BuildHash())
+		}
+		if option.Config.CurrentDirty != (version.Dirty == "true") {
+			t.Fatalf("CurrentDirty = %v, want %v", option.Config.CurrentDirty, version.Dirty == "true")
 		}
 		if option.Config.AllowPrerelease != nil {
 			t.Fatalf("AllowPrerelease = %v, want nil", option.Config.AllowPrerelease)
