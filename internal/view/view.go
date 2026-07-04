@@ -381,7 +381,7 @@ type StatusView struct {
 	// GraphReadyNoTime means the graph is ready but the registry record predates
 	// the persisted build timestamp.
 	GraphReadyNoTime bool
-	// GraphNotBuilt means no successful graph build has been recorded.
+	// GraphNotBuilt means the graph is not ready and has no recorded successful build time.
 	GraphNotBuilt bool
 	HasStats      bool
 }
