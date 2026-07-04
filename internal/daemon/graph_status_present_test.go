@@ -30,6 +30,24 @@ func formatLocalStatusDateForTest(value time.Time) string {
 	return value.In(location).Format(layout)
 }
 
+func formatLocalStatusClockForTest(value time.Time) string {
+	const layout = "3:04 PM MST"
+	location, err := time.LoadLocation("Local")
+	if err != nil {
+		return value.Format(layout)
+	}
+	return value.In(location).Format(layout)
+}
+
+func formatLocalStatusStampForTest(value time.Time) string {
+	const layout = "Jan 2, 3:04 PM MST"
+	location, err := time.LoadLocation("Local")
+	if err != nil {
+		return value.Format(layout)
+	}
+	return value.In(location).Format(layout)
+}
+
 func TestFormatRelativeTimeBuckets(t *testing.T) {
 	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
 	useRelativeTimeNowForTest(t, now)
@@ -43,21 +61,53 @@ func TestFormatRelativeTimeBuckets(t *testing.T) {
 		{name: "0 seconds", value: now, want: "just now"},
 		{name: "30 seconds", value: now.Add(-30 * time.Second), want: "just now"},
 		{name: "59 seconds", value: now.Add(-59 * time.Second), want: "just now"},
-		{name: "60 seconds", value: now.Add(-60 * time.Second), want: "1 minute ago"},
-		{name: "120 seconds", value: now.Add(-120 * time.Second), want: "2 minutes ago"},
-		{name: "59 minutes", value: now.Add(-59 * time.Minute), want: "59 minutes ago"},
-		{name: "60 minutes", value: now.Add(-60 * time.Minute), want: "1 hour ago"},
-		{name: "23 hours", value: now.Add(-23 * time.Hour), want: "23 hours ago"},
-		{name: "24 hours", value: now.Add(-24 * time.Hour), want: "yesterday"},
-		{name: "47 hours", value: now.Add(-47 * time.Hour), want: "yesterday"},
-		{name: "49 hours", value: now.Add(-49 * time.Hour), want: formatLocalStatusDateForTest(now.Add(-49 * time.Hour))},
-		{name: "10 days", value: now.Add(-10 * 24 * time.Hour), want: formatLocalStatusDateForTest(now.Add(-10 * 24 * time.Hour))},
+		{name: "60 seconds", value: now.Add(-60 * time.Second), want: "1m ago"},
+		{name: "120 seconds", value: now.Add(-120 * time.Second), want: "2m ago"},
+		{name: "59 minutes", value: now.Add(-59 * time.Minute), want: "59m ago"},
+		{name: "60 minutes", value: now.Add(-60 * time.Minute), want: "1h ago"},
+		{name: "23 hours", value: now.Add(-23 * time.Hour), want: "23h ago"},
+		{name: "24 hours", value: now.Add(-24 * time.Hour), want: "1d ago"},
+		{name: "47 hours", value: now.Add(-47 * time.Hour), want: "1d ago"},
+		{name: "49 hours", value: now.Add(-49 * time.Hour), want: "2d ago"},
+		{name: "10 days", value: now.Add(-10 * 24 * time.Hour), want: "10d ago"},
 		{name: "future", value: now.Add(time.Minute), want: "just now"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := formatRelativeTime(testCase.value); got != testCase.want {
 				t.Fatalf("formatRelativeTime(%s) = %q, want %q", testCase.name, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestFormatStampWithRelative(t *testing.T) {
+	location, err := time.LoadLocation("Local")
+	if err != nil {
+		t.Fatalf("LoadLocation returned error: %v", err)
+	}
+	now := time.Date(2026, 7, 3, 9, 20, 0, 0, location)
+	useRelativeTimeNowForTest(t, now)
+
+	today := now.Add(-44 * time.Minute)
+	older := now.Add(-49 * time.Hour)
+	soon := now.Add(2 * time.Minute)
+
+	cases := []struct {
+		name  string
+		value time.Time
+		want  string
+	}{
+		{name: "today", value: today, want: formatLocalStatusClockForTest(today) + " (44m ago)"},
+		{name: "older", value: older, want: formatLocalStatusStampForTest(older) + " (2d ago)"},
+		{name: "just now", value: now.Add(-30 * time.Second), want: formatLocalStatusClockForTest(now.Add(-30*time.Second)) + " (just now)"},
+		{name: "future", value: soon, want: formatLocalStatusClockForTest(soon) + " (just now)"},
+		{name: "zero", value: time.Time{}, want: ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := formatStampWithRelative(testCase.value); got != testCase.want {
+				t.Fatalf("formatStampWithRelative(%s) = %q, want %q", testCase.name, got, testCase.want)
 			}
 		})
 	}
@@ -71,8 +121,18 @@ func TestResolveStatusNarrativeAppendsGraphLineFromViewFields(t *testing.T) {
 	}{
 		{
 			name:       "updated",
-			statusView: view.StatusView{GraphUpdatedAt: "6 minutes ago"},
-			want:       "🕸️ Code graph updated 6 minutes ago",
+			statusView: view.StatusView{GraphUpdatedAt: "4:10 PM PDT (6m ago)"},
+			want:       "🕸️ Code graph: updated 4:10 PM PDT (6m ago)",
+		},
+		{
+			name:       "building",
+			statusView: view.StatusView{GraphBuilding: true},
+			want:       "🕸️ Code graph: building",
+		},
+		{
+			name:       "failed",
+			statusView: view.StatusView{GraphFailed: true},
+			want:       "🕸️ Code graph: update didn't finish, retries",
 		},
 		{
 			name:       "ready no time",
@@ -82,7 +142,7 @@ func TestResolveStatusNarrativeAppendsGraphLineFromViewFields(t *testing.T) {
 		{
 			name:       "not built",
 			statusView: view.StatusView{GraphNotBuilt: true},
-			want:       "🕸️ Code graph: builds shortly, or run index_codebase",
+			want:       "🕸️ Code graph: builds shortly",
 		},
 	}
 	for _, testCase := range cases {
@@ -126,24 +186,24 @@ func TestResolveSearchStatusViewPopulatesGraphFields(t *testing.T) {
 		CanonicalPath:  "/repo/code",
 		Kind:           model.CodebaseKindCode,
 		Status:         model.CodebaseStatusIndexed,
-		GraphState:     model.GraphStateStale,
+		GraphState:     model.GraphStateReady,
 		GraphUpdatedAt: now.Add(-6 * time.Minute),
 	}
-	statusView, _, _ := resolveSearchStatusView(codebase, activeJob, dependencyHealth{})
-	if statusView.GraphUpdatedAt != "6 minutes ago" {
-		t.Fatalf("GraphUpdatedAt = %q, want %q", statusView.GraphUpdatedAt, "6 minutes ago")
+	statusView, _, _ := resolveSearchStatusView(codebase, activeJob, dependencyHealth{}, false)
+	if statusView.GraphUpdatedAt != formatStampWithRelative(codebase.GraphUpdatedAt) {
+		t.Fatalf("GraphUpdatedAt = %q, want %q", statusView.GraphUpdatedAt, formatStampWithRelative(codebase.GraphUpdatedAt))
 	}
 
 	legacyCodebase := model.Codebase{
 		ID:             "cb-legacy-code",
 		CanonicalPath:  "/repo/legacy-code",
 		Status:         model.CodebaseStatusIndexed,
-		GraphState:     model.GraphStateStale,
+		GraphState:     model.GraphStateReady,
 		GraphUpdatedAt: now.Add(-6 * time.Minute),
 	}
-	statusView, _, _ = resolveSearchStatusView(legacyCodebase, activeJob, dependencyHealth{})
-	if statusView.GraphUpdatedAt != "6 minutes ago" {
-		t.Fatalf("legacy empty-kind GraphUpdatedAt = %q, want %q", statusView.GraphUpdatedAt, "6 minutes ago")
+	statusView, _, _ = resolveSearchStatusView(legacyCodebase, activeJob, dependencyHealth{}, false)
+	if statusView.GraphUpdatedAt != formatStampWithRelative(legacyCodebase.GraphUpdatedAt) {
+		t.Fatalf("legacy empty kind GraphUpdatedAt = %q, want %q", statusView.GraphUpdatedAt, formatStampWithRelative(legacyCodebase.GraphUpdatedAt))
 	}
 
 	documentCodebase := model.Codebase{
@@ -154,8 +214,8 @@ func TestResolveSearchStatusViewPopulatesGraphFields(t *testing.T) {
 		GraphState:     model.GraphStateStale,
 		GraphUpdatedAt: now.Add(-6 * time.Minute),
 	}
-	statusView, _, _ = resolveSearchStatusView(documentCodebase, activeJob, dependencyHealth{})
-	if statusView.GraphUpdatedAt != "" || statusView.GraphReadyNoTime || statusView.GraphNotBuilt {
-		t.Fatalf("non-code graph fields = %+v, want all zero", statusView)
+	statusView, _, _ = resolveSearchStatusView(documentCodebase, activeJob, dependencyHealth{}, false)
+	if statusView.GraphUpdatedAt != "" || statusView.GraphBuilding || statusView.GraphFailed || statusView.GraphReadyNoTime || statusView.GraphNotBuilt {
+		t.Fatalf("non code graph fields = %+v, want all zero", statusView)
 	}
 }

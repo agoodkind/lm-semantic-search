@@ -551,7 +551,7 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	}
 	server.manager.fillLiveChunkTotal(ctx, outcome.Codebase, outcome.ActiveJob)
 	health := server.manager.DependencyHealth()
-	inFlightStatus, inFlightTemplateName, inFlightBackgroundSync := resolveSearchStatusView(outcome.Codebase, outcome.ActiveJob, health)
+	inFlightStatus, inFlightTemplateName, inFlightBackgroundSync := resolveSearchStatusView(outcome.Codebase, outcome.ActiveJob, health, server.manager.graphIndexing(outcome.Codebase.ID))
 	searchView := view.SearchView{
 		RequestedPath:          requestedPath,
 		Query:                  request.GetQuery(),

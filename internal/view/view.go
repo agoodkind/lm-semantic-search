@@ -378,6 +378,10 @@ type StatusView struct {
 	// graph build, for example "6 minutes ago". Non-empty renders
 	// "Code graph updated <label>".
 	GraphUpdatedAt string
+	// GraphBuilding means a graph index is in flight.
+	GraphBuilding bool
+	// GraphFailed means the latest graph index did not finish.
+	GraphFailed bool
 	// GraphReadyNoTime means the graph is ready but the registry record predates
 	// the persisted build timestamp.
 	GraphReadyNoTime bool

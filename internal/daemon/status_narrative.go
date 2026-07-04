@@ -38,13 +38,19 @@ func withGraphLine(lines []string, statusView view.StatusView) []string {
 
 func graphLineFromStatusView(statusView view.StatusView) string {
 	if statusView.GraphUpdatedAt != "" {
-		return "🕸️ Code graph updated " + statusView.GraphUpdatedAt
+		return "🕸️ Code graph: updated " + statusView.GraphUpdatedAt
+	}
+	if statusView.GraphBuilding {
+		return "🕸️ Code graph: building"
+	}
+	if statusView.GraphFailed {
+		return "🕸️ Code graph: update didn't finish, retries"
 	}
 	if statusView.GraphReadyNoTime {
 		return "🕸️ Code graph: ready"
 	}
 	if statusView.GraphNotBuilt {
-		return "🕸️ Code graph: builds shortly, or run index_codebase"
+		return "🕸️ Code graph: builds shortly"
 	}
 	return ""
 }

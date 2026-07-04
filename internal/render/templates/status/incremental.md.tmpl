@@ -2,7 +2,4 @@
 🔄 Indexing new changes: {{ .Percent }}%
 🔢 {{ .FilesInCodebase }} files: {{ .FilesChanged }} changed, {{ .FilesUnchanged }} unchanged
 {{ .BreakdownBlock }}
-{{- if or .GraphUpdatedAt .GraphReadyNoTime .GraphNotBuilt }}
-{{ template "graphLine" . }}
-{{- end }}
-🕐 Updated {{ .UpdatedAt }}
+{{ template "statusFooter" . }}
