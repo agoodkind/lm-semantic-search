@@ -38,14 +38,14 @@ The daemon runs the engine with a single internal worker, which keeps engine wor
 
 ## Querying the graph
 
-The graph is queried through four read-only tools, each addressed by an absolute codebase path:
+The graph is queried through four tools, each addressed by an absolute codebase path:
 
 - `query_graph` runs a graph query and returns matching rows.
 - `trace_path` traces call relationships from a named function, in a chosen direction and depth.
 - `get_architecture` summarizes structure, optionally scoped to a path.
 - `manage_adr` reads or updates the codebase's architecture decision records.
 
-The daemon owns the project identity and injects it into every graph tool call, so callers never pass it. Only these four tools are accepted. The engine's own repository-indexing entry point is not exposed as a tool, because indexing is driven by the daemon's own index and sync flow, not by ad hoc tool calls.
+query_graph, trace_path, and get_architecture are read only, and manage_adr reads or updates the codebase's architecture decision records. None of them run the indexer. The daemon owns the project identity and injects it into every graph tool call, so callers never pass it. Only these four tools are accepted. The engine's own repository-indexing entry point is not exposed as a tool, because indexing is driven by the daemon's own index and sync flow, not by ad hoc tool calls.
 
 ## Freshness in status and doctor
 
