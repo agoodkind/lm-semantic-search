@@ -145,6 +145,7 @@ func TestGraphStateRecordsReadyAndReconcilesStaleGraph(t *testing.T) {
 	})
 
 	codebase := newCodebaseRecord(repoPath)
+	codebase.Kind = ""
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.EffectiveConfig = defaultIndexConfig()
 	codebase.EffectiveConfig.IgnoreDigest = digestIndexConfig(codebase.EffectiveConfig)
@@ -355,38 +356,263 @@ func TestUpdateGraphStateClearsSnapshotHashWhenNotReady(t *testing.T) {
 	}
 }
 
-func TestGraphStatusReportsSnapshotMatchOnlyWhenReady(t *testing.T) {
+func TestUpdateGraphStateRecordsSuccessfulBuildTime(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	codebase := newCodebaseRecord(repoPath)
-	codebase.Status = model.CodebaseStatusIndexed
-	codebase.EffectiveConfig = defaultIndexConfig()
-	codebase.EffectiveConfig.IgnoreDigest = digestIndexConfig(codebase.EffectiveConfig)
-	codebase.MerkleSnapshotPath = manager.merklePath(codebase.ID)
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	untouched := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if !untouched.GraphUpdatedAt.IsZero() {
+		t.Fatalf("GraphUpdatedAt = %v, want zero before graph state update", untouched.GraphUpdatedAt)
+	}
+
+	manager.updateGraphState(context.Background(), codebase.ID, model.GraphStateReady, "ready-hash")
+
+	manager.mu.Lock()
+	ready := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if ready.GraphUpdatedAt.IsZero() {
+		t.Fatal("GraphUpdatedAt is zero after ready graph state update")
+	}
+	successfulBuildTime := ready.GraphUpdatedAt
+
+	manager.updateGraphState(context.Background(), codebase.ID, model.GraphStateStale, "")
+
+	manager.mu.Lock()
+	stale := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if !stale.GraphUpdatedAt.Equal(successfulBuildTime) {
+		t.Fatalf("GraphUpdatedAt = %v, want preserved successful build time %v", stale.GraphUpdatedAt, successfulBuildTime)
+	}
+	if stale.GraphSnapshotHash != "" {
+		t.Fatalf("GraphSnapshotHash = %q, want empty", stale.GraphSnapshotHash)
+	}
+}
+
+func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	useRelativeTimeNowForTest(t, now)
+
+	cases := []struct {
+		name               string
+		codebase           model.Codebase
+		wantUpdatedAt      string
+		wantReadyNoTime    bool
+		wantNotBuilt       bool
+		wantAllFieldsEmpty bool
+	}{
+		{
+			name: "ever built",
+			codebase: model.Codebase{
+				CanonicalPath:  repoPath,
+				Kind:           model.CodebaseKindCode,
+				Status:         model.CodebaseStatusIndexed,
+				GraphState:     model.GraphStateStale,
+				GraphUpdatedAt: now.Add(-6 * time.Minute),
+				LastSuccessfulRun: &model.IndexRunSummary{
+					CompletedAt: now,
+				},
+			},
+			wantUpdatedAt: "6 minutes ago",
+		},
+		{
+			name: "legacy empty kind ever built",
+			codebase: model.Codebase{
+				CanonicalPath:  repoPath,
+				Status:         model.CodebaseStatusIndexed,
+				GraphState:     model.GraphStateStale,
+				GraphUpdatedAt: now.Add(-6 * time.Minute),
+				LastSuccessfulRun: &model.IndexRunSummary{
+					CompletedAt: now,
+				},
+			},
+			wantUpdatedAt: "6 minutes ago",
+		},
+		{
+			name: "ready no time",
+			codebase: model.Codebase{
+				CanonicalPath: repoPath,
+				Kind:          model.CodebaseKindCode,
+				Status:        model.CodebaseStatusIndexed,
+				GraphState:    model.GraphStateReady,
+			},
+			wantReadyNoTime: true,
+		},
+		{
+			name: "never built",
+			codebase: model.Codebase{
+				CanonicalPath: repoPath,
+				Kind:          model.CodebaseKindCode,
+				Status:        model.CodebaseStatusIndexed,
+				GraphState:    model.GraphStateAbsent,
+			},
+			wantNotBuilt: true,
+		},
+		{
+			name: "non code",
+			codebase: model.Codebase{
+				CanonicalPath: "chat:///thread-alpha",
+				Kind:          model.CodebaseKindDocument,
+				Status:        model.CodebaseStatusIndexed,
+			},
+			wantAllFieldsEmpty: true,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := manager.resolveGetIndexView(
+				testCase.codebase.CanonicalPath,
+				true,
+				&testCase.codebase,
+				nil,
+				dependencyHealth{},
+				collectionNotApplicable,
+				nil,
+				nil,
+			)
+			if got.Status.GraphUpdatedAt != testCase.wantUpdatedAt {
+				t.Fatalf("GraphUpdatedAt = %q, want %q", got.Status.GraphUpdatedAt, testCase.wantUpdatedAt)
+			}
+			if got.Status.GraphReadyNoTime != testCase.wantReadyNoTime {
+				t.Fatalf("GraphReadyNoTime = %t, want %t", got.Status.GraphReadyNoTime, testCase.wantReadyNoTime)
+			}
+			if got.Status.GraphNotBuilt != testCase.wantNotBuilt {
+				t.Fatalf("GraphNotBuilt = %t, want %t", got.Status.GraphNotBuilt, testCase.wantNotBuilt)
+			}
+			if testCase.wantAllFieldsEmpty && (got.Status.GraphUpdatedAt != "" || got.Status.GraphReadyNoTime || got.Status.GraphNotBuilt) {
+				t.Fatalf("non-code graph fields = %+v, want all zero", got.Status)
+			}
+		})
+	}
+}
+
+func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	baseCodebase := newCodebaseRecord(repoPath)
+	baseCodebase.Status = model.CodebaseStatusIndexed
+	baseCodebase.EffectiveConfig = defaultIndexConfig()
+	baseCodebase.EffectiveConfig.IgnoreDigest = digestIndexConfig(baseCodebase.EffectiveConfig)
+	baseCodebase.MerkleSnapshotPath = manager.merklePath(baseCodebase.ID)
 
 	snapshot, err := merkle.Capture(
 		context.Background(),
 		manager.indexability,
-		codebase.ID,
+		baseCodebase.ID,
 		repoPath,
-		codebase.EffectiveConfig,
+		baseCodebase.EffectiveConfig,
 	)
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}
-	snapshotHash := snapshotHashForGraph(snapshot, codebase.EffectiveConfig.IgnoreDigest)
-	if err = merkle.WriteSnapshot(codebase.MerkleSnapshotPath, snapshot); err != nil {
-		t.Fatalf("WriteSnapshot returned error: %v", err)
-	}
-	codebase.GraphState = model.GraphStateStale
-	codebase.GraphSnapshotHash = snapshotHash
+	snapshotHash := snapshotHashForGraph(snapshot, baseCodebase.EffectiveConfig.IgnoreDigest)
 
-	statusLine := manager.graphStatusLine(codebase)
-	if strings.Contains(statusLine, "matches semantic snapshot") {
-		t.Fatalf("graphStatusLine = %q, want no ready-only match label", statusLine)
+	cases := []struct {
+		name          string
+		graphState    model.GraphState
+		snapshotState string
+		graphHash     string
+		codebaseKind  model.CodebaseKind
+		emptyKind     bool
+		canonicalPath string
+		want          string
+	}{
+		{
+			name:          "missing snapshot",
+			graphState:    model.GraphStateReady,
+			snapshotState: "missing",
+			graphHash:     snapshotHash,
+			want:          repoPath + ": can't confirm the code graph is current",
+		},
+		{
+			name:          "unreadable snapshot",
+			graphState:    model.GraphStateReady,
+			snapshotState: "unreadable",
+			graphHash:     snapshotHash,
+			want:          repoPath + ": can't confirm the code graph is current",
+		},
+		{
+			name:          "failed graph build",
+			graphState:    model.GraphStateStale,
+			snapshotState: "current",
+			graphHash:     snapshotHash,
+			want:          repoPath + ": code graph's last update didn't finish (retries automatically)",
+		},
+		{
+			name:          "ready graph behind current files",
+			graphState:    model.GraphStateReady,
+			snapshotState: "current",
+			graphHash:     "different-hash",
+			want:          repoPath + ": code graph is behind the current files (rebuilds automatically)",
+		},
+		{
+			name:          "absent graph behind current files",
+			graphState:    model.GraphStateAbsent,
+			snapshotState: "current",
+			want:          repoPath + ": code graph is behind the current files (rebuilds automatically)",
+		},
+		{
+			name:          "ready and current",
+			graphState:    model.GraphStateReady,
+			snapshotState: "current",
+			graphHash:     snapshotHash,
+			want:          "",
+		},
+		{
+			name:          "legacy empty kind missing snapshot",
+			graphState:    model.GraphStateReady,
+			snapshotState: "missing",
+			graphHash:     snapshotHash,
+			emptyKind:     true,
+			want:          repoPath + ": can't confirm the code graph is current",
+		},
+		{
+			name:          "non code codebase",
+			graphState:    model.GraphStateReady,
+			snapshotState: "missing",
+			graphHash:     snapshotHash,
+			codebaseKind:  model.CodebaseKindDocument,
+			canonicalPath: "chat:///thread-alpha",
+			want:          "",
+		},
 	}
-	diagnostic := manager.graphDiagnostic(codebase)
-	if strings.Contains(diagnostic, "but matches the semantic snapshot") {
-		t.Fatalf("graphDiagnostic = %q, want no ready-only match label", diagnostic)
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			codebase := baseCodebase
+			codebase.GraphState = testCase.graphState
+			codebase.GraphSnapshotHash = testCase.graphHash
+			if testCase.emptyKind {
+				codebase.Kind = ""
+			} else if testCase.codebaseKind != "" {
+				codebase.Kind = testCase.codebaseKind
+			}
+			if testCase.canonicalPath != "" {
+				codebase.CanonicalPath = testCase.canonicalPath
+			}
+			if err = os.Remove(codebase.MerkleSnapshotPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("Remove returned error: %v", err)
+			}
+			switch testCase.snapshotState {
+			case "current":
+				if err = merkle.WriteSnapshot(codebase.MerkleSnapshotPath, snapshot); err != nil {
+					t.Fatalf("WriteSnapshot returned error: %v", err)
+				}
+			case "unreadable":
+				if err = os.WriteFile(codebase.MerkleSnapshotPath, []byte("{"), 0o644); err != nil {
+					t.Fatalf("WriteFile returned error: %v", err)
+				}
+			case "missing":
+			default:
+				t.Fatalf("unknown snapshot state %q", testCase.snapshotState)
+			}
+
+			diagnostic := manager.graphDiagnostic(codebase)
+			if diagnostic != testCase.want {
+				t.Fatalf("graphDiagnostic = %q, want %q", diagnostic, testCase.want)
+			}
+		})
 	}
 }
 
@@ -402,7 +628,6 @@ func TestGraphStatusMissingSnapshotDoesNotLogError(t *testing.T) {
 		slog.SetDefault(previousLogger)
 	})
 
-	_ = manager.graphStatusLine(codebase)
 	_ = manager.graphDiagnostic(codebase)
 
 	if handler.errorCount() != 0 {

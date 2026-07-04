@@ -355,7 +355,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		return true, nil
 	}
 	var graphTask *graphIndexTask
-	if codebase.Kind == model.CodebaseKindCode {
+	if codebase.Kind != model.CodebaseKindDocument {
 		// The graph task is stamped with the hash of the snapshot this run
 		// committed (the working set), not the captured one: skipped, pending,
 		// or unreadable paths can leave the checkpoint behind the capture, and
@@ -541,7 +541,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 
 	manager.absorbDescendants(ctx, descendants)
 	var graphTask *graphIndexTask
-	if codebase.Kind == model.CodebaseKindCode {
+	if codebase.Kind != model.CodebaseKindDocument {
 		graphTask = newGraphIndexTask(job.CodebaseID, job.CanonicalPath, snapshotHashForGraph(plan.currentSnapshot, plan.configDigest), func(completeCtx context.Context) {
 			manager.updateJobCompleted(completeCtx, job.ID, result)
 		})

@@ -1,6 +1,6 @@
 📁 {{ .Name }}
 ⏳ Indexing is queued but has not started yet.
-{{- if .GraphLine }}
-{{ .GraphLine }}
+{{- if or .GraphUpdatedAt .GraphReadyNoTime .GraphNotBuilt }}
+{{ template "graphLine" . }}
 {{- end }}
 🕐 Updated {{ .UpdatedAt }}

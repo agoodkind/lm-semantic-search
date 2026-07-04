@@ -1,0 +1,6 @@
+{{- define "graphLine" -}}
+{{- if .GraphUpdatedAt }}🕸️ Code graph updated {{ .GraphUpdatedAt }}
+{{- else if .GraphReadyNoTime }}🕸️ Code graph: ready
+{{- else if .GraphNotBuilt }}🕸️ Code graph: builds shortly, or run index_codebase
+{{- end -}}
+{{- end -}}
