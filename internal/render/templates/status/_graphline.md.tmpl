@@ -1,6 +1,3 @@
-{{- define "graphLine" -}}
-{{- if .GraphUpdatedAt }}🕸️ Code graph updated {{ .GraphUpdatedAt }}
-{{- else if .GraphReadyNoTime }}🕸️ Code graph: ready
-{{- else if .GraphNotBuilt }}🕸️ Code graph: builds shortly, or run index_codebase
-{{- end -}}
-{{- end -}}
+{{ define "statusFooter" }}{{ if .UpdatedAt }}🕐 Semantic: updated {{ .UpdatedAt }}{{ end }}{{ if and .UpdatedAt (or .GraphUpdatedAt .GraphBuilding .GraphFailed .GraphReadyNoTime .GraphNotBuilt) }}
+{{ end }}{{ template "graphLine" . }}{{ end }}
+{{ define "graphLine" }}{{ if .GraphUpdatedAt }}🕸️ Code graph: updated {{ .GraphUpdatedAt }}{{ else if .GraphBuilding }}🕸️ Code graph: building{{ else if .GraphFailed }}🕸️ Code graph: update didn't finish, retries{{ else if .GraphReadyNoTime }}🕸️ Code graph: ready{{ else if .GraphNotBuilt }}🕸️ Code graph: builds shortly{{ end }}{{ end }}

@@ -1,6 +1,3 @@
 📁 {{ .Name }}
 ⏳ {{ .WaitLabel }}
-{{- if or .GraphUpdatedAt .GraphReadyNoTime .GraphNotBuilt }}
-{{ template "graphLine" . }}
-{{- end }}
-🕐 Updated {{ .UpdatedAt }}
+{{ template "statusFooter" . }}

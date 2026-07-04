@@ -399,6 +399,8 @@ func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
 		name               string
 		codebase           model.Codebase
 		wantUpdatedAt      string
+		wantBuilding       bool
+		wantFailed         bool
 		wantReadyNoTime    bool
 		wantNotBuilt       bool
 		wantAllFieldsEmpty bool
@@ -409,26 +411,47 @@ func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
 				CanonicalPath:  repoPath,
 				Kind:           model.CodebaseKindCode,
 				Status:         model.CodebaseStatusIndexed,
-				GraphState:     model.GraphStateStale,
+				GraphState:     model.GraphStateReady,
 				GraphUpdatedAt: now.Add(-6 * time.Minute),
 				LastSuccessfulRun: &model.IndexRunSummary{
 					CompletedAt: now,
 				},
 			},
-			wantUpdatedAt: "6 minutes ago",
+			wantUpdatedAt: formatStampWithRelative(now.Add(-6 * time.Minute)),
 		},
 		{
 			name: "legacy empty kind ever built",
 			codebase: model.Codebase{
 				CanonicalPath:  repoPath,
 				Status:         model.CodebaseStatusIndexed,
-				GraphState:     model.GraphStateStale,
+				GraphState:     model.GraphStateReady,
 				GraphUpdatedAt: now.Add(-6 * time.Minute),
 				LastSuccessfulRun: &model.IndexRunSummary{
 					CompletedAt: now,
 				},
 			},
-			wantUpdatedAt: "6 minutes ago",
+			wantUpdatedAt: formatStampWithRelative(now.Add(-6 * time.Minute)),
+		},
+		{
+			name: "building",
+			codebase: model.Codebase{
+				ID:            "cb-building",
+				CanonicalPath: repoPath,
+				Kind:          model.CodebaseKindCode,
+				Status:        model.CodebaseStatusIndexed,
+				GraphState:    model.GraphStateAbsent,
+			},
+			wantBuilding: true,
+		},
+		{
+			name: "failed",
+			codebase: model.Codebase{
+				CanonicalPath: repoPath,
+				Kind:          model.CodebaseKindCode,
+				Status:        model.CodebaseStatusIndexed,
+				GraphState:    model.GraphStateStale,
+			},
+			wantFailed: true,
 		},
 		{
 			name: "ready no time",
@@ -462,6 +485,12 @@ func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.wantBuilding {
+				manager.graphMutex.Lock()
+				state := manager.graphLifecycleStateLocked(testCase.codebase.ID)
+				state.indexing = true
+				manager.graphMutex.Unlock()
+			}
 			got := manager.resolveGetIndexView(
 				testCase.codebase.CanonicalPath,
 				true,
@@ -472,8 +501,20 @@ func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
 				nil,
 				nil,
 			)
+			if testCase.wantBuilding {
+				manager.graphMutex.Lock()
+				state := manager.graphLifecycleStateLocked(testCase.codebase.ID)
+				state.indexing = false
+				manager.graphMutex.Unlock()
+			}
 			if got.Status.GraphUpdatedAt != testCase.wantUpdatedAt {
 				t.Fatalf("GraphUpdatedAt = %q, want %q", got.Status.GraphUpdatedAt, testCase.wantUpdatedAt)
+			}
+			if got.Status.GraphBuilding != testCase.wantBuilding {
+				t.Fatalf("GraphBuilding = %t, want %t", got.Status.GraphBuilding, testCase.wantBuilding)
+			}
+			if got.Status.GraphFailed != testCase.wantFailed {
+				t.Fatalf("GraphFailed = %t, want %t", got.Status.GraphFailed, testCase.wantFailed)
 			}
 			if got.Status.GraphReadyNoTime != testCase.wantReadyNoTime {
 				t.Fatalf("GraphReadyNoTime = %t, want %t", got.Status.GraphReadyNoTime, testCase.wantReadyNoTime)
@@ -481,8 +522,8 @@ func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
 			if got.Status.GraphNotBuilt != testCase.wantNotBuilt {
 				t.Fatalf("GraphNotBuilt = %t, want %t", got.Status.GraphNotBuilt, testCase.wantNotBuilt)
 			}
-			if testCase.wantAllFieldsEmpty && (got.Status.GraphUpdatedAt != "" || got.Status.GraphReadyNoTime || got.Status.GraphNotBuilt) {
-				t.Fatalf("non-code graph fields = %+v, want all zero", got.Status)
+			if testCase.wantAllFieldsEmpty && (got.Status.GraphUpdatedAt != "" || got.Status.GraphBuilding || got.Status.GraphFailed || got.Status.GraphReadyNoTime || got.Status.GraphNotBuilt) {
+				t.Fatalf("non code graph fields = %+v, want all zero", got.Status)
 			}
 		})
 	}

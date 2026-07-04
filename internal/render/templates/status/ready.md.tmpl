@@ -9,7 +9,4 @@
 {{- if .SyncNote }}
 {{ .SyncNote }}
 {{- end }}
-{{- if or .GraphUpdatedAt .GraphReadyNoTime .GraphNotBuilt }}
-{{ template "graphLine" . }}
-{{- end }}
-🕐 Updated {{ .UpdatedAt }}
+{{ template "statusFooter" . }}
