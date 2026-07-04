@@ -48,7 +48,8 @@ about which files mention a concept:
 
 - who calls a function, or what a function calls: use trace_path.
 - an overview of a package or the whole repo: use get_architecture.
-- an ad hoc structural query over functions, types, or calls: use query_graph.
+- an ad hoc structural query over functions, types, or calls: use query_graph,
+  which takes a Cypher query string, not natural language.
 - reading or updating architecture decision records: use manage_adr.
 
 The graph covers code, not document collections. The daemon builds and refreshes
@@ -103,8 +104,9 @@ comma-separated string.
   when the user explicitly wants a full wipe. It also removes the codebase's
   code graph.
 - query_graph(absolutePath: string, query: string) runs a structural query over
-  the code graph and returns matching rows. Use it for ad hoc questions about
-  functions, types, and calls.
+  the code graph and returns matching rows. `query` is a Cypher graph query, not
+  natural language. Use it for ad hoc questions about functions, types, and
+  calls.
 - trace_path(absolutePath: string, functionName: string, direction?: string,
   depth?: number) traces call relationships from a function. `direction` is
   inbound, outbound, or both.
