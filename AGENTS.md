@@ -107,6 +107,8 @@ A missing previous snapshot or a missing semantic collection routes back to a fu
 
 Conversation ingest (manifest cap, message-level delta, seed and reuse invariants, bootstrap reasons) is documented at [docs/conversationingest/overview.md](docs/conversationingest/overview.md).
 
+The per-codebase code graph (the cbm engine integration, its lifecycle, query tools, build wiring, and submodule auto-bump) is documented at [docs/cbm/overview.md](docs/cbm/overview.md).
+
 ## Idempotency
 
 Concurrent MCP requests for the same codebase deduplicate against any in-flight job with a matching effective config, and that includes `force=true` requests. N parallel `index_codebase(force=true)` calls collapse to a single embedding pass instead of cancelling each other in sequence. This defensive shape prevents the machine-blowing-up failure mode where a client fan-out can otherwise launch arbitrary parallel work.
