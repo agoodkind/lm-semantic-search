@@ -114,6 +114,17 @@ func (manager *Manager) graphLifecycleStateLocked(codebaseID string) *graphLifec
 	return state
 }
 
+func (manager *Manager) graphIndexing(codebaseID string) bool {
+	if codebaseID == "" {
+		return false
+	}
+	manager.graphMutex.Lock()
+	defer manager.graphMutex.Unlock()
+
+	state := manager.graphLifecycle[codebaseID]
+	return state != nil && state.indexing
+}
+
 // beginGraphIndex claims the single in-flight graph-index slot for codebaseID.
 // It returns ok=false when an index for this codebase is already running, so a
 // redundant concurrent trigger (for example a sync sweep overlapping a manual

@@ -4,7 +4,4 @@
 {{ .ReuseForecastLine }}
 {{- end }}
 💡 builds shortly, or run index_codebase
-{{- if or .GraphUpdatedAt .GraphReadyNoTime .GraphNotBuilt }}
-{{ template "graphLine" . }}
-{{- end }}
-🕐 Updated {{ .UpdatedAt }}
+{{ template "statusFooter" . }}

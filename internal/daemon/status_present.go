@@ -174,7 +174,7 @@ func resolveQuarantineSurface(codebase model.Codebase) view.QuarantineSurface {
 // their exact output. templateName selects among preparing, building,
 // incremental, ready, and waiting.
 func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display displayStatus, waitLabel string) (view.StatusView, string) {
-	statusView := blankStatusView(filepath.Base(codebase.CanonicalPath), formatBoundaryStatusTime(codebase.UpdatedAt))
+	statusView := blankStatusView(filepath.Base(codebase.CanonicalPath), formatStampWithRelative(codebase.UpdatedAt))
 	switch display {
 	case displayDiscovered:
 		// A discovered worktree is registered and watched but not yet built. The
@@ -201,11 +201,11 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 			statusView.Files = run.IndexedFiles
 			statusView.Chunks = run.TotalChunks
 			statusView.SkippedLine = skippedFilesLine(run.SkippedFiles)
-			statusView.UpdatedAt = formatBoundaryStatusTime(run.CompletedAt)
+			statusView.UpdatedAt = formatStampWithRelative(run.CompletedAt)
 		}
 		if activeJob != nil && isBackgroundSyncReconcile(&codebase, activeJob) {
 			if !activeJob.Progress.LastEventAt.IsZero() {
-				statusView.UpdatedAt = formatBoundaryStatusTime(activeJob.Progress.LastEventAt)
+				statusView.UpdatedAt = formatStampWithRelative(activeJob.Progress.LastEventAt)
 			}
 			statusView.SyncNote = backgroundSyncNote(activeJob)
 		}
@@ -216,7 +216,7 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 			statusView.Files = run.IndexedFiles
 			statusView.Chunks = run.TotalChunks
 			statusView.SkippedLine = skippedFilesLine(run.SkippedFiles)
-			statusView.UpdatedAt = formatBoundaryStatusTime(run.CompletedAt)
+			statusView.UpdatedAt = formatStampWithRelative(run.CompletedAt)
 		}
 		return statusView, "ready.md.tmpl"
 	}
@@ -225,7 +225,7 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 	if activeJob != nil {
 		progress := activeJob.Progress
 		if !progress.LastEventAt.IsZero() {
-			statusView.UpdatedAt = formatBoundaryStatusTime(progress.LastEventAt)
+			statusView.UpdatedAt = formatStampWithRelative(progress.LastEventAt)
 		}
 		changed := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
 		statusView.Percent = int32(progress.OverallPercent + 0.5)
@@ -280,6 +280,8 @@ func blankStatusView(name string, updatedAt string) view.StatusView {
 		UpdatedAt:         updatedAt,
 		SyncNote:          "",
 		GraphUpdatedAt:    "",
+		GraphBuilding:     false,
+		GraphFailed:       false,
 		GraphReadyNoTime:  false,
 		GraphNotBuilt:     false,
 	}
@@ -301,17 +303,26 @@ func formatBoundaryStatusTime(value time.Time) string {
 	return value.In(location).Format(layout)
 }
 
-func formatAbsoluteStatusDate(value time.Time) string {
-	const layout = "on Jan 2, 2006"
-	location, err := time.LoadLocation("Local")
-	if err != nil {
-		return value.Format(layout)
-	}
-	return value.In(location).Format(layout)
-}
-
 func formatStatusTime(value time.Time) string {
 	return formatBoundaryStatusTime(value)
+}
+
+func formatStampWithRelative(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	location, err := time.LoadLocation("Local")
+	localValue := value
+	localNow := relativeTimeNow()
+	if err == nil {
+		localValue = value.In(location)
+		localNow = localNow.In(location)
+	}
+	layout := "3:04 PM MST"
+	if localValue.Year() != localNow.Year() || localValue.YearDay() != localNow.YearDay() {
+		layout = "Jan 2, 3:04 PM MST"
+	}
+	return localValue.Format(layout) + " (" + formatRelativeTime(value) + ")"
 }
 
 func formatRelativeTime(value time.Time) string {
@@ -328,16 +339,14 @@ func formatRelativeTime(value time.Time) string {
 	}
 	if elapsed < time.Hour {
 		minutes := int(elapsed / time.Minute)
-		return fmt.Sprintf("%d %s ago", minutes, plural("minute", minutes))
+		return fmt.Sprintf("%dm ago", minutes)
 	}
 	if elapsed < 24*time.Hour {
 		hours := int(elapsed / time.Hour)
-		return fmt.Sprintf("%d %s ago", hours, plural("hour", hours))
+		return fmt.Sprintf("%dh ago", hours)
 	}
-	if elapsed < 48*time.Hour {
-		return "yesterday"
-	}
-	return formatAbsoluteStatusDate(value)
+	days := int(elapsed / (24 * time.Hour))
+	return fmt.Sprintf("%dd ago", days)
 }
 
 // waitingLabel names the dependency a waiting codebase is blocked on. The banner
@@ -472,19 +481,27 @@ func (manager *Manager) resolveGetIndexView(
 	if display == displayDiscovered {
 		statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
 	}
-	resolveGraphStatusFields(&statusView, *codebase)
+	resolveGraphStatusFields(&statusView, *codebase, manager.graphIndexing(codebase.ID))
 	getIndex.Status = statusView
 	getIndex.TemplateName = templateName
 	getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, getIndex.Failure, getIndex.Quarantine, statusView)
 	return getIndex
 }
 
-func resolveGraphStatusFields(statusView *view.StatusView, codebase model.Codebase) {
+func resolveGraphStatusFields(statusView *view.StatusView, codebase model.Codebase, graphBuilding bool) {
 	if codebase.Kind == model.CodebaseKindDocument {
 		return
 	}
+	if graphBuilding {
+		statusView.GraphBuilding = true
+		return
+	}
+	if codebase.GraphState == model.GraphStateStale {
+		statusView.GraphFailed = true
+		return
+	}
 	if !codebase.GraphUpdatedAt.IsZero() {
-		statusView.GraphUpdatedAt = formatRelativeTime(codebase.GraphUpdatedAt)
+		statusView.GraphUpdatedAt = formatStampWithRelative(codebase.GraphUpdatedAt)
 		return
 	}
 	if codebase.GraphState == model.GraphStateReady {
@@ -666,13 +683,13 @@ func resolveConversationSearchResults(chunks []model.StoredChunk) []view.Convers
 
 // resolveSearchStatusView builds the optional in-flight status portion for a
 // search response.
-func resolveSearchStatusView(codebase model.Codebase, activeJob *model.Job, health dependencyHealth) (view.StatusView, string, bool) {
+func resolveSearchStatusView(codebase model.Codebase, activeJob *model.Job, health dependencyHealth, graphBuilding bool) (view.StatusView, string, bool) {
 	if activeJob == nil {
 		return blankStatusView("", ""), "", false
 	}
 	display := computeDisplayStatus(codebase, activeJob, health.Mode, status.CollectionNotApplicable)
 	statusView, templateName := resolveStatusView(codebase, activeJob, display, waitingLabel(health.Mode))
-	resolveGraphStatusFields(&statusView, codebase)
+	resolveGraphStatusFields(&statusView, codebase, graphBuilding)
 	return statusView, templateName, isBackgroundSyncReconcile(&codebase, activeJob)
 }
 

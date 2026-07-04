@@ -374,10 +374,14 @@ type StatusView struct {
 	Chunks            int32
 	SkippedLine       string
 	SyncNote          string
-	// GraphUpdatedAt is the pre-formatted relative label for the last successful
-	// graph build, for example "6 minutes ago". Non-empty renders
-	// "Code graph updated <label>".
+	// GraphUpdatedAt is the pre-formatted last-build stamp for the graph: an
+	// absolute local time with a relative value in parentheses, for example
+	// "9:20 AM PDT (44m ago)". Non-empty renders "Code graph: updated <stamp>".
 	GraphUpdatedAt string
+	// GraphBuilding means a graph index is in flight.
+	GraphBuilding bool
+	// GraphFailed means the latest graph index did not finish.
+	GraphFailed bool
 	// GraphReadyNoTime means the graph is ready but the registry record predates
 	// the persisted build timestamp.
 	GraphReadyNoTime bool

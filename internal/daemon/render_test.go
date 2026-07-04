@@ -304,6 +304,7 @@ func TestRenderIndexedDetailReady(t *testing.T) {
 	t.Parallel()
 	codebase := &model.Codebase{
 		CanonicalPath: "/Users/agoodkind/Sites/swift-makefile",
+		UpdatedAt:     renderTestTime,
 		LastSuccessfulRun: &model.IndexRunSummary{
 			IndexedFiles: 58,
 			TotalChunks:  600,
@@ -976,6 +977,7 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 	t.Parallel()
 	codebase := &model.Codebase{
 		CanonicalPath: "/Users/agoodkind/Sites/swift-makefile",
+		UpdatedAt:     renderTestTime,
 		LastSuccessfulRun: &model.IndexRunSummary{
 			IndexedFiles: 58,
 			TotalChunks:  600,
@@ -1004,6 +1006,7 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 
 func TestStatusTemplateRendersStructuredGraphLine(t *testing.T) {
 	t.Parallel()
+	semanticLine := "🕐 Semantic: updated 4:10 PM PDT (6m ago)"
 	cases := []struct {
 		name       string
 		statusView view.StatusView
@@ -1013,16 +1016,34 @@ func TestStatusTemplateRendersStructuredGraphLine(t *testing.T) {
 			name: "updated",
 			statusView: view.StatusView{
 				Name:           "repo",
-				UpdatedAt:      "4:10 PM PDT",
-				GraphUpdatedAt: "6 minutes ago",
+				UpdatedAt:      "4:10 PM PDT (6m ago)",
+				GraphUpdatedAt: "4:09 PM PDT (7m ago)",
 			},
-			want: "🕸️ Code graph updated 6 minutes ago",
+			want: "🕸️ Code graph: updated 4:09 PM PDT (7m ago)",
+		},
+		{
+			name: "building",
+			statusView: view.StatusView{
+				Name:          "repo",
+				UpdatedAt:     "4:10 PM PDT (6m ago)",
+				GraphBuilding: true,
+			},
+			want: "🕸️ Code graph: building",
+		},
+		{
+			name: "failed",
+			statusView: view.StatusView{
+				Name:        "repo",
+				UpdatedAt:   "4:10 PM PDT (6m ago)",
+				GraphFailed: true,
+			},
+			want: "🕸️ Code graph: update didn't finish, retries",
 		},
 		{
 			name: "ready no time",
 			statusView: view.StatusView{
 				Name:             "repo",
-				UpdatedAt:        "4:10 PM PDT",
+				UpdatedAt:        "4:10 PM PDT (6m ago)",
 				GraphReadyNoTime: true,
 			},
 			want: "🕸️ Code graph: ready",
@@ -1031,10 +1052,10 @@ func TestStatusTemplateRendersStructuredGraphLine(t *testing.T) {
 			name: "not built",
 			statusView: view.StatusView{
 				Name:          "repo",
-				UpdatedAt:     "4:10 PM PDT",
+				UpdatedAt:     "4:10 PM PDT (6m ago)",
 				GraphNotBuilt: true,
 			},
-			want: "🕸️ Code graph: builds shortly, or run index_codebase",
+			want: "🕸️ Code graph: builds shortly",
 		},
 	}
 	for _, testCase := range cases {
@@ -1047,8 +1068,56 @@ func TestStatusTemplateRendersStructuredGraphLine(t *testing.T) {
 			if !strings.Contains(out, testCase.want) {
 				t.Fatalf("status output missing graph line %q:\n%s", testCase.want, out)
 			}
+			if !strings.Contains(out, semanticLine) {
+				t.Fatalf("status output missing semantic line %q:\n%s", semanticLine, out)
+			}
 			if strings.Contains(out, "semantic snapshot") {
 				t.Fatalf("status output still mentions semantic snapshot:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestStatusFooterRendersAcrossCodebaseTemplates(t *testing.T) {
+	t.Parallel()
+	templates := []string{
+		"ready.md.tmpl",
+		"building.md.tmpl",
+		"incremental.md.tmpl",
+		"discovered.md.tmpl",
+		"pending.md.tmpl",
+		"preparing.md.tmpl",
+		"loading.md.tmpl",
+		"waiting.md.tmpl",
+	}
+	statusView := view.StatusView{
+		Name:              "repo",
+		UpdatedAt:         "4:10 PM PDT (6m ago)",
+		GraphUpdatedAt:    "4:09 PM PDT (7m ago)",
+		PrepareLabel:      "Preparing to index",
+		WaitLabel:         "Waiting for the embedding server",
+		Heading:           "Building initial index",
+		Percent:           42,
+		FilesInCodebase:   314,
+		FilesChanged:      12,
+		FilesUnchanged:    302,
+		ReuseForecastLine: "♻️ reuses embeddings from 1 indexed sibling worktree",
+		Files:             314,
+		Chunks:            1979,
+		HasStats:          true,
+	}
+	for _, templateName := range templates {
+		t.Run(templateName, func(t *testing.T) {
+			out := render.GetIndex(view.GetIndexView{
+				Tracked:      true,
+				TemplateName: templateName,
+				Status:       statusView,
+			})
+			if !strings.Contains(out, "🕐 Semantic: updated 4:10 PM PDT (6m ago)") {
+				t.Fatalf("%s missing semantic footer:\n%s", templateName, out)
+			}
+			if !strings.Contains(out, "🕸️ Code graph: updated 4:09 PM PDT (7m ago)") {
+				t.Fatalf("%s missing graph footer:\n%s", templateName, out)
 			}
 		})
 	}
