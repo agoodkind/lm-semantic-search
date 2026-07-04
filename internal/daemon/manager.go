@@ -310,6 +310,7 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 		MerkleSnapshotPath:    "",
 		GraphState:            "",
 		GraphSnapshotHash:     "",
+		GraphUpdatedAt:        time.Time{},
 		Quarantine:            nil,
 		WorktreeCommonDir:     "",
 		InodeTrackingDisabled: false,

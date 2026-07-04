@@ -318,13 +318,17 @@ func (manager *Manager) updateGraphState(ctx context.Context, codebaseID string,
 	if !found {
 		return
 	}
+	now := clock.Now()
 	codebase.GraphState = graphState
 	if graphState != model.GraphStateReady {
 		codebase.GraphSnapshotHash = ""
 	} else if snapshotHash != "" {
 		codebase.GraphSnapshotHash = snapshotHash
 	}
-	codebase.UpdatedAt = clock.Now()
+	if graphState == model.GraphStateReady {
+		codebase.GraphUpdatedAt = now
+	}
+	codebase.UpdatedAt = now
 	manager.codebases[codebaseID] = codebase
 	if err := manager.saveLocked(); err != nil {
 		slog.ErrorContext(ctx, "write registry after graph state update failed", "codebase_id", codebaseID, "err", err)
@@ -343,7 +347,7 @@ func (manager *Manager) shouldReconcileGraph(codebaseID string, currentSnapshotH
 	if !found {
 		return false
 	}
-	if codebase.Kind != model.CodebaseKindCode {
+	if codebase.Kind == model.CodebaseKindDocument {
 		return false
 	}
 	graphState := codebase.GraphState
@@ -358,36 +362,8 @@ func snapshotHashForGraph(snapshot merkle.Snapshot, configDigest string) string 
 	return snapshot.Hash()
 }
 
-func (manager *Manager) graphStatusLine(codebase model.Codebase) string {
-	if codebase.Kind != model.CodebaseKindCode {
-		return ""
-	}
-	graphState := codebase.GraphState
-	if graphState == "" {
-		graphState = model.GraphStateAbsent
-	}
-
-	matchLabel := "semantic snapshot unknown"
-	snapshotPath := manager.snapshotPathForCodebase(codebase)
-	if _, statErr := os.Stat(snapshotPath); errors.Is(statErr, os.ErrNotExist) {
-		return fmt.Sprintf("🕸️ Graph: %s, %s", graphState, matchLabel)
-	}
-	snapshot, err := merkle.ReadSnapshot(snapshotPath)
-	if err == nil {
-		currentHash := snapshotHashForGraph(snapshot, codebase.EffectiveConfig.IgnoreDigest)
-		if graphState == model.GraphStateReady && codebase.GraphSnapshotHash == currentHash {
-			matchLabel = "matches semantic snapshot"
-		} else {
-			matchLabel = "does not match semantic snapshot"
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		matchLabel = "semantic snapshot unreadable"
-	}
-	return fmt.Sprintf("🕸️ Graph: %s, %s", graphState, matchLabel)
-}
-
 func (manager *Manager) graphDiagnostic(codebase model.Codebase) string {
-	if codebase.Kind != model.CodebaseKindCode {
+	if codebase.Kind == model.CodebaseKindDocument {
 		return ""
 	}
 	graphState := codebase.GraphState
@@ -397,20 +373,20 @@ func (manager *Manager) graphDiagnostic(codebase model.Codebase) string {
 
 	snapshotPath := manager.snapshotPathForCodebase(codebase)
 	if _, statErr := os.Stat(snapshotPath); errors.Is(statErr, os.ErrNotExist) {
-		if graphState == model.GraphStateReady {
-			return codebase.CanonicalPath + ": graph ready but semantic snapshot is missing"
-		}
-		return fmt.Sprintf("%s: graph %s and semantic snapshot is missing", codebase.CanonicalPath, graphState)
+		return codebase.CanonicalPath + ": can't confirm the code graph is current"
 	}
 	snapshot, err := merkle.ReadSnapshot(snapshotPath)
 	if err != nil {
-		return fmt.Sprintf("%s: graph %s and semantic snapshot is unreadable", codebase.CanonicalPath, graphState)
+		return codebase.CanonicalPath + ": can't confirm the code graph is current"
 	}
 	currentHash := snapshotHashForGraph(snapshot, codebase.EffectiveConfig.IgnoreDigest)
 	if graphState == model.GraphStateReady && codebase.GraphSnapshotHash == currentHash {
 		return ""
 	}
-	return fmt.Sprintf("%s: graph %s and does not match the semantic snapshot", codebase.CanonicalPath, graphState)
+	if graphState == model.GraphStateStale {
+		return codebase.CanonicalPath + ": code graph's last update didn't finish (retries automatically)"
+	}
+	return codebase.CanonicalPath + ": code graph is behind the current files (rebuilds automatically)"
 }
 
 func (manager *Manager) graphPaths(codebaseID string) []string {

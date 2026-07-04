@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/status"
@@ -36,6 +37,8 @@ const (
 // probe per-path collection readiness (the list view, the search status view).
 // Such a surface reflects only the global dependency mode.
 const collectionNotApplicable = status.CollectionNotApplicable
+
+var relativeTimeNow = clock.Now
 
 // computeDisplayStatus resolves the display status through the status package,
 // the single source of truth for every surface (list, detail, MCP, CLI). It
@@ -276,7 +279,9 @@ func blankStatusView(name string, updatedAt string) view.StatusView {
 		ReuseForecastLine: "",
 		UpdatedAt:         updatedAt,
 		SyncNote:          "",
-		GraphLine:         "",
+		GraphUpdatedAt:    "",
+		GraphReadyNoTime:  false,
+		GraphNotBuilt:     false,
 	}
 }
 
@@ -296,8 +301,43 @@ func formatBoundaryStatusTime(value time.Time) string {
 	return value.In(location).Format(layout)
 }
 
+func formatAbsoluteStatusDate(value time.Time) string {
+	const layout = "on Jan 2, 2006"
+	location, err := time.LoadLocation("Local")
+	if err != nil {
+		return value.Format(layout)
+	}
+	return value.In(location).Format(layout)
+}
+
 func formatStatusTime(value time.Time) string {
 	return formatBoundaryStatusTime(value)
+}
+
+func formatRelativeTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	now := relativeTimeNow()
+	if value.After(now) {
+		return "just now"
+	}
+	elapsed := now.Sub(value)
+	if elapsed < time.Minute {
+		return "just now"
+	}
+	if elapsed < time.Hour {
+		minutes := int(elapsed / time.Minute)
+		return fmt.Sprintf("%d %s ago", minutes, plural("minute", minutes))
+	}
+	if elapsed < 24*time.Hour {
+		hours := int(elapsed / time.Hour)
+		return fmt.Sprintf("%d %s ago", hours, plural("hour", hours))
+	}
+	if elapsed < 48*time.Hour {
+		return "yesterday"
+	}
+	return formatAbsoluteStatusDate(value)
 }
 
 // waitingLabel names the dependency a waiting codebase is blocked on. The banner
@@ -432,11 +472,26 @@ func (manager *Manager) resolveGetIndexView(
 	if display == displayDiscovered {
 		statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
 	}
-	statusView.GraphLine = manager.graphStatusLine(*codebase)
+	resolveGraphStatusFields(&statusView, *codebase)
 	getIndex.Status = statusView
 	getIndex.TemplateName = templateName
 	getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, getIndex.Failure, getIndex.Quarantine, statusView)
 	return getIndex
+}
+
+func resolveGraphStatusFields(statusView *view.StatusView, codebase model.Codebase) {
+	if codebase.Kind == model.CodebaseKindDocument {
+		return
+	}
+	if !codebase.GraphUpdatedAt.IsZero() {
+		statusView.GraphUpdatedAt = formatRelativeTime(codebase.GraphUpdatedAt)
+		return
+	}
+	if codebase.GraphState == model.GraphStateReady {
+		statusView.GraphReadyNoTime = true
+		return
+	}
+	statusView.GraphNotBuilt = true
 }
 
 // reuseForecastLine renders the discovered-worktree reuse forecast, or empty
@@ -617,6 +672,7 @@ func resolveSearchStatusView(codebase model.Codebase, activeJob *model.Job, heal
 	}
 	display := computeDisplayStatus(codebase, activeJob, health.Mode, status.CollectionNotApplicable)
 	statusView, templateName := resolveStatusView(codebase, activeJob, display, waitingLabel(health.Mode))
+	resolveGraphStatusFields(&statusView, codebase)
 	return statusView, templateName, isBackgroundSyncReconcile(&codebase, activeJob)
 }
 

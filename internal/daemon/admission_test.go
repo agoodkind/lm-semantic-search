@@ -31,7 +31,7 @@ func TestBootstrapAdmissionHaltDropsStagingAndDoesNotPromote(t *testing.T) {
 	cfg.IgnoreDigest = "sha256:admission-bootstrap"
 	codebaseID, job := seedBootstrapCodebase(t, manager, repoPath, cfg)
 
-	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg))
+	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg))
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
@@ -84,7 +84,7 @@ func TestForcedRebuildAdmissionHaltPreservesLiveSnapshot(t *testing.T) {
 	manager.codebases[codebaseID] = codebase
 	manager.mu.Unlock()
 
-	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg))
+	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg))
 
 	after, err := merkle.ReadSnapshot(manager.merklePath(codebaseID))
 	if err != nil {
@@ -168,7 +168,7 @@ func TestSiblingExpectedAdmissionHaltTrips(t *testing.T) {
 	})
 	codebaseID, job := seedBootstrapCodebase(t, manager, worktreeRoot, cfg)
 
-	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, worktreeRoot, cfg))
+	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, worktreeRoot, cfg))
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
@@ -209,7 +209,7 @@ func TestAdmissionAllowsNormalLargeBuildWithinSlack(t *testing.T) {
 	manager.codebases[codebaseID] = codebase
 	manager.mu.Unlock()
 
-	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg))
+	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg))
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
