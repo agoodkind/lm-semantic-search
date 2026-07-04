@@ -45,7 +45,7 @@ func registerSemanticSearchPrompt(s *server.MCPServer) {
 		},
 		func(_ context.Context, _ mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 			return &mcp.GetPromptResult{
-				Description: "Claude Context semantic search playbook",
+				Description: "lm-semantic-search semantic search playbook",
 				Messages: []mcp.PromptMessage{
 					{
 						Role:    mcp.RoleAssistant,

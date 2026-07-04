@@ -1,9 +1,10 @@
-# Claude Context Search
+# lm-semantic-search
 
-Use claude-context for conceptual discovery across a repo. Use native grep,
+Use lm-semantic-search for conceptual discovery across a repo. Use native grep,
 ripgrep, or direct file reads for exact literals, exact line references,
 exhaustive occurrence lists, or when semantic results stay low-signal after one
-corrective pass.
+corrective pass. For structural questions such as call relationships or an
+architecture summary, use the code graph tools instead of semantic search.
 
 ## Workflow
 
@@ -39,24 +40,44 @@ corrective pass.
 12. Treat returned chunks as candidates. Read the cited files before acting
     because the working tree can be newer than the index.
 
+## When to use the code graph
+
+The code graph answers structural questions that ranked text search cannot.
+Reach for it when the question is about relationships or shape rather than
+about which files mention a concept:
+
+- who calls a function, or what a function calls: use trace_path.
+- an overview of a package or the whole repo: use get_architecture.
+- an ad hoc structural query over functions, types, or calls: use query_graph,
+  which takes a Cypher query string, not natural language.
+- reading or updating architecture decision records: use manage_adr.
+
+The graph covers code, not document collections. The daemon builds and refreshes
+it on the same sync passes as the semantic index, so it tracks the indexed file
+set. A graph that is not built yet, or still building, is not an error; it fills
+in on the next sync. query_graph, trace_path, and get_architecture are read
+only. manage_adr reads or updates the codebase's architecture decision records.
+None of the four run the indexer.
+
 ## Subagent Instructions
 
 When launching Task subagents, include this guidance verbatim after
 substituting the absolute repository root for <path>:
 
-Use the claude-context MCP search_code tool first for conceptual code discovery
-in <path>. Call get_indexing_status before searching. If the status is "not
-indexed", stop, ask the user for permission to index, and wait for an explicit
-yes before calling index_codebase. Do not index without permission. Do not
-trust rankings while indexing is still in progress. If the reported stats are
-roughly one chunk per file, treat the index as coarse. For implementation
+Use the lm-semantic-search MCP search_code tool first for conceptual code
+discovery in <path>. Call get_indexing_status before searching. If the status
+is "not indexed", stop, ask the user for permission to index, and wait for an
+explicit yes before calling index_codebase. Do not index without permission. Do
+not trust rankings while indexing is still in progress. If the reported stats
+are roughly one chunk per file, treat the index as coarse. For implementation
 questions, pass an extensionFilter array for the source language, e.g. [".go"].
-If the top hits
-are docs like README.md or generated files like *.pb.go, retry once with
-tighter filters and a higher limit, then fall back to native grep or ripgrep
-instead of repeatedly forcing semantic search. Use splitter: ast by default
-when reindexing, and use splitter: langchain only when the user explicitly
-wants that diagnostic.
+If the top hits are docs like README.md or generated files like *.pb.go, retry
+once with tighter filters and a higher limit, then fall back to native grep or
+ripgrep instead of repeatedly forcing semantic search. For structural questions
+such as call paths or an architecture summary, use the graph tools (query_graph,
+trace_path, get_architecture) instead. Use splitter: ast by default when
+reindexing, and use splitter: langchain only when the user explicitly wants that
+diagnostic.
 
 ## Tool Reference
 
@@ -80,4 +101,17 @@ comma-separated string.
   job reaches a terminal state or `wait_timeout_seconds` (default 300) elapses,
   after which it returns current progress while the job keeps running.
 - clear_index(absolutePath: string) removes the index and should only be used
-  when the user explicitly wants a full wipe.
+  when the user explicitly wants a full wipe. It also removes the codebase's
+  code graph.
+- query_graph(absolutePath: string, query: string) runs a structural query over
+  the code graph and returns matching rows. `query` is a Cypher graph query, not
+  natural language. Use it for ad hoc questions about functions, types, and
+  calls.
+- trace_path(absolutePath: string, functionName: string, direction?: string,
+  depth?: number) traces call relationships from a function. `direction` is
+  inbound, outbound, or both.
+- get_architecture(absolutePath: string, path?: string) summarizes structure,
+  optionally scoped to a subpath.
+- manage_adr(absolutePath: string, mode: string, content?: string,
+  sections?: string[]) reads or updates the codebase's architecture decision
+  records. `mode` is get, update, or sections.
