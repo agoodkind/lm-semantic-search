@@ -474,34 +474,120 @@ func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
 	}
 }
 
-func TestGraphDiagnosticReportsSnapshotMatchOnlyWhenReady(t *testing.T) {
+func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
-	codebase := newCodebaseRecord(repoPath)
-	codebase.Status = model.CodebaseStatusIndexed
-	codebase.EffectiveConfig = defaultIndexConfig()
-	codebase.EffectiveConfig.IgnoreDigest = digestIndexConfig(codebase.EffectiveConfig)
-	codebase.MerkleSnapshotPath = manager.merklePath(codebase.ID)
+	baseCodebase := newCodebaseRecord(repoPath)
+	baseCodebase.Status = model.CodebaseStatusIndexed
+	baseCodebase.EffectiveConfig = defaultIndexConfig()
+	baseCodebase.EffectiveConfig.IgnoreDigest = digestIndexConfig(baseCodebase.EffectiveConfig)
+	baseCodebase.MerkleSnapshotPath = manager.merklePath(baseCodebase.ID)
 
 	snapshot, err := merkle.Capture(
 		context.Background(),
 		manager.indexability,
-		codebase.ID,
+		baseCodebase.ID,
 		repoPath,
-		codebase.EffectiveConfig,
+		baseCodebase.EffectiveConfig,
 	)
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}
-	snapshotHash := snapshotHashForGraph(snapshot, codebase.EffectiveConfig.IgnoreDigest)
-	if err = merkle.WriteSnapshot(codebase.MerkleSnapshotPath, snapshot); err != nil {
-		t.Fatalf("WriteSnapshot returned error: %v", err)
-	}
-	codebase.GraphState = model.GraphStateStale
-	codebase.GraphSnapshotHash = snapshotHash
+	snapshotHash := snapshotHashForGraph(snapshot, baseCodebase.EffectiveConfig.IgnoreDigest)
 
-	diagnostic := manager.graphDiagnostic(codebase)
-	if strings.Contains(diagnostic, "but matches the semantic snapshot") {
-		t.Fatalf("graphDiagnostic = %q, want no ready-only match label", diagnostic)
+	cases := []struct {
+		name          string
+		graphState    model.GraphState
+		snapshotState string
+		graphHash     string
+		codebaseKind  model.CodebaseKind
+		canonicalPath string
+		want          string
+	}{
+		{
+			name:          "missing snapshot",
+			graphState:    model.GraphStateReady,
+			snapshotState: "missing",
+			graphHash:     snapshotHash,
+			want:          repoPath + ": can't confirm the code graph is current",
+		},
+		{
+			name:          "unreadable snapshot",
+			graphState:    model.GraphStateReady,
+			snapshotState: "unreadable",
+			graphHash:     snapshotHash,
+			want:          repoPath + ": can't confirm the code graph is current",
+		},
+		{
+			name:          "failed graph build",
+			graphState:    model.GraphStateStale,
+			snapshotState: "current",
+			graphHash:     snapshotHash,
+			want:          repoPath + ": code graph's last update didn't finish (retries automatically)",
+		},
+		{
+			name:          "ready graph behind current files",
+			graphState:    model.GraphStateReady,
+			snapshotState: "current",
+			graphHash:     "different-hash",
+			want:          repoPath + ": code graph is behind the current files (rebuilds automatically)",
+		},
+		{
+			name:          "absent graph behind current files",
+			graphState:    model.GraphStateAbsent,
+			snapshotState: "current",
+			want:          repoPath + ": code graph is behind the current files (rebuilds automatically)",
+		},
+		{
+			name:          "ready and current",
+			graphState:    model.GraphStateReady,
+			snapshotState: "current",
+			graphHash:     snapshotHash,
+			want:          "",
+		},
+		{
+			name:          "non code codebase",
+			graphState:    model.GraphStateReady,
+			snapshotState: "missing",
+			graphHash:     snapshotHash,
+			codebaseKind:  model.CodebaseKindDocument,
+			canonicalPath: "chat:///thread-alpha",
+			want:          "",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			codebase := baseCodebase
+			codebase.GraphState = testCase.graphState
+			codebase.GraphSnapshotHash = testCase.graphHash
+			if testCase.codebaseKind != "" {
+				codebase.Kind = testCase.codebaseKind
+			}
+			if testCase.canonicalPath != "" {
+				codebase.CanonicalPath = testCase.canonicalPath
+			}
+			if err = os.Remove(codebase.MerkleSnapshotPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("Remove returned error: %v", err)
+			}
+			switch testCase.snapshotState {
+			case "current":
+				if err = merkle.WriteSnapshot(codebase.MerkleSnapshotPath, snapshot); err != nil {
+					t.Fatalf("WriteSnapshot returned error: %v", err)
+				}
+			case "unreadable":
+				if err = os.WriteFile(codebase.MerkleSnapshotPath, []byte("{"), 0o644); err != nil {
+					t.Fatalf("WriteFile returned error: %v", err)
+				}
+			case "missing":
+			default:
+				t.Fatalf("unknown snapshot state %q", testCase.snapshotState)
+			}
+
+			diagnostic := manager.graphDiagnostic(codebase)
+			if diagnostic != testCase.want {
+				t.Fatalf("graphDiagnostic = %q, want %q", diagnostic, testCase.want)
+			}
+		})
 	}
 }
 

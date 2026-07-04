@@ -373,20 +373,20 @@ func (manager *Manager) graphDiagnostic(codebase model.Codebase) string {
 
 	snapshotPath := manager.snapshotPathForCodebase(codebase)
 	if _, statErr := os.Stat(snapshotPath); errors.Is(statErr, os.ErrNotExist) {
-		if graphState == model.GraphStateReady {
-			return codebase.CanonicalPath + ": graph ready but semantic snapshot is missing"
-		}
-		return fmt.Sprintf("%s: graph %s and semantic snapshot is missing", codebase.CanonicalPath, graphState)
+		return codebase.CanonicalPath + ": can't confirm the code graph is current"
 	}
 	snapshot, err := merkle.ReadSnapshot(snapshotPath)
 	if err != nil {
-		return fmt.Sprintf("%s: graph %s and semantic snapshot is unreadable", codebase.CanonicalPath, graphState)
+		return codebase.CanonicalPath + ": can't confirm the code graph is current"
 	}
 	currentHash := snapshotHashForGraph(snapshot, codebase.EffectiveConfig.IgnoreDigest)
 	if graphState == model.GraphStateReady && codebase.GraphSnapshotHash == currentHash {
 		return ""
 	}
-	return fmt.Sprintf("%s: graph %s and does not match the semantic snapshot", codebase.CanonicalPath, graphState)
+	if graphState == model.GraphStateStale {
+		return codebase.CanonicalPath + ": code graph's last update didn't finish (retries automatically)"
+	}
+	return codebase.CanonicalPath + ": code graph is behind the current files (rebuilds automatically)"
 }
 
 func (manager *Manager) graphPaths(codebaseID string) []string {
