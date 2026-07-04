@@ -96,6 +96,34 @@ func TestRunDeltaSyncKeepsPriorTotalBytesWhenChunkCacheMissing(t *testing.T) {
 	}
 }
 
+func TestRunDeltaSyncCreatesGraphTaskForLegacyEmptyKindCodebase(t *testing.T) {
+	manager, codebase, job, _ := newAdmissionDeltaFixture(t)
+	manager.mu.Lock()
+	stored := manager.codebases[codebase.ID]
+	stored.Kind = ""
+	manager.codebases[codebase.ID] = stored
+	manager.mu.Unlock()
+
+	manager.runner = runnerWithChunks(map[string][]string{
+		"main.go": {"replacement chunk"},
+	})
+	if err := os.WriteFile(filepath.Join(job.CanonicalPath, "main.go"), []byte("package main\nfunc Changed() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
+
+	handled, graphTask := manager.runDeltaSync(context.Background(), job, source)
+	if !handled {
+		t.Fatal("runDeltaSync returned false, want handled completion")
+	}
+	if graphTask == nil {
+		t.Fatal("graphTask is nil, want graph task for legacy empty-kind codebase")
+	}
+	if graphTask.codebaseID != codebase.ID {
+		t.Fatalf("graphTask codebaseID = %q, want %q", graphTask.codebaseID, codebase.ID)
+	}
+}
+
 func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 	t.Run("added file reuses sibling vectors", func(t *testing.T) {
 		addedContent := "package feature\n\nfunc Added() string { return \"shared\" }\n"

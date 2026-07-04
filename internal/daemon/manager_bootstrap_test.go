@@ -82,6 +82,36 @@ func seedBootstrapCodebase(t *testing.T, manager *Manager, canonical string, cfg
 	return codebaseID, job
 }
 
+func runBootstrapAndGraph(t *testing.T, manager *Manager, job model.Job, source itemSource) {
+	t.Helper()
+
+	graphTask := manager.runBootstrap(context.Background(), job, source)
+	manager.runGraphIndexTask(context.Background(), graphTask)
+}
+
+func TestRunBootstrapCreatesGraphTaskForLegacyEmptyKindCodebase(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 2)
+	manager.semantic = &fakeSemantic{}
+
+	var mu sync.Mutex
+	embedded := make([]string, 0)
+	manager.runner = recordingRunner(&mu, &embedded)
+
+	canonical := newMultiFileRepo(t, "main.go")
+	cfg := defaultIndexConfig()
+	cfg.IgnoreDigest = "sha256:bootstrap-legacy-empty-kind"
+	codebaseID, job := seedBootstrapCodebase(t, manager, canonical, cfg)
+	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config)
+
+	graphTask := manager.runBootstrap(context.Background(), job, source)
+	if graphTask == nil {
+		t.Fatal("graphTask is nil, want graph task for legacy empty-kind codebase")
+	}
+	if graphTask.codebaseID != codebaseID {
+		t.Fatalf("graphTask codebaseID = %q, want %q", graphTask.codebaseID, codebaseID)
+	}
+}
+
 func setBootstrapCollectionName(t *testing.T, manager *Manager, codebaseID string, collectionName string) {
 	t.Helper()
 
@@ -145,7 +175,7 @@ func TestRunBootstrapReusesLiveCollectionVectors(t *testing.T) {
 	setBootstrapCollectionName(t, manager, codebaseID, liveCollection)
 	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(liveCollection)
 
-	manager.runBootstrap(context.Background(), job, source)
+	runBootstrapAndGraph(t, manager, job, source)
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
@@ -216,7 +246,7 @@ func TestRunBootstrapMissingLiveCollectionEmbedsEverything(t *testing.T) {
 		setBootstrapCollectionName(t, manager, codebaseID, liveCollection)
 		source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(liveCollection)
 
-		manager.runBootstrap(context.Background(), job, source)
+		runBootstrapAndGraph(t, manager, job, source)
 
 		completed, found := manager.GetJob(job.ID)
 		if !found {
@@ -278,7 +308,7 @@ func TestRunBootstrapMissingLiveCollectionEmbedsEverything(t *testing.T) {
 		})
 		source := newConversationItemSource(liveCollection, manifest, documents, nil)
 
-		manager.runBootstrap(context.Background(), job, source)
+		runBootstrapAndGraph(t, manager, job, source)
 
 		completed, found := manager.GetJob(job.ID)
 		if !found {
@@ -332,7 +362,7 @@ func TestRunBootstrapForcedSkipsLiveItemReuse(t *testing.T) {
 	setBootstrapCollectionName(t, manager, codebaseID, liveCollection)
 	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(liveCollection)
 
-	manager.runBootstrap(context.Background(), job, source)
+	runBootstrapAndGraph(t, manager, job, source)
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
@@ -447,7 +477,7 @@ func TestRunBootstrapPromotesCollectionBeforeCommittingMerkle(t *testing.T) {
 		t.Fatalf("MkdirAll(%s) returned error: %v", liveMerklePath, err)
 	}
 
-	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
@@ -498,7 +528,7 @@ func TestRunBootstrapSemanticPromotionFailureLeavesLiveMerkleUnchanged(t *testin
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {

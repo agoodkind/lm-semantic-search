@@ -145,6 +145,7 @@ func TestGraphStateRecordsReadyAndReconcilesStaleGraph(t *testing.T) {
 	})
 
 	codebase := newCodebaseRecord(repoPath)
+	codebase.Kind = ""
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.EffectiveConfig = defaultIndexConfig()
 	codebase.EffectiveConfig.IgnoreDigest = digestIndexConfig(codebase.EffectiveConfig)
@@ -417,6 +418,19 @@ func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
 			wantUpdatedAt: "6 minutes ago",
 		},
 		{
+			name: "legacy empty kind ever built",
+			codebase: model.Codebase{
+				CanonicalPath:  repoPath,
+				Status:         model.CodebaseStatusIndexed,
+				GraphState:     model.GraphStateStale,
+				GraphUpdatedAt: now.Add(-6 * time.Minute),
+				LastSuccessfulRun: &model.IndexRunSummary{
+					CompletedAt: now,
+				},
+			},
+			wantUpdatedAt: "6 minutes ago",
+		},
+		{
 			name: "ready no time",
 			codebase: model.Codebase{
 				CanonicalPath: repoPath,
@@ -500,6 +514,7 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 		snapshotState string
 		graphHash     string
 		codebaseKind  model.CodebaseKind
+		emptyKind     bool
 		canonicalPath string
 		want          string
 	}{
@@ -545,6 +560,14 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 			want:          "",
 		},
 		{
+			name:          "legacy empty kind missing snapshot",
+			graphState:    model.GraphStateReady,
+			snapshotState: "missing",
+			graphHash:     snapshotHash,
+			emptyKind:     true,
+			want:          repoPath + ": can't confirm the code graph is current",
+		},
+		{
 			name:          "non code codebase",
 			graphState:    model.GraphStateReady,
 			snapshotState: "missing",
@@ -560,7 +583,9 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 			codebase := baseCodebase
 			codebase.GraphState = testCase.graphState
 			codebase.GraphSnapshotHash = testCase.graphHash
-			if testCase.codebaseKind != "" {
+			if testCase.emptyKind {
+				codebase.Kind = ""
+			} else if testCase.codebaseKind != "" {
 				codebase.Kind = testCase.codebaseKind
 			}
 			if testCase.canonicalPath != "" {

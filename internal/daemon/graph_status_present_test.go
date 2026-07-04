@@ -134,6 +134,18 @@ func TestResolveSearchStatusViewPopulatesGraphFields(t *testing.T) {
 		t.Fatalf("GraphUpdatedAt = %q, want %q", statusView.GraphUpdatedAt, "6 minutes ago")
 	}
 
+	legacyCodebase := model.Codebase{
+		ID:             "cb-legacy-code",
+		CanonicalPath:  "/repo/legacy-code",
+		Status:         model.CodebaseStatusIndexed,
+		GraphState:     model.GraphStateStale,
+		GraphUpdatedAt: now.Add(-6 * time.Minute),
+	}
+	statusView, _, _ = resolveSearchStatusView(legacyCodebase, activeJob, dependencyHealth{})
+	if statusView.GraphUpdatedAt != "6 minutes ago" {
+		t.Fatalf("legacy empty-kind GraphUpdatedAt = %q, want %q", statusView.GraphUpdatedAt, "6 minutes ago")
+	}
+
 	documentCodebase := model.Codebase{
 		ID:             "cb-document",
 		CanonicalPath:  "chat:///thread-alpha",

@@ -347,7 +347,7 @@ func (manager *Manager) shouldReconcileGraph(codebaseID string, currentSnapshotH
 	if !found {
 		return false
 	}
-	if codebase.Kind != model.CodebaseKindCode {
+	if codebase.Kind == model.CodebaseKindDocument {
 		return false
 	}
 	graphState := codebase.GraphState
@@ -363,7 +363,7 @@ func snapshotHashForGraph(snapshot merkle.Snapshot, configDigest string) string 
 }
 
 func (manager *Manager) graphDiagnostic(codebase model.Codebase) string {
-	if codebase.Kind != model.CodebaseKindCode {
+	if codebase.Kind == model.CodebaseKindDocument {
 		return ""
 	}
 	graphState := codebase.GraphState

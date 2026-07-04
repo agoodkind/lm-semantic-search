@@ -480,7 +480,7 @@ func (manager *Manager) resolveGetIndexView(
 }
 
 func resolveGraphStatusFields(statusView *view.StatusView, codebase model.Codebase) {
-	if codebase.Kind != model.CodebaseKindCode {
+	if codebase.Kind == model.CodebaseKindDocument {
 		return
 	}
 	if !codebase.GraphUpdatedAt.IsZero() {
