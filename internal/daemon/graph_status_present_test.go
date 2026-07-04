@@ -21,6 +21,15 @@ func useRelativeTimeNowForTest(t *testing.T, now time.Time) {
 	})
 }
 
+func formatLocalStatusDateForTest(value time.Time) string {
+	const layout = "on Jan 2, 2006"
+	location, err := time.LoadLocation("Local")
+	if err != nil {
+		return value.Format(layout)
+	}
+	return value.In(location).Format(layout)
+}
+
 func TestFormatRelativeTimeBuckets(t *testing.T) {
 	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
 	useRelativeTimeNowForTest(t, now)
@@ -41,7 +50,8 @@ func TestFormatRelativeTimeBuckets(t *testing.T) {
 		{name: "23 hours", value: now.Add(-23 * time.Hour), want: "23 hours ago"},
 		{name: "24 hours", value: now.Add(-24 * time.Hour), want: "yesterday"},
 		{name: "47 hours", value: now.Add(-47 * time.Hour), want: "yesterday"},
-		{name: "49 hours", value: now.Add(-49 * time.Hour), want: formatBoundaryStatusTime(now.Add(-49 * time.Hour))},
+		{name: "49 hours", value: now.Add(-49 * time.Hour), want: formatLocalStatusDateForTest(now.Add(-49 * time.Hour))},
+		{name: "10 days", value: now.Add(-10 * 24 * time.Hour), want: formatLocalStatusDateForTest(now.Add(-10 * 24 * time.Hour))},
 		{name: "future", value: now.Add(time.Minute), want: "just now"},
 	}
 	for _, testCase := range cases {

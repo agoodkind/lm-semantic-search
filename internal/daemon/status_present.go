@@ -301,6 +301,15 @@ func formatBoundaryStatusTime(value time.Time) string {
 	return value.In(location).Format(layout)
 }
 
+func formatAbsoluteStatusDate(value time.Time) string {
+	const layout = "on Jan 2, 2006"
+	location, err := time.LoadLocation("Local")
+	if err != nil {
+		return value.Format(layout)
+	}
+	return value.In(location).Format(layout)
+}
+
 func formatStatusTime(value time.Time) string {
 	return formatBoundaryStatusTime(value)
 }
@@ -328,7 +337,7 @@ func formatRelativeTime(value time.Time) string {
 	if elapsed < 48*time.Hour {
 		return "yesterday"
 	}
-	return formatBoundaryStatusTime(value)
+	return formatAbsoluteStatusDate(value)
 }
 
 // waitingLabel names the dependency a waiting codebase is blocked on. The banner
