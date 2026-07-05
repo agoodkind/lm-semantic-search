@@ -481,6 +481,18 @@ message ConversationFingerprint {
   string fingerprint = 2;
 }
 
+// ConversationReconcileMode declares how the engine treats a conversation the
+// upsert manifest omits. RETAIN keeps it and its rows (additive-only); the
+// explicit DeleteConversation RPC is then the only path that removes a
+// conversation. AUTHORITATIVE deletes it, gated by the large-delete quarantine.
+// UNSPECIFIED is treated as RETAIN, so a caller that sets nothing never triggers
+// a mass delete on a transient short manifest.
+enum ConversationReconcileMode {
+  CONVERSATION_RECONCILE_MODE_UNSPECIFIED = 0;
+  CONVERSATION_RECONCILE_MODE_RETAIN = 1;
+  CONVERSATION_RECONCILE_MODE_AUTHORITATIVE = 2;
+}
+
 message SyncConversationManifestRequest {
   string collection_id = 1;
   // manifest lists every current conversation with its content fingerprint, so
@@ -502,10 +514,13 @@ message UpsertConversationDocumentsResponse {
 }
 
 // UpsertConversationDocumentsHeader opens a streamed upsert. It carries the
-// collection id and the caller info once, before any documents.
+// collection id, the caller info, and the reconcile mode once, before any
+// documents. reconcile_mode declares whether a conversation the manifest omits
+// is retained or deleted; it defaults to RETAIN when unset.
 message UpsertConversationDocumentsHeader {
   string collection_id = 1;
   ClientInfo client = 2;
+  ConversationReconcileMode reconcile_mode = 3;
 }
 
 // UpsertConversationDocumentsDocuments is one batch of documents in a streamed
@@ -516,8 +531,9 @@ message UpsertConversationDocumentsDocuments {
 }
 
 // UpsertConversationDocumentsManifest carries the full current conversation set
-// with fingerprints. The manifest is authoritative for deletion, so it is sent
-// whole as one chunk under the per-chunk size bound rather than split.
+// with fingerprints. The header's reconcile_mode governs what happens to a
+// conversation the manifest omits (default RETAIN keeps it); the manifest is
+// sent whole as one chunk under the per-chunk size bound rather than split.
 message UpsertConversationDocumentsManifest {
   repeated ConversationFingerprint manifest = 1;
 }

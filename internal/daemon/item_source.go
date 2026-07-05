@@ -173,15 +173,19 @@ type conversationItemSource struct {
 	documents      map[string][]model.ConversationDocument
 	rowReader      conversationRowReader
 	splitterID     string
+	// absence is the caller-declared policy for a conversation the manifest
+	// omits. clyde sends it on the upsert header; the constructor maps the wire
+	// enum to this internal value so the delta core never sees the proto type.
+	absence absencePolicy
 }
 
-func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader) conversationItemSource {
+func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader, absence absencePolicy) conversationItemSource {
 	byID := make(map[string][]model.ConversationDocument, len(manifest))
 	for _, document := range documents {
 		conversationID := document.ConversationID
 		byID[conversationID] = append(byID[conversationID], document)
 	}
-	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: ""}
+	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", absence: absence}
 }
 
 func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot, error) {
@@ -303,13 +307,13 @@ func (source conversationItemSource) removalFor(itemIDs []string) semantic.Remov
 	return semantic.RemovePrefixes(prefixes)
 }
 
-// absencePolicy retains a conversation missing from the manifest rather than
-// deleting it. A transcript absent from a push is almost always a transient
-// disappearance, so the rows stay and a later restoring push is a no-op. The
-// explicit single-conversation delete is the only path that removes a
-// conversation.
+// absencePolicy returns the caller-declared policy for a conversation the
+// manifest omits. It defaults to absenceRetain (set by the constructor when the
+// wire mode is unset), so a transient disappearance keeps the rows and a later
+// restoring push is a no-op. Only an AUTHORITATIVE upsert or the explicit
+// single-conversation delete removes a conversation.
 func (source conversationItemSource) absencePolicy() absencePolicy {
-	return absenceRetain
+	return source.absence
 }
 
 // reuseSource stays prefix scoped for loader-error fallback. The normal
