@@ -8,6 +8,7 @@ import (
 	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc"
 )
@@ -153,5 +154,91 @@ func TestUpsertConversationDocumentsStreamRejectsMissingHeader(t *testing.T) {
 	}
 	if stream.response != nil {
 		t.Fatal("UpsertConversationDocumentsStream sent a response despite the missing header")
+	}
+}
+
+// TestConversationAbsencePolicyFromProto pins the wire-to-internal mapping at the
+// RPC boundary: only AUTHORITATIVE deletes; RETAIN and the unset default retain,
+// so a caller that sends nothing never triggers a mass delete.
+func TestConversationAbsencePolicyFromProto(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		mode pb.ConversationReconcileMode
+		want absencePolicy
+	}{
+		{pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_UNSPECIFIED, absenceRetain},
+		{pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, absenceRetain},
+		{pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_AUTHORITATIVE, absenceDeleteGuarded},
+	}
+	for _, tc := range cases {
+		if got := conversationAbsencePolicyFromProto(tc.mode); got != tc.want {
+			t.Fatalf("conversationAbsencePolicyFromProto(%v) = %v, want %v", tc.mode, got, tc.want)
+		}
+	}
+}
+
+// TestUpsertConversationDocumentsStreamThreadsAuthoritativeReconcileMode proves
+// the header's reconcile_mode threads through the stream handler all the way to
+// the delete decision: a second push through the real handler, carrying
+// AUTHORITATIVE and omitting a previously ingested conversation, removes it from
+// the checkpoint snapshot. The default (unset) path is covered by the retain
+// tests, so this pins the opt-in delete path end to end.
+func TestUpsertConversationDocumentsStreamThreadsAuthoritativeReconcileMode(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	ctx := context.Background()
+	collectionID := "thread-stream-authoritative"
+
+	seedManifest := map[string]string{"conv-a": "fp-a", "conv-b": "fp-b"}
+	seedDocuments := []model.ConversationDocument{
+		{ConversationID: "conv-a", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "a"},
+		{ConversationID: "conv-b", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "b"},
+	}
+	seedJob, err := manager.upsertConversationDocuments(ctx, collectionID, seedDocuments, seedManifest, testClientInfo(), absenceRetain)
+	if err != nil {
+		t.Fatalf("seed upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, seedJob.ID, model.JobStateCompleted)
+
+	server := NewGRPCServer(manager, nil)
+	stream := &fakeUpsertStreamServer{
+		ClientStreamingServer: nil,
+		chunks: []*pb.UpsertConversationDocumentsChunk{
+			{Chunk: &pb.UpsertConversationDocumentsChunk_Header{Header: &pb.UpsertConversationDocumentsHeader{
+				CollectionId:  collectionID,
+				Client:        &pb.ClientInfo{Name: "test", Pid: 0, CallerCwd: ""},
+				ReconcileMode: pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_AUTHORITATIVE,
+			}}},
+			{Chunk: &pb.UpsertConversationDocumentsChunk_Manifest{Manifest: &pb.UpsertConversationDocumentsManifest{
+				Manifest: []*pb.ConversationFingerprint{{ConversationId: "conv-a", Fingerprint: "fp-a"}},
+			}}},
+		},
+		cursor:   0,
+		response: nil,
+	}
+	if err := server.UpsertConversationDocumentsStream(stream); err != nil {
+		t.Fatalf("UpsertConversationDocumentsStream returned error: %v", err)
+	}
+	if stream.response == nil || stream.response.GetJobId() == "" {
+		t.Fatal("UpsertConversationDocumentsStream returned no job id")
+	}
+	waitForConversationJobState(t, manager, stream.response.GetJobId(), model.JobStateCompleted)
+
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	snapshot, err := merkle.ReadSnapshot(manager.merklePath(codebase.ID))
+	if err != nil {
+		t.Fatalf("ReadSnapshot returned error: %v", err)
+	}
+	if _, present := snapshot.Files["conv-b"]; present {
+		t.Fatalf("AUTHORITATIVE stream retained conv-b on absence; snapshot = %v", snapshot.Files)
+	}
+	if _, present := snapshot.Files["conv-a"]; !present {
+		t.Fatalf("AUTHORITATIVE stream dropped present conv-a; snapshot = %v", snapshot.Files)
 	}
 }

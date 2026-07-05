@@ -101,7 +101,7 @@ gksyntax-grammars:
 		exit 1; \
 	fi; \
 	if printf '%s\n' "$$status" | grep -Eq '^[+-]'; then \
-		git submodule update --init --recursive $(GKS_DIR); \
+		git -c url.https://github.com/.insteadOf=git@github.com: submodule update --init --recursive $(GKS_DIR); \
 	fi
 	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
 		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \

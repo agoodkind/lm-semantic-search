@@ -25,6 +25,7 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 
 	collectionID := ""
 	var client model.ClientInfo
+	reconcileMode := pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_UNSPECIFIED
 	headerSeen := false
 	documents := make([]model.ConversationDocument, 0)
 	var manifest map[string]string
@@ -46,6 +47,7 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 			}
 			collectionID = payload.Header.GetCollectionId()
 			client = pbClient(payload.Header.GetClient())
+			reconcileMode = payload.Header.GetReconcileMode()
 			headerSeen = true
 			// Validate the header before accepting any documents so a header-less or
 			// empty-collection_id stream cannot accumulate documents unbounded in
@@ -72,7 +74,7 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 		return status.Error(adapterr.Respond(ctx, adapterr.NewMissingArgument("header")))
 	}
 
-	job, callErr := server.manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, client)
+	job, callErr := server.manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, client, conversationAbsencePolicyFromProto(reconcileMode))
 	if callErr != nil {
 		return status.Error(adapterr.Respond(ctx, classifyManagerError(collectionID, callErr)))
 	}
@@ -109,4 +111,18 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 		return status.Error(adapterr.Respond(ctx, adapterr.NewInternal("send upsert conversation documents response", sendErr)))
 	}
 	return nil
+}
+
+// conversationAbsencePolicyFromProto maps the wire reconcile mode to the internal
+// absence policy, keeping the proto enum at the RPC boundary. AUTHORITATIVE lets
+// the manifest delete conversations it omits; the large-delete quarantine guard
+// is code-only, so it does not gate conversation deletes. The missing-manifest
+// guard in upsertConversationDocuments is what prevents an accidental mass delete.
+// RETAIN and the unset default keep omitted conversations, so a caller that sends
+// nothing never deletes.
+func conversationAbsencePolicyFromProto(mode pb.ConversationReconcileMode) absencePolicy {
+	if mode == pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_AUTHORITATIVE {
+		return absenceDeleteGuarded
+	}
+	return absenceRetain
 }

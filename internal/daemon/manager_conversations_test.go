@@ -85,7 +85,7 @@ func TestConversationManifestSyncReturnsNeededIDs(t *testing.T) {
 	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "alpha"},
 		{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "beta"},
-	}, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"}, testClientInfo())
+	}, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"}, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestConversationEmptyDiffStoredNamePresentCompletesNoop(t *testing.T) {
 		Text:           "stored collection regression",
 	}}
 
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo())
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("first upsertConversationDocuments returned error: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestConversationEmptyDiffStoredNamePresentCompletesNoop(t *testing.T) {
 	}
 	fake.mu.Unlock()
 
-	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, manifest, testClientInfo())
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, manifest, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
 	}
@@ -667,7 +667,7 @@ func TestConversationIngestDoesNotWriteChunkCache(t *testing.T) {
 			TimestampUnix:  1712345001,
 			Text:           "beta cache entry",
 		},
-	}, firstManifest, testClientInfo())
+	}, firstManifest, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestConversationIngestDoesNotWriteChunkCache(t *testing.T) {
 		Role:           "assistant",
 		TimestampUnix:  1712345002,
 		Text:           "fresh needle cache entry",
-	}}, secondManifest, testClientInfo())
+	}}, secondManifest, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
 	}
@@ -921,6 +921,7 @@ func TestConversationIndexOneEmbedsOnlyAppendedMessage(t *testing.T) {
 			{ConversationID: "conv-append", MessageIndex: 2, Role: "user", Text: "new question"},
 		},
 		reader,
+		absenceRetain,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-append")
@@ -966,6 +967,7 @@ func TestConversationIndexOneReindexesOnlyEditedMessage(t *testing.T) {
 			{ConversationID: "conv-edit", MessageIndex: 2, Role: "user", Text: "follow up"},
 		},
 		reader,
+		absenceRetain,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-edit")
@@ -999,6 +1001,7 @@ func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
 			{ConversationID: "conv-stale", MessageIndex: 1, Role: "assistant", Text: "answer"},
 		},
 		reader,
+		absenceRetain,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-stale")
@@ -1034,7 +1037,7 @@ func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, source.documents["conv-stale"], source.manifest, testClientInfo())
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, source.documents["conv-stale"], source.manifest, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1079,6 +1082,7 @@ func TestConversationIndexOneMultipartTransitions(t *testing.T) {
 				{ConversationID: "conv-shape", MessageIndex: 7, Role: "assistant", Text: "short"},
 			},
 			reader,
+			absenceRetain,
 		)
 
 		result, err := source.indexOne(context.Background(), "conv-shape")
@@ -1110,6 +1114,7 @@ func TestConversationIndexOneMultipartTransitions(t *testing.T) {
 				{ConversationID: "conv-shape", MessageIndex: 8, Role: "assistant", Text: text},
 			},
 			reader,
+			absenceRetain,
 		)
 
 		result, err := source.indexOne(context.Background(), "conv-shape")
@@ -1150,6 +1155,7 @@ func TestConversationIndexOneSiblingIndexSafety(t *testing.T) {
 			{ConversationID: "conv-sibling", MessageIndex: 120, Role: "user", Text: "one twenty"},
 		},
 		reader,
+		absenceRetain,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-sibling")
@@ -1177,6 +1183,7 @@ func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T
 		map[string]string{"conv-load-failure": "fp-load-failure"},
 		documents,
 		reader,
+		absenceRetain,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-load-failure")
@@ -1218,7 +1225,7 @@ func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, map[string]string{"conv-load-failure": "fp-load-failure"}, testClientInfo())
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, map[string]string{"conv-load-failure": "fp-load-failure"}, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1249,6 +1256,7 @@ func TestConversationIndexOneHealsMissingRows(t *testing.T) {
 			{ConversationID: "conv-heal", MessageIndex: 1, Role: "assistant", Text: "restored"},
 		},
 		reader,
+		absenceRetain,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-heal")
@@ -1281,6 +1289,7 @@ func TestConversationIndexOneHealsLegacyRowsWithoutDuplicates(t *testing.T) {
 			{ConversationID: "conv-legacy", MessageIndex: 1, Role: "assistant", Text: "answer"},
 		},
 		reader,
+		absenceRetain,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-legacy")
@@ -1527,7 +1536,7 @@ func upsertConversationsForManifest(t *testing.T, manager *Manager, ctx context.
 			Text:           "body " + conversationID,
 		})
 	}
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo())
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1657,7 +1666,7 @@ func (store *conversationStateStore) setFromDocuments(prefix string, documents [
 func runConversationDeltaIngest(t *testing.T, manager *Manager, ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string) {
 	t.Helper()
 
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo())
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1761,7 +1770,7 @@ func TestSearchWithinConversationScopesAndReportsFingerprint(t *testing.T) {
 	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{ConversationID: "conv-a", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "needle in alpha"},
 		{ConversationID: "conv-b", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "needle in beta"},
-	}, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"}, testClientInfo())
+	}, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"}, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1849,7 +1858,7 @@ func TestSearchWithinConversationRPCBoundary(t *testing.T) {
 
 	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{ConversationID: "conv-rpc", MessageIndex: 3, Role: "assistant", TimestampUnix: 1712345002, Text: "needle on the wire"},
-	}, map[string]string{"conv-rpc": "fp-rpc-1"}, testClientInfo())
+	}, map[string]string{"conv-rpc": "fp-rpc-1"}, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1914,7 +1923,7 @@ func TestConversationIngestLoadsReuseVectorsPerConversation(t *testing.T) {
 	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{ConversationID: "conv-alpha", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "alpha"},
 		{ConversationID: "conv-beta", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "beta"},
-	}, map[string]string{"conv-alpha": "fp-a-1", "conv-beta": "fp-b-1"}, testClientInfo())
+	}, map[string]string{"conv-alpha": "fp-a-1", "conv-beta": "fp-b-1"}, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1966,6 +1975,7 @@ func TestHandleChangedFileProgressReflectsRealWork(t *testing.T) {
 			{ConversationID: "conv-delivered", MessageIndex: 0, Role: "user", TimestampUnix: 1712345003, Text: "delivered"},
 		},
 		nil,
+		absenceRetain,
 	)
 	state := deltaState{
 		plan:         deltaPlan{},
@@ -2342,7 +2352,7 @@ func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
 
 	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{ConversationID: "conv-solo", MessageIndex: 0, Role: "user", TimestampUnix: 1712345002, Text: "solo"},
-	}, map[string]string{"conv-solo": "fp-s-1"}, testClientInfo())
+	}, map[string]string{"conv-solo": "fp-s-1"}, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -2366,9 +2376,9 @@ func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
 	}
 }
 
-// TestItemSourceAbsencePolicy proves the two sources declare opposite policies:
-// a code source deletes a file the walk no longer finds, while a conversation
-// source retains a conversation missing from a push.
+// TestItemSourceAbsencePolicy proves a code source always deletes a file the
+// walk no longer finds, while a conversation source honors the caller-declared
+// policy: it retains by default and deletes only when built AUTHORITATIVE.
 func TestItemSourceAbsencePolicy(t *testing.T) {
 	t.Parallel()
 
@@ -2376,9 +2386,13 @@ func TestItemSourceAbsencePolicy(t *testing.T) {
 	if code.absencePolicy() != absenceDeleteGuarded {
 		t.Fatalf("code absencePolicy = %v, want absenceDeleteGuarded", code.absencePolicy())
 	}
-	conversation := newConversationItemSource("conv_chunks_test", map[string]string{}, nil, nil)
-	if conversation.absencePolicy() != absenceRetain {
-		t.Fatalf("conversation absencePolicy = %v, want absenceRetain", conversation.absencePolicy())
+	retain := newConversationItemSource("conv_chunks_test", map[string]string{}, nil, nil, absenceRetain)
+	if retain.absencePolicy() != absenceRetain {
+		t.Fatalf("retain conversation absencePolicy = %v, want absenceRetain", retain.absencePolicy())
+	}
+	authoritative := newConversationItemSource("conv_chunks_test", map[string]string{}, nil, nil, absenceDeleteGuarded)
+	if authoritative.absencePolicy() != absenceDeleteGuarded {
+		t.Fatalf("authoritative conversation absencePolicy = %v, want absenceDeleteGuarded", authoritative.absencePolicy())
 	}
 }
 
@@ -2409,7 +2423,7 @@ func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) 
 		{ConversationID: "conv-3", MessageIndex: 0, Role: "user", TimestampUnix: 1712345003, Text: "three"},
 		{ConversationID: "conv-4", MessageIndex: 0, Role: "user", TimestampUnix: 1712345004, Text: "four"},
 	}
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, fullDocuments, fullManifest, testClientInfo())
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, fullDocuments, fullManifest, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("first upsertConversationDocuments returned error: %v", err)
 	}
@@ -2419,7 +2433,7 @@ func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) 
 	// Retain-on-absence keeps them: no removal runs and the snapshot still lists
 	// the omitted ids.
 	reducedManifest := map[string]string{"conv-0": "fp-0", "conv-1": "fp-1"}
-	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, reducedManifest, testClientInfo())
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, reducedManifest, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
 	}
@@ -2441,7 +2455,7 @@ func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) 
 
 	// A restoring push sends the full manifest again with no documents. The ids and
 	// fingerprints already match, so nothing re-embeds and the cache is unchanged.
-	thirdJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, fullManifest, testClientInfo())
+	thirdJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, fullManifest, testClientInfo(), absenceRetain)
 	if err != nil {
 		t.Fatalf("third upsertConversationDocuments returned error: %v", err)
 	}
@@ -2454,4 +2468,86 @@ func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) 
 		t.Fatalf("DeleteConversation returned error: %v", err)
 	}
 	waitForConversationJobState(t, manager, deleteJob.ID, model.JobStateCompleted)
+}
+
+// TestConversationIngestDeletesConversationsAbsentUnderAuthoritative proves the
+// wire reconcile mode drives behavior: an upsert built AUTHORITATIVE removes a
+// conversation the manifest omits, the mirror of the retain test. This is the
+// path a caller opts into by sending CONVERSATION_RECONCILE_MODE_AUTHORITATIVE.
+func TestConversationIngestDeletesConversationsAbsentUnderAuthoritative(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	ctx := context.Background()
+	collectionID := "thread-authoritative"
+
+	fullManifest := map[string]string{
+		"conv-0": "fp-0",
+		"conv-1": "fp-1",
+		"conv-2": "fp-2",
+	}
+	fullDocuments := []model.ConversationDocument{
+		{ConversationID: "conv-0", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "zero"},
+		{ConversationID: "conv-1", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "one"},
+		{ConversationID: "conv-2", MessageIndex: 0, Role: "user", TimestampUnix: 1712345002, Text: "two"},
+	}
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, fullDocuments, fullManifest, testClientInfo(), absenceDeleteGuarded)
+	if err != nil {
+		t.Fatalf("first upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
+
+	// The second push omits conv-2 and delivers no documents. AUTHORITATIVE
+	// deletes it, so the checkpoint snapshot no longer lists it.
+	reducedManifest := map[string]string{"conv-0": "fp-0", "conv-1": "fp-1"}
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, reducedManifest, testClientInfo(), absenceDeleteGuarded)
+	if err != nil {
+		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
+	}
+	waitForConversationJobState(t, manager, secondJob.ID, model.JobStateCompleted)
+
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	snapshot, err := merkle.ReadSnapshot(manager.merklePath(codebase.ID))
+	if err != nil {
+		t.Fatalf("ReadSnapshot returned error: %v", err)
+	}
+	if _, present := snapshot.Files["conv-2"]; present {
+		t.Fatalf("AUTHORITATIVE upsert retained conv-2 on absence; snapshot = %v", snapshot.Files)
+	}
+	for _, conversationID := range []string{"conv-0", "conv-1"} {
+		if _, present := snapshot.Files[conversationID]; !present {
+			t.Fatalf("AUTHORITATIVE upsert dropped present %s; snapshot = %v", conversationID, snapshot.Files)
+		}
+	}
+}
+
+// TestUpsertConversationDocumentsRejectsAuthoritativeWithoutManifest proves the
+// missing-manifest guard: an authoritative upsert with a nil manifest is rejected
+// rather than deriving the manifest from only the delivered documents, which would
+// treat every other indexed conversation as absent and delete it. The same
+// nil-manifest upsert under retain is still allowed and derives the manifest.
+func TestUpsertConversationDocumentsRejectsAuthoritativeWithoutManifest(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	ctx := context.Background()
+
+	documents := []model.ConversationDocument{
+		{ConversationID: "conv-x", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "x"},
+	}
+
+	if _, err := manager.upsertConversationDocuments(ctx, "authoritative-no-manifest", documents, nil, testClientInfo(), absenceDeleteGuarded); err == nil {
+		t.Fatal("authoritative upsert with nil manifest was accepted; want rejection to avoid a derived-manifest mass delete")
+	}
+
+	retainJob, err := manager.upsertConversationDocuments(ctx, "retain-no-manifest", documents, nil, testClientInfo(), absenceRetain)
+	if err != nil {
+		t.Fatalf("retain upsert with nil manifest was rejected: %v", err)
+	}
+	waitForConversationJobState(t, manager, retainJob.ID, model.JobStateCompleted)
 }

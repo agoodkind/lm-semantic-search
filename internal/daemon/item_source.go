@@ -44,14 +44,17 @@ type itemSource interface {
 }
 
 // absencePolicy is what runDeltaSync does with an item the store holds that the
-// current capture omits. absenceDeleteGuarded removes the item, gated by the
-// large-delete quarantine. absenceRetain keeps the item and its rows so a
-// transient mass disappearance cannot wipe the index.
+// current capture omits. absenceRetain is the zero value and the safe default: it
+// keeps the item and its rows so a transient mass disappearance cannot wipe the
+// index. absenceDeleteGuarded removes the item; the large-delete quarantine gates
+// that removal for code collections only (shouldQuarantineLargeRemoval is
+// code-kind gated), so a conversation upsert that opts into deletion has no such
+// guard.
 type absencePolicy int
 
 const (
-	absenceDeleteGuarded absencePolicy = iota
-	absenceRetain
+	absenceRetain absencePolicy = iota
+	absenceDeleteGuarded
 )
 
 type itemReuseScope string
@@ -173,15 +176,21 @@ type conversationItemSource struct {
 	documents      map[string][]model.ConversationDocument
 	rowReader      conversationRowReader
 	splitterID     string
+	// absence is the caller-declared policy for a conversation the manifest
+	// omits. clyde sends the mode on the upsert header; the stream handler maps
+	// the wire enum to this internal value in conversationAbsencePolicyFromProto,
+	// so the delta core never sees the proto type. The constructor only stores the
+	// already-mapped value.
+	absence absencePolicy
 }
 
-func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader) conversationItemSource {
+func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader, absence absencePolicy) conversationItemSource {
 	byID := make(map[string][]model.ConversationDocument, len(manifest))
 	for _, document := range documents {
 		conversationID := document.ConversationID
 		byID[conversationID] = append(byID[conversationID], document)
 	}
-	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: ""}
+	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", absence: absence}
 }
 
 func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot, error) {
@@ -303,13 +312,13 @@ func (source conversationItemSource) removalFor(itemIDs []string) semantic.Remov
 	return semantic.RemovePrefixes(prefixes)
 }
 
-// absencePolicy retains a conversation missing from the manifest rather than
-// deleting it. A transcript absent from a push is almost always a transient
-// disappearance, so the rows stay and a later restoring push is a no-op. The
-// explicit single-conversation delete is the only path that removes a
-// conversation.
+// absencePolicy returns the caller-declared policy for a conversation the
+// manifest omits. conversationAbsencePolicyFromProto maps an unset or RETAIN wire
+// mode to absenceRetain, so a transient disappearance keeps the rows and a later
+// restoring push is a no-op. Only an AUTHORITATIVE upsert or the explicit
+// single-conversation delete removes a conversation.
 func (source conversationItemSource) absencePolicy() absencePolicy {
-	return absenceRetain
+	return source.absence
 }
 
 // reuseSource stays prefix scoped for loader-error fallback. The normal

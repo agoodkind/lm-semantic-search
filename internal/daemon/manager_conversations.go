@@ -44,6 +44,10 @@ type conversationJobPayload struct {
 	Manifest       map[string]string
 	Documents      []model.ConversationDocument
 	ConversationID string
+	// Absence is the upsert's caller-declared policy for a conversation the
+	// manifest omits. It is meaningful only for an upsert; a delete sets it
+	// explicitly to absenceRetain (also the zero value) but never consults it.
+	Absence absencePolicy
 }
 
 // RegisterConversationCollection records a virtual document collection that is
@@ -188,13 +192,21 @@ func firstN(values []string, limit int) []string {
 // upsertConversationDocuments queues an asynchronous ingest. When manifest is
 // nil it is derived from the delivered documents, so a caller that hands over a
 // complete set need not compute fingerprints itself.
-func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo) (model.Job, error) {
+func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo, absence absencePolicy) (model.Job, error) {
 	for _, document := range documents {
 		if strings.TrimSpace(document.ConversationID) == "" {
 			return model.Job{}, errors.New("conversation id is required")
 		}
 	}
 	if manifest == nil {
+		// Deriving the manifest from only the delivered documents is safe under
+		// retain: an omitted conversation is kept either way. Under an authoritative
+		// (delete-on-absence) upsert it is dangerous, because the derived manifest
+		// lists only the delivered ids, so every other indexed conversation would be
+		// treated as absent and deleted. Require an explicit manifest there.
+		if absence == absenceDeleteGuarded {
+			return model.Job{}, errors.New("authoritative conversation upsert requires an explicit manifest")
+		}
 		manifest = manifestFromDocuments(documents)
 	}
 	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
@@ -207,6 +219,7 @@ func (manager *Manager) upsertConversationDocuments(ctx context.Context, collect
 		Manifest:       manifest,
 		Documents:      documents,
 		ConversationID: "",
+		Absence:        absence,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
 }
@@ -319,6 +332,10 @@ func (manager *Manager) deleteConversation(ctx context.Context, collectionID str
 		Manifest:       nil,
 		Documents:      nil,
 		ConversationID: trimmedConversationID,
+		// A delete removes exactly one conversation and never runs the
+		// manifest-absence branch, so Absence is unused here; set it explicitly to
+		// absenceRetain (also the zero value) to satisfy exhaustruct.
+		Absence: absenceRetain,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
 }
@@ -426,7 +443,7 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
-		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic)
+		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence)
 		// The second return is the code path's graph-index task; a conversation
 		// collection never produces one, so there is nothing to discard here.
 		if handled, _ := manager.runDeltaSync(ctx, job, source); handled {
