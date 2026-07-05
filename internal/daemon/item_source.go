@@ -174,8 +174,10 @@ type conversationItemSource struct {
 	rowReader      conversationRowReader
 	splitterID     string
 	// absence is the caller-declared policy for a conversation the manifest
-	// omits. clyde sends it on the upsert header; the constructor maps the wire
-	// enum to this internal value so the delta core never sees the proto type.
+	// omits. clyde sends the mode on the upsert header; the stream handler maps
+	// the wire enum to this internal value in conversationAbsencePolicyFromProto,
+	// so the delta core never sees the proto type. The constructor only stores the
+	// already-mapped value.
 	absence absencePolicy
 }
 
@@ -308,8 +310,8 @@ func (source conversationItemSource) removalFor(itemIDs []string) semantic.Remov
 }
 
 // absencePolicy returns the caller-declared policy for a conversation the
-// manifest omits. It defaults to absenceRetain (set by the constructor when the
-// wire mode is unset), so a transient disappearance keeps the rows and a later
+// manifest omits. conversationAbsencePolicyFromProto maps an unset or RETAIN wire
+// mode to absenceRetain, so a transient disappearance keeps the rows and a later
 // restoring push is a no-op. Only an AUTHORITATIVE upsert or the explicit
 // single-conversation delete removes a conversation.
 func (source conversationItemSource) absencePolicy() absencePolicy {

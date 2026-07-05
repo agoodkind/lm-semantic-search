@@ -45,8 +45,9 @@ type conversationJobPayload struct {
 	Documents      []model.ConversationDocument
 	ConversationID string
 	// Absence is the upsert's caller-declared policy for a conversation the
-	// manifest omits. It is meaningful only for an upsert; a delete leaves it at
-	// the zero value, which the delete path never consults.
+	// manifest omits. It is meaningful only for an upsert; a delete sets it
+	// explicitly to absenceRetain for clarity but never consults it (the zero
+	// value would be absenceDeleteGuarded).
 	Absence absencePolicy
 }
 
