@@ -44,14 +44,17 @@ type itemSource interface {
 }
 
 // absencePolicy is what runDeltaSync does with an item the store holds that the
-// current capture omits. absenceDeleteGuarded removes the item, gated by the
-// large-delete quarantine. absenceRetain keeps the item and its rows so a
-// transient mass disappearance cannot wipe the index.
+// current capture omits. absenceRetain is the zero value and the safe default: it
+// keeps the item and its rows so a transient mass disappearance cannot wipe the
+// index. absenceDeleteGuarded removes the item; the large-delete quarantine gates
+// that removal for code collections only (shouldQuarantineLargeRemoval is
+// code-kind gated), so a conversation upsert that opts into deletion has no such
+// guard.
 type absencePolicy int
 
 const (
-	absenceDeleteGuarded absencePolicy = iota
-	absenceRetain
+	absenceRetain absencePolicy = iota
+	absenceDeleteGuarded
 )
 
 type itemReuseScope string

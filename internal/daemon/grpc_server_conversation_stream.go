@@ -115,9 +115,11 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 
 // conversationAbsencePolicyFromProto maps the wire reconcile mode to the internal
 // absence policy, keeping the proto enum at the RPC boundary. AUTHORITATIVE lets
-// the manifest delete conversations it omits (under the large-delete guard);
-// RETAIN and the unset default keep them, so a caller that sends nothing never
-// triggers a mass delete.
+// the manifest delete conversations it omits; the large-delete quarantine guard
+// is code-only, so it does not gate conversation deletes. The missing-manifest
+// guard in upsertConversationDocuments is what prevents an accidental mass delete.
+// RETAIN and the unset default keep omitted conversations, so a caller that sends
+// nothing never deletes.
 func conversationAbsencePolicyFromProto(mode pb.ConversationReconcileMode) absencePolicy {
 	if mode == pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_AUTHORITATIVE {
 		return absenceDeleteGuarded

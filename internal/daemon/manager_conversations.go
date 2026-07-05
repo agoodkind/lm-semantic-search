@@ -46,8 +46,7 @@ type conversationJobPayload struct {
 	ConversationID string
 	// Absence is the upsert's caller-declared policy for a conversation the
 	// manifest omits. It is meaningful only for an upsert; a delete sets it
-	// explicitly to absenceRetain for clarity but never consults it (the zero
-	// value would be absenceDeleteGuarded).
+	// explicitly to absenceRetain (also the zero value) but never consults it.
 	Absence absencePolicy
 }
 
@@ -200,6 +199,14 @@ func (manager *Manager) upsertConversationDocuments(ctx context.Context, collect
 		}
 	}
 	if manifest == nil {
+		// Deriving the manifest from only the delivered documents is safe under
+		// retain: an omitted conversation is kept either way. Under an authoritative
+		// (delete-on-absence) upsert it is dangerous, because the derived manifest
+		// lists only the delivered ids, so every other indexed conversation would be
+		// treated as absent and deleted. Require an explicit manifest there.
+		if absence == absenceDeleteGuarded {
+			return model.Job{}, errors.New("authoritative conversation upsert requires an explicit manifest")
+		}
 		manifest = manifestFromDocuments(documents)
 	}
 	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
@@ -327,7 +334,7 @@ func (manager *Manager) deleteConversation(ctx context.Context, collectionID str
 		ConversationID: trimmedConversationID,
 		// A delete removes exactly one conversation and never runs the
 		// manifest-absence branch, so Absence is unused here; set it explicitly to
-		// the retain default rather than lean on the zero value.
+		// absenceRetain (also the zero value) to satisfy exhaustruct.
 		Absence: absenceRetain,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)

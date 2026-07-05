@@ -94,9 +94,11 @@ func (OutcomeKind) EnumDescriptor() ([]byte, []int) {
 // ConversationReconcileMode declares how the engine treats a conversation the
 // upsert manifest omits. RETAIN keeps it and its rows (additive-only); the
 // explicit DeleteConversation RPC is then the only path that removes a
-// conversation. AUTHORITATIVE deletes it, gated by the large-delete quarantine.
-// UNSPECIFIED is treated as RETAIN, so a caller that sets nothing never triggers
-// a mass delete on a transient short manifest.
+// conversation. AUTHORITATIVE deletes it; the large-delete quarantine guard is
+// code-only and does not gate conversation deletes, so send AUTHORITATIVE only
+// with a complete manifest (the engine rejects an authoritative upsert that
+// omits the manifest). UNSPECIFIED is treated as RETAIN, so a caller that sets
+// nothing never triggers a mass delete on a transient short manifest.
 type ConversationReconcileMode int32
 
 const (

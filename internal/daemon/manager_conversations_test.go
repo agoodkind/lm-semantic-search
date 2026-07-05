@@ -2524,3 +2524,30 @@ func TestConversationIngestDeletesConversationsAbsentUnderAuthoritative(t *testi
 		}
 	}
 }
+
+// TestUpsertConversationDocumentsRejectsAuthoritativeWithoutManifest proves the
+// missing-manifest guard: an authoritative upsert with a nil manifest is rejected
+// rather than deriving the manifest from only the delivered documents, which would
+// treat every other indexed conversation as absent and delete it. The same
+// nil-manifest upsert under retain is still allowed and derives the manifest.
+func TestUpsertConversationDocumentsRejectsAuthoritativeWithoutManifest(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	ctx := context.Background()
+
+	documents := []model.ConversationDocument{
+		{ConversationID: "conv-x", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "x"},
+	}
+
+	if _, err := manager.upsertConversationDocuments(ctx, "authoritative-no-manifest", documents, nil, testClientInfo(), absenceDeleteGuarded); err == nil {
+		t.Fatal("authoritative upsert with nil manifest was accepted; want rejection to avoid a derived-manifest mass delete")
+	}
+
+	retainJob, err := manager.upsertConversationDocuments(ctx, "retain-no-manifest", documents, nil, testClientInfo(), absenceRetain)
+	if err != nil {
+		t.Fatalf("retain upsert with nil manifest was rejected: %v", err)
+	}
+	waitForConversationJobState(t, manager, retainJob.ID, model.JobStateCompleted)
+}
