@@ -30,7 +30,13 @@ If both `openaiBaseUrl` and `OPENAI_BASE_URL` are unset, the OpenAI SDK uses its
 
 ## MCP Installation
 
-Build and install the daemon, CLI, and MCP adapter:
+Install the release binaries and user service:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/agoodkind/lm-semantic-search/main/install.sh | bash
+```
+
+From source, build and install the daemon, CLI, and MCP adapter:
 
 ```bash
 make install
