@@ -1659,9 +1659,15 @@ type ConversationDocument struct {
 	WorkspaceRoot string `protobuf:"bytes,7,opt,name=workspace_root,json=workspaceRoot,proto3" json:"workspace_root,omitempty"`
 	// archived marks a conversation hidden from normal clyde lists. clyde owns
 	// this value, and it defaults false when unset.
-	Archived      bool                    `protobuf:"varint,8,opt,name=archived,proto3" json:"archived,omitempty"`
-	Tools         []*ConversationToolCall `protobuf:"bytes,9,rep,name=tools,proto3" json:"tools,omitempty"`
-	Thinking      string                  `protobuf:"bytes,10,opt,name=thinking,proto3" json:"thinking,omitempty"`
+	Archived bool `protobuf:"varint,8,opt,name=archived,proto3" json:"archived,omitempty"`
+	// tools carries the structured tool calls made in this message, so the engine
+	// can parse and index tool inputs, commands, and outputs. clyde populates it;
+	// it is empty for messages with no tool calls.
+	Tools []*ConversationToolCall `protobuf:"bytes,9,rep,name=tools,proto3" json:"tools,omitempty"`
+	// thinking is the assistant's internal reasoning text for this message. It can
+	// be sensitive, so a consumer that persists or exposes conversation content
+	// should treat it as private and index it only where that is intended.
+	Thinking      string `protobuf:"bytes,10,opt,name=thinking,proto3" json:"thinking,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1766,14 +1772,27 @@ func (x *ConversationDocument) GetThinking() string {
 	return ""
 }
 
+// ConversationToolCall is one structured tool call attached to a conversation
+// document. clyde derives command and lang_hint from the provider-specific tool
+// input so the engine can route shell and structured payloads without knowing
+// each provider's key layout.
 type ConversationToolCall struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	InputJson     string                 `protobuf:"bytes,2,opt,name=input_json,json=inputJson,proto3" json:"input_json,omitempty"`
-	Command       string                 `protobuf:"bytes,3,opt,name=command,proto3" json:"command,omitempty"`
-	LangHint      string                 `protobuf:"bytes,4,opt,name=lang_hint,json=langHint,proto3" json:"lang_hint,omitempty"`
-	Output        string                 `protobuf:"bytes,5,opt,name=output,proto3" json:"output,omitempty"`
-	IsError       bool                   `protobuf:"varint,6,opt,name=is_error,json=isError,proto3" json:"is_error,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name is the tool name, for example "Bash" or "run_command".
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// input_json is the raw tool input object as JSON.
+	InputJson string `protobuf:"bytes,2,opt,name=input_json,json=inputJson,proto3" json:"input_json,omitempty"`
+	// command is the shell command string when this tool ran a shell, extracted by
+	// clyde from the provider-specific input key. Empty for non-shell tools.
+	Command string `protobuf:"bytes,3,opt,name=command,proto3" json:"command,omitempty"`
+	// lang_hint names the payload language for chunking, for example "bash",
+	// "json", or "markdown". Empty when unknown.
+	LangHint string `protobuf:"bytes,4,opt,name=lang_hint,json=langHint,proto3" json:"lang_hint,omitempty"`
+	// output is the tool result text when captured. Can be large and is sensitive
+	// in the same way tool inputs can be.
+	Output string `protobuf:"bytes,5,opt,name=output,proto3" json:"output,omitempty"`
+	// is_error marks a tool call that returned an error result.
+	IsError       bool `protobuf:"varint,6,opt,name=is_error,json=isError,proto3" json:"is_error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

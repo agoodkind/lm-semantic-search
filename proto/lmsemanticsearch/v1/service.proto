@@ -280,16 +280,35 @@ message ConversationDocument {
   // archived marks a conversation hidden from normal clyde lists. clyde owns
   // this value, and it defaults false when unset.
   bool archived = 8;
+  // tools carries the structured tool calls made in this message, so the engine
+  // can parse and index tool inputs, commands, and outputs. clyde populates it;
+  // it is empty for messages with no tool calls.
   repeated ConversationToolCall tools = 9;
+  // thinking is the assistant's internal reasoning text for this message. It can
+  // be sensitive, so a consumer that persists or exposes conversation content
+  // should treat it as private and index it only where that is intended.
   string thinking = 10;
 }
 
+// ConversationToolCall is one structured tool call attached to a conversation
+// document. clyde derives command and lang_hint from the provider-specific tool
+// input so the engine can route shell and structured payloads without knowing
+// each provider's key layout.
 message ConversationToolCall {
+  // name is the tool name, for example "Bash" or "run_command".
   string name = 1;
+  // input_json is the raw tool input object as JSON.
   string input_json = 2;
+  // command is the shell command string when this tool ran a shell, extracted by
+  // clyde from the provider-specific input key. Empty for non-shell tools.
   string command = 3;
+  // lang_hint names the payload language for chunking, for example "bash",
+  // "json", or "markdown". Empty when unknown.
   string lang_hint = 4;
+  // output is the tool result text when captured. Can be large and is sensitive
+  // in the same way tool inputs can be.
   string output = 5;
+  // is_error marks a tool call that returned an error result.
   bool is_error = 6;
 }
 

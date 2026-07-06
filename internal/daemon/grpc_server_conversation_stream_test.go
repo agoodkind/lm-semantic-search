@@ -41,7 +41,7 @@ func (f *fakeUpsertStreamServer) SendAndClose(response *pb.UpsertConversationDoc
 
 func (f *fakeUpsertStreamServer) Context() context.Context { return context.Background() }
 
-func TestPBConversationDocumentsThreadsToolCallsAndThinking(t *testing.T) {
+func TestPBConversationDocumentsMapsToolCallsAndThinking(t *testing.T) {
 	t.Parallel()
 
 	documents := []*pb.ConversationDocument{
