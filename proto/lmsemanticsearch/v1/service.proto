@@ -280,6 +280,17 @@ message ConversationDocument {
   // archived marks a conversation hidden from normal clyde lists. clyde owns
   // this value, and it defaults false when unset.
   bool archived = 8;
+  repeated ConversationToolCall tools = 9;
+  string thinking = 10;
+}
+
+message ConversationToolCall {
+  string name = 1;
+  string input_json = 2;
+  string command = 3;
+  string lang_hint = 4;
+  string output = 5;
+  bool is_error = 6;
 }
 
 message ConversationSearchResult {
