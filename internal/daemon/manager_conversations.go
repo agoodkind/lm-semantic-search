@@ -24,6 +24,7 @@ import (
 const (
 	conversationCanonicalPathPrefix = "chat:///"
 	conversationChunkMaxBytes       = 60000
+	conversationToolSummaryMaxBytes = 2000
 )
 
 type conversationJobKind string
@@ -564,11 +565,28 @@ func fingerprintConversationDocuments(documents []model.ConversationDocument) st
 		hasher.Write([]byte{0})
 		hasher.Write([]byte(document.Text))
 		hasher.Write([]byte{0})
+		for _, tool := range document.Tools {
+			hasher.Write([]byte(tool.Name))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(tool.InputJSON))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(tool.Command))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(tool.LangHint))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(tool.Output))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(strconv.FormatBool(tool.IsError)))
+			hasher.Write([]byte{0})
+		}
+		hasher.Write([]byte(document.Thinking))
+		hasher.Write([]byte{0})
 	}
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
-func conversationDocumentsToStoredChunks(documents []model.ConversationDocument) ([]model.StoredChunk, error) {
+func conversationDocumentsToStoredChunks(ctx context.Context, documents []model.ConversationDocument) ([]model.StoredChunk, error) {
+	dispatcher := newConversationToolDispatcher()
 	chunks := make([]model.StoredChunk, 0, len(documents))
 	for _, document := range documents {
 		conversationID := strings.TrimSpace(document.ConversationID)
@@ -578,22 +596,68 @@ func conversationDocumentsToStoredChunks(documents []model.ConversationDocument)
 		parentConversationID := strings.TrimSpace(document.ParentConversationID)
 		pieces := splitConversationText(document.Text)
 		for partIndex, piece := range pieces {
-			chunks = append(chunks, model.StoredChunk{
-				Content:              piece,
-				RelativePath:         conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
-				StartLine:            0,
-				EndLine:              0,
-				Language:             "",
-				FileExtension:        "",
-				ConversationID:       conversationID,
-				ParentConversationID: parentConversationID,
-				MessageIndex:         document.MessageIndex,
-				Role:                 document.Role,
-				TimestampUnix:        document.TimestampUnix,
-				WorkspaceRoot:        document.WorkspaceRoot,
-				Archived:             document.Archived,
-				Score:                0,
-			})
+			chunks = append(chunks, newConversationStoredChunk(
+				document,
+				conversationID,
+				parentConversationID,
+				conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
+				piece,
+				"",
+				0,
+				0,
+			))
+		}
+		for toolIndex, toolCall := range document.Tools {
+			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
+			chunks = append(chunks, newConversationStoredChunk(
+				document,
+				conversationID,
+				parentConversationID,
+				toolBasePath+"/tok",
+				conversationToolTokenContent(toolCall),
+				"",
+				0,
+				0,
+			))
+			if toolCall.Command != "" {
+				chunks = append(chunks, newConversationStoredChunk(
+					document,
+					conversationID,
+					parentConversationID,
+					toolBasePath+"/cmd",
+					toolCall.Command,
+					"",
+					0,
+					0,
+				))
+			}
+			extension := conversationToolExtension(toolCall.LangHint)
+			if toolCall.InputJSON != "" {
+				inputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/in", "tool"+extension, toolCall.InputJSON)
+				if err != nil {
+					return nil, err
+				}
+				chunks = append(chunks, inputChunks...)
+			}
+			if toolCall.Output != "" {
+				outputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/out", "tool"+extension, toolCall.Output)
+				if err != nil {
+					return nil, err
+				}
+				chunks = append(chunks, outputChunks...)
+			}
+		}
+		if document.Thinking != "" {
+			chunks = append(chunks, newConversationStoredChunk(
+				document,
+				conversationID,
+				parentConversationID,
+				conversationThinkingPath(conversationID, document.MessageIndex),
+				document.Thinking,
+				"",
+				0,
+				0,
+			))
 		}
 	}
 	return chunks, nil
@@ -624,7 +688,7 @@ func diffConversationMessages(conversationID string, documents []model.Conversat
 	for _, document := range documents {
 		delivered[document.MessageIndex] = struct{}{}
 		stored, found := storedState[document.MessageIndex]
-		if found && stored.Role == document.Role && stored.Text == document.Text {
+		if found && stored.Role == document.Role && stored.Text == document.Text && !conversationDocumentHasDerivedContent(document) {
 			continue
 		}
 		diff.documents = append(diff.documents, document)
@@ -645,6 +709,10 @@ func diffConversationMessages(conversationID string, documents []model.Conversat
 	return diff
 }
 
+func conversationDocumentHasDerivedContent(document model.ConversationDocument) bool {
+	return len(document.Tools) > 0 || document.Thinking != ""
+}
+
 // addRemoval emits both the exact path and the slash-suffixed prefix for one
 // message. The pair is load-bearing: the exact path deletes a single-part
 // row, the slash prefix deletes multipart part rows across shape transitions,
@@ -652,8 +720,10 @@ func diffConversationMessages(conversationID string, documents []model.Conversat
 // (conv/x/12 matches conv/x/120).
 func (diff *conversationMessageDiff) addRemoval(conversationID string, messageIndex int32) {
 	relativePath := conversationRelativePath(conversationID, messageIndex, 0, false)
-	diff.removalPaths = append(diff.removalPaths, relativePath)
-	diff.removalPrefixes = append(diff.removalPrefixes, relativePath+"/")
+	toolPath := conversationToolMessagePath(conversationID, messageIndex)
+	thinkingPath := conversationThinkingPath(conversationID, messageIndex)
+	diff.removalPaths = append(diff.removalPaths, relativePath, toolPath, thinkingPath)
+	diff.removalPrefixes = append(diff.removalPrefixes, relativePath+"/", toolPath+"/", thinkingPath+"/")
 }
 
 func conversationRelativePath(conversationID string, messageIndex int32, partIndex int, multipart bool) string {

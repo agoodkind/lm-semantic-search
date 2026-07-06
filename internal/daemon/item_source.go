@@ -227,14 +227,14 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 		}, nil
 	}
 	if source.rowReader == nil || source.collectionName == "" {
-		return source.fullConversationResult(conversationID, documents, false)
+		return source.fullConversationResult(ctx, conversationID, documents, false)
 	}
 
 	conversationPrefix := conversationRelativePathPrefix(conversationID)
 	storedState, reuse, err := source.rowReader.LoadConversationMessageState(ctx, source.collectionName, conversationPrefix)
 	if err != nil {
 		slog.WarnContext(ctx, "load conversation message state failed; falling back to full conversation reindex", "conversation_id", conversationID, "collection", source.collectionName, "err", err)
-		return source.fullConversationResult(conversationID, documents, true)
+		return source.fullConversationResult(ctx, conversationID, documents, true)
 	}
 	if storedState == nil {
 		storedState = map[int32]semantic.StoredMessageState{}
@@ -244,7 +244,7 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 	}
 
 	delta := diffConversationMessages(conversationID, documents, storedState)
-	chunks, err := conversationDocumentsToStoredChunks(delta.documents)
+	chunks, err := conversationDocumentsToStoredChunks(ctx, delta.documents)
 	if err != nil {
 		return indexer.OneFileResult{
 			Chunks:          nil,
@@ -271,8 +271,8 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 	}, nil
 }
 
-func (source conversationItemSource) fullConversationResult(conversationID string, documents []model.ConversationDocument, removalOverride bool) (indexer.OneFileResult, error) {
-	chunks, err := conversationDocumentsToStoredChunks(documents)
+func (source conversationItemSource) fullConversationResult(ctx context.Context, conversationID string, documents []model.ConversationDocument, removalOverride bool) (indexer.OneFileResult, error) {
+	chunks, err := conversationDocumentsToStoredChunks(ctx, documents)
 	if err != nil {
 		return indexer.OneFileResult{
 			Chunks:          nil,
@@ -299,15 +299,15 @@ func (source conversationItemSource) fullConversationResult(conversationID strin
 	}
 	if removalOverride {
 		result.RemovalOverride = true
-		result.RemovalPrefixes = []string{conversationRelativePathPrefix(conversationID)}
+		result.RemovalPrefixes = conversationFullRemovalPrefixes(conversationID)
 	}
 	return result, nil
 }
 
 func (source conversationItemSource) removalFor(itemIDs []string) semantic.Removal {
-	prefixes := make([]string, 0, len(itemIDs))
+	prefixes := make([]string, 0, len(itemIDs)*3)
 	for _, conversationID := range itemIDs {
-		prefixes = append(prefixes, conversationRelativePathPrefix(conversationID))
+		prefixes = append(prefixes, conversationFullRemovalPrefixes(conversationID)...)
 	}
 	return semantic.RemovePrefixes(prefixes)
 }

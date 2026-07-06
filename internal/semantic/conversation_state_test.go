@@ -272,6 +272,51 @@ func TestLoadConversationMessageStateFromIteratorReuseMapMatchesContentKeysPerRo
 	assertReuseMap(t, reuse, wantReuse)
 }
 
+func TestLoadConversationMessageStateFromIteratorSkipsDerivedConversationRows(t *testing.T) {
+	rows := []conversationStateTestRow{
+		{
+			relativePath:    "conv/derived/5",
+			role:            "assistant",
+			content:         "visible text",
+			messageIndex:    5,
+			hasMessageIndex: true,
+			vector:          []float32{1},
+		},
+		{
+			relativePath:    "convtool/derived/5/0/tok",
+			role:            "assistant",
+			content:         "Bash cat /tmp/input.txt",
+			messageIndex:    5,
+			hasMessageIndex: true,
+			vector:          []float32{2},
+		},
+		{
+			relativePath:    "convthink/derived/5",
+			role:            "assistant",
+			content:         "private reasoning",
+			messageIndex:    5,
+			hasMessageIndex: true,
+			vector:          []float32{3},
+		},
+	}
+	iterator := &conversationStateTestIterator{
+		pages: []milvusclient.ResultSet{conversationStateResultSet(t, rows, true)},
+	}
+
+	state, reuse, err := loadConversationMessageStateFromIterator(context.Background(), "conv_chunks_test", "conv/derived/", iterator)
+	if err != nil {
+		t.Fatalf("loadConversationMessageStateFromIterator returned error: %v", err)
+	}
+
+	wantState := map[int32]StoredMessageState{
+		5: {Role: "assistant", Text: "visible text"},
+	}
+	assertStoredMessageState(t, state, wantState)
+	assertReuseMap(t, reuse, map[string][]float32{
+		contentVectorKey("visible text"): {1},
+	})
+}
+
 func TestLoadConversationMessageStateRejectsNegativePathIndexes(t *testing.T) {
 	tests := []struct {
 		name         string

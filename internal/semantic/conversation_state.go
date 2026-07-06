@@ -122,23 +122,16 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 	messageIndexColumn := resultSet.GetColumn(messageIndexFieldName)
 	legacyRows := 0
 	for rowIndex := range resultSet.ResultCount {
-		contentValue, contentErr := contentColumn.GetAsString(rowIndex)
-		if contentErr != nil {
-			slog.Error("read conversation state content column failed", "index", rowIndex, "err", contentErr)
-			return legacyRows, fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
-		}
-		vector, vectorErr := vectorAt(vectorColumn, rowIndex)
-		if vectorErr != nil {
-			slog.Error("read conversation state vector column failed", "index", rowIndex, "err", vectorErr)
-			return legacyRows, fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
-		}
-		reuse[contentVectorKey(contentValue)] = vector
-
 		messageIndex, ok, messageIndexErr := messageIndexAt(messageIndexColumn, rowIndex)
 		if messageIndexErr != nil {
 			return legacyRows, messageIndexErr
 		}
 		if !ok {
+			contentValue, vector, contentErr := conversationContentVectorAt(contentColumn, vectorColumn, rowIndex)
+			if contentErr != nil {
+				return legacyRows, contentErr
+			}
+			reuse[contentVectorKey(contentValue)] = vector
 			legacyRows++
 			continue
 		}
@@ -150,6 +143,14 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 			slog.Error("read conversation state relative path column failed", "index", rowIndex, "err", relativePathErr)
 			return legacyRows, fmt.Errorf("read relative path column at %d: %w", rowIndex, relativePathErr)
 		}
+		if isDerivedConversationRelativePath(relativePath) {
+			continue
+		}
+		contentValue, vector, contentErr := conversationContentVectorAt(contentColumn, vectorColumn, rowIndex)
+		if contentErr != nil {
+			return legacyRows, contentErr
+		}
+		reuse[contentVectorKey(contentValue)] = vector
 		role, roleErr := roleColumn.GetAsString(rowIndex)
 		if roleErr != nil {
 			slog.Error("read conversation state role column failed", "index", rowIndex, "err", roleErr)
@@ -163,6 +164,24 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 		appendStoredMessagePart(assemblies, safeInt32FromInt64(messageIndex), role, partIndex, contentValue)
 	}
 	return legacyRows, nil
+}
+
+func conversationContentVectorAt(contentColumn column.Column, vectorColumn column.Column, rowIndex int) (string, []float32, error) {
+	contentValue, contentErr := contentColumn.GetAsString(rowIndex)
+	if contentErr != nil {
+		slog.Error("read conversation state content column failed", "index", rowIndex, "err", contentErr)
+		return "", nil, fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
+	}
+	vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+	if vectorErr != nil {
+		slog.Error("read conversation state vector column failed", "index", rowIndex, "err", vectorErr)
+		return "", nil, fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
+	}
+	return contentValue, vector, nil
+}
+
+func isDerivedConversationRelativePath(relativePath string) bool {
+	return strings.HasPrefix(relativePath, "convtool/") || strings.HasPrefix(relativePath, "convthink/")
 }
 
 func messageIndexAt(messageIndexColumn column.Column, rowIndex int) (int64, bool, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -860,7 +861,7 @@ func TestConversationDocumentsToStoredChunksSplitsOversizedMessage(t *testing.T)
 	t.Parallel()
 
 	text := strings.Repeat("a", conversationChunkMaxBytes+5)
-	chunks, err := conversationDocumentsToStoredChunks([]model.ConversationDocument{{
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
 		ConversationID:       "thread-large",
 		ParentConversationID: "thread-large-parent",
 		MessageIndex:         7,
@@ -938,8 +939,8 @@ func TestConversationIndexOneEmbedsOnlyAppendedMessage(t *testing.T) {
 	if !result.RemovalOverride {
 		t.Fatal("RemovalOverride = false, want true")
 	}
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-append/2"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-append/2/"})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-append", 2))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-append", 2))
 	assertReuseVector(t, result.ReuseVectors, "reuse-alpha", []float32{1, 2})
 	assertMessageStateCalls(t, reader.callsSnapshot(), []messageStateCall{{
 		Collection: "conv_chunks_live",
@@ -978,8 +979,8 @@ func TestConversationIndexOneReindexesOnlyEditedMessage(t *testing.T) {
 	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
 		{relativePath: "conv/conv-edit/1", messageIndex: 1, role: "assistant", content: "new answer"},
 	})
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-edit/1"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-edit/1/"})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-edit", 1))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-edit", 1))
 }
 
 func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
@@ -1012,8 +1013,8 @@ func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
 	if len(result.Chunks) != 0 {
 		t.Fatalf("Chunks = %+v, want none for stale-only delta", result.Chunks)
 	}
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-stale/2"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-stale/2/"})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-stale", 2))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-stale", 2))
 	assertReuseVector(t, result.ReuseVectors, "reuse-stale", []float32{3})
 
 	manager, _, _ := newTestManager(t)
@@ -1058,8 +1059,8 @@ func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
 		t.Fatalf("stale removal chunks = %d, want 0", calls[0].Chunks)
 	}
 	assertRemovalEqual(t, calls[0].Removal, semantic.Removal{
-		Paths:    []string{"conv/conv-stale/2"},
-		Prefixes: []string{"conv/conv-stale/2/"},
+		Paths:    conversationRemovalPathsForTest("conv-stale", 2),
+		Prefixes: conversationRemovalPrefixesForTest("conv-stale", 2),
 	})
 }
 
@@ -1093,8 +1094,8 @@ func TestConversationIndexOneMultipartTransitions(t *testing.T) {
 		assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
 			{relativePath: "conv/conv-shape/7", messageIndex: 7, role: "assistant", content: "short"},
 		})
-		assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-shape/7"})
-		assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-shape/7/"})
+		assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-shape", 7))
+		assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-shape", 7))
 	})
 
 	t.Run("single stored row becomes multipart", func(t *testing.T) {
@@ -1132,8 +1133,8 @@ func TestConversationIndexOneMultipartTransitions(t *testing.T) {
 		if result.Chunks[0].Content+result.Chunks[1].Content != text {
 			t.Fatalf("multipart content did not round trip to delivered text")
 		}
-		assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-shape/8"})
-		assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-shape/8/"})
+		assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-shape", 8))
+		assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-shape", 8))
 	})
 }
 
@@ -1166,8 +1167,8 @@ func TestConversationIndexOneSiblingIndexSafety(t *testing.T) {
 	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
 		{relativePath: "conv/conv-sibling/12", messageIndex: 12, role: "user", content: "new twelve"},
 	})
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-sibling/12"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-sibling/12/"})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-sibling", 12))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-sibling", 12))
 }
 
 func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T) {
@@ -1196,7 +1197,7 @@ func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T
 		{relativePath: "conv/conv-load-failure/1", messageIndex: 1, role: "assistant", content: "answer"},
 	})
 	assertStringSliceEqual(t, result.RemovalPaths, nil)
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-load-failure/"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationFullRemovalPrefixes("conv-load-failure"))
 	if result.ReuseVectors != nil {
 		t.Fatalf("ReuseVectors = %v, want nil on loader-error fallback", result.ReuseVectors)
 	}
@@ -1267,8 +1268,8 @@ func TestConversationIndexOneHealsMissingRows(t *testing.T) {
 	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
 		{relativePath: "conv/conv-heal/1", messageIndex: 1, role: "assistant", content: "restored"},
 	})
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-heal/1"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-heal/1/"})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-heal", 1))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-heal", 1))
 }
 
 func TestConversationIndexOneHealsLegacyRowsWithoutDuplicates(t *testing.T) {
@@ -1301,8 +1302,14 @@ func TestConversationIndexOneHealsLegacyRowsWithoutDuplicates(t *testing.T) {
 		{relativePath: "conv/conv-legacy/0", messageIndex: 0, role: "user", content: "hello"},
 		{relativePath: "conv/conv-legacy/1", messageIndex: 1, role: "assistant", content: "answer"},
 	})
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-legacy/0", "conv/conv-legacy/1"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-legacy/0/", "conv/conv-legacy/1/"})
+	assertStringSliceEqual(t, result.RemovalPaths, append(
+		conversationRemovalPathsForTest("conv-legacy", 0),
+		conversationRemovalPathsForTest("conv-legacy", 1)...,
+	))
+	assertStringSliceEqual(t, result.RemovalPrefixes, append(
+		conversationRemovalPrefixesForTest("conv-legacy", 0),
+		conversationRemovalPrefixesForTest("conv-legacy", 1)...,
+	))
 	assertReuseVector(t, result.ReuseVectors, "legacy-zero", []float32{1})
 	assertReuseVector(t, result.ReuseVectors, "legacy-one", []float32{2})
 }
@@ -1330,8 +1337,14 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	runConversationDeltaIngest(t, manager, ctx, collectionID, coldDocuments, map[string]string{conversationID: "fp-cold"})
 	assertReindexCallCount(t, fake, 1)
 	assertReindexCall(t, fake.reindexCallsSnapshot()[0], 2, semantic.Removal{
-		Paths:    []string{"conv/conv-e2e/0", "conv/conv-e2e/1"},
-		Prefixes: []string{"conv/conv-e2e/0/", "conv/conv-e2e/1/"},
+		Paths: append(
+			conversationRemovalPathsForTest("conv-e2e", 0),
+			conversationRemovalPathsForTest("conv-e2e", 1)...,
+		),
+		Prefixes: append(
+			conversationRemovalPrefixesForTest("conv-e2e", 0),
+			conversationRemovalPrefixesForTest("conv-e2e", 1)...,
+		),
 	})
 	stateStore.setFromDocuments(prefix, coldDocuments)
 
@@ -1359,8 +1372,8 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	runConversationDeltaIngest(t, manager, ctx, collectionID, appendedDocuments, map[string]string{conversationID: "fp-appended"})
 	assertReindexCallCount(t, fake, 2)
 	assertReindexCall(t, fake.reindexCallsSnapshot()[1], 1, semantic.Removal{
-		Paths:    []string{"conv/conv-e2e/2"},
-		Prefixes: []string{"conv/conv-e2e/2/"},
+		Paths:    conversationRemovalPathsForTest("conv-e2e", 2),
+		Prefixes: conversationRemovalPrefixesForTest("conv-e2e", 2),
 	})
 	stateStore.setFromDocuments(prefix, appendedDocuments)
 
@@ -1369,8 +1382,8 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	runConversationDeltaIngest(t, manager, ctx, collectionID, editedDocuments, map[string]string{conversationID: "fp-edited"})
 	assertReindexCallCount(t, fake, 3)
 	assertReindexCall(t, fake.reindexCallsSnapshot()[2], 1, semantic.Removal{
-		Paths:    []string{"conv/conv-e2e/1"},
-		Prefixes: []string{"conv/conv-e2e/1/"},
+		Paths:    conversationRemovalPathsForTest("conv-e2e", 1),
+		Prefixes: conversationRemovalPrefixesForTest("conv-e2e", 1),
 	})
 	stateStore.setFromDocuments(prefix, editedDocuments)
 
@@ -1378,8 +1391,8 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	runConversationDeltaIngest(t, manager, ctx, collectionID, staleDocuments, map[string]string{conversationID: "fp-stale"})
 	assertReindexCallCount(t, fake, 4)
 	assertReindexCall(t, fake.reindexCallsSnapshot()[3], 0, semantic.Removal{
-		Paths:    []string{"conv/conv-e2e/2"},
-		Prefixes: []string{"conv/conv-e2e/2/"},
+		Paths:    conversationRemovalPathsForTest("conv-e2e", 2),
+		Prefixes: conversationRemovalPrefixesForTest("conv-e2e", 2),
 	})
 }
 
@@ -2330,6 +2343,75 @@ func assertRemovalEqual(t *testing.T, got semantic.Removal, want semantic.Remova
 	assertStringSliceEqual(t, got.Prefixes, want.Prefixes)
 }
 
+func conversationRemovalPathsForTest(conversationID string, messageIndex int32) []string {
+	messageSegment := strconv.Itoa(int(messageIndex))
+	return []string{
+		conversationRelativePath(conversationID, messageIndex, 0, false),
+		"convtool/" + conversationID + "/" + messageSegment,
+		"convthink/" + conversationID + "/" + messageSegment,
+	}
+}
+
+func conversationRemovalPrefixesForTest(conversationID string, messageIndex int32) []string {
+	messageSegment := strconv.Itoa(int(messageIndex))
+	return []string{
+		conversationRelativePath(conversationID, messageIndex, 0, false) + "/",
+		"convtool/" + conversationID + "/" + messageSegment + "/",
+		"convthink/" + conversationID + "/" + messageSegment + "/",
+	}
+}
+
+func findConversationChunkForTest(t *testing.T, chunks []model.StoredChunk, relativePath string) model.StoredChunk {
+	t.Helper()
+	for _, chunk := range chunks {
+		if chunk.RelativePath == relativePath {
+			return chunk
+		}
+	}
+	t.Fatalf("chunk %q not found in %+v", relativePath, chunks)
+	return model.StoredChunk{}
+}
+
+func findConversationChunkWithPrefixForTest(t *testing.T, chunks []model.StoredChunk, prefix string) model.StoredChunk {
+	t.Helper()
+	for _, chunk := range chunks {
+		if strings.HasPrefix(chunk.RelativePath, prefix) {
+			return chunk
+		}
+	}
+	t.Fatalf("chunk prefix %q not found in %+v", prefix, chunks)
+	return model.StoredChunk{}
+}
+
+func reconstructConversationTextRowsForTest(chunks []model.StoredChunk, conversationID string, messageIndex int32) string {
+	var builder strings.Builder
+	for _, chunk := range conversationTextRowsForTest(chunks, conversationID, messageIndex) {
+		builder.WriteString(chunk.Content)
+	}
+	return builder.String()
+}
+
+func conversationTextRowSignaturesForTest(chunks []model.StoredChunk, conversationID string, messageIndex int32) []string {
+	textRows := conversationTextRowsForTest(chunks, conversationID, messageIndex)
+	signatures := make([]string, 0, len(textRows))
+	for _, chunk := range textRows {
+		signatures = append(signatures, chunk.RelativePath+"\x00"+chunk.Content)
+	}
+	return signatures
+}
+
+func conversationTextRowsForTest(chunks []model.StoredChunk, conversationID string, messageIndex int32) []model.StoredChunk {
+	exactPath := conversationRelativePath(conversationID, messageIndex, 0, false)
+	partPrefix := exactPath + "/"
+	textRows := make([]model.StoredChunk, 0)
+	for _, chunk := range chunks {
+		if chunk.RelativePath == exactPath || strings.HasPrefix(chunk.RelativePath, partPrefix) {
+			textRows = append(textRows, chunk)
+		}
+	}
+	return textRows
+}
+
 // TestConversationIngestReuseLoadFailureFallsBackToFullEmbed proves a failed
 // message state and reuse load does not fail the job: the conversation falls
 // back to a full prefix reindex with nil override reuse, and the per-item reuse
@@ -2393,6 +2475,153 @@ func TestItemSourceAbsencePolicy(t *testing.T) {
 	authoritative := newConversationItemSource("conv_chunks_test", map[string]string{}, nil, nil, absenceDeleteGuarded)
 	if authoritative.absencePolicy() != absenceDeleteGuarded {
 		t.Fatalf("authoritative conversation absencePolicy = %v, want absenceDeleteGuarded", authoritative.absencePolicy())
+	}
+}
+
+func TestConversationDocumentsToStoredChunksEmbedsBashToolTokens(t *testing.T) {
+	t.Parallel()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID:       "conv-tool",
+		ParentConversationID: "parent-tool",
+		MessageIndex:         3,
+		Role:                 "assistant",
+		TimestampUnix:        1712345700,
+		Text:                 "ran a command",
+		WorkspaceRoot:        "/workspace",
+		Archived:             true,
+		Tools: []model.ConversationToolCall{{
+			Name:     "Bash",
+			Command:  "cat /tmp/input.txt > /tmp/output.txt",
+			LangHint: "bash",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool/3/0/tok")
+	for _, expected := range []string{"Bash", "cat", "/tmp/input.txt", "/tmp/output.txt"} {
+		if !strings.Contains(tokenChunk.Content, expected) {
+			t.Fatalf("token chunk content = %q, want to contain %q", tokenChunk.Content, expected)
+		}
+	}
+	if tokenChunk.ParentConversationID != "parent-tool" {
+		t.Fatalf("ParentConversationID = %q, want parent-tool", tokenChunk.ParentConversationID)
+	}
+	if tokenChunk.WorkspaceRoot != "/workspace" {
+		t.Fatalf("WorkspaceRoot = %q, want /workspace", tokenChunk.WorkspaceRoot)
+	}
+	if !tokenChunk.Archived {
+		t.Fatal("Archived = false, want true")
+	}
+
+	commandChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool/3/0/cmd")
+	if commandChunk.Content != "cat /tmp/input.txt > /tmp/output.txt" {
+		t.Fatalf("command chunk content = %q, want raw command", commandChunk.Content)
+	}
+}
+
+func TestConversationDocumentsToStoredChunksSplitsJSONToolInput(t *testing.T) {
+	t.Parallel()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID: "conv-json",
+		MessageIndex:   4,
+		Role:           "assistant",
+		Text:           "read input",
+		Tools: []model.ConversationToolCall{{
+			Name:      "Read",
+			InputJSON: `{"path":"/tmp/input.json","limit":5}`,
+			LangHint:  "json",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	inputChunk := findConversationChunkWithPrefixForTest(t, chunks, "convtool/conv-json/4/0/in/")
+	if !strings.Contains(inputChunk.Content, "/tmp/input.json") {
+		t.Fatalf("input chunk content = %q, want JSON input", inputChunk.Content)
+	}
+}
+
+func TestConversationDocumentsToStoredChunksKeepsTextDeltaStable(t *testing.T) {
+	t.Parallel()
+
+	document := model.ConversationDocument{
+		ConversationID: "conv-stable",
+		MessageIndex:   7,
+		Role:           "assistant",
+		Text:           "visible transcript text",
+		Tools: []model.ConversationToolCall{{
+			Name:      "Read",
+			InputJSON: `{"file":"/tmp/private.json"}`,
+			LangHint:  "json",
+		}},
+		Thinking: "private reasoning",
+	}
+	firstChunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{document})
+	if err != nil {
+		t.Fatalf("first conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+	secondChunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{document})
+	if err != nil {
+		t.Fatalf("second conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	reconstructed := reconstructConversationTextRowsForTest(firstChunks, document.ConversationID, document.MessageIndex)
+	if reconstructed != document.Text {
+		t.Fatalf("reconstructed text = %q, want %q", reconstructed, document.Text)
+	}
+	assertStringSliceEqual(
+		t,
+		conversationTextRowSignaturesForTest(firstChunks, document.ConversationID, document.MessageIndex),
+		conversationTextRowSignaturesForTest(secondChunks, document.ConversationID, document.MessageIndex),
+	)
+}
+
+func TestConversationDocumentsToStoredChunksEmbedsThinking(t *testing.T) {
+	t.Parallel()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID: "conv-think",
+		MessageIndex:   2,
+		Role:           "assistant",
+		Text:           "answer",
+		Thinking:       "private reasoning",
+	}})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	thinkingChunk := findConversationChunkForTest(t, chunks, "convthink/conv-think/2")
+	if thinkingChunk.Content != "private reasoning" {
+		t.Fatalf("thinking chunk content = %q, want private reasoning", thinkingChunk.Content)
+	}
+}
+
+func TestConversationDocumentsToStoredChunksEmbedsToolOnlyTokenChunk(t *testing.T) {
+	t.Parallel()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID: "conv-tool-only",
+		MessageIndex:   0,
+		Role:           "assistant",
+		Text:           "",
+		Tools: []model.ConversationToolCall{{
+			Name:      "Read",
+			InputJSON: `{"file":"/tmp/tool-only.txt"}`,
+			LangHint:  "json",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool-only/0/0/tok")
+	if !strings.Contains(tokenChunk.Content, "Read") {
+		t.Fatalf("token chunk content = %q, want tool name", tokenChunk.Content)
 	}
 }
 
