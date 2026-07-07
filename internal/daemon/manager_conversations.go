@@ -678,7 +678,7 @@ type conversationMessageDiff struct {
 // New messages also carry exact removals because legacy rows without
 // messageIndex are invisible to storedState but still live under the same
 // conv/<id>/<message> paths; genuinely new messages pay one no-op delete.
-func diffConversationMessages(conversationID string, documents []model.ConversationDocument, storedState map[int32]semantic.StoredMessageState) conversationMessageDiff {
+func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, storedState map[int32]semantic.StoredMessageState, reuse map[string][]float32) (conversationMessageDiff, error) {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
 		removalPaths:    make([]string, 0),
@@ -688,8 +688,14 @@ func diffConversationMessages(conversationID string, documents []model.Conversat
 	for _, document := range documents {
 		delivered[document.MessageIndex] = struct{}{}
 		stored, found := storedState[document.MessageIndex]
-		if found && stored.Role == document.Role && stored.Text == document.Text && !conversationDocumentHasDerivedContent(document) {
-			continue
+		if found {
+			matches, err := conversationDocumentMatchesStored(ctx, document, stored, reuse)
+			if err != nil {
+				return diff, err
+			}
+			if matches {
+				continue
+			}
 		}
 		diff.documents = append(diff.documents, document)
 		diff.addRemoval(conversationID, document.MessageIndex)
@@ -706,11 +712,42 @@ func diffConversationMessages(conversationID string, documents []model.Conversat
 	for _, staleIndex := range staleIndexes {
 		diff.addRemoval(conversationID, staleIndex)
 	}
-	return diff
+	return diff, nil
 }
 
-func conversationDocumentHasDerivedContent(document model.ConversationDocument) bool {
-	return len(document.Tools) > 0 || document.Thinking != ""
+func conversationDocumentMatchesStored(ctx context.Context, document model.ConversationDocument, stored semantic.StoredMessageState, reuse map[string][]float32) (bool, error) {
+	if stored.Role != document.Role || stored.Text != document.Text {
+		return false, nil
+	}
+	documentHasDerived := len(document.Tools) > 0 || document.Thinking != ""
+	if !stored.HasDerivedContent && !documentHasDerived {
+		return true, nil
+	}
+	if !documentHasDerived {
+		return false, nil
+	}
+	chunks, err := conversationDocumentsToStoredChunks(ctx, []model.ConversationDocument{document})
+	if err != nil {
+		return false, err
+	}
+	currentHasDerived := false
+	for _, chunk := range chunks {
+		if !isDerivedConversationChunk(chunk) {
+			continue
+		}
+		currentHasDerived = true
+		if _, found := reuse[semantic.ContentVectorKey(chunk.Content)]; !found {
+			return false, nil
+		}
+	}
+	if stored.HasDerivedContent != currentHasDerived {
+		return false, nil
+	}
+	return true, nil
+}
+
+func isDerivedConversationChunk(chunk model.StoredChunk) bool {
+	return strings.HasPrefix(chunk.RelativePath, "convtool/") || strings.HasPrefix(chunk.RelativePath, "convthink/")
 }
 
 // addRemoval emits both the exact path and the slash-suffixed prefix for one

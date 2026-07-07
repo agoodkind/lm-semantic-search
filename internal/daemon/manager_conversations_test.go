@@ -1396,6 +1396,98 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	})
 }
 
+func TestConversationIngestAppendedMessageDoesNotReembedStoredDerivedRows(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	stateStore := newConversationStateStore()
+	storedReuse := map[string][]float32{}
+	fake := &fakeSemantic{
+		loadMessageState: func(_ context.Context, _ string, prefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
+			return stateStore.state(prefix), cloneReuseVectors(storedReuse), nil
+		},
+	}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-derived-append"
+	conversationID := "conv-derived-append"
+	prefix := conversationRelativePathPrefix(conversationID)
+
+	coldDocuments := []model.ConversationDocument{
+		{ConversationID: conversationID, MessageIndex: 0, Role: "user", Text: "hello"},
+		{
+			ConversationID: conversationID,
+			MessageIndex:   1,
+			Role:           "assistant",
+			Text:           "answer",
+			Tools: []model.ConversationToolCall{{
+				Name:      "Read",
+				InputJSON: `{"file":"/tmp/input.json"}`,
+				LangHint:  "json",
+			}},
+			Thinking: "private reasoning",
+		},
+	}
+	runConversationDeltaIngest(t, manager, ctx, collectionID, coldDocuments, map[string]string{conversationID: "fp-cold"})
+	assertReindexCallCount(t, fake, 1)
+	stateStore.setFromDocuments(prefix, coldDocuments)
+	storedReuse = reuseForConversationDocuments(t, coldDocuments)
+
+	appendedDocuments := append([]model.ConversationDocument{}, coldDocuments...)
+	appendedDocuments = append(appendedDocuments, model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   2,
+		Role:           "user",
+		Text:           "next question",
+	})
+	runConversationDeltaIngest(t, manager, ctx, collectionID, appendedDocuments, map[string]string{conversationID: "fp-appended"})
+
+	assertReindexCallCount(t, fake, 2)
+	assertReindexCall(t, fake.reindexCallsSnapshot()[1], 1, semantic.Removal{
+		Paths:    conversationRemovalPathsForTest(conversationID, 2),
+		Prefixes: conversationRemovalPrefixesForTest(conversationID, 2),
+	})
+}
+
+func TestConversationIndexOneReemitsChangedDerivedContentWithSameText(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-derived-change"
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{
+			1: {Role: "assistant", Text: "answer", HasDerivedContent: true},
+		},
+		reuse: map[string][]float32{
+			semantic.ContentVectorKey("old private reasoning"): {1},
+		},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-derived-change"},
+		[]model.ConversationDocument{{
+			ConversationID: conversationID,
+			MessageIndex:   1,
+			Role:           "assistant",
+			Text:           "answer",
+			Thinking:       "new private reasoning",
+		}},
+		reader,
+		absenceRetain,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+
+	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+		{relativePath: "conv/conv-derived-change/1", messageIndex: 1, role: "assistant", content: "answer"},
+		{relativePath: "convthink/conv-derived-change/1", messageIndex: 1, role: "assistant", content: "new private reasoning"},
+	})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest(conversationID, 1))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest(conversationID, 1))
+}
+
 func TestConversationRPCsQueueJournaledJobs(t *testing.T) {
 	t.Parallel()
 
@@ -1669,11 +1761,29 @@ func (store *conversationStateStore) state(prefix string) map[int32]semantic.Sto
 func (store *conversationStateStore) setFromDocuments(prefix string, documents []model.ConversationDocument) {
 	next := make(map[int32]semantic.StoredMessageState, len(documents))
 	for _, document := range documents {
-		next[document.MessageIndex] = semantic.StoredMessageState{Role: document.Role, Text: document.Text}
+		next[document.MessageIndex] = semantic.StoredMessageState{
+			Role:              document.Role,
+			Text:              document.Text,
+			HasDerivedContent: len(document.Tools) > 0 || document.Thinking != "",
+		}
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.states[prefix] = next
+}
+
+func reuseForConversationDocuments(t *testing.T, documents []model.ConversationDocument) map[string][]float32 {
+	t.Helper()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+	reuse := make(map[string][]float32, len(chunks))
+	for index, chunk := range chunks {
+		reuse[semantic.ContentVectorKey(chunk.Content)] = []float32{float32(index + 1)}
+	}
+	return reuse
 }
 
 func runConversationDeltaIngest(t *testing.T, manager *Manager, ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string) {
