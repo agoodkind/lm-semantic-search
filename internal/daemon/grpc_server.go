@@ -943,6 +943,9 @@ func pbConversationToolCalls(tools []*pb.ConversationToolCall) []model.Conversat
 			IsError:   tool.GetIsError(),
 		})
 	}
+	if len(result) == 0 {
+		return nil
+	}
 	return result
 }
 
