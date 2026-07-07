@@ -609,27 +609,21 @@ func conversationDocumentsToStoredChunks(ctx context.Context, documents []model.
 		}
 		for toolIndex, toolCall := range document.Tools {
 			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
-			chunks = append(chunks, newConversationStoredChunk(
+			chunks = append(chunks, splitConversationDerivedContent(
 				document,
 				conversationID,
 				parentConversationID,
 				toolBasePath+"/tok",
 				conversationToolTokenContent(toolCall),
-				"",
-				0,
-				0,
-			))
+			)...)
 			if toolCall.Command != "" {
-				chunks = append(chunks, newConversationStoredChunk(
+				chunks = append(chunks, splitConversationDerivedContent(
 					document,
 					conversationID,
 					parentConversationID,
 					toolBasePath+"/cmd",
 					toolCall.Command,
-					"",
-					0,
-					0,
-				))
+				)...)
 			}
 			extension := conversationToolExtension(toolCall.LangHint)
 			if toolCall.InputJSON != "" {
@@ -648,16 +642,13 @@ func conversationDocumentsToStoredChunks(ctx context.Context, documents []model.
 			}
 		}
 		if document.Thinking != "" {
-			chunks = append(chunks, newConversationStoredChunk(
+			chunks = append(chunks, splitConversationDerivedContent(
 				document,
 				conversationID,
 				parentConversationID,
 				conversationThinkingPath(conversationID, document.MessageIndex),
 				document.Thinking,
-				"",
-				0,
-				0,
-			))
+			)...)
 		}
 	}
 	return chunks, nil

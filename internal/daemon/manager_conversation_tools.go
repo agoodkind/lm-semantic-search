@@ -63,6 +63,29 @@ func splitConversationToolPayload(ctx context.Context, dispatcher *chunk.Dispatc
 	return chunks, nil
 }
 
+func splitConversationDerivedContent(document model.ConversationDocument, conversationID string, parentConversationID string, relativePath string, content string) []model.StoredChunk {
+	pieces := splitConversationText(content)
+	chunks := make([]model.StoredChunk, 0, len(pieces))
+	multipart := len(pieces) > 1
+	for partIndex, piece := range pieces {
+		chunkRelativePath := relativePath
+		if multipart {
+			chunkRelativePath = fmt.Sprintf("%s/%d", relativePath, partIndex)
+		}
+		chunks = append(chunks, newConversationStoredChunk(
+			document,
+			conversationID,
+			parentConversationID,
+			chunkRelativePath,
+			piece,
+			"",
+			0,
+			0,
+		))
+	}
+	return chunks
+}
+
 func conversationToolTokenContent(toolCall model.ConversationToolCall) string {
 	tokens := make([]string, 0)
 	appendConversationToken(&tokens, toolCall.Name)
@@ -71,7 +94,7 @@ func conversationToolTokenContent(toolCall model.ConversationToolCall) string {
 		appendConversationShellTokens(&tokens, command)
 	}
 	if toolCall.InputJSON != "" {
-		appendConversationToken(&tokens, truncateUTF8Bytes(toolCall.InputJSON, conversationToolSummaryMaxBytes))
+		appendConversationToken(&tokens, truncateConversationToolSummary(toolCall.InputJSON))
 	}
 	return strings.Join(tokens, "\n")
 }
@@ -84,7 +107,7 @@ func conversationToolTokenContent(toolCall model.ConversationToolCall) string {
 func appendConversationShellTokens(tokens *[]string, command string) {
 	decomposition := shelldecomp.Parse(command, "/", "")
 	if decomposition == nil || decomposition.IsOpaque() {
-		appendConversationToken(tokens, command)
+		appendConversationToken(tokens, truncateConversationToolSummary(command))
 		return
 	}
 	tokenCount := len(*tokens)
@@ -98,16 +121,18 @@ func appendConversationShellTokens(tokens *[]string, command string) {
 		appendConversationShellTarget(tokens, writeTarget.Resolvable, writeTarget.Path, writeTarget.Raw)
 	}
 	if len(*tokens) == tokenCount {
-		appendConversationToken(tokens, command)
+		appendConversationToken(tokens, truncateConversationToolSummary(command))
 	}
 }
 
-// appendConversationShellTarget adds a resolved absolute path when shelldecomp
-// pinned one, and otherwise the raw token, so an unresolvable target is still
-// searchable without indexing the Unresolvable sentinel.
+// appendConversationShellTarget keeps the resolved absolute path and the raw
+// token when they differ, since commands are decomposed from cwd "/".
 func appendConversationShellTarget(tokens *[]string, resolvable bool, path string, raw string) {
 	if resolvable {
 		appendConversationToken(tokens, path)
+		if strings.TrimSpace(raw) != "" && strings.TrimSpace(raw) != strings.TrimSpace(path) {
+			appendConversationToken(tokens, raw)
+		}
 		return
 	}
 	appendConversationToken(tokens, raw)
@@ -119,6 +144,10 @@ func appendConversationToken(tokens *[]string, value string) {
 		return
 	}
 	*tokens = append(*tokens, trimmedValue)
+}
+
+func truncateConversationToolSummary(value string) string {
+	return truncateUTF8Bytes(value, conversationToolSummaryMaxBytes)
 }
 
 func truncateUTF8Bytes(value string, maxBytes int) string {

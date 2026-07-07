@@ -2493,6 +2493,49 @@ func findConversationChunkWithPrefixForTest(t *testing.T, chunks []model.StoredC
 	return model.StoredChunk{}
 }
 
+func assertMultipartConversationChunkContentForTest(t *testing.T, chunks []model.StoredChunk, relativePathPrefix string, expectedContent string) {
+	t.Helper()
+
+	partCount := 0
+	var joined strings.Builder
+	for _, chunk := range chunks {
+		if !strings.HasPrefix(chunk.RelativePath, relativePathPrefix) {
+			continue
+		}
+		partCount++
+		if len(chunk.Content) > conversationChunkMaxBytes {
+			t.Fatalf("chunk %q has %d bytes, want at most %d", chunk.RelativePath, len(chunk.Content), conversationChunkMaxBytes)
+		}
+		joined.WriteString(chunk.Content)
+	}
+	if partCount < 2 {
+		t.Fatalf("prefix %q matched %d chunks, want multipart derived chunks", relativePathPrefix, partCount)
+	}
+	if joined.String() != expectedContent {
+		t.Fatalf("content under %q did not round trip to expected content", relativePathPrefix)
+	}
+}
+
+func appendConversationReusePiecesForTest(reuse map[string][]float32, content string, firstVector float32) float32 {
+	nextVector := firstVector
+	for _, piece := range splitConversationText(content) {
+		reuse[semantic.ContentVectorKey(piece)] = []float32{nextVector}
+		nextVector++
+	}
+	return nextVector
+}
+
+func assertConversationTokenLineForTest(t *testing.T, content string, expectedToken string) {
+	t.Helper()
+
+	for _, token := range strings.Split(content, "\n") {
+		if token == expectedToken {
+			return
+		}
+	}
+	t.Fatalf("token content = %q, want exact token %q", content, expectedToken)
+}
+
 func reconstructConversationTextRowsForTest(chunks []model.StoredChunk, conversationID string, messageIndex int32) string {
 	var builder strings.Builder
 	for _, chunk := range conversationTextRowsForTest(chunks, conversationID, messageIndex) {
@@ -2520,6 +2563,90 @@ func conversationTextRowsForTest(chunks []model.StoredChunk, conversationID stri
 		}
 	}
 	return textRows
+}
+
+func TestConversationIndexOneReusesOversizedDerivedChunks(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-derived-large"
+	messageIndex := int32(9)
+	toolName := strings.Repeat("n", conversationChunkMaxBytes+3)
+	command := strings.Repeat("c", conversationChunkMaxBytes+5)
+	thinking := strings.Repeat("t", conversationChunkMaxBytes+7)
+	document := model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   messageIndex,
+		Role:           "assistant",
+		Text:           "visible transcript text",
+		Tools: []model.ConversationToolCall{{
+			Name:    toolName,
+			Command: command,
+		}},
+		Thinking: thinking,
+	}
+	toolContent := conversationToolTokenContent(document.Tools[0])
+	reuse := make(map[string][]float32)
+	nextVector := appendConversationReusePiecesForTest(reuse, toolContent, 1)
+	nextVector = appendConversationReusePiecesForTest(reuse, command, nextVector)
+	appendConversationReusePiecesForTest(reuse, thinking, nextVector)
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{
+			messageIndex: {
+				Role:              document.Role,
+				Text:              document.Text,
+				HasDerivedContent: true,
+			},
+		},
+		reuse: reuse,
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-derived-large"},
+		[]model.ConversationDocument{document},
+		reader,
+		absenceRetain,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+	if len(result.Chunks) != 0 {
+		t.Fatalf("Chunks = %d, want none when guardrail-split derived rows can be reused", len(result.Chunks))
+	}
+	assertStringSliceEqual(t, result.RemovalPaths, nil)
+	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{document})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+	for chunkIndex, chunk := range chunks {
+		if isDerivedConversationChunk(chunk) && len(chunk.Content) > conversationChunkMaxBytes {
+			t.Fatalf("derived chunk %d has %d bytes, want at most %d", chunkIndex, len(chunk.Content), conversationChunkMaxBytes)
+		}
+	}
+	assertMultipartConversationChunkContentForTest(
+		t,
+		chunks,
+		"convtool/"+conversationID+"/9/0/tok/",
+		toolContent,
+	)
+	assertMultipartConversationChunkContentForTest(
+		t,
+		chunks,
+		"convtool/"+conversationID+"/9/0/cmd/",
+		command,
+	)
+	assertMultipartConversationChunkContentForTest(
+		t,
+		chunks,
+		"convthink/"+conversationID+"/9/",
+		thinking,
+	)
+	if reconstructed := reconstructConversationTextRowsForTest(chunks, conversationID, messageIndex); reconstructed != document.Text {
+		t.Fatalf("reconstructed text = %q, want %q", reconstructed, document.Text)
+	}
 }
 
 // TestConversationIngestReuseLoadFailureFallsBackToFullEmbed proves a failed
@@ -2629,6 +2756,53 @@ func TestConversationDocumentsToStoredChunksEmbedsBashToolTokens(t *testing.T) {
 	commandChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool/3/0/cmd")
 	if commandChunk.Content != "cat /tmp/input.txt > /tmp/output.txt" {
 		t.Fatalf("command chunk content = %q, want raw command", commandChunk.Content)
+	}
+}
+
+func TestConversationDocumentsToStoredChunksKeepsRawShellTargetTokens(t *testing.T) {
+	t.Parallel()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID: "conv-raw-target",
+		MessageIndex:   3,
+		Role:           "assistant",
+		Text:           "ran a command",
+		Tools: []model.ConversationToolCall{{
+			Name:    "Bash",
+			Command: "cat relative/input.txt > relative/output.txt",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-raw-target/3/0/tok")
+	for _, expectedToken := range []string{
+		"/relative/input.txt",
+		"relative/input.txt",
+		"/relative/output.txt",
+		"relative/output.txt",
+	} {
+		assertConversationTokenLineForTest(t, tokenChunk.Content, expectedToken)
+	}
+}
+
+func TestConversationToolTokenContentTruncatesRawCommandFallback(t *testing.T) {
+	t.Parallel()
+
+	command := "ONLY_ASSIGNMENT=" + strings.Repeat("x", conversationToolSummaryMaxBytes+100)
+	content := conversationToolTokenContent(model.ConversationToolCall{
+		Name:    "Bash",
+		Command: command,
+	})
+	tokens := strings.Split(content, "\n")
+	fallbackToken := tokens[len(tokens)-1]
+	expectedFallback := truncateConversationToolSummary(command)
+	if fallbackToken != expectedFallback {
+		t.Fatalf("fallback token has %d bytes, want truncated %d-byte command", len(fallbackToken), len(expectedFallback))
+	}
+	if len(fallbackToken) > conversationToolSummaryMaxBytes {
+		t.Fatalf("fallback token has %d bytes, want at most %d", len(fallbackToken), conversationToolSummaryMaxBytes)
 	}
 }
 
