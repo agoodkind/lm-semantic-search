@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"sort"
 
 	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/indexer"
@@ -12,6 +13,44 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
+
+// unionForcedItems folds a source's forced item ids into the diff's Modified
+// set, so the delta routine re-examines them even when their captured
+// fingerprint matches the stored checkpoint. Only ids present in the current
+// capture are added, and ids already classified as Added or Modified are left
+// as-is, so forcing is idempotent and never invents an item the source did not
+// deliver. indexOne then re-runs its normal content diff, reusing unchanged
+// chunks and re-stamping the delivered fingerprint, so a forced item leaves the
+// committed checkpoint unchanged when its content is unchanged. A code source
+// forces nothing, so this is a no-op for filesystem syncs.
+func unionForcedItems(diff merkle.Diff, forced []string, captured merkle.Snapshot) merkle.Diff {
+	if len(forced) == 0 {
+		return diff
+	}
+	already := make(map[string]struct{}, len(diff.Added)+len(diff.Modified))
+	for _, itemID := range diff.Added {
+		already[itemID] = struct{}{}
+	}
+	for _, itemID := range diff.Modified {
+		already[itemID] = struct{}{}
+	}
+	added := false
+	for _, itemID := range forced {
+		if _, present := captured.Files[itemID]; !present {
+			continue
+		}
+		if _, seen := already[itemID]; seen {
+			continue
+		}
+		already[itemID] = struct{}{}
+		diff.Modified = append(diff.Modified, itemID)
+		added = true
+	}
+	if added {
+		sort.Strings(diff.Modified)
+	}
+	return diff
+}
 
 // itemSource is the one part of the indexing routine that differs by kind. The
 // shared delta and bootstrap routine asks a source to list the current items
@@ -22,6 +61,13 @@ import (
 type itemSource interface {
 	// capture lists the current items as itemID -> content fingerprint.
 	capture(ctx context.Context) (merkle.Snapshot, error)
+	// forcedItems names item ids that must be re-examined this run even when
+	// their captured fingerprint matches the stored checkpoint. The delta routine
+	// unions these into the changed set, so indexOne runs for them and its normal
+	// content diff reuses unchanged chunks while embedding only new ones. A code
+	// source never forces (returns nil); a conversation source returns its
+	// delivered ids when an operator-run backfill asks to re-examine them.
+	forcedItems() []string
 	// indexOne produces the stored chunks and fingerprint for one item.
 	indexOne(ctx context.Context, itemID string) (indexer.OneFileResult, error)
 	// removalFor maps item ids to the store removal that drops their prior rows.
@@ -94,6 +140,12 @@ func newCodeItemSource(runner indexingRunner, resolver *indexability.Resolver, c
 func (source codeItemSource) withCollectionName(collectionName string) codeItemSource {
 	source.collectionName = collectionName
 	return source
+}
+
+// forcedItems is always nil for a code source: a filesystem sync never
+// re-examines a file whose content hash is unchanged.
+func (source codeItemSource) forcedItems() []string {
+	return nil
 }
 
 func (source codeItemSource) capture(ctx context.Context) (merkle.Snapshot, error) {
@@ -182,15 +234,34 @@ type conversationItemSource struct {
 	// so the delta core never sees the proto type. The constructor only stores the
 	// already-mapped value.
 	absence absencePolicy
+	// reexamine, when set by an operator-run backfill, forces every delivered
+	// conversation into this run's changed set even when its fingerprint is
+	// unchanged, so indexOne re-examines it and picks up new derived chunks.
+	reexamine bool
 }
 
-func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader, absence absencePolicy) conversationItemSource {
+func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader, absence absencePolicy, reexamine bool) conversationItemSource {
 	byID := make(map[string][]model.ConversationDocument, len(manifest))
 	for _, document := range documents {
 		conversationID := document.ConversationID
 		byID[conversationID] = append(byID[conversationID], document)
 	}
-	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", absence: absence}
+	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", absence: absence, reexamine: reexamine}
+}
+
+// forcedItems returns the delivered conversation ids when an operator-run
+// backfill asked to re-examine them, so the delta routine processes them even
+// though their fingerprint matches the checkpoint. It returns nil for the normal
+// sync, which leaves reexamine false and so is byte-for-byte unchanged.
+func (source conversationItemSource) forcedItems() []string {
+	if !source.reexamine {
+		return nil
+	}
+	forced := make([]string, 0, len(source.documents))
+	for conversationID := range source.documents {
+		forced = append(forced, conversationID)
+	}
+	return forced
 }
 
 func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot, error) {

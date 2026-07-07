@@ -49,6 +49,11 @@ type conversationJobPayload struct {
 	// manifest omits. It is meaningful only for an upsert; a delete sets it
 	// explicitly to absenceRetain (also the zero value) but never consults it.
 	Absence absencePolicy
+	// Reexamine forces every delivered conversation into this run's changed set
+	// even when its fingerprint is unchanged, so an operator-run backfill can pick
+	// up a new indexing capability. It is meaningful only for an upsert and stays
+	// false for the normal sync.
+	Reexamine bool
 }
 
 // RegisterConversationCollection records a virtual document collection that is
@@ -193,7 +198,7 @@ func firstN(values []string, limit int) []string {
 // upsertConversationDocuments queues an asynchronous ingest. When manifest is
 // nil it is derived from the delivered documents, so a caller that hands over a
 // complete set need not compute fingerprints itself.
-func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo, absence absencePolicy) (model.Job, error) {
+func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo, absence absencePolicy, reexamine bool) (model.Job, error) {
 	for _, document := range documents {
 		if strings.TrimSpace(document.ConversationID) == "" {
 			return model.Job{}, errors.New("conversation id is required")
@@ -221,6 +226,7 @@ func (manager *Manager) upsertConversationDocuments(ctx context.Context, collect
 		Documents:      documents,
 		ConversationID: "",
 		Absence:        absence,
+		Reexamine:      reexamine,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
 }
@@ -337,6 +343,8 @@ func (manager *Manager) deleteConversation(ctx context.Context, collectionID str
 		// manifest-absence branch, so Absence is unused here; set it explicitly to
 		// absenceRetain (also the zero value) to satisfy exhaustruct.
 		Absence: absenceRetain,
+		// A delete never re-examines documents; it carries none.
+		Reexamine: false,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
 }
@@ -444,7 +452,7 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
-		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence)
+		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence, payload.Reexamine)
 		// The second return is the code path's graph-index task; a conversation
 		// collection never produces one, so there is nothing to discard here.
 		if handled, _ := manager.runDeltaSync(ctx, job, source); handled {
