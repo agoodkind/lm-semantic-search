@@ -65,7 +65,12 @@ func NewProvider(cfg config.Config) (Provider, error) {
 		slog.Error("embedding provider is not supported", "provider", provider, "err", errors.New("only OpenAI-compatible adapter is supported"))
 		return nil, fmt.Errorf("embedding provider %q is not supported; only the OpenAI-compatible adapter is available", provider)
 	}
-	return newOpenAICompatibleProvider(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.EmbeddingModel, cfg.EmbeddingDimension)
+	// A negative configured value would build a negative duration, which makes
+	// context.WithTimeout expire immediately and fail every embed. Treat it as
+	// disabled (unbounded) instead, matching the zero-disables semantics.
+	requestTimeoutMS := max(cfg.EmbeddingRequestTimeoutMS, 0)
+	requestTimeout := time.Duration(requestTimeoutMS) * time.Millisecond
+	return newOpenAICompatibleProvider(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.EmbeddingModel, cfg.EmbeddingDimension, requestTimeout)
 }
 
 type openAICompatibleProvider struct {
@@ -73,9 +78,13 @@ type openAICompatibleProvider struct {
 	model      string
 	dimensions int32
 	client     openai.Client
+	// requestTimeout bounds one embedding HTTP request so an unresponsive endpoint
+	// fails the call instead of hanging the goroutine forever. Zero leaves the
+	// request unbounded (governed only by the caller's context).
+	requestTimeout time.Duration
 }
 
-func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, dimensions int32) (Provider, error) {
+func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, dimensions int32, requestTimeout time.Duration) (Provider, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, fmt.Errorf("%s embedding provider requires an API key", openAIProviderName)
 	}
@@ -95,10 +104,11 @@ func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, di
 	}
 
 	return &openAICompatibleProvider{
-		name:       openAIProviderName,
-		model:      model,
-		dimensions: dimensions,
-		client:     openai.NewClient(requestOptions...),
+		name:           openAIProviderName,
+		model:          model,
+		dimensions:     dimensions,
+		client:         openai.NewClient(requestOptions...),
+		requestTimeout: requestTimeout,
 	}, nil
 }
 
@@ -195,7 +205,18 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, params openai.EmbeddingNewParams) (*openai.CreateEmbeddingResponse, error) {
 	var lastErr error
 	for attempt := 1; attempt <= embedMaxAttempts; attempt++ {
-		response, err := provider.client.Embeddings.New(ctx, params)
+		// Bound the request when a timeout is configured so an unresponsive
+		// endpoint fails the call instead of hanging the goroutine forever. The
+		// external error is classified and wrapped below, never returned bare.
+		requestCtx := ctx
+		var cancel context.CancelFunc
+		if provider.requestTimeout > 0 {
+			requestCtx, cancel = context.WithTimeout(ctx, provider.requestTimeout)
+		}
+		response, err := provider.client.Embeddings.New(requestCtx, params)
+		if cancel != nil {
+			cancel()
+		}
 		if err == nil {
 			return response, nil
 		}
@@ -206,7 +227,17 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 			slog.ErrorContext(ctx, "generate embeddings failed", "provider", provider.name, "model", provider.model, "status", statusCode, "err", err)
 			var apiErr *openai.Error
 			switch {
-			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			case ctx.Err() != nil:
+				// The caller's context ended (a job cancel or daemon shutdown), so
+				// report a cancellation, never a down endpoint.
+				return nil, adapterr.NewEmbedCancelled(fmt.Errorf("generate %s embeddings: %w", provider.name, ctx.Err()))
+			case errors.Is(err, context.DeadlineExceeded):
+				// The per-request bound fired while the caller's context is still
+				// live: the endpoint accepted the request but did not answer within
+				// requestTimeout. Fail as unreachable so the job fails and retries
+				// later instead of the goroutine hanging forever on a wedged endpoint.
+				return nil, adapterr.NewEmbedderUnreachable(fmt.Errorf("generate %s embeddings: endpoint did not respond within %s: %w", provider.name, provider.requestTimeout, err))
+			case errors.Is(err, context.Canceled):
 				return nil, adapterr.NewEmbedCancelled(fmt.Errorf("generate %s embeddings: %w", provider.name, err))
 			case errors.As(err, &apiErr):
 				// Reachable endpoint that answered with a non-429 HTTP error.

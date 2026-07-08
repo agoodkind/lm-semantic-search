@@ -5,15 +5,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v2"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 )
+
+// testEmbedTimeout bounds one request in the happy-path tests. It is generous
+// relative to the instant httptest responses, so it exercises the bound without
+// firing.
+const testEmbedTimeout = 2 * time.Second
 
 func TestOpenAICompatibleProviderEmbedBatch(t *testing.T) {
 	t.Parallel()
@@ -38,7 +46,7 @@ func TestOpenAICompatibleProviderEmbedBatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 2)
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 2, testEmbedTimeout)
 	if err != nil {
 		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
 	}
@@ -75,7 +83,7 @@ func TestEmbedBatchRecordsMetrics(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 2)
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 2, testEmbedTimeout)
 	if err != nil {
 		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
 	}
@@ -117,7 +125,7 @@ func TestEmbedBatchRetriesTransientThenSucceeds(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 0)
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 0, testEmbedTimeout)
 	if err != nil {
 		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
 	}
@@ -144,7 +152,7 @@ func TestEmbedBatchPersistentBusyReturnsErrEmbedderBusy(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 0)
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 0, testEmbedTimeout)
 	if err != nil {
 		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
 	}
@@ -168,7 +176,7 @@ func TestEmbedBatchNon429NotBusy(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 0)
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 0, testEmbedTimeout)
 	if err != nil {
 		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
 	}
@@ -192,7 +200,7 @@ func TestEmbedBatchNon429ReturnsRejected(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 0)
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 0, testEmbedTimeout)
 	if err != nil {
 		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
 	}
@@ -203,6 +211,44 @@ func TestEmbedBatchNon429ReturnsRejected(t *testing.T) {
 	}
 	if errors.Is(err, ErrEmbedderBusy) {
 		t.Fatalf("a 400 must not classify as ErrEmbedderBusy: %v", err)
+	}
+}
+
+func TestEmbedBatchTimesOutOnUnresponsiveEndpoint(t *testing.T) {
+	t.Parallel()
+
+	// A listener that never accepts leaves the kernel to complete the TCP
+	// handshake, so the client connects and sends its request, then blocks
+	// forever waiting for a response. This mimics a wedged embedder that holds
+	// the socket open without answering. Without a request bound the embed call
+	// hangs indefinitely; the bound must fail it instead of stranding the caller.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen returned error: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	baseURL := "http://" + listener.Addr().String() + "/v1"
+	provider, err := newOpenAICompatibleProvider("test-key", baseURL, "model", 0, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	start := time.Now()
+	_, err = provider.EmbedBatch(context.Background(), []string{"alpha"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("EmbedBatch returned nil error against an unresponsive endpoint")
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("EmbedBatch took %v against an unresponsive endpoint; the request bound did not fire", elapsed)
+	}
+	if errors.Is(err, ErrEmbedderBusy) || errors.Is(err, ErrEmbedderRejected) {
+		t.Fatalf("request timeout misclassified as busy or rejected: %v", err)
+	}
+	if !strings.Contains(err.Error(), "did not respond within") {
+		t.Fatalf("error does not indicate a request timeout: %v", err)
 	}
 }
 
@@ -240,6 +286,40 @@ func TestEmbedBackoffDoubles(t *testing.T) {
 	}
 	if embedBackoff(3) != 4*embedBackoffBase {
 		t.Fatalf("attempt 3 backoff = %v, want %v", embedBackoff(3), 4*embedBackoffBase)
+	}
+}
+
+func TestNewProviderClampsTimeout(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		timeoutMS   int
+		wantTimeout time.Duration
+	}{
+		{name: "negative clamps to unbounded", timeoutMS: -1, wantTimeout: 0},
+		{name: "zero stays unbounded", timeoutMS: 0, wantTimeout: 0},
+		{name: "positive is honored", timeoutMS: 1500, wantTimeout: 1500 * time.Millisecond},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			provider, err := NewProvider(config.Config{
+				EmbeddingProvider:         "OpenAI",
+				OpenAIAPIKey:              "test-key",
+				EmbeddingModel:            "text-embedding-3-small",
+				EmbeddingRequestTimeoutMS: testCase.timeoutMS,
+			})
+			if err != nil {
+				t.Fatalf("NewProvider returned error: %v", err)
+			}
+			concrete, ok := provider.(*openAICompatibleProvider)
+			if !ok {
+				t.Fatalf("provider type = %T, want *openAICompatibleProvider", provider)
+			}
+			if concrete.requestTimeout != testCase.wantTimeout {
+				t.Fatalf("requestTimeout = %v, want %v", concrete.requestTimeout, testCase.wantTimeout)
+			}
+		})
 	}
 }
 
