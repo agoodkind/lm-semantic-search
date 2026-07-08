@@ -21,6 +21,7 @@ const (
 	defaultPerfCountersIntervalMS    = 60000
 	defaultMaxConcurrentIndexJobs    = 3
 	defaultEmbeddingBatchTokenBudget = 6000
+	defaultEmbeddingRequestTimeoutMS = 300000
 	defaultMaxJobChunks              = 200000
 	defaultMaxConversationsPerIngest = 100
 	defaultMaxJobBytes               = 1073741824
@@ -57,6 +58,12 @@ type Config struct {
 	// EmbeddingBatchTokenBudget caps the estimated tokens (bytes/4) packed into
 	// one embedding request. EmbeddingBatchSize stays as the row-count ceiling.
 	EmbeddingBatchTokenBudget int
+	// EmbeddingRequestTimeoutMS bounds one embedding HTTP request. A wedged or
+	// unresponsive embedder makes an unbounded request hang forever, which strands
+	// the indexing goroutine and the background sync (the embed call has no other
+	// deadline). Past this bound the request fails as unreachable so the job fails
+	// and retries later instead of hanging. Zero disables the bound.
+	EmbeddingRequestTimeoutMS int
 	EmbeddingDimension        int32
 	OpenAIAPIKey              string
 	OpenAIBaseURL             string
@@ -189,6 +196,7 @@ func Default() (Config, error) {
 		EmbeddingModel:            envOrDefault("EMBEDDING_MODEL", defaultModel),
 		EmbeddingBatchSize:        envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
 		EmbeddingBatchTokenBudget: batchTokenBudget,
+		EmbeddingRequestTimeoutMS: envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", defaultEmbeddingRequestTimeoutMS),
 		EmbeddingDimension:        envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
 		OpenAIAPIKey:              envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
 		OpenAIBaseURL:             envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),
