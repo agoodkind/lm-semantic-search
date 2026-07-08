@@ -14,15 +14,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
-// unionForcedItems folds a source's forced item ids into the diff's Modified
-// set, so the delta routine re-examines them even when their captured
-// fingerprint matches the stored checkpoint. Only ids present in the current
-// capture are added, and ids already classified as Added or Modified are left
-// as-is, so forcing is idempotent and never invents an item the source did not
-// deliver. indexOne then re-runs its normal content diff, reusing unchanged
-// chunks and re-stamping the delivered fingerprint, so a forced item leaves the
-// committed checkpoint unchanged when its content is unchanged. A code source
-// forces nothing, so this is a no-op for filesystem syncs.
 // forcedItemsSet collects a source's forced item ids into a set for O(1) lookup
 // in applyDeltaChanges. It returns nil when the source forces nothing (the
 // normal sync), so the hash-equality skip stays in force for every item.
@@ -38,6 +29,15 @@ func forcedItemsSet(source itemSource) map[string]struct{} {
 	return set
 }
 
+// unionForcedItems folds a source's forced item ids into the diff's Modified
+// set, so the delta routine re-examines them even when their captured
+// fingerprint matches the stored checkpoint. Only ids present in the current
+// capture are added, and ids already classified as Added or Modified are left
+// as-is, so forcing is idempotent and never invents an item the source did not
+// deliver. indexOne then re-runs its normal content diff, reusing unchanged
+// chunks and re-stamping the delivered fingerprint, so a forced item leaves the
+// committed checkpoint unchanged when its content is unchanged. A code source
+// forces nothing, so this is a no-op for filesystem syncs.
 func unionForcedItems(diff merkle.Diff, forced []string, captured merkle.Snapshot) merkle.Diff {
 	if len(forced) == 0 {
 		return diff
