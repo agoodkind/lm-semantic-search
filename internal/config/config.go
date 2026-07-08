@@ -120,7 +120,11 @@ type persistedConfig struct {
 	EmbeddingModel            string `json:"embeddingModel"`
 	EmbeddingBatchSize        int    `json:"embeddingBatchSize"`
 	EmbeddingBatchTokenBudget int    `json:"embeddingBatchTokenBudget"`
-	EmbeddingRequestTimeoutMS int    `json:"embeddingRequestTimeoutMs"`
+	// EmbeddingRequestTimeoutMS is a pointer so an omitted config.json field (nil)
+	// is distinct from an explicit 0, which disables the bound. A plain int would
+	// collapse a persisted 0 into the default and make the disable case
+	// unexpressible from config.json.
+	EmbeddingRequestTimeoutMS *int   `json:"embeddingRequestTimeoutMs"`
 	EmbeddingDimension        int32  `json:"embeddingDimension"`
 	OpenAIAPIKey              string `json:"openaiApiKey"`
 	OpenAIBaseURL             string `json:"openaiBaseUrl"`
@@ -172,6 +176,13 @@ func Default() (Config, error) {
 	if batchTokenBudget <= 0 {
 		batchTokenBudget = defaultEmbeddingBatchTokenBudget
 	}
+	// An explicit config.json value (including 0 to disable) wins over the
+	// default; a nil pointer means the field was omitted. The env var overrides
+	// either.
+	requestTimeoutMS := defaultEmbeddingRequestTimeoutMS
+	if fileConfig.EmbeddingRequestTimeoutMS != nil {
+		requestTimeoutMS = *fileConfig.EmbeddingRequestTimeoutMS
+	}
 	queryPrefix := fileConfig.QueryInstructionPrefix
 	if queryPrefix == "" && strings.Contains(defaultModel, "NV-EmbedCode") {
 		queryPrefix = nvEmbedCodeQueryPrefix
@@ -197,7 +208,7 @@ func Default() (Config, error) {
 		EmbeddingModel:            envOrDefault("EMBEDDING_MODEL", defaultModel),
 		EmbeddingBatchSize:        envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
 		EmbeddingBatchTokenBudget: batchTokenBudget,
-		EmbeddingRequestTimeoutMS: envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", intOrDefault(fileConfig.EmbeddingRequestTimeoutMS, defaultEmbeddingRequestTimeoutMS)),
+		EmbeddingRequestTimeoutMS: envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", requestTimeoutMS),
 		EmbeddingDimension:        envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
 		OpenAIAPIKey:              envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
 		OpenAIBaseURL:             envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),

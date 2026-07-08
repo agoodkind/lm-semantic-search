@@ -174,24 +174,37 @@ func TestDefaultQueryInstructionPrefixEmptyForOtherModels(t *testing.T) {
 	}
 }
 
+func intPtr(value int) *int {
+	return &value
+}
+
 func TestDefaultEmbeddingRequestTimeoutDefaultsAndPersists(t *testing.T) {
 	defaulted := defaultWithPersistedConfig(t, persistedConfig{})
 	if defaulted.EmbeddingRequestTimeoutMS != defaultEmbeddingRequestTimeoutMS {
-		t.Errorf("EmbeddingRequestTimeoutMS = %d want default %d", defaulted.EmbeddingRequestTimeoutMS, defaultEmbeddingRequestTimeoutMS)
+		t.Errorf("omitted EmbeddingRequestTimeoutMS = %d want default %d", defaulted.EmbeddingRequestTimeoutMS, defaultEmbeddingRequestTimeoutMS)
 	}
 
 	persisted := defaultWithPersistedConfig(t, persistedConfig{
-		EmbeddingRequestTimeoutMS: 45000,
+		EmbeddingRequestTimeoutMS: intPtr(45000),
 	})
 	if persisted.EmbeddingRequestTimeoutMS != 45000 {
-		t.Errorf("EmbeddingRequestTimeoutMS = %d want persisted 45000", persisted.EmbeddingRequestTimeoutMS)
+		t.Errorf("persisted EmbeddingRequestTimeoutMS = %d want 45000", persisted.EmbeddingRequestTimeoutMS)
+	}
+
+	// An explicit 0 in config.json disables the bound and must survive as 0,
+	// distinct from an omitted field that falls back to the default.
+	disabled := defaultWithPersistedConfig(t, persistedConfig{
+		EmbeddingRequestTimeoutMS: intPtr(0),
+	})
+	if disabled.EmbeddingRequestTimeoutMS != 0 {
+		t.Errorf("persisted zero EmbeddingRequestTimeoutMS = %d want 0 (disabled)", disabled.EmbeddingRequestTimeoutMS)
 	}
 }
 
 func TestDefaultEmbeddingRequestTimeoutEnvOverridesPersisted(t *testing.T) {
 	t.Setenv("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", "12000")
 	cfg := defaultWithPersistedConfig(t, persistedConfig{
-		EmbeddingRequestTimeoutMS: 45000,
+		EmbeddingRequestTimeoutMS: intPtr(45000),
 	})
 	if cfg.EmbeddingRequestTimeoutMS != 12000 {
 		t.Errorf("EmbeddingRequestTimeoutMS = %d want env override 12000", cfg.EmbeddingRequestTimeoutMS)

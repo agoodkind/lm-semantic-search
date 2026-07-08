@@ -303,7 +303,6 @@ func TestNewProviderClampsTimeout(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
 			provider, err := NewProvider(config.Config{
 				EmbeddingProvider:         "OpenAI",
 				OpenAIAPIKey:              "test-key",
