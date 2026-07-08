@@ -79,6 +79,10 @@ type deltaState struct {
 	// can only rise to meet it as matching chunks are served from the pool.
 	seededReuse int32
 	admission   *admissionState
+	// forced names items the source demands be re-examined even when their
+	// fingerprint is unchanged, so applyDeltaChanges skips its hash-equality
+	// short-circuit for them. See forcedItemsSet.
+	forced map[string]struct{}
 }
 
 // chunkCounters accumulates the reuse-vs-embed split across one run's per-file
@@ -315,6 +319,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
 		seededReuse:      0,
 		admission:        manager.admissionForJob(job),
+		forced:           forcedItemsSet(source),
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -514,6 +519,8 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
 		seededReuse:      0,
 		admission:        manager.admissionForJob(job),
+		// A bootstrap re-embeds every item, so nothing needs per-item forcing.
+		forced: nil,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -716,7 +723,8 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 			manager.updateJobCancelled(ctx, job.ID)
 			return result, deltaOutcome{fallback: false, handled: true, progressed: false}
 		}
-		if seedHash, present := state.plan.seedSnapshot.Files[relativePath]; present && seedHash == state.plan.currentSnapshot.Files[relativePath] {
+		_, forced := state.forced[relativePath]
+		if seedHash, present := state.plan.seedSnapshot.Files[relativePath]; present && !forced && seedHash == state.plan.currentSnapshot.Files[relativePath] {
 			state.working[relativePath] = seedHash
 			processed, reused, embedded, loaded := state.chunkSplit()
 			manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, processed, reused, embedded, loaded, state.source.unit())
