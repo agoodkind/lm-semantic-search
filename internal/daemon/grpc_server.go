@@ -916,9 +916,35 @@ func pbConversationDocuments(documents []*pb.ConversationDocument) []model.Conve
 			Role:                 document.GetRole(),
 			TimestampUnix:        document.GetTimestampUnix(),
 			Text:                 document.GetText(),
+			Tools:                pbConversationToolCalls(document.GetTools()),
+			Thinking:             document.GetThinking(),
 			WorkspaceRoot:        document.GetWorkspaceRoot(),
 			Archived:             document.GetArchived(),
 		})
+	}
+	return result
+}
+
+func pbConversationToolCalls(tools []*pb.ConversationToolCall) []model.ConversationToolCall {
+	if len(tools) == 0 {
+		return nil
+	}
+	result := make([]model.ConversationToolCall, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		result = append(result, model.ConversationToolCall{
+			Name:      tool.GetName(),
+			InputJSON: tool.GetInputJson(),
+			Command:   tool.GetCommand(),
+			LangHint:  tool.GetLangHint(),
+			Output:    tool.GetOutput(),
+			IsError:   tool.GetIsError(),
+		})
+	}
+	if len(result) == 0 {
+		return nil
 	}
 	return result
 }

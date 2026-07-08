@@ -41,6 +41,101 @@ func (f *fakeUpsertStreamServer) SendAndClose(response *pb.UpsertConversationDoc
 
 func (f *fakeUpsertStreamServer) Context() context.Context { return context.Background() }
 
+func TestPBConversationDocumentsMapsToolCallsAndThinking(t *testing.T) {
+	t.Parallel()
+
+	documents := []*pb.ConversationDocument{
+		{
+			ConversationId:       "conv-tool",
+			ParentConversationId: "conv-parent",
+			MessageIndex:         2,
+			Role:                 "assistant",
+			TimestampUnix:        1712345680,
+			Text:                 "plain transcript text",
+			WorkspaceRoot:        "/workspace",
+			Archived:             true,
+			Tools: []*pb.ConversationToolCall{
+				{
+					Name:      "run_shell",
+					InputJson: "{\"cmd\":\"ls\"}",
+					Command:   "ls",
+					LangHint:  "bash",
+					Output:    "ok",
+					IsError:   true,
+				},
+			},
+			Thinking: "private reasoning",
+		},
+		{
+			ConversationId: "conv-legacy",
+			MessageIndex:   0,
+			Role:           "user",
+			TimestampUnix:  1712345681,
+			Text:           "legacy text",
+		},
+		nil,
+	}
+
+	got := pbConversationDocuments(documents)
+	if len(got) != 2 {
+		t.Fatalf("pbConversationDocuments returned %d documents, want 2", len(got))
+	}
+	if got[0].ConversationID != "conv-tool" {
+		t.Fatalf("ConversationID = %q, want conv-tool", got[0].ConversationID)
+	}
+	if got[0].ParentConversationID != "conv-parent" {
+		t.Fatalf("ParentConversationID = %q, want conv-parent", got[0].ParentConversationID)
+	}
+	if got[0].MessageIndex != 2 {
+		t.Fatalf("MessageIndex = %d, want 2", got[0].MessageIndex)
+	}
+	if got[0].Role != "assistant" {
+		t.Fatalf("Role = %q, want assistant", got[0].Role)
+	}
+	if got[0].TimestampUnix != 1712345680 {
+		t.Fatalf("TimestampUnix = %d, want 1712345680", got[0].TimestampUnix)
+	}
+	if got[0].Text != "plain transcript text" {
+		t.Fatalf("Text = %q, want plain transcript text", got[0].Text)
+	}
+	if got[0].WorkspaceRoot != "/workspace" {
+		t.Fatalf("WorkspaceRoot = %q, want /workspace", got[0].WorkspaceRoot)
+	}
+	if !got[0].Archived {
+		t.Fatal("Archived = false, want true")
+	}
+	if got[0].Thinking != "private reasoning" {
+		t.Fatalf("Thinking = %q, want private reasoning", got[0].Thinking)
+	}
+	if len(got[0].Tools) != 1 {
+		t.Fatalf("Tools length = %d, want 1", len(got[0].Tools))
+	}
+	if got[0].Tools[0].Name != "run_shell" {
+		t.Fatalf("Tools[0].Name = %q, want run_shell", got[0].Tools[0].Name)
+	}
+	if got[0].Tools[0].InputJSON != "{\"cmd\":\"ls\"}" {
+		t.Fatalf("Tools[0].InputJSON = %q, want input JSON", got[0].Tools[0].InputJSON)
+	}
+	if got[0].Tools[0].Command != "ls" {
+		t.Fatalf("Tools[0].Command = %q, want ls", got[0].Tools[0].Command)
+	}
+	if got[0].Tools[0].LangHint != "bash" {
+		t.Fatalf("Tools[0].LangHint = %q, want bash", got[0].Tools[0].LangHint)
+	}
+	if got[0].Tools[0].Output != "ok" {
+		t.Fatalf("Tools[0].Output = %q, want ok", got[0].Tools[0].Output)
+	}
+	if !got[0].Tools[0].IsError {
+		t.Fatal("Tools[0].IsError = false, want true")
+	}
+	if got[1].Thinking != "" {
+		t.Fatalf("legacy Thinking = %q, want empty", got[1].Thinking)
+	}
+	if len(got[1].Tools) != 0 {
+		t.Fatalf("legacy Tools length = %d, want 0", len(got[1].Tools))
+	}
+}
+
 func TestUpsertConversationDocumentsStreamQueuesJob(t *testing.T) {
 	t.Parallel()
 

@@ -334,15 +334,27 @@ type ConversationDocument struct {
 	ConversationID string `json:"conversation_id"`
 	// ParentConversationID names the conversation this one forked from, carried
 	// into chunk metadata so forks group with their parent. Empty when absent.
-	ParentConversationID string `json:"parent_conversation_id"`
-	MessageIndex         int32  `json:"message_index"`
-	Role                 string `json:"role"`
-	TimestampUnix        int64  `json:"timestamp_unix"`
-	Text                 string `json:"text"`
+	ParentConversationID string                 `json:"parent_conversation_id"`
+	MessageIndex         int32                  `json:"message_index"`
+	Role                 string                 `json:"role"`
+	TimestampUnix        int64                  `json:"timestamp_unix"`
+	Text                 string                 `json:"text"`
+	Tools                []ConversationToolCall `json:"tools,omitempty"`
+	Thinking             string                 `json:"thinking,omitempty"`
 	// WorkspaceRoot is the workspace the conversation belongs to. clyde supplies
 	// it so the engine can store it as a filterable scalar column.
 	WorkspaceRoot string `json:"workspace_root,omitempty"`
 	Archived      bool   `json:"archived,omitempty"`
+}
+
+// ConversationToolCall is one structured tool call attached to a conversation document.
+type ConversationToolCall struct {
+	Name      string `json:"name,omitempty"`
+	InputJSON string `json:"input_json,omitempty"`
+	Command   string `json:"command,omitempty"`
+	LangHint  string `json:"lang_hint,omitempty"`
+	Output    string `json:"output,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
 }
 
 // PathClassificationKind reports the daemon's verdict about one queried path.
