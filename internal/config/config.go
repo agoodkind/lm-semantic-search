@@ -120,6 +120,7 @@ type persistedConfig struct {
 	EmbeddingModel            string `json:"embeddingModel"`
 	EmbeddingBatchSize        int    `json:"embeddingBatchSize"`
 	EmbeddingBatchTokenBudget int    `json:"embeddingBatchTokenBudget"`
+	EmbeddingRequestTimeoutMS int    `json:"embeddingRequestTimeoutMs"`
 	EmbeddingDimension        int32  `json:"embeddingDimension"`
 	OpenAIAPIKey              string `json:"openaiApiKey"`
 	OpenAIBaseURL             string `json:"openaiBaseUrl"`
@@ -196,7 +197,7 @@ func Default() (Config, error) {
 		EmbeddingModel:            envOrDefault("EMBEDDING_MODEL", defaultModel),
 		EmbeddingBatchSize:        envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
 		EmbeddingBatchTokenBudget: batchTokenBudget,
-		EmbeddingRequestTimeoutMS: envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", defaultEmbeddingRequestTimeoutMS),
+		EmbeddingRequestTimeoutMS: envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", intOrDefault(fileConfig.EmbeddingRequestTimeoutMS, defaultEmbeddingRequestTimeoutMS)),
 		EmbeddingDimension:        envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
 		OpenAIAPIKey:              envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
 		OpenAIBaseURL:             envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),

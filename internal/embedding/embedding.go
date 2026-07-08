@@ -65,7 +65,11 @@ func NewProvider(cfg config.Config) (Provider, error) {
 		slog.Error("embedding provider is not supported", "provider", provider, "err", errors.New("only OpenAI-compatible adapter is supported"))
 		return nil, fmt.Errorf("embedding provider %q is not supported; only the OpenAI-compatible adapter is available", provider)
 	}
-	requestTimeout := time.Duration(cfg.EmbeddingRequestTimeoutMS) * time.Millisecond
+	// A negative configured value would build a negative duration, which makes
+	// context.WithTimeout expire immediately and fail every embed. Treat it as
+	// disabled (unbounded) instead, matching the zero-disables semantics.
+	requestTimeoutMS := max(cfg.EmbeddingRequestTimeoutMS, 0)
+	requestTimeout := time.Duration(requestTimeoutMS) * time.Millisecond
 	return newOpenAICompatibleProvider(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.EmbeddingModel, cfg.EmbeddingDimension, requestTimeout)
 }
 

@@ -289,6 +289,41 @@ func TestEmbedBackoffDoubles(t *testing.T) {
 	}
 }
 
+func TestNewProviderClampsTimeout(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		timeoutMS   int
+		wantTimeout time.Duration
+	}{
+		{name: "negative clamps to unbounded", timeoutMS: -1, wantTimeout: 0},
+		{name: "zero stays unbounded", timeoutMS: 0, wantTimeout: 0},
+		{name: "positive is honored", timeoutMS: 1500, wantTimeout: 1500 * time.Millisecond},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			provider, err := NewProvider(config.Config{
+				EmbeddingProvider:         "OpenAI",
+				OpenAIAPIKey:              "test-key",
+				EmbeddingModel:            "text-embedding-3-small",
+				EmbeddingRequestTimeoutMS: testCase.timeoutMS,
+			})
+			if err != nil {
+				t.Fatalf("NewProvider returned error: %v", err)
+			}
+			concrete, ok := provider.(*openAICompatibleProvider)
+			if !ok {
+				t.Fatalf("provider type = %T, want *openAICompatibleProvider", provider)
+			}
+			if concrete.requestTimeout != testCase.wantTimeout {
+				t.Fatalf("requestTimeout = %v, want %v", concrete.requestTimeout, testCase.wantTimeout)
+			}
+		})
+	}
+}
+
 func TestNewProviderRejectsNonOpenAI(t *testing.T) {
 	t.Parallel()
 

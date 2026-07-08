@@ -174,6 +174,30 @@ func TestDefaultQueryInstructionPrefixEmptyForOtherModels(t *testing.T) {
 	}
 }
 
+func TestDefaultEmbeddingRequestTimeoutDefaultsAndPersists(t *testing.T) {
+	defaulted := defaultWithPersistedConfig(t, persistedConfig{})
+	if defaulted.EmbeddingRequestTimeoutMS != defaultEmbeddingRequestTimeoutMS {
+		t.Errorf("EmbeddingRequestTimeoutMS = %d want default %d", defaulted.EmbeddingRequestTimeoutMS, defaultEmbeddingRequestTimeoutMS)
+	}
+
+	persisted := defaultWithPersistedConfig(t, persistedConfig{
+		EmbeddingRequestTimeoutMS: 45000,
+	})
+	if persisted.EmbeddingRequestTimeoutMS != 45000 {
+		t.Errorf("EmbeddingRequestTimeoutMS = %d want persisted 45000", persisted.EmbeddingRequestTimeoutMS)
+	}
+}
+
+func TestDefaultEmbeddingRequestTimeoutEnvOverridesPersisted(t *testing.T) {
+	t.Setenv("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", "12000")
+	cfg := defaultWithPersistedConfig(t, persistedConfig{
+		EmbeddingRequestTimeoutMS: 45000,
+	})
+	if cfg.EmbeddingRequestTimeoutMS != 12000 {
+		t.Errorf("EmbeddingRequestTimeoutMS = %d want env override 12000", cfg.EmbeddingRequestTimeoutMS)
+	}
+}
+
 func TestDefaultEmbeddingBatchConfigUsesPersistedValues(t *testing.T) {
 	cfg := defaultWithPersistedConfig(t, persistedConfig{
 		EmbeddingModel:            "nvidia/NV-EmbedCode-7b-v1",
