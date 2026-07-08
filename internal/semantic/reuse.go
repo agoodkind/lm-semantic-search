@@ -17,14 +17,18 @@ import (
 // oversized Milvus response.
 const reuseVectorBatchSize = 1000
 
-// contentVectorKey is the reuse-map key for one chunk: the hex SHA-256 of its
+// ContentVectorKey is the reuse-map key for one chunk: the hex SHA-256 of its
 // content. The dense embedding is a pure function of content (the embedder
 // receives content only, with no path or codebase salt), so identical content
 // anywhere produces the same vector. Keying on content lets a fresh build
 // reuse an already-embedded vector instead of calling the embedder again.
-func contentVectorKey(content string) string {
+func ContentVectorKey(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(sum[:])
+}
+
+func contentVectorKey(content string) string {
+	return ContentVectorKey(content)
 }
 
 // LoadReuseVectors reads every chunk's content and dense vector from each

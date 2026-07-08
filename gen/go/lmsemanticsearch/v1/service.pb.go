@@ -3746,8 +3746,18 @@ type UpsertConversationDocumentsHeader struct {
 	CollectionId  string                    `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
 	Client        *ClientInfo               `protobuf:"bytes,2,opt,name=client,proto3" json:"client,omitempty"`
 	ReconcileMode ConversationReconcileMode `protobuf:"varint,3,opt,name=reconcile_mode,json=reconcileMode,proto3,enum=lmsemanticsearch.v1.ConversationReconcileMode" json:"reconcile_mode,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// reexamine_delivered forces the engine to re-examine every delivered
+	// conversation even when its fingerprint matches the stored checkpoint, so an
+	// operator-run backfill can pick up a new indexing capability (tool-call
+	// chunking) for conversations whose transcript files never changed on disk.
+	// It re-runs the normal per-message content diff, so unchanged chunks reuse
+	// their stored vectors and only genuinely-new chunks embed, and it re-stamps
+	// each conversation's delivered fingerprint so the next sync sees no change.
+	// The normal delta sync leaves it false and is unaffected. It is not a
+	// force-reindex: existing vectors are reused, never rebuilt from scratch.
+	ReexamineDelivered bool `protobuf:"varint,4,opt,name=reexamine_delivered,json=reexamineDelivered,proto3" json:"reexamine_delivered,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *UpsertConversationDocumentsHeader) Reset() {
@@ -3799,6 +3809,13 @@ func (x *UpsertConversationDocumentsHeader) GetReconcileMode() ConversationRecon
 		return x.ReconcileMode
 	}
 	return ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_UNSPECIFIED
+}
+
+func (x *UpsertConversationDocumentsHeader) GetReexamineDelivered() bool {
+	if x != nil {
+		return x.ReexamineDelivered
+	}
+	return false
 }
 
 // UpsertConversationDocumentsDocuments is one batch of documents in a streamed
@@ -5405,11 +5422,12 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"_\n" +
 	"#UpsertConversationDocumentsResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\xd8\x01\n" +
+	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\x89\x02\n" +
 	"!UpsertConversationDocumentsHeader\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x127\n" +
 	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\x12U\n" +
-	"\x0ereconcile_mode\x18\x03 \x01(\x0e2..lmsemanticsearch.v1.ConversationReconcileModeR\rreconcileMode\"o\n" +
+	"\x0ereconcile_mode\x18\x03 \x01(\x0e2..lmsemanticsearch.v1.ConversationReconcileModeR\rreconcileMode\x12/\n" +
+	"\x13reexamine_delivered\x18\x04 \x01(\bR\x12reexamineDelivered\"o\n" +
 	"$UpsertConversationDocumentsDocuments\x12G\n" +
 	"\tdocuments\x18\x01 \x03(\v2).lmsemanticsearch.v1.ConversationDocumentR\tdocuments\"o\n" +
 	"#UpsertConversationDocumentsManifest\x12H\n" +

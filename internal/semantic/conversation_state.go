@@ -17,8 +17,9 @@ import (
 // StoredMessageState is the stored text and role for one delivered conversation
 // message as currently represented in Milvus.
 type StoredMessageState struct {
-	Role string
-	Text string
+	Role              string
+	Text              string
+	HasDerivedContent bool
 }
 
 type storedMessagePart struct {
@@ -27,8 +28,9 @@ type storedMessagePart struct {
 }
 
 type storedMessageAssembly struct {
-	role  string
-	parts []storedMessagePart
+	role              string
+	parts             []storedMessagePart
+	hasDerivedContent bool
 }
 
 // LoadConversationMessageState reads rows for one conversation prefix and
@@ -57,7 +59,7 @@ func (service *Service) LoadConversationMessageState(ctx context.Context, collec
 
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(reuseVectorBatchSize).
-		WithFilter(relativePathPrefixExpression(conversationPrefix)).
+		WithFilter(conversationStateFilterExpression(conversationPrefix)).
 		WithOutputFields(relativePathFieldName, messageIndexFieldName, roleFieldName, contentFieldName, denseVectorFieldName))
 	if err != nil {
 		slog.ErrorContext(ctx, "open conversation state query iterator failed", "collection", collectionName, "err", err)
@@ -122,15 +124,9 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 	messageIndexColumn := resultSet.GetColumn(messageIndexFieldName)
 	legacyRows := 0
 	for rowIndex := range resultSet.ResultCount {
-		contentValue, contentErr := contentColumn.GetAsString(rowIndex)
+		contentValue, vector, contentErr := conversationContentVectorAt(contentColumn, vectorColumn, rowIndex)
 		if contentErr != nil {
-			slog.Error("read conversation state content column failed", "index", rowIndex, "err", contentErr)
-			return legacyRows, fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
-		}
-		vector, vectorErr := vectorAt(vectorColumn, rowIndex)
-		if vectorErr != nil {
-			slog.Error("read conversation state vector column failed", "index", rowIndex, "err", vectorErr)
-			return legacyRows, fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
+			return legacyRows, contentErr
 		}
 		reuse[contentVectorKey(contentValue)] = vector
 
@@ -150,6 +146,10 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 			slog.Error("read conversation state relative path column failed", "index", rowIndex, "err", relativePathErr)
 			return legacyRows, fmt.Errorf("read relative path column at %d: %w", rowIndex, relativePathErr)
 		}
+		if isDerivedConversationRelativePath(relativePath) {
+			markStoredMessageDerived(assemblies, safeInt32FromInt64(messageIndex))
+			continue
+		}
 		role, roleErr := roleColumn.GetAsString(rowIndex)
 		if roleErr != nil {
 			slog.Error("read conversation state role column failed", "index", rowIndex, "err", roleErr)
@@ -163,6 +163,47 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 		appendStoredMessagePart(assemblies, safeInt32FromInt64(messageIndex), role, partIndex, contentValue)
 	}
 	return legacyRows, nil
+}
+
+func conversationContentVectorAt(contentColumn column.Column, vectorColumn column.Column, rowIndex int) (string, []float32, error) {
+	contentValue, contentErr := contentColumn.GetAsString(rowIndex)
+	if contentErr != nil {
+		slog.Error("read conversation state content column failed", "index", rowIndex, "err", contentErr)
+		return "", nil, fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
+	}
+	vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+	if vectorErr != nil {
+		slog.Error("read conversation state vector column failed", "index", rowIndex, "err", vectorErr)
+		return "", nil, fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
+	}
+	return contentValue, vector, nil
+}
+
+func conversationStateFilterExpression(conversationPrefix string) string {
+	conversationID, ok := conversationIDFromStatePrefix(conversationPrefix)
+	if !ok {
+		return relativePathPrefixExpression(conversationPrefix)
+	}
+	clauses := []string{
+		inStringClause(conversationIDFieldName, []string{conversationID}),
+		relativePathPrefixExpression(conversationPrefix),
+		relativePathPrefixExpression("convtool/" + conversationID + "/"),
+		relativePathPrefixExpression("convthink/" + conversationID + "/"),
+	}
+	return "(" + strings.Join(clauses, " or ") + ")"
+}
+
+func conversationIDFromStatePrefix(conversationPrefix string) (string, bool) {
+	trimmed := strings.TrimRight(conversationPrefix, "/")
+	conversationID, ok := strings.CutPrefix(trimmed, "conv/")
+	if !ok || conversationID == "" {
+		return "", false
+	}
+	return conversationID, true
+}
+
+func isDerivedConversationRelativePath(relativePath string) bool {
+	return strings.HasPrefix(relativePath, "convtool/") || strings.HasPrefix(relativePath, "convthink/")
 }
 
 func messageIndexAt(messageIndexColumn column.Column, rowIndex int) (int64, bool, error) {
@@ -188,13 +229,22 @@ func messageIndexAt(messageIndexColumn column.Column, rowIndex int) (int64, bool
 func appendStoredMessagePart(assemblies map[int32]*storedMessageAssembly, messageIndex int32, role string, partIndex int, content string) {
 	assembly := assemblies[messageIndex]
 	if assembly == nil {
-		assembly = &storedMessageAssembly{role: "", parts: nil}
+		assembly = &storedMessageAssembly{role: "", parts: nil, hasDerivedContent: false}
 		assemblies[messageIndex] = assembly
 	}
 	if assembly.role == "" {
 		assembly.role = role
 	}
 	assembly.parts = append(assembly.parts, storedMessagePart{index: partIndex, content: content})
+}
+
+func markStoredMessageDerived(assemblies map[int32]*storedMessageAssembly, messageIndex int32) {
+	assembly := assemblies[messageIndex]
+	if assembly == nil {
+		assembly = &storedMessageAssembly{role: "", parts: nil, hasDerivedContent: false}
+		assemblies[messageIndex] = assembly
+	}
+	assembly.hasDerivedContent = true
 }
 
 func assembleStoredMessageState(assemblies map[int32]*storedMessageAssembly) map[int32]StoredMessageState {
@@ -207,7 +257,11 @@ func assembleStoredMessageState(assemblies map[int32]*storedMessageAssembly) map
 		for _, part := range assembly.parts {
 			text.WriteString(part.content)
 		}
-		state[messageIndex] = StoredMessageState{Role: assembly.role, Text: text.String()}
+		state[messageIndex] = StoredMessageState{
+			Role:              assembly.role,
+			Text:              text.String(),
+			HasDerivedContent: assembly.hasDerivedContent,
+		}
 	}
 	return state
 }

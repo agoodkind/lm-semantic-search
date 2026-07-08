@@ -26,6 +26,7 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 	collectionID := ""
 	var client model.ClientInfo
 	reconcileMode := pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_UNSPECIFIED
+	reexamine := false
 	headerSeen := false
 	documents := make([]model.ConversationDocument, 0)
 	var manifest map[string]string
@@ -48,6 +49,7 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 			collectionID = payload.Header.GetCollectionId()
 			client = pbClient(payload.Header.GetClient())
 			reconcileMode = payload.Header.GetReconcileMode()
+			reexamine = payload.Header.GetReexamineDelivered()
 			headerSeen = true
 			// Validate the header before accepting any documents so a header-less or
 			// empty-collection_id stream cannot accumulate documents unbounded in
@@ -74,7 +76,7 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 		return status.Error(adapterr.Respond(ctx, adapterr.NewMissingArgument("header")))
 	}
 
-	job, callErr := server.manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, client, conversationAbsencePolicyFromProto(reconcileMode))
+	job, callErr := server.manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, client, conversationAbsencePolicyFromProto(reconcileMode), reexamine)
 	if callErr != nil {
 		return status.Error(adapterr.Respond(ctx, classifyManagerError(collectionID, callErr)))
 	}

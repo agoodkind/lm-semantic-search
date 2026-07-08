@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -85,7 +86,7 @@ func TestConversationManifestSyncReturnsNeededIDs(t *testing.T) {
 	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "alpha"},
 		{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "beta"},
-	}, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"}, testClientInfo(), absenceRetain)
+	}, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"}, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -125,7 +126,7 @@ func TestConversationEmptyDiffStoredNamePresentCompletesNoop(t *testing.T) {
 		Text:           "stored collection regression",
 	}}
 
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo(), absenceRetain)
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("first upsertConversationDocuments returned error: %v", err)
 	}
@@ -154,7 +155,7 @@ func TestConversationEmptyDiffStoredNamePresentCompletesNoop(t *testing.T) {
 	}
 	fake.mu.Unlock()
 
-	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, manifest, testClientInfo(), absenceRetain)
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, manifest, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
 	}
@@ -667,7 +668,7 @@ func TestConversationIngestDoesNotWriteChunkCache(t *testing.T) {
 			TimestampUnix:  1712345001,
 			Text:           "beta cache entry",
 		},
-	}, firstManifest, testClientInfo(), absenceRetain)
+	}, firstManifest, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -686,7 +687,7 @@ func TestConversationIngestDoesNotWriteChunkCache(t *testing.T) {
 		Role:           "assistant",
 		TimestampUnix:  1712345002,
 		Text:           "fresh needle cache entry",
-	}}, secondManifest, testClientInfo(), absenceRetain)
+	}}, secondManifest, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
 	}
@@ -860,7 +861,7 @@ func TestConversationDocumentsToStoredChunksSplitsOversizedMessage(t *testing.T)
 	t.Parallel()
 
 	text := strings.Repeat("a", conversationChunkMaxBytes+5)
-	chunks, err := conversationDocumentsToStoredChunks([]model.ConversationDocument{{
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
 		ConversationID:       "thread-large",
 		ParentConversationID: "thread-large-parent",
 		MessageIndex:         7,
@@ -922,6 +923,7 @@ func TestConversationIndexOneEmbedsOnlyAppendedMessage(t *testing.T) {
 		},
 		reader,
 		absenceRetain,
+		false,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-append")
@@ -938,8 +940,8 @@ func TestConversationIndexOneEmbedsOnlyAppendedMessage(t *testing.T) {
 	if !result.RemovalOverride {
 		t.Fatal("RemovalOverride = false, want true")
 	}
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-append/2"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-append/2/"})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-append", 2))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-append", 2))
 	assertReuseVector(t, result.ReuseVectors, "reuse-alpha", []float32{1, 2})
 	assertMessageStateCalls(t, reader.callsSnapshot(), []messageStateCall{{
 		Collection: "conv_chunks_live",
@@ -968,6 +970,7 @@ func TestConversationIndexOneReindexesOnlyEditedMessage(t *testing.T) {
 		},
 		reader,
 		absenceRetain,
+		false,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-edit")
@@ -978,8 +981,8 @@ func TestConversationIndexOneReindexesOnlyEditedMessage(t *testing.T) {
 	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
 		{relativePath: "conv/conv-edit/1", messageIndex: 1, role: "assistant", content: "new answer"},
 	})
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-edit/1"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-edit/1/"})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-edit", 1))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-edit", 1))
 }
 
 func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
@@ -1002,6 +1005,7 @@ func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
 		},
 		reader,
 		absenceRetain,
+		false,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-stale")
@@ -1012,8 +1016,8 @@ func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
 	if len(result.Chunks) != 0 {
 		t.Fatalf("Chunks = %+v, want none for stale-only delta", result.Chunks)
 	}
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-stale/2"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-stale/2/"})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-stale", 2))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-stale", 2))
 	assertReuseVector(t, result.ReuseVectors, "reuse-stale", []float32{3})
 
 	manager, _, _ := newTestManager(t)
@@ -1037,7 +1041,7 @@ func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, source.documents["conv-stale"], source.manifest, testClientInfo(), absenceRetain)
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, source.documents["conv-stale"], source.manifest, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1058,8 +1062,8 @@ func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
 		t.Fatalf("stale removal chunks = %d, want 0", calls[0].Chunks)
 	}
 	assertRemovalEqual(t, calls[0].Removal, semantic.Removal{
-		Paths:    []string{"conv/conv-stale/2"},
-		Prefixes: []string{"conv/conv-stale/2/"},
+		Paths:    conversationRemovalPathsForTest("conv-stale", 2),
+		Prefixes: conversationRemovalPrefixesForTest("conv-stale", 2),
 	})
 }
 
@@ -1083,6 +1087,7 @@ func TestConversationIndexOneMultipartTransitions(t *testing.T) {
 			},
 			reader,
 			absenceRetain,
+			false,
 		)
 
 		result, err := source.indexOne(context.Background(), "conv-shape")
@@ -1093,8 +1098,8 @@ func TestConversationIndexOneMultipartTransitions(t *testing.T) {
 		assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
 			{relativePath: "conv/conv-shape/7", messageIndex: 7, role: "assistant", content: "short"},
 		})
-		assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-shape/7"})
-		assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-shape/7/"})
+		assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-shape", 7))
+		assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-shape", 7))
 	})
 
 	t.Run("single stored row becomes multipart", func(t *testing.T) {
@@ -1115,6 +1120,7 @@ func TestConversationIndexOneMultipartTransitions(t *testing.T) {
 			},
 			reader,
 			absenceRetain,
+			false,
 		)
 
 		result, err := source.indexOne(context.Background(), "conv-shape")
@@ -1132,8 +1138,8 @@ func TestConversationIndexOneMultipartTransitions(t *testing.T) {
 		if result.Chunks[0].Content+result.Chunks[1].Content != text {
 			t.Fatalf("multipart content did not round trip to delivered text")
 		}
-		assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-shape/8"})
-		assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-shape/8/"})
+		assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-shape", 8))
+		assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-shape", 8))
 	})
 }
 
@@ -1156,6 +1162,7 @@ func TestConversationIndexOneSiblingIndexSafety(t *testing.T) {
 		},
 		reader,
 		absenceRetain,
+		false,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-sibling")
@@ -1166,8 +1173,8 @@ func TestConversationIndexOneSiblingIndexSafety(t *testing.T) {
 	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
 		{relativePath: "conv/conv-sibling/12", messageIndex: 12, role: "user", content: "new twelve"},
 	})
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-sibling/12"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-sibling/12/"})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-sibling", 12))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-sibling", 12))
 }
 
 func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T) {
@@ -1184,6 +1191,7 @@ func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T
 		documents,
 		reader,
 		absenceRetain,
+		false,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-load-failure")
@@ -1196,7 +1204,7 @@ func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T
 		{relativePath: "conv/conv-load-failure/1", messageIndex: 1, role: "assistant", content: "answer"},
 	})
 	assertStringSliceEqual(t, result.RemovalPaths, nil)
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-load-failure/"})
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationFullRemovalPrefixes("conv-load-failure"))
 	if result.ReuseVectors != nil {
 		t.Fatalf("ReuseVectors = %v, want nil on loader-error fallback", result.ReuseVectors)
 	}
@@ -1225,7 +1233,7 @@ func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, map[string]string{"conv-load-failure": "fp-load-failure"}, testClientInfo(), absenceRetain)
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, map[string]string{"conv-load-failure": "fp-load-failure"}, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1257,6 +1265,7 @@ func TestConversationIndexOneHealsMissingRows(t *testing.T) {
 		},
 		reader,
 		absenceRetain,
+		false,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-heal")
@@ -1267,8 +1276,8 @@ func TestConversationIndexOneHealsMissingRows(t *testing.T) {
 	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
 		{relativePath: "conv/conv-heal/1", messageIndex: 1, role: "assistant", content: "restored"},
 	})
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-heal/1"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-heal/1/"})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-heal", 1))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-heal", 1))
 }
 
 func TestConversationIndexOneHealsLegacyRowsWithoutDuplicates(t *testing.T) {
@@ -1290,6 +1299,7 @@ func TestConversationIndexOneHealsLegacyRowsWithoutDuplicates(t *testing.T) {
 		},
 		reader,
 		absenceRetain,
+		false,
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-legacy")
@@ -1301,8 +1311,14 @@ func TestConversationIndexOneHealsLegacyRowsWithoutDuplicates(t *testing.T) {
 		{relativePath: "conv/conv-legacy/0", messageIndex: 0, role: "user", content: "hello"},
 		{relativePath: "conv/conv-legacy/1", messageIndex: 1, role: "assistant", content: "answer"},
 	})
-	assertStringSliceEqual(t, result.RemovalPaths, []string{"conv/conv-legacy/0", "conv/conv-legacy/1"})
-	assertStringSliceEqual(t, result.RemovalPrefixes, []string{"conv/conv-legacy/0/", "conv/conv-legacy/1/"})
+	assertStringSliceEqual(t, result.RemovalPaths, append(
+		conversationRemovalPathsForTest("conv-legacy", 0),
+		conversationRemovalPathsForTest("conv-legacy", 1)...,
+	))
+	assertStringSliceEqual(t, result.RemovalPrefixes, append(
+		conversationRemovalPrefixesForTest("conv-legacy", 0),
+		conversationRemovalPrefixesForTest("conv-legacy", 1)...,
+	))
 	assertReuseVector(t, result.ReuseVectors, "legacy-zero", []float32{1})
 	assertReuseVector(t, result.ReuseVectors, "legacy-one", []float32{2})
 }
@@ -1330,8 +1346,14 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	runConversationDeltaIngest(t, manager, ctx, collectionID, coldDocuments, map[string]string{conversationID: "fp-cold"})
 	assertReindexCallCount(t, fake, 1)
 	assertReindexCall(t, fake.reindexCallsSnapshot()[0], 2, semantic.Removal{
-		Paths:    []string{"conv/conv-e2e/0", "conv/conv-e2e/1"},
-		Prefixes: []string{"conv/conv-e2e/0/", "conv/conv-e2e/1/"},
+		Paths: append(
+			conversationRemovalPathsForTest("conv-e2e", 0),
+			conversationRemovalPathsForTest("conv-e2e", 1)...,
+		),
+		Prefixes: append(
+			conversationRemovalPrefixesForTest("conv-e2e", 0),
+			conversationRemovalPrefixesForTest("conv-e2e", 1)...,
+		),
 	})
 	stateStore.setFromDocuments(prefix, coldDocuments)
 
@@ -1359,8 +1381,8 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	runConversationDeltaIngest(t, manager, ctx, collectionID, appendedDocuments, map[string]string{conversationID: "fp-appended"})
 	assertReindexCallCount(t, fake, 2)
 	assertReindexCall(t, fake.reindexCallsSnapshot()[1], 1, semantic.Removal{
-		Paths:    []string{"conv/conv-e2e/2"},
-		Prefixes: []string{"conv/conv-e2e/2/"},
+		Paths:    conversationRemovalPathsForTest("conv-e2e", 2),
+		Prefixes: conversationRemovalPrefixesForTest("conv-e2e", 2),
 	})
 	stateStore.setFromDocuments(prefix, appendedDocuments)
 
@@ -1369,8 +1391,8 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	runConversationDeltaIngest(t, manager, ctx, collectionID, editedDocuments, map[string]string{conversationID: "fp-edited"})
 	assertReindexCallCount(t, fake, 3)
 	assertReindexCall(t, fake.reindexCallsSnapshot()[2], 1, semantic.Removal{
-		Paths:    []string{"conv/conv-e2e/1"},
-		Prefixes: []string{"conv/conv-e2e/1/"},
+		Paths:    conversationRemovalPathsForTest("conv-e2e", 1),
+		Prefixes: conversationRemovalPrefixesForTest("conv-e2e", 1),
 	})
 	stateStore.setFromDocuments(prefix, editedDocuments)
 
@@ -1378,9 +1400,102 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	runConversationDeltaIngest(t, manager, ctx, collectionID, staleDocuments, map[string]string{conversationID: "fp-stale"})
 	assertReindexCallCount(t, fake, 4)
 	assertReindexCall(t, fake.reindexCallsSnapshot()[3], 0, semantic.Removal{
-		Paths:    []string{"conv/conv-e2e/2"},
-		Prefixes: []string{"conv/conv-e2e/2/"},
+		Paths:    conversationRemovalPathsForTest("conv-e2e", 2),
+		Prefixes: conversationRemovalPrefixesForTest("conv-e2e", 2),
 	})
+}
+
+func TestConversationIngestAppendedMessageDoesNotReembedStoredDerivedRows(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _ := newTestManager(t)
+	stateStore := newConversationStateStore()
+	storedReuse := map[string][]float32{}
+	fake := &fakeSemantic{
+		loadMessageState: func(_ context.Context, _ string, prefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
+			return stateStore.state(prefix), cloneReuseVectors(storedReuse), nil
+		},
+	}
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "thread-derived-append"
+	conversationID := "conv-derived-append"
+	prefix := conversationRelativePathPrefix(conversationID)
+
+	coldDocuments := []model.ConversationDocument{
+		{ConversationID: conversationID, MessageIndex: 0, Role: "user", Text: "hello"},
+		{
+			ConversationID: conversationID,
+			MessageIndex:   1,
+			Role:           "assistant",
+			Text:           "answer",
+			Tools: []model.ConversationToolCall{{
+				Name:      "Read",
+				InputJSON: `{"file":"/tmp/input.json"}`,
+				LangHint:  "json",
+			}},
+			Thinking: "private reasoning",
+		},
+	}
+	runConversationDeltaIngest(t, manager, ctx, collectionID, coldDocuments, map[string]string{conversationID: "fp-cold"})
+	assertReindexCallCount(t, fake, 1)
+	stateStore.setFromDocuments(prefix, coldDocuments)
+	storedReuse = reuseForConversationDocuments(t, coldDocuments)
+
+	appendedDocuments := append([]model.ConversationDocument{}, coldDocuments...)
+	appendedDocuments = append(appendedDocuments, model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   2,
+		Role:           "user",
+		Text:           "next question",
+	})
+	runConversationDeltaIngest(t, manager, ctx, collectionID, appendedDocuments, map[string]string{conversationID: "fp-appended"})
+
+	assertReindexCallCount(t, fake, 2)
+	assertReindexCall(t, fake.reindexCallsSnapshot()[1], 1, semantic.Removal{
+		Paths:    conversationRemovalPathsForTest(conversationID, 2),
+		Prefixes: conversationRemovalPrefixesForTest(conversationID, 2),
+	})
+}
+
+func TestConversationIndexOneReemitsChangedDerivedContentWithSameText(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-derived-change"
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{
+			1: {Role: "assistant", Text: "answer", HasDerivedContent: true},
+		},
+		reuse: map[string][]float32{
+			semantic.ContentVectorKey("old private reasoning"): {1},
+		},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-derived-change"},
+		[]model.ConversationDocument{{
+			ConversationID: conversationID,
+			MessageIndex:   1,
+			Role:           "assistant",
+			Text:           "answer",
+			Thinking:       "new private reasoning",
+		}},
+		reader,
+		absenceRetain,
+		false,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+
+	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
+		{relativePath: "conv/conv-derived-change/1", messageIndex: 1, role: "assistant", content: "answer"},
+		{relativePath: "convthink/conv-derived-change/1", messageIndex: 1, role: "assistant", content: "new private reasoning"},
+	})
+	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest(conversationID, 1))
+	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest(conversationID, 1))
 }
 
 func TestConversationRPCsQueueJournaledJobs(t *testing.T) {
@@ -1536,7 +1651,7 @@ func upsertConversationsForManifest(t *testing.T, manager *Manager, ctx context.
 			Text:           "body " + conversationID,
 		})
 	}
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo(), absenceRetain)
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1656,17 +1771,35 @@ func (store *conversationStateStore) state(prefix string) map[int32]semantic.Sto
 func (store *conversationStateStore) setFromDocuments(prefix string, documents []model.ConversationDocument) {
 	next := make(map[int32]semantic.StoredMessageState, len(documents))
 	for _, document := range documents {
-		next[document.MessageIndex] = semantic.StoredMessageState{Role: document.Role, Text: document.Text}
+		next[document.MessageIndex] = semantic.StoredMessageState{
+			Role:              document.Role,
+			Text:              document.Text,
+			HasDerivedContent: len(document.Tools) > 0 || document.Thinking != "",
+		}
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.states[prefix] = next
 }
 
+func reuseForConversationDocuments(t *testing.T, documents []model.ConversationDocument) map[string][]float32 {
+	t.Helper()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+	reuse := make(map[string][]float32, len(chunks))
+	for index, chunk := range chunks {
+		reuse[semantic.ContentVectorKey(chunk.Content)] = []float32{float32(index + 1)}
+	}
+	return reuse
+}
+
 func runConversationDeltaIngest(t *testing.T, manager *Manager, ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string) {
 	t.Helper()
 
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo(), absenceRetain)
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, manifest, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1770,7 +1903,7 @@ func TestSearchWithinConversationScopesAndReportsFingerprint(t *testing.T) {
 	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{ConversationID: "conv-a", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "needle in alpha"},
 		{ConversationID: "conv-b", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "needle in beta"},
-	}, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"}, testClientInfo(), absenceRetain)
+	}, map[string]string{"conv-a": "fp-a-1", "conv-b": "fp-b-1"}, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1858,7 +1991,7 @@ func TestSearchWithinConversationRPCBoundary(t *testing.T) {
 
 	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{ConversationID: "conv-rpc", MessageIndex: 3, Role: "assistant", TimestampUnix: 1712345002, Text: "needle on the wire"},
-	}, map[string]string{"conv-rpc": "fp-rpc-1"}, testClientInfo(), absenceRetain)
+	}, map[string]string{"conv-rpc": "fp-rpc-1"}, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1923,7 +2056,7 @@ func TestConversationIngestLoadsReuseVectorsPerConversation(t *testing.T) {
 	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{ConversationID: "conv-alpha", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "alpha"},
 		{ConversationID: "conv-beta", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "beta"},
-	}, map[string]string{"conv-alpha": "fp-a-1", "conv-beta": "fp-b-1"}, testClientInfo(), absenceRetain)
+	}, map[string]string{"conv-alpha": "fp-a-1", "conv-beta": "fp-b-1"}, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -1976,6 +2109,7 @@ func TestHandleChangedFileProgressReflectsRealWork(t *testing.T) {
 		},
 		nil,
 		absenceRetain,
+		false,
 	)
 	state := deltaState{
 		plan:         deltaPlan{},
@@ -2261,6 +2395,10 @@ func (source oneFileResultOverrideSource) capture(context.Context) (merkle.Snaps
 	return merkle.Snapshot{}, nil
 }
 
+func (source oneFileResultOverrideSource) forcedItems() []string {
+	return nil
+}
+
 func (source oneFileResultOverrideSource) indexOne(context.Context, string) (indexer.OneFileResult, error) {
 	return source.result, nil
 }
@@ -2330,6 +2468,203 @@ func assertRemovalEqual(t *testing.T, got semantic.Removal, want semantic.Remova
 	assertStringSliceEqual(t, got.Prefixes, want.Prefixes)
 }
 
+func conversationRemovalPathsForTest(conversationID string, messageIndex int32) []string {
+	messageSegment := strconv.Itoa(int(messageIndex))
+	return []string{
+		conversationRelativePath(conversationID, messageIndex, 0, false),
+		"convtool/" + conversationID + "/" + messageSegment,
+		"convthink/" + conversationID + "/" + messageSegment,
+	}
+}
+
+func conversationRemovalPrefixesForTest(conversationID string, messageIndex int32) []string {
+	messageSegment := strconv.Itoa(int(messageIndex))
+	return []string{
+		conversationRelativePath(conversationID, messageIndex, 0, false) + "/",
+		"convtool/" + conversationID + "/" + messageSegment + "/",
+		"convthink/" + conversationID + "/" + messageSegment + "/",
+	}
+}
+
+func findConversationChunkForTest(t *testing.T, chunks []model.StoredChunk, relativePath string) model.StoredChunk {
+	t.Helper()
+	for _, chunk := range chunks {
+		if chunk.RelativePath == relativePath {
+			return chunk
+		}
+	}
+	t.Fatalf("chunk %q not found in %+v", relativePath, chunks)
+	return model.StoredChunk{}
+}
+
+func findConversationChunkWithPrefixForTest(t *testing.T, chunks []model.StoredChunk, prefix string) model.StoredChunk {
+	t.Helper()
+	for _, chunk := range chunks {
+		if strings.HasPrefix(chunk.RelativePath, prefix) {
+			return chunk
+		}
+	}
+	t.Fatalf("chunk prefix %q not found in %+v", prefix, chunks)
+	return model.StoredChunk{}
+}
+
+func assertMultipartConversationChunkContentForTest(t *testing.T, chunks []model.StoredChunk, relativePathPrefix string, expectedContent string) {
+	t.Helper()
+
+	partCount := 0
+	var joined strings.Builder
+	for _, chunk := range chunks {
+		if !strings.HasPrefix(chunk.RelativePath, relativePathPrefix) {
+			continue
+		}
+		partCount++
+		if len(chunk.Content) > conversationChunkMaxBytes {
+			t.Fatalf("chunk %q has %d bytes, want at most %d", chunk.RelativePath, len(chunk.Content), conversationChunkMaxBytes)
+		}
+		joined.WriteString(chunk.Content)
+	}
+	if partCount < 2 {
+		t.Fatalf("prefix %q matched %d chunks, want multipart derived chunks", relativePathPrefix, partCount)
+	}
+	if joined.String() != expectedContent {
+		t.Fatalf("content under %q did not round trip to expected content", relativePathPrefix)
+	}
+}
+
+func appendConversationReusePiecesForTest(reuse map[string][]float32, content string, firstVector float32) float32 {
+	nextVector := firstVector
+	for _, piece := range splitConversationText(content) {
+		reuse[semantic.ContentVectorKey(piece)] = []float32{nextVector}
+		nextVector++
+	}
+	return nextVector
+}
+
+func assertConversationTokenLineForTest(t *testing.T, content string, expectedToken string) {
+	t.Helper()
+
+	for _, token := range strings.Split(content, "\n") {
+		if token == expectedToken {
+			return
+		}
+	}
+	t.Fatalf("token content = %q, want exact token %q", content, expectedToken)
+}
+
+func reconstructConversationTextRowsForTest(chunks []model.StoredChunk, conversationID string, messageIndex int32) string {
+	var builder strings.Builder
+	for _, chunk := range conversationTextRowsForTest(chunks, conversationID, messageIndex) {
+		builder.WriteString(chunk.Content)
+	}
+	return builder.String()
+}
+
+func conversationTextRowSignaturesForTest(chunks []model.StoredChunk, conversationID string, messageIndex int32) []string {
+	textRows := conversationTextRowsForTest(chunks, conversationID, messageIndex)
+	signatures := make([]string, 0, len(textRows))
+	for _, chunk := range textRows {
+		signatures = append(signatures, chunk.RelativePath+"\x00"+chunk.Content)
+	}
+	return signatures
+}
+
+func conversationTextRowsForTest(chunks []model.StoredChunk, conversationID string, messageIndex int32) []model.StoredChunk {
+	exactPath := conversationRelativePath(conversationID, messageIndex, 0, false)
+	partPrefix := exactPath + "/"
+	textRows := make([]model.StoredChunk, 0)
+	for _, chunk := range chunks {
+		if chunk.RelativePath == exactPath || strings.HasPrefix(chunk.RelativePath, partPrefix) {
+			textRows = append(textRows, chunk)
+		}
+	}
+	return textRows
+}
+
+func TestConversationIndexOneReusesOversizedDerivedChunks(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-derived-large"
+	messageIndex := int32(9)
+	toolName := strings.Repeat("n", conversationChunkMaxBytes+3)
+	command := strings.Repeat("c", conversationChunkMaxBytes+5)
+	thinking := strings.Repeat("t", conversationChunkMaxBytes+7)
+	document := model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   messageIndex,
+		Role:           "assistant",
+		Text:           "visible transcript text",
+		Tools: []model.ConversationToolCall{{
+			Name:    toolName,
+			Command: command,
+		}},
+		Thinking: thinking,
+	}
+	toolContent := conversationToolTokenContent(document.Tools[0])
+	reuse := make(map[string][]float32)
+	nextVector := appendConversationReusePiecesForTest(reuse, toolContent, 1)
+	nextVector = appendConversationReusePiecesForTest(reuse, command, nextVector)
+	appendConversationReusePiecesForTest(reuse, thinking, nextVector)
+	reader := &testConversationRowReader{
+		state: map[int32]semantic.StoredMessageState{
+			messageIndex: {
+				Role:              document.Role,
+				Text:              document.Text,
+				HasDerivedContent: true,
+			},
+		},
+		reuse: reuse,
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-derived-large"},
+		[]model.ConversationDocument{document},
+		reader,
+		absenceRetain,
+		false,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+	if len(result.Chunks) != 0 {
+		t.Fatalf("Chunks = %d, want none when guardrail-split derived rows can be reused", len(result.Chunks))
+	}
+	assertStringSliceEqual(t, result.RemovalPaths, nil)
+	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{document})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+	for chunkIndex, chunk := range chunks {
+		if isDerivedConversationChunk(chunk) && len(chunk.Content) > conversationChunkMaxBytes {
+			t.Fatalf("derived chunk %d has %d bytes, want at most %d", chunkIndex, len(chunk.Content), conversationChunkMaxBytes)
+		}
+	}
+	assertMultipartConversationChunkContentForTest(
+		t,
+		chunks,
+		"convtool/"+conversationID+"/9/0/tok/",
+		toolContent,
+	)
+	assertMultipartConversationChunkContentForTest(
+		t,
+		chunks,
+		"convtool/"+conversationID+"/9/0/cmd/",
+		command,
+	)
+	assertMultipartConversationChunkContentForTest(
+		t,
+		chunks,
+		"convthink/"+conversationID+"/9/",
+		thinking,
+	)
+	if reconstructed := reconstructConversationTextRowsForTest(chunks, conversationID, messageIndex); reconstructed != document.Text {
+		t.Fatalf("reconstructed text = %q, want %q", reconstructed, document.Text)
+	}
+}
+
 // TestConversationIngestReuseLoadFailureFallsBackToFullEmbed proves a failed
 // message state and reuse load does not fail the job: the conversation falls
 // back to a full prefix reindex with nil override reuse, and the per-item reuse
@@ -2352,7 +2687,7 @@ func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
 
 	job, err := manager.upsertConversationDocuments(ctx, collectionID, []model.ConversationDocument{
 		{ConversationID: "conv-solo", MessageIndex: 0, Role: "user", TimestampUnix: 1712345002, Text: "solo"},
-	}, map[string]string{"conv-solo": "fp-s-1"}, testClientInfo(), absenceRetain)
+	}, map[string]string{"conv-solo": "fp-s-1"}, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
@@ -2386,13 +2721,207 @@ func TestItemSourceAbsencePolicy(t *testing.T) {
 	if code.absencePolicy() != absenceDeleteGuarded {
 		t.Fatalf("code absencePolicy = %v, want absenceDeleteGuarded", code.absencePolicy())
 	}
-	retain := newConversationItemSource("conv_chunks_test", map[string]string{}, nil, nil, absenceRetain)
+	retain := newConversationItemSource("conv_chunks_test", map[string]string{}, nil, nil, absenceRetain, false)
 	if retain.absencePolicy() != absenceRetain {
 		t.Fatalf("retain conversation absencePolicy = %v, want absenceRetain", retain.absencePolicy())
 	}
-	authoritative := newConversationItemSource("conv_chunks_test", map[string]string{}, nil, nil, absenceDeleteGuarded)
+	authoritative := newConversationItemSource("conv_chunks_test", map[string]string{}, nil, nil, absenceDeleteGuarded, false)
 	if authoritative.absencePolicy() != absenceDeleteGuarded {
 		t.Fatalf("authoritative conversation absencePolicy = %v, want absenceDeleteGuarded", authoritative.absencePolicy())
+	}
+}
+
+func TestConversationDocumentsToStoredChunksEmbedsBashToolTokens(t *testing.T) {
+	t.Parallel()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID:       "conv-tool",
+		ParentConversationID: "parent-tool",
+		MessageIndex:         3,
+		Role:                 "assistant",
+		TimestampUnix:        1712345700,
+		Text:                 "ran a command",
+		WorkspaceRoot:        "/workspace",
+		Archived:             true,
+		Tools: []model.ConversationToolCall{{
+			Name:     "Bash",
+			Command:  "cat /tmp/input.txt > /tmp/output.txt",
+			LangHint: "bash",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool/3/0/tok")
+	for _, expected := range []string{"Bash", "cat", "/tmp/input.txt", "/tmp/output.txt"} {
+		if !strings.Contains(tokenChunk.Content, expected) {
+			t.Fatalf("token chunk content = %q, want to contain %q", tokenChunk.Content, expected)
+		}
+	}
+	if tokenChunk.ParentConversationID != "parent-tool" {
+		t.Fatalf("ParentConversationID = %q, want parent-tool", tokenChunk.ParentConversationID)
+	}
+	if tokenChunk.WorkspaceRoot != "/workspace" {
+		t.Fatalf("WorkspaceRoot = %q, want /workspace", tokenChunk.WorkspaceRoot)
+	}
+	if !tokenChunk.Archived {
+		t.Fatal("Archived = false, want true")
+	}
+
+	commandChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool/3/0/cmd")
+	if commandChunk.Content != "cat /tmp/input.txt > /tmp/output.txt" {
+		t.Fatalf("command chunk content = %q, want raw command", commandChunk.Content)
+	}
+}
+
+func TestConversationDocumentsToStoredChunksKeepsRawShellTargetTokens(t *testing.T) {
+	t.Parallel()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID: "conv-raw-target",
+		MessageIndex:   3,
+		Role:           "assistant",
+		Text:           "ran a command",
+		Tools: []model.ConversationToolCall{{
+			Name:    "Bash",
+			Command: "cat relative/input.txt > relative/output.txt",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-raw-target/3/0/tok")
+	for _, expectedToken := range []string{
+		"/relative/input.txt",
+		"relative/input.txt",
+		"/relative/output.txt",
+		"relative/output.txt",
+	} {
+		assertConversationTokenLineForTest(t, tokenChunk.Content, expectedToken)
+	}
+}
+
+func TestConversationToolTokenContentTruncatesRawCommandFallback(t *testing.T) {
+	t.Parallel()
+
+	command := "ONLY_ASSIGNMENT=" + strings.Repeat("x", conversationToolSummaryMaxBytes+100)
+	content := conversationToolTokenContent(model.ConversationToolCall{
+		Name:    "Bash",
+		Command: command,
+	})
+	tokens := strings.Split(content, "\n")
+	fallbackToken := tokens[len(tokens)-1]
+	expectedFallback := truncateConversationToolSummary(command)
+	if fallbackToken != expectedFallback {
+		t.Fatalf("fallback token has %d bytes, want truncated %d-byte command", len(fallbackToken), len(expectedFallback))
+	}
+	if len(fallbackToken) > conversationToolSummaryMaxBytes {
+		t.Fatalf("fallback token has %d bytes, want at most %d", len(fallbackToken), conversationToolSummaryMaxBytes)
+	}
+}
+
+func TestConversationDocumentsToStoredChunksSplitsJSONToolInput(t *testing.T) {
+	t.Parallel()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID: "conv-json",
+		MessageIndex:   4,
+		Role:           "assistant",
+		Text:           "read input",
+		Tools: []model.ConversationToolCall{{
+			Name:      "Read",
+			InputJSON: `{"path":"/tmp/input.json","limit":5}`,
+			LangHint:  "json",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	inputChunk := findConversationChunkWithPrefixForTest(t, chunks, "convtool/conv-json/4/0/in/")
+	if !strings.Contains(inputChunk.Content, "/tmp/input.json") {
+		t.Fatalf("input chunk content = %q, want JSON input", inputChunk.Content)
+	}
+}
+
+func TestConversationDocumentsToStoredChunksKeepsTextDeltaStable(t *testing.T) {
+	t.Parallel()
+
+	document := model.ConversationDocument{
+		ConversationID: "conv-stable",
+		MessageIndex:   7,
+		Role:           "assistant",
+		Text:           "visible transcript text",
+		Tools: []model.ConversationToolCall{{
+			Name:      "Read",
+			InputJSON: `{"file":"/tmp/private.json"}`,
+			LangHint:  "json",
+		}},
+		Thinking: "private reasoning",
+	}
+	firstChunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{document})
+	if err != nil {
+		t.Fatalf("first conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+	secondChunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{document})
+	if err != nil {
+		t.Fatalf("second conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	reconstructed := reconstructConversationTextRowsForTest(firstChunks, document.ConversationID, document.MessageIndex)
+	if reconstructed != document.Text {
+		t.Fatalf("reconstructed text = %q, want %q", reconstructed, document.Text)
+	}
+	assertStringSliceEqual(
+		t,
+		conversationTextRowSignaturesForTest(firstChunks, document.ConversationID, document.MessageIndex),
+		conversationTextRowSignaturesForTest(secondChunks, document.ConversationID, document.MessageIndex),
+	)
+}
+
+func TestConversationDocumentsToStoredChunksEmbedsThinking(t *testing.T) {
+	t.Parallel()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID: "conv-think",
+		MessageIndex:   2,
+		Role:           "assistant",
+		Text:           "answer",
+		Thinking:       "private reasoning",
+	}})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	thinkingChunk := findConversationChunkForTest(t, chunks, "convthink/conv-think/2")
+	if thinkingChunk.Content != "private reasoning" {
+		t.Fatalf("thinking chunk content = %q, want private reasoning", thinkingChunk.Content)
+	}
+}
+
+func TestConversationDocumentsToStoredChunksEmbedsToolOnlyTokenChunk(t *testing.T) {
+	t.Parallel()
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID: "conv-tool-only",
+		MessageIndex:   0,
+		Role:           "assistant",
+		Text:           "",
+		Tools: []model.ConversationToolCall{{
+			Name:      "Read",
+			InputJSON: `{"file":"/tmp/tool-only.txt"}`,
+			LangHint:  "json",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool-only/0/0/tok")
+	if !strings.Contains(tokenChunk.Content, "Read") {
+		t.Fatalf("token chunk content = %q, want tool name", tokenChunk.Content)
 	}
 }
 
@@ -2423,7 +2952,7 @@ func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) 
 		{ConversationID: "conv-3", MessageIndex: 0, Role: "user", TimestampUnix: 1712345003, Text: "three"},
 		{ConversationID: "conv-4", MessageIndex: 0, Role: "user", TimestampUnix: 1712345004, Text: "four"},
 	}
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, fullDocuments, fullManifest, testClientInfo(), absenceRetain)
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, fullDocuments, fullManifest, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("first upsertConversationDocuments returned error: %v", err)
 	}
@@ -2433,7 +2962,7 @@ func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) 
 	// Retain-on-absence keeps them: no removal runs and the snapshot still lists
 	// the omitted ids.
 	reducedManifest := map[string]string{"conv-0": "fp-0", "conv-1": "fp-1"}
-	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, reducedManifest, testClientInfo(), absenceRetain)
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, reducedManifest, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
 	}
@@ -2455,7 +2984,7 @@ func TestConversationIngestRetainsConversationsAbsentFromManifest(t *testing.T) 
 
 	// A restoring push sends the full manifest again with no documents. The ids and
 	// fingerprints already match, so nothing re-embeds and the cache is unchanged.
-	thirdJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, fullManifest, testClientInfo(), absenceRetain)
+	thirdJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, fullManifest, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("third upsertConversationDocuments returned error: %v", err)
 	}
@@ -2492,7 +3021,7 @@ func TestConversationIngestDeletesConversationsAbsentUnderAuthoritative(t *testi
 		{ConversationID: "conv-1", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "one"},
 		{ConversationID: "conv-2", MessageIndex: 0, Role: "user", TimestampUnix: 1712345002, Text: "two"},
 	}
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, fullDocuments, fullManifest, testClientInfo(), absenceDeleteGuarded)
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, fullDocuments, fullManifest, testClientInfo(), absenceDeleteGuarded, false)
 	if err != nil {
 		t.Fatalf("first upsertConversationDocuments returned error: %v", err)
 	}
@@ -2501,7 +3030,7 @@ func TestConversationIngestDeletesConversationsAbsentUnderAuthoritative(t *testi
 	// The second push omits conv-2 and delivers no documents. AUTHORITATIVE
 	// deletes it, so the checkpoint snapshot no longer lists it.
 	reducedManifest := map[string]string{"conv-0": "fp-0", "conv-1": "fp-1"}
-	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, reducedManifest, testClientInfo(), absenceDeleteGuarded)
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, nil, reducedManifest, testClientInfo(), absenceDeleteGuarded, false)
 	if err != nil {
 		t.Fatalf("second upsertConversationDocuments returned error: %v", err)
 	}
@@ -2541,11 +3070,11 @@ func TestUpsertConversationDocumentsRejectsAuthoritativeWithoutManifest(t *testi
 		{ConversationID: "conv-x", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "x"},
 	}
 
-	if _, err := manager.upsertConversationDocuments(ctx, "authoritative-no-manifest", documents, nil, testClientInfo(), absenceDeleteGuarded); err == nil {
+	if _, err := manager.upsertConversationDocuments(ctx, "authoritative-no-manifest", documents, nil, testClientInfo(), absenceDeleteGuarded, false); err == nil {
 		t.Fatal("authoritative upsert with nil manifest was accepted; want rejection to avoid a derived-manifest mass delete")
 	}
 
-	retainJob, err := manager.upsertConversationDocuments(ctx, "retain-no-manifest", documents, nil, testClientInfo(), absenceRetain)
+	retainJob, err := manager.upsertConversationDocuments(ctx, "retain-no-manifest", documents, nil, testClientInfo(), absenceRetain, false)
 	if err != nil {
 		t.Fatalf("retain upsert with nil manifest was rejected: %v", err)
 	}

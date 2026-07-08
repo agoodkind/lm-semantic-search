@@ -24,6 +24,7 @@ import (
 const (
 	conversationCanonicalPathPrefix = "chat:///"
 	conversationChunkMaxBytes       = 60000
+	conversationToolSummaryMaxBytes = 2000
 )
 
 type conversationJobKind string
@@ -48,6 +49,11 @@ type conversationJobPayload struct {
 	// manifest omits. It is meaningful only for an upsert; a delete sets it
 	// explicitly to absenceRetain (also the zero value) but never consults it.
 	Absence absencePolicy
+	// Reexamine forces every delivered conversation into this run's changed set
+	// even when its fingerprint is unchanged, so an operator-run backfill can pick
+	// up a new indexing capability. It is meaningful only for an upsert and stays
+	// false for the normal sync.
+	Reexamine bool
 }
 
 // RegisterConversationCollection records a virtual document collection that is
@@ -192,7 +198,7 @@ func firstN(values []string, limit int) []string {
 // upsertConversationDocuments queues an asynchronous ingest. When manifest is
 // nil it is derived from the delivered documents, so a caller that hands over a
 // complete set need not compute fingerprints itself.
-func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo, absence absencePolicy) (model.Job, error) {
+func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo, absence absencePolicy, reexamine bool) (model.Job, error) {
 	for _, document := range documents {
 		if strings.TrimSpace(document.ConversationID) == "" {
 			return model.Job{}, errors.New("conversation id is required")
@@ -220,6 +226,7 @@ func (manager *Manager) upsertConversationDocuments(ctx context.Context, collect
 		Documents:      documents,
 		ConversationID: "",
 		Absence:        absence,
+		Reexamine:      reexamine,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
 }
@@ -336,6 +343,8 @@ func (manager *Manager) deleteConversation(ctx context.Context, collectionID str
 		// manifest-absence branch, so Absence is unused here; set it explicitly to
 		// absenceRetain (also the zero value) to satisfy exhaustruct.
 		Absence: absenceRetain,
+		// A delete never re-examines documents; it carries none.
+		Reexamine: false,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
 }
@@ -443,7 +452,7 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
-		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence)
+		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence, payload.Reexamine)
 		// The second return is the code path's graph-index task; a conversation
 		// collection never produces one, so there is nothing to discard here.
 		if handled, _ := manager.runDeltaSync(ctx, job, source); handled {
@@ -564,11 +573,28 @@ func fingerprintConversationDocuments(documents []model.ConversationDocument) st
 		hasher.Write([]byte{0})
 		hasher.Write([]byte(document.Text))
 		hasher.Write([]byte{0})
+		for _, tool := range document.Tools {
+			hasher.Write([]byte(tool.Name))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(tool.InputJSON))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(tool.Command))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(tool.LangHint))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(tool.Output))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(strconv.FormatBool(tool.IsError)))
+			hasher.Write([]byte{0})
+		}
+		hasher.Write([]byte(document.Thinking))
+		hasher.Write([]byte{0})
 	}
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
-func conversationDocumentsToStoredChunks(documents []model.ConversationDocument) ([]model.StoredChunk, error) {
+func conversationDocumentsToStoredChunks(ctx context.Context, documents []model.ConversationDocument) ([]model.StoredChunk, error) {
+	dispatcher := newConversationToolDispatcher()
 	chunks := make([]model.StoredChunk, 0, len(documents))
 	for _, document := range documents {
 		conversationID := strings.TrimSpace(document.ConversationID)
@@ -578,22 +604,59 @@ func conversationDocumentsToStoredChunks(documents []model.ConversationDocument)
 		parentConversationID := strings.TrimSpace(document.ParentConversationID)
 		pieces := splitConversationText(document.Text)
 		for partIndex, piece := range pieces {
-			chunks = append(chunks, model.StoredChunk{
-				Content:              piece,
-				RelativePath:         conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
-				StartLine:            0,
-				EndLine:              0,
-				Language:             "",
-				FileExtension:        "",
-				ConversationID:       conversationID,
-				ParentConversationID: parentConversationID,
-				MessageIndex:         document.MessageIndex,
-				Role:                 document.Role,
-				TimestampUnix:        document.TimestampUnix,
-				WorkspaceRoot:        document.WorkspaceRoot,
-				Archived:             document.Archived,
-				Score:                0,
-			})
+			chunks = append(chunks, newConversationStoredChunk(
+				document,
+				conversationID,
+				parentConversationID,
+				conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
+				piece,
+				"",
+				0,
+				0,
+			))
+		}
+		for toolIndex, toolCall := range document.Tools {
+			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
+			chunks = append(chunks, splitConversationDerivedContent(
+				document,
+				conversationID,
+				parentConversationID,
+				toolBasePath+"/tok",
+				conversationToolTokenContent(toolCall),
+			)...)
+			if toolCall.Command != "" {
+				chunks = append(chunks, splitConversationDerivedContent(
+					document,
+					conversationID,
+					parentConversationID,
+					toolBasePath+"/cmd",
+					toolCall.Command,
+				)...)
+			}
+			extension := conversationToolExtension(toolCall.LangHint)
+			if toolCall.InputJSON != "" {
+				inputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/in", "tool"+extension, toolCall.InputJSON)
+				if err != nil {
+					return nil, err
+				}
+				chunks = append(chunks, inputChunks...)
+			}
+			if toolCall.Output != "" {
+				outputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/out", "tool"+extension, toolCall.Output)
+				if err != nil {
+					return nil, err
+				}
+				chunks = append(chunks, outputChunks...)
+			}
+		}
+		if document.Thinking != "" {
+			chunks = append(chunks, splitConversationDerivedContent(
+				document,
+				conversationID,
+				parentConversationID,
+				conversationThinkingPath(conversationID, document.MessageIndex),
+				document.Thinking,
+			)...)
 		}
 	}
 	return chunks, nil
@@ -614,7 +677,7 @@ type conversationMessageDiff struct {
 // New messages also carry exact removals because legacy rows without
 // messageIndex are invisible to storedState but still live under the same
 // conv/<id>/<message> paths; genuinely new messages pay one no-op delete.
-func diffConversationMessages(conversationID string, documents []model.ConversationDocument, storedState map[int32]semantic.StoredMessageState) conversationMessageDiff {
+func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, storedState map[int32]semantic.StoredMessageState, reuse map[string][]float32) (conversationMessageDiff, error) {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
 		removalPaths:    make([]string, 0),
@@ -624,8 +687,14 @@ func diffConversationMessages(conversationID string, documents []model.Conversat
 	for _, document := range documents {
 		delivered[document.MessageIndex] = struct{}{}
 		stored, found := storedState[document.MessageIndex]
-		if found && stored.Role == document.Role && stored.Text == document.Text {
-			continue
+		if found {
+			matches, err := conversationDocumentMatchesStored(ctx, document, stored, reuse)
+			if err != nil {
+				return diff, err
+			}
+			if matches {
+				continue
+			}
 		}
 		diff.documents = append(diff.documents, document)
 		diff.addRemoval(conversationID, document.MessageIndex)
@@ -642,7 +711,42 @@ func diffConversationMessages(conversationID string, documents []model.Conversat
 	for _, staleIndex := range staleIndexes {
 		diff.addRemoval(conversationID, staleIndex)
 	}
-	return diff
+	return diff, nil
+}
+
+func conversationDocumentMatchesStored(ctx context.Context, document model.ConversationDocument, stored semantic.StoredMessageState, reuse map[string][]float32) (bool, error) {
+	if stored.Role != document.Role || stored.Text != document.Text {
+		return false, nil
+	}
+	documentHasDerived := len(document.Tools) > 0 || document.Thinking != ""
+	if !stored.HasDerivedContent && !documentHasDerived {
+		return true, nil
+	}
+	if !documentHasDerived {
+		return false, nil
+	}
+	chunks, err := conversationDocumentsToStoredChunks(ctx, []model.ConversationDocument{document})
+	if err != nil {
+		return false, err
+	}
+	currentHasDerived := false
+	for _, chunk := range chunks {
+		if !isDerivedConversationChunk(chunk) {
+			continue
+		}
+		currentHasDerived = true
+		if _, found := reuse[semantic.ContentVectorKey(chunk.Content)]; !found {
+			return false, nil
+		}
+	}
+	if stored.HasDerivedContent != currentHasDerived {
+		return false, nil
+	}
+	return true, nil
+}
+
+func isDerivedConversationChunk(chunk model.StoredChunk) bool {
+	return strings.HasPrefix(chunk.RelativePath, "convtool/") || strings.HasPrefix(chunk.RelativePath, "convthink/")
 }
 
 // addRemoval emits both the exact path and the slash-suffixed prefix for one
@@ -652,8 +756,10 @@ func diffConversationMessages(conversationID string, documents []model.Conversat
 // (conv/x/12 matches conv/x/120).
 func (diff *conversationMessageDiff) addRemoval(conversationID string, messageIndex int32) {
 	relativePath := conversationRelativePath(conversationID, messageIndex, 0, false)
-	diff.removalPaths = append(diff.removalPaths, relativePath)
-	diff.removalPrefixes = append(diff.removalPrefixes, relativePath+"/")
+	toolPath := conversationToolMessagePath(conversationID, messageIndex)
+	thinkingPath := conversationThinkingPath(conversationID, messageIndex)
+	diff.removalPaths = append(diff.removalPaths, relativePath, toolPath, thinkingPath)
+	diff.removalPrefixes = append(diff.removalPrefixes, relativePath+"/", toolPath+"/", thinkingPath+"/")
 }
 
 func conversationRelativePath(conversationID string, messageIndex int32, partIndex int, multipart bool) string {

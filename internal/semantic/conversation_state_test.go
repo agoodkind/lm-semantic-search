@@ -12,6 +12,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 type conversationStateTestIterator struct {
@@ -270,6 +271,120 @@ func TestLoadConversationMessageStateFromIteratorReuseMapMatchesContentKeysPerRo
 		contentVectorKey("same message part one"):  {11},
 	}
 	assertReuseMap(t, reuse, wantReuse)
+}
+
+func TestConversationStateFilterExpressionIncludesDerivedPrefixes(t *testing.T) {
+	got := conversationStateFilterExpression("conv/reuse/")
+	want := `(conversationId in ["reuse"] or relativePath like "conv/reuse/%" or relativePath like "convtool/reuse/%" or relativePath like "convthink/reuse/%")`
+
+	if got != want {
+		t.Fatalf("conversation state filter = %q, want %q", got, want)
+	}
+}
+
+func TestLoadConversationMessageStateFromIteratorSkipsDerivedConversationRows(t *testing.T) {
+	rows := []conversationStateTestRow{
+		{
+			relativePath:    "conv/derived/5",
+			role:            "assistant",
+			content:         "visible text",
+			messageIndex:    5,
+			hasMessageIndex: true,
+			vector:          []float32{1},
+		},
+		{
+			relativePath:    "convtool/derived/5/0/tok",
+			role:            "assistant",
+			content:         "Bash cat /tmp/input.txt",
+			messageIndex:    5,
+			hasMessageIndex: true,
+			vector:          []float32{2},
+		},
+		{
+			relativePath:    "convthink/derived/5",
+			role:            "assistant",
+			content:         "private reasoning",
+			messageIndex:    5,
+			hasMessageIndex: true,
+			vector:          []float32{3},
+		},
+	}
+	iterator := &conversationStateTestIterator{
+		pages: []milvusclient.ResultSet{conversationStateResultSet(t, rows, true)},
+	}
+
+	state, reuse, err := loadConversationMessageStateFromIterator(context.Background(), "conv_chunks_test", "conv/derived/", iterator)
+	if err != nil {
+		t.Fatalf("loadConversationMessageStateFromIterator returned error: %v", err)
+	}
+
+	wantState := map[int32]StoredMessageState{
+		5: {Role: "assistant", Text: "visible text", HasDerivedContent: true},
+	}
+	assertStoredMessageState(t, state, wantState)
+	assertReuseMap(t, reuse, map[string][]float32{
+		contentVectorKey("visible text"):            {1},
+		contentVectorKey("Bash cat /tmp/input.txt"): {2},
+		contentVectorKey("private reasoning"):       {3},
+	})
+}
+
+func TestLoadConversationMessageStateDerivedReuseSkipsEmbedder(t *testing.T) {
+	rows := []conversationStateTestRow{
+		{
+			relativePath:    "conv/reuse-derived/5",
+			role:            "assistant",
+			content:         "visible text",
+			messageIndex:    5,
+			hasMessageIndex: true,
+			vector:          []float32{1},
+		},
+		{
+			relativePath:    "convtool/reuse-derived/5/0/tok",
+			role:            "assistant",
+			content:         "Bash cat /tmp/input.txt",
+			messageIndex:    5,
+			hasMessageIndex: true,
+			vector:          []float32{2},
+		},
+		{
+			relativePath:    "convthink/reuse-derived/5",
+			role:            "assistant",
+			content:         "private reasoning",
+			messageIndex:    5,
+			hasMessageIndex: true,
+			vector:          []float32{3},
+		},
+	}
+	iterator := &conversationStateTestIterator{
+		pages: []milvusclient.ResultSet{conversationStateResultSet(t, rows, true)},
+	}
+
+	_, reuse, err := loadConversationMessageStateFromIterator(context.Background(), "conv_chunks_test", "conv/reuse-derived/", iterator)
+	if err != nil {
+		t.Fatalf("loadConversationMessageStateFromIterator returned error: %v", err)
+	}
+
+	embedder := &countingEmbedder{}
+	service := &Service{embedder: embedder}
+	chunks := []model.StoredChunk{
+		{Content: "Bash cat /tmp/input.txt"},
+		{Content: "private reasoning"},
+		{Content: "new appended message"},
+	}
+	_, reused, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	if err != nil {
+		t.Fatalf("embedChunkBatch returned error: %v", err)
+	}
+	if reused != 2 {
+		t.Fatalf("reused = %d, want 2 derived chunks reused", reused)
+	}
+	if len(embedder.batches) != 1 {
+		t.Fatalf("embedder called %d time(s), want one call for the new chunk", len(embedder.batches))
+	}
+	if want := []string{"new appended message"}; !slices.Equal(embedder.batches[0], want) {
+		t.Fatalf("embedded batch = %v, want %v", embedder.batches[0], want)
+	}
 }
 
 func TestLoadConversationMessageStateRejectsNegativePathIndexes(t *testing.T) {

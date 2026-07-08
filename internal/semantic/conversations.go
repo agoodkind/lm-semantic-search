@@ -41,11 +41,24 @@ func (service *Service) DeleteConversation(ctx context.Context, collectionName s
 	if err := service.loadCollection(ctx, trimmedCollectionName); err != nil {
 		return err
 	}
-	return service.deleteByRelativePathPrefix(ctx, trimmedCollectionName, conversationRelativePathPrefix(trimmedConversationID))
+	for _, prefix := range conversationRelativePathPrefixes(trimmedConversationID) {
+		if err := service.deleteByRelativePathPrefix(ctx, trimmedCollectionName, prefix); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // conversationRelativePathPrefix is the relativePath prefix every message row of
 // one conversation shares, so a prefix delete drops the whole conversation.
 func conversationRelativePathPrefix(conversationID string) string {
 	return "conv/" + conversationID + "/"
+}
+
+func conversationRelativePathPrefixes(conversationID string) []string {
+	return []string{
+		conversationRelativePathPrefix(conversationID),
+		"convtool/" + conversationID + "/",
+		"convthink/" + conversationID + "/",
+	}
 }
