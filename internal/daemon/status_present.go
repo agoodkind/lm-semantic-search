@@ -228,7 +228,6 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 			statusView.UpdatedAt = formatStampWithRelative(progress.LastEventAt)
 		}
 		changed := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
-		statusView.Percent = int32(progress.OverallPercent + 0.5)
 		statusView.FilesInCodebase = progress.FilesInCodebase
 		statusView.FilesChanged = changed
 		statusView.FilesUnchanged = max(progress.FilesInCodebase-changed, 0)
@@ -248,6 +247,11 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 			chunkProgress.ChunksTotal = codebase.LastSuccessfulRun.TotalChunks
 		}
 		statusView.Breakdown = resolveOutcomeBreakdown(chunkProgress)
+		// The headline percent reads over the corpus-floored total so a
+		// superseded-and-restarted run reflects how much of the corpus is
+		// already embedded rather than this run's reset file cursor. The floor
+		// is the codebase live total, matching the chunk tree above.
+		statusView.Percent = int32(resolveOverallPercent(chunkProgress) + 0.5)
 		embedding = progress.FilesTotal > 0 || progress.FilesInCodebase > 0
 	}
 	if !embedding {

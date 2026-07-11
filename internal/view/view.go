@@ -176,11 +176,7 @@ func ResolveBreakdown(counts ProgressCounts) OutcomeBreakdown {
 
 	processed := embedded + unchanged + removed + pending + oversize + unreadable
 	scopeTotal := max(counts.FilesTotal+removed, changedSet)
-	chunksEmbedded := counts.ChunksEmbedded
-	if chunksEmbedded == 0 && counts.ChunksGenerated > 0 {
-		chunksEmbedded = counts.ChunksGenerated
-	}
-	chunksProcessed := max(counts.ChunksProcessed, counts.ChunksReused+chunksEmbedded)
+	chunksEmbedded, chunksProcessed := resolveChunkTotals(counts)
 	chunksTotal := max(counts.ChunksTotal, chunksProcessed)
 	reuse := resolveReusePresentation(counts.RunMode, counts.ChunksReused, counts.ReuseVectorsLoaded)
 	hasChunks := hasFileScope || chunksTotal > 0 || chunksProcessed > 0 || reuse.hasReuse
@@ -193,6 +189,44 @@ func ResolveBreakdown(counts ProgressCounts) OutcomeBreakdown {
 		ChunksTotal: chunksTotal,
 		ChunkRows:   breakdownChunkRows(hasChunks, chunksEmbedded, counts.ChunksReused, reuse.showReuseRow),
 	}
+}
+
+// resolveChunkTotals applies the ChunksGenerated fallback to ChunksEmbedded and
+// floors chunksProcessed at reused plus embedded. ResolveBreakdown and
+// ResolveOverallPercent share this derivation, so extracting it keeps the two
+// from silently diverging.
+func resolveChunkTotals(counts ProgressCounts) (embedded int32, processed int32) {
+	embedded = counts.ChunksEmbedded
+	if embedded == 0 && counts.ChunksGenerated > 0 {
+		embedded = counts.ChunksGenerated
+	}
+	processed = max(counts.ChunksProcessed, counts.ChunksReused+embedded)
+	return embedded, processed
+}
+
+// ResolveOverallPercent returns the headline completion percent for a run. It
+// counts chunk work already present (reused plus embedded) against a known
+// corpus chunk total, so a reuse-heavy or superseded-and-restarted run reads by
+// how much of the corpus is already embedded rather than by this run's reset
+// file cursor. runPercent is the run's own file-cursor percent
+// (Progress.OverallPercent); the corpus figure only ever raises it, never
+// lowers it, so a genuine high file-progress reading is preserved.
+//
+// The corpus figure applies only when ChunksTotal is a real corpus denominator,
+// which is true only when it exceeds the chunks this run has processed. A
+// mid-run ChunksTotal that merely equals the running sum carries no
+// corpus-completion signal, so a cold or seeded first build stays on its
+// file-cursor percent. This reads the same counters ResolveBreakdown does; it
+// adds no new counting.
+func ResolveOverallPercent(counts ProgressCounts, runPercent float64) float64 {
+	_, chunksProcessed := resolveChunkTotals(counts)
+	if counts.ChunksTotal > chunksProcessed {
+		corpusPercent := float64(chunksProcessed) / float64(counts.ChunksTotal) * 100
+		if corpusPercent > runPercent {
+			return corpusPercent
+		}
+	}
+	return runPercent
 }
 
 // breakdownFileRows builds the file children in fixed order, omitting a zero

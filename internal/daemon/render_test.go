@@ -146,6 +146,91 @@ func breakdownHasPending(breakdown *pb.OutcomeBreakdown) bool {
 	return false
 }
 
+// TestRestartedRunReadsMostlyDoneNotNearZero is the core fix: a run whose file
+// cursor reset near zero after being superseded and restarted, but whose reused
+// work covers most of the corpus, reads as mostly done on every surface. The
+// compact job view, the codebase status view, and the wire all report the same
+// corpus-completion percent rather than the reset file-cursor percent.
+func TestRestartedRunReadsMostlyDoneNotNearZero(t *testing.T) {
+	t.Parallel()
+	codebase := &model.Codebase{
+		CanonicalPath:  "/Users/agoodkind/Sites/swift-makefile",
+		LiveChunkTotal: 40000,
+	}
+	job := model.Job{
+		ID:            "job_restart",
+		CanonicalPath: codebase.CanonicalPath,
+		State:         model.JobStateRunning,
+		Operation:     "streaming_reindex",
+		Progress: model.Progress{
+			RunMode:        model.RunModeResuming,
+			OverallPercent: 2.3,
+			FilesTotal:     4292, FilesProcessed: 50, FilesInCodebase: 4292,
+			FilesModified: 4292,
+			ChunksReused:  37800, ChunksEmbedded: 200, ChunksTotal: 40000,
+			LastEventAt: renderTestTime,
+		},
+	}
+
+	// The compact job surface leads with the corpus-completion percent (38,000 of
+	// 40,000 chunks present = 95.0%), not the reset 2.3% file cursor.
+	surface := resolveProgressSurface(job)
+	if surface.PercentLabel != "95.0%" {
+		t.Fatalf("compact percent = %q, want 95.0%% (reused work counted as done)", surface.PercentLabel)
+	}
+	jobOut := render.GetJob(resolveJobEntry(job, false, ""), true)
+	if !strings.Contains(jobOut, "📊 Progress: 95.0%") {
+		t.Fatalf("job view did not read as mostly done:\n%s", jobOut)
+	}
+	if strings.Contains(jobOut, "Progress: 2.3%") {
+		t.Fatalf("job view still shows the reset file-cursor percent:\n%s", jobOut)
+	}
+
+	// The codebase status view reads the same corpus completion.
+	statusOut := renderActiveStatusForTest(codebase, &job)
+	if !strings.Contains(statusOut, "🔄 Indexing new changes: 95%") {
+		t.Fatalf("status view did not read as mostly done:\n%s", statusOut)
+	}
+
+	// The wire carries the same resolved percent, so the TUI renders identically.
+	wire := pbconv.ToJob(job).GetProgress().GetOverallPercent()
+	if wire != 95.0 {
+		t.Fatalf("wire OverallPercent = %.4f, want 95.0 (parity with the human surface)", wire)
+	}
+
+	// The corpus total stays visible in the chunk tree (codebase-level accumulation).
+	if !strings.Contains(statusOut, "🧩 40,000 chunks total") {
+		t.Fatalf("status view lost the corpus chunk total:\n%s", statusOut)
+	}
+}
+
+// TestReuseHeavyRunSurfacesReusedAsProgress proves a run that embeds little but
+// reuses most of the corpus reads as mostly done, so the reused work is progress
+// in the headline rather than being invisible behind a low embed percent.
+func TestReuseHeavyRunSurfacesReusedAsProgress(t *testing.T) {
+	t.Parallel()
+	job := model.Job{
+		ID:            "job_reuse",
+		CanonicalPath: "/repo",
+		State:         model.JobStateRunning,
+		Operation:     "conversation_ingest",
+		Progress: model.Progress{
+			RunMode:        model.RunModeChanged,
+			OverallPercent: 5.0,
+			FilesTotal:     1011, FilesProcessed: 40,
+			ChunksReused: 30000, ChunksEmbedded: 1000, ChunksTotal: 40000,
+			LastEventAt: renderTestTime,
+		},
+	}
+	surface := resolveProgressSurface(job)
+	if surface.PercentLabel != "77.5%" {
+		t.Fatalf("reuse-heavy percent = %q, want 77.5%% (31,000 of 40,000 present)", surface.PercentLabel)
+	}
+	if wire := pbconv.ToJob(job).GetProgress().GetOverallPercent(); wire != 77.5 {
+		t.Fatalf("wire OverallPercent = %.4f, want 77.5 (parity)", wire)
+	}
+}
+
 // TestStatusTreeMatchesSessionCases locks the two real cases from the design
 // session to their exact trees: a code delta and a conversation ingest. The
 // file rows sum to the processed count in both.
