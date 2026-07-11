@@ -943,10 +943,18 @@ func TestConversationIndexOneEmbedsOnlyAppendedMessage(t *testing.T) {
 	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-append", 2))
 	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-append", 2))
 	assertReuseVector(t, result.ReuseVectors, "reuse-alpha", []float32{1, 2})
-	assertMessageStateCalls(t, reader.callsSnapshot(), []messageStateCall{{
-		Collection: "conv_chunks_live",
-		Prefix:     "conv/conv-append/",
-	}})
+	assertDerivedBatchCalls(t, reader.callsSnapshot(), "conv_chunks_live", []string{"conv-append"})
+}
+
+func assertDerivedBatchCalls(t *testing.T, got []derivedBatchCall, wantCollection string, wantIDs []string) {
+	t.Helper()
+	if len(got) != 1 {
+		t.Fatalf("derived batch calls = %+v, want exactly one", got)
+	}
+	if got[0].Collection != wantCollection {
+		t.Fatalf("derived batch call collection = %q, want %q", got[0].Collection, wantCollection)
+	}
+	assertStringSliceEqual(t, got[0].ConversationIDs, wantIDs)
 }
 
 func TestConversationIndexOneReindexesOnlyEditedMessage(t *testing.T) {
@@ -1329,8 +1337,8 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	manager, _, _ := newTestManager(t)
 	stateStore := newConversationStateStore()
 	fake := &fakeSemantic{
-		loadMessageState: func(_ context.Context, _ string, prefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
-			return stateStore.state(prefix), map[string][]float32{}, nil
+		loadDerivedBatch: func(_ context.Context, _ string, conversationIDs []string) (semantic.ConversationBatchState, error) {
+			return stateStore.batchState(t, conversationIDs), nil
 		},
 	}
 	manager.semantic = fake
@@ -1410,10 +1418,9 @@ func TestConversationIngestAppendedMessageDoesNotReembedStoredDerivedRows(t *tes
 
 	manager, _, _ := newTestManager(t)
 	stateStore := newConversationStateStore()
-	storedReuse := map[string][]float32{}
 	fake := &fakeSemantic{
-		loadMessageState: func(_ context.Context, _ string, prefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
-			return stateStore.state(prefix), cloneReuseVectors(storedReuse), nil
+		loadDerivedBatch: func(_ context.Context, _ string, conversationIDs []string) (semantic.ConversationBatchState, error) {
+			return stateStore.batchState(t, conversationIDs), nil
 		},
 	}
 	manager.semantic = fake
@@ -1440,7 +1447,6 @@ func TestConversationIngestAppendedMessageDoesNotReembedStoredDerivedRows(t *tes
 	runConversationDeltaIngest(t, manager, ctx, collectionID, coldDocuments, map[string]string{conversationID: "fp-cold"})
 	assertReindexCallCount(t, fake, 1)
 	stateStore.setFromDocuments(prefix, coldDocuments)
-	storedReuse = reuseForConversationDocuments(t, coldDocuments)
 
 	appendedDocuments := append([]model.ConversationDocument{}, coldDocuments...)
 	appendedDocuments = append(appendedDocuments, model.ConversationDocument{
@@ -1682,23 +1688,57 @@ func assertStringSliceContains(t *testing.T, values []string, want string) {
 	t.Fatalf("values %v missing %q", values, want)
 }
 
+// testConversationRowReader stubs the batched stored-row read for one
+// conversation. state and reuse describe the base-message state and vectors as
+// before; derivedPaths adds the exact derived relativePath -> content-hash
+// identities a derived-content test needs. Every requested id resolves to the
+// same fixture, which suits the single-conversation unit tests; batch is an
+// explicit override for multi-conversation identity tests.
 type testConversationRowReader struct {
-	state map[int32]semantic.StoredMessageState
-	reuse map[string][]float32
-	err   error
-	calls []messageStateCall
+	state        map[int32]semantic.StoredMessageState
+	reuse        map[string][]float32
+	derivedPaths map[string]string
+	batch        *semantic.ConversationBatchState
+	err          error
+	calls        []derivedBatchCall
 }
 
-func (reader *testConversationRowReader) LoadConversationMessageState(_ context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
-	reader.calls = append(reader.calls, messageStateCall{Collection: collectionName, Prefix: conversationPrefix})
+type derivedBatchCall struct {
+	Collection      string
+	ConversationIDs []string
+}
+
+func (reader *testConversationRowReader) LoadConversationDerivedBatch(_ context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error) {
+	reader.calls = append(reader.calls, derivedBatchCall{Collection: collectionName, ConversationIDs: append([]string(nil), conversationIDs...)})
 	if reader.err != nil {
-		return nil, nil, reader.err
+		return semantic.ConversationBatchState{}, reader.err
 	}
-	return cloneStoredMessageState(reader.state), cloneReuseVectors(reader.reuse), nil
+	if reader.batch != nil {
+		return *reader.batch, nil
+	}
+	rows := make(map[string]semantic.ConversationStoredRows, len(conversationIDs))
+	for _, conversationID := range conversationIDs {
+		rows[conversationID] = semantic.ConversationStoredRows{
+			Messages:     cloneStoredMessageState(reader.state),
+			DerivedPaths: cloneDerivedPaths(reader.derivedPaths),
+		}
+	}
+	return semantic.ConversationBatchState{Rows: rows, Reuse: cloneReuseVectors(reader.reuse)}, nil
 }
 
-func (reader *testConversationRowReader) callsSnapshot() []messageStateCall {
-	return append([]messageStateCall(nil), reader.calls...)
+func (reader *testConversationRowReader) callsSnapshot() []derivedBatchCall {
+	return append([]derivedBatchCall(nil), reader.calls...)
+}
+
+func cloneDerivedPaths(derivedPaths map[string]string) map[string]string {
+	if derivedPaths == nil {
+		return nil
+	}
+	copied := make(map[string]string, len(derivedPaths))
+	for relativePath, contentHash := range derivedPaths {
+		copied[relativePath] = contentHash
+	}
+	return copied
 }
 
 type conversationDeltaChunkWant struct {
@@ -1753,33 +1793,99 @@ func cloneStoredMessageState(state map[int32]semantic.StoredMessageState) map[in
 	return copied
 }
 
+// conversationStateStore records the documents an integration test has already
+// embedded, keyed by conversation id, and serves them back as a batched stored
+// read. It computes the base-message state and the exact derived-path identities
+// from those documents, so a second pass over unchanged documents produces the
+// no-op the delta path expects.
 type conversationStateStore struct {
-	mu     sync.Mutex
-	states map[string]map[int32]semantic.StoredMessageState
+	mu        sync.Mutex
+	documents map[string][]model.ConversationDocument
 }
 
 func newConversationStateStore() *conversationStateStore {
-	return &conversationStateStore{states: map[string]map[int32]semantic.StoredMessageState{}}
-}
-
-func (store *conversationStateStore) state(prefix string) map[int32]semantic.StoredMessageState {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	return cloneStoredMessageState(store.states[prefix])
+	return &conversationStateStore{documents: map[string][]model.ConversationDocument{}}
 }
 
 func (store *conversationStateStore) setFromDocuments(prefix string, documents []model.ConversationDocument) {
-	next := make(map[int32]semantic.StoredMessageState, len(documents))
-	for _, document := range documents {
-		next[document.MessageIndex] = semantic.StoredMessageState{
-			Role:              document.Role,
-			Text:              document.Text,
-			HasDerivedContent: len(document.Tools) > 0 || document.Thinking != "",
-		}
-	}
+	conversationID := conversationIDFromPrefixForTest(prefix)
+	copied := append([]model.ConversationDocument(nil), documents...)
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	store.states[prefix] = next
+	store.documents[conversationID] = copied
+}
+
+func (store *conversationStateStore) batchState(t *testing.T, conversationIDs []string) semantic.ConversationBatchState {
+	t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	byID := make(map[string][]model.ConversationDocument, len(conversationIDs))
+	for _, conversationID := range conversationIDs {
+		if documents, found := store.documents[conversationID]; found {
+			byID[conversationID] = documents
+		}
+	}
+	return conversationBatchStateForDocuments(t, byID)
+}
+
+func conversationIDFromPrefixForTest(prefix string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(prefix, "conv/"), "/")
+}
+
+// conversationBatchStateForDocuments builds the batched stored read a fully
+// embedded set of documents would produce: base-message state, the exact derived
+// relativePath -> content-hash identities, and a batch-wide reuse map keyed by
+// content hash. The reuse vectors are placeholders because the fake reindex never
+// inspects their values, only their keys.
+func conversationBatchStateForDocuments(t *testing.T, documentsByID map[string][]model.ConversationDocument) semantic.ConversationBatchState {
+	t.Helper()
+	state := semantic.ConversationBatchState{Rows: map[string]semantic.ConversationStoredRows{}, Reuse: map[string][]float32{}}
+	nextVector := float32(1)
+	for conversationID, documents := range documentsByID {
+		chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents)
+		if err != nil {
+			t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+		}
+		messages := make(map[int32]semantic.StoredMessageState, len(documents))
+		for _, document := range documents {
+			messages[document.MessageIndex] = semantic.StoredMessageState{
+				Role:              document.Role,
+				Text:              document.Text,
+				HasDerivedContent: len(document.Tools) > 0 || document.Thinking != "",
+			}
+		}
+		derivedPaths := map[string]string{}
+		for _, chunk := range chunks {
+			key := semantic.ContentVectorKey(chunk.Content)
+			if _, found := state.Reuse[key]; !found {
+				state.Reuse[key] = []float32{nextVector}
+				nextVector++
+			}
+			if isDerivedConversationChunk(chunk) {
+				derivedPaths[chunk.RelativePath] = key
+			}
+		}
+		state.Rows[conversationID] = semantic.ConversationStoredRows{Messages: messages, DerivedPaths: derivedPaths}
+	}
+	return state
+}
+
+// conversationDerivedPathsForDocumentsTest returns the exact derived
+// relativePath -> content-hash identities a set of documents embeds, for stubbing
+// a reader that stores derived rows.
+func conversationDerivedPathsForDocumentsTest(t *testing.T, documents []model.ConversationDocument) map[string]string {
+	t.Helper()
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+	derivedPaths := map[string]string{}
+	for _, chunk := range chunks {
+		if isDerivedConversationChunk(chunk) {
+			derivedPaths[chunk.RelativePath] = semantic.ContentVectorKey(chunk.Content)
+		}
+	}
+	return derivedPaths
 }
 
 func reuseForConversationDocuments(t *testing.T, documents []model.ConversationDocument) map[string][]float32 {
@@ -2028,21 +2134,21 @@ func TestSearchWithinConversationRPCBoundary(t *testing.T) {
 	}
 }
 
-// TestConversationIngestLoadsReuseVectorsPerConversation proves the upsert path
-// loads each delivered conversation's existing message state and vectors from
-// the live collection, scoped to its conv/<id>/ prefix, and hands that exact
-// reuse map to the reindex.
-func TestConversationIngestLoadsReuseVectorsPerConversation(t *testing.T) {
+// TestConversationIngestLoadsReuseVectorsBatched proves the upsert path resolves
+// every delivered conversation in one batched read rather than a per-conversation
+// state load, and hands the batch-wide reuse map to each conversation's reindex
+// so a vector embedded for identical content anywhere in the batch is reused.
+func TestConversationIngestLoadsReuseVectorsBatched(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
-	reuseByPrefix := map[string]map[string][]float32{
-		"conv/conv-alpha/": {"hash-alpha": {0.1}},
-		"conv/conv-beta/":  {"hash-beta": {0.2}},
-	}
+	batchReuse := map[string][]float32{"hash-alpha": {0.1}, "hash-beta": {0.2}}
 	fake := &fakeSemantic{
-		loadMessageState: func(_ context.Context, _ string, prefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
-			return map[int32]semantic.StoredMessageState{}, reuseByPrefix[prefix], nil
+		loadDerivedBatch: func(_ context.Context, _ string, _ []string) (semantic.ConversationBatchState, error) {
+			return semantic.ConversationBatchState{
+				Rows:  map[string]semantic.ConversationStoredRows{},
+				Reuse: cloneReuseVectors(batchReuse),
+			}, nil
 		},
 	}
 	manager.semantic = fake
@@ -2062,32 +2168,31 @@ func TestConversationIngestLoadsReuseVectorsPerConversation(t *testing.T) {
 	}
 	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
 
-	stateCalls := fake.messageStateCallsSnapshot()
-	if len(stateCalls) != 2 {
-		t.Fatalf("message state loads = %d, want 2 (one per delivered conversation): %+v", len(stateCalls), stateCalls)
+	batchCalls := fake.derivedBatchCallsSnapshot()
+	if len(batchCalls) != 1 {
+		t.Fatalf("derived batch loads = %d, want 1 batched read: %+v", len(batchCalls), batchCalls)
 	}
-	seenPrefixes := map[string]bool{}
-	for _, call := range stateCalls {
-		if call.Collection != codebase.CollectionName {
-			t.Fatalf("message state load collection = %q, want live collection %q", call.Collection, codebase.CollectionName)
-		}
-		seenPrefixes[call.Prefix] = true
+	seenIDs := map[string]bool{}
+	for _, conversationID := range batchCalls[0] {
+		seenIDs[conversationID] = true
 	}
-	if !seenPrefixes["conv/conv-alpha/"] || !seenPrefixes["conv/conv-beta/"] {
-		t.Fatalf("message state load prefixes = %v, want conv/conv-alpha/ and conv/conv-beta/", seenPrefixes)
+	if !seenIDs["conv-alpha"] || !seenIDs["conv-beta"] {
+		t.Fatalf("batched read ids = %v, want conv-alpha and conv-beta", batchCalls[0])
+	}
+	if stateCalls := fake.messageStateCallsSnapshot(); len(stateCalls) != 0 {
+		t.Fatalf("per-conversation message state loads = %+v, want none on the batched path", stateCalls)
 	}
 	if prefixCalls := fake.reusePrefixCallsSnapshot(); len(prefixCalls) != 0 {
-		t.Fatalf("separate reuse prefix loads = %+v, want none on the combined loader path", prefixCalls)
+		t.Fatalf("separate reuse prefix loads = %+v, want none on the batched path", prefixCalls)
 	}
+	_ = codebase
 
 	reuseByConversation := fake.reindexReuseSnapshot()
-	alphaReuse, alphaSeen := reuseByConversation["conv-alpha"]
-	if !alphaSeen || len(alphaReuse) != 1 || alphaReuse["hash-alpha"] == nil {
-		t.Fatalf("conv-alpha reindex reuse = %v, want the conv/conv-alpha/ map", alphaReuse)
-	}
-	betaReuse, betaSeen := reuseByConversation["conv-beta"]
-	if !betaSeen || len(betaReuse) != 1 || betaReuse["hash-beta"] == nil {
-		t.Fatalf("conv-beta reindex reuse = %v, want the conv/conv-beta/ map", betaReuse)
+	for _, conversationID := range []string{"conv-alpha", "conv-beta"} {
+		reuse, seen := reuseByConversation[conversationID]
+		if !seen || reuse["hash-alpha"] == nil || reuse["hash-beta"] == nil {
+			t.Fatalf("%s reindex reuse = %v, want the batch-wide reuse map", conversationID, reuse)
+		}
 	}
 }
 
@@ -2612,7 +2717,8 @@ func TestConversationIndexOneReusesOversizedDerivedChunks(t *testing.T) {
 				HasDerivedContent: true,
 			},
 		},
-		reuse: reuse,
+		reuse:        reuse,
+		derivedPaths: conversationDerivedPathsForDocumentsTest(t, []model.ConversationDocument{document}),
 	}
 	source := newConversationItemSource(
 		"conv_chunks_live",

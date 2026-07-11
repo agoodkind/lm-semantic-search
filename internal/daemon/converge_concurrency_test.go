@@ -55,7 +55,15 @@ type fakeSemantic struct {
 	reusePathCalls     []reusePathCall
 	loadMessageState   func(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error)
 	messageStateCalls  []messageStateCall
-	reindexReuse       map[string]map[string][]float32
+	// loadDerivedBatch, when set, supplies the batched stored-row read the
+	// examination path issues once per run; derivedBatchCalls records the
+	// conversation-id batches each call asked for. When it is nil but
+	// loadMessageState is set, LoadConversationDerivedBatch synthesizes the batch
+	// from per-conversation state so existing base-text integration tests keep
+	// their fixtures.
+	loadDerivedBatch  func(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error)
+	derivedBatchCalls [][]string
+	reindexReuse      map[string]map[string][]float32
 	// conversationSearchScopes records the conversation-id scope each
 	// conversation search received, so tests can prove native scoping.
 	conversationSearchScopes [][]string
@@ -228,6 +236,44 @@ func (f *fakeSemantic) LoadConversationMessageState(ctx context.Context, collect
 		return f.loadMessageState(ctx, collectionName, conversationPrefix)
 	}
 	return map[int32]semantic.StoredMessageState{}, map[string][]float32{}, nil
+}
+
+func (f *fakeSemantic) LoadConversationDerivedBatch(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error) {
+	f.mu.Lock()
+	f.derivedBatchCalls = append(f.derivedBatchCalls, append([]string(nil), conversationIDs...))
+	f.mu.Unlock()
+	if f.loadDerivedBatch != nil {
+		return f.loadDerivedBatch(ctx, collectionName, conversationIDs)
+	}
+	if f.loadMessageState != nil {
+		return f.conversationBatchFromMessageState(ctx, collectionName, conversationIDs)
+	}
+	return semantic.ConversationBatchState{Rows: map[string]semantic.ConversationStoredRows{}, Reuse: map[string][]float32{}}, nil
+}
+
+// conversationBatchFromMessageState synthesizes a batched read from the
+// per-conversation loadMessageState hook, so a base-text integration test that
+// only stubs message state keeps working. It carries no derived-path identities,
+// so a test that stores derived rows must stub loadDerivedBatch directly.
+func (f *fakeSemantic) conversationBatchFromMessageState(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error) {
+	state := semantic.ConversationBatchState{Rows: map[string]semantic.ConversationStoredRows{}, Reuse: map[string][]float32{}}
+	for _, conversationID := range conversationIDs {
+		messages, reuse, err := f.LoadConversationMessageState(ctx, collectionName, "conv/"+conversationID+"/")
+		if err != nil {
+			return semantic.ConversationBatchState{}, err
+		}
+		state.Rows[conversationID] = semantic.ConversationStoredRows{Messages: messages, DerivedPaths: map[string]string{}}
+		for key, vector := range reuse {
+			state.Reuse[key] = vector
+		}
+	}
+	return state, nil
+}
+
+func (f *fakeSemantic) derivedBatchCallsSnapshot() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]string(nil), f.derivedBatchCalls...)
 }
 
 // reusePrefixCallsSnapshot returns a copy of the recorded prefix reuse loads.

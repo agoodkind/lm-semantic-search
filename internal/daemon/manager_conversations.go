@@ -452,9 +452,22 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
+		snapshotPath := manager.merklePath(job.CodebaseID)
+		// A reexamine backfill over a corpus with no derived markers is the migration
+		// case: stamp the already fully embedded conversations once before planning so
+		// the marker skip engages instead of the whole corpus re-examining. A fresh
+		// install also has no markers, but the batched read finds nothing embedded and
+		// stamps nothing, so it re-embeds normally.
+		if conversationReexamineNeedsBootstrap(payload.Reexamine, snapshotPath) {
+			if _, stamped, bootstrapErr := manager.stampFullyEmbeddedConversations(ctx, payload.CollectionName, snapshotPath, payload.Documents); bootstrapErr != nil {
+				slog.WarnContext(ctx, "conversation bootstrap stamping failed; proceeding without markers", "job_id", job.ID, "err", bootstrapErr)
+			} else if stamped > 0 {
+				slog.InfoContext(ctx, "conversation bootstrap stamped fully-embedded conversations before reexamine", "job_id", job.ID, "stamped", stamped)
+			}
+		}
 		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence, payload.Reexamine)
 		source.derivedVersions = loadConversationDerivedMarkers(
-			conversationDerivedMarkerPath(manager.merklePath(job.CodebaseID)),
+			conversationDerivedMarkerPath(snapshotPath),
 		)
 		// The second return is the code path's graph-index task; a conversation
 		// collection never produces one, so there is nothing to discard here.
@@ -680,7 +693,7 @@ type conversationMessageDiff struct {
 // New messages also carry exact removals because legacy rows without
 // messageIndex are invisible to storedState but still live under the same
 // conv/<id>/<message> paths; genuinely new messages pay one no-op delete.
-func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, storedState map[int32]semantic.StoredMessageState, reuse map[string][]float32) (conversationMessageDiff, error) {
+func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, stored semantic.ConversationStoredRows) (conversationMessageDiff, error) {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
 		removalPaths:    make([]string, 0),
@@ -689,9 +702,9 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 	delivered := make(map[int32]struct{}, len(documents))
 	for _, document := range documents {
 		delivered[document.MessageIndex] = struct{}{}
-		stored, found := storedState[document.MessageIndex]
+		message, found := stored.Messages[document.MessageIndex]
 		if found {
-			matches, err := conversationDocumentMatchesStored(ctx, document, stored, reuse)
+			matches, err := conversationDocumentMatchesStored(ctx, conversationID, document, message, stored.DerivedPaths)
 			if err != nil {
 				return diff, err
 			}
@@ -704,7 +717,7 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 	}
 
 	staleIndexes := make([]int32, 0)
-	for messageIndex := range storedState {
+	for messageIndex := range stored.Messages {
 		if _, found := delivered[messageIndex]; found {
 			continue
 		}
@@ -717,35 +730,63 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 	return diff, nil
 }
 
-func conversationDocumentMatchesStored(ctx context.Context, document model.ConversationDocument, stored semantic.StoredMessageState, reuse map[string][]float32) (bool, error) {
-	if stored.Role != document.Role || stored.Text != document.Text {
+// conversationDocumentMatchesStored treats a delivered message as unchanged only
+// when its stored role and assembled text match and its derived rows match by
+// full identity: every expected derived chunk has a stored row at its exact
+// relativePath whose content hash matches, and the stored derived paths for the
+// message are exactly the expected set. Keying on (conversationID, relativePath,
+// contentHash) is load-bearing: a vector present elsewhere in the batch is not
+// proof the target row exists, so an absent target row makes the message changed
+// and the reindex inserts it, reusing the shared vector rather than re-embedding.
+func conversationDocumentMatchesStored(ctx context.Context, conversationID string, document model.ConversationDocument, message semantic.StoredMessageState, storedDerivedPaths map[string]string) (bool, error) {
+	if message.Role != document.Role || message.Text != document.Text {
 		return false, nil
 	}
+	storedDerivedForMessage := conversationDerivedPathsForMessage(storedDerivedPaths, conversationID, document.MessageIndex)
 	documentHasDerived := len(document.Tools) > 0 || document.Thinking != ""
-	if !stored.HasDerivedContent && !documentHasDerived {
-		return true, nil
-	}
 	if !documentHasDerived {
-		return false, nil
+		return len(storedDerivedForMessage) == 0, nil
 	}
 	chunks, err := conversationDocumentsToStoredChunks(ctx, []model.ConversationDocument{document})
 	if err != nil {
 		return false, err
 	}
-	currentHasDerived := false
+	expectedDerived := make(map[string]string)
 	for _, chunk := range chunks {
-		if !isDerivedConversationChunk(chunk) {
-			continue
+		if isDerivedConversationChunk(chunk) {
+			expectedDerived[chunk.RelativePath] = semantic.ContentVectorKey(chunk.Content)
 		}
-		currentHasDerived = true
-		if _, found := reuse[semantic.ContentVectorKey(chunk.Content)]; !found {
+	}
+	if len(expectedDerived) != len(storedDerivedForMessage) {
+		return false, nil
+	}
+	for relativePath, contentHash := range expectedDerived {
+		if storedDerivedForMessage[relativePath] != contentHash {
 			return false, nil
 		}
 	}
-	if stored.HasDerivedContent != currentHasDerived {
-		return false, nil
-	}
 	return true, nil
+}
+
+// conversationDerivedPathsForMessage selects the stored derived paths that belong
+// to one message, so the identity check compares like with like. Tool rows live
+// under convtool/<id>/<message>/, and thinking rows are convthink/<id>/<message>
+// or its multipart children, so the message boundary is the trailing slash; a
+// bare prefix would like-match a sibling index (message 1 catching message 12).
+func conversationDerivedPathsForMessage(storedDerivedPaths map[string]string, conversationID string, messageIndex int32) map[string]string {
+	if len(storedDerivedPaths) == 0 {
+		return nil
+	}
+	toolPrefix := conversationToolMessagePath(conversationID, messageIndex) + "/"
+	thinkingPath := conversationThinkingPath(conversationID, messageIndex)
+	thinkingPrefix := thinkingPath + "/"
+	forMessage := make(map[string]string)
+	for relativePath, contentHash := range storedDerivedPaths {
+		if strings.HasPrefix(relativePath, toolPrefix) || relativePath == thinkingPath || strings.HasPrefix(relativePath, thinkingPrefix) {
+			forMessage[relativePath] = contentHash
+		}
+	}
+	return forMessage
 }
 
 func isDerivedConversationChunk(chunk model.StoredChunk) bool {
