@@ -243,15 +243,18 @@ type conversationItemSource struct {
 	documents      map[string][]model.ConversationDocument
 	rowReader      conversationRowReader
 	splitterID     string
+	// derivedVersions records the tool and thinking chunking version that last
+	// completed for each conversation. It is conversation-specific state and is
+	// persisted beside the Merkle checkpoint.
+	derivedVersions map[string]string
 	// absence is the caller-declared policy for a conversation the manifest
 	// omits. clyde sends the mode on the upsert header; the stream handler maps
 	// the wire enum to this internal value in conversationAbsencePolicyFromProto,
 	// so the delta core never sees the proto type. The constructor only stores the
 	// already-mapped value.
 	absence absencePolicy
-	// reexamine, when set by an operator-run backfill, forces every delivered
-	// conversation into this run's changed set even when its fingerprint is
-	// unchanged, so indexOne re-examines it and picks up new derived chunks.
+	// reexamine, when set by an operator-run backfill, forces each delivered
+	// conversation whose derived marker is absent or stale into the changed set.
 	reexamine bool
 }
 
@@ -261,22 +264,38 @@ func newConversationItemSource(collectionName string, manifest map[string]string
 		conversationID := document.ConversationID
 		byID[conversationID] = append(byID[conversationID], document)
 	}
-	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", absence: absence, reexamine: reexamine}
+	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", derivedVersions: map[string]string{}, absence: absence, reexamine: reexamine}
 }
 
-// forcedItems returns the delivered conversation ids when an operator-run
-// backfill asked to re-examine them, so the delta routine processes them even
-// though their fingerprint matches the checkpoint. It returns nil for the normal
-// sync, which leaves reexamine false and so is byte-for-byte unchanged.
+// forcedItems returns delivered conversation ids whose derived marker is absent
+// or stale when an operator-run backfill asks to reexamine them. It returns nil
+// before consulting markers for a normal sync, so that path stays unchanged.
 func (source conversationItemSource) forcedItems() []string {
 	if !source.reexamine {
 		return nil
 	}
 	forced := make([]string, 0, len(source.documents))
 	for conversationID := range source.documents {
+		if source.derivedVersions[conversationID] == derivedPipelineVersion {
+			continue
+		}
 		forced = append(forced, conversationID)
 	}
 	return forced
+}
+
+func (source conversationItemSource) checkpointDerivedMarker(snapshotPath string, conversationID string) error {
+	if _, delivered := source.documents[conversationID]; !delivered {
+		return nil
+	}
+	nextVersions := maps.Clone(source.derivedVersions)
+	nextVersions[conversationID] = derivedPipelineVersion
+	markerPath := conversationDerivedMarkerPath(snapshotPath)
+	if err := writeConversationDerivedMarkers(markerPath, nextVersions); err != nil {
+		return err
+	}
+	source.derivedVersions[conversationID] = derivedPipelineVersion
+	return nil
 }
 
 func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot, error) {

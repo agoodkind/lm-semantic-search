@@ -12,6 +12,10 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
+// derivedPipelineVersion must be bumped whenever conversation tool or thinking
+// chunking changes, so a reexamine run rebuilds content derived by older logic.
+const derivedPipelineVersion = "1"
+
 var conversationToolExtensions = map[string]string{
 	"bash":     ".bash",
 	"json":     ".json",

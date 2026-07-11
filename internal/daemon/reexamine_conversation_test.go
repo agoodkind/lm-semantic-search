@@ -8,9 +8,9 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// TestConversationItemSourceForcedItemsReexamine proves a reexamine-flagged
-// conversation source forces every delivered conversation, and an unflagged one
-// forces nothing, so the normal sync stays byte-for-byte unchanged.
+// TestConversationItemSourceForcedItemsReexamine proves marker-aware forcing:
+// absent and stale markers force delivered conversations, a current marker skips
+// one, and an unflagged source consults no markers and forces nothing.
 func TestConversationItemSourceForcedItemsReexamine(t *testing.T) {
 	docs := []model.ConversationDocument{
 		{ConversationID: "claude:a", MessageIndex: 0, Role: "user", Text: "hi"},
@@ -20,13 +20,26 @@ func TestConversationItemSourceForcedItemsReexamine(t *testing.T) {
 	manifest := map[string]string{"claude:a": "fp1", "codex:b": "fp2"}
 
 	forced := newConversationItemSource("coll", manifest, docs, nil, absenceRetain, true)
+	forced.derivedVersions = map[string]string{
+		"codex:b": "stale-version",
+	}
 	got := forced.forcedItems()
 	slices.Sort(got)
 	if !slices.Equal(got, []string{"claude:a", "codex:b"}) {
 		t.Fatalf("forcedItems with reexamine = %v, want [claude:a codex:b]", got)
 	}
 
+	forced.derivedVersions["claude:a"] = derivedPipelineVersion
+	got = forced.forcedItems()
+	if !slices.Equal(got, []string{"codex:b"}) {
+		t.Fatalf("forcedItems with current marker = %v, want [codex:b]", got)
+	}
+
 	quiet := newConversationItemSource("coll", manifest, docs, nil, absenceRetain, false)
+	quiet.derivedVersions = map[string]string{
+		"claude:a": "stale-version",
+		"codex:b":  "stale-version",
+	}
 	if got := quiet.forcedItems(); got != nil {
 		t.Fatalf("forcedItems without reexamine = %v, want nil", got)
 	}
