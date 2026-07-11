@@ -12,7 +12,7 @@ require (
 	github.com/openai/openai-go/v2 v2.7.1
 	github.com/rjeczalik/notify v0.9.3
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/term v0.44.0
+	golang.org/x/term v0.45.0
 	goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e
 	goodkind.io/gksyntax v0.0.0-20260608044551-dcae2f033996
 	goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910
