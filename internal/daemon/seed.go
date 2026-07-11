@@ -61,6 +61,7 @@ func (manager *Manager) resolveSeed(ctx context.Context, job model.Job, codebase
 	if removeErr := store.RemoveFile(snapshotPath); removeErr != nil {
 		slog.WarnContext(ctx, "remove stale bootstrap checkpoint failed", "path", snapshotPath, "err", removeErr)
 	}
+	removeConversationDerivedMarkers(ctx, snapshotPath, "remove stale bootstrap derived markers failed")
 	decision := seedDecision{
 		seed:         seed,
 		snapshotPath: snapshotPath,

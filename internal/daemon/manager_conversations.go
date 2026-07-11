@@ -49,10 +49,10 @@ type conversationJobPayload struct {
 	// manifest omits. It is meaningful only for an upsert; a delete sets it
 	// explicitly to absenceRetain (also the zero value) but never consults it.
 	Absence absencePolicy
-	// Reexamine forces every delivered conversation into this run's changed set
-	// even when its fingerprint is unchanged, so an operator-run backfill can pick
-	// up a new indexing capability. It is meaningful only for an upsert and stays
-	// false for the normal sync.
+	// Reexamine forces delivered conversations with absent or stale derived
+	// markers into this run's changed set even when their fingerprints are
+	// unchanged. It is meaningful only for an upsert and stays false for the
+	// normal sync.
 	Reexamine bool
 }
 
@@ -453,6 +453,9 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
 		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence, payload.Reexamine)
+		source.derivedVersions = loadConversationDerivedMarkers(
+			conversationDerivedMarkerPath(manager.merklePath(job.CodebaseID)),
+		)
 		// The second return is the code path's graph-index task; a conversation
 		// collection never produces one, so there is nothing to discard here.
 		if handled, _ := manager.runDeltaSync(ctx, job, source); handled {
