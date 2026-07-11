@@ -133,7 +133,7 @@ func ToProgress(p model.Progress) *pb.Progress {
 	return &pb.Progress{
 		Phase:                     p.Phase,
 		PhasePercent:              p.PhasePercent,
-		OverallPercent:            p.OverallPercent,
+		OverallPercent:            view.ResolveOverallPercent(ProgressCounts(p), p.OverallPercent),
 		Unit:                      p.Unit,
 		FilesTotal:                p.FilesTotal,
 		FilesProcessed:            p.FilesProcessed,

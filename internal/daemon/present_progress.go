@@ -82,6 +82,16 @@ func resolveOutcomeBreakdown(progress model.Progress) view.OutcomeBreakdown {
 	return view.ResolveBreakdown(pbconv.ProgressCounts(progress))
 }
 
+// resolveOverallPercent reduces a job's progress into the headline completion
+// percent through the shared view resolver, so the compact job surface, the
+// codebase status view, and the wire (pbconv.ToProgress) all report one value.
+// It reads only existing chunk counters; the corpus-completion figure counts
+// reused work as done so a restarted or reuse-heavy run does not read as
+// near-zero behind a reset file cursor.
+func resolveOverallPercent(progress model.Progress) float64 {
+	return view.ResolveOverallPercent(pbconv.ProgressCounts(progress), progress.OverallPercent)
+}
+
 // resolveProgressSurface reduces a job's progress into the typed view. It is
 // the only reader of Progress fields for the compact job surfaces.
 func resolveProgressSurface(job model.Job) view.ProgressSurface {
@@ -96,7 +106,7 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 
 	active := job.State == model.JobStateQueued || job.State == model.JobStateRunning || job.State == model.JobStateCancelling
 
-	percentLabel := fmt.Sprintf("%.1f%%", progress.OverallPercent)
+	percentLabel := fmt.Sprintf("%.1f%%", resolveOverallPercent(progress))
 	if active && !jobScopeKnown(progress) {
 		if jobOperation(job.Operation) == jobOperationSync {
 			percentLabel = "Changes detected, preparing to index"
