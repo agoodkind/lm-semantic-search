@@ -22,6 +22,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/debugserver"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
+	"goodkind.io/lm-semantic-search/internal/logcleanup"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/store"
 	"goodkind.io/lm-semantic-search/internal/updateopts"
@@ -73,13 +74,30 @@ func installCorrelationLogger(origin string) context.Context {
 	return correlation.WithContext(context.Background(), rootCorrelation)
 }
 
+// minRotationMB is the smallest whole-megabyte cap gklog rotation accepts, so
+// a sub-megabyte configured cap still rotates rather than falling back to
+// gklog's zero-value default.
+const minRotationMB = 1
+
+// rotationConfig converts the configured per-file byte cap into gklog's
+// whole-megabyte RotationConfig. It is populated (non-empty) so both the
+// per-concern files and the combined service log rotate on write instead of
+// growing unbounded.
+func rotationConfig(cfg config.Config) gklog.RotationConfig {
+	maxSizeMB := max(int(cfg.LogRotationMaxBytes/(1024*1024)), minRotationMB)
+	return gklog.RotationConfig{MaxSizeMB: maxSizeMB}
+}
+
 // installConcernRouter swaps the default logger so records fan out to
-// per-concern JSONL files under logsDir while the combined stream stays on
-// stderr for the service log. The concern is the first dot-separated segment
-// of each message; the daemon concern catches anything without a dot.
-func installConcernRouter(logsDir string) {
-	combined := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
-	router := gklog.NewRouter(logsDir, slog.LevelInfo, combined, gklog.RouterOptions{FallbackConcern: "daemon", Rotation: gklog.RotationConfig{}})
+// per-concern rotating JSONL files under logsDir, and routes the combined
+// service stream through a rotating gklog file at logPath instead of raw
+// stderr, so the top-level combined log is bounded too. The combined file
+// handle is released at process exit, matching the per-concern files the router
+// opens lazily. The concern is the first dot-separated segment of each message;
+// the daemon concern catches anything without a dot.
+func installConcernRouter(logsDir string, logPath string, rot gklog.RotationConfig) {
+	combined := gklog.FileJSON(logPath, slog.LevelInfo, rot)
+	router := gklog.NewRouter(logsDir, slog.LevelInfo, combined, gklog.RouterOptions{FallbackConcern: "daemon", Rotation: rot})
 	slog.SetDefault(slog.New(correlation.SlogHandler(router, correlationHandlerOptions())))
 }
 
@@ -105,7 +123,7 @@ func run(rootContext context.Context) error {
 		}
 	}
 
-	installConcernRouter(cfg.LogsDir)
+	installConcernRouter(cfg.LogsDir, cfg.LogPath, rotationConfig(cfg))
 	metrics.Register()
 
 	slog.InfoContext(rootContext, "daemon identity", "build", version.String(), "commit", version.Commit, "socket", cfg.SocketPath, "state_root", cfg.StateRoot, "pid", os.Getpid())
@@ -137,6 +155,7 @@ func run(rootContext context.Context) error {
 	defer cancelRuntime()
 	manager.ResumeOrphanedJobs(runtimeContext)
 	daemon.NewBackgroundSync(cfg, manager).Start(runtimeContext)
+	startLogRetentionSweep(runtimeContext, cfg)
 
 	metrics.StartReporter(runtimeContext, time.Duration(cfg.PerfCountersIntervalMS)*time.Millisecond)
 	var debugSrv *debugserver.Server
@@ -182,6 +201,30 @@ func run(rootContext context.Context) error {
 	cancelRuntime()
 	server.GracefulStop()
 	return nil
+}
+
+// startLogRetentionSweep launches the background log retention walker. It runs
+// off the log-write path: rotation happens on write via gklog, while this
+// walker deletes rotated backups past the retention budget on ctx cancellation
+// or its interval. The walker stops when the runtime context cancels at
+// shutdown.
+func startLogRetentionSweep(ctx context.Context, cfg config.Config) {
+	interval := time.Duration(cfg.LogCleanupIntervalMS) * time.Millisecond
+	// The combined log lives under LogsDir today, but sweep its own directory
+	// explicitly too so an overridden CLAUDE_CONTEXTD_LOG_PATH pointing outside
+	// LogsDir still has its rotated backups retained rather than growing unbounded.
+	// Dedupe so the common case (both resolve to LogsDir) runs a single walker.
+	roots := map[string]struct{}{
+		cfg.LogsDir:               {},
+		filepath.Dir(cfg.LogPath): {},
+	}
+	for root := range roots {
+		logcleanup.Start(ctx, logcleanup.Policy{
+			Root:           root,
+			RetentionBytes: cfg.LogRetentionBytes,
+			Enabled:        cfg.LogCleanupEnabled,
+		}, interval)
+	}
 }
 
 func startUpdateScheduler(ctx context.Context, cfg config.Config, shutdownCh chan<- struct{}) {

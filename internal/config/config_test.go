@@ -341,3 +341,52 @@ func TestDefaultDebugAndJobControlEnvOverrides(t *testing.T) {
 		t.Errorf("ResumeIndexingOnBoot = true want false")
 	}
 }
+
+func TestDefaultLogRotationAndCleanupDefaults(t *testing.T) {
+	isolateState(t)
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+
+	if cfg.LogRotationMaxBytes != defaultLogRotationMaxBytes {
+		t.Errorf("LogRotationMaxBytes = %d want %d", cfg.LogRotationMaxBytes, defaultLogRotationMaxBytes)
+	}
+	if cfg.LogRetentionBytes != defaultLogRetentionBytes {
+		t.Errorf("LogRetentionBytes = %d want %d", cfg.LogRetentionBytes, defaultLogRetentionBytes)
+	}
+	if !cfg.LogCleanupEnabled {
+		t.Errorf("LogCleanupEnabled = false want true")
+	}
+	if cfg.LogCleanupIntervalMS != defaultLogCleanupIntervalMS {
+		t.Errorf("LogCleanupIntervalMS = %d want %d", cfg.LogCleanupIntervalMS, defaultLogCleanupIntervalMS)
+	}
+}
+
+func TestDefaultLogRotationAndCleanupEnvOverrides(t *testing.T) {
+	isolateState(t)
+
+	t.Setenv("CLAUDE_CONTEXT_LOG_ROTATION_MAX_BYTES", "1048576")
+	t.Setenv("CLAUDE_CONTEXT_LOG_RETENTION_BYTES", "10485760")
+	t.Setenv("CLAUDE_CONTEXT_LOG_CLEANUP_ENABLED", "false")
+	t.Setenv("CLAUDE_CONTEXT_LOG_CLEANUP_INTERVAL_MS", "60000")
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+
+	if cfg.LogRotationMaxBytes != 1048576 {
+		t.Errorf("LogRotationMaxBytes = %d want 1048576", cfg.LogRotationMaxBytes)
+	}
+	if cfg.LogRetentionBytes != 10485760 {
+		t.Errorf("LogRetentionBytes = %d want 10485760", cfg.LogRetentionBytes)
+	}
+	if cfg.LogCleanupEnabled {
+		t.Errorf("LogCleanupEnabled = true want false")
+	}
+	if cfg.LogCleanupIntervalMS != 60000 {
+		t.Errorf("LogCleanupIntervalMS = %d want 60000", cfg.LogCleanupIntervalMS)
+	}
+}

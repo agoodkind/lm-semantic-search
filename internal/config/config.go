@@ -27,7 +27,16 @@ const (
 	defaultMaxJobBytes               = 1073741824
 	defaultExpectedJobGrowthFactor   = 4
 	defaultExpectedJobGrowthFloor    = 10000
-	nvEmbedCodeQueryPrefix           = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
+	// defaultLogRotationMaxBytes caps each active log file before gklog rotates
+	// it on write. 5 MB keeps several backups inside the retention budget.
+	defaultLogRotationMaxBytes = 5 * 1024 * 1024
+	// defaultLogRetentionBytes caps the total bytes of rotated log backups the
+	// retention sweep keeps. ~20 MB bounds the logs dir that grew to 1.1 GB.
+	defaultLogRetentionBytes = 20 * 1024 * 1024
+	// defaultLogCleanupIntervalMS sets the cadence of the background retention
+	// sweep. Five minutes keeps the sweep off the hot path while staying timely.
+	defaultLogCleanupIntervalMS = 300000
+	nvEmbedCodeQueryPrefix      = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
 )
 
 type embeddingProvider string
@@ -113,6 +122,20 @@ type Config struct {
 	// ResumeIndexingOnBoot controls whether daemon startup relaunches
 	// codebases that were left mid-index when the daemon last stopped.
 	ResumeIndexingOnBoot bool
+	// LogRotationMaxBytes caps each active log file's size before gklog rotates
+	// it on write, so the per-concern files and the combined service log stay
+	// bounded. Converted to gklog's whole-megabyte rotation cap at install time.
+	LogRotationMaxBytes int64
+	// LogRetentionBytes caps the total bytes of rotated log backups the
+	// background retention sweep keeps. Backups past this budget are deleted
+	// oldest first, off the log-write path. Zero or below keeps everything.
+	LogRetentionBytes int64
+	// LogCleanupEnabled turns the background retention sweep on. When false the
+	// sweep audits eligible backups but deletes nothing.
+	LogCleanupEnabled bool
+	// LogCleanupIntervalMS sets how often the background retention sweep runs a
+	// pass after the immediate boot pass.
+	LogCleanupIntervalMS int
 }
 
 type persistedConfig struct {
@@ -234,6 +257,10 @@ func Default() (Config, error) {
 		ExpectedJobGrowthFactor:   envFloat64OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FACTOR", defaultExpectedJobGrowthFactor),
 		ExpectedJobGrowthFloor:    envInt32OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FLOOR", defaultExpectedJobGrowthFloor),
 		ResumeIndexingOnBoot:      envBoolOrDefault("CLAUDE_CONTEXT_RESUME_ON_BOOT", true),
+		LogRotationMaxBytes:       envInt64OrDefault("CLAUDE_CONTEXT_LOG_ROTATION_MAX_BYTES", defaultLogRotationMaxBytes),
+		LogRetentionBytes:         envInt64OrDefault("CLAUDE_CONTEXT_LOG_RETENTION_BYTES", defaultLogRetentionBytes),
+		LogCleanupEnabled:         envBoolOrDefault("CLAUDE_CONTEXT_LOG_CLEANUP_ENABLED", true),
+		LogCleanupIntervalMS:      envIntOrDefault("CLAUDE_CONTEXT_LOG_CLEANUP_INTERVAL_MS", defaultLogCleanupIntervalMS),
 	}, nil
 }
 
