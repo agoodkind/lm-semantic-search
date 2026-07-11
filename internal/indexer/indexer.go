@@ -122,14 +122,23 @@ func NewRunner() *Runner {
 	}
 }
 
-// OneFileResult is the per-file output of one splitter pass. Skipped=true
-// means SkipReason names why no chunks were produced; callers route each
-// SkipReason into the matching Result counter. Removed=true means the file was
-// absent on disk when the task ran, so the converge operation for this path is
-// a removal: callers delete its rows and drop it from the snapshot rather than
-// treating the absence as an error. RemovalOverride true makes RemovalPaths and
-// RemovalPrefixes replace the caller's default removal; when both slices are
-// empty, the item deletes nothing.
+// OneFileResult is the per-item output of one source's indexOne pass, uniform
+// across sources: the produced chunks plus an optional explicit removal set and
+// an optional reuse-vector map. Skipped=true means SkipReason names why no chunks
+// were produced; callers route each SkipReason into the matching Result counter.
+// Removed=true means the item was absent when the task ran, so the converge
+// operation for it is a removal: callers delete its rows and drop it from the
+// snapshot rather than treating the absence as an error.
+//
+// The removal set and reuse map are source-agnostic: any item source may set
+// them, and the delta routine consumes them without a concrete-type assumption.
+// RemovalOverride true makes RemovalPaths and RemovalPrefixes replace the
+// caller's default removal, and when both slices are empty the item deletes
+// nothing. ReuseVectors, when non-nil, carries the already-embedded vectors this
+// item may reuse so the caller skips the per-item reuse load. The code path
+// leaves all of them zero; only a source that computes its own removal or reuse
+// (the conversation message delta) sets them, and R1 classifies the conversation
+// no-op up front so these fields carry real work rather than a per-item bulge.
 type OneFileResult struct {
 	Chunks     []model.StoredChunk
 	FileHash   string

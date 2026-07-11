@@ -609,7 +609,14 @@ func fingerprintConversationDocuments(documents []model.ConversationDocument) st
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
-func conversationDocumentsToStoredChunks(ctx context.Context, documents []model.ConversationDocument) ([]model.StoredChunk, error) {
+// conversationDocumentsToStoredChunks is the single derived-chunk regeneration
+// entry point: every path that turns delivered documents into stored chunks
+// (both the per-item indexOne loop and the full-conversation fallback) routes
+// through it. It is a package var rather than a plain func, mirroring
+// derivedPipelineVersion, only so a same-package test can wrap it to count
+// regenerations and lock the chokepoint invariant that the up-front presence
+// classifier (forcedWorkSet) regenerates nothing. Production never reassigns it.
+var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []model.ConversationDocument) ([]model.StoredChunk, error) {
 	dispatcher := newConversationToolDispatcher()
 	chunks := make([]model.StoredChunk, 0, len(documents))
 	for _, document := range documents {

@@ -48,6 +48,7 @@ func TestDeltaProgressAccumulatesReuseSplit(t *testing.T) {
 	manager.mu.Unlock()
 
 	state := deltaState{
+		source:      codeItemSource{},
 		semantic:    true,
 		staging:     false,
 		reuse:       nil,

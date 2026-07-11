@@ -58,7 +58,9 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 	if err := service.deleteByRelativePaths(ctx, collectionName, []string{srcRelativePath}); err != nil {
 		return 0, err
 	}
-	if err := service.insertBatch(ctx, collectionName, rewritten, vectors); err != nil {
+	// CopyChunks rewrites existing rows within one known collection and has no
+	// item source to ask, so it classifies the column set from that collection.
+	if err := service.insertBatch(ctx, collectionName, rewritten, vectors, storeColumnSetForCollection(collectionName)); err != nil {
 		return 0, err
 	}
 	slog.InfoContext(ctx, "semantic.copy_chunks", "collection", collectionName, "src", srcRelativePath, "dst", dstRelativePath, "rows", len(rewritten))

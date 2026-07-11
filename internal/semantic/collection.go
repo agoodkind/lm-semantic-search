@@ -42,6 +42,40 @@ func isConversationCollection(collectionName string) bool {
 	return strings.HasPrefix(collectionName, conversationCollectionPrefix)
 }
 
+// StoreColumnSet names the scalar column family a store write populates. The
+// ingest caller (the item source) passes it into the write path so insertBatch
+// never re-derives the row shape from the collection name string. A conversation
+// write carries the conversation scalar columns; a code write carries only the
+// base columns.
+type StoreColumnSet int
+
+const (
+	// StoreColumnSetCode writes only the base chunk columns.
+	StoreColumnSetCode StoreColumnSet = iota
+	// StoreColumnSetConversation additionally writes the conversation scalar
+	// columns (conversationId, provider, role, workspace, timestamps, and the
+	// message lineage fields).
+	StoreColumnSetConversation
+)
+
+// ConversationScalars reports whether this column set writes the conversation
+// scalar columns. It replaces the collection-name prefix check inside the store
+// write, so the row shape is a caller decision rather than a string inference.
+func (columnSet StoreColumnSet) ConversationScalars() bool {
+	return columnSet == StoreColumnSetConversation
+}
+
+// storeColumnSetForCollection classifies a collection by name for the callers
+// that rewrite rows in place and have no item source to ask (CopyChunks copies
+// existing rows within one known collection). The source-driven ingest path
+// passes its StoreColumnSet directly instead of calling this.
+func storeColumnSetForCollection(collectionName string) StoreColumnSet {
+	if isConversationCollection(collectionName) {
+		return StoreColumnSetConversation
+	}
+	return StoreColumnSetCode
+}
+
 // isStagingCollection reports whether a collection name is a transient rebuild
 // staging collection, by its suffix. The mmap sweep skips these: a staging
 // collection is promoted onto its live name or dropped, may carry no dense index

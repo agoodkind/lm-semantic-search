@@ -31,8 +31,13 @@ type deltaPlan struct {
 	seedSnapshot    merkle.Snapshot
 	configDigest    string
 	graphTask       *graphIndexTask
-	fallback        bool
-	handled         bool
+	// forced is the precomputed forced work set from source.forcedWorkSet: the
+	// delivered ids that still have real missing work, already unioned into diff.
+	// runDeltaSync turns it into the per-item forced set so applyDeltaChanges
+	// skips the hash-equality short-circuit for exactly these ids.
+	forced   []string
+	fallback bool
+	handled  bool
 }
 
 // deltaOutcome reports what happened inside a runDeltaSync step.
@@ -116,11 +121,12 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 		fileReused = progress.ChunksReused
 		fileEmbedded = progress.ChunksEmbedded
 	}
+	columnSet := state.source.columnSet()
 	var err error
 	if state.staging {
-		err = manager.semantic.StageReindex(ctx, job.CanonicalPath, chunks, removal, progressFn, state.reuse)
+		err = manager.semantic.StageReindex(ctx, job.CanonicalPath, chunks, removal, progressFn, state.reuse, columnSet)
 	} else {
-		err = manager.semantic.Reindex(ctx, job.CanonicalPath, chunks, removal, progressFn, state.reuse)
+		err = manager.semantic.Reindex(ctx, job.CanonicalPath, chunks, removal, progressFn, state.reuse, columnSet)
 	}
 	if err != nil {
 		return manager.classifyReindexErr(ctx, job, err, phase)
@@ -168,6 +174,22 @@ func (manager *Manager) cleanupHaltedStaging(ctx context.Context, job model.Job,
 // confirms the live collection is still present or otherwise not definitively
 // missing. A missing snapshot produces an empty seed whose diff classifies
 // every file as Added, which the per-file loop handles uniformly.
+// failedSyncPlan is the terminal plan a planSyncDiff step returns after it has
+// already set the job to a failed or cancelled state: an empty diff the caller
+// treats as handled, carrying no forced work.
+func failedSyncPlan(seed merkle.Snapshot, configDigest string) deltaPlan {
+	return deltaPlan{
+		diff:            merkle.Diff{Added: nil, Modified: nil, Removed: nil},
+		currentSnapshot: merkle.Snapshot{ConfigDigest: "", Files: nil, Inodes: nil},
+		seedSnapshot:    seed,
+		configDigest:    configDigest,
+		graphTask:       nil,
+		forced:          nil,
+		fallback:        false,
+		handled:         true,
+	}
+}
+
 func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebaseID string, source itemSource) deltaPlan {
 	configDigest := job.Config.IgnoreDigest
 	seed := manager.resolveSeed(ctx, job, codebaseID, false, false).seed
@@ -178,18 +200,24 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 		} else {
 			manager.updateJobFailed(ctx, job.ID, fmt.Errorf("capture sync snapshot: %w", err))
 		}
-		return deltaPlan{
-			diff:            merkle.Diff{Added: nil, Modified: nil, Removed: nil},
-			currentSnapshot: merkle.Snapshot{ConfigDigest: "", Files: nil, Inodes: nil},
-			seedSnapshot:    seed,
-			configDigest:    configDigest,
-			graphTask:       nil,
-			fallback:        false,
-			handled:         true,
+		return failedSyncPlan(seed, configDigest)
+	}
+	forced, forcedErr := source.forcedWorkSet(ctx)
+	if forcedErr != nil {
+		if errors.Is(forcedErr, context.Canceled) {
+			manager.updateJobCancelled(ctx, job.ID)
+		} else {
+			manager.updateJobFailed(ctx, job.ID, fmt.Errorf("classify forced work set: %w", forcedErr))
 		}
+		return failedSyncPlan(seed, configDigest)
 	}
 	diff := merkle.DiffSnapshots(seed, captured)
-	diff = unionForcedItems(diff, source.forcedItems(), captured)
+	// forcedWorkSet has already pruned the delivered no-ops, so unioning its
+	// result fixes the changed set (and therefore the progress denominator)
+	// before the empty-diff fast path and the per-item loop. A fully-backfilled
+	// reexamine yields an empty pruned set, so the empty-diff path completes it
+	// instantly without regenerating anything.
+	diff = unionForcedItems(diff, forced, captured)
 	if diff.Empty() {
 		evidence := manager.probeCollectionEvidence(ctx, job.CanonicalPath, "planSyncDiff")
 		if decideEmptyDiffMode(evidence, len(seed.Files)) == emptyDiffModeFallbackBootstrap {
@@ -200,6 +228,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 				seedSnapshot:    seed,
 				configDigest:    configDigest,
 				graphTask:       nil,
+				forced:          forced,
 				fallback:        true,
 				handled:         false,
 			}
@@ -238,6 +267,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 			seedSnapshot:    seed,
 			configDigest:    configDigest,
 			graphTask:       graphTask,
+			forced:          forced,
 			fallback:        false,
 			handled:         true,
 		}
@@ -248,6 +278,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 		seedSnapshot:    seed,
 		configDigest:    configDigest,
 		graphTask:       nil,
+		forced:          forced,
 		fallback:        false,
 		handled:         false,
 	}
@@ -320,7 +351,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
 		seededReuse:      0,
 		admission:        manager.admissionForJob(job),
-		forced:           forcedItemsSet(source),
+		forced:           forcedItemsSet(plan.forced),
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -523,6 +554,7 @@ func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codeba
 			seedSnapshot:    merkle.Snapshot{ConfigDigest: configDigest, Files: nil, Inodes: nil},
 			configDigest:    configDigest,
 			graphTask:       nil,
+			forced:          nil,
 			fallback:        false,
 			handled:         true,
 		}
@@ -540,6 +572,7 @@ func (manager *Manager) planBootstrap(ctx context.Context, job model.Job, codeba
 		seedSnapshot:    seedDecision.seed,
 		configDigest:    configDigest,
 		graphTask:       nil,
+		forced:          nil,
 		fallback:        false,
 		handled:         false,
 	}

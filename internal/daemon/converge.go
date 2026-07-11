@@ -142,7 +142,7 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 		return false
 	}
 	if fileResult.Removed {
-		if rmErr := manager.semantic.Reindex(ctx, root, nil, semantic.RemovePaths([]string{relativePath}), nil, nil); rmErr != nil {
+		if rmErr := manager.semantic.Reindex(ctx, root, nil, semantic.RemovePaths([]string{relativePath}), nil, nil, semantic.StoreColumnSetCode); rmErr != nil {
 			manager.logConvergeReindexErr(ctx, relativePath, "remove", rmErr)
 			return false
 		}
@@ -178,7 +178,7 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 		slog.WarnContext(ctx, "converge.admission_halt", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", admissionErr)
 		return false
 	}
-	if upErr := manager.semantic.Reindex(ctx, root, fileResult.Chunks, semantic.RemovePaths([]string{relativePath}), nil, nil); upErr != nil {
+	if upErr := manager.semantic.Reindex(ctx, root, fileResult.Chunks, semantic.RemovePaths([]string{relativePath}), nil, nil, semantic.StoreColumnSetCode); upErr != nil {
 		manager.logConvergeReindexErr(ctx, relativePath, "upsert", upErr)
 		return false
 	}
@@ -196,7 +196,7 @@ func (manager *Manager) convergeRemoveExcluded(ctx context.Context, root string,
 	if !snapshot.HasFile(relativePath) {
 		return false
 	}
-	if rmErr := manager.semantic.Reindex(ctx, root, nil, semantic.RemovePaths([]string{relativePath}), nil, nil); rmErr != nil {
+	if rmErr := manager.semantic.Reindex(ctx, root, nil, semantic.RemovePaths([]string{relativePath}), nil, nil, semantic.StoreColumnSetCode); rmErr != nil {
 		manager.logConvergeReindexErr(ctx, relativePath, "remove_excluded", rmErr)
 		return false
 	}

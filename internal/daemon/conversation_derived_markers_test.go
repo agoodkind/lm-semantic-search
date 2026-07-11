@@ -41,15 +41,23 @@ func TestConversationDerivedMarkersRoundTripAndLegacy(t *testing.T) {
 	}
 }
 
-func TestCurrentConversationMarkerSkipsStateLoad(t *testing.T) {
+// TestForcedWorkSetPrunesFullyPresentConversation proves the cheap up-front
+// classification: a delivered conversation whose expected derived rows are all
+// present in the store is pruned from the forced work set after exactly one
+// batch read, with no per-item regeneration. The old marker-skip is gone; the
+// classifier now judges from store presence directly.
+func TestForcedWorkSetPrunesFullyPresentConversation(t *testing.T) {
 	t.Parallel()
 
-	reader := &testConversationRowReader{}
+	reader := &testConversationRowReader{
+		derivedPaths: map[string]string{"convthink/claude:current/0": "hash"},
+	}
 	documents := []model.ConversationDocument{{
 		ConversationID: "claude:current",
 		MessageIndex:   0,
-		Role:           "user",
+		Role:           "assistant",
 		Text:           "unchanged",
+		Thinking:       "private reasoning",
 	}}
 	source := newConversationItemSource(
 		"conversation_collection",
@@ -59,17 +67,20 @@ func TestCurrentConversationMarkerSkipsStateLoad(t *testing.T) {
 		absenceRetain,
 		true,
 	)
-	source.derivedVersions = map[string]string{"claude:current": derivedPipelineVersion}
 	captured, err := source.capture(context.Background())
 	if err != nil {
 		t.Fatalf("capture returned error: %v", err)
 	}
-	diff := unionForcedItems(merkle.Diff{}, source.forcedItems(), captured)
-	if !diff.Empty() {
-		t.Fatalf("current marker produced changed diff: %+v", diff)
+	forced, forcedErr := source.forcedWorkSet(context.Background())
+	if forcedErr != nil {
+		t.Fatalf("forcedWorkSet returned error: %v", forcedErr)
 	}
-	if calls := reader.callsSnapshot(); len(calls) != 0 {
-		t.Fatalf("message state loads = %v, want none", calls)
+	diff := unionForcedItems(merkle.Diff{}, forced, captured)
+	if !diff.Empty() {
+		t.Fatalf("fully present conversation produced changed diff: %+v", diff)
+	}
+	if calls := reader.callsSnapshot(); len(calls) != 1 {
+		t.Fatalf("derived batch loads = %v, want exactly one cheap read", calls)
 	}
 }
 
@@ -107,17 +118,22 @@ func TestConversationMarkerWrittenOnlyAfterSemanticSuccess(t *testing.T) {
 				true,
 			)
 			snapshotPath := filepath.Join(cfg.MerkleDir, "marker-success.json")
+			forced, forcedErr := source.forcedWorkSet(context.Background())
+			if forcedErr != nil {
+				t.Fatalf("forcedWorkSet returned error: %v", forcedErr)
+			}
 			state := deltaState{
 				plan: deltaPlan{
 					diff:            merkle.Diff{Added: []string{"claude:result"}},
 					currentSnapshot: merkle.Snapshot{Files: map[string]string{"claude:result": "fp-result"}},
+					forced:          forced,
 				},
 				snapshotPath: snapshotPath,
 				working:      map[string]string{},
 				source:       source,
 				semantic:     true,
 				chunkCounts:  &chunkCounters{},
-				forced:       forcedItemsSet(source),
+				forced:       forcedItemsSet(forced),
 			}
 
 			_, outcome := manager.applyDeltaChanges(context.Background(), model.Job{ID: "job-marker"}, state)

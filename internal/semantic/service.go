@@ -256,7 +256,7 @@ func (service *Service) renameCollection(ctx context.Context, oldName string, ne
 // inserted through the same batched flow the staging build uses. Reindex
 // returns ErrCollectionMissing when the live collection no longer exists, so
 // callers can fall back to a full staging build.
-func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32) (err error) {
+func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.reindex")
 	defer done(&err)
 
@@ -283,7 +283,7 @@ func (service *Service) Reindex(ctx context.Context, codebasePath string, addedO
 		return nil
 	}
 	addedOrModifiedChunks = service.guardrailExpand(ctx, codebasePath, addedOrModifiedChunks, "reindex")
-	return service.insertChunksBatched(ctx, collectionName, addedOrModifiedChunks, true, "Reindexing changed files...", progress, reuse)
+	return service.insertChunksBatched(ctx, collectionName, addedOrModifiedChunks, true, "Reindexing changed files...", progress, reuse, columnSet)
 }
 
 // PruneToCurrent removes rows whose relativePath is outside the provided
@@ -576,12 +576,12 @@ func (service *Service) dropIfExists(ctx context.Context, collectionName string)
 	return nil
 }
 
-func (service *Service) insertBatch(ctx context.Context, collectionName string, chunks []model.StoredChunk, vectors [][]float32) (err error) {
+func (service *Service) insertBatch(ctx context.Context, collectionName string, chunks []model.StoredChunk, vectors [][]float32, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.insertBatch")
 	defer done(&err)
 
 	insertOption := milvusclient.NewColumnBasedInsertOption(collectionName)
-	conversationCollection := isConversationCollection(collectionName)
+	conversationCollection := columnSet.ConversationScalars()
 	if conversationCollection {
 		// A pre-existing conv_chunks_* collection created before the scalar columns
 		// existed has no conversationId/provider/etc. fields, so an insert that

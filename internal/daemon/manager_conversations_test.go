@@ -2500,8 +2500,12 @@ func (source oneFileResultOverrideSource) capture(context.Context) (merkle.Snaps
 	return merkle.Snapshot{}, nil
 }
 
-func (source oneFileResultOverrideSource) forcedItems() []string {
-	return nil
+func (source oneFileResultOverrideSource) forcedWorkSet(context.Context) ([]string, error) {
+	return nil, nil
+}
+
+func (source oneFileResultOverrideSource) columnSet() semantic.StoreColumnSet {
+	return semantic.StoreColumnSetConversation
 }
 
 func (source oneFileResultOverrideSource) indexOne(context.Context, string) (indexer.OneFileResult, error) {
