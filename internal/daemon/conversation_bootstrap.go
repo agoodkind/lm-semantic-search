@@ -55,6 +55,16 @@ func (manager *Manager) stampFullyEmbeddedConversations(ctx context.Context, col
 		examined++
 		fullyEmbedded, checkErr := conversationFullyEmbedded(ctx, conversationID, documentsByID[conversationID], batch.Rows[conversationID])
 		if checkErr != nil {
+			// A later conversation's diff errored, but earlier conversations in this
+			// run may already be stamped in versions. Persist them before returning so
+			// the reported stamped count matches what is durably on disk, rather than
+			// claiming stamps that were never written.
+			if changed {
+				if writeErr := writeConversationDerivedMarkers(markerPath, versions); writeErr != nil {
+					slog.ErrorContext(ctx, "persist partial bootstrap markers before returning error failed", "collection", collectionName, "err", writeErr)
+					return examined, 0, checkErr
+				}
+			}
 			return examined, stamped, checkErr
 		}
 		if !fullyEmbedded {
