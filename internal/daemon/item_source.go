@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"sort"
+	"sync"
 
 	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/indexer"
@@ -133,7 +134,11 @@ type itemReuseSource struct {
 }
 
 type conversationRowReader interface {
-	LoadConversationMessageState(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error)
+	// LoadConversationDerivedBatch reads the stored rows for a batch of
+	// conversations in one Milvus query per id batch. The examination path resolves
+	// every delivered conversation from this single read instead of one
+	// per-conversation state load.
+	LoadConversationDerivedBatch(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error)
 }
 
 // codeItemSource lists and reads a filesystem codebase. It is the byte-for-byte
@@ -256,6 +261,20 @@ type conversationItemSource struct {
 	// reexamine, when set by an operator-run backfill, forces each delivered
 	// conversation whose derived marker is absent or stale into the changed set.
 	reexamine bool
+	// batch caches the one batched read of the live collection for every delivered
+	// conversation. indexOne loads it once on first use, so a run of many
+	// conversations costs one Milvus query per id batch instead of one read per
+	// conversation. It is a pointer so the single load survives the value copies the
+	// delta routine makes of the source.
+	batch *conversationDerivedBatch
+}
+
+// conversationDerivedBatch is the single-flight cache of the batched stored-row
+// read shared across every indexOne call in one run.
+type conversationDerivedBatch struct {
+	once  sync.Once
+	state semantic.ConversationBatchState
+	err   error
 }
 
 func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader, absence absencePolicy, reexamine bool) conversationItemSource {
@@ -264,7 +283,26 @@ func newConversationItemSource(collectionName string, manifest map[string]string
 		conversationID := document.ConversationID
 		byID[conversationID] = append(byID[conversationID], document)
 	}
-	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", derivedVersions: map[string]string{}, absence: absence, reexamine: reexamine}
+	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", derivedVersions: map[string]string{}, absence: absence, reexamine: reexamine, batch: &conversationDerivedBatch{once: sync.Once{}, state: semantic.ConversationBatchState{Rows: nil, Reuse: nil}, err: nil}}
+}
+
+// loadDerivedBatch reads the stored rows for every delivered conversation once,
+// caching the result so each indexOne consults it instead of issuing its own
+// per-conversation query. The batched reuse map spans conversations, so an absent
+// target row can reuse a vector embedded for identical content in another
+// delivered conversation while still inserting the missing row.
+func (source conversationItemSource) loadDerivedBatch(ctx context.Context) (semantic.ConversationBatchState, error) {
+	if source.batch == nil {
+		return semantic.ConversationBatchState{Rows: map[string]semantic.ConversationStoredRows{}, Reuse: map[string][]float32{}}, nil
+	}
+	source.batch.once.Do(func() {
+		conversationIDs := make([]string, 0, len(source.documents))
+		for conversationID := range source.documents {
+			conversationIDs = append(conversationIDs, conversationID)
+		}
+		source.batch.state, source.batch.err = source.rowReader.LoadConversationDerivedBatch(ctx, source.collectionName, conversationIDs)
+	})
+	return source.batch.state, source.batch.err
 }
 
 // forcedItems returns delivered conversation ids whose derived marker is absent
@@ -335,20 +373,28 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 		return source.fullConversationResult(ctx, conversationID, documents, false)
 	}
 
-	conversationPrefix := conversationRelativePathPrefix(conversationID)
-	storedState, reuse, err := source.rowReader.LoadConversationMessageState(ctx, source.collectionName, conversationPrefix)
+	batch, err := source.loadDerivedBatch(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "load conversation message state failed; falling back to full conversation reindex", "conversation_id", conversationID, "collection", source.collectionName, "err", err)
+		slog.WarnContext(ctx, "load conversation derived batch failed; falling back to full conversation reindex", "conversation_id", conversationID, "collection", source.collectionName, "err", err)
 		return source.fullConversationResult(ctx, conversationID, documents, true)
 	}
-	if storedState == nil {
-		storedState = map[int32]semantic.StoredMessageState{}
+	stored := batch.Rows[conversationID]
+	if stored.Messages == nil {
+		stored.Messages = map[int32]semantic.StoredMessageState{}
 	}
-	if reuse == nil {
-		reuse = map[string][]float32{}
+	if stored.DerivedPaths == nil {
+		stored.DerivedPaths = map[string]string{}
+	}
+	// The batch-wide reuse map spans every delivered conversation, so a changed
+	// message reuses a vector embedded for identical content anywhere in the batch
+	// while its missing target row is still inserted. A non-nil map keeps the
+	// message-delta path from falling back to a per-conversation reuse load.
+	batchReuse := batch.Reuse
+	if batchReuse == nil {
+		batchReuse = map[string][]float32{}
 	}
 
-	delta, diffErr := diffConversationMessages(ctx, conversationID, documents, storedState, reuse)
+	delta, diffErr := diffConversationMessages(ctx, conversationID, documents, stored)
 	if diffErr != nil {
 		return indexer.OneFileResult{
 			Chunks:          nil,
@@ -385,7 +431,7 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 		RemovalOverride: true,
 		RemovalPaths:    delta.removalPaths,
 		RemovalPrefixes: delta.removalPrefixes,
-		ReuseVectors:    reuse,
+		ReuseVectors:    batchReuse,
 	}, nil
 }
 

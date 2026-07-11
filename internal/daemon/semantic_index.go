@@ -45,7 +45,10 @@ type semanticReuseLoader interface {
 	LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error)
 	LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
 	LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
-	LoadConversationMessageState(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error)
+	// LoadConversationDerivedBatch resolves the stored rows for a batch of
+	// conversations in one Milvus query per id batch, replacing the
+	// per-conversation message-state iterator in the examination path.
+	LoadConversationDerivedBatch(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error)
 }
 
 // semanticWriter is the slice that mutates the live or staging collection.
