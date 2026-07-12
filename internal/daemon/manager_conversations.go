@@ -452,23 +452,7 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
-		snapshotPath := manager.merklePath(job.CodebaseID)
-		// A reexamine backfill over a corpus with no derived markers is the migration
-		// case: stamp the already fully embedded conversations once before planning so
-		// the marker skip engages instead of the whole corpus re-examining. A fresh
-		// install also has no markers, but the batched read finds nothing embedded and
-		// stamps nothing, so it re-embeds normally.
-		if conversationReexamineNeedsBootstrap(payload.Reexamine, snapshotPath) {
-			if _, stamped, bootstrapErr := manager.stampFullyEmbeddedConversations(ctx, payload.CollectionName, snapshotPath, payload.Documents); bootstrapErr != nil {
-				slog.WarnContext(ctx, "conversation bootstrap stamping failed; proceeding without markers", "job_id", job.ID, "err", bootstrapErr)
-			} else if stamped > 0 {
-				slog.InfoContext(ctx, "conversation bootstrap stamped fully-embedded conversations before reexamine", "job_id", job.ID, "stamped", stamped)
-			}
-		}
 		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence, payload.Reexamine)
-		source.derivedVersions = loadConversationDerivedMarkers(
-			conversationDerivedMarkerPath(snapshotPath),
-		)
 		// The second return is the code path's graph-index task; a conversation
 		// collection never produces one, so there is nothing to discard here.
 		if handled, _ := manager.runDeltaSync(ctx, job, source); handled {

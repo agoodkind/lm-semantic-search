@@ -52,6 +52,49 @@ func TestConversationItemSourceForcedWorkSetReexamine(t *testing.T) {
 	}
 }
 
+// TestForcedWorkSetPrunesFullyPresentConversation proves the cheap up-front
+// classification: a delivered conversation whose expected derived rows are all
+// present in the store is pruned from the forced work set after exactly one
+// batch read, with no per-item regeneration. No marker is involved; the
+// classifier judges from store presence directly.
+func TestForcedWorkSetPrunesFullyPresentConversation(t *testing.T) {
+	t.Parallel()
+
+	reader := &testConversationRowReader{
+		derivedPaths: map[string]string{"convthink/claude:current/0": "hash"},
+	}
+	documents := []model.ConversationDocument{{
+		ConversationID: "claude:current",
+		MessageIndex:   0,
+		Role:           "assistant",
+		Text:           "unchanged",
+		Thinking:       "private reasoning",
+	}}
+	source := newConversationItemSource(
+		"conversation_collection",
+		map[string]string{"claude:current": "fp-current"},
+		documents,
+		reader,
+		absenceRetain,
+		true,
+	)
+	captured, err := source.capture(context.Background())
+	if err != nil {
+		t.Fatalf("capture returned error: %v", err)
+	}
+	forced, forcedErr := source.forcedWorkSet(context.Background())
+	if forcedErr != nil {
+		t.Fatalf("forcedWorkSet returned error: %v", forcedErr)
+	}
+	diff := unionForcedItems(merkle.Diff{}, forced, captured)
+	if !diff.Empty() {
+		t.Fatalf("fully present conversation produced changed diff: %+v", diff)
+	}
+	if calls := reader.callsSnapshot(); len(calls) != 1 {
+		t.Fatalf("derived batch loads = %v, want exactly one cheap read", calls)
+	}
+}
+
 // TestConversationForcedWorkSetFailsSafeOnBatchError proves a store-read failure
 // forces every delivered id rather than under-embedding.
 func TestConversationForcedWorkSetFailsSafeOnBatchError(t *testing.T) {

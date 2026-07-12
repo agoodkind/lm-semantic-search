@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/merkle"
@@ -168,133 +167,13 @@ func TestConversationIndexOneReconcilesDerivedPathShapeChange(t *testing.T) {
 	}
 }
 
-// TestStampFullyEmbeddedConversations proves the bootstrap stamps only a
-// conversation whose expected rows are all present, never a partially embedded
-// one, and never embeds.
-func TestStampFullyEmbeddedConversations(t *testing.T) {
-	t.Parallel()
-
-	fullID := "conv-full"
-	partialID := "conv-partial"
-	fullDocuments := []model.ConversationDocument{
-		{ConversationID: fullID, MessageIndex: 0, Role: "user", Text: "hi"},
-		{ConversationID: fullID, MessageIndex: 1, Role: "assistant", Text: "answer", Thinking: "reasoning"},
-	}
-	partialDocuments := []model.ConversationDocument{
-		{ConversationID: partialID, MessageIndex: 0, Role: "user", Text: "hi"},
-		{ConversationID: partialID, MessageIndex: 1, Role: "assistant", Text: "answer", Thinking: "reasoning"},
-	}
-
-	batch := conversationBatchStateForDocuments(t, map[string][]model.ConversationDocument{
-		fullID:    fullDocuments,
-		partialID: partialDocuments,
-	})
-	// Break the partial conversation: drop its derived rows so message 1 is missing
-	// its thinking row and the conversation is not fully embedded.
-	partialRows := batch.Rows[partialID]
-	partialRows.DerivedPaths = map[string]string{}
-	batch.Rows[partialID] = partialRows
-
-	manager, _, _ := newTestManager(t)
-	fake := &fakeSemantic{
-		loadDerivedBatch: func(_ context.Context, _ string, _ []string) (semantic.ConversationBatchState, error) {
-			return batch, nil
-		},
-	}
-	manager.semantic = fake
-	ctx := context.Background()
-	collectionID := "thread-bootstrap"
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-
-	documents := append(append([]model.ConversationDocument{}, fullDocuments...), partialDocuments...)
-	examined, stamped, err := manager.StampFullyEmbeddedConversations(ctx, collectionID, documents)
-	if err != nil {
-		t.Fatalf("StampFullyEmbeddedConversations returned error: %v", err)
-	}
-	if examined != 2 {
-		t.Fatalf("examined = %d, want 2", examined)
-	}
-	if stamped != 1 {
-		t.Fatalf("stamped = %d, want 1 (only the fully embedded conversation)", stamped)
-	}
-
-	markers := loadConversationDerivedMarkers(conversationDerivedMarkerPath(manager.merklePath(codebase.ID)))
-	if markers[fullID] != derivedPipelineVersion {
-		t.Fatalf("fully embedded marker = %q, want %q", markers[fullID], derivedPipelineVersion)
-	}
-	if _, found := markers[partialID]; found {
-		t.Fatalf("partial conversation stamped %q, want it left unstamped", markers[partialID])
-	}
-	if calls := fake.reindexCallsSnapshot(); len(calls) != 0 {
-		t.Fatalf("bootstrap issued %d reindex calls, want 0 (never re-embeds)", len(calls))
-	}
-}
-
-// TestStampFullyEmbeddedConversationsFreshInstallStampsNothing proves the
-// migration guard is safe on a fresh install: an empty batched read means no
-// conversation is fully embedded, so nothing is stamped.
-func TestStampFullyEmbeddedConversationsFreshInstallStampsNothing(t *testing.T) {
-	t.Parallel()
-
-	manager, _, _ := newTestManager(t)
-	fake := &fakeSemantic{
-		loadDerivedBatch: func(_ context.Context, _ string, _ []string) (semantic.ConversationBatchState, error) {
-			return semantic.ConversationBatchState{Rows: map[string]semantic.ConversationStoredRows{}, Reuse: map[string][]float32{}}, nil
-		},
-	}
-	manager.semantic = fake
-	ctx := context.Background()
-	collectionID := "thread-bootstrap-fresh"
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-
-	documents := []model.ConversationDocument{
-		{ConversationID: "conv-fresh", MessageIndex: 0, Role: "user", Text: "hi"},
-	}
-	examined, stamped, err := manager.StampFullyEmbeddedConversations(ctx, collectionID, documents)
-	if err != nil {
-		t.Fatalf("StampFullyEmbeddedConversations returned error: %v", err)
-	}
-	if examined != 1 || stamped != 0 {
-		t.Fatalf("examined = %d, stamped = %d, want 1 examined and 0 stamped on a fresh install", examined, stamped)
-	}
-	markers := loadConversationDerivedMarkers(conversationDerivedMarkerPath(manager.merklePath(codebase.ID)))
-	if len(markers) != 0 {
-		t.Fatalf("markers = %v, want none on a fresh install", markers)
-	}
-}
-
-// TestConversationReexamineNeedsBootstrap proves the auto-trigger fires only for
-// a reexamine backfill whose marker store is empty.
-func TestConversationReexamineNeedsBootstrap(t *testing.T) {
-	t.Parallel()
-
-	snapshotPath := filepath.Join(t.TempDir(), "conversation.json")
-	if !conversationReexamineNeedsBootstrap(true, snapshotPath) {
-		t.Fatal("reexamine with empty markers should trigger bootstrap")
-	}
-	if conversationReexamineNeedsBootstrap(false, snapshotPath) {
-		t.Fatal("a non-reexamine upsert should never trigger bootstrap")
-	}
-	markerPath := conversationDerivedMarkerPath(snapshotPath)
-	if err := writeConversationDerivedMarkers(markerPath, map[string]string{"conv-x": derivedPipelineVersion}); err != nil {
-		t.Fatalf("writeConversationDerivedMarkers returned error: %v", err)
-	}
-	if conversationReexamineNeedsBootstrap(true, snapshotPath) {
-		t.Fatal("reexamine with existing markers should not re-trigger bootstrap")
-	}
-}
-
-// TestReexamineBackfillAutoStampsFullyEmbedded proves the migration path: a
-// reexamine upsert over a corpus with no markers stamps the already fully
-// embedded conversation before planning, so it is skipped rather than
-// re-examined every run, and it is never re-embedded.
-func TestReexamineBackfillAutoStampsFullyEmbedded(t *testing.T) {
+// TestReexamineBackfillFullyPresentEmbedsZero proves the store-presence no-op:
+// a reexamine upsert over a corpus whose delivered conversation already has all
+// its expected derived rows present classifies it as done via forcedWorkSet and
+// embeds nothing, with no marker involved. The unchanged checkpoint keeps the
+// merkle diff empty, and the presence classifier prunes the delivered id, so the
+// per-item loop never runs and no reindex is issued.
+func TestReexamineBackfillFullyPresentEmbedsZero(t *testing.T) {
 	t.Parallel()
 
 	conversationID := "conv-done"
@@ -314,7 +193,7 @@ func TestReexamineBackfillAutoStampsFullyEmbedded(t *testing.T) {
 	}
 	manager.semantic = fake
 	ctx := context.Background()
-	collectionID := "thread-reexamine-migration"
+	collectionID := "thread-reexamine-present"
 	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
 	if err != nil {
 		t.Fatalf("RegisterConversationCollection returned error: %v", err)
@@ -333,11 +212,7 @@ func TestReexamineBackfillAutoStampsFullyEmbedded(t *testing.T) {
 	}
 	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
 
-	markers := loadConversationDerivedMarkers(conversationDerivedMarkerPath(manager.merklePath(codebase.ID)))
-	if markers[conversationID] != derivedPipelineVersion {
-		t.Fatalf("marker = %q, want %q stamped by the auto-bootstrap", markers[conversationID], derivedPipelineVersion)
-	}
 	if calls := fake.reindexCallsSnapshot(); len(calls) != 0 {
-		t.Fatalf("reindex calls = %d, want 0 (fully embedded conversation skipped)", len(calls))
+		t.Fatalf("reindex calls = %d, want 0 (fully present conversation pruned by store presence)", len(calls))
 	}
 }
