@@ -283,7 +283,11 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	}
 	delete(manager.failedBuildRetries, codebase.ID)
 	codebase.Status = model.CodebaseStatusIndexed
-	codebase.ActiveJobID = ""
+	// Clear ActiveJobID only when it still points at this job, so a raced or
+	// duplicate terminal transition never clobbers a drained successor.
+	if codebase.ActiveJobID == jobID {
+		codebase.ActiveJobID = ""
+	}
 	codebase.Quarantine = nil
 	codebase.LastSuccessfulRun = &model.IndexRunSummary{
 		IndexedFiles: result.IndexedFiles,
@@ -298,8 +302,24 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	codebase.MerkleSnapshotPath = manager.merklePath(codebase.ID)
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
-	// Code codebases keep the existing whole-result chunk cache write. Legacy
-	// registry entries have an empty Kind and are treated as code.
+	manager.writeCompletedArtifacts(ctx, codebase, result, jobID)
+	if err := manager.saveLocked(); err != nil {
+		slog.ErrorContext(ctx, "write registry after completed job failed", "job_id", jobID, "err", err)
+	}
+	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above, so a raced
+	// transition that did not own the slot never drains a duplicate.
+	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
+	manager.mu.Unlock()
+	manager.notifyIndexReady(ctx, codebase)
+	if drained {
+		manager.runDrainedJob(ctx, codebase.ID, drainedJobID)
+	}
+}
+
+// writeCompletedArtifacts persists the chunk cache and Merkle snapshot for a
+// completed job. Code codebases keep the whole-result chunk cache write; legacy
+// registry entries have an empty Kind and are treated as code.
+func (manager *Manager) writeCompletedArtifacts(ctx context.Context, codebase model.Codebase, result indexer.Result, jobID string) {
 	if codebase.Kind != model.CodebaseKindDocument {
 		chunkPath := manager.chunkPath(codebase.ID)
 		if err := store.WriteChunks(chunkPath, result.Chunks); err != nil {
@@ -312,11 +332,6 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 			slog.ErrorContext(ctx, "write Merkle snapshot failed", "job_id", jobID, "err", err)
 		}
 	}
-	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after completed job failed", "job_id", jobID, "err", err)
-	}
-	manager.mu.Unlock()
-	manager.notifyIndexReady(ctx, codebase)
 }
 
 func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runErr error) {
@@ -324,6 +339,15 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 
 	job, found := manager.jobs[jobID]
 	if !found {
+		manager.mu.Unlock()
+		return
+	}
+	// A job already moved to Cancelled (by CancelJob or updateJobCancelled) must
+	// not be flipped to Failed by a late error from the same run. The terminal
+	// transition already drained any pending successor and cleared ActiveJobID, so
+	// re-processing here would stamp a transient failure on a codebase that may now
+	// be running that successor. Mirror the same guard in updateJobCompleted.
+	if job.State == model.JobStateCancelled {
 		manager.mu.Unlock()
 		return
 	}
@@ -367,7 +391,11 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 		manager.mu.Unlock()
 		return
 	}
-	codebase.ActiveJobID = ""
+	// Clear ActiveJobID only when it still points at this job, so a raced or
+	// duplicate terminal transition never clobbers a drained successor.
+	if codebase.ActiveJobID == jobID {
+		codebase.ActiveJobID = ""
+	}
 	switch {
 	case infra:
 		// A shared-infrastructure failure is not the codebase's fault and never
@@ -396,9 +424,14 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	if err := manager.saveLocked(); err != nil {
 		slog.ErrorContext(ctx, "write registry after failed job failed", "job_id", jobID, "err", err)
 	}
+	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above.
+	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
 	codebaseID := codebase.ID
 	manager.mu.Unlock()
 	manager.notifyIndexStopped(ctx, codebaseID)
+	if drained {
+		manager.runDrainedJob(ctx, codebaseID, drainedJobID)
+	}
 }
 
 func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
@@ -431,15 +464,25 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 	}
 	// A cancellation is not a failure: leave the codebase at its last-good state
 	// so a status check reflects the current usable state, not a stale failure.
-	codebase.ActiveJobID = ""
+	// Clear ActiveJobID only when it still points at this job, so a raced or
+	// duplicate terminal transition (an explicit CancelJob plus this context-cancel
+	// path) never clobbers a drained successor.
+	if codebase.ActiveJobID == jobID {
+		codebase.ActiveJobID = ""
+	}
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
 		slog.ErrorContext(ctx, "write registry after cancelled job failed", "job_id", jobID, "err", err)
 	}
+	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above.
+	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
 	codebaseID := codebase.ID
 	manager.mu.Unlock()
 	manager.notifyIndexStopped(ctx, codebaseID)
+	if drained {
+		manager.runDrainedJob(ctx, codebaseID, drainedJobID)
+	}
 }
 
 func waitForJobDone(ctx context.Context, jobDone chan struct{}) error {

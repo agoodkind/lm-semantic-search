@@ -358,41 +358,28 @@ func (manager *Manager) queueConversationJob(ctx context.Context, codebase model
 		manager.mu.Unlock()
 		return emptyJob, fmt.Errorf("conversation collection not tracked: %s", codebase.CanonicalPath)
 	}
-	if activeJob, active, err := manager.activeConversationJobLocked(current); err != nil {
+	activeJob, active, err := manager.activeConversationJobLocked(current)
+	if err != nil {
 		manager.mu.Unlock()
 		return emptyJob, err
-	} else if active {
+	}
+	if active {
+		// Coalesce an upsert onto the depth-1 pending slot instead of refusing, so a
+		// backfill and a normal ingest on the same collection do not contend; the slot
+		// drains into a fresh job on the active job's terminal transition. A delete
+		// cannot losslessly fold into the single upsert-shaped slot, so it keeps the
+		// refuse behavior.
+		if payload.Kind == conversationJobKindUpsert {
+			manager.mergePendingConversationPayloadLocked(current.ID, payload)
+			manager.mu.Unlock()
+			return activeJob, nil
+		}
 		manager.mu.Unlock()
 		return emptyJob, fmt.Errorf("conflicting active job %s for conversation collection %s", activeJob.ID, current.CanonicalPath)
 	}
 
-	now := clock.Now()
-	job := newQueuedJob(
-		current.ID,
-		current.CanonicalPath,
-		current.CanonicalPath,
-		client,
-		string(jobOperationConversationIngest),
-		false,
-		current.EffectiveConfig,
-		emptyAdmissionBudget,
-		now,
-	)
-	current.Status = model.CodebaseStatusIndexing
-	current.ActiveJobID = job.ID
-	current.UpdatedAt = now
-	manager.codebases[current.ID] = current
-	manager.conversationJobs[job.ID] = payload
-	if err := manager.saveLocked(); err != nil {
-		delete(manager.conversationJobs, job.ID)
-		manager.mu.Unlock()
-		return emptyJob, err
-	}
-	// Pair the record write with one observer signal so no saveLocked path skips
-	// invalidation; for a document collection it is a no-op delete.
-	manager.observer.Invalidate(current.ID)
-	if err := manager.appendJobLocked("conversation_ingest", job); err != nil {
-		delete(manager.conversationJobs, job.ID)
+	job, err := manager.enqueueConversationJobLocked(current, client, payload)
+	if err != nil {
 		manager.mu.Unlock()
 		return emptyJob, err
 	}
@@ -487,16 +474,16 @@ func (manager *Manager) runConversationDelete(ctx context.Context, job model.Job
 		manager.updateJobFailed(ctx, job.ID, err)
 		return
 	}
-	manager.finishConversationDelete(job.ID)
+	manager.finishConversationDelete(ctx, job.ID)
 }
 
-func (manager *Manager) finishConversationDelete(jobID string) {
+func (manager *Manager) finishConversationDelete(ctx context.Context, jobID string) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 
 	job, found := manager.jobs[jobID]
 	if !found {
 		delete(manager.conversationJobs, jobID)
+		manager.mu.Unlock()
 		return
 	}
 	now := clock.Now()
@@ -509,23 +496,36 @@ func (manager *Manager) finishConversationDelete(jobID string) {
 	job.Progress.HeartbeatAt = now
 	delete(manager.conversationJobs, jobID)
 	if err := manager.appendJobLocked("job_completed", job); err != nil {
-		slog.Error("append completed conversation delete event failed", "job_id", jobID, "err", err)
+		slog.ErrorContext(ctx, "append completed conversation delete event failed", "job_id", jobID, "err", err)
 	}
 
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
+		manager.mu.Unlock()
 		return
 	}
+	// Clear ActiveJobID only when it still points at this job, so a raced or
+	// duplicate terminal transition never clobbers a drained successor.
 	codebase.Status = model.CodebaseStatusIndexed
-	codebase.ActiveJobID = ""
+	if codebase.ActiveJobID == jobID {
+		codebase.ActiveJobID = ""
+	}
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
-		slog.Error("write registry after conversation delete failed", "job_id", jobID, "err", err)
+		slog.ErrorContext(ctx, "write registry after conversation delete failed", "job_id", jobID, "err", err)
 	}
 	// Pair the record write with one observer signal so no saveLocked path skips
 	// invalidation; for a document collection it is a no-op delete.
 	manager.observer.Invalidate(codebase.ID)
+	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above, so a raced
+	// transition that did not own the slot never drains a duplicate.
+	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
+	codebaseID := codebase.ID
+	manager.mu.Unlock()
+	if drained {
+		manager.runDrainedJob(ctx, codebaseID, drainedJobID)
+	}
 }
 
 func (manager *Manager) conversationJobPayload(jobID string) (conversationJobPayload, bool) {

@@ -125,12 +125,15 @@ func (manager *Manager) startStagingResume(ctx context.Context, plan resumePlan,
 		manager.mu.Unlock()
 		return nil
 	}
-	_, deduplicated, err := manager.activeJobLocked(codebase, plan.canonicalPath, indexConfig)
+	_, resolution, err := manager.activeJobLocked(codebase, indexConfig)
 	if err != nil {
 		manager.mu.Unlock()
 		return err
 	}
-	if deduplicated {
+	// A staging resume is a startup best-effort: if any job is already active for
+	// this codebase (a matching-config dedup or a non-matching coalesce), skip the
+	// resume rather than fight the in-flight run.
+	if resolution != activeJobNone {
 		manager.mu.Unlock()
 		return nil
 	}
