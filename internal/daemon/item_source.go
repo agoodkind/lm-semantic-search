@@ -114,6 +114,19 @@ type itemSource interface {
 	reuseSource(itemID string) itemReuseSource
 	// unit is the human progress noun, "file" or "document".
 	unit() string
+	// producesGraph reports whether a completed run schedules the code-graph
+	// build task. A code source builds a call and reference graph from its files,
+	// so the spine stamps a graph task; a conversation source has no such graph,
+	// so the spine skips it. This is the capability the delta and bootstrap
+	// routines consult instead of switching on codebase.Kind.
+	producesGraph() bool
+	// tracksByteTotals reports whether a delta reconstructs the whole-codebase
+	// byte total from the persisted chunk cache. A code source does, so a
+	// one-file edit still reports the whole tree's bytes rather than only the
+	// delta's; a conversation source does not, and the spine carries the prior
+	// total forward instead. This is the capability normalizeDeltaTotalBytes
+	// consults instead of switching on codebase.Kind.
+	tracksByteTotals() bool
 }
 
 // absencePolicy is what runDeltaSync does with an item the store holds that the
@@ -250,6 +263,19 @@ func (source codeItemSource) reuseSource(relativePath string) itemReuseSource {
 
 func (source codeItemSource) unit() string {
 	return "file"
+}
+
+// producesGraph is true: a code source builds the call and reference graph from
+// its files, so a completed run schedules the graph task.
+func (source codeItemSource) producesGraph() bool {
+	return true
+}
+
+// tracksByteTotals is true: a code delta rebuilds the whole-codebase byte total
+// from the persisted chunk cache, so a one-file edit still reports the tree's
+// total rather than only the changed files' bytes.
+func (source codeItemSource) tracksByteTotals() bool {
+	return true
 }
 
 // conversationItemSource lists and reads conversation documents the daemon was
@@ -600,4 +626,17 @@ func (source conversationItemSource) reuseSource(conversationID string) itemReus
 
 func (source conversationItemSource) unit() string {
 	return "document"
+}
+
+// producesGraph is false: a conversation collection has no code graph, so the
+// spine skips the graph task for it.
+func (source conversationItemSource) producesGraph() bool {
+	return false
+}
+
+// tracksByteTotals is false: a conversation ingest does not reconstruct a
+// whole-collection byte total from a chunk cache, so the spine carries the prior
+// total forward instead of running the code chunk-cache normalization.
+func (source conversationItemSource) tracksByteTotals() bool {
+	return false
 }

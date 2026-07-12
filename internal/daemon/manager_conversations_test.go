@@ -2528,6 +2528,14 @@ func (source oneFileResultOverrideSource) unit() string {
 	return "document"
 }
 
+func (source oneFileResultOverrideSource) producesGraph() bool {
+	return false
+}
+
+func (source oneFileResultOverrideSource) tracksByteTotals() bool {
+	return false
+}
+
 func overrideDeltaState(merkleDir string, source oneFileResultOverrideSource) deltaState {
 	return deltaState{
 		plan:         deltaPlan{},

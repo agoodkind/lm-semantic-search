@@ -38,7 +38,7 @@ func (manager *Manager) codebaseTotals(ctx context.Context, canonicalPath string
 }
 
 func (manager *Manager) normalizeDeltaTotalBytes(ctx context.Context, codebase model.Codebase, state deltaState, result indexer.Result) (indexer.Result, error) {
-	if codebase.Kind == model.CodebaseKindCode {
+	if state.source.tracksByteTotals() {
 		normalizedChunks, ok, err := manager.deltaChunkCache(ctx, codebase, state, result.Chunks)
 		if err != nil {
 			return result, err
