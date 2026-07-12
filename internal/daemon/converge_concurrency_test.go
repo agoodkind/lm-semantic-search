@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -633,5 +634,298 @@ func TestConvergeCopyChunksFiresOnRename(t *testing.T) {
 	}
 	if _, present := snapshot.Files["dst.go"]; !present {
 		t.Fatalf("snapshot missing renamed destination dst.go; have %v", snapshot.Files)
+	}
+}
+
+// gatedRecordingSemantic builds a fakeSemantic that records every conversation
+// id reaching an embed call and blocks the FIRST embed on release after
+// signalling entered. A test uses it to hold the first conversation job active
+// inside its embed, submit a coalescing second job, then release and prove the
+// drained successor embedded the coalesced ids. The returned snapshot is a
+// concurrency-safe copy of the embedded-id set.
+func gatedRecordingSemantic() (*fakeSemantic, func() map[string]struct{}, chan struct{}, chan struct{}) {
+	var mu sync.Mutex
+	embedded := map[string]struct{}{}
+	var calls atomic.Int32
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	record := func(chunks []model.StoredChunk) {
+		mu.Lock()
+		for _, chunk := range chunks {
+			if chunk.ConversationID != "" {
+				embedded[chunk.ConversationID] = struct{}{}
+			}
+		}
+		mu.Unlock()
+	}
+	gate := func() {
+		if calls.Add(1) == 1 {
+			entered <- struct{}{}
+			<-release
+		}
+	}
+	embed := func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, _ func(semantic.Progress), _ map[string][]float32) error {
+		record(chunks)
+		gate()
+		return nil
+	}
+	fake := &fakeSemantic{stageReindexWithReuse: embed, reindexWithReuse: embed}
+	snapshot := func() map[string]struct{} {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make(map[string]struct{}, len(embedded))
+		for id := range embedded {
+			out[id] = struct{}{}
+		}
+		return out
+	}
+	return fake, snapshot, entered, release
+}
+
+func waitForCompletedJobCount(t *testing.T, manager *Manager, want int) {
+	t.Helper()
+	waitForCondition(t, func() bool {
+		jobs := manager.ListJobs("")
+		if len(jobs) != want {
+			return false
+		}
+		for _, job := range jobs {
+			if job.State != model.JobStateCompleted {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// TestConversationUpsertCoalescesWithoutContention proves the no-contention
+// contract: a normal ingest and a backfill on the SAME collection do not
+// collide. While the first ingest holds the embed, the second submission returns
+// the ACTIVE job id and does not error with the removed conflict message.
+func TestConversationUpsertCoalescesWithoutContention(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	fake, _, entered, release := gatedRecordingSemantic()
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "coalesce-no-contention"
+
+	firstDocs := []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}}
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false)
+	if err != nil {
+		t.Fatalf("first upsert returned error: %v", err)
+	}
+	<-entered // the first job is now blocked inside the embed, ActiveJobID set
+
+	backfillDocs := []model.ConversationDocument{{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "b"}}
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, backfillDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, true)
+	if err != nil {
+		t.Fatalf("second same-collection upsert returned error, want coalesced success: %v", err)
+	}
+	if secondJob.ID != firstJob.ID {
+		t.Fatalf("coalesced submission returned job %s, want the active job %s", secondJob.ID, firstJob.ID)
+	}
+
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	manager.mu.Lock()
+	pending, ok := manager.pendingConversationJobs[codebase.ID]
+	manager.mu.Unlock()
+	if !ok {
+		t.Fatal("pending slot empty after coalesce, want the merged backfill payload")
+	}
+	if _, present := pending.Manifest["conv-b"]; !present {
+		t.Fatalf("pending manifest = %v, want conv-b", pending.Manifest)
+	}
+	if !pending.Reexamine {
+		t.Fatal("pending payload lost the backfill (Reexamine) intent")
+	}
+
+	close(release)
+	waitForCompletedJobCount(t, manager, 2)
+}
+
+// TestConversationCoalesceDrainsPendingAfterTerminal proves the drain: after the
+// first job reaches terminal and clears ActiveJobID, the coalesced pending
+// payload runs as a fresh job and BOTH id sets end up embedded.
+func TestConversationCoalesceDrainsPendingAfterTerminal(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	fake, embeddedSnapshot, entered, release := gatedRecordingSemantic()
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "coalesce-drain"
+
+	firstDocs := []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}}
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false)
+	if err != nil {
+		t.Fatalf("first upsert returned error: %v", err)
+	}
+	<-entered
+
+	secondDocs := []model.ConversationDocument{{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "b"}}
+	if _, err := manager.upsertConversationDocuments(ctx, collectionID, secondDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, false); err != nil {
+		t.Fatalf("second upsert returned error: %v", err)
+	}
+
+	close(release)
+	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
+	// The drained successor runs as a separate second job.
+	waitForCompletedJobCount(t, manager, 2)
+
+	embedded := embeddedSnapshot()
+	for _, want := range []string{"conv-a", "conv-b"} {
+		if _, present := embedded[want]; !present {
+			t.Fatalf("embedded ids = %v, want both conv-a and conv-b (drained work not lost)", embedded)
+		}
+	}
+	manager.mu.Lock()
+	_, stillPending := manager.pendingConversationJobs[firstJob.CodebaseID]
+	manager.mu.Unlock()
+	if stillPending {
+		t.Fatal("pending slot not drained after terminal transition")
+	}
+}
+
+// TestConversationCoalesceDepthOneMergesThirdSubmission proves depth 1: with one
+// job active and one pending, a third submission merges into the single pending
+// payload rather than growing an unbounded queue, and the one drained job covers
+// every delivered id.
+func TestConversationCoalesceDepthOneMergesThirdSubmission(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	fake, embeddedSnapshot, entered, release := gatedRecordingSemantic()
+	manager.semantic = fake
+	ctx := context.Background()
+	collectionID := "coalesce-depth-one"
+
+	firstDocs := []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}}
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false)
+	if err != nil {
+		t.Fatalf("first upsert returned error: %v", err)
+	}
+	<-entered
+
+	secondDocs := []model.ConversationDocument{{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "b"}}
+	if _, err := manager.upsertConversationDocuments(ctx, collectionID, secondDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, false); err != nil {
+		t.Fatalf("second upsert returned error: %v", err)
+	}
+	thirdDocs := []model.ConversationDocument{{ConversationID: "conv-c", MessageIndex: 0, Role: "user", Text: "c"}}
+	if _, err := manager.upsertConversationDocuments(ctx, collectionID, thirdDocs, testConversationManifest("conv-c"), testClientInfo(), absenceRetain, false); err != nil {
+		t.Fatalf("third upsert returned error: %v", err)
+	}
+
+	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	manager.mu.Lock()
+	pending, ok := manager.pendingConversationJobs[codebase.ID]
+	manager.mu.Unlock()
+	if !ok {
+		t.Fatal("pending slot empty, want the merged conv-b + conv-c payload")
+	}
+	for _, want := range []string{"conv-b", "conv-c"} {
+		if _, present := pending.Manifest[want]; !present {
+			t.Fatalf("pending manifest = %v, want both conv-b and conv-c (depth-1 merge)", pending.Manifest)
+		}
+	}
+
+	close(release)
+	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
+	// Exactly one drained job runs (first + drained = 2), proving no unbounded queue.
+	waitForCompletedJobCount(t, manager, 2)
+
+	embedded := embeddedSnapshot()
+	for _, want := range []string{"conv-a", "conv-b", "conv-c"} {
+		if _, present := embedded[want]; !present {
+			t.Fatalf("embedded ids = %v, want conv-a, conv-b, and conv-c (no dropped ids)", embedded)
+		}
+	}
+}
+
+// TestCodeIndexCoalescesNonMatchingConfigAndDrains proves the code admission
+// path: a non-matching-config request while a code job is active coalesces
+// (returns the active job id, no conflict error), a matching-config request
+// still dedups, and the pending config drains into a fresh sync after terminal.
+func TestCodeIndexCoalescesNonMatchingConfigAndDrains(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var indexCalls atomic.Int32
+	manager.runner = fakeRunner{
+		index:      nil,
+		indexFiles: nil,
+		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
+			if indexCalls.Add(1) == 1 {
+				entered <- struct{}{}
+				<-release
+			}
+			content := "package main\n"
+			return indexer.OneFileResult{
+				Chunks:   []model.StoredChunk{{Content: content, RelativePath: relativePath, StartLine: 1, EndLine: 1, Language: "go", FileExtension: ".go"}},
+				FileHash: hashText(content),
+				Skipped:  false,
+				Removed:  false,
+			}, nil
+		},
+	}
+
+	firstJob, _, deduplicated, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
+	if err != nil {
+		t.Fatalf("first StartIndex returned error: %v", err)
+	}
+	if deduplicated {
+		t.Fatal("first request should not be a dedup hit")
+	}
+	<-entered // first job blocked inside the indexer, ActiveJobID set
+
+	// A matching-config request still dedups onto the active job.
+	dedupJob, _, dedupHit, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
+	if err != nil {
+		t.Fatalf("matching-config StartIndex returned error: %v", err)
+	}
+	if !dedupHit || dedupJob.ID != firstJob.ID {
+		t.Fatalf("matching-config request returned (dedup=%v, job=%s), want dedup onto %s", dedupHit, dedupJob.ID, firstJob.ID)
+	}
+
+	// A non-matching-config request coalesces instead of refusing.
+	conflictConfig := defaultIndexConfig()
+	conflictConfig.SplitterType = "langchain"
+	coalescedJob, _, coalescedHit, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), conflictConfig, false, emptyAdmissionBudget)
+	if err != nil {
+		t.Fatalf("non-matching-config StartIndex returned error, want coalesced success: %v", err)
+	}
+	if !coalescedHit || coalescedJob.ID != firstJob.ID {
+		t.Fatalf("non-matching-config request returned (coalesced=%v, job=%s), want the active job %s", coalescedHit, coalescedJob.ID, firstJob.ID)
+	}
+
+	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
+	if err != nil || !found {
+		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
+	}
+	manager.mu.Lock()
+	pendingCode, ok := manager.pendingCodeJobs[codebase.ID]
+	manager.mu.Unlock()
+	if !ok {
+		t.Fatal("pending code slot empty after non-matching coalesce")
+	}
+	if pendingCode.indexConfig.SplitterType != "langchain" {
+		t.Fatalf("pending code config SplitterType = %q, want langchain", pendingCode.indexConfig.SplitterType)
+	}
+
+	close(release)
+	// The drained sync runs as a second job carrying the coalesced langchain config.
+	waitForCompletedJobCount(t, manager, 2)
+	drainedFound := false
+	for _, job := range manager.ListJobs("") {
+		if job.ID != firstJob.ID {
+			if job.Config.SplitterType != "langchain" {
+				t.Fatalf("drained job config SplitterType = %q, want langchain", job.Config.SplitterType)
+			}
+			drainedFound = true
+		}
+	}
+	if !drainedFound {
+		t.Fatal("no drained successor job found after terminal")
 	}
 }

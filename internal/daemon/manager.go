@@ -72,8 +72,17 @@ type Manager struct {
 	jobs                    map[string]model.Job
 	conversationJobs        map[string]conversationJobPayload
 	conversationSyncCursors map[string]string
-	cancels                 map[string]context.CancelFunc
-	done                    map[string]chan struct{}
+	// pendingConversationJobs holds at most one coalesced conversation upsert
+	// payload per codebase (depth 1). An upsert that arrives while that codebase
+	// has an active job merges into this slot instead of refusing; the slot drains
+	// into a fresh job when the active job reaches a terminal state. Guarded by mu.
+	pendingConversationJobs map[string]conversationJobPayload
+	// pendingCodeJobs holds at most one coalesced code sync request per codebase
+	// (depth 1), admitted when a non-matching-config index or sync request arrives
+	// while a code job is active and drained on terminal. Guarded by mu.
+	pendingCodeJobs map[string]pendingCodeRequest
+	cancels         map[string]context.CancelFunc
+	done            map[string]chan struct{}
 	// failedBuildRetries caps automatic retries for terminal failed builds per daemon lifetime; not persisted, guarded by mu.
 	failedBuildRetries map[string]int
 	// lastJobJournalAt throttles periodic job-progress journaling; not persisted, guarded by mu.
@@ -144,6 +153,8 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		jobs:                    map[string]model.Job{},
 		conversationJobs:        map[string]conversationJobPayload{},
 		conversationSyncCursors: map[string]string{},
+		pendingConversationJobs: map[string]conversationJobPayload{},
+		pendingCodeJobs:         map[string]pendingCodeRequest{},
 		cancels:                 map[string]context.CancelFunc{},
 		done:                    map[string]chan struct{}{},
 		failedBuildRetries:      map[string]int{},
@@ -383,7 +394,11 @@ type startIndexDecision struct {
 	codebase  model.Codebase
 	activeJob model.Job
 	dedup     bool
-	mode      startIndexMode
+	// coalesce is set when an in-flight job carries a different config: the commit
+	// path records a pending code request and returns the active job rather than
+	// refusing with a conflict error.
+	coalesce bool
+	mode     startIndexMode
 }
 
 // decideStartIndexLocked resolves the codebase record and routing mode from
@@ -402,25 +417,38 @@ func (manager *Manager) decideStartIndexLocked(canonicalPath string, indexConfig
 			codebase:  fresh,
 			activeJob: emptyJob,
 			dedup:     false,
+			coalesce:  false,
 			mode:      decideStartIndexMode(false, fresh.Status, false, force, presence),
 		}, nil
 	}
-	activeJob, deduplicated, err := manager.activeJobLocked(codebase, canonicalPath, indexConfig)
+	activeJob, resolution, err := manager.activeJobLocked(codebase, indexConfig)
 	if err != nil {
 		return startIndexDecision{}, err
 	}
-	if deduplicated {
+	switch resolution {
+	case activeJobDedup:
 		return startIndexDecision{
 			codebase:  codebase,
 			activeJob: activeJob,
 			dedup:     true,
+			coalesce:  false,
 			mode:      startIndexModeBootstrap,
 		}, nil
+	case activeJobConflict:
+		return startIndexDecision{
+			codebase:  codebase,
+			activeJob: activeJob,
+			dedup:     false,
+			coalesce:  true,
+			mode:      startIndexModeBootstrap,
+		}, nil
+	case activeJobNone:
 	}
 	return startIndexDecision{
 		codebase:  codebase,
 		activeJob: emptyJob,
 		dedup:     false,
+		coalesce:  false,
 		mode: decideStartIndexMode(
 			true,
 			codebase.Status,
@@ -522,6 +550,20 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	if decision.dedup {
 		return decision.activeJob, decision.codebase, true, "", nil
 	}
+	if decision.coalesce {
+		// A non-matching-config request arriving while a code job is active coalesces
+		// onto the depth-1 pending slot and returns the active job as deduplicated, so
+		// the caller treats it as success rather than a conflict. The slot drains into
+		// a fresh sync when the active job reaches a terminal state.
+		manager.mergePendingCodeRequestLocked(decision.codebase.ID, pendingCodeRequest{
+			requestedPath: requestedPath,
+			canonicalPath: canonicalPath,
+			client:        client,
+			indexConfig:   indexConfig,
+			force:         force,
+		})
+		return decision.activeJob, decision.codebase, true, "", nil
+	}
 	overlapsCodebaseID := ""
 	if ancestor, found := manager.findStrictAncestor(canonicalPath); found {
 		overlapsCodebaseID = ancestor.ID
@@ -592,7 +634,7 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 	indexConfig := manager.enrichIndexConfig(codebase.EffectiveConfig)
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 
-	activeJob, deduplicated, err := manager.activeJobLocked(codebase, canonicalPath, indexConfig)
+	activeJob, resolution, err := manager.activeJobLocked(codebase, indexConfig)
 	if err != nil {
 		slog.ErrorContext(ctx, "resolve active sync job failed", "canonical_path", canonicalPath, "err", err)
 		manager.mu.Unlock()
@@ -600,46 +642,44 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 		var emptyCodebase model.Codebase
 		return emptyJob, emptyCodebase, false, err
 	}
-	if deduplicated {
+	if resolution == activeJobDedup {
+		manager.mu.Unlock()
+		return activeJob, codebase, true, nil
+	}
+	if resolution == activeJobConflict {
+		// A non-matching-config sync arriving while a code job is active coalesces
+		// onto the depth-1 pending slot and returns the active job as deduplicated, so
+		// the caller treats it as success. The slot drains on the active job's
+		// terminal transition.
+		manager.mergePendingCodeRequestLocked(codebase.ID, pendingCodeRequest{
+			requestedPath: requestedPath,
+			canonicalPath: canonicalPath,
+			client:        client,
+			indexConfig:   indexConfig,
+			force:         false,
+		})
 		manager.mu.Unlock()
 		return activeJob, codebase, true, nil
 	}
 
-	codebase.Status = model.CodebaseStatusIndexing
-	codebase.EffectiveConfig = indexConfig
-	if manager.semantic != nil && manager.semantic.Available() {
-		codebase.CollectionName = manager.semantic.CollectionName(canonicalPath)
-	}
-	if info, ok := gitworktree.Resolve(canonicalPath); ok && info.Linked {
-		codebase.WorktreeCommonDir = info.CommonDir
-	}
-	codebase.UpdatedAt = clock.Now()
-
-	now := clock.Now()
-	job := newQueuedJob(codebase.ID, requestedPath, canonicalPath, client, string(jobOperationSync), false, indexConfig, emptyAdmissionBudget, now)
-
-	codebase.ActiveJobID = job.ID
-	manager.codebases[codebase.ID] = codebase
-	if err := manager.saveLocked(); err != nil {
+	job, err := manager.enqueueCodeSyncJobLocked(codebase, pendingCodeRequest{
+		requestedPath: requestedPath,
+		canonicalPath: canonicalPath,
+		client:        client,
+		indexConfig:   indexConfig,
+		force:         false,
+	})
+	if err != nil {
 		manager.mu.Unlock()
 		var emptyJob model.Job
 		var emptyCodebase model.Codebase
 		return emptyJob, emptyCodebase, false, err
 	}
-	if err := manager.appendJobLocked("start_sync", job); err != nil {
-		manager.mu.Unlock()
-		var emptyJob model.Job
-		var emptyCodebase model.Codebase
-		return emptyJob, emptyCodebase, false, err
-	}
-	// The re-enriched EffectiveConfig may carry new custom ignore patterns, so
-	// signal the observer to invalidate; the next decision rebuilds from the
-	// registry source of truth.
-	manager.observer.Invalidate(codebase.ID)
+	updatedCodebase := manager.codebases[codebase.ID]
 	manager.mu.Unlock()
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)
-	return job, codebase, false, nil
+	return job, updatedCodebase, false, nil
 }
 
 // ClearIndex removes a tracked codebase from daemon state.
@@ -659,6 +699,11 @@ func (manager *Manager) ClearIndex(ctx context.Context, requestedPath string, cl
 		return model.Codebase{}, errors.New("codebase not tracked: " + requestedPath)
 	}
 	codebase := matches[0]
+	// Drop any coalesced pending work before cancelling the active job, so the
+	// cancel's terminal transition does not drain a successor into a codebase this
+	// call is about to remove.
+	delete(manager.pendingConversationJobs, codebase.ID)
+	delete(manager.pendingCodeJobs, codebase.ID)
 	jobDone, cancel := manager.beginActiveJobCancellationLocked(codebase)
 	manager.mu.Unlock()
 
@@ -744,6 +789,8 @@ func (manager *Manager) CancelJob(ctx context.Context, jobID string) (model.Job,
 
 	codebaseID := job.CodebaseID
 	var saveErr error
+	drainedJobID := ""
+	drained := false
 	codebase, found := manager.codebases[job.CodebaseID]
 	if found && codebase.ActiveJobID == job.ID {
 		// A cancellation is not a failure: leave the codebase at its last-good
@@ -754,10 +801,16 @@ func (manager *Manager) CancelJob(ctx context.Context, jobID string) (model.Job,
 		if err := manager.saveLocked(); err != nil {
 			saveErr = err
 		}
+		// A submission coalesced onto this now-cancelled job still runs: drain the
+		// depth-1 pending slot into a fresh successor.
+		drainedJobID, drained = manager.drainPendingJobLocked(ctx, codebase.ID)
 	}
 
 	manager.mu.Unlock()
 	manager.notifyIndexStopped(ctx, codebaseID)
+	if drained {
+		manager.runDrainedJob(ctx, codebaseID, drainedJobID)
+	}
 	if saveErr != nil {
 		return model.Job{}, saveErr
 	}
@@ -893,43 +946,16 @@ func (manager *Manager) dedupAgainstActiveJob(canonicalPath string, indexConfig 
 		var emptyCodebase model.Codebase
 		return emptyJob, emptyCodebase, false
 	}
-	activeJob, deduplicated, err := manager.activeJobLocked(existingCodebase, canonicalPath, indexConfig)
-	if err != nil || !deduplicated {
+	// The early dedup runs before StartIndex's force-cancel, so it only collapses a
+	// matching-config request; a conflict is left for the commit path to coalesce
+	// after any force-cancel has cleared the active job.
+	activeJob, resolution, err := manager.activeJobLocked(existingCodebase, indexConfig)
+	if err != nil || resolution != activeJobDedup {
 		var emptyJob model.Job
 		var emptyCodebase model.Codebase
 		return emptyJob, emptyCodebase, false
 	}
 	return activeJob, existingCodebase, true
-}
-
-func (manager *Manager) activeJobLocked(codebase model.Codebase, canonicalPath string, indexConfig model.IndexConfig) (model.Job, bool, error) {
-	if codebase.ActiveJobID == "" {
-		var emptyJob model.Job
-		return emptyJob, false, nil
-	}
-
-	activeJob, found := manager.jobs[codebase.ActiveJobID]
-	if !found {
-		var emptyJob model.Job
-		return emptyJob, false, nil
-	}
-
-	switch activeJob.State {
-	case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
-		var emptyJob model.Job
-		return emptyJob, false, nil
-	case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
-	default:
-		var emptyJob model.Job
-		return emptyJob, false, fmt.Errorf("unknown job state %s for active job %s", activeJob.State, activeJob.ID)
-	}
-
-	if activeJob.Config.IgnoreDigest == indexConfig.IgnoreDigest && activeJob.Config.SplitterType == indexConfig.SplitterType {
-		return activeJob, true, nil
-	}
-
-	var emptyJob model.Job
-	return emptyJob, false, fmt.Errorf("conflicting active job %s for canonical path %s", activeJob.ID, canonicalPath)
 }
 
 // Delta sync helpers live in manager_delta.go. Job state mutators live in
