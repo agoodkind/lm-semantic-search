@@ -292,7 +292,7 @@ func TestUpsertConversationDocumentsStreamThreadsAuthoritativeReconcileMode(t *t
 		{ConversationID: "conv-a", MessageIndex: 0, Role: "user", TimestampUnix: 1712345000, Text: "a"},
 		{ConversationID: "conv-b", MessageIndex: 0, Role: "user", TimestampUnix: 1712345001, Text: "b"},
 	}
-	seedJob, err := manager.upsertConversationDocuments(ctx, collectionID, seedDocuments, seedManifest, testClientInfo(), absenceRetain, false)
+	seedJob, err := manager.upsertConversationDocuments(ctx, collectionID, seedDocuments, seedManifest, testClientInfo(), absenceRetain, false, false)
 	if err != nil {
 		t.Fatalf("seed upsertConversationDocuments returned error: %v", err)
 	}

@@ -11,12 +11,12 @@ import (
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
-// TestConversationItemSourceForcedWorkSetReexamine proves the cheap store-presence
+// TestConversationItemSourceForcedWorkSetBackfill proves the cheap store-presence
 // classifier: a backfill forces only the delivered conversation whose expected
 // derived rows are missing, prunes a conversation whose derived rows are all
 // present, prunes a conversation that expects no derived rows at all, and forces
-// nothing when the source is not a reexamine.
-func TestConversationItemSourceForcedWorkSetReexamine(t *testing.T) {
+// nothing when neither backfill nor force is set.
+func TestConversationItemSourceForcedWorkSetBackfill(t *testing.T) {
 	docs := []model.ConversationDocument{
 		{ConversationID: "claude:a", MessageIndex: 0, Role: "assistant", Text: "a", Thinking: "reasoning-a"},
 		{ConversationID: "codex:b", MessageIndex: 0, Role: "assistant", Text: "b", Thinking: "reasoning-b"},
@@ -33,7 +33,7 @@ func TestConversationItemSourceForcedWorkSetReexamine(t *testing.T) {
 	}
 	reader := &testConversationRowReader{batch: &batch}
 
-	forced := newConversationItemSource("coll", manifest, docs, reader, absenceRetain, true)
+	forced := newConversationItemSource("coll", manifest, docs, reader, absenceRetain, true, false)
 	got, err := forced.forcedWorkSet(context.Background())
 	if err != nil {
 		t.Fatalf("forcedWorkSet returned error: %v", err)
@@ -42,13 +42,73 @@ func TestConversationItemSourceForcedWorkSetReexamine(t *testing.T) {
 		t.Fatalf("forcedWorkSet = %v, want [codex:b] (only the missing-derived conversation)", got)
 	}
 
-	quiet := newConversationItemSource("coll", manifest, docs, reader, absenceRetain, false)
+	quiet := newConversationItemSource("coll", manifest, docs, reader, absenceRetain, false, false)
 	got, err = quiet.forcedWorkSet(context.Background())
 	if err != nil {
-		t.Fatalf("forcedWorkSet without reexamine returned error: %v", err)
+		t.Fatalf("forcedWorkSet with neither flag returned error: %v", err)
 	}
 	if got != nil {
-		t.Fatalf("forcedWorkSet without reexamine = %v, want nil", got)
+		t.Fatalf("forcedWorkSet with neither flag = %v, want nil", got)
+	}
+}
+
+// TestConversationItemSourceForceForcesAllAndDisablesReuse proves the force path:
+// force returns every delivered id from forcedWorkSet even for a fully-present
+// conversation (no presence prune), reuseSource reports the no-reuse scope so
+// present chunks re-embed, and indexOne regenerates the whole conversation's
+// chunks with no reuse map. It contrasts with backfill, which prunes the same
+// fully-present conversation.
+func TestConversationItemSourceForceForcesAllAndDisablesReuse(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "claude:present"
+	documents := []model.ConversationDocument{{
+		ConversationID: conversationID,
+		MessageIndex:   0,
+		Role:           "assistant",
+		Text:           "answer",
+		Thinking:       "private reasoning",
+	}}
+	manifest := map[string]string{conversationID: "fp-present"}
+	// Every expected derived row is already present, so a backfill would prune it.
+	batch := conversationBatchStateForDocuments(t, map[string][]model.ConversationDocument{
+		conversationID: documents,
+	})
+	reader := &testConversationRowReader{batch: &batch}
+
+	// Backfill prunes the fully-present conversation.
+	backfillSource := newConversationItemSource("conv_chunks_live", manifest, documents, reader, absenceRetain, true, false)
+	backfillForced, err := backfillSource.forcedWorkSet(context.Background())
+	if err != nil {
+		t.Fatalf("backfill forcedWorkSet returned error: %v", err)
+	}
+	if len(backfillForced) != 0 {
+		t.Fatalf("backfill forcedWorkSet = %v, want empty (present conversation pruned)", backfillForced)
+	}
+
+	// Force returns the delivered id despite full presence, and disables reuse.
+	forceSource := newConversationItemSource("conv_chunks_live", manifest, documents, reader, absenceRetain, false, true)
+	forceForced, err := forceSource.forcedWorkSet(context.Background())
+	if err != nil {
+		t.Fatalf("force forcedWorkSet returned error: %v", err)
+	}
+	if !slices.Equal(forceForced, []string{conversationID}) {
+		t.Fatalf("force forcedWorkSet = %v, want [%s] (force forces all delivered, no prune)", forceForced, conversationID)
+	}
+	if scope := forceSource.reuseSource(conversationID).Scope; scope != itemReuseScopeNone {
+		t.Fatalf("force reuseSource scope = %q, want none (reuse disabled under force)", scope)
+	}
+	// indexOne under force regenerates the whole conversation and carries no reuse
+	// map, so every present chunk re-embeds.
+	result, err := forceSource.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("force indexOne returned error: %v", err)
+	}
+	if len(result.Chunks) == 0 {
+		t.Fatalf("force indexOne produced no chunks, want the full present conversation regenerated")
+	}
+	if result.ReuseVectors != nil {
+		t.Fatalf("force indexOne ReuseVectors = %v, want nil (reuse disabled so chunks re-embed)", result.ReuseVectors)
 	}
 }
 
@@ -77,6 +137,7 @@ func TestForcedWorkSetPrunesFullyPresentConversation(t *testing.T) {
 		reader,
 		absenceRetain,
 		true,
+		false,
 	)
 	captured, err := source.capture(context.Background())
 	if err != nil {
@@ -105,7 +166,7 @@ func TestConversationForcedWorkSetFailsSafeOnBatchError(t *testing.T) {
 	manifest := map[string]string{"claude:a": "fp1", "codex:b": "fp2"}
 	reader := &testConversationRowReader{err: errors.New("batch read failed")}
 
-	source := newConversationItemSource("coll", manifest, docs, reader, absenceRetain, true)
+	source := newConversationItemSource("coll", manifest, docs, reader, absenceRetain, true, false)
 	got, err := source.forcedWorkSet(context.Background())
 	if err != nil {
 		t.Fatalf("forcedWorkSet fail-safe returned error: %v", err)

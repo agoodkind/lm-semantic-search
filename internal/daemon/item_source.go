@@ -298,10 +298,16 @@ type conversationItemSource struct {
 	// so the delta core never sees the proto type. The constructor only stores the
 	// already-mapped value.
 	absence absencePolicy
-	// reexamine, when set by an operator-run backfill, drives forcedWorkSet: it
+	// backfill, when set by an operator-run backfill, drives forcedWorkSet: it
 	// forces each delivered conversation whose expected derived rows are not all
-	// present in the store into the changed set, judged from live store presence.
-	reexamine bool
+	// present in the store into the changed set, judged from live store presence,
+	// and prunes conversations whose derived rows are all present.
+	backfill bool
+	// force, when set, rebuilds every delivered conversation regardless of
+	// presence: forcedWorkSet returns all delivered ids, indexOne regenerates the
+	// whole conversation, and reuseSource returns no reuse, so present rows
+	// re-embed. When both flags are set, force wins.
+	force bool
 	// batch caches the one batched read of the live collection for every delivered
 	// conversation. indexOne loads it once on first use, so a run of many
 	// conversations costs one Milvus query per id batch instead of one read per
@@ -318,13 +324,13 @@ type conversationDerivedBatch struct {
 	err   error
 }
 
-func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader, absence absencePolicy, reexamine bool) conversationItemSource {
+func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader, absence absencePolicy, backfill bool, force bool) conversationItemSource {
 	byID := make(map[string][]model.ConversationDocument, len(manifest))
 	for _, document := range documents {
 		conversationID := document.ConversationID
 		byID[conversationID] = append(byID[conversationID], document)
 	}
-	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", absence: absence, reexamine: reexamine, batch: &conversationDerivedBatch{once: sync.Once{}, state: semantic.ConversationBatchState{Rows: nil, Reuse: nil}, err: nil}}
+	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", absence: absence, backfill: backfill, force: force, batch: &conversationDerivedBatch{once: sync.Once{}, state: semantic.ConversationBatchState{Rows: nil, Reuse: nil}, err: nil}}
 }
 
 // loadDerivedBatch reads the stored rows for every delivered conversation once,
@@ -346,30 +352,41 @@ func (source conversationItemSource) loadDerivedBatch(ctx context.Context) (sema
 	return source.batch.state, source.batch.err
 }
 
-// forcedWorkSet classifies the backfill work set CHEAPLY, up front, from store
-// presence alone. It loads the single-flight derived batch once (the same read
-// every indexOne reuses), then for each delivered conversation compares the
-// derived prefixes its messages EXPECT against the derived-path keys the store
-// already holds. A conversation whose expected derived prefixes are all present
-// is a no-op and is pruned; only conversations with at least one missing prefix
-// are returned, so the per-item loop regenerates and embeds only real work.
+// forcedWorkSet names the delivered ids the run must re-examine, chosen by the
+// two orthogonal flags:
 //
-// Correctness bound: this is a PRESENCE check, not a staleness check. A backfill
-// treats a conversation with all expected derived prefixes present as a no-op
-// even when those rows were derived by an older pipeline version, so a plain
-// backfill fills MISSING rows and never rebuilds present-but-stale ones. Bumping
-// derivedPipelineVersion does not pull a present conversation back into the work
-// set here. Rebuilding present rows at a new version is the force path's job (a
-// later PR), which re-embeds present units unpruned rather than relying on this
-// classifier.
+//   - force: return ALL delivered ids with no prune. Force rebuilds every
+//     delivered conversation regardless of presence, so nothing is classified
+//     away here; indexOne regenerates each in full and reuseSource returns no
+//     reuse, so present rows re-embed.
+//   - backfill (force off): classify CHEAPLY, up front, from store presence
+//     alone. It loads the single-flight derived batch once (the same read every
+//     indexOne reuses), then for each delivered conversation compares the derived
+//     prefixes its messages EXPECT against the derived-path keys the store already
+//     holds. A conversation whose expected derived prefixes are all present is a
+//     no-op and is pruned; only conversations with at least one missing prefix are
+//     returned, so the per-item loop regenerates and embeds only real work.
+//   - neither: nil (the normal delta sync forces nothing).
 //
-// It never calls diffConversationMessages or conversationDocumentsToStoredChunks:
-// those regenerate chunks and would reintroduce the per-item cost this prune
-// removes. A normal (non-reexamine) sync forces nothing. On a batch-load error it
-// logs and fails safe by returning every delivered id, so a store read failure
-// never causes an under-embed.
+// Correctness bound for backfill: it is a PRESENCE check, not a staleness check.
+// A backfill treats a conversation with all expected derived prefixes present as
+// a no-op even when those rows were derived by an older pipeline, so a plain
+// backfill fills MISSING rows and never rebuilds present-but-stale ones.
+// Rebuilding present rows is the force path's job: it re-embeds present units
+// unpruned rather than relying on this classifier.
+//
+// The backfill path never calls diffConversationMessages or
+// conversationDocumentsToStoredChunks: those regenerate chunks and would
+// reintroduce the per-item cost this prune removes. On a batch-load error it logs
+// and fails safe by returning every delivered id, so a store read failure never
+// causes an under-embed.
 func (source conversationItemSource) forcedWorkSet(ctx context.Context) ([]string, error) {
-	if !source.reexamine {
+	if source.force {
+		// Force rebuilds everything delivered, so no prune: every delivered id is
+		// forced into the changed set and re-embedded with reuse disabled.
+		return source.allDeliveredIDs(), nil
+	}
+	if !source.backfill {
 		return nil, nil
 	}
 	if source.rowReader == nil || source.collectionName == "" {
@@ -494,6 +511,12 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 			ReuseVectors:    nil,
 		}, nil
 	}
+	if source.force {
+		// Force rebuilds the whole conversation: regenerate every chunk and drop the
+		// prior rows (removalOverride), and carry no reuse map so reuseSource returns
+		// no reuse and embedChunkBatch re-embeds every present chunk.
+		return source.fullConversationResult(ctx, conversationID, documents, true)
+	}
 	if source.rowReader == nil || source.collectionName == "" {
 		return source.fullConversationResult(ctx, conversationID, documents, false)
 	}
@@ -612,9 +635,12 @@ func (source conversationItemSource) absencePolicy() absencePolicy {
 
 // reuseSource stays prefix scoped for loader-error fallback. The normal
 // message-delta path carries reuse in OneFileResult and skips this per-item
-// load, but a full fallback still needs the existing conv/<id>/ rows.
+// load, but a full fallback still needs the existing conv/<id>/ rows. Under
+// force the reuse lever is disabled: it returns the no-reuse scope so a present
+// chunk cannot be served from a stored vector and every chunk re-embeds, which
+// is what makes force rebuild present-but-stale rows.
 func (source conversationItemSource) reuseSource(conversationID string) itemReuseSource {
-	if source.collectionName == "" {
+	if source.force || source.collectionName == "" {
 		return itemReuseSource{
 			CollectionName: "",
 			RelativePath:   "",

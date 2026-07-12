@@ -49,11 +49,17 @@ type conversationJobPayload struct {
 	// manifest omits. It is meaningful only for an upsert; a delete sets it
 	// explicitly to absenceRetain (also the zero value) but never consults it.
 	Absence absencePolicy
-	// Reexamine forces delivered conversations with absent or stale derived
-	// markers into this run's changed set even when their fingerprints are
-	// unchanged. It is meaningful only for an upsert and stays false for the
-	// normal sync.
-	Reexamine bool
+	// Backfill forces delivered conversations whose expected derived rows are
+	// ABSENT into this run's changed set even when their fingerprints are
+	// unchanged, and skips conversations whose derived rows are all present. It is
+	// presence-based and meaningful only for an upsert; the normal sync leaves it
+	// false.
+	Backfill bool
+	// Force rebuilds EVERY delivered conversation regardless of presence, with
+	// vector reuse disabled, so present rows re-embed. It is meaningful only for an
+	// upsert and stays false for the normal sync. When both flags are set, Force
+	// wins.
+	Force bool
 }
 
 // RegisterConversationCollection records a virtual document collection that is
@@ -198,7 +204,7 @@ func firstN(values []string, limit int) []string {
 // upsertConversationDocuments queues an asynchronous ingest. When manifest is
 // nil it is derived from the delivered documents, so a caller that hands over a
 // complete set need not compute fingerprints itself.
-func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo, absence absencePolicy, reexamine bool) (model.Job, error) {
+func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo, absence absencePolicy, backfill bool, force bool) (model.Job, error) {
 	for _, document := range documents {
 		if strings.TrimSpace(document.ConversationID) == "" {
 			return model.Job{}, errors.New("conversation id is required")
@@ -226,7 +232,8 @@ func (manager *Manager) upsertConversationDocuments(ctx context.Context, collect
 		Documents:      documents,
 		ConversationID: "",
 		Absence:        absence,
-		Reexamine:      reexamine,
+		Backfill:       backfill,
+		Force:          force,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
 }
@@ -343,8 +350,9 @@ func (manager *Manager) deleteConversation(ctx context.Context, collectionID str
 		// manifest-absence branch, so Absence is unused here; set it explicitly to
 		// absenceRetain (also the zero value) to satisfy exhaustruct.
 		Absence: absenceRetain,
-		// A delete never re-examines documents; it carries none.
-		Reexamine: false,
+		// A delete never backfills or force-rebuilds documents; it carries none.
+		Backfill: false,
+		Force:    false,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
 }
@@ -439,7 +447,7 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
-		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence, payload.Reexamine)
+		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence, payload.Backfill, payload.Force)
 		// The second return is the code path's graph-index task; a conversation
 		// collection never produces one, so there is nothing to discard here.
 		if handled, _ := manager.runDeltaSync(ctx, job, source); handled {
@@ -596,10 +604,10 @@ func fingerprintConversationDocuments(documents []model.ConversationDocument) st
 // conversationDocumentsToStoredChunks is the single derived-chunk regeneration
 // entry point: every path that turns delivered documents into stored chunks
 // (both the per-item indexOne loop and the full-conversation fallback) routes
-// through it. It is a package var rather than a plain func, mirroring
-// derivedPipelineVersion, only so a same-package test can wrap it to count
-// regenerations and lock the chokepoint invariant that the up-front presence
-// classifier (forcedWorkSet) regenerates nothing. Production never reassigns it.
+// through it. It is a package var rather than a plain func only so a same-package
+// test can wrap it to count regenerations and lock the chokepoint invariant that
+// the up-front presence classifier (forcedWorkSet) regenerates nothing.
+// Production never reassigns it.
 var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []model.ConversationDocument) ([]model.StoredChunk, error) {
 	dispatcher := newConversationToolDispatcher()
 	chunks := make([]model.StoredChunk, 0, len(documents))
