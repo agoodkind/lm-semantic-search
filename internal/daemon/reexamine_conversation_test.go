@@ -135,6 +135,25 @@ func TestItemSourceColumnSet(t *testing.T) {
 	}
 }
 
+// TestItemSourceCapabilities proves each source reports the spine capabilities
+// that replaced the codebase.Kind branches: a code source produces a code graph
+// and tracks whole-codebase byte totals, while a conversation source does
+// neither.
+func TestItemSourceCapabilities(t *testing.T) {
+	if !(codeItemSource{}).producesGraph() {
+		t.Fatal("code producesGraph = false, want true")
+	}
+	if !(codeItemSource{}).tracksByteTotals() {
+		t.Fatal("code tracksByteTotals = false, want true")
+	}
+	if (conversationItemSource{}).producesGraph() {
+		t.Fatal("conversation producesGraph = true, want false")
+	}
+	if (conversationItemSource{}).tracksByteTotals() {
+		t.Fatal("conversation tracksByteTotals = true, want false")
+	}
+}
+
 // TestUnionForcedItemsAddsUnchangedPresentItem proves a forced id that the
 // merkle diff classified as unchanged is added to Modified, an already-changed
 // id is not duplicated, and an id absent from the current capture is ignored.
