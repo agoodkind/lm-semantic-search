@@ -77,29 +77,41 @@ func TestScenario2AppendReexaminesOnlyThatConversation(t *testing.T) {
 	}
 }
 
-// TestScenario3VersionBumpForcesAll proves bumping the derived pipeline version
-// forces every delivered conversation back into the changed set for re-
-// examination even though no fingerprint changed.
-func TestScenario3VersionBumpForcesAll(t *testing.T) {
+// TestScenario3VersionBumpDoesNotReforceBackfill proves the presence-based
+// backfill contract: after a full backfill, bumping the derived pipeline version
+// and running another plain BACKFILL does NOT re-force or re-embed conversations
+// whose derived rows are already present. A backfill fills MISSING rows and
+// no-ops present ones; it is presence-based and intentionally does not detect
+// stale or older-version content. Auto-version-forcing (the old per-conversation
+// derivedPipelineVersion marker behavior) is retired and replaced by an
+// operator-initiated force. Force-based rebuild of present-but-stale rows is
+// validated separately when the force path (R6) lands.
+func TestScenario3VersionBumpDoesNotReforceBackfill(t *testing.T) {
 	h := newHarness(t)
 
 	convs := seedConversations()
 	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
 	requireCompleted(t, backfill, "backfill")
 
+	// Bump the derived pipeline version to simulate a chunking change. A plain
+	// backfill is presence-based, so the bump must not pull the already-present
+	// conversations back into the changed set.
 	restore := daemon.SetDerivedPipelineVersionForLiveTest("2")
 	defer restore()
 
 	bumped := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
-	requireCompleted(t, bumped, "version-bumped reexamine")
+	requireCompleted(t, bumped, "version-bumped backfill")
 
-	if int(bumped.Progress.FilesModified) != len(seedConversationIDs) {
-		t.Fatalf("version-bumped FilesModified = %d, want %d (every conversation forced)\n%s", bumped.Progress.FilesModified, len(seedConversationIDs), progressString(bumped))
+	// Every derived row is present, so the presence classifier prunes all three
+	// conversations. The version bump changes nothing a backfill acts on.
+	if bumped.Progress.FilesModified != 0 {
+		t.Fatalf("version-bumped FilesModified = %d, want 0 (backfill is presence-based; a version bump does not re-force present conversations)\n%s", bumped.Progress.FilesModified, progressString(bumped))
 	}
-	// The content is byte-identical and already stored, so a forced re-examination
-	// finds nothing to embed: forcing is examination, not re-embedding.
+	if bumped.Progress.FilesEmbedded != 0 {
+		t.Fatalf("version-bumped FilesEmbedded = %d, want 0 (no conversation re-embedded)\n%s", bumped.Progress.FilesEmbedded, progressString(bumped))
+	}
 	if bumped.Progress.ChunksEmbedded != 0 {
-		t.Fatalf("version-bumped ChunksEmbedded = %d, want 0 (content unchanged, examination only)\n%s", bumped.Progress.ChunksEmbedded, progressString(bumped))
+		t.Fatalf("version-bumped ChunksEmbedded = %d, want 0 (present rows are not rebuilt by a backfill)\n%s", bumped.Progress.ChunksEmbedded, progressString(bumped))
 	}
 }
 

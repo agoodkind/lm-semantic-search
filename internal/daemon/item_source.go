@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"sort"
+	"strings"
 	"sync"
 
 	"goodkind.io/lm-semantic-search/internal/indexability"
@@ -15,11 +16,12 @@ import (
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
-// forcedItemsSet collects a source's forced item ids into a set for O(1) lookup
-// in applyDeltaChanges. It returns nil when the source forces nothing (the
-// normal sync), so the hash-equality skip stays in force for every item.
-func forcedItemsSet(source itemSource) map[string]struct{} {
-	forced := source.forcedItems()
+// forcedItemsSet collects the precomputed forced item ids into a set for O(1)
+// lookup in applyDeltaChanges. The classification runs once up front in
+// planSyncDiff (forcedWorkSet), so this takes the resulting slice rather than
+// re-asking the source. It returns nil when nothing is forced (the normal sync),
+// so the hash-equality skip stays in force for every item.
+func forcedItemsSet(forced []string) map[string]struct{} {
 	if len(forced) == 0 {
 		return nil
 	}
@@ -77,13 +79,22 @@ func unionForcedItems(diff merkle.Diff, forced []string, captured merkle.Snapsho
 type itemSource interface {
 	// capture lists the current items as itemID -> content fingerprint.
 	capture(ctx context.Context) (merkle.Snapshot, error)
-	// forcedItems names item ids that must be re-examined this run even when
-	// their captured fingerprint matches the stored checkpoint. The delta routine
-	// unions these into the changed set, so indexOne runs for them and its normal
-	// content diff reuses unchanged chunks while embedding only new ones. A code
-	// source never forces (returns nil); a conversation source returns its
-	// delivered ids when an operator-run backfill asks to re-examine them.
-	forcedItems() []string
+	// forcedWorkSet names the delivered item ids that still have real missing
+	// work, classified up front this run from store presence alone. The delta
+	// routine unions these into the changed set BEFORE the per-item loop, so a
+	// unit whose expected rows are all present is pruned here and never reaches
+	// indexOne, which is what removes the per-item no-op cost. The classification
+	// must stay cheap: it reads store presence and compares expected prefixes, and
+	// must not regenerate chunks. A code source forces nothing (its merkle diff
+	// already runs up front); a conversation backfill returns the delivered ids
+	// whose expected derived rows are not all present. On an unrecoverable
+	// classification failure a source fails safe by returning every delivered id
+	// so the run never under-embeds.
+	forcedWorkSet(ctx context.Context) ([]string, error)
+	// columnSet names the store column family this source's rows carry, so the
+	// store write is told the row shape instead of inferring it from the
+	// collection name.
+	columnSet() semantic.StoreColumnSet
 	// indexOne produces the stored chunks and fingerprint for one item.
 	indexOne(ctx context.Context, itemID string) (indexer.OneFileResult, error)
 	// removalFor maps item ids to the store removal that drops their prior rows.
@@ -162,10 +173,17 @@ func (source codeItemSource) withCollectionName(collectionName string) codeItemS
 	return source
 }
 
-// forcedItems is always nil for a code source: a filesystem sync never
-// re-examines a file whose content hash is unchanged.
-func (source codeItemSource) forcedItems() []string {
-	return nil
+// forcedWorkSet is always empty for a code source: a filesystem sync never
+// re-examines a file whose content hash is unchanged, and its merkle diff
+// already classifies missing work up front in planSyncDiff.
+func (source codeItemSource) forcedWorkSet(_ context.Context) ([]string, error) {
+	return nil, nil
+}
+
+// columnSet is the base column family: a code file's rows carry no conversation
+// scalar columns.
+func (source codeItemSource) columnSet() semantic.StoreColumnSet {
+	return semantic.StoreColumnSetCode
 }
 
 func (source codeItemSource) capture(ctx context.Context) (merkle.Snapshot, error) {
@@ -305,21 +323,119 @@ func (source conversationItemSource) loadDerivedBatch(ctx context.Context) (sema
 	return source.batch.state, source.batch.err
 }
 
-// forcedItems returns delivered conversation ids whose derived marker is absent
-// or stale when an operator-run backfill asks to reexamine them. It returns nil
-// before consulting markers for a normal sync, so that path stays unchanged.
-func (source conversationItemSource) forcedItems() []string {
+// forcedWorkSet classifies the backfill work set CHEAPLY, up front, from store
+// presence alone. It loads the single-flight derived batch once (the same read
+// every indexOne reuses), then for each delivered conversation compares the
+// derived prefixes its messages EXPECT against the derived-path keys the store
+// already holds. A conversation whose expected derived prefixes are all present
+// is a no-op and is pruned; only conversations with at least one missing prefix
+// are returned, so the per-item loop regenerates and embeds only real work.
+//
+// Correctness bound: this is a PRESENCE check, not a staleness check. A backfill
+// treats a conversation with all expected derived prefixes present as a no-op
+// even when those rows were derived by an older pipeline version, so a plain
+// backfill fills MISSING rows and never rebuilds present-but-stale ones. Bumping
+// derivedPipelineVersion does not pull a present conversation back into the work
+// set here. Rebuilding present rows at a new version is the force path's job (a
+// later PR), which re-embeds present units unpruned rather than relying on this
+// classifier.
+//
+// It never calls diffConversationMessages or conversationDocumentsToStoredChunks:
+// those regenerate chunks and would reintroduce the per-item cost this prune
+// removes. A normal (non-reexamine) sync forces nothing. On a batch-load error it
+// logs and fails safe by returning every delivered id, so a store read failure
+// never causes an under-embed.
+func (source conversationItemSource) forcedWorkSet(ctx context.Context) ([]string, error) {
 	if !source.reexamine {
-		return nil
+		return nil, nil
+	}
+	if source.rowReader == nil || source.collectionName == "" {
+		// No live collection to read presence from, so indexOne would rebuild each
+		// conversation in full anyway. Force the whole delivery rather than skip
+		// work we cannot verify is already present.
+		return source.allDeliveredIDs(), nil
+	}
+	batch, err := source.loadDerivedBatch(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "load conversation derived batch for forced work set failed; forcing all delivered conversations", "collection", source.collectionName, "err", err)
+		return source.allDeliveredIDs(), nil
 	}
 	forced := make([]string, 0, len(source.documents))
-	for conversationID := range source.documents {
-		if source.derivedVersions[conversationID] == derivedPipelineVersion {
-			continue
+	for conversationID, documents := range source.documents {
+		stored := batch.Rows[conversationID]
+		if conversationNeedsDerivedWork(conversationID, documents, stored.DerivedPaths) {
+			forced = append(forced, conversationID)
 		}
-		forced = append(forced, conversationID)
 	}
-	return forced
+	sort.Strings(forced)
+	return forced, nil
+}
+
+// allDeliveredIDs returns every delivered conversation id, sorted. It backs the
+// fail-safe path: when store presence cannot be read, forcing the whole delivery
+// keeps the run from silently skipping conversations that may need work.
+func (source conversationItemSource) allDeliveredIDs() []string {
+	ids := make([]string, 0, len(source.documents))
+	for conversationID := range source.documents {
+		ids = append(ids, conversationID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// columnSet is the conversation column family: a conversation's rows carry the
+// conversation scalar columns.
+func (source conversationItemSource) columnSet() semantic.StoreColumnSet {
+	return semantic.StoreColumnSetConversation
+}
+
+// conversationNeedsDerivedWork reports whether a delivered conversation still has
+// derived (tool or thinking) rows missing from the store, judged CHEAPLY from
+// message metadata and stored derived-path presence alone. A tool-carrying
+// message expects at least one stored row under convtool/<id>/<msgIdx>/, and a
+// thinking-carrying message expects a stored row at convthink/<id>/<msgIdx> or
+// under its multipart prefix. It never regenerates chunks, so a fully present
+// conversation is classified as a no-op without paying the per-item embed cost.
+// A message carrying no tools and no thinking expects no derived rows, so a
+// conversation of only such messages needs no work.
+//
+// It judges PRESENCE only: a message whose expected derived prefix is present
+// needs no work, regardless of the pipeline version that produced the stored row.
+// Detecting stale or older-version content is the force path's responsibility,
+// not this backfill classifier's.
+func conversationNeedsDerivedWork(conversationID string, documents []model.ConversationDocument, storedDerivedPaths map[string]string) bool {
+	for _, document := range documents {
+		if len(document.Tools) > 0 {
+			toolPrefix := conversationToolMessagePath(conversationID, document.MessageIndex) + "/"
+			if !derivedPrefixPresent(storedDerivedPaths, toolPrefix, "") {
+				return true
+			}
+		}
+		if document.Thinking != "" {
+			thinkingPath := conversationThinkingPath(conversationID, document.MessageIndex)
+			if !derivedPrefixPresent(storedDerivedPaths, thinkingPath+"/", thinkingPath) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// derivedPrefixPresent reports whether any stored derived-path key matches the
+// exact path or begins with the slash-terminated prefix. The trailing slash on
+// prefix is load-bearing: a bare prefix would like-match a sibling index
+// (message 1 catching message 12), the same boundary conversationDerivedPathsForMessage
+// enforces.
+func derivedPrefixPresent(storedDerivedPaths map[string]string, prefix string, exact string) bool {
+	for relativePath := range storedDerivedPaths {
+		if exact != "" && relativePath == exact {
+			return true
+		}
+		if prefix != "" && strings.HasPrefix(relativePath, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (source conversationItemSource) checkpointDerivedMarker(snapshotPath string, conversationID string) error {

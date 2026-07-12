@@ -649,7 +649,7 @@ func seedRealIndexedCodebase(t *testing.T, manager *Manager, repoPath string, fi
 		})
 	}
 
-	if err := service.StageReindex(context.Background(), canonicalPath, chunks, semantic.RemovePaths(nil), nil, nil); err != nil {
+	if err := service.StageReindex(context.Background(), canonicalPath, chunks, semantic.RemovePaths(nil), nil, nil, semantic.StoreColumnSetCode); err != nil {
 		t.Fatalf("semantic.StageReindex seed returned error: %v", err)
 	}
 	if err := service.PromoteStaging(context.Background(), canonicalPath); err != nil {

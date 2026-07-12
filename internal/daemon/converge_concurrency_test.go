@@ -84,6 +84,7 @@ type reindexCall struct {
 	Chunks       int
 	Removed      []string
 	Removal      semantic.Removal
+	ColumnSet    semantic.StoreColumnSet
 }
 
 func (f *fakeSemantic) Available() bool { return !f.unavailable }
@@ -326,10 +327,10 @@ func (f *fakeSemantic) recordReindexReuse(chunks []model.StoredChunk, reuse map[
 	f.reindexReuse[chunks[0].ConversationID] = copied
 }
 
-func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32) error {
+func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error {
 	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
-	f.reindexCalls = append(f.reindexCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval})
+	f.reindexCalls = append(f.reindexCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval, ColumnSet: columnSet})
 	f.mu.Unlock()
 	f.recordReindexReuse(chunks, reuse)
 	if f.reindexWithReuse != nil {
@@ -344,10 +345,10 @@ func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks 
 	return nil
 }
 
-func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32) error {
+func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error {
 	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
-	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval})
+	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval, ColumnSet: columnSet})
 	f.mu.Unlock()
 	f.recordReindexReuse(chunks, reuse)
 	if f.stageReindexWithReuse != nil {

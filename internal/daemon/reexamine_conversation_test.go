@@ -1,55 +1,94 @@
 package daemon
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
-// TestConversationItemSourceForcedItemsReexamine proves marker-aware forcing:
-// absent and stale markers force delivered conversations, a current marker skips
-// one, and an unflagged source consults no markers and forces nothing.
-func TestConversationItemSourceForcedItemsReexamine(t *testing.T) {
+// TestConversationItemSourceForcedWorkSetReexamine proves the cheap store-presence
+// classifier: a backfill forces only the delivered conversation whose expected
+// derived rows are missing, prunes a conversation whose derived rows are all
+// present, prunes a conversation that expects no derived rows at all, and forces
+// nothing when the source is not a reexamine.
+func TestConversationItemSourceForcedWorkSetReexamine(t *testing.T) {
 	docs := []model.ConversationDocument{
-		{ConversationID: "claude:a", MessageIndex: 0, Role: "user", Text: "hi"},
-		{ConversationID: "claude:a", MessageIndex: 1, Role: "assistant", Text: "yo"},
-		{ConversationID: "codex:b", MessageIndex: 0, Role: "user", Text: "sup"},
+		{ConversationID: "claude:a", MessageIndex: 0, Role: "assistant", Text: "a", Thinking: "reasoning-a"},
+		{ConversationID: "codex:b", MessageIndex: 0, Role: "assistant", Text: "b", Thinking: "reasoning-b"},
+		{ConversationID: "plain:c", MessageIndex: 0, Role: "user", Text: "c"},
 	}
-	manifest := map[string]string{"claude:a": "fp1", "codex:b": "fp2"}
+	manifest := map[string]string{"claude:a": "fp1", "codex:b": "fp2", "plain:c": "fp3"}
+	batch := semantic.ConversationBatchState{
+		Rows: map[string]semantic.ConversationStoredRows{
+			"claude:a": {Messages: map[int32]semantic.StoredMessageState{}, DerivedPaths: map[string]string{"convthink/claude:a/0": "h"}},
+			"codex:b":  {Messages: map[int32]semantic.StoredMessageState{}, DerivedPaths: map[string]string{}},
+			"plain:c":  {Messages: map[int32]semantic.StoredMessageState{}, DerivedPaths: map[string]string{}},
+		},
+		Reuse: map[string][]float32{},
+	}
+	reader := &testConversationRowReader{batch: &batch}
 
-	forced := newConversationItemSource("coll", manifest, docs, nil, absenceRetain, true)
-	forced.derivedVersions = map[string]string{
-		"codex:b": "stale-version",
+	forced := newConversationItemSource("coll", manifest, docs, reader, absenceRetain, true)
+	got, err := forced.forcedWorkSet(context.Background())
+	if err != nil {
+		t.Fatalf("forcedWorkSet returned error: %v", err)
 	}
-	got := forced.forcedItems()
-	slices.Sort(got)
-	if !slices.Equal(got, []string{"claude:a", "codex:b"}) {
-		t.Fatalf("forcedItems with reexamine = %v, want [claude:a codex:b]", got)
-	}
-
-	forced.derivedVersions["claude:a"] = derivedPipelineVersion
-	got = forced.forcedItems()
 	if !slices.Equal(got, []string{"codex:b"}) {
-		t.Fatalf("forcedItems with current marker = %v, want [codex:b]", got)
+		t.Fatalf("forcedWorkSet = %v, want [codex:b] (only the missing-derived conversation)", got)
 	}
 
-	quiet := newConversationItemSource("coll", manifest, docs, nil, absenceRetain, false)
-	quiet.derivedVersions = map[string]string{
-		"claude:a": "stale-version",
-		"codex:b":  "stale-version",
+	quiet := newConversationItemSource("coll", manifest, docs, reader, absenceRetain, false)
+	got, err = quiet.forcedWorkSet(context.Background())
+	if err != nil {
+		t.Fatalf("forcedWorkSet without reexamine returned error: %v", err)
 	}
-	if got := quiet.forcedItems(); got != nil {
-		t.Fatalf("forcedItems without reexamine = %v, want nil", got)
+	if got != nil {
+		t.Fatalf("forcedWorkSet without reexamine = %v, want nil", got)
 	}
 }
 
-// TestCodeItemSourceForcedItemsNil proves a code source never forces an item, so
+// TestConversationForcedWorkSetFailsSafeOnBatchError proves a store-read failure
+// forces every delivered id rather than under-embedding.
+func TestConversationForcedWorkSetFailsSafeOnBatchError(t *testing.T) {
+	docs := []model.ConversationDocument{
+		{ConversationID: "claude:a", MessageIndex: 0, Role: "assistant", Text: "a", Thinking: "ra"},
+		{ConversationID: "codex:b", MessageIndex: 0, Role: "assistant", Text: "b", Thinking: "rb"},
+	}
+	manifest := map[string]string{"claude:a": "fp1", "codex:b": "fp2"}
+	reader := &testConversationRowReader{err: errors.New("batch read failed")}
+
+	source := newConversationItemSource("coll", manifest, docs, reader, absenceRetain, true)
+	got, err := source.forcedWorkSet(context.Background())
+	if err != nil {
+		t.Fatalf("forcedWorkSet fail-safe returned error: %v", err)
+	}
+	if !slices.Equal(got, []string{"claude:a", "codex:b"}) {
+		t.Fatalf("forcedWorkSet on batch error = %v, want all delivered ids", got)
+	}
+}
+
+// TestCodeItemSourceForcedWorkSetNil proves a code source never forces an item, so
 // unionForcedItems is a no-op for filesystem syncs.
-func TestCodeItemSourceForcedItemsNil(t *testing.T) {
-	if got := (codeItemSource{}).forcedItems(); got != nil {
-		t.Fatalf("code forcedItems = %v, want nil", got)
+func TestCodeItemSourceForcedWorkSetNil(t *testing.T) {
+	got, err := (codeItemSource{}).forcedWorkSet(context.Background())
+	if err != nil || got != nil {
+		t.Fatalf("code forcedWorkSet = (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+// TestItemSourceColumnSet proves each source names its own store column family,
+// so the store write is told the row shape rather than inferring it.
+func TestItemSourceColumnSet(t *testing.T) {
+	if got := (codeItemSource{}).columnSet(); got != semantic.StoreColumnSetCode {
+		t.Fatalf("code columnSet = %v, want StoreColumnSetCode", got)
+	}
+	if got := (conversationItemSource{}).columnSet(); got != semantic.StoreColumnSetConversation {
+		t.Fatalf("conversation columnSet = %v, want StoreColumnSetConversation", got)
 	}
 }
 

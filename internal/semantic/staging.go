@@ -24,7 +24,7 @@ import (
 // item's insert and its checkpoint, the resumed run re-embeds that one item and
 // its prior staging rows are removed before the fresh rows land. A nil chunk
 // slice with an empty removal is a no-op.
-func (service *Service) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32) (err error) {
+func (service *Service) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.stageReindex")
 	defer done(&err)
 
@@ -47,7 +47,7 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 		return nil
 	}
 	chunks = service.guardrailExpand(ctx, codebasePath, chunks, "stage")
-	return service.insertChunksBatched(ctx, stagingName, chunks, hasStaging, "Generating embeddings and writing to Milvus...", progress, reuse)
+	return service.insertChunksBatched(ctx, stagingName, chunks, hasStaging, "Generating embeddings and writing to Milvus...", progress, reuse, columnSet)
 }
 
 // PromoteStaging atomically swaps the staging collection onto the live
@@ -132,7 +132,7 @@ func (service *Service) packForEmbedding(chunks []model.StoredChunk) [][]model.S
 // returned vector, which is how both the staging build and an empty live
 // collection learn their dimension without an up-front guess. The caller
 // guarantees chunks is non-empty and already guardrail-expanded.
-func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string][]float32) error {
+func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) error {
 	packs := service.packForEmbedding(chunks)
 	totalBatches := len(packs)
 	var writtenRows int32
@@ -153,7 +153,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			collectionReady = true
 		}
 
-		if err := service.insertBatch(ctx, collectionName, chunkBatch, vectors); err != nil {
+		if err := service.insertBatch(ctx, collectionName, chunkBatch, vectors, columnSet); err != nil {
 			return err
 		}
 
