@@ -12,13 +12,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// derivedPipelineVersion must be bumped whenever conversation tool or thinking
-// chunking changes, so a reexamine run rebuilds content derived by older logic.
-// It is a var rather than a const so the live marker harness can reassign it
-// (via the live-tagged SetDerivedPipelineVersionForLiveTest hook) to force a
-// re-examination; production code never mutates it.
-var derivedPipelineVersion = "1"
-
 var conversationToolExtensions = map[string]string{
 	"bash":     ".bash",
 	"json":     ".json",

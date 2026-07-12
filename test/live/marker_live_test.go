@@ -5,9 +5,7 @@ package live
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"testing"
 	"time"
@@ -159,43 +157,6 @@ func TestScenario4AuthoritativeDeletePurgesRows(t *testing.T) {
 	}
 }
 
-// TestScenario5PostBootstrapEmbedsZero proves the migration path: after deleting
-// the on-disk derived marker, a reexamine auto-stamps the already fully embedded
-// conversations and the subsequent examination embeds nothing.
-func TestScenario5PostBootstrapEmbedsZero(t *testing.T) {
-	h := newHarness(t)
-
-	convs := seedConversations()
-	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
-	requireCompleted(t, backfill, "backfill")
-
-	// Simulate a pre-marker install: remove the derived marker sidecar so the next
-	// reexamine sees an empty marker store and runs the one-time bootstrap stamp.
-	markerPath := h.derivedMarkerPath()
-	if err := os.Remove(markerPath); err != nil {
-		t.Fatalf("remove derived marker %s returned error: %v", markerPath, err)
-	}
-
-	migrated := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
-	requireCompleted(t, migrated, "post-bootstrap reexamine")
-
-	if migrated.Progress.ChunksEmbedded != 0 {
-		t.Fatalf("post-bootstrap ChunksEmbedded = %d, want 0 (bootstrap stamped, nothing to embed)\n%s", migrated.Progress.ChunksEmbedded, progressString(migrated))
-	}
-	if migrated.Progress.FilesEmbedded != 0 {
-		t.Fatalf("post-bootstrap FilesEmbedded = %d, want 0\n%s", migrated.Progress.FilesEmbedded, progressString(migrated))
-	}
-
-	// The auto-bootstrap must have re-stamped every fully embedded conversation at
-	// the current pipeline version, recreating the marker sidecar it deleted.
-	versions := h.readDerivedMarkers(markerPath)
-	for _, id := range seedConversationIDs {
-		if versions[id] != "1" {
-			t.Fatalf("bootstrap did not stamp %s at version 1; markers = %v", id, versions)
-		}
-	}
-}
-
 // upsert drives one client-streaming conversation ingest over gRPC (header,
 // documents, manifest, CloseAndRecv), then polls the job to a terminal state and
 // returns the full model.Job so a test can read the per-run progress the wire
@@ -291,29 +252,6 @@ func (h *harness) countRowsWithPrefix(prefix string) int64 {
 		h.t.Fatalf("read count column for %q returned error: %v", prefix, err)
 	}
 	return total
-}
-
-// derivedMarkerPath is the on-disk derived-marker sidecar for this collection,
-// beside the merkle snapshot at <merkleDir>/<codebaseID>.json.derived.
-func (h *harness) derivedMarkerPath() string {
-	return fmt.Sprintf("%s/%s.json.derived", h.merkleDir, h.codebaseID)
-}
-
-// readDerivedMarkers reads the marker sidecar and returns its conversation ->
-// version map.
-func (h *harness) readDerivedMarkers(path string) map[string]string {
-	h.t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		h.t.Fatalf("read derived markers %s returned error: %v", path, err)
-	}
-	var file struct {
-		Versions map[string]string `json:"versions"`
-	}
-	if err := json.Unmarshal(data, &file); err != nil {
-		h.t.Fatalf("unmarshal derived markers %s returned error: %v", path, err)
-	}
-	return file.Versions
 }
 
 func requireCompleted(t *testing.T, job model.Job, label string) {

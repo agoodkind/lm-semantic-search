@@ -266,18 +266,15 @@ type conversationItemSource struct {
 	documents      map[string][]model.ConversationDocument
 	rowReader      conversationRowReader
 	splitterID     string
-	// derivedVersions records the tool and thinking chunking version that last
-	// completed for each conversation. It is conversation-specific state and is
-	// persisted beside the Merkle checkpoint.
-	derivedVersions map[string]string
 	// absence is the caller-declared policy for a conversation the manifest
 	// omits. clyde sends the mode on the upsert header; the stream handler maps
 	// the wire enum to this internal value in conversationAbsencePolicyFromProto,
 	// so the delta core never sees the proto type. The constructor only stores the
 	// already-mapped value.
 	absence absencePolicy
-	// reexamine, when set by an operator-run backfill, forces each delivered
-	// conversation whose derived marker is absent or stale into the changed set.
+	// reexamine, when set by an operator-run backfill, drives forcedWorkSet: it
+	// forces each delivered conversation whose expected derived rows are not all
+	// present in the store into the changed set, judged from live store presence.
 	reexamine bool
 	// batch caches the one batched read of the live collection for every delivered
 	// conversation. indexOne loads it once on first use, so a run of many
@@ -301,7 +298,7 @@ func newConversationItemSource(collectionName string, manifest map[string]string
 		conversationID := document.ConversationID
 		byID[conversationID] = append(byID[conversationID], document)
 	}
-	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", derivedVersions: map[string]string{}, absence: absence, reexamine: reexamine, batch: &conversationDerivedBatch{once: sync.Once{}, state: semantic.ConversationBatchState{Rows: nil, Reuse: nil}, err: nil}}
+	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", absence: absence, reexamine: reexamine, batch: &conversationDerivedBatch{once: sync.Once{}, state: semantic.ConversationBatchState{Rows: nil, Reuse: nil}, err: nil}}
 }
 
 // loadDerivedBatch reads the stored rows for every delivered conversation once,
@@ -436,20 +433,6 @@ func derivedPrefixPresent(storedDerivedPaths map[string]string, prefix string, e
 		}
 	}
 	return false
-}
-
-func (source conversationItemSource) checkpointDerivedMarker(snapshotPath string, conversationID string) error {
-	if _, delivered := source.documents[conversationID]; !delivered {
-		return nil
-	}
-	nextVersions := maps.Clone(source.derivedVersions)
-	nextVersions[conversationID] = derivedPipelineVersion
-	markerPath := conversationDerivedMarkerPath(snapshotPath)
-	if err := writeConversationDerivedMarkers(markerPath, nextVersions); err != nil {
-		return err
-	}
-	source.derivedVersions[conversationID] = derivedPipelineVersion
-	return nil
 }
 
 func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot, error) {

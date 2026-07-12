@@ -164,7 +164,6 @@ func (manager *Manager) cleanupHaltedStaging(ctx context.Context, job model.Job,
 		if removeErr := store.RemoveFile(state.snapshotPath); removeErr != nil {
 			slog.WarnContext(ctx, "remove staging checkpoint after admission halt failed", "path", state.snapshotPath, "err", removeErr)
 		}
-		removeConversationDerivedMarkers(ctx, state.snapshotPath, "remove staging derived markers after admission halt failed")
 	}
 }
 
@@ -457,10 +456,6 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		// A bootstrap re-embeds every item, so nothing needs per-item forcing.
 		forced: nil,
 	}
-	if conversationSource, ok := source.(conversationItemSource); ok {
-		conversationSource.derivedVersions = bootstrapDerivedVersions(state.snapshotPath, len(plan.seedSnapshot.Files))
-		state.source = conversationSource
-	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
 	reuse, seeded, descendants := manager.resolveReuseSeed(ctx, job)
@@ -595,7 +590,6 @@ func (manager *Manager) promoteStagingMerkle(ctx context.Context, job model.Job,
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
 	slog.InfoContext(ctx, "promoted staging Merkle snapshot to live", "component", "daemon", "subcomponent", "delta", "codebase_id", job.CodebaseID, "path", livePath)
-	promoteConversationDerivedMarkers(ctx, state.source, state.snapshotPath, livePath)
 	return deltaOutcome{fallback: false, handled: false, progressed: false}
 }
 
@@ -856,11 +850,6 @@ func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, l
 	if err := merkle.WriteSnapshot(state.snapshotPath, snapshot); err != nil {
 		slog.ErrorContext(ctx, "checkpoint write failed", "path", state.snapshotPath, "label", label, "err", err)
 		return
-	}
-	if source, ok := state.source.(conversationItemSource); ok {
-		if err := source.checkpointDerivedMarker(state.snapshotPath, label); err != nil {
-			slog.ErrorContext(ctx, "conversation derived marker write failed", "path", conversationDerivedMarkerPath(state.snapshotPath), "conversation_id", label, "err", err)
-		}
 	}
 }
 
