@@ -49,6 +49,7 @@ func TestConversationIndexOneInsertsMissingTargetWithSharedVector(t *testing.T) 
 		reader,
 		absenceRetain,
 		false,
+		false,
 	)
 
 	result, err := source.indexOne(context.Background(), conversationID)
@@ -95,6 +96,7 @@ func TestConversationIndexOnePresentDerivedRowsSkip(t *testing.T) {
 		[]model.ConversationDocument{document},
 		reader,
 		absenceRetain,
+		false,
 		false,
 	)
 
@@ -147,6 +149,7 @@ func TestConversationIndexOneReconcilesDerivedPathShapeChange(t *testing.T) {
 		[]model.ConversationDocument{document},
 		reader,
 		absenceRetain,
+		false,
 		false,
 	)
 
@@ -206,7 +209,7 @@ func TestReexamineBackfillFullyPresentEmbedsZero(t *testing.T) {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, map[string]string{conversationID: "fp-done"}, testClientInfo(), absenceRetain, true)
+	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, map[string]string{conversationID: "fp-done"}, testClientInfo(), absenceRetain, true, false)
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}

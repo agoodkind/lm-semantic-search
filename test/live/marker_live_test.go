@@ -13,7 +13,6 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
-	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -29,13 +28,13 @@ func TestScenario1FullBackfillThenReexamineIsBounded(t *testing.T) {
 	h := newHarness(t)
 
 	convs := seedConversations()
-	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
+	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
 	requireCompleted(t, backfill, "backfill")
 	if backfill.Progress.ChunksEmbedded <= 0 {
 		t.Fatalf("backfill ChunksEmbedded = %d, want > 0 (nothing embedded on first pass)\n%s", backfill.Progress.ChunksEmbedded, progressString(backfill))
 	}
 
-	second := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
+	second := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
 	requireCompleted(t, second, "second reexamine")
 	if second.Progress.ChunksEmbedded != 0 {
 		t.Fatalf("second reexamine ChunksEmbedded = %d, want 0 (bounded examination)\n%s", second.Progress.ChunksEmbedded, progressString(second))
@@ -54,14 +53,14 @@ func TestScenario2AppendReexaminesOnlyThatConversation(t *testing.T) {
 	h := newHarness(t)
 
 	convs := seedConversations()
-	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
+	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
 	requireCompleted(t, backfill, "backfill")
 
 	// Append one message to a single conversation. Its content and derived
 	// fingerprint both change, so the merkle diff classifies exactly it as
 	// modified.
 	convs["live-b"] = appendMessage(convs["live-b"], "live-b")
-	appended := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
+	appended := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
 	requireCompleted(t, appended, "appended reexamine")
 
 	if appended.Progress.FilesModified != 1 {
@@ -75,41 +74,46 @@ func TestScenario2AppendReexaminesOnlyThatConversation(t *testing.T) {
 	}
 }
 
-// TestScenario3VersionBumpDoesNotReforceBackfill proves the presence-based
-// backfill contract: after a full backfill, bumping the derived pipeline version
-// and running another plain BACKFILL does NOT re-force or re-embed conversations
-// whose derived rows are already present. A backfill fills MISSING rows and
-// no-ops present ones; it is presence-based and intentionally does not detect
-// stale or older-version content. Auto-version-forcing (the old per-conversation
-// derivedPipelineVersion marker behavior) is retired and replaced by an
-// operator-initiated force. Force-based rebuild of present-but-stale rows is
-// validated separately when the force path (R6) lands.
-func TestScenario3VersionBumpDoesNotReforceBackfill(t *testing.T) {
+// TestScenario3ForceRebuildsPresentBackfillSkips proves the force-vs-backfill
+// distinction directly over a fully-present corpus. After a full backfill embeds
+// every seeded conversation, a plain BACKFILL re-run re-embeds NOTHING because
+// backfill is presence-based and every derived row is already present. A FORCE
+// re-run then re-embeds those same present rows, because force rebuilds every
+// delivered conversation with reuse disabled. The two flags are orthogonal:
+// backfill fills only missing rows, force rebuilds present ones.
+func TestScenario3ForceRebuildsPresentBackfillSkips(t *testing.T) {
 	h := newHarness(t)
 
 	convs := seedConversations()
-	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
-	requireCompleted(t, backfill, "backfill")
-
-	// Bump the derived pipeline version to simulate a chunking change. A plain
-	// backfill is presence-based, so the bump must not pull the already-present
-	// conversations back into the changed set.
-	restore := daemon.SetDerivedPipelineVersionForLiveTest("2")
-	defer restore()
-
-	bumped := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
-	requireCompleted(t, bumped, "version-bumped backfill")
-
-	// Every derived row is present, so the presence classifier prunes all three
-	// conversations. The version bump changes nothing a backfill acts on.
-	if bumped.Progress.FilesModified != 0 {
-		t.Fatalf("version-bumped FilesModified = %d, want 0 (backfill is presence-based; a version bump does not re-force present conversations)\n%s", bumped.Progress.FilesModified, progressString(bumped))
+	initial := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
+	requireCompleted(t, initial, "initial backfill")
+	if initial.Progress.ChunksEmbedded <= 0 {
+		t.Fatalf("initial backfill ChunksEmbedded = %d, want > 0 (the seed rows embedded)\n%s", initial.Progress.ChunksEmbedded, progressString(initial))
 	}
-	if bumped.Progress.FilesEmbedded != 0 {
-		t.Fatalf("version-bumped FilesEmbedded = %d, want 0 (no conversation re-embedded)\n%s", bumped.Progress.FilesEmbedded, progressString(bumped))
+
+	// A plain backfill over the now fully-present corpus is presence-based, so the
+	// classifier prunes every conversation and nothing re-embeds.
+	plainBackfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
+	requireCompleted(t, plainBackfill, "plain backfill")
+	if plainBackfill.Progress.FilesModified != 0 {
+		t.Fatalf("plain backfill FilesModified = %d, want 0 (present rows skipped; backfill is presence-based)\n%s", plainBackfill.Progress.FilesModified, progressString(plainBackfill))
 	}
-	if bumped.Progress.ChunksEmbedded != 0 {
-		t.Fatalf("version-bumped ChunksEmbedded = %d, want 0 (present rows are not rebuilt by a backfill)\n%s", bumped.Progress.ChunksEmbedded, progressString(bumped))
+	if plainBackfill.Progress.ChunksEmbedded != 0 {
+		t.Fatalf("plain backfill ChunksEmbedded = %d, want 0 (present rows are not rebuilt by a backfill)\n%s", plainBackfill.Progress.ChunksEmbedded, progressString(plainBackfill))
+	}
+
+	// A force over the same fully-present corpus rebuilds every delivered
+	// conversation with reuse disabled, so the present rows re-embed.
+	forced := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, false, true)
+	requireCompleted(t, forced, "force rebuild")
+	if want := int32(len(seedConversationIDs)); forced.Progress.FilesModified != want {
+		t.Fatalf("force FilesModified = %d, want %d (force rebuilds every delivered conversation)\n%s", forced.Progress.FilesModified, want, progressString(forced))
+	}
+	if forced.Progress.ChunksEmbedded <= 0 {
+		t.Fatalf("force ChunksEmbedded = %d, want > 0 (present rows re-embedded, reuse disabled)\n%s", forced.Progress.ChunksEmbedded, progressString(forced))
+	}
+	if forced.Progress.ChunksReused != 0 {
+		t.Fatalf("force ChunksReused = %d, want 0 (reuse disabled under force)\n%s", forced.Progress.ChunksReused, progressString(forced))
 	}
 }
 
@@ -120,7 +124,7 @@ func TestScenario4AuthoritativeDeletePurgesRows(t *testing.T) {
 	h := newHarness(t)
 
 	convs := seedConversations()
-	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true)
+	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
 	requireCompleted(t, backfill, "backfill")
 
 	dropped := "live-c"
@@ -144,7 +148,7 @@ func TestScenario4AuthoritativeDeletePurgesRows(t *testing.T) {
 		}
 		remaining[id] = convs[id]
 	}
-	authoritative := h.upsert(remaining, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_AUTHORITATIVE, false)
+	authoritative := h.upsert(remaining, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_AUTHORITATIVE, false, false)
 	requireCompleted(t, authoritative, "authoritative delete")
 
 	for _, prefix := range []string{convBasePrefix(dropped), convToolPrefix(dropped), convThinkPrefix(dropped)} {
@@ -160,8 +164,10 @@ func TestScenario4AuthoritativeDeletePurgesRows(t *testing.T) {
 // upsert drives one client-streaming conversation ingest over gRPC (header,
 // documents, manifest, CloseAndRecv), then polls the job to a terminal state and
 // returns the full model.Job so a test can read the per-run progress the wire
-// Progress does not expose (FilesEmbedded and FilesModified).
-func (h *harness) upsert(convs map[string][]*pb.ConversationDocument, reconcile pb.ConversationReconcileMode, reexamine bool) model.Job {
+// Progress does not expose (FilesEmbedded and FilesModified). backfill and force
+// are the two orthogonal header flags: backfill fills absent derived rows, force
+// rebuilds every delivered conversation with reuse disabled.
+func (h *harness) upsert(convs map[string][]*pb.ConversationDocument, reconcile pb.ConversationReconcileMode, backfill bool, force bool) model.Job {
 	h.t.Helper()
 
 	stream, err := h.client.UpsertConversationDocumentsStream(correlatedContext())
@@ -171,10 +177,11 @@ func (h *harness) upsert(convs map[string][]*pb.ConversationDocument, reconcile 
 
 	header := &pb.UpsertConversationDocumentsChunk{
 		Chunk: &pb.UpsertConversationDocumentsChunk_Header{Header: &pb.UpsertConversationDocumentsHeader{
-			CollectionId:       h.collectionID,
-			Client:             &pb.ClientInfo{Name: "live-harness"},
-			ReconcileMode:      reconcile,
-			ReexamineDelivered: reexamine,
+			CollectionId:      h.collectionID,
+			Client:            &pb.ClientInfo{Name: "live-harness"},
+			ReconcileMode:     reconcile,
+			BackfillDelivered: backfill,
+			ForceReexamine:    force,
 		}},
 	}
 	if err := stream.Send(header); err != nil {

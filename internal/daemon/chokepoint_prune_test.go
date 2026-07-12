@@ -149,7 +149,7 @@ func TestForcedWorkSetPrunesNoOpsBeforeDenominatorAndRegen(t *testing.T) {
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
 
-	base := newConversationItemSource(collectionName, manifest, docs, fake, absenceRetain, true)
+	base := newConversationItemSource(collectionName, manifest, docs, fake, absenceRetain, true, false)
 	spy := &indexOneSpySource{conversationItemSource: base}
 
 	plan := manager.planSyncDiff(context.Background(), job, codebaseID, spy)
@@ -221,7 +221,7 @@ func TestForcedWorkSetPrunesNoOpsBeforeDenominatorAndRegen(t *testing.T) {
 			Reuse: map[string][]float32{},
 		}, nil
 	}
-	secondBase := newConversationItemSource(collectionName, manifest, docs, fake, absenceRetain, true)
+	secondBase := newConversationItemSource(collectionName, manifest, docs, fake, absenceRetain, true, false)
 	captured, err := secondBase.capture(context.Background())
 	if err != nil {
 		t.Fatalf("second capture returned error: %v", err)

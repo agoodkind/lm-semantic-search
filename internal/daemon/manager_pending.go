@@ -75,12 +75,13 @@ func (manager *Manager) activeJobLocked(codebase model.Codebase, indexConfig mod
 
 // mergePendingConversationPayloadLocked folds an incoming upsert payload into the
 // codebase's single depth-1 pending slot. Documents and Manifest union by
-// conversation id with the newer submission winning per id; Reexamine ORs so a
-// coalesced backfill keeps its re-examination intent; Absence takes the most
-// conservative (retain) of the two so a coalesced retain upsert never inherits a
-// delete-on-absence policy it did not ask for. It writes only the pending slot and
-// never touches the executing payload (manager.conversationJobs[activeJobID]).
-// Caller holds manager.mu.
+// conversation id with the newer submission winning per id; Backfill and Force
+// each OR (sticky true) so a coalesced backfill keeps its backfill intent and a
+// coalesced force stays a force; Absence takes the most conservative (retain) of
+// the two so a coalesced retain upsert never inherits a delete-on-absence policy
+// it did not ask for. It writes only the pending slot and never touches the
+// executing payload (manager.conversationJobs[activeJobID]). Caller holds
+// manager.mu.
 func (manager *Manager) mergePendingConversationPayloadLocked(codebaseID string, incoming conversationJobPayload) {
 	existing, found := manager.pendingConversationJobs[codebaseID]
 	if !found {
@@ -95,7 +96,8 @@ func (manager *Manager) mergePendingConversationPayloadLocked(codebaseID string,
 	// fingerprint replaces the pending one, and pending-only ids are kept.
 	maps.Copy(merged.Manifest, incoming.Manifest)
 	merged.Documents = unionConversationDocuments(merged.Documents, incoming.Documents)
-	merged.Reexamine = merged.Reexamine || incoming.Reexamine
+	merged.Backfill = merged.Backfill || incoming.Backfill
+	merged.Force = merged.Force || incoming.Force
 	merged.Absence = mostConservativeAbsence(merged.Absence, incoming.Absence)
 	manager.pendingConversationJobs[codebaseID] = merged
 }

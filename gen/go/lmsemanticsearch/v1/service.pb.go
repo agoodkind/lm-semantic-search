@@ -3746,18 +3746,20 @@ type UpsertConversationDocumentsHeader struct {
 	CollectionId  string                    `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
 	Client        *ClientInfo               `protobuf:"bytes,2,opt,name=client,proto3" json:"client,omitempty"`
 	ReconcileMode ConversationReconcileMode `protobuf:"varint,3,opt,name=reconcile_mode,json=reconcileMode,proto3,enum=lmsemanticsearch.v1.ConversationReconcileMode" json:"reconcile_mode,omitempty"`
-	// reexamine_delivered forces the engine to re-examine every delivered
-	// conversation even when its fingerprint matches the stored checkpoint, so an
-	// operator-run backfill can pick up a new indexing capability (tool-call
-	// chunking) for conversations whose transcript files never changed on disk.
-	// It re-runs the normal per-message content diff, so unchanged chunks reuse
-	// their stored vectors and only genuinely-new chunks embed, and it re-stamps
-	// each conversation's delivered fingerprint so the next sync sees no change.
-	// The normal delta sync leaves it false and is unaffected. It is not a
-	// force-reindex: existing vectors are reused, never rebuilt from scratch.
-	ReexamineDelivered bool `protobuf:"varint,4,opt,name=reexamine_delivered,json=reexamineDelivered,proto3" json:"reexamine_delivered,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// backfill_delivered fills derived rows that are ABSENT for a delivered
+	// conversation and skips conversations whose expected derived rows are all
+	// present. It is presence-based, so it never rebuilds a present row: an
+	// operator backfill picks up a new indexing capability for conversations whose
+	// transcript files never changed on disk without re-embedding work already
+	// stored. The normal delta sync leaves it false.
+	BackfillDelivered bool `protobuf:"varint,5,opt,name=backfill_delivered,json=backfillDelivered,proto3" json:"backfill_delivered,omitempty"`
+	// force_reexamine rebuilds EVERY delivered conversation regardless of presence,
+	// with vector reuse disabled, so present rows re-embed from scratch. It is the
+	// blunt rebuild-it-all lever an operator uses after a chunking change. When
+	// both flags are set force wins. The normal delta sync leaves it false.
+	ForceReexamine bool `protobuf:"varint,6,opt,name=force_reexamine,json=forceReexamine,proto3" json:"force_reexamine,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *UpsertConversationDocumentsHeader) Reset() {
@@ -3811,9 +3813,16 @@ func (x *UpsertConversationDocumentsHeader) GetReconcileMode() ConversationRecon
 	return ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_UNSPECIFIED
 }
 
-func (x *UpsertConversationDocumentsHeader) GetReexamineDelivered() bool {
+func (x *UpsertConversationDocumentsHeader) GetBackfillDelivered() bool {
 	if x != nil {
-		return x.ReexamineDelivered
+		return x.BackfillDelivered
+	}
+	return false
+}
+
+func (x *UpsertConversationDocumentsHeader) GetForceReexamine() bool {
+	if x != nil {
+		return x.ForceReexamine
 	}
 	return false
 }
@@ -5422,12 +5431,13 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"_\n" +
 	"#UpsertConversationDocumentsResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\x89\x02\n" +
+	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\xcb\x02\n" +
 	"!UpsertConversationDocumentsHeader\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x127\n" +
 	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\x12U\n" +
-	"\x0ereconcile_mode\x18\x03 \x01(\x0e2..lmsemanticsearch.v1.ConversationReconcileModeR\rreconcileMode\x12/\n" +
-	"\x13reexamine_delivered\x18\x04 \x01(\bR\x12reexamineDelivered\"o\n" +
+	"\x0ereconcile_mode\x18\x03 \x01(\x0e2..lmsemanticsearch.v1.ConversationReconcileModeR\rreconcileMode\x12-\n" +
+	"\x12backfill_delivered\x18\x05 \x01(\bR\x11backfillDelivered\x12'\n" +
+	"\x0fforce_reexamine\x18\x06 \x01(\bR\x0eforceReexamineJ\x04\b\x04\x10\x05R\x13reexamine_delivered\"o\n" +
 	"$UpsertConversationDocumentsDocuments\x12G\n" +
 	"\tdocuments\x18\x01 \x03(\v2).lmsemanticsearch.v1.ConversationDocumentR\tdocuments\"o\n" +
 	"#UpsertConversationDocumentsManifest\x12H\n" +

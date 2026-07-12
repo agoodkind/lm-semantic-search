@@ -710,14 +710,14 @@ func TestConversationUpsertCoalescesWithoutContention(t *testing.T) {
 	collectionID := "coalesce-no-contention"
 
 	firstDocs := []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}}
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false)
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false, false)
 	if err != nil {
 		t.Fatalf("first upsert returned error: %v", err)
 	}
 	<-entered // the first job is now blocked inside the embed, ActiveJobID set
 
 	backfillDocs := []model.ConversationDocument{{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "b"}}
-	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, backfillDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, true)
+	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, backfillDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, true, false)
 	if err != nil {
 		t.Fatalf("second same-collection upsert returned error, want coalesced success: %v", err)
 	}
@@ -738,8 +738,8 @@ func TestConversationUpsertCoalescesWithoutContention(t *testing.T) {
 	if _, present := pending.Manifest["conv-b"]; !present {
 		t.Fatalf("pending manifest = %v, want conv-b", pending.Manifest)
 	}
-	if !pending.Reexamine {
-		t.Fatal("pending payload lost the backfill (Reexamine) intent")
+	if !pending.Backfill {
+		t.Fatal("pending payload lost the backfill intent")
 	}
 
 	close(release)
@@ -757,14 +757,14 @@ func TestConversationCoalesceDrainsPendingAfterTerminal(t *testing.T) {
 	collectionID := "coalesce-drain"
 
 	firstDocs := []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}}
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false)
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false, false)
 	if err != nil {
 		t.Fatalf("first upsert returned error: %v", err)
 	}
 	<-entered
 
 	secondDocs := []model.ConversationDocument{{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "b"}}
-	if _, err := manager.upsertConversationDocuments(ctx, collectionID, secondDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, false); err != nil {
+	if _, err := manager.upsertConversationDocuments(ctx, collectionID, secondDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, false, false); err != nil {
 		t.Fatalf("second upsert returned error: %v", err)
 	}
 
@@ -799,18 +799,18 @@ func TestConversationCoalesceDepthOneMergesThirdSubmission(t *testing.T) {
 	collectionID := "coalesce-depth-one"
 
 	firstDocs := []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}}
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false)
+	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false, false)
 	if err != nil {
 		t.Fatalf("first upsert returned error: %v", err)
 	}
 	<-entered
 
 	secondDocs := []model.ConversationDocument{{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "b"}}
-	if _, err := manager.upsertConversationDocuments(ctx, collectionID, secondDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, false); err != nil {
+	if _, err := manager.upsertConversationDocuments(ctx, collectionID, secondDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, false, false); err != nil {
 		t.Fatalf("second upsert returned error: %v", err)
 	}
 	thirdDocs := []model.ConversationDocument{{ConversationID: "conv-c", MessageIndex: 0, Role: "user", Text: "c"}}
-	if _, err := manager.upsertConversationDocuments(ctx, collectionID, thirdDocs, testConversationManifest("conv-c"), testClientInfo(), absenceRetain, false); err != nil {
+	if _, err := manager.upsertConversationDocuments(ctx, collectionID, thirdDocs, testConversationManifest("conv-c"), testClientInfo(), absenceRetain, false, false); err != nil {
 		t.Fatalf("third upsert returned error: %v", err)
 	}
 
@@ -927,5 +927,59 @@ func TestCodeIndexCoalescesNonMatchingConfigAndDrains(t *testing.T) {
 	}
 	if !drainedFound {
 		t.Fatal("no drained successor job found after terminal")
+	}
+}
+
+// TestMergePendingConversationPayloadORsBackfillAndForce proves the depth-1
+// coalescing merge keeps both orthogonal flags sticky true, independent of order:
+// a coalesced backfill stays a backfill and a coalesced force stays a force, so a
+// force that lands next to a plain or backfill submission is never downgraded.
+func TestMergePendingConversationPayloadORsBackfillAndForce(t *testing.T) {
+	t.Parallel()
+
+	upsert := func(backfill bool, force bool) conversationJobPayload {
+		return conversationJobPayload{
+			Kind:           conversationJobKindUpsert,
+			CollectionName: "conv_chunks_merge",
+			Manifest:       map[string]string{"conv-a": "fp"},
+			Documents:      []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}},
+			ConversationID: "",
+			Absence:        absenceRetain,
+			Backfill:       backfill,
+			Force:          force,
+		}
+	}
+
+	cases := []struct {
+		name         string
+		first        conversationJobPayload
+		second       conversationJobPayload
+		wantBackfill bool
+		wantForce    bool
+	}{
+		{"backfill then force keeps both", upsert(true, false), upsert(false, true), true, true},
+		{"force then backfill keeps both", upsert(false, true), upsert(true, false), true, true},
+		{"force then plain stays force", upsert(false, true), upsert(false, false), false, true},
+		{"backfill then plain stays backfill", upsert(true, false), upsert(false, false), true, false},
+		{"plain then plain stays plain", upsert(false, false), upsert(false, false), false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			manager, _, _ := newTestManager(t)
+			const codebaseID = "cb-merge"
+
+			manager.mu.Lock()
+			manager.mergePendingConversationPayloadLocked(codebaseID, tc.first)
+			manager.mergePendingConversationPayloadLocked(codebaseID, tc.second)
+			merged := manager.pendingConversationJobs[codebaseID]
+			manager.mu.Unlock()
+
+			if merged.Backfill != tc.wantBackfill {
+				t.Fatalf("merged Backfill = %v, want %v", merged.Backfill, tc.wantBackfill)
+			}
+			if merged.Force != tc.wantForce {
+				t.Fatalf("merged Force = %v, want %v", merged.Force, tc.wantForce)
+			}
+		})
 	}
 }
