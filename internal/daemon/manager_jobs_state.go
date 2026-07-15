@@ -70,7 +70,9 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	}
 
 	now := clock.Now()
-	job.State = model.JobStateRunning
+	if job.State == model.JobStateQueued {
+		job.State = model.JobStateRunning
+	}
 	job.UpdatedAt = now
 	job.Progress.Phase = progress.Phase
 	job.Progress.OverallPercent = progress.OverallPercent
@@ -128,7 +130,12 @@ func (manager *Manager) updateJobChunkProgress(jobID string, processed int32, re
 	}
 
 	now := clock.Now()
-	job.State = model.JobStateRunning
+	// Promote a queued job to running on its first progress, but never override a
+	// cancelling job back to running: a batch that was already in flight when the
+	// operator cancelled must not resurrect the run in the status.
+	if job.State == model.JobStateQueued {
+		job.State = model.JobStateRunning
+	}
 	job.UpdatedAt = now
 	job.Progress.ChunksProcessed = processed
 	job.Progress.ChunksReused = reused
