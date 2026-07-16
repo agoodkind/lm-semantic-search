@@ -195,3 +195,26 @@ func TestResolveListSummarySplitsSuperseded(t *testing.T) {
 		t.Fatalf("summary = %+v, want 1 failed, 1 superseded, 1 completed", got)
 	}
 }
+
+// TestBatchDenominatorGating checks the within-conversation batch denominator in
+// resolveProgressSurface: an active run surfaces "embedding batch N of M", and a
+// terminal run surfaces nothing even when the batch counts linger, so a finished
+// job shows no stale bounded progress.
+func TestBatchDenominatorGating(t *testing.T) {
+	t.Parallel()
+	active := model.Job{
+		State:    model.JobStateRunning,
+		Progress: model.Progress{EmbeddingBatchesCompleted: 3, EmbeddingBatchesTotal: 7},
+	}
+	if got := resolveProgressSurface(active).BatchLine; got != "embedding batch 3 of 7" {
+		t.Errorf("active BatchLine = %q, want %q", got, "embedding batch 3 of 7")
+	}
+
+	terminal := model.Job{
+		State:    model.JobStateCompleted,
+		Progress: model.Progress{EmbeddingBatchesCompleted: 7, EmbeddingBatchesTotal: 7},
+	}
+	if got := resolveProgressSurface(terminal).BatchLine; got != "" {
+		t.Errorf("completed BatchLine = %q, want empty (no stale denominator)", got)
+	}
+}
