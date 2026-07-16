@@ -110,8 +110,8 @@ func (service *Service) DropStaging(ctx context.Context, codebasePath string) er
 }
 
 const (
-	defaultEmbeddingBatchRows        = 32
-	defaultEmbeddingBatchTokenBudget = 6000
+	defaultEmbeddingBatchRows        = 64
+	defaultEmbeddingBatchTokenBudget = 12000
 )
 
 func (service *Service) packForEmbedding(chunks []model.StoredChunk) [][]model.StoredChunk {

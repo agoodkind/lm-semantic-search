@@ -126,3 +126,28 @@ func TestPackForEmbeddingClosesOnConfiguredRowCap(t *testing.T) {
 		}
 	}
 }
+
+// TestDefaultBudgetPacksSmallChunksIntoFewerRequests locks the throughput intent
+// of the raised defaults. The conversation backfill produces many small chunks,
+// and each pack is one embedding request whose cost is dominated by fixed
+// per-request overhead, so packing more chunks per request amortizes that
+// overhead. At 200 estimated tokens per chunk the 12000-token default packs 60
+// per request (the 64-row cap is not binding), so 300 small chunks embed in 5
+// requests instead of the 10 the old 6000-token, 32-row defaults produced.
+func TestDefaultBudgetPacksSmallChunksIntoFewerRequests(t *testing.T) {
+	const chunkCount = 300
+	const chunkBytes = 800 // 200 estimated tokens (bytes/4)
+	chunks := make([]model.StoredChunk, chunkCount)
+	for i := range chunks {
+		chunks[i] = chunkOfBytes(chunkBytes)
+	}
+
+	oldRequests := len(packChunksByEstimatedTokens(chunks, 32, 6000))
+	newRequests := len(packChunksByEstimatedTokens(chunks, defaultEmbeddingBatchRows, defaultEmbeddingBatchTokenBudget))
+	if newRequests >= oldRequests {
+		t.Fatalf("raised defaults did not cut request count: old=%d new=%d", oldRequests, newRequests)
+	}
+	if newRequests != 5 {
+		t.Fatalf("default packing = %d requests for %d small chunks, want 5", newRequests, chunkCount)
+	}
+}

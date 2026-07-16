@@ -145,11 +145,23 @@ func TestDefaultDebugAndJobControlDefaults(t *testing.T) {
 	}
 }
 
-func TestDefaultEmbeddingBatchTokenBudgetDefaultsTo6000(t *testing.T) {
+func TestDefaultEmbeddingBatchDefaults(t *testing.T) {
 	cfg := defaultWithPersistedConfig(t, persistedConfig{})
 
-	if cfg.EmbeddingBatchTokenBudget != 6000 {
-		t.Errorf("EmbeddingBatchTokenBudget = %d want 6000", cfg.EmbeddingBatchTokenBudget)
+	if cfg.EmbeddingBatchTokenBudget != defaultEmbeddingBatchTokenBudget {
+		t.Errorf("EmbeddingBatchTokenBudget = %d want %d", cfg.EmbeddingBatchTokenBudget, defaultEmbeddingBatchTokenBudget)
+	}
+	if cfg.EmbeddingBatchSize != defaultEmbeddingBatchSize {
+		t.Errorf("EmbeddingBatchSize = %d want %d", cfg.EmbeddingBatchSize, defaultEmbeddingBatchSize)
+	}
+}
+
+func TestEmbeddingBatchTokenBudgetEnvOverridesConfig(t *testing.T) {
+	t.Setenv("EMBEDDING_BATCH_TOKEN_BUDGET", "20000")
+	cfg := defaultWithPersistedConfig(t, persistedConfig{EmbeddingBatchTokenBudget: 8000})
+
+	if cfg.EmbeddingBatchTokenBudget != 20000 {
+		t.Errorf("EmbeddingBatchTokenBudget = %d want 20000 (env overrides config.json)", cfg.EmbeddingBatchTokenBudget)
 	}
 }
 

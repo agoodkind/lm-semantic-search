@@ -20,7 +20,8 @@ const (
 	defaultDebugListenAddr           = "127.0.0.1:6480"
 	defaultPerfCountersIntervalMS    = 60000
 	defaultMaxConcurrentIndexJobs    = 3
-	defaultEmbeddingBatchTokenBudget = 6000
+	defaultEmbeddingBatchSize        = 64
+	defaultEmbeddingBatchTokenBudget = 12000
 	defaultEmbeddingRequestTimeoutMS = 300000
 	defaultMaxJobChunks              = 200000
 	defaultMaxConversationsPerIngest = 100
@@ -65,7 +66,11 @@ type Config struct {
 	EmbeddingModel     string
 	EmbeddingBatchSize int
 	// EmbeddingBatchTokenBudget caps the estimated tokens (bytes/4) packed into
-	// one embedding request. EmbeddingBatchSize stays as the row-count ceiling.
+	// one embedding request, so many small chunks ride in one request and the
+	// fixed per-request overhead is amortized instead of paid per chunk.
+	// EmbeddingBatchSize stays as the row-count ceiling. Both are runtime-tunable
+	// (EMBEDDING_BATCH_TOKEN_BUDGET, EMBEDDING_BATCH_SIZE) so the batch size can be
+	// dialed against embed wall-clock without a rebuild.
 	EmbeddingBatchTokenBudget int
 	// EmbeddingRequestTimeoutMS bounds one embedding HTTP request. A wedged or
 	// unresponsive embedder makes an unbounded request hang forever, which strands
@@ -229,8 +234,8 @@ func Default() (Config, error) {
 		ContextRoot:               contextRoot,
 		EmbeddingProvider:         envOrDefault("EMBEDDING_PROVIDER", defaultProvider),
 		EmbeddingModel:            envOrDefault("EMBEDDING_MODEL", defaultModel),
-		EmbeddingBatchSize:        envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
-		EmbeddingBatchTokenBudget: batchTokenBudget,
+		EmbeddingBatchSize:        envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, defaultEmbeddingBatchSize)),
+		EmbeddingBatchTokenBudget: envIntOrDefault("EMBEDDING_BATCH_TOKEN_BUDGET", batchTokenBudget),
 		EmbeddingRequestTimeoutMS: envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", requestTimeoutMS),
 		EmbeddingDimension:        envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
 		OpenAIAPIKey:              envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
