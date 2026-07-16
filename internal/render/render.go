@@ -254,6 +254,9 @@ func renderProgressLines(progress view.ProgressSurface) []string {
 	if progress.Heading != "" {
 		lines = append(lines, "  "+progress.Heading)
 	}
+	if progress.BatchLine != "" {
+		lines = append(lines, "  "+progress.BatchLine)
+	}
 	lines = append(lines, BreakdownLines(progress.Breakdown)...)
 	if progress.ScopeLine != "" {
 		lines = append(lines, "  "+progress.ScopeLine)

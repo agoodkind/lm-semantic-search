@@ -130,11 +130,17 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 		scopeLine = "Changed since last sync: " + strings.Join(parts, " · ")
 	}
 
+	batchLine := ""
+	if active && progress.EmbeddingBatchesTotal > 0 {
+		batchLine = "embedding batch " + formatCount(progress.EmbeddingBatchesCompleted) + " of " + formatCount(progress.EmbeddingBatchesTotal)
+	}
+
 	return view.ProgressSurface{
 		Heading:      progressHeading(job),
 		Breakdown:    resolveOutcomeBreakdown(progress),
 		ScopeLine:    scopeLine,
 		PercentLabel: percentLabel,
+		BatchLine:    batchLine,
 	}
 }
 

@@ -115,11 +115,27 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 	// Capture the last semantic progress for this one reindex call. The semantic
 	// callback reports cumulative reused/embedded counts within the call, so the
 	// final value is this file's split, which we fold into the run totals.
+	//
+	// The callback also fires once per embed batch, so it is the seam where a
+	// long item becomes visible: publish the run's chunk counters, this item's
+	// batch denominator, and a fresh heartbeat on every batch. accProcessed and
+	// friends are the run total from items already finished; this item's in-flight
+	// split is added on top, and the post-call fold below makes the total exact.
+	accProcessed, accReused, accEmbedded, _ := state.chunkSplit()
 	var fileProcessed, fileReused, fileEmbedded int32
 	progressFn := func(progress semantic.Progress) {
 		fileProcessed = progress.ChunksProcessed
 		fileReused = progress.ChunksReused
 		fileEmbedded = progress.ChunksEmbedded
+		manager.updateJobChunkProgress(
+			job.ID,
+			accProcessed+fileProcessed,
+			accReused+fileReused,
+			accEmbedded+fileEmbedded,
+			progress.EmbeddingBatchesTotal,
+			progress.EmbeddingBatchesCompleted,
+			progress.CollectionRowsWritten,
+		)
 	}
 	columnSet := state.source.columnSet()
 	var err error

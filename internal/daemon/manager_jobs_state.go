@@ -70,7 +70,9 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	}
 
 	now := clock.Now()
-	job.State = model.JobStateRunning
+	if job.State == model.JobStateQueued {
+		job.State = model.JobStateRunning
+	}
 	job.UpdatedAt = now
 	job.Progress.Phase = progress.Phase
 	job.Progress.OverallPercent = progress.OverallPercent
@@ -106,6 +108,46 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	if progress.FilesEmbedded > 0 {
 		manager.noteDependencyHealthyLocked()
 	}
+}
+
+// updateJobChunkProgress advances the chunk counters, the current item's embed
+// batch denominator, and the heartbeat during a single item's embed loop. It is
+// called once per embed batch, so a long item (a large conversation with many
+// chunks) shows visible forward movement and a fresh heartbeat instead of
+// sitting frozen until the item finishes. It deliberately leaves the file
+// counters and the change breakdown alone, since reportDeltaProgress owns the
+// per-file totals and setJobDeltaCounts owns the added/modified/removed counts.
+func (manager *Manager) updateJobChunkProgress(jobID string, processed int32, reused int32, embedded int32, batchesTotal int32, batchesCompleted int32, rowsWritten int32) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	job, found := manager.jobs[jobID]
+	if !found {
+		return
+	}
+	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStateCancelling {
+		return
+	}
+
+	now := clock.Now()
+	// Promote a queued job to running on its first progress, but never override a
+	// cancelling job back to running: a batch that was already in flight when the
+	// operator cancelled must not resurrect the run in the status.
+	if job.State == model.JobStateQueued {
+		job.State = model.JobStateRunning
+	}
+	job.UpdatedAt = now
+	job.Progress.ChunksProcessed = processed
+	job.Progress.ChunksReused = reused
+	job.Progress.ChunksEmbedded = embedded
+	job.Progress.ChunksGenerated = embedded
+	job.Progress.EmbeddingBatchesTotal = batchesTotal
+	job.Progress.EmbeddingBatchesCompleted = batchesCompleted
+	job.Progress.CollectionRowsWritten = rowsWritten
+	job.Progress.LastEventAt = now
+	job.Progress.HeartbeatAt = now
+	manager.jobs[jobID] = job
+	manager.journalJobProgressLocked(job)
 }
 
 func (manager *Manager) updateCodebaseLiveTotalsLocked(job model.Job) {

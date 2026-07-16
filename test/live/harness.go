@@ -85,6 +85,7 @@ type harness struct {
 	stateRoot      string
 	merkleDir      string
 	prodPidsPre    map[int]bool
+	embedGate      *embedGate
 }
 
 // newHarness builds the isolated daemon and returns a ready harness, or skips the
@@ -92,6 +93,13 @@ type harness struct {
 // failure). It registers a per-test UUID conversation collection and asserts the
 // derived Milvus name is not the production collection before any ingest runs.
 func newHarness(t *testing.T) *harness {
+	return newHarnessWithGate(t, nil)
+}
+
+// newHarnessWithGate builds the isolated daemon like newHarness but installs an
+// embedGate so a test can pace embedding requests and read the job's progress
+// between batches. A nil gate is the normal, ungated path.
+func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 	t.Helper()
 
 	defaultConfig, err := config.Default()
@@ -129,7 +137,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	socketPath := filepath.Join(socketDir, "daemon.sock")
 
-	embedServer := newFakeEmbeddingServer(t)
+	embedServer := newFakeEmbeddingServer(t, gate)
 
 	cfg := config.Config{
 		StateRoot:                 stateRoot,
@@ -224,6 +232,7 @@ func newHarness(t *testing.T) *harness {
 		stateRoot:      stateRoot,
 		merkleDir:      cfg.MerkleDir,
 		prodPidsPre:    prodPidsPre,
+		embedGate:      gate,
 	}
 	t.Cleanup(func() { h.teardown(stopServer) })
 	return h
@@ -361,14 +370,23 @@ func underTempRoot(path string) bool {
 // embed request (POST .../embeddings) with one fixed-width vector per input,
 // keyed by a content hash so identical content yields an identical vector and the
 // engine's content-hash reuse path stays exercised.
-func newFakeEmbeddingServer(t *testing.T) *httptest.Server {
+// embedGate lets a test pace embedding requests. When installed, every embed
+// request announces its batch size on arrived, then blocks until the test sends
+// on release, so the test can read job progress between batches. The models
+// (health) route is never gated.
+type embedGate struct {
+	arrived chan int
+	release chan struct{}
+}
+
+func newFakeEmbeddingServer(t *testing.T, gate *embedGate) *httptest.Server {
 	t.Helper()
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch {
 		case strings.HasSuffix(request.URL.Path, "/models"):
 			writeModelsList(writer)
 		case strings.HasSuffix(request.URL.Path, "/embeddings"):
-			writeEmbeddings(t, writer, request)
+			writeEmbeddings(t, writer, request, gate)
 		default:
 			http.Error(writer, "unexpected path "+request.URL.Path, http.StatusNotFound)
 		}
@@ -388,11 +406,15 @@ func writeModelsList(writer http.ResponseWriter) {
 	})
 }
 
-func writeEmbeddings(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+func writeEmbeddings(t *testing.T, writer http.ResponseWriter, request *http.Request, gate *embedGate) {
 	inputs, err := decodeEmbeddingInputs(request)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if gate != nil {
+		gate.arrived <- len(inputs)
+		<-gate.release
 	}
 	type row struct {
 		Object    string    `json:"object"`

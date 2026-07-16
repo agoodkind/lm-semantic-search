@@ -350,6 +350,10 @@ type ProgressSurface struct {
 	// PercentLabel is the progress figure ("23.5%") or the preparing label
 	// when the scope is not measured yet.
 	PercentLabel string
+	// BatchLine is the within-item embed progress ("embedding batch 34 of 120")
+	// for an active run, so a single large item shows a bounded denominator while
+	// it embeds. Empty for a terminal entry or before any batch.
+	BatchLine string
 }
 
 // TimingView is the resolved timing block for a job.
