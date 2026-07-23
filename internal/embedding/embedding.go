@@ -55,15 +55,27 @@ type Provider interface {
 
 // NewProvider constructs the configured embedding provider.
 //
-// Only the OpenAI-compatible HTTP adapter is supported. Users point it at any
-// upstream that speaks the OpenAI embeddings API by setting OPENAI_BASE_URL
-// (for example a self-hosted Ollama with `/v1/embeddings`, an OpenRouter
-// account, or the OpenAI service itself).
-func NewProvider(cfg config.Config) (Provider, error) {
+// The ONNX provider runs the embedded offline model in process. The default
+// OpenAI-compatible adapter sends requests to the configured embeddings API.
+func NewProvider(ctx context.Context, cfg config.Config) (Provider, error) {
 	provider := strings.TrimSpace(cfg.EmbeddingProvider)
+	if strings.EqualFold(provider, config.EmbeddingProviderONNX) {
+		return newONNXProvider(ctx, cfg)
+	}
 	if provider != "" && !strings.EqualFold(provider, "OpenAI") {
-		slog.Error("embedding provider is not supported", "provider", provider, "err", errors.New("only OpenAI-compatible adapter is supported"))
-		return nil, fmt.Errorf("embedding provider %q is not supported; only the OpenAI-compatible adapter is available", provider)
+		slog.ErrorContext(
+			ctx,
+			"embedding provider is not supported",
+			"provider",
+			provider,
+			"err",
+			errors.New("only ONNX and OpenAI-compatible adapters are supported"),
+		)
+		return nil, fmt.Errorf(
+			"embedding provider %q is not supported; use %q or the OpenAI-compatible adapter",
+			provider,
+			config.EmbeddingProviderONNX,
+		)
 	}
 	// A negative configured value would build a negative duration, which makes
 	// context.WithTimeout expire immediately and fail every embed. Treat it as

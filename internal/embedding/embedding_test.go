@@ -303,7 +303,7 @@ func TestNewProviderClampsTimeout(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			provider, err := NewProvider(config.Config{
+			provider, err := NewProvider(context.Background(), config.Config{
 				EmbeddingProvider:         "OpenAI",
 				OpenAIAPIKey:              "test-key",
 				EmbeddingModel:            "text-embedding-3-small",
@@ -326,7 +326,7 @@ func TestNewProviderClampsTimeout(t *testing.T) {
 func TestNewProviderRejectsNonOpenAI(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewProvider(config.Config{
+	_, err := NewProvider(context.Background(), config.Config{
 		EmbeddingProvider: "VoyageAI",
 		OpenAIAPIKey:      "test-key",
 		EmbeddingModel:    "voyage-code-3",
@@ -339,7 +339,7 @@ func TestNewProviderRejectsNonOpenAI(t *testing.T) {
 func TestNewProviderAcceptsOpenAIWithBaseURL(t *testing.T) {
 	t.Parallel()
 
-	provider, err := NewProvider(config.Config{
+	provider, err := NewProvider(context.Background(), config.Config{
 		EmbeddingProvider: "OpenAI",
 		OpenAIAPIKey:      "test-key",
 		OpenAIBaseURL:     "https://example.invalid/v1",

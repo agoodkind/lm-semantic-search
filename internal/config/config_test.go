@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
 func TestParseCommaSeparated(t *testing.T) {
@@ -223,6 +225,42 @@ func TestDefaultEmbeddingBatchConfigUsesPersistedValues(t *testing.T) {
 	}
 	if cfg.QueryInstructionPrefix != "custom query prefix: " {
 		t.Errorf("QueryInstructionPrefix = %q want custom query prefix", cfg.QueryInstructionPrefix)
+	}
+}
+
+func TestDefaultOfflineEmbeddingModelDefaultsAndReadsConfig(t *testing.T) {
+	defaulted := defaultWithPersistedConfig(t, persistedConfig{})
+	if defaulted.OfflineEmbeddingModel != offlinemodel.EmbeddingGemma {
+		t.Fatalf(
+			"default OfflineEmbeddingModel = %q, want %q",
+			defaulted.OfflineEmbeddingModel,
+			offlinemodel.EmbeddingGemma,
+		)
+	}
+
+	persisted := defaultWithPersistedConfig(t, persistedConfig{
+		OfflineEmbeddingModel: offlinemodel.BGESmall,
+	})
+	if persisted.OfflineEmbeddingModel != offlinemodel.BGESmall {
+		t.Fatalf(
+			"persisted OfflineEmbeddingModel = %q, want %q",
+			persisted.OfflineEmbeddingModel,
+			offlinemodel.BGESmall,
+		)
+	}
+}
+
+func TestDefaultOfflineEmbeddingModelEnvOverridesConfig(t *testing.T) {
+	t.Setenv("OFFLINE_EMBEDDING_MODEL", offlinemodel.EmbeddingGemma)
+	cfg := defaultWithPersistedConfig(t, persistedConfig{
+		OfflineEmbeddingModel: offlinemodel.BGESmall,
+	})
+	if cfg.OfflineEmbeddingModel != offlinemodel.EmbeddingGemma {
+		t.Fatalf(
+			"OfflineEmbeddingModel = %q, want env override %q",
+			cfg.OfflineEmbeddingModel,
+			offlinemodel.EmbeddingGemma,
+		)
 	}
 }
 

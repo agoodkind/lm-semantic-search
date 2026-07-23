@@ -17,6 +17,21 @@ MCP_CMD := ./cmd/$(MCP_BINARY)
 # make install builds and installs the daemon plus both client binaries.
 INSTALL_BINS := $(BINARY):$(CMD) $(CLI_BINARY):$(CLI_CMD) $(MCP_BINARY):$(MCP_CMD)
 RELEASE_BINS := $(INSTALL_BINS)
+# The go-makefile compile matrix sets RELEASE_PLATFORMS per job to that job's
+# single target, so use ?= to defer to that environment value. A plain := would
+# override it and make every job rebuild all listed platforms with one
+# toolchain, so the Linux job would cross-build darwin with gcc and fail on the
+# Darwin-only -arch flag. This default drives local make release. darwin/amd64
+# is omitted because ONNX Runtime 1.27.0 ships no osx-x64 binary; the CI and
+# release workflow inputs (release_platforms / platforms) exclude it from the
+# matrix.
+RELEASE_PLATFORMS ?= darwin/arm64 linux/amd64 linux/arm64
+# go-makefile resolves codesign and quill through PATH. These generated command
+# adapters add the daemon entitlement without applying it to either client.
+# The release package job runs quill on Linux, so this path must not depend on
+# the build host operating system.
+SIGNING_WRAPPER_DIR := $(CURDIR)/.make/signing-bin
+export PATH := $(SIGNING_WRAPPER_DIR):$(PATH)
 
 # Pipeline modules. Add go-service.mk if this binary ships as a daemon and
 # set LAUNCHD_LABEL, SYSTEMD_UNIT, LOG_PATH before -include $(GO_MK).
@@ -27,7 +42,34 @@ STATICCHECK_EXTRA_FLAGS = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_ST
 # its host fallback, the PKG_CONFIG_PATH export, the go-mk-cgo-deps prerequisite
 # on every compile-bearing target, and the GO_MK_CC/GO_MK_CXX toolchain
 # resolution into CC/CXX for the dep recipe.
-GO_MK_CGO_DEPS := cbm
+GO_MK_CGO_DEPS := cbm onnxruntime tokenizers
+GO_MK_CGO_CACHE_VERSIONS := onnxruntime=1.27.0 tokenizers=1.27.0
+GO_MK_CGO_CACHE_INPUTS := cmd/onnxruntime-dep cmd/tokenizers-dep
+export CGO_LDFLAGS_ALLOW := -Wl,-rpath,@loader_path
+ifeq ($(shell uname),Darwin)
+GO_MK_INSTALL_POST_CMD = \
+	if [ -w "$(INSTALL_DIR)" ]; then \
+		cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.1.27.0.dylib" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.1.dylib" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.dylib" "$(INSTALL_DIR)/"; \
+	else \
+		sudo cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.1.27.0.dylib" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.1.dylib" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.dylib" "$(INSTALL_DIR)/"; \
+	fi
+endif
+ifeq ($(shell uname),Linux)
+GO_MK_INSTALL_POST_CMD = \
+	if [ -w "$(INSTALL_DIR)" ]; then \
+		cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1.27.0" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so" "$(INSTALL_DIR)/"; \
+	else \
+		sudo cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1.27.0" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so" "$(INSTALL_DIR)/"; \
+	fi
+endif
 
 LAUNCHD_LABEL := io.goodkind.lm-semantic-search-daemon
 SYSTEMD_UNIT := lm-semantic-search-daemon.service
@@ -53,13 +95,26 @@ GO_MK_GENERATE_OUTPUTS := \
 	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/alloc.h
 GO_MK_WORKSPACE_USE := . third_party/gksyntax
 
+daemon-entitlements-signer:
+	@mkdir -p "$(SIGNING_WRAPPER_DIR)"
+	go build -o "$(SIGNING_WRAPPER_DIR)/codesign" ./cmd/daemon-entitlements-signer
+	@ln -sf codesign "$(SIGNING_WRAPPER_DIR)/quill"
+
 go-mk-cgo-dep-cbm: scripts/setup-cgo-cbm.sh scripts/cbm-lib.mk third_party/cbm/Makefile.cbm
 	"$(CURDIR)/scripts/setup-cgo-cbm.sh"
+
+go-mk-cgo-dep-onnxruntime:
+	CGO_ENABLED=0 go run ./cmd/onnxruntime-dep
+
+go-mk-cgo-dep-tokenizers:
+	CGO_ENABLED=0 go run ./cmd/tokenizers-dep
 
 # bootstrap.mk fetches go.mk + golangci.yml + every module in GO_MK_MODULES
 # at parse time and -includes them. Update path: edit go-makefile/bootstrap.mk,
 # then refresh consumer copies (one-off cp; not enshrined as infrastructure).
 include bootstrap.mk
+
+build install release: | daemon-entitlements-signer
 
 .DEFAULT_GOAL := check
 
@@ -67,7 +122,7 @@ include bootstrap.mk
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: go-mk-cgo-dep-cbm deploy deploy-service daemon-wait daemon-status kill-orphans live
+.PHONY: daemon-entitlements-signer go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live
 
 # live runs the opt-in conversation-marker validation suite against a real local
 # Milvus, fully isolated from the operator's daemon (build tag `live`). It reuses

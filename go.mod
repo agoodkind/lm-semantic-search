@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/daulet/tokenizers v1.27.0
 	github.com/gertd/go-pluralize v0.2.1
 	github.com/git-pkgs/gitignore v1.2.0
 	github.com/mark3labs/mcp-go v0.57.0

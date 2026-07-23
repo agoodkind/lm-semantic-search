@@ -15,3 +15,7 @@ jobs:
       cgo: true
       submodules: recursive
       binary: lm-semantic-search-daemon
+      # darwin/amd64 is omitted because ONNX Runtime 1.27.0 ships no osx-x64
+      # binary, so the offline profile cannot build on Intel macOS. Keep this
+      # list in sync with ci.yml release_platforms.
+      platforms: "darwin/arm64 linux/amd64 linux/arm64"

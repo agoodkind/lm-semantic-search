@@ -11,3 +11,6 @@ go.work.sum
 !.deadcode-baseline.txt
 !.staticcheck-extra-baseline.txt
 !.go-mk-applied-notices
+
+# Legacy build-time embedding model path. Runtime models use the XDG state cache.
+internal/embedding/model/model.onnx
