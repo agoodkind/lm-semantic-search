@@ -110,6 +110,11 @@ var presets = map[string]Preset{
 	},
 }
 
+// Names returns the supported preset names in display order.
+func Names() []string {
+	return []string{EmbeddingGemma, BGESmall}
+}
+
 // Resolve returns a pinned preset by name. An empty name selects DefaultName.
 func Resolve(name string) (Preset, error) {
 	normalizedName := strings.TrimSpace(strings.ToLower(name))

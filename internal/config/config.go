@@ -165,6 +165,7 @@ type Config struct {
 }
 
 type persistedConfig struct {
+	Profile                   string `json:"profile"`
 	EmbeddingProvider         string `json:"embeddingProvider"`
 	EmbeddingModel            string `json:"embeddingModel"`
 	OfflineEmbeddingModel     string `json:"offlineEmbeddingModel"`
@@ -265,7 +266,7 @@ func Default() (Config, error) {
 		requestTimeoutMS = *fileConfig.EmbeddingRequestTimeoutMS
 	}
 	return ApplyProfile(Config{
-		Profile: ProfileStandard, IndexBackend: IndexBackendMilvus,
+		Profile: resolveProfile(fileConfig.Profile), IndexBackend: IndexBackendMilvus,
 		ConfigRoot:                configRoot,
 		ConfigPath:                configPath,
 		StateRoot:                 stateRoot,
@@ -458,6 +459,22 @@ func intOrDefault(value int, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func stringOrDefault(value string, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func resolveProfile(persistedProfile string) string {
+	resolvedProfile := envOrDefault(
+		"CLAUDE_CONTEXT_PROFILE",
+		stringOrDefault(persistedProfile, ProfileStandard),
+	)
+	normalizedProfile := strings.ToLower(strings.TrimSpace(resolvedProfile))
+	return stringOrDefault(normalizedProfile, ProfileStandard)
 }
 
 func boolOrDefault(value *bool, fallback bool) bool {

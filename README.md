@@ -28,6 +28,48 @@ Example `config.json`:
 
 If both `openaiBaseUrl` and `OPENAI_BASE_URL` are unset, the OpenAI SDK uses its default endpoint. `OPENAI_BASE_URL` overrides `openaiBaseUrl` when both are set.
 
+## Offline profile
+
+The `offline` profile runs indexing and search entirely on the local machine. It uses an embedded vector store and a bundled ONNX embedding model, so it needs no Docker, GPU, or model server. The smaller local model provides lower retrieval precision than the default profile.
+
+Enable the profile with the Go CLI:
+
+```bash
+lm-semantic-search profile offline
+```
+
+Select an offline embedding model with `--model`:
+
+```bash
+lm-semantic-search profile offline --model bge-small
+```
+
+Valid model names are `embeddinggemma` (the default) and `bge-small`. The daemon fetches and caches the selected model on first use.
+
+The command writes `"profile": "offline"` to the daemon `config.json`. You can set the same value directly:
+
+```json
+{
+  "profile": "offline"
+}
+```
+
+`CLAUDE_CONTEXT_PROFILE=offline` overrides the file setting. Restart the daemon after changing the profile.
+
+Offline search is dense-only. It does not include the default profile's BM25 sparse search and hybrid reranking.
+
+Offline collections are stored separately from the default Milvus collections. After switching an offline-indexed codebase back to `standard`, force a reindex:
+
+```bash
+lm-semantic-search profile standard
+```
+
+Restart the daemon, then run:
+
+```bash
+lm-semantic-search codebase index /absolute/path/to/repo --force
+```
+
 ## MCP Installation
 
 Install the release binaries and user service:
