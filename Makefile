@@ -87,7 +87,7 @@ include bootstrap.mk
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live
+.PHONY: go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live offline-live
 
 # live runs the opt-in conversation-marker validation suite against a real local
 # Milvus, fully isolated from the operator's daemon (build tag `live`). It reuses
@@ -96,6 +96,11 @@ include bootstrap.mk
 # it is not, each test skips with an environment note rather than failing.
 live: | $(GO_MK_PREREQS)
 	go test -tags live -count=1 ./test/live/
+
+# offline-live runs the self-contained offline-profile acceptance suite against
+# an isolated in-process daemon, embedded vector store, and embedded ONNX model.
+offline-live: | $(GO_MK_PREREQS)
+	go test -tags offlinelive -count=1 ./test/offlinelive/
 
 # daemon-status and daemon-wait call the installed CLI; kill-orphans matches the
 # installed MCP binary by name.

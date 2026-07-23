@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -99,7 +100,10 @@ func (manager *Manager) enrichIndexConfig(indexConfig model.IndexConfig) model.I
 	if manager.config.EmbeddingDimension > 0 {
 		indexConfig.EmbeddingDimension = manager.config.EmbeddingDimension
 	}
-	indexConfig.VectorBackend = "milvus"
+	indexConfig.VectorBackend = strings.TrimSpace(manager.config.IndexBackend)
+	if indexConfig.VectorBackend == "" {
+		indexConfig.VectorBackend = config.IndexBackendMilvus
+	}
 	indexConfig.Hybrid = manager.config.HybridMode
 	indexConfig.IgnorePatterns = mergeDistinct(indexConfig.IgnorePatterns, manager.config.CustomIgnorePatterns)
 	indexConfig.IncludeSubmodules = mergeNormalizedSubmodules(indexConfig.IncludeSubmodules, manager.config.IncludeSubmodules)
