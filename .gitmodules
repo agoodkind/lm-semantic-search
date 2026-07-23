@@ -4,3 +4,6 @@
 [submodule "third_party/cbm"]
 	path = third_party/cbm
 	url = https://github.com/DeusData/codebase-memory-mcp.git
+[submodule "third_party/usearch"]
+	path = third_party/usearch
+	url = https://github.com/unum-cloud/usearch.git
