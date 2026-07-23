@@ -46,7 +46,7 @@ type Store struct {
 func New(ctx context.Context, cfg config.Config) (*Store, error) {
 	var provider embedding.Provider
 	if strings.TrimSpace(cfg.EmbeddingProvider) != "" {
-		configuredProvider, err := embedding.NewProvider(cfg)
+		configuredProvider, err := embedding.NewProvider(ctx, cfg)
 		if err != nil {
 			slog.ErrorContext(
 				ctx,

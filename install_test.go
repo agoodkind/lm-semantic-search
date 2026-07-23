@@ -35,3 +35,77 @@ func TestInstallerDaemonServiceNameUsesCurrentProduct(t *testing.T) {
 		t.Fatalf("systemd unit description does not name lm-semantic-search daemon")
 	}
 }
+
+func TestDependencyToolsRunWithoutInheritedCgo(t *testing.T) {
+	data, err := os.ReadFile("Makefile")
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	contents := string(data)
+
+	for _, command := range []string{
+		"CGO_ENABLED=0 go run ./cmd/onnxruntime-dep",
+		"CGO_ENABLED=0 go run ./cmd/tokenizers-dep",
+	} {
+		if !strings.Contains(contents, command) {
+			t.Fatalf("Makefile does not isolate dependency tool command %q from cgo", command)
+		}
+	}
+}
+
+func TestLinuxONNXBridgeUsesOriginRelativeRunpath(t *testing.T) {
+	data, err := os.ReadFile("internal/embedding/onnx.go")
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	contents := string(data)
+
+	const directive = "#cgo linux LDFLAGS: -Wl,-rpath,$ORIGIN"
+	if !strings.Contains(contents, directive) {
+		t.Fatalf("ONNX cgo bridge is missing Linux runpath directive %q", directive)
+	}
+}
+
+func TestLinuxSourceInstallStagesONNXRuntimeBesideDaemon(t *testing.T) {
+	data, err := os.ReadFile("Makefile")
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	contents := string(data)
+
+	requiredText := []string{
+		"ifeq ($(shell uname),Linux)",
+		"GO_MK_INSTALL_POST_CMD",
+		"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1.27.0",
+		"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1",
+		"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so",
+		"$(INSTALL_DIR)/",
+	}
+	for _, text := range requiredText {
+		if !strings.Contains(contents, text) {
+			t.Fatalf("Makefile is missing Linux ONNX Runtime install text %q", text)
+		}
+	}
+}
+
+func TestLinuxInstallerStagesPinnedONNXRuntimeBesideDaemon(t *testing.T) {
+	data, err := os.ReadFile("install.sh")
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	contents := string(data)
+
+	requiredText := []string{
+		"onnxruntime-linux-x64-1.27.0.tgz",
+		"547e40a48f1fe73e3f812d7c88a948612c23f896b91e4e2ee1e232d7b468246f",
+		"onnxruntime-linux-aarch64-1.27.0.tgz",
+		"3e4d83ac06924a32a07b6d7f91ce6f852876153fc0bbdf931bf517a140bfbe48",
+		"install_linux_onnxruntime",
+		"libonnxruntime.so",
+	}
+	for _, text := range requiredText {
+		if !strings.Contains(contents, text) {
+			t.Fatalf("install.sh is missing Linux ONNX Runtime contract text %q", text)
+		}
+	}
+}
