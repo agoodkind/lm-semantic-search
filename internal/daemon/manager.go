@@ -195,12 +195,12 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	// The observer is the sole caller of the resolver's invalidate, so every
 	// consumer signals it instead of invalidating the cache itself.
 	manager.observer = newIgnoreObserver(manager.indexability)
-	semanticService, err := semantic.NewService(ctx, cfg)
+	semanticBackend, err := newSemanticIndex(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("create semantic service: %w", err)
+		return nil, err
 	}
-	manager.semantic = semanticService
-	if semanticService.Degraded() {
+	manager.semantic = semanticBackend
+	if svc, ok := semanticBackend.(*semantic.Service); ok && svc.Degraded() {
 		manager.health = dependencyHealth{Mode: dependencyStoreUnavailable, Since: clock.Now(), LastHealthyAt: time.Time{}}
 	}
 	if err := manager.load(ctx); err != nil {
