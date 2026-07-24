@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
 const (
@@ -66,9 +68,12 @@ type Config struct {
 	// selects the embedded local store and the in-process ONNX embedder.
 	Profile string
 
-	EmbeddingProvider  string
-	EmbeddingModel     string
-	EmbeddingBatchSize int
+	EmbeddingProvider string
+	EmbeddingModel    string
+	// OfflineEmbeddingModel selects a pinned ONNX model preset for the offline
+	// profile. ApplyProfile derives EmbeddingModel and EmbeddingDimension from it.
+	OfflineEmbeddingModel string
+	EmbeddingBatchSize    int
 	// EmbeddingBatchTokenBudget caps the estimated tokens (bytes/4) packed into
 	// one embedding request. EmbeddingBatchSize stays as the row-count ceiling.
 	EmbeddingBatchTokenBudget int
@@ -149,6 +154,7 @@ type Config struct {
 type persistedConfig struct {
 	EmbeddingProvider         string `json:"embeddingProvider"`
 	EmbeddingModel            string `json:"embeddingModel"`
+	OfflineEmbeddingModel     string `json:"offlineEmbeddingModel"`
 	EmbeddingBatchSize        int    `json:"embeddingBatchSize"`
 	EmbeddingBatchTokenBudget int    `json:"embeddingBatchTokenBudget"`
 	// EmbeddingRequestTimeoutMS is a pointer so an omitted config.json field (nil)
@@ -164,6 +170,47 @@ type persistedConfig struct {
 	MilvusToken               string `json:"milvusToken"`
 	CollectionNameOverride    string `json:"collectionNameOverride"`
 	HybridMode                *bool  `json:"hybridMode"`
+}
+
+type embeddingConfigDefaults struct {
+	provider             string
+	model                string
+	offlineModel         string
+	queryInstructionText string
+}
+
+func resolveEmbeddingConfigDefaults(
+	fileConfig persistedConfig,
+) embeddingConfigDefaults {
+	provider := envOrDefault(
+		"EMBEDDING_PROVIDER",
+		string(embeddingProviderOpenAI),
+	)
+	if provider == string(embeddingProviderOpenAI) &&
+		fileConfig.EmbeddingProvider != "" {
+		provider = fileConfig.EmbeddingProvider
+	}
+
+	model := fileConfig.EmbeddingModel
+	if model == "" {
+		model = envOrDefault("EMBEDDING_MODEL", "text-embedding-3-small")
+	}
+	offlineModel := fileConfig.OfflineEmbeddingModel
+	if offlineModel == "" {
+		offlineModel = offlinemodel.DefaultName
+	}
+	offlineModel = envOrDefault("OFFLINE_EMBEDDING_MODEL", offlineModel)
+
+	queryInstructionText := fileConfig.QueryInstructionPrefix
+	if queryInstructionText == "" && strings.Contains(model, "NV-EmbedCode") {
+		queryInstructionText = nvEmbedCodeQueryPrefix
+	}
+	return embeddingConfigDefaults{
+		provider:             provider,
+		model:                model,
+		offlineModel:         offlineModel,
+		queryInstructionText: queryInstructionText,
+	}
 }
 
 // Default returns the daemon configuration derived from the local environment.
@@ -192,16 +239,7 @@ func Default() (Config, error) {
 	logPath := envOrDefault("CLAUDE_CONTEXTD_LOG_PATH", filepath.Join(logsDir, defaultLogFileName))
 
 	fileConfig := readPersistedConfig(configPath)
-
-	defaultProvider := envOrDefault("EMBEDDING_PROVIDER", string(embeddingProviderOpenAI))
-	if defaultProvider == string(embeddingProviderOpenAI) && fileConfig.EmbeddingProvider != "" {
-		defaultProvider = fileConfig.EmbeddingProvider
-	}
-
-	defaultModel := fileConfig.EmbeddingModel
-	if defaultModel == "" {
-		defaultModel = envOrDefault("EMBEDDING_MODEL", "text-embedding-3-small")
-	}
+	embeddingDefaults := resolveEmbeddingConfigDefaults(fileConfig)
 
 	batchTokenBudget := fileConfig.EmbeddingBatchTokenBudget
 	if batchTokenBudget <= 0 {
@@ -214,11 +252,6 @@ func Default() (Config, error) {
 	if fileConfig.EmbeddingRequestTimeoutMS != nil {
 		requestTimeoutMS = *fileConfig.EmbeddingRequestTimeoutMS
 	}
-	queryPrefix := fileConfig.QueryInstructionPrefix
-	if queryPrefix == "" && strings.Contains(defaultModel, "NV-EmbedCode") {
-		queryPrefix = nvEmbedCodeQueryPrefix
-	}
-
 	return ApplyProfile(Config{
 		Profile: ProfileStandard, IndexBackend: IndexBackendMilvus,
 		ConfigRoot:                configRoot,
@@ -236,15 +269,16 @@ func Default() (Config, error) {
 		ChunksDir:                 filepath.Join(stateRoot, "chunks"),
 		GraphDir:                  filepath.Join(stateRoot, "graph"),
 		ContextRoot:               contextRoot,
-		EmbeddingProvider:         envOrDefault("EMBEDDING_PROVIDER", defaultProvider),
-		EmbeddingModel:            envOrDefault("EMBEDDING_MODEL", defaultModel),
+		EmbeddingProvider:         envOrDefault("EMBEDDING_PROVIDER", embeddingDefaults.provider),
+		EmbeddingModel:            envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model),
+		OfflineEmbeddingModel:     embeddingDefaults.offlineModel,
 		EmbeddingBatchSize:        envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
 		EmbeddingBatchTokenBudget: batchTokenBudget,
 		EmbeddingRequestTimeoutMS: envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", requestTimeoutMS),
 		EmbeddingDimension:        envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
 		OpenAIAPIKey:              envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
 		OpenAIBaseURL:             envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),
-		QueryInstructionPrefix:    queryPrefix,
+		QueryInstructionPrefix:    embeddingDefaults.queryInstructionText,
 		CustomIgnorePatterns:      parseCommaSeparated(os.Getenv("CUSTOM_IGNORE_PATTERNS")),
 		IncludeSubmodules:         parseCommaSeparated(os.Getenv("CLAUDE_CONTEXT_INCLUDE_SUBMODULES")),
 		MilvusAddress:             envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),

@@ -101,6 +101,23 @@ func installConcernRouter(logsDir string, logPath string, rot gklog.RotationConf
 	slog.SetDefault(slog.New(correlation.SlogHandler(router, correlationHandlerOptions())))
 }
 
+func parseCommandLineConfig(cfg config.Config) config.Config {
+	socketPath := flag.String("socket", cfg.SocketPath, "unix socket path")
+	stateRoot := flag.String("state-root", cfg.StateRoot, "state root")
+	profile := flag.String("profile", cfg.Profile, "runtime profile: standard or offline")
+	offlineEmbeddingModel := flag.String(
+		"offline-embedding-model",
+		cfg.OfflineEmbeddingModel,
+		"offline embedding model: embeddinggemma or bge-small",
+	)
+	flag.Parse()
+
+	cfg.Profile = *profile
+	cfg.OfflineEmbeddingModel = *offlineEmbeddingModel
+	cfg = config.ApplyProfile(cfg)
+	return applyStatePaths(cfg, *stateRoot, *socketPath)
+}
+
 func run(rootContext context.Context) error {
 	slog.InfoContext(rootContext, "start daemon")
 
@@ -110,11 +127,7 @@ func run(rootContext context.Context) error {
 		return fmt.Errorf("load default config: %w", err)
 	}
 
-	socketPath := flag.String("socket", cfg.SocketPath, "unix socket path")
-	stateRoot := flag.String("state-root", cfg.StateRoot, "state root")
-	flag.Parse()
-
-	cfg = applyStatePaths(cfg, *stateRoot, *socketPath)
+	cfg = parseCommandLineConfig(cfg)
 
 	for _, path := range []string{cfg.StateRoot, cfg.SocketsDir, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.ChunksDir} {
 		if err := store.EnsureDir(path); err != nil {

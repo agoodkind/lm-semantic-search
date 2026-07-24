@@ -108,7 +108,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		}, nil
 	}
 
-	embedder, err := embedding.NewProvider(cfg)
+	embedder, err := embedding.NewProvider(ctx, cfg)
 	if err != nil {
 		slog.ErrorContext(ctx, "create embedding provider failed", "provider", cfg.EmbeddingProvider, "err", err)
 		return nil, fmt.Errorf("create embedding provider: %w", err)

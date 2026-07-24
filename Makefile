@@ -27,7 +27,21 @@ STATICCHECK_EXTRA_FLAGS = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_ST
 # its host fallback, the PKG_CONFIG_PATH export, the go-mk-cgo-deps prerequisite
 # on every compile-bearing target, and the GO_MK_CC/GO_MK_CXX toolchain
 # resolution into CC/CXX for the dep recipe.
-GO_MK_CGO_DEPS := cbm
+GO_MK_CGO_DEPS := cbm onnxruntime tokenizers
+GO_MK_CGO_CACHE_VERSIONS := onnxruntime=1.27.0 tokenizers=1.27.0
+GO_MK_CGO_CACHE_INPUTS := cmd/onnxruntime-dep cmd/tokenizers-dep
+ifeq ($(shell uname),Linux)
+GO_MK_INSTALL_POST_CMD = \
+	if [ -w "$(INSTALL_DIR)" ]; then \
+		cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1.27.0" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so" "$(INSTALL_DIR)/"; \
+	else \
+		sudo cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1.27.0" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1" \
+			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so" "$(INSTALL_DIR)/"; \
+	fi
+endif
 
 LAUNCHD_LABEL := io.goodkind.lm-semantic-search-daemon
 SYSTEMD_UNIT := lm-semantic-search-daemon.service
@@ -56,6 +70,12 @@ GO_MK_WORKSPACE_USE := . third_party/gksyntax
 go-mk-cgo-dep-cbm: scripts/setup-cgo-cbm.sh scripts/cbm-lib.mk third_party/cbm/Makefile.cbm
 	"$(CURDIR)/scripts/setup-cgo-cbm.sh"
 
+go-mk-cgo-dep-onnxruntime:
+	CGO_ENABLED=0 go run ./cmd/onnxruntime-dep
+
+go-mk-cgo-dep-tokenizers:
+	CGO_ENABLED=0 go run ./cmd/tokenizers-dep
+
 # bootstrap.mk fetches go.mk + golangci.yml + every module in GO_MK_MODULES
 # at parse time and -includes them. Update path: edit go-makefile/bootstrap.mk,
 # then refresh consumer copies (one-off cp; not enshrined as infrastructure).
@@ -67,7 +87,7 @@ include bootstrap.mk
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: go-mk-cgo-dep-cbm deploy deploy-service daemon-wait daemon-status kill-orphans live
+.PHONY: go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live
 
 # live runs the opt-in conversation-marker validation suite against a real local
 # Milvus, fully isolated from the operator's daemon (build tag `live`). It reuses

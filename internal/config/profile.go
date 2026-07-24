@@ -1,5 +1,7 @@
 package config
 
+import "goodkind.io/lm-semantic-search/internal/offlinemodel"
+
 const (
 	// ProfileStandard is the default profile: the Milvus store and the
 	// OpenAI-compatible embedder.
@@ -13,10 +15,6 @@ const (
 	IndexBackendLocal = "local"
 	// EmbeddingProviderONNX selects the in-process ONNX embedding provider.
 	EmbeddingProviderONNX = "onnx"
-
-	// offlineEmbeddingDimension is the bge-small-en-v1.5 output width the offline
-	// profile embeds at.
-	offlineEmbeddingDimension int32 = 384
 )
 
 // ApplyProfile expands the user-facing Profile into the derived backend and
@@ -31,9 +29,19 @@ func ApplyProfile(cfg Config) Config {
 		}
 		return cfg
 	}
+	preset, err := offlinemodel.Resolve(cfg.OfflineEmbeddingModel)
+	if err == nil {
+		cfg.OfflineEmbeddingModel = preset.Name
+		cfg.EmbeddingModel = preset.Name
+		cfg.EmbeddingDimension = preset.Dimension
+		cfg.QueryInstructionPrefix = preset.QueryPrefix
+	} else {
+		cfg.EmbeddingModel = cfg.OfflineEmbeddingModel
+		cfg.EmbeddingDimension = 0
+		cfg.QueryInstructionPrefix = ""
+	}
 	cfg.IndexBackend = IndexBackendLocal
 	cfg.EmbeddingProvider = EmbeddingProviderONNX
-	cfg.EmbeddingDimension = offlineEmbeddingDimension
 	cfg.MilvusAddress = ""
 	cfg.MilvusToken = ""
 	return cfg
