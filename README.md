@@ -30,7 +30,7 @@ If both `openaiBaseUrl` and `OPENAI_BASE_URL` are unset, the OpenAI SDK uses its
 
 ## Offline profile
 
-The `offline` profile runs indexing and search entirely on the local machine. It uses an embedded vector store and a bundled ONNX embedding model, so it needs no Docker, GPU, or model server. The smaller local model provides lower retrieval precision than the default profile.
+The `offline` profile runs indexing and search entirely on the local machine, so it needs no Docker, GPU, or hosted model server. It uses an on-disk approximate-nearest-neighbor vector index and an in-process ONNX embedding model that the daemon downloads and caches on first use. The local model provides lower retrieval precision than the default profile. See [docs/offline.md](docs/offline.md) for how it works, its limits, and switching back.
 
 Enable the profile with the Go CLI:
 
