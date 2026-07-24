@@ -101,7 +101,17 @@ func isolateState(t *testing.T) {
 
 func defaultWithPersistedConfig(t *testing.T, fileConfig persistedConfig) Config {
 	t.Helper()
+	return defaultWithPersistedConfigAndProfile(t, fileConfig, "")
+}
+
+func defaultWithPersistedConfigAndProfile(
+	t *testing.T,
+	fileConfig persistedConfig,
+	environmentProfile string,
+) Config {
+	t.Helper()
 	isolateState(t)
+	t.Setenv("CLAUDE_CONTEXT_PROFILE", environmentProfile)
 	t.Setenv("EMBEDDING_MODEL", "")
 	configRoot := t.TempDir()
 	t.Setenv("CLAUDE_CONTEXTD_CONFIG_ROOT", configRoot)
@@ -120,6 +130,105 @@ func defaultWithPersistedConfig(t *testing.T, fileConfig persistedConfig) Config
 		t.Fatalf("Default returned error: %v", err)
 	}
 	return cfg
+}
+
+func TestDefaultResolvesProfileFromEnvironmentAndFile(t *testing.T) {
+	testCases := []struct {
+		name                  string
+		environmentProfile    string
+		fileProfile           string
+		wantProfile           string
+		wantIndexBackend      string
+		wantEmbeddingProvider string
+	}{
+		{
+			name:                  "unset",
+			wantProfile:           ProfileStandard,
+			wantIndexBackend:      IndexBackendMilvus,
+			wantEmbeddingProvider: string(embeddingProviderOpenAI),
+		},
+		{
+			name:                  "file",
+			fileProfile:           ProfileOffline,
+			wantProfile:           ProfileOffline,
+			wantIndexBackend:      IndexBackendLocal,
+			wantEmbeddingProvider: EmbeddingProviderONNX,
+		},
+		{
+			name:                  "environment overrides file",
+			environmentProfile:    ProfileOffline,
+			fileProfile:           ProfileStandard,
+			wantProfile:           ProfileOffline,
+			wantIndexBackend:      IndexBackendLocal,
+			wantEmbeddingProvider: EmbeddingProviderONNX,
+		},
+		{
+			name:                  "environment trailing whitespace",
+			environmentProfile:    "Offline ",
+			wantProfile:           ProfileOffline,
+			wantIndexBackend:      IndexBackendLocal,
+			wantEmbeddingProvider: EmbeddingProviderONNX,
+		},
+		{
+			name:                  "environment leading whitespace",
+			environmentProfile:    " offline",
+			wantProfile:           ProfileOffline,
+			wantIndexBackend:      IndexBackendLocal,
+			wantEmbeddingProvider: EmbeddingProviderONNX,
+		},
+		{
+			name:                  "environment uppercase",
+			environmentProfile:    "OFFLINE",
+			wantProfile:           ProfileOffline,
+			wantIndexBackend:      IndexBackendLocal,
+			wantEmbeddingProvider: EmbeddingProviderONNX,
+		},
+		{
+			name:                  "file trailing whitespace",
+			fileProfile:           "Offline ",
+			wantProfile:           ProfileOffline,
+			wantIndexBackend:      IndexBackendLocal,
+			wantEmbeddingProvider: EmbeddingProviderONNX,
+		},
+		{
+			name:                  "file leading whitespace",
+			fileProfile:           " offline",
+			wantProfile:           ProfileOffline,
+			wantIndexBackend:      IndexBackendLocal,
+			wantEmbeddingProvider: EmbeddingProviderONNX,
+		},
+		{
+			name:                  "file uppercase",
+			fileProfile:           "OFFLINE",
+			wantProfile:           ProfileOffline,
+			wantIndexBackend:      IndexBackendLocal,
+			wantEmbeddingProvider: EmbeddingProviderONNX,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := defaultWithPersistedConfigAndProfile(
+				t,
+				persistedConfig{Profile: testCase.fileProfile},
+				testCase.environmentProfile,
+			)
+
+			if cfg.Profile != testCase.wantProfile {
+				t.Errorf("Profile = %q want %q", cfg.Profile, testCase.wantProfile)
+			}
+			if cfg.IndexBackend != testCase.wantIndexBackend {
+				t.Errorf("IndexBackend = %q want %q", cfg.IndexBackend, testCase.wantIndexBackend)
+			}
+			if cfg.EmbeddingProvider != testCase.wantEmbeddingProvider {
+				t.Errorf(
+					"EmbeddingProvider = %q want %q",
+					cfg.EmbeddingProvider,
+					testCase.wantEmbeddingProvider,
+				)
+			}
+		})
+	}
 }
 
 func TestDefaultDebugAndJobControlDefaults(t *testing.T) {
