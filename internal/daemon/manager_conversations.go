@@ -27,12 +27,17 @@ const (
 	conversationToolSummaryMaxBytes = 2000
 )
 
-// conversationChunkByteBudget is the byte cap splitConversationText applies. It
-// defaults to the varchar-safe conversationChunkMaxBytes, and NewManager lowers
-// it to the embedding token budget when EmbeddingMaxTokens is set, so a
-// conversation chunk stays within the embedder's input limit instead of being
-// silently truncated. It is written once at startup and read-only thereafter.
-var conversationChunkByteBudget = conversationChunkMaxBytes
+// resolveConversationChunkBudget picks the effective byte cap for splitting
+// conversation text. The budget flows in from the owning manager as an optional
+// argument; when absent or non-positive it defaults to the varchar-safe cap. The
+// optional shape keeps the many direct test call sites unchanged while the
+// production path passes the manager's per-run budget explicitly.
+func resolveConversationChunkBudget(chunkByteBudget []int) int {
+	if len(chunkByteBudget) > 0 && chunkByteBudget[0] > 0 {
+		return chunkByteBudget[0]
+	}
+	return conversationChunkMaxBytes
+}
 
 type conversationJobKind string
 
@@ -454,7 +459,7 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
-		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence, payload.Backfill, payload.Force)
+		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence, payload.Backfill, payload.Force, manager.conversationChunkByteBudget)
 		// The second return is the code path's graph-index task; a conversation
 		// collection never produces one, so there is nothing to discard here.
 		if handled, _ := manager.runDeltaSync(ctx, job, source); handled {
@@ -615,8 +620,9 @@ func fingerprintConversationDocuments(documents []model.ConversationDocument) st
 // test can wrap it to count regenerations and lock the chokepoint invariant that
 // the up-front presence classifier (forcedWorkSet) regenerates nothing.
 // Production never reassigns it.
-var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []model.ConversationDocument) ([]model.StoredChunk, error) {
+var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []model.ConversationDocument, chunkByteBudget ...int) ([]model.StoredChunk, error) {
 	dispatcher := newConversationToolDispatcher()
+	budget := resolveConversationChunkBudget(chunkByteBudget)
 	chunks := make([]model.StoredChunk, 0, len(documents))
 	for _, document := range documents {
 		conversationID := strings.TrimSpace(document.ConversationID)
@@ -624,7 +630,7 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 			return nil, errors.New("conversation id is required")
 		}
 		parentConversationID := strings.TrimSpace(document.ParentConversationID)
-		pieces := splitConversationText(document.Text)
+		pieces := splitConversationText(document.Text, budget)
 		for partIndex, piece := range pieces {
 			chunks = append(chunks, newConversationStoredChunk(
 				document,
@@ -645,6 +651,7 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 				parentConversationID,
 				toolBasePath+"/tok",
 				conversationToolTokenContent(toolCall),
+				budget,
 			)...)
 			if toolCall.Command != "" {
 				chunks = append(chunks, splitConversationDerivedContent(
@@ -653,6 +660,7 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 					parentConversationID,
 					toolBasePath+"/cmd",
 					toolCall.Command,
+					budget,
 				)...)
 			}
 			extension := conversationToolExtension(toolCall.LangHint)
@@ -678,6 +686,7 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 				parentConversationID,
 				conversationThinkingPath(conversationID, document.MessageIndex),
 				document.Thinking,
+				budget,
 			)...)
 		}
 	}
@@ -699,7 +708,7 @@ type conversationMessageDiff struct {
 // New messages also carry exact removals because legacy rows without
 // messageIndex are invisible to storedState but still live under the same
 // conv/<id>/<message> paths; genuinely new messages pay one no-op delete.
-func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, stored semantic.ConversationStoredRows) (conversationMessageDiff, error) {
+func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, stored semantic.ConversationStoredRows, chunkByteBudget ...int) (conversationMessageDiff, error) {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
 		removalPaths:    make([]string, 0),
@@ -710,7 +719,7 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 		delivered[document.MessageIndex] = struct{}{}
 		message, found := stored.Messages[document.MessageIndex]
 		if found {
-			matches, err := conversationDocumentMatchesStored(ctx, conversationID, document, message, stored.DerivedPaths)
+			matches, err := conversationDocumentMatchesStored(ctx, conversationID, document, message, stored.DerivedPaths, chunkByteBudget...)
 			if err != nil {
 				return diff, err
 			}
@@ -744,7 +753,7 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 // contentHash) is load-bearing: a vector present elsewhere in the batch is not
 // proof the target row exists, so an absent target row makes the message changed
 // and the reindex inserts it, reusing the shared vector rather than re-embedding.
-func conversationDocumentMatchesStored(ctx context.Context, conversationID string, document model.ConversationDocument, message semantic.StoredMessageState, storedDerivedPaths map[string]string) (bool, error) {
+func conversationDocumentMatchesStored(ctx context.Context, conversationID string, document model.ConversationDocument, message semantic.StoredMessageState, storedDerivedPaths map[string]string, chunkByteBudget ...int) (bool, error) {
 	if message.Role != document.Role || message.Text != document.Text {
 		return false, nil
 	}
@@ -753,7 +762,7 @@ func conversationDocumentMatchesStored(ctx context.Context, conversationID strin
 	if !documentHasDerived {
 		return len(storedDerivedForMessage) == 0, nil
 	}
-	chunks, err := conversationDocumentsToStoredChunks(ctx, []model.ConversationDocument{document})
+	chunks, err := conversationDocumentsToStoredChunks(ctx, []model.ConversationDocument{document}, chunkByteBudget...)
 	if err != nil {
 		return false, err
 	}
@@ -824,8 +833,8 @@ func conversationRelativePathPrefix(conversationID string) string {
 	return "conv/" + conversationID + "/"
 }
 
-func splitConversationText(text string) []string {
-	return splitTextByBytes(text, conversationChunkByteBudget)
+func splitConversationText(text string, chunkByteBudget ...int) []string {
+	return splitTextByBytes(text, resolveConversationChunkBudget(chunkByteBudget))
 }
 
 // splitTextByBytes cuts text into UTF-8-aligned pieces of at most maxBytes each.

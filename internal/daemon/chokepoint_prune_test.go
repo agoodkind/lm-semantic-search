@@ -63,11 +63,11 @@ func TestForcedWorkSetPrunesNoOpsBeforeDenominatorAndRegen(t *testing.T) {
 	var regenMu sync.Mutex
 	regenCalls := 0
 	realGenerate := conversationDocumentsToStoredChunks
-	conversationDocumentsToStoredChunks = func(ctx context.Context, documents []model.ConversationDocument) ([]model.StoredChunk, error) {
+	conversationDocumentsToStoredChunks = func(ctx context.Context, documents []model.ConversationDocument, chunkByteBudget ...int) ([]model.StoredChunk, error) {
 		regenMu.Lock()
 		regenCalls++
 		regenMu.Unlock()
-		return realGenerate(ctx, documents)
+		return realGenerate(ctx, documents, chunkByteBudget...)
 	}
 	defer func() { conversationDocumentsToStoredChunks = realGenerate }()
 	regenCount := func() int {
