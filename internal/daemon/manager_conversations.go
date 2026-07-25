@@ -699,15 +699,19 @@ type conversationMessageDiff struct {
 	removalPrefixes []string
 }
 
-// diffConversationMessages treats a delivered message as unchanged only when
-// the stored role equals document.Role and the assembled stored text equals
-// document.Text, which is also the text conversationDocumentsToStoredChunks
-// stores after multipart splitting. Stale stored indices must be deleted here
-// because the conversation source uses absenceRetain, so an absent message row
-// would otherwise survive forever once the conversation fingerprint advances.
-// New messages also carry exact removals because legacy rows without
-// messageIndex are invisible to storedState but still live under the same
-// conv/<id>/<message> paths; genuinely new messages pay one no-op delete.
+// diffConversationMessages classifies each delivered message against the stored
+// rows and emits a removal only where stored rows must actually be purged. A
+// delivered message absent from stored.Messages is genuinely new / appended, so
+// it is embedded without any delete: it has no prior rows, and issuing a removal
+// there would be a pure no-op Milvus round-trip. A delivered message present in
+// stored.Messages whose content changed replaces only its own rows, so it
+// carries an exact removal. A stored index that is not delivered is a rewind that
+// dropped the message, so its rows are removed. "Unchanged" means the stored role
+// equals document.Role and the assembled stored text equals document.Text, which
+// is also the text conversationDocumentsToStoredChunks stores after multipart
+// splitting. Stale stored indices must be deleted here because the conversation
+// source uses absenceRetain, so an absent message row would otherwise survive
+// forever once the conversation fingerprint advances.
 func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, stored semantic.ConversationStoredRows, chunkByteBudget ...int) (conversationMessageDiff, error) {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
@@ -718,15 +722,20 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 	for _, document := range documents {
 		delivered[document.MessageIndex] = struct{}{}
 		message, found := stored.Messages[document.MessageIndex]
-		if found {
-			matches, err := conversationDocumentMatchesStored(ctx, conversationID, document, message, stored.DerivedPaths, chunkByteBudget...)
-			if err != nil {
-				return diff, err
-			}
-			if matches {
-				continue
-			}
+		if !found {
+			// A genuinely new / appended message has no stored rows to purge, so it is
+			// embedded without a delete.
+			diff.documents = append(diff.documents, document)
+			continue
 		}
+		matches, err := conversationDocumentMatchesStored(ctx, conversationID, document, message, stored.DerivedPaths, chunkByteBudget...)
+		if err != nil {
+			return diff, err
+		}
+		if matches {
+			continue
+		}
+		// A stored message whose content changed replaces only its own rows.
 		diff.documents = append(diff.documents, document)
 		diff.addRemoval(conversationID, document.MessageIndex)
 	}
