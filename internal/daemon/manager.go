@@ -176,6 +176,14 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		indexability:            nil,
 		observer:                nil,
 	}
+	// Lower the conversation chunk byte budget to the embedding token budget when
+	// EmbeddingMaxTokens is set, so conversation chunks stay within the model's
+	// input limit instead of being silently truncated. Unset leaves the
+	// varchar-safe default. Written once here, before any indexing goroutine
+	// reads it.
+	if budget := config.EmbedChunkByteBudget(cfg.EmbeddingMaxTokens); budget > 0 && budget < conversationChunkByteBudget {
+		conversationChunkByteBudget = budget
+	}
 	if err := store.EnsureDir(cfg.GraphDir); err != nil {
 		slog.ErrorContext(ctx, "create graph cache directory failed", "path", cfg.GraphDir, "err", err)
 		return nil, fmt.Errorf("create graph cache directory: %w", err)

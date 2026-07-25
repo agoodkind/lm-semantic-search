@@ -27,6 +27,13 @@ const (
 	conversationToolSummaryMaxBytes = 2000
 )
 
+// conversationChunkByteBudget is the byte cap splitConversationText applies. It
+// defaults to the varchar-safe conversationChunkMaxBytes, and NewManager lowers
+// it to the embedding token budget when EmbeddingMaxTokens is set, so a
+// conversation chunk stays within the embedder's input limit instead of being
+// silently truncated. It is written once at startup and read-only thereafter.
+var conversationChunkByteBudget = conversationChunkMaxBytes
+
 type conversationJobKind string
 
 const (
@@ -818,13 +825,19 @@ func conversationRelativePathPrefix(conversationID string) string {
 }
 
 func splitConversationText(text string) []string {
-	if len(text) <= conversationChunkMaxBytes {
+	return splitTextByBytes(text, conversationChunkByteBudget)
+}
+
+// splitTextByBytes cuts text into UTF-8-aligned pieces of at most maxBytes each.
+// A non-positive maxBytes disables splitting and returns the text unchanged.
+func splitTextByBytes(text string, maxBytes int) []string {
+	if maxBytes <= 0 || len(text) <= maxBytes {
 		return []string{text}
 	}
-	pieces := make([]string, 0, (len(text)+conversationChunkMaxBytes-1)/conversationChunkMaxBytes)
+	pieces := make([]string, 0, (len(text)+maxBytes-1)/maxBytes)
 	start := 0
 	for start < len(text) {
-		end := start + conversationChunkMaxBytes
+		end := start + maxBytes
 		if end >= len(text) {
 			pieces = append(pieces, text[start:])
 			break

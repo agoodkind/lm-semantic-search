@@ -37,6 +37,13 @@ const (
 	// sweep. Five minutes keeps the sweep off the hot path while staying timely.
 	defaultLogCleanupIntervalMS = 300000
 	nvEmbedCodeQueryPrefix      = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
+	// embedTokenSafetyMargin scales EmbeddingMaxTokens down before splitting,
+	// because estimatedTokenCount (bytes/4) can undercount the model's real
+	// tokenizer for dense or non-Latin text.
+	embedTokenSafetyMargin = 0.9
+	// bytesPerEstimatedToken mirrors estimatedTokenCount's bytes-per-token ratio,
+	// converting a token cap into a byte budget for byte-oriented splitters.
+	bytesPerEstimatedToken = 4
 )
 
 type embeddingProvider string
@@ -67,6 +74,12 @@ type Config struct {
 	// EmbeddingBatchTokenBudget caps the estimated tokens (bytes/4) packed into
 	// one embedding request. EmbeddingBatchSize stays as the row-count ceiling.
 	EmbeddingBatchTokenBudget int
+	// EmbeddingMaxTokens caps the estimated tokens (bytes/4) of a single chunk
+	// sent to the embedder, so a chunk never exceeds the model's input limit and
+	// gets silently truncated. There is no default: an unset value (0) disables
+	// the cap and preserves prior behavior, with a startup warning. Use
+	// EffectiveEmbedTokenCap and EmbedChunkByteBudget to apply the safety margin.
+	EmbeddingMaxTokens int
 	// EmbeddingRequestTimeoutMS bounds one embedding HTTP request. A wedged or
 	// unresponsive embedder makes an unbounded request hang forever, which strands
 	// the indexing goroutine and the background sync (the embed call has no other
@@ -143,6 +156,7 @@ type persistedConfig struct {
 	EmbeddingModel            string `json:"embeddingModel"`
 	EmbeddingBatchSize        int    `json:"embeddingBatchSize"`
 	EmbeddingBatchTokenBudget int    `json:"embeddingBatchTokenBudget"`
+	EmbeddingMaxTokens        int    `json:"embeddingMaxTokens"`
 	// EmbeddingRequestTimeoutMS is a pointer so an omitted config.json field (nil)
 	// is distinct from an explicit 0, which disables the bound. A plain int would
 	// collapse a persisted 0 into the default and make the disable case
@@ -195,10 +209,8 @@ func Default() (Config, error) {
 		defaultModel = envOrDefault("EMBEDDING_MODEL", "text-embedding-3-small")
 	}
 
-	batchTokenBudget := fileConfig.EmbeddingBatchTokenBudget
-	if batchTokenBudget <= 0 {
-		batchTokenBudget = defaultEmbeddingBatchTokenBudget
-	}
+	batchTokenBudget := intOrDefault(fileConfig.EmbeddingBatchTokenBudget, defaultEmbeddingBatchTokenBudget)
+	embeddingMaxTokens := resolveEmbeddingMaxTokens(fileConfig.EmbeddingMaxTokens)
 	// An explicit config.json value (including 0 to disable) wins over the
 	// default; a nil pointer means the field was omitted. The env var overrides
 	// either.
@@ -231,6 +243,7 @@ func Default() (Config, error) {
 		EmbeddingModel:            envOrDefault("EMBEDDING_MODEL", defaultModel),
 		EmbeddingBatchSize:        envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
 		EmbeddingBatchTokenBudget: batchTokenBudget,
+		EmbeddingMaxTokens:        embeddingMaxTokens,
 		EmbeddingRequestTimeoutMS: envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", requestTimeoutMS),
 		EmbeddingDimension:        envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
 		OpenAIAPIKey:              envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
@@ -359,6 +372,42 @@ func readPersistedConfig(path string) persistedConfig {
 		return emptyConfig
 	}
 	return cfg
+}
+
+// resolveEmbeddingMaxTokens applies the env override over the config value.
+// There is no default: an unset or non-positive value resolves to 0, which
+// disables the per-chunk cap, and a warning names the knob to set.
+func resolveEmbeddingMaxTokens(fileValue int) int {
+	value := envIntOrDefault("EMBEDDING_MAX_TOKENS", fileValue)
+	if value <= 0 {
+		slog.Warn(
+			"embeddingMaxTokens is unset; per-chunk token cap disabled, so oversize inputs may be silently truncated by the embedder",
+			"config_field", "embeddingMaxTokens",
+			"env_var", "EMBEDDING_MAX_TOKENS",
+		)
+		return 0
+	}
+	return value
+}
+
+// EffectiveEmbedTokenCap returns the per-chunk estimated-token cap after the
+// safety margin, or 0 when capping is disabled (maxTokens <= 0).
+func EffectiveEmbedTokenCap(maxTokens int) int {
+	if maxTokens <= 0 {
+		return 0
+	}
+	return max(int(float64(maxTokens)*embedTokenSafetyMargin), 1)
+}
+
+// EmbedChunkByteBudget returns the byte budget a byte-oriented splitter uses to
+// keep a chunk's estimated token count within EffectiveEmbedTokenCap, or 0 when
+// capping is disabled.
+func EmbedChunkByteBudget(maxTokens int) int {
+	tokenCap := EffectiveEmbedTokenCap(maxTokens)
+	if tokenCap <= 0 {
+		return 0
+	}
+	return tokenCap * bytesPerEstimatedToken
 }
 
 func intOrDefault(value int, fallback int) int {
