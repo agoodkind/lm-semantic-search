@@ -47,8 +47,10 @@ const conversationBatchIDFilterSize = conversationFilterIDBatchSize
 // conversation's expected chunks and diffs them against these stored rows, so a
 // batch of conversations costs one query rather than one per conversation. Rows
 // that carry no conversationID scalar (legacy pre-scalar rows) are not matched
-// and read as absent, so their conversation re-embeds and the message-level
-// removal reconciles the stale rows.
+// and read as absent. A delivered index absent from Messages no longer issues a
+// message-level removal, so the append path's correctness now depends on the
+// invariant that no scalar-less (missing-messageIndex) rows exist rather than on
+// that removal reconciling them.
 func (service *Service) LoadConversationDerivedBatch(ctx context.Context, collectionName string, conversationIDs []string) (ConversationBatchState, error) {
 	state := ConversationBatchState{Rows: map[string]ConversationStoredRows{}, Reuse: map[string][]float32{}}
 	uniqueIDs := dedupeConversationIDs(conversationIDs)
@@ -166,7 +168,9 @@ func appendConversationBatchBaseRow(assemblies *conversationBatchAssemblies, con
 	if !ok {
 		// A base row without a messageIndex is a legacy pre-scalar row. It cannot be
 		// placed into assembled per-message state, so its conversation reads as
-		// absent for that message and re-embeds, which reconciles the stale row.
+		// absent for that message. The append path no longer issues a message-level
+		// removal for an index absent from Messages, so correctness now depends on the
+		// invariant that no such scalar-less rows exist rather than on reconciliation.
 		return nil
 	}
 	if roleColumn == nil {

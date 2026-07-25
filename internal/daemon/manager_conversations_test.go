@@ -1301,22 +1301,26 @@ func TestConversationIndexOneHealsMissingRows(t *testing.T) {
 	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
 }
 
-func TestConversationIndexOneHealsLegacyRowsWithoutDuplicates(t *testing.T) {
+func TestConversationIndexOneColdConversationEmbedsEveryMessageWithoutRemoval(t *testing.T) {
 	t.Parallel()
 
+	// A cold conversation has no stored rows, so every delivered index is absent
+	// from Messages and is genuinely new / appended. Each message embeds with no
+	// removal, and batch-wide reuse vectors for identical content embedded in
+	// sibling conversations still serve the inserts without re-embedding.
 	reader := &testConversationRowReader{
 		state: map[int32]semantic.StoredMessageState{},
 		reuse: map[string][]float32{
-			"legacy-zero": {1},
-			"legacy-one":  {2},
+			"batch-hello":  {1},
+			"batch-answer": {2},
 		},
 	}
 	source := newConversationItemSource(
 		"conv_chunks_live",
-		map[string]string{"conv-legacy": "fp-legacy"},
+		map[string]string{"conv-cold": "fp-cold"},
 		[]model.ConversationDocument{
-			{ConversationID: "conv-legacy", MessageIndex: 0, Role: "user", Text: "hello"},
-			{ConversationID: "conv-legacy", MessageIndex: 1, Role: "assistant", Text: "answer"},
+			{ConversationID: "conv-cold", MessageIndex: 0, Role: "user", Text: "hello"},
+			{ConversationID: "conv-cold", MessageIndex: 1, Role: "assistant", Text: "answer"},
 		},
 		reader,
 		absenceRetain,
@@ -1324,22 +1328,19 @@ func TestConversationIndexOneHealsLegacyRowsWithoutDuplicates(t *testing.T) {
 		false,
 	)
 
-	result, err := source.indexOne(context.Background(), "conv-legacy")
+	result, err := source.indexOne(context.Background(), "conv-cold")
 	if err != nil {
 		t.Fatalf("indexOne returned error: %v", err)
 	}
 
 	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
-		{relativePath: "conv/conv-legacy/0", messageIndex: 0, role: "user", content: "hello"},
-		{relativePath: "conv/conv-legacy/1", messageIndex: 1, role: "assistant", content: "answer"},
+		{relativePath: "conv/conv-cold/0", messageIndex: 0, role: "user", content: "hello"},
+		{relativePath: "conv/conv-cold/1", messageIndex: 1, role: "assistant", content: "answer"},
 	})
-	// Neither message is in stored, so both are genuinely new: they embed
-	// (reusing the stored vectors) without any removal, and no duplicate rows are
-	// produced.
 	assertStringSliceEqual(t, result.RemovalPaths, nil)
 	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
-	assertReuseVector(t, result.ReuseVectors, "legacy-zero", []float32{1})
-	assertReuseVector(t, result.ReuseVectors, "legacy-one", []float32{2})
+	assertReuseVector(t, result.ReuseVectors, "batch-hello", []float32{1})
+	assertReuseVector(t, result.ReuseVectors, "batch-answer", []float32{2})
 }
 
 func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
