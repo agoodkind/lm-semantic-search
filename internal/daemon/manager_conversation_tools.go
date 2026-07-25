@@ -63,8 +63,8 @@ func splitConversationToolPayload(ctx context.Context, dispatcher *chunk.Dispatc
 	return chunks, nil
 }
 
-func splitConversationDerivedContent(document model.ConversationDocument, conversationID string, parentConversationID string, relativePath string, content string) []model.StoredChunk {
-	pieces := splitConversationText(content)
+func splitConversationDerivedContent(document model.ConversationDocument, conversationID string, parentConversationID string, relativePath string, content string, chunkByteBudget ...int) []model.StoredChunk {
+	pieces := splitConversationText(content, chunkByteBudget...)
 	chunks := make([]model.StoredChunk, 0, len(pieces))
 	multipart := len(pieces) > 1
 	for partIndex, piece := range pieces {

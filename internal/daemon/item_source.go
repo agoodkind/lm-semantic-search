@@ -308,6 +308,11 @@ type conversationItemSource struct {
 	// whole conversation, and reuseSource returns no reuse, so present rows
 	// re-embed. When both flags are set, force wins.
 	force bool
+	// chunkByteBudget is the owning manager's immutable byte cap for splitting
+	// conversation text, so chunks stay within the embedder's token limit. The
+	// diff and chunk-generation paths thread it into conversationDocumentsToStoredChunks
+	// so both use the same boundaries.
+	chunkByteBudget int
 	// batch caches the one batched read of the live collection for every delivered
 	// conversation. indexOne loads it once on first use, so a run of many
 	// conversations costs one Milvus query per id batch instead of one read per
@@ -324,13 +329,13 @@ type conversationDerivedBatch struct {
 	err   error
 }
 
-func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader, absence absencePolicy, backfill bool, force bool) conversationItemSource {
+func newConversationItemSource(collectionName string, manifest map[string]string, documents []model.ConversationDocument, rowReader conversationRowReader, absence absencePolicy, backfill bool, force bool, chunkByteBudget ...int) conversationItemSource {
 	byID := make(map[string][]model.ConversationDocument, len(manifest))
 	for _, document := range documents {
 		conversationID := document.ConversationID
 		byID[conversationID] = append(byID[conversationID], document)
 	}
-	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", absence: absence, backfill: backfill, force: force, batch: &conversationDerivedBatch{once: sync.Once{}, state: semantic.ConversationBatchState{Rows: nil, Reuse: nil}, err: nil}}
+	return conversationItemSource{collectionName: collectionName, manifest: manifest, documents: byID, rowReader: rowReader, splitterID: "", absence: absence, backfill: backfill, force: force, chunkByteBudget: resolveConversationChunkBudget(chunkByteBudget), batch: &conversationDerivedBatch{once: sync.Once{}, state: semantic.ConversationBatchState{Rows: nil, Reuse: nil}, err: nil}}
 }
 
 // loadDerivedBatch reads the stored rows for every delivered conversation once,
@@ -542,7 +547,7 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 		batchReuse = map[string][]float32{}
 	}
 
-	delta, diffErr := diffConversationMessages(ctx, conversationID, documents, stored)
+	delta, diffErr := diffConversationMessages(ctx, conversationID, documents, stored, source.chunkByteBudget)
 	if diffErr != nil {
 		return indexer.OneFileResult{
 			Chunks:          nil,
@@ -556,7 +561,7 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 			ReuseVectors:    nil,
 		}, diffErr
 	}
-	chunks, err := conversationDocumentsToStoredChunks(ctx, delta.documents)
+	chunks, err := conversationDocumentsToStoredChunks(ctx, delta.documents, source.chunkByteBudget)
 	if err != nil {
 		return indexer.OneFileResult{
 			Chunks:          nil,
@@ -584,7 +589,7 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 }
 
 func (source conversationItemSource) fullConversationResult(ctx context.Context, conversationID string, documents []model.ConversationDocument, removalOverride bool) (indexer.OneFileResult, error) {
-	chunks, err := conversationDocumentsToStoredChunks(ctx, documents)
+	chunks, err := conversationDocumentsToStoredChunks(ctx, documents, source.chunkByteBudget)
 	if err != nil {
 		return indexer.OneFileResult{
 			Chunks:          nil,

@@ -774,6 +774,11 @@ func (service *Service) guardrailExpand(ctx context.Context, codebasePath string
 	ctx, done := spans.Open(ctx, "semantic.guardrailExpand")
 	defer done(nil)
 
+	// Split chunks over the embedding token budget first, so no input reaches the
+	// embedder above its input limit and gets silently truncated. This runs
+	// before the varchar guardrail because the token budget is the tighter cap.
+	chunks = service.expandOverTokenBudget(ctx, codebasePath, chunks, operation)
+
 	expanded, changed := expandOversizeChunks(chunks)
 	if !changed {
 		return chunks
@@ -821,25 +826,7 @@ func expandOversizeChunks(chunks []model.StoredChunk) ([]model.StoredChunk, bool
 // splitForVarchar cuts value into sub-strings of at most
 // milvusVarcharMaxBytes bytes, each ending on a UTF-8 codepoint boundary.
 func splitForVarchar(value string) []string {
-	out := make([]string, 0, (len(value)+milvusVarcharMaxBytes-1)/milvusVarcharMaxBytes)
-	start := 0
-	for start < len(value) {
-		end := start + milvusVarcharMaxBytes
-		if end >= len(value) {
-			out = append(out, value[start:])
-			break
-		}
-		for end > start && !utf8.RuneStart(value[end]) {
-			end--
-		}
-		if end == start {
-			_, size := utf8.DecodeRuneInString(value[start:])
-			end = start + size
-		}
-		out = append(out, value[start:end])
-		start = end
-	}
-	return out
+	return splitBytes(value, milvusVarcharMaxBytes)
 }
 
 // generateID matches the TS chunk-ID format at packages/core/src/context.ts:1067.
