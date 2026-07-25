@@ -61,6 +61,11 @@ type Config struct {
 	GraphDir     string
 	ContextRoot  string
 
+	// Profile is the user-facing capability selector expanded by ApplyProfile.
+	// Empty or "standard" keeps the Milvus plus OpenAI-compatible default; "offline"
+	// selects the embedded local store and the in-process ONNX embedder.
+	Profile string
+
 	EmbeddingProvider  string
 	EmbeddingModel     string
 	EmbeddingBatchSize int
@@ -83,6 +88,9 @@ type Config struct {
 	IncludeSubmodules      []string
 	MilvusAddress          string
 	MilvusToken            string
+	// IndexBackend selects the vector store implementation: "milvus" (default) or
+	// "local". Derived from Profile by ApplyProfile; may also be set directly.
+	IndexBackend           string
 	CollectionNameOverride string
 	HybridMode             bool
 	BackgroundSyncEnabled  bool
@@ -211,7 +219,8 @@ func Default() (Config, error) {
 		queryPrefix = nvEmbedCodeQueryPrefix
 	}
 
-	return Config{
+	return ApplyProfile(Config{
+		Profile: ProfileStandard, IndexBackend: IndexBackendMilvus,
 		ConfigRoot:                configRoot,
 		ConfigPath:                configPath,
 		StateRoot:                 stateRoot,
@@ -261,7 +270,7 @@ func Default() (Config, error) {
 		LogRetentionBytes:         envInt64OrDefault("CLAUDE_CONTEXT_LOG_RETENTION_BYTES", defaultLogRetentionBytes),
 		LogCleanupEnabled:         envBoolOrDefault("CLAUDE_CONTEXT_LOG_CLEANUP_ENABLED", true),
 		LogCleanupIntervalMS:      envIntOrDefault("CLAUDE_CONTEXT_LOG_CLEANUP_INTERVAL_MS", defaultLogCleanupIntervalMS),
-	}, nil
+	}), nil
 }
 
 func resolveXDGConfigHome(homeDir string) string {
