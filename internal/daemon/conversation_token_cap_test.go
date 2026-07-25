@@ -64,6 +64,39 @@ func TestConversationChunkBudgetLowersSplit(t *testing.T) {
 	}
 }
 
+func TestConversationDerivedContentAppliesBudget(t *testing.T) {
+	t.Parallel()
+
+	// The derived thinking path must respect the same byte budget as message text,
+	// so a long reasoning block is split rather than sent oversized to the embedder.
+	thinking := strings.Repeat("b", 2500)
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
+		ConversationID: "thread-think",
+		MessageIndex:   7,
+		Role:           "assistant",
+		Text:           "short",
+		Thinking:       thinking,
+	}}, 1000)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	var thinkingRows []model.StoredChunk
+	for _, chunk := range chunks {
+		if strings.HasPrefix(chunk.RelativePath, "convthink/thread-think/7") {
+			thinkingRows = append(thinkingRows, chunk)
+		}
+	}
+	if len(thinkingRows) < 3 {
+		t.Fatalf("2500-byte thinking block at budget 1000 should split into at least 3 rows, got %d", len(thinkingRows))
+	}
+	for _, chunk := range thinkingRows {
+		if len(chunk.Content) > 1000 {
+			t.Fatalf("thinking row over budget: %d bytes", len(chunk.Content))
+		}
+	}
+}
+
 func TestConversationChunkBudgetDefaultsToVarcharCap(t *testing.T) {
 	t.Parallel()
 
