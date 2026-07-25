@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -32,16 +33,16 @@ func (provider *fakeEmbeddingProvider) Embed(
 func (provider *fakeEmbeddingProvider) EmbedBatch(
 	ctx context.Context,
 	texts []string,
-) ([][]float32, error) {
+) (embedding.BatchResult, error) {
 	vectors := make([][]float32, 0, len(texts))
 	for _, text := range texts {
 		vector, err := provider.Embed(ctx, text)
 		if err != nil {
-			return nil, err
+			return embedding.BatchResult{}, err
 		}
 		vectors = append(vectors, vector)
 	}
-	return vectors, nil
+	return embedding.BatchResult{Vectors: vectors}, nil
 }
 
 func (provider *fakeEmbeddingProvider) ProviderName() string {

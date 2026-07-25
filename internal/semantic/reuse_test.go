@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -21,18 +22,82 @@ func (embedder *countingEmbedder) Embed(_ context.Context, _ string) ([]float32,
 	return []float32{0}, nil
 }
 
-func (embedder *countingEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+func (embedder *countingEmbedder) EmbedBatch(_ context.Context, texts []string) (embedding.BatchResult, error) {
 	embedder.batches = append(embedder.batches, slices.Clone(texts))
 	vectors := make([][]float32, len(texts))
 	for index, text := range texts {
 		vectors[index] = []float32{float32(len(text))}
 	}
-	return vectors, nil
+	return embedding.BatchResult{Vectors: vectors}, nil
 }
 
 func (embedder *countingEmbedder) ProviderName() string { return "counting" }
 
 func (embedder *countingEmbedder) Health(_ context.Context) error { return nil }
+
+// skippingEmbedder rejects the first input of every batch as oversized and
+// embeds the rest, so a test can prove the index path drops the skipped chunk
+// and continues without failing the batch or the job.
+type skippingEmbedder struct{}
+
+func (skippingEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	return []float32{0}, nil
+}
+
+func (skippingEmbedder) EmbedBatch(_ context.Context, texts []string) (embedding.BatchResult, error) {
+	vectors := make([][]float32, len(texts))
+	var skipped []embedding.SkippedInput
+	for index := range texts {
+		if index == 0 {
+			skipped = append(skipped, embedding.SkippedInput{
+				Index:          0,
+				Reason:         "context_length_exceeded",
+				ReportedTokens: 5000,
+				MaxTokens:      4096,
+			})
+			continue
+		}
+		vectors[index] = []float32{float32(len(texts[index]))}
+	}
+	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
+}
+
+func (skippingEmbedder) ProviderName() string { return "skipping" }
+
+func (skippingEmbedder) Health(_ context.Context) error { return nil }
+
+func TestEmbedChunkBatchDropsOversizedInputWithoutError(t *testing.T) {
+	service := &Service{embedder: skippingEmbedder{}}
+
+	chunks := []model.StoredChunk{
+		{Content: "oversized", ConversationID: "conv-1"},
+		{Content: "small", RelativePath: "a/b.go"},
+	}
+
+	vectors, reused, err := service.embedChunkBatch(context.Background(), chunks, nil)
+	// A per-input skip is not a failure: the batch (and so the job) keeps going,
+	// so nothing here can mark the embedder unhealthy.
+	if err != nil {
+		t.Fatalf("embedChunkBatch returned error for a per-input skip: %v", err)
+	}
+	if reused != 0 {
+		t.Fatalf("reused = %d, want 0", reused)
+	}
+	if vectors[0] != nil {
+		t.Fatalf("vectors[0] = %v, want nil (input skipped as oversized)", vectors[0])
+	}
+	if vectors[1] == nil {
+		t.Fatalf("vectors[1] = nil, want the embedded survivor")
+	}
+
+	keptChunks, keptVectors := filterEmbeddedChunks(chunks, vectors)
+	if len(keptChunks) != 1 || len(keptVectors) != 1 {
+		t.Fatalf("kept %d chunks / %d vectors, want 1 / 1 (the oversized chunk dropped)", len(keptChunks), len(keptVectors))
+	}
+	if keptChunks[0].RelativePath != "a/b.go" {
+		t.Fatalf("kept chunk = %+v, want the small survivor only", keptChunks[0])
+	}
+}
 
 func TestEmbedChunkBatchReusesByContentAndEmbedsOnlyMisses(t *testing.T) {
 	embedder := &countingEmbedder{}

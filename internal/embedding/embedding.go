@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,10 +44,45 @@ var ErrEmbedderBusy = errors.New("embedding endpoint is at capacity")
 // network failure that means the endpoint is unreachable.
 var ErrEmbedderRejected = errors.New("embedding endpoint rejected the request")
 
+// embedCodeContextLengthExceeded is the OpenAI error code an embedding endpoint
+// returns when a single input exceeds the model's context window. It is a
+// permanent, per-input condition rather than a server outage, so the offending
+// input is dropped and the rest of the batch is still embedded.
+const embedCodeContextLengthExceeded = "context_length_exceeded"
+
+// SkippedInput identifies one input the embedding endpoint rejected as
+// individually un-embeddable, for example a chunk whose token count exceeds the
+// model's context window. The endpoint's own reported figures travel with it so
+// a caller that holds the source chunk metadata can log the skip with full
+// context.
+type SkippedInput struct {
+	// Index is the position of the skipped input in the EmbedBatch texts slice.
+	Index int
+	// Reason is the endpoint's error code for the rejection, for example
+	// "context_length_exceeded".
+	Reason string
+	// ReportedTokens is the token count the endpoint measured for the input, or
+	// zero when the endpoint did not report one.
+	ReportedTokens int
+	// MaxTokens is the model's maximum context length the endpoint reported, or
+	// zero when the endpoint did not report one.
+	MaxTokens int
+}
+
+// BatchResult is the outcome of an EmbedBatch call. Vectors holds one entry per
+// input text, in input order, so it stays index-aligned with the caller's
+// inputs; a skipped input has a nil Vectors entry. Skipped lists the inputs the
+// endpoint rejected as individually un-embeddable, so a caller can log and drop
+// those inputs without failing the whole batch or the indexing job.
+type BatchResult struct {
+	Vectors [][]float32
+	Skipped []SkippedInput
+}
+
 // Provider generates dense embedding vectors.
 type Provider interface {
 	Embed(context.Context, string) ([]float32, error)
-	EmbedBatch(context.Context, []string) ([][]float32, error)
+	EmbedBatch(context.Context, []string) (BatchResult, error)
 	ProviderName() string
 	// Health verifies the endpoint is reachable right now without performing an
 	// embedding, so a caller can decide whether search can serve a query. A
@@ -148,35 +185,26 @@ func (provider *openAICompatibleProvider) Health(ctx context.Context) error {
 }
 
 func (provider *openAICompatibleProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	embeddings, err := provider.EmbedBatch(ctx, []string{text})
+	result, err := provider.EmbedBatch(ctx, []string{text})
 	if err != nil {
 		return nil, err
 	}
-	if len(embeddings) == 0 {
-		return nil, fmt.Errorf("%s embedding provider returned no vectors", provider.name)
+	if len(result.Vectors) == 0 || result.Vectors[0] == nil {
+		// A single-input call the endpoint rejected as un-embeddable (for example a
+		// query longer than the model's context window) leaves no vector to return.
+		return nil, fmt.Errorf("%s embedding provider returned no vector for the input", provider.name)
 	}
-	return embeddings[0], nil
+	return result.Vectors[0], nil
 }
 
-func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts []string) (vectors [][]float32, err error) {
+func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts []string) (result BatchResult, err error) {
 	if len(texts) == 0 {
-		return nil, nil
+		return BatchResult{Vectors: nil, Skipped: nil}, nil
 	}
 
 	preprocessedTexts := make([]string, 0, len(texts))
 	for _, text := range texts {
 		preprocessedTexts = append(preprocessedTexts, preprocessText(text))
-	}
-
-	params := openai.EmbeddingNewParams{
-		Input: openai.EmbeddingNewParamsInputUnion{
-			OfArrayOfStrings: preprocessedTexts,
-		},
-		Model:          provider.model,
-		EncodingFormat: openai.EmbeddingNewParamsEncodingFormatFloat,
-	}
-	if provider.dimensions > 0 {
-		params.Dimensions = openai.Int(int64(provider.dimensions))
 	}
 
 	// Single choke point for every embedding call, so all per-batch latency and
@@ -187,24 +215,82 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 		metrics.EmbedBatchDone(len(texts), clock.Now().Sub(start), err != nil)
 	}()
 
-	response, err := provider.embedWithRetry(ctx, params)
-	if err != nil {
-		return nil, err
+	vectors := make([][]float32, len(texts))
+	// surviving maps each position in the current request's input array back to
+	// its original index in texts. An oversized input is removed from surviving
+	// and its vectors slot stays nil, so the remaining inputs are re-requested
+	// until the endpoint accepts them all or nothing is left to send.
+	surviving := make([]int, 0, len(texts))
+	for index := range preprocessedTexts {
+		surviving = append(surviving, index)
 	}
-	if len(response.Data) != len(preprocessedTexts) {
-		slog.ErrorContext(ctx, "embedding provider returned unexpected vector count", "provider", provider.name, "want", len(preprocessedTexts), "got", len(response.Data), "err", errors.New("vector count mismatch"))
-		return nil, fmt.Errorf("%s embedding provider returned %d vectors for %d texts", provider.name, len(response.Data), len(preprocessedTexts))
+	var skipped []SkippedInput
+
+	for len(surviving) > 0 {
+		inputs := make([]string, 0, len(surviving))
+		for _, originalIndex := range surviving {
+			inputs = append(inputs, preprocessedTexts[originalIndex])
+		}
+
+		response, embedErr := provider.embedWithRetry(ctx, provider.embeddingParams(inputs))
+		if embedErr == nil {
+			if len(response.Data) != len(inputs) {
+				slog.ErrorContext(ctx, "embedding provider returned unexpected vector count", "provider", provider.name, "want", len(inputs), "got", len(response.Data), "err", errors.New("vector count mismatch"))
+				return BatchResult{}, fmt.Errorf("%s embedding provider returned %d vectors for %d texts", provider.name, len(response.Data), len(inputs))
+			}
+			for position, originalIndex := range surviving {
+				vectors[originalIndex] = toFloat32Vector(response.Data[position].Embedding)
+			}
+			return BatchResult{Vectors: vectors, Skipped: skipped}, nil
+		}
+
+		rejection, isPerInput := oversizedInputRejection(embedErr)
+		if !isPerInput || rejection.index < 0 || rejection.index >= len(surviving) {
+			// Either a genuine server/transport failure, or a per-input rejection
+			// whose offending input the endpoint did not identify. Neither can be
+			// resolved by dropping one known input, so the typed error propagates
+			// and the daemon classifies it (and may mark the embedder unhealthy).
+			return BatchResult{}, embedErr
+		}
+
+		originalIndex := surviving[rejection.index]
+		skipped = append(skipped, SkippedInput{
+			Index:          originalIndex,
+			Reason:         rejection.code,
+			ReportedTokens: rejection.reportedTokens,
+			MaxTokens:      rejection.maxTokens,
+		})
+		// vectors[originalIndex] stays nil to mark the input as skipped.
+		surviving = append(surviving[:rejection.index], surviving[rejection.index+1:]...)
 	}
 
-	vectors = make([][]float32, 0, len(response.Data))
-	for _, item := range response.Data {
-		vector := make([]float32, 0, len(item.Embedding))
-		for _, value := range item.Embedding {
-			vector = append(vector, float32(value))
-		}
-		vectors = append(vectors, vector)
+	// Every input was skipped as un-embeddable; the batch still succeeds so the
+	// job continues, and the caller drops the nil-vector inputs.
+	return BatchResult{Vectors: vectors, Skipped: skipped}, nil
+}
+
+// embeddingParams builds the embeddings request for one input array.
+func (provider *openAICompatibleProvider) embeddingParams(inputs []string) openai.EmbeddingNewParams {
+	params := openai.EmbeddingNewParams{
+		Input: openai.EmbeddingNewParamsInputUnion{
+			OfArrayOfStrings: inputs,
+		},
+		Model:          provider.model,
+		EncodingFormat: openai.EmbeddingNewParamsEncodingFormatFloat,
 	}
-	return vectors, nil
+	if provider.dimensions > 0 {
+		params.Dimensions = openai.Int(int64(provider.dimensions))
+	}
+	return params
+}
+
+// toFloat32Vector narrows one endpoint embedding to the float32 storage form.
+func toFloat32Vector(embedding []float64) []float32 {
+	vector := make([]float32, 0, len(embedding))
+	for _, value := range embedding {
+		vector = append(vector, float32(value))
+	}
+	return vector
 }
 
 // embedWithRetry issues the embeddings request, retrying transient contention
@@ -293,6 +379,63 @@ func transientEmbedStatus(err error) (int, bool) {
 	default:
 		return apiErr.StatusCode, false
 	}
+}
+
+// perInputRejection describes a per-input embedding rejection the endpoint
+// blamed on one identified input. index is the offending input's position in the
+// request's input array; the token figures are parsed from the endpoint message
+// for logging and are zero when the message does not carry them.
+type perInputRejection struct {
+	code           string
+	index          int
+	reportedTokens int
+	maxTokens      int
+}
+
+var (
+	embedInputIndexPattern     = regexp.MustCompile(`input at index (\d+)`)
+	embedMaxTokensPattern      = regexp.MustCompile(`maximum context length is (\d+) tokens`)
+	embedResolvedTokensPattern = regexp.MustCompile(`resolved to (\d+) tokens`)
+)
+
+// oversizedInputRejection reports whether err is a per-input embedding rejection
+// that names a single offending input, so that input can be dropped and the rest
+// of the batch embedded. It matches an HTTP 400 whose OpenAI error code is
+// context_length_exceeded: a permanent per-input condition (the input exceeds the
+// model's context window), never a server outage. The offending index is relative
+// to the request's input array, and the token figures come from the endpoint
+// message; a message that omits the index yields index -1, which the caller
+// treats as un-droppable and surfaces as an error.
+func oversizedInputRejection(err error) (perInputRejection, bool) {
+	var apiErr *openai.Error
+	if !errors.As(err, &apiErr) {
+		return perInputRejection{code: "", index: -1, reportedTokens: 0, maxTokens: 0}, false
+	}
+	if apiErr.StatusCode != http.StatusBadRequest || apiErr.Code != embedCodeContextLengthExceeded {
+		return perInputRejection{code: "", index: -1, reportedTokens: 0, maxTokens: 0}, false
+	}
+	message := apiErr.Message
+	return perInputRejection{
+		code:           apiErr.Code,
+		index:          parseFirstSubmatchInt(embedInputIndexPattern, message, -1),
+		reportedTokens: parseFirstSubmatchInt(embedResolvedTokensPattern, message, 0),
+		maxTokens:      parseFirstSubmatchInt(embedMaxTokensPattern, message, 0),
+	}, true
+}
+
+// parseFirstSubmatchInt returns the first capture group of pattern in text as an
+// int, or fallback when the pattern does not match or the capture is not a valid
+// integer.
+func parseFirstSubmatchInt(pattern *regexp.Regexp, text string, fallback int) int {
+	match := pattern.FindStringSubmatch(text)
+	if len(match) < 2 {
+		return fallback
+	}
+	value, convErr := strconv.Atoi(match[1])
+	if convErr != nil {
+		return fallback
+	}
+	return value
 }
 
 // embedBackoff returns the wait before the next attempt, doubling from the base

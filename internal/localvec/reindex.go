@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -222,7 +223,7 @@ func (store *Store) embedRows(
 		missingIndexes = append(missingIndexes, index)
 	}
 	if len(missingTexts) > 0 {
-		embedded, embedErr := provider.EmbedBatch(ctx, missingTexts)
+		result, embedErr := provider.EmbedBatch(ctx, missingTexts)
 		if embedErr != nil {
 			slog.ErrorContext(
 				ctx,
@@ -234,19 +235,27 @@ func (store *Store) embedRows(
 			)
 			return nil, 0, fmt.Errorf("embed local vector chunks: %w", embedErr)
 		}
-		if len(embedded) != len(missingTexts) {
+		if len(result.Vectors) != len(missingTexts) {
 			return nil, 0, fmt.Errorf(
 				"embedding provider returned %d vectors for %d chunks",
-				len(embedded),
+				len(result.Vectors),
 				len(missingTexts),
 			)
 		}
+		for _, skip := range result.Skipped {
+			logSkippedOversizedRow(ctx, chunks[missingIndexes[skip.Index]], skip)
+		}
 		for position, chunkIndex := range missingIndexes {
-			vectors[chunkIndex] = embedded[position]
+			// A skipped input carries a nil vector; that chunk is dropped below so
+			// it is never stored, and the rest of the batch is written.
+			vectors[chunkIndex] = result.Vectors[position]
 		}
 	}
 	rows := make([]row, 0, len(chunks))
 	for index, chunk := range chunks {
+		if vectors[index] == nil {
+			continue
+		}
 		stored, rowErr := newRow(chunk, vectors[index])
 		if rowErr != nil {
 			return nil, 0, rowErr
@@ -254,6 +263,22 @@ func (store *Store) embedRows(
 		rows = append(rows, stored)
 	}
 	return rows, len(chunks) - len(missingTexts), nil
+}
+
+// logSkippedOversizedRow records at WARN that one local-vector chunk was dropped
+// because the embedding endpoint rejected it as too large to embed, naming the
+// chunk and reporting both the local size estimate and the endpoint's figures.
+func logSkippedOversizedRow(ctx context.Context, chunk model.StoredChunk, skip embedding.SkippedInput) {
+	slog.WarnContext(
+		ctx,
+		"localvec.embed_input_skipped_oversized",
+		"reason", skip.Reason,
+		"conversation_id", chunk.ConversationID,
+		"relative_path", chunk.RelativePath,
+		"content_bytes", len(chunk.Content),
+		"model_max_tokens", skip.MaxTokens,
+		"reported_tokens", skip.ReportedTokens,
+	)
 }
 
 func emitProgress(

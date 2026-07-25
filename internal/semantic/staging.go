@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
@@ -145,21 +146,29 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			return err
 		}
 
+		// An input the endpoint rejected as un-embeddable (for example a chunk over
+		// the model's context window) has a nil vector. Drop those chunks so the
+		// batch inserts only the inputs that embedded, and the job continues.
+		keptChunks, keptVectors := filterEmbeddedChunks(chunkBatch, vectors)
+		if len(keptChunks) == 0 {
+			continue
+		}
+
 		if !collectionReady {
-			dimension := len(vectors[0])
+			dimension := len(keptVectors[0])
 			if err := service.createCollection(ctx, collectionName, dimension); err != nil {
 				return err
 			}
 			collectionReady = true
 		}
 
-		if err := service.insertBatch(ctx, collectionName, chunkBatch, vectors, columnSet); err != nil {
+		if err := service.insertBatch(ctx, collectionName, keptChunks, keptVectors, columnSet); err != nil {
 			return err
 		}
 
-		writtenRows += safeInt32FromInt(len(chunkBatch))
+		writtenRows += safeInt32FromInt(len(keptChunks))
 		reusedRows += safeInt32FromInt(reused)
-		embeddedRows += safeInt32FromInt(len(chunkBatch) - reused)
+		embeddedRows += safeInt32FromInt(len(keptChunks) - reused)
 		if progress != nil {
 			progress(Progress{
 				Phase:                     phase,
@@ -201,7 +210,7 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 		return vectors, reused, nil
 	}
 
-	embedded, err := service.embedder.EmbedBatch(ctx, missTexts)
+	result, err := service.embedder.EmbedBatch(ctx, missTexts)
 	if err != nil {
 		// EmbedBatch already returns a typed adapterr error; %w keeps that class
 		// visible to errors.As so the index and search paths classify an embedding
@@ -209,14 +218,55 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 		slog.ErrorContext(ctx, "embed batch failed", "err", err)
 		return nil, 0, fmt.Errorf("embed chunk batch: %w", err)
 	}
-	if len(embedded) != len(missTexts) {
-		slog.ErrorContext(ctx, "embedding batch returned unexpected vector count", "want", len(missTexts), "got", len(embedded), "err", errors.New("vector count mismatch"))
-		return nil, 0, fmt.Errorf("embedding batch returned %d vectors for %d chunks", len(embedded), len(missTexts))
+	if len(result.Vectors) != len(missTexts) {
+		slog.ErrorContext(ctx, "embedding batch returned unexpected vector count", "want", len(missTexts), "got", len(result.Vectors), "err", errors.New("vector count mismatch"))
+		return nil, 0, fmt.Errorf("embedding batch returned %d vectors for %d chunks", len(result.Vectors), len(missTexts))
+	}
+	for _, skip := range result.Skipped {
+		logSkippedOversizedChunk(ctx, chunkBatch[missIndexes[skip.Index]], skip)
 	}
 	for position, vectorIndex := range missIndexes {
-		vectors[vectorIndex] = embedded[position]
+		// A skipped input carries a nil vector; the caller drops that chunk before
+		// inserting, so it is never indexed.
+		vectors[vectorIndex] = result.Vectors[position]
 	}
 	return vectors, reused, nil
+}
+
+// logSkippedOversizedChunk records at WARN that one chunk was dropped because the
+// embedding endpoint rejected it as too large to embed. It names the chunk by its
+// conversation id or relative path and reports both the local size estimate and
+// the endpoint's own token figures, so the drop is diagnosable without failing
+// the job.
+func logSkippedOversizedChunk(ctx context.Context, chunk model.StoredChunk, skip embedding.SkippedInput) {
+	slog.WarnContext(
+		ctx,
+		"semantic.embed_input_skipped_oversized",
+		"reason", skip.Reason,
+		"conversation_id", chunk.ConversationID,
+		"relative_path", chunk.RelativePath,
+		"estimated_tokens", estimatedTokenCount(chunk.Content),
+		"content_bytes", len(chunk.Content),
+		"model_max_tokens", skip.MaxTokens,
+		"reported_tokens", skip.ReportedTokens,
+	)
+}
+
+// filterEmbeddedChunks keeps only the chunks whose vector is non-nil, pairing
+// each kept chunk with its vector in the original order. A nil vector marks an
+// input the embedding endpoint skipped as un-embeddable, which is dropped here so
+// it is never inserted.
+func filterEmbeddedChunks(chunks []model.StoredChunk, vectors [][]float32) ([]model.StoredChunk, [][]float32) {
+	keptChunks := make([]model.StoredChunk, 0, len(chunks))
+	keptVectors := make([][]float32, 0, len(chunks))
+	for index, vector := range vectors {
+		if vector == nil {
+			continue
+		}
+		keptChunks = append(keptChunks, chunks[index])
+		keptVectors = append(keptVectors, vector)
+	}
+	return keptChunks, keptVectors
 }
 
 // stagingCollectionName derives the transient rebuild collection name, kept
