@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 )
 
 const (
@@ -48,8 +49,9 @@ func (service *Service) dialMilvus(ctx context.Context) (*milvusclient.Client, e
 	defer cancel()
 
 	clientConfig := &milvusclient.ClientConfig{
-		Address: service.cfg.MilvusAddress,
-		APIKey:  service.cfg.MilvusToken,
+		Address:     service.cfg.MilvusAddress,
+		APIKey:      service.cfg.MilvusToken,
+		DialOptions: milvusgrpc.DialOptions(slog.Default()),
 	}
 	client, err := milvusclient.New(dialContext, clientConfig)
 	if err != nil {
