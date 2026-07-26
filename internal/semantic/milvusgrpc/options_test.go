@@ -111,17 +111,17 @@ func TestMilvusDeadlineInterceptorShortensLongerCallerDeadline(t *testing.T) {
 	}
 }
 
-// deadlineSlack is how much later than the bound an effective deadline may
-// land before the test calls it the caller's budget rather than the bound. It
-// only absorbs the scheduling gap between the test's clock reading and the
-// interceptor's own, so it stays far below the gap between the two budgets
-// under test.
+// deadlineSlack is how much later than the bound a chosen deadline may land
+// before the test reads it as the caller's budget rather than the bound. It only
+// absorbs the gap between two clock readings, so it stays far below the gap
+// between the two budgets under test.
 const deadlineSlack = 5 * time.Second
 
-// testControlledClock is the clock this test controls. It takes one reading
-// with Go's monotonic timer intact and derives both the caller's deadline and
-// the assertion's baseline from it, so the check measures elapsed monotonic
-// time rather than whatever the wall clock reads mid-test.
+// testControlledClock is the clock these tests control. It takes one reading
+// with Go's monotonic timer intact and derives the caller's deadline, the
+// stepped wall-clock readings, and the assertions' baseline from it, so a test
+// can advance the wall clock by an exact amount with no sleeping and no
+// dependence on what the machine's clock does mid-run.
 type testControlledClock struct {
 	base time.Time
 }
@@ -130,9 +130,19 @@ func newTestControlledClock() testControlledClock {
 	return testControlledClock{base: time.Now()}
 }
 
-// deadlineAfter returns the instant one budget past the controlled reading.
+// deadlineAfter returns a caller deadline one budget past the controlled
+// reading. It keeps the monotonic reading, which is what a deadline built by
+// context.WithTimeout carries.
 func (clock testControlledClock) deadlineAfter(budget time.Duration) time.Time {
 	return clock.base.Add(budget)
+}
+
+// wallReadingAfter returns the wall-clock reading a process would see once the
+// clock has stepped forward by step. Calling UTC strips the monotonic reading,
+// which is exactly what internal/clock.Now does, so the result compares on wall
+// time the way the removed code's operand did.
+func (clock testControlledClock) wallReadingAfter(step time.Duration) time.Time {
+	return clock.base.Add(step).UTC()
 }
 
 // budgetOf returns how long after the controlled reading an instant falls.
@@ -140,26 +150,86 @@ func (clock testControlledClock) budgetOf(instant time.Time) time.Duration {
 	return instant.Sub(clock.base)
 }
 
-// TestMilvusDeadlineInterceptorBoundsOnTheMonotonicTimer pins the bound against
-// a wall-clock correction. The caller's deadline sits an hour past the bound and
-// carries Go's monotonic reading, so the effective deadline must still be the
-// bound.
+// wallClockDeadlineChoice models the deadline selection this package used to
+// perform: pick the caller's deadline when it is already earlier than the bound,
+// otherwise install the bound, deciding by measuring the caller's instant
+// against a freshly read clock. The reading is a parameter so a test can step
+// it; the removed code took it from internal/clock.Now, which returns
+// time.Now().UTC() and therefore carries no monotonic reading.
 //
-// Choosing between the caller's deadline and the bound by hand means comparing
-// the caller's instant against a freshly read clock, and reading the wall clock
-// strips the monotonic reading, which drops the comparison onto wall time. A
-// forward wall-clock correction larger than the caller's remaining budget then
-// makes the caller's deadline look already past the bound, the bound is skipped,
-// and the invoker receives the caller's hour instead of the bound. This
-// assertion is the one that fails in that case.
-func TestMilvusDeadlineInterceptorBoundsOnTheMonotonicTimer(t *testing.T) {
+// This models the removed code. It is not production code and production does
+// not call it. Production performs no clock read at all, so nothing in it can
+// observe a stepped clock, and no test can step a clock production never reads.
+// TestMilvusCallDeadlineSelectionReadsNoClock in internal/archguard is what
+// keeps production off this shape; this function exists to show, deterministically
+// and without editing production code, what that shape does after a forward
+// wall-clock correction.
+func wallClockDeadlineChoice(ctx context.Context, wallClockNow time.Time, timeout time.Duration) time.Time {
+	bound := wallClockNow.Add(timeout)
+	deadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		return bound
+	}
+	if deadline.After(bound) {
+		return bound
+	}
+	return deadline
+}
+
+// TestWallClockDeadlineChoiceEscapesTheBoundAfterAForwardStep steps the clock
+// the removed comparison read and shows the defect that motivated replacing it
+// with context.WithTimeout. While the clock holds still the comparison is
+// correct and the bound wins. After a forward correction larger than the
+// caller's remaining budget, the caller's deadline reads as already past the
+// bound, the comparison keeps it, and a wedged call inherits the caller's hour.
+//
+// The step is injected into a model of the removed comparison rather than into
+// production, because production reads no clock and Go's public time API cannot
+// build a time.Time whose wall and monotonic readings disagree. See
+// wallClockDeadlineChoice for why that division is the honest one.
+func TestWallClockDeadlineChoiceEscapesTheBoundAfterAForwardStep(t *testing.T) {
 	clock := newTestControlledClock()
 	const callerBudget = time.Hour
+	const forwardStep = 2 * time.Hour
+	timeout := DefaultCallTimeouts().Metadata
 
 	ctx, cancel := context.WithDeadline(context.Background(), clock.deadlineAfter(callerBudget))
 	defer cancel()
 
+	steady := clock.budgetOf(wallClockDeadlineChoice(ctx, clock.wallReadingAfter(0), timeout))
+	if steady > timeout+deadlineSlack {
+		t.Fatalf(
+			"steady-clock budget = %s, want the %s bound; the removed comparison was correct while the clock held still",
+			steady,
+			timeout,
+		)
+	}
+
+	stepped := clock.budgetOf(wallClockDeadlineChoice(ctx, clock.wallReadingAfter(forwardStep), timeout))
+	if stepped <= timeout+deadlineSlack {
+		t.Fatalf(
+			"stepped-clock budget = %s, want the caller's %s; a %s forward wall-clock correction is what made the removed comparison stop bounding the call",
+			stepped,
+			callerBudget,
+			forwardStep,
+		)
+	}
+}
+
+// TestMilvusDeadlineInterceptorBoundsALaterCallerDeadlineUnderTheSameStep runs
+// the real interceptor over the same caller deadline and the same elapsed real
+// time as the model above, and shows the bound still wins. It cannot step the
+// machine's wall clock, so it claims only that the interceptor bounds a later
+// caller deadline; the guard test named in wallClockDeadlineChoice is what
+// keeps the implementation on a shape a wall-clock step cannot reach.
+func TestMilvusDeadlineInterceptorBoundsALaterCallerDeadlineUnderTheSameStep(t *testing.T) {
+	clock := newTestControlledClock()
+	const callerBudget = time.Hour
 	timeouts := DefaultCallTimeouts()
+
+	ctx, cancel := context.WithDeadline(context.Background(), clock.deadlineAfter(callerBudget))
+	defer cancel()
+
 	var effectiveDeadline time.Time
 	invoker := func(
 		ctx context.Context,

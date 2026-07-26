@@ -2,11 +2,13 @@ package config
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
@@ -573,6 +575,88 @@ func TestDefaultResolvesMilvusMutationCallTimeout(t *testing.T) {
 		cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMutationCallTimeoutMS: fileTimeoutMS})
 		if cfg.MilvusMutationCallTimeoutMS != environmentTimeoutMS {
 			t.Errorf("MilvusMutationCallTimeoutMS = %d want %d", cfg.MilvusMutationCallTimeoutMS, environmentTimeoutMS)
+		}
+	})
+}
+
+// TestMilvusMutationCallTimeoutRejectsUnconvertibleCounts pins the range check
+// that keeps the millisecond-to-duration conversion total. The two rejected
+// extremes are the ones that wrap on multiplication: a count just past the
+// maximum wraps to a tiny or negative duration that would fail every mutation
+// immediately, and a large negative count wraps to a positive duration of
+// centuries that would remove the bound altogether.
+func TestMilvusMutationCallTimeoutRejectsUnconvertibleCounts(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		milliseconds int
+		want         time.Duration
+	}{
+		{name: "unset", milliseconds: 0, want: 0},
+		{name: "ordinary negative", milliseconds: -1, want: 0},
+		{name: "wrapping negative", milliseconds: -9223372036855, want: 0},
+		{name: "most negative", milliseconds: math.MinInt64, want: 0},
+		{name: "ordinary value", milliseconds: 900000, want: 15 * time.Minute},
+		{name: "largest convertible", milliseconds: int(MaxMilvusMutationCallTimeoutMS), want: time.Duration(MaxMilvusMutationCallTimeoutMS) * time.Millisecond},
+		{name: "one past the largest", milliseconds: int(MaxMilvusMutationCallTimeoutMS) + 1, want: 0},
+		{name: "largest int", milliseconds: math.MaxInt64, want: 0},
+	}
+	for _, testCase := range cases {
+		got := MilvusMutationCallTimeout(testCase.milliseconds)
+		if got != testCase.want {
+			t.Errorf("%s: MilvusMutationCallTimeout(%d) = %s want %s", testCase.name, testCase.milliseconds, got, testCase.want)
+		}
+		if got < 0 {
+			t.Errorf("%s: MilvusMutationCallTimeout(%d) = %s, a negative duration means the multiplication wrapped", testCase.name, testCase.milliseconds, got)
+		}
+	}
+}
+
+// TestDefaultRejectsOutOfRangeMilvusMutationCallTimeout drives the same boundary
+// through both inputs an operator can actually use. A count the conversion
+// cannot hold must resolve to zero from config.json and from the environment
+// alike, so neither route can seat a value that wraps at the dial site.
+func TestDefaultRejectsOutOfRangeMilvusMutationCallTimeout(t *testing.T) {
+	outOfRange := []struct {
+		name         string
+		milliseconds int
+	}{
+		{name: "wrapping negative", milliseconds: -9223372036855},
+		{name: "one past the largest", milliseconds: int(MaxMilvusMutationCallTimeoutMS) + 1},
+	}
+
+	for _, testCase := range outOfRange {
+		t.Run("file "+testCase.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
+			cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMutationCallTimeoutMS: testCase.milliseconds})
+			if cfg.MilvusMutationCallTimeoutMS != 0 {
+				t.Errorf("MilvusMutationCallTimeoutMS = %d want 0 for an unconvertible file value", cfg.MilvusMutationCallTimeoutMS)
+			}
+		})
+
+		t.Run("environment "+testCase.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", strconv.Itoa(testCase.milliseconds))
+			cfg := defaultWithPersistedConfig(t, persistedConfig{})
+			if cfg.MilvusMutationCallTimeoutMS != 0 {
+				t.Errorf("MilvusMutationCallTimeoutMS = %d want 0 for an unconvertible environment value", cfg.MilvusMutationCallTimeoutMS)
+			}
+		})
+	}
+
+	t.Run("largest convertible survives both routes", func(t *testing.T) {
+		largest := int(MaxMilvusMutationCallTimeoutMS)
+
+		t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
+		fromFile := defaultWithPersistedConfig(t, persistedConfig{MilvusMutationCallTimeoutMS: largest})
+		if fromFile.MilvusMutationCallTimeoutMS != largest {
+			t.Errorf("file MilvusMutationCallTimeoutMS = %d want %d", fromFile.MilvusMutationCallTimeoutMS, largest)
+		}
+
+		t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", strconv.Itoa(largest))
+		fromEnvironment := defaultWithPersistedConfig(t, persistedConfig{})
+		if fromEnvironment.MilvusMutationCallTimeoutMS != largest {
+			t.Errorf("environment MilvusMutationCallTimeoutMS = %d want %d", fromEnvironment.MilvusMutationCallTimeoutMS, largest)
 		}
 	})
 }

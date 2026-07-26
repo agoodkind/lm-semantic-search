@@ -345,3 +345,26 @@ func TestCallTimeoutsUsesConfiguredMutationBound(t *testing.T) {
 		)
 	}
 }
+
+// TestCallTimeoutsRejectsUnconvertibleMutationBound covers the dial site
+// directly rather than through config.Default. The field is a plain int that any
+// caller can set, so the conversion at the dial site has to be total on its own:
+// a count that cannot be held as a duration must fall back to the transport's
+// bound instead of wrapping into a bound of centuries or of nanoseconds.
+func TestCallTimeoutsRejectsUnconvertibleMutationBound(t *testing.T) {
+	t.Parallel()
+
+	unconvertible := []int{-9223372036855, int(config.MaxMilvusMutationCallTimeoutMS) + 1}
+	for _, milliseconds := range unconvertible {
+		service := &Service{cfg: config.Config{MilvusMutationCallTimeoutMS: milliseconds}}
+		got := service.callTimeouts().Mutation
+		if got != milvusgrpc.DefaultCallTimeouts().Mutation {
+			t.Fatalf(
+				"mutation bound for %d ms = %s, want the transport default %s",
+				milliseconds,
+				got,
+				milvusgrpc.DefaultCallTimeouts().Mutation,
+			)
+		}
+	}
+}

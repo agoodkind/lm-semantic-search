@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
@@ -112,9 +114,12 @@ type Config struct {
 	// rows they match, and a filter-based Delete matches an unbounded row count,
 	// so no fixed value is provably sufficient for every collection. An operator
 	// whose collection is large enough for a valid mutation to be cancelled at
-	// the built-in bound raises this instead of rebuilding the daemon. Zero or
-	// below keeps the transport package's own five-minute bound, so an unset or
-	// invalid value never leaves a mutation unbounded.
+	// the built-in bound raises this instead of rebuilding the daemon.
+	//
+	// Zero, a negative count, and a count above MaxMilvusMutationCallTimeoutMS
+	// all keep the transport package's own five-minute bound, so no unset or
+	// out-of-range value can leave a mutation unbounded. Convert it with
+	// MilvusMutationCallTimeout rather than multiplying it directly.
 	MilvusMutationCallTimeoutMS int
 	// IndexBackend selects the vector store implementation: "milvus" (default) or
 	// "local". Derived from Profile by ApplyProfile; may also be set directly.
@@ -281,61 +286,58 @@ func Default() (Config, error) {
 	}
 	return ApplyProfile(Config{
 		Profile: resolveProfile(fileConfig.Profile), IndexBackend: IndexBackendMilvus,
-		ConfigRoot:                configRoot,
-		ConfigPath:                configPath,
-		StateRoot:                 stateRoot,
-		SocketPath:                socketPath,
-		RegistryPath:              filepath.Join(stateRoot, "registry.json"),
-		JobsPath:                  filepath.Join(stateRoot, "jobs.jsonl"),
-		EventsPath:                filepath.Join(stateRoot, "events.jsonl"),
-		LogsDir:                   logsDir,
-		LogPath:                   logPath,
-		MerkleDir:                 filepath.Join(stateRoot, "merkle"),
-		LocksDir:                  filepath.Join(stateRoot, "locks"),
-		SocketsDir:                socketsDir,
-		ChunksDir:                 filepath.Join(stateRoot, "chunks"),
-		GraphDir:                  filepath.Join(stateRoot, "graph"),
-		ContextRoot:               contextRoot,
-		EmbeddingProvider:         envOrDefault("EMBEDDING_PROVIDER", embeddingDefaults.provider),
-		EmbeddingModel:            envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model),
-		OfflineEmbeddingModel:     embeddingDefaults.offlineModel,
-		EmbeddingBatchSize:        envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
-		EmbeddingBatchTokenBudget: batchTokenBudget,
-		EmbeddingMaxTokens:        embeddingMaxTokens,
-		EmbeddingRequestTimeoutMS: envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", requestTimeoutMS),
-		EmbeddingDimension:        envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
-		OpenAIAPIKey:              envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
-		OpenAIBaseURL:             envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),
-		QueryInstructionPrefix:    embeddingDefaults.queryInstructionText,
-		CustomIgnorePatterns:      parseCommaSeparated(os.Getenv("CUSTOM_IGNORE_PATTERNS")),
-		IncludeSubmodules:         parseCommaSeparated(os.Getenv("CLAUDE_CONTEXT_INCLUDE_SUBMODULES")),
-		MilvusAddress:             envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),
-		MilvusToken:               envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),
-		MilvusMutationCallTimeoutMS: envIntOrDefault(
-			"CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS",
-			fileConfig.MilvusMutationCallTimeoutMS,
-		),
-		CollectionNameOverride:    envOrDefault("CODE_CHUNKS_COLLECTION_NAME_OVERRIDE", fileConfig.CollectionNameOverride),
-		HybridMode:                envBoolOrDefault("HYBRID_MODE", boolOrDefault(fileConfig.HybridMode, true)),
-		BackgroundSyncEnabled:     envBoolOrDefault("CLAUDE_CONTEXT_BACKGROUND_SYNC", true),
-		SyncIntervalMS:            envIntOrDefault("CLAUDE_CONTEXT_SYNC_INTERVAL_MS", defaultSyncInterval),
-		TriggerWatcherEnabled:     envBoolOrDefault("CLAUDE_CONTEXT_TRIGGER_WATCHER", true),
-		FileWatcherEnabled:        envBoolOrDefault("CLAUDE_CONTEXT_FILE_WATCHER", true),
-		SyncLockStaleMS:           envIntOrDefault("CLAUDE_CONTEXT_SYNC_LOCK_STALE_MS", defaultSyncLockAge),
-		DebugListenerEnabled:      envBoolOrDefault("CLAUDE_CONTEXT_DEBUG_LISTENER", true),
-		DebugListenAddr:           envOrDefault("CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR", defaultDebugListenAddr),
-		PerfCountersIntervalMS:    envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),
-		MaxConcurrentIndexJobs:    envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
-		MaxJobChunks:              envInt32OrDefault("CLAUDE_CONTEXT_MAX_JOB_CHUNKS", defaultMaxJobChunks),
-		MaxConversationsPerIngest: envIntOrDefault("CLAUDE_CONTEXT_MAX_CONVERSATIONS_PER_INGEST", defaultMaxConversationsPerIngest),
-		MaxJobBytes:               envInt64OrDefault("CLAUDE_CONTEXT_MAX_JOB_BYTES", defaultMaxJobBytes),
-		ExpectedJobGrowthFactor:   envFloat64OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FACTOR", defaultExpectedJobGrowthFactor),
-		ExpectedJobGrowthFloor:    envInt32OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FLOOR", defaultExpectedJobGrowthFloor),
-		ResumeIndexingOnBoot:      envBoolOrDefault("CLAUDE_CONTEXT_RESUME_ON_BOOT", true),
-		LogRotationMaxBytes:       envInt64OrDefault("CLAUDE_CONTEXT_LOG_ROTATION_MAX_BYTES", defaultLogRotationMaxBytes),
-		LogRetentionBytes:         envInt64OrDefault("CLAUDE_CONTEXT_LOG_RETENTION_BYTES", defaultLogRetentionBytes),
-		LogCleanupEnabled:         envBoolOrDefault("CLAUDE_CONTEXT_LOG_CLEANUP_ENABLED", true),
-		LogCleanupIntervalMS:      envIntOrDefault("CLAUDE_CONTEXT_LOG_CLEANUP_INTERVAL_MS", defaultLogCleanupIntervalMS),
+		ConfigRoot:                  configRoot,
+		ConfigPath:                  configPath,
+		StateRoot:                   stateRoot,
+		SocketPath:                  socketPath,
+		RegistryPath:                filepath.Join(stateRoot, "registry.json"),
+		JobsPath:                    filepath.Join(stateRoot, "jobs.jsonl"),
+		EventsPath:                  filepath.Join(stateRoot, "events.jsonl"),
+		LogsDir:                     logsDir,
+		LogPath:                     logPath,
+		MerkleDir:                   filepath.Join(stateRoot, "merkle"),
+		LocksDir:                    filepath.Join(stateRoot, "locks"),
+		SocketsDir:                  socketsDir,
+		ChunksDir:                   filepath.Join(stateRoot, "chunks"),
+		GraphDir:                    filepath.Join(stateRoot, "graph"),
+		ContextRoot:                 contextRoot,
+		EmbeddingProvider:           envOrDefault("EMBEDDING_PROVIDER", embeddingDefaults.provider),
+		EmbeddingModel:              envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model),
+		OfflineEmbeddingModel:       embeddingDefaults.offlineModel,
+		EmbeddingBatchSize:          envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
+		EmbeddingBatchTokenBudget:   batchTokenBudget,
+		EmbeddingMaxTokens:          embeddingMaxTokens,
+		EmbeddingRequestTimeoutMS:   envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", requestTimeoutMS),
+		EmbeddingDimension:          envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
+		OpenAIAPIKey:                envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
+		OpenAIBaseURL:               envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),
+		QueryInstructionPrefix:      embeddingDefaults.queryInstructionText,
+		CustomIgnorePatterns:        parseCommaSeparated(os.Getenv("CUSTOM_IGNORE_PATTERNS")),
+		IncludeSubmodules:           parseCommaSeparated(os.Getenv("CLAUDE_CONTEXT_INCLUDE_SUBMODULES")),
+		MilvusAddress:               envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),
+		MilvusToken:                 envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),
+		MilvusMutationCallTimeoutMS: resolveMilvusMutationCallTimeoutMS(fileConfig.MilvusMutationCallTimeoutMS),
+		CollectionNameOverride:      envOrDefault("CODE_CHUNKS_COLLECTION_NAME_OVERRIDE", fileConfig.CollectionNameOverride),
+		HybridMode:                  envBoolOrDefault("HYBRID_MODE", boolOrDefault(fileConfig.HybridMode, true)),
+		BackgroundSyncEnabled:       envBoolOrDefault("CLAUDE_CONTEXT_BACKGROUND_SYNC", true),
+		SyncIntervalMS:              envIntOrDefault("CLAUDE_CONTEXT_SYNC_INTERVAL_MS", defaultSyncInterval),
+		TriggerWatcherEnabled:       envBoolOrDefault("CLAUDE_CONTEXT_TRIGGER_WATCHER", true),
+		FileWatcherEnabled:          envBoolOrDefault("CLAUDE_CONTEXT_FILE_WATCHER", true),
+		SyncLockStaleMS:             envIntOrDefault("CLAUDE_CONTEXT_SYNC_LOCK_STALE_MS", defaultSyncLockAge),
+		DebugListenerEnabled:        envBoolOrDefault("CLAUDE_CONTEXT_DEBUG_LISTENER", true),
+		DebugListenAddr:             envOrDefault("CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR", defaultDebugListenAddr),
+		PerfCountersIntervalMS:      envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),
+		MaxConcurrentIndexJobs:      envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
+		MaxJobChunks:                envInt32OrDefault("CLAUDE_CONTEXT_MAX_JOB_CHUNKS", defaultMaxJobChunks),
+		MaxConversationsPerIngest:   envIntOrDefault("CLAUDE_CONTEXT_MAX_CONVERSATIONS_PER_INGEST", defaultMaxConversationsPerIngest),
+		MaxJobBytes:                 envInt64OrDefault("CLAUDE_CONTEXT_MAX_JOB_BYTES", defaultMaxJobBytes),
+		ExpectedJobGrowthFactor:     envFloat64OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FACTOR", defaultExpectedJobGrowthFactor),
+		ExpectedJobGrowthFloor:      envInt32OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FLOOR", defaultExpectedJobGrowthFloor),
+		ResumeIndexingOnBoot:        envBoolOrDefault("CLAUDE_CONTEXT_RESUME_ON_BOOT", true),
+		LogRotationMaxBytes:         envInt64OrDefault("CLAUDE_CONTEXT_LOG_ROTATION_MAX_BYTES", defaultLogRotationMaxBytes),
+		LogRetentionBytes:           envInt64OrDefault("CLAUDE_CONTEXT_LOG_RETENTION_BYTES", defaultLogRetentionBytes),
+		LogCleanupEnabled:           envBoolOrDefault("CLAUDE_CONTEXT_LOG_CLEANUP_ENABLED", true),
+		LogCleanupIntervalMS:        envIntOrDefault("CLAUDE_CONTEXT_LOG_CLEANUP_INTERVAL_MS", defaultLogCleanupIntervalMS),
 	}), nil
 }
 
@@ -446,6 +448,53 @@ func resolveEmbeddingMaxTokens(fileValue int) int {
 			"embeddingMaxTokens is unset; per-chunk token cap disabled, so oversize inputs may be silently truncated by the embedder",
 			"config_field", "embeddingMaxTokens",
 			"env_var", "EMBEDDING_MAX_TOKENS",
+		)
+		return 0
+	}
+	return value
+}
+
+// MaxMilvusMutationCallTimeoutMS is the largest millisecond count that converts
+// to a [time.Duration] without overflowing its int64 nanosecond range. Anything
+// larger wraps on multiplication, so it is rejected rather than converted.
+const MaxMilvusMutationCallTimeoutMS = int64(math.MaxInt64) / int64(time.Millisecond)
+
+// MilvusMutationCallTimeout converts a configured millisecond count into the
+// Milvus mutation bound. Zero, a negative count, and a count above
+// MaxMilvusMutationCallTimeoutMS all return zero, which the transport reads as
+// "keep the built-in bound".
+//
+// The range check is what makes the conversion total. Multiplying an
+// out-of-range count instead wraps it: -9223372036855 milliseconds becomes a
+// positive duration of roughly 292 years, which removes the bound the policy
+// exists to enforce, and a count just above the maximum wraps to a tiny or
+// negative duration that fails every mutation immediately. Both are silent, so
+// the count is validated before it is multiplied rather than after.
+func MilvusMutationCallTimeout(milliseconds int) time.Duration {
+	count := int64(milliseconds)
+	if count <= 0 || count > MaxMilvusMutationCallTimeoutMS {
+		return 0
+	}
+	return time.Duration(count) * time.Millisecond
+}
+
+// resolveMilvusMutationCallTimeoutMS applies the env override over the config
+// value and rejects anything MilvusMutationCallTimeout cannot convert, so the
+// resolved field only ever holds zero or a usable count. A rejected value warns
+// and names the knob, because an operator who mistypes the count would otherwise
+// see the built-in bound silently stay in place.
+func resolveMilvusMutationCallTimeoutMS(fileValue int) int {
+	value := envIntOrDefault("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", fileValue)
+	if value == 0 {
+		return 0
+	}
+	if MilvusMutationCallTimeout(value) == 0 {
+		slog.Warn(
+			"milvusMutationCallTimeoutMs is not a usable millisecond count; keeping the built-in Milvus mutation bound",
+			"value", value,
+			"max", MaxMilvusMutationCallTimeoutMS,
+			"config_field", "milvusMutationCallTimeoutMs",
+			"env_var", "CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS",
 		)
 		return 0
 	}
