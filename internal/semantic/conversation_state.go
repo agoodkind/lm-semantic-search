@@ -44,10 +44,9 @@ func (service *Service) LoadConversationMessageState(ctx context.Context, collec
 		return state, reuse, nil
 	}
 
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		slog.ErrorContext(ctx, "check collection for conversation state load failed", "collection", collectionName, "err", err)
-		return nil, nil, fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
+		return nil, nil, err
 	}
 	if !hasCollection {
 		return state, reuse, nil
@@ -293,7 +292,10 @@ func assembleStoredMessageState(assemblies map[int32]*storedMessageAssembly) map
 			if leftPart.splitPartRecorded && rightPart.splitPartRecorded {
 				return leftPart.splitPart < rightPart.splitPart
 			}
-			return false
+			if leftPart.splitPartRecorded != rightPart.splitPartRecorded {
+				return leftPart.splitPartRecorded
+			}
+			return leftPart.content < rightPart.content
 		})
 		var text strings.Builder
 		for _, part := range assembly.parts {

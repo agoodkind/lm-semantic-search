@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -35,9 +34,9 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 	}
 
 	stagingName := stagingCollectionName(service.CollectionName(codebasePath))
-	hasStaging, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(stagingName))
+	hasStaging, err := service.hasCollection(ctx, stagingName, "check staging collection "+stagingName)
 	if err != nil {
-		return wrapStoreError(ctx, err, "check staging collection "+stagingName)
+		return err
 	}
 
 	if hasStaging && !removal.Empty() {
@@ -67,9 +66,9 @@ func (service *Service) PromoteStaging(ctx context.Context, codebasePath string)
 
 	collectionName := service.CollectionName(codebasePath)
 	stagingName := stagingCollectionName(collectionName)
-	hasStaging, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(stagingName))
+	hasStaging, err := service.hasCollection(ctx, stagingName, "check staging collection "+stagingName)
 	if err != nil {
-		return wrapStoreError(ctx, err, "check staging collection "+stagingName)
+		return err
 	}
 	if !hasStaging {
 		return ErrCollectionMissing
@@ -93,10 +92,9 @@ func (service *Service) HasStaging(ctx context.Context, codebasePath string) (bo
 		return false, nil
 	}
 	stagingName := stagingCollectionName(service.CollectionName(codebasePath))
-	hasStaging, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(stagingName))
+	hasStaging, err := service.hasCollection(ctx, stagingName, "check staging collection "+stagingName)
 	if err != nil {
-		slog.ErrorContext(ctx, "check staging collection presence failed", "collection", stagingName, "err", err)
-		return false, fmt.Errorf("check staging collection %s: %w", stagingName, err)
+		return false, err
 	}
 	return hasStaging, nil
 }

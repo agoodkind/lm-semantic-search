@@ -99,9 +99,13 @@ func (service *Service) awaitCollectionReleased(ctx context.Context, collectionN
 // is gated on the collection's load state, so a collection that came up unloaded
 // skips straight to the alter and a single load.
 func (service *Service) ensureMmapEnabledOnCollection(ctx context.Context, collectionName string) (mmapOutcome, error) {
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(
+		ctx,
+		collectionName,
+		"check collection "+collectionName+" for mmap",
+	)
 	if err != nil {
-		return mmapOutcomeUnknown, wrapStoreError(ctx, err, "check collection "+collectionName+" for mmap")
+		return mmapOutcomeUnknown, err
 	}
 	if !hasCollection {
 		return mmapOutcomeSkipped, nil

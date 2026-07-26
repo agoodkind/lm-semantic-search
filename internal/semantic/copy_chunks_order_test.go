@@ -9,21 +9,34 @@ import (
 func TestCopyChunkMutationsInsertDestinationBeforeDeletingSource(t *testing.T) {
 	t.Parallel()
 
-	operations := make([]string, 0, 2)
+	operations := make([]string, 0, 4)
 	err := runCopyChunkMutations(copyChunkMutations{
 		insertDestination: func() error {
 			operations = append(operations, "insert destination")
+			return nil
+		},
+		persistDestination: func() error {
+			operations = append(operations, "persist destination")
 			return nil
 		},
 		deleteSource: func() error {
 			operations = append(operations, "delete source")
 			return nil
 		},
+		persistSourceDelete: func() error {
+			operations = append(operations, "persist source delete")
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("runCopyChunkMutations returned error: %v", err)
 	}
-	want := []string{"insert destination", "delete source"}
+	want := []string{
+		"insert destination",
+		"persist destination",
+		"delete source",
+		"persist source delete",
+	}
 	if !slices.Equal(operations, want) {
 		t.Fatalf("mutation order = %v, want %v", operations, want)
 	}
@@ -40,8 +53,14 @@ func TestCopyChunkMutationsDeleteFailureKeepsBothCopies(t *testing.T) {
 			destinationExists = true
 			return nil
 		},
+		persistDestination: func() error {
+			return nil
+		},
 		deleteSource: func() error {
 			return deleteErr
+		},
+		persistSourceDelete: func() error {
+			return nil
 		},
 	})
 	if !errors.Is(err, deleteErr) {
@@ -62,22 +81,20 @@ func TestCopyChunkMutationsInterruptionAfterFirstMutationPreservesContent(t *tes
 	interruptedErr := errors.New("copy interrupted")
 	sourceExists := true
 	destinationExists := false
-	mutationCount := 0
-	interruptAfterFirst := func() error {
-		mutationCount++
-		if mutationCount == 1 {
-			return interruptedErr
-		}
-		return nil
-	}
 	err := runCopyChunkMutations(copyChunkMutations{
 		insertDestination: func() error {
 			destinationExists = true
-			return interruptAfterFirst()
+			return nil
+		},
+		persistDestination: func() error {
+			return interruptedErr
 		},
 		deleteSource: func() error {
 			sourceExists = false
-			return interruptAfterFirst()
+			return nil
+		},
+		persistSourceDelete: func() error {
+			return nil
 		},
 	})
 	if !errors.Is(err, interruptedErr) {

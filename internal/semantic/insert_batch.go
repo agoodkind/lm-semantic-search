@@ -122,10 +122,52 @@ func (service *Service) insertBatchWithIDs(
 			WithInt64Column(messageIndexFieldName, columns.scalars.messageIndexes)
 	}
 
-	if _, err := service.milvus.Insert(ctx, insertOption); err != nil {
-		return wrapStoreError(ctx, err, "insert Milvus batch into "+collectionName)
+	insertResult, err := service.executeInsert(ctx, insertOption)
+	if err != nil {
+		return err
+	}
+	if insertResult.InsertCount != int64(len(chunks)) {
+		countErr := fmt.Errorf(
+			"milvus acknowledged %d of %d rows",
+			insertResult.InsertCount,
+			len(chunks),
+		)
+		slog.ErrorContext(
+			ctx,
+			"insert Milvus batch returned unexpected row count",
+			"collection",
+			collectionName,
+			"inserted",
+			insertResult.InsertCount,
+			"expected",
+			len(chunks),
+			"err",
+			countErr,
+		)
+		return fmt.Errorf("insert Milvus batch into %s: %w", collectionName, countErr)
 	}
 	return nil
+}
+
+func (service *Service) executeInsert(
+	ctx context.Context,
+	option milvusclient.InsertOption,
+) (milvusclient.InsertResult, error) {
+	var result milvusclient.InsertResult
+	var err error
+	if service.insertRows != nil {
+		result, err = service.insertRows(ctx, option)
+	} else {
+		result, err = service.milvus.Insert(ctx, option)
+	}
+	if err != nil {
+		return result, wrapStoreError(
+			ctx,
+			err,
+			"insert Milvus batch into "+option.CollectionName(),
+		)
+	}
+	return result, nil
 }
 
 func validateInsertBatchCounts(

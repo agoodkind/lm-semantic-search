@@ -58,10 +58,9 @@ func (service *Service) LoadConversationDerivedBatch(ctx context.Context, collec
 		return state, nil
 	}
 
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		slog.ErrorContext(ctx, "check collection for conversation batch load failed", "collection", collectionName, "err", err)
-		return ConversationBatchState{}, fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
+		return ConversationBatchState{}, err
 	}
 	if !hasCollection {
 		return state, nil

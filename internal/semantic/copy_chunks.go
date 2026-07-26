@@ -21,10 +21,11 @@ import (
 // Milvus does not support an in-place column update on a primary-keyed
 // row (the primary key in this schema is derived from relativePath), so
 // CopyChunks queries the source rows, computes new IDs and rows for the
-// destination path, inserts the new rows, then deletes the source rows.
-// A failure after the insert leaves both copies available instead of losing
-// the only stored copy. CopyChunks returns a source-delete failure without
-// retrying, leaving later convergence to remove the source.
+// destination path, inserts and flushes the new rows, then deletes and flushes
+// the source rows. A failure after the destination flush keeps the destination
+// durable even if the source deletion has an uncertain result. CopyChunks
+// returns the failure without retrying, leaving later convergence to remove
+// any remaining source rows.
 // The dense vector is preserved across the copy; the sparse vector, when
 // the collection is hybrid, is re-derived by the BM25 function from the
 // preserved content so no embedding API call is issued.
@@ -36,10 +37,9 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 		return 0, nil
 	}
 	collectionName := service.CollectionName(codebasePath)
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		slog.ErrorContext(ctx, "check Milvus collection for copy failed", "collection", collectionName, "err", err)
-		return 0, fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
+		return 0, err
 	}
 	if !hasCollection {
 		return 0, ErrCollectionMissing
@@ -73,6 +73,9 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 				storeColumnSetForCollection(collectionName),
 			)
 		},
+		persistDestination: func() error {
+			return service.flushCollection(ctx, collectionName)
+		},
 		deleteSource: func() error {
 			// The deleted-row count is not part of the copy's result, which
 			// reports the rows written at the destination.
@@ -82,6 +85,9 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 				[]string{srcRelativePath},
 			)
 			return deleteErr
+		},
+		persistSourceDelete: func() error {
+			return service.flushCollection(ctx, collectionName)
 		},
 	}
 	if err := runCopyChunkMutations(mutations); err != nil {
@@ -94,16 +100,38 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 type copyChunkMutation func() error
 
 type copyChunkMutations struct {
-	insertDestination copyChunkMutation
-	deleteSource      copyChunkMutation
+	insertDestination   copyChunkMutation
+	persistDestination  copyChunkMutation
+	deleteSource        copyChunkMutation
+	persistSourceDelete copyChunkMutation
 }
 
 func runCopyChunkMutations(mutations copyChunkMutations) error {
 	if err := mutations.insertDestination(); err != nil {
 		return err
 	}
+	if err := mutations.persistDestination(); err != nil {
+		return err
+	}
 	if err := mutations.deleteSource(); err != nil {
 		return err
+	}
+	if err := mutations.persistSourceDelete(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (service *Service) flushCollection(ctx context.Context, collectionName string) error {
+	task, err := service.milvus.Flush(
+		ctx,
+		milvusclient.NewFlushOption(collectionName),
+	)
+	if err != nil {
+		return wrapStoreError(ctx, err, "flush Milvus collection "+collectionName)
+	}
+	if err := task.Await(ctx); err != nil {
+		return wrapStoreError(ctx, err, "await Milvus collection flush "+collectionName)
 	}
 	return nil
 }

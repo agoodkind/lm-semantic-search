@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/milvus-io/milvus/client/v2/column"
@@ -14,9 +15,10 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-func TestResultSetsToChunksRestoresSplitPartAndIdentity(t *testing.T) {
+func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 	t.Parallel()
 
+	const collectionName = "test_collection"
 	input := []model.StoredChunk{
 		{
 			Content:       "same",
@@ -35,26 +37,48 @@ func TestResultSetsToChunksRestoresSplitPartAndIdentity(t *testing.T) {
 			SplitPart:     513,
 		},
 	}
-	insertColumns := buildInsertBatchColumns(context.Background(), input, false)
-	splitParts, err := newSplitPartColumn(
-		"test_collection",
-		insertColumns.splitParts,
-		[]bool{true, true},
+	var capturedOption milvusclient.InsertOption
+	service := &Service{
+		insertRows: func(
+			_ context.Context,
+			option milvusclient.InsertOption,
+		) (milvusclient.InsertResult, error) {
+			capturedOption = option
+			return milvusclient.InsertResult{InsertCount: int64(len(input))}, nil
+		},
+	}
+	migration := &splitPartMigration{}
+	migration.once.Do(func() {})
+	service.ensuredSplitPartColumns.Store(collectionName, migration)
+
+	err := service.insertBatch(
+		context.Background(),
+		collectionName,
+		input,
+		[][]float32{{1}, {2}},
+		StoreColumnSetCode,
 	)
 	if err != nil {
-		t.Fatalf("newSplitPartColumn returned error: %v", err)
+		t.Fatalf("insertBatch returned error: %v", err)
+	}
+	if capturedOption == nil {
+		t.Fatal("insertBatch did not send an insert option")
+	}
+	request, err := capturedOption.InsertRequest(testInsertCollection(collectionName, 1))
+	if err != nil {
+		t.Fatalf("captured insert option returned error: %v", err)
+	}
+	fields := make(milvusclient.DataSet, 0, len(request.GetFieldsData()))
+	for _, fieldData := range request.GetFieldsData() {
+		fieldColumn, columnErr := column.FieldDataColumn(fieldData, 0, -1)
+		if columnErr != nil {
+			t.Fatalf("convert inserted field %q: %v", fieldData.GetFieldName(), columnErr)
+		}
+		fields = append(fields, fieldColumn)
 	}
 	resultSet := milvusclient.ResultSet{
-		ResultCount: 2,
-		Fields: milvusclient.DataSet{
-			column.NewColumnVarChar(contentFieldName, insertColumns.contents),
-			column.NewColumnVarChar(relativePathFieldName, insertColumns.relativePaths),
-			column.NewColumnInt64(startLineFieldName, insertColumns.startLines),
-			column.NewColumnInt64(endLineFieldName, insertColumns.endLines),
-			column.NewColumnVarChar(fileExtensionFieldName, insertColumns.fileExtensions),
-			column.NewColumnVarChar(metadataFieldName, insertColumns.metadataValues),
-			splitParts,
-		},
+		ResultCount: int(request.GetNumRows()),
+		Fields:      fields,
 	}
 
 	chunks, err := resultSetsToChunks([]milvusclient.ResultSet{resultSet})
@@ -69,6 +93,76 @@ func TestResultSetsToChunksRestoresSplitPartAndIdentity(t *testing.T) {
 	}
 	if generateID(chunks[0], 0) == generateID(chunks[1], 1) {
 		t.Fatal("round-tripped split pieces share a primary key")
+	}
+}
+
+func testInsertCollection(collectionName string, dimension int64) *entity.Collection {
+	schema := entity.NewSchema().
+		WithName(collectionName).
+		WithField(entity.NewField().
+			WithName(idFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(512).
+			WithIsPrimaryKey(true)).
+		WithField(entity.NewField().
+			WithName(contentFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(65535)).
+		WithField(entity.NewField().
+			WithName(relativePathFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(1024)).
+		WithField(entity.NewField().
+			WithName(startLineFieldName).
+			WithDataType(entity.FieldTypeInt64)).
+		WithField(entity.NewField().
+			WithName(endLineFieldName).
+			WithDataType(entity.FieldTypeInt64)).
+		WithField(entity.NewField().
+			WithName(fileExtensionFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(32)).
+		WithField(entity.NewField().
+			WithName(metadataFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(65535)).
+		WithField(splitPartField()).
+		WithField(entity.NewField().
+			WithName(denseVectorFieldName).
+			WithDataType(entity.FieldTypeFloatVector).
+			WithDim(dimension))
+	return &entity.Collection{Name: collectionName, Schema: schema}
+}
+
+func TestInsertBatchRejectsPartialInsertCount(t *testing.T) {
+	t.Parallel()
+
+	const collectionName = "test_collection"
+	service := &Service{
+		insertRows: func(
+			_ context.Context,
+			_ milvusclient.InsertOption,
+		) (milvusclient.InsertResult, error) {
+			return milvusclient.InsertResult{InsertCount: 1}, nil
+		},
+	}
+	migration := &splitPartMigration{}
+	migration.once.Do(func() {})
+	service.ensuredSplitPartColumns.Store(collectionName, migration)
+	chunks := []model.StoredChunk{
+		{Content: "first", RelativePath: "first.go"},
+		{Content: "second", RelativePath: "second.go"},
+	}
+
+	err := service.insertBatch(
+		context.Background(),
+		collectionName,
+		chunks,
+		[][]float32{{1}, {2}},
+		StoreColumnSetCode,
+	)
+	if err == nil {
+		t.Fatal("insertBatch returned nil for a partial insert count")
 	}
 }
 
@@ -217,6 +311,31 @@ func TestSplitPartMigrationDecisionIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInvalidateCollectionCachesClearsSchemaState(t *testing.T) {
+	t.Parallel()
+
+	const collectionName = "test_collection"
+	service := &Service{}
+	service.ensuredConvColumns.Store(collectionName, "conversation")
+	service.ensuredSplitPartColumns.Store(collectionName, "split-part")
+	service.ensuredMmapEnabled.Store(collectionName, "mmap")
+	service.ensuredBackfill.Store(collectionName, "backfill")
+
+	service.invalidateCollectionCaches(collectionName)
+
+	caches := []*sync.Map{
+		&service.ensuredConvColumns,
+		&service.ensuredSplitPartColumns,
+		&service.ensuredMmapEnabled,
+		&service.ensuredBackfill,
+	}
+	for index, cache := range caches {
+		if _, found := cache.Load(collectionName); found {
+			t.Fatalf("cache %d retained collection state", index)
+		}
+	}
+}
+
 func TestConversationAssemblyOrdersRowsBySplitPart(t *testing.T) {
 	t.Parallel()
 
@@ -258,5 +377,55 @@ func TestConversationAssemblyOrdersRowsBySplitPart(t *testing.T) {
 	state := assembleStoredMessageState(assemblies)
 	if got := state[0].Text; got != "firstsecond" {
 		t.Fatalf("assembled text = %q, want firstsecond", got)
+	}
+}
+
+func TestConversationAssemblyOrdersMigratedRowsDeterministically(t *testing.T) {
+	t.Parallel()
+
+	splitParts, err := newSplitPartColumn(
+		"test_collection",
+		[]int64{0, 0},
+		[]bool{false, false},
+	)
+	if err != nil {
+		t.Fatalf("newSplitPartColumn returned error: %v", err)
+	}
+	resultSet := milvusclient.ResultSet{
+		ResultCount: 2,
+		Fields: milvusclient.DataSet{
+			column.NewColumnVarChar(
+				relativePathFieldName,
+				[]string{"conv/example/0", "conv/example/0"},
+			),
+			column.NewColumnVarChar(roleFieldName, []string{"user", "user"}),
+			column.NewColumnVarChar(contentFieldName, []string{"second", "first"}),
+			column.NewColumnInt64(messageIndexFieldName, []int64{0, 0}),
+			column.NewColumnFloatVector(
+				denseVectorFieldName,
+				1,
+				[][]float32{{2}, {1}},
+			),
+			splitParts,
+		},
+	}
+	assemblies := make(map[int32]*storedMessageAssembly)
+	reuse := make(map[string][]float32)
+
+	legacyRows, err := appendConversationMessageStateRows(
+		resultSet,
+		"conv/example/",
+		assemblies,
+		reuse,
+	)
+	if err != nil {
+		t.Fatalf("appendConversationMessageStateRows returned error: %v", err)
+	}
+	if legacyRows != 0 {
+		t.Fatalf("legacy rows = %d, want 0", legacyRows)
+	}
+	state := assembleStoredMessageState(assemblies)
+	if got := state[0].Text; got != "firstsecond" {
+		t.Fatalf("assembled migrated text = %q, want firstsecond", got)
 	}
 }

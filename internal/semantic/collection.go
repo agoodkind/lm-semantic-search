@@ -159,6 +159,7 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 	if err := service.milvus.CreateCollection(ctx, milvusclient.NewCreateCollectionOption(collectionName, schema).WithIndexOptions(indexOptions...)); err != nil {
 		return wrapStoreError(ctx, err, "create Milvus collection "+collectionName)
 	}
+	service.invalidateCollectionCaches(collectionName)
 	// Enable mmap on the dense field and index through the supported alter path,
 	// which also loads the collection. A freshly created collection is unloaded, so
 	// the alter needs no release first, and enabling mmap before any rows load keeps
@@ -294,10 +295,13 @@ func (service *Service) ensureConversationScalarColumns(ctx context.Context, col
 	if !isConversationCollection(collectionName) {
 		return nil
 	}
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(
+		ctx,
+		collectionName,
+		"check conversation collection "+collectionName,
+	)
 	if err != nil {
-		slog.ErrorContext(ctx, "check conversation collection for scalar migration failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("check conversation collection %s: %w", collectionName, err)
+		return err
 	}
 	if !hasCollection {
 		return nil

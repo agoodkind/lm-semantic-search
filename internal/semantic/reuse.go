@@ -131,10 +131,9 @@ func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collection
 		slog.InfoContext(ctx, "semantic.reuse_vectors_read", "collection", collectionName, "rows", rowsRead, "keys", len(reuse))
 	}()
 
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		slog.ErrorContext(ctx, "check collection for reuse load failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
+		return err
 	}
 	if !hasCollection {
 		return nil

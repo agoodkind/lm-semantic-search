@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -46,10 +45,13 @@ func (service *Service) SearchConversationCollectionCapped(ctx context.Context, 
 		return capConversationChunks(chunks, perConversationLimit, minScore, limit), nil
 	}
 
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(trimmedCollectionName))
+	hasCollection, err := service.hasCollection(
+		ctx,
+		trimmedCollectionName,
+		"check Milvus collection "+trimmedCollectionName,
+	)
 	if err != nil {
-		slog.ErrorContext(ctx, "check Milvus collection failed", "collection", trimmedCollectionName, "err", err)
-		return nil, fmt.Errorf("check Milvus collection %s: %w", trimmedCollectionName, err)
+		return nil, err
 	}
 	if !hasCollection {
 		return nil, ErrCollectionMissing

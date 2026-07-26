@@ -69,11 +69,17 @@ type CollectionFacts struct {
 	RowsKnown bool
 }
 
+type insertRowsFunc func(
+	context.Context,
+	milvusclient.InsertOption,
+) (milvusclient.InsertResult, error)
+
 // Service owns the embedding provider and Milvus client for semantic search.
 type Service struct {
 	cfg             config.Config
 	embedder        embedding.Provider
 	milvus          *milvusclient.Client
+	insertRows      insertRowsFunc
 	available       atomic.Bool
 	reconnectCancel context.CancelFunc
 	reconnectDone   chan struct{}
@@ -102,6 +108,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			cfg:                     cfg,
 			embedder:                nil,
 			milvus:                  nil,
+			insertRows:              nil,
 			available:               atomic.Bool{},
 			reconnectCancel:         nil,
 			reconnectDone:           nil,
@@ -123,6 +130,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		cfg:                     cfg,
 		embedder:                embedder,
 		milvus:                  nil,
+		insertRows:              nil,
 		available:               atomic.Bool{},
 		reconnectCancel:         nil,
 		reconnectDone:           nil,
@@ -252,7 +260,38 @@ func (service *Service) renameCollection(ctx context.Context, oldName string, ne
 	if err := service.milvus.RenameCollection(ctx, milvusclient.NewRenameCollectionOption(oldName, newName)); err != nil {
 		return wrapStoreError(ctx, err, "rename Milvus collection "+oldName+" to "+newName)
 	}
+	service.invalidateCollectionCaches(oldName)
+	service.invalidateCollectionCaches(newName)
 	return nil
+}
+
+func (service *Service) invalidateCollectionCaches(collectionName string) {
+	service.ensuredConvColumns.Delete(collectionName)
+	service.ensuredSplitPartColumns.Delete(collectionName)
+	service.ensuredMmapEnabled.Delete(collectionName)
+	service.ensuredBackfill.Delete(collectionName)
+}
+
+// hasCollection centralizes collection-presence probes and invalidates every
+// per-name lifecycle cache when Milvus confirms the collection is absent. A
+// shared collection can be dropped and recreated by another process, so no
+// cached schema or index migration remains valid after a confirmed absence.
+func (service *Service) hasCollection(
+	ctx context.Context,
+	collectionName string,
+	operation string,
+) (bool, error) {
+	hasCollection, err := service.milvus.HasCollection(
+		ctx,
+		milvusclient.NewHasCollectionOption(collectionName),
+	)
+	if err != nil {
+		return false, wrapStoreError(ctx, err, operation)
+	}
+	if !hasCollection {
+		service.invalidateCollectionCaches(collectionName)
+	}
+	return hasCollection, nil
 }
 
 // Reindex applies a per-item delta against an existing live collection.
@@ -271,9 +310,9 @@ func (service *Service) Reindex(ctx context.Context, codebasePath string, addedO
 	}
 
 	collectionName := service.CollectionName(codebasePath)
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		return wrapStoreError(ctx, err, "check Milvus collection "+collectionName)
+		return err
 	}
 	if !hasCollection {
 		return ErrCollectionMissing
@@ -303,9 +342,9 @@ func (service *Service) PruneToCurrent(ctx context.Context, codebasePath string,
 		return nil
 	}
 	collectionName := service.CollectionName(codebasePath)
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		return wrapStoreError(ctx, err, "check Milvus collection "+collectionName)
+		return err
 	}
 	if !hasCollection {
 		return ErrCollectionMissing
@@ -382,10 +421,9 @@ func (service *Service) queryTextForEmbedding(query string) string {
 }
 
 func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, filterExpr string) ([]model.StoredChunk, error) {
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		slog.ErrorContext(ctx, "check Milvus collection failed", "collection", collectionName, "err", err)
-		return nil, fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
+		return nil, err
 	}
 	if !hasCollection {
 		return nil, ErrCollectionMissing
@@ -535,9 +573,9 @@ func (service *Service) InspectCollection(ctx context.Context, collectionName st
 		return CollectionFacts{}, ErrUnavailable
 	}
 
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		return CollectionFacts{}, wrapStoreError(ctx, err, "check Milvus collection "+collectionName)
+		return CollectionFacts{}, err
 	}
 	if !hasCollection {
 		return CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
@@ -577,17 +615,17 @@ func (service *Service) HasCollectionForPath(ctx context.Context, codebasePath s
 		return false, ErrUnavailable
 	}
 	collectionName := service.CollectionName(codebasePath)
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		return false, wrapStoreError(ctx, err, "check Milvus collection "+collectionName)
+		return false, err
 	}
 	return hasCollection, nil
 }
 
 func (service *Service) dropIfExists(ctx context.Context, collectionName string) error {
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		return wrapStoreError(ctx, err, "check Milvus collection "+collectionName)
+		return err
 	}
 	if !hasCollection {
 		return nil
@@ -595,6 +633,7 @@ func (service *Service) dropIfExists(ctx context.Context, collectionName string)
 	if err := service.milvus.DropCollection(ctx, milvusclient.NewDropCollectionOption(collectionName)); err != nil {
 		return wrapStoreError(ctx, err, "drop Milvus collection "+collectionName)
 	}
+	service.invalidateCollectionCaches(collectionName)
 	return nil
 }
 
