@@ -208,6 +208,59 @@ func TestEmbedChunksSplittingOversizeStopsAtEndpointTokenFloor(t *testing.T) {
 	}
 }
 
+func TestEmbedChunksSplittingOversizeContinuesPastFourRounds(t *testing.T) {
+	t.Parallel()
+	const maxBytes = 512
+	var batches [][]string
+	var embedded []string
+	threshold := thresholdEmbed(maxBytes, &embedded)
+	recordingEmbed := func(ctx context.Context, texts []string) (embedding.BatchResult, error) {
+		batches = append(batches, slices.Clone(texts))
+		return threshold(ctx, texts)
+	}
+	content := strings.Repeat("x", 9215)
+	chunks := []model.StoredChunk{{Content: content, RelativePath: "conv/x/small-context"}}
+
+	kept, vectors, dropped, err := EmbedChunksSplittingOversize(
+		context.Background(),
+		chunks,
+		testChunkPacker,
+		recordingEmbed,
+	)
+	if err != nil {
+		t.Fatalf("EmbedChunksSplittingOversize returned error: %v", err)
+	}
+	if dropped != 0 {
+		t.Fatalf("dropped = %d, want 0 because every piece fits after five splits", dropped)
+	}
+	if len(kept) != 63 || len(vectors) != 63 {
+		t.Fatalf("kept %d chunks / %d vectors, want 63 / 63", len(kept), len(vectors))
+	}
+	if len(batches) != 7 {
+		t.Fatalf("embed requests = %d, want 7 across six packed rounds", len(batches))
+	}
+
+	ordered := slices.Clone(kept)
+	sort.Slice(ordered, func(left int, right int) bool {
+		return ordered[left].SplitPart < ordered[right].SplitPart
+	})
+	var joined strings.Builder
+	for index := range ordered {
+		if len(ordered[index].Content) > maxBytes {
+			t.Fatalf(
+				"kept piece %d contains %d bytes, want no more than %d",
+				index,
+				len(ordered[index].Content),
+				maxBytes,
+			)
+		}
+		joined.WriteString(ordered[index].Content)
+	}
+	if joined.String() != content {
+		t.Fatal("kept pieces did not round-trip to the original content")
+	}
+}
+
 func TestEmbedChunksSplittingOversizePacksEveryRetryRound(t *testing.T) {
 	t.Parallel()
 	const maxRows = 32

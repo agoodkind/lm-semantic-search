@@ -11,10 +11,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-const (
-	contextLengthExceededReason = "context_length_exceeded"
-	maximumSplitRetryRounds     = 4
-)
+const contextLengthExceededReason = "context_length_exceeded"
 
 // ErrNilEmbeddingVector reports a provider contract violation where an input
 // has neither a vector nor a matching SkippedInput.
@@ -39,10 +36,11 @@ type splitRetryPackResult struct {
 // rejects as context_length_exceeded, re-splits it into smaller sub-chunks and
 // retries. It applies pack to every retry round. Only a context-length rejection
 // may split, and splitting stops at the endpoint's token limit expressed as a
-// conservative byte floor or after a bounded number of rounds. A refusal below
-// either bound is dropped as one input and logged once, which prevents an
-// endpoint fault from shredding content codepoint by codepoint. keptChunks and
-// keptVectors remain index-aligned.
+// conservative byte floor. A refusal at or below that floor is dropped as one
+// input and logged once, which prevents an endpoint fault from shredding content
+// codepoint by codepoint. Each split strictly shortens a splittable piece, so the
+// byte floor also bounds the number of rounds. keptChunks and keptVectors remain
+// index-aligned.
 func EmbedChunksSplittingOversize(ctx context.Context, chunks []model.StoredChunk, pack ChunkPackFunc, embed EmbedBatchFunc) (keptChunks []model.StoredChunk, keptVectors [][]float32, droppedInputs int, err error) {
 	keptChunks = make([]model.StoredChunk, 0, len(chunks))
 	keptVectors = make([][]float32, 0, len(chunks))
@@ -103,7 +101,7 @@ func embedSplitRetryPack(ctx context.Context, chunkPack []model.StoredChunk, ret
 			packResult.keptVectors = append(packResult.keptVectors, vector)
 			continue
 		}
-		if shouldSplitRejectedChunk(chunkPack[index], skip, retryRound) {
+		if shouldSplitRejectedChunk(chunkPack[index], skip) {
 			packResult.retryChunks = append(packResult.retryChunks, splitChunkInHalf(chunkPack[index])...)
 			continue
 		}
@@ -113,7 +111,7 @@ func embedSplitRetryPack(ctx context.Context, chunkPack []model.StoredChunk, ret
 	return packResult, nil
 }
 
-func shouldSplitRejectedChunk(chunk model.StoredChunk, skip embedding.SkippedInput, retryRound int) bool {
+func shouldSplitRejectedChunk(chunk model.StoredChunk, skip embedding.SkippedInput) bool {
 	if skip.Reason != contextLengthExceededReason {
 		return false
 	}
@@ -123,10 +121,10 @@ func shouldSplitRejectedChunk(chunk model.StoredChunk, skip embedding.SkippedInp
 	if len(chunk.Content) <= max(skip.MaxTokens, 1) {
 		return false
 	}
-	return retryRound < maximumSplitRetryRounds
+	return true
 }
 
-func rejectedDropKind(chunk model.StoredChunk, skip embedding.SkippedInput, retryRound int) string {
+func rejectedDropKind(chunk model.StoredChunk, skip embedding.SkippedInput) string {
 	if skip.Reason != contextLengthExceededReason {
 		return "unexpected_reason"
 	}
@@ -136,9 +134,6 @@ func rejectedDropKind(chunk model.StoredChunk, skip embedding.SkippedInput, retr
 	if len(chunk.Content) <= max(skip.MaxTokens, 1) {
 		return "below_token_floor"
 	}
-	if retryRound >= maximumSplitRetryRounds {
-		return "retry_round_limit"
-	}
 	return "unknown"
 }
 
@@ -146,7 +141,7 @@ func logRejectedDrop(ctx context.Context, chunk model.StoredChunk, skip embeddin
 	slog.WarnContext(
 		ctx,
 		"semantic.embed_input_dropped",
-		"drop_kind", rejectedDropKind(chunk, skip, retryRound),
+		"drop_kind", rejectedDropKind(chunk, skip),
 		"reason", skip.Reason,
 		"conversation_id", chunk.ConversationID,
 		"relative_path", chunk.RelativePath,
