@@ -244,10 +244,14 @@ func (store *Store) embedRows(
 		// rejects as oversized, so an OpenAI-compatible local embedder never drops a
 		// dense chunk; the offline ONNX embedder never rejects because the pre-split
 		// already kept every piece under the preset limit.
-		embeddedChunks, vectors, _, embedErr := semantic.EmbedChunksSplittingOversize(ctx, missChunks, provider.EmbedBatch)
+		pack := semantic.NewChunkPacker(store.cfg.EmbeddingBatchSize, store.cfg.EmbeddingBatchTokenBudget)
+		embeddedChunks, vectors, dropped, embedErr := semantic.EmbedChunksSplittingOversize(ctx, missChunks, pack, provider.EmbedBatch)
 		if embedErr != nil {
 			slog.ErrorContext(ctx, "embed local vector chunks failed", "chunks", len(missChunks), "err", embedErr)
 			return nil, 0, fmt.Errorf("embed local vector chunks: %w", embedErr)
+		}
+		if dropped > 0 {
+			slog.WarnContext(ctx, "local vector rows dropped as indivisible", "dropped", dropped, "chunks", len(missChunks))
 		}
 		for index := range embeddedChunks {
 			stored, rowErr := newRow(embeddedChunks[index], vectors[index])
