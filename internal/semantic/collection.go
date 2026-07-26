@@ -387,13 +387,13 @@ func (service *Service) ensureConversationScalarColumnsOnce(ctx context.Context,
 // conversation upsert and delete paths run it against an already-existing
 // collection before their prefix delete, since a daemon process that did not
 // create the collection itself never loaded it.
+//
+// The wait is bounded (see awaitCollectionLoaded). A collection that never
+// finishes loading fails as not-ready instead of holding the caller and its
+// concurrency slot forever.
 func (service *Service) loadCollection(ctx context.Context, collectionName string) error {
-	loadTask, err := service.milvus.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName))
-	if err != nil {
+	if _, err := service.milvus.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName)); err != nil {
 		return wrapStoreError(ctx, err, "load Milvus collection "+collectionName)
 	}
-	if err := loadTask.Await(ctx); err != nil {
-		return wrapStoreError(ctx, err, "await Milvus collection load "+collectionName)
-	}
-	return nil
+	return service.awaitCollectionLoaded(ctx, collectionName)
 }

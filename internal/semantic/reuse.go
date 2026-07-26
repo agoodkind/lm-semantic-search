@@ -183,16 +183,9 @@ func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collection
 // loadCollectionForRead ensures a collection is loaded before a query iterator
 // reads it. A collection built in this process is already loaded, but one left
 // unloaded by a Milvus restart would otherwise fail the read, so this loads it
-// idempotently.
+// idempotently. It shares loadCollection's bounded wait, so a reuse read of a
+// stuck collection fails as not-ready rather than hanging the build that asked
+// for it.
 func (service *Service) loadCollectionForRead(ctx context.Context, collectionName string) error {
-	loadTask, err := service.milvus.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName))
-	if err != nil {
-		slog.ErrorContext(ctx, "load collection for reuse read failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("load Milvus collection %s: %w", collectionName, err)
-	}
-	if err := loadTask.Await(ctx); err != nil {
-		slog.ErrorContext(ctx, "await collection load for reuse read failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("await Milvus collection load %s: %w", collectionName, err)
-	}
-	return nil
+	return service.loadCollection(ctx, collectionName)
 }

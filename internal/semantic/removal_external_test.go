@@ -102,6 +102,19 @@ func (server *removalMilvusServer) LoadCollection(
 	return removalSuccessStatus(), nil
 }
 
+// GetLoadState answers the bounded readiness wait, which reads the load-state
+// enum rather than the client's unbounded await. The fake collection is
+// immediately queryable, so it reports Loaded on the first probe.
+func (server *removalMilvusServer) GetLoadState(
+	_ context.Context,
+	_ *milvuspb.GetLoadStateRequest,
+) (*milvuspb.GetLoadStateResponse, error) {
+	return &milvuspb.GetLoadStateResponse{
+		Status: removalSuccessStatus(),
+		State:  commonpb.LoadState_LoadStateLoaded,
+	}, nil
+}
+
 func (server *removalMilvusServer) GetLoadingProgress(
 	_ context.Context,
 	_ *milvuspb.GetLoadingProgressRequest,
