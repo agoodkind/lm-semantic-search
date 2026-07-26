@@ -424,6 +424,124 @@ func TestBootSelfCheckRetriesFailureUntilReadinessRecovers(t *testing.T) {
 	}
 }
 
+// A permanently unavailable dependency gets three bounded probes, leaves the
+// degraded health evidence in place, and returns one typed terminal failure.
+func TestBootSelfCheckStopsAfterMaximumFailures(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	indexedTestCodebase(t, manager, repoPath)
+
+	dependencyErr := adapterr.NewEmbedderUnreachable(
+		errors.New("embedding endpoint is unavailable"),
+	)
+	var attempts atomic.Int32
+	manager.semantic = &fakeSemantic{
+		search: func(
+			context.Context,
+			string,
+			string,
+			int32,
+			[]string,
+			string,
+		) ([]model.StoredChunk, error) {
+			attempts.Add(1)
+			return nil, dependencyErr
+		},
+	}
+
+	outcome, err := manager.runBootSelfCheckSequence(context.Background(), 0)
+
+	if got := attempts.Load(); got != bootSelfCheckMaxAttempts {
+		t.Fatalf(
+			"boot attempts = %d, want terminal bound %d",
+			got,
+			bootSelfCheckMaxAttempts,
+		)
+	}
+	if outcome != bootSelfCheckFailed {
+		t.Fatalf("final outcome = %q, want %q", outcome, bootSelfCheckFailed)
+	}
+	var exhaustedErr *bootSelfCheckExhaustedError
+	if !errors.As(err, &exhaustedErr) {
+		t.Fatalf("sequence error = %T %v, want bootSelfCheckExhaustedError", err, err)
+	}
+	if exhaustedErr.Attempts != bootSelfCheckMaxAttempts ||
+		exhaustedErr.Outcome != bootSelfCheckFailed {
+		t.Fatalf("terminal error = %+v, want maximum attempts and failed outcome", exhaustedErr)
+	}
+	if !errors.Is(err, dependencyErr) {
+		t.Fatalf("terminal error = %v, want the dependency failure as its cause", err)
+	}
+	if got := healthModeNow(manager); got != dependencyEmbedderUnreachable {
+		t.Fatalf(
+			"health mode = %q after terminal failure, want %q",
+			got,
+			dependencyEmbedderUnreachable,
+		)
+	}
+}
+
+// Repeated successful probes can all be superseded by newer failure evidence.
+// That sequence has the same attempt bound and reports superseded as its final
+// outcome without clearing the genuine degraded record.
+func TestBootSelfCheckStopsAfterMaximumSupersededPasses(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	indexedTestCodebase(t, manager, repoPath)
+
+	var attempts atomic.Int32
+	manager.semantic = &fakeSemantic{
+		search: func(
+			context.Context,
+			string,
+			string,
+			int32,
+			[]string,
+			string,
+		) ([]model.StoredChunk, error) {
+			attempts.Add(1)
+			manager.noteDependencyFailure(
+				adapterr.NewEmbedderBusy(
+					errors.New("embedding endpoint remained at capacity"),
+				),
+			)
+			return []model.StoredChunk{{Content: "stale success"}}, nil
+		},
+	}
+
+	outcome, err := manager.runBootSelfCheckSequence(context.Background(), 0)
+
+	if got := attempts.Load(); got != bootSelfCheckMaxAttempts {
+		t.Fatalf(
+			"boot attempts = %d, want terminal bound %d",
+			got,
+			bootSelfCheckMaxAttempts,
+		)
+	}
+	if outcome != bootSelfCheckSuperseded {
+		t.Fatalf("final outcome = %q, want %q", outcome, bootSelfCheckSuperseded)
+	}
+	var exhaustedErr *bootSelfCheckExhaustedError
+	if !errors.As(err, &exhaustedErr) {
+		t.Fatalf("sequence error = %T %v, want bootSelfCheckExhaustedError", err, err)
+	}
+	if exhaustedErr.Attempts != bootSelfCheckMaxAttempts ||
+		exhaustedErr.Outcome != bootSelfCheckSuperseded {
+		t.Fatalf(
+			"terminal error = %+v, want maximum attempts and superseded outcome",
+			exhaustedErr,
+		)
+	}
+	if exhaustedErr.Cause != nil {
+		t.Fatalf("superseded terminal cause = %v, want nil", exhaustedErr.Cause)
+	}
+	if got := healthModeNow(manager); got != dependencyEmbedderBusy {
+		t.Fatalf(
+			"health mode = %q after superseded sequence, want %q",
+			got,
+			dependencyEmbedderBusy,
+		)
+	}
+}
+
 // A boot query that started before a later dependency failure is stale evidence.
 // Its success must leave the newer failure visible.
 func TestBootSelfCheckSuccessDoesNotClearNewerFailure(t *testing.T) {

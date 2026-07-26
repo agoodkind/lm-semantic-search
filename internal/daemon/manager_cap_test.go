@@ -201,6 +201,254 @@ func TestStartIndexQueuedBehindCapReportsQueuedThenRunning(t *testing.T) {
 	waitForCodebaseStatus(t, manager, secondRepo, model.CodebaseStatusIndexed)
 }
 
+// A reuse collection can spend the full bounded load window in Milvus. The
+// waiting read releases both scarce holds, so another job can start even when
+// the configured job cap is one.
+func TestStuckReuseLoadDoesNotHoldIndexSlotOrSyncLock(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 1)
+	parentRepo, childRepo := newParentWithChildRepo(t)
+	secondRepo := newCapTestRepo(t)
+
+	loadEntered := make(chan struct{}, 1)
+	releaseLoad := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-releaseLoad:
+		default:
+			close(releaseLoad)
+		}
+	})
+	manager.semantic = &fakeSemantic{
+		loadReuse: func(
+			ctx context.Context,
+			_ []string,
+		) (map[string][]float32, error) {
+			select {
+			case loadEntered <- struct{}{}:
+			default:
+			}
+			select {
+			case <-releaseLoad:
+				return map[string][]float32{}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+
+	secondStarted := make(chan struct{}, 1)
+	manager.runner = fakeRunner{
+		indexOne: func(
+			_ context.Context,
+			_ string,
+			relativePath string,
+			_ model.IndexConfig,
+		) (indexer.OneFileResult, error) {
+			if relativePath == "main.go" {
+				select {
+				case secondStarted <- struct{}{}:
+				default:
+				}
+			}
+			content := "package main\n"
+			return indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:       content,
+					RelativePath:  relativePath,
+					StartLine:     1,
+					EndLine:       1,
+					Language:      "go",
+					FileExtension: ".go",
+				}},
+				FileHash: hashText(content),
+			}, nil
+		},
+	}
+
+	indexConfig := defaultIndexConfig()
+	_, firstJob := seedBootstrapCodebase(t, manager, parentRepo, indexConfig)
+	registerIndexedChild(
+		manager,
+		"cb-stuck-reuse-child",
+		childRepo,
+		indexConfig,
+		"hybrid_code_chunks_stuck",
+	)
+	manager.runJobAsync(context.Background(), firstJob.ID)
+
+	select {
+	case <-loadEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("parent job never entered the stuck reuse load")
+	}
+	if got := len(manager.indexSlots); got != 0 {
+		t.Fatalf("index slots held during reuse wait = %d, want 0", got)
+	}
+	manager.syncLock.mu.Lock()
+	lockRefcount := manager.syncLock.refcount
+	manager.syncLock.mu.Unlock()
+	if lockRefcount != 0 {
+		t.Fatalf("sync lock refcount during reuse wait = %d, want 0", lockRefcount)
+	}
+
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		secondRepo,
+		testClientInfo(),
+		indexConfig,
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
+		t.Fatalf("second StartIndex returned error: %v", err)
+	}
+	select {
+	case <-secondStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second job did not start while the first reuse load was stuck")
+	}
+
+	close(releaseLoad)
+	waitForCondition(t, func() bool {
+		completed, found := manager.GetJob(firstJob.ID)
+		return found && completed.State == model.JobStateCompleted
+	})
+	waitForCodebaseStatus(t, manager, secondRepo, model.CodebaseStatusIndexed)
+}
+
+// A job that has finished its bounded reuse read must also finish when another
+// job keeps the released slot. The resume has its own deadline, so the caller
+// observes a failed terminal job instead of one left running behind the holder.
+func TestReuseLoadResumeDeadlineTerminatesJobWhileReplacementHoldsSlot(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 1)
+	manager.jobCapacityReacquireTimeout = 100 * time.Millisecond
+	parentRepo, childRepo := newParentWithChildRepo(t)
+	replacementRepo := newCapTestRepo(t)
+
+	loadEntered := make(chan struct{}, 1)
+	releaseLoad := make(chan struct{})
+	replacementStarted := make(chan struct{}, 1)
+	releaseReplacement := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-releaseLoad:
+		default:
+			close(releaseLoad)
+		}
+		select {
+		case <-releaseReplacement:
+		default:
+			close(releaseReplacement)
+		}
+	})
+
+	manager.semantic = &fakeSemantic{
+		loadReuse: func(
+			ctx context.Context,
+			_ []string,
+		) (map[string][]float32, error) {
+			select {
+			case loadEntered <- struct{}{}:
+			default:
+			}
+			select {
+			case <-releaseLoad:
+				return map[string][]float32{}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+	manager.runner = fakeRunner{
+		indexOne: func(
+			ctx context.Context,
+			_ string,
+			relativePath string,
+			_ model.IndexConfig,
+		) (indexer.OneFileResult, error) {
+			if relativePath == "main.go" {
+				select {
+				case replacementStarted <- struct{}{}:
+				default:
+				}
+				select {
+				case <-releaseReplacement:
+				case <-ctx.Done():
+					return indexer.OneFileResult{}, ctx.Err()
+				}
+			}
+			content := "package main\n"
+			return indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:       content,
+					RelativePath:  relativePath,
+					StartLine:     1,
+					EndLine:       1,
+					Language:      "go",
+					FileExtension: ".go",
+				}},
+				FileHash: hashText(content),
+			}, nil
+		},
+	}
+
+	indexConfig := defaultIndexConfig()
+	_, firstJob := seedBootstrapCodebase(t, manager, parentRepo, indexConfig)
+	registerIndexedChild(
+		manager,
+		"cb-resume-deadline-child",
+		childRepo,
+		indexConfig,
+		"hybrid_code_chunks_resume_deadline",
+	)
+	manager.runJobAsync(context.Background(), firstJob.ID)
+
+	select {
+	case <-loadEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("parent job never entered the reuse load")
+	}
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		replacementRepo,
+		testClientInfo(),
+		indexConfig,
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
+		t.Fatalf("replacement StartIndex returned error: %v", err)
+	}
+	select {
+	case <-replacementStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replacement job did not take the released slot")
+	}
+
+	close(releaseLoad)
+	terminalDeadline := time.NewTimer(2 * time.Second)
+	defer terminalDeadline.Stop()
+	terminalPoll := time.NewTicker(10 * time.Millisecond)
+	defer terminalPoll.Stop()
+	var terminal model.Job
+	for terminal.State != model.JobStateFailed {
+		select {
+		case <-terminalDeadline.C:
+			t.Fatalf("parent job remained non-terminal after its resume deadline: state=%q", terminal.State)
+		case <-terminalPoll.C:
+			observed, found := manager.GetJob(firstJob.ID)
+			if !found {
+				t.Fatalf("parent job %s disappeared", firstJob.ID)
+			}
+			terminal = observed
+		}
+	}
+	if terminal.CompletedAt == nil || terminal.Error == nil {
+		t.Fatalf("failed parent job lacks terminal error metadata: %+v", terminal)
+	}
+
+	close(releaseReplacement)
+	waitForCodebaseStatus(t, manager, replacementRepo, model.CodebaseStatusIndexed)
+}
+
 func TestCancelQueuedJobBehindCapReachesCancelled(t *testing.T) {
 	const cap = 1
 

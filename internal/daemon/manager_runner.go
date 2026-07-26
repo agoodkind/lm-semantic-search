@@ -40,15 +40,15 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 		// updateJobRunning, so a queued-behind-the-cap job reports queued.
 		select {
 		case manager.indexSlots <- struct{}{}:
-			slotReleased := false
-			defer func() {
-				if !slotReleased {
-					<-manager.indexSlots
-				}
-			}()
-			graphTask := manager.runJob(backgroundContext, jobID)
-			<-manager.indexSlots
-			slotReleased = true
+			capacity := &jobCapacity{
+				manager:      manager,
+				slotHeld:     true,
+				syncLockHeld: false,
+			}
+			defer capacity.release(backgroundContext)
+			runContext := withJobCapacity(backgroundContext, capacity)
+			graphTask := manager.runJob(runContext, jobID)
+			capacity.release(backgroundContext)
 			manager.runGraphIndexTask(backgroundContext, graphTask)
 		case <-backgroundContext.Done():
 			manager.updateJobCancelled(backgroundContext, jobID)
@@ -77,11 +77,18 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 	// backs off while this job writes the collection. Skip it when there is no
 	// semantic backend, since then the job performs no embedding to coordinate.
 	if manager.semantic != nil && manager.semantic.Available() {
-		if !manager.syncLock.acquireBlocking(ctx) {
+		capacity := jobCapacityFromContext(ctx)
+		if capacity != nil && !capacity.acquireSyncLock(ctx) {
 			manager.updateJobCancelled(ctx, job.ID)
 			return nil
 		}
-		defer manager.syncLock.release(ctx)
+		if capacity == nil {
+			if !manager.syncLock.acquireBlocking(ctx) {
+				manager.updateJobCancelled(ctx, job.ID)
+				return nil
+			}
+			defer manager.syncLock.release(ctx)
+		}
 	}
 
 	// Every operation reaches a terminal job state below. An incremental sync

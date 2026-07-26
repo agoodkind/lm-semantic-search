@@ -25,6 +25,11 @@ const (
 	// skipped because reads may perform crash recovery, and ONNX inference is
 	// skipped because its native call cannot guarantee context cancellation.
 	bootSelfCheckTimeout = 20 * time.Second
+	// bootSelfCheckMaxAttempts gives startup races two chances to recover after
+	// the first probe. Immediate failures terminate in about nine seconds with
+	// the default delay, while three hung probes still terminate in under
+	// seventy seconds instead of becoming a daemon-lifetime retry loop.
+	bootSelfCheckMaxAttempts = 3
 	// bootSelfCheckQuery is the fixed probe text. Its wording is irrelevant to the
 	// verdict: a nearest-neighbour search answers for any text, so the check reads
 	// the absence of an error, never the contents or the count of the results.
@@ -48,11 +53,36 @@ const (
 	bootSelfCheckSuperseded bootSelfCheckOutcome = "superseded"
 )
 
+type bootSelfCheckExhaustedError struct {
+	Attempts int
+	Outcome  bootSelfCheckOutcome
+	Cause    error
+}
+
+func (err *bootSelfCheckExhaustedError) Error() string {
+	if err.Cause != nil {
+		return fmt.Sprintf(
+			"boot self-check exhausted %d attempts with outcome %s: %v",
+			err.Attempts,
+			err.Outcome,
+			err.Cause,
+		)
+	}
+	return fmt.Sprintf(
+		"boot self-check exhausted %d attempts with outcome %s",
+		err.Attempts,
+		err.Outcome,
+	)
+}
+
+func (err *bootSelfCheckExhaustedError) Unwrap() error {
+	return err.Cause
+}
+
 // StartBootSelfCheck launches the boot self-check and returns
 // immediately, so startup never waits on it and the daemon serves regardless of
-// the outcome. Remote checks run under their own deadline and retry after a
-// failure or superseded pass until one passes, skips, or the runtime context
-// ends.
+// the outcome. Remote checks run under their own deadline and make at most three
+// attempts, stopping sooner when one passes, skips, or the runtime context ends.
 func (manager *Manager) StartBootSelfCheck(ctx context.Context) {
 	delay := manager.bootSelfCheckDelay
 	go func() {
@@ -73,18 +103,59 @@ func (manager *Manager) StartBootSelfCheck(ctx context.Context) {
 		checkCtx := correlation.WithContext(ctx, correlation.New("").WithIdentityAttributes(
 			correlation.IdentityAttribute{Key: "origin", Value: "boot-selfcheck"},
 		))
-		for {
-			boundedCtx, cancel := context.WithTimeout(checkCtx, bootSelfCheckTimeout)
-			outcome, _ := manager.runBootSelfCheck(boundedCtx)
-			cancel()
-			if outcome == bootSelfCheckPassed || outcome == bootSelfCheckSkipped {
-				return
-			}
-			if !waitForBootSelfCheck(ctx, delay) {
-				return
-			}
-		}
+		_, _ = manager.runBootSelfCheckSequence(checkCtx, delay)
 	}()
+}
+
+func (manager *Manager) runBootSelfCheckSequence(
+	ctx context.Context,
+	retryDelay time.Duration,
+) (bootSelfCheckOutcome, error) {
+	outcome := bootSelfCheckSkipped
+	var lastErr error
+	for attempt := 1; attempt <= bootSelfCheckMaxAttempts; attempt++ {
+		boundedCtx, cancel := context.WithTimeout(ctx, bootSelfCheckTimeout)
+		outcome, lastErr = manager.runBootSelfCheck(boundedCtx)
+		cancel()
+		if outcome == bootSelfCheckPassed || outcome == bootSelfCheckSkipped {
+			return outcome, nil
+		}
+		if ctx.Err() != nil {
+			contextErr := ctx.Err()
+			slog.ErrorContext(ctx, "daemon.selfcheck.cancelled",
+				"component", "daemon",
+				"subcomponent", "selfcheck",
+				"outcome", outcome,
+				"err", contextErr,
+			)
+			return outcome, fmt.Errorf("boot self-check sequence cancelled: %w", contextErr)
+		}
+		if attempt < bootSelfCheckMaxAttempts &&
+			!waitForBootSelfCheck(ctx, retryDelay) {
+			contextErr := ctx.Err()
+			slog.ErrorContext(ctx, "daemon.selfcheck.cancelled",
+				"component", "daemon",
+				"subcomponent", "selfcheck",
+				"outcome", outcome,
+				"err", contextErr,
+			)
+			return outcome, fmt.Errorf("boot self-check retry wait cancelled: %w", contextErr)
+		}
+	}
+
+	exhaustedErr := &bootSelfCheckExhaustedError{
+		Attempts: bootSelfCheckMaxAttempts,
+		Outcome:  outcome,
+		Cause:    lastErr,
+	}
+	slog.ErrorContext(ctx, "daemon.selfcheck.exhausted",
+		"component", "daemon",
+		"subcomponent", "selfcheck",
+		"attempts", bootSelfCheckMaxAttempts,
+		"outcome", outcome,
+		"err", exhaustedErr,
+	)
+	return outcome, exhaustedErr
 }
 
 func waitForBootSelfCheck(ctx context.Context, delay time.Duration) bool {
