@@ -699,15 +699,30 @@ type conversationMessageDiff struct {
 	removalPrefixes []string
 }
 
-// diffConversationMessages treats a delivered message as unchanged only when
-// the stored role equals document.Role and the assembled stored text equals
-// document.Text, which is also the text conversationDocumentsToStoredChunks
-// stores after multipart splitting. Stale stored indices must be deleted here
-// because the conversation source uses absenceRetain, so an absent message row
-// would otherwise survive forever once the conversation fingerprint advances.
-// New messages also carry exact removals because legacy rows without
-// messageIndex are invisible to storedState but still live under the same
-// conv/<id>/<message> paths; genuinely new messages pay one no-op delete.
+// diffConversationMessages classifies each delivered message against the stored
+// rows and emits a removal only where stored rows must actually be purged. A
+// delivered message with no stored rows at all is genuinely new / appended, so it
+// is embedded without any delete: it has no prior rows, and issuing a removal
+// there would be a pure no-op Milvus round-trip. "No stored rows at all" means
+// both that the index is absent from stored.Messages and that stored.DerivedPaths
+// holds no row for it, because absence from stored.Messages alone does not prove
+// the message has no rows: a partially applied earlier removal can delete the base
+// row and then fail before the derived prefixes are purged, which leaves orphaned
+// convtool / convthink rows under an index the next read sees as absent. Embedding
+// over those orphans would leave a superseded tool or thinking row searchable for
+// good, so an absent base index with surviving derived rows still carries a
+// removal. A delivered message present in stored.Messages whose content changed
+// replaces only its own rows, so it carries an exact removal. A stored index that
+// is not delivered is a rewind that dropped the message, so its rows are removed;
+// that sweep reads its indices from conversationStoredMessageIndexes, which unions
+// the base state with the derived paths, so the same partially applied removal is
+// also repaired in its undelivered form rather than only when the message comes
+// back. "Unchanged" means the stored role equals document.Role and the assembled
+// stored text equals document.Text, which is also the text
+// conversationDocumentsToStoredChunks stores after multipart splitting. Stale
+// stored indices must be deleted here because the conversation source uses
+// absenceRetain, so an absent message row would otherwise survive forever once the
+// conversation fingerprint advances.
 func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, stored semantic.ConversationStoredRows, chunkByteBudget ...int) (conversationMessageDiff, error) {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
@@ -718,31 +733,116 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 	for _, document := range documents {
 		delivered[document.MessageIndex] = struct{}{}
 		message, found := stored.Messages[document.MessageIndex]
-		if found {
-			matches, err := conversationDocumentMatchesStored(ctx, conversationID, document, message, stored.DerivedPaths, chunkByteBudget...)
-			if err != nil {
-				return diff, err
+		if !found {
+			// A genuinely new / appended message has no stored rows to purge, so it is
+			// embedded without a delete. Orphaned derived rows left by a partially
+			// applied earlier removal are not an append, so they are purged first.
+			diff.documents = append(diff.documents, document)
+			orphanedDerived := conversationDerivedPathsForMessage(stored.DerivedPaths, conversationID, document.MessageIndex)
+			if len(orphanedDerived) > 0 {
+				diff.addRemoval(conversationID, document.MessageIndex)
 			}
-			if matches {
-				continue
-			}
+			continue
 		}
+		matches, err := conversationDocumentMatchesStored(ctx, conversationID, document, message, stored.DerivedPaths, chunkByteBudget...)
+		if err != nil {
+			return diff, err
+		}
+		if matches {
+			continue
+		}
+		// A stored message whose content changed replaces only its own rows.
 		diff.documents = append(diff.documents, document)
 		diff.addRemoval(conversationID, document.MessageIndex)
 	}
 
 	staleIndexes := make([]int32, 0)
-	for messageIndex := range stored.Messages {
+	for _, messageIndex := range conversationStoredMessageIndexes(ctx, conversationID, stored) {
 		if _, found := delivered[messageIndex]; found {
 			continue
 		}
 		staleIndexes = append(staleIndexes, messageIndex)
 	}
-	slices.Sort(staleIndexes)
 	for _, staleIndex := range staleIndexes {
 		diff.addRemoval(conversationID, staleIndex)
 	}
 	return diff, nil
+}
+
+// conversationStoredMessageIndexes reports, in ascending order, every message
+// index the stored rows carry, reading both the assembled base state and the
+// derived paths. Both sources are needed because a message's base row and its
+// derived rows are deleted in separate steps, so a removal that fails partway
+// leaves an index that exists only as convtool / convthink rows. Iterating
+// stored.Messages alone would make the stale sweep blind to such an index once the
+// message stops being delivered, which would leave the orphaned tool and thinking
+// rows searchable with no path that ever removes them.
+func conversationStoredMessageIndexes(ctx context.Context, conversationID string, stored semantic.ConversationStoredRows) []int32 {
+	seen := make(map[int32]struct{}, len(stored.Messages)+len(stored.DerivedPaths))
+	indexes := make([]int32, 0, len(stored.Messages)+len(stored.DerivedPaths))
+	for messageIndex := range stored.Messages {
+		seen[messageIndex] = struct{}{}
+		indexes = append(indexes, messageIndex)
+	}
+	toolPrefix := conversationToolRelativePathPrefix(conversationID)
+	thinkingPrefix := conversationThinkingRelativePathPrefix(conversationID)
+	unparsedCount := 0
+	for relativePath := range stored.DerivedPaths {
+		messageIndex, parsed := conversationDerivedMessageIndex(relativePath, toolPrefix, thinkingPrefix)
+		if !parsed {
+			unparsedCount++
+			continue
+		}
+		if _, found := seen[messageIndex]; found {
+			continue
+		}
+		seen[messageIndex] = struct{}{}
+		indexes = append(indexes, messageIndex)
+	}
+	if unparsedCount > 0 {
+		slog.DebugContext(
+			ctx, "daemon.conversation_derived_path_index_unparsed",
+			"component", "daemon",
+			"subcomponent", "conversations",
+			"conversation_id", conversationID,
+			"count", unparsedCount,
+		)
+	}
+	slices.Sort(indexes)
+	return indexes
+}
+
+// conversationDerivedMessageIndex parses the message index out of one stored
+// derived relativePath. Tool rows are convtool/<conversation>/<message>/... and
+// thinking rows are convthink/<conversation>/<message> or its multipart children,
+// so the index is the one segment that follows the conversation prefix. The parse
+// is deliberately strict and reports failure rather than guessing, because a
+// misread index here would delete a live message's rows: a path under neither
+// prefix, an empty or non-numeric segment, a value outside int32, and a spelling
+// that does not format back to itself (a leading zero, a sign, or padding) are all
+// skipped. A skipped path only means its index is not swept, which is the same
+// state as before this sweep read derived paths at all.
+func conversationDerivedMessageIndex(relativePath string, toolPrefix string, thinkingPrefix string) (int32, bool) {
+	remainder, trimmed := strings.CutPrefix(relativePath, toolPrefix)
+	if !trimmed {
+		remainder, trimmed = strings.CutPrefix(relativePath, thinkingPrefix)
+	}
+	if !trimmed {
+		return 0, false
+	}
+	segment, _, _ := strings.Cut(remainder, "/")
+	if segment == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(segment, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	messageIndex := int32(parsed)
+	if strconv.FormatInt(int64(messageIndex), 10) != segment {
+		return 0, false
+	}
+	return messageIndex, true
 }
 
 // conversationDocumentMatchesStored treats a delivered message as unchanged only
