@@ -41,18 +41,31 @@ func testChunkPacker(chunks []model.StoredChunk) [][]model.StoredChunk {
 // thresholdEmbed returns an EmbedBatchFunc that rejects any input longer than
 // maxBytes as context_length_exceeded and embeds the rest, mirroring the real
 // endpoint's per-input rejection so the split-retry loop runs end to end. It
+// reports both size figures, as an endpoint whose message carries them does, and
 // records every text it actually embedded so a test can prove no content is lost.
 func thresholdEmbed(maxBytes int, embedded *[]string) EmbedBatchFunc {
+	return thresholdEmbedReporting(maxBytes, adapterr.ReportedFigure(maxBytes), embedded)
+}
+
+// thresholdEmbedReporting is thresholdEmbed with control over the maximum the
+// endpoint reports, so a test can drive the loop from a refusal that names no
+// maximum at all. A refusal without a maximum also carries no measured count,
+// because both figures are read from the same message.
+func thresholdEmbedReporting(maxBytes int, maxTokens adapterr.EmbedFigure, embedded *[]string) EmbedBatchFunc {
 	return func(_ context.Context, texts []string) (embedding.BatchResult, error) {
 		vectors := make([][]float32, len(texts))
 		var skipped []embedding.SkippedInput
 		for index, text := range texts {
 			if len(text) > maxBytes {
+				reportedTokens := adapterr.UnreportedFigure()
+				if maxTokens.Reported {
+					reportedTokens = adapterr.ReportedFigure(len(text))
+				}
 				skipped = append(skipped, embedding.SkippedInput{
 					Index:          index,
 					Reason:         "context_length_exceeded",
-					ReportedTokens: len(text),
-					MaxTokens:      maxBytes,
+					ReportedTokens: reportedTokens,
+					MaxTokens:      maxTokens,
 				})
 				continue
 			}
@@ -63,7 +76,7 @@ func thresholdEmbed(maxBytes int, embedded *[]string) EmbedBatchFunc {
 	}
 }
 
-func rejectingEmbed(reason string, maxTokens int, batches *[][]string) EmbedBatchFunc {
+func rejectingEmbed(reason string, maxTokens adapterr.EmbedFigure, batches *[][]string) EmbedBatchFunc {
 	return func(_ context.Context, texts []string) (embedding.BatchResult, error) {
 		*batches = append(*batches, slices.Clone(texts))
 		vectors := make([][]float32, len(texts))
@@ -72,7 +85,7 @@ func rejectingEmbed(reason string, maxTokens int, batches *[][]string) EmbedBatc
 			skipped = append(skipped, embedding.SkippedInput{
 				Index:          index,
 				Reason:         adapterr.EmbedRejectionReason(reason),
-				ReportedTokens: len(text),
+				ReportedTokens: adapterr.ReportedFigure(len(text)),
 				MaxTokens:      maxTokens,
 			})
 		}
@@ -170,7 +183,7 @@ func TestEmbedChunksSplittingOversizeDropsUnexpectedReasonWithoutSplitting(t *te
 		chunks,
 		testActiveModelMaxTokens,
 		testChunkPacker,
-		rejectingEmbed("endpoint_policy_rejection", 4096, &batches),
+		rejectingEmbed("endpoint_policy_rejection", adapterr.ReportedFigure(4096), &batches),
 	)
 	if err != nil {
 		t.Fatalf("EmbedChunksSplittingOversize returned error: %v", err)
@@ -198,7 +211,7 @@ func TestEmbedChunksSplittingOversizeStopsAtContentTokenFloor(t *testing.T) {
 		chunks,
 		testActiveModelMaxTokens,
 		testChunkPacker,
-		rejectingEmbed("context_length_exceeded", maxTokens, &batches),
+		rejectingEmbed("context_length_exceeded", adapterr.ReportedFigure(maxTokens), &batches),
 	)
 	if err != nil {
 		t.Fatalf("EmbedChunksSplittingOversize returned error: %v", err)
@@ -233,8 +246,8 @@ func TestEmbedChunksSplittingOversizeAccountsForSpecialTokens(t *testing.T) {
 				skipped = append(skipped, embedding.SkippedInput{
 					Index:          index,
 					Reason:         contextLengthExceededReason,
-					ReportedTokens: tokenCount,
-					MaxTokens:      maxTokens,
+					ReportedTokens: adapterr.ReportedFigure(tokenCount),
+					MaxTokens:      adapterr.ReportedFigure(maxTokens),
 				})
 				continue
 			}
@@ -279,7 +292,7 @@ func TestEmbedChunksSplittingOversizeDropsWhenSpecialTokensFillLimit(t *testing.
 		[]model.StoredChunk{{Content: content, RelativePath: "conv/x/no-content-capacity"}},
 		testActiveModelMaxTokens,
 		testChunkPacker,
-		rejectingEmbed(contextLengthExceededReason, maxTokens, &batches),
+		rejectingEmbed(contextLengthExceededReason, adapterr.ReportedFigure(maxTokens), &batches),
 	)
 	if err != nil {
 		t.Fatalf("EmbedChunksSplittingOversize returned error: %v", err)
@@ -292,6 +305,67 @@ func TestEmbedChunksSplittingOversizeDropsWhenSpecialTokensFillLimit(t *testing.
 	}
 	if len(batches) != 1 {
 		t.Fatalf("embed calls = %d, want 1 because splitting cannot help", len(batches))
+	}
+}
+
+func TestEmbedChunksSplittingOversizeSplitsWhenEndpointReportsNoMaximum(t *testing.T) {
+	t.Parallel()
+	const (
+		maxBytes             = 8
+		activeModelMaxTokens = 10
+	)
+	var embedded []string
+	content := "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL"
+	chunks := []model.StoredChunk{{Content: content, RelativePath: "conv/x/no-maximum"}}
+
+	kept, vectors, dropped, err := EmbedChunksSplittingOversize(
+		context.Background(),
+		chunks,
+		activeModelMaxTokens,
+		testChunkPacker,
+		thresholdEmbedReporting(maxBytes, adapterr.UnreportedFigure(), &embedded),
+	)
+	if err != nil {
+		t.Fatalf("EmbedChunksSplittingOversize returned error: %v", err)
+	}
+	if dropped != 0 {
+		t.Fatalf("dropped = %d, want 0 because the active model limit still bounds the split", dropped)
+	}
+	if len(kept) != len(vectors) {
+		t.Fatalf("kept %d chunks but %d vectors", len(kept), len(vectors))
+	}
+	if got := strings.Join(embedded, ""); got != content {
+		t.Fatalf("embedded texts joined to %q, want the original %q", got, content)
+	}
+}
+
+func TestEmbedChunksSplittingOversizeDropsWholeInputWhenReportedMaximumIsZero(t *testing.T) {
+	t.Parallel()
+	var batches [][]string
+	// The content is far longer than the floor the active model limit would give,
+	// so a run that fell back to that limit would split and retry instead of
+	// dropping the input on the first refusal.
+	content := strings.Repeat("x", 2048)
+	chunks := []model.StoredChunk{{Content: content, RelativePath: "conv/x/zero-maximum"}}
+
+	kept, vectors, dropped, err := EmbedChunksSplittingOversize(
+		context.Background(),
+		chunks,
+		testActiveModelMaxTokens,
+		testChunkPacker,
+		rejectingEmbed(contextLengthExceededReason, adapterr.ReportedFigure(0), &batches),
+	)
+	if err != nil {
+		t.Fatalf("EmbedChunksSplittingOversize returned error: %v", err)
+	}
+	if len(kept) != 0 || len(vectors) != 0 {
+		t.Fatalf("kept %d chunks / %d vectors, want 0 / 0", len(kept), len(vectors))
+	}
+	if dropped != 1 {
+		t.Fatalf("dropped = %d, want 1 whole input because a zero maximum leaves no room to split into", dropped)
+	}
+	if len(batches) != 1 {
+		t.Fatalf("embed calls = %d, want 1 because splitting cannot help against a zero maximum", len(batches))
 	}
 }
 
@@ -365,8 +439,8 @@ func TestEmbedChunksSplittingOversizePacksEveryRetryRound(t *testing.T) {
 				skipped = append(skipped, embedding.SkippedInput{
 					Index:          index,
 					Reason:         "context_length_exceeded",
-					ReportedTokens: len(text) + splitRetrySpecialTokenMargin,
-					MaxTokens:      3,
+					ReportedTokens: adapterr.ReportedFigure(len(text) + splitRetrySpecialTokenMargin),
+					MaxTokens:      adapterr.ReportedFigure(3),
 				})
 				continue
 			}

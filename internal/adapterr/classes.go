@@ -1,6 +1,7 @@
 package adapterr
 
 import (
+	"log/slog"
 	"strconv"
 
 	"google.golang.org/grpc/codes"
@@ -326,21 +327,61 @@ const (
 	EmbedLimitUnreported EmbedLimitKind = "unreported"
 )
 
+// EmbedFigure is one size figure a refusal may carry. A provider reports the
+// measured size, the ceiling, both, or neither, so presence travels beside the
+// number instead of being inferred from it: the zero value is a figure the
+// provider never reported, and [ReportedFigure] marks one it did. Keeping the two
+// apart is what lets a figure the provider genuinely reported as zero render as a
+// zero rather than as a figure nobody sent.
+type EmbedFigure struct {
+	// Value is the size the provider reported. It is meaningful only when
+	// Reported is true.
+	Value int
+	// Reported records whether the provider stated this figure at all.
+	Reported bool
+}
+
+// ReportedFigure marks a figure a provider actually reported. Zero and negative
+// values are preserved as reported, because what the provider said is a separate
+// question from whether the number is a size anything could have.
+func ReportedFigure(value int) EmbedFigure {
+	return EmbedFigure{Value: value, Reported: true}
+}
+
+// UnreportedFigure marks a figure the provider never reported. Its value is not a
+// measurement and nothing renders it, which is the whole point of naming the
+// absence rather than letting a zero stand in for it.
+func UnreportedFigure() EmbedFigure {
+	return EmbedFigure{Value: 0, Reported: false}
+}
+
+// LogValue renders the figure for a structured log as the number the provider
+// reported, or as "unreported" when it reported none, so an operator reading the
+// log is not shown a zero that never arrived.
+func (figure EmbedFigure) LogValue() slog.Value {
+	if !figure.Reported {
+		return slog.StringValue(embedFigureUnreportedLogValue)
+	}
+	return slog.IntValue(figure.Value)
+}
+
+// embedFigureUnreportedLogValue is what a log line shows in place of a figure the
+// provider never reported.
+const embedFigureUnreportedLogValue = "unreported"
+
 // EmbedInputRejection describes one embedding input a provider refused as
 // individually un-embeddable. Measured and Maximum are both expressed in Limit's
-// unit and are zero when the provider reported no figure, which the rendered
-// message states plainly rather than quoting a zero.
+// unit, and each carries whether the provider reported it, which the rendered
+// message states plainly rather than guessing from the number.
 type EmbedInputRejection struct {
 	// Reason is the closed-set reason for the refusal.
 	Reason EmbedRejectionReason
 	// Limit names which ceiling refused the input.
 	Limit EmbedLimitKind
-	// Measured is the input's measured size in Limit's unit, or zero when the
-	// provider measured none.
-	Measured int
-	// Maximum is the ceiling in Limit's unit, or zero when the provider reported
-	// none.
-	Maximum int
+	// Measured is the input's measured size in Limit's unit.
+	Measured EmbedFigure
+	// Maximum is the ceiling in Limit's unit.
+	Maximum EmbedFigure
 }
 
 // embedRejectionUnreportedDetail is the message clause for a size refusal that
@@ -408,34 +449,109 @@ func embedRejectionDetail(rejection EmbedInputRejection) (string, string) {
 	}
 }
 
+// embedLimitWording carries the prose one limit kind uses for its figures, so the
+// token and byte refusals share a single set of reported-and-missing combinations
+// instead of each growing its own copy.
+type embedLimitWording struct {
+	// unit is the plural unit the figures are counted in, for example "tokens".
+	unit string
+	// unitSingular is the same unit inside a compound adjective, as in
+	// "8192-token limit".
+	unitSingular string
+	// measuredSubject names the measured figure when it has to be described
+	// rather than quoted.
+	measuredSubject string
+	// maximumSubject names the ceiling when it stands alone in a sentence.
+	maximumSubject string
+	// pairedMaximumPrefix opens the ceiling clause when both figures are quoted
+	// together.
+	pairedMaximumPrefix string
+	// pairedMaximumSuffix closes that same clause.
+	pairedMaximumSuffix string
+}
+
+// tokenLimitWording describes a refusal against the model's context window.
+var tokenLimitWording = embedLimitWording{
+	unit:                "tokens",
+	unitSingular:        "token",
+	measuredSubject:     "the input's measured token count",
+	maximumSubject:      "the model's limit",
+	pairedMaximumPrefix: "the model's ",
+	pairedMaximumSuffix: " limit",
+}
+
+// byteLimitWording describes a refusal against the byte ceiling a provider
+// applies before tokenizing, which is a different limit from the model's token
+// window and must not be reported as one.
+var byteLimitWording = embedLimitWording{
+	unit:                "bytes",
+	unitSingular:        "byte",
+	measuredSubject:     "the input's measured size",
+	maximumSubject:      "the limit applied before tokenizing",
+	pairedMaximumPrefix: "the ",
+	pairedMaximumSuffix: " limit applied before tokenizing",
+}
+
 // embedTokenLimitDetail renders a refusal against a model's token limit.
 func embedTokenLimitDetail(rejection EmbedInputRejection) string {
-	if rejection.Maximum <= 0 {
-		return embedRejectionUnreportedDetail
-	}
-	limit := "the model's limit is " + strconv.Itoa(rejection.Maximum) + " tokens"
-	if rejection.Measured <= 0 {
-		return limit
-	}
-	return "the input measured " + strconv.Itoa(rejection.Measured) +
-		" tokens against the model's " + strconv.Itoa(rejection.Maximum) + "-token limit"
+	return embedSizeLimitDetail(rejection, tokenLimitWording)
 }
 
 // embedByteLimitDetail renders a refusal against the byte ceiling a provider
-// applies before tokenizing, which is a different limit from the model's token
-// window and must not be reported as one.
+// applies before tokenizing.
 func embedByteLimitDetail(rejection EmbedInputRejection) string {
-	if rejection.Maximum <= 0 {
+	return embedSizeLimitDetail(rejection, byteLimitWording)
+}
+
+// embedSizeLimitDetail renders every combination of the two size figures. A
+// figure is quoted when the provider reported one a size could take, and is
+// described otherwise, so a reported zero reads as a zero and an absent figure
+// reads as missing. The paired sentence states both figures side by side without
+// claiming one exceeds the other, which keeps a contradictory pair neutral.
+func embedSizeLimitDetail(rejection EmbedInputRejection, wording embedLimitWording) string {
+	measuredQuotable := quotableEmbedFigure(rejection.Measured)
+	maximumQuotable := quotableEmbedFigure(rejection.Maximum)
+
+	switch {
+	case measuredQuotable && maximumQuotable:
+		return "the input measured " + strconv.Itoa(rejection.Measured.Value) +
+			" " + wording.unit + " against " + wording.pairedMaximumPrefix +
+			strconv.Itoa(rejection.Maximum.Value) + "-" + wording.unitSingular +
+			wording.pairedMaximumSuffix
+	case measuredQuotable:
+		return "the input measured " + strconv.Itoa(rejection.Measured.Value) +
+			" " + wording.unit + "; " +
+			embedUnquotableFigureClause(wording.maximumSubject, rejection.Maximum)
+	case maximumQuotable:
+		return wording.maximumSubject + " is " + strconv.Itoa(rejection.Maximum.Value) +
+			" " + wording.unit + "; " +
+			embedUnquotableFigureClause(wording.measuredSubject, rejection.Measured)
+	case !rejection.Measured.Reported && !rejection.Maximum.Reported:
 		return embedRejectionUnreportedDetail
+	default:
+		return embedUnquotableFigureClause(wording.measuredSubject, rejection.Measured) + "; " +
+			embedUnquotableFigureClause(wording.maximumSubject, rejection.Maximum)
 	}
-	limit := "the limit applied before tokenizing is " +
-		strconv.Itoa(rejection.Maximum) + " bytes"
-	if rejection.Measured <= 0 {
-		return limit
+}
+
+// quotableEmbedFigure reports whether a figure can be stated as a size. A
+// provider has to have reported it, and it has to be a count something could
+// actually have, which rules out a negative.
+func quotableEmbedFigure(figure EmbedFigure) bool {
+	return figure.Reported && figure.Value >= 0
+}
+
+// embedUnquotableFigureClause says why one figure is not quoted. A provider that
+// reported no figure and a provider that reported a negative one are different
+// failures, and the negative value is repeated back rather than dropped, so the
+// caller can see the provider is misreporting instead of reading silence as a
+// figure that never arrived.
+func embedUnquotableFigureClause(subject string, figure EmbedFigure) string {
+	if !figure.Reported {
+		return subject + " was not reported"
 	}
-	return "the input measured " + strconv.Itoa(rejection.Measured) +
-		" bytes against the " + strconv.Itoa(rejection.Maximum) +
-		"-byte limit applied before tokenizing"
+	return subject + " was reported as " + strconv.Itoa(figure.Value) +
+		", which is not a possible size"
 }
 
 // NewConflictingJob reports a duplicate indexing request the daemon

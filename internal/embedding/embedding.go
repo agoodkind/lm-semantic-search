@@ -64,12 +64,13 @@ type SkippedInput struct {
 	// repository declares, never text an endpoint returned, so it stays safe to
 	// show a client and stable to route on.
 	Reason adapterr.EmbedRejectionReason
-	// ReportedTokens is the token count the endpoint measured for the input, or
-	// zero when the endpoint did not report one.
-	ReportedTokens int
-	// MaxTokens is the model's maximum context length the endpoint reported, or
-	// zero when the endpoint did not report one.
-	MaxTokens int
+	// ReportedTokens is the token count the endpoint measured for the input. It
+	// carries whether the endpoint reported a count at all, so a count it
+	// genuinely reported as zero stays distinct from one it never sent.
+	ReportedTokens adapterr.EmbedFigure
+	// MaxTokens is the model's maximum context length the endpoint reported, and
+	// likewise carries whether the endpoint reported it.
+	MaxTokens adapterr.EmbedFigure
 }
 
 // BatchResult is the outcome of an EmbedBatch call. Vectors holds one entry per
@@ -224,16 +225,17 @@ func (provider *openAICompatibleProvider) Embed(ctx context.Context, text string
 
 // hostedInputRejection renders one endpoint refusal for the client-visible
 // error. The endpoint reports its figures only in prose, so they are optional:
-// when neither the limit nor the measured count could be read, the rejection is
-// still a size refusal and says the figures are missing rather than quoting a
-// zero.
+// when the endpoint reported neither the limit nor the measured count, the
+// rejection is still a size refusal and says the figures are missing. The test is
+// whether a figure arrived, not what it was, so a count the endpoint reported as
+// zero is still reported onward as a figure.
 func hostedInputRejection(
 	reason adapterr.EmbedRejectionReason,
-	reportedTokens int,
-	maxTokens int,
+	reportedTokens adapterr.EmbedFigure,
+	maxTokens adapterr.EmbedFigure,
 ) adapterr.EmbedInputRejection {
 	limit := adapterr.EmbedLimitTokens
-	if maxTokens <= 0 && reportedTokens <= 0 {
+	if !maxTokens.Reported && !reportedTokens.Reported {
 		limit = adapterr.EmbedLimitUnreported
 	}
 	return adapterr.EmbedInputRejection{
@@ -452,12 +454,12 @@ func transientEmbedStatus(err error) (int, bool) {
 // reported. Only the figures live here: the classification comes from the HTTP
 // status and the error code field, which are machine-readable, while index and
 // the token counts are parsed from the endpoint's prose, which is not. index is
-// -1 and the counts are zero when the message does not carry them, and neither
-// absence changes how the refusal is classified.
+// -1 and each token count is absent when the message does not carry it, and
+// neither absence changes how the refusal is classified.
 type perInputRejection struct {
 	index          int
-	reportedTokens int
-	maxTokens      int
+	reportedTokens adapterr.EmbedFigure
+	maxTokens      adapterr.EmbedFigure
 }
 
 var (
@@ -471,38 +473,67 @@ var (
 // per-input condition (the input exceeds the model's context window) and never a
 // server outage. Both of those are machine-readable fields, so the classification
 // never depends on how the endpoint worded its message. The returned index and
-// token counts are read from that prose as a convenience and are absent (-1 and
-// zero) when the wording does not carry them; an absent index only limits which
-// input can be dropped, it does not make the refusal any less per-input.
+// token counts are read from that prose as a convenience and are absent when the
+// wording does not carry them; an absent index only limits which input can be
+// dropped, it does not make the refusal any less per-input.
 func oversizedInputRejection(err error) (perInputRejection, bool) {
 	var apiErr *openai.Error
 	if !errors.As(err, &apiErr) {
-		return perInputRejection{index: -1, reportedTokens: 0, maxTokens: 0}, false
+		return unparsedInputRejection(), false
 	}
 	if apiErr.StatusCode != http.StatusBadRequest || apiErr.Code != embedCodeContextLengthExceeded {
-		return perInputRejection{index: -1, reportedTokens: 0, maxTokens: 0}, false
+		return unparsedInputRejection(), false
 	}
 	message := apiErr.Message
+	index, indexFound := parseFirstSubmatchInt(embedInputIndexPattern, message)
+	if !indexFound {
+		index = embedInputIndexUnnamed
+	}
 	return perInputRejection{
-		index:          parseFirstSubmatchInt(embedInputIndexPattern, message, -1),
-		reportedTokens: parseFirstSubmatchInt(embedResolvedTokensPattern, message, 0),
-		maxTokens:      parseFirstSubmatchInt(embedMaxTokensPattern, message, 0),
+		index:          index,
+		reportedTokens: parseReportedFigure(embedResolvedTokensPattern, message),
+		maxTokens:      parseReportedFigure(embedMaxTokensPattern, message),
 	}, true
 }
 
+// embedInputIndexUnnamed marks a refusal whose message named no input position,
+// so no single input of a multi-input request can be dropped.
+const embedInputIndexUnnamed = -1
+
+// unparsedInputRejection is the empty rejection returned beside a false result,
+// so a caller that ignores the boolean still sees no figures rather than zeros.
+func unparsedInputRejection() perInputRejection {
+	return perInputRejection{
+		index:          embedInputIndexUnnamed,
+		reportedTokens: adapterr.UnreportedFigure(),
+		maxTokens:      adapterr.UnreportedFigure(),
+	}
+}
+
+// parseReportedFigure reads one size figure out of the endpoint's prose. A figure
+// the message does not carry, or carries in a form that is not a readable
+// integer, comes back absent rather than as a zero, so a figure the endpoint
+// genuinely reported as zero stays distinguishable from one it never reported.
+func parseReportedFigure(pattern *regexp.Regexp, text string) adapterr.EmbedFigure {
+	value, found := parseFirstSubmatchInt(pattern, text)
+	if !found {
+		return adapterr.UnreportedFigure()
+	}
+	return adapterr.ReportedFigure(value)
+}
+
 // parseFirstSubmatchInt returns the first capture group of pattern in text as an
-// int, or fallback when the pattern does not match or the capture is not a valid
-// integer.
-func parseFirstSubmatchInt(pattern *regexp.Regexp, text string, fallback int) int {
+// int, and whether the pattern matched with a capture that read as an integer.
+func parseFirstSubmatchInt(pattern *regexp.Regexp, text string) (int, bool) {
 	match := pattern.FindStringSubmatch(text)
 	if len(match) < 2 {
-		return fallback
+		return 0, false
 	}
 	value, convErr := strconv.Atoi(match[1])
 	if convErr != nil {
-		return fallback
+		return 0, false
 	}
-	return value
+	return value, true
 }
 
 // embedBackoff returns the wait before the next attempt, doubling from the base

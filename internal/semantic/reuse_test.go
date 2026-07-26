@@ -53,8 +53,8 @@ func (skippingEmbedder) EmbedBatch(_ context.Context, texts []string) (embedding
 			skipped = append(skipped, embedding.SkippedInput{
 				Index:          0,
 				Reason:         adapterr.EmbedRejectionContextLengthExceeded,
-				ReportedTokens: 5000,
-				MaxTokens:      4096,
+				ReportedTokens: adapterr.ReportedFigure(5000),
+				MaxTokens:      adapterr.ReportedFigure(4096),
 			})
 			continue
 		}

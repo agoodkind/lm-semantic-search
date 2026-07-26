@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -42,10 +43,10 @@ type splitRetryPackResult struct {
 // rejects as context_length_exceeded, re-splits it into smaller sub-chunks and
 // retries. It applies pack to every retry round. Only a context-length rejection
 // may split, and splitting stops at a conservative content-byte floor derived
-// from the reported token limit or the active model limit when the endpoint omits
-// it. The floor reserves two tokens for tokenizer-added start and end markers. A
-// limit with no remaining content capacity drops the rejected input whole because
-// splitting cannot help. Otherwise, every split strictly shortens a piece until
+// from the token limit the endpoint reported, or from the active model limit when
+// the endpoint reported none. The floor reserves two tokens for tokenizer-added
+// start and end markers. A limit with no remaining content capacity drops the
+// rejected input whole because splitting cannot help. Otherwise, every split strictly shortens a piece until
 // it reaches the positive floor or one codepoint, so the loop stays bounded
 // without a round cap. keptChunks and keptVectors remain index-aligned.
 func EmbedChunksSplittingOversize(ctx context.Context, chunks []model.StoredChunk, activeModelMaxTokens int, pack ChunkPackFunc, embed EmbedBatchFunc) (keptChunks []model.StoredChunk, keptVectors [][]float32, droppedInputs int, err error) {
@@ -145,23 +146,34 @@ func shouldSplitRejectedChunk(chunk model.StoredChunk, skip embedding.SkippedInp
 }
 
 // splitRetryContentByteFloor converts a token limit to the smallest content-byte
-// size where another split cannot be assumed to help. ActiveEmbedTokenLimit
-// supplies at least 512 tokens when the endpoint omits its figure, so the
-// fallback floor is at least 510 bytes rather than zero or one. A positive
-// reported figure takes precedence. A figure no larger than the special-token
-// margin has no content capacity, so the caller drops the rejected input whole.
-func splitRetryContentByteFloor(reportedMaxTokens int, activeModelMaxTokens int) (int, bool) {
-	modelMaxTokens := reportedMaxTokens
-	if modelMaxTokens <= 0 {
-		modelMaxTokens = activeModelMaxTokens
-	}
-	if modelMaxTokens <= 0 {
-		modelMaxTokens = config.MinimumKnownEmbedModelInputTokenLimit
-	}
+// size where another split cannot be assumed to help. A limit no larger than the
+// special-token margin has no content capacity, so the caller drops the rejected
+// input whole.
+func splitRetryContentByteFloor(reportedMaxTokens adapterr.EmbedFigure, activeModelMaxTokens int) (int, bool) {
+	modelMaxTokens := splitRetryModelMaxTokens(reportedMaxTokens, activeModelMaxTokens)
 	if modelMaxTokens <= splitRetrySpecialTokenMargin {
 		return 0, false
 	}
 	return modelMaxTokens - splitRetrySpecialTokenMargin, true
+}
+
+// splitRetryModelMaxTokens picks the token limit the next split is measured
+// against. The loop cannot make progress without a number, so it takes the
+// endpoint's figure only when the endpoint reported one that a limit could
+// actually be, which is any count from zero up: a maximum genuinely reported as
+// zero says the model has no room at all, and the caller drops the input rather
+// than retrying against a limit the endpoint never claimed. A figure the endpoint
+// never reported, and a negative one no limit could take, both fall back to the
+// active model's limit, and then to the smallest limit any known embedding model
+// accepts when the caller passes no usable limit either.
+func splitRetryModelMaxTokens(reportedMaxTokens adapterr.EmbedFigure, activeModelMaxTokens int) int {
+	if reportedMaxTokens.Reported && reportedMaxTokens.Value >= 0 {
+		return reportedMaxTokens.Value
+	}
+	if activeModelMaxTokens > 0 {
+		return activeModelMaxTokens
+	}
+	return config.MinimumKnownEmbedModelInputTokenLimit
 }
 
 func rejectedDropKind(chunk model.StoredChunk, skip embedding.SkippedInput, activeModelMaxTokens int) string {

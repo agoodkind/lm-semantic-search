@@ -285,11 +285,11 @@ func TestEmbedBatchSkipsOversizedInputAndEmbedsRest(t *testing.T) {
 	if skip.Reason != "context_length_exceeded" {
 		t.Fatalf("Skipped[0].Reason = %q, want context_length_exceeded", skip.Reason)
 	}
-	if skip.MaxTokens != 4096 {
-		t.Fatalf("Skipped[0].MaxTokens = %d, want 4096", skip.MaxTokens)
+	if skip.MaxTokens != adapterr.ReportedFigure(4096) {
+		t.Fatalf("Skipped[0].MaxTokens = %+v, want a reported 4096", skip.MaxTokens)
 	}
-	if skip.ReportedTokens != 4472 {
-		t.Fatalf("Skipped[0].ReportedTokens = %d, want 4472", skip.ReportedTokens)
+	if skip.ReportedTokens != adapterr.ReportedFigure(4472) {
+		t.Fatalf("Skipped[0].ReportedTokens = %+v, want a reported 4472", skip.ReportedTokens)
 	}
 }
 
@@ -539,6 +539,45 @@ func TestHostedRefusalWithoutIndexProseStaysAnInvalidArgument(t *testing.T) {
 	}
 }
 
+// TestHostedRefusalReportsAMeasuredCountTheEndpointGaveAsZero covers an endpoint
+// that measures the input at zero tokens and says so. Zero is a count it did
+// report, so the caller has to read it as the measurement rather than as a
+// measurement that never arrived.
+func TestHostedRefusalReportsAMeasuredCountTheEndpointGaveAsZero(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens, however the input resolved to 0 tokens."}}`))
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	vector, embedErr := provider.Embed(context.Background(), "a query the endpoint measured at zero")
+	if embedErr == nil {
+		t.Fatal("Embed returned a vector for a query the endpoint refused")
+	}
+	if vector != nil {
+		t.Fatalf("Embed returned %d values alongside the rejection", len(vector))
+	}
+
+	message := adapterr.SafeMessage(embedErr)
+	if !strings.Contains(message, "0 tokens") {
+		t.Fatalf("client message %q does not carry the zero the endpoint measured", message)
+	}
+	if !strings.Contains(message, "8192-token limit") {
+		t.Fatalf("client message %q does not carry the maximum the endpoint reported", message)
+	}
+	if strings.Contains(message, "not reported") || strings.Contains(message, "no size figures") {
+		t.Fatalf("client message %q calls a figure the endpoint reported missing", message)
+	}
+}
+
 func TestNormalizeEmbeddingInputOnlyFillsAnEmptyInput(t *testing.T) {
 	t.Parallel()
 
@@ -563,7 +602,9 @@ func TestOversizedInputRejectionClassification(t *testing.T) {
 	if !ok {
 		t.Fatal("context_length_exceeded 400 was not classified as a per-input rejection")
 	}
-	if rejection.index != 2 || rejection.maxTokens != 4096 || rejection.reportedTokens != 5000 {
+	if rejection.index != 2 ||
+		rejection.maxTokens != adapterr.ReportedFigure(4096) ||
+		rejection.reportedTokens != adapterr.ReportedFigure(5000) {
 		t.Fatalf("parsed rejection = %+v, want index 2, max 4096, reported 5000", rejection)
 	}
 

@@ -206,49 +206,52 @@ func (provider *onnxProvider) clientRejection(
 		return adapterr.EmbedInputRejection{
 			Reason:   reason,
 			Limit:    adapterr.EmbedLimitTokens,
-			Measured: outcome.tokenCount,
-			Maximum:  int(provider.runtime.preset.MaximumTokens),
+			Measured: adapterr.ReportedFigure(outcome.tokenCount),
+			Maximum:  adapterr.ReportedFigure(int(provider.runtime.preset.MaximumTokens)),
 		}
 	case onnxInputBytesExceeded:
 		return adapterr.EmbedInputRejection{
 			Reason:   reason,
 			Limit:    adapterr.EmbedLimitBytes,
-			Measured: inputBytes,
-			Maximum:  provider.runtime.tokenizer.maximumInputBytes(),
+			Measured: adapterr.ReportedFigure(inputBytes),
+			Maximum:  adapterr.ReportedFigure(provider.runtime.tokenizer.maximumInputBytes()),
 		}
 	case onnxInputContainsNUL, onnxInputAccepted:
 		return adapterr.EmbedInputRejection{
 			Reason:   reason,
 			Limit:    adapterr.EmbedLimitNone,
-			Measured: 0,
-			Maximum:  0,
+			Measured: adapterr.UnreportedFigure(),
+			Maximum:  adapterr.UnreportedFigure(),
 		}
 	default:
 		return adapterr.EmbedInputRejection{
 			Reason:   reason,
 			Limit:    adapterr.EmbedLimitNone,
-			Measured: 0,
-			Maximum:  0,
+			Measured: adapterr.UnreportedFigure(),
+			Maximum:  adapterr.UnreportedFigure(),
 		}
 	}
 }
 
-// skippedInput renders one refused input for the batch's Skipped list. The
-// model's token limit travels only with a rejection the tokenizer measured
-// against it; the byte ceiling is a different limit and is named in the reason
-// rather than reported as a token count the caller cannot act on.
+// skippedInput renders one refused input for the batch's Skipped list. Both token
+// figures travel only with a rejection the tokenizer measured against the model's
+// window. A NUL byte and an over-long byte count are both refused before
+// tokenizing, so neither figure exists for them and both come back unreported
+// rather than as a zero the caller would read as a measurement.
 func (provider *onnxProvider) skippedInput(
 	index int,
 	outcome onnxEmbedOutcome,
 ) SkippedInput {
-	maximumTokens := 0
+	reportedTokens := adapterr.UnreportedFigure()
+	maximumTokens := adapterr.UnreportedFigure()
 	if outcome.rejection == onnxInputOverTokenLimit {
-		maximumTokens = int(provider.runtime.preset.MaximumTokens)
+		reportedTokens = adapterr.ReportedFigure(outcome.tokenCount)
+		maximumTokens = adapterr.ReportedFigure(int(provider.runtime.preset.MaximumTokens))
 	}
 	return SkippedInput{
 		Index:          index,
 		Reason:         adapterr.EmbedRejectionReason(outcome.rejection),
-		ReportedTokens: outcome.tokenCount,
+		ReportedTokens: reportedTokens,
 		MaxTokens:      maximumTokens,
 	}
 }

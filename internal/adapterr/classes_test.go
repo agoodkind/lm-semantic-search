@@ -168,8 +168,8 @@ func TestNewEmbedInputRejectedKeepsFreeTextOutOfTheClientEnvelope(t *testing.T) 
 	err := NewEmbedInputRejected(EmbedInputRejection{
 		Reason:   EmbedRejectionReason(leak),
 		Limit:    EmbedLimitTokens,
-		Measured: 10000,
-		Maximum:  8192,
+		Measured: ReportedFigure(10000),
+		Maximum:  ReportedFigure(8192),
 	}, errors.New("cause stays in the daemon log"))
 
 	if err.Code != string(EmbedRejectionUnspecified) {
@@ -198,8 +198,8 @@ func TestNewEmbedInputRejectedKeepsFreeTextOutOfTheClientEnvelope(t *testing.T) 
 		known := NewEmbedInputRejected(EmbedInputRejection{
 			Reason:   reason,
 			Limit:    EmbedLimitNone,
-			Measured: 0,
-			Maximum:  0,
+			Measured: UnreportedFigure(),
+			Maximum:  UnreportedFigure(),
 		}, nil)
 		if known.Code != string(reason) {
 			t.Fatalf("declared reason %q came back as %q", reason, known.Code)
@@ -217,8 +217,8 @@ func TestEmbedInputRejectionNamesTheLimitThatApplied(t *testing.T) {
 	tokens := NewEmbedInputRejected(EmbedInputRejection{
 		Reason:   EmbedRejectionContextLengthExceeded,
 		Limit:    EmbedLimitTokens,
-		Measured: 10000,
-		Maximum:  8192,
+		Measured: ReportedFigure(10000),
+		Maximum:  ReportedFigure(8192),
 	}, nil)
 	if !strings.Contains(tokens.Message, "10000 tokens") || !strings.Contains(tokens.Message, "8192-token limit") {
 		t.Fatalf("token refusal message = %q", tokens.Message)
@@ -227,8 +227,8 @@ func TestEmbedInputRejectionNamesTheLimitThatApplied(t *testing.T) {
 	bytesRejection := NewEmbedInputRejected(EmbedInputRejection{
 		Reason:   EmbedRejectionInputBytesExceeded,
 		Limit:    EmbedLimitBytes,
-		Measured: 32769,
-		Maximum:  32768,
+		Measured: ReportedFigure(32769),
+		Maximum:  ReportedFigure(32768),
 	}, nil)
 	if !strings.Contains(bytesRejection.Message, "32769 bytes") || !strings.Contains(bytesRejection.Message, "32768-byte limit") {
 		t.Fatalf("byte refusal message = %q", bytesRejection.Message)
@@ -242,8 +242,8 @@ func TestEmbedInputRejectionNamesTheLimitThatApplied(t *testing.T) {
 	unreported := NewEmbedInputRejected(EmbedInputRejection{
 		Reason:   EmbedRejectionContextLengthExceeded,
 		Limit:    EmbedLimitUnreported,
-		Measured: 0,
-		Maximum:  0,
+		Measured: UnreportedFigure(),
+		Maximum:  UnreportedFigure(),
 	}, nil)
 	if !strings.Contains(unreported.Message, "no size figures") {
 		t.Fatalf("unreported refusal message = %q, want it to say the figures are missing", unreported.Message)
@@ -258,10 +258,116 @@ func TestEmbedInputRejectionNamesTheLimitThatApplied(t *testing.T) {
 	nul := NewEmbedInputRejected(EmbedInputRejection{
 		Reason:   EmbedRejectionInputContainsNUL,
 		Limit:    EmbedLimitNone,
-		Measured: 0,
-		Maximum:  0,
+		Measured: UnreportedFigure(),
+		Maximum:  UnreportedFigure(),
 	}, nil)
 	if nul.Message != "embedding input rejected as "+string(EmbedRejectionInputContainsNUL) {
 		t.Fatalf("NUL refusal message = %q, want the reason alone with no limit beside it", nul.Message)
+	}
+}
+
+// TestEmbedInputRejectionSeparatesAReportedFigureFromAnAbsentOne walks every
+// combination of the two size figures a provider may report. A figure the
+// provider stated is quoted even when it is zero, a figure it never stated is
+// called missing, and a figure no size could take is repeated back as such
+// instead of passing for either.
+func TestEmbedInputRejectionSeparatesAReportedFigureFromAnAbsentOne(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		measured EmbedFigure
+		maximum  EmbedFigure
+		want     []string
+		reject   []string
+	}{
+		{
+			name:     "a measured count without a maximum",
+			measured: ReportedFigure(10000),
+			maximum:  UnreportedFigure(),
+			want:     []string{"10000 tokens", "the model's limit was not reported"},
+			reject:   []string{"no size figures"},
+		},
+		{
+			name:     "a maximum without a measured count",
+			measured: UnreportedFigure(),
+			maximum:  ReportedFigure(8192),
+			want:     []string{"8192 tokens", "measured token count was not reported"},
+			reject:   []string{"no size figures"},
+		},
+		{
+			name:     "a measured zero is the measurement, not a missing figure",
+			measured: ReportedFigure(0),
+			maximum:  ReportedFigure(8192),
+			want:     []string{"0 tokens", "8192-token limit"},
+			reject:   []string{"not reported", "no size figures"},
+		},
+		{
+			name:     "both figures reported as zero are both quoted",
+			measured: ReportedFigure(0),
+			maximum:  ReportedFigure(0),
+			want:     []string{"0 tokens", "0-token limit"},
+			reject:   []string{"not reported", "no size figures"},
+		},
+		{
+			name:     "a maximum reported as zero is quoted beside an absent measurement",
+			measured: UnreportedFigure(),
+			maximum:  ReportedFigure(0),
+			want:     []string{"0 tokens", "measured token count was not reported"},
+			reject:   []string{"no size figures"},
+		},
+		{
+			name:     "a negative measurement is repeated back, never called absent",
+			measured: ReportedFigure(-5),
+			maximum:  ReportedFigure(8192),
+			want:     []string{"8192 tokens", "reported as -5", "not a possible size"},
+			reject:   []string{"not reported", "no size figures"},
+		},
+		{
+			name:     "a negative maximum is repeated back beside the real measurement",
+			measured: ReportedFigure(10000),
+			maximum:  ReportedFigure(-1),
+			want:     []string{"10000 tokens", "reported as -1", "not a possible size"},
+			reject:   []string{"not reported", "no size figures"},
+		},
+		{
+			name:     "two unusable figures are both described rather than dropped",
+			measured: ReportedFigure(-5),
+			maximum:  UnreportedFigure(),
+			want:     []string{"reported as -5", "the model's limit was not reported"},
+			reject:   []string{"no size figures"},
+		},
+		{
+			name:     "neither figure reported still says the figures are missing",
+			measured: UnreportedFigure(),
+			maximum:  UnreportedFigure(),
+			want:     []string{"no size figures"},
+			reject:   []string{"0"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			rejection := NewEmbedInputRejected(EmbedInputRejection{
+				Reason:   EmbedRejectionContextLengthExceeded,
+				Limit:    EmbedLimitTokens,
+				Measured: test.measured,
+				Maximum:  test.maximum,
+			}, nil)
+			for _, fragment := range test.want {
+				if !strings.Contains(rejection.Message, fragment) {
+					t.Fatalf("message = %q, want it to carry %q", rejection.Message, fragment)
+				}
+			}
+			for _, fragment := range test.reject {
+				if strings.Contains(rejection.Message, fragment) {
+					t.Fatalf("message = %q, must not carry %q", rejection.Message, fragment)
+				}
+			}
+			if rejection.Hint == "" {
+				t.Fatal("a size refusal still needs the shorten-and-retry hint")
+			}
+		})
 	}
 }

@@ -238,11 +238,11 @@ func TestONNXEmbedBatchSkipsOverLimitInputInsteadOfTruncating(t *testing.T) {
 	if skip.Reason != adapterr.EmbedRejectionContextLengthExceeded {
 		t.Fatalf("skipped reason = %q, want %q", skip.Reason, adapterr.EmbedRejectionContextLengthExceeded)
 	}
-	if skip.MaxTokens != int(preset.MaximumTokens) {
-		t.Fatalf("skipped MaxTokens = %d, want %d", skip.MaxTokens, preset.MaximumTokens)
+	if skip.MaxTokens != adapterr.ReportedFigure(int(preset.MaximumTokens)) {
+		t.Fatalf("skipped MaxTokens = %+v, want a reported %d", skip.MaxTokens, preset.MaximumTokens)
 	}
-	if skip.ReportedTokens <= skip.MaxTokens {
-		t.Fatalf("skipped ReportedTokens = %d, want more than the %d-token limit", skip.ReportedTokens, skip.MaxTokens)
+	if !skip.ReportedTokens.Reported || skip.ReportedTokens.Value <= skip.MaxTokens.Value {
+		t.Fatalf("skipped ReportedTokens = %+v, want a reported count over the %d-token limit", skip.ReportedTokens, skip.MaxTokens.Value)
 	}
 
 	// A single-input Embed follows the same rule: an over-limit input is an error,
@@ -407,11 +407,11 @@ func TestONNXEmbedBatchReportsOversizedInputAsSkipped(t *testing.T) {
 	// The byte ceiling refused this input, not the model's token window, so the
 	// skip carries no token limit. Reporting the model's 512 tokens here would
 	// name a figure that had nothing to do with the refusal.
-	if result.Skipped[0].MaxTokens != 0 {
-		t.Fatalf("skipped MaxTokens = %d, want 0; the token limit is not the limit that refused this input", result.Skipped[0].MaxTokens)
+	if result.Skipped[0].MaxTokens.Reported {
+		t.Fatalf("skipped MaxTokens = %+v, want unreported; the token limit is not the limit that refused this input", result.Skipped[0].MaxTokens)
 	}
-	if result.Skipped[0].ReportedTokens != 0 {
-		t.Fatalf("skipped ReportedTokens = %d, want 0; the input was never tokenized", result.Skipped[0].ReportedTokens)
+	if result.Skipped[0].ReportedTokens.Reported {
+		t.Fatalf("skipped ReportedTokens = %+v, want unreported; the input was never tokenized", result.Skipped[0].ReportedTokens)
 	}
 }
 
