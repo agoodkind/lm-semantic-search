@@ -101,9 +101,10 @@ type Config struct {
 	// EmbeddingMaxTokens caps the tokens of a single chunk sent to the embedder,
 	// so a chunk is split rather than dropped when it would exceed the model's
 	// input limit. An unset value (0) does not disable the cap: the model's hard
-	// input-token limit is always enforced by EffectiveEmbedTokenCap, and a
+	// input-token limit is always enforced by EffectiveEmbedTokenCapForLimit, and a
 	// configured value only tightens the cap below that limit. Use
-	// EffectiveEmbedTokenCap and EmbedChunkByteBudget to apply the safety margin.
+	// EffectiveEmbedTokenCapForLimit and EmbedChunkByteBudget to apply the safety
+	// margin.
 	EmbeddingMaxTokens int
 	// EmbeddingRequestTimeoutMS bounds one embedding HTTP request. A wedged or
 	// unresponsive embedder makes an unbounded request hang forever, which strands
@@ -453,8 +454,8 @@ func readPersistedConfig(path string) persistedConfig {
 
 // resolveEmbeddingMaxTokens applies the env override over the config value. An
 // unset or non-positive value resolves to 0, which falls back to the model's
-// hard input-token limit in EffectiveEmbedTokenCap rather than disabling the
-// split; a warning names the knob to set for a tighter, batching-friendly cap.
+// hard input-token limit in EffectiveEmbedTokenCapForLimit rather than disabling
+// the split; a warning names the knob to set for a tighter, batching-friendly cap.
 func resolveEmbeddingMaxTokens(fileValue int) int {
 	value := envIntOrDefault("EMBEDDING_MAX_TOKENS", fileValue)
 	if value <= 0 {
@@ -516,15 +517,20 @@ func resolveMilvusMutationCallTimeoutMS(fileValue int) int {
 	return value
 }
 
-// EffectiveEmbedTokenCap returns the per-chunk token cap after the safety margin.
-// The model's hard input-token limit is always enforced, so an unset or larger
-// embeddingMaxTokens still caps at the model limit rather than disabling the
-// split and letting the embedder drop an oversized input; a configured value
-// below the model limit tightens the cap further. The result is always at least
-// one and always below EmbedModelInputTokenLimit.
-func EffectiveEmbedTokenCap(maxTokens int) int {
-	modelLimit := EmbedModelInputTokenLimit
-	modelCap := int(float64(modelLimit) * embedTokenSafetyMargin)
+// EffectiveEmbedTokenCapForLimit returns the per-chunk token cap after the safety
+// margin against modelLimit, the active model's hard input-token limit. The model
+// limit is always enforced, so an unset or larger maxTokens still caps at the
+// model limit rather than disabling the split and letting the embedder drop or
+// truncate an oversized input; a configured value below the model limit tightens
+// the cap further. A non-positive modelLimit falls back to the OpenAI-compatible
+// limit. The result is always at least one and always below modelLimit, so the
+// local ONNX backend can pass its 2048/512 preset limit and the Milvus backend
+// its 4096 OpenAI-compatible limit through one path.
+func EffectiveEmbedTokenCapForLimit(maxTokens int, modelLimit int) int {
+	if modelLimit <= 0 {
+		modelLimit = EmbedModelInputTokenLimit
+	}
+	modelCap := max(int(float64(modelLimit)*embedTokenSafetyMargin), 1)
 	if maxTokens <= 0 {
 		return modelCap
 	}
@@ -533,14 +539,38 @@ func EffectiveEmbedTokenCap(maxTokens int) int {
 }
 
 // EmbedChunkByteBudget returns the byte budget a byte-oriented splitter uses to
-// keep a sub-chunk within EffectiveEmbedTokenCap real tokens. It converts the
-// token cap at a conservative bytes-per-token ratio below the densest measured
-// content, so dense text stays under the model limit even though the byte count
-// cannot see the real tokenizer. It is always positive because the model limit
-// is always enforced.
+// keep a sub-chunk within EffectiveEmbedTokenCap real tokens against the
+// OpenAI-compatible model limit. It is EmbedChunkByteBudgetForLimit specialized
+// to EmbedModelInputTokenLimit.
 func EmbedChunkByteBudget(maxTokens int) int {
-	tokenCap := EffectiveEmbedTokenCap(maxTokens)
+	return EmbedChunkByteBudgetForLimit(maxTokens, EmbedModelInputTokenLimit)
+}
+
+// EmbedChunkByteBudgetForLimit returns the byte budget that keeps a sub-chunk
+// within EffectiveEmbedTokenCapForLimit real tokens against modelLimit. It
+// converts the token cap at a conservative bytes-per-token ratio below the
+// densest measured content, so dense text stays under the model limit even though
+// the byte count cannot see the real tokenizer. It is always positive because the
+// model limit is always enforced.
+func EmbedChunkByteBudgetForLimit(maxTokens int, modelLimit int) int {
+	tokenCap := EffectiveEmbedTokenCapForLimit(maxTokens, modelLimit)
 	return tokenCap * conservativeEmbedBytesPerTokenNum / conservativeEmbedBytesPerTokenDen
+}
+
+// ActiveEmbedTokenLimit reports the embedding model's hard per-input token limit
+// for the active provider: the offline ONNX preset's maximum for the ONNX
+// provider, otherwise the OpenAI-compatible model input limit. The split path
+// derives its byte budget from this so the local backend splits at the preset's
+// real 2048 (embeddinggemma) or 512 (bge-small) limit instead of the 4096
+// OpenAI-compatible limit that would let the ONNX tokenizer truncate the input.
+func ActiveEmbedTokenLimit(cfg Config) int {
+	if strings.EqualFold(strings.TrimSpace(cfg.EmbeddingProvider), EmbeddingProviderONNX) {
+		preset, err := offlinemodel.Resolve(cfg.OfflineEmbeddingModel)
+		if err == nil && preset.MaximumTokens > 0 {
+			return int(preset.MaximumTokens)
+		}
+	}
+	return EmbedModelInputTokenLimit
 }
 
 func intOrDefault(value int, fallback int) int {
