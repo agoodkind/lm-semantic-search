@@ -290,6 +290,112 @@ func TestEmbedBatchSkipsOversizedInputAndEmbedsRest(t *testing.T) {
 	}
 }
 
+// oversizedHostedInputBytes is past the 32768-byte ceiling the provider used to
+// cut every hosted input down to, so an input this long proves the cut is gone.
+const oversizedHostedInputBytes = 40000
+
+func TestEmbedBatchSendsOversizedInputWithoutShorteningIt(t *testing.T) {
+	t.Parallel()
+
+	var receivedInputs []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		var body struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("Decode returned error: %v", err)
+			return
+		}
+		receivedInputs = body.Input
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"data": []map[string]any{{"embedding": []float64{1.0, 2.0}}},
+		})
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	oversized := strings.Repeat("a", oversizedHostedInputBytes)
+	result, err := provider.EmbedBatch(context.Background(), []string{oversized})
+	if err != nil {
+		t.Fatalf("EmbedBatch returned error: %v", err)
+	}
+	if len(receivedInputs) != 1 {
+		t.Fatalf("endpoint received %d inputs, want 1", len(receivedInputs))
+	}
+	if len(receivedInputs[0]) != oversizedHostedInputBytes {
+		t.Fatalf("endpoint received %d bytes, want the whole %d-byte input; the provider shortened it behind the caller's back", len(receivedInputs[0]), oversizedHostedInputBytes)
+	}
+	if receivedInputs[0] != oversized {
+		t.Fatal("endpoint received input that differs from the caller's content")
+	}
+	if len(result.Vectors) != 1 || result.Vectors[0] == nil {
+		t.Fatalf("vectors = %#v, want one vector for the accepted input", result.Vectors)
+	}
+	if len(result.Skipped) != 0 {
+		t.Fatalf("Skipped = %#v, want none for an input the endpoint accepted", result.Skipped)
+	}
+}
+
+func TestEmbedReportsOversizedQueryRejectionInsteadOfShorteningIt(t *testing.T) {
+	t.Parallel()
+
+	// A search query goes through single-input Embed, which no index path splits
+	// beforehand. The endpoint sees the whole query and rejects it as too long, and
+	// that rejection reaches the caller instead of a vector over a shortened copy.
+	var receivedInputs []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		var body struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("Decode returned error: %v", err)
+			return
+		}
+		receivedInputs = body.Input
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens, however the input at index 0 resolved to 10000 tokens. Reduce the input length."}}`))
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	oversized := strings.Repeat("b", oversizedHostedInputBytes)
+	vector, embedErr := provider.Embed(context.Background(), oversized)
+	if embedErr == nil {
+		t.Fatal("Embed returned a vector for a query the endpoint rejected as too long")
+	}
+	if vector != nil {
+		t.Fatalf("Embed returned %d values alongside the rejection", len(vector))
+	}
+	if len(receivedInputs) != 1 {
+		t.Fatalf("endpoint received %d inputs, want 1", len(receivedInputs))
+	}
+	if len(receivedInputs[0]) != oversizedHostedInputBytes {
+		t.Fatalf("endpoint received %d bytes, want the whole %d-byte query; the provider shortened it behind the caller's back", len(receivedInputs[0]), oversizedHostedInputBytes)
+	}
+}
+
+func TestNormalizeEmbeddingInputOnlyFillsAnEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	if got := normalizeEmbeddingInput(""); got != " " {
+		t.Fatalf("empty input became %q, want a single space the endpoint accepts", got)
+	}
+	oversized := strings.Repeat("c", oversizedHostedInputBytes)
+	if got := normalizeEmbeddingInput(oversized); got != oversized {
+		t.Fatalf("input of %d bytes became %d bytes; nothing may shorten it here", len(oversized), len(got))
+	}
+}
+
 func TestOversizedInputRejectionClassification(t *testing.T) {
 	t.Parallel()
 

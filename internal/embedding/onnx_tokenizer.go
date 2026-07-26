@@ -4,20 +4,51 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/daulet/tokenizers"
 )
 
+// onnxMaximumInputBytesPerToken caps the input the tokenizer is asked to measure,
+// expressed as bytes per token the model accepts. The binding materializes and
+// copies the identifier, attention-mask, and type-identifier arrays before any
+// limit check, so measuring an unbounded input builds token records and duplicate
+// buffers that are discarded moments later. The supported models average a few
+// bytes per token, so a ceiling of 64 bytes per allowed token sits far above any
+// content that could fit the model and only catches inputs that were never
+// embeddable whole.
+const onnxMaximumInputBytesPerToken = 64
+
+// onnxInputRejection names why an input must not be embedded. Its values are the
+// reason codes carried on SkippedInput, so one rejection reads the same whether
+// the in-process tokenizer or a hosted endpoint refused the input.
+type onnxInputRejection string
+
+const (
+	// onnxInputAccepted marks an input the provider may tokenize and embed whole.
+	onnxInputAccepted onnxInputRejection = ""
+	// onnxInputContainsNUL marks an input carrying a NUL byte. The binding passes
+	// the text as a NUL-terminated C string, so the tokenizer would measure only
+	// the bytes before that NUL and any vector would cover that prefix alone.
+	onnxInputContainsNUL onnxInputRejection = embedCodeInputContainsNUL
+	// onnxInputBytesExceeded marks an input past onnxMaximumInputBytesPerToken per
+	// allowed token, rejected before tokenization rather than measured exactly.
+	onnxInputBytesExceeded onnxInputRejection = embedCodeInputBytesExceeded
+	// onnxInputOverTokenLimit marks an input the tokenizer measured past the
+	// model's maximum token count.
+	onnxInputOverTokenLimit onnxInputRejection = embedCodeContextLengthExceeded
+)
+
 // encodedONNXInput carries one tokenized input. tokenCount is the input's full
-// token count, never a truncated one. When overLimit is true the input
-// tokenizes past the model's maximum and the tensors are left empty, so no
-// caller can run the model over a shortened copy of the content.
+// token count, never a truncated one, and is zero for an input rejected before it
+// could be measured. A rejected input carries no tensors, so no caller can run
+// the model over a shortened copy of the content.
 type encodedONNXInput struct {
 	inputIDs      []int64
 	attentionMask []int64
 	tokenTypeIDs  []int64
 	tokenCount    int
-	overLimit     bool
+	rejection     onnxInputRejection
 }
 
 type genericTokenizer struct {
@@ -65,11 +96,38 @@ func newGenericTokenizer(
 	}, nil
 }
 
-// encode tokenizes text without truncation. An input past the model's maximum
-// token count comes back marked over the limit with its full token count and no
-// tensors, so the caller reports it as skipped instead of embedding a shortened
-// copy.
+// maximumInputBytes is the largest input this tokenizer will measure. It scales
+// with the model's token limit, so a model with a larger context accepts a
+// proportionally larger input.
+func (tokenizer *genericTokenizer) maximumInputBytes() int {
+	return tokenizer.maximumTokens * onnxMaximumInputBytesPerToken
+}
+
+// classifyInput reports whether text can be tokenized as a whole. It reads only
+// settings fixed when the tokenizer loaded and never calls the binding, so a
+// caller can reject an input before taking the runtime lock and without
+// allocating an encoding it would discard.
+func (tokenizer *genericTokenizer) classifyInput(text string) onnxInputRejection {
+	if strings.ContainsRune(text, 0) {
+		return onnxInputContainsNUL
+	}
+	if len(text) > tokenizer.maximumInputBytes() {
+		return onnxInputBytesExceeded
+	}
+	return onnxInputAccepted
+}
+
+// encode tokenizes text without truncation. An input classifyInput refuses, and
+// an input whose measurement lands past the model's maximum token count, both
+// come back carrying the reason and no tensors, so the caller reports the input
+// as skipped instead of embedding a shortened copy. The provider classifies the
+// same input before locking the runtime, and this call repeats the check so no
+// caller of the tokenizer can reach the NUL-terminated binding with an input it
+// would only read part of.
 func (tokenizer *genericTokenizer) encode(text string) (encodedONNXInput, error) {
+	if rejection := tokenizer.classifyInput(text); rejection != onnxInputAccepted {
+		return rejectedEncodedONNXInput(rejection, 0), nil
+	}
 	encoding, err := tokenizer.tokenizer.EncodeWithOptionsErr(
 		text,
 		true,
@@ -84,10 +142,7 @@ func (tokenizer *genericTokenizer) encode(text string) (encodedONNXInput, error)
 		return emptyEncodedONNXInput(), fmt.Errorf("ONNX tokenizer returned no token ids")
 	}
 	if len(encoding.IDs) > tokenizer.maximumTokens {
-		overLimit := emptyEncodedONNXInput()
-		overLimit.tokenCount = len(encoding.IDs)
-		overLimit.overLimit = true
-		return overLimit, nil
+		return rejectedEncodedONNXInput(onnxInputOverTokenLimit, len(encoding.IDs)), nil
 	}
 
 	inputIDs := uint32sToInt64s(encoding.IDs)
@@ -123,19 +178,35 @@ func (tokenizer *genericTokenizer) encode(text string) (encodedONNXInput, error)
 		attentionMask: attentionMask,
 		tokenTypeIDs:  tokenTypeIDs,
 		tokenCount:    len(inputIDs),
-		overLimit:     false,
+		rejection:     onnxInputAccepted,
 	}, nil
 }
 
-// emptyEncodedONNXInput is the zero encoding returned when tokenizing failed or
-// when the input is over the model's limit and must not be embedded.
+// emptyEncodedONNXInput is the zero encoding returned alongside an error, so no
+// caller mistakes a failed tokenization for an embeddable input.
 func emptyEncodedONNXInput() encodedONNXInput {
 	return encodedONNXInput{
 		inputIDs:      nil,
 		attentionMask: nil,
 		tokenTypeIDs:  nil,
 		tokenCount:    0,
-		overLimit:     false,
+		rejection:     onnxInputAccepted,
+	}
+}
+
+// rejectedEncodedONNXInput is the encoding for an input that must not be
+// embedded. It carries the reason and the measured token count when the input got
+// far enough to be measured, and never any tensors.
+func rejectedEncodedONNXInput(
+	rejection onnxInputRejection,
+	tokenCount int,
+) encodedONNXInput {
+	return encodedONNXInput{
+		inputIDs:      nil,
+		attentionMask: nil,
+		tokenTypeIDs:  nil,
+		tokenCount:    tokenCount,
+		rejection:     rejection,
 	}
 }
 

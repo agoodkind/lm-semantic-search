@@ -20,8 +20,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/metrics"
 )
 
-const maxEmbeddingTokens = 8192
-
 // openAIProviderName is the only supported provider label.
 const openAIProviderName = "OpenAI"
 
@@ -50,6 +48,18 @@ var ErrEmbedderRejected = errors.New("embedding endpoint rejected the request")
 // input is dropped and the rest of the batch is still embedded.
 const embedCodeContextLengthExceeded = "context_length_exceeded"
 
+// embedCodeInputContainsNUL is the reason code the in-process provider reports
+// for an input carrying a NUL byte. The tokenizer binding is NUL-terminated, so
+// it can only measure such an input up to its first NUL; the input is rejected
+// whole rather than embedded as the prefix before that byte.
+const embedCodeInputContainsNUL = "input_contains_nul_byte"
+
+// embedCodeInputBytesExceeded is the reason code the in-process provider reports
+// for an input larger than the byte ceiling it is willing to tokenize. Measuring
+// such an input would materialize a complete encoding only to discard it as
+// oversized, so it is rejected before the model runtime is touched.
+const embedCodeInputBytesExceeded = "input_bytes_exceeded"
+
 // SkippedInput identifies one input the embedding endpoint rejected as
 // individually un-embeddable, for example a chunk whose token count exceeds the
 // model's context window. The endpoint's own reported figures travel with it so
@@ -58,8 +68,9 @@ const embedCodeContextLengthExceeded = "context_length_exceeded"
 type SkippedInput struct {
 	// Index is the position of the skipped input in the EmbedBatch texts slice.
 	Index int
-	// Reason is the endpoint's error code for the rejection, for example
-	// "context_length_exceeded".
+	// Reason is the error code for the rejection, for example
+	// "context_length_exceeded". A hosted endpoint supplies its own code; the
+	// in-process provider supplies the code for the condition it detected.
 	Reason string
 	// ReportedTokens is the token count the endpoint measured for the input, or
 	// zero when the endpoint did not report one.
@@ -204,7 +215,7 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 
 	preprocessedTexts := make([]string, 0, len(texts))
 	for _, text := range texts {
-		preprocessedTexts = append(preprocessedTexts, preprocessText(text))
+		preprocessedTexts = append(preprocessedTexts, normalizeEmbeddingInput(text))
 	}
 
 	// Single choke point for every embedding call, so all per-batch latency and
@@ -445,14 +456,17 @@ func embedBackoff(attempt int) time.Duration {
 	return embedBackoffBase * time.Duration(multiplier)
 }
 
-func preprocessText(text string) string {
+// normalizeEmbeddingInput prepares one input for the embeddings request. An empty
+// input carries no content and the endpoint rejects it outright, so it becomes a
+// single space. Every other input is sent exactly as the caller supplied it.
+// Shortening a long input here would hand back a vector covering only the head of
+// the content while the caller stores that vector under the whole content's
+// identity; an input the endpoint cannot fit comes back as a
+// context_length_exceeded rejection instead, which EmbedBatch reports through
+// BatchResult.Skipped.
+func normalizeEmbeddingInput(text string) string {
 	if text == "" {
 		return " "
-	}
-
-	maxCharacters := maxEmbeddingTokens * 4
-	if len(text) > maxCharacters {
-		return text[:maxCharacters]
 	}
 	return text
 }

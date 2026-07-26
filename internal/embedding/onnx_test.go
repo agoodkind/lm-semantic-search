@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
@@ -171,8 +173,8 @@ func TestGenericTokenizerReportsOverLimitInsteadOfTruncating(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode long input: %v", err)
 			}
-			if !encoded.overLimit {
-				t.Fatalf("long input reported overLimit = false with %d token ids; the tokenizer truncated it silently", len(encoded.inputIDs))
+			if encoded.rejection != onnxInputOverTokenLimit {
+				t.Fatalf("long input reported rejection %q with %d token ids; the tokenizer truncated it silently", encoded.rejection, len(encoded.inputIDs))
 			}
 			if encoded.tokenCount <= int(preset.MaximumTokens) {
 				t.Fatalf("reported token count = %d, want more than the %d-token limit", encoded.tokenCount, preset.MaximumTokens)
@@ -185,8 +187,8 @@ func TestGenericTokenizerReportsOverLimitInsteadOfTruncating(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode short input: %v", err)
 			}
-			if shortEncoded.overLimit {
-				t.Fatal("short input reported as over the limit")
+			if shortEncoded.rejection != onnxInputAccepted {
+				t.Fatalf("short input reported rejection %q", shortEncoded.rejection)
 			}
 			if shortEncoded.tokenCount != len(shortEncoded.inputIDs) {
 				t.Fatalf("short input token count = %d, want %d", shortEncoded.tokenCount, len(shortEncoded.inputIDs))
@@ -246,6 +248,163 @@ func TestONNXEmbedBatchSkipsOverLimitInputInsteadOfTruncating(t *testing.T) {
 	// never a vector over a shortened copy of the content.
 	if _, embedErr := provider.Embed(context.Background(), longText); embedErr == nil {
 		t.Fatal("Embed returned a vector for an over-limit input")
+	}
+}
+
+// newUnloadedONNXProvider builds a provider whose runtime carries a tokenizer
+// with no loaded binding and no model session, so the only inputs it can answer
+// for are the ones it refuses before tokenizing. Any path that reaches the
+// binding or the model panics on the nil pointer, which is what makes a clean
+// return from these tests evidence that neither was touched.
+func newUnloadedONNXProvider(t *testing.T, presetName string) *onnxProvider {
+	t.Helper()
+	preset, err := offlinemodel.Resolve(presetName)
+	if err != nil {
+		t.Fatalf("Resolve %s: %v", presetName, err)
+	}
+	return &onnxProvider{
+		runtime: &inProcessONNXRuntime{
+			session: nil,
+			tokenizer: &genericTokenizer{
+				tokenizer:     nil,
+				maximumTokens: int(preset.MaximumTokens),
+			},
+			preset: preset,
+			mutex:  sync.Mutex{},
+		},
+	}
+}
+
+func TestONNXRejectsInputWithNULByteInsteadOfEmbeddingItsPrefix(t *testing.T) {
+	provider := newUnloadedONNXProvider(t, offlinemodel.BGESmall)
+	// The tokenizer binding passes the text as a NUL-terminated C string, so an
+	// input like this one would measure and embed only "trusted prefix" while the
+	// caller stored that vector under the whole input's identity.
+	const nulInput = "trusted prefix\x00omitted tail"
+
+	vector, err := provider.Embed(context.Background(), nulInput)
+	if err == nil {
+		t.Fatal("Embed returned a vector for an input containing a NUL byte; that vector could only cover the prefix before it")
+	}
+	if vector != nil {
+		t.Fatalf("Embed returned %d values alongside the rejection", len(vector))
+	}
+
+	result, batchErr := provider.EmbedBatch(context.Background(), []string{nulInput})
+	if batchErr != nil {
+		t.Fatalf("EmbedBatch: %v", batchErr)
+	}
+	if len(result.Vectors) != 1 {
+		t.Fatalf("vectors = %d, want 1 (index-aligned with the inputs)", len(result.Vectors))
+	}
+	if result.Vectors[0] != nil {
+		t.Fatal("the NUL-carrying input got a vector, so its prefix was embedded anyway")
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("skipped = %d, want 1; the input must be reported, never silently dropped", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason != embedCodeInputContainsNUL {
+		t.Fatalf("skipped reason = %q, want %q", result.Skipped[0].Reason, embedCodeInputContainsNUL)
+	}
+	if result.Skipped[0].Index != 0 {
+		t.Fatalf("skipped index = %d, want 0", result.Skipped[0].Index)
+	}
+}
+
+func TestONNXEmbedRejectsNULInputThatSharesAPrefixWithAnEmbeddableOne(t *testing.T) {
+	cfg := config.ApplyProfile(config.Config{
+		Profile:               config.ProfileOffline,
+		OfflineEmbeddingModel: offlinemodel.BGESmall,
+		StateRoot:             offlineModelCacheRoot(t),
+	})
+	provider, err := NewProvider(context.Background(), cfg)
+	if err != nil {
+		skipIfArtifactUnavailable(t, err)
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	const prefix = "package main\nfunc main() {}"
+	prefixVector, err := provider.Embed(context.Background(), prefix)
+	if err != nil {
+		t.Fatalf("embed the prefix on its own: %v", err)
+	}
+
+	// Same prefix, then a NUL, then content the NUL-terminated binding would never
+	// read. A vector here would be the prefix's vector stored under the whole
+	// input's identity.
+	fullInput := prefix + "\x00type Handler struct{ Name string }"
+	fullVector, fullErr := provider.Embed(context.Background(), fullInput)
+	if fullErr == nil {
+		if slices.Equal(fullVector, prefixVector) {
+			t.Fatal("Embed returned the prefix's own vector for an input whose tail follows a NUL byte")
+		}
+		t.Fatal("Embed returned a vector for an input containing a NUL byte")
+	}
+	if fullVector != nil {
+		t.Fatalf("Embed returned %d values alongside the rejection", len(fullVector))
+	}
+}
+
+func TestONNXEmbedRejectsOversizedInputWithoutTakingTheRuntimeLock(t *testing.T) {
+	provider := newUnloadedONNXProvider(t, offlinemodel.BGESmall)
+	oversized := strings.Repeat("a", provider.runtime.tokenizer.maximumInputBytes()+1)
+
+	// Hold the runtime lock for the whole call. An implementation that tokenizes
+	// before checking the input's size blocks here, which is the contention this
+	// bound exists to prevent: one oversized query would otherwise stall every
+	// other embedding and health probe while its encoding was built and discarded.
+	provider.runtime.mutex.Lock()
+	defer provider.runtime.mutex.Unlock()
+
+	type embedAttempt struct {
+		vector []float32
+		err    error
+	}
+	attempts := make(chan embedAttempt, 1)
+	go func() {
+		vector, err := provider.Embed(context.Background(), oversized)
+		attempts <- embedAttempt{vector: vector, err: err}
+	}()
+
+	select {
+	case attempt := <-attempts:
+		if attempt.err == nil {
+			t.Fatal("Embed returned a vector for an input past the tokenizer byte bound")
+		}
+		if attempt.vector != nil {
+			t.Fatalf("Embed returned %d values alongside the rejection", len(attempt.vector))
+		}
+		if !strings.Contains(attempt.err.Error(), "over the") {
+			t.Fatalf("rejection does not name the bound it exceeded: %v", attempt.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Embed blocked on the runtime lock for an input it must reject before tokenizing")
+	}
+}
+
+func TestONNXEmbedBatchReportsOversizedInputAsSkipped(t *testing.T) {
+	provider := newUnloadedONNXProvider(t, offlinemodel.BGESmall)
+	maximumInputBytes := provider.runtime.tokenizer.maximumInputBytes()
+	oversized := strings.Repeat("a", maximumInputBytes+1)
+
+	result, err := provider.EmbedBatch(context.Background(), []string{oversized})
+	if err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	if len(result.Vectors) != 1 {
+		t.Fatalf("vectors = %d, want 1 (index-aligned with the inputs)", len(result.Vectors))
+	}
+	if result.Vectors[0] != nil {
+		t.Fatal("the oversized input got a vector, so part of its content was embedded")
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("skipped = %d, want 1; the input must be reported, never silently dropped", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason != embedCodeInputBytesExceeded {
+		t.Fatalf("skipped reason = %q, want %q", result.Skipped[0].Reason, embedCodeInputBytesExceeded)
+	}
+	if result.Skipped[0].MaxTokens != provider.runtime.tokenizer.maximumTokens {
+		t.Fatalf("skipped MaxTokens = %d, want %d", result.Skipped[0].MaxTokens, provider.runtime.tokenizer.maximumTokens)
 	}
 }
 
