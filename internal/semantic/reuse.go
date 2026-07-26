@@ -10,6 +10,7 @@ import (
 	"log/slog"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
 // reuseVectorBatchSize bounds one QueryIterator page when streaming a reuse
@@ -114,7 +115,22 @@ func relativePathExpression(relativePath string) string {
 // loadReuseVectorsFiltered streams the rows of one collection matching
 // filterExpression into reuse, keyed by contentVectorKey. A missing collection
 // loads nothing.
-func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collectionName string, filterExpression string, reuse map[string][]float32) error {
+//
+// The span is the reindex phase boundary for the reuse read: every reuse entry
+// point funnels through here, so one span per call attributes the Milvus
+// collection load plus the vector-bearing iterator pages on their own, apart
+// from the embed and insert phases. semantic.reuse_vectors_read carries the row
+// count under the same span id, so a reader divides rows by duration_ms without
+// measuring the store by hand.
+func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collectionName string, filterExpression string, reuse map[string][]float32) (err error) {
+	ctx, done := spans.Open(ctx, "semantic.loadReuseVectors")
+	defer done(&err)
+
+	rowsRead := 0
+	defer func() {
+		slog.InfoContext(ctx, "semantic.reuse_vectors_read", "collection", collectionName, "rows", rowsRead, "keys", len(reuse))
+	}()
+
 	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "check collection for reuse load failed", "collection", collectionName, "err", err)
@@ -160,6 +176,7 @@ func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collection
 				return fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
 			}
 			reuse[contentVectorKey(contentValue)] = vector
+			rowsRead++
 		}
 	}
 }

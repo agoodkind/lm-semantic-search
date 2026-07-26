@@ -319,9 +319,13 @@ func (service *Service) PruneToCurrent(ctx context.Context, codebasePath string,
 
 // deleteByRelativePaths removes existing chunks for the given relative paths.
 // Paths are escaped to be safe inside the Milvus filter expression.
-func (service *Service) deleteByRelativePaths(ctx context.Context, collectionName string, relativePaths []string) error {
+func (service *Service) deleteByRelativePaths(
+	ctx context.Context,
+	collectionName string,
+	relativePaths []string,
+) (int64, error) {
 	if len(relativePaths) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	quoted := make([]string, 0, len(relativePaths))
@@ -330,10 +334,18 @@ func (service *Service) deleteByRelativePaths(ctx context.Context, collectionNam
 	}
 	expression := fmt.Sprintf(`%s in [%s]`, relativePathFieldName, strings.Join(quoted, ","))
 
-	if _, err := service.milvus.Delete(ctx, milvusclient.NewDeleteOption(collectionName).WithExpr(expression)); err != nil {
-		return wrapStoreError(ctx, err, "delete from "+collectionName+" by relative path")
+	result, err := service.milvus.Delete(
+		ctx,
+		milvusclient.NewDeleteOption(collectionName).WithExpr(expression),
+	)
+	if err != nil {
+		return 0, wrapStoreError(
+			ctx,
+			err,
+			"delete from "+collectionName+" by relative path",
+		)
 	}
-	return nil
+	return result.DeleteCount, nil
 }
 
 // Search executes semantic or hybrid search against the configured collection.

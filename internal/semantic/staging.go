@@ -8,6 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
@@ -128,43 +129,70 @@ func NewChunkPacker(batchRows int, tokenBudget int) ChunkPackFunc {
 		tokenBudget = defaultEmbeddingBatchTokenBudget
 	}
 	return func(chunks []model.StoredChunk) [][]model.StoredChunk {
-		return packChunksByEstimatedTokens(chunks, batchRows, tokenBudget)
+		return packChunksByEstimatedTokens(chunks, batchRows, tokenBudget, nil)
 	}
 }
 
-func (service *Service) packForEmbedding(chunks []model.StoredChunk) [][]model.StoredChunk {
-	return NewChunkPacker(service.cfg.EmbeddingBatchSize, service.cfg.EmbeddingBatchTokenBudget)(chunks)
+// packForEmbedding groups chunks into embedding requests under the configured
+// row ceiling and estimated-token budget. reuse is the same map embedChunkBatch
+// consults, so the packer charges the token budget only for the chunks that will
+// actually be sent to the embedder.
+func (service *Service) packForEmbedding(chunks []model.StoredChunk, reuse map[string][]float32) [][]model.StoredChunk {
+	batchRows := service.cfg.EmbeddingBatchSize
+	if batchRows <= 0 {
+		batchRows = defaultEmbeddingBatchRows
+	}
+	tokenBudget := service.cfg.EmbeddingBatchTokenBudget
+	if tokenBudget <= 0 {
+		tokenBudget = defaultEmbeddingBatchTokenBudget
+	}
+	return packChunksByEstimatedTokens(chunks, batchRows, tokenBudget, reuse)
 }
 
-// insertChunksBatched embeds chunks in row-count and estimated-token capped
-// batches and inserts them into collectionName. When collectionReady is false
-// the collection is created on the first batch using the dimension of the first
-// returned vector, which is how both the staging build and an empty live
-// collection learn their dimension without an up-front guess. The caller
-// guarantees chunks is non-empty and already guardrail-expanded.
-func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) error {
-	packs := service.packForEmbedding(chunks)
-	totalBatches := len(packs)
+// insertChunksBatched packs embedding requests by row count and estimated
+// tokens, then independently packs store inserts by estimated serialized bytes.
+// When collectionReady is false the collection is created on the first batch
+// using the dimension of the first returned vector, which is how both the
+// staging build and an empty live collection learn their dimension without an
+// up-front guess. The caller guarantees chunks is non-empty and already
+// guardrail-expanded.
+//
+// The span bounds the whole embed-and-insert loop, so a reindex splits into its
+// removal, guardrail, and write phases without any external measurement. The
+// per-batch semantic.embedBatch and semantic.insertBatch spans nested inside it
+// separate the embedder round trip from the Milvus write, and
+// semantic.chunks_written closes the loop with the totals that make those
+// durations a rate.
+func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
+	ctx, done := spans.Open(ctx, "semantic.insertChunksBatched")
+	defer done(&err)
+
+	embeddingPacks := service.packForEmbedding(chunks, reuse)
+	totalEmbeddingBatches := len(embeddingPacks)
+	totalInsertBatches := 0
 	var writtenRows int32
 	var reusedRows int32
 	var embeddedRows int32
 	var droppedInputs int32
 
-	for batchIndex, chunkBatch := range packs {
-		vectors, reused, err := service.embedChunkBatch(ctx, chunkBatch, reuse)
+	for embeddingBatchIndex, embeddingBatch := range embeddingPacks {
+		vectors, reused, err := service.embedChunkBatch(ctx, embeddingBatch, reuse)
 		if err != nil {
 			return err
 		}
 
-		keptChunks, keptVectors := filterEmbeddedChunks(chunkBatch, vectors)
+		keptChunks, keptVectors := filterEmbeddedChunks(embeddingBatch, vectors)
 
-		oversized := collectOversizedChunks(chunkBatch, vectors)
+		// A reused chunk never reaches the embedder, so it cannot be refused and
+		// cannot enter this retry queue. The chunks-only constructor therefore
+		// correctly charges every retry input against the token budget.
+		oversized := collectOversizedChunks(embeddingBatch, vectors)
 		if len(oversized) > 0 {
 			retryChunks, retryVectors, dropped, retryErr := EmbedChunksSplittingOversize(
 				ctx,
 				oversized,
 				config.ActiveEmbedTokenLimit(service.cfg),
-				service.packForEmbedding,
+				NewChunkPacker(service.cfg.EmbeddingBatchSize, service.cfg.EmbeddingBatchTokenBudget),
 				service.embedder.EmbedBatch,
 			)
 			if retryErr != nil {
@@ -174,30 +202,47 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			keptVectors = append(keptVectors, retryVectors...)
 			droppedInputs += safeInt32FromInt(dropped)
 		}
-
 		if len(keptChunks) > 0 {
+			dimension := len(keptVectors[0])
 			if !collectionReady {
-				dimension := len(keptVectors[0])
 				if err := service.createCollection(ctx, collectionName, dimension); err != nil {
 					return err
 				}
 				collectionReady = true
 			}
 
-			if err := service.insertBatch(ctx, collectionName, keptChunks, keptVectors, columnSet); err != nil {
-				return err
+			insertPacks := packChunksByEstimatedInsertBytes(
+				keptChunks,
+				dimension,
+				insertBatchEstimatedByteBudget,
+				columnSet,
+			)
+			vectorStart := 0
+			for _, insertBatch := range insertPacks {
+				vectorEnd := vectorStart + len(insertBatch)
+				if err := service.insertBatch(
+					ctx,
+					collectionName,
+					insertBatch,
+					keptVectors[vectorStart:vectorEnd],
+					columnSet,
+				); err != nil {
+					return err
+				}
+				vectorStart = vectorEnd
+				totalInsertBatches++
+				writtenRows += safeInt32FromInt(len(insertBatch))
 			}
 
-			writtenRows += safeInt32FromInt(len(keptChunks))
 			reusedRows += safeInt32FromInt(reused)
 			embeddedRows += safeInt32FromInt(len(keptChunks) - reused)
 		}
 		if progress != nil {
 			progress(Progress{
 				Phase:                     phase,
-				OverallPercent:            90 + (float64(batchIndex+1)/float64(totalBatches))*10,
-				EmbeddingBatchesTotal:     safeInt32FromInt(totalBatches),
-				EmbeddingBatchesCompleted: safeInt32FromInt(batchIndex + 1),
+				OverallPercent:            90 + (float64(embeddingBatchIndex+1)/float64(totalEmbeddingBatches))*10,
+				EmbeddingBatchesTotal:     safeInt32FromInt(totalEmbeddingBatches),
+				EmbeddingBatchesCompleted: safeInt32FromInt(embeddingBatchIndex + 1),
 				CollectionRowsWritten:     writtenRows,
 				ChunksProcessed:           writtenRows,
 				ChunksReused:              reusedRows,
@@ -214,6 +259,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			"dropped_inputs", droppedInputs,
 		)
 	}
+	slog.InfoContext(ctx, "semantic.chunks_written", "collection", collectionName, "embedding_batches", totalEmbeddingBatches, "insert_batches", totalInsertBatches, "chunks", writtenRows, "embedded", embeddedRows, "reused", reusedRows)
 	return nil
 }
 
@@ -242,17 +288,9 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 		return vectors, reused, nil
 	}
 
-	result, err := service.embedder.EmbedBatch(ctx, missTexts)
+	result, err := service.embedMissedTexts(ctx, missTexts, reused)
 	if err != nil {
-		// EmbedBatch already returns a typed adapterr error; %w keeps that class
-		// visible to errors.As so the index and search paths classify an embedding
-		// failure the same way.
-		slog.ErrorContext(ctx, "embed batch failed", "err", err)
-		return nil, 0, fmt.Errorf("embed chunk batch: %w", err)
-	}
-	if len(result.Vectors) != len(missTexts) {
-		slog.ErrorContext(ctx, "embedding batch returned unexpected vector count", "want", len(missTexts), "got", len(result.Vectors), "err", errors.New("vector count mismatch"))
-		return nil, 0, fmt.Errorf("embedding batch returned %d vectors for %d chunks", len(result.Vectors), len(missTexts))
+		return nil, 0, err
 	}
 	for position, vectorIndex := range missIndexes {
 		// A skipped input carries a nil vector; the caller re-splits and retries that
@@ -275,6 +313,47 @@ func collectOversizedChunks(chunks []model.StoredChunk, vectors [][]float32) []m
 		}
 	}
 	return oversized
+}
+
+// embedMissedTexts sends one embedding request for the chunk contents no reuse
+// vector covered.
+//
+// It carries its own span because embedding is the phase that dominates a
+// reindex and nothing inside semantic.reindex timed it before: the round trip
+// blocks on the embedding host's queue and its forward pass, so a slow reindex
+// is attributable to the embedder or to Milvus only when the two are timed
+// apart. The span opens only when there is something to embed, so an all-reuse
+// batch stays silent instead of logging an empty phase.
+// semantic.embed_batch_started carries the input and estimated-token counts
+// under the same span id, which is what turns duration_ms into a rate.
+func (service *Service) embedMissedTexts(ctx context.Context, missTexts []string, reusedCount int) (result embedding.BatchResult, err error) {
+	ctx, done := spans.Open(ctx, "semantic.embedBatch")
+	defer done(&err)
+	slog.InfoContext(ctx, "semantic.embed_batch_started", "inputs", len(missTexts), "estimated_tokens", estimatedBatchTokenCount(missTexts), "reused", reusedCount)
+
+	result, err = service.embedder.EmbedBatch(ctx, missTexts)
+	if err != nil {
+		// EmbedBatch already returns a typed adapterr error; %w keeps that class
+		// visible to errors.As so the index and search paths classify an embedding
+		// failure the same way.
+		slog.ErrorContext(ctx, "embed batch failed", "err", err)
+		return embedding.BatchResult{}, fmt.Errorf("embed chunk batch: %w", err)
+	}
+	if len(result.Vectors) != len(missTexts) {
+		slog.ErrorContext(ctx, "embedding batch returned unexpected vector count", "want", len(missTexts), "got", len(result.Vectors), "err", errors.New("vector count mismatch"))
+		return embedding.BatchResult{}, fmt.Errorf("embedding batch returned %d vectors for %d chunks", len(result.Vectors), len(missTexts))
+	}
+	return result, nil
+}
+
+// estimatedBatchTokenCount sums the packer's per-input token estimate across one
+// embedding request, so the embed span reports the size of what it sent.
+func estimatedBatchTokenCount(texts []string) int {
+	total := 0
+	for _, text := range texts {
+		total += estimatedTokenCount(text)
+	}
+	return total
 }
 
 // filterEmbeddedChunks keeps only the chunks whose vector is non-nil, pairing
