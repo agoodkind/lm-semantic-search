@@ -170,25 +170,6 @@ func TestMergeUpRedirectsNestedIndexToParent(t *testing.T) {
 	})
 }
 
-func TestChunkUnderPrefix(t *testing.T) {
-	cases := []struct {
-		relativePath string
-		prefix       string
-		want         bool
-	}{
-		{"child/leaf.go", "child", true},
-		{"child", "child", true},
-		{"childish/leaf.go", "child", false},
-		{"other/leaf.go", "child", false},
-		{"child/deep/leaf.go", "child", true},
-	}
-	for _, testCase := range cases {
-		if got := chunkUnderPrefix(testCase.relativePath, testCase.prefix); got != testCase.want {
-			t.Fatalf("chunkUnderPrefix(%q, %q) = %v, want %v", testCase.relativePath, testCase.prefix, got, testCase.want)
-		}
-	}
-}
-
 func TestSubtreePrefixResolvesNestedPath(t *testing.T) {
 	parentCanonical, childCanonical := newParentWithChildRepo(t)
 	if got := subtreePrefix(childCanonical, parentCanonical); got != "child" {

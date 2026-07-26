@@ -975,8 +975,8 @@ func (manager *Manager) dedupAgainstActiveJob(canonicalPath string, indexConfig 
 }
 
 // Delta sync helpers live in manager_delta.go. Job state mutators live in
-// manager_jobs_state.go. SearchCode and rankChunks live in manager_search.go.
-// Path helpers live in manager_paths.go. Config helpers and id helpers live in
+// manager_jobs_state.go. SearchCode lives in manager_search.go. Path helpers
+// live in manager_paths.go. Config helpers and id helpers live in
 // manager_config.go. Boundary guards (StateRoot, directory, inode-stability)
 // live in manager_guards.go. Active-job snapshot and cancellation helpers live
 // in manager_active_job.go.

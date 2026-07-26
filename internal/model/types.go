@@ -332,9 +332,8 @@ type StoredChunk struct {
 	// every piece keeps the parent relativePath so a message delete-by-prefix
 	// still removes them all.
 	SplitPart int32 `json:"split_part,omitempty"`
-	// Score is the retrieval relevance for this chunk: the vector similarity for
-	// a semantic search, or the keyword rank the code literal-fallback search
-	// (rankChunks) assigns. Zero on chunks that did not come from a search.
+	// Score is the vector similarity for a semantic search. Zero on chunks that
+	// did not come from a search.
 	Score float64 `json:"score,omitempty"`
 }
 
