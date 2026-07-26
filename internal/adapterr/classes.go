@@ -1,6 +1,10 @@
 package adapterr
 
-import "google.golang.org/grpc/codes"
+import (
+	"strconv"
+
+	"google.golang.org/grpc/codes"
+)
 
 // Class is the closed-set classification for an [AdapterError].
 type Class string
@@ -268,6 +272,48 @@ func NewInvalidArgument(message string) *AdapterError {
 		Code:          "invalid_argument",
 		Hint:          "",
 		Cause:         nil,
+		SafeForClient: true,
+	}
+}
+
+// CodeEmbedInputRejected is the fallback code for an embedding input a provider
+// refused without naming a reason.
+const CodeEmbedInputRejected = "embed_input_rejected"
+
+// NewEmbedInputRejected reports one embedding input the provider refused as
+// individually un-embeddable, for example a search query longer than the model's
+// context window. The reason code, the model's token limit, and the measured
+// token count reach the client because the caller can act on them by shortening
+// the input, where a sanitized internal error would leave a person with no way to
+// learn what to change. Every provider builds this error from the same figures,
+// so a client cannot tell which one refused the input.
+func NewEmbedInputRejected(
+	reason string,
+	reportedTokens int,
+	maxTokens int,
+	cause error,
+) *AdapterError {
+	code := reason
+	if code == "" {
+		code = CodeEmbedInputRejected
+	}
+	message := "embedding input rejected as " + code
+	hint := ""
+	if maxTokens > 0 {
+		hint = "shorten the input to fit the model's context window and retry"
+		if reportedTokens > 0 {
+			message += ": the input measured " + strconv.Itoa(reportedTokens) +
+				" tokens against the model's " + strconv.Itoa(maxTokens) + "-token limit"
+		} else {
+			message += ": the model's limit is " + strconv.Itoa(maxTokens) + " tokens"
+		}
+	}
+	return &AdapterError{
+		Class:         ClassInvalidArgument,
+		Message:       message,
+		Code:          code,
+		Hint:          hint,
+		Cause:         cause,
 		SafeForClient: true,
 	}
 }

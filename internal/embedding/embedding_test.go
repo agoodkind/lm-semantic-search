@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/openai/openai-go/v2"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
 // testEmbedTimeout bounds one request in the happy-path tests. It is generous
@@ -381,6 +383,89 @@ func TestEmbedReportsOversizedQueryRejectionInsteadOfShorteningIt(t *testing.T) 
 	}
 	if len(receivedInputs[0]) != oversizedHostedInputBytes {
 		t.Fatalf("endpoint received %d bytes, want the whole %d-byte query; the provider shortened it behind the caller's back", len(receivedInputs[0]), oversizedHostedInputBytes)
+	}
+}
+
+// TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument pins the shape both
+// providers give a refused single input: a typed invalid-argument error whose
+// client-safe message names the reason and the model's limit, and which never
+// names the provider or the model. A caller can act on the reason and still
+// cannot tell which provider refused the input.
+func TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens, however the input at index 0 resolved to 10000 tokens. Reduce the input length."}}`))
+	}))
+	defer server.Close()
+
+	hostedProvider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+	_, hostedErr := hostedProvider.Embed(context.Background(), strings.Repeat("a", oversizedHostedInputBytes))
+	if hostedErr == nil {
+		t.Fatal("the hosted provider accepted an input its endpoint rejected")
+	}
+
+	onnxProviderUnderTest := newUnloadedONNXProvider(t, offlinemodel.BGESmall)
+	onnxOversized := strings.Repeat("a", onnxProviderUnderTest.runtime.tokenizer.maximumInputBytes()+1)
+	_, onnxErr := onnxProviderUnderTest.Embed(context.Background(), onnxOversized)
+	if onnxErr == nil {
+		t.Fatal("the in-process provider accepted an input past its tokenizer bound")
+	}
+
+	cases := []struct {
+		name        string
+		err         error
+		wantReason  string
+		wantFigures []string
+	}{
+		{
+			name:        "hosted endpoint rejection",
+			err:         hostedErr,
+			wantReason:  embedCodeContextLengthExceeded,
+			wantFigures: []string{"10000", "8192"},
+		},
+		{
+			name:        "in-process rejection",
+			err:         onnxErr,
+			wantReason:  embedCodeInputBytesExceeded,
+			wantFigures: []string{"512"},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var adapterErr *adapterr.AdapterError
+			if !errors.As(testCase.err, &adapterErr) {
+				t.Fatalf("error stayed untyped, so the boundary sanitizes it into an internal error: %v", testCase.err)
+			}
+			if adapterErr.Class != adapterr.ClassInvalidArgument {
+				t.Fatalf("class = %q, want %q", adapterErr.Class, adapterr.ClassInvalidArgument)
+			}
+			if !adapterErr.SafeForClient {
+				t.Fatal("a refused input must be safe to show the caller; otherwise the reason never leaves the daemon log")
+			}
+			if adapterErr.Code != testCase.wantReason {
+				t.Fatalf("code = %q, want the reason %q", adapterErr.Code, testCase.wantReason)
+			}
+			message := adapterr.SafeMessage(testCase.err)
+			if !strings.Contains(message, testCase.wantReason) {
+				t.Fatalf("client message %q does not name the reason %q", message, testCase.wantReason)
+			}
+			for _, figure := range testCase.wantFigures {
+				if !strings.Contains(message, figure) {
+					t.Fatalf("client message %q does not carry the figure %q", message, figure)
+				}
+			}
+			for _, leak := range []string{"OpenAI", "ONNX", "onnx", "bge-small", "endpoint"} {
+				if strings.Contains(message, leak) {
+					t.Fatalf("client message %q names %q, so a caller can tell the providers apart", message, leak)
+				}
+			}
+		})
 	}
 }
 

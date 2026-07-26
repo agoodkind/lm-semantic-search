@@ -177,13 +177,38 @@ func (provider *onnxProvider) Embed(
 			"model_max_tokens", preset.MaximumTokens,
 			"err", rejectionErr,
 		)
-		return nil, fmt.Errorf(
-			"generate ONNX embedding for %q: %w",
-			preset.Name,
-			rejectionErr,
+		return nil, rejectedInputError(
+			provider.skippedInput(0, outcome),
+			fmt.Errorf(
+				"generate ONNX embedding for %q: %w",
+				preset.Name,
+				rejectionErr,
+			),
 		)
 	}
 	return outcome.vector, nil
+}
+
+// skippedInput renders one refused input for the batch's Skipped list and for
+// the single-input error, so both report the same reason and figures. The
+// model's token limit travels only with a rejection that is about length; a NUL
+// byte is not a size problem, so quoting a token limit beside it would send the
+// caller after the wrong fix.
+func (provider *onnxProvider) skippedInput(
+	index int,
+	outcome onnxEmbedOutcome,
+) SkippedInput {
+	maximumTokens := 0
+	if outcome.rejection == onnxInputOverTokenLimit ||
+		outcome.rejection == onnxInputBytesExceeded {
+		maximumTokens = int(provider.runtime.preset.MaximumTokens)
+	}
+	return SkippedInput{
+		Index:          index,
+		Reason:         string(outcome.rejection),
+		ReportedTokens: outcome.tokenCount,
+		MaxTokens:      maximumTokens,
+	}
 }
 
 // explainRejection states why one input was not embedded, naming the figure that
@@ -346,7 +371,6 @@ func (provider *onnxProvider) EmbedBatch(
 	// context_length_exceeded rejection. Both implementations of Provider therefore
 	// honor the same promise: a returned vector always covers the whole input, and
 	// the caller's split-and-retry loop divides anything that does not fit.
-	maximumTokens := int(provider.runtime.preset.MaximumTokens)
 	vectors := make([][]float32, len(texts))
 	var skipped []SkippedInput
 	for index, text := range texts {
@@ -355,12 +379,7 @@ func (provider *onnxProvider) EmbedBatch(
 			return BatchResult{}, embedErr
 		}
 		if outcome.rejection != onnxInputAccepted {
-			skipped = append(skipped, SkippedInput{
-				Index:          index,
-				Reason:         string(outcome.rejection),
-				ReportedTokens: outcome.tokenCount,
-				MaxTokens:      maximumTokens,
-			})
+			skipped = append(skipped, provider.skippedInput(index, outcome))
 			continue
 		}
 		vectors[index] = outcome.vector

@@ -200,12 +200,47 @@ func (provider *openAICompatibleProvider) Embed(ctx context.Context, text string
 	if err != nil {
 		return nil, err
 	}
-	if len(result.Vectors) == 0 || result.Vectors[0] == nil {
-		// A single-input call the endpoint rejected as un-embeddable (for example a
-		// query longer than the model's context window) leaves no vector to return.
+	if len(result.Vectors) > 0 && result.Vectors[0] != nil {
+		return result.Vectors[0], nil
+	}
+	if len(result.Skipped) == 0 {
 		return nil, fmt.Errorf("%s embedding provider returned no vector for the input", provider.name)
 	}
-	return result.Vectors[0], nil
+	// The endpoint rejected this single input as un-embeddable, for example a query
+	// longer than the model's context window. Its own reported figures travel to
+	// the caller so a person can shorten the input, rather than being sanitized
+	// into an internal error nobody can act on.
+	skipped := result.Skipped[0]
+	slog.WarnContext(
+		ctx,
+		"embedding endpoint refused the input",
+		"provider", provider.name,
+		"model", provider.model,
+		"reason", skipped.Reason,
+		"reported_tokens", skipped.ReportedTokens,
+		"model_max_tokens", skipped.MaxTokens,
+	)
+	return nil, rejectedInputError(skipped, fmt.Errorf(
+		"%s embedding endpoint refused the input as %s",
+		provider.name,
+		skipped.Reason,
+	))
+}
+
+// rejectedInputError renders one refused input as the typed, client-safe error
+// both providers return from Embed. Embed's callers are the search paths, where
+// a person is waiting on an answer, so the reason and the model's figures reach
+// the client instead of a sanitized internal error. Both providers build the
+// error here from the same SkippedInput, so a client cannot tell which provider
+// refused the input; the provider-specific detail stays in the cause, which the
+// boundary keeps in the daemon log.
+func rejectedInputError(skipped SkippedInput, cause error) error {
+	return adapterr.NewEmbedInputRejected(
+		skipped.Reason,
+		skipped.ReportedTokens,
+		skipped.MaxTokens,
+		cause,
+	)
 }
 
 func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts []string) (result BatchResult, err error) {

@@ -13,10 +13,15 @@ import (
 // expressed as bytes per token the model accepts. The binding materializes and
 // copies the identifier, attention-mask, and type-identifier arrays before any
 // limit check, so measuring an unbounded input builds token records and duplicate
-// buffers that are discarded moments later. The supported models average a few
-// bytes per token, so a ceiling of 64 bytes per allowed token sits far above any
-// content that could fit the model and only catches inputs that were never
-// embeddable whole.
+// buffers that are discarded moments later. Ordinary prose and code average a few
+// bytes per token, so a ceiling of 64 bytes per allowed token sits far above the
+// content this cap is meant to stop.
+//
+// The bound may over-reject. A long unbroken run, such as a base64 value or a
+// minified identifier, can collapse largely to one unknown token, so an input
+// past this ceiling might in fact have fit the model. That direction is
+// deliberate: a refused input is reported through the rejection channel and can
+// be split, while a measured one could still only ever be embedded whole.
 const onnxMaximumInputBytesPerToken = 64
 
 // onnxInputRejection names why an input must not be embedded. Its values are the
