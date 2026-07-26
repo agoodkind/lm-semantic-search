@@ -48,7 +48,8 @@ const genericDegradedHeadline = "A shared dependency is degraded. Indexing is pa
 var bannerHeadlineByMode = map[DependencyMode]string{
 	EmbedderUnreachable: "Embedding server unreachable. Indexing is paused and resumes automatically when it returns.",
 	EmbedderRejected:    "Embedding server is rejecting requests. Indexing is paused until the embedding config is fixed.",
-	EmbedderBusy:        "Embedding server is at capacity. Indexing is paused and retries automatically when it frees up.",
+	EmbedderPaused:      "Embedding service is paused to preserve battery. Indexing resumes after low power mode ends or the service is resumed.",
+	EmbedderBusy:        "Embedding server is throttling requests. Active indexing may continue between rejected batches.",
 	StoreUnavailable:    "Vector store unavailable. Search and indexing are paused until it returns.",
 }
 

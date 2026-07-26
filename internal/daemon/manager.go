@@ -905,7 +905,7 @@ func (manager *Manager) ListJobs(codebaseID string) []model.Job {
 }
 
 // Doctor reports basic local state-path diagnostics.
-func (manager *Manager) Doctor() []string {
+func (manager *Manager) Doctor(ctx context.Context) []string {
 	diagnostics := []string{}
 	for _, path := range []string{
 		manager.config.StateRoot,
@@ -927,7 +927,7 @@ func (manager *Manager) Doctor() []string {
 		return codebases[i].CanonicalPath < codebases[j].CanonicalPath
 	})
 	for _, codebase := range codebases {
-		if diagnostic := manager.graphDiagnostic(codebase); diagnostic != "" {
+		if diagnostic := manager.graphDiagnostic(ctx, codebase); diagnostic != "" {
 			diagnostics = append(diagnostics, diagnostic)
 		}
 		if codebase.LastSuccessfulRun == nil {

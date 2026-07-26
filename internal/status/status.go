@@ -46,6 +46,7 @@ const (
 	Healthy             DependencyMode = ""
 	EmbedderUnreachable DependencyMode = "embedder_unreachable"
 	EmbedderRejected    DependencyMode = "embedder_rejected"
+	EmbedderPaused      DependencyMode = "embedder_paused"
 	EmbedderBusy        DependencyMode = "embedder_busy"
 	StoreUnavailable    DependencyMode = "store_unavailable"
 )

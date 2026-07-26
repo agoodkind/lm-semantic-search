@@ -178,6 +178,25 @@ func TestShouldQueueMissingCollectionRepair(t *testing.T) {
 	if shouldQueueMissingCollectionRepair(model.Codebase{Status: model.CodebaseStatusIndexed}, true, collectionPresenceMissing) {
 		t.Fatal("active job must suppress repair queueing")
 	}
+	// A run that indexed no file promoted no collection, so its absence is not
+	// damage. Queuing here marks a healthy empty repository stale and rebuilds it
+	// on every sweep.
+	zeroFileRun := model.Codebase{
+		Status:            model.CodebaseStatusIndexed,
+		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 0, TotalChunks: 0, Status: "completed"},
+	}
+	if shouldQueueMissingCollectionRepair(zeroFileRun, false, collectionPresenceMissing) {
+		t.Fatal("a run that indexed no file has no missing collection to repair")
+	}
+	// A record that says the run committed files did have a collection, so its
+	// absence is damage the repair pass has to rebuild.
+	committedRun := model.Codebase{
+		Status:            model.CodebaseStatusIndexed,
+		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 3, TotalChunks: 9, Status: "completed"},
+	}
+	if !shouldQueueMissingCollectionRepair(committedRun, false, collectionPresenceMissing) {
+		t.Fatal("a committed run whose collection vanished must still queue repair")
+	}
 }
 
 func TestShouldDeferWatcherConvergeForFirstBuild(t *testing.T) {

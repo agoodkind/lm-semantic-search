@@ -856,9 +856,8 @@ func cloneOptionalBool(value *bool) *bool {
 func (server *GRPCServer) Doctor(ctx context.Context, request *pb.DoctorRequest) (resp *pb.DoctorResponse, err error) {
 	ctx, done := beginRPC(ctx, "Doctor")
 	defer done(&err)
-	_ = ctx
 	_ = request
-	diagnostics := server.manager.Doctor()
+	diagnostics := server.manager.Doctor(ctx)
 	response := &pb.DoctorResponse{
 		Diagnostics: make([]*pb.Diagnostic, 0, len(diagnostics)),
 	}

@@ -28,17 +28,26 @@ func (manager *Manager) resolveSeed(ctx context.Context, job model.Job, codebase
 	configDigest := job.Config.IgnoreDigest
 	legacyDigest := manager.legacyDigestForCodebase(codebaseID)
 	if !staging {
-		snapshotPath := manager.merklePath(codebaseID)
+		manager.mu.Lock()
+		codebase := manager.codebases[codebaseID]
+		manager.mu.Unlock()
+		// An absent registry entry leaves the zero codebase here, which carries no
+		// successful run and so reads quietly. A job should not be running for an
+		// untracked codebase, and if one ever is, the quiet read is the right
+		// fallback: there is no recorded run whose checkpoint could have been lost.
+		// The zero codebase also carries no id, so resolve the path from the id the
+		// caller supplied rather than from the record.
+		codebase.ID = codebaseID
 		return seedDecision{
-			seed:         merkle.LoadSnapshotForConfig(snapshotPath, configDigest, legacyDigest),
-			snapshotPath: snapshotPath,
+			seed:         manager.loadLiveCheckpoint(ctx, codebase, configDigest).snapshot,
+			snapshotPath: manager.snapshotPathForCodebase(codebase),
 			resumed:      false,
 			reason:       "",
 		}
 	}
 
 	snapshotPath := manager.stagingMerklePath(codebaseID)
-	seed := merkle.LoadSnapshotForConfig(snapshotPath, configDigest, legacyDigest)
+	seed := merkle.LoadOptionalSnapshotForConfig(snapshotPath, configDigest, legacyDigest)
 	resumed, reason := manager.canResumeStaging(ctx, job.CanonicalPath, seed, semanticReady)
 	if resumed {
 		decision := seedDecision{

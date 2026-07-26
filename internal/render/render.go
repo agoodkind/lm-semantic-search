@@ -235,7 +235,7 @@ func renderGetJob(entry view.JobEntryView, found bool) string {
 		"⚙️ Operation: " + entry.Operation,
 		"🚦 State: " + entry.Surface.StateLabel,
 		"🔧 Phase: " + entry.PhaseLabel,
-		"📊 Progress: " + entry.Progress.PercentLabel,
+		"📊 Run progress: " + entry.Progress.PercentLabel,
 	}
 	lines = append(lines, renderTimingLines(entry.Timing)...)
 	lines = append(lines, renderProgressLines(entry.Progress)...)
@@ -292,6 +292,18 @@ var outcomeKindPresentation = map[view.OutcomeKind]outcomePresentation{
 // never read differently across commands. Lines are unindented so the block is
 // identical wherever it is placed. The file header renders only when there is
 // measured scope; the chunk header only when there is chunk activity.
+//
+// The chunk header names what the run did with the chunks rather than how
+// settled the number is or where the chunks ended up. The same breakdown
+// renders for a running job, whose collection count is still rising, and for a
+// finished one, whose count is final, and the wire form the TUI rebuilds from
+// carries no liveness flag. "total" overclaimed finality on the running half
+// and "counted so far" hedged a settled number on the ended half. "indexed"
+// then claimed the chunks are in the collection, which is false for a first
+// build that failed or hit an admission halt: cleanupHaltedStaging drops the
+// staging collection while the counters stay on the job record, so the chunks
+// exist nowhere. "processed" is the one word true in all four states, it makes
+// no claim about the collection, and it matches the file header above it.
 func BreakdownLines(breakdown view.OutcomeBreakdown) []string {
 	lines := make([]string, 0, 8)
 	if len(breakdown.FileRows) > 0 {
@@ -304,7 +316,7 @@ func BreakdownLines(breakdown view.OutcomeBreakdown) []string {
 		lines = append(lines, renderOutcomeRows(breakdown.FileRows)...)
 	}
 	if len(breakdown.ChunkRows) > 0 {
-		lines = append(lines, fmt.Sprintf("🧩 %s chunks total", formatCountString(breakdown.ChunksTotal)))
+		lines = append(lines, fmt.Sprintf("🧩 %s chunks processed", formatCountString(breakdown.ChunksTotal)))
 		lines = append(lines, renderOutcomeRows(breakdown.ChunkRows)...)
 	}
 	return lines
@@ -366,7 +378,7 @@ func renderListJobs(summary view.ListSummary, active []view.JobEntryView, termin
 	lines := make([]string, 0, 32)
 	lines = append(lines, fmt.Sprintf("Tracked jobs: %d total", summary.Total))
 	lines = append(lines, fmt.Sprintf("Active: %d queued, %d running, %d canceling", summary.Queued, summary.Running, summary.Canceling))
-	lines = append(lines, fmt.Sprintf("Terminal: %d completed, %d failed, %d superseded, %d canceled",
+	lines = append(lines, fmt.Sprintf("Ended: %d completed, %d failed, %d superseded, %d canceled",
 		summary.Completed, summary.Failed, summary.Superseded, summary.Canceled))
 	if len(active) == 0 {
 		lines = append(lines, "", "No active jobs.")
@@ -380,19 +392,21 @@ func renderListJobs(summary view.ListSummary, active []view.JobEntryView, termin
 	}
 	lines = append(lines, "")
 	if len(terminal) > recentTerminalLimit {
-		lines = append(lines, fmt.Sprintf("Recent terminal jobs: showing %d of %d", recentTerminalLimit, len(terminal)), "")
+		lines = append(lines, fmt.Sprintf("Recent ended jobs: showing %d of %d", recentTerminalLimit, len(terminal)), "")
 		lines = appendJobEntries(lines, terminal[:recentTerminalLimit])
 		lines = append(lines, "", "Use `job get JOB_ID` or `--json` for full history.")
 		return strings.Join(lines, "\n")
 	}
-	lines = append(lines, fmt.Sprintf("Terminal jobs: %d", len(terminal)), "")
+	lines = append(lines, fmt.Sprintf("Ended jobs: %d", len(terminal)), "")
 	lines = appendJobEntries(lines, terminal)
 	return strings.Join(lines, "\n")
 }
 
 func renderJobListEntry(entry view.JobEntryView) []string {
+	// The bracket has no key of its own, so it carries the scoped label; the
+	// detail block above prints the bare figure under its own "Run progress" key.
 	lines := []string{fmt.Sprintf("- %s [%s · %s] %s %s",
-		entry.ID, entry.Surface.StateLabel, entry.Progress.PercentLabel, entry.Operation, entry.CanonicalPath)}
+		entry.ID, entry.Surface.StateLabel, entry.Progress.PercentScopeLabel, entry.Operation, entry.CanonicalPath)}
 	lines = append(lines, renderTimingLines(entry.Timing)...)
 	lines = append(lines, renderProgressLines(entry.Progress)...)
 	if entry.Surface.ErrorLine != "" {

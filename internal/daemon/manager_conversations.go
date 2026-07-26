@@ -131,8 +131,7 @@ func (manager *Manager) SyncConversationManifest(ctx context.Context, collection
 	}
 
 	configDigest := codebase.EffectiveConfig.IgnoreDigest
-	legacyDigest := manager.legacyDigestForCodebase(codebase.ID)
-	seed := merkle.LoadSnapshotForConfig(manager.merklePath(codebase.ID), configDigest, legacyDigest)
+	seed := manager.loadLiveCheckpoint(ctx, codebase, configDigest).snapshot
 	current := merkle.Snapshot{ConfigDigest: configDigest, Files: manifest, Inodes: nil}
 	diff := merkle.DiffSnapshots(seed, current)
 
@@ -285,7 +284,7 @@ func (manager *Manager) SearchWithinConversation(ctx context.Context, collection
 	if err != nil {
 		return nil, "", err
 	}
-	return chunks, manager.conversationIndexedFingerprint(codebase, trimmedConversationID), nil
+	return chunks, manager.conversationIndexedFingerprint(ctx, codebase, trimmedConversationID), nil
 }
 
 func (manager *Manager) backfillConversationScalars(ctx context.Context, collectionID string, enrichment semantic.ConversationEnrichment, dryRun bool) (changed int, orphan int, err error) {
@@ -307,13 +306,9 @@ func (manager *Manager) backfillConversationScalars(ctx context.Context, collect
 // conversationIndexedFingerprint reads the checkpointed content fingerprint
 // for one conversation from the collection's merkle snapshot. Empty when the
 // engine has never embedded the conversation.
-func (manager *Manager) conversationIndexedFingerprint(codebase model.Codebase, conversationID string) string {
-	snapshot := merkle.LoadSnapshotForConfig(
-		manager.merklePath(codebase.ID),
-		codebase.EffectiveConfig.IgnoreDigest,
-		manager.legacyDigestForCodebase(codebase.ID),
-	)
-	return snapshot.Files[conversationID]
+func (manager *Manager) conversationIndexedFingerprint(ctx context.Context, codebase model.Codebase, conversationID string) string {
+	checkpoint := manager.loadLiveCheckpoint(ctx, codebase, codebase.EffectiveConfig.IgnoreDigest)
+	return checkpoint.snapshot.Files[conversationID]
 }
 
 // searchConversationCollectionFiltered is the one retrieval path under both

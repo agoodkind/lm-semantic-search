@@ -536,8 +536,11 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 	baseCodebase.EffectiveConfig = defaultIndexConfig()
 	baseCodebase.EffectiveConfig.IgnoreDigest = digestIndexConfig(baseCodebase.EffectiveConfig)
 	baseCodebase.MerkleSnapshotPath = manager.merklePath(baseCodebase.ID)
+	// Every case but the zero-file one describes a codebase that indexed files,
+	// which is what makes an absent checkpoint a loss worth reporting.
+	baseCodebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
 
-	snapshot, err := merkle.Capture(
+	captured, err := merkle.Capture(
 		context.Background(),
 		manager.indexability,
 		baseCodebase.ID,
@@ -547,6 +550,10 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}
+	// writeCompletedArtifacts stamps the run's config digest onto every snapshot
+	// it writes, so the stored shape here matches what a real run leaves behind.
+	snapshot := captured
+	snapshot.ConfigDigest = baseCodebase.EffectiveConfig.IgnoreDigest
 	snapshotHash := snapshotHashForGraph(snapshot, baseCodebase.EffectiveConfig.IgnoreDigest)
 
 	cases := []struct {
@@ -557,6 +564,7 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 		codebaseKind  model.CodebaseKind
 		emptyKind     bool
 		canonicalPath string
+		zeroFileRun   bool
 		want          string
 	}{
 		{
@@ -565,6 +573,17 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 			snapshotState: "missing",
 			graphHash:     snapshotHash,
 			want:          repoPath + ": can't confirm the code graph is current",
+		},
+		{
+			// A run that indexed no file wrote no checkpoint and has no files for a
+			// graph to cover, so doctor has nothing to report about it. Reporting
+			// the absent checkpoint would leave a healthy empty repository listed as
+			// a problem on every doctor run.
+			name:          "zero file run missing snapshot",
+			graphState:    model.GraphStateAbsent,
+			snapshotState: "missing",
+			zeroFileRun:   true,
+			want:          "",
 		},
 		{
 			name:          "unreadable snapshot",
@@ -624,6 +643,9 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 			codebase := baseCodebase
 			codebase.GraphState = testCase.graphState
 			codebase.GraphSnapshotHash = testCase.graphHash
+			if testCase.zeroFileRun {
+				codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 0, TotalChunks: 0, Status: "completed"}
+			}
 			if testCase.emptyKind {
 				codebase.Kind = ""
 			} else if testCase.codebaseKind != "" {
@@ -649,7 +671,7 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 				t.Fatalf("unknown snapshot state %q", testCase.snapshotState)
 			}
 
-			diagnostic := manager.graphDiagnostic(codebase)
+			diagnostic := manager.graphDiagnostic(context.Background(), codebase)
 			if diagnostic != testCase.want {
 				t.Fatalf("graphDiagnostic = %q, want %q", diagnostic, testCase.want)
 			}
@@ -669,7 +691,7 @@ func TestGraphStatusMissingSnapshotDoesNotLogError(t *testing.T) {
 		slog.SetDefault(previousLogger)
 	})
 
-	_ = manager.graphDiagnostic(codebase)
+	_ = manager.graphDiagnostic(context.Background(), codebase)
 
 	if handler.errorCount() != 0 {
 		t.Fatalf("logged %d ERROR entries for missing snapshot, want 0", handler.errorCount())

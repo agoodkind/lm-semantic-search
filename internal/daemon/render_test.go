@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -178,11 +179,16 @@ func TestRestartedRunReadsMostlyDoneNotNearZero(t *testing.T) {
 	if surface.PercentLabel != "95.0%" {
 		t.Fatalf("compact percent = %q, want 95.0%% (reused work counted as done)", surface.PercentLabel)
 	}
+	if surface.PercentScopeLabel != "95.0% run progress" {
+		t.Fatalf("scoped percent = %q, want 95.0%% run progress", surface.PercentScopeLabel)
+	}
 	jobOut := render.GetJob(resolveJobEntry(job, false, ""), true)
-	if !strings.Contains(jobOut, "📊 Progress: 95.0%") {
+	// An exact line, not a prefix: a prefix match is what let "Progress: 95.0%
+	// run progress" ship, because the doubled label still satisfied it.
+	if !hasExactLine(jobOut, "📊 Run progress: 95.0%") {
 		t.Fatalf("job view did not read as mostly done:\n%s", jobOut)
 	}
-	if strings.Contains(jobOut, "Progress: 2.3%") {
+	if strings.Contains(jobOut, "2.3%") {
 		t.Fatalf("job view still shows the reset file-cursor percent:\n%s", jobOut)
 	}
 
@@ -199,7 +205,7 @@ func TestRestartedRunReadsMostlyDoneNotNearZero(t *testing.T) {
 	}
 
 	// The corpus total stays visible in the chunk tree (codebase-level accumulation).
-	if !strings.Contains(statusOut, "🧩 40,000 chunks total") {
+	if !strings.Contains(statusOut, "🧩 40,000 chunks processed") {
 		t.Fatalf("status view lost the corpus chunk total:\n%s", statusOut)
 	}
 }
@@ -254,7 +260,7 @@ func TestStatusTreeMatchesSessionCases(t *testing.T) {
 			want: []string{
 				"📄 1 of 2 changed files processed",
 				"└─ ➕ 1 embedded",
-				"🧩 778 chunks total",
+				"🧩 778 chunks processed",
 				"├─ ➕ 778 added",
 				"└─ ♻️ 0 reused",
 			},
@@ -274,7 +280,7 @@ func TestStatusTreeMatchesSessionCases(t *testing.T) {
 				"📄 70 of 72 changed documents processed",
 				"├─ ➕ 9 embedded",
 				"└─ ⏳ 61 pending, not sent yet",
-				"🧩 3,516 chunks total",
+				"🧩 3,516 chunks processed",
 				"├─ ➕ 1,204 added",
 				"└─ ♻️ 2,312 reused",
 			},
@@ -448,7 +454,7 @@ func TestRenderIndexingActiveBuilding(t *testing.T) {
 		Progress:  model.Progress{RunMode: model.RunModeFirstBuild, OverallPercent: 42, FilesTotal: 58, FilesProcessed: 24, FilesEmbedded: 24, ChunksGenerated: 71, LastEventAt: renderTestTime},
 	}
 	out := renderActiveStatusForTest(codebase, job)
-	for _, want := range []string{"📁 swift-makefile", "🔄 Building initial index: 42%", "📄 24 of 58 files (full build) processed", "└─ ➕ 24 embedded", "🧩 71 chunks total", "└─ ➕ 71 added"} {
+	for _, want := range []string{"📁 swift-makefile", "🔄 Building initial index: 42%", "📄 24 of 58 files (full build) processed", "└─ ➕ 24 embedded", "🧩 71 chunks processed", "└─ ➕ 71 added"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("building status missing %q in:\n%s", want, out)
 		}
@@ -486,7 +492,7 @@ func TestRenderIndexingActiveSeededFirstBuild(t *testing.T) {
 		"🔄 Building initial index: 42%",
 		"📄 1 of 58 files (first build, reusing prior vectors) processed",
 		"└─ ➕ 1 embedded",
-		"🧩 678 chunks total",
+		"🧩 678 chunks processed",
 		"├─ ➕ 55 added",
 		"└─ ♻️ 623 reused",
 	} {
@@ -552,7 +558,7 @@ func TestRenderIndexingActiveIncremental(t *testing.T) {
 		"🗑️ 10 removed",
 		"📏 3 skipped, too large",
 		"⚠️ 2 error, unreadable",
-		"🧩 57,240 chunks total",
+		"🧩 57,240 chunks processed",
 		"➕ 1,043 added",
 		"♻️ 0 reused",
 	} {
@@ -612,7 +618,7 @@ func TestRenderIndexingActiveIncrementalFallsBackToLastTotal(t *testing.T) {
 		Progress:  model.Progress{OverallPercent: 10, FilesTotal: 58, FilesProcessed: 1, ChunksTotal: 0},
 	}
 	out := renderActiveStatusForTest(codebase, job)
-	if !strings.Contains(out, "🧩 600 chunks total") {
+	if !strings.Contains(out, "🧩 600 chunks processed") {
 		t.Fatalf("expected fallback to last recorded total in:\n%s", out)
 	}
 }
@@ -781,7 +787,7 @@ func TestRenderProgressLines(t *testing.T) {
 	for _, want := range []string{
 		"📄 7 of 58 files (full build) processed",
 		"└─ ➕ 7 embedded",
-		"🧩 84 chunks total",
+		"🧩 84 chunks processed",
 		"└─ ➕ 84 added",
 		"Changed since last sync: 12 files added · 30 modified · 5 removed",
 	} {
@@ -812,7 +818,7 @@ func TestRenderGetJobShowsMagnitude(t *testing.T) {
 	if !strings.Contains(out, "📄 7 of 58 files processed") {
 		t.Fatalf("expected magnitude in job view, got:\n%s", out)
 	}
-	if !strings.Contains(out, "🧩 84 chunks total") {
+	if !strings.Contains(out, "🧩 84 chunks processed") {
 		t.Fatalf("expected chunk line in job view, got:\n%s", out)
 	}
 }
@@ -880,9 +886,9 @@ func TestRenderListJobsSummarizesHistory(t *testing.T) {
 	for _, want := range []string{
 		"Tracked jobs: 3 total",
 		"Active: 0 queued, 1 running, 0 canceling",
-		"Terminal: 1 completed, 0 failed, 0 superseded, 1 canceled",
+		"Ended: 1 completed, 0 failed, 0 superseded, 1 canceled",
 		"Active jobs:",
-		"Terminal jobs: 2",
+		"Ended jobs: 2",
 		"Duration: 45m0s",
 		"Elapsed: 2m0s",
 	} {
@@ -892,6 +898,212 @@ func TestRenderListJobsSummarizesHistory(t *testing.T) {
 	}
 	if strings.Contains(out, "[cancelled") {
 		t.Fatalf("job list should use American spelling for states, got:\n%s", out)
+	}
+}
+
+func TestRenderListJobsLabelsFinishedJobHistoryAsEnded(t *testing.T) {
+	t.Parallel()
+
+	completedAt := renderTestTime.Add(10 * time.Hour)
+	jobs := []model.Job{{
+		ID:            "job_ended",
+		CanonicalPath: "/repo",
+		Operation:     "conversation_ingest",
+		State:         model.JobStateCancelled,
+		StartedAt:     renderTestTime,
+		UpdatedAt:     completedAt,
+		CompletedAt:   &completedAt,
+		Progress: model.Progress{
+			OverallPercent: 26,
+			FilesTotal:     92,
+			FilesProcessed: 1,
+			FilesPending:   1,
+		},
+	}}
+
+	out := renderListJobsForTest(jobs, true)
+	if !strings.Contains(out, "Ended jobs: 1") {
+		t.Fatalf("job history does not say the displayed job ended:\n%s", out)
+	}
+	if !strings.Contains(out, "[canceled") {
+		t.Fatalf("ended job lost its terminal state:\n%s", out)
+	}
+	// One screen, one word for one set. The tally above the history counts the
+	// same jobs the history lists, so a second word for it would read as a
+	// second set the operator has to reconcile.
+	if strings.Contains(out, "Terminal") {
+		t.Fatalf("the job list names the finished set with two different words:\n%s", out)
+	}
+}
+
+// The chunk header states what the run did with the chunks, not how settled the
+// number is or where the chunks ended up, so one line is true in every state a
+// job can end in. "total" overclaims finality while a run is live, "counted so
+// far" hedges a settled number after it ends, and "indexed" claims the chunks
+// are in the collection, which a failed first build's are not: the halt drops
+// the staging collection and leaves the counters on the job record. The same
+// breakdown feeds every surface and the wire form the TUI rebuilds from carries
+// no liveness flag, so one wording has to hold across all of them.
+func TestRenderChunkCountHeaderHoldsForRunningAndEndedJobs(t *testing.T) {
+	t.Parallel()
+
+	progress := model.Progress{
+		RunMode:         model.RunModeChanged,
+		FilesTotal:      92,
+		FilesProcessed:  1,
+		FilesEmbedded:   1,
+		ChunksGenerated: 1168,
+	}
+	haltedProgress := progress
+	haltedProgress.RunMode = model.RunModeFirstBuild
+	haltedProgress.Phase = "failed"
+	completedAt := renderTestTime.Add(time.Hour)
+	cases := []struct {
+		name string
+		job  model.Job
+	}{
+		{
+			name: "running",
+			job: model.Job{
+				ID: "job_chunks_running", CanonicalPath: "/repo", Operation: "conversation_ingest",
+				State: model.JobStateRunning, Progress: progress,
+			},
+		},
+		{
+			name: "ended",
+			job: model.Job{
+				ID: "job_chunks_ended", CanonicalPath: "/repo", Operation: "conversation_ingest",
+				State: model.JobStateCompleted, StartedAt: renderTestTime,
+				UpdatedAt: completedAt, CompletedAt: &completedAt, Progress: progress,
+			},
+		},
+		{
+			// A first build that failed had its staging collection dropped, so its
+			// chunks are in no collection at all. The header must not say they are.
+			name: "halted first build",
+			job: model.Job{
+				ID: "job_chunks_halted", CanonicalPath: "/repo", Operation: "index",
+				State: model.JobStateFailed, StartedAt: renderTestTime,
+				UpdatedAt: completedAt, CompletedAt: &completedAt, Progress: haltedProgress,
+				Error: &model.JobError{Message: "index budget exceeded", Code: "index_budget_exceeded"},
+			},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			out := render.GetJob(resolveJobEntry(testCase.job, false, ""), true)
+			if !hasExactLine(out, "🧩 1,168 chunks processed") {
+				t.Fatalf("chunk count header is not the one shared line:\n%s", out)
+			}
+			for _, wrong := range []string{"chunks total", "chunks counted so far", "chunks indexed"} {
+				if strings.Contains(out, wrong) {
+					t.Fatalf("chunk header claims something the surface cannot know (%q):\n%s", wrong, out)
+				}
+			}
+		})
+	}
+}
+
+// The detail block prints its own key, so the figure under it stays bare; the
+// list bracket has no key, so it carries the scope inline. Both are asserted as
+// exact lines, because the prefix match this test replaced is what let
+// "Progress: 95.0% run progress" reach an operator.
+func TestRenderJobSurfacesNameTheProgressScopeExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	completedAt := renderTestTime.Add(time.Hour)
+	job := model.Job{
+		ID:            "job_scope_once",
+		CanonicalPath: "/repo",
+		Operation:     "sync",
+		State:         model.JobStateCompleted,
+		StartedAt:     renderTestTime,
+		UpdatedAt:     completedAt,
+		CompletedAt:   &completedAt,
+		Progress: model.Progress{
+			RunMode: model.RunModeChanged, OverallPercent: 100,
+			FilesTotal: 4, FilesProcessed: 4, FilesEmbedded: 4, ChunksGenerated: 12,
+		},
+	}
+
+	detail := render.GetJob(resolveJobEntry(job, false, ""), true)
+	if !hasExactLine(detail, "📊 Run progress: 100.0%") {
+		t.Fatalf("job detail does not carry the bare figure under its own key:\n%s", detail)
+	}
+	if strings.Contains(detail, "run progress: 100.0% run progress") ||
+		strings.Contains(detail, "Progress: 100.0% run progress") {
+		t.Fatalf("job detail doubles the progress label:\n%s", detail)
+	}
+
+	list := renderListJobsForTest([]model.Job{job}, false)
+	if !hasExactLine(list, "- job_scope_once [completed · 100.0% run progress] sync /repo") {
+		t.Fatalf("job list bracket does not name the progress scope:\n%s", list)
+	}
+}
+
+// hasExactLine reports whether out carries want as a whole line, ignoring the
+// surrounding indentation a surface adds. A Contains check would also accept a
+// line that merely starts with want, which is how a doubled label ships.
+func hasExactLine(out string, want string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRenderConversationJobLabelsEachProgressScope(t *testing.T) {
+	t.Parallel()
+
+	job := model.Job{
+		ID:            "job_scopes",
+		CanonicalPath: "chat:///clyde-conversations",
+		Operation:     "conversation_ingest",
+		State:         model.JobStateRunning,
+		Progress: model.Progress{
+			RunMode:        model.RunModeChanged,
+			Unit:           "document",
+			ScopeUnit:      "conversation",
+			OverallPercent: 1.1,
+			FilesTotal:     92,
+			FilesProcessed: 1,
+			FilesAdded:     76,
+			FilesModified:  16,
+			FilesEmbedded:  1,
+		},
+	}
+
+	jobs := []model.Job{job}
+	completedAt := renderTestTime.Add(time.Hour)
+	for index := range 9 {
+		jobs = append(jobs, model.Job{
+			ID:            fmt.Sprintf("job_ended_%d", index),
+			CanonicalPath: "/repo",
+			Operation:     "sync",
+			State:         model.JobStateCompleted,
+			StartedAt:     renderTestTime,
+			UpdatedAt:     completedAt,
+			CompletedAt:   &completedAt,
+		})
+	}
+
+	out := renderListJobsForTest(jobs, false)
+	for _, want := range []string{
+		"[running · 1.1% run progress]",
+		"📄 1 of 92 changed documents processed",
+		"Changed since last sync: 76 conversations added · 16 modified",
+		"Tracked jobs: 10 total",
+		"Active: 0 queued, 1 running, 0 canceling",
+		"Recent ended jobs: showing 8 of 9",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("job list does not label scope %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "showing 8 of 10") {
+		t.Fatalf("recent history denominator includes the active job:\n%s", out)
 	}
 }
 
@@ -925,7 +1137,7 @@ func TestRenderListJobsSeparatesSupersededFailures(t *testing.T) {
 		},
 	}
 	out := renderListJobsForTest(jobs, false)
-	if want := "Terminal: 0 completed, 1 failed, 1 superseded, 0 canceled"; !strings.Contains(out, want) {
+	if want := "Ended: 0 completed, 1 failed, 1 superseded, 0 canceled"; !strings.Contains(out, want) {
 		t.Fatalf("summary did not separate superseded from failed, want %q in:\n%s", want, out)
 	}
 	if want := "superseded by job_new"; !strings.Contains(out, want) {
@@ -948,7 +1160,7 @@ func TestRenderGetJobPreparingNotZeroPercent(t *testing.T) {
 		Progress:      model.Progress{FilesTotal: 0, FilesInCodebase: 0, OverallPercent: 0},
 	}
 	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
-	if !strings.Contains(out, "Progress: Preparing to index") {
+	if !hasExactLine(out, "📊 Run progress: Preparing to index") {
 		t.Fatalf("expected preparing label, got:\n%s", out)
 	}
 	if strings.Contains(out, "0.0%") {
@@ -1007,7 +1219,7 @@ func TestRenderGetJobKeepsRealZeroPercent(t *testing.T) {
 		Progress:      model.Progress{FilesTotal: 58, OverallPercent: 0},
 	}
 	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
-	if !strings.Contains(out, "Progress: 0.0%") {
+	if !hasExactLine(out, "📊 Run progress: 0.0%") {
 		t.Fatalf("known-scope zero should render 0.0%%, got:\n%s", out)
 	}
 	if strings.Contains(out, "Preparing to index") {
@@ -1026,7 +1238,7 @@ func TestRenderGetJobShowsMeasuredPercent(t *testing.T) {
 		Progress:      model.Progress{FilesTotal: 4292, FilesProcessed: 2139, OverallPercent: 49.8},
 	}
 	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
-	if !strings.Contains(out, "Progress: 49.8%") {
+	if !hasExactLine(out, "📊 Run progress: 49.8%") {
 		t.Fatalf("expected 49.8%%, got:\n%s", out)
 	}
 }
@@ -1044,7 +1256,7 @@ func TestRenderGetJobFailedShowsPercentAndError(t *testing.T) {
 		Error:         &model.JobError{Message: "embedder_unreachable: dial tcp [::1]:5400: connect: connection refused"},
 	}
 	out := render.GetJob(resolveJobEntry(*job, false, ""), true)
-	if !strings.Contains(out, "Progress: 0.0%") {
+	if !hasExactLine(out, "📊 Run progress: 0.0%") {
 		t.Fatalf("failed job should show its percent, got:\n%s", out)
 	}
 	if strings.Contains(out, "Preparing to index") {

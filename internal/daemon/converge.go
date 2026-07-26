@@ -63,7 +63,7 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 
 	configDigest := codebase.EffectiveConfig.IgnoreDigest
 	snapshotPath := manager.snapshotPathForCodebase(codebase)
-	snapshot := merkle.LoadSnapshotForConfig(snapshotPath, configDigest, manager.legacyDigestForCodebase(codebaseID))
+	snapshot := manager.loadLiveCheckpoint(ctx, codebase, configDigest).snapshot
 	if snapshot.Files == nil {
 		snapshot.Files = make(map[string]string)
 	}

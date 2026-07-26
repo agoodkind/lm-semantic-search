@@ -1,6 +1,7 @@
 package status
 
 import (
+	"strings"
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -161,7 +162,7 @@ func TestBannerHeadlineCoversEveryMode(t *testing.T) {
 	if BannerHeadlineFor(Healthy) != "" {
 		t.Error("healthy mode must have no banner headline")
 	}
-	for _, mode := range []DependencyMode{EmbedderUnreachable, EmbedderRejected, EmbedderBusy, StoreUnavailable} {
+	for _, mode := range []DependencyMode{EmbedderUnreachable, EmbedderRejected, EmbedderPaused, EmbedderBusy, StoreUnavailable} {
 		if !mode.Degraded() {
 			t.Errorf("%s should report degraded", mode)
 		}
@@ -171,6 +172,18 @@ func TestBannerHeadlineCoversEveryMode(t *testing.T) {
 	}
 	if BannerHeadlineFor(DependencyMode("future_mode")) != genericDegradedHeadline {
 		t.Error("unknown degraded mode should fall back to the generic headline")
+	}
+}
+
+func TestEmbedderBusyBannerReportsThrottlingWithoutClaimingPause(t *testing.T) {
+	t.Parallel()
+
+	headline := BannerHeadlineFor(EmbedderBusy)
+	if !strings.Contains(headline, "throttling requests") {
+		t.Fatalf("busy headline does not report throttling: %q", headline)
+	}
+	if strings.Contains(headline, "paused") {
+		t.Fatalf("busy headline claims indexing stopped: %q", headline)
 	}
 }
 

@@ -44,6 +44,10 @@ var ErrEmbedderBusy = errors.New("embedding endpoint is at capacity")
 // network failure that means the endpoint is unreachable.
 var ErrEmbedderRejected = errors.New("embedding endpoint rejected the request")
 
+// ErrEmbedderPaused marks a deliberate service pause reported by the endpoint.
+// It is distinct from capacity and configuration rejection.
+var ErrEmbedderPaused = errors.New("embedding endpoint paused the service")
+
 // embedCodeContextLengthExceeded is the OpenAI error code an embedding endpoint
 // returns when a single input exceeds the model's context window. It is a
 // permanent, per-input condition rather than a server outage, so the offending
@@ -52,6 +56,34 @@ var ErrEmbedderRejected = errors.New("embedding endpoint rejected the request")
 // this package's own [adapterr.EmbedRejectionContextLengthExceeded], never text
 // the endpoint supplied.
 const embedCodeContextLengthExceeded = "context_length_exceeded"
+
+// embeddingEndpointErrorType is the endpoint's error-envelope discriminator.
+// service_paused is a non-standard extension used by some OpenAI-compatible
+// endpoints, so it is interpreted only at this HTTP adapter boundary.
+//
+// The discriminator is read from the NESTED error object, which is where the
+// OpenAI error contract puts it and where compliant endpoints send it. Do not
+// add a top-level parser for it.
+//
+// Two separate readers have concluded the opposite and proposed exactly that
+// change, because the daemon log prints the pause as
+// {"message":...,"type":"service_paused"} with no wrapper. That text is the
+// client library rendering an already-parsed error, not the response body. The
+// body on the wire carries the wrapper. Confirm against the endpoint's own
+// source before believing otherwise; a log line and an error string are both
+// renderings and neither is evidence of the wire format.
+//
+// The SDK settles it. openai-go builds its typed error in
+// internal/requestconfig.Client.Execute by extracting the top-level "error" key
+// with gjson and unmarshalling only that object, so openai.Error.Type is
+// populated from the nested object and from nowhere else, and the same strip is
+// why the rendered error string shows no wrapper. A top-level type field would
+// leave openai.Error.Type empty and this discriminator would never match.
+type embeddingEndpointErrorType string
+
+const embeddingEndpointErrorTypeServicePaused embeddingEndpointErrorType = "service_paused"
+
+const embeddingEndpointServicePausedHint = "leave low power mode or resume the embedding service"
 
 // SkippedInput identifies one input the embedding endpoint rejected as
 // individually un-embeddable, for example a chunk whose token count exceeds the
@@ -417,6 +449,28 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 		}
 		lastErr = err
 
+		if paused, servicePaused := embedServicePaused(err); servicePaused {
+			slog.WarnContext(
+				ctx,
+				"embedding endpoint reported service paused",
+				"provider", provider.name,
+				"model", provider.model,
+				"status", paused.statusCode,
+				"message", paused.message,
+			)
+			cause := fmt.Errorf(
+				"generate %s embeddings: %w: %w",
+				provider.name,
+				ErrEmbedderPaused,
+				err,
+			)
+			return nil, adapterr.NewEmbedderPaused(
+				"embedding endpoint reported: "+paused.message,
+				embeddingEndpointServicePausedHint,
+				cause,
+			)
+		}
+
 		statusCode, transient := transientEmbedStatus(err)
 		if !transient {
 			slog.ErrorContext(ctx, "generate embeddings failed", "provider", provider.name, "model", provider.model, "status", statusCode, "err", err)
@@ -460,6 +514,30 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 	statusCode, _ := transientEmbedStatus(lastErr)
 	slog.ErrorContext(ctx, "embedding endpoint still busy after retries", "provider", provider.name, "model", provider.model, "status", statusCode, "attempts", embedMaxAttempts, "err", lastErr)
 	return nil, adapterr.NewEmbedderBusy(fmt.Errorf("generate %s embeddings: %w: %w", provider.name, ErrEmbedderBusy, lastErr))
+}
+
+// servicePausedReport carries what the endpoint actually said when it reported
+// a deliberate pause: the status it answered with and its own message. The
+// status is read from the response rather than assumed, so a log line never
+// states a status the code did not observe.
+type servicePausedReport struct {
+	statusCode int
+	message    string
+}
+
+func embedServicePaused(err error) (servicePausedReport, bool) {
+	var apiErr *openai.Error
+	if !errors.As(err, &apiErr) {
+		return servicePausedReport{statusCode: 0, message: ""}, false
+	}
+	if embeddingEndpointErrorType(apiErr.Type) != embeddingEndpointErrorTypeServicePaused {
+		return servicePausedReport{statusCode: 0, message: ""}, false
+	}
+	message := strings.TrimSpace(apiErr.Message)
+	if message == "" {
+		message = "the embedding service is paused"
+	}
+	return servicePausedReport{statusCode: apiErr.StatusCode, message: message}, true
 }
 
 // transientEmbedStatus reports the HTTP status of an OpenAI API error and whether

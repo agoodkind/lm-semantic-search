@@ -87,8 +87,16 @@ func Code(err error) string {
 // IsTransient reports whether err is a self-healing condition: the next sync or
 // index attempt resolves it on its own once the dependency recovers. It marks a
 // job retryable and, like every shared-infrastructure failure, must not be
-// persisted as a codebase's terminal state. The set is an at-capacity or
-// unreachable embedder, an unavailable vector store, and a cancellation.
+// persisted as a codebase's terminal state. The set is an at-capacity,
+// unreachable, or deliberately paused embedder, an unavailable vector store,
+// and a cancellation.
+//
+// A deliberate pause belongs in that set because it ends on its own: the
+// endpoint resumes when low power mode ends or the operator resumes the
+// service, and the repair pass picks the job back up with no change to the
+// index. Leaving it out made the surface omit the "retryable" tag while the
+// banner for the same condition told the operator to wait for it, so the two
+// halves of one screen disagreed about whether there was anything to do.
 func IsTransient(err error) bool {
 	if err == nil {
 		return false
@@ -98,7 +106,7 @@ func IsTransient(err error) bool {
 	}
 	adapterErr := classify(err)
 	switch adapterErr.Class {
-	case ClassEmbedderBusy, ClassEmbedCancelled, ClassEmbedderUnreachable, ClassMilvusUnavailable:
+	case ClassEmbedderBusy, ClassEmbedCancelled, ClassEmbedderUnreachable, ClassMilvusUnavailable, ClassEmbedderPaused:
 		return true
 	case ClassNotIndexed, ClassUnknownCodebaseID, ClassCollectionMissing,
 		ClassCollectionNotReady, ClassSearchResultIncomplete, ClassEmbedderRejected,

@@ -157,7 +157,7 @@ message JobError {
 message DependencyHealth {
   bool degraded = 1;
   // mode is the degraded condition: "embedder_unreachable", "embedder_rejected",
-  // "store_unavailable", or empty when healthy.
+  // "embedder_paused", "embedder_busy", "store_unavailable", or empty when healthy.
   string mode = 2;
   google.protobuf.Timestamp since = 3;
   google.protobuf.Timestamp last_healthy_at = 4;

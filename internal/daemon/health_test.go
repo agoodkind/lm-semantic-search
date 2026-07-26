@@ -29,6 +29,7 @@ func TestDegradeModeFor(t *testing.T) {
 	}{
 		{"unreachable", adapterr.NewEmbedderUnreachable(nil), dependencyEmbedderUnreachable},
 		{"rejected", adapterr.NewEmbedderRejected(nil), dependencyEmbedderRejected},
+		{"paused", adapterr.NewEmbedderPaused("paused", "resume", nil), dependencyEmbedderPaused},
 		{"busy", adapterr.NewEmbedderBusy(nil), dependencyEmbedderBusy},
 		{"store unavailable", semantic.ErrUnavailable, dependencyStoreUnavailable},
 		{"cancelled", adapterr.NewEmbedCancelled(nil), dependencyHealthy},

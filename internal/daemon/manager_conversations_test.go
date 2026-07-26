@@ -21,6 +21,26 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+func TestConversationFingerprintReportsMissingCheckpointAfterSuccessfulRun(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	codebase := newCodebaseRecord(repoPath)
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{
+		IndexedFiles: 1,
+		TotalChunks:  1,
+		Status:       "completed",
+		CompletedAt:  time.Now(),
+	}
+
+	logs := captureLogs(t)
+
+	if fingerprint := manager.conversationIndexedFingerprint(context.Background(), codebase, "conversation-1"); fingerprint != "" {
+		t.Fatalf("fingerprint = %q, want empty for the absent checkpoint", fingerprint)
+	}
+	if len(logs.linesContaining("level=ERROR", "read Merkle snapshot failed", manager.merklePath(codebase.ID))) == 0 {
+		t.Fatalf("missing checkpoint after a successful run was not reported as a fault naming its path:\n%s", logs.text())
+	}
+}
+
 func TestRegisterConversationCollectionIsIdempotent(t *testing.T) {
 	t.Parallel()
 

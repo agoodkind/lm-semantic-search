@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -375,7 +374,7 @@ func snapshotHashForGraph(snapshot merkle.Snapshot, configDigest string) string 
 	return snapshot.Hash()
 }
 
-func (manager *Manager) graphDiagnostic(codebase model.Codebase) string {
+func (manager *Manager) graphDiagnostic(ctx context.Context, codebase model.Codebase) string {
 	if codebase.Kind == model.CodebaseKindDocument {
 		return ""
 	}
@@ -384,15 +383,18 @@ func (manager *Manager) graphDiagnostic(codebase model.Codebase) string {
 		graphState = model.GraphStateAbsent
 	}
 
-	snapshotPath := manager.snapshotPathForCodebase(codebase)
-	if _, statErr := os.Stat(snapshotPath); errors.Is(statErr, os.ErrNotExist) {
+	checkpoint := manager.loadLiveCheckpoint(ctx, codebase, codebase.EffectiveConfig.IgnoreDigest)
+	if checkpoint.state == liveCheckpointNeverWritten {
+		// A codebase whose last completed run indexed no file has no files for a
+		// code graph to cover, so there is nothing here an operator could act on.
+		// Reporting the checkpoint it never wrote would leave doctor listing a
+		// healthy empty repository as a problem for as long as it stays tracked.
+		return ""
+	}
+	if !checkpoint.usable() {
 		return codebase.CanonicalPath + ": can't confirm the code graph is current"
 	}
-	snapshot, err := merkle.ReadSnapshot(snapshotPath)
-	if err != nil {
-		return codebase.CanonicalPath + ": can't confirm the code graph is current"
-	}
-	currentHash := snapshotHashForGraph(snapshot, codebase.EffectiveConfig.IgnoreDigest)
+	currentHash := snapshotHashForGraph(checkpoint.snapshot, codebase.EffectiveConfig.IgnoreDigest)
 	if graphState == model.GraphStateReady && codebase.GraphSnapshotHash == currentHash {
 		return ""
 	}

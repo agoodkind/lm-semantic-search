@@ -24,6 +24,10 @@ type resumePlan struct {
 	config        model.IndexConfig
 	codebaseID    string
 	checkpoint    resumeCheckpointKind
+	// codebase is the record the probe reads its checkpoint through. The plan
+	// carries the whole record rather than a precomputed verdict so the probe
+	// reaches loadLiveCheckpoint with everything the one expectation rule needs.
+	codebase model.Codebase
 }
 
 // ResumeOrphanedJobs re-queues indexing for every codebase whose previous job
@@ -51,6 +55,7 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 			config:        codebase.EffectiveConfig,
 			codebaseID:    codebase.ID,
 			checkpoint:    resumeCheckpointNone,
+			codebase:      codebase,
 		})
 	}
 	manager.mu.Unlock()
@@ -64,7 +69,7 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 
 	resumable := make([]resumePlan, 0, len(plans))
 	for _, plan := range plans {
-		plan.checkpoint = manager.resumableCheckpointKind(plan.codebaseID, plan.config.IgnoreDigest)
+		plan.checkpoint = manager.resumableCheckpointKind(ctx, plan.codebase, plan.config.IgnoreDigest)
 		if plan.checkpoint != resumeCheckpointNone {
 			resumable = append(resumable, plan)
 			continue
@@ -102,14 +107,29 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 // mid-index persisted for its current config: the live snapshot, the staging
 // bootstrap snapshot, or none. Resuming without one would re-embed every file
 // from scratch, so the daemon treats a missing checkpoint as not resumable.
-func (manager *Manager) resumableCheckpointKind(codebaseID string, configDigest string) resumeCheckpointKind {
-	legacyDigest := manager.legacyDigestForCodebase(codebaseID)
-	stagingSnapshot := merkle.LoadSnapshotForConfig(manager.stagingMerklePath(codebaseID), configDigest, legacyDigest)
+//
+// The staging probe is always optional. This function runs only for codebases
+// stuck at "indexing", and a bootstrap writes to the staging path, so an
+// interrupted first build is exactly the case that may still own a staging
+// checkpoint. What makes the probe optional is that an absent staging file is
+// indistinguishable from an interruption that landed before the first per-file
+// checkpoint was written, and no registry field separates those two: a required
+// read would fire on every early interruption and the operator could not act on
+// it. The absence is still visible, as resumeCheckpointNone logs "skipping
+// unresumable interrupted index" with the reason no_checkpoint.
+//
+// The live probe goes through loadLiveCheckpoint, which is where the one rule
+// lives: where no live checkpoint was ever written an absent file is the
+// expected shape and stays quiet, and where one should exist its absence is a
+// real loss and is reported to the operator.
+func (manager *Manager) resumableCheckpointKind(ctx context.Context, codebase model.Codebase, configDigest string) resumeCheckpointKind {
+	legacyDigest := manager.legacyDigestForCodebase(codebase.ID)
+	stagingSnapshot := merkle.LoadOptionalSnapshotForConfig(manager.stagingMerklePath(codebase.ID), configDigest, legacyDigest)
 	if len(stagingSnapshot.Files) > 0 {
 		return resumeCheckpointStaging
 	}
-	liveSnapshot := merkle.LoadSnapshotForConfig(manager.merklePath(codebaseID), configDigest, legacyDigest)
-	if len(liveSnapshot.Files) > 0 {
+	liveCheckpoint := manager.loadLiveCheckpoint(ctx, codebase, configDigest)
+	if len(liveCheckpoint.snapshot.Files) > 0 {
 		return resumeCheckpointLive
 	}
 	return resumeCheckpointNone
