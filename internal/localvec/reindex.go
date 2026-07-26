@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -34,14 +34,14 @@ func (store *Store) Reindex(
 	} else if !exists {
 		return semantic.ErrCollectionMissing
 	}
-	rows, reused, err := store.embedRows(ctx, addedOrModifiedChunks, reuse)
+	rows, reused, dropped, err := store.embedRows(ctx, addedOrModifiedChunks, reuse)
 	if err != nil {
 		return err
 	}
 	if err := stored.mutate(removal, rows, true); err != nil {
 		return err
 	}
-	emitProgress(progress, len(rows), reused)
+	emitProgress(progress, len(rows), reused, dropped)
 	return nil
 }
 
@@ -62,14 +62,14 @@ func (store *Store) StageReindex(
 	if err != nil {
 		return err
 	}
-	rows, reused, err := store.embedRows(ctx, chunks, reuse)
+	rows, reused, dropped, err := store.embedRows(ctx, chunks, reuse)
 	if err != nil {
 		return err
 	}
 	if err := stored.mutate(removal, rows, false); err != nil {
 		return err
 	}
-	emitProgress(progress, len(rows), reused)
+	emitProgress(progress, len(rows), reused, dropped)
 	return nil
 }
 
@@ -203,90 +203,76 @@ func (store *Store) embedRows(
 	ctx context.Context,
 	chunks []model.StoredChunk,
 	reuse map[string][]float32,
-) ([]row, int, error) {
+) ([]row, int, int, error) {
 	if len(chunks) == 0 {
-		return nil, 0, nil
+		return nil, 0, 0, nil
 	}
 	provider, err := store.embeddingProvider()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
-	vectors := make([][]float32, len(chunks))
-	missingTexts := make([]string, 0, len(chunks))
-	missingIndexes := make([]int, 0, len(chunks))
-	for index, chunk := range chunks {
-		if vector, found := reuse[semantic.ContentVectorKey(chunk.Content)]; found {
-			vectors[index] = append([]float32(nil), vector...)
-			continue
-		}
-		missingTexts = append(missingTexts, chunk.Content)
-		missingIndexes = append(missingIndexes, index)
-	}
-	if len(missingTexts) > 0 {
-		result, embedErr := provider.EmbedBatch(ctx, missingTexts)
-		if embedErr != nil {
-			slog.ErrorContext(
-				ctx,
-				"embed local vector chunks failed",
-				"chunks",
-				len(missingTexts),
-				"err",
-				embedErr,
-			)
-			return nil, 0, fmt.Errorf("embed local vector chunks: %w", embedErr)
-		}
-		if len(result.Vectors) != len(missingTexts) {
-			return nil, 0, fmt.Errorf(
-				"embedding provider returned %d vectors for %d chunks",
-				len(result.Vectors),
-				len(missingTexts),
-			)
-		}
-		for _, skip := range result.Skipped {
-			logSkippedOversizedRow(ctx, chunks[missingIndexes[skip.Index]], skip)
-		}
-		for position, chunkIndex := range missingIndexes {
-			// A skipped input carries a nil vector; that chunk is dropped below so
-			// it is never stored, and the rest of the batch is written.
-			vectors[chunkIndex] = result.Vectors[position]
-		}
-	}
-	rows := make([]row, 0, len(chunks))
-	for index, chunk := range chunks {
-		if vectors[index] == nil {
-			continue
-		}
-		stored, rowErr := newRow(chunk, vectors[index])
-		if rowErr != nil {
-			return nil, 0, rowErr
-		}
-		rows = append(rows, stored)
-	}
-	return rows, len(chunks) - len(missingTexts), nil
-}
 
-// logSkippedOversizedRow records at WARN that one local-vector chunk was dropped
-// because the embedding endpoint rejected it as too large to embed, naming the
-// chunk and reporting both the local size estimate and the endpoint's figures.
-func logSkippedOversizedRow(ctx context.Context, chunk model.StoredChunk, skip embedding.SkippedInput) {
-	slog.WarnContext(
-		ctx,
-		"localvec.embed_input_skipped_oversized",
-		"reason", string(skip.Reason),
-		"conversation_id", chunk.ConversationID,
-		"relative_path", chunk.RelativePath,
-		"content_bytes", len(chunk.Content),
-		"model_max_tokens", skip.MaxTokens,
-		"reported_tokens", skip.ReportedTokens,
-	)
+	// Pre-split oversized chunks at the active model's real input limit before the
+	// embedder sees them. The offline ONNX tokenizer would otherwise truncate an
+	// oversized input to its 2048/512-token maximum and silently lose the rest, so
+	// the byte budget is derived from the preset limit, not the 4096
+	// OpenAI-compatible limit.
+	byteBudget := config.EmbedChunkByteBudgetForLimit(store.cfg.EmbeddingMaxTokens, config.ActiveEmbedTokenLimit(store.cfg))
+	splitChunks, splitCount := semantic.SplitChunksToByteBudget(chunks, byteBudget)
+	if splitCount > 0 {
+		slog.InfoContext(ctx, "localvec.split_over_token_budget", "byte_budget", byteBudget, "chunks_split", splitCount, "expanded_from", len(chunks), "expanded_to", len(splitChunks))
+	}
+
+	rows := make([]row, 0, len(splitChunks))
+	missChunks := make([]model.StoredChunk, 0, len(splitChunks))
+	reused := 0
+	dropped := 0
+	for _, chunk := range splitChunks {
+		if vector, found := reuse[semantic.ContentVectorKey(chunk.Content)]; found {
+			stored, rowErr := newRow(chunk, append([]float32(nil), vector...))
+			if rowErr != nil {
+				return nil, 0, 0, rowErr
+			}
+			rows = append(rows, stored)
+			reused++
+			continue
+		}
+		missChunks = append(missChunks, chunk)
+	}
+
+	if len(missChunks) > 0 {
+		// EmbedChunksSplittingOversize re-splits and retries any chunk the endpoint
+		// rejects as oversized, so an OpenAI-compatible local embedder never drops a
+		// dense chunk; the offline ONNX embedder never rejects because the pre-split
+		// already kept every piece under the preset limit.
+		pack := semantic.NewChunkPacker(store.cfg.EmbeddingBatchSize, store.cfg.EmbeddingBatchTokenBudget)
+		embeddedChunks, vectors, droppedCount, embedErr := semantic.EmbedChunksSplittingOversize(ctx, missChunks, config.ActiveEmbedTokenLimit(store.cfg), pack, provider.EmbedBatch)
+		if embedErr != nil {
+			slog.ErrorContext(ctx, "embed local vector chunks failed", "chunks", len(missChunks), "err", embedErr)
+			return nil, 0, 0, fmt.Errorf("embed local vector chunks: %w", embedErr)
+		}
+		dropped = droppedCount
+		if droppedCount > 0 {
+			slog.WarnContext(ctx, "local vector rows dropped as indivisible", "dropped", droppedCount, "chunks", len(missChunks))
+		}
+		for index := range embeddedChunks {
+			stored, rowErr := newRow(embeddedChunks[index], vectors[index])
+			if rowErr != nil {
+				return nil, 0, 0, rowErr
+			}
+			rows = append(rows, stored)
+		}
+	}
+	return rows, reused, dropped, nil
 }
 
 func emitProgress(
 	progress func(semantic.Progress),
 	rowCount int,
 	reused int,
+	dropped int,
 ) {
-	if progress == nil || rowCount == 0 {
+	if progress == nil || rowCount == 0 && dropped == 0 {
 		return
 	}
 	rows := safeInt32(rowCount)
@@ -299,6 +285,6 @@ func emitProgress(
 		ChunksProcessed:           rows,
 		ChunksReused:              safeInt32(reused),
 		ChunksEmbedded:            safeInt32(rowCount - reused),
-		ChunksDropped:             0,
+		ChunksDropped:             safeInt32(dropped),
 	})
 }

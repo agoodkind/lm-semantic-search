@@ -115,16 +115,25 @@ const (
 	defaultEmbeddingBatchTokenBudget = 6000
 )
 
-func (service *Service) packForEmbedding(chunks []model.StoredChunk) [][]model.StoredChunk {
-	batchRows := service.cfg.EmbeddingBatchSize
+// NewChunkPacker returns a packer that groups chunks under a row count and an
+// estimated token budget, substituting the built-in defaults for either value
+// when it is not positive. Both storage backends embed through the same
+// split-and-retry loop, and that loop packs every round, so both need a packer
+// built the same way.
+func NewChunkPacker(batchRows int, tokenBudget int) ChunkPackFunc {
 	if batchRows <= 0 {
 		batchRows = defaultEmbeddingBatchRows
 	}
-	tokenBudget := service.cfg.EmbeddingBatchTokenBudget
 	if tokenBudget <= 0 {
 		tokenBudget = defaultEmbeddingBatchTokenBudget
 	}
-	return packChunksByEstimatedTokens(chunks, batchRows, tokenBudget)
+	return func(chunks []model.StoredChunk) [][]model.StoredChunk {
+		return packChunksByEstimatedTokens(chunks, batchRows, tokenBudget)
+	}
+}
+
+func (service *Service) packForEmbedding(chunks []model.StoredChunk) [][]model.StoredChunk {
+	return NewChunkPacker(service.cfg.EmbeddingBatchSize, service.cfg.EmbeddingBatchTokenBudget)(chunks)
 }
 
 // insertChunksBatched embeds chunks in row-count and estimated-token capped
