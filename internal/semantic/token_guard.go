@@ -86,6 +86,23 @@ func splitChunkAtBudget(chunk model.StoredChunk, budget int) []model.StoredChunk
 	return out
 }
 
+// splitChunkInHalf splits chunk.Content into two byte-budgeted children so a
+// chunk the endpoint already rejected at its current size is re-split strictly
+// smaller before the next retry, guaranteeing progress toward a single
+// indivisible codepoint. The caller must confirm the content is not already a
+// single codepoint.
+func splitChunkInHalf(chunk model.StoredChunk) []model.StoredChunk {
+	budget := max(len(chunk.Content)/2, 1)
+	return splitChunkAtBudget(chunk, budget)
+}
+
+// isIndivisibleContent reports whether content is a single UTF-8 codepoint (or
+// empty), which cannot be split further without breaking the codepoint. Only such
+// a piece may be dropped when the endpoint still rejects it as oversized.
+func isIndivisibleContent(content string) bool {
+	return utf8.RuneCountInString(content) <= 1
+}
+
 // splitBytesWithOffsets cuts value into sub-strings of at most maxBytes bytes,
 // each ending on a UTF-8 codepoint boundary, and reports each piece's start byte
 // offset within value. A non-positive maxBytes returns value unsplit at offset

@@ -46,10 +46,9 @@ const (
 
 // Progress reports semantic indexing progress after chunk extraction.
 //
-// ChunksReused counts chunks served a vector from the reuse map (no embedder
-// call), and ChunksEmbedded counts chunks whose vector came from the embedder
-// this run. Their sum is the chunks written so far, so a surface can show
-// total = reused + embedded and make the reuse-vs-redo split visible.
+// ChunksReused counts chunks served a vector from the reuse map, ChunksEmbedded
+// counts chunks whose vector came from the embedder, and ChunksDropped counts
+// refused inputs that could not be split safely.
 type Progress struct {
 	Phase                     string
 	OverallPercent            float64
@@ -59,6 +58,7 @@ type Progress struct {
 	ChunksProcessed           int32
 	ChunksReused              int32
 	ChunksEmbedded            int32
+	ChunksDropped             int32
 }
 
 // CollectionFacts reports the live store facts for one collection name.

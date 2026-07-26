@@ -36,6 +36,7 @@ func TestToProgressPreservesExplicitChunkCounters(t *testing.T) {
 		ChunksEmbedded:  2,
 		ChunksGenerated: 7,
 		ChunksReused:    3,
+		ChunksDropped:   4,
 	})
 
 	if got := progress.GetChunksEmbedded(); got != 2 {
@@ -49,5 +50,8 @@ func TestToProgressPreservesExplicitChunkCounters(t *testing.T) {
 	}
 	if got := progress.GetChunksReused(); got != 3 {
 		t.Fatalf("ChunksReused = %d, want 3", got)
+	}
+	if got := progress.GetChunksDropped(); got != 4 {
+		t.Fatalf("ChunksDropped = %d, want 4", got)
 	}
 }

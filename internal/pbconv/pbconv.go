@@ -141,6 +141,7 @@ func ToProgress(p model.Progress) *pb.Progress {
 		ChunksReused:              p.ChunksReused,
 		ChunksEmbedded:            chunksEmbedded,
 		ChunksGenerated:           p.ChunksGenerated,
+		ChunksDropped:             p.ChunksDropped,
 		ReuseVectorsLoaded:        p.ReuseVectorsLoaded,
 		EmbeddingBatchesTotal:     p.EmbeddingBatchesTotal,
 		EmbeddingBatchesCompleted: p.EmbeddingBatchesCompleted,

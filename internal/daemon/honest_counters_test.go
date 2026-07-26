@@ -23,7 +23,7 @@ func TestChunkSplitReportsActualReusedNotSeedPool(t *testing.T) {
 			seededReuse:  2668,
 		}
 
-		processed, reused, embedded, loaded := state.chunkSplit()
+		processed, reused, embedded, _, loaded := state.chunkSplit()
 
 		if reused != 729 {
 			t.Fatalf("reused = %d, want 729 (actual per-file reuse, not the 2668 seed pool)", reused)
@@ -52,7 +52,7 @@ func TestChunkSplitReportsActualReusedNotSeedPool(t *testing.T) {
 			seededReuse:  2668,
 		}
 
-		processed, reused, embedded, loaded := state.chunkSplit()
+		processed, reused, embedded, _, loaded := state.chunkSplit()
 
 		if processed != 0 || reused != 0 || embedded != 0 {
 			t.Fatalf("processed/reused/embedded = %d/%d/%d, want 0/0/0 before any per-file work", processed, reused, embedded)

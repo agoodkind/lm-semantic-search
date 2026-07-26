@@ -84,6 +84,7 @@ type Progress struct {
 	ChunksReused       int32
 	ChunksEmbedded     int32
 	ChunksGenerated    int32
+	ChunksDropped      int32
 	ReuseVectorsLoaded int32
 }
 
@@ -111,6 +112,7 @@ func newEmbeddedProgress(
 		ChunksReused:           0,
 		ChunksEmbedded:         chunksEmbedded,
 		ChunksGenerated:        chunksEmbedded,
+		ChunksDropped:          0,
 		ReuseVectorsLoaded:     0,
 	}
 }

@@ -49,10 +49,10 @@ const (
 	// embeddingMaxTokens is unset, so a missing or partial config cannot disable
 	// the split and let the embedder drop content.
 	EmbedModelInputTokenLimit = 4096
-	// smallestKnownEmbedModelInputTokenLimit is the fail-safe limit for an
+	// MinimumKnownEmbedModelInputTokenLimit is the fail-safe limit for an
 	// unrecognized model name. A conservative fallback can split more often, but
 	// it cannot silently send a known-oversized input to a smaller model.
-	smallestKnownEmbedModelInputTokenLimit = 512
+	MinimumKnownEmbedModelInputTokenLimit = 512
 	// embedTokenSafetyMargin scales the token cap down before splitting, because a
 	// byte-based budget cannot see the model's real tokenizer and dense or
 	// non-Latin text packs more tokens per byte than the estimate assumes.
@@ -474,7 +474,7 @@ func resolveEmbeddingMaxTokens(fileValue int) int {
 			"embeddingMaxTokens is unset; splitting falls back to the model's hard input-token limit, set the knob for a tighter per-chunk cap",
 			"config_field", "embeddingMaxTokens",
 			"env_var", "EMBEDDING_MAX_TOKENS",
-			"minimum_known_model_token_limit", smallestKnownEmbedModelInputTokenLimit,
+			"minimum_known_model_token_limit", MinimumKnownEmbedModelInputTokenLimit,
 		)
 		return 0
 	}
@@ -538,7 +538,7 @@ func resolveMilvusMutationCallTimeoutMS(fileValue int) int {
 // every provider can pass its model-specific limit through one path.
 func EffectiveEmbedTokenCapForLimit(maxTokens int, modelLimit int) int {
 	if modelLimit <= 0 {
-		modelLimit = smallestKnownEmbedModelInputTokenLimit
+		modelLimit = MinimumKnownEmbedModelInputTokenLimit
 	}
 	modelCap := max(int(float64(modelLimit)*embedTokenSafetyMargin), 1)
 	if maxTokens <= 0 {
@@ -578,15 +578,15 @@ func ActiveEmbedTokenLimit(cfg Config) int {
 		if err == nil && preset.MaximumTokens > 0 {
 			return int(preset.MaximumTokens)
 		}
-		return smallestKnownEmbedModelInputTokenLimit
+		return MinimumKnownEmbedModelInputTokenLimit
 	}
 	switch embeddingModel(strings.ToLower(strings.TrimSpace(cfg.EmbeddingModel))) {
 	case embeddingModelBGESmall:
-		return smallestKnownEmbedModelInputTokenLimit
+		return MinimumKnownEmbedModelInputTokenLimit
 	case embeddingModelNVEmbedCode:
 		return EmbedModelInputTokenLimit
 	default:
-		return smallestKnownEmbedModelInputTokenLimit
+		return MinimumKnownEmbedModelInputTokenLimit
 	}
 }
 

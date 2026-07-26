@@ -106,6 +106,8 @@ message Progress {
   int32 chunks_embedded = 16;
   // reuse_vectors_loaded counts old vectors loaded as reuse candidates during this run.
   int32 reuse_vectors_loaded = 17;
+  // chunks_dropped counts refused inputs that could not be split safely.
+  int32 chunks_dropped = 18;
 }
 
 // OutcomeKind is the semantic identity of one outcome row. The render layer maps

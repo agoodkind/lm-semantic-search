@@ -73,9 +73,8 @@ type deltaState struct {
 	// vector instead of calling the embedder, so the shared subtree is never
 	// re-embedded. Nil for an ordinary build, which embeds every chunk.
 	reuse map[string][]float32
-	// chunkCounts accumulates the reused and embedded chunk counts across every
-	// per-file reindex in this run, so the job progress can show total = reused +
-	// embedded. It is a pointer because deltaState is copied by value through the
+	// chunkCounts accumulates chunk outcomes across every per-file reindex in this
+	// run. It is a pointer because deltaState is copied by value through the
 	// per-file loop, and the totals must survive each copy.
 	chunkCounts *chunkCounters
 	// seededReuse is the size of the reuse-vector pool loaded at bootstrap seed
@@ -96,6 +95,7 @@ type chunkCounters struct {
 	processed          int32
 	reused             int32
 	embedded           int32
+	dropped            int32
 	reuseVectorsLoaded int32
 }
 
@@ -121,17 +121,19 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 	// batch denominator, and a fresh heartbeat on every batch. accProcessed and
 	// friends are the run total from items already finished; this item's in-flight
 	// split is added on top, and the post-call fold below makes the total exact.
-	accProcessed, accReused, accEmbedded, _ := state.chunkSplit()
-	var fileProcessed, fileReused, fileEmbedded int32
+	accProcessed, accReused, accEmbedded, accDropped, _ := state.chunkSplit()
+	var fileProcessed, fileReused, fileEmbedded, fileDropped int32
 	progressFn := func(progress semantic.Progress) {
 		fileProcessed = progress.ChunksProcessed
 		fileReused = progress.ChunksReused
 		fileEmbedded = progress.ChunksEmbedded
+		fileDropped = progress.ChunksDropped
 		manager.updateJobChunkProgress(
 			job.ID,
 			accProcessed+fileProcessed,
 			accReused+fileReused,
 			accEmbedded+fileEmbedded,
+			accDropped+fileDropped,
 			progress.EmbeddingBatchesTotal,
 			progress.EmbeddingBatchesCompleted,
 			progress.CollectionRowsWritten,
@@ -154,6 +156,7 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 		state.chunkCounts.processed += fileProcessed
 		state.chunkCounts.reused += fileReused
 		state.chunkCounts.embedded += fileEmbedded
+		state.chunkCounts.dropped += fileDropped
 	}
 	return deltaOutcome{fallback: false, handled: false, progressed: false}
 }
@@ -363,7 +366,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		itemReuseEnabled: manager.resolveItemReusePolicy(ctx, job, false, semanticReady),
 		staging:          false,
 		reuse:            nil,
-		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
+		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, dropped: 0, reuseVectorsLoaded: 0},
 		seededReuse:      0,
 		admission:        manager.admissionForJob(job),
 		forced:           forcedItemsSet(plan.forced),
@@ -466,7 +469,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		itemReuseEnabled: manager.resolveItemReusePolicy(ctx, job, true, semanticReady),
 		staging:          true,
 		reuse:            nil,
-		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, reuseVectorsLoaded: 0},
+		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, dropped: 0, reuseVectorsLoaded: 0},
 		seededReuse:      0,
 		admission:        manager.admissionForJob(job),
 		// A bootstrap re-embeds every item, so nothing needs per-item forcing.
@@ -678,8 +681,8 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		_, forced := state.forced[relativePath]
 		if seedHash, present := state.plan.seedSnapshot.Files[relativePath]; present && !forced && seedHash == state.plan.currentSnapshot.Files[relativePath] {
 			state.working[relativePath] = seedHash
-			processed, reused, embedded, loaded := state.chunkSplit()
-			manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, processed, reused, embedded, loaded, state.source.unit())
+			processed, reused, embedded, dropped, loaded := state.chunkSplit()
+			manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, processed, reused, embedded, dropped, loaded, state.source.unit())
 			continue
 		}
 		outcome := manager.handleChangedFile(ctx, job, state, relativePath, &result)
@@ -693,8 +696,8 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		if outcome.progressed {
 			manager.writeCheckpoint(ctx, state, relativePath)
 		}
-		processed, reused, embedded, loaded := state.chunkSplit()
-		manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, processed, reused, embedded, loaded, state.source.unit())
+		processed, reused, embedded, dropped, loaded := state.chunkSplit()
+		manager.reportDeltaProgress(job.ID, safeInt32(index+1), totalChanged, totalFiles, result, processed, reused, embedded, dropped, loaded, state.source.unit())
 	}
 	return result, deltaOutcome{fallback: false, handled: false, progressed: false}
 }
@@ -873,18 +876,18 @@ func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, l
 // shared by every progress update from that loop.
 const phaseReindexingChanged = "Reindexing changed files..."
 
-// chunkSplit returns the run's processed, reused, embedded, and
+// chunkSplit returns the run's processed, reused, embedded, dropped, and
 // reuse-vectors-loaded counts for progress reporting. reused is the chunks
 // actually served from the reuse pool this run, so it never exceeds processed.
 // The seeded pool size is reported separately as the reuse-vectors-loaded
 // figure, which the building view can show immediately for context without
 // inflating the reused count.
-func (state deltaState) chunkSplit() (int32, int32, int32, int32) {
+func (state deltaState) chunkSplit() (int32, int32, int32, int32, int32) {
 	if state.chunkCounts == nil {
-		return 0, 0, 0, state.seededReuse
+		return 0, 0, 0, 0, state.seededReuse
 	}
 	loaded := max(state.chunkCounts.reuseVectorsLoaded, state.seededReuse)
-	return state.chunkCounts.processed, state.chunkCounts.reused, state.chunkCounts.embedded, loaded
+	return state.chunkCounts.processed, state.chunkCounts.reused, state.chunkCounts.embedded, state.chunkCounts.dropped, loaded
 }
 
 // reportDeltaProgress publishes one progress update from the per-file embed
@@ -894,7 +897,7 @@ func (state deltaState) chunkSplit() (int32, int32, int32, int32) {
 // rather than a stalled "Preparing". reused and embedded are the run's
 // accumulated chunk split; ChunksGenerated carries the embedded-this-run total
 // so a surface can show total = reused + embedded.
-func (manager *Manager) reportDeltaProgress(jobID string, processed int32, totalChanged int, totalFiles int32, result indexer.Result, chunksProcessed int32, reused int32, embedded int32, reuseVectorsLoaded int32, unit string) {
+func (manager *Manager) reportDeltaProgress(jobID string, processed int32, totalChanged int, totalFiles int32, result indexer.Result, chunksProcessed int32, reused int32, embedded int32, dropped int32, reuseVectorsLoaded int32, unit string) {
 	manager.updateJobProgress(jobID, indexer.Progress{
 		Phase:                  phaseReindexingChanged,
 		OverallPercent:         float64(processed) / float64(maxInt(totalChanged, 1)) * 100,
@@ -908,6 +911,7 @@ func (manager *Manager) reportDeltaProgress(jobID string, processed int32, total
 		ChunksReused:           reused,
 		ChunksEmbedded:         embedded,
 		ChunksGenerated:        embedded,
+		ChunksDropped:          dropped,
 		ReuseVectorsLoaded:     reuseVectorsLoaded,
 	}, unit)
 }

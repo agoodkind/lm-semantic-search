@@ -11,16 +11,13 @@ import (
 )
 
 // TestDeltaProgressAccumulatesReuseSplit proves that the per-file reindex folds
-// each file's reused-vs-embedded chunk split into the run totals, and that
-// reportDeltaProgress carries those totals onto the job's model.Progress with
-// ChunksReused holding the reused count and ChunksEmbedded holding the embedded
-// count.
+// each file's chunk outcomes into the run totals and carries them onto the job.
 func TestDeltaProgressAccumulatesReuseSplit(t *testing.T) {
 	manager, _, _ := newTestManager(t)
 
 	emissions := []semantic.Progress{
-		{Phase: "", OverallPercent: 0, EmbeddingBatchesTotal: 0, EmbeddingBatchesCompleted: 0, CollectionRowsWritten: 4200, ChunksProcessed: 4200, ChunksReused: 4000, ChunksEmbedded: 200},
-		{Phase: "", OverallPercent: 0, EmbeddingBatchesTotal: 0, EmbeddingBatchesCompleted: 0, CollectionRowsWritten: 3261, ChunksProcessed: 3261, ChunksReused: 2989, ChunksEmbedded: 272},
+		{Phase: "", OverallPercent: 0, EmbeddingBatchesTotal: 0, EmbeddingBatchesCompleted: 0, CollectionRowsWritten: 4200, ChunksProcessed: 4200, ChunksReused: 4000, ChunksEmbedded: 200, ChunksDropped: 3},
+		{Phase: "", OverallPercent: 0, EmbeddingBatchesTotal: 0, EmbeddingBatchesCompleted: 0, CollectionRowsWritten: 3261, ChunksProcessed: 3261, ChunksReused: 2989, ChunksEmbedded: 272, ChunksDropped: 2},
 	}
 	call := 0
 	manager.semantic = &fakeSemantic{
@@ -62,8 +59,8 @@ func TestDeltaProgressAccumulatesReuseSplit(t *testing.T) {
 		}
 	}
 
-	processed, reused, embedded, loaded := state.chunkSplit()
-	manager.reportDeltaProgress(job.ID, 2, 2, 2, indexer.Result{IndexedFiles: 2, TotalChunks: 7461}, processed, reused, embedded, loaded, "file")
+	processed, reused, embedded, dropped, loaded := state.chunkSplit()
+	manager.reportDeltaProgress(job.ID, 2, 2, 2, indexer.Result{IndexedFiles: 2, TotalChunks: 7461}, processed, reused, embedded, dropped, loaded, "file")
 
 	got, found := manager.GetJob(job.ID)
 	if !found {
@@ -80,6 +77,9 @@ func TestDeltaProgressAccumulatesReuseSplit(t *testing.T) {
 	}
 	if got.Progress.ChunksGenerated != 472 {
 		t.Fatalf("Progress.ChunksGenerated = %d, want 472", got.Progress.ChunksGenerated)
+	}
+	if got.Progress.ChunksDropped != 5 {
+		t.Fatalf("Progress.ChunksDropped = %d, want 5", got.Progress.ChunksDropped)
 	}
 }
 
