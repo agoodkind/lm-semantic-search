@@ -7,7 +7,6 @@ import (
 	"log/slog"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
@@ -146,10 +145,22 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			return err
 		}
 
-		// An input the endpoint rejected as un-embeddable (for example a chunk over
-		// the model's context window) has a nil vector. Drop those chunks so the
-		// batch inserts only the inputs that embedded, and the job continues.
 		keptChunks, keptVectors := filterEmbeddedChunks(chunkBatch, vectors)
+
+		// An input the endpoint rejected as un-embeddable (for example a dense chunk
+		// still over the model's context window after the byte-budget pre-split) has
+		// a nil vector. Re-split each such chunk smaller and retry its pieces until
+		// every piece embeds or a piece is a single indivisible codepoint, so an
+		// oversized input is divided and indexed instead of dropped.
+		oversized := collectOversizedChunks(chunkBatch, vectors)
+		if len(oversized) > 0 {
+			retryChunks, retryVectors, _, retryErr := EmbedChunksSplittingOversize(ctx, oversized, service.embedder.EmbedBatch)
+			if retryErr != nil {
+				return retryErr
+			}
+			keptChunks = append(keptChunks, retryChunks...)
+			keptVectors = append(keptVectors, retryVectors...)
+		}
 		if len(keptChunks) == 0 {
 			continue
 		}
@@ -222,34 +233,27 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 		slog.ErrorContext(ctx, "embedding batch returned unexpected vector count", "want", len(missTexts), "got", len(result.Vectors), "err", errors.New("vector count mismatch"))
 		return nil, 0, fmt.Errorf("embedding batch returned %d vectors for %d chunks", len(result.Vectors), len(missTexts))
 	}
-	for _, skip := range result.Skipped {
-		logSkippedOversizedChunk(ctx, chunkBatch[missIndexes[skip.Index]], skip)
-	}
 	for position, vectorIndex := range missIndexes {
-		// A skipped input carries a nil vector; the caller drops that chunk before
-		// inserting, so it is never indexed.
+		// A skipped input carries a nil vector; the caller re-splits and retries that
+		// chunk through EmbedChunksSplittingOversize instead of dropping it, so an
+		// oversized input is divided and indexed rather than lost.
 		vectors[vectorIndex] = result.Vectors[position]
 	}
 	return vectors, reused, nil
 }
 
-// logSkippedOversizedChunk records at WARN that one chunk was dropped because the
-// embedding endpoint rejected it as too large to embed. It names the chunk by its
-// conversation id or relative path and reports both the local size estimate and
-// the endpoint's own token figures, so the drop is diagnosable without failing
-// the job.
-func logSkippedOversizedChunk(ctx context.Context, chunk model.StoredChunk, skip embedding.SkippedInput) {
-	slog.WarnContext(
-		ctx,
-		"semantic.embed_input_skipped_oversized",
-		"reason", string(skip.Reason),
-		"conversation_id", chunk.ConversationID,
-		"relative_path", chunk.RelativePath,
-		"estimated_tokens", estimatedTokenCount(chunk.Content),
-		"content_bytes", len(chunk.Content),
-		"model_max_tokens", skip.MaxTokens,
-		"reported_tokens", skip.ReportedTokens,
-	)
+// collectOversizedChunks returns the chunks whose vector is nil, meaning the
+// embedding endpoint rejected the input as individually un-embeddable. The caller
+// feeds these back through the splitter and retries them instead of dropping
+// them, so an oversized input is divided and indexed.
+func collectOversizedChunks(chunks []model.StoredChunk, vectors [][]float32) []model.StoredChunk {
+	oversized := make([]model.StoredChunk, 0)
+	for index, vector := range vectors {
+		if vector == nil {
+			oversized = append(oversized, chunks[index])
+		}
+	}
+	return oversized
 }
 
 // filterEmbeddedChunks keeps only the chunks whose vector is non-nil, pairing
