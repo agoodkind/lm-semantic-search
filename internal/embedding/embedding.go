@@ -20,8 +20,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/metrics"
 )
 
-const maxEmbeddingTokens = 8192
-
 // openAIProviderName is the only supported provider label.
 const openAIProviderName = "OpenAI"
 
@@ -47,7 +45,10 @@ var ErrEmbedderRejected = errors.New("embedding endpoint rejected the request")
 // embedCodeContextLengthExceeded is the OpenAI error code an embedding endpoint
 // returns when a single input exceeds the model's context window. It is a
 // permanent, per-input condition rather than a server outage, so the offending
-// input is dropped and the rest of the batch is still embedded.
+// input is dropped and the rest of the batch is still embedded. This is the wire
+// value compared against the endpoint's response; the reason reported onward is
+// this package's own [adapterr.EmbedRejectionContextLengthExceeded], never text
+// the endpoint supplied.
 const embedCodeContextLengthExceeded = "context_length_exceeded"
 
 // SkippedInput identifies one input the embedding endpoint rejected as
@@ -58,9 +59,11 @@ const embedCodeContextLengthExceeded = "context_length_exceeded"
 type SkippedInput struct {
 	// Index is the position of the skipped input in the EmbedBatch texts slice.
 	Index int
-	// Reason is the endpoint's error code for the rejection, for example
-	// "context_length_exceeded".
-	Reason string
+	// Reason is the closed-set reason for the rejection, for example
+	// [adapterr.EmbedRejectionContextLengthExceeded]. It is always a value this
+	// repository declares, never text an endpoint returned, so it stays safe to
+	// show a client and stable to route on.
+	Reason adapterr.EmbedRejectionReason
 	// ReportedTokens is the token count the endpoint measured for the input, or
 	// zero when the endpoint did not report one.
 	ReportedTokens int
@@ -189,12 +192,56 @@ func (provider *openAICompatibleProvider) Embed(ctx context.Context, text string
 	if err != nil {
 		return nil, err
 	}
-	if len(result.Vectors) == 0 || result.Vectors[0] == nil {
-		// A single-input call the endpoint rejected as un-embeddable (for example a
-		// query longer than the model's context window) leaves no vector to return.
+	if len(result.Vectors) > 0 && result.Vectors[0] != nil {
+		return result.Vectors[0], nil
+	}
+	if len(result.Skipped) == 0 {
 		return nil, fmt.Errorf("%s embedding provider returned no vector for the input", provider.name)
 	}
-	return result.Vectors[0], nil
+	// The endpoint rejected this single input as un-embeddable, for example a query
+	// longer than the model's context window. The reason and whatever figures the
+	// endpoint reported travel to the caller so a person can shorten the input,
+	// rather than being sanitized into an internal error nobody can act on.
+	skipped := result.Skipped[0]
+	slog.WarnContext(
+		ctx,
+		"embedding endpoint refused the input",
+		"provider", provider.name,
+		"model", provider.model,
+		"reason", string(skipped.Reason),
+		"reported_tokens", skipped.ReportedTokens,
+		"model_max_tokens", skipped.MaxTokens,
+	)
+	return nil, adapterr.NewEmbedInputRejected(
+		hostedInputRejection(skipped.Reason, skipped.ReportedTokens, skipped.MaxTokens),
+		fmt.Errorf(
+			"%s embedding endpoint refused the input as %s",
+			provider.name,
+			string(skipped.Reason),
+		),
+	)
+}
+
+// hostedInputRejection renders one endpoint refusal for the client-visible
+// error. The endpoint reports its figures only in prose, so they are optional:
+// when neither the limit nor the measured count could be read, the rejection is
+// still a size refusal and says the figures are missing rather than quoting a
+// zero.
+func hostedInputRejection(
+	reason adapterr.EmbedRejectionReason,
+	reportedTokens int,
+	maxTokens int,
+) adapterr.EmbedInputRejection {
+	limit := adapterr.EmbedLimitTokens
+	if maxTokens <= 0 && reportedTokens <= 0 {
+		limit = adapterr.EmbedLimitUnreported
+	}
+	return adapterr.EmbedInputRejection{
+		Reason:   reason,
+		Limit:    limit,
+		Measured: reportedTokens,
+		Maximum:  maxTokens,
+	}
 }
 
 func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts []string) (result BatchResult, err error) {
@@ -204,7 +251,7 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 
 	preprocessedTexts := make([]string, 0, len(texts))
 	for _, text := range texts {
-		preprocessedTexts = append(preprocessedTexts, preprocessText(text))
+		preprocessedTexts = append(preprocessedTexts, normalizeEmbeddingInput(text))
 	}
 
 	// Single choke point for every embedding call, so all per-batch latency and
@@ -245,23 +292,43 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 		}
 
 		rejection, isPerInput := oversizedInputRejection(embedErr)
-		if !isPerInput || rejection.index < 0 || rejection.index >= len(surviving) {
-			// Either a genuine server/transport failure, or a per-input rejection
-			// whose offending input the endpoint did not identify. Neither can be
-			// resolved by dropping one known input, so the typed error propagates
-			// and the daemon classifies it (and may mark the embedder unhealthy).
+		if !isPerInput {
+			// A genuine server or transport failure. The typed error propagates and
+			// the daemon classifies it, which may mark the embedder unhealthy.
 			return BatchResult{}, embedErr
 		}
 
-		originalIndex := surviving[rejection.index]
+		position := rejection.index
+		if position < 0 && len(surviving) == 1 {
+			// The endpoint refused a single-input request, so the offending input is
+			// unambiguous even though its message named no index.
+			position = 0
+		}
+		if position < 0 || position >= len(surviving) {
+			// The endpoint refused the request as carrying an over-long input but did
+			// not say which one, and several are in flight, so no single input can be
+			// dropped. The fault is still the request's and not the endpoint's, so it
+			// must not read as a rejecting embedder and must not degrade its health.
+			slog.WarnContext(ctx, "embedding endpoint refused a batch without naming the input", "provider", provider.name, "model", provider.model, "inputs", len(surviving), "err", embedErr)
+			return BatchResult{}, adapterr.NewEmbedInputRejected(
+				hostedInputRejection(
+					adapterr.EmbedRejectionContextLengthExceeded,
+					rejection.reportedTokens,
+					rejection.maxTokens,
+				),
+				embedErr,
+			)
+		}
+
+		originalIndex := surviving[position]
 		skipped = append(skipped, SkippedInput{
 			Index:          originalIndex,
-			Reason:         rejection.code,
+			Reason:         adapterr.EmbedRejectionContextLengthExceeded,
 			ReportedTokens: rejection.reportedTokens,
 			MaxTokens:      rejection.maxTokens,
 		})
 		// vectors[originalIndex] stays nil to mark the input as skipped.
-		surviving = append(surviving[:rejection.index], surviving[rejection.index+1:]...)
+		surviving = append(surviving[:position], surviving[position+1:]...)
 	}
 
 	// Every input was skipped as un-embeddable; the batch still succeeds so the
@@ -382,11 +449,12 @@ func transientEmbedStatus(err error) (int, bool) {
 }
 
 // perInputRejection describes a per-input embedding rejection the endpoint
-// blamed on one identified input. index is the offending input's position in the
-// request's input array; the token figures are parsed from the endpoint message
-// for logging and are zero when the message does not carry them.
+// reported. Only the figures live here: the classification comes from the HTTP
+// status and the error code field, which are machine-readable, while index and
+// the token counts are parsed from the endpoint's prose, which is not. index is
+// -1 and the counts are zero when the message does not carry them, and neither
+// absence changes how the refusal is classified.
 type perInputRejection struct {
-	code           string
 	index          int
 	reportedTokens int
 	maxTokens      int
@@ -398,25 +466,24 @@ var (
 	embedResolvedTokensPattern = regexp.MustCompile(`resolved to (\d+) tokens`)
 )
 
-// oversizedInputRejection reports whether err is a per-input embedding rejection
-// that names a single offending input, so that input can be dropped and the rest
-// of the batch embedded. It matches an HTTP 400 whose OpenAI error code is
-// context_length_exceeded: a permanent per-input condition (the input exceeds the
-// model's context window), never a server outage. The offending index is relative
-// to the request's input array, and the token figures come from the endpoint
-// message; a message that omits the index yields index -1, which the caller
-// treats as un-droppable and surfaces as an error.
+// oversizedInputRejection reports whether err is a per-input embedding rejection:
+// an HTTP 400 whose OpenAI error code is context_length_exceeded, a permanent
+// per-input condition (the input exceeds the model's context window) and never a
+// server outage. Both of those are machine-readable fields, so the classification
+// never depends on how the endpoint worded its message. The returned index and
+// token counts are read from that prose as a convenience and are absent (-1 and
+// zero) when the wording does not carry them; an absent index only limits which
+// input can be dropped, it does not make the refusal any less per-input.
 func oversizedInputRejection(err error) (perInputRejection, bool) {
 	var apiErr *openai.Error
 	if !errors.As(err, &apiErr) {
-		return perInputRejection{code: "", index: -1, reportedTokens: 0, maxTokens: 0}, false
+		return perInputRejection{index: -1, reportedTokens: 0, maxTokens: 0}, false
 	}
 	if apiErr.StatusCode != http.StatusBadRequest || apiErr.Code != embedCodeContextLengthExceeded {
-		return perInputRejection{code: "", index: -1, reportedTokens: 0, maxTokens: 0}, false
+		return perInputRejection{index: -1, reportedTokens: 0, maxTokens: 0}, false
 	}
 	message := apiErr.Message
 	return perInputRejection{
-		code:           apiErr.Code,
 		index:          parseFirstSubmatchInt(embedInputIndexPattern, message, -1),
 		reportedTokens: parseFirstSubmatchInt(embedResolvedTokensPattern, message, 0),
 		maxTokens:      parseFirstSubmatchInt(embedMaxTokensPattern, message, 0),
@@ -445,14 +512,17 @@ func embedBackoff(attempt int) time.Duration {
 	return embedBackoffBase * time.Duration(multiplier)
 }
 
-func preprocessText(text string) string {
+// normalizeEmbeddingInput prepares one input for the embeddings request. An empty
+// input carries no content and the endpoint rejects it outright, so it becomes a
+// single space. Every other input is sent exactly as the caller supplied it.
+// Shortening a long input here would hand back a vector covering only the head of
+// the content while the caller stores that vector under the whole content's
+// identity; an input the endpoint cannot fit comes back as a
+// context_length_exceeded rejection instead, which EmbedBatch reports through
+// BatchResult.Skipped.
+func normalizeEmbeddingInput(text string) string {
 	if text == "" {
 		return " "
-	}
-
-	maxCharacters := maxEmbeddingTokens * 4
-	if len(text) > maxCharacters {
-		return text[:maxCharacters]
 	}
 	return text
 }

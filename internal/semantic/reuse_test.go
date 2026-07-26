@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
@@ -51,7 +52,7 @@ func (skippingEmbedder) EmbedBatch(_ context.Context, texts []string) (embedding
 		if index == 0 {
 			skipped = append(skipped, embedding.SkippedInput{
 				Index:          0,
-				Reason:         "context_length_exceeded",
+				Reason:         adapterr.EmbedRejectionContextLengthExceeded,
 				ReportedTokens: 5000,
 				MaxTokens:      4096,
 			})

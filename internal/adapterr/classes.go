@@ -1,6 +1,10 @@
 package adapterr
 
-import "google.golang.org/grpc/codes"
+import (
+	"strconv"
+
+	"google.golang.org/grpc/codes"
+)
 
 // Class is the closed-set classification for an [AdapterError].
 type Class string
@@ -270,6 +274,168 @@ func NewInvalidArgument(message string) *AdapterError {
 		Cause:         nil,
 		SafeForClient: true,
 	}
+}
+
+// EmbedRejectionReason is the closed set of reasons a provider may report for an
+// embedding input it refused. The set is closed, and [NewEmbedInputRejected]
+// rejects any value outside it, so a client-visible message can never carry free
+// text a provider or the endpoint it talks to supplied, such as a model name, an
+// endpoint address, or a credential echoed back in an error.
+type EmbedRejectionReason string
+
+// Embedding rejection reasons.
+const (
+	// EmbedRejectionUnspecified is the reason reported when a provider named none
+	// this package recognizes. It is also the fallback for an unrecognized value,
+	// which is how an arbitrary string is kept out of the client envelope.
+	EmbedRejectionUnspecified EmbedRejectionReason = "embed_input_rejected"
+
+	// EmbedRejectionContextLengthExceeded reports an input longer than the
+	// model's context window.
+	EmbedRejectionContextLengthExceeded EmbedRejectionReason = "context_length_exceeded"
+
+	// EmbedRejectionInputBytesExceeded reports an input larger than the byte
+	// ceiling a provider applies before tokenizing.
+	EmbedRejectionInputBytesExceeded EmbedRejectionReason = "input_bytes_exceeded"
+
+	// EmbedRejectionInputContainsNUL reports an input carrying a NUL byte, which
+	// a NUL-terminated tokenizer binding could read only up to.
+	EmbedRejectionInputContainsNUL EmbedRejectionReason = "input_contains_nul_byte"
+)
+
+// EmbedLimitKind names which limit refused an embedding input, so a message
+// quotes the limit that actually applied instead of a figure the caller cannot
+// act on.
+type EmbedLimitKind string
+
+// Embedding limit kinds.
+const (
+	// EmbedLimitNone marks a refusal no size limit explains, for example an input
+	// the provider cannot read at all.
+	EmbedLimitNone EmbedLimitKind = "none"
+
+	// EmbedLimitTokens marks a refusal against a model's token limit.
+	EmbedLimitTokens EmbedLimitKind = "tokens"
+
+	// EmbedLimitBytes marks a refusal against a byte ceiling applied before
+	// tokenizing.
+	EmbedLimitBytes EmbedLimitKind = "bytes"
+
+	// EmbedLimitUnreported marks a refusal the provider classified as a size
+	// problem without reporting any figures for it.
+	EmbedLimitUnreported EmbedLimitKind = "unreported"
+)
+
+// EmbedInputRejection describes one embedding input a provider refused as
+// individually un-embeddable. Measured and Maximum are both expressed in Limit's
+// unit and are zero when the provider reported no figure, which the rendered
+// message states plainly rather than quoting a zero.
+type EmbedInputRejection struct {
+	// Reason is the closed-set reason for the refusal.
+	Reason EmbedRejectionReason
+	// Limit names which ceiling refused the input.
+	Limit EmbedLimitKind
+	// Measured is the input's measured size in Limit's unit, or zero when the
+	// provider measured none.
+	Measured int
+	// Maximum is the ceiling in Limit's unit, or zero when the provider reported
+	// none.
+	Maximum int
+}
+
+// embedRejectionUnreportedDetail is the message clause for a size refusal that
+// arrived without figures, so the caller reads that the numbers are missing
+// instead of a zero it cannot act on.
+const embedRejectionUnreportedDetail = "the provider reported no size figures with the refusal"
+
+// embedRejectionShortenHint is the action for every size-driven refusal.
+const embedRejectionShortenHint = "shorten the input and retry"
+
+// NewEmbedInputRejected reports one embedding input a provider refused as
+// individually un-embeddable, for example a search query longer than the model's
+// context window. The reason and the applicable figures reach the client because
+// the caller can act on them by shortening the input, where a sanitized internal
+// error would leave a person with no way to learn what to change. The message is
+// built only from the closed-set reason and those figures, so it can name neither
+// the provider nor anything the endpoint said, and a client cannot tell which
+// provider refused the input.
+func NewEmbedInputRejected(rejection EmbedInputRejection, cause error) *AdapterError {
+	reason := knownEmbedRejectionReason(rejection.Reason)
+	message := "embedding input rejected as " + string(reason)
+	detail, hint := embedRejectionDetail(rejection)
+	if detail != "" {
+		message += ": " + detail
+	}
+	return &AdapterError{
+		Class:         ClassInvalidArgument,
+		Message:       message,
+		Code:          string(reason),
+		Hint:          hint,
+		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
+// knownEmbedRejectionReason maps a reason to itself when this package declares
+// it, and to [EmbedRejectionUnspecified] otherwise. A named string type still
+// accepts any converted string, so membership is checked here rather than
+// trusted from the caller.
+func knownEmbedRejectionReason(reason EmbedRejectionReason) EmbedRejectionReason {
+	switch reason {
+	case EmbedRejectionContextLengthExceeded,
+		EmbedRejectionInputBytesExceeded,
+		EmbedRejectionInputContainsNUL,
+		EmbedRejectionUnspecified:
+		return reason
+	default:
+		return EmbedRejectionUnspecified
+	}
+}
+
+// embedRejectionDetail renders the message clause and the hint for one refusal.
+func embedRejectionDetail(rejection EmbedInputRejection) (string, string) {
+	switch rejection.Limit {
+	case EmbedLimitTokens:
+		return embedTokenLimitDetail(rejection), embedRejectionShortenHint
+	case EmbedLimitBytes:
+		return embedByteLimitDetail(rejection), embedRejectionShortenHint
+	case EmbedLimitUnreported:
+		return embedRejectionUnreportedDetail, embedRejectionShortenHint
+	case EmbedLimitNone:
+		return "", ""
+	default:
+		return "", ""
+	}
+}
+
+// embedTokenLimitDetail renders a refusal against a model's token limit.
+func embedTokenLimitDetail(rejection EmbedInputRejection) string {
+	if rejection.Maximum <= 0 {
+		return embedRejectionUnreportedDetail
+	}
+	limit := "the model's limit is " + strconv.Itoa(rejection.Maximum) + " tokens"
+	if rejection.Measured <= 0 {
+		return limit
+	}
+	return "the input measured " + strconv.Itoa(rejection.Measured) +
+		" tokens against the model's " + strconv.Itoa(rejection.Maximum) + "-token limit"
+}
+
+// embedByteLimitDetail renders a refusal against the byte ceiling a provider
+// applies before tokenizing, which is a different limit from the model's token
+// window and must not be reported as one.
+func embedByteLimitDetail(rejection EmbedInputRejection) string {
+	if rejection.Maximum <= 0 {
+		return embedRejectionUnreportedDetail
+	}
+	limit := "the limit applied before tokenizing is " +
+		strconv.Itoa(rejection.Maximum) + " bytes"
+	if rejection.Measured <= 0 {
+		return limit
+	}
+	return "the input measured " + strconv.Itoa(rejection.Measured) +
+		" bytes against the " + strconv.Itoa(rejection.Maximum) +
+		"-byte limit applied before tokenizing"
 }
 
 // NewConflictingJob reports a duplicate indexing request the daemon

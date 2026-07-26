@@ -8,14 +8,17 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/openai/openai-go/v2"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
 // testEmbedTimeout bounds one request in the happy-path tests. It is generous
@@ -287,6 +290,264 @@ func TestEmbedBatchSkipsOversizedInputAndEmbedsRest(t *testing.T) {
 	}
 	if skip.ReportedTokens != 4472 {
 		t.Fatalf("Skipped[0].ReportedTokens = %d, want 4472", skip.ReportedTokens)
+	}
+}
+
+// oversizedHostedInputBytes is past the 32768-byte ceiling the provider used to
+// cut every hosted input down to, so an input this long proves the cut is gone.
+const oversizedHostedInputBytes = 40000
+
+func TestEmbedBatchSendsOversizedInputWithoutShorteningIt(t *testing.T) {
+	t.Parallel()
+
+	var receivedInputs []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		var body struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("Decode returned error: %v", err)
+			return
+		}
+		receivedInputs = body.Input
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"data": []map[string]any{{"embedding": []float64{1.0, 2.0}}},
+		})
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	oversized := strings.Repeat("a", oversizedHostedInputBytes)
+	result, err := provider.EmbedBatch(context.Background(), []string{oversized})
+	if err != nil {
+		t.Fatalf("EmbedBatch returned error: %v", err)
+	}
+	if len(receivedInputs) != 1 {
+		t.Fatalf("endpoint received %d inputs, want 1", len(receivedInputs))
+	}
+	if len(receivedInputs[0]) != oversizedHostedInputBytes {
+		t.Fatalf("endpoint received %d bytes, want the whole %d-byte input; the provider shortened it behind the caller's back", len(receivedInputs[0]), oversizedHostedInputBytes)
+	}
+	if receivedInputs[0] != oversized {
+		t.Fatal("endpoint received input that differs from the caller's content")
+	}
+	if len(result.Vectors) != 1 || result.Vectors[0] == nil {
+		t.Fatalf("vectors = %#v, want one vector for the accepted input", result.Vectors)
+	}
+	if len(result.Skipped) != 0 {
+		t.Fatalf("Skipped = %#v, want none for an input the endpoint accepted", result.Skipped)
+	}
+}
+
+func TestEmbedReportsOversizedQueryRejectionInsteadOfShorteningIt(t *testing.T) {
+	t.Parallel()
+
+	// A search query goes through single-input Embed, which no index path splits
+	// beforehand. The endpoint sees the whole query and rejects it as too long, and
+	// that rejection reaches the caller instead of a vector over a shortened copy.
+	var receivedInputs []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		var body struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("Decode returned error: %v", err)
+			return
+		}
+		receivedInputs = body.Input
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens, however the input at index 0 resolved to 10000 tokens. Reduce the input length."}}`))
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	oversized := strings.Repeat("b", oversizedHostedInputBytes)
+	vector, embedErr := provider.Embed(context.Background(), oversized)
+	if embedErr == nil {
+		t.Fatal("Embed returned a vector for a query the endpoint rejected as too long")
+	}
+	if vector != nil {
+		t.Fatalf("Embed returned %d values alongside the rejection", len(vector))
+	}
+	if len(receivedInputs) != 1 {
+		t.Fatalf("endpoint received %d inputs, want 1", len(receivedInputs))
+	}
+	if len(receivedInputs[0]) != oversizedHostedInputBytes {
+		t.Fatalf("endpoint received %d bytes, want the whole %d-byte query; the provider shortened it behind the caller's back", len(receivedInputs[0]), oversizedHostedInputBytes)
+	}
+}
+
+// TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument pins the shape both
+// providers give a refused single input: a typed invalid-argument error whose
+// client-safe message names the reason and the model's limit, and which never
+// names the provider or the model. A caller can act on the reason and still
+// cannot tell which provider refused the input.
+func TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens, however the input at index 0 resolved to 10000 tokens. Reduce the input length."}}`))
+	}))
+	defer server.Close()
+
+	hostedProvider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+	_, hostedErr := hostedProvider.Embed(context.Background(), strings.Repeat("a", oversizedHostedInputBytes))
+	if hostedErr == nil {
+		t.Fatal("the hosted provider accepted an input its endpoint rejected")
+	}
+
+	onnxProviderUnderTest := newUnloadedONNXProvider(t, offlinemodel.BGESmall)
+	onnxOversized := strings.Repeat("a", onnxProviderUnderTest.runtime.tokenizer.maximumInputBytes()+1)
+	_, onnxErr := onnxProviderUnderTest.Embed(context.Background(), onnxOversized)
+	if onnxErr == nil {
+		t.Fatal("the in-process provider accepted an input past its tokenizer bound")
+	}
+
+	// The in-process input was refused by the byte ceiling, which is 64 bytes per
+	// allowed token, so the limit the caller must act on is that byte figure and
+	// never the model's 512-token window.
+	onnxByteBound := strconv.Itoa(onnxProviderUnderTest.runtime.tokenizer.maximumInputBytes())
+	onnxTokenLimit := strconv.Itoa(onnxProviderUnderTest.runtime.tokenizer.maximumTokens)
+
+	cases := []struct {
+		name          string
+		err           error
+		wantReason    adapterr.EmbedRejectionReason
+		wantFigures   []string
+		forbidFigures []string
+	}{
+		{
+			name:          "hosted endpoint rejection",
+			err:           hostedErr,
+			wantReason:    adapterr.EmbedRejectionContextLengthExceeded,
+			wantFigures:   []string{"10000", "8192", "tokens"},
+			forbidFigures: nil,
+		},
+		{
+			name:          "in-process rejection",
+			err:           onnxErr,
+			wantReason:    adapterr.EmbedRejectionInputBytesExceeded,
+			wantFigures:   []string{onnxByteBound, "bytes"},
+			forbidFigures: []string{onnxTokenLimit + " tokens", onnxTokenLimit + "-token"},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var adapterErr *adapterr.AdapterError
+			if !errors.As(testCase.err, &adapterErr) {
+				t.Fatalf("error stayed untyped, so the boundary sanitizes it into an internal error: %v", testCase.err)
+			}
+			if adapterErr.Class != adapterr.ClassInvalidArgument {
+				t.Fatalf("class = %q, want %q", adapterErr.Class, adapterr.ClassInvalidArgument)
+			}
+			if !adapterErr.SafeForClient {
+				t.Fatal("a refused input must be safe to show the caller; otherwise the reason never leaves the daemon log")
+			}
+			if adapterErr.Code != string(testCase.wantReason) {
+				t.Fatalf("code = %q, want the reason %q", adapterErr.Code, testCase.wantReason)
+			}
+			message := adapterr.SafeMessage(testCase.err)
+			if !strings.Contains(message, string(testCase.wantReason)) {
+				t.Fatalf("client message %q does not name the reason %q", message, testCase.wantReason)
+			}
+			for _, figure := range testCase.wantFigures {
+				if !strings.Contains(message, figure) {
+					t.Fatalf("client message %q does not carry the figure %q", message, figure)
+				}
+			}
+			for _, wrongFigure := range testCase.forbidFigures {
+				if strings.Contains(message, wrongFigure) {
+					t.Fatalf("client message %q quotes %q, which is not the limit that refused the input", message, wrongFigure)
+				}
+			}
+			for _, leak := range []string{"OpenAI", "ONNX", "onnx", "bge-small", "endpoint"} {
+				if strings.Contains(message, leak) {
+					t.Fatalf("client message %q names %q, so a caller can tell the providers apart", message, leak)
+				}
+			}
+		})
+	}
+}
+
+// TestHostedRefusalWithoutIndexProseStaysAnInvalidArgument covers the endpoint
+// that answers context_length_exceeded without the "input at index N" wording
+// the live endpoint happens to use. Classification comes from the HTTP status
+// and the error code, so the caller still gets an actionable invalid argument
+// rather than an embedder-rejected error that also degrades embedder health.
+func TestHostedRefusalWithoutIndexProseStaysAnInvalidArgument(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"The input is too long for this model."}}`))
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	vector, embedErr := provider.Embed(context.Background(), strings.Repeat("a", oversizedHostedInputBytes))
+	if embedErr == nil {
+		t.Fatal("Embed returned a vector for a query the endpoint refused")
+	}
+	if vector != nil {
+		t.Fatalf("Embed returned %d values alongside the rejection", len(vector))
+	}
+
+	var adapterErr *adapterr.AdapterError
+	if !errors.As(embedErr, &adapterErr) {
+		t.Fatalf("a refusal worded without an index stayed untyped: %v", embedErr)
+	}
+	if adapterErr.Class != adapterr.ClassInvalidArgument {
+		t.Fatalf("class = %q, want %q; the endpoint refused one input and is otherwise healthy", adapterErr.Class, adapterr.ClassInvalidArgument)
+	}
+	if adapterr.IsInfraFailure(embedErr) {
+		t.Fatal("a refused input read as a shared-infrastructure failure, which degrades the embedder banner")
+	}
+	if errors.Is(embedErr, ErrEmbedderRejected) {
+		t.Fatal("a refused input read as a rejecting embedder")
+	}
+	message := adapterr.SafeMessage(embedErr)
+	if !strings.Contains(message, string(adapterr.EmbedRejectionContextLengthExceeded)) {
+		t.Fatalf("client message %q does not name the reason", message)
+	}
+	// No figures could be read from that wording, so the message has to say so
+	// rather than quote a zero the caller would act on.
+	if !strings.Contains(message, "no size figures") {
+		t.Fatalf("client message %q does not say the figures are missing", message)
+	}
+	if strings.Contains(message, " 0 ") || strings.Contains(message, "0-token") {
+		t.Fatalf("client message %q quotes a zero figure", message)
+	}
+}
+
+func TestNormalizeEmbeddingInputOnlyFillsAnEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	if got := normalizeEmbeddingInput(""); got != " " {
+		t.Fatalf("empty input became %q, want a single space the endpoint accepts", got)
+	}
+	oversized := strings.Repeat("c", oversizedHostedInputBytes)
+	if got := normalizeEmbeddingInput(oversized); got != oversized {
+		t.Fatalf("input of %d bytes became %d bytes; nothing may shorten it here", len(oversized), len(got))
 	}
 }
 

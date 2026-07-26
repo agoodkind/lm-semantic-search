@@ -152,3 +152,116 @@ func TestIsInfraFailure(t *testing.T) {
 		}
 	}
 }
+
+// TestNewEmbedInputRejectedKeepsFreeTextOutOfTheClientEnvelope proves the safety
+// is a property of the constructor rather than of today's callers. A named
+// string type still accepts any converted string, so a future caller could hand
+// it a provider name, a model name, an endpoint address, or a credential an
+// endpoint echoed back in an error. Anything outside the closed reason set has
+// to fall back to the unspecified reason.
+func TestNewEmbedInputRejectedKeepsFreeTextOutOfTheClientEnvelope(t *testing.T) {
+	t.Parallel()
+
+	// The fixture stands in for a credential without being shaped like one, so
+	// the repository's secret scanner does not read the test as a real leak.
+	const leak = "OpenAI at https://api.example.invalid rejected key REDACTED-CREDENTIAL-FIXTURE"
+	err := NewEmbedInputRejected(EmbedInputRejection{
+		Reason:   EmbedRejectionReason(leak),
+		Limit:    EmbedLimitTokens,
+		Measured: 10000,
+		Maximum:  8192,
+	}, errors.New("cause stays in the daemon log"))
+
+	if err.Code != string(EmbedRejectionUnspecified) {
+		t.Fatalf("code = %q, want the unspecified reason %q", err.Code, EmbedRejectionUnspecified)
+	}
+	for _, fragment := range []string{leak, "OpenAI", "api.example.invalid", "REDACTED-CREDENTIAL-FIXTURE"} {
+		if strings.Contains(err.Message, fragment) {
+			t.Fatalf("client message %q carries caller-supplied text %q", err.Message, fragment)
+		}
+		if strings.Contains(err.Code, fragment) {
+			t.Fatalf("client code %q carries caller-supplied text %q", err.Code, fragment)
+		}
+	}
+	if !strings.Contains(SafeMessage(err), string(EmbedRejectionUnspecified)) {
+		t.Fatalf("client message %q does not name the fallback reason", SafeMessage(err))
+	}
+
+	// Every declared reason survives unchanged, so the guard rejects only what it
+	// does not recognize.
+	for _, reason := range []EmbedRejectionReason{
+		EmbedRejectionContextLengthExceeded,
+		EmbedRejectionInputBytesExceeded,
+		EmbedRejectionInputContainsNUL,
+		EmbedRejectionUnspecified,
+	} {
+		known := NewEmbedInputRejected(EmbedInputRejection{
+			Reason:   reason,
+			Limit:    EmbedLimitNone,
+			Measured: 0,
+			Maximum:  0,
+		}, nil)
+		if known.Code != string(reason) {
+			t.Fatalf("declared reason %q came back as %q", reason, known.Code)
+		}
+	}
+}
+
+// TestEmbedInputRejectionNamesTheLimitThatApplied pins each limit kind to the
+// figure a caller can act on: a byte ceiling is never reported as a token
+// window, and a refusal that arrived without figures says so instead of quoting
+// a zero.
+func TestEmbedInputRejectionNamesTheLimitThatApplied(t *testing.T) {
+	t.Parallel()
+
+	tokens := NewEmbedInputRejected(EmbedInputRejection{
+		Reason:   EmbedRejectionContextLengthExceeded,
+		Limit:    EmbedLimitTokens,
+		Measured: 10000,
+		Maximum:  8192,
+	}, nil)
+	if !strings.Contains(tokens.Message, "10000 tokens") || !strings.Contains(tokens.Message, "8192-token limit") {
+		t.Fatalf("token refusal message = %q", tokens.Message)
+	}
+
+	bytesRejection := NewEmbedInputRejected(EmbedInputRejection{
+		Reason:   EmbedRejectionInputBytesExceeded,
+		Limit:    EmbedLimitBytes,
+		Measured: 32769,
+		Maximum:  32768,
+	}, nil)
+	if !strings.Contains(bytesRejection.Message, "32769 bytes") || !strings.Contains(bytesRejection.Message, "32768-byte limit") {
+		t.Fatalf("byte refusal message = %q", bytesRejection.Message)
+	}
+	for _, tokenClaim := range []string{" tokens", "-token limit", "model's limit"} {
+		if strings.Contains(bytesRejection.Message, tokenClaim) {
+			t.Fatalf("byte refusal message %q reports %q, a token limit that did not apply", bytesRejection.Message, tokenClaim)
+		}
+	}
+
+	unreported := NewEmbedInputRejected(EmbedInputRejection{
+		Reason:   EmbedRejectionContextLengthExceeded,
+		Limit:    EmbedLimitUnreported,
+		Measured: 0,
+		Maximum:  0,
+	}, nil)
+	if !strings.Contains(unreported.Message, "no size figures") {
+		t.Fatalf("unreported refusal message = %q, want it to say the figures are missing", unreported.Message)
+	}
+	if strings.Contains(unreported.Message, "0") {
+		t.Fatalf("unreported refusal message %q quotes a zero figure", unreported.Message)
+	}
+	if unreported.Hint == "" {
+		t.Fatal("a size refusal without figures still needs the shorten-and-retry hint")
+	}
+
+	nul := NewEmbedInputRejected(EmbedInputRejection{
+		Reason:   EmbedRejectionInputContainsNUL,
+		Limit:    EmbedLimitNone,
+		Measured: 0,
+		Maximum:  0,
+	}, nil)
+	if nul.Message != "embedding input rejected as "+string(EmbedRejectionInputContainsNUL) {
+		t.Fatalf("NUL refusal message = %q, want the reason alone with no limit beside it", nul.Message)
+	}
+}

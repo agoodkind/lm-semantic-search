@@ -23,11 +23,13 @@ const (
 	offlineModelFileMode       = 0o644
 )
 
-// errArtifactUnavailable marks a failure to fetch an offline model artifact
+// ErrArtifactUnavailable marks a failure to fetch an offline model artifact
 // from its remote host, either a transport error or a non-success HTTP status.
 // The daemon must not assume network access, so callers can degrade gracefully
-// on this condition, and tests that need a downloaded artifact skip on it.
-var errArtifactUnavailable = errors.New("offline embedding artifact unavailable")
+// on this condition, and tests that need a downloaded artifact skip on it. It is
+// exported so a test outside this package can tell a missing download apart from
+// a real provider failure.
+var ErrArtifactUnavailable = errors.New("offline embedding artifact unavailable")
 
 type cachedModelFiles struct {
 	modelPath     string
@@ -405,7 +407,7 @@ func downloadArtifactResponse(
 		return nil, fmt.Errorf(
 			"download offline embedding artifact %s: %w: %w",
 			rawURL,
-			errArtifactUnavailable,
+			ErrArtifactUnavailable,
 			err,
 		)
 	}
@@ -428,7 +430,7 @@ func downloadArtifactResponse(
 		return nil, fmt.Errorf(
 			"download offline embedding artifact %s: %w: HTTP status %s; close response: %w",
 			rawURL,
-			errArtifactUnavailable,
+			ErrArtifactUnavailable,
 			response.Status,
 			closeErr,
 		)
@@ -436,7 +438,7 @@ func downloadArtifactResponse(
 	return nil, fmt.Errorf(
 		"download offline embedding artifact %s: %w: HTTP status %s",
 		rawURL,
-		errArtifactUnavailable,
+		ErrArtifactUnavailable,
 		response.Status,
 	)
 }

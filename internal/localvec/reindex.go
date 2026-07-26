@@ -272,7 +272,7 @@ func logSkippedOversizedRow(ctx context.Context, chunk model.StoredChunk, skip e
 	slog.WarnContext(
 		ctx,
 		"localvec.embed_input_skipped_oversized",
-		"reason", skip.Reason,
+		"reason", string(skip.Reason),
 		"conversation_id", chunk.ConversationID,
 		"relative_path", chunk.RelativePath,
 		"content_bytes", len(chunk.Content),
