@@ -59,9 +59,9 @@ func TestEffectiveEmbedTokenCapForLimitUsesPresetLimit(t *testing.T) {
 	if got := EffectiveEmbedTokenCapForLimit(0, 512); got != 460 {
 		t.Fatalf("EffectiveEmbedTokenCapForLimit(0, 512) = %d, want 460", got)
 	}
-	// A non-positive model limit falls back to the OpenAI-compatible limit: 3686.
-	if got := EffectiveEmbedTokenCapForLimit(0, 0); got != 3686 {
-		t.Fatalf("EffectiveEmbedTokenCapForLimit(0, 0) = %d, want 3686 (model-limit fallback)", got)
+	// A non-positive model limit fails safe at the smallest known limit: 460.
+	if got := EffectiveEmbedTokenCapForLimit(0, 0); got != 460 {
+		t.Fatalf("EffectiveEmbedTokenCapForLimit(0, 0) = %d, want 460 (safe fallback)", got)
 	}
 }
 
@@ -97,8 +97,7 @@ func TestEmbedChunkByteBudgetForLimitTracksPreset(t *testing.T) {
 
 func TestActiveEmbedTokenLimitSelectsPresetForONNX(t *testing.T) {
 	t.Parallel()
-	// The ONNX provider selects the offline preset's maximum tokens; every other
-	// provider uses the OpenAI-compatible model limit.
+	// The ONNX provider selects the offline preset's maximum tokens.
 	onnx := Config{EmbeddingProvider: EmbeddingProviderONNX, OfflineEmbeddingModel: "bge-small"}
 	if got := ActiveEmbedTokenLimit(onnx); got != 512 {
 		t.Fatalf("ActiveEmbedTokenLimit(bge-small) = %d, want 512", got)
@@ -107,8 +106,58 @@ func TestActiveEmbedTokenLimitSelectsPresetForONNX(t *testing.T) {
 	if got := ActiveEmbedTokenLimit(gemma); got != 2048 {
 		t.Fatalf("ActiveEmbedTokenLimit(embeddinggemma) = %d, want 2048", got)
 	}
-	openAI := Config{EmbeddingProvider: "OpenAI"}
-	if got := ActiveEmbedTokenLimit(openAI); got != EmbedModelInputTokenLimit {
-		t.Fatalf("ActiveEmbedTokenLimit(OpenAI) = %d, want %d", got, EmbedModelInputTokenLimit)
+}
+
+func TestActiveEmbedTokenLimitSelectsOpenAICompatibleModel(t *testing.T) {
+	t.Parallel()
+	cfg := Config{
+		EmbeddingProvider: "OpenAI",
+		EmbeddingModel:    "BAAI/bge-small-en-v1.5",
+	}
+	if got := ActiveEmbedTokenLimit(cfg); got != 512 {
+		t.Fatalf("ActiveEmbedTokenLimit(BAAI/bge-small-en-v1.5) = %d, want 512", got)
+	}
+	if got := EmbedChunkByteBudgetForLimit(0, ActiveEmbedTokenLimit(cfg)); got >= EmbedChunkByteBudget(0) {
+		t.Fatalf("hosted bge-small byte budget = %d, want < %d", got, EmbedChunkByteBudget(0))
+	}
+}
+
+func TestActiveEmbedTokenLimitUnknownModelUsesSmallestKnownLimit(t *testing.T) {
+	t.Parallel()
+	cfg := Config{
+		EmbeddingProvider: "OpenAI",
+		EmbeddingModel:    "custom/unknown-embedding-model",
+	}
+	if got := ActiveEmbedTokenLimit(cfg); got != 512 {
+		t.Fatalf("ActiveEmbedTokenLimit(unknown model) = %d, want safe fallback 512", got)
+	}
+}
+
+func TestOpenAICompatibleConfiguredLimitOnlyTightensModelLimit(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name       string
+		maxTokens  int
+		wantTokens int
+	}{
+		{name: "larger configured limit", maxTokens: 1024, wantTokens: 460},
+		{name: "smaller configured limit", maxTokens: 256, wantTokens: 230},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := Config{
+				EmbeddingProvider:  "OpenAI",
+				EmbeddingModel:     "BAAI/bge-small-en-v1.5",
+				EmbeddingMaxTokens: testCase.maxTokens,
+			}
+			modelLimit := ActiveEmbedTokenLimit(cfg)
+			if got := EffectiveEmbedTokenCapForLimit(cfg.EmbeddingMaxTokens, modelLimit); got != testCase.wantTokens {
+				t.Fatalf(
+					"effective cap for embeddingMaxTokens %d = %d, want %d",
+					testCase.maxTokens,
+					got,
+					testCase.wantTokens,
+				)
+			}
+		})
 	}
 }

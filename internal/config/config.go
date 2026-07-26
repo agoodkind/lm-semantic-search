@@ -49,6 +49,10 @@ const (
 	// embeddingMaxTokens is unset, so a missing or partial config cannot disable
 	// the split and let the embedder drop content.
 	EmbedModelInputTokenLimit = 4096
+	// smallestKnownEmbedModelInputTokenLimit is the fail-safe limit for an
+	// unrecognized model name. A conservative fallback can split more often, but
+	// it cannot silently send a known-oversized input to a smaller model.
+	smallestKnownEmbedModelInputTokenLimit = 512
 	// embedTokenSafetyMargin scales the token cap down before splitting, because a
 	// byte-based budget cannot see the model's real tokenizer and dense or
 	// non-Latin text packs more tokens per byte than the estimate assumes.
@@ -65,6 +69,13 @@ const (
 type embeddingProvider string
 
 const embeddingProviderOpenAI embeddingProvider = "OpenAI"
+
+type embeddingModel string
+
+const (
+	embeddingModelBGESmall    embeddingModel = "baai/bge-small-en-v1.5"
+	embeddingModelNVEmbedCode embeddingModel = "nvidia/nv-embedcode-7b-v1"
+)
 
 // Config describes daemon runtime paths on the local machine.
 type Config struct {
@@ -463,7 +474,7 @@ func resolveEmbeddingMaxTokens(fileValue int) int {
 			"embeddingMaxTokens is unset; splitting falls back to the model's hard input-token limit, set the knob for a tighter per-chunk cap",
 			"config_field", "embeddingMaxTokens",
 			"env_var", "EMBEDDING_MAX_TOKENS",
-			"model_token_limit", EmbedModelInputTokenLimit,
+			"minimum_known_model_token_limit", smallestKnownEmbedModelInputTokenLimit,
 		)
 		return 0
 	}
@@ -522,13 +533,12 @@ func resolveMilvusMutationCallTimeoutMS(fileValue int) int {
 // limit is always enforced, so an unset or larger maxTokens still caps at the
 // model limit rather than disabling the split and letting the embedder drop or
 // truncate an oversized input; a configured value below the model limit tightens
-// the cap further. A non-positive modelLimit falls back to the OpenAI-compatible
-// limit. The result is always at least one and always below modelLimit, so the
-// local ONNX backend can pass its 2048/512 preset limit and the Milvus backend
-// its 4096 OpenAI-compatible limit through one path.
+// the cap further. A non-positive modelLimit fails safe at the smallest known
+// model limit. The result is always at least one and always below modelLimit, so
+// every provider can pass its model-specific limit through one path.
 func EffectiveEmbedTokenCapForLimit(maxTokens int, modelLimit int) int {
 	if modelLimit <= 0 {
-		modelLimit = EmbedModelInputTokenLimit
+		modelLimit = smallestKnownEmbedModelInputTokenLimit
 	}
 	modelCap := max(int(float64(modelLimit)*embedTokenSafetyMargin), 1)
 	if maxTokens <= 0 {
@@ -557,20 +567,27 @@ func EmbedChunkByteBudgetForLimit(maxTokens int, modelLimit int) int {
 	return tokenCap * conservativeEmbedBytesPerTokenNum / conservativeEmbedBytesPerTokenDen
 }
 
-// ActiveEmbedTokenLimit reports the embedding model's hard per-input token limit
-// for the active provider: the offline ONNX preset's maximum for the ONNX
-// provider, otherwise the OpenAI-compatible model input limit. The split path
-// derives its byte budget from this so the local backend splits at the preset's
-// real 2048 (embeddinggemma) or 512 (bge-small) limit instead of the 4096
-// OpenAI-compatible limit that would let the ONNX tokenizer truncate the input.
+// ActiveEmbedTokenLimit reports the active model's hard per-input token limit.
+// ONNX models use their preset, while OpenAI-compatible models use the known
+// limit for their configured model name. An unknown model fails safe at the
+// smallest known limit because an arbitrary compatible endpoint cannot be probed
+// before indexing.
 func ActiveEmbedTokenLimit(cfg Config) int {
 	if strings.EqualFold(strings.TrimSpace(cfg.EmbeddingProvider), EmbeddingProviderONNX) {
 		preset, err := offlinemodel.Resolve(cfg.OfflineEmbeddingModel)
 		if err == nil && preset.MaximumTokens > 0 {
 			return int(preset.MaximumTokens)
 		}
+		return smallestKnownEmbedModelInputTokenLimit
 	}
-	return EmbedModelInputTokenLimit
+	switch embeddingModel(strings.ToLower(strings.TrimSpace(cfg.EmbeddingModel))) {
+	case embeddingModelBGESmall:
+		return smallestKnownEmbedModelInputTokenLimit
+	case embeddingModelNVEmbedCode:
+		return EmbedModelInputTokenLimit
+	default:
+		return smallestKnownEmbedModelInputTokenLimit
+	}
 }
 
 func intOrDefault(value int, fallback int) int {
