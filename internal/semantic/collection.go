@@ -388,12 +388,22 @@ func (service *Service) ensureConversationScalarColumnsOnce(ctx context.Context,
 // collection before their prefix delete, since a daemon process that did not
 // create the collection itself never loaded it.
 //
-// The wait is bounded (see awaitCollectionLoaded). A collection that never
-// finishes loading fails as not-ready instead of holding the caller and its
-// concurrency slot forever.
+// Concurrent callers for one collection share one initial request, both polls,
+// and one recovery request. A concurrent cohort therefore issues at most two
+// LoadCollection calls. Its worst-case shared operation lasts one Milvus
+// metadata-call bound, two configured load bounds, and one recovery request
+// bounded by the shorter of those two bounds. A caller's earlier deadline still
+// ends its own wait first. A collection that never finishes loading fails as
+// not-ready instead of multiplying work across callers.
 func (service *Service) loadCollection(ctx context.Context, collectionName string) error {
-	if _, err := service.milvus.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName)); err != nil {
-		return wrapStoreError(ctx, err, "load Milvus collection "+collectionName)
-	}
-	return service.awaitCollectionLoaded(ctx, collectionName)
+	return service.collectionLoads.Do(
+		ctx,
+		collectionName,
+		func(loadCtx context.Context) error {
+			if _, err := service.milvus.LoadCollection(loadCtx, milvusclient.NewLoadCollectionOption(collectionName)); err != nil {
+				return wrapStoreError(loadCtx, err, "load Milvus collection "+collectionName)
+			}
+			return service.awaitCollectionLoaded(loadCtx, collectionName)
+		},
+	)
 }

@@ -115,11 +115,17 @@ type Manager struct {
 	// pipeline and the vector store). It is global, not per-codebase, observed
 	// from job outcomes, and drives the status banner. Guarded by mu.
 	health dependencyHealth
+	// dependencyFailureGeneration advances for every classified dependency
+	// failure, including repeated failures in the same mode. A background success
+	// can compare its starting generation before clearing newer evidence.
+	// Guarded by mu.
+	dependencyFailureGeneration uint64
 	// lastDepProbeAt debounces refreshDependencyHealth's backend probe. Guarded by mu.
 	lastDepProbeAt time.Time
 	// deferredBuildDelay is the post-discovery wait before a worktree build starts; settable so a test can keep the timer from firing mid-test.
 	deferredBuildDelay time.Duration
-	// bootSelfCheckDelay is the startup wait before the one-shot end-to-end self-check runs; settable so a test does not pay the real delay.
+	// bootSelfCheckDelay is the wait before the first end-to-end self-check and
+	// between retries; settable so tests do not pay the real delay.
 	bootSelfCheckDelay time.Duration
 	// indexability resolves whether a path should be indexed, caching one
 	// git-style ignore matcher per codebase id. Converge and the watcher both
@@ -180,6 +186,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		indexSlots:                  make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
 		syncLock:                    newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
 		health:                      dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
+		dependencyFailureGeneration: 0,
 		lastDepProbeAt:              time.Time{},
 		deferredBuildDelay:          defaultDeferredBuildDelay,
 		bootSelfCheckDelay:          defaultBootSelfCheckDelay,

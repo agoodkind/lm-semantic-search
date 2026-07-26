@@ -109,6 +109,7 @@ func (manager *Manager) noteDependencyFailureLocked(err error) {
 	if mode == dependencyHealthy {
 		return
 	}
+	manager.dependencyFailureGeneration++
 	if manager.health.Mode != mode {
 		slog.Warn("dependency.health.degraded", "component", "daemon", "subcomponent", "health", "from", string(manager.health.Mode), "to", string(mode))
 		manager.health.Mode = mode
@@ -160,6 +161,26 @@ func (manager *Manager) noteDependencyHealthy() {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.noteDependencyHealthyLocked()
+}
+
+// dependencyFailureGenerationNow returns the current dependency-failure
+// generation for an asynchronous operation to capture before it starts.
+func (manager *Manager) dependencyFailureGenerationNow() uint64 {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.dependencyFailureGeneration
+}
+
+// noteDependencyHealthyIfGeneration clears health only when no dependency
+// failure was recorded after the caller began its successful operation.
+func (manager *Manager) noteDependencyHealthyIfGeneration(generation uint64) bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.dependencyFailureGeneration != generation {
+		return false
+	}
+	manager.noteDependencyHealthyLocked()
+	return true
 }
 
 // refreshDependencyHealth runs an active liveness probe of the search backend

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
@@ -43,6 +44,71 @@ type collectionLoadProbe func(ctx context.Context) (collectionLoadState, error)
 // a no-op, which is what makes the single recovery attempt safe to run.
 type collectionLoadRequest func(ctx context.Context) error
 
+type collectionLoadOperation func(ctx context.Context) error
+
+type collectionLoadFlight struct {
+	done chan struct{}
+	err  error
+}
+
+// collectionLoadCoordinator shares one in-flight load operation per collection
+// name. A follower may cancel its own wait without cancelling the leader.
+type collectionLoadCoordinator struct {
+	mutex   sync.Mutex
+	flights map[string]*collectionLoadFlight
+}
+
+// Do joins an existing collection load or becomes its leader.
+func (coordinator *collectionLoadCoordinator) Do(
+	ctx context.Context,
+	collectionName string,
+	operation collectionLoadOperation,
+) error {
+	coordinator.mutex.Lock()
+	if flight, found := coordinator.flights[collectionName]; found {
+		coordinator.mutex.Unlock()
+		return waitForCollectionLoadFlight(ctx, collectionName, flight)
+	}
+	if coordinator.flights == nil {
+		coordinator.flights = make(map[string]*collectionLoadFlight)
+	}
+	flight := &collectionLoadFlight{done: make(chan struct{}), err: nil}
+	coordinator.flights[collectionName] = flight
+	coordinator.mutex.Unlock()
+
+	operationErr := operation(ctx)
+
+	coordinator.mutex.Lock()
+	flight.err = operationErr
+	delete(coordinator.flights, collectionName)
+	close(flight.done)
+	coordinator.mutex.Unlock()
+	return operationErr
+}
+
+func waitForCollectionLoadFlight(
+	ctx context.Context,
+	collectionName string,
+	flight *collectionLoadFlight,
+) error {
+	select {
+	case <-ctx.Done():
+		slog.WarnContext(ctx, "semantic.collection_load_shared_wait_cancelled",
+			"component", "semantic",
+			"subcomponent", "load",
+			"collection", collectionName,
+			"err", ctx.Err(),
+		)
+		return fmt.Errorf(
+			"wait for shared collection load %s: %w",
+			collectionName,
+			ctx.Err(),
+		)
+	case <-flight.done:
+		return flight.err
+	}
+}
+
 // waitForCollectionLoad blocks until collectionName reports loaded, or reports a
 // stuck load once the bound elapses twice: once on the initial wait, and once
 // more on a single re-issued load.
@@ -52,9 +118,9 @@ type collectionLoadRequest func(ctx context.Context) error
 // lost or the collection was released underneath the caller, but a query node
 // that cannot materialize the collection will not be fixed by asking again, so
 // looping on it would only convert a bounded failure back into an unbounded
-// wait. The worst case is therefore twice bound, after which the caller gets a
-// typed error naming the collection, how long it waited, and the last progress
-// Milvus reported.
+// wait. The two polls and bounded recovery request take at most three times
+// bound, after which the caller gets a typed error naming the collection, how
+// long it waited, and the last progress Milvus reported.
 func waitForCollectionLoad(
 	ctx context.Context,
 	collectionName string,

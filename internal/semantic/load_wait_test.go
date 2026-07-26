@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -140,6 +141,82 @@ func TestWaitForCollectionLoadHonorsCallerCancellation(t *testing.T) {
 	err := waitForCollectionLoad(ctx, "hybrid_code_chunks_cancelled", time.Minute, stuckProbe, reissue)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitForCollectionLoad error = %v, want context.Canceled", err)
+	}
+}
+
+// Concurrent callers for one collection share the whole load operation. The
+// leader issues the initial load and the bounded recovery, while followers
+// observe the same outcome without multiplying either request.
+func TestCollectionLoadCoordinatorCollapsesConcurrentWaiters(t *testing.T) {
+	const waiterCount = 8
+
+	var coordinator collectionLoadCoordinator
+	var operationCalls atomic.Int32
+	var initialLoads atomic.Int32
+	var recoveryLoads atomic.Int32
+	start := make(chan struct{})
+	release := make(chan struct{})
+	results := make(chan error, waiterCount)
+	var ready sync.WaitGroup
+	ready.Add(waiterCount)
+
+	operation := func(ctx context.Context) error {
+		operationCalls.Add(1)
+		initialLoads.Add(1)
+		<-release
+		reissue := func(context.Context) error {
+			recoveryLoads.Add(1)
+			return nil
+		}
+		return waitForCollectionLoad(
+			ctx,
+			"hybrid_code_chunks_shared",
+			20*time.Millisecond,
+			stuckProbe,
+			reissue,
+		)
+	}
+	for range waiterCount {
+		go func() {
+			ready.Done()
+			<-start
+			results <- coordinator.Do(
+				context.Background(),
+				"hybrid_code_chunks_shared",
+				operation,
+			)
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for operationCalls.Load() == 0 {
+		select {
+		case <-deadline.C:
+			t.Fatal("no collection load operation started")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+
+	for range waiterCount {
+		err := <-results
+		if !errors.Is(err, ErrCollectionNotReady) {
+			t.Fatalf("shared load error = %v, want ErrCollectionNotReady", err)
+		}
+	}
+	if got := operationCalls.Load(); got != 1 {
+		t.Fatalf("collection load operations = %d, want 1 shared flight", got)
+	}
+	if got := initialLoads.Load(); got != 1 {
+		t.Fatalf("initial collection loads = %d, want 1 shared request", got)
+	}
+	if got := recoveryLoads.Load(); got != 1 {
+		t.Fatalf("recovery collection loads = %d, want 1 shared request", got)
 	}
 }
 

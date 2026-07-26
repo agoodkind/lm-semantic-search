@@ -3,11 +3,19 @@ package daemon
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/localvec"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -43,6 +51,176 @@ func healthModeNow(manager *Manager) dependencyMode {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	return manager.health.Mode
+}
+
+func snapshotCollectionFiles(t *testing.T, root string) map[string][]byte {
+	t.Helper()
+
+	snapshot := make(map[string][]byte)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		relativePath, relativeErr := filepath.Rel(root, path)
+		if relativeErr != nil {
+			return relativeErr
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		snapshot[relativePath] = content
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot collection files: %v", err)
+	}
+	return snapshot
+}
+
+// The local backend may repair a torn metadata tail during an ordinary lazy
+// load, so the boot check must skip that backend rather than mutate the
+// collection while claiming to probe it read-only.
+func TestBootSelfCheckLeavesLocalCollectionFilesUnchanged(t *testing.T) {
+	manager, cfg, repoPath := newTestManager(t)
+	codebase := indexedTestCodebase(t, manager, repoPath)
+
+	localStore, err := localvec.New(
+		context.Background(),
+		config.Config{StateRoot: cfg.StateRoot},
+	)
+	if err != nil {
+		t.Fatalf("create local vector store: %v", err)
+	}
+	manager.config.IndexBackend = config.IndexBackendLocal
+	manager.semantic = localStore
+
+	collectionPath := filepath.Join(
+		cfg.StateRoot,
+		"localvec",
+		localStore.CollectionName(codebase.CanonicalPath),
+	)
+	if err := os.MkdirAll(collectionPath, 0o700); err != nil {
+		t.Fatalf("create local collection directory: %v", err)
+	}
+	validRow := `{"id":"chunk_a","relativePath":"a.go","content":"a","contentVectorKey":"ka","vector":[1,0]}` + "\n"
+	tornRow := `{"id":"chunk_b","relativePath":"b.go","conte`
+	if err := os.WriteFile(
+		filepath.Join(collectionPath, "metadata.jsonl"),
+		[]byte(validRow+tornRow),
+		0o600,
+	); err != nil {
+		t.Fatalf("write torn local metadata: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(collectionPath, "index.usearch"),
+		[]byte("invalid index is sufficient because the probe must not open it"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write local index fixture: %v", err)
+	}
+
+	before := snapshotCollectionFiles(t, collectionPath)
+	outcome, err := manager.runBootSelfCheck(context.Background())
+	after := snapshotCollectionFiles(t, collectionPath)
+
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("local collection files changed during boot check:\nbefore=%q\nafter=%q", before, after)
+	}
+	if err != nil {
+		t.Fatalf("runBootSelfCheck returned error for skipped local backend: %v", err)
+	}
+	if outcome != bootSelfCheckSkipped {
+		t.Fatalf("outcome = %q, want %q for local backend", outcome, bootSelfCheckSkipped)
+	}
+}
+
+// The ONNX inference boundary cannot be interrupted safely. The boot check must
+// not enter it, so later daemon searches retain the same runtime.
+func TestBootSelfCheckSkipsUninterruptibleInferenceAndLeavesSearchUsable(
+	t *testing.T,
+) {
+	manager, _, repoPath := newTestManager(t)
+	indexedTestCodebase(t, manager, repoPath)
+	manager.config.IndexBackend = config.IndexBackendMilvus
+	manager.config.EmbeddingProvider = config.EmbeddingProviderONNX
+
+	var runtimeMutex sync.Mutex
+	var bootCalls atomic.Int32
+	bootEntered := make(chan struct{})
+	releaseBoot := make(chan struct{})
+	t.Cleanup(func() {
+		close(releaseBoot)
+	})
+	manager.semantic = &fakeSemantic{
+		search: func(
+			_ context.Context,
+			_ string,
+			query string,
+			_ int32,
+			_ []string,
+			_ string,
+		) ([]model.StoredChunk, error) {
+			runtimeMutex.Lock()
+			defer runtimeMutex.Unlock()
+			if query == bootSelfCheckQuery {
+				bootCalls.Add(1)
+				close(bootEntered)
+				<-releaseBoot
+				return nil, errors.New("released blocked boot inference")
+			}
+			return []model.StoredChunk{{
+				Content:      "later search",
+				RelativePath: "main.go",
+			}}, nil
+		},
+	}
+
+	checkDone := make(chan bootSelfCheckOutcome, 1)
+	go func() {
+		outcome, _ := manager.runBootSelfCheck(context.Background())
+		checkDone <- outcome
+	}()
+
+	select {
+	case outcome := <-checkDone:
+		if outcome != bootSelfCheckSkipped {
+			t.Fatalf("boot outcome = %q, want %q", outcome, bootSelfCheckSkipped)
+		}
+	case <-bootEntered:
+	case <-time.After(time.Second):
+		t.Fatal("boot check neither skipped nor entered the dependency")
+	}
+
+	searchDone := make(chan error, 1)
+	go func() {
+		outcome, searchErr := manager.SearchCode(
+			context.Background(),
+			repoPath,
+			"later query",
+			1,
+			nil,
+		)
+		if searchErr == nil && len(outcome.Results) != 1 {
+			searchErr = errors.New("later search returned no result")
+		}
+		searchDone <- searchErr
+	}()
+
+	select {
+	case searchErr := <-searchDone:
+		if searchErr != nil {
+			t.Fatalf("later daemon search failed: %v", searchErr)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("later daemon search blocked behind boot inference")
+	}
+	if got := bootCalls.Load(); got != 0 {
+		t.Fatalf("boot inference calls = %d, want 0", got)
+	}
 }
 
 // A boot that can still answer a real query reports one passing line and clears
@@ -194,6 +372,102 @@ func TestStartBootSelfCheckDoesNotBlockStartup(t *testing.T) {
 	}
 	// The hung probe is still parked here, which is the point: startup already
 	// returned and the daemon would be serving.
+}
+
+// A failed remote check keeps retrying on its bounded schedule. A later pass
+// clears readiness without waiting for a job, file change, or user query.
+func TestBootSelfCheckRetriesFailureUntilReadinessRecovers(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	indexedTestCodebase(t, manager, repoPath)
+	manager.bootSelfCheckDelay = time.Millisecond
+
+	var attempts atomic.Int32
+	manager.semantic = &fakeSemantic{
+		search: func(
+			context.Context,
+			string,
+			string,
+			int32,
+			[]string,
+			string,
+		) ([]model.StoredChunk, error) {
+			if attempts.Add(1) == 1 {
+				return nil, adapterr.NewEmbedderUnreachable(
+					errors.New("embedding endpoint is unavailable"),
+				)
+			}
+			return []model.StoredChunk{{Content: "healthy"}}, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.StartBootSelfCheck(ctx)
+
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if attempts.Load() >= 2 && healthModeNow(manager) == dependencyHealthy {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf(
+				"boot attempts = %d and health mode = %q, want a retry and healthy readiness",
+				attempts.Load(),
+				healthModeNow(manager),
+			)
+		case <-ticker.C:
+		}
+	}
+}
+
+// A boot query that started before a later dependency failure is stale evidence.
+// Its success must leave the newer failure visible.
+func TestBootSelfCheckSuccessDoesNotClearNewerFailure(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	indexedTestCodebase(t, manager, repoPath)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	manager.semantic = &fakeSemantic{
+		search: func(
+			context.Context,
+			string,
+			string,
+			int32,
+			[]string,
+			string,
+		) ([]model.StoredChunk, error) {
+			close(entered)
+			<-release
+			return []model.StoredChunk{{Content: "stale success"}}, nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.runBootSelfCheck(context.Background())
+		done <- err
+	}()
+	<-entered
+	manager.noteDependencyFailure(
+		adapterr.NewEmbedderBusy(errors.New("embedding endpoint remained at capacity")),
+	)
+	close(release)
+
+	if err := <-done; err != nil {
+		t.Fatalf("runBootSelfCheck returned error: %v", err)
+	}
+	if got := healthModeNow(manager); got != dependencyEmbedderBusy {
+		t.Fatalf(
+			"health mode = %q after stale boot success, want newer %q failure preserved",
+			got,
+			dependencyEmbedderBusy,
+		)
+	}
 }
 
 // The target is the most recently completed index, so the probe hits the data

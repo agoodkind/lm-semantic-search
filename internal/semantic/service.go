@@ -84,6 +84,9 @@ type Service struct {
 	reconnectCancel context.CancelFunc
 	reconnectDone   chan struct{}
 	closeOnce       sync.Once
+	// collectionLoads collapses concurrent initial load, wait, and recovery work
+	// for the same collection name into one shared flight.
+	collectionLoads collectionLoadCoordinator
 	// ensuredConvColumns maps a conversation collection name to its
 	// *conversationScalarMigration, gating the one-time scalar-column migration to
 	// once per collection per process. See ensureConversationScalarColumnsOnce.
@@ -105,14 +108,18 @@ type Service struct {
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
 		return &Service{
-			cfg:                     cfg,
-			embedder:                nil,
-			milvus:                  nil,
-			insertRows:              nil,
-			available:               atomic.Bool{},
-			reconnectCancel:         nil,
-			reconnectDone:           nil,
-			closeOnce:               sync.Once{},
+			cfg:             cfg,
+			embedder:        nil,
+			milvus:          nil,
+			insertRows:      nil,
+			available:       atomic.Bool{},
+			reconnectCancel: nil,
+			reconnectDone:   nil,
+			closeOnce:       sync.Once{},
+			collectionLoads: collectionLoadCoordinator{
+				mutex:   sync.Mutex{},
+				flights: nil,
+			},
 			ensuredConvColumns:      sync.Map{},
 			ensuredSplitPartColumns: sync.Map{},
 			ensuredMmapEnabled:      sync.Map{},
@@ -127,14 +134,18 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	service := &Service{
-		cfg:                     cfg,
-		embedder:                embedder,
-		milvus:                  nil,
-		insertRows:              nil,
-		available:               atomic.Bool{},
-		reconnectCancel:         nil,
-		reconnectDone:           nil,
-		closeOnce:               sync.Once{},
+		cfg:             cfg,
+		embedder:        embedder,
+		milvus:          nil,
+		insertRows:      nil,
+		available:       atomic.Bool{},
+		reconnectCancel: nil,
+		reconnectDone:   nil,
+		closeOnce:       sync.Once{},
+		collectionLoads: collectionLoadCoordinator{
+			mutex:   sync.Mutex{},
+			flights: nil,
+		},
 		ensuredConvColumns:      sync.Map{},
 		ensuredSplitPartColumns: sync.Map{},
 		ensuredMmapEnabled:      sync.Map{},

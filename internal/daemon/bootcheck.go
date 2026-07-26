@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -19,9 +21,9 @@ const (
 	// startup, while still surfacing a bad restore within seconds rather than at
 	// the first user query hours later.
 	defaultBootSelfCheckDelay = 3 * time.Second
-	// bootSelfCheckTimeout bounds the whole check. A store or embedder that never
-	// answers ends the check as a failure instead of leaving a goroutine parked on
-	// it for the life of the process.
+	// bootSelfCheckTimeout bounds a remote-backend check. Local stores are
+	// skipped because reads may perform crash recovery, and ONNX inference is
+	// skipped because its native call cannot guarantee context cancellation.
 	bootSelfCheckTimeout = 20 * time.Second
 	// bootSelfCheckQuery is the fixed probe text. Its wording is irrelevant to the
 	// verdict: a nearest-neighbour search answers for any text, so the check reads
@@ -41,12 +43,16 @@ const (
 	bootSelfCheckPassed  bootSelfCheckOutcome = "passed"
 	bootSelfCheckSkipped bootSelfCheckOutcome = "skipped"
 	bootSelfCheckFailed  bootSelfCheckOutcome = "failed"
+	// A superseded pass completed after newer dependency-failure evidence. It
+	// leaves readiness degraded and schedules another attempt.
+	bootSelfCheckSuperseded bootSelfCheckOutcome = "superseded"
 )
 
-// StartBootSelfCheck launches the one-shot boot self-check and returns
+// StartBootSelfCheck launches the boot self-check and returns
 // immediately, so startup never waits on it and the daemon serves regardless of
-// the outcome. The check runs once per process, after a short delay, under its
-// own deadline, and cancels with the runtime context at shutdown.
+// the outcome. Remote checks run under their own deadline and retry after a
+// failure or superseded pass until one passes, skips, or the runtime context
+// ends.
 func (manager *Manager) StartBootSelfCheck(ctx context.Context) {
 	delay := manager.bootSelfCheckDelay
 	go func() {
@@ -60,38 +66,60 @@ func (manager *Manager) StartBootSelfCheck(ctx context.Context) {
 			}
 		}()
 
-		timer := time.NewTimer(delay)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
+		if !waitForBootSelfCheck(ctx, delay) {
 			return
-		case <-timer.C:
 		}
 
 		checkCtx := correlation.WithContext(ctx, correlation.New("").WithIdentityAttributes(
 			correlation.IdentityAttribute{Key: "origin", Value: "boot-selfcheck"},
 		))
-		boundedCtx, cancel := context.WithTimeout(checkCtx, bootSelfCheckTimeout)
-		defer cancel()
-		_, _ = manager.runBootSelfCheck(boundedCtx)
+		for {
+			boundedCtx, cancel := context.WithTimeout(checkCtx, bootSelfCheckTimeout)
+			outcome, _ := manager.runBootSelfCheck(boundedCtx)
+			cancel()
+			if outcome == bootSelfCheckPassed || outcome == bootSelfCheckSkipped {
+				return
+			}
+			if !waitForBootSelfCheck(ctx, delay) {
+				return
+			}
+		}
 	}()
 }
 
-// runBootSelfCheck proves the search path end to end once, by running a real
-// one-row query against a collection the registry says is indexed. That single
-// call embeds the query text through the configured endpoint and reads the
-// collection back out of the store, so it catches a restore that left the
-// daemon connected to a store whose data can no longer answer a query, which a
-// component-by-component liveness ping cannot see.
+func waitForBootSelfCheck(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// runBootSelfCheck proves the remote search path end to end once, by running a
+// real one-row query against a collection the registry says is indexed. It
+// skips the local backend and every ONNX embedder because their native inference
+// boundary cannot guarantee cancellation and local collection loading may
+// perform crash recovery.
 //
-// It is read-only and idempotent: a search writes nothing, deletes nothing, and
-// triggers no indexing, so it is safe on every boot.
+// The remote query is read-only and idempotent. It deletes nothing and triggers
+// no indexing.
 //
 // The outcome feeds the same shared-dependency health record that job and search
 // outcomes feed, so a failure raises the existing status banner rather than
-// introducing a second notion of health, and a pass clears a boot-time banner
-// the way a real user query would.
+// introducing a second notion of health. A pass clears a boot-time banner only
+// when no newer dependency failure arrived while the query was in flight.
 func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutcome, error) {
+	if reason := manager.bootSelfCheckSkipReason(); reason != "" {
+		slog.InfoContext(ctx, "daemon.selfcheck.skipped",
+			"component", "daemon",
+			"subcomponent", "selfcheck",
+			"reason", reason,
+		)
+		return bootSelfCheckSkipped, nil
+	}
 	if manager.semantic == nil {
 		slog.InfoContext(ctx, "daemon.selfcheck.skipped",
 			"component", "daemon",
@@ -121,6 +149,7 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 		return bootSelfCheckSkipped, nil
 	}
 
+	failureGeneration := manager.dependencyFailureGenerationNow()
 	startedAt := clock.Now()
 	_, err := manager.semantic.Search(ctx, codebase.CanonicalPath, bootSelfCheckQuery, bootSelfCheckLimit, nil, "")
 	durationMS := clock.Now().Sub(startedAt).Milliseconds()
@@ -138,10 +167,16 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 		return bootSelfCheckFailed, checkErr
 	}
 
-	// The query embedded through the configured endpoint and the store answered
-	// the search, which is the whole pipeline, so this clears any mode the boot
-	// dial or a prior outage left on the record.
-	manager.noteDependencyHealthy()
+	if !manager.noteDependencyHealthyIfGeneration(failureGeneration) {
+		slog.WarnContext(ctx, "daemon.selfcheck.superseded",
+			"component", "daemon",
+			"subcomponent", "selfcheck",
+			"codebase_id", codebase.ID,
+			"path", codebase.CanonicalPath,
+			"duration_ms", durationMS,
+		)
+		return bootSelfCheckSuperseded, nil
+	}
 	slog.InfoContext(ctx, "daemon.selfcheck.passed",
 		"component", "daemon",
 		"subcomponent", "selfcheck",
@@ -150,6 +185,19 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 		"duration_ms", durationMS,
 	)
 	return bootSelfCheckPassed, nil
+}
+
+func (manager *Manager) bootSelfCheckSkipReason() string {
+	if manager.config.IndexBackend == config.IndexBackendLocal {
+		return "local backend search may perform crash recovery"
+	}
+	if strings.EqualFold(
+		strings.TrimSpace(manager.config.EmbeddingProvider),
+		config.EmbeddingProviderONNX,
+	) {
+		return "ONNX inference cannot guarantee cancellation"
+	}
+	return ""
 }
 
 // bootSelfCheckTarget picks the codebase whose collection the check queries: the
