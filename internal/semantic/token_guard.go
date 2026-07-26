@@ -68,8 +68,10 @@ func SplitChunksToByteBudget(chunks []model.StoredChunk, byteBudget int) ([]mode
 // that encodes its byte offset within the original parent content plus one, so
 // identical pieces of repeated content never share a primary key. A child of an
 // already-split chunk keeps offsets relative to the original parent by adding the
-// parent child's base offset, so nested re-splits during retry stay unique. The
-// parent relativePath and line range are preserved on every child.
+// parent child's base offset, so nested re-splits during retry stay unique. Every
+// child is marked as having a recorded split position so a later read distinguishes
+// it from a legacy row written before the position was stored. The parent
+// relativePath and line range are preserved on every child.
 func splitChunkAtBudget(chunk model.StoredChunk, budget int) []model.StoredChunk {
 	baseOffset := 0
 	if chunk.SplitPart > 0 {
@@ -81,6 +83,7 @@ func splitChunkAtBudget(chunk model.StoredChunk, budget int) []model.StoredChunk
 		child := chunk
 		child.Content = pieces[index]
 		child.SplitPart = safeInt32FromInt(baseOffset + offsets[index] + 1)
+		child.SplitPartRecorded = true
 		out = append(out, child)
 	}
 	return out
@@ -134,11 +137,4 @@ func splitBytesWithOffsets(value string, maxBytes int) ([]string, []int) {
 		start = end
 	}
 	return pieces, offsets
-}
-
-// splitBytes cuts value into sub-strings of at most maxBytes bytes, each ending
-// on a UTF-8 codepoint boundary. A non-positive maxBytes returns value unsplit.
-func splitBytes(value string, maxBytes int) []string {
-	pieces, _ := splitBytesWithOffsets(value, maxBytes)
-	return pieces
 }

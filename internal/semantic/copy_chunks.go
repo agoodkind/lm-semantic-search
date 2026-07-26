@@ -2,6 +2,8 @@ package semantic
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 
@@ -40,20 +42,18 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 		return 0, ErrCollectionMissing
 	}
 
-	chunks, vectors, err := service.fetchChunksForPath(ctx, collectionName, srcRelativePath)
+	source, err := service.fetchChunksForPath(ctx, collectionName, srcRelativePath)
 	if err != nil {
 		return 0, err
 	}
-	if len(chunks) == 0 {
+	if len(source.chunks) == 0 {
 		return 0, nil
 	}
 
-	rewritten := make([]model.StoredChunk, 0, len(chunks))
-	for _, chunk := range chunks {
-		chunkCopy := chunk
-		chunkCopy.RelativePath = dstRelativePath
-		rewritten = append(rewritten, chunkCopy)
-	}
+	rewritten, destinationIDs, splitPartsRecorded := rewriteCopiedRows(
+		source,
+		dstRelativePath,
+	)
 
 	if _, err := service.deleteByRelativePaths(
 		ctx,
@@ -64,17 +64,97 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 	}
 	// CopyChunks rewrites existing rows within one known collection and has no
 	// item source to ask, so it classifies the column set from that collection.
-	if err := service.insertBatch(ctx, collectionName, rewritten, vectors, storeColumnSetForCollection(collectionName)); err != nil {
+	if err := service.insertBatchWithIDs(
+		ctx,
+		collectionName,
+		rewritten,
+		destinationIDs,
+		source.vectors,
+		splitPartsRecorded,
+		storeColumnSetForCollection(collectionName),
+	); err != nil {
 		return 0, err
 	}
 	slog.InfoContext(ctx, "semantic.copy_chunks", "collection", collectionName, "src", srcRelativePath, "dst", dstRelativePath, "rows", len(rewritten))
 	return len(rewritten), nil
 }
 
+func copiedChunkID(sourceID string, dstRelativePath string) string {
+	sum := sha256.Sum256([]byte(dstRelativePath + ":" + sourceID))
+	return "chunk_" + hex.EncodeToString(sum[:])[:16]
+}
+
+type copiedRows struct {
+	chunks             []model.StoredChunk
+	ids                []string
+	vectors            [][]float32
+	splitPartsRecorded []bool
+}
+
+type copiedRowColumns struct {
+	id            column.Column
+	content       column.Column
+	startLine     column.Column
+	endLine       column.Column
+	fileExtension column.Column
+	metadata      column.Column
+	vector        column.Column
+	splitPart     column.Column
+}
+
+type copiedRow struct {
+	chunk             model.StoredChunk
+	id                string
+	vector            []float32
+	splitPartRecorded bool
+}
+
+func noCopiedRows() copiedRows {
+	return copiedRows{
+		chunks:             nil,
+		ids:                nil,
+		vectors:            nil,
+		splitPartsRecorded: nil,
+	}
+}
+
+func rewriteCopiedRows(
+	source copiedRows,
+	dstRelativePath string,
+) ([]model.StoredChunk, []string, []bool) {
+	rewritten := make([]model.StoredChunk, 0, len(source.chunks))
+	destinationIDs := make([]string, 0, len(source.chunks))
+	recorded := make([]bool, 0, len(source.chunks))
+	for index, chunk := range source.chunks {
+		splitPartRecorded := source.splitPartsRecorded[index]
+		chunkCopy := chunk
+		chunkCopy.RelativePath = dstRelativePath
+		chunkCopy.SplitPartRecorded = splitPartRecorded
+		rewritten = append(rewritten, chunkCopy)
+		recorded = append(recorded, splitPartRecorded)
+		if splitPartRecorded {
+			destinationIDs = append(destinationIDs, generateID(chunkCopy, index))
+			continue
+		}
+		destinationIDs = append(
+			destinationIDs,
+			copiedChunkID(source.ids[index], dstRelativePath),
+		)
+	}
+	return rewritten, destinationIDs, recorded
+}
+
 // fetchChunksForPath retrieves every chunk row for relativePath including
 // the dense vector so CopyChunks can reinsert under a new key without
 // re-embedding the content.
-func (service *Service) fetchChunksForPath(ctx context.Context, collectionName string, relativePath string) ([]model.StoredChunk, [][]float32, error) {
+func (service *Service) fetchChunksForPath(
+	ctx context.Context,
+	collectionName string,
+	relativePath string,
+) (copiedRows, error) {
+	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+		return noCopiedRows(), err
+	}
 	expression := relativePathExpression(relativePath)
 	outputFields := []string{
 		idFieldName,
@@ -85,59 +165,125 @@ func (service *Service) fetchChunksForPath(ctx context.Context, collectionName s
 		fileExtensionFieldName,
 		metadataFieldName,
 		denseVectorFieldName,
+		splitPartFieldName,
 	}
 	queryOption := milvusclient.NewQueryOption(collectionName).WithFilter(expression).WithOutputFields(outputFields...)
 	resultSet, err := service.milvus.Query(ctx, queryOption)
 	if err != nil {
 		slog.ErrorContext(ctx, "query chunks for copy failed", "collection", collectionName, "path", relativePath, "err", err)
-		return nil, nil, fmt.Errorf("query chunks for %s in %s: %w", relativePath, collectionName, err)
+		return noCopiedRows(), fmt.Errorf(
+			"query chunks for %s in %s: %w",
+			relativePath,
+			collectionName,
+			err,
+		)
 	}
 	if resultSet.ResultCount == 0 {
-		return nil, nil, nil
+		return noCopiedRows(), nil
 	}
 
-	contentColumn := resultSet.GetColumn(contentFieldName)
-	startLineColumn := resultSet.GetColumn(startLineFieldName)
-	endLineColumn := resultSet.GetColumn(endLineFieldName)
-	fileExtensionColumn := resultSet.GetColumn(fileExtensionFieldName)
-	metadataColumn := resultSet.GetColumn(metadataFieldName)
-	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
-	if contentColumn == nil || startLineColumn == nil || endLineColumn == nil || fileExtensionColumn == nil || vectorColumn == nil {
-		return nil, nil, ErrSearchResultIncomplete
+	columns, err := copiedColumns(resultSet)
+	if err != nil {
+		return noCopiedRows(), err
 	}
 
 	chunks := make([]model.StoredChunk, 0, resultSet.ResultCount)
+	ids := make([]string, 0, resultSet.ResultCount)
 	vectors := make([][]float32, 0, resultSet.ResultCount)
+	splitPartsRecorded := make([]bool, 0, resultSet.ResultCount)
 	for rowIndex := range resultSet.ResultCount {
-		contentValue, contentErr := contentColumn.GetAsString(rowIndex)
-		if contentErr != nil {
-			return nil, nil, fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
+		row, rowErr := copiedRowAt(
+			ctx,
+			collectionName,
+			relativePath,
+			columns,
+			rowIndex,
+		)
+		if rowErr != nil {
+			return noCopiedRows(), rowErr
 		}
-		startLineValue, startLineErr := startLineColumn.GetAsInt64(rowIndex)
-		if startLineErr != nil {
-			return nil, nil, fmt.Errorf("read start_line column at %d: %w", rowIndex, startLineErr)
-		}
-		endLineValue, endLineErr := endLineColumn.GetAsInt64(rowIndex)
-		if endLineErr != nil {
-			return nil, nil, fmt.Errorf("read end_line column at %d: %w", rowIndex, endLineErr)
-		}
-		fileExtensionValue, fileExtensionErr := fileExtensionColumn.GetAsString(rowIndex)
-		if fileExtensionErr != nil {
-			return nil, nil, fmt.Errorf("read file_extension column at %d: %w", rowIndex, fileExtensionErr)
-		}
-		languageValue := ""
-		if metadataColumn != nil {
-			metadataValue, metadataErr := metadataColumn.GetAsString(rowIndex)
-			if metadataErr == nil {
-				languageValue = decodeMetadataLanguage(metadataValue)
-			}
-		}
-		vector, vectorErr := vectorAt(vectorColumn, rowIndex)
-		if vectorErr != nil {
-			return nil, nil, fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
-		}
+		chunks = append(chunks, row.chunk)
+		ids = append(ids, row.id)
+		vectors = append(vectors, row.vector)
+		splitPartsRecorded = append(splitPartsRecorded, row.splitPartRecorded)
+	}
+	return copiedRows{
+		chunks:             chunks,
+		ids:                ids,
+		vectors:            vectors,
+		splitPartsRecorded: splitPartsRecorded,
+	}, nil
+}
 
-		chunks = append(chunks, model.StoredChunk{
+func copiedColumns(resultSet milvusclient.ResultSet) (copiedRowColumns, error) {
+	columns := copiedRowColumns{
+		id:            resultSet.GetColumn(idFieldName),
+		content:       resultSet.GetColumn(contentFieldName),
+		startLine:     resultSet.GetColumn(startLineFieldName),
+		endLine:       resultSet.GetColumn(endLineFieldName),
+		fileExtension: resultSet.GetColumn(fileExtensionFieldName),
+		metadata:      resultSet.GetColumn(metadataFieldName),
+		vector:        resultSet.GetColumn(denseVectorFieldName),
+		splitPart:     resultSet.GetColumn(splitPartFieldName),
+	}
+	if columns.id == nil || columns.content == nil || columns.startLine == nil ||
+		columns.endLine == nil || columns.fileExtension == nil ||
+		columns.vector == nil {
+		return copiedRowColumns{}, ErrSearchResultIncomplete
+	}
+	return columns, nil
+}
+
+func copiedRowAt(
+	ctx context.Context,
+	collectionName string,
+	relativePath string,
+	columns copiedRowColumns,
+	rowIndex int,
+) (copiedRow, error) {
+	idValue, err := columns.id.GetAsString(rowIndex)
+	if err != nil {
+		slog.ErrorContext(ctx, "read id column for copy failed", "collection", collectionName, "row", rowIndex, "err", err)
+		return copiedRow{}, fmt.Errorf("read id column at %d: %w", rowIndex, err)
+	}
+	contentValue, err := columns.content.GetAsString(rowIndex)
+	if err != nil {
+		slog.ErrorContext(ctx, "read content column for copy failed", "row", rowIndex, "err", err)
+		return copiedRow{}, fmt.Errorf("read content column at %d: %w", rowIndex, err)
+	}
+	startLineValue, err := columns.startLine.GetAsInt64(rowIndex)
+	if err != nil {
+		slog.ErrorContext(ctx, "read start line column for copy failed", "row", rowIndex, "err", err)
+		return copiedRow{}, fmt.Errorf("read start_line column at %d: %w", rowIndex, err)
+	}
+	endLineValue, err := columns.endLine.GetAsInt64(rowIndex)
+	if err != nil {
+		slog.ErrorContext(ctx, "read end line column for copy failed", "row", rowIndex, "err", err)
+		return copiedRow{}, fmt.Errorf("read end_line column at %d: %w", rowIndex, err)
+	}
+	fileExtensionValue, err := columns.fileExtension.GetAsString(rowIndex)
+	if err != nil {
+		slog.ErrorContext(ctx, "read file extension column for copy failed", "row", rowIndex, "err", err)
+		return copiedRow{}, fmt.Errorf("read file_extension column at %d: %w", rowIndex, err)
+	}
+	languageValue := ""
+	if columns.metadata != nil {
+		metadataValue, metadataErr := columns.metadata.GetAsString(rowIndex)
+		if metadataErr == nil {
+			languageValue = decodeMetadataLanguage(metadataValue)
+		}
+	}
+	vector, err := vectorAt(columns.vector, rowIndex)
+	if err != nil {
+		slog.ErrorContext(ctx, "read vector column for copy failed", "row", rowIndex, "err", err)
+		return copiedRow{}, fmt.Errorf("read vector column at %d: %w", rowIndex, err)
+	}
+	splitPartValue, splitPartRecorded, err := splitPartAt(columns.splitPart, rowIndex)
+	if err != nil {
+		return copiedRow{}, err
+	}
+	return copiedRow{
+		chunk: model.StoredChunk{
 			Content:              contentValue,
 			RelativePath:         relativePath,
 			StartLine:            safeInt32FromInt64(startLineValue),
@@ -151,12 +297,34 @@ func (service *Service) fetchChunksForPath(ctx context.Context, collectionName s
 			TimestampUnix:        0,
 			WorkspaceRoot:        "",
 			Archived:             false,
-			SplitPart:            0,
+			SplitPart:            splitPartValue,
+			SplitPartRecorded:    splitPartRecorded,
 			Score:                0,
-		})
-		vectors = append(vectors, vector)
+		},
+		id:                idValue,
+		vector:            vector,
+		splitPartRecorded: splitPartRecorded,
+	}, nil
+}
+
+func splitPartAt(splitPartColumn column.Column, rowIndex int) (int32, bool, error) {
+	if splitPartColumn == nil {
+		return 0, false, nil
 	}
-	return chunks, vectors, nil
+	isNull, nullErr := splitPartColumn.IsNull(rowIndex)
+	if nullErr != nil {
+		slog.Error("read split part null state failed", "row", rowIndex, "err", nullErr)
+		return 0, false, fmt.Errorf("read split part null state at %d: %w", rowIndex, nullErr)
+	}
+	if isNull {
+		return 0, false, nil
+	}
+	value, valueErr := splitPartColumn.GetAsInt64(rowIndex)
+	if valueErr != nil {
+		slog.Error("read split part column failed", "row", rowIndex, "err", valueErr)
+		return 0, false, fmt.Errorf("read split part column at %d: %w", rowIndex, valueErr)
+	}
+	return safeInt32FromInt64(value), true, nil
 }
 
 // vectorAt extracts one float-vector row from a Milvus result column. The

@@ -102,6 +102,24 @@ func conversationScalarFields() []*entity.Field {
 	}
 }
 
+func splitPartField() *entity.Field {
+	return entity.NewField().
+		WithName(splitPartFieldName).
+		WithDataType(entity.FieldTypeInt64).
+		WithNullable(true)
+}
+
+func splitPartFieldsToAdd(schema *entity.Schema) []*entity.Field {
+	if schema != nil {
+		for _, field := range schema.Fields {
+			if field.Name == splitPartFieldName {
+				return nil
+			}
+		}
+	}
+	return []*entity.Field{splitPartField()}
+}
+
 func (service *Service) createCollection(ctx context.Context, collectionName string, dimension int) error {
 	schema := entity.NewSchema().
 		WithField(entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(512).WithIsPrimaryKey(true)).
@@ -111,6 +129,7 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		WithField(entity.NewField().WithName(endLineFieldName).WithDataType(entity.FieldTypeInt64)).
 		WithField(entity.NewField().WithName(fileExtensionFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(32)).
 		WithField(entity.NewField().WithName(metadataFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
+		WithField(splitPartField()).
 		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)))
 
 	if isConversationCollection(collectionName) {
@@ -155,6 +174,79 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		return service.loadCollection(ctx, collectionName)
 	}
 	return nil
+}
+
+type splitPartMigration struct {
+	once sync.Once
+	err  error
+}
+
+func (service *Service) addMissingSplitPartColumn(ctx context.Context, collectionName string) error {
+	collection, err := service.milvus.DescribeCollection(
+		ctx,
+		milvusclient.NewDescribeCollectionOption(collectionName),
+	)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"describe collection for split part migration failed",
+			"collection",
+			collectionName,
+			"err",
+			err,
+		)
+		return fmt.Errorf("describe collection %s for split part migration: %w", collectionName, err)
+	}
+	fields := splitPartFieldsToAdd(collection.Schema)
+	for _, field := range fields {
+		if err := service.milvus.AddCollectionField(
+			ctx,
+			milvusclient.NewAddCollectionFieldOption(collectionName, field),
+		); err != nil {
+			slog.ErrorContext(
+				ctx,
+				"add split part column failed",
+				"collection",
+				collectionName,
+				"field",
+				field.Name,
+				"err",
+				err,
+			)
+			return fmt.Errorf("add split part column to %s: %w", collectionName, err)
+		}
+	}
+	if len(fields) > 0 {
+		slog.InfoContext(ctx, "semantic.split_part_column_added", "collection", collectionName)
+	}
+	return nil
+}
+
+func (service *Service) ensureSplitPartColumnOnce(
+	ctx context.Context,
+	collectionName string,
+) error {
+	loaded, _ := service.ensuredSplitPartColumns.LoadOrStore(
+		collectionName,
+		&splitPartMigration{once: sync.Once{}, err: nil},
+	)
+	migration, ok := loaded.(*splitPartMigration)
+	if !ok {
+		typeErr := fmt.Errorf(
+			"split part migration guard for %s has unexpected type %T",
+			collectionName,
+			loaded,
+		)
+		slog.ErrorContext(ctx, "split part migration guard invalid", "err", typeErr)
+		return typeErr
+	}
+	migration.once.Do(func() {
+		migration.err = service.addMissingSplitPartColumn(ctx, collectionName)
+		if migration.err != nil {
+			service.ensuredSplitPartColumns.CompareAndDelete(collectionName, loaded)
+		}
+	})
+	return migration.err
 }
 
 // ensureConversationScalarColumns adds any conversation scalar column the

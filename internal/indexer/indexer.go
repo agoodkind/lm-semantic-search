@@ -278,6 +278,7 @@ func (runner *Runner) processFile(ctx context.Context, resolver *indexability.Re
 			WorkspaceRoot:        "",
 			Archived:             false,
 			SplitPart:            0,
+			SplitPartRecorded:    true,
 			Score:                0,
 		})
 	}

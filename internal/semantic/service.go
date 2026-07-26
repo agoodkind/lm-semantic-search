@@ -41,6 +41,7 @@ const (
 	fileExtensionFieldName  = "fileExtension"
 	metadataFieldName       = "metadata"
 	idFieldName             = "id"
+	splitPartFieldName      = "splitPart"
 	countOutputField        = "count(*)"
 )
 
@@ -81,6 +82,9 @@ type Service struct {
 	// *conversationScalarMigration, gating the one-time scalar-column migration to
 	// once per collection per process. See ensureConversationScalarColumnsOnce.
 	ensuredConvColumns sync.Map
+	// ensuredSplitPartColumns gates the nullable splitPart schema migration once
+	// per collection per process.
+	ensuredSplitPartColumns sync.Map
 	// ensuredMmapEnabled records the collections this process has confirmed
 	// mmap-migrated, so the daemon's periodic mmap sweep skips them with no RPC.
 	// See ensureMmapEnabledOnce.
@@ -95,16 +99,17 @@ type Service struct {
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
 		return &Service{
-			cfg:                cfg,
-			embedder:           nil,
-			milvus:             nil,
-			available:          atomic.Bool{},
-			reconnectCancel:    nil,
-			reconnectDone:      nil,
-			closeOnce:          sync.Once{},
-			ensuredConvColumns: sync.Map{},
-			ensuredMmapEnabled: sync.Map{},
-			ensuredBackfill:    sync.Map{},
+			cfg:                     cfg,
+			embedder:                nil,
+			milvus:                  nil,
+			available:               atomic.Bool{},
+			reconnectCancel:         nil,
+			reconnectDone:           nil,
+			closeOnce:               sync.Once{},
+			ensuredConvColumns:      sync.Map{},
+			ensuredSplitPartColumns: sync.Map{},
+			ensuredMmapEnabled:      sync.Map{},
+			ensuredBackfill:         sync.Map{},
 		}, nil
 	}
 
@@ -115,16 +120,17 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	service := &Service{
-		cfg:                cfg,
-		embedder:           embedder,
-		milvus:             nil,
-		available:          atomic.Bool{},
-		reconnectCancel:    nil,
-		reconnectDone:      nil,
-		closeOnce:          sync.Once{},
-		ensuredConvColumns: sync.Map{},
-		ensuredMmapEnabled: sync.Map{},
-		ensuredBackfill:    sync.Map{},
+		cfg:                     cfg,
+		embedder:                embedder,
+		milvus:                  nil,
+		available:               atomic.Bool{},
+		reconnectCancel:         nil,
+		reconnectDone:           nil,
+		closeOnce:               sync.Once{},
+		ensuredConvColumns:      sync.Map{},
+		ensuredSplitPartColumns: sync.Map{},
+		ensuredMmapEnabled:      sync.Map{},
+		ensuredBackfill:         sync.Map{},
 	}
 
 	client, err := service.dialMilvus(ctx)
@@ -400,6 +406,9 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 // which is lexical and never embeds. The caller confirms the collection exists;
 // offset zero is an ordinary first-page search.
 func (service *Service) searchCollectionWithVector(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, limit int, offset int, filterExpr string) ([]model.StoredChunk, error) {
+	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+		return nil, err
+	}
 	searchLimit := limit
 	if searchLimit <= 0 {
 		searchLimit = 10
@@ -412,6 +421,7 @@ func (service *Service) searchCollectionWithVector(ctx context.Context, collecti
 		endLineFieldName,
 		fileExtensionFieldName,
 		metadataFieldName,
+		splitPartFieldName,
 	}
 	if isConversationCollection(collectionName) {
 		// Conversation collections carry workspaceRoot as a native scalar column.
@@ -588,81 +598,6 @@ func (service *Service) dropIfExists(ctx context.Context, collectionName string)
 	return nil
 }
 
-func (service *Service) insertBatch(ctx context.Context, collectionName string, chunks []model.StoredChunk, vectors [][]float32, columnSet StoreColumnSet) (err error) {
-	ctx, done := spans.Open(ctx, "semantic.insertBatch")
-	defer done(&err)
-
-	insertOption := milvusclient.NewColumnBasedInsertOption(collectionName)
-	conversationCollection := columnSet.ConversationScalars()
-	if conversationCollection {
-		// A pre-existing conv_chunks_* collection created before the scalar columns
-		// existed has no conversationId/provider/etc. fields, so an insert that
-		// populates them fails with unknown fields. Run the once-guarded migration
-		// first so the columns exist before this batch references them.
-		if err := service.ensureConversationScalarColumnsOnce(ctx, collectionName); err != nil {
-			return err
-		}
-	}
-
-	ids := make([]string, 0, len(chunks))
-	contents := make([]string, 0, len(chunks))
-	relativePaths := make([]string, 0, len(chunks))
-	startLines := make([]int64, 0, len(chunks))
-	endLines := make([]int64, 0, len(chunks))
-	fileExtensions := make([]string, 0, len(chunks))
-	metadataValues := make([]string, 0, len(chunks))
-	scalars := newConversationScalarColumns(conversationCollection, len(chunks))
-
-	sanitizedCount := 0
-	for index, chunk := range chunks {
-		content, contentChanged := sanitizeUTF8(chunk.Content)
-		relativePath, pathChanged := sanitizeUTF8(chunk.RelativePath)
-		fileExtension, extChanged := sanitizeUTF8(chunk.FileExtension)
-		metadataValue, metaChanged := sanitizeUTF8(encodeMetadata(chunk))
-		if contentChanged || pathChanged || extChanged || metaChanged {
-			sanitizedCount++
-			slog.WarnContext(ctx, "semantic.sanitized_invalid_utf8", "relative_path", chunk.RelativePath, "start_line", chunk.StartLine, "end_line", chunk.EndLine, "content_changed", contentChanged, "path_changed", pathChanged, "extension_changed", extChanged, "metadata_changed", metaChanged)
-		}
-		ids = append(ids, generateID(chunk, index))
-		contents = append(contents, content)
-		relativePaths = append(relativePaths, relativePath)
-		startLines = append(startLines, int64(chunk.StartLine))
-		endLines = append(endLines, int64(chunk.EndLine))
-		fileExtensions = append(fileExtensions, fileExtension)
-		metadataValues = append(metadataValues, metadataValue)
-		scalars.append(chunk)
-	}
-	if sanitizedCount > 0 {
-		slog.WarnContext(ctx, "semantic.insertBatch sanitized chunks before Milvus marshal", "collection", collectionName, "sanitized", sanitizedCount, "batch_size", len(chunks))
-	}
-
-	insertOption = insertOption.
-		WithVarcharColumn(idFieldName, ids).
-		WithVarcharColumn(contentFieldName, contents).
-		WithVarcharColumn(relativePathFieldName, relativePaths).
-		WithInt64Column(startLineFieldName, startLines).
-		WithInt64Column(endLineFieldName, endLines).
-		WithVarcharColumn(fileExtensionFieldName, fileExtensions).
-		WithVarcharColumn(metadataFieldName, metadataValues).
-		WithFloatVectorColumn(denseVectorFieldName, len(vectors[0]), vectors)
-	if conversationCollection {
-		insertOption = insertOption.
-			WithVarcharColumn(conversationIDFieldName, scalars.conversationIDs).
-			WithVarcharColumn(parentConversationIDFieldName, scalars.parentConversationIDs).
-			WithVarcharColumn(roleFieldName, scalars.roles).
-			WithVarcharColumn(providerFieldName, scalars.providers).
-			WithVarcharColumn(workspaceRootFieldName, scalars.workspaceRoots).
-			WithBoolColumn(archivedFieldName, scalars.archiveds).
-			WithInt64Column(timestampUnixFieldName, scalars.timestamps).
-			WithInt64Column(messageIndexFieldName, scalars.messageIndexes)
-	}
-
-	if _, err := service.milvus.Insert(ctx, insertOption); err != nil {
-		return wrapStoreError(ctx, err, "insert Milvus batch into "+collectionName)
-	}
-	return nil
-}
-
 func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChunk, error) {
 	if len(resultSets) == 0 {
 		return []model.StoredChunk{}, nil
@@ -678,6 +613,7 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 	endLineColumn := resultSet.GetColumn(endLineFieldName)
 	fileExtensionColumn := resultSet.GetColumn(fileExtensionFieldName)
 	metadataColumn := resultSet.GetColumn(metadataFieldName)
+	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
 	// workspaceRoot is only present on conversation-collection result sets, where
 	// the search requests the native scalar column. It is nil for code
 	// collections and on rows that never carried a workspace root, so reads stay
@@ -728,6 +664,13 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 				workspaceRootValue = rootValue
 			}
 		}
+		splitPartValue, splitPartRecorded, splitPartErr := splitPartAt(
+			splitPartColumn,
+			index,
+		)
+		if splitPartErr != nil {
+			return nil, splitPartErr
+		}
 
 		score := 0.0
 		if index < len(resultSet.Scores) {
@@ -747,7 +690,8 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			TimestampUnix:        metadataValue.timestampUnix(),
 			WorkspaceRoot:        workspaceRootValue,
 			Archived:             false,
-			SplitPart:            0,
+			SplitPart:            splitPartValue,
+			SplitPartRecorded:    splitPartRecorded,
 			Score:                score,
 		})
 	}
@@ -827,19 +771,9 @@ func expandOversizeChunks(chunks []model.StoredChunk) ([]model.StoredChunk, bool
 			out = append(out, chunk)
 			continue
 		}
-		for _, piece := range splitForVarchar(chunk.Content) {
-			child := chunk
-			child.Content = piece
-			out = append(out, child)
-		}
+		out = append(out, splitChunkAtBudget(chunk, milvusVarcharMaxBytes)...)
 	}
 	return out, true
-}
-
-// splitForVarchar cuts value into sub-strings of at most
-// milvusVarcharMaxBytes bytes, each ending on a UTF-8 codepoint boundary.
-func splitForVarchar(value string) []string {
-	return splitBytes(value, milvusVarcharMaxBytes)
 }
 
 // generateID matches the TS chunk-ID format at packages/core/src/context.ts:1067

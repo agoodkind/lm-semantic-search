@@ -36,6 +36,76 @@ func TestExpandOverTokenBudgetSplitsOversizeChunk(t *testing.T) {
 	}
 }
 
+func TestExpandOverTokenBudgetAssignsDistinctStablePositions(t *testing.T) {
+	t.Parallel()
+
+	// The budget the splitter actually uses derives from the active model's hard
+	// input limit, not from EmbeddingMaxTokens alone, so the expected piece count
+	// has to be measured against that same budget.
+	serviceConfig := config.Config{EmbeddingMaxTokens: 4096}
+	service := &Service{cfg: serviceConfig}
+	byteBudget := config.EmbedChunkByteBudgetForLimit(
+		serviceConfig.EmbeddingMaxTokens,
+		config.ActiveEmbedTokenLimit(serviceConfig),
+	)
+	content := strings.Repeat("x", byteBudget*2)
+	chunks := []model.StoredChunk{{
+		Content:           content,
+		RelativePath:      "conv/x/1",
+		SplitPartRecorded: true,
+	}}
+
+	out := service.expandOverTokenBudget(context.Background(), "cb", chunks, "test")
+	if len(out) != 2 {
+		t.Fatalf("split rows = %d, want 2", len(out))
+	}
+	if out[0].SplitPart != 1 {
+		t.Fatalf("first split position = %d, want 1", out[0].SplitPart)
+	}
+	if out[1].SplitPart != int32(byteBudget+1) {
+		t.Fatalf(
+			"second split position = %d, want %d",
+			out[1].SplitPart,
+			byteBudget+1,
+		)
+	}
+	if generateID(out[0], 0) == generateID(out[1], 1) {
+		t.Fatal("identical split rows share a primary key")
+	}
+}
+
+func TestExpandOversizeChunksAssignsDistinctStablePositions(t *testing.T) {
+	t.Parallel()
+
+	content := strings.Repeat("x", milvusVarcharMaxBytes*2)
+	chunks := []model.StoredChunk{{
+		Content:           content,
+		RelativePath:      "src/large.go",
+		SplitPartRecorded: true,
+	}}
+
+	out, changed := expandOversizeChunks(chunks)
+	if !changed {
+		t.Fatal("expandOversizeChunks reported no change")
+	}
+	if len(out) != 2 {
+		t.Fatalf("split rows = %d, want 2", len(out))
+	}
+	if out[0].SplitPart != 1 {
+		t.Fatalf("first split position = %d, want 1", out[0].SplitPart)
+	}
+	if out[1].SplitPart != int32(milvusVarcharMaxBytes+1) {
+		t.Fatalf(
+			"second split position = %d, want %d",
+			out[1].SplitPart,
+			milvusVarcharMaxBytes+1,
+		)
+	}
+	if generateID(out[0], 0) == generateID(out[1], 1) {
+		t.Fatal("identical varchar split rows share a primary key")
+	}
+}
+
 func TestExpandOverTokenBudgetEnforcesModelLimitWhenUnset(t *testing.T) {
 	t.Parallel()
 	// An unset EmbeddingMaxTokens must still split: the model's hard input-token

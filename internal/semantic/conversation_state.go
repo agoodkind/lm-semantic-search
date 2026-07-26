@@ -23,8 +23,10 @@ type StoredMessageState struct {
 }
 
 type storedMessagePart struct {
-	index   int
-	content string
+	pathIndex         int
+	splitPart         int32
+	splitPartRecorded bool
+	content           string
 }
 
 type storedMessageAssembly struct {
@@ -53,6 +55,9 @@ func (service *Service) LoadConversationMessageState(ctx context.Context, collec
 	if err := service.ensureConversationScalarColumnsOnce(ctx, collectionName); err != nil {
 		return nil, nil, err
 	}
+	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+		return nil, nil, err
+	}
 	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
 		return nil, nil, err
 	}
@@ -60,7 +65,7 @@ func (service *Service) LoadConversationMessageState(ctx context.Context, collec
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(reuseVectorBatchSize).
 		WithFilter(conversationStateFilterExpression(conversationPrefix)).
-		WithOutputFields(relativePathFieldName, messageIndexFieldName, roleFieldName, contentFieldName, denseVectorFieldName))
+		WithOutputFields(relativePathFieldName, messageIndexFieldName, roleFieldName, contentFieldName, denseVectorFieldName, splitPartFieldName))
 	if err != nil {
 		slog.ErrorContext(ctx, "open conversation state query iterator failed", "collection", collectionName, "err", err)
 		return nil, nil, fmt.Errorf("open conversation state iterator for %s: %w", collectionName, err)
@@ -122,6 +127,7 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 	relativePathColumn := resultSet.GetColumn(relativePathFieldName)
 	roleColumn := resultSet.GetColumn(roleFieldName)
 	messageIndexColumn := resultSet.GetColumn(messageIndexFieldName)
+	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
 	legacyRows := 0
 	for rowIndex := range resultSet.ResultCount {
 		contentValue, vector, contentErr := conversationContentVectorAt(contentColumn, vectorColumn, rowIndex)
@@ -160,7 +166,22 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 			slog.Error("read conversation state part index failed", "index", rowIndex, "err", partErr)
 			return legacyRows, fmt.Errorf("read conversation part index at %d: %w", rowIndex, partErr)
 		}
-		appendStoredMessagePart(assemblies, safeInt32FromInt64(messageIndex), role, partIndex, contentValue)
+		splitPart, splitPartRecorded, splitPartErr := splitPartAt(
+			splitPartColumn,
+			rowIndex,
+		)
+		if splitPartErr != nil {
+			return legacyRows, splitPartErr
+		}
+		appendStoredMessagePart(
+			assemblies,
+			safeInt32FromInt64(messageIndex),
+			role,
+			partIndex,
+			splitPart,
+			splitPartRecorded,
+			contentValue,
+		)
 	}
 	return legacyRows, nil
 }
@@ -226,7 +247,15 @@ func messageIndexAt(messageIndexColumn column.Column, rowIndex int) (int64, bool
 	return messageIndex, true, nil
 }
 
-func appendStoredMessagePart(assemblies map[int32]*storedMessageAssembly, messageIndex int32, role string, partIndex int, content string) {
+func appendStoredMessagePart(
+	assemblies map[int32]*storedMessageAssembly,
+	messageIndex int32,
+	role string,
+	pathIndex int,
+	splitPart int32,
+	splitPartRecorded bool,
+	content string,
+) {
 	assembly := assemblies[messageIndex]
 	if assembly == nil {
 		assembly = &storedMessageAssembly{role: "", parts: nil, hasDerivedContent: false}
@@ -235,7 +264,12 @@ func appendStoredMessagePart(assemblies map[int32]*storedMessageAssembly, messag
 	if assembly.role == "" {
 		assembly.role = role
 	}
-	assembly.parts = append(assembly.parts, storedMessagePart{index: partIndex, content: content})
+	assembly.parts = append(assembly.parts, storedMessagePart{
+		pathIndex:         pathIndex,
+		splitPart:         splitPart,
+		splitPartRecorded: splitPartRecorded,
+		content:           content,
+	})
 }
 
 func markStoredMessageDerived(assemblies map[int32]*storedMessageAssembly, messageIndex int32) {
@@ -251,7 +285,15 @@ func assembleStoredMessageState(assemblies map[int32]*storedMessageAssembly) map
 	state := make(map[int32]StoredMessageState, len(assemblies))
 	for messageIndex, assembly := range assemblies {
 		sort.SliceStable(assembly.parts, func(left int, right int) bool {
-			return assembly.parts[left].index < assembly.parts[right].index
+			leftPart := assembly.parts[left]
+			rightPart := assembly.parts[right]
+			if leftPart.pathIndex != rightPart.pathIndex {
+				return leftPart.pathIndex < rightPart.pathIndex
+			}
+			if leftPart.splitPartRecorded && rightPart.splitPartRecorded {
+				return leftPart.splitPart < rightPart.splitPart
+			}
+			return false
 		})
 		var text strings.Builder
 		for _, part := range assembly.parts {

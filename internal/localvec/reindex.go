@@ -155,8 +155,9 @@ func (store *Store) CopyChunks(
 			if rows[index].RelativePath != srcRelativePath {
 				continue
 			}
+			destinationID := copiedRowID(rows[index], dstRelativePath)
 			rows[index].RelativePath = dstRelativePath
-			rows[index].ID = generateRowID(rows[index].chunk(0))
+			rows[index].ID = destinationID
 			rows[index].Label = 0
 			copied++
 		}
