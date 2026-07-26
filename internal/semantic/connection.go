@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 )
 
 const (
@@ -43,13 +45,26 @@ var reconnectJitter = func(limit time.Duration) time.Duration {
 	return time.Duration(randomValue.Int64())
 }
 
+// callTimeouts resolves the per-call Milvus deadline policy from configuration.
+// Only the mutation bound is operator-tunable, because it is the one bound whose
+// sufficient value depends on how many rows a call matches.
+//
+// The millisecond count is converted by config.MilvusMutationCallTimeout rather
+// than multiplied here, so a count too large to hold as a duration falls back to
+// the built-in bound instead of wrapping into one that is effectively absent.
+func (service *Service) callTimeouts() milvusgrpc.CallTimeouts {
+	configuredMutation := config.MilvusMutationCallTimeout(service.cfg.MilvusMutationCallTimeoutMS)
+	return milvusgrpc.DefaultCallTimeouts().WithMutation(configuredMutation)
+}
+
 func (service *Service) dialMilvus(ctx context.Context) (*milvusclient.Client, error) {
 	dialContext, cancel := context.WithTimeout(ctx, bootDialTimeout)
 	defer cancel()
 
 	clientConfig := &milvusclient.ClientConfig{
-		Address: service.cfg.MilvusAddress,
-		APIKey:  service.cfg.MilvusToken,
+		Address:     service.cfg.MilvusAddress,
+		APIKey:      service.cfg.MilvusToken,
+		DialOptions: milvusgrpc.DialOptions(slog.Default(), service.callTimeouts()),
 	}
 	client, err := milvusclient.New(dialContext, clientConfig)
 	if err != nil {

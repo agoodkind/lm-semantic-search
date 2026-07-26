@@ -8,6 +8,7 @@ require (
 	github.com/daulet/tokenizers v1.27.0
 	github.com/gertd/go-pluralize v0.2.1
 	github.com/git-pkgs/gitignore v1.2.0
+	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3
 	github.com/mark3labs/mcp-go v0.57.0
 	github.com/milvus-io/milvus/client/v2 v2.6.5
 	github.com/openai/openai-go/v2 v2.7.1
@@ -66,7 +67,6 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.21.6 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0 // indirect
-	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3 // indirect
 	github.com/in-toto/attestation v1.2.0 // indirect
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

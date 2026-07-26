@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 )
 
 // TestStagingCollectionNameStaysWithinCap proves the rebuild staging name
@@ -311,4 +312,59 @@ func waitForSemanticCondition(t *testing.T, condition func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition did not become true before timeout")
+}
+
+// TestCallTimeoutsUsesConfiguredMutationBound proves the operator-facing
+// configuration reaches the Milvus transport policy, so raising the bound for a
+// large collection takes effect on the next dial without a rebuild. A zero value
+// leaves the transport's own bound in place, because a mutation must stay
+// bounded even when the configuration says nothing.
+func TestCallTimeoutsUsesConfiguredMutationBound(t *testing.T) {
+	t.Parallel()
+
+	const configuredTimeoutMS = 900000
+	configured := &Service{cfg: config.Config{MilvusMutationCallTimeoutMS: configuredTimeoutMS}}
+	wantMutation := time.Duration(configuredTimeoutMS) * time.Millisecond
+	if got := configured.callTimeouts().Mutation; got != wantMutation {
+		t.Fatalf("configured mutation bound = %s, want %s", got, wantMutation)
+	}
+
+	unset := &Service{cfg: config.Config{MilvusMutationCallTimeoutMS: 0}}
+	if got := unset.callTimeouts().Mutation; got != milvusgrpc.DefaultCallTimeouts().Mutation {
+		t.Fatalf(
+			"unset mutation bound = %s, want the transport default %s",
+			got,
+			milvusgrpc.DefaultCallTimeouts().Mutation,
+		)
+	}
+	if got := configured.callTimeouts().Metadata; got != milvusgrpc.DefaultCallTimeouts().Metadata {
+		t.Fatalf(
+			"metadata bound = %s, want the transport default %s left alone",
+			got,
+			milvusgrpc.DefaultCallTimeouts().Metadata,
+		)
+	}
+}
+
+// TestCallTimeoutsRejectsUnconvertibleMutationBound covers the dial site
+// directly rather than through config.Default. The field is a plain int that any
+// caller can set, so the conversion at the dial site has to be total on its own:
+// a count that cannot be held as a duration must fall back to the transport's
+// bound instead of wrapping into a bound of centuries or of nanoseconds.
+func TestCallTimeoutsRejectsUnconvertibleMutationBound(t *testing.T) {
+	t.Parallel()
+
+	unconvertible := []int{-9223372036855, int(config.MaxMilvusMutationCallTimeoutMS) + 1}
+	for _, milliseconds := range unconvertible {
+		service := &Service{cfg: config.Config{MilvusMutationCallTimeoutMS: milliseconds}}
+		got := service.callTimeouts().Mutation
+		if got != milvusgrpc.DefaultCallTimeouts().Mutation {
+			t.Fatalf(
+				"mutation bound for %d ms = %s, want the transport default %s",
+				milliseconds,
+				got,
+				milvusgrpc.DefaultCallTimeouts().Mutation,
+			)
+		}
+	}
 }
