@@ -49,6 +49,10 @@ const (
 	// embeddingMaxTokens is unset, so a missing or partial config cannot disable
 	// the split and let the embedder drop content.
 	EmbedModelInputTokenLimit = 4096
+	// smallestKnownEmbedModelInputTokenLimit is the fail-safe limit for an
+	// unrecognized model name. A conservative fallback can split more often, but
+	// it cannot silently send a known-oversized input to a smaller model.
+	smallestKnownEmbedModelInputTokenLimit = 512
 	// embedTokenSafetyMargin scales the token cap down before splitting, because a
 	// byte-based budget cannot see the model's real tokenizer and dense or
 	// non-Latin text packs more tokens per byte than the estimate assumes.
@@ -65,6 +69,13 @@ const (
 type embeddingProvider string
 
 const embeddingProviderOpenAI embeddingProvider = "OpenAI"
+
+type embeddingModel string
+
+const (
+	embeddingModelBGESmall    embeddingModel = "baai/bge-small-en-v1.5"
+	embeddingModelNVEmbedCode embeddingModel = "nvidia/nv-embedcode-7b-v1"
+)
 
 // Config describes daemon runtime paths on the local machine.
 type Config struct {
@@ -101,9 +112,10 @@ type Config struct {
 	// EmbeddingMaxTokens caps the tokens of a single chunk sent to the embedder,
 	// so a chunk is split rather than dropped when it would exceed the model's
 	// input limit. An unset value (0) does not disable the cap: the model's hard
-	// input-token limit is always enforced by EffectiveEmbedTokenCap, and a
+	// input-token limit is always enforced by EffectiveEmbedTokenCapForLimit, and a
 	// configured value only tightens the cap below that limit. Use
-	// EffectiveEmbedTokenCap and EmbedChunkByteBudget to apply the safety margin.
+	// EffectiveEmbedTokenCapForLimit and EmbedChunkByteBudget to apply the safety
+	// margin.
 	EmbeddingMaxTokens int
 	// EmbeddingRequestTimeoutMS bounds one embedding HTTP request. A wedged or
 	// unresponsive embedder makes an unbounded request hang forever, which strands
@@ -453,8 +465,8 @@ func readPersistedConfig(path string) persistedConfig {
 
 // resolveEmbeddingMaxTokens applies the env override over the config value. An
 // unset or non-positive value resolves to 0, which falls back to the model's
-// hard input-token limit in EffectiveEmbedTokenCap rather than disabling the
-// split; a warning names the knob to set for a tighter, batching-friendly cap.
+// hard input-token limit in EffectiveEmbedTokenCapForLimit rather than disabling
+// the split; a warning names the knob to set for a tighter, batching-friendly cap.
 func resolveEmbeddingMaxTokens(fileValue int) int {
 	value := envIntOrDefault("EMBEDDING_MAX_TOKENS", fileValue)
 	if value <= 0 {
@@ -462,7 +474,7 @@ func resolveEmbeddingMaxTokens(fileValue int) int {
 			"embeddingMaxTokens is unset; splitting falls back to the model's hard input-token limit, set the knob for a tighter per-chunk cap",
 			"config_field", "embeddingMaxTokens",
 			"env_var", "EMBEDDING_MAX_TOKENS",
-			"model_token_limit", EmbedModelInputTokenLimit,
+			"minimum_known_model_token_limit", smallestKnownEmbedModelInputTokenLimit,
 		)
 		return 0
 	}
@@ -516,15 +528,19 @@ func resolveMilvusMutationCallTimeoutMS(fileValue int) int {
 	return value
 }
 
-// EffectiveEmbedTokenCap returns the per-chunk token cap after the safety margin.
-// The model's hard input-token limit is always enforced, so an unset or larger
-// embeddingMaxTokens still caps at the model limit rather than disabling the
-// split and letting the embedder drop an oversized input; a configured value
-// below the model limit tightens the cap further. The result is always at least
-// one and always below EmbedModelInputTokenLimit.
-func EffectiveEmbedTokenCap(maxTokens int) int {
-	modelLimit := EmbedModelInputTokenLimit
-	modelCap := int(float64(modelLimit) * embedTokenSafetyMargin)
+// EffectiveEmbedTokenCapForLimit returns the per-chunk token cap after the safety
+// margin against modelLimit, the active model's hard input-token limit. The model
+// limit is always enforced, so an unset or larger maxTokens still caps at the
+// model limit rather than disabling the split and letting the embedder drop or
+// truncate an oversized input; a configured value below the model limit tightens
+// the cap further. A non-positive modelLimit fails safe at the smallest known
+// model limit. The result is always at least one and always below modelLimit, so
+// every provider can pass its model-specific limit through one path.
+func EffectiveEmbedTokenCapForLimit(maxTokens int, modelLimit int) int {
+	if modelLimit <= 0 {
+		modelLimit = smallestKnownEmbedModelInputTokenLimit
+	}
+	modelCap := max(int(float64(modelLimit)*embedTokenSafetyMargin), 1)
 	if maxTokens <= 0 {
 		return modelCap
 	}
@@ -533,14 +549,45 @@ func EffectiveEmbedTokenCap(maxTokens int) int {
 }
 
 // EmbedChunkByteBudget returns the byte budget a byte-oriented splitter uses to
-// keep a sub-chunk within EffectiveEmbedTokenCap real tokens. It converts the
-// token cap at a conservative bytes-per-token ratio below the densest measured
-// content, so dense text stays under the model limit even though the byte count
-// cannot see the real tokenizer. It is always positive because the model limit
-// is always enforced.
+// keep a sub-chunk within EffectiveEmbedTokenCap real tokens against the
+// OpenAI-compatible model limit. It is EmbedChunkByteBudgetForLimit specialized
+// to EmbedModelInputTokenLimit.
 func EmbedChunkByteBudget(maxTokens int) int {
-	tokenCap := EffectiveEmbedTokenCap(maxTokens)
+	return EmbedChunkByteBudgetForLimit(maxTokens, EmbedModelInputTokenLimit)
+}
+
+// EmbedChunkByteBudgetForLimit returns the byte budget that keeps a sub-chunk
+// within EffectiveEmbedTokenCapForLimit real tokens against modelLimit. It
+// converts the token cap at a conservative bytes-per-token ratio below the
+// densest measured content, so dense text stays under the model limit even though
+// the byte count cannot see the real tokenizer. It is always positive because the
+// model limit is always enforced.
+func EmbedChunkByteBudgetForLimit(maxTokens int, modelLimit int) int {
+	tokenCap := EffectiveEmbedTokenCapForLimit(maxTokens, modelLimit)
 	return tokenCap * conservativeEmbedBytesPerTokenNum / conservativeEmbedBytesPerTokenDen
+}
+
+// ActiveEmbedTokenLimit reports the active model's hard per-input token limit.
+// ONNX models use their preset, while OpenAI-compatible models use the known
+// limit for their configured model name. An unknown model fails safe at the
+// smallest known limit because an arbitrary compatible endpoint cannot be probed
+// before indexing.
+func ActiveEmbedTokenLimit(cfg Config) int {
+	if strings.EqualFold(strings.TrimSpace(cfg.EmbeddingProvider), EmbeddingProviderONNX) {
+		preset, err := offlinemodel.Resolve(cfg.OfflineEmbeddingModel)
+		if err == nil && preset.MaximumTokens > 0 {
+			return int(preset.MaximumTokens)
+		}
+		return smallestKnownEmbedModelInputTokenLimit
+	}
+	switch embeddingModel(strings.ToLower(strings.TrimSpace(cfg.EmbeddingModel))) {
+	case embeddingModelBGESmall:
+		return smallestKnownEmbedModelInputTokenLimit
+	case embeddingModelNVEmbedCode:
+		return EmbedModelInputTokenLimit
+	default:
+		return smallestKnownEmbedModelInputTokenLimit
+	}
 }
 
 func intOrDefault(value int, fallback int) int {
