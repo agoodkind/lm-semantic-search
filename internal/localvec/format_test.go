@@ -1,11 +1,37 @@
 package localvec
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/model"
 )
+
+func TestGenerateRowIDDistinctForSplitChildrenAndStableForUnsplit(t *testing.T) {
+	t.Parallel()
+	// Two byte-identical split pieces of one message differ only by SplitPart, so
+	// their primary keys must differ or the rows would collide in the store.
+	first := model.StoredChunk{Content: "aaaa", RelativePath: "conv/x/1", SplitPart: 1}
+	second := model.StoredChunk{Content: "aaaa", RelativePath: "conv/x/1", SplitPart: 5}
+	if generateRowID(first) == generateRowID(second) {
+		t.Fatal("split pieces with identical content share a primary key")
+	}
+
+	// An unsplit chunk (SplitPart 0) must reproduce the legacy id so the offline
+	// corpus is not re-embedded.
+	unsplit := model.StoredChunk{Content: "hello", RelativePath: "src/file.go", StartLine: 2, EndLine: 4}
+	legacyInput := fmt.Sprintf("%s:%d:%d:%s", unsplit.RelativePath, unsplit.StartLine, unsplit.EndLine, unsplit.Content)
+	sum := sha256.Sum256([]byte(legacyInput))
+	legacyID := "chunk_" + hex.EncodeToString(sum[:])[:rowIDHashLength]
+	if got := generateRowID(unsplit); got != legacyID {
+		t.Fatalf("generateRowID for unsplit chunk = %q, want legacy %q", got, legacyID)
+	}
+}
 
 // TestReadRowsToleratesTornTrailingLine proves that a truncated final line,
 // which an append interrupted by a crash can leave, does not make every earlier
