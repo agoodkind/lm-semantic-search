@@ -11,7 +11,8 @@ import (
 )
 
 type rejectingAllEmbedder struct {
-	requestCount int
+	requestCount      int
+	reportedMaxTokens int
 }
 
 func (embedder *rejectingAllEmbedder) Embed(
@@ -33,7 +34,7 @@ func (embedder *rejectingAllEmbedder) EmbedBatch(
 			Index:          index,
 			Reason:         contextLengthExceededReason,
 			ReportedTokens: len(texts[index]),
-			MaxTokens:      512,
+			MaxTokens:      embedder.reportedMaxTokens,
 		})
 	}
 	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
@@ -49,7 +50,7 @@ func (embedder *rejectingAllEmbedder) Health(_ context.Context) error {
 
 func TestInsertChunksBatchedReportsSplitRetryDrops(t *testing.T) {
 	t.Parallel()
-	embedder := &rejectingAllEmbedder{}
+	embedder := &rejectingAllEmbedder{reportedMaxTokens: 512}
 	service := &Service{
 		cfg: config.Config{
 			EmbeddingBatchSize:        32,
@@ -84,7 +85,53 @@ func TestInsertChunksBatchedReportsSplitRetryDrops(t *testing.T) {
 	if reports[0].ChunksDropped != 63 {
 		t.Fatalf("ChunksDropped = %d, want 63", reports[0].ChunksDropped)
 	}
+	// Eight bounds Provider.EmbedBatch calls: one initial call and seven packed
+	// split-retry calls. The OpenAI-compatible provider can make 95 endpoint
+	// requests because it removes one rejected input per request.
 	if embedder.requestCount != 8 {
-		t.Fatalf("embedding requests = %d, want 8 including the initial rejected batch", embedder.requestCount)
+		t.Fatalf("embed calls = %d, want 8 including the initial rejected batch", embedder.requestCount)
+	}
+}
+
+func TestInsertChunksBatchedUsesActiveModelLimitWhenEndpointOmitsIt(t *testing.T) {
+	t.Parallel()
+	embedder := &rejectingAllEmbedder{reportedMaxTokens: 0}
+	service := &Service{
+		cfg: config.Config{
+			EmbeddingModel:            "BAAI/bge-small-en-v1.5",
+			EmbeddingBatchSize:        32,
+			EmbeddingBatchTokenBudget: 6000,
+		},
+		embedder: embedder,
+	}
+	chunks := []model.StoredChunk{{
+		Content:      strings.Repeat("x", 9215),
+		RelativePath: "conv/x/unreported-limit",
+	}}
+	var reports []Progress
+
+	err := service.insertChunksBatched(
+		context.Background(),
+		"test_collection",
+		chunks,
+		true,
+		"test",
+		func(progress Progress) {
+			reports = append(reports, progress)
+		},
+		nil,
+		StoreColumnSetCode,
+	)
+	if err != nil {
+		t.Fatalf("insertChunksBatched returned error: %v", err)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("progress reports = %d, want 1", len(reports))
+	}
+	if reports[0].ChunksDropped != 63 {
+		t.Fatalf("ChunksDropped = %d, want 63 whole pieces at the active model floor", reports[0].ChunksDropped)
+	}
+	if embedder.requestCount != 8 {
+		t.Fatalf("embed calls = %d, want 8 including the initial rejected batch", embedder.requestCount)
 	}
 }

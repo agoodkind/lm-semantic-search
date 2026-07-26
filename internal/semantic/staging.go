@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
@@ -153,6 +154,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			retryChunks, retryVectors, dropped, retryErr := EmbedChunksSplittingOversize(
 				ctx,
 				oversized,
+				config.ActiveEmbedTokenLimit(service.cfg),
 				service.packForEmbedding,
 				service.embedder.EmbedBatch,
 			)

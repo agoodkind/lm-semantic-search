@@ -11,10 +11,13 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
+
+const testActiveModelMaxTokens = 512
 
 func vectorForText(text string) []float32 {
 	sum := sha256.Sum256([]byte(text))
@@ -67,7 +70,7 @@ func rejectingEmbed(reason string, maxTokens int, batches *[][]string) EmbedBatc
 		for index, text := range texts {
 			skipped = append(skipped, embedding.SkippedInput{
 				Index:          index,
-				Reason:         reason,
+				Reason:         adapterr.EmbedRejectionReason(reason),
 				ReportedTokens: len(text),
 				MaxTokens:      maxTokens,
 			})
@@ -83,7 +86,7 @@ func TestEmbedChunksSplittingOversizeSplitsUntilEveryPieceEmbeds(t *testing.T) {
 	content := "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL"
 	chunks := []model.StoredChunk{{Content: content, RelativePath: "conv/x/1"}}
 
-	kept, vectors, dropped, err := EmbedChunksSplittingOversize(context.Background(), chunks, testChunkPacker, thresholdEmbed(maxBytes, &embedded))
+	kept, vectors, dropped, err := EmbedChunksSplittingOversize(context.Background(), chunks, testActiveModelMaxTokens, testChunkPacker, thresholdEmbed(maxBytes, &embedded))
 	if err != nil {
 		t.Fatalf("EmbedChunksSplittingOversize returned error: %v", err)
 	}
@@ -143,7 +146,7 @@ func TestEmbedChunksSplittingOversizeDropsOnlyIndivisibleCodepoint(t *testing.T)
 	content := "🧠"
 	chunks := []model.StoredChunk{{Content: content, RelativePath: "conv/x/2"}}
 
-	kept, vectors, dropped, err := EmbedChunksSplittingOversize(context.Background(), chunks, testChunkPacker, thresholdEmbed(0, &embedded))
+	kept, vectors, dropped, err := EmbedChunksSplittingOversize(context.Background(), chunks, testActiveModelMaxTokens, testChunkPacker, thresholdEmbed(0, &embedded))
 	if err != nil {
 		t.Fatalf("EmbedChunksSplittingOversize returned error: %v", err)
 	}
@@ -164,6 +167,7 @@ func TestEmbedChunksSplittingOversizeDropsUnexpectedReasonWithoutSplitting(t *te
 	kept, vectors, dropped, err := EmbedChunksSplittingOversize(
 		context.Background(),
 		chunks,
+		testActiveModelMaxTokens,
 		testChunkPacker,
 		rejectingEmbed("endpoint_policy_rejection", 4096, &batches),
 	)
@@ -181,7 +185,7 @@ func TestEmbedChunksSplittingOversizeDropsUnexpectedReasonWithoutSplitting(t *te
 	}
 }
 
-func TestEmbedChunksSplittingOversizeStopsAtEndpointTokenFloor(t *testing.T) {
+func TestEmbedChunksSplittingOversizeStopsAtContentTokenFloor(t *testing.T) {
 	t.Parallel()
 	const maxTokens = 8
 	var batches [][]string
@@ -191,6 +195,7 @@ func TestEmbedChunksSplittingOversizeStopsAtEndpointTokenFloor(t *testing.T) {
 	kept, vectors, dropped, err := EmbedChunksSplittingOversize(
 		context.Background(),
 		chunks,
+		testActiveModelMaxTokens,
 		testChunkPacker,
 		rejectingEmbed("context_length_exceeded", maxTokens, &batches),
 	)
@@ -200,11 +205,92 @@ func TestEmbedChunksSplittingOversizeStopsAtEndpointTokenFloor(t *testing.T) {
 	if len(kept) != 0 || len(vectors) != 0 {
 		t.Fatalf("kept %d chunks / %d vectors, want 0 / 0", len(kept), len(vectors))
 	}
-	if dropped != 8 {
-		t.Fatalf("dropped = %d, want 8 whole pieces at the %d-byte floor", dropped, maxTokens)
+	if dropped != 16 {
+		t.Fatalf("dropped = %d, want 16 whole pieces at the special-token-adjusted floor", dropped)
 	}
-	if len(batches) != 4 {
-		t.Fatalf("embed batches = %d, want 4 retry rounds down to the floor", len(batches))
+	if len(batches) != 5 {
+		t.Fatalf("embed calls = %d, want 5 retry rounds down to the floor", len(batches))
+	}
+}
+
+func TestEmbedChunksSplittingOversizeAccountsForSpecialTokens(t *testing.T) {
+	t.Parallel()
+	const (
+		maxTokens          = 512
+		addedSpecialTokens = 2
+	)
+	var batches [][]string
+	var embedded []string
+	content := strings.Repeat("!", maxTokens-1)
+	embed := func(_ context.Context, texts []string) (embedding.BatchResult, error) {
+		batches = append(batches, slices.Clone(texts))
+		vectors := make([][]float32, len(texts))
+		var skipped []embedding.SkippedInput
+		for index, text := range texts {
+			tokenCount := len(text) + addedSpecialTokens
+			if tokenCount > maxTokens {
+				skipped = append(skipped, embedding.SkippedInput{
+					Index:          index,
+					Reason:         contextLengthExceededReason,
+					ReportedTokens: tokenCount,
+					MaxTokens:      maxTokens,
+				})
+				continue
+			}
+			embedded = append(embedded, text)
+			vectors[index] = vectorForText(text)
+		}
+		return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
+	}
+
+	kept, vectors, dropped, err := EmbedChunksSplittingOversize(
+		context.Background(),
+		[]model.StoredChunk{{Content: content, RelativePath: "conv/x/special-tokens"}},
+		testActiveModelMaxTokens,
+		testChunkPacker,
+		embed,
+	)
+	if err != nil {
+		t.Fatalf("EmbedChunksSplittingOversize returned error: %v", err)
+	}
+	if dropped != 0 {
+		t.Fatalf("dropped = %d, want 0 because one split makes every piece fit", dropped)
+	}
+	if len(kept) != 3 || len(vectors) != 3 {
+		t.Fatalf("kept %d chunks / %d vectors, want 3 / 3", len(kept), len(vectors))
+	}
+	if got := strings.Join(embedded, ""); got != content {
+		t.Fatalf("embedded content length = %d, want %d", len(got), len(content))
+	}
+	if len(batches) != 2 {
+		t.Fatalf("embed calls = %d, want 2 for one rejected and one accepted round", len(batches))
+	}
+}
+
+func TestEmbedChunksSplittingOversizeDropsWhenSpecialTokensFillLimit(t *testing.T) {
+	t.Parallel()
+	const maxTokens = 2
+	var batches [][]string
+	content := strings.Repeat("x", 64)
+
+	kept, vectors, dropped, err := EmbedChunksSplittingOversize(
+		context.Background(),
+		[]model.StoredChunk{{Content: content, RelativePath: "conv/x/no-content-capacity"}},
+		testActiveModelMaxTokens,
+		testChunkPacker,
+		rejectingEmbed(contextLengthExceededReason, maxTokens, &batches),
+	)
+	if err != nil {
+		t.Fatalf("EmbedChunksSplittingOversize returned error: %v", err)
+	}
+	if len(kept) != 0 || len(vectors) != 0 {
+		t.Fatalf("kept %d chunks / %d vectors, want 0 / 0", len(kept), len(vectors))
+	}
+	if dropped != 1 {
+		t.Fatalf("dropped = %d, want 1 whole input because no content token can fit", dropped)
+	}
+	if len(batches) != 1 {
+		t.Fatalf("embed calls = %d, want 1 because splitting cannot help", len(batches))
 	}
 }
 
@@ -224,6 +310,7 @@ func TestEmbedChunksSplittingOversizeContinuesPastFourRounds(t *testing.T) {
 	kept, vectors, dropped, err := EmbedChunksSplittingOversize(
 		context.Background(),
 		chunks,
+		testActiveModelMaxTokens,
 		testChunkPacker,
 		recordingEmbed,
 	)
@@ -277,8 +364,8 @@ func TestEmbedChunksSplittingOversizePacksEveryRetryRound(t *testing.T) {
 				skipped = append(skipped, embedding.SkippedInput{
 					Index:          index,
 					Reason:         "context_length_exceeded",
-					ReportedTokens: len(text),
-					MaxTokens:      1,
+					ReportedTokens: len(text) + splitRetrySpecialTokenMargin,
+					MaxTokens:      3,
 				})
 				continue
 			}
@@ -297,6 +384,7 @@ func TestEmbedChunksSplittingOversizePacksEveryRetryRound(t *testing.T) {
 	kept, vectors, dropped, err := EmbedChunksSplittingOversize(
 		context.Background(),
 		chunks,
+		testActiveModelMaxTokens,
 		testChunkPacker,
 		embed,
 	)
@@ -323,7 +411,7 @@ func TestEmbedChunksSplittingOversizeRejectsNilVectorWithoutSkip(t *testing.T) {
 		return embedding.BatchResult{Vectors: make([][]float32, len(texts)), Skipped: nil}, nil
 	}
 
-	_, _, _, err := EmbedChunksSplittingOversize(context.Background(), chunks, testChunkPacker, nilVectorEmbed)
+	_, _, _, err := EmbedChunksSplittingOversize(context.Background(), chunks, testActiveModelMaxTokens, testChunkPacker, nilVectorEmbed)
 	if err == nil {
 		t.Fatal("EmbedChunksSplittingOversize returned nil error for an unmarked nil vector")
 	}
