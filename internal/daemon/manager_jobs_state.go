@@ -92,6 +92,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	job.Progress.ChunksReused = progress.ChunksReused
 	job.Progress.ChunksEmbedded = progress.ChunksEmbedded
 	job.Progress.ChunksGenerated = progress.ChunksGenerated
+	job.Progress.ChunksDropped = progress.ChunksDropped
 	job.Progress.ReuseVectorsLoaded = progress.ReuseVectorsLoaded
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
@@ -117,7 +118,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 // sitting frozen until the item finishes. It deliberately leaves the file
 // counters and the change breakdown alone, since reportDeltaProgress owns the
 // per-file totals and setJobDeltaCounts owns the added/modified/removed counts.
-func (manager *Manager) updateJobChunkProgress(jobID string, processed int32, reused int32, embedded int32, batchesTotal int32, batchesCompleted int32, rowsWritten int32) {
+func (manager *Manager) updateJobChunkProgress(jobID string, processed int32, reused int32, embedded int32, dropped int32, batchesTotal int32, batchesCompleted int32, rowsWritten int32) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -141,6 +142,7 @@ func (manager *Manager) updateJobChunkProgress(jobID string, processed int32, re
 	job.Progress.ChunksReused = reused
 	job.Progress.ChunksEmbedded = embedded
 	job.Progress.ChunksGenerated = embedded
+	job.Progress.ChunksDropped = dropped
 	job.Progress.EmbeddingBatchesTotal = batchesTotal
 	job.Progress.EmbeddingBatchesCompleted = batchesCompleted
 	job.Progress.CollectionRowsWritten = rowsWritten

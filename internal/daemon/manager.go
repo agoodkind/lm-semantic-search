@@ -387,6 +387,7 @@ func newQueuedJob(
 			ChunksReused:              0,
 			ChunksEmbedded:            0,
 			ChunksGenerated:           0,
+			ChunksDropped:             0,
 			ReuseVectorsLoaded:        0,
 			EmbeddingBatchesTotal:     0,
 			EmbeddingBatchesCompleted: 0,

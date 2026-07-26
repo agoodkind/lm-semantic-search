@@ -175,6 +175,7 @@ type Progress struct {
 	ChunksReused              int32     `json:"chunks_reused"`
 	ChunksEmbedded            int32     `json:"chunks_embedded"`
 	ChunksGenerated           int32     `json:"chunks_generated"`
+	ChunksDropped             int32     `json:"chunks_dropped"`
 	ReuseVectorsLoaded        int32     `json:"reuse_vectors_loaded"`
 	EmbeddingBatchesTotal     int32     `json:"embedding_batches_total"`
 	EmbeddingBatchesCompleted int32     `json:"embedding_batches_completed"`

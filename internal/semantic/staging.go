@@ -138,6 +138,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 	var writtenRows int32
 	var reusedRows int32
 	var embeddedRows int32
+	var droppedInputs int32
 
 	for batchIndex, chunkBatch := range packs {
 		vectors, reused, err := service.embedChunkBatch(ctx, chunkBatch, reuse)
@@ -147,39 +148,39 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 
 		keptChunks, keptVectors := filterEmbeddedChunks(chunkBatch, vectors)
 
-		// An input the endpoint rejected as un-embeddable (for example a dense chunk
-		// still over the model's context window after the byte-budget pre-split) has
-		// a nil vector. Re-split each such chunk smaller and retry its pieces until
-		// every piece embeds or a piece is a single indivisible codepoint, so an
-		// oversized input is divided and indexed instead of dropped.
 		oversized := collectOversizedChunks(chunkBatch, vectors)
 		if len(oversized) > 0 {
-			retryChunks, retryVectors, _, retryErr := EmbedChunksSplittingOversize(ctx, oversized, service.embedder.EmbedBatch)
+			retryChunks, retryVectors, dropped, retryErr := EmbedChunksSplittingOversize(
+				ctx,
+				oversized,
+				service.packForEmbedding,
+				service.embedder.EmbedBatch,
+			)
 			if retryErr != nil {
 				return retryErr
 			}
 			keptChunks = append(keptChunks, retryChunks...)
 			keptVectors = append(keptVectors, retryVectors...)
-		}
-		if len(keptChunks) == 0 {
-			continue
+			droppedInputs += safeInt32FromInt(dropped)
 		}
 
-		if !collectionReady {
-			dimension := len(keptVectors[0])
-			if err := service.createCollection(ctx, collectionName, dimension); err != nil {
+		if len(keptChunks) > 0 {
+			if !collectionReady {
+				dimension := len(keptVectors[0])
+				if err := service.createCollection(ctx, collectionName, dimension); err != nil {
+					return err
+				}
+				collectionReady = true
+			}
+
+			if err := service.insertBatch(ctx, collectionName, keptChunks, keptVectors, columnSet); err != nil {
 				return err
 			}
-			collectionReady = true
-		}
 
-		if err := service.insertBatch(ctx, collectionName, keptChunks, keptVectors, columnSet); err != nil {
-			return err
+			writtenRows += safeInt32FromInt(len(keptChunks))
+			reusedRows += safeInt32FromInt(reused)
+			embeddedRows += safeInt32FromInt(len(keptChunks) - reused)
 		}
-
-		writtenRows += safeInt32FromInt(len(keptChunks))
-		reusedRows += safeInt32FromInt(reused)
-		embeddedRows += safeInt32FromInt(len(keptChunks) - reused)
 		if progress != nil {
 			progress(Progress{
 				Phase:                     phase,
@@ -190,8 +191,17 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 				ChunksProcessed:           writtenRows,
 				ChunksReused:              reusedRows,
 				ChunksEmbedded:            embeddedRows,
+				ChunksDropped:             droppedInputs,
 			})
 		}
+	}
+	if droppedInputs > 0 {
+		slog.WarnContext(
+			ctx,
+			"semantic.embed_inputs_dropped_summary",
+			"collection", collectionName,
+			"dropped_inputs", droppedInputs,
+		)
 	}
 	return nil
 }

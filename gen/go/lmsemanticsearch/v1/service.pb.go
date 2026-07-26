@@ -577,8 +577,10 @@ type Progress struct {
 	ChunksEmbedded int32 `protobuf:"varint,16,opt,name=chunks_embedded,json=chunksEmbedded,proto3" json:"chunks_embedded,omitempty"`
 	// reuse_vectors_loaded counts old vectors loaded as reuse candidates during this run.
 	ReuseVectorsLoaded int32 `protobuf:"varint,17,opt,name=reuse_vectors_loaded,json=reuseVectorsLoaded,proto3" json:"reuse_vectors_loaded,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// chunks_dropped counts refused inputs that could not be split safely.
+	ChunksDropped int32 `protobuf:"varint,18,opt,name=chunks_dropped,json=chunksDropped,proto3" json:"chunks_dropped,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Progress) Reset() {
@@ -726,6 +728,13 @@ func (x *Progress) GetChunksEmbedded() int32 {
 func (x *Progress) GetReuseVectorsLoaded() int32 {
 	if x != nil {
 		return x.ReuseVectorsLoaded
+	}
+	return 0
+}
+
+func (x *Progress) GetChunksDropped() int32 {
+	if x != nil {
+		return x.ChunksDropped
 	}
 	return 0
 }
@@ -5158,7 +5167,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0evector_backend\x18\t \x01(\tR\rvectorBackend\x12\x16\n" +
 	"\x06hybrid\x18\n" +
 	" \x01(\bR\x06hybrid\x12-\n" +
-	"\x12include_submodules\x18\v \x03(\tR\x11includeSubmodules\"\x96\x06\n" +
+	"\x12include_submodules\x18\v \x03(\tR\x11includeSubmodules\"\xbd\x06\n" +
 	"\bProgress\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12#\n" +
 	"\rphase_percent\x18\x02 \x01(\x01R\fphasePercent\x12'\n" +
@@ -5178,7 +5187,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\tbreakdown\x18\x0e \x01(\v2%.lmsemanticsearch.v1.OutcomeBreakdownR\tbreakdown\x12)\n" +
 	"\x10chunks_processed\x18\x0f \x01(\x05R\x0fchunksProcessed\x12'\n" +
 	"\x0fchunks_embedded\x18\x10 \x01(\x05R\x0echunksEmbedded\x120\n" +
-	"\x14reuse_vectors_loaded\x18\x11 \x01(\x05R\x12reuseVectorsLoaded\"X\n" +
+	"\x14reuse_vectors_loaded\x18\x11 \x01(\x05R\x12reuseVectorsLoaded\x12%\n" +
+	"\x0echunks_dropped\x18\x12 \x01(\x05R\rchunksDropped\"X\n" +
 	"\n" +
 	"OutcomeRow\x124\n" +
 	"\x04kind\x18\x01 \x01(\x0e2 .lmsemanticsearch.v1.OutcomeKindR\x04kind\x12\x14\n" +

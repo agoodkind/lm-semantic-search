@@ -299,5 +299,6 @@ func emitProgress(
 		ChunksProcessed:           rows,
 		ChunksReused:              safeInt32(reused),
 		ChunksEmbedded:            safeInt32(rowCount - reused),
+		ChunksDropped:             0,
 	})
 }
