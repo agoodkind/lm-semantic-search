@@ -111,6 +111,88 @@ func TestMilvusDeadlineInterceptorShortensLongerCallerDeadline(t *testing.T) {
 	}
 }
 
+// deadlineSlack is how much later than the bound an effective deadline may
+// land before the test calls it the caller's budget rather than the bound. It
+// only absorbs the scheduling gap between the test's clock reading and the
+// interceptor's own, so it stays far below the gap between the two budgets
+// under test.
+const deadlineSlack = 5 * time.Second
+
+// testControlledClock is the clock this test controls. It takes one reading
+// with Go's monotonic timer intact and derives both the caller's deadline and
+// the assertion's baseline from it, so the check measures elapsed monotonic
+// time rather than whatever the wall clock reads mid-test.
+type testControlledClock struct {
+	base time.Time
+}
+
+func newTestControlledClock() testControlledClock {
+	return testControlledClock{base: time.Now()}
+}
+
+// deadlineAfter returns the instant one budget past the controlled reading.
+func (clock testControlledClock) deadlineAfter(budget time.Duration) time.Time {
+	return clock.base.Add(budget)
+}
+
+// budgetOf returns how long after the controlled reading an instant falls.
+func (clock testControlledClock) budgetOf(instant time.Time) time.Duration {
+	return instant.Sub(clock.base)
+}
+
+// TestMilvusDeadlineInterceptorBoundsOnTheMonotonicTimer pins the bound against
+// a wall-clock correction. The caller's deadline sits an hour past the bound and
+// carries Go's monotonic reading, so the effective deadline must still be the
+// bound.
+//
+// Choosing between the caller's deadline and the bound by hand means comparing
+// the caller's instant against a freshly read clock, and reading the wall clock
+// strips the monotonic reading, which drops the comparison onto wall time. A
+// forward wall-clock correction larger than the caller's remaining budget then
+// makes the caller's deadline look already past the bound, the bound is skipped,
+// and the invoker receives the caller's hour instead of the bound. This
+// assertion is the one that fails in that case.
+func TestMilvusDeadlineInterceptorBoundsOnTheMonotonicTimer(t *testing.T) {
+	clock := newTestControlledClock()
+	const callerBudget = time.Hour
+
+	ctx, cancel := context.WithDeadline(context.Background(), clock.deadlineAfter(callerBudget))
+	defer cancel()
+
+	timeouts := DefaultCallTimeouts()
+	var effectiveDeadline time.Time
+	invoker := func(
+		ctx context.Context,
+		_ string,
+		_ any,
+		_ any,
+		_ *grpc.ClientConn,
+		_ ...grpc.CallOption,
+	) error {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("invoker context has no deadline")
+		}
+		effectiveDeadline = deadline
+		return nil
+	}
+
+	interceptor := milvusDeadlineInterceptor(slog.Default(), timeouts)
+	if err := interceptor(ctx, "/milvus.test/Call", nil, nil, nil, invoker); err != nil {
+		t.Fatalf("interceptor returned error: %v", err)
+	}
+
+	effectiveBudget := clock.budgetOf(effectiveDeadline)
+	if effectiveBudget > timeouts.Metadata+deadlineSlack || effectiveBudget <= 0 {
+		t.Fatalf(
+			"effective budget = %s, want the %s bound rather than the caller's %s",
+			effectiveBudget,
+			timeouts.Metadata,
+			callerBudget,
+		)
+	}
+}
+
 func TestMilvusDeadlineInterceptorPreservesEarlierCallerDeadline(t *testing.T) {
 	originalDeadline := time.Now().Add(100 * time.Millisecond)
 	ctx, cancel := context.WithDeadline(context.Background(), originalDeadline)
@@ -140,18 +222,37 @@ func TestMilvusDeadlineInterceptorPreservesEarlierCallerDeadline(t *testing.T) {
 	}
 }
 
+// TestCallTimeoutsForMethod pins the classification against the pinned
+// MilvusService method table. The mutating cases are every logical data
+// mutation that service declares, so a method whose duration scales with
+// matching rows cannot silently fall back to the short metadata bound. The
+// remaining cases are the read-only, administrative, credential, and user-tag
+// calls that must stay on the short bound, including the two Delete-prefixed
+// names an inexact match would sweep in with the row Delete.
 func TestCallTimeoutsForMethod(t *testing.T) {
 	timeouts := DefaultCallTimeouts()
 	cases := []struct {
 		method string
 		want   time.Duration
 	}{
-		{method: "Delete", want: timeouts.Mutation},
 		{method: "Insert", want: timeouts.Mutation},
 		{method: "Upsert", want: timeouts.Mutation},
+		{method: "Delete", want: timeouts.Mutation},
 		{method: "Flush", want: timeouts.Mutation},
+		{method: "FlushAll", want: timeouts.Mutation},
+		{method: "Import", want: timeouts.Mutation},
+		{method: "ReplicateMessage", want: timeouts.Mutation},
+		{method: "TruncateCollection", want: timeouts.Mutation},
 		{method: "DescribeCollection", want: timeouts.Metadata},
 		{method: "Search", want: timeouts.Metadata},
+		{method: "Query", want: timeouts.Metadata},
+		{method: "DropCollection", want: timeouts.Metadata},
+		{method: "DropPartition", want: timeouts.Metadata},
+		{method: "DropIndex", want: timeouts.Metadata},
+		{method: "DropAlias", want: timeouts.Metadata},
+		{method: "DropDatabase", want: timeouts.Metadata},
+		{method: "DropResourceGroup", want: timeouts.Metadata},
+		{method: "DropRole", want: timeouts.Metadata},
 		{method: "DeleteCredential", want: timeouts.Metadata},
 		{method: "DeleteUserTags", want: timeouts.Metadata},
 	}
@@ -162,6 +263,29 @@ func TestCallTimeoutsForMethod(t *testing.T) {
 	}
 	if timeouts.Mutation <= timeouts.Metadata {
 		t.Fatalf("mutation bound %s must exceed the metadata bound %s", timeouts.Mutation, timeouts.Metadata)
+	}
+}
+
+// TestCallTimeoutsWithMutationIsOperatorTunable pins the tuning path an operator
+// uses when a valid bulk delete on a large collection outlasts the built-in
+// bound. A non-positive value keeps the built-in bound, because configuration
+// that is unset or wrong must never leave a mutation unbounded.
+func TestCallTimeoutsWithMutationIsOperatorTunable(t *testing.T) {
+	base := DefaultCallTimeouts()
+	const configuredMutation = 30 * time.Minute
+
+	tuned := base.WithMutation(configuredMutation)
+	if tuned.Mutation != configuredMutation {
+		t.Fatalf("tuned mutation bound = %s, want the configured %s", tuned.Mutation, configuredMutation)
+	}
+	if tuned.Metadata != base.Metadata {
+		t.Fatalf("tuning the mutation bound changed the metadata bound to %s, want %s", tuned.Metadata, base.Metadata)
+	}
+
+	for _, unusable := range []time.Duration{0, -time.Second} {
+		if got := base.WithMutation(unusable).Mutation; got != base.Mutation {
+			t.Fatalf("WithMutation(%s) = %s, want the built-in %s bound kept", unusable, got, base.Mutation)
+		}
 	}
 }
 
@@ -260,7 +384,9 @@ var fakeMilvusServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*fakeMilvusHandler)(nil),
 	Methods: []grpc.MethodDesc{
 		{MethodName: "Delete", Handler: handleDelayedCall},
+		{MethodName: "TruncateCollection", Handler: handleDelayedCall},
 		{MethodName: "DescribeCollection", Handler: handleDelayedCall},
+		{MethodName: "DeleteCredential", Handler: handleDelayedCall},
 	},
 	Metadata: "milvusgrpc_test",
 }
@@ -308,11 +434,13 @@ func invokeFakeMilvus(conn *grpc.ClientConn, method string) error {
 	)
 }
 
-// TestDialOptionsApplyMutationTimeoutToSlowDelete drives the real dial options
-// against a fake server whose calls outlast the metadata bound. Delete must
-// survive on the larger mutation bound while an ordinary metadata call on the
-// same connection still fails fast, which is what one flat bound could not do.
-func TestDialOptionsApplyMutationTimeoutToSlowDelete(t *testing.T) {
+// TestDialOptionsApplyMutationTimeoutToSlowMutations drives the real dial
+// options against a fake server whose calls outlast the metadata bound. Each
+// data mutation must survive on the larger mutation bound while a read-only call
+// and a credential call on the same connection still fail fast, which is what
+// one flat bound could not do and what a name-prefix classification would get
+// wrong for DeleteCredential.
+func TestDialOptionsApplyMutationTimeoutToSlowMutations(t *testing.T) {
 	const serverDelay = 400 * time.Millisecond
 	timeouts := CallTimeouts{
 		Metadata: 100 * time.Millisecond,
@@ -322,18 +450,23 @@ func TestDialOptionsApplyMutationTimeoutToSlowDelete(t *testing.T) {
 	address := startFakeMilvus(t, serverDelay)
 	conn := dialFakeMilvus(t, address, timeouts)
 
-	if err := invokeFakeMilvus(conn, "Delete"); err != nil {
-		t.Fatalf("Delete under the %s mutation bound failed: %v", timeouts.Mutation, err)
+	for _, method := range []string{"Delete", "TruncateCollection"} {
+		if err := invokeFakeMilvus(conn, method); err != nil {
+			t.Fatalf("%s under the %s mutation bound failed: %v", method, timeouts.Mutation, err)
+		}
 	}
 
-	err := invokeFakeMilvus(conn, "DescribeCollection")
-	if status.Code(err) != codes.DeadlineExceeded {
-		t.Fatalf(
-			"DescribeCollection error = %v (code %s), want DeadlineExceeded from the %s metadata bound",
-			err,
-			status.Code(err),
-			timeouts.Metadata,
-		)
+	for _, method := range []string{"DescribeCollection", "DeleteCredential"} {
+		err := invokeFakeMilvus(conn, method)
+		if status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf(
+				"%s error = %v (code %s), want DeadlineExceeded from the %s metadata bound",
+				method,
+				err,
+				status.Code(err),
+				timeouts.Metadata,
+			)
+		}
 	}
 }
 

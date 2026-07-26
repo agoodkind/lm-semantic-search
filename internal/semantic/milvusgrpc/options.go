@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors"
-	"goodkind.io/lm-semantic-search/internal/clock"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
@@ -24,13 +23,17 @@ const (
 	// from reporting itself as running while nothing moves.
 	defaultMetadataCallTimeout = 60 * time.Second
 
-	// defaultMutationCallTimeout bounds a Milvus call that writes or deletes
-	// rows. One filter-based Delete covers every row of a conversation, and
-	// Milvus evaluates the non-primary relativePath predicate across the loaded
+	// defaultMutationCallTimeout is the bound a client applies to a Milvus call
+	// that writes or deletes rows when its configuration names no other value.
+	// One filter-based Delete covers every row of a conversation, and Milvus
+	// evaluates the non-primary relativePath predicate across the loaded
 	// collection before it answers, so the matching row count is unbounded and a
 	// valid bulk delete on a large collection can run well past the metadata
 	// bound. A separate, larger bound keeps the call bounded without turning a
-	// valid delete into a milvus_unavailable ingest failure.
+	// valid delete into a milvus_unavailable ingest failure. No fixed duration is
+	// provably sufficient for an unbounded row count, so the bound is tunable
+	// through CallTimeouts.WithMutation and an operator whose collection is large
+	// enough to outlast this default raises it without a rebuild.
 	defaultMutationCallTimeout = 5 * time.Minute
 
 	// keepaliveTime is how long the connection stays idle before the client
@@ -46,11 +49,29 @@ const (
 	keepaliveTimeout = 20 * time.Second
 )
 
-// mutationMethodNames lists the Milvus unary methods that write or delete
-// collection rows and therefore carry the mutation deadline. The names match
-// the milvuspb MilvusService method names exactly, so the unrelated
-// DeleteCredential and DeleteUserTags calls keep the metadata bound.
-var mutationMethodNames = []string{"Delete", "Insert", "Upsert", "Flush"}
+// mutationMethodNames lists the Milvus unary methods that write, delete, or
+// persist collection data and therefore carry the mutation deadline. The list
+// was read off the pinned milvuspb MilvusService_ServiceDesc method table
+// rather than inferred from method names, so it covers the whole data-mutation
+// surface that service declares: the four row-level calls plus TruncateCollection,
+// Import, ReplicateMessage, and FlushAll, whose durations all scale with data
+// volume rather than with schema size.
+//
+// Every entry matches a service method name exactly. Exact matching is what
+// keeps the administrative deletes on the metadata bound, because a prefix or
+// substring rule would sweep DeleteCredential and DeleteUserTags in with Delete.
+// Collection, partition, index, alias, database, resource-group, and role calls
+// stay on the metadata bound for the same reason.
+var mutationMethodNames = []string{
+	"Delete",
+	"Flush",
+	"FlushAll",
+	"Import",
+	"Insert",
+	"ReplicateMessage",
+	"TruncateCollection",
+	"Upsert",
+}
 
 // CallTimeouts is the per-call deadline policy a Milvus client applies to every
 // unary call. Two classes are enough because Milvus calls split cleanly into
@@ -72,6 +93,21 @@ func DefaultCallTimeouts() CallTimeouts {
 	}
 }
 
+// WithMutation returns the policy with the mutation bound replaced, so an
+// operator whose collection is large enough for a valid bulk delete to outlast
+// the default raises it from configuration instead of a rebuild.
+//
+// A non-positive duration keeps the current bound. Configuration that is unset,
+// zero, or negative must not remove the bound, because an unbounded mutation is
+// the silent hang this policy exists to prevent.
+func (timeouts CallTimeouts) WithMutation(mutation time.Duration) CallTimeouts {
+	if mutation <= 0 {
+		return timeouts
+	}
+	timeouts.Mutation = mutation
+	return timeouts
+}
+
 // forMethod returns the bound that applies to one Milvus unary method, named
 // without its service prefix.
 func (timeouts CallTimeouts) forMethod(method string) time.Duration {
@@ -91,11 +127,15 @@ func (reportable deadlineReportable) ClientReporter(
 	callMeta interceptors.CallMeta,
 ) (interceptors.Reporter, context.Context) {
 	timeout := reportable.timeouts.forMethod(callMeta.Method)
-	callContext := ctx
-	cancel := func() {}
-	if needsBound(ctx, timeout) {
-		callContext, cancel = context.WithTimeout(ctx, timeout)
-	}
+	// context.WithTimeout already implements the shorter-of-two rule this policy
+	// needs: it keeps the caller's deadline when that one is earlier and installs
+	// the bound otherwise. Deciding between the two here instead would mean
+	// comparing an instant against a freshly read clock, and reading the wall
+	// clock strips Go's monotonic reading, so a forward wall-clock correction
+	// would make a caller deadline look expired and hand a wedged call the full
+	// caller budget. The context package compares the two deadlines on the
+	// monotonic timer, which no clock correction moves.
+	callContext, cancel := context.WithTimeout(ctx, timeout)
 	reporter := &deadlineReporter{
 		NoopReporter: interceptors.NoopReporter{},
 		cancel:       cancel,
@@ -104,19 +144,6 @@ func (reportable deadlineReportable) ClientReporter(
 		logger:       reportable.logger,
 	}
 	return reporter, callContext
-}
-
-// needsBound reports whether the call must carry the transport bound. A caller
-// that set no deadline needs it, and so does a caller whose own deadline is
-// later than the bound, because that caller would otherwise let a wedged call
-// block for its full budget. A caller that already asked for less keeps its own
-// earlier deadline untouched.
-func needsBound(ctx context.Context, timeout time.Duration) bool {
-	deadline, hasDeadline := ctx.Deadline()
-	if !hasDeadline {
-		return true
-	}
-	return deadline.After(clock.Now().Add(timeout))
 }
 
 type deadlineReporter struct {

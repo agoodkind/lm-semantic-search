@@ -106,6 +106,16 @@ type Config struct {
 	IncludeSubmodules      []string
 	MilvusAddress          string
 	MilvusToken            string
+	// MilvusMutationCallTimeoutMS bounds one Milvus row-mutating call: Insert,
+	// Upsert, Delete, Flush, FlushAll, Import, ReplicateMessage, and
+	// TruncateCollection. The duration of those calls scales with the number of
+	// rows they match, and a filter-based Delete matches an unbounded row count,
+	// so no fixed value is provably sufficient for every collection. An operator
+	// whose collection is large enough for a valid mutation to be cancelled at
+	// the built-in bound raises this instead of rebuilding the daemon. Zero or
+	// below keeps the transport package's own five-minute bound, so an unset or
+	// invalid value never leaves a mutation unbounded.
+	MilvusMutationCallTimeoutMS int
 	// IndexBackend selects the vector store implementation: "milvus" (default) or
 	// "local". Derived from Profile by ApplyProfile; may also be set directly.
 	IndexBackend           string
@@ -183,8 +193,12 @@ type persistedConfig struct {
 	QueryInstructionPrefix    string `json:"queryInstructionPrefix"`
 	MilvusAddress             string `json:"milvusAddress"`
 	MilvusToken               string `json:"milvusToken"`
-	CollectionNameOverride    string `json:"collectionNameOverride"`
-	HybridMode                *bool  `json:"hybridMode"`
+	// MilvusMutationCallTimeoutMS is a plain int because zero is not a distinct
+	// setting here: it means "use the transport default", the same as an omitted
+	// field, since a mutation must never run unbounded.
+	MilvusMutationCallTimeoutMS int    `json:"milvusMutationCallTimeoutMs"`
+	CollectionNameOverride      string `json:"collectionNameOverride"`
+	HybridMode                  *bool  `json:"hybridMode"`
 }
 
 type embeddingConfigDefaults struct {
@@ -297,6 +311,10 @@ func Default() (Config, error) {
 		IncludeSubmodules:         parseCommaSeparated(os.Getenv("CLAUDE_CONTEXT_INCLUDE_SUBMODULES")),
 		MilvusAddress:             envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),
 		MilvusToken:               envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),
+		MilvusMutationCallTimeoutMS: envIntOrDefault(
+			"CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS",
+			fileConfig.MilvusMutationCallTimeoutMS,
+		),
 		CollectionNameOverride:    envOrDefault("CODE_CHUNKS_COLLECTION_NAME_OVERRIDE", fileConfig.CollectionNameOverride),
 		HybridMode:                envBoolOrDefault("HYBRID_MODE", boolOrDefault(fileConfig.HybridMode, true)),
 		BackgroundSyncEnabled:     envBoolOrDefault("CLAUDE_CONTEXT_BACKGROUND_SYNC", true),

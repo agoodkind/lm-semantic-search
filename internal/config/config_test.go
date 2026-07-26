@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
@@ -536,4 +537,42 @@ func TestDefaultLogRotationAndCleanupEnvOverrides(t *testing.T) {
 	if cfg.LogCleanupIntervalMS != 60000 {
 		t.Errorf("LogCleanupIntervalMS = %d want 60000", cfg.LogCleanupIntervalMS)
 	}
+}
+
+// TestDefaultResolvesMilvusMutationCallTimeout pins the operator's tuning path
+// for the Milvus mutation bound. That bound covers calls whose duration scales
+// with the number of rows they match, so an operator with a large collection
+// raises it from config.json or the environment rather than from a rebuild.
+// Leaving it unset resolves to zero, which is how the transport keeps its own
+// built-in bound.
+func TestDefaultResolvesMilvusMutationCallTimeout(t *testing.T) {
+	const fileTimeoutMS = 900000
+	const environmentTimeoutMS = 1800000
+
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
+		cfg := defaultWithPersistedConfig(t, persistedConfig{})
+		if cfg.MilvusMutationCallTimeoutMS != 0 {
+			t.Errorf(
+				"MilvusMutationCallTimeoutMS = %d want 0 so the transport keeps its built-in bound",
+				cfg.MilvusMutationCallTimeoutMS,
+			)
+		}
+	})
+
+	t.Run("config file", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
+		cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMutationCallTimeoutMS: fileTimeoutMS})
+		if cfg.MilvusMutationCallTimeoutMS != fileTimeoutMS {
+			t.Errorf("MilvusMutationCallTimeoutMS = %d want %d", cfg.MilvusMutationCallTimeoutMS, fileTimeoutMS)
+		}
+	})
+
+	t.Run("environment overrides config file", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", strconv.Itoa(environmentTimeoutMS))
+		cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMutationCallTimeoutMS: fileTimeoutMS})
+		if cfg.MilvusMutationCallTimeoutMS != environmentTimeoutMS {
+			t.Errorf("MilvusMutationCallTimeoutMS = %d want %d", cfg.MilvusMutationCallTimeoutMS, environmentTimeoutMS)
+		}
+	})
 }
