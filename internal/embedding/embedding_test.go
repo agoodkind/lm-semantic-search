@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -417,23 +418,32 @@ func TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument(t *testing.T) {
 		t.Fatal("the in-process provider accepted an input past its tokenizer bound")
 	}
 
+	// The in-process input was refused by the byte ceiling, which is 64 bytes per
+	// allowed token, so the limit the caller must act on is that byte figure and
+	// never the model's 512-token window.
+	onnxByteBound := strconv.Itoa(onnxProviderUnderTest.runtime.tokenizer.maximumInputBytes())
+	onnxTokenLimit := strconv.Itoa(onnxProviderUnderTest.runtime.tokenizer.maximumTokens)
+
 	cases := []struct {
-		name        string
-		err         error
-		wantReason  string
-		wantFigures []string
+		name          string
+		err           error
+		wantReason    adapterr.EmbedRejectionReason
+		wantFigures   []string
+		forbidFigures []string
 	}{
 		{
-			name:        "hosted endpoint rejection",
-			err:         hostedErr,
-			wantReason:  embedCodeContextLengthExceeded,
-			wantFigures: []string{"10000", "8192"},
+			name:          "hosted endpoint rejection",
+			err:           hostedErr,
+			wantReason:    adapterr.EmbedRejectionContextLengthExceeded,
+			wantFigures:   []string{"10000", "8192", "tokens"},
+			forbidFigures: nil,
 		},
 		{
-			name:        "in-process rejection",
-			err:         onnxErr,
-			wantReason:  embedCodeInputBytesExceeded,
-			wantFigures: []string{"512"},
+			name:          "in-process rejection",
+			err:           onnxErr,
+			wantReason:    adapterr.EmbedRejectionInputBytesExceeded,
+			wantFigures:   []string{onnxByteBound, "bytes"},
+			forbidFigures: []string{onnxTokenLimit + " tokens", onnxTokenLimit + "-token"},
 		},
 	}
 	for _, testCase := range cases {
@@ -448,16 +458,21 @@ func TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument(t *testing.T) {
 			if !adapterErr.SafeForClient {
 				t.Fatal("a refused input must be safe to show the caller; otherwise the reason never leaves the daemon log")
 			}
-			if adapterErr.Code != testCase.wantReason {
+			if adapterErr.Code != string(testCase.wantReason) {
 				t.Fatalf("code = %q, want the reason %q", adapterErr.Code, testCase.wantReason)
 			}
 			message := adapterr.SafeMessage(testCase.err)
-			if !strings.Contains(message, testCase.wantReason) {
+			if !strings.Contains(message, string(testCase.wantReason)) {
 				t.Fatalf("client message %q does not name the reason %q", message, testCase.wantReason)
 			}
 			for _, figure := range testCase.wantFigures {
 				if !strings.Contains(message, figure) {
 					t.Fatalf("client message %q does not carry the figure %q", message, figure)
+				}
+			}
+			for _, wrongFigure := range testCase.forbidFigures {
+				if strings.Contains(message, wrongFigure) {
+					t.Fatalf("client message %q quotes %q, which is not the limit that refused the input", message, wrongFigure)
 				}
 			}
 			for _, leak := range []string{"OpenAI", "ONNX", "onnx", "bge-small", "endpoint"} {
@@ -466,6 +481,61 @@ func TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestHostedRefusalWithoutIndexProseStaysAnInvalidArgument covers the endpoint
+// that answers context_length_exceeded without the "input at index N" wording
+// the live endpoint happens to use. Classification comes from the HTTP status
+// and the error code, so the caller still gets an actionable invalid argument
+// rather than an embedder-rejected error that also degrades embedder health.
+func TestHostedRefusalWithoutIndexProseStaysAnInvalidArgument(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"The input is too long for this model."}}`))
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	vector, embedErr := provider.Embed(context.Background(), strings.Repeat("a", oversizedHostedInputBytes))
+	if embedErr == nil {
+		t.Fatal("Embed returned a vector for a query the endpoint refused")
+	}
+	if vector != nil {
+		t.Fatalf("Embed returned %d values alongside the rejection", len(vector))
+	}
+
+	var adapterErr *adapterr.AdapterError
+	if !errors.As(embedErr, &adapterErr) {
+		t.Fatalf("a refusal worded without an index stayed untyped: %v", embedErr)
+	}
+	if adapterErr.Class != adapterr.ClassInvalidArgument {
+		t.Fatalf("class = %q, want %q; the endpoint refused one input and is otherwise healthy", adapterErr.Class, adapterr.ClassInvalidArgument)
+	}
+	if adapterr.IsInfraFailure(embedErr) {
+		t.Fatal("a refused input read as a shared-infrastructure failure, which degrades the embedder banner")
+	}
+	if errors.Is(embedErr, ErrEmbedderRejected) {
+		t.Fatal("a refused input read as a rejecting embedder")
+	}
+	message := adapterr.SafeMessage(embedErr)
+	if !strings.Contains(message, string(adapterr.EmbedRejectionContextLengthExceeded)) {
+		t.Fatalf("client message %q does not name the reason", message)
+	}
+	// No figures could be read from that wording, so the message has to say so
+	// rather than quote a zero the caller would act on.
+	if !strings.Contains(message, "no size figures") {
+		t.Fatalf("client message %q does not say the figures are missing", message)
+	}
+	if strings.Contains(message, " 0 ") || strings.Contains(message, "0-token") {
+		t.Fatalf("client message %q quotes a zero figure", message)
 	}
 }
 

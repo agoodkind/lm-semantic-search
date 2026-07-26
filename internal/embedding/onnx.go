@@ -19,6 +19,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
@@ -177,8 +178,8 @@ func (provider *onnxProvider) Embed(
 			"model_max_tokens", preset.MaximumTokens,
 			"err", rejectionErr,
 		)
-		return nil, rejectedInputError(
-			provider.skippedInput(0, outcome),
+		return nil, adapterr.NewEmbedInputRejected(
+			provider.clientRejection(outcome, len(text)),
 			fmt.Errorf(
 				"generate ONNX embedding for %q: %w",
 				preset.Name,
@@ -189,23 +190,64 @@ func (provider *onnxProvider) Embed(
 	return outcome.vector, nil
 }
 
-// skippedInput renders one refused input for the batch's Skipped list and for
-// the single-input error, so both report the same reason and figures. The
-// model's token limit travels only with a rejection that is about length; a NUL
-// byte is not a size problem, so quoting a token limit beside it would send the
-// caller after the wrong fix.
+// clientRejection renders one refused input for the client-visible error. Each
+// reason names the limit that actually refused the input: the model's token
+// window for an input the tokenizer measured, the byte ceiling for an input
+// refused before tokenizing, and no limit at all for a NUL byte, which is not a
+// size problem and would send the caller after the wrong fix if a limit were
+// quoted beside it.
+func (provider *onnxProvider) clientRejection(
+	outcome onnxEmbedOutcome,
+	inputBytes int,
+) adapterr.EmbedInputRejection {
+	reason := adapterr.EmbedRejectionReason(outcome.rejection)
+	switch outcome.rejection {
+	case onnxInputOverTokenLimit:
+		return adapterr.EmbedInputRejection{
+			Reason:   reason,
+			Limit:    adapterr.EmbedLimitTokens,
+			Measured: outcome.tokenCount,
+			Maximum:  int(provider.runtime.preset.MaximumTokens),
+		}
+	case onnxInputBytesExceeded:
+		return adapterr.EmbedInputRejection{
+			Reason:   reason,
+			Limit:    adapterr.EmbedLimitBytes,
+			Measured: inputBytes,
+			Maximum:  provider.runtime.tokenizer.maximumInputBytes(),
+		}
+	case onnxInputContainsNUL, onnxInputAccepted:
+		return adapterr.EmbedInputRejection{
+			Reason:   reason,
+			Limit:    adapterr.EmbedLimitNone,
+			Measured: 0,
+			Maximum:  0,
+		}
+	default:
+		return adapterr.EmbedInputRejection{
+			Reason:   reason,
+			Limit:    adapterr.EmbedLimitNone,
+			Measured: 0,
+			Maximum:  0,
+		}
+	}
+}
+
+// skippedInput renders one refused input for the batch's Skipped list. The
+// model's token limit travels only with a rejection the tokenizer measured
+// against it; the byte ceiling is a different limit and is named in the reason
+// rather than reported as a token count the caller cannot act on.
 func (provider *onnxProvider) skippedInput(
 	index int,
 	outcome onnxEmbedOutcome,
 ) SkippedInput {
 	maximumTokens := 0
-	if outcome.rejection == onnxInputOverTokenLimit ||
-		outcome.rejection == onnxInputBytesExceeded {
+	if outcome.rejection == onnxInputOverTokenLimit {
 		maximumTokens = int(provider.runtime.preset.MaximumTokens)
 	}
 	return SkippedInput{
 		Index:          index,
-		Reason:         string(outcome.rejection),
+		Reason:         adapterr.EmbedRejectionReason(outcome.rejection),
 		ReportedTokens: outcome.tokenCount,
 		MaxTokens:      maximumTokens,
 	}

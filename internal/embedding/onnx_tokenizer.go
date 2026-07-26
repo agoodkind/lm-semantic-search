@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/daulet/tokenizers"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 )
 
 // onnxMaximumInputBytesPerToken caps the input the tokenizer is asked to measure,
@@ -31,17 +32,18 @@ type onnxInputRejection string
 
 const (
 	// onnxInputAccepted marks an input the provider may tokenize and embed whole.
+	// It is the one value that is not a rejection reason.
 	onnxInputAccepted onnxInputRejection = ""
 	// onnxInputContainsNUL marks an input carrying a NUL byte. The binding passes
 	// the text as a NUL-terminated C string, so the tokenizer would measure only
 	// the bytes before that NUL and any vector would cover that prefix alone.
-	onnxInputContainsNUL onnxInputRejection = embedCodeInputContainsNUL
+	onnxInputContainsNUL onnxInputRejection = onnxInputRejection(adapterr.EmbedRejectionInputContainsNUL)
 	// onnxInputBytesExceeded marks an input past onnxMaximumInputBytesPerToken per
 	// allowed token, rejected before tokenization rather than measured exactly.
-	onnxInputBytesExceeded onnxInputRejection = embedCodeInputBytesExceeded
+	onnxInputBytesExceeded onnxInputRejection = onnxInputRejection(adapterr.EmbedRejectionInputBytesExceeded)
 	// onnxInputOverTokenLimit marks an input the tokenizer measured past the
 	// model's maximum token count.
-	onnxInputOverTokenLimit onnxInputRejection = embedCodeContextLengthExceeded
+	onnxInputOverTokenLimit onnxInputRejection = onnxInputRejection(adapterr.EmbedRejectionContextLengthExceeded)
 )
 
 // encodedONNXInput carries one tokenized input. tokenCount is the input's full

@@ -242,7 +242,7 @@ func logSkippedOversizedChunk(ctx context.Context, chunk model.StoredChunk, skip
 	slog.WarnContext(
 		ctx,
 		"semantic.embed_input_skipped_oversized",
-		"reason", skip.Reason,
+		"reason", string(skip.Reason),
 		"conversation_id", chunk.ConversationID,
 		"relative_path", chunk.RelativePath,
 		"estimated_tokens", estimatedTokenCount(chunk.Content),

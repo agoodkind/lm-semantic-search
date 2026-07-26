@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
@@ -234,8 +235,8 @@ func TestONNXEmbedBatchSkipsOverLimitInputInsteadOfTruncating(t *testing.T) {
 	if skip.Index != 1 {
 		t.Fatalf("skipped index = %d, want 1", skip.Index)
 	}
-	if skip.Reason != embedCodeContextLengthExceeded {
-		t.Fatalf("skipped reason = %q, want %q", skip.Reason, embedCodeContextLengthExceeded)
+	if skip.Reason != adapterr.EmbedRejectionContextLengthExceeded {
+		t.Fatalf("skipped reason = %q, want %q", skip.Reason, adapterr.EmbedRejectionContextLengthExceeded)
 	}
 	if skip.MaxTokens != int(preset.MaximumTokens) {
 		t.Fatalf("skipped MaxTokens = %d, want %d", skip.MaxTokens, preset.MaximumTokens)
@@ -303,8 +304,8 @@ func TestONNXRejectsInputWithNULByteInsteadOfEmbeddingItsPrefix(t *testing.T) {
 	if len(result.Skipped) != 1 {
 		t.Fatalf("skipped = %d, want 1; the input must be reported, never silently dropped", len(result.Skipped))
 	}
-	if result.Skipped[0].Reason != embedCodeInputContainsNUL {
-		t.Fatalf("skipped reason = %q, want %q", result.Skipped[0].Reason, embedCodeInputContainsNUL)
+	if result.Skipped[0].Reason != adapterr.EmbedRejectionInputContainsNUL {
+		t.Fatalf("skipped reason = %q, want %q", result.Skipped[0].Reason, adapterr.EmbedRejectionInputContainsNUL)
 	}
 	if result.Skipped[0].Index != 0 {
 		t.Fatalf("skipped index = %d, want 0", result.Skipped[0].Index)
@@ -400,11 +401,17 @@ func TestONNXEmbedBatchReportsOversizedInputAsSkipped(t *testing.T) {
 	if len(result.Skipped) != 1 {
 		t.Fatalf("skipped = %d, want 1; the input must be reported, never silently dropped", len(result.Skipped))
 	}
-	if result.Skipped[0].Reason != embedCodeInputBytesExceeded {
-		t.Fatalf("skipped reason = %q, want %q", result.Skipped[0].Reason, embedCodeInputBytesExceeded)
+	if result.Skipped[0].Reason != adapterr.EmbedRejectionInputBytesExceeded {
+		t.Fatalf("skipped reason = %q, want %q", result.Skipped[0].Reason, adapterr.EmbedRejectionInputBytesExceeded)
 	}
-	if result.Skipped[0].MaxTokens != provider.runtime.tokenizer.maximumTokens {
-		t.Fatalf("skipped MaxTokens = %d, want %d", result.Skipped[0].MaxTokens, provider.runtime.tokenizer.maximumTokens)
+	// The byte ceiling refused this input, not the model's token window, so the
+	// skip carries no token limit. Reporting the model's 512 tokens here would
+	// name a figure that had nothing to do with the refusal.
+	if result.Skipped[0].MaxTokens != 0 {
+		t.Fatalf("skipped MaxTokens = %d, want 0; the token limit is not the limit that refused this input", result.Skipped[0].MaxTokens)
+	}
+	if result.Skipped[0].ReportedTokens != 0 {
+		t.Fatalf("skipped ReportedTokens = %d, want 0; the input was never tokenized", result.Skipped[0].ReportedTokens)
 	}
 }
 
