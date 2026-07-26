@@ -21,7 +21,10 @@ import (
 // Milvus does not support an in-place column update on a primary-keyed
 // row (the primary key in this schema is derived from relativePath), so
 // CopyChunks queries the source rows, computes new IDs and rows for the
-// destination path, deletes the source rows, then inserts the new rows.
+// destination path, inserts the new rows, then deletes the source rows.
+// A failure after the insert leaves both copies available instead of losing
+// the only stored copy. CopyChunks returns a source-delete failure without
+// retrying, leaving later convergence to remove the source.
 // The dense vector is preserved across the copy; the sparse vector, when
 // the collection is hybrid, is re-derived by the BM25 function from the
 // preserved content so no embedding API call is issued.
@@ -55,28 +58,54 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 		dstRelativePath,
 	)
 
-	if _, err := service.deleteByRelativePaths(
-		ctx,
-		collectionName,
-		[]string{srcRelativePath},
-	); err != nil {
-		return 0, err
+	mutations := copyChunkMutations{
+		insertDestination: func() error {
+			// CopyChunks rewrites existing rows within one known collection and
+			// has no item source to ask, so it classifies the column set from
+			// that collection.
+			return service.insertBatchWithIDs(
+				ctx,
+				collectionName,
+				rewritten,
+				destinationIDs,
+				source.vectors,
+				splitPartsRecorded,
+				storeColumnSetForCollection(collectionName),
+			)
+		},
+		deleteSource: func() error {
+			// The deleted-row count is not part of the copy's result, which
+			// reports the rows written at the destination.
+			_, deleteErr := service.deleteByRelativePaths(
+				ctx,
+				collectionName,
+				[]string{srcRelativePath},
+			)
+			return deleteErr
+		},
 	}
-	// CopyChunks rewrites existing rows within one known collection and has no
-	// item source to ask, so it classifies the column set from that collection.
-	if err := service.insertBatchWithIDs(
-		ctx,
-		collectionName,
-		rewritten,
-		destinationIDs,
-		source.vectors,
-		splitPartsRecorded,
-		storeColumnSetForCollection(collectionName),
-	); err != nil {
+	if err := runCopyChunkMutations(mutations); err != nil {
 		return 0, err
 	}
 	slog.InfoContext(ctx, "semantic.copy_chunks", "collection", collectionName, "src", srcRelativePath, "dst", dstRelativePath, "rows", len(rewritten))
 	return len(rewritten), nil
+}
+
+type copyChunkMutation func() error
+
+type copyChunkMutations struct {
+	insertDestination copyChunkMutation
+	deleteSource      copyChunkMutation
+}
+
+func runCopyChunkMutations(mutations copyChunkMutations) error {
+	if err := mutations.insertDestination(); err != nil {
+		return err
+	}
+	if err := mutations.deleteSource(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func copiedChunkID(sourceID string, dstRelativePath string) string {
