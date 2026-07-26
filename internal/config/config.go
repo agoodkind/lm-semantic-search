@@ -41,13 +41,25 @@ const (
 	// sweep. Five minutes keeps the sweep off the hot path while staying timely.
 	defaultLogCleanupIntervalMS = 300000
 	nvEmbedCodeQueryPrefix      = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
-	// embedTokenSafetyMargin scales EmbeddingMaxTokens down before splitting,
-	// because estimatedTokenCount (bytes/4) can undercount the model's real
-	// tokenizer for dense or non-Latin text.
+	// EmbedModelInputTokenLimit is the embedding model's hard per-input token
+	// limit. The server rejects a longer single input with HTTP 400
+	// context_length_exceeded ("maximum context length is 4096 tokens") and drops
+	// that input, so splitting targets this limit to divide and index an oversized
+	// input instead of losing it. It is always enforced, even when
+	// embeddingMaxTokens is unset, so a missing or partial config cannot disable
+	// the split and let the embedder drop content.
+	EmbedModelInputTokenLimit = 4096
+	// embedTokenSafetyMargin scales the token cap down before splitting, because a
+	// byte-based budget cannot see the model's real tokenizer and dense or
+	// non-Latin text packs more tokens per byte than the estimate assumes.
 	embedTokenSafetyMargin = 0.9
-	// bytesPerEstimatedToken mirrors estimatedTokenCount's bytes-per-token ratio,
-	// converting a token cap into a byte budget for byte-oriented splitters.
-	bytesPerEstimatedToken = 4
+	// conservativeEmbedBytesPerToken{Num,Den} express ~2.5 bytes per token, below
+	// the densest measured content (~2.77 bytes/token). Converting a token cap into
+	// a byte budget at this ratio overestimates tokens, so a byte-budgeted
+	// sub-chunk stays under the model limit even for dense text the byte count
+	// cannot weigh directly.
+	conservativeEmbedBytesPerTokenNum = 5
+	conservativeEmbedBytesPerTokenDen = 2
 )
 
 type embeddingProvider string
@@ -86,10 +98,11 @@ type Config struct {
 	// EmbeddingBatchTokenBudget caps the estimated tokens (bytes/4) packed into
 	// one embedding request. EmbeddingBatchSize stays as the row-count ceiling.
 	EmbeddingBatchTokenBudget int
-	// EmbeddingMaxTokens caps the estimated tokens (bytes/4) of a single chunk
-	// sent to the embedder, so a chunk never exceeds the model's input limit and
-	// gets silently truncated. There is no default: an unset value (0) disables
-	// the cap and preserves prior behavior, with a startup warning. Use
+	// EmbeddingMaxTokens caps the tokens of a single chunk sent to the embedder,
+	// so a chunk is split rather than dropped when it would exceed the model's
+	// input limit. An unset value (0) does not disable the cap: the model's hard
+	// input-token limit is always enforced by EffectiveEmbedTokenCap, and a
+	// configured value only tightens the cap below that limit. Use
 	// EffectiveEmbedTokenCap and EmbedChunkByteBudget to apply the safety margin.
 	EmbeddingMaxTokens int
 	// EmbeddingRequestTimeoutMS bounds one embedding HTTP request. A wedged or
@@ -438,16 +451,18 @@ func readPersistedConfig(path string) persistedConfig {
 	return cfg
 }
 
-// resolveEmbeddingMaxTokens applies the env override over the config value.
-// There is no default: an unset or non-positive value resolves to 0, which
-// disables the per-chunk cap, and a warning names the knob to set.
+// resolveEmbeddingMaxTokens applies the env override over the config value. An
+// unset or non-positive value resolves to 0, which falls back to the model's
+// hard input-token limit in EffectiveEmbedTokenCap rather than disabling the
+// split; a warning names the knob to set for a tighter, batching-friendly cap.
 func resolveEmbeddingMaxTokens(fileValue int) int {
 	value := envIntOrDefault("EMBEDDING_MAX_TOKENS", fileValue)
 	if value <= 0 {
 		slog.Warn(
-			"embeddingMaxTokens is unset; per-chunk token cap disabled, so oversize inputs may be silently truncated by the embedder",
+			"embeddingMaxTokens is unset; splitting falls back to the model's hard input-token limit, set the knob for a tighter per-chunk cap",
 			"config_field", "embeddingMaxTokens",
 			"env_var", "EMBEDDING_MAX_TOKENS",
+			"model_token_limit", EmbedModelInputTokenLimit,
 		)
 		return 0
 	}
@@ -501,24 +516,31 @@ func resolveMilvusMutationCallTimeoutMS(fileValue int) int {
 	return value
 }
 
-// EffectiveEmbedTokenCap returns the per-chunk estimated-token cap after the
-// safety margin, or 0 when capping is disabled (maxTokens <= 0).
+// EffectiveEmbedTokenCap returns the per-chunk token cap after the safety margin.
+// The model's hard input-token limit is always enforced, so an unset or larger
+// embeddingMaxTokens still caps at the model limit rather than disabling the
+// split and letting the embedder drop an oversized input; a configured value
+// below the model limit tightens the cap further. The result is always at least
+// one and always below EmbedModelInputTokenLimit.
 func EffectiveEmbedTokenCap(maxTokens int) int {
+	modelLimit := EmbedModelInputTokenLimit
+	modelCap := int(float64(modelLimit) * embedTokenSafetyMargin)
 	if maxTokens <= 0 {
-		return 0
+		return modelCap
 	}
-	return max(int(float64(maxTokens)*embedTokenSafetyMargin), 1)
+	configuredCap := int(float64(maxTokens) * embedTokenSafetyMargin)
+	return max(min(configuredCap, modelCap), 1)
 }
 
 // EmbedChunkByteBudget returns the byte budget a byte-oriented splitter uses to
-// keep a chunk's estimated token count within EffectiveEmbedTokenCap, or 0 when
-// capping is disabled.
+// keep a sub-chunk within EffectiveEmbedTokenCap real tokens. It converts the
+// token cap at a conservative bytes-per-token ratio below the densest measured
+// content, so dense text stays under the model limit even though the byte count
+// cannot see the real tokenizer. It is always positive because the model limit
+// is always enforced.
 func EmbedChunkByteBudget(maxTokens int) int {
 	tokenCap := EffectiveEmbedTokenCap(maxTokens)
-	if tokenCap <= 0 {
-		return 0
-	}
-	return tokenCap * bytesPerEstimatedToken
+	return tokenCap * conservativeEmbedBytesPerTokenNum / conservativeEmbedBytesPerTokenDen
 }
 
 func intOrDefault(value int, fallback int) int {
