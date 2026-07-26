@@ -1,6 +1,7 @@
 package semantic
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -484,6 +485,48 @@ func TestPackForEmbeddingClosesOnConfiguredRowCap(t *testing.T) {
 	for i, group := range groups {
 		if len(group) != want[i] {
 			t.Fatalf("group %d rows = %d, want %d", i, len(group), want[i])
+		}
+	}
+}
+
+// TestPackChunksLargeInputKeepsEveryChunkInOrder packs an input large enough to
+// need many groups and asserts the caller-visible outcome: every chunk appears
+// exactly once, in input order, and no group exceeds the token budget.
+func TestPackChunksLargeInputKeepsEveryChunkInOrder(t *testing.T) {
+	const (
+		chunkCount  = 2000
+		chunkBytes  = 1500
+		tokenBudget = 6000
+	)
+	chunks := make([]model.StoredChunk, 0, chunkCount)
+	for index := range chunkCount {
+		chunks = append(chunks, model.StoredChunk{
+			Content: strconv.Itoa(index) + strings.Repeat("x", chunkBytes),
+		})
+	}
+
+	groups := packChunksByEstimatedTokens(chunks, math.MaxInt, tokenBudget, nil)
+
+	flattened := make([]model.StoredChunk, 0, chunkCount)
+	for _, group := range groups {
+		if len(group) == 0 {
+			t.Fatal("packer emitted an empty group")
+		}
+		groupTokens := 0
+		for _, chunk := range group {
+			groupTokens += estimatedTokenCount(chunk.Content)
+		}
+		if len(group) > 1 && groupTokens > tokenBudget {
+			t.Fatalf("group of %d rows estimated %d tokens, over the %d budget", len(group), groupTokens, tokenBudget)
+		}
+		flattened = append(flattened, group...)
+	}
+	if len(flattened) != chunkCount {
+		t.Fatalf("packed %d chunks, want %d", len(flattened), chunkCount)
+	}
+	for index := range flattened {
+		if flattened[index].Content != chunks[index].Content {
+			t.Fatalf("chunk %d out of order or altered", index)
 		}
 	}
 }

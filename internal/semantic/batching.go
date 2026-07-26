@@ -51,8 +51,17 @@ func packChunksByEstimatedTokens(
 	if tokenBudget < 1 {
 		tokenBudget = 1
 	}
+	// Reserve nothing and let append grow each group, matching
+	// packChunksByEstimatedInsertBytes. How many rows a group holds depends on the
+	// token budget and the content, so it cannot be known when the group opens,
+	// and every group's backing array is retained in the result. Reserving the row
+	// ceiling dies on the allocation, because that ceiling is operator-settable
+	// with no upper bound. Reserving the input, or the input not yet placed, costs
+	// input size times group count, so a 2,000-chunk input packing into 125 groups
+	// reserved 126,000 slots to hold 2,000. Geometric growth keeps the total
+	// proportional to the input. maxRows remains the logical group limit.
 	groups := make([][]model.StoredChunk, 0)
-	current := make([]model.StoredChunk, 0, maxRows)
+	current := make([]model.StoredChunk, 0)
 	currentTokens := 0
 	for _, chunk := range chunks {
 		tokens := embeddedTokenCount(chunk, reuse)
@@ -60,7 +69,7 @@ func packChunksByEstimatedTokens(
 		overRows := len(current) >= maxRows
 		if len(current) > 0 && (overBudget || overRows) {
 			groups = append(groups, current)
-			current = make([]model.StoredChunk, 0, maxRows)
+			current = make([]model.StoredChunk, 0)
 			currentTokens = 0
 		}
 		current = append(current, chunk)
