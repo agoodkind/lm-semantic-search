@@ -735,6 +735,7 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			TimestampUnix:        metadataValue.timestampUnix(),
 			WorkspaceRoot:        workspaceRootValue,
 			Archived:             false,
+			SplitPart:            0,
 			Score:                score,
 		})
 	}
@@ -829,9 +830,16 @@ func splitForVarchar(value string) []string {
 	return splitBytes(value, milvusVarcharMaxBytes)
 }
 
-// generateID matches the TS chunk-ID format at packages/core/src/context.ts:1067.
+// generateID matches the TS chunk-ID format at packages/core/src/context.ts:1067
+// for an unsplit chunk. A split child (SplitPart > 0) folds its split position
+// into the hash so identical pieces of repeated oversized content get distinct
+// primary keys; an unsplit chunk keeps the original identity so the normal
+// single-chunk case is not re-embedded.
 func generateID(chunk model.StoredChunk, _ int) string {
 	hashInput := fmt.Sprintf("%s:%d:%d:%s", chunk.RelativePath, chunk.StartLine, chunk.EndLine, chunk.Content)
+	if chunk.SplitPart > 0 {
+		hashInput = fmt.Sprintf("%s:%d:%d:%d:%s", chunk.RelativePath, chunk.StartLine, chunk.EndLine, chunk.SplitPart, chunk.Content)
+	}
 	sum := sha256.Sum256([]byte(hashInput))
 	return "chunk_" + hex.EncodeToString(sum[:])[:16]
 }

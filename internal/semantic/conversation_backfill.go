@@ -245,6 +245,7 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 			TimestampUnix:        metadata.timestampUnix(),
 			WorkspaceRoot:        backfillString(workspaceRootColumn, rowIndex),
 			Archived:             false,
+			SplitPart:            0,
 			Score:                0,
 		})
 	}

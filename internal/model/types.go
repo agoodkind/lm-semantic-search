@@ -323,6 +323,14 @@ type StoredChunk struct {
 	// and for conversation chunks whose caller did not supply it.
 	WorkspaceRoot string `json:"workspace_root,omitempty"`
 	Archived      bool   `json:"archived,omitempty"`
+	// SplitPart identifies one piece of an oversized chunk the token-budget
+	// splitter divided so each piece fits the embedding model's input limit. Zero
+	// marks an unsplit chunk, whose primary key is unchanged. A positive value
+	// encodes the piece's byte offset within the original content plus one, so
+	// identical pieces of repeated content never collide on the primary key while
+	// every piece keeps the parent relativePath so a message delete-by-prefix
+	// still removes them all.
+	SplitPart int32 `json:"split_part,omitempty"`
 	// Score is the retrieval relevance for this chunk: the vector similarity for
 	// a semantic search, or the keyword rank the code literal-fallback search
 	// (rankChunks) assigns. Zero on chunks that did not come from a search.

@@ -275,6 +275,7 @@ func (runner *Runner) processFile(ctx context.Context, resolver *indexability.Re
 			TimestampUnix:        0,
 			WorkspaceRoot:        "",
 			Archived:             false,
+			SplitPart:            0,
 			Score:                0,
 		})
 	}
