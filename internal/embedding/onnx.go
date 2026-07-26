@@ -143,13 +143,58 @@ func (provider *onnxProvider) Health(ctx context.Context) error {
 	return nil
 }
 
+// onnxEmbedOutcome is the result of embedding one input in process. An input
+// the tokenizer measured past the model's maximum comes back with overLimit
+// true, a nil vector, and its full token count, so the caller reports it as
+// skipped rather than embedding a truncated copy of the content.
+type onnxEmbedOutcome struct {
+	vector     []float32
+	tokenCount int
+	overLimit  bool
+}
+
+// Embed returns the vector for one input. An input past the model's token limit
+// is an error rather than a truncated vector, which matches the
+// OpenAI-compatible provider's behavior for an input the endpoint rejects.
 func (provider *onnxProvider) Embed(
 	ctx context.Context,
 	text string,
 ) ([]float32, error) {
+	outcome, err := provider.embedOne(ctx, text)
+	if err != nil {
+		return nil, err
+	}
+	if outcome.overLimit {
+		preset := provider.runtime.preset
+		limitErr := errors.New("input exceeds the model's maximum token count")
+		slog.WarnContext(
+			ctx,
+			"ONNX embedding input over the model token limit",
+			"model", preset.Name,
+			"reported_tokens", outcome.tokenCount,
+			"model_max_tokens", preset.MaximumTokens,
+			"err", limitErr,
+		)
+		return nil, fmt.Errorf(
+			"generate ONNX embedding for %q: input is %d tokens, over the %d-token limit: %w",
+			preset.Name,
+			outcome.tokenCount,
+			preset.MaximumTokens,
+			limitErr,
+		)
+	}
+	return outcome.vector, nil
+}
+
+// embedOne tokenizes one input and runs the model over it when it fits the
+// model's token limit. It never shortens the input to make it fit.
+func (provider *onnxProvider) embedOne(
+	ctx context.Context,
+	text string,
+) (onnxEmbedOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		slog.WarnContext(ctx, "ONNX embedding cancelled before start", "err", err)
-		return nil, fmt.Errorf("generate ONNX embedding: %w", err)
+		return rejectedONNXEmbedOutcome(), fmt.Errorf("generate ONNX embedding: %w", err)
 	}
 
 	provider.runtime.mutex.Lock()
@@ -162,12 +207,19 @@ func (provider *onnxProvider) Embed(
 			"err",
 			err,
 		)
-		return nil, fmt.Errorf("generate ONNX embedding: %w", err)
+		return rejectedONNXEmbedOutcome(), fmt.Errorf("generate ONNX embedding: %w", err)
 	}
 
 	encoded, err := provider.runtime.tokenizer.encode(text)
 	if err != nil {
-		return nil, err
+		return rejectedONNXEmbedOutcome(), err
+	}
+	if encoded.overLimit {
+		return onnxEmbedOutcome{
+			vector:     nil,
+			tokenCount: encoded.tokenCount,
+			overLimit:  true,
+		}, nil
 	}
 	preset := provider.runtime.preset
 	embeddingDimension := int(preset.Dimension)
@@ -196,26 +248,40 @@ func (provider *onnxProvider) Embed(
 		C.size_t(len(errorBuffer)),
 	)
 	if result != 0 {
-		return nil, fmt.Errorf(
+		return rejectedONNXEmbedOutcome(), fmt.Errorf(
 			"run ONNX embedding model %q: %s",
 			preset.Name,
 			cErrorMessage(errorBuffer),
 		)
 	}
 	if int(outputCount) != len(tokenEmbeddings) {
-		return nil, fmt.Errorf(
+		return rejectedONNXEmbedOutcome(), fmt.Errorf(
 			"ONNX embedding model %q returned %d values, want %d",
 			preset.Name,
 			outputCount,
 			len(tokenEmbeddings),
 		)
 	}
-	return poolAndNormalize(
+	vector, poolErr := poolAndNormalize(
 		tokenEmbeddings,
 		encoded.attentionMask,
 		embeddingDimension,
 		preset.Pooling,
 	)
+	if poolErr != nil {
+		return rejectedONNXEmbedOutcome(), poolErr
+	}
+	return onnxEmbedOutcome{
+		vector:     vector,
+		tokenCount: encoded.tokenCount,
+		overLimit:  false,
+	}, nil
+}
+
+// rejectedONNXEmbedOutcome is the zero outcome returned alongside an error, so
+// no caller mistakes a failed run for an embedded input.
+func rejectedONNXEmbedOutcome() onnxEmbedOutcome {
+	return onnxEmbedOutcome{vector: nil, tokenCount: 0, overLimit: false}
 }
 
 func (provider *onnxProvider) EmbedBatch(
@@ -232,17 +298,32 @@ func (provider *onnxProvider) EmbedBatch(
 		metrics.EmbedBatchDone(len(texts), clock.Now().Sub(start), err != nil)
 	}()
 
-	// The in-process tokenizer caps each input at the model's maximum tokens, so
-	// ONNX never rejects an input as oversized and never reports a skip.
-	vectors := make([][]float32, 0, len(texts))
-	for _, text := range texts {
-		vector, embedErr := provider.Embed(ctx, text)
+	// An input the tokenizer measures past the model's maximum is reported as
+	// skipped with a nil vector, exactly as the OpenAI-compatible provider reports
+	// a context_length_exceeded rejection. Both implementations of Provider
+	// therefore honor the same promise: a returned vector always covers the whole
+	// input, and the caller's split-and-retry loop divides anything that does not
+	// fit.
+	maximumTokens := int(provider.runtime.preset.MaximumTokens)
+	vectors := make([][]float32, len(texts))
+	var skipped []SkippedInput
+	for index, text := range texts {
+		outcome, embedErr := provider.embedOne(ctx, text)
 		if embedErr != nil {
 			return BatchResult{}, embedErr
 		}
-		vectors = append(vectors, vector)
+		if outcome.overLimit {
+			skipped = append(skipped, SkippedInput{
+				Index:          index,
+				Reason:         embedCodeContextLengthExceeded,
+				ReportedTokens: outcome.tokenCount,
+				MaxTokens:      maximumTokens,
+			})
+			continue
+		}
+		vectors[index] = outcome.vector
 	}
-	return BatchResult{Vectors: vectors, Skipped: nil}, nil
+	return BatchResult{Vectors: vectors, Skipped: skipped}, nil
 }
 
 func poolAndNormalize(
