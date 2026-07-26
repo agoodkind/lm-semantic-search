@@ -20,6 +20,11 @@ type recordingEmbeddingProvider struct {
 	embedded []string
 }
 
+type rejectingEmbeddingProvider struct {
+	rejected map[string]bool
+	batches  [][]string
+}
+
 func (provider *recordingEmbeddingProvider) Embed(
 	_ context.Context,
 	text string,
@@ -48,6 +53,41 @@ func (provider *recordingEmbeddingProvider) ProviderName() string {
 }
 
 func (provider *recordingEmbeddingProvider) Health(context.Context) error {
+	return nil
+}
+
+func (provider *rejectingEmbeddingProvider) Embed(
+	_ context.Context,
+	text string,
+) ([]float32, error) {
+	return []float32{1, float32(len(text) + 1)}, nil
+}
+
+func (provider *rejectingEmbeddingProvider) EmbedBatch(
+	_ context.Context,
+	texts []string,
+) (embedding.BatchResult, error) {
+	provider.batches = append(provider.batches, append([]string(nil), texts...))
+	vectors := make([][]float32, len(texts))
+	skipped := make([]embedding.SkippedInput, 0, len(texts))
+	for index, text := range texts {
+		if provider.rejected[text] {
+			skipped = append(skipped, embedding.SkippedInput{
+				Index:  index,
+				Reason: "endpoint_policy_rejection",
+			})
+			continue
+		}
+		vectors[index] = []float32{1, float32(len(text) + 1)}
+	}
+	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
+}
+
+func (provider *rejectingEmbeddingProvider) ProviderName() string {
+	return "rejecting"
+}
+
+func (provider *rejectingEmbeddingProvider) Health(context.Context) error {
 	return nil
 }
 
@@ -92,6 +132,111 @@ func TestStageReindexSplitsOversizedChunkIntoDistinctRows(t *testing.T) {
 	stageAndPromote(t, store, codebasePath, []model.StoredChunk{{Content: content, RelativePath: "big.go"}}, semantic.StoreColumnSetCode)
 
 	assertRowsCoverContentWithDistinctIDs(t, store, codebasePath, content, provider.embedded)
+}
+
+func TestReindexReportsDroppedChunks(t *testing.T) {
+	t.Parallel()
+
+	const codebasePath = "/tmp/localvec-reindex-dropped"
+	provider := &rejectingEmbeddingProvider{
+		rejected: map[string]bool{"drop": true},
+	}
+	store, err := newStoreWithProvider(config.Config{StateRoot: t.TempDir()}, provider)
+	if err != nil {
+		t.Fatalf("newStoreWithProvider returned error: %v", err)
+	}
+	stageAndPromote(
+		t,
+		store,
+		codebasePath,
+		[]model.StoredChunk{{Content: "seed", RelativePath: "seed.go"}},
+		semantic.StoreColumnSetCode,
+	)
+	provider.batches = nil
+
+	var reports []semantic.Progress
+	err = store.Reindex(
+		context.Background(),
+		codebasePath,
+		[]model.StoredChunk{
+			{Content: "keep", RelativePath: "keep.go"},
+			{Content: "drop", RelativePath: "drop.go"},
+		},
+		semantic.Removal{},
+		func(progress semantic.Progress) {
+			reports = append(reports, progress)
+		},
+		nil,
+		semantic.StoreColumnSetCode,
+	)
+	if err != nil {
+		t.Fatalf("Reindex returned error: %v", err)
+	}
+	if len(provider.batches) != 1 || len(provider.batches[0]) != 2 {
+		t.Fatalf("embed batches = %v, want one packed batch with two inputs", provider.batches)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("progress reports = %d, want 1", len(reports))
+	}
+	if reports[0].ChunksDropped != 1 {
+		t.Fatalf("ChunksDropped = %d, want 1", reports[0].ChunksDropped)
+	}
+	if reports[0].CollectionRowsWritten != 1 {
+		t.Fatalf(
+			"CollectionRowsWritten = %d, want 1",
+			reports[0].CollectionRowsWritten,
+		)
+	}
+}
+
+func TestStageReindexReportsProgressWhenEveryChunkDropped(t *testing.T) {
+	t.Parallel()
+
+	const codebasePath = "/tmp/localvec-stage-all-dropped"
+	provider := &rejectingEmbeddingProvider{
+		rejected: map[string]bool{
+			"drop one": true,
+			"drop two": true,
+		},
+	}
+	store, err := newStoreWithProvider(config.Config{StateRoot: t.TempDir()}, provider)
+	if err != nil {
+		t.Fatalf("newStoreWithProvider returned error: %v", err)
+	}
+
+	var reports []semantic.Progress
+	err = store.StageReindex(
+		context.Background(),
+		codebasePath,
+		[]model.StoredChunk{
+			{Content: "drop one", RelativePath: "one.go"},
+			{Content: "drop two", RelativePath: "two.go"},
+		},
+		semantic.Removal{},
+		func(progress semantic.Progress) {
+			reports = append(reports, progress)
+		},
+		nil,
+		semantic.StoreColumnSetCode,
+	)
+	if err != nil {
+		t.Fatalf("StageReindex returned error: %v", err)
+	}
+	if len(provider.batches) != 1 || len(provider.batches[0]) != 2 {
+		t.Fatalf("embed batches = %v, want one packed batch with two inputs", provider.batches)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("progress reports = %d, want 1", len(reports))
+	}
+	if reports[0].ChunksDropped != 2 {
+		t.Fatalf("ChunksDropped = %d, want 2", reports[0].ChunksDropped)
+	}
+	if reports[0].CollectionRowsWritten != 0 {
+		t.Fatalf(
+			"CollectionRowsWritten = %d, want 0",
+			reports[0].CollectionRowsWritten,
+		)
+	}
 }
 
 func TestReindexPrefixDeleteRemovesEverySplitPiece(t *testing.T) {
