@@ -55,7 +55,11 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 		rewritten = append(rewritten, chunkCopy)
 	}
 
-	if err := service.deleteByRelativePaths(ctx, collectionName, []string{srcRelativePath}); err != nil {
+	if _, err := service.deleteByRelativePaths(
+		ctx,
+		collectionName,
+		[]string{srcRelativePath},
+	); err != nil {
 		return 0, err
 	}
 	// CopyChunks rewrites existing rows within one known collection and has no

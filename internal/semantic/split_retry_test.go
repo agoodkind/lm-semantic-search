@@ -34,6 +34,7 @@ func testChunkPacker(chunks []model.StoredChunk) [][]model.StoredChunk {
 		chunks,
 		defaultEmbeddingBatchRows,
 		defaultEmbeddingBatchTokenBudget,
+		nil,
 	)
 }
 

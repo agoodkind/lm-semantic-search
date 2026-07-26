@@ -42,7 +42,11 @@ func (service *Service) DeleteConversation(ctx context.Context, collectionName s
 		return err
 	}
 	for _, prefix := range conversationRelativePathPrefixes(trimmedConversationID) {
-		if err := service.deleteByRelativePathPrefix(ctx, trimmedCollectionName, prefix); err != nil {
+		if _, err := service.deleteByRelativePathPrefix(
+			ctx,
+			trimmedCollectionName,
+			prefix,
+		); err != nil {
 			return err
 		}
 	}
