@@ -168,6 +168,9 @@ func run(rootContext context.Context) error {
 	defer cancelRuntime()
 	manager.ResumeOrphanedJobs(runtimeContext)
 	daemon.NewBackgroundSync(cfg, manager).Start(runtimeContext)
+	// The self-check runs in the background and never gates serving, so it is
+	// started before the listener starts accepting rather than after.
+	manager.StartBootSelfCheck(runtimeContext)
 	startLogRetentionSweep(runtimeContext, cfg)
 
 	metrics.StartReporter(runtimeContext, time.Duration(cfg.PerfCountersIntervalMS)*time.Millisecond)
