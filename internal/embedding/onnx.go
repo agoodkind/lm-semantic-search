@@ -221,9 +221,9 @@ func (provider *onnxProvider) Embed(
 func (provider *onnxProvider) EmbedBatch(
 	ctx context.Context,
 	texts []string,
-) (vectors [][]float32, err error) {
+) (result BatchResult, err error) {
 	if len(texts) == 0 {
-		return nil, nil
+		return BatchResult{Vectors: nil, Skipped: nil}, nil
 	}
 
 	start := clock.Now()
@@ -232,15 +232,17 @@ func (provider *onnxProvider) EmbedBatch(
 		metrics.EmbedBatchDone(len(texts), clock.Now().Sub(start), err != nil)
 	}()
 
-	vectors = make([][]float32, 0, len(texts))
+	// The in-process tokenizer caps each input at the model's maximum tokens, so
+	// ONNX never rejects an input as oversized and never reports a skip.
+	vectors := make([][]float32, 0, len(texts))
 	for _, text := range texts {
 		vector, embedErr := provider.Embed(ctx, text)
 		if embedErr != nil {
-			return nil, embedErr
+			return BatchResult{}, embedErr
 		}
 		vectors = append(vectors, vector)
 	}
-	return vectors, nil
+	return BatchResult{Vectors: vectors, Skipped: nil}, nil
 }
 
 func poolAndNormalize(

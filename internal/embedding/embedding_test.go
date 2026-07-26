@@ -51,7 +51,7 @@ func TestOpenAICompatibleProviderEmbedBatch(t *testing.T) {
 		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
 	}
 
-	vectors, err := provider.EmbedBatch(context.Background(), []string{"alpha", "beta"})
+	result, err := provider.EmbedBatch(context.Background(), []string{"alpha", "beta"})
 	if err != nil {
 		t.Fatalf("EmbedBatch returned error: %v", err)
 	}
@@ -64,8 +64,11 @@ func TestOpenAICompatibleProviderEmbedBatch(t *testing.T) {
 	if requestBody["model"] != "text-embedding-3-small" {
 		t.Fatalf("request model = %#v", requestBody["model"])
 	}
-	if len(vectors) != 2 || len(vectors[0]) != 2 || vectors[0][0] != 1 {
-		t.Fatalf("vectors = %#v", vectors)
+	if len(result.Vectors) != 2 || len(result.Vectors[0]) != 2 || result.Vectors[0][0] != 1 {
+		t.Fatalf("vectors = %#v", result.Vectors)
+	}
+	if len(result.Skipped) != 0 {
+		t.Fatalf("Skipped = %#v, want none", result.Skipped)
 	}
 }
 
@@ -130,12 +133,12 @@ func TestEmbedBatchRetriesTransientThenSucceeds(t *testing.T) {
 		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
 	}
 
-	vectors, err := provider.EmbedBatch(context.Background(), []string{"alpha"})
+	result, err := provider.EmbedBatch(context.Background(), []string{"alpha"})
 	if err != nil {
 		t.Fatalf("EmbedBatch returned error: %v", err)
 	}
-	if len(vectors) != 1 {
-		t.Fatalf("vectors = %#v", vectors)
+	if len(result.Vectors) != 1 {
+		t.Fatalf("vectors = %#v", result.Vectors)
 	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("server calls = %d, want 2 (one 429 then a successful retry)", got)
@@ -211,6 +214,114 @@ func TestEmbedBatchNon429ReturnsRejected(t *testing.T) {
 	}
 	if errors.Is(err, ErrEmbedderBusy) {
 		t.Fatalf("a 400 must not classify as ErrEmbedderBusy: %v", err)
+	}
+}
+
+func TestEmbedBatchSkipsOversizedInputAndEmbedsRest(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		var body struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode returned error: %v", err)
+		}
+		// The first request carries both inputs; the endpoint rejects the whole
+		// request naming the oversized input at index 0. After that input is
+		// dropped, the retry carries only the survivor and succeeds.
+		if calls.Add(1) == 1 {
+			if len(body.Input) != 2 {
+				t.Fatalf("first request input count = %d, want 2", len(body.Input))
+			}
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 4096 tokens, however the input at index 0 resolved to 4472 tokens. Reduce the input length."}}`))
+			return
+		}
+		if len(body.Input) != 1 {
+			t.Fatalf("retry request input count = %d, want 1 (oversized input dropped)", len(body.Input))
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"data": []map[string]any{{"embedding": []float64{3.0, 4.0}}},
+		})
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	result, err := provider.EmbedBatch(context.Background(), []string{"oversized", "small"})
+	// The whole batch must succeed: a per-input rejection is not a job failure, so
+	// no error propagates and nothing marks the embedder unhealthy.
+	if err != nil {
+		t.Fatalf("EmbedBatch returned error for a per-input rejection: %v", err)
+	}
+	if errors.Is(err, ErrEmbedderRejected) || errors.Is(err, ErrEmbedderBusy) {
+		t.Fatalf("a per-input rejection must not classify as a server error: %v", err)
+	}
+	if len(result.Vectors) != 2 {
+		t.Fatalf("len(Vectors) = %d, want 2", len(result.Vectors))
+	}
+	if result.Vectors[0] != nil {
+		t.Fatalf("Vectors[0] = %#v, want nil (input skipped)", result.Vectors[0])
+	}
+	if len(result.Vectors[1]) != 2 || result.Vectors[1][0] != 3 {
+		t.Fatalf("Vectors[1] = %#v, want the embedded survivor", result.Vectors[1])
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("len(Skipped) = %d, want 1", len(result.Skipped))
+	}
+	skip := result.Skipped[0]
+	if skip.Index != 0 {
+		t.Fatalf("Skipped[0].Index = %d, want 0", skip.Index)
+	}
+	if skip.Reason != "context_length_exceeded" {
+		t.Fatalf("Skipped[0].Reason = %q, want context_length_exceeded", skip.Reason)
+	}
+	if skip.MaxTokens != 4096 {
+		t.Fatalf("Skipped[0].MaxTokens = %d, want 4096", skip.MaxTokens)
+	}
+	if skip.ReportedTokens != 4472 {
+		t.Fatalf("Skipped[0].ReportedTokens = %d, want 4472", skip.ReportedTokens)
+	}
+}
+
+func TestOversizedInputRejectionClassification(t *testing.T) {
+	t.Parallel()
+
+	contextLength := &openai.Error{
+		StatusCode: http.StatusBadRequest,
+		Code:       "context_length_exceeded",
+		Message:    "This model's maximum context length is 4096 tokens, however the input at index 2 resolved to 5000 tokens. Reduce the input length.",
+	}
+	rejection, ok := oversizedInputRejection(contextLength)
+	if !ok {
+		t.Fatal("context_length_exceeded 400 was not classified as a per-input rejection")
+	}
+	if rejection.index != 2 || rejection.maxTokens != 4096 || rejection.reportedTokens != 5000 {
+		t.Fatalf("parsed rejection = %+v, want index 2, max 4096, reported 5000", rejection)
+	}
+
+	// A generic 400 (bad model, bad dimensions) is a server-side rejection, not a
+	// per-input skip, so it must not be classified as droppable.
+	genericBadRequest := &openai.Error{StatusCode: http.StatusBadRequest, Code: "invalid_request_error"}
+	if _, ok := oversizedInputRejection(genericBadRequest); ok {
+		t.Fatal("a generic 400 was wrongly classified as a per-input rejection")
+	}
+
+	// A 503 is a genuine transient server outage, never a per-input skip.
+	serviceUnavailable := &openai.Error{StatusCode: http.StatusServiceUnavailable, Code: "context_length_exceeded"}
+	if _, ok := oversizedInputRejection(serviceUnavailable); ok {
+		t.Fatal("a 503 was wrongly classified as a per-input rejection")
+	}
+
+	// A non-API (transport) error is never a per-input rejection.
+	if _, ok := oversizedInputRejection(errors.New("connection refused")); ok {
+		t.Fatal("a transport error was wrongly classified as a per-input rejection")
 	}
 }
 
