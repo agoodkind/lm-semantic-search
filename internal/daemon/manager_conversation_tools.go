@@ -37,6 +37,7 @@ func newConversationStoredChunk(document model.ConversationDocument, conversatio
 		TimestampUnix:        document.TimestampUnix,
 		WorkspaceRoot:        document.WorkspaceRoot,
 		Archived:             document.Archived,
+		SplitPart:            0,
 		Score:                0,
 	}
 }

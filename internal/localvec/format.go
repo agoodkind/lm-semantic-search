@@ -41,6 +41,10 @@ type row struct {
 	TimestampUnix        int64     `json:"timestampUnix,omitempty"`
 	WorkspaceRoot        string    `json:"workspaceRoot,omitempty"`
 	Archived             bool      `json:"archived,omitempty"`
+	// SplitPart carries the source chunk's SplitPart so a split child keeps a
+	// distinct, stable primary key across a rewrite (CopyChunks regenerates the id
+	// from the row's chunk). Zero for an unsplit row.
+	SplitPart int32 `json:"splitPart,omitempty"`
 }
 
 func newRow(chunk model.StoredChunk, vector []float32) (row, error) {
@@ -73,6 +77,7 @@ func newRow(chunk model.StoredChunk, vector []float32) (row, error) {
 		TimestampUnix:        chunk.TimestampUnix,
 		WorkspaceRoot:        chunk.WorkspaceRoot,
 		Archived:             chunk.Archived,
+		SplitPart:            chunk.SplitPart,
 	}, nil
 }
 
@@ -158,10 +163,15 @@ func (stored row) chunk(score float64) model.StoredChunk {
 		TimestampUnix:        stored.TimestampUnix,
 		WorkspaceRoot:        stored.WorkspaceRoot,
 		Archived:             stored.Archived,
+		SplitPart:            stored.SplitPart,
 		Score:                score,
 	}
 }
 
+// generateRowID derives a row's primary key from its identity. A split child
+// (SplitPart > 0) folds its split position into the hash so identical pieces of
+// repeated oversized content get distinct primary keys; an unsplit chunk keeps
+// the original identity so the normal single-chunk case is unchanged.
 func generateRowID(chunk model.StoredChunk) string {
 	hashInput := fmt.Sprintf(
 		"%s:%d:%d:%s",
@@ -170,6 +180,16 @@ func generateRowID(chunk model.StoredChunk) string {
 		chunk.EndLine,
 		chunk.Content,
 	)
+	if chunk.SplitPart > 0 {
+		hashInput = fmt.Sprintf(
+			"%s:%d:%d:%d:%s",
+			chunk.RelativePath,
+			chunk.StartLine,
+			chunk.EndLine,
+			chunk.SplitPart,
+			chunk.Content,
+		)
+	}
 	sum := sha256.Sum256([]byte(hashInput))
 	return "chunk_" + hex.EncodeToString(sum[:])[:rowIDHashLength]
 }
