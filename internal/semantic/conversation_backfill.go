@@ -39,12 +39,15 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 	if _, err := service.addMissingConversationScalarColumns(ctx, collectionName); err != nil {
 		return 0, err
 	}
+	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+		return 0, err
+	}
 	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
 		return 0, err
 	}
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(conversationBackfillBatchSize).
-		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName))
+		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName, splitPartFieldName))
 	if err != nil {
 		slog.ErrorContext(ctx, "open conversation backfill iterator failed", "collection", collectionName, "err", err)
 		return 0, fmt.Errorf("open backfill iterator for %s: %w", collectionName, err)
@@ -191,6 +194,7 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 	metadataColumn := resultSet.GetColumn(metadataFieldName)
 	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
 	workspaceRootColumn := resultSet.GetColumn(workspaceRootFieldName)
+	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
 	if idColumn == nil || contentColumn == nil || relativePathColumn == nil || vectorColumn == nil {
 		return nil, nil, nil, ErrSearchResultIncomplete
 	}
@@ -228,6 +232,13 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 				metadata = decodeMetadata(rawMetadata)
 			}
 		}
+		splitPart, splitPartRecorded, splitPartErr := splitPartAt(
+			splitPartColumn,
+			rowIndex,
+		)
+		if splitPartErr != nil {
+			return nil, nil, nil, splitPartErr
+		}
 
 		ids = append(ids, id)
 		vectors = append(vectors, vector)
@@ -245,7 +256,8 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 			TimestampUnix:        metadata.timestampUnix(),
 			WorkspaceRoot:        backfillString(workspaceRootColumn, rowIndex),
 			Archived:             false,
-			SplitPart:            0,
+			SplitPart:            splitPart,
+			SplitPartRecorded:    splitPartRecorded,
 			Score:                0,
 		})
 	}
@@ -292,6 +304,8 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 	endLines := make([]int64, 0, len(chunks))
 	fileExtensions := make([]string, 0, len(chunks))
 	metadataValues := make([]string, 0, len(chunks))
+	splitParts := make([]int64, 0, len(chunks))
+	splitPartsRecorded := make([]bool, 0, len(chunks))
 	for _, chunk := range chunks {
 		content, _ := sanitizeUTF8(chunk.Content)
 		relativePath, _ := sanitizeUTF8(chunk.RelativePath)
@@ -303,7 +317,29 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 		endLines = append(endLines, int64(chunk.EndLine))
 		fileExtensions = append(fileExtensions, fileExtension)
 		metadataValues = append(metadataValues, metadataValue)
+		splitParts = append(splitParts, int64(chunk.SplitPart))
+		splitPartsRecorded = append(
+			splitPartsRecorded,
+			chunk.SplitPartRecorded,
+		)
 		scalars.append(chunk)
+	}
+	splitPartColumn, columnErr := column.NewNullableColumnInt64(
+		splitPartFieldName,
+		splitParts,
+		splitPartsRecorded,
+		column.WithSparseNullableMode[int64](true),
+	)
+	if columnErr != nil {
+		slog.ErrorContext(
+			ctx,
+			"build split part backfill column failed",
+			"collection",
+			collectionName,
+			"err",
+			columnErr,
+		)
+		return fmt.Errorf("build split part backfill column for %s: %w", collectionName, columnErr)
 	}
 
 	// workspaceRoot is written only when opts.WriteWorkspaceRoot is set. The
@@ -320,6 +356,7 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 		WithInt64Column(endLineFieldName, endLines).
 		WithVarcharColumn(fileExtensionFieldName, fileExtensions).
 		WithVarcharColumn(metadataFieldName, metadataValues).
+		WithColumns(splitPartColumn).
 		WithFloatVectorColumn(denseVectorFieldName, len(vectors[0]), vectors).
 		WithVarcharColumn(conversationIDFieldName, scalars.conversationIDs).
 		WithVarcharColumn(parentConversationIDFieldName, scalars.parentConversationIDs).
@@ -391,13 +428,16 @@ func (service *Service) BackfillConversationEnrichment(ctx context.Context, coll
 	if _, err := service.addMissingConversationScalarColumns(ctx, collectionName); err != nil {
 		return 0, 0, err
 	}
+	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+		return 0, 0, err
+	}
 	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
 		return 0, 0, err
 	}
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(conversationBackfillBatchSize).
 		WithFilter(workspaceRootFieldName+` == "" or `+archivedFieldName+` is null`).
-		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName, workspaceRootFieldName))
+		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName, workspaceRootFieldName, splitPartFieldName))
 	if err != nil {
 		slog.ErrorContext(ctx, "open conversation workspace backfill iterator failed", "collection", collectionName, "err", err)
 		return 0, 0, fmt.Errorf("open workspace backfill iterator for %s: %w", collectionName, err)

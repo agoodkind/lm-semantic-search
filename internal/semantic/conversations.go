@@ -3,11 +3,8 @@ package semantic
 import (
 	"context"
 	"errors"
-	"fmt"
-	"log/slog"
 	"strings"
 
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
@@ -30,10 +27,13 @@ func (service *Service) DeleteConversation(ctx context.Context, collectionName s
 		return errors.New("conversation id is required")
 	}
 
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(trimmedCollectionName))
+	hasCollection, err := service.hasCollection(
+		ctx,
+		trimmedCollectionName,
+		"check conversation collection "+trimmedCollectionName,
+	)
 	if err != nil {
-		slog.ErrorContext(ctx, "check conversation collection before delete failed", "collection", trimmedCollectionName, "err", err)
-		return fmt.Errorf("check conversation collection %s: %w", trimmedCollectionName, err)
+		return err
 	}
 	if !hasCollection {
 		return nil

@@ -45,6 +45,9 @@ type row struct {
 	// distinct, stable primary key across a rewrite (CopyChunks regenerates the id
 	// from the row's chunk). Zero for an unsplit row.
 	SplitPart int32 `json:"splitPart,omitempty"`
+	// SplitPartRecorded marks a row written after SplitPart was persisted, so a
+	// legacy row that predates the field is not read back as position zero.
+	SplitPartRecorded bool `json:"splitPartRecorded"`
 }
 
 func newRow(chunk model.StoredChunk, vector []float32) (row, error) {
@@ -78,6 +81,7 @@ func newRow(chunk model.StoredChunk, vector []float32) (row, error) {
 		WorkspaceRoot:        chunk.WorkspaceRoot,
 		Archived:             chunk.Archived,
 		SplitPart:            chunk.SplitPart,
+		SplitPartRecorded:    true,
 	}, nil
 }
 
@@ -164,8 +168,23 @@ func (stored row) chunk(score float64) model.StoredChunk {
 		WorkspaceRoot:        stored.WorkspaceRoot,
 		Archived:             stored.Archived,
 		SplitPart:            stored.SplitPart,
+		SplitPartRecorded:    stored.SplitPartRecorded,
 		Score:                score,
 	}
+}
+
+// copiedRowID derives a copied row's primary key at its destination path. A row
+// whose split position was recorded can regenerate its identity from its chunk,
+// while a legacy row without one derives from its own stored id so distinct
+// legacy rows that share content stay distinct instead of collapsing.
+func copiedRowID(stored row, destinationPath string) string {
+	if stored.SplitPartRecorded {
+		chunk := stored.chunk(0)
+		chunk.RelativePath = destinationPath
+		return generateRowID(chunk)
+	}
+	sum := sha256.Sum256([]byte(destinationPath + ":" + stored.ID))
+	return "chunk_" + hex.EncodeToString(sum[:])[:rowIDHashLength]
 }
 
 // generateRowID derives a row's primary key from its identity. A split child

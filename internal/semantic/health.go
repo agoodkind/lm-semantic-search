@@ -3,6 +3,7 @@ package semantic
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
@@ -50,9 +51,10 @@ func (service *Service) CollectionState(ctx context.Context, codebasePath string
 		return false, false, nil
 	}
 	collectionName := service.CollectionName(codebasePath)
-	has, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	has, err := service.hasCollection(ctx, collectionName, "check collection "+collectionName)
 	if err != nil {
-		return false, false, adapterr.NewMilvusUnavailable(fmt.Errorf("check collection %s: %w", collectionName, err))
+		slog.ErrorContext(ctx, "check collection state failed", "collection", collectionName, "err", err)
+		return false, false, adapterr.NewMilvusUnavailable(err)
 	}
 	if !has {
 		return false, false, nil

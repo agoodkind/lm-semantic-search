@@ -33,6 +33,64 @@ func TestGenerateRowIDDistinctForSplitChildrenAndStableForUnsplit(t *testing.T) 
 	}
 }
 
+func TestLocalRowRoundTripPreservesSplitPartAndUnsplitIdentity(t *testing.T) {
+	t.Parallel()
+
+	split := model.StoredChunk{
+		Content:      "same",
+		RelativePath: "src/big.go",
+		StartLine:    1,
+		EndLine:      400,
+		SplitPart:    513,
+	}
+	stored, err := newRow(split, []float32{1})
+	if err != nil {
+		t.Fatalf("newRow returned error: %v", err)
+	}
+	if got := stored.chunk(0).SplitPart; got != split.SplitPart {
+		t.Fatalf("round-tripped SplitPart = %d, want %d", got, split.SplitPart)
+	}
+
+	unsplit := model.StoredChunk{
+		Content:      "hello",
+		RelativePath: "src/file.go",
+		StartLine:    2,
+		EndLine:      4,
+	}
+	legacyInput := fmt.Sprintf(
+		"%s:%d:%d:%s",
+		unsplit.RelativePath,
+		unsplit.StartLine,
+		unsplit.EndLine,
+		unsplit.Content,
+	)
+	sum := sha256.Sum256([]byte(legacyInput))
+	want := "chunk_" + hex.EncodeToString(sum[:])[:rowIDHashLength]
+	if got := generateRowID(unsplit); got != want {
+		t.Fatalf("generateRowID for unsplit chunk = %q, want legacy %q", got, want)
+	}
+}
+
+func TestCopiedRowIDKeepsLegacyNullSplitPartsDistinct(t *testing.T) {
+	t.Parallel()
+
+	first := row{
+		ID:                "chunk_1111111111111111",
+		RelativePath:      "src/big.go",
+		StartLine:         1,
+		EndLine:           400,
+		Content:           "same",
+		SplitPartRecorded: false,
+	}
+	second := first
+	second.ID = "chunk_2222222222222222"
+
+	const destinationPath = "src/renamed.go"
+	if copiedRowID(first, destinationPath) == copiedRowID(second, destinationPath) {
+		t.Fatal("legacy local rows share a copied primary key")
+	}
+}
+
 // TestReadRowsToleratesTornTrailingLine proves that a truncated final line,
 // which an append interrupted by a crash can leave, does not make every earlier
 // committed row unreadable. Only the torn line is dropped.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -360,6 +361,77 @@ func TestReindexMissingCollectionSkipsEmbedding(t *testing.T) {
 	)
 	if !errors.Is(err, semantic.ErrCollectionMissing) {
 		t.Fatalf("Reindex error = %v, want ErrCollectionMissing", err)
+	}
+}
+
+func TestSplitRowsRoundTripAndCopyWithDistinctIdentities(t *testing.T) {
+	t.Parallel()
+
+	const (
+		codebasePath    = "/tmp/localvec-split-copy"
+		sourcePath      = "src/big.go"
+		destinationPath = "src/renamed.go"
+	)
+	store, err := newStoreWithProvider(
+		config.Config{StateRoot: t.TempDir()},
+		&fakeEmbeddingProvider{vectors: map[string][]float32{
+			"same": {1, 0},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("newStoreWithProvider returned error: %v", err)
+	}
+	chunks := []model.StoredChunk{
+		{
+			Content:      "same",
+			RelativePath: sourcePath,
+			StartLine:    1,
+			EndLine:      400,
+			SplitPart:    1,
+		},
+		{
+			Content:      "same",
+			RelativePath: sourcePath,
+			StartLine:    1,
+			EndLine:      400,
+			SplitPart:    513,
+		},
+	}
+	stageAndPromote(t, store, codebasePath, chunks, semantic.StoreColumnSetCode)
+
+	copied, err := store.CopyChunks(
+		context.Background(),
+		codebasePath,
+		sourcePath,
+		destinationPath,
+	)
+	if err != nil {
+		t.Fatalf("CopyChunks returned error: %v", err)
+	}
+	if copied != 2 {
+		t.Fatalf("CopyChunks copied %d rows, want 2", copied)
+	}
+	stored, err := store.collectionForName(store.CollectionName(codebasePath), false)
+	if err != nil {
+		t.Fatalf("collectionForName returned error: %v", err)
+	}
+	rows, exists, err := stored.snapshot()
+	if err != nil {
+		t.Fatalf("snapshot returned error: %v", err)
+	}
+	if !exists {
+		t.Fatal("snapshot reported collection missing")
+	}
+	if len(rows) != 2 {
+		t.Fatalf("stored rows = %d, want 2", len(rows))
+	}
+	if rows[0].ID == rows[1].ID {
+		t.Fatalf("copied rows share destination ID %q", rows[0].ID)
+	}
+	parts := []int32{rows[0].chunk(0).SplitPart, rows[1].chunk(0).SplitPart}
+	slices.Sort(parts)
+	if !slices.Equal(parts, []int32{1, 513}) {
+		t.Fatalf("round-tripped split parts = %v, want [1 513]", parts)
 	}
 }
 

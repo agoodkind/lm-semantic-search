@@ -58,15 +58,17 @@ func (service *Service) LoadConversationDerivedBatch(ctx context.Context, collec
 		return state, nil
 	}
 
-	hasCollection, err := service.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		slog.ErrorContext(ctx, "check collection for conversation batch load failed", "collection", collectionName, "err", err)
-		return ConversationBatchState{}, fmt.Errorf("check Milvus collection %s: %w", collectionName, err)
+		return ConversationBatchState{}, err
 	}
 	if !hasCollection {
 		return state, nil
 	}
 	if err := service.ensureConversationScalarColumnsOnce(ctx, collectionName); err != nil {
+		return ConversationBatchState{}, err
+	}
+	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return ConversationBatchState{}, err
 	}
 	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
@@ -97,7 +99,7 @@ func (service *Service) loadConversationBatchGroup(ctx context.Context, collecti
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(reuseVectorBatchSize).
 		WithFilter(inStringClause(conversationIDFieldName, conversationIDs)).
-		WithOutputFields(conversationIDFieldName, relativePathFieldName, messageIndexFieldName, roleFieldName, contentFieldName, denseVectorFieldName))
+		WithOutputFields(conversationIDFieldName, relativePathFieldName, messageIndexFieldName, roleFieldName, contentFieldName, denseVectorFieldName, splitPartFieldName))
 	if err != nil {
 		slog.ErrorContext(ctx, "open conversation batch query iterator failed", "collection", collectionName, "err", err)
 		return fmt.Errorf("open conversation batch iterator for %s: %w", collectionName, err)
@@ -127,6 +129,7 @@ func appendConversationBatchRows(resultSet milvusclient.ResultSet, assemblies *c
 	}
 	roleColumn := resultSet.GetColumn(roleFieldName)
 	messageIndexColumn := resultSet.GetColumn(messageIndexFieldName)
+	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
 
 	for rowIndex := range resultSet.ResultCount {
 		contentValue, vector, contentErr := conversationContentVectorAt(contentColumn, vectorColumn, rowIndex)
@@ -153,14 +156,32 @@ func appendConversationBatchRows(resultSet milvusclient.ResultSet, assemblies *c
 			assemblies.addDerived(conversationID, relativePath, contentHash)
 			continue
 		}
-		if err := appendConversationBatchBaseRow(assemblies, conversationID, relativePath, contentValue, roleColumn, messageIndexColumn, rowIndex); err != nil {
+		if err := appendConversationBatchBaseRow(
+			assemblies,
+			conversationID,
+			relativePath,
+			contentValue,
+			roleColumn,
+			messageIndexColumn,
+			splitPartColumn,
+			rowIndex,
+		); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func appendConversationBatchBaseRow(assemblies *conversationBatchAssemblies, conversationID string, relativePath string, content string, roleColumn column.Column, messageIndexColumn column.Column, rowIndex int) error {
+func appendConversationBatchBaseRow(
+	assemblies *conversationBatchAssemblies,
+	conversationID string,
+	relativePath string,
+	content string,
+	roleColumn column.Column,
+	messageIndexColumn column.Column,
+	splitPartColumn column.Column,
+	rowIndex int,
+) error {
 	messageIndex, ok, messageIndexErr := messageIndexAt(messageIndexColumn, rowIndex)
 	if messageIndexErr != nil {
 		return messageIndexErr
@@ -187,7 +208,22 @@ func appendConversationBatchBaseRow(assemblies *conversationBatchAssemblies, con
 		slog.Error("read conversation batch part index failed", "index", rowIndex, "err", partErr)
 		return fmt.Errorf("read conversation part index at %d: %w", rowIndex, partErr)
 	}
-	assemblies.addBasePart(conversationID, safeInt32FromInt64(messageIndex), role, partIndex, content)
+	splitPart, splitPartRecorded, splitPartErr := splitPartAt(
+		splitPartColumn,
+		rowIndex,
+	)
+	if splitPartErr != nil {
+		return splitPartErr
+	}
+	assemblies.addBasePart(
+		conversationID,
+		safeInt32FromInt64(messageIndex),
+		role,
+		partIndex,
+		splitPart,
+		splitPartRecorded,
+		content,
+	)
 	return nil
 }
 
@@ -205,13 +241,29 @@ func newConversationBatchAssemblies() *conversationBatchAssemblies {
 	}
 }
 
-func (assemblies *conversationBatchAssemblies) addBasePart(conversationID string, messageIndex int32, role string, partIndex int, content string) {
+func (assemblies *conversationBatchAssemblies) addBasePart(
+	conversationID string,
+	messageIndex int32,
+	role string,
+	partIndex int,
+	splitPart int32,
+	splitPartRecorded bool,
+	content string,
+) {
 	conversationMessages := assemblies.messages[conversationID]
 	if conversationMessages == nil {
 		conversationMessages = map[int32]*storedMessageAssembly{}
 		assemblies.messages[conversationID] = conversationMessages
 	}
-	appendStoredMessagePart(conversationMessages, messageIndex, role, partIndex, content)
+	appendStoredMessagePart(
+		conversationMessages,
+		messageIndex,
+		role,
+		partIndex,
+		splitPart,
+		splitPartRecorded,
+		content,
+	)
 }
 
 func (assemblies *conversationBatchAssemblies) addDerived(conversationID string, relativePath string, contentHash string) {
