@@ -390,15 +390,17 @@ func (service *Service) ensureConversationScalarColumnsOnce(ctx context.Context,
 //
 // Concurrent callers for one collection share one initial request, both polls,
 // and one recovery request. A concurrent cohort therefore issues at most two
-// LoadCollection calls. Its worst-case shared operation lasts one Milvus
-// metadata-call bound, two configured load bounds, and one recovery request
-// bounded by the shorter of those two bounds. A caller's earlier deadline still
-// ends its own wait first. A collection that never finishes loading fails as
-// not-ready instead of multiplying work across callers.
+// LoadCollection calls. The shared load runs detached from every caller, so one
+// caller cancelling ends only its own wait and leaves the others waiting on a
+// load that is still running; sharedCollectionLoadCeiling is what ends that load
+// once no caller remains. A caller's earlier deadline still ends its own wait
+// first. A collection that never finishes loading fails as not-ready instead of
+// multiplying work across callers.
 func (service *Service) loadCollection(ctx context.Context, collectionName string) error {
 	return service.collectionLoads.Do(
 		ctx,
 		collectionName,
+		service.sharedCollectionLoadCeiling(),
 		func(loadCtx context.Context) error {
 			if _, err := service.milvus.LoadCollection(loadCtx, milvusclient.NewLoadCollectionOption(collectionName)); err != nil {
 				return wrapStoreError(loadCtx, err, "load Milvus collection "+collectionName)

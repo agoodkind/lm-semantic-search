@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/metrics"
@@ -42,6 +43,7 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 		case manager.indexSlots <- struct{}{}:
 			capacity := &jobCapacity{
 				manager:      manager,
+				mu:           sync.Mutex{},
 				slotHeld:     true,
 				syncLockHeld: false,
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -198,14 +199,18 @@ func TestStartIndexQueuedBehindCapReportsQueuedThenRunning(t *testing.T) {
 		running, ok := manager.GetJob(secondJob.ID)
 		return ok && (running.State == model.JobStateRunning || running.State == model.JobStateCompleted)
 	})
+	// Both jobs must settle before the test returns, so neither runner goroutine
+	// is still writing into the state root when t.Cleanup removes it.
+	waitForCodebaseStatus(t, manager, firstRepo, model.CodebaseStatusIndexed)
 	waitForCodebaseStatus(t, manager, secondRepo, model.CodebaseStatusIndexed)
 }
 
-// A reuse collection can spend the full bounded load window in Milvus. The
-// waiting read releases both scarce holds, so another job can start even when
-// the configured job cap is one.
+// A reuse collection can spend the full bounded load window in Milvus. Once
+// that read has run past the release grace, it gives up both scarce holds, so
+// another job can start even when the configured job cap is one.
 func TestStuckReuseLoadDoesNotHoldIndexSlotOrSyncLock(t *testing.T) {
 	manager, _ := newTestManagerWithCap(t, 1)
+	manager.jobCapacityTimings.ReleaseGrace = 10 * time.Millisecond
 	parentRepo, childRepo := newParentWithChildRepo(t)
 	secondRepo := newCapTestRepo(t)
 
@@ -281,15 +286,12 @@ func TestStuckReuseLoadDoesNotHoldIndexSlotOrSyncLock(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("parent job never entered the stuck reuse load")
 	}
-	if got := len(manager.indexSlots); got != 0 {
-		t.Fatalf("index slots held during reuse wait = %d, want 0", got)
-	}
-	manager.syncLock.mu.Lock()
-	lockRefcount := manager.syncLock.refcount
-	manager.syncLock.mu.Unlock()
-	if lockRefcount != 0 {
-		t.Fatalf("sync lock refcount during reuse wait = %d, want 0", lockRefcount)
-	}
+	waitForCondition(t, func() bool {
+		manager.syncLock.mu.Lock()
+		lockRefcount := manager.syncLock.refcount
+		manager.syncLock.mu.Unlock()
+		return len(manager.indexSlots) == 0 && lockRefcount == 0
+	})
 
 	if _, _, _, _, err := manager.StartIndex(
 		context.Background(),
@@ -315,12 +317,15 @@ func TestStuckReuseLoadDoesNotHoldIndexSlotOrSyncLock(t *testing.T) {
 	waitForCodebaseStatus(t, manager, secondRepo, model.CodebaseStatusIndexed)
 }
 
-// A job that has finished its bounded reuse read must also finish when another
-// job keeps the released slot. The resume has its own deadline, so the caller
-// observes a failed terminal job instead of one left running behind the holder.
+// A job whose stalled reuse read finally returns must reach a terminal state
+// even when another job has taken the slot it gave up. The read here stalls
+// well past the release grace, so the holds really are surrendered; the resume
+// then has its own deadline, and the caller observes a failed terminal job
+// instead of one left running behind the holder.
 func TestReuseLoadResumeDeadlineTerminatesJobWhileReplacementHoldsSlot(t *testing.T) {
 	manager, _ := newTestManagerWithCap(t, 1)
-	manager.jobCapacityReacquireTimeout = 100 * time.Millisecond
+	manager.jobCapacityTimings.ReleaseGrace = 10 * time.Millisecond
+	manager.jobCapacityTimings.Reacquire = 100 * time.Millisecond
 	parentRepo, childRepo := newParentWithChildRepo(t)
 	replacementRepo := newCapTestRepo(t)
 
@@ -447,6 +452,144 @@ func TestReuseLoadResumeDeadlineTerminatesJobWhileReplacementHoldsSlot(t *testin
 
 	close(releaseReplacement)
 	waitForCodebaseStatus(t, manager, replacementRepo, model.CodebaseStatusIndexed)
+}
+
+// An ordinary sync reads stored vectors once per changed file, and every one of
+// those reads answers straight away. Such a job keeps its indexing slot for its
+// whole run even while another job sits queued behind the cap waiting for one,
+// so the queued job only reaches its own first file once every one of the
+// sync's per-file reads is behind it.
+func TestHealthyPerFileReuseReadsKeepTheIndexSlot(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 1)
+	// The production release grace stands, so a read that answers immediately
+	// must never reach it. The resume bound is shortened so that a job which did
+	// give up its holds fails fast rather than stretching the test.
+	manager.jobCapacityTimings.Reacquire = 100 * time.Millisecond
+
+	const syncFileCount = 6
+	syncRepo := newMultiFileRepo(t, "a.go", "b.go", "c.go", "d.go", "e.go", "f.go")
+	queuedRepo := newCapTestRepo(t)
+
+	semanticFake := &fakeSemantic{}
+	manager.semantic = semanticFake
+
+	var openSyncGate sync.Once
+	syncEntered := make(chan struct{})
+	syncGate := make(chan struct{})
+	queuedGate := make(chan struct{})
+	syncReadsWhenQueuedRan := make(chan int, 1)
+	t.Cleanup(func() {
+		closeOnce(syncGate)
+		closeOnce(queuedGate)
+	})
+
+	indexConfig := defaultIndexConfig()
+	_, syncJob := seedBootstrapCodebase(t, manager, syncRepo, indexConfig)
+
+	manager.runner = fakeRunner{
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			_ model.IndexConfig,
+		) (indexer.OneFileResult, error) {
+			if root == syncRepo {
+				openSyncGate.Do(func() {
+					close(syncEntered)
+					<-syncGate
+				})
+			} else {
+				select {
+				case syncReadsWhenQueuedRan <- len(semanticFake.reusePathCallsSnapshot()):
+				default:
+				}
+				select {
+				case <-queuedGate:
+				case <-ctx.Done():
+					return indexer.OneFileResult{}, ctx.Err()
+				}
+			}
+			content := "package main\n// " + relativePath + "\n"
+			return indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:       content,
+					RelativePath:  relativePath,
+					StartLine:     1,
+					EndLine:       1,
+					Language:      "go",
+					FileExtension: ".go",
+				}},
+				FileHash: hashText(content),
+			}, nil
+		},
+	}
+
+	manager.runJobAsync(context.Background(), syncJob.ID)
+	select {
+	case <-syncEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sync job never reached its first file")
+	}
+
+	queuedJob, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		queuedRepo,
+		testClientInfo(),
+		indexConfig,
+		false,
+		emptyAdmissionBudget,
+	)
+	if err != nil {
+		t.Fatalf("queued StartIndex returned error: %v", err)
+	}
+	// Wait until the queued job's runner goroutine exists, so it is contending
+	// for the one slot while the sync performs its per-file reads.
+	waitForCondition(t, func() bool {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		return manager.done[queuedJob.ID] != nil
+	})
+	close(syncGate)
+
+	waitForCondition(t, func() bool {
+		observed, found := manager.GetJob(syncJob.ID)
+		return found && (observed.State == model.JobStateCompleted ||
+			observed.State == model.JobStateFailed ||
+			observed.State == model.JobStateCancelled)
+	})
+	settled, _ := manager.GetJob(syncJob.ID)
+	if settled.State != model.JobStateCompleted {
+		t.Fatalf("sync job state = %q, want %q; error = %v", settled.State, model.JobStateCompleted, settled.Error)
+	}
+	if reads := len(semanticFake.reusePathCallsSnapshot()); reads != syncFileCount {
+		t.Fatalf("per-file reuse reads = %d, want %d so the run really exercised them", reads, syncFileCount)
+	}
+
+	select {
+	case observed := <-syncReadsWhenQueuedRan:
+		if observed != syncFileCount {
+			t.Fatalf(
+				"queued job took the slot after only %d of the sync's %d per-file reads, want it to wait for all of them",
+				observed,
+				syncFileCount,
+			)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued job never started after the sync released its slot")
+	}
+
+	close(queuedGate)
+	waitForCodebaseStatus(t, manager, queuedRepo, model.CodebaseStatusIndexed)
+}
+
+// closeOnce closes a gate channel that a test may already have closed, so a
+// cleanup can unblock a runner without knowing how far the test got.
+func closeOnce(gate chan struct{}) {
+	select {
+	case <-gate:
+	default:
+		close(gate)
+	}
 }
 
 func TestCancelQueuedJobBehindCapReachesCancelled(t *testing.T) {

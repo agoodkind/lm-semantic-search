@@ -183,6 +183,7 @@ func TestCollectionLoadCoordinatorCollapsesConcurrentWaiters(t *testing.T) {
 			results <- coordinator.Do(
 				context.Background(),
 				"hybrid_code_chunks_shared",
+				time.Minute,
 				operation,
 			)
 		}()
@@ -217,6 +218,61 @@ func TestCollectionLoadCoordinatorCollapsesConcurrentWaiters(t *testing.T) {
 	}
 	if got := recoveryLoads.Load(); got != 1 {
 		t.Fatalf("recovery collection loads = %d, want 1 shared request", got)
+	}
+}
+
+// Callers of one shared load do not share a fate. The caller that started the
+// load cancels while the load is still running, and a caller whose own context
+// is healthy still receives the load's real outcome rather than the other
+// caller's cancellation.
+func TestCollectionLoadOutlivesTheCallerThatStartedIt(t *testing.T) {
+	const collectionName = "hybrid_code_chunks_detached"
+
+	var coordinator collectionLoadCoordinator
+	var operationCalls atomic.Int32
+	loadOutcome := errors.New("the shared load reached its own verdict")
+	operationRunning := make(chan struct{})
+	release := make(chan struct{})
+	operation := func(loadCtx context.Context) error {
+		if operationCalls.Add(1) == 1 {
+			close(operationRunning)
+		}
+		<-release
+		if err := loadCtx.Err(); err != nil {
+			return err
+		}
+		return loadOutcome
+	}
+
+	startingCtx, cancelStarting := context.WithCancel(context.Background())
+	defer cancelStarting()
+	startingResult := make(chan error, 1)
+	go func() {
+		startingResult <- coordinator.Do(startingCtx, collectionName, time.Minute, operation)
+	}()
+	<-operationRunning
+
+	joinedResult := make(chan error, 1)
+	joined := make(chan struct{})
+	go func() {
+		close(joined)
+		joinedResult <- coordinator.Do(context.Background(), collectionName, time.Minute, operation)
+	}()
+	<-joined
+
+	cancelStarting()
+	startingErr := <-startingResult
+	if !errors.Is(startingErr, context.Canceled) {
+		t.Fatalf("starting caller error = %v, want its own cancellation", startingErr)
+	}
+
+	close(release)
+	joinedErr := <-joinedResult
+	if !errors.Is(joinedErr, loadOutcome) {
+		t.Fatalf("joined caller error = %v, want the load's own outcome %v", joinedErr, loadOutcome)
+	}
+	if got := operationCalls.Load(); got != 1 {
+		t.Fatalf("collection load operations = %d, want 1 shared load across both callers", got)
 	}
 }
 

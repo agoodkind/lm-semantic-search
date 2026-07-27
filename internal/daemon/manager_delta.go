@@ -781,6 +781,11 @@ func effectiveRemoval(source itemSource, fileResult indexer.OneFileResult, relat
 // instead of the embedder. It returns the build-wide reuse map unchanged when
 // the source has no per-item reuse, and on a failed load it logs and falls
 // back to that map so the item embeds every chunk rather than failing.
+//
+// It has one terminal outcome of its own. A read that stalls long enough gives
+// up this job's indexing slot and sync-lock reference, and when the job cannot
+// take those back within the resume bound the returned jobCapacityReacquireError
+// ends the job rather than continuing without them.
 func (manager *Manager) itemReuse(
 	ctx context.Context,
 	state deltaState,
@@ -794,7 +799,7 @@ func (manager *Manager) itemReuse(
 		return state.reuse, 0, nil
 	}
 	var itemReuse map[string][]float32
-	err := manager.runWithoutJobCapacity(ctx, func() error {
+	err := manager.runReleasingCapacityIfStalled(ctx, func() error {
 		var loadErr error
 		switch source.Scope {
 		case itemReuseScopeNone:

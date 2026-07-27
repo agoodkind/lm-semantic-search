@@ -106,10 +106,11 @@ type Manager struct {
 	// buffered slot for its duration; jobs that cannot acquire a slot stay
 	// queued until one frees.
 	indexSlots chan struct{}
-	// jobCapacityReacquireTimeout bounds how long a job that released its slot
-	// for a read may wait to resume. It is settable so the public-boundary
-	// contention test does not pay the production wait.
-	jobCapacityReacquireTimeout time.Duration
+	// jobCapacityTimings bounds how long a read may stall before the job frees
+	// its slot and the sync lock, and how long it may then wait to resume. They
+	// are settable so the public-boundary contention tests do not pay the
+	// production waits.
+	jobCapacityTimings jobCapacityTimings
 	// syncLock is the process-wide refcounted hold of the shared advisory lock
 	// that coordinates embedding with the upstream TS adapter. Index jobs and
 	// background converges all take a reference for the duration of their
@@ -188,7 +189,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		lifecycleHook:               nil,
 		lifecycleMutex:              sync.Mutex{},
 		indexSlots:                  make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
-		jobCapacityReacquireTimeout: defaultJobCapacityReacquireTimeout,
+		jobCapacityTimings:          defaultJobCapacityTimings(),
 		syncLock:                    newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
 		health:                      dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
 		dependencyFailureGeneration: 0,

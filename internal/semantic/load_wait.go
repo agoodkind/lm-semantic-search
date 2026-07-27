@@ -52,38 +52,107 @@ type collectionLoadFlight struct {
 }
 
 // collectionLoadCoordinator shares one in-flight load operation per collection
-// name. A follower may cancel its own wait without cancelling the leader.
+// name. Every caller observes that load through its own wait, so a caller that
+// cancels ends only its own wait.
 type collectionLoadCoordinator struct {
 	mutex   sync.Mutex
 	flights map[string]*collectionLoadFlight
 }
 
-// Do joins an existing collection load or becomes its leader.
+// Do joins the in-flight load for collectionName or starts one, and returns
+// when either that load finishes or ctx ends.
+//
+// The caller that starts the load does not run it inline. A load run on the
+// first caller's context would fail for the whole cohort the moment that one
+// caller cancelled, which is the opposite of what sharing the load is for, so
+// the operation runs detached from every caller and ceiling is what ends it
+// once nobody is waiting on it any more.
 func (coordinator *collectionLoadCoordinator) Do(
 	ctx context.Context,
 	collectionName string,
+	ceiling time.Duration,
 	operation collectionLoadOperation,
 ) error {
+	flight, starting := coordinator.joinOrStart(collectionName)
+	if starting {
+		coordinator.runFlight(ctx, collectionName, ceiling, flight, operation)
+	}
+	return waitForCollectionLoadFlight(ctx, collectionName, flight)
+}
+
+// joinOrStart returns the flight this caller waits on and whether this caller
+// is the one that must run it.
+func (coordinator *collectionLoadCoordinator) joinOrStart(
+	collectionName string,
+) (*collectionLoadFlight, bool) {
 	coordinator.mutex.Lock()
+	defer coordinator.mutex.Unlock()
 	if flight, found := coordinator.flights[collectionName]; found {
-		coordinator.mutex.Unlock()
-		return waitForCollectionLoadFlight(ctx, collectionName, flight)
+		return flight, false
 	}
 	if coordinator.flights == nil {
 		coordinator.flights = make(map[string]*collectionLoadFlight)
 	}
 	flight := &collectionLoadFlight{done: make(chan struct{}), err: nil}
 	coordinator.flights[collectionName] = flight
-	coordinator.mutex.Unlock()
+	return flight, true
+}
 
-	operationErr := operation(ctx)
+// runFlight runs the shared load on a context that keeps the starting caller's
+// values, so correlation ids and spans survive, but none of its cancellation or
+// deadline. The load is left running when its starting caller leaves, which is
+// the right trade because LoadCollection is idempotent and the collection it
+// finishes loading serves whoever asks next.
+//
+// The outcome is published from inside this goroutine rather than on the
+// starting caller's return path. Publishing earlier would retire the flight
+// while the load was still running and the next caller would start a second
+// concurrent load for the same collection. The deferred publish also means a
+// panicking operation cannot leave followers parked until their own contexts
+// expire.
+func (coordinator *collectionLoadCoordinator) runFlight(
+	ctx context.Context,
+	collectionName string,
+	ceiling time.Duration,
+	flight *collectionLoadFlight,
+	operation collectionLoadOperation,
+) {
+	loadCtx, cancelLoad := context.WithTimeout(context.WithoutCancel(ctx), ceiling)
+	go func() {
+		defer cancelLoad()
+		var operationErr error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				operationErr = fmt.Errorf(
+					"shared load of collection %s panicked: %v",
+					collectionName,
+					recovered,
+				)
+				slog.ErrorContext(loadCtx, "semantic.collection_load_panic",
+					"component", "semantic",
+					"subcomponent", "load",
+					"collection", collectionName,
+					"err", operationErr,
+				)
+			}
+			coordinator.finishFlight(collectionName, flight, operationErr)
+		}()
+		operationErr = operation(loadCtx)
+	}()
+}
 
+// finishFlight publishes one flight's outcome and retires it, so the next
+// caller starts a fresh load rather than joining a finished one.
+func (coordinator *collectionLoadCoordinator) finishFlight(
+	collectionName string,
+	flight *collectionLoadFlight,
+	operationErr error,
+) {
 	coordinator.mutex.Lock()
+	defer coordinator.mutex.Unlock()
 	flight.err = operationErr
 	delete(coordinator.flights, collectionName)
 	close(flight.done)
-	coordinator.mutex.Unlock()
-	return operationErr
 }
 
 func waitForCollectionLoadFlight(
@@ -255,6 +324,17 @@ func (service *Service) collectionLoadBound() time.Duration {
 		return bound
 	}
 	return defaultCollectionLoadBound
+}
+
+// sharedCollectionLoadCeiling is the whole-operation bound for one shared load.
+// The shared load answers to no caller's cancellation, so this is the only
+// thing that ends it: one initial LoadCollection under the store's metadata
+// bound, then awaitCollectionLoaded's worst case of two polls and one recovery
+// request, each under the configured load bound. Stating the sum once here
+// keeps the guarantee readable, and keeps it correct if any one of those bounds
+// changes later.
+func (service *Service) sharedCollectionLoadCeiling() time.Duration {
+	return service.callTimeouts().Metadata + 3*service.collectionLoadBound()
 }
 
 // awaitCollectionLoaded waits for collectionName to become queryable under the

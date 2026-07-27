@@ -29,7 +29,7 @@ func (manager *Manager) resolveReuseSeed(
 		return reuse, 0, descendants, nil
 	}
 	var loadedReuse map[string][]float32
-	err := manager.runWithoutJobCapacity(ctx, func() error {
+	err := manager.runReleasingCapacityIfStalled(ctx, func() error {
 		var loadErr error
 		loadedReuse, loadErr = manager.semantic.LoadReuseVectors(ctx, reuseCollections)
 		if loadErr == nil {
