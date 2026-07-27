@@ -76,7 +76,8 @@ func TestEmbedChunkBatchDropsOversizedInputWithoutError(t *testing.T) {
 		{Content: "small", RelativePath: "a/b.go"},
 	}
 
-	vectors, reused, err := service.embedChunkBatch(context.Background(), chunks, nil)
+	embedded, err := service.embedChunkBatch(context.Background(), chunks, nil)
+	vectors, reused := embedded.vectors, embedded.reused
 	// A per-input skip is not a failure: the batch (and so the job) keeps going,
 	// so nothing here can mark the embedder unhealthy.
 	if err != nil {
@@ -115,7 +116,8 @@ func TestEmbedChunkBatchReusesByContentAndEmbedsOnlyMisses(t *testing.T) {
 		contentVectorKey("reused-C"): {9, 9},
 	}
 
-	vectors, reused, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	embedded, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	vectors, reused := embedded.vectors, embedded.reused
 	if err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
 	}
@@ -154,7 +156,8 @@ func TestEmbedChunkBatchAllReusedSkipsEmbedderEntirely(t *testing.T) {
 		contentVectorKey("y"): {2},
 	}
 
-	vectors, reused, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	embedded, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	vectors, reused := embedded.vectors, embedded.reused
 	if err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
 	}
@@ -174,7 +177,8 @@ func TestEmbedChunkBatchNoReuseEmbedsEverything(t *testing.T) {
 	service := &Service{embedder: embedder}
 
 	chunks := []model.StoredChunk{{Content: "a"}, {Content: "bb"}}
-	vectors, reused, err := service.embedChunkBatch(context.Background(), chunks, nil)
+	embedded, err := service.embedChunkBatch(context.Background(), chunks, nil)
+	vectors, reused := embedded.vectors, embedded.reused
 	if err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
 	}
@@ -352,12 +356,12 @@ func TestEmbedChunkBatchCountsReuseInMetrics(t *testing.T) {
 	reuse := map[string][]float32{contentVectorKey("reused-A"): {7, 7}}
 
 	before := metrics.Read().EmbedChunksReusedTotal
-	_, reused, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	embedded, err := service.embedChunkBatch(context.Background(), chunks, reuse)
 	if err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
 	}
-	if reused != 1 {
-		t.Fatalf("reused = %d, want 1", reused)
+	if embedded.reused != 1 {
+		t.Fatalf("reused = %d, want 1", embedded.reused)
 	}
 	after := metrics.Read().EmbedChunksReusedTotal
 	if after-before != 1 {

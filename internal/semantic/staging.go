@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/metrics"
@@ -173,19 +174,26 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 	var reusedRows int32
 	var embeddedRows int32
 	var droppedInputs int32
+	var refusedEmptyInputs int32
 
 	for embeddingBatchIndex, embeddingBatch := range embeddingPacks {
-		vectors, reused, err := service.embedChunkBatch(ctx, embeddingBatch, reuse)
+		embedded, err := service.embedChunkBatch(ctx, embeddingBatch, reuse)
 		if err != nil {
 			return err
 		}
+		reused := embedded.reused
 
-		keptChunks, keptVectors := filterEmbeddedChunks(embeddingBatch, vectors)
+		keptChunks, keptVectors := filterEmbeddedChunks(embeddingBatch, embedded.vectors)
+
+		if emptyRefused := collectEmptyRefusedChunks(embeddingBatch, embedded); len(emptyRefused) > 0 {
+			logEmptyContentRefused(ctx, collectionName, emptyRefused)
+			refusedEmptyInputs += safeInt32FromInt(len(emptyRefused))
+		}
 
 		// A reused chunk never reaches the embedder, so it cannot be refused and
 		// cannot enter this retry queue. The chunks-only constructor therefore
 		// correctly charges every retry input against the token budget.
-		oversized := collectOversizedChunks(embeddingBatch, vectors)
+		oversized := collectOversizedChunks(embeddingBatch, embedded)
 		if len(oversized) > 0 {
 			retryChunks, retryVectors, dropped, retryErr := EmbedChunksSplittingOversize(
 				ctx,
@@ -250,16 +258,24 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			})
 		}
 	}
-	if droppedInputs > 0 {
-		slog.WarnContext(
-			ctx,
-			"semantic.embed_inputs_dropped_summary",
-			"collection", collectionName,
-			"dropped_inputs", droppedInputs,
-		)
-	}
+	logEmbedRunExceptions(ctx, collectionName, droppedInputs, refusedEmptyInputs)
 	slog.InfoContext(ctx, "semantic.chunks_written", "collection", collectionName, "embedding_batches", totalEmbeddingBatches, "insert_batches", totalInsertBatches, "chunks", writtenRows, "embedded", embeddedRows, "reused", reusedRows)
 	return nil
+}
+
+// chunkBatchEmbedding is the outcome of embedding one packed batch. vectors holds
+// one entry per chunk in input order, nil where no vector was produced. reused
+// counts the chunks a reuse vector covered, which never reached the embedder.
+//
+// refusedEmpty marks, per chunk, the ones a provider refused because they carry
+// nothing to embed. It is separate from a nil vector because the two nil cases
+// mean opposite things: an endpoint rejection means the content did not fit and
+// must be split and retried, while a refusal means there was no content, so
+// splitting it would divide nothing and retrying it would be refused again.
+type chunkBatchEmbedding struct {
+	vectors      [][]float32
+	reused       int
+	refusedEmpty []bool
 }
 
 // embedChunkBatch returns one dense vector per chunk in chunkBatch, in order,
@@ -268,8 +284,9 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 // hash) that vector is taken directly; only the remaining misses are embedded in
 // a single batch. A nil or empty reuse map makes this embed every chunk, which
 // is the ordinary first-index behavior, and reports zero reused.
-func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.StoredChunk, reuse map[string][]float32) ([][]float32, int, error) {
+func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.StoredChunk, reuse map[string][]float32) (chunkBatchEmbedding, error) {
 	vectors := make([][]float32, len(chunkBatch))
+	refusedEmpty := make([]bool, len(chunkBatch))
 	missTexts := make([]string, 0, len(chunkBatch))
 	missIndexes := make([]int, 0, len(chunkBatch))
 	for index, chunk := range chunkBatch {
@@ -289,12 +306,12 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 	// together report what a batch cost and what it skipped.
 	metrics.ChunksReused(reused)
 	if len(missTexts) == 0 {
-		return vectors, reused, nil
+		return chunkBatchEmbedding{vectors: vectors, reused: reused, refusedEmpty: refusedEmpty}, nil
 	}
 
 	result, err := service.embedMissedTexts(ctx, missTexts, reused)
 	if err != nil {
-		return nil, 0, err
+		return chunkBatchEmbedding{}, err
 	}
 	for position, vectorIndex := range missIndexes {
 		// A skipped input carries a nil vector; the caller re-splits and retries that
@@ -302,21 +319,93 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 		// oversized input is divided and indexed rather than lost.
 		vectors[vectorIndex] = result.Vectors[position]
 	}
-	return vectors, reused, nil
+	for _, skip := range result.Skipped {
+		if skip.Reason != adapterr.EmbedRejectionEmptyContent {
+			continue
+		}
+		if skip.Index < 0 || skip.Index >= len(missIndexes) {
+			continue
+		}
+		refusedEmpty[missIndexes[skip.Index]] = true
+	}
+	return chunkBatchEmbedding{vectors: vectors, reused: reused, refusedEmpty: refusedEmpty}, nil
 }
 
-// collectOversizedChunks returns the chunks whose vector is nil, meaning the
+// collectOversizedChunks returns the chunks whose vector is nil because the
 // embedding endpoint rejected the input as individually un-embeddable. The caller
 // feeds these back through the splitter and retries them instead of dropping
 // them, so an oversized input is divided and indexed.
-func collectOversizedChunks(chunks []model.StoredChunk, vectors [][]float32) []model.StoredChunk {
+//
+// A chunk refused as carrying nothing to embed is excluded. It has no content to
+// divide, so the splitter could only hand back the same empty input and the retry
+// would end in the drop accounting, which counts content the index lost. Letting
+// it land there would spend the drop counters on inputs that were never content
+// and hide the real losses they exist to surface.
+func collectOversizedChunks(chunks []model.StoredChunk, embedded chunkBatchEmbedding) []model.StoredChunk {
 	oversized := make([]model.StoredChunk, 0)
-	for index, vector := range vectors {
-		if vector == nil {
+	for index, vector := range embedded.vectors {
+		if vector == nil && !embedded.refusedEmpty[index] {
 			oversized = append(oversized, chunks[index])
 		}
 	}
 	return oversized
+}
+
+// logEmbedRunExceptions reports, once per run, the inputs that did not become
+// rows. The two counts stay on separate lines with separate field names because
+// they mean different things and only one of them is a loss: dropped inputs are
+// content the index no longer holds, while refused inputs never carried content
+// at all. Summing them would produce a number that answers neither "what did we
+// lose" nor "who is sending us nothing".
+func logEmbedRunExceptions(ctx context.Context, collectionName string, droppedInputs int32, refusedEmptyInputs int32) {
+	if droppedInputs > 0 {
+		slog.WarnContext(
+			ctx,
+			"semantic.embed_inputs_dropped_summary",
+			"collection", collectionName,
+			"dropped_inputs", droppedInputs,
+		)
+	}
+	if refusedEmptyInputs > 0 {
+		slog.WarnContext(
+			ctx,
+			"semantic.embed_inputs_refused_empty_summary",
+			"collection", collectionName,
+			"refused_inputs", refusedEmptyInputs,
+		)
+	}
+}
+
+// logEmptyContentRefused reports one batch's refusals so an operator can find
+// who sent them. Whoever assembles chunks is meant to have excluded content with
+// nothing in it long before it reaches a provider, so any of these is a defect in
+// that caller rather than a condition the index is expected to meet. The count
+// says how bad it is and the first chunk's identity says where to look; naming
+// every chunk would print a line per row and bury the signal in its own volume.
+func logEmptyContentRefused(ctx context.Context, collectionName string, refused []model.StoredChunk) {
+	first := refused[0]
+	slog.WarnContext(
+		ctx,
+		"semantic.embed_inputs_refused_empty",
+		"collection", collectionName,
+		"refused_inputs", len(refused),
+		"conversation_id", first.ConversationID,
+		"relative_path", first.RelativePath,
+		"message_index", first.MessageIndex,
+		"role", first.Role,
+	)
+}
+
+// collectEmptyRefusedChunks returns the chunks a provider refused as carrying
+// nothing to embed, so the caller can report them apart from lost content.
+func collectEmptyRefusedChunks(chunks []model.StoredChunk, embedded chunkBatchEmbedding) []model.StoredChunk {
+	refused := make([]model.StoredChunk, 0)
+	for index, wasRefused := range embedded.refusedEmpty {
+		if wasRefused {
+			refused = append(refused, chunks[index])
+		}
+	}
+	return refused
 }
 
 // embedMissedTexts sends one embedding request for the chunk contents no reuse

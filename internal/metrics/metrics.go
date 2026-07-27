@@ -14,12 +14,13 @@ import (
 // lock-free and the expvar publishers can read the live values without
 // copying. The grouping mirrors the daemon subsystems that own them.
 var (
-	embedBatchesTotal      atomic.Int64
-	embedBatchesFailed     atomic.Int64
-	embedVectorsTotal      atomic.Int64
-	embedLatencyMSSum      atomic.Int64
-	embedInflight          atomic.Int64
-	embedChunksReusedTotal atomic.Int64
+	embedBatchesTotal       atomic.Int64
+	embedBatchesFailed      atomic.Int64
+	embedVectorsTotal       atomic.Int64
+	embedLatencyMSSum       atomic.Int64
+	embedInflight           atomic.Int64
+	embedChunksReusedTotal  atomic.Int64
+	embedInputsRefusedEmpty atomic.Int64
 
 	convergeUpsertTotal     atomic.Int64
 	convergeRemoveTotal     atomic.Int64
@@ -48,6 +49,14 @@ type Snapshot struct {
 	EmbedLatencyMSSum      int64
 	EmbedInflight          int64
 	EmbedChunksReusedTotal int64
+	// EmbedInputsRefusedEmpty counts inputs a provider refused because they carry
+	// no non-whitespace character. Its expected steady-state value is zero: the
+	// callers that assemble inputs are meant to have excluded such content long
+	// before it reaches a provider. A sustained nonzero value is therefore not a
+	// workload measurement but a defect report against whoever offered the input,
+	// and it is deliberately kept apart from any dropped-content count so a real
+	// content loss and an unembeddable input are never summed into one number.
+	EmbedInputsRefusedEmpty int64
 
 	ConvergeUpsertTotal     int64
 	ConvergeRemoveTotal     int64
@@ -96,6 +105,12 @@ func ChunksReused(count int) {
 		return
 	}
 	embedChunksReusedTotal.Add(int64(count))
+}
+
+// EmbedInputsRefusedEmpty counts inputs a provider refused as carrying nothing
+// to embed. Callers pass the number refused in one batch.
+func EmbedInputsRefusedEmpty(inputs int) {
+	embedInputsRefusedEmpty.Add(int64(inputs))
 }
 
 // ConvergeUpsert counts one converge upsert operation.
@@ -170,6 +185,7 @@ func Read() Snapshot {
 		EmbedLatencyMSSum:        embedLatencyMSSum.Load(),
 		EmbedInflight:            embedInflight.Load(),
 		EmbedChunksReusedTotal:   embedChunksReusedTotal.Load(),
+		EmbedInputsRefusedEmpty:  embedInputsRefusedEmpty.Load(),
 		ConvergeUpsertTotal:      convergeUpsertTotal.Load(),
 		ConvergeRemoveTotal:      convergeRemoveTotal.Load(),
 		ConvergeCopyChunksTotal:  convergeCopyChunksTotal.Load(),

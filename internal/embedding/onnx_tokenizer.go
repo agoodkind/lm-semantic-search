@@ -44,6 +44,10 @@ const (
 	// onnxInputOverTokenLimit marks an input the tokenizer measured past the
 	// model's maximum token count.
 	onnxInputOverTokenLimit onnxInputRejection = onnxInputRejection(adapterr.EmbedRejectionContextLengthExceeded)
+	// onnxInputEmpty marks an input carrying no non-whitespace character. The
+	// tokenizer would reduce it to the model's special tokens alone, so the vector
+	// would describe the model rather than any content.
+	onnxInputEmpty onnxInputRejection = onnxInputRejection(adapterr.EmbedRejectionEmptyContent)
 )
 
 // encodedONNXInput carries one tokenized input. tokenCount is the input's full
@@ -115,6 +119,9 @@ func (tokenizer *genericTokenizer) maximumInputBytes() int {
 // caller can reject an input before taking the runtime lock and without
 // allocating an encoding it would discard.
 func (tokenizer *genericTokenizer) classifyInput(text string) onnxInputRejection {
+	if hasNothingToEmbed(text) {
+		return onnxInputEmpty
+	}
 	if strings.ContainsRune(text, 0) {
 		return onnxInputContainsNUL
 	}

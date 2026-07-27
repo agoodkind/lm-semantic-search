@@ -93,7 +93,7 @@ func TestEmbedPhaseSpanReportsInputCountsForRateAttribution(t *testing.T) {
 	chunks := []model.StoredChunk{{Content: "reused-A"}, {Content: "fresh"}}
 	reuse := map[string][]float32{contentVectorKey("reused-A"): {1}}
 
-	if _, _, err := service.embedChunkBatch(context.Background(), chunks, reuse); err != nil {
+	if _, err := service.embedChunkBatch(context.Background(), chunks, reuse); err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestEmbedPhaseSpanIsSilentForAnAllReuseBatch(t *testing.T) {
 	chunks := []model.StoredChunk{{Content: "reused-A"}}
 	reuse := map[string][]float32{contentVectorKey("reused-A"): {1}}
 
-	if _, _, err := service.embedChunkBatch(context.Background(), chunks, reuse); err != nil {
+	if _, err := service.embedChunkBatch(context.Background(), chunks, reuse); err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestEmbedPhaseSpanCountsEveryInputWhenNothingIsReused(t *testing.T) {
 
 	chunks := []model.StoredChunk{chunkOfBytes(400), chunkOfBytes(400)}
 
-	if _, _, err := service.embedChunkBatch(context.Background(), chunks, nil); err != nil {
+	if _, err := service.embedChunkBatch(context.Background(), chunks, nil); err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
 	}
 
