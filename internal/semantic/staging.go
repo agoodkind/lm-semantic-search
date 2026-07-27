@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
@@ -25,7 +26,7 @@ import (
 // item's insert and its checkpoint, the resumed run re-embeds that one item and
 // its prior staging rows are removed before the fresh rows land. A nil chunk
 // slice with an empty removal is a no-op.
-func (service *Service) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
+func (service *Service) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet, reusePolicy ReusePolicy) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.stageReindex")
 	defer done(&err)
 
@@ -48,7 +49,7 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 		return nil
 	}
 	chunks = service.guardrailExpand(ctx, codebasePath, chunks, "stage")
-	return service.insertChunksBatched(ctx, stagingName, chunks, hasStaging, "Generating embeddings and writing to Milvus...", progress, reuse, columnSet)
+	return service.insertChunksBatched(ctx, stagingName, chunks, hasStaging, "Generating embeddings and writing to Milvus...", progress, reuse, columnSet, reusePolicy)
 }
 
 // PromoteStaging atomically swaps the staging collection onto the live
@@ -161,11 +162,17 @@ func (service *Service) packForEmbedding(chunks []model.StoredChunk, reuse map[s
 // separate the embedder round trip from the Milvus write, and
 // semantic.chunks_written closes the loop with the totals that make those
 // durations a rate.
-func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
+func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet, reusePolicy ReusePolicy) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.insertChunksBatched")
 	defer done(&err)
 
-	embeddingPacks := service.packForEmbedding(chunks, reuse)
+	// Resolve every distinct content in this run against the corpus-wide
+	// content-vector store before packing, so the packer charges the token budget
+	// only for content the corpus has genuinely never embedded. reuse, when the
+	// caller supplied one, is folded in and adds nothing the store already knows.
+	resolved := service.resolveRunContentVectors(ctx, chunks, reuse, reusePolicy)
+
+	embeddingPacks := service.packForEmbedding(chunks, resolved)
 	totalEmbeddingBatches := len(embeddingPacks)
 	totalInsertBatches := 0
 	var writtenRows int32
@@ -174,7 +181,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 	var droppedInputs int32
 
 	for embeddingBatchIndex, embeddingBatch := range embeddingPacks {
-		vectors, reused, err := service.embedChunkBatch(ctx, embeddingBatch, reuse)
+		vectors, reused, err := service.embedChunkBatch(ctx, embeddingBatch, resolved)
 		if err != nil {
 			return err
 		}
@@ -200,6 +207,12 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			keptVectors = append(keptVectors, retryVectors...)
 			droppedInputs += safeInt32FromInt(dropped)
 		}
+
+		// Everything the embedder just produced, from both the ordinary batch and
+		// the oversize retry, is recorded once here and folded into resolved so the
+		// remaining batches of this same run reuse it too.
+		service.recordRunContentVectors(ctx, keptChunks, keptVectors, resolved, reusePolicy)
+
 		if len(keptChunks) > 0 {
 			dimension := len(keptVectors[0])
 			if !collectionReady {
@@ -259,6 +272,60 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 	}
 	slog.InfoContext(ctx, "semantic.chunks_written", "collection", collectionName, "embedding_batches", totalEmbeddingBatches, "insert_batches", totalInsertBatches, "chunks", writtenRows, "embedded", embeddedRows, "reused", reusedRows)
 	return nil
+}
+
+// resolveRunContentVectors answers, for every distinct content in this run,
+// whether the corpus already holds a vector for it under the current embedding
+// identity. The caller's reuse map is folded in first so a caller that already
+// read vectors for its own rows still contributes them.
+//
+// A store failure is not an ingest failure. Reuse only decides whether the
+// embedder is called, never what is stored, so a failed lookup degrades to
+// embedding the content again and the run still produces correct rows.
+func (service *Service) resolveRunContentVectors(ctx context.Context, chunks []model.StoredChunk, reuse map[string][]float32, reusePolicy ReusePolicy) map[string][]float32 {
+	if reusePolicy == ReuseDisabled {
+		// A forced rebuild wants the embedder called for every chunk, so neither the
+		// caller's map nor the corpus may answer for any of them.
+		return map[string][]float32{}
+	}
+	resolved := make(map[string][]float32, len(reuse)+len(chunks))
+	maps.Copy(resolved, reuse)
+
+	contentHashes := distinctContentHashes(chunks)
+	storeHits, err := service.ResolveContentVectors(ctx, contentHashes)
+	if err != nil {
+		slog.WarnContext(ctx, "resolve content vectors failed; embedding uncovered chunks", "distinct_content", len(contentHashes), "err", err)
+		return resolved
+	}
+	maps.Copy(resolved, storeHits)
+	slog.InfoContext(
+		ctx, "semantic.content_vectors_resolved",
+		"distinct_content", len(contentHashes),
+		"store_hits", len(storeHits),
+		"resolved", len(resolved),
+	)
+	return resolved
+}
+
+// recordRunContentVectors stores the vectors this run paid the embedder for and
+// adds them to resolved so the rest of the run reuses them. A store failure is
+// logged and does not fail the ingest, for the same reason a failed lookup does
+// not: the rows being written are already correct either way.
+func (service *Service) recordRunContentVectors(ctx context.Context, chunks []model.StoredChunk, vectors [][]float32, resolved map[string][]float32, reusePolicy ReusePolicy) {
+	if reusePolicy == ReuseDisabled {
+		return
+	}
+	contentVectors := unrecordedContentVectors(chunks, vectors, resolved)
+	if len(contentVectors) == 0 {
+		return
+	}
+	if err := service.RecordContentVectors(ctx, contentVectors); err != nil {
+		slog.WarnContext(ctx, "record content vectors failed; later runs will re-embed this content", "rows", len(contentVectors), "err", err)
+		return
+	}
+	for _, contentVector := range contentVectors {
+		resolved[contentVector.ContentHash] = contentVector.Vector
+	}
 }
 
 // embedChunkBatch returns one dense vector per chunk in chunkBatch, in order,

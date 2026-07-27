@@ -328,7 +328,7 @@ func (f *fakeSemantic) recordReindexReuse(chunks []model.StoredChunk, reuse map[
 	f.reindexReuse[chunks[0].ConversationID] = copied
 }
 
-func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error {
+func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet, reusePolicy semantic.ReusePolicy) error {
 	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
 	f.reindexCalls = append(f.reindexCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval, ColumnSet: columnSet})
@@ -346,7 +346,7 @@ func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks 
 	return nil
 }
 
-func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error {
+func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet, reusePolicy semantic.ReusePolicy) error {
 	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
 	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval, ColumnSet: columnSet})

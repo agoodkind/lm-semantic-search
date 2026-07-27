@@ -308,6 +308,7 @@ func stageAndPromoteWithReuse(
 		nil,
 		reuse,
 		semantic.StoreColumnSetCode,
+		semantic.ReuseFromCorpus,
 	); err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
 	}
@@ -332,6 +333,7 @@ func stageAndPromote(
 		nil,
 		nil,
 		columnSet,
+		semantic.ReuseFromCorpus,
 	); err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
 	}

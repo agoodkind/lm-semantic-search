@@ -21,7 +21,14 @@ func (store *Store) Reindex(
 	progress func(semantic.Progress),
 	reuse map[string][]float32,
 	_ semantic.StoreColumnSet,
+	reusePolicy semantic.ReusePolicy,
 ) error {
+	// The local store has no corpus-wide content-vector collection, so the
+	// caller's map is the only reuse there is. Honouring the policy here still
+	// matters: a forced rebuild must reach the embedder for every chunk.
+	if reusePolicy == semantic.ReuseDisabled {
+		reuse = nil
+	}
 	if err := operationContextError(ctx, "reindex local vectors"); err != nil {
 		return err
 	}
@@ -54,7 +61,14 @@ func (store *Store) StageReindex(
 	progress func(semantic.Progress),
 	reuse map[string][]float32,
 	_ semantic.StoreColumnSet,
+	reusePolicy semantic.ReusePolicy,
 ) error {
+	// The local store has no corpus-wide content-vector collection, so the
+	// caller's map is the only reuse there is. Honouring the policy here still
+	// matters: a forced rebuild must reach the embedder for every chunk.
+	if reusePolicy == semantic.ReuseDisabled {
+		reuse = nil
+	}
 	if err := operationContextError(ctx, "stage local vectors"); err != nil {
 		return err
 	}

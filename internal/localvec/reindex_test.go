@@ -169,6 +169,7 @@ func TestReindexReportsDroppedChunks(t *testing.T) {
 		},
 		nil,
 		semantic.StoreColumnSetCode,
+		semantic.ReuseFromCorpus,
 	)
 	if err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
@@ -219,6 +220,7 @@ func TestStageReindexReportsProgressWhenEveryChunkDropped(t *testing.T) {
 		},
 		nil,
 		semantic.StoreColumnSetCode,
+		semantic.ReuseFromCorpus,
 	)
 	if err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
@@ -272,6 +274,7 @@ func TestReindexPrefixDeleteRemovesEverySplitPiece(t *testing.T) {
 		nil,
 		nil,
 		semantic.StoreColumnSetCode,
+		semantic.ReuseFromCorpus,
 	); err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
 	}
@@ -309,6 +312,7 @@ func TestReindexSplitsOversizedChunkIntoDistinctRows(t *testing.T) {
 		nil,
 		nil,
 		semantic.StoreColumnSetCode,
+		semantic.ReuseFromCorpus,
 	); err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
 	}
@@ -358,6 +362,7 @@ func TestReindexMissingCollectionSkipsEmbedding(t *testing.T) {
 		nil,
 		nil,
 		semantic.StoreColumnSetCode,
+		semantic.ReuseFromCorpus,
 	)
 	if !errors.Is(err, semantic.ErrCollectionMissing) {
 		t.Fatalf("Reindex error = %v, want ErrCollectionMissing", err)
@@ -481,6 +486,7 @@ func TestReindexDeletesPathsAndPrefixesBeforeAppending(t *testing.T) {
 		nil,
 		nil,
 		semantic.StoreColumnSetCode,
+		semantic.ReuseFromCorpus,
 	); err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
 	}

@@ -155,6 +155,13 @@ type itemReuseSource struct {
 	CollectionName string
 	RelativePath   string
 	Scope          itemReuseScope
+	// Policy reports whether this item may take a vector from the corpus-wide
+	// content-addressed store instead of calling the embedder. It rides here
+	// rather than on its own interface method because every source already
+	// answers this question while deciding its reuse scope, and the two answers
+	// must not be able to disagree. The zero value is ReuseFromCorpus, so a
+	// source that has no opinion gets the cheap path.
+	Policy semantic.ReusePolicy
 }
 
 type conversationRowReader interface {
@@ -256,9 +263,10 @@ func (source codeItemSource) reuseSource(relativePath string) itemReuseSource {
 			CollectionName: "",
 			RelativePath:   "",
 			Scope:          itemReuseScopeNone,
+			Policy:         semantic.ReuseFromCorpus,
 		}
 	}
-	return itemReuseSource{CollectionName: source.collectionName, RelativePath: relativePath, Scope: itemReuseScopePath}
+	return itemReuseSource{CollectionName: source.collectionName, RelativePath: relativePath, Scope: itemReuseScopePath, Policy: semantic.ReuseFromCorpus}
 }
 
 func (source codeItemSource) unit() string {
@@ -644,15 +652,30 @@ func (source conversationItemSource) absencePolicy() absencePolicy {
 // force the reuse lever is disabled: it returns the no-reuse scope so a present
 // chunk cannot be served from a stored vector and every chunk re-embeds, which
 // is what makes force rebuild present-but-stale rows.
+// Under force the Policy is ReuseDisabled, not merely a missing scope. Force
+// exists so an operator can rebuild rows that are present but stale, and a stale
+// row's content is usually unchanged, so a content-keyed store would otherwise
+// answer for every chunk and the rebuild would embed nothing. An absent
+// collection is different: there is nothing stale to replace, so that case keeps
+// the ordinary corpus policy and only loses its per-item scope.
 func (source conversationItemSource) reuseSource(conversationID string) itemReuseSource {
-	if source.force || source.collectionName == "" {
+	if source.force {
 		return itemReuseSource{
 			CollectionName: "",
 			RelativePath:   "",
 			Scope:          itemReuseScopeNone,
+			Policy:         semantic.ReuseDisabled,
 		}
 	}
-	return itemReuseSource{CollectionName: source.collectionName, RelativePath: conversationRelativePathPrefix(conversationID), Scope: itemReuseScopePrefix}
+	if source.collectionName == "" {
+		return itemReuseSource{
+			CollectionName: "",
+			RelativePath:   "",
+			Scope:          itemReuseScopeNone,
+			Policy:         semantic.ReuseFromCorpus,
+		}
+	}
+	return itemReuseSource{CollectionName: source.collectionName, RelativePath: conversationRelativePathPrefix(conversationID), Scope: itemReuseScopePrefix, Policy: semantic.ReuseFromCorpus}
 }
 
 func (source conversationItemSource) unit() string {

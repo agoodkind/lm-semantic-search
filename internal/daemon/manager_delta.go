@@ -63,6 +63,10 @@ type deltaState struct {
 	source           itemSource
 	semantic         bool
 	itemReuseEnabled bool
+	// reusePolicy is the item source's answer for the item currently being
+	// reindexed. The zero value is ReuseFromCorpus, which is right for the
+	// removal-only calls that carry no chunks and so embed nothing.
+	reusePolicy semantic.ReusePolicy
 	// staging routes per-file embeds into the staging collection that a
 	// from-scratch build promotes onto the live name at the end, instead of
 	// the live collection an incremental sync writes to directly.
@@ -97,6 +101,29 @@ type chunkCounters struct {
 	embedded           int32
 	dropped            int32
 	reuseVectorsLoaded int32
+}
+
+// newDeltaState builds the per-run state the changed-file loop threads through
+// every item. reusePolicy starts at the corpus-wide value and
+// reuseStateForChangedFile replaces it per item, because only the item source
+// knows whether that item is a forced rebuild.
+func (manager *Manager) newDeltaState(ctx context.Context, job model.Job, codebase model.Codebase, plan deltaPlan, source itemSource) deltaState {
+	semanticReady := manager.semantic != nil && manager.semantic.Available()
+	return deltaState{
+		plan:             plan,
+		snapshotPath:     manager.merklePath(codebase.ID),
+		working:          make(map[string]string, len(plan.seedSnapshot.Files)),
+		source:           source,
+		semantic:         semanticReady,
+		itemReuseEnabled: manager.resolveItemReusePolicy(ctx, job, false, semanticReady),
+		reusePolicy:      semantic.ReuseFromCorpus,
+		staging:          false,
+		reuse:            nil,
+		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, dropped: 0, reuseVectorsLoaded: 0},
+		seededReuse:      0,
+		admission:        manager.admissionForJob(job),
+		forced:           forcedItemsSet(plan.forced),
+	}
 }
 
 // applyReindexForState runs one per-file delta against the live collection, or
@@ -142,9 +169,9 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 	columnSet := state.source.columnSet()
 	var err error
 	if state.staging {
-		err = manager.semantic.StageReindex(ctx, job.CanonicalPath, chunks, removal, progressFn, state.reuse, columnSet)
+		err = manager.semantic.StageReindex(ctx, job.CanonicalPath, chunks, removal, progressFn, state.reuse, columnSet, state.reusePolicy)
 	} else {
-		err = manager.semantic.Reindex(ctx, job.CanonicalPath, chunks, removal, progressFn, state.reuse, columnSet)
+		err = manager.semantic.Reindex(ctx, job.CanonicalPath, chunks, removal, progressFn, state.reuse, columnSet, state.reusePolicy)
 	}
 	if err != nil {
 		return manager.classifyReindexErr(ctx, job, err, phase)
@@ -342,21 +369,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	// touch only the embed counters, so these counts persist for the run.
 	manager.setJobDeltaCounts(job.ID, len(plan.diff.Added), len(plan.diff.Modified), len(plan.diff.Removed), len(plan.currentSnapshot.Files))
 
-	semanticReady := manager.semantic != nil && manager.semantic.Available()
-	state := deltaState{
-		plan:             plan,
-		snapshotPath:     manager.merklePath(codebase.ID),
-		working:          make(map[string]string, len(plan.seedSnapshot.Files)),
-		source:           source,
-		semantic:         semanticReady,
-		itemReuseEnabled: manager.resolveItemReusePolicy(ctx, job, false, semanticReady),
-		staging:          false,
-		reuse:            nil,
-		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, dropped: 0, reuseVectorsLoaded: 0},
-		seededReuse:      0,
-		admission:        manager.admissionForJob(job),
-		forced:           forcedItemsSet(plan.forced),
-	}
+	state := manager.newDeltaState(ctx, job, codebase, plan, source)
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
 	if outcome := manager.applyDeltaRemovals(ctx, job, state); outcome.fallback {
@@ -457,6 +470,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		source:           source,
 		semantic:         semanticReady,
 		itemReuseEnabled: manager.resolveItemReusePolicy(ctx, job, true, semanticReady),
+		reusePolicy:      semantic.ReuseFromCorpus,
 		staging:          true,
 		reuse:            nil,
 		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, dropped: 0, reuseVectorsLoaded: 0},
@@ -748,6 +762,10 @@ func (manager *Manager) reuseStateForChangedFile(
 	fileResult indexer.OneFileResult,
 	removal semantic.Removal,
 ) (deltaState, error) {
+	// The policy is read before any of the reuse-map branches below, because a
+	// forced rebuild takes the same branch as an ordinary item that happens to
+	// carry no pre-read vectors, and only the policy tells those two apart.
+	state.reusePolicy = state.source.reuseSource(relativePath).Policy
 	if fileResult.ReuseVectors != nil {
 		state.reuse = mergedReuse(state.reuse, fileResult.ReuseVectors)
 		if state.chunkCounts != nil {

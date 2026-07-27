@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
 	"google.golang.org/grpc"
 )
@@ -86,6 +88,10 @@ type harness struct {
 	merkleDir      string
 	prodPidsPre    map[int]bool
 	embedGate      *embedGate
+	embedRecorder  *embedRecorder
+	// contentVectorCollection is the run's content-addressed vector collection,
+	// named by the salted embedding identity so teardown can drop it too.
+	contentVectorCollection string
 }
 
 // newHarness builds the isolated daemon and returns a ready harness, or skips the
@@ -137,7 +143,16 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	socketPath := filepath.Join(socketDir, "daemon.sock")
 
-	embedServer := newFakeEmbeddingServer(t, gate)
+	recorder := newEmbedRecorder()
+	embedServer := newFakeEmbeddingServer(t, gate, recorder)
+
+	// One random id isolates every per-run Milvus name this harness can create.
+	// It names the throwaway conversation collection below, and it also salts the
+	// embedding model name so the content-vector collection (which is keyed by
+	// embedding identity, not by codebase) is unique to this run. Without the
+	// salt, one run's stored vectors would satisfy the next run's reuse and a
+	// test that counts embedder calls would pass or fail depending on run order.
+	runID := randomID()
 
 	cfg := config.Config{
 		StateRoot:                 stateRoot,
@@ -154,7 +169,7 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 		GraphDir:                  filepath.Join(stateRoot, "graph"),
 		ContextRoot:               filepath.Join(stateRoot, "context"),
 		EmbeddingProvider:         "OpenAI",
-		EmbeddingModel:            "text-embedding-3-small",
+		EmbeddingModel:            "text-embedding-3-small-" + runID,
 		EmbeddingBatchSize:        8,
 		EmbeddingBatchTokenBudget: 1000,
 		EmbeddingDimension:        fakeEmbeddingDimension,
@@ -202,7 +217,7 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 
 	// A fresh random id derives a unique conv_chunks_<hash> collection name, so
 	// the throwaway collection can never be the production one.
-	collectionID := "live-marker-" + randomID()
+	collectionID := "live-marker-" + runID
 	codebase, err := manager.RegisterConversationCollection(context.Background(), collectionID)
 	if err != nil {
 		_ = conn.Close()
@@ -233,6 +248,12 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 		merkleDir:      cfg.MerkleDir,
 		prodPidsPre:    prodPidsPre,
 		embedGate:      gate,
+		embedRecorder:  recorder,
+		contentVectorCollection: semantic.EmbeddingIdentity{
+			Provider:  cfg.EmbeddingProvider,
+			Model:     cfg.EmbeddingModel,
+			Dimension: cfg.EmbeddingDimension,
+		}.CollectionName(),
 	}
 	t.Cleanup(func() { h.teardown(stopServer) })
 	return h
@@ -251,6 +272,17 @@ func (h *harness) teardown(stopServer func()) {
 			// A missing collection (a scenario that never inserted) is not an error.
 			if !strings.Contains(err.Error(), "not exist") && !strings.Contains(err.Error(), "not found") {
 				h.t.Errorf("DropCollection(%s) returned error: %v", h.collectionName, err)
+			}
+		}
+		cancel()
+	}
+	// The content-vector collection is salted with this run's id, so dropping it
+	// can never touch a collection another run or the operator's daemon owns.
+	if h.contentVectorCollection != "" {
+		dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := h.milvus.DropCollection(dropCtx, milvusclient.NewDropCollectionOption(h.contentVectorCollection)); err != nil {
+			if !strings.Contains(err.Error(), "not exist") && !strings.Contains(err.Error(), "not found") {
+				h.t.Errorf("DropCollection(%s) returned error: %v", h.contentVectorCollection, err)
 			}
 		}
 		cancel()
@@ -379,14 +411,73 @@ type embedGate struct {
 	release chan struct{}
 }
 
-func newFakeEmbeddingServer(t *testing.T, gate *embedGate) *httptest.Server {
+// embedRecorder counts how many times the fake embedder was asked to embed each
+// distinct text. It is what lets a test assert that identical content costs one
+// embedding call for the whole corpus rather than one per occurrence, which is
+// an outcome the daemon's caller pays for directly in wall-clock time.
+type embedRecorder struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func newEmbedRecorder() *embedRecorder {
+	return &embedRecorder{mu: sync.Mutex{}, counts: map[string]int{}}
+}
+
+func (recorder *embedRecorder) record(texts []string) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	for _, text := range texts {
+		recorder.counts[text]++
+	}
+}
+
+// maxRepeat reports the largest number of times any single text was sent to the
+// embedder. One means no text was ever embedded twice, which is the property
+// corpus-wide reuse guarantees.
+//
+// This is stated over whatever texts the engine actually produced rather than
+// over a string the test planted, because the engine splits a document into
+// chunks by byte budget and renders each one, so no test-authored string is
+// guaranteed to survive as a whole embedder input.
+func (recorder *embedRecorder) maxRepeat() int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	most := 0
+	for _, count := range recorder.counts {
+		if count > most {
+			most = count
+		}
+	}
+	return most
+}
+
+// distinct reports how many different texts were sent to the embedder.
+func (recorder *embedRecorder) distinct() int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return len(recorder.counts)
+}
+
+// total reports how many inputs were sent to the embedder across every request.
+func (recorder *embedRecorder) total() int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	total := 0
+	for _, count := range recorder.counts {
+		total += count
+	}
+	return total
+}
+
+func newFakeEmbeddingServer(t *testing.T, gate *embedGate, recorder *embedRecorder) *httptest.Server {
 	t.Helper()
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch {
 		case strings.HasSuffix(request.URL.Path, "/models"):
 			writeModelsList(writer)
 		case strings.HasSuffix(request.URL.Path, "/embeddings"):
-			writeEmbeddings(t, writer, request, gate)
+			writeEmbeddings(t, writer, request, gate, recorder)
 		default:
 			http.Error(writer, "unexpected path "+request.URL.Path, http.StatusNotFound)
 		}
@@ -406,11 +497,14 @@ func writeModelsList(writer http.ResponseWriter) {
 	})
 }
 
-func writeEmbeddings(t *testing.T, writer http.ResponseWriter, request *http.Request, gate *embedGate) {
+func writeEmbeddings(t *testing.T, writer http.ResponseWriter, request *http.Request, gate *embedGate, recorder *embedRecorder) {
 	inputs, err := decodeEmbeddingInputs(request)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if recorder != nil {
+		recorder.record(inputs)
 	}
 	if gate != nil {
 		gate.arrived <- len(inputs)

@@ -311,7 +311,7 @@ func (service *Service) hasCollection(
 // inserted through the same batched flow the staging build uses. Reindex
 // returns ErrCollectionMissing when the live collection no longer exists, so
 // callers can fall back to a full staging build.
-func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
+func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet, reusePolicy ReusePolicy) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.reindex")
 	defer done(&err)
 
@@ -338,7 +338,7 @@ func (service *Service) Reindex(ctx context.Context, codebasePath string, addedO
 		return nil
 	}
 	addedOrModifiedChunks = service.guardrailExpand(ctx, codebasePath, addedOrModifiedChunks, "reindex")
-	return service.insertChunksBatched(ctx, collectionName, addedOrModifiedChunks, true, "Reindexing changed files...", progress, reuse, columnSet)
+	return service.insertChunksBatched(ctx, collectionName, addedOrModifiedChunks, true, "Reindexing changed files...", progress, reuse, columnSet, reusePolicy)
 }
 
 // PruneToCurrent removes rows whose relativePath is outside the provided

@@ -107,6 +107,7 @@ func TestStoreRoundTripSearchDeletePruneAndReuse(t *testing.T) {
 		nil,
 		nil,
 		semantic.StoreColumnSetCode,
+		semantic.ReuseFromCorpus,
 	); err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
 	}
@@ -166,6 +167,7 @@ func TestStoreRoundTripSearchDeletePruneAndReuse(t *testing.T) {
 		nil,
 		nil,
 		semantic.StoreColumnSetCode,
+		semantic.ReuseFromCorpus,
 	); err != nil {
 		t.Fatalf("Reindex delete returned error: %v", err)
 	}
@@ -253,6 +255,7 @@ func TestStoreRecoversInterruptedPromotion(t *testing.T) {
 				nil,
 				nil,
 				semantic.StoreColumnSetCode,
+				semantic.ReuseFromCorpus,
 			); err != nil {
 				t.Fatalf("StageReindex returned error: %v", err)
 			}

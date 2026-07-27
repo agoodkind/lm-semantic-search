@@ -76,6 +76,7 @@ func TestInsertChunksBatchedReportsSplitRetryDrops(t *testing.T) {
 		},
 		nil,
 		StoreColumnSetCode,
+		ReuseFromCorpus,
 	)
 	if err != nil {
 		t.Fatalf("insertChunksBatched returned error: %v", err)
@@ -122,6 +123,7 @@ func TestInsertChunksBatchedUsesActiveModelLimitWhenEndpointOmitsIt(t *testing.T
 		},
 		nil,
 		StoreColumnSetCode,
+		ReuseFromCorpus,
 	)
 	if err != nil {
 		t.Fatalf("insertChunksBatched returned error: %v", err)
