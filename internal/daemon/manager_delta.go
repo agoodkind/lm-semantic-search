@@ -332,22 +332,8 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	if plan.handled {
 		return true, plan.graphTask
 	}
-	// The source's absence policy decides what a large disappearance means here.
-	// A code source deletes the missing files, guarded by the large-delete
-	// quarantine. A conversation source retains them, because a transcript
-	// missing from a push is almost always a transient disappearance, so the
-	// removals are dropped from this run and the rows stay.
-	switch source.absencePolicy() {
-	case absenceDeleteGuarded:
-		if signal, suspicious := assessDeltaDeleteWave(codebase, plan.diff, plan.seedSnapshot, job.CanonicalPath); suspicious {
-			manager.updateJobQuarantined(ctx, job.ID, signal)
-			return true, nil
-		}
-	case absenceRetain:
-		if retained := len(plan.diff.Removed); retained > 0 {
-			slog.InfoContext(ctx, "converge.retain_absent", "component", "daemon", "subcomponent", "delta", "collection", codebase.CollectionName, "retained", retained)
-		}
-		plan.diff.Removed = nil
+	if manager.applyDeltaAbsencePolicy(ctx, job, codebase, source, &plan) {
+		return true, nil
 	}
 	manager.setJobRunMode(job.ID, model.RunModeChanged)
 
@@ -380,7 +366,11 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	}
 
 	if len(plan.diff.Added) > 0 && state.semantic {
-		reuse, seeded, _ := manager.resolveReuseSeed(ctx, job)
+		reuse, seeded, _, reuseErr := manager.resolveReuseSeed(ctx, job)
+		if reuseErr != nil {
+			manager.finishJobForReuseFailure(ctx, job.ID, reuseErr)
+			return true, nil
+		}
 		state.reuse = reuse
 		state.seededReuse = seeded
 		state.chunkCounts.reuseVectorsLoaded = seeded
@@ -477,7 +467,11 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
-	reuse, seeded, descendants := manager.resolveReuseSeed(ctx, job)
+	reuse, seeded, descendants, reuseErr := manager.resolveReuseSeed(ctx, job)
+	if reuseErr != nil {
+		manager.finishJobForReuseFailure(ctx, job.ID, reuseErr)
+		return nil
+	}
 	state.reuse = reuse
 	state.seededReuse = seeded
 	state.chunkCounts.reuseVectorsLoaded = seeded
@@ -517,32 +511,6 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		manager.updateJobCompleted(ctx, job.ID, result)
 	}
 	return graphTask
-}
-
-// resolveReuseSeed loads build-wide reuse vectors from indexed descendants and
-// sibling worktrees that share the requested embedding model. It also returns
-// the descendant candidates it scanned so a from-scratch build can absorb them
-// without re-scanning the registry, keeping the reuse seed and the absorb list
-// derived from one consistent snapshot.
-func (manager *Manager) resolveReuseSeed(ctx context.Context, job model.Job) (map[string][]float32, int32, []model.Codebase) {
-	descendants := manager.descendantReuseCandidates(job.CanonicalPath, job.Config)
-	reuse := map[string][]float32{}
-	if manager.semantic == nil || !manager.semantic.Available() {
-		return reuse, 0, descendants
-	}
-	reuseCollections := collectionNamesOf(descendants)
-	reuseCollections = append(reuseCollections, manager.worktreeSiblingReuseCollections(job.CanonicalPath, job.Config)...)
-	if len(reuseCollections) == 0 {
-		return reuse, 0, descendants
-	}
-	loadedReuse, err := manager.semantic.LoadReuseVectors(ctx, reuseCollections)
-	if err != nil {
-		slog.WarnContext(ctx, "load reuse vectors failed; building without the reuse seed", "job_id", job.ID, "err", err)
-		return reuse, 0, descendants
-	}
-	seeded := safeInt32(len(loadedReuse))
-	slog.InfoContext(ctx, "build.reuse_seeded", "job_id", job.ID, "reuse_collections", len(reuseCollections), "reuse_vectors", len(loadedReuse))
-	return loadedReuse, seeded, descendants
 }
 
 // planBootstrap captures a fresh snapshot for a from-scratch build and decides
@@ -761,30 +729,44 @@ func (manager *Manager) handleRemovedFile(ctx context.Context, job model.Job, st
 }
 
 func (manager *Manager) applyChangedFileSemantic(ctx context.Context, job model.Job, state deltaState, relativePath string, fileResult indexer.OneFileResult, removal semantic.Removal) deltaOutcome {
-	state = manager.reuseStateForChangedFile(ctx, state, relativePath, fileResult, removal)
+	var reuseErr error
+	state, reuseErr = manager.reuseStateForChangedFile(ctx, state, relativePath, fileResult, removal)
+	if reuseErr != nil {
+		manager.finishJobForReuseFailure(ctx, job.ID, reuseErr)
+		return deltaOutcome{fallback: false, handled: true, progressed: false}
+	}
 	if len(fileResult.Chunks) == 0 && removal.Empty() {
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 	return manager.applyReindexForState(ctx, job, state, fileResult.Chunks, removal, "per-file reindex")
 }
 
-func (manager *Manager) reuseStateForChangedFile(ctx context.Context, state deltaState, relativePath string, fileResult indexer.OneFileResult, removal semantic.Removal) deltaState {
+func (manager *Manager) reuseStateForChangedFile(
+	ctx context.Context,
+	state deltaState,
+	relativePath string,
+	fileResult indexer.OneFileResult,
+	removal semantic.Removal,
+) (deltaState, error) {
 	if fileResult.ReuseVectors != nil {
 		state.reuse = mergedReuse(state.reuse, fileResult.ReuseVectors)
 		if state.chunkCounts != nil {
 			state.chunkCounts.reuseVectorsLoaded += safeInt32(len(fileResult.ReuseVectors))
 		}
-		return state
+		return state, nil
 	}
 	if len(fileResult.Chunks) == 0 && removal.Empty() {
-		return state
+		return state, nil
 	}
-	reuse, loaded := manager.itemReuse(ctx, state, relativePath)
+	reuse, loaded, err := manager.itemReuse(ctx, state, relativePath)
+	if err != nil {
+		return state, err
+	}
 	state.reuse = reuse
 	if state.chunkCounts != nil {
 		state.chunkCounts.reuseVectorsLoaded += loaded
 	}
-	return state
+	return state, nil
 }
 
 func effectiveRemoval(source itemSource, fileResult indexer.OneFileResult, relativePath string) semantic.Removal {
@@ -799,34 +781,75 @@ func effectiveRemoval(source itemSource, fileResult indexer.OneFileResult, relat
 // instead of the embedder. It returns the build-wide reuse map unchanged when
 // the source has no per-item reuse, and on a failed load it logs and falls
 // back to that map so the item embeds every chunk rather than failing.
-func (manager *Manager) itemReuse(ctx context.Context, state deltaState, relativePath string) (map[string][]float32, int32) {
+//
+// It has one terminal outcome of its own. A read that stalls long enough gives
+// up this job's indexing slot and sync-lock reference, and when the job cannot
+// take those back within the resume bound the returned jobCapacityReacquireError
+// ends the job rather than continuing without them.
+func (manager *Manager) itemReuse(
+	ctx context.Context,
+	state deltaState,
+	relativePath string,
+) (map[string][]float32, int32, error) {
 	if !state.itemReuseEnabled {
-		return state.reuse, 0
+		return state.reuse, 0, nil
 	}
 	source := state.source.reuseSource(relativePath)
 	if source.Scope == itemReuseScopeNone {
-		return state.reuse, 0
+		return state.reuse, 0, nil
 	}
 	var itemReuse map[string][]float32
-	var err error
-	switch source.Scope {
-	case itemReuseScopeNone:
-		return state.reuse, 0
-	case itemReuseScopePath:
-		itemReuse, err = manager.semantic.LoadReuseVectorsForPath(ctx, source.CollectionName, source.RelativePath)
-	case itemReuseScopePrefix:
-		itemReuse, err = manager.semantic.LoadReuseVectorsForPrefix(ctx, source.CollectionName, source.RelativePath)
-	default:
-		return state.reuse, 0
-	}
+	err := manager.runReleasingCapacityIfStalled(ctx, func() error {
+		var loadErr error
+		switch source.Scope {
+		case itemReuseScopeNone:
+			return nil
+		case itemReuseScopePath:
+			itemReuse, loadErr = manager.semantic.LoadReuseVectorsForPath(
+				ctx,
+				source.CollectionName,
+				source.RelativePath,
+			)
+		case itemReuseScopePrefix:
+			itemReuse, loadErr = manager.semantic.LoadReuseVectorsForPrefix(
+				ctx,
+				source.CollectionName,
+				source.RelativePath,
+			)
+		default:
+			return nil
+		}
+		if loadErr == nil {
+			return nil
+		}
+		slog.WarnContext(ctx, "load item reuse vectors from semantic backend failed",
+			"path", relativePath,
+			"collection", source.CollectionName,
+			"scope", source.Scope,
+			"err", loadErr,
+		)
+		return fmt.Errorf("load item reuse vectors: %w", loadErr)
+	})
 	if err != nil {
+		var reacquireErr *jobCapacityReacquireError
+		if errors.As(err, &reacquireErr) {
+			return state.reuse, 0, reacquireErr
+		}
 		slog.WarnContext(ctx, "load item reuse vectors failed; embedding every chunk", "path", relativePath, "collection", source.CollectionName, "scope", source.Scope, "err", err)
-		return state.reuse, 0
+		return state.reuse, 0, nil
 	}
 	if len(itemReuse) == 0 {
-		return state.reuse, 0
+		return state.reuse, 0, nil
 	}
-	return mergedReuse(state.reuse, itemReuse), safeInt32(len(itemReuse))
+	return mergedReuse(state.reuse, itemReuse), safeInt32(len(itemReuse)), nil
+}
+
+func (manager *Manager) finishJobForReuseFailure(ctx context.Context, jobID string, err error) {
+	if errors.Is(err, context.Canceled) {
+		manager.updateJobCancelled(ctx, jobID)
+		return
+	}
+	manager.updateJobFailed(ctx, jobID, err)
 }
 
 // mergedReuse overlays an item's own reuse vectors on any build-wide reuse map

@@ -168,6 +168,11 @@ func run(rootContext context.Context) error {
 	defer cancelRuntime()
 	manager.ResumeOrphanedJobs(runtimeContext)
 	daemon.NewBackgroundSync(cfg, manager).Start(runtimeContext)
+	// The remote-backend self-check runs in the background and never gates
+	// serving. Local stores skip it because a read may perform crash recovery,
+	// and ONNX configurations skip it because native inference cannot guarantee
+	// cancellation.
+	manager.StartBootSelfCheck(runtimeContext)
 	startLogRetentionSweep(runtimeContext, cfg)
 
 	metrics.StartReporter(runtimeContext, time.Duration(cfg.PerfCountersIntervalMS)*time.Millisecond)

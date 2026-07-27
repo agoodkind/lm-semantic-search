@@ -387,13 +387,25 @@ func (service *Service) ensureConversationScalarColumnsOnce(ctx context.Context,
 // conversation upsert and delete paths run it against an already-existing
 // collection before their prefix delete, since a daemon process that did not
 // create the collection itself never loaded it.
+//
+// Concurrent callers for one collection share one initial request, both polls,
+// and one recovery request. A concurrent cohort therefore issues at most two
+// LoadCollection calls. The shared load runs detached from every caller, so one
+// caller cancelling ends only its own wait and leaves the others waiting on a
+// load that is still running; sharedCollectionLoadCeiling is what ends that load
+// once no caller remains. A caller's earlier deadline still ends its own wait
+// first. A collection that never finishes loading fails as not-ready instead of
+// multiplying work across callers.
 func (service *Service) loadCollection(ctx context.Context, collectionName string) error {
-	loadTask, err := service.milvus.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName))
-	if err != nil {
-		return wrapStoreError(ctx, err, "load Milvus collection "+collectionName)
-	}
-	if err := loadTask.Await(ctx); err != nil {
-		return wrapStoreError(ctx, err, "await Milvus collection load "+collectionName)
-	}
-	return nil
+	return service.collectionLoads.Do(
+		ctx,
+		collectionName,
+		service.sharedCollectionLoadCeiling(),
+		func(loadCtx context.Context) error {
+			if _, err := service.milvus.LoadCollection(loadCtx, milvusclient.NewLoadCollectionOption(collectionName)); err != nil {
+				return wrapStoreError(loadCtx, err, "load Milvus collection "+collectionName)
+			}
+			return service.awaitCollectionLoaded(loadCtx, collectionName)
+		},
+	)
 }

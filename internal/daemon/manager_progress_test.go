@@ -113,7 +113,10 @@ func TestCodeItemReuseLoadsExactPath(t *testing.T) {
 		chunkCounts:      &chunkCounters{},
 	}
 
-	reuse, loaded := manager.itemReuse(context.Background(), state, "src/file.go")
+	reuse, loaded, err := manager.itemReuse(context.Background(), state, "src/file.go")
+	if err != nil {
+		t.Fatalf("itemReuse returned error: %v", err)
+	}
 	if loaded != 1 {
 		t.Fatalf("loaded = %d, want 1 exact-path reuse candidate", loaded)
 	}
@@ -158,7 +161,10 @@ func TestItemReuseSkipsPerFileLoadsDuringBootstrap(t *testing.T) {
 		chunkCounts: &chunkCounters{},
 	}
 
-	reuse, loaded := manager.itemReuse(context.Background(), state, "src/file.go")
+	reuse, loaded, err := manager.itemReuse(context.Background(), state, "src/file.go")
+	if err != nil {
+		t.Fatalf("itemReuse returned error: %v", err)
+	}
 	if loaded != 0 {
 		t.Fatalf("loaded = %d, want 0 during bootstrap", loaded)
 	}
