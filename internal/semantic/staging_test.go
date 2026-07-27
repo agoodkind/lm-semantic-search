@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -12,7 +13,7 @@ import (
 
 type rejectingAllEmbedder struct {
 	requestCount      int
-	reportedMaxTokens int
+	reportedMaxTokens adapterr.EmbedFigure
 }
 
 func (embedder *rejectingAllEmbedder) Embed(
@@ -33,7 +34,7 @@ func (embedder *rejectingAllEmbedder) EmbedBatch(
 		skipped = append(skipped, embedding.SkippedInput{
 			Index:          index,
 			Reason:         contextLengthExceededReason,
-			ReportedTokens: len(texts[index]),
+			ReportedTokens: adapterr.ReportedFigure(len(texts[index])),
 			MaxTokens:      embedder.reportedMaxTokens,
 		})
 	}
@@ -50,7 +51,7 @@ func (embedder *rejectingAllEmbedder) Health(_ context.Context) error {
 
 func TestInsertChunksBatchedReportsSplitRetryDrops(t *testing.T) {
 	t.Parallel()
-	embedder := &rejectingAllEmbedder{reportedMaxTokens: 512}
+	embedder := &rejectingAllEmbedder{reportedMaxTokens: adapterr.ReportedFigure(512)}
 	service := &Service{
 		cfg: config.Config{
 			EmbeddingBatchSize:        32,
@@ -95,7 +96,7 @@ func TestInsertChunksBatchedReportsSplitRetryDrops(t *testing.T) {
 
 func TestInsertChunksBatchedUsesActiveModelLimitWhenEndpointOmitsIt(t *testing.T) {
 	t.Parallel()
-	embedder := &rejectingAllEmbedder{reportedMaxTokens: 0}
+	embedder := &rejectingAllEmbedder{reportedMaxTokens: adapterr.UnreportedFigure()}
 	service := &Service{
 		cfg: config.Config{
 			EmbeddingModel:            "BAAI/bge-small-en-v1.5",
