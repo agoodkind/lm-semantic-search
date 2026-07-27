@@ -59,9 +59,15 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 	chunks, semanticErr := manager.semantic.Search(ctx, codebase.CanonicalPath, query, limit, normalizedExtensions, relativePathPrefix)
 	switch {
 	case semanticErr == nil:
-		// The query embed succeeded, which proves the embedder is reachable, so
-		// clear any degraded banner a prior outage left up. This mirrors the
-		// indexing rule that only a real embed clears the banner.
+		// A search that returns no error exercised both shared dependencies, which
+		// is why it may clear any mode rather than only the store's. Both backends
+		// read the collection, embed the query against the live endpoint, then run
+		// the ranked query, and each step returns its own error, so reaching here
+		// is positive evidence that the store answered and the embedder answered.
+		// The result count is not part of that evidence: an indexed codebase with
+		// no match for this query returns zero rows from a perfectly healthy
+		// pipeline. This mirrors the indexing rule that only a real embed clears
+		// the banner.
 		manager.noteDependencyHealthy()
 		return SearchOutcome{
 			Codebase:  codebase,

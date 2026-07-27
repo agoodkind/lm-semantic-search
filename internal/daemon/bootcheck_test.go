@@ -240,7 +240,7 @@ func TestBootSelfCheckPassesAndClearsBootBanner(t *testing.T) {
 		},
 	}
 	manager.mu.Lock()
-	manager.health = dependencyHealth{Mode: dependencyStoreUnavailable, Since: clock.Now(), LastHealthyAt: time.Time{}}
+	manager.health = dependencyHealth{Mode: dependencyStoreUnavailable, Since: clock.Now(), StoreReachableAt: time.Time{}, EmbedderReachableAt: time.Time{}}
 	manager.mu.Unlock()
 
 	outcome, err := manager.runBootSelfCheck(context.Background())

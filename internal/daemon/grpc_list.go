@@ -14,6 +14,11 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 	ctx, done := beginRPC(ctx, "ListIndexes")
 	defer done(&err)
 	_ = request
+	// This surface answers whether each tracked codebase can serve: the global
+	// dependency mode folds into every row's display status inside
+	// ListIndexesView. Probe before reading it so the rows and the banner both
+	// describe the store as it is now, not as the last unrelated caller left it.
+	server.manager.refreshDependencyHealth(ctx)
 	views := server.manager.ListIndexesView()
 	response := &pb.ListIndexesResponse{
 		Indexes: make([]*pb.Codebase, 0, len(views)),

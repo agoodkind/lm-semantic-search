@@ -38,7 +38,7 @@ func TestRenderHealthBannerVariants(t *testing.T) {
 		{dependencyStoreUnavailable, "Vector store unavailable", "MILVUS_ADDRESS=127.0.0.1:19530"},
 	}
 	for _, testCase := range cases {
-		out := render.HealthBanner(resolveBannerView(dependencyHealth{Mode: testCase.mode, LastHealthyAt: clock.Now()}, cfg))
+		out := render.HealthBanner(resolveBannerView(dependencyHealth{Mode: testCase.mode, StoreReachableAt: clock.Now(), EmbedderReachableAt: clock.Now()}, cfg))
 		if !strings.HasPrefix(out, "🟥 ") {
 			t.Fatalf("%s banner missing the 🟥 marker: %q", testCase.mode, out)
 		}
@@ -164,7 +164,7 @@ func TestGetIndexDegradedEnvelope(t *testing.T) {
 	codebase.Status = model.CodebaseStatusIndexing
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
-	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), LastHealthyAt: clock.Now()}
+	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), StoreReachableAt: clock.Now(), EmbedderReachableAt: clock.Now()}
 	manager.mu.Unlock()
 
 	server := NewGRPCServer(manager, nil)
@@ -211,7 +211,7 @@ func TestStartIndexShowsBannerWhenDegraded(t *testing.T) {
 		probeErr:    adapterr.NewEmbedderUnreachable(nil),
 	}
 	manager.mu.Lock()
-	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), LastHealthyAt: clock.Now()}
+	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), StoreReachableAt: clock.Now(), EmbedderReachableAt: clock.Now()}
 	manager.mu.Unlock()
 
 	server := NewGRPCServer(manager, nil)
