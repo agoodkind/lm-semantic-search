@@ -2591,7 +2591,7 @@ func assertRemovalEqual(t *testing.T, got semantic.Removal, want semantic.Remova
 func conversationRemovalPathsForTest(conversationID string, messageIndex int32) []string {
 	messageSegment := strconv.Itoa(int(messageIndex))
 	return []string{
-		conversationRelativePath(conversationID, messageIndex, 0, false),
+		conversationMessagePath(conversationID, messageIndex),
 		"convtool/" + conversationID + "/" + messageSegment,
 		"convthink/" + conversationID + "/" + messageSegment,
 	}
@@ -2600,7 +2600,7 @@ func conversationRemovalPathsForTest(conversationID string, messageIndex int32) 
 func conversationRemovalPrefixesForTest(conversationID string, messageIndex int32) []string {
 	messageSegment := strconv.Itoa(int(messageIndex))
 	return []string{
-		conversationRelativePath(conversationID, messageIndex, 0, false) + "/",
+		conversationMessagePath(conversationID, messageIndex) + "/",
 		"convtool/" + conversationID + "/" + messageSegment + "/",
 		"convthink/" + conversationID + "/" + messageSegment + "/",
 	}
@@ -2689,7 +2689,7 @@ func conversationTextRowSignaturesForTest(chunks []model.StoredChunk, conversati
 }
 
 func conversationTextRowsForTest(chunks []model.StoredChunk, conversationID string, messageIndex int32) []model.StoredChunk {
-	exactPath := conversationRelativePath(conversationID, messageIndex, 0, false)
+	exactPath := conversationMessagePath(conversationID, messageIndex)
 	partPrefix := exactPath + "/"
 	textRows := make([]model.StoredChunk, 0)
 	for _, chunk := range chunks {
@@ -3208,7 +3208,7 @@ func TestUpsertConversationDocumentsRejectsAuthoritativeWithoutManifest(t *testi
 // membership against the production path helpers rather than hardcoded literals.
 func conversationMessageRemovalPaths(conversationID string, messageIndex int32) []string {
 	return []string{
-		conversationRelativePath(conversationID, messageIndex, 0, false),
+		conversationMessagePath(conversationID, messageIndex),
 		conversationToolMessagePath(conversationID, messageIndex),
 		conversationThinkingPath(conversationID, messageIndex),
 	}

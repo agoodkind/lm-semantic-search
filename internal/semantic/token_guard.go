@@ -15,9 +15,12 @@ import (
 // truncated. The budget is derived from the active provider's hard input-token
 // limit at a conservative bytes-per-token ratio, so it is always positive and the
 // split runs even when EmbeddingMaxTokens is unset. It is the single backstop
-// covering every Milvus embed path, including the conversation tool payloads that
-// split by syntax rather than by the byte budget. Unlike the varchar guardrail, a
-// token split is expected for large content, so it logs at info level.
+// covering every Milvus embed path. It stays load-bearing even though conversation
+// rows are already cut to a byte budget upstream, because that budget is derived
+// from the OpenAI-compatible model limit while this one is derived from the active
+// provider's limit, so a narrower active model still gets a split here. Unlike the
+// varchar guardrail, a token split is expected for large content, so it logs at
+// info level.
 func (service *Service) expandOverTokenBudget(ctx context.Context, codebasePath string, chunks []model.StoredChunk, operation string) []model.StoredChunk {
 	byteBudget := config.EmbedChunkByteBudgetForLimit(service.cfg.EmbeddingMaxTokens, config.ActiveEmbedTokenLimit(service.cfg))
 	out, splitCount := SplitChunksToByteBudget(chunks, byteBudget)

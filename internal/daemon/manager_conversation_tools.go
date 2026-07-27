@@ -1,26 +1,27 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"unicode/utf8"
 
-	"goodkind.io/gksyntax/chunk"
 	"goodkind.io/gksyntax/shelldecomp"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-var conversationToolExtensions = map[string]string{
-	"bash":     ".bash",
-	"json":     ".json",
-	"markdown": ".md",
-}
+// conversationPartNaming selects how one split names the rows it stores.
+type conversationPartNaming int
 
-func newConversationToolDispatcher() *chunk.Dispatcher {
-	return chunk.NewDispatcher()
-}
+const (
+	// conversationPartNamingBareWhenSingle keeps an unsplit piece at the base
+	// relative path and appends /<part> only once the content actually splits.
+	// Message text, reasoning, and the derived token and command rows use it.
+	conversationPartNamingBareWhenSingle conversationPartNaming = iota
+	// conversationPartNamingAlwaysIndexed appends /<part> to every piece,
+	// including an unsplit one, so tool input and output rows keep the stored
+	// path scheme the collection already holds.
+	conversationPartNamingAlwaysIndexed
+)
 
 func newConversationStoredChunk(document model.ConversationDocument, conversationID string, parentConversationID string, relativePath string, content string, language string, startLine int32, endLine int32) model.StoredChunk {
 	return model.StoredChunk{
@@ -42,35 +43,25 @@ func newConversationStoredChunk(document model.ConversationDocument, conversatio
 	}
 }
 
-func splitConversationToolPayload(ctx context.Context, dispatcher *chunk.Dispatcher, document model.ConversationDocument, conversationID string, parentConversationID string, relativePathPrefix string, splitPath string, content string) ([]model.StoredChunk, error) {
-	splitResult, err := dispatcher.SplitFileWithType(ctx, splitPath, []byte(content), "")
-	if err != nil {
-		slog.ErrorContext(ctx, "split conversation tool payload failed", "relative_path_prefix", relativePathPrefix, "err", err)
-		return nil, fmt.Errorf("split conversation tool payload %s: %w", relativePathPrefix, err)
-	}
-	chunks := make([]model.StoredChunk, 0, len(splitResult.Chunks))
-	for partIndex, splitChunk := range splitResult.Chunks {
-		chunks = append(chunks, newConversationStoredChunk(
-			document,
-			conversationID,
-			parentConversationID,
-			fmt.Sprintf("%s/%d", relativePathPrefix, partIndex),
-			splitChunk.Content,
-			splitChunk.Language,
-			safeInt32(splitChunk.StartLine),
-			safeInt32(splitChunk.EndLine),
-		))
-	}
-	return chunks, nil
-}
-
-func splitConversationDerivedContent(document model.ConversationDocument, conversationID string, parentConversationID string, relativePath string, content string, chunkByteBudget ...int) []model.StoredChunk {
+// splitConversationContent is the one path from a conversation string to stored
+// rows. Every conversation family divides the same way: message text, reasoning,
+// the derived tool token and command rows, and the tool input and output
+// payloads all cut on the manager's configured byte budget, so a tool payload is
+// bounded by the same embedder-derived cap as the message text beside it.
+//
+// A tool payload is data a provider serialized, not a source file, so it gets no
+// parse tree. Dividing a serialized payload on syntax boundaries produces pieces
+// that carry only the punctuation between two values, because a structural
+// boundary is not a boundary between two retrievable things the way a function
+// or a class is. Cutting on the byte budget cannot produce such a piece, and it
+// needs no knowledge of any provider's payload format.
+func splitConversationContent(document model.ConversationDocument, conversationID string, parentConversationID string, relativePath string, content string, naming conversationPartNaming, chunkByteBudget ...int) []model.StoredChunk {
 	pieces := splitConversationText(content, chunkByteBudget...)
+	indexed := naming == conversationPartNamingAlwaysIndexed || len(pieces) > 1
 	chunks := make([]model.StoredChunk, 0, len(pieces))
-	multipart := len(pieces) > 1
 	for partIndex, piece := range pieces {
 		chunkRelativePath := relativePath
-		if multipart {
+		if indexed {
 			chunkRelativePath = fmt.Sprintf("%s/%d", relativePath, partIndex)
 		}
 		chunks = append(chunks, newConversationStoredChunk(
@@ -191,12 +182,4 @@ func conversationToolCallPath(conversationID string, messageIndex int32, toolInd
 
 func conversationThinkingPath(conversationID string, messageIndex int32) string {
 	return fmt.Sprintf("convthink/%s/%d", conversationID, messageIndex)
-}
-
-func conversationToolExtension(langHint string) string {
-	extension, found := conversationToolExtensions[strings.ToLower(strings.TrimSpace(langHint))]
-	if !found {
-		return ""
-	}
-	return extension
 }

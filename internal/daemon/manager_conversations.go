@@ -621,71 +621,84 @@ func fingerprintConversationDocuments(documents []model.ConversationDocument) st
 // the up-front presence classifier (forcedWorkSet) regenerates nothing.
 // Production never reassigns it.
 var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []model.ConversationDocument, chunkByteBudget ...int) ([]model.StoredChunk, error) {
-	dispatcher := newConversationToolDispatcher()
 	budget := resolveConversationChunkBudget(chunkByteBudget)
 	chunks := make([]model.StoredChunk, 0, len(documents))
 	for _, document := range documents {
 		conversationID := strings.TrimSpace(document.ConversationID)
 		if conversationID == "" {
-			return nil, errors.New("conversation id is required")
+			missingIDErr := errors.New("conversation id is required")
+			slog.ErrorContext(
+				ctx, "conversation document is missing its conversation id",
+				"component", "daemon",
+				"subcomponent", "conversations",
+				"message_index", document.MessageIndex,
+				"err", missingIDErr,
+			)
+			return nil, missingIDErr
 		}
 		parentConversationID := strings.TrimSpace(document.ParentConversationID)
-		pieces := splitConversationText(document.Text, budget)
-		for partIndex, piece := range pieces {
-			chunks = append(chunks, newConversationStoredChunk(
-				document,
-				conversationID,
-				parentConversationID,
-				conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
-				piece,
-				"",
-				0,
-				0,
-			))
-		}
+		chunks = append(chunks, splitConversationContent(
+			document,
+			conversationID,
+			parentConversationID,
+			conversationMessagePath(conversationID, document.MessageIndex),
+			document.Text,
+			conversationPartNamingBareWhenSingle,
+			budget,
+		)...)
 		for toolIndex, toolCall := range document.Tools {
 			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
-			chunks = append(chunks, splitConversationDerivedContent(
+			chunks = append(chunks, splitConversationContent(
 				document,
 				conversationID,
 				parentConversationID,
 				toolBasePath+"/tok",
 				conversationToolTokenContent(toolCall),
+				conversationPartNamingBareWhenSingle,
 				budget,
 			)...)
 			if toolCall.Command != "" {
-				chunks = append(chunks, splitConversationDerivedContent(
+				chunks = append(chunks, splitConversationContent(
 					document,
 					conversationID,
 					parentConversationID,
 					toolBasePath+"/cmd",
 					toolCall.Command,
+					conversationPartNamingBareWhenSingle,
 					budget,
 				)...)
 			}
-			extension := conversationToolExtension(toolCall.LangHint)
 			if toolCall.InputJSON != "" {
-				inputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/in", "tool"+extension, toolCall.InputJSON)
-				if err != nil {
-					return nil, err
-				}
-				chunks = append(chunks, inputChunks...)
+				chunks = append(chunks, splitConversationContent(
+					document,
+					conversationID,
+					parentConversationID,
+					toolBasePath+"/in",
+					toolCall.InputJSON,
+					conversationPartNamingAlwaysIndexed,
+					budget,
+				)...)
 			}
 			if toolCall.Output != "" {
-				outputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/out", "tool"+extension, toolCall.Output)
-				if err != nil {
-					return nil, err
-				}
-				chunks = append(chunks, outputChunks...)
+				chunks = append(chunks, splitConversationContent(
+					document,
+					conversationID,
+					parentConversationID,
+					toolBasePath+"/out",
+					toolCall.Output,
+					conversationPartNamingAlwaysIndexed,
+					budget,
+				)...)
 			}
 		}
 		if document.Thinking != "" {
-			chunks = append(chunks, splitConversationDerivedContent(
+			chunks = append(chunks, splitConversationContent(
 				document,
 				conversationID,
 				parentConversationID,
 				conversationThinkingPath(conversationID, document.MessageIndex),
 				document.Thinking,
+				conversationPartNamingBareWhenSingle,
 				budget,
 			)...)
 		}
@@ -914,19 +927,18 @@ func isDerivedConversationChunk(chunk model.StoredChunk) bool {
 // and a bare prefix without the slash would like-match sibling indices
 // (conv/x/12 matches conv/x/120).
 func (diff *conversationMessageDiff) addRemoval(conversationID string, messageIndex int32) {
-	relativePath := conversationRelativePath(conversationID, messageIndex, 0, false)
+	relativePath := conversationMessagePath(conversationID, messageIndex)
 	toolPath := conversationToolMessagePath(conversationID, messageIndex)
 	thinkingPath := conversationThinkingPath(conversationID, messageIndex)
 	diff.removalPaths = append(diff.removalPaths, relativePath, toolPath, thinkingPath)
 	diff.removalPrefixes = append(diff.removalPrefixes, relativePath+"/", toolPath+"/", thinkingPath+"/")
 }
 
-func conversationRelativePath(conversationID string, messageIndex int32, partIndex int, multipart bool) string {
-	basePath := fmt.Sprintf("conv/%s/%d", conversationID, messageIndex)
-	if !multipart {
-		return basePath
-	}
-	return fmt.Sprintf("%s/%d", basePath, partIndex)
+// conversationMessagePath is the base relative path for one message's text rows.
+// An unsplit message is stored at exactly this path; splitConversationContent
+// appends /<part> only once the text actually splits.
+func conversationMessagePath(conversationID string, messageIndex int32) string {
+	return fmt.Sprintf("conv/%s/%d", conversationID, messageIndex)
 }
 
 func conversationRelativePathPrefix(conversationID string) string {
