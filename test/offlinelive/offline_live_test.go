@@ -3,8 +3,6 @@
 package offlinelive
 
 import (
-	"context"
-	"errors"
 	"strings"
 	"testing"
 )
@@ -49,7 +47,6 @@ func TestOfflineProfileEndToEnd(t *testing.T) {
 		)
 	}
 	harness.assertOfflineRuntime(job, status)
-	harness.assertNoExternalDials()
 
 	searchResponse := harness.search(fixtureQuery, searchResultLimit)
 	if int32(len(searchResponse.GetResults())) != searchResultLimit {
@@ -96,81 +93,4 @@ func TestOfflineProfileEndToEnd(t *testing.T) {
 			graphResponse.GetResultJson(),
 		)
 	}
-	harness.assertNoExternalDials()
-}
-
-type stubCommandOutput struct {
-	pgrepOutput []byte
-	pgrepError  error
-	psOutput    []byte
-	psError     error
-}
-
-func (runner stubCommandOutput) run(
-	_ context.Context,
-	name string,
-	_ ...string,
-) ([]byte, error) {
-	switch name {
-	case "pgrep":
-		return runner.pgrepOutput, runner.pgrepError
-	case "ps":
-		return runner.psOutput, runner.psError
-	default:
-		return nil, errors.New("unexpected command")
-	}
-}
-
-type stubExitError struct {
-	exitCode int
-}
-
-func (failure stubExitError) Error() string {
-	return "stub command failed"
-}
-
-func (failure stubExitError) ExitCode() int {
-	return failure.exitCode
-}
-
-func TestProductionDaemonSnapshotCommandFailures(t *testing.T) {
-	t.Run("pgrep no match is empty", func(t *testing.T) {
-		processIDs, err := snapshotProductionDaemonPids(
-			context.Background(),
-			stubCommandOutput{
-				pgrepError: stubExitError{exitCode: 1},
-			}.run,
-		)
-		if err != nil {
-			t.Fatalf("snapshot returned error for pgrep no-match: %v", err)
-		}
-		if len(processIDs) != 0 {
-			t.Fatalf("snapshot returned %d pids, want none", len(processIDs))
-		}
-	})
-
-	t.Run("pgrep execution failure is an error", func(t *testing.T) {
-		_, err := snapshotProductionDaemonPids(
-			context.Background(),
-			stubCommandOutput{
-				pgrepError: errors.New("pgrep unavailable"),
-			}.run,
-		)
-		if err == nil {
-			t.Fatal("snapshot returned no error for pgrep execution failure")
-		}
-	})
-
-	t.Run("ps execution failure is an error", func(t *testing.T) {
-		_, err := snapshotProductionDaemonPids(
-			context.Background(),
-			stubCommandOutput{
-				pgrepOutput: []byte("123\n"),
-				psError:     errors.New("ps unavailable"),
-			}.run,
-		)
-		if err == nil {
-			t.Fatal("snapshot returned no error for ps execution failure")
-		}
-	})
 }

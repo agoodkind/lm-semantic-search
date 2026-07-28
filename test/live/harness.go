@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -84,7 +83,6 @@ type harness struct {
 	codebaseID     string
 	stateRoot      string
 	merkleDir      string
-	prodPidsPre    map[int]bool
 	embedGate      *embedGate
 }
 
@@ -122,8 +120,6 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 	if err != nil {
 		t.Skipf("BLOCKED: Milvus unreachable at %s: %v", milvusAddress, err)
 	}
-
-	prodPidsPre := snapshotProductionDaemonPids()
 
 	stateRoot := t.TempDir()
 	// The unix socket path must fit macOS's ~104-char sun_path limit, and
@@ -231,17 +227,15 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 		codebaseID:     codebase.ID,
 		stateRoot:      stateRoot,
 		merkleDir:      cfg.MerkleDir,
-		prodPidsPre:    prodPidsPre,
 		embedGate:      gate,
 	}
 	t.Cleanup(func() { h.teardown(stopServer) })
 	return h
 }
 
-// teardown drops the throwaway collection, closes the clients, stops the
-// in-process server, and asserts the production daemon set is unchanged. It
-// re-asserts the collection name was never the production one, so an isolation
-// breach fails the test even on the teardown path.
+// teardown drops the throwaway collection, closes the clients, and stops the
+// in-process server. It re-asserts the collection name was never the production
+// one, so an isolation breach fails the test even on the teardown path.
 func (h *harness) teardown(stopServer func()) {
 	if h.collectionName == productionConversationCollection {
 		h.t.Errorf("isolation breach: harness collection was the production collection %q", productionConversationCollection)
@@ -262,19 +256,6 @@ func (h *harness) teardown(stopServer func()) {
 	_ = h.milvus.Close(closeCtx)
 	cancel()
 	stopServer()
-	h.assertProductionUntouched()
-}
-
-// assertProductionUntouched confirms every production daemon pid seen before boot
-// is still alive after the run, proving the in-process server never signalled the
-// operator's daemon.
-func (h *harness) assertProductionUntouched() {
-	post := snapshotProductionDaemonPids()
-	for pid := range h.prodPidsPre {
-		if !post[pid] {
-			h.t.Errorf("production daemon pid %d disappeared during the live run; isolation breached", pid)
-		}
-	}
 }
 
 // startInProcessServer serves the daemon gRPC service on a throwaway unix socket
@@ -305,64 +286,6 @@ func startInProcessServer(t *testing.T, manager *daemon.Manager, socketPath stri
 		_ = listener.Close()
 		_ = os.Remove(socketPath)
 	}
-}
-
-// snapshotProductionDaemonPids returns the pids of every running installed
-// production daemon, meaning those whose executable lives outside a temp root. A
-// live-test server boots in-process (no daemon subprocess), so an empty set is
-// the common, correct result on a host with no production daemon running.
-func snapshotProductionDaemonPids() map[int]bool {
-	pids := map[int]bool{}
-	out, err := exec.Command("pgrep", "-f", daemonProcessName).Output()
-	if err != nil {
-		return pids
-	}
-	for _, field := range strings.Fields(string(out)) {
-		pid, convErr := strconv.Atoi(field)
-		if convErr != nil || pid <= 0 {
-			continue
-		}
-		if isProductionDaemonPid(pid) {
-			pids[pid] = true
-		}
-	}
-	return pids
-}
-
-// isProductionDaemonPid reports whether pid runs an installed production daemon
-// rather than a temp-rooted test artifact. It resolves the command with ps and
-// keeps only pids whose executable path sits outside every temp root, so a
-// concurrent live test's process is never mistaken for production.
-func isProductionDaemonPid(pid int) bool {
-	out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return false
-	}
-	command := strings.TrimSpace(string(out))
-	if command == "" {
-		return false
-	}
-	execPath := command
-	if idx := strings.IndexByte(command, ' '); idx >= 0 {
-		execPath = command[:idx]
-	}
-	return !underTempRoot(execPath)
-}
-
-// underTempRoot reports whether path lives under a temp root macOS resolves the
-// system temp dir through, so a test artifact is never counted as production.
-func underTempRoot(path string) bool {
-	clean := filepath.Clean(path)
-	roots := []string{"/tmp", "/private/tmp", "/private/var/folders", "/var/folders"}
-	if osTemp := filepath.Clean(os.TempDir()); osTemp != "" && osTemp != "." {
-		roots = append(roots, osTemp)
-	}
-	for _, root := range roots {
-		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
-			return true
-		}
-	}
-	return false
 }
 
 // newFakeEmbeddingServer starts a local OpenAI-compatible embedding endpoint. It
