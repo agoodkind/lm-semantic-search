@@ -42,6 +42,23 @@ type Store struct {
 	available   bool
 }
 
+// BackendName names this store for any surface reporting which backend is in
+// use, so the answer comes from the store that exists rather than the setting
+// that asked for one.
+func (store *Store) BackendName() string {
+	return config.IndexBackendLocal
+}
+
+// EmbeddingProviderName is what this store's embedder calls itself. A store
+// constructed with no embedder returns empty rather than naming one, because an
+// absent embedder is a fact a caller needs and a guessed name would hide it.
+func (store *Store) EmbeddingProviderName() string {
+	if store.embedder == nil {
+		return ""
+	}
+	return store.embedder.ProviderName()
+}
+
 // New constructs an embedded vector store.
 func New(ctx context.Context, cfg config.Config) (*Store, error) {
 	var provider embedding.Provider

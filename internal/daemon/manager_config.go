@@ -85,6 +85,42 @@ func digestIndexConfig(indexConfig model.IndexConfig) string {
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
+// reportedVectorBackend is the vector store the daemon says it is using. It
+// asks the backend that exists, because the configured value is a request and
+// the built object is the answer, and a backend selected wrongly would
+// otherwise be reported as the one that was asked for.
+//
+// A manager with no backend yet has nothing to ask, so it reports the
+// configured value, which is the only thing it knows and is honest about being
+// an intention rather than a state.
+func (manager *Manager) reportedVectorBackend() string {
+	if manager.semantic != nil {
+		if built := strings.TrimSpace(manager.semantic.BackendName()); built != "" {
+			return built
+		}
+	}
+	configured := strings.TrimSpace(manager.config.IndexBackend)
+	if configured == "" {
+		return config.IndexBackendMilvus
+	}
+	return configured
+}
+
+// reportedEmbeddingProvider is the embedder the daemon says it is using, read
+// from the backend that built it for the same reason as
+// [Manager.reportedVectorBackend].
+//
+// A backend that built no embedder names none, and the configured value stands
+// in so the field still says which embedder was requested.
+func (manager *Manager) reportedEmbeddingProvider() string {
+	if manager.semantic != nil {
+		if built := strings.TrimSpace(manager.semantic.EmbeddingProviderName()); built != "" {
+			return built
+		}
+	}
+	return manager.config.EmbeddingProvider
+}
+
 func (manager *Manager) enrichIndexConfig(indexConfig model.IndexConfig) model.IndexConfig {
 	if strings.TrimSpace(indexConfig.SplitterType) == "" {
 		indexConfig.SplitterType = "ast"
@@ -95,15 +131,12 @@ func (manager *Manager) enrichIndexConfig(indexConfig model.IndexConfig) model.I
 	if indexConfig.SplitterOverlap == 0 {
 		indexConfig.SplitterOverlap = 300
 	}
-	indexConfig.EmbeddingProvider = manager.config.EmbeddingProvider
+	indexConfig.EmbeddingProvider = manager.reportedEmbeddingProvider()
 	indexConfig.EmbeddingModel = manager.config.EmbeddingModel
 	if manager.config.EmbeddingDimension > 0 {
 		indexConfig.EmbeddingDimension = manager.config.EmbeddingDimension
 	}
-	indexConfig.VectorBackend = strings.TrimSpace(manager.config.IndexBackend)
-	if indexConfig.VectorBackend == "" {
-		indexConfig.VectorBackend = config.IndexBackendMilvus
-	}
+	indexConfig.VectorBackend = manager.reportedVectorBackend()
 	indexConfig.Hybrid = manager.config.HybridMode
 	indexConfig.IgnorePatterns = mergeDistinct(indexConfig.IgnorePatterns, manager.config.CustomIgnorePatterns)
 	indexConfig.IncludeSubmodules = mergeNormalizedSubmodules(indexConfig.IncludeSubmodules, manager.config.IncludeSubmodules)

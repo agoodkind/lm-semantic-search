@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
@@ -23,8 +24,14 @@ import (
 // copyChunks are the only behaviors a converge exercises; the rest return inert
 // values so the manager treats the backend as available and empty.
 type fakeSemantic struct {
-	unavailable           bool
-	probeErr              error
+	unavailable bool
+	probeErr    error
+	// backendName and embeddingProviderName are what this double reports about
+	// itself. They default to the local backend and the embedded model so a test
+	// that does not care about identity still describes a coherent backend, and a
+	// test that does care states the value it wants outright.
+	backendName           string
+	embeddingProviderName string
 	reindex               func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
 	reindexWithReuse      func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
 	stageReindexWithReuse func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
@@ -86,6 +93,20 @@ type reindexCall struct {
 	Removed      []string
 	Removal      semantic.Removal
 	ColumnSet    semantic.StoreColumnSet
+}
+
+func (f *fakeSemantic) BackendName() string {
+	if f.backendName != "" {
+		return f.backendName
+	}
+	return config.IndexBackendLocal
+}
+
+func (f *fakeSemantic) EmbeddingProviderName() string {
+	if f.embeddingProviderName != "" {
+		return f.embeddingProviderName
+	}
+	return config.EmbeddingProviderONNX
 }
 
 func (f *fakeSemantic) Available() bool { return !f.unavailable }
