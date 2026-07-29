@@ -20,9 +20,8 @@ import (
 // flat list of named observations plus the work in flight.
 //
 // It reports only non-terminal work, so the reply stays a few kilobytes rather
-// than growing with job history the way ListJobs does, and it reports
-// file-change converges beside registered jobs, because those register no job
-// and no other surface can see them.
+// than growing with job history the way ListJobs does. File-change waits appear
+// as watcher activity until their converge job is registered.
 func (server *GRPCServer) GetStatus(ctx context.Context, request *pb.GetStatusRequest) (resp *pb.GetStatusResponse, err error) {
 	ctx, done := beginRPC(ctx, "GetStatus")
 	defer done(&err)

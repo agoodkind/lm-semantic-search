@@ -1,0 +1,270 @@
+package daemon
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/model"
+)
+
+// seedConvergeCodebase registers an indexed codebase rooted at repoPath, so a
+// converge test starts from a tracked codebase without repeating the registry
+// setup.
+func seedConvergeCodebase(t *testing.T, manager *Manager, repoPath string) model.Codebase {
+	t.Helper()
+
+	indexConfig := defaultIndexConfig()
+	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
+	codebase := newCodebaseRecord(repoPath)
+	codebase.Status = model.CodebaseStatusIndexed
+	codebase.EffectiveConfig = indexConfig
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+	return codebase
+}
+
+// TestConvergePathsReportsWhatItConverged proves the caller learns how many of
+// the paths it handed over actually reached the index. A job built around this
+// call reports that count as its scope, so a wrong count is a wrong status.
+func TestConvergePathsReportsWhatItConverged(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error { return nil },
+	}
+
+	present := filepath.Join(repoPath, "present.go")
+	if err := os.WriteFile(present, []byte("package main\n\nfunc Present() {}\n"), 0o644); err != nil {
+		t.Fatalf("write the present file: %v", err)
+	}
+
+	outcome, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"present.go", "absent.go"})
+	if err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+	if outcome.PathsGiven != 2 {
+		t.Fatalf("PathsGiven = %d, want 2", outcome.PathsGiven)
+	}
+	if outcome.PathsConverged != 1 {
+		t.Fatalf("PathsConverged = %d, want 1; only present.go exists on disk", outcome.PathsConverged)
+	}
+}
+
+// TestConvergePathsStopsBetweenPathsOnCancel proves a cancelled converge stops
+// rather than finishing its list. The paths it did not reach keep their previous
+// index entries, which the periodic sync repairs on its next pass.
+func TestConvergePathsStopsBetweenPathsOnCancel(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel as soon as the first path reaches the store, so the second path is
+	// never read.
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			cancel()
+			return nil
+		},
+	}
+
+	names := []string{"first.go", "second.go"}
+	for _, name := range names {
+		body := "package main\n\nfunc " + name[:len(name)-3] + "() {}\n"
+		if err := os.WriteFile(filepath.Join(repoPath, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	outcome, err := manager.ConvergePaths(ctx, codebase.ID, names)
+	if err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+	if outcome.PathsGiven != 2 {
+		t.Fatalf("PathsGiven = %d, want 2", outcome.PathsGiven)
+	}
+	if outcome.PathsConverged >= 2 {
+		t.Fatalf("PathsConverged = %d, want fewer than 2; the cancel did not stop the loop", outcome.PathsConverged)
+	}
+}
+
+func TestConvergeViaWatcherRegistersRunningJob(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			close(entered)
+			<-release
+			return nil
+		},
+	}
+
+	if err := os.WriteFile(filepath.Join(repoPath, "watched.go"), []byte("package watched\n"), 0o644); err != nil {
+		t.Fatalf("write watched.go: %v", err)
+	}
+
+	syncer := NewBackgroundSync(cfg, manager)
+	manager.SetWatcherActivityReporter(syncer)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		syncer.convergeViaWatcher(context.Background(), codebase.ID, []string{"watched.go"})
+	}()
+	t.Cleanup(func() {
+		closeOnce(release)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("watcher converge did not stop during cleanup")
+		}
+	})
+	<-entered
+
+	jobs := manager.ListJobs(codebase.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("ListJobs returned %d jobs, want 1 running converge", len(jobs))
+	}
+	job := jobs[0]
+	if job.Operation != "converge" {
+		t.Fatalf("Operation = %q, want %q", job.Operation, "converge")
+	}
+	if job.State != model.JobStateRunning {
+		t.Fatalf("State = %q, want %q", job.State, model.JobStateRunning)
+	}
+	if job.Progress.FilesTotal != 1 {
+		t.Fatalf("FilesTotal = %d, want 1", job.Progress.FilesTotal)
+	}
+	if job.Progress.Unit != "path" {
+		t.Fatalf("Unit = %q, want %q", job.Progress.Unit, "path")
+	}
+	if job.Client != (model.ClientInfo{Name: "daemon-watcher", PID: 0}) {
+		t.Fatalf("Client = %+v, want daemon-watcher with PID 0", job.Client)
+	}
+	resolved, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatalf("GetJob(%q) did not resolve the running converge", job.ID)
+	}
+	if resolved.ID != job.ID {
+		t.Fatalf("GetJob returned ID %q, want %q", resolved.ID, job.ID)
+	}
+
+	snapshot := manager.StatusSnapshot()
+	if units := len(snapshot.ActiveJobs) + len(snapshot.Watcher); units != 1 {
+		t.Fatalf(
+			"StatusSnapshot reported %d units for one running converge: jobs=%d watcher=%d",
+			units,
+			len(snapshot.ActiveJobs),
+			len(snapshot.Watcher),
+		)
+	}
+}
+
+func TestCancelJobStopsWatcherConverge(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	entered := make(chan struct{})
+	stopped := make(chan struct{})
+	manager.semantic = &fakeSemantic{
+		reindex: func(ctx context.Context, _ string, _ []model.StoredChunk, _ []string) error {
+			close(entered)
+			<-ctx.Done()
+			close(stopped)
+			return nil
+		},
+	}
+
+	if err := os.WriteFile(filepath.Join(repoPath, "cancel.go"), []byte("package cancel\n"), 0o644); err != nil {
+		t.Fatalf("write cancel.go: %v", err)
+	}
+
+	parentCtx, stopParent := context.WithCancel(context.Background())
+	syncer := NewBackgroundSync(cfg, manager)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		syncer.convergeViaWatcher(parentCtx, codebase.ID, []string{"cancel.go"})
+	}()
+	t.Cleanup(func() {
+		stopParent()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("watcher converge did not stop during cleanup")
+		}
+	})
+	<-entered
+
+	jobs := manager.ListJobs(codebase.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("ListJobs returned %d jobs, want 1 cancellable converge", len(jobs))
+	}
+	if _, err := manager.CancelJob(context.Background(), jobs[0].ID); err != nil {
+		t.Fatalf("CancelJob returned error: %v", err)
+	}
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CancelJob did not stop the running converge")
+	}
+	<-done
+
+	cancelled, found := manager.GetJob(jobs[0].ID)
+	if !found {
+		t.Fatalf("GetJob(%q) did not resolve the cancelled converge", jobs[0].ID)
+	}
+	if cancelled.State != model.JobStateCancelled {
+		t.Fatalf("State = %q, want %q", cancelled.State, model.JobStateCancelled)
+	}
+}
+
+func TestCompletedWatcherConvergeKeepsDegradedDependency(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			return nil
+		},
+	}
+	manager.mu.Lock()
+	manager.noteDependencyFailureLocked(adapterr.NewEmbedderUnreachable(nil))
+	manager.mu.Unlock()
+
+	if err := os.WriteFile(filepath.Join(repoPath, "complete.go"), []byte("package complete\n"), 0o644); err != nil {
+		t.Fatalf("write complete.go: %v", err)
+	}
+
+	syncer := NewBackgroundSync(cfg, manager)
+	syncer.convergeViaWatcher(context.Background(), codebase.ID, []string{"complete.go"})
+
+	jobs := manager.ListJobs(codebase.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("ListJobs returned %d jobs, want 1 completed converge", len(jobs))
+	}
+	job := jobs[0]
+	if job.State != model.JobStateCompleted {
+		t.Fatalf("State = %q, want %q", job.State, model.JobStateCompleted)
+	}
+	if job.Progress.FilesEmbedded != 0 {
+		t.Fatalf("FilesEmbedded = %d, want 0", job.Progress.FilesEmbedded)
+	}
+	if !manager.DependencyHealth().Degraded() {
+		t.Fatal("completed converge cleared the degraded dependency banner")
+	}
+}

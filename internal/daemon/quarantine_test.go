@@ -54,7 +54,7 @@ func TestConvergePathsRootMissingMarksMissingAndSkipsDelete(t *testing.T) {
 	if err := os.RemoveAll(repoPath); err != nil {
 		t.Fatalf("RemoveAll returned error: %v", err)
 	}
-	if err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"f000.go"}); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"f000.go"}); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestConvergePathsLargeWatcherDeleteQuarantines(t *testing.T) {
 	for i := 0; i < 110; i++ {
 		relativePaths = append(relativePaths, fmt.Sprintf("f%03d.go", i))
 	}
-	if err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 

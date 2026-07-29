@@ -14,9 +14,9 @@ func (manager *Manager) SetWatcherActivityReporter(reporter WatcherActivityRepor
 	manager.watcherActivity = reporter
 }
 
-// WatcherActivity reports the file-change work in flight, or nothing when no
-// syncer is installed. A converge registers no job, so this is the only path by
-// which that work reaches a caller at all.
+// WatcherActivity reports the syncer's raw file-change admission and queued
+// paths, or nothing when no syncer is installed. StatusSnapshot filters an
+// admitted entry after the matching converge job is registered.
 func (manager *Manager) WatcherActivity() []WatcherActivity {
 	manager.watcherActivityMutex.Lock()
 	reporter := manager.watcherActivity

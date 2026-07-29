@@ -35,9 +35,9 @@ type StatusSnapshot struct {
 	// Codebases carries each tracked codebase with its resolved display status,
 	// so a status count and an activity row cannot disagree about one codebase.
 	Codebases []CodebaseView
-	// Watcher holds the file-change converges, which register no job. The syncer
-	// owns them under its own lock and none of them ever becomes a job, so they
-	// need no atomicity with the job store.
+	// Watcher holds file-change work that has not become a registered converge
+	// job. The syncer owns the admission state under its own lock, and the
+	// snapshot filters entries that the job store can already report.
 	//
 	// They are not atomic with IndexSlotsInUse either, because a running converge
 	// holds an index slot and no single lock covers both the syncer's set and the
@@ -78,6 +78,7 @@ func (manager *Manager) StatusSnapshot() StatusSnapshot {
 	sort.Slice(activeJobs, func(first int, second int) bool {
 		return activeJobs[first].StartedAt.After(activeJobs[second].StartedAt)
 	})
+	watcher = watcherActivityWithoutRegisteredConverges(watcher, activeJobs)
 
 	return StatusSnapshot{
 		StartedAt:       manager.startedAt,
@@ -89,6 +90,30 @@ func (manager *Manager) StatusSnapshot() StatusSnapshot {
 		Codebases:       manager.codebaseViewsLocked(),
 		Watcher:         watcher,
 	}
+}
+
+func watcherActivityWithoutRegisteredConverges(
+	watcher []WatcherActivity,
+	activeJobs []model.Job,
+) []WatcherActivity {
+	registered := make(map[string]struct{})
+	for _, job := range activeJobs {
+		if job.Operation == "converge" {
+			registered[job.CodebaseID] = struct{}{}
+		}
+	}
+	if len(registered) == 0 {
+		return watcher
+	}
+
+	filtered := make([]WatcherActivity, 0, len(watcher))
+	for _, activity := range watcher {
+		if _, found := registered[activity.CodebaseID]; found {
+			continue
+		}
+		filtered = append(filtered, activity)
+	}
+	return filtered
 }
 
 // CanonicalPaths indexes the snapshot's codebases by id, so a watcher or

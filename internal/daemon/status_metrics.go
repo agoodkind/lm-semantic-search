@@ -290,10 +290,9 @@ func codebaseMetrics(views []CodebaseView) []*pb.Metric {
 
 // buildStatusActivity reports every unit of work the daemon is doing or has
 // queued, from all three sources in one snapshot. Registered jobs come from the
-// job store; the file-change converges come from the syncer, because they
-// register no job and so cannot be found in the job store at all; the coalesced
-// requests come from the manager's depth-1 slots, which hold no job record until
-// they drain.
+// job store; file-change admission and queued paths come from the syncer until a
+// converge job exists; coalesced requests come from the manager's depth-1 slots,
+// which hold no job record until they drain.
 //
 // Every source is read at one instant, so a slot that drains into a job cannot
 // fall between two reads and vanish, and cannot appear twice either.
@@ -365,8 +364,8 @@ func pendingActivityRow(entry PendingWork) *pb.ActivityRow {
 	}}
 }
 
-// watcherActivityRow projects one file-change converge. It carries an absent
-// job_id rather than an empty string, because the work has no job record and an
+// watcherActivityRow projects file-change work that has no registered converge
+// job yet. It carries an absent job_id rather than an empty string, because an
 // empty id would read as one the job commands could accept.
 func watcherActivityRow(entry WatcherActivity, canonicalPath string) *pb.ActivityRow {
 	return &pb.ActivityRow{Metrics: []*pb.Metric{

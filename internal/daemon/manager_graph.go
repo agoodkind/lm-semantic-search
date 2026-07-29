@@ -195,13 +195,15 @@ func (manager *Manager) graphEngine(ctx context.Context, codebaseID string) (*cb
 	return engine, release, nil
 }
 
-// CloseGraphEngines closes every idle cached graph engine and blocks new graph
-// operations. An engine with an in-flight call is left open on purpose: the
-// blocking C call cannot be interrupted, closing under it would free memory the
-// call still reads, and waiting for it could stall shutdown behind a detached
-// post-timeout call, so process exit reclaims that handle instead. It is safe
-// to call more than once.
+// CloseGraphEngines flushes the manager's journal writer, closes every idle
+// cached graph engine, and blocks new graph operations. An engine with an
+// in-flight call is left open on purpose: the blocking C call cannot be
+// interrupted, closing under it would free memory the call still reads, and
+// waiting for it could stall shutdown behind a detached post-timeout call, so
+// process exit reclaims that handle instead. It is safe to call more than once.
 func (manager *Manager) CloseGraphEngines() {
+	manager.closeJobJournal()
+
 	manager.graphMutex.Lock()
 	defer manager.graphMutex.Unlock()
 

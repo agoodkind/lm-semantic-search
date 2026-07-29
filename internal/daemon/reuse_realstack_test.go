@@ -302,7 +302,7 @@ func TestWatcherUntrackedChurnDoesNotQuarantineRealSemanticService(t *testing.T)
 	for index := 0; index < 120; index++ {
 		batch = append(batch, fmt.Sprintf("f%03d.go", index))
 	}
-	if err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 
@@ -352,7 +352,7 @@ func TestWatcherTrackedMassDeleteQuarantinesRealSemanticService(t *testing.T) {
 	for index := 0; index < 120; index++ {
 		batch = append(batch, fmt.Sprintf("f%03d.go", index))
 	}
-	if err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 
@@ -403,7 +403,7 @@ func TestWatcherUntrackedChurnStaysIndexedGRPCE2ERealSemanticService(t *testing.
 	for index := 0; index < 120; index++ {
 		batch = append(batch, fmt.Sprintf("f%03d.go", index))
 	}
-	if err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 
