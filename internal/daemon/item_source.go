@@ -448,20 +448,15 @@ func (source conversationItemSource) columnSet() semantic.StoreColumnSet {
 // needs no work, regardless of the pipeline version that produced the stored row.
 // Detecting stale or older-version content is the force path's responsibility,
 // not this backfill classifier's.
-//
-// What it expects has to match what is actually written. A tool call or a
-// reasoning field whose content holds nothing a search could return writes no
-// row, so expecting one from the field's mere presence would report work needed
-// on every pass forever.
 func conversationNeedsDerivedWork(conversationID string, documents []model.ConversationDocument, storedDerivedPaths map[string]string) bool {
 	for _, document := range documents {
-		if conversationDocumentExpectsToolRows(document) {
+		if len(document.Tools) > 0 {
 			toolPrefix := conversationToolMessagePath(conversationID, document.MessageIndex) + "/"
 			if !derivedPrefixPresent(storedDerivedPaths, toolPrefix, "") {
 				return true
 			}
 		}
-		if conversationTextIsStorable(document.Thinking) {
+		if document.Thinking != "" {
 			thinkingPath := conversationThinkingPath(conversationID, document.MessageIndex)
 			if !derivedPrefixPresent(storedDerivedPaths, thinkingPath+"/", thinkingPath) {
 				return true

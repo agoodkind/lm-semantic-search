@@ -713,14 +713,11 @@ type conversationMessageDiff struct {
 // the base state with the derived paths, so the same partially applied removal is
 // also repaired in its undelivered form rather than only when the message comes
 // back. "Unchanged" means the stored role equals document.Role and the assembled
-// stored text equals the delivered text once both are reduced to what this rule
-// would store, which is what conversationDocumentsToStoredChunks writes after
-// multipart splitting. A delivered message that would write no row at all, and
-// for which the store holds nothing, is likewise unchanged: it is skipped rather
-// than sent, because sending it would write nothing and leave it absent again on
-// every later pass. Stale stored indices must be deleted here because the
-// conversation source uses absenceRetain, so an absent message row would
-// otherwise survive forever once the conversation fingerprint advances.
+// stored text equals the delivered text once both are reduced to what the
+// storable rule would keep, which is what conversationDocumentsToStoredChunks
+// writes after multipart splitting. Stale stored indices must be deleted here
+// because the conversation source uses absenceRetain, so an absent message row
+// would otherwise survive forever once the conversation fingerprint advances.
 func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, stored semantic.ConversationStoredRows, chunkByteBudget ...int) (conversationMessageDiff, error) {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
@@ -732,18 +729,11 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 		delivered[document.MessageIndex] = struct{}{}
 		message, found := stored.Messages[document.MessageIndex]
 		if !found {
-			orphanedDerived := conversationDerivedPathsForMessage(stored.DerivedPaths, conversationID, document.MessageIndex)
-			if len(orphanedDerived) == 0 && conversationDocumentStoresNothing(document) {
-				// The store holds nothing for this message and would hold
-				// nothing if it were sent, so the two already agree. Sending it
-				// would write no row, leave it absent again, and repeat that on
-				// every later sync for as long as the conversation existed.
-				continue
-			}
 			// A genuinely new / appended message has no stored rows to purge, so it is
 			// embedded without a delete. Orphaned derived rows left by a partially
 			// applied earlier removal are not an append, so they are purged first.
 			diff.documents = append(diff.documents, document)
+			orphanedDerived := conversationDerivedPathsForMessage(stored.DerivedPaths, conversationID, document.MessageIndex)
 			if len(orphanedDerived) > 0 {
 				diff.addRemoval(conversationID, document.MessageIndex)
 			}
@@ -875,12 +865,7 @@ func conversationDocumentMatchesStored(ctx context.Context, conversationID strin
 		return false, nil
 	}
 	storedDerivedForMessage := conversationDerivedPathsForMessage(storedDerivedPaths, conversationID, document.MessageIndex)
-	// Ask whether the message writes a derived row, not whether it carries the
-	// field. A tool call or a reasoning field holding only spacing writes none,
-	// so reading presence here would send the message down the regenerate path
-	// to compare an empty expected set against an empty stored one.
-	documentHasDerived := conversationDocumentExpectsToolRows(document) ||
-		conversationTextIsStorable(document.Thinking)
+	documentHasDerived := len(document.Tools) > 0 || document.Thinking != ""
 	if !documentHasDerived {
 		return len(storedDerivedForMessage) == 0, nil
 	}
