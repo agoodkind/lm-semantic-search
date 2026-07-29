@@ -13,8 +13,17 @@ import (
 )
 
 type conversationPart struct {
-	index   int
-	content string
+	index int
+	// splitPart is the piece's position when one stored path was cut again to
+	// fit the embedding budget, so several pieces share a relative path and are
+	// told apart only by this. Ordering by path alone would concatenate them in
+	// whatever order the snapshot returned, and a rebuilt text that differs from
+	// the delivered one makes an unchanged message read as changed on every sync.
+	splitPart int32
+	// splitPartRecorded marks a row written after the position was persisted, so
+	// a legacy row that predates the field is not read back as position zero.
+	splitPartRecorded bool
+	content           string
 }
 
 type conversationAssembly struct {
@@ -143,7 +152,12 @@ func addConversationBatchRow(
 	}
 	message.parts = append(
 		message.parts,
-		conversationPart{index: partIndex, content: candidate.Content},
+		conversationPart{
+			index:             partIndex,
+			splitPart:         candidate.SplitPart,
+			splitPartRecorded: candidate.SplitPartRecorded,
+			content:           candidate.Content,
+		},
 	)
 	return nil
 }
@@ -361,8 +375,24 @@ func assembleConversationMessages(
 ) map[int32]semantic.StoredMessageState {
 	messages := make(map[int32]semantic.StoredMessageState, len(assemblies))
 	for messageIndex, assembly := range assemblies {
+		// This ordering matches the Milvus loader's exactly. Both rebuild a
+		// message's text by concatenating its parts, and a text that rebuilds
+		// differently from the one delivered makes an unchanged message read as
+		// changed on every sync for as long as the conversation exists, so the
+		// two loaders cannot order parts differently.
 		sort.SliceStable(assembly.parts, func(left int, right int) bool {
-			return assembly.parts[left].index < assembly.parts[right].index
+			leftPart := assembly.parts[left]
+			rightPart := assembly.parts[right]
+			if leftPart.index != rightPart.index {
+				return leftPart.index < rightPart.index
+			}
+			if leftPart.splitPartRecorded && rightPart.splitPartRecorded {
+				return leftPart.splitPart < rightPart.splitPart
+			}
+			if leftPart.splitPartRecorded != rightPart.splitPartRecorded {
+				return leftPart.splitPartRecorded
+			}
+			return leftPart.content < rightPart.content
 		})
 		var text strings.Builder
 		for _, part := range assembly.parts {

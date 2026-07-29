@@ -905,7 +905,12 @@ func conversationDocumentMatchesStored(ctx context.Context, conversationID strin
 		return false, nil
 	}
 	storedDerivedForMessage := conversationDerivedPathsForMessage(storedDerivedPaths, conversationID, document.MessageIndex)
-	documentHasDerived := len(document.Tools) > 0 || document.Thinking != ""
+	// Ask whether the message writes a derived row, not whether it carries the
+	// field. A tool call or a reasoning field holding only spacing writes none,
+	// so reading presence here would send the message down the regenerate path
+	// to compare an empty expected set against an empty stored one.
+	documentHasDerived := conversationDocumentExpectsToolRows(document) ||
+		conversationTextIsStorable(document.Thinking)
 	if !documentHasDerived {
 		return len(storedDerivedForMessage) == 0, nil
 	}
