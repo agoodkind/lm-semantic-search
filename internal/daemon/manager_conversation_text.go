@@ -49,25 +49,38 @@ func conversationStorableText(text string) string {
 	return ""
 }
 
-// appendStorableConversationChunk adds a row only when its content holds
-// something a search could return.
+// appendStorableConversationField splits one of a message's fields and adds a
+// row for every piece, or adds nothing at all when the field holds nothing a
+// search could return.
 //
-// Every conversation row, whatever kind it is, is appended through here, so the
-// rule lives in one place rather than as a condition repeated at each producer.
-// A message's text, a tool's distilled summary, its command, its input, its
-// output, and a turn's reasoning all reach the store through this function, and
-// each one used to decide for itself. They disagreed: the text row tested
-// whether its content held a non-whitespace character while the other five
-// tested only whether the field was set, so a field holding a space produced a
-// row that no search could ever return.
+// The decision is about the whole field, and it is taken here before the split,
+// so every producer answers it the same way. A message's text, a tool's
+// distilled summary, its command, its input, its output, and a turn's reasoning
+// all reach the store through this decision, and each one used to take it alone.
+// They disagreed: the text row tested whether its content held a non-whitespace
+// character while the other five tested only whether the field was set, so a
+// field holding a single space produced a row no search could ever return.
 //
-// It also drops an individual empty piece of a split, which a per-field
-// condition cannot see because the split happens after the field is checked.
-func appendStorableConversationChunk(chunks []model.StoredChunk, chunk model.StoredChunk) []model.StoredChunk {
-	if !conversationTextIsStorable(chunk.Content) {
+// The decision cannot move to the individual piece. A message's stored text is
+// rebuilt by concatenating its pieces in order, so a declined interior piece
+// would leave the rebuilt text shorter than the delivered one, and the message
+// would compare unequal to itself on every later sync forever. A field that is
+// worth storing stores all of itself, spacing included.
+func appendStorableConversationField(
+	chunks []model.StoredChunk,
+	content string,
+	budget int,
+	buildChunk func(piece string, partIndex int, multipart bool) model.StoredChunk,
+) []model.StoredChunk {
+	if !conversationTextIsStorable(content) {
 		return chunks
 	}
-	return append(chunks, chunk)
+	pieces := splitConversationText(content, budget)
+	multipart := len(pieces) > 1
+	for partIndex, piece := range pieces {
+		chunks = append(chunks, buildChunk(piece, partIndex, multipart))
+	}
+	return chunks
 }
 
 func splitConversationText(text string, chunkByteBudget ...int) []string {

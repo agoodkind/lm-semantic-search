@@ -117,29 +117,70 @@ func TestEveryRowKindStillStoresRealContent(t *testing.T) {
 	}
 }
 
-// TestAnEmptyPieceOfASplitIsDropped covers what a per-field condition cannot
-// see. A field is checked before it is split, so a split that yields an empty
-// piece stored that piece regardless of how the field was checked.
-func TestAnEmptyPieceOfASplitIsDropped(t *testing.T) {
+// TestASplitMessageStoresEveryPieceOfItsText is the reason the decision cannot
+// move from the field to the individual piece.
+//
+// A message's stored text is rebuilt by concatenating its pieces in order. A
+// piece that is declined for holding only spacing leaves the rebuilt text
+// shorter than the delivered one, so the message compares unequal to itself on
+// every later sync, is re-sent, and has its derived rows removed as orphans, for
+// as long as the conversation exists. A field worth storing stores all of
+// itself.
+func TestASplitMessageStoresEveryPieceOfItsText(t *testing.T) {
 	t.Parallel()
 
+	text := "alpha" + strings.Repeat(" ", 64) + "omega"
 	documents := []model.ConversationDocument{{
 		ConversationID: "claude:a",
 		MessageIndex:   0,
 		Role:           "assistant",
-		Text:           "alpha" + strings.Repeat(" ", 64) + "omega",
+		Text:           text,
 	}}
 
 	chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents, 8)
 	if err != nil {
 		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
 	}
-	if len(chunks) == 0 {
-		t.Fatal("a text carrying real words stored nothing")
+
+	var rebuilt strings.Builder
+	pieces := 0
+	for _, chunk := range chunks {
+		if strings.HasPrefix(chunk.RelativePath, "conv/claude:a/0") {
+			rebuilt.WriteString(chunk.Content)
+			pieces++
+		}
+	}
+	if pieces < 2 {
+		t.Fatalf("expected the text to split into several pieces, got %d", pieces)
+	}
+	if rebuilt.String() != text {
+		t.Fatalf(
+			"the stored pieces rebuild to %q, want the delivered text %q",
+			rebuilt.String(),
+			text,
+		)
+	}
+}
+
+// TestAFieldOfOnlySpacingStoresNothing is the other half of the same rule,
+// taken at the field rather than the piece.
+func TestAFieldOfOnlySpacingStoresNothing(t *testing.T) {
+	t.Parallel()
+
+	documents := []model.ConversationDocument{{
+		ConversationID: "claude:a",
+		MessageIndex:   0,
+		Role:           "assistant",
+		Text:           strings.Repeat(" ", 64),
+	}}
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents, 8)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
 	}
 	for _, chunk := range chunks {
-		if strings.TrimSpace(chunk.Content) == "" {
-			t.Fatalf("a split piece of pure spacing was stored at %q", chunk.RelativePath)
+		if strings.HasPrefix(chunk.RelativePath, "conv/claude:a/0") {
+			t.Fatalf("a text of only spacing stored a row at %q", chunk.RelativePath)
 		}
 	}
 }

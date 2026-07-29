@@ -629,19 +629,23 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 			return nil, errors.New("conversation id is required")
 		}
 		parentConversationID := strings.TrimSpace(document.ParentConversationID)
-		pieces := splitConversationText(document.Text, budget)
-		for partIndex, piece := range pieces {
-			chunks = appendStorableConversationChunk(chunks, newConversationStoredChunk(
-				document,
-				conversationID,
-				parentConversationID,
-				conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
-				piece,
-				"",
-				0,
-				0,
-			))
-		}
+		chunks = appendStorableConversationField(
+			chunks,
+			document.Text,
+			budget,
+			func(piece string, partIndex int, multipart bool) model.StoredChunk {
+				return newConversationStoredChunk(
+					document,
+					conversationID,
+					parentConversationID,
+					conversationRelativePath(conversationID, document.MessageIndex, partIndex, multipart),
+					piece,
+					"",
+					0,
+					0,
+				)
+			},
+		)
 		for toolIndex, toolCall := range document.Tools {
 			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
 			chunks = append(chunks, splitConversationDerivedContent(
@@ -682,6 +686,50 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 		)...)
 	}
 	return chunks, nil
+}
+
+// conversationDocumentStoresNothing reports whether a delivered message would
+// write no row at all, because every field it carries holds nothing a search
+// could return.
+//
+// Such a message has no stored identity, so the delta comparison would read it
+// as new on every sync, send it, write nothing, and find it absent again the
+// next time. It names the same fields conversationDocumentsToStoredChunks reads,
+// in the same order, and TestStoresNothingAgreesWithTheGenerator holds the two
+// together.
+func conversationDocumentStoresNothing(document model.ConversationDocument) bool {
+	if conversationTextIsStorable(document.Text) {
+		return false
+	}
+	if conversationTextIsStorable(document.Thinking) {
+		return false
+	}
+	for _, toolCall := range document.Tools {
+		if !conversationToolCallStoresNothing(toolCall) {
+			return false
+		}
+	}
+	return true
+}
+
+// conversationToolCallStoresNothing reports whether one tool call writes no row,
+// because its distilled summary, its command, its input, and its output all hold
+// nothing a search could return.
+//
+// Anything that asks whether a tool call is expected to have a stored row must
+// ask this rather than whether the call is present, because a call whose every
+// field holds only spacing is present and stores nothing.
+func conversationToolCallStoresNothing(toolCall model.ConversationToolCall) bool {
+	if conversationTextIsStorable(conversationToolTokenContent(toolCall)) {
+		return false
+	}
+	if conversationTextIsStorable(toolCall.Command) {
+		return false
+	}
+	if conversationTextIsStorable(toolCall.InputJSON) {
+		return false
+	}
+	return !conversationTextIsStorable(toolCall.Output)
 }
 
 type conversationMessageDiff struct {
@@ -725,11 +773,18 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 		delivered[document.MessageIndex] = struct{}{}
 		message, found := stored.Messages[document.MessageIndex]
 		if !found {
+			orphanedDerived := conversationDerivedPathsForMessage(stored.DerivedPaths, conversationID, document.MessageIndex)
+			if len(orphanedDerived) == 0 && conversationDocumentStoresNothing(document) {
+				// The store holds nothing for this message and would hold
+				// nothing if it were sent, so the two already agree. Sending it
+				// would write no row, leave it absent again, and repeat that on
+				// every later sync for as long as the conversation existed.
+				continue
+			}
 			// A genuinely new / appended message has no stored rows to purge, so it is
 			// embedded without a delete. Orphaned derived rows left by a partially
 			// applied earlier removal are not an append, so they are purged first.
 			diff.documents = append(diff.documents, document)
-			orphanedDerived := conversationDerivedPathsForMessage(stored.DerivedPaths, conversationID, document.MessageIndex)
 			if len(orphanedDerived) > 0 {
 				diff.addRemoval(conversationID, document.MessageIndex)
 			}
