@@ -252,6 +252,8 @@ Set `enabled = true` under `[conversation.semantic]`. **Read the file first and 
 
 **Proven when:** a conversation ingested after the change stores one row per tool call, no row written after the change contains `file_path`, `"command"`, or `input_text`, the tool-row total falls as conversations are re-ingested, and the blank-row count stays flat.
 
+**Recall must hold.** Before turning writes on, run a set of searches a person would actually type and record which conversations each one returns. Run the same set again after conversations have been re-ingested under the new shape. A conversation that the old corpus returned and the new one does not is a regression, and it blocks the change regardless of how much smaller the corpus got. Cover all four ways a tool call is reached: the tool's name, a program name inside a command, a file path, and the command text itself.
+
 ---
 
 ## Notes
