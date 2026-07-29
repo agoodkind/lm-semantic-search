@@ -16,9 +16,9 @@ Leave `[conversation.semantic] enabled = false` until the last task.
 
 ---
 
-## 1. clyde: `Display` on the tool call
+## 1. clyde: `Display` and `DisplayLang` on the tool call
 
-`internal/transcript/transcript.go`, add to `ToolCall`:
+`internal/transcript/transcript.go`, add both fields to `ToolCall`:
 
 ```go
 	// Display is what the user saw for this call: a shell command, a file path,
@@ -27,9 +27,15 @@ Leave `[conversation.semantic] enabled = false` until the last task.
 	// stores a tool call reads this rather than re-deriving it from Input, so the
 	// harness's serialization stays inside the provider package.
 	Display string `json:"display,omitempty"`
+	// DisplayLang names the language Display is written in, "bash" when the call
+	// ran a shell and empty otherwise. The provider's parser fills it, because
+	// only that parser knows which of its harness's tools are shells. A consumer
+	// that wants to break a command into program names and file paths reads this
+	// rather than matching tool names, so no harness name reaches a generic layer.
+	DisplayLang string `json:"display_lang,omitempty"`
 ```
 
-`go build ./...` names every literal `exhaustruct` now rejects. Add `Display: ""` to each; the next task fills them.
+`go build ./...` names every literal `exhaustruct` now rejects. Add `Display: ""` and `DisplayLang: ""` to each; the next task fills them.
 
 **Done when:** the tree builds and `go test ./internal/transcript/` passes.
 
@@ -37,32 +43,37 @@ Leave `[conversation.semantic] enabled = false` until the last task.
 
 ## 2. clyde: four parsers fill it
 
-Each provider package gets a `tool_display.go` with the same shape, reading its own harness's keys:
+Each provider package gets a `tool_display.go` with the same shape, reading its own harness's keys. It returns the display text and the language that text is written in, because the parser is the only layer that knows which of its harness's tools are shells:
 
 ```go
-// toolDisplayText is what the user saw for one tool call.
+// toolDisplayText is what the user saw for one tool call, and the language that
+// text is written in. The language is "bash" when the call ran a shell and empty
+// otherwise.
 //
 // A tool whose shape this parser does not recognize shows nothing rather than
 // its serialization. An unrecognized tool is a gap to fill here, and showing
 // the JSON instead would hide the gap behind text nobody wrote.
-func toolDisplayText(name string, input transcript.ToolInputJSON) string {
+func toolDisplayText(name string, input transcript.ToolInputJSON) (string, string) {
 	if input.Len() == 0 {
-		return ""
+		return "", ""
 	}
 	var parsed <providerToolInput>
 	if err := json.Unmarshal(input.Raw, &parsed); err != nil {
-		return ""
+		return "", ""
 	}
-	for _, candidate := range []string{ /* fields in priority order */ } {
+	if command := strings.TrimSpace(parsed.Command); command != "" {
+		return command, "bash"
+	}
+	for _, candidate := range []string{ /* remaining fields in priority order */ } {
 		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
-			return trimmed
+			return trimmed, ""
 		}
 	}
-	return ""
+	return "", ""
 }
 ```
 
-The keys, in priority order:
+The keys, in priority order, with the first key of each row producing the `bash` language:
 
 | package | keys |
 | --- | --- |
@@ -71,18 +82,18 @@ The keys, in priority order:
 | `providers/cursor/parser` | `command`, `relative_workspace_path`, `target_file`, `query`, `pattern` |
 | `providers/zed/parser` | `command`, `path`, `regex`, `query` |
 
-Codex needs two extra cases its siblings do not. A bare JSON string input is a raw payload such as a patch and is returned as itself, because `toolInputJSON` encodes non-JSON that way. A shell command arrives as an argv array and joins with spaces.
+Codex needs two extra cases its siblings do not. A bare JSON string input is a raw payload such as a patch and is returned as itself with an empty language, because `toolInputJSON` encodes non-JSON that way. A shell command arrives as an argv array and joins with spaces.
 
-Fill `Display: toolDisplayText(name, input)` at each `transcript.ToolCall{` literal in:
+Fill both fields at each `transcript.ToolCall{` literal in:
 
 - `providers/claude/parser/entry.go`
 - `providers/codex/store/messages.go` in `toolCallHistoryMessage`
 - `providers/cursor/parser/mapping.go` in `mapJSONLMessage` and `mapComposerBubble`
 - `providers/zed/parser/parser.go` in `agentMessageParts`
 
-**Test each package** with a table over its own keys, asserting a shell call shows its command, a file tool shows its path, a search shows its pattern, an unknown tool shows nothing, and an empty input shows nothing.
+**Test each package** with a table over its own keys, asserting a shell call shows its command with the `bash` language, a file tool shows its path with an empty language, a search shows its pattern, an unknown tool shows nothing, and an empty input shows nothing.
 
-**Also test** that a parsed fixture carries `Display` on every tool call that has an input, so the renderer is wired in rather than only existing beside the parser.
+**Also test** against a real parsed fixture that the renderer is wired into the parser rather than only existing beside it. Assert an exact expected display string for each of the specific tools the key list covers, and assert that at least 90% of the fixture's tool calls carrying an input also carry display text. The floor rather than a strict every-call assertion is deliberate: the key lists are not exhaustive, so an unrecognized tool must read as a coverage number rather than a red build.
 
 **Done when:** `go test ./internal/providers/...` passes.
 
@@ -138,29 +149,20 @@ Regenerate, then follow the compiler to rename `InputJSON` to `Display` and drop
 
 `internal/conversation/semsearch/client.go`: `SemToolCall` loses `InputJSON` and `Command`, gains `Display`.
 
-`internal/daemon/conversation_semantic_sync.go`: delete `deriveToolCommandAndLang` and `semanticToolCommandInput`. In `semanticToolCalls`, set `projected.Display = strings.ToValidUTF8(tool.Display, "")` and set the hint from the tool's name:
+`internal/daemon/conversation_semantic_sync.go`: delete `deriveToolCommandAndLang` and `semanticToolCommandInput`. In `semanticToolCalls`, read both fields the parser already filled:
 
 ```go
-// semanticToolLangHint reports the language a tool call's display text is
-// written in.
-//
-// A shell tool's display text is the command the user saw, so the hint is what
-// tells the engine it may break that text into program names and file paths.
-// The hint is a format, which the engine may know; the tool names below are the
-// only harness knowledge in this file and they are shared across every harness
-// clyde reads.
-func semanticToolLangHint(tool transcript.ToolCall) string {
-	if strings.TrimSpace(tool.Display) == "" {
-		return ""
-	}
-	switch strings.ToLower(strings.TrimSpace(tool.Name)) {
-	case "bash", "shell", "run_terminal_cmd", "terminal", "local_shell":
-		return "bash"
-	default:
-		return ""
-	}
-}
+		if withArguments || withOutput {
+			// The provider's parser rendered what the user saw and named the
+			// language it is written in. Re-deriving either here would put
+			// knowledge of every harness's tool shapes into a layer that must
+			// not hold it.
+			projected.Display = strings.ToValidUTF8(tool.Display, "")
+			projected.LangHint = tool.DisplayLang
+		}
 ```
+
+This file gains no tool names. A shell call is one whose parser said so.
 
 **Test:** a projected call carries the display text, and no projected field contains `file_path`. A shell call carries a `bash` hint and a file read carries none.
 
@@ -254,4 +256,6 @@ Set `enabled = true` under `[conversation.semantic]`. **Read the file first and 
 
 **Export had the same defect.** The spec covers only search, but `toolFullDetailText` dumps the same raw JSON at a human reading an export. That is why `Display` lives on `transcript.ToolCall` rather than only on the search projection: one renderer, two consumers.
 
-**The key lists are not exhaustive.** They come from the tool shapes visible in the current corpus. A tool whose shape is missing stores its name alone rather than wrong text, so a gap reads as a thin row rather than as silent JSON.
+**The key lists are not exhaustive.** They come from the tool shapes visible in the current corpus. A tool whose shape is missing stores its name alone rather than wrong text, so a gap reads as a thin row rather than as silent JSON. Task 2's fixture test asserts a coverage floor rather than every call for exactly this reason.
+
+**The provider names the language, not a generic layer.** A shell call's display text is its command, and only the provider's parser knows which of its harness's tools run shells. `DisplayLang` carries that answer forward so `internal/daemon` and the engine hold no harness tool names.
