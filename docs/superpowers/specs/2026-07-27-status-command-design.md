@@ -38,12 +38,12 @@ Refreshes on an interval, default two seconds. The fourth column is the change s
 ```
 lm-semantic-search  version=202607270542-fe-6e0a44c  pid=7342  uptime_s=11,539 s
 socket=/Users/agoodkind/.local/state/lm-semantic-search/sockets/lm-semantic-search-daemon.sock
-read_at=2026-07-27T14:52:31+02:00  interval=2s
+read_at=2026-07-27T12:52:31Z  interval=2s
 
 dependency_health.degraded                  false
 dependency_health.mode                         ""
 dependency_health.since                      null
-dependency_health.last_healthy_at            2026-07-27T14:52:20Z
+dependency_health.last_healthy_at            2026-07-27T12:52:20Z
 
 index_slots_in_use                              2  slots               +0
 index_slots_total                               4  slots
@@ -98,8 +98,7 @@ activity  running=2 queued=3
     codebase_id=cb_1780707585_a95525d0b0db  operation=converge  state=running
     canonical_path=/Users/agoodkind/Sites/lm-semantic-search
     pending_paths=8
-    chunks_embedded=98  chunks_reused=0  chunks_dropped=0
-    started_at=14:52:22  last_event_at=14:52:30
+    started_at=14:52:22
 
 [2] job_id=null  source=watcher
     codebase_id=cb_1785151182_893b769460bc  operation=converge  state=queued
@@ -132,7 +131,7 @@ version 202607270542-fe-6e0a44c
 pid 7342
 uptime_s 11539 s
 socket /Users/agoodkind/.local/state/lm-semantic-search/sockets/lm-semantic-search-daemon.sock
-read_at 2026-07-27T14:52:31+02:00
+read_at 2026-07-27T12:52:31Z
 dependency_health.degraded false
 dependency_health.mode ""
 dependency_health.since null
@@ -184,7 +183,6 @@ activity.0.chunks_embedded 98 chunks
 activity.0.chunks_reused 4025 chunks
 activity.0.chunks_dropped 0 chunks
 activity.0.collection_rows_written 1032 rows
-activity.0.last_event_at 14:52:27
 activity.1.job_id null
 activity.1.source watcher
 activity.1.codebase_id cb_1780707585_a95525d0b0db
@@ -193,7 +191,7 @@ activity.1.state running
 activity.1.pending_paths 8 paths
 ```
 
-Timestamps print in the daemon host's local zone with an offset, matching `formatLocalTime`.
+Timestamps print as UTC, the same value the JSON carries. This form is parsed, so it takes the one unambiguous zone; the terminal is the surface that converts to the reader's own zone.
 
 `--output single-line` prints the first line, `version <value>`.
 
@@ -322,11 +320,7 @@ The key that is present names the type. No value key at all means the value is a
         {"name": "state", "stringValue": "running"},
         {"name": "canonical_path", "stringValue": "/Users/agoodkind/Sites/lm-semantic-search"},
         {"name": "pending_paths", "intValue": "8", "unit": "paths"},
-        {"name": "chunks_embedded", "intValue": "98", "unit": "chunks"},
-        {"name": "chunks_reused", "intValue": "0", "unit": "chunks"},
-        {"name": "chunks_dropped", "intValue": "0", "unit": "chunks"},
-        {"name": "started_at", "stringValue": "2026-07-27T12:52:22.310Z"},
-        {"name": "last_event_at", "stringValue": "2026-07-27T12:52:30.004Z"}
+        {"name": "started_at", "stringValue": "2026-07-27T12:52:22.310Z"}
       ]
     },
     {
@@ -350,7 +344,9 @@ The activity row index is the array position, so no index field is carried and n
 
 An `intValue` is a JSON string because `protojson` encodes 64-bit integers as strings to keep precision in consumers whose numbers are doubles. `doubleValue` is a JSON number. This matches every other command in this CLI: `totalBytes` on `codebase list` is `"904166"` and `totalChunks` is `26669`.
 
-Timestamps are UTC in JSON and local with an offset on the terminal and in piped text. That split is the repository's existing rule: machine-facing output preserves UTC through `protojson`, human-facing output goes through `formatLocalTime`.
+Every timestamp is UTC on every surface: the terminal, the piped text, and the JSON. This repository bans local-time conversion, which the `gosmopolitan` linter enforces, so one zone is the only available answer and no two surfaces can disagree about an instant.
+
+`displayText` appears in the JSON reply, as it does on every other command in this service, because one shared marshaller serves them all. A JSON consumer reads `metrics` and `activity` and ignores it.
 
 There is no delta in JSON. A delta is the difference between two reads, and a single call is one read. A consumer that wants a rate calls twice and subtracts, which is what the terminal does.
 

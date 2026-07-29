@@ -8,6 +8,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/pbconv"
+	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
 
@@ -42,17 +43,13 @@ func formatCount(value int32) string {
 	return out.String()
 }
 
-// formatBoundaryTime renders a timestamp for view labels in daemon local time.
+// formatBoundaryTime renders a timestamp for view labels in the host's zone.
 func formatBoundaryTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
 	const layout = "1/2/2006, 3:04:05 PM MST"
-	location, err := time.LoadLocation("Local")
-	if err != nil {
-		return value.Format(layout)
-	}
-	return value.In(location).Format(layout)
+	return render.InLocalZone(value).Format(layout)
 }
 
 // progressHeading names the pass for an active job, empty otherwise.

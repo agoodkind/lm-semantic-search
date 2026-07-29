@@ -47,6 +47,9 @@ const (
 	unitMillis     = "ms"
 	unitPercent    = "%"
 	unitCodebases  = "codebases"
+	// unitUnits counts units of work of mixed kinds: a job, a converge, and a
+	// coalesced request are each one, and no narrower noun covers all three.
+	unitUnits = "units"
 )
 
 // activitySourceJob and activitySourceWatcher name what started a unit of work.
@@ -181,8 +184,43 @@ func buildStatusMetrics(daemon *StatusSnapshot, snapshot metrics.Snapshot, now t
 
 	if daemon != nil {
 		list = append(list, codebaseMetrics(daemon.Codebases)...)
+		list = append(list, activityCountMetrics(daemon)...)
 	}
 	return list
+}
+
+// activityCountMetrics summarises the rows so a reader sees how much work is
+// outstanding without counting rows, and so a piped consumer can watch the
+// queue drain with one grep. The counts come from the same snapshot the rows
+// come from, so a summary and its rows cannot disagree.
+//
+// Registered jobs carry a lifecycle state; watcher and pending entries carry
+// the watcher vocabulary. Anything else counts as running, because work the
+// daemon reported but this function does not recognise is still work.
+func activityCountMetrics(daemon *StatusSnapshot) []*pb.Metric {
+	running := 0
+	queued := 0
+	for _, job := range daemon.ActiveJobs {
+		if job.State == model.JobStateQueued {
+			queued++
+		} else {
+			running++
+		}
+	}
+	for _, entry := range daemon.Watcher {
+		if entry.State == WatcherStateQueued {
+			queued++
+		} else {
+			running++
+		}
+	}
+	// A pending slot is by definition waiting on its codebase's active job.
+	queued += len(daemon.Pending)
+
+	return []*pb.Metric{
+		intMetric(statusGroupActivity, "activity.running", int64(running), unitUnits),
+		intMetric(statusGroupActivity, "activity.queued", int64(queued), unitUnits),
+	}
 }
 
 // runtimeMetrics samples the Go runtime gauges the periodic

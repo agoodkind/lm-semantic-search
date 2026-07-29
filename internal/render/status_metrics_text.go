@@ -3,6 +3,7 @@ package render
 import (
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
@@ -17,6 +18,7 @@ import (
 // zero.
 func StatusMetrics(response *pb.GetStatusResponse) string {
 	var builder strings.Builder
+	writeIdentityLines(&builder, response)
 	for _, metric := range response.GetMetrics() {
 		writeMetricLine(&builder, metric.GetName(), metric)
 	}
@@ -27,6 +29,38 @@ func StatusMetrics(response *pb.GetStatusResponse) string {
 		}
 	}
 	return strings.TrimRight(builder.String(), "\n")
+}
+
+// writeIdentityLines emits the records that name the process the reply came
+// from, before the counters. Without them a captured snapshot cannot say which
+// daemon produced it or when, so two files could not be told apart.
+//
+// They carry the same escaping as every other value, because a socket path is
+// operator-supplied.
+func writeIdentityLines(builder *strings.Builder, response *pb.GetStatusResponse) {
+	daemon := response.GetDaemon()
+	if daemon == nil {
+		return
+	}
+	writeIdentityLine(builder, "version", daemon.GetVersion())
+	writeIdentityLine(builder, "commit", daemon.GetCommit())
+	writeIdentityLine(builder, "pid", strconv.FormatInt(int64(daemon.GetPid()), 10))
+	writeIdentityLine(builder, "socket", daemon.GetSocketPath())
+	if readAt := response.GetReadAt(); readAt != nil {
+		writeIdentityLine(builder, "read_at", readAt.AsTime().UTC().Format(time.RFC3339Nano))
+	}
+}
+
+// writeIdentityLine emits one identity record, skipping a value the daemon did
+// not report rather than printing an empty field.
+func writeIdentityLine(builder *strings.Builder, name string, value string) {
+	if value == "" {
+		return
+	}
+	builder.WriteString(name)
+	builder.WriteString(" ")
+	builder.WriteString(stringValueText(value))
+	builder.WriteString("\n")
 }
 
 // writeMetricLine emits one record.

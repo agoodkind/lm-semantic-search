@@ -4,9 +4,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // lineFields indexes the rendered text by record name so a test asserts on one
@@ -285,5 +287,45 @@ func TestStatusMetricsEscapesControlRunes(t *testing.T) {
 	}
 	if recovered != hostile {
 		t.Fatalf("round trip produced %q, want the original bytes", recovered)
+	}
+}
+
+// TestStatusMetricsNamesTheProcess proves the piped form says which daemon
+// produced it and when. Without those records a captured snapshot cannot be
+// told from another machine's, or from the same machine an hour earlier.
+func TestStatusMetricsNamesTheProcess(t *testing.T) {
+	t.Parallel()
+
+	response := &pb.GetStatusResponse{
+		ReadAt: timestamppb.New(time.Date(2026, 7, 27, 12, 52, 31, 0, time.UTC)),
+		Daemon: &pb.DaemonIdentity{
+			Version:    "202607270542-fe-6e0a44c",
+			Commit:     "6e0a44c",
+			Pid:        7342,
+			SocketPath: "/Users/a/state/daemon.sock",
+		},
+		Metrics: []*pb.Metric{
+			{
+				Group: "embed", Name: "embed_vectors_total", Unit: "vectors",
+				Value: &pb.Metric_IntValue{IntValue: 3946},
+			},
+		},
+	}
+
+	got := lineFields(StatusMetrics(response))
+	cases := map[string]string{
+		"version": "202607270542-fe-6e0a44c",
+		"commit":  "6e0a44c",
+		"pid":     "7342",
+		"socket":  "/Users/a/state/daemon.sock",
+		"read_at": "2026-07-27T12:52:31Z",
+	}
+	for name, want := range cases {
+		if got[name] != want {
+			t.Fatalf("%s = %q, want %q", name, got[name], want)
+		}
+	}
+	if got["embed_vectors_total"] != "3946 vectors" {
+		t.Fatalf("identity records displaced the counters: %q", got["embed_vectors_total"])
 	}
 }
