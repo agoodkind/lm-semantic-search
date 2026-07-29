@@ -33,6 +33,8 @@ import (
 // staticcheck can verify the dispatch covers every case.
 type jobOperation string
 
+type appendJobEventFunc func(string, model.JobEvent) error
+
 const (
 	// jobOperationIndex runs a full Replace against an empty or
 	// previously-cleared collection.
@@ -93,6 +95,8 @@ type Manager struct {
 	failedBuildRetries map[string]int
 	// lastJobJournalAt throttles periodic job-progress journaling; not persisted, guarded by mu.
 	lastJobJournalAt map[string]time.Time
+	appendJobEvent   appendJobEventFunc
+	jobJournal       *jobJournalWriter
 	runner           indexingRunner
 	semantic         semanticIndex
 	graphEngines     map[string]*cbm.Engine
@@ -189,6 +193,8 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		done:                        map[string]chan struct{}{},
 		failedBuildRetries:          map[string]int{},
 		lastJobJournalAt:            map[string]time.Time{},
+		appendJobEvent:              store.AppendJobEvent,
+		jobJournal:                  nil,
 		runner:                      indexer.NewRunner(),
 		semantic:                    nil,
 		graphEngines:                map[string]*cbm.Engine{},
@@ -251,6 +257,13 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		slog.ErrorContext(ctx, "load daemon state failed", "state_root", cfg.StateRoot, "err", err)
 		return nil, fmt.Errorf("load daemon state: %w", err)
 	}
+	manager.jobJournal = newJobJournalWriter(
+		cfg.JobsPath,
+		func(path string, event model.JobEvent) error {
+			return manager.appendJobEvent(path, event)
+		},
+		jobJournalQueueCapacity,
+	)
 	return manager, nil
 }
 
@@ -321,11 +334,10 @@ func (manager *Manager) appendJobLocked(event string, job model.Job) error {
 		OccurredAt: clock.Now(),
 		Job:        job,
 	}
-	if err := store.AppendJobEvent(manager.config.JobsPath, jobEvent); err != nil {
-		slog.Error("append jobs journal failed", "path", manager.config.JobsPath, "err", err)
-		return fmt.Errorf("append jobs journal %s: %w", manager.config.JobsPath, err)
+	if manager.jobJournal != nil {
+		return manager.jobJournal.enqueue(jobEvent)
 	}
-	return nil
+	return appendJobJournalEvent(manager.config.JobsPath, manager.appendJobEvent, jobEvent)
 }
 
 // Version returns daemon runtime path details.

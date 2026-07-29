@@ -27,6 +27,7 @@ func TestJobProgressIsJournaledAndThrottled(t *testing.T) {
 	manager.updateJobProgress(job.ID, indexer.Progress{Phase: "Reindexing", FilesTotal: 100, FilesProcessed: 42}, "file")
 	// Second update inside the throttle interval stays in memory only.
 	manager.updateJobProgress(job.ID, indexer.Progress{Phase: "Reindexing", FilesTotal: 100, FilesProcessed: 99}, "file")
+	manager.closeJobJournal()
 
 	loaded, err := store.ReadJobEvents(manager.config.JobsPath)
 	if err != nil {

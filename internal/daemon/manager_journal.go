@@ -28,10 +28,8 @@ func (manager *Manager) journalJobProgressLocked(job model.Job) {
 	if !last.IsZero() && now.Sub(last) < jobProgressJournalInterval {
 		return
 	}
-	// Advance the throttle only after a successful append. If the append fails
-	// (a transient disk or permission error), leave the timestamp so the next
-	// progress update retries instead of skipping the window and losing the
-	// crash-recovery progress this function exists to preserve.
+	// Advance the throttle after the event enters the ordered journal queue. The
+	// writer logs a later disk error with the journal path and job id.
 	if err := manager.appendJobLocked("job_progress", job); err != nil {
 		slog.Warn("journal job progress failed; will retry on next update", "job_id", job.ID, "err", err)
 		return
