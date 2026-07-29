@@ -149,6 +149,15 @@ func TestGetIndexDegradedEnvelope(t *testing.T) {
 func TestStartIndexShowsBannerWhenDegraded(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	manager.runner = fakeRunner{}
+	// The backend must report the same outage the test simulates. StartIndex
+	// launches the index job asynchronously, and a job that reaches both
+	// dependencies clears the health record, so a backend that answers normally
+	// makes this a race between that job and reading the display text. Reporting
+	// the outage keeps the record degraded for the whole call.
+	manager.semantic = &fakeSemantic{
+		unavailable: true,
+		probeErr:    adapterr.NewEmbedderUnreachable(nil),
+	}
 	manager.mu.Lock()
 	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), LastHealthyAt: clock.Now()}
 	manager.mu.Unlock()
