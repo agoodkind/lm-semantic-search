@@ -713,11 +713,14 @@ type conversationMessageDiff struct {
 // the base state with the derived paths, so the same partially applied removal is
 // also repaired in its undelivered form rather than only when the message comes
 // back. "Unchanged" means the stored role equals document.Role and the assembled
-// stored text equals document.Text, which is also the text
-// conversationDocumentsToStoredChunks stores after multipart splitting. Stale
-// stored indices must be deleted here because the conversation source uses
-// absenceRetain, so an absent message row would otherwise survive forever once the
-// conversation fingerprint advances.
+// stored text equals the delivered text once both are reduced to what this rule
+// would store, which is what conversationDocumentsToStoredChunks writes after
+// multipart splitting. A delivered message that would write no row at all, and
+// for which the store holds nothing, is likewise unchanged: it is skipped rather
+// than sent, because sending it would write nothing and leave it absent again on
+// every later pass. Stale stored indices must be deleted here because the
+// conversation source uses absenceRetain, so an absent message row would
+// otherwise survive forever once the conversation fingerprint advances.
 func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, stored semantic.ConversationStoredRows, chunkByteBudget ...int) (conversationMessageDiff, error) {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
