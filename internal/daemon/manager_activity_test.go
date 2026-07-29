@@ -273,3 +273,48 @@ func TestStatusSnapshotResolvesHealthLikeEverySurface(t *testing.T) {
 		t.Fatalf("snapshot health %+v disagrees with DependencyHealth %+v", viaSnapshot, viaAccessor)
 	}
 }
+
+// TestWatcherActivityReportsDeferredFirstBuildPaths proves changed paths held
+// behind a first build still report as waiting work. They converge the moment
+// that build promotes, so omitting them shows a quiet system while edits pile
+// up, which is the exact blindness this command exists to remove.
+func TestWatcherActivityReportsDeferredFirstBuildPaths(t *testing.T) {
+	t.Parallel()
+
+	syncer := NewBackgroundSync(config.Config{}, nil)
+	syncer.deferWatcherPaths("cb-first-build", []string{"a.go", "b.go", "a.go"})
+
+	activity := syncer.WatcherActivity()
+	if len(activity) != 1 {
+		t.Fatalf("activity rows = %d, want 1: %+v", len(activity), activity)
+	}
+	if activity[0].CodebaseID != "cb-first-build" {
+		t.Fatalf("codebase = %q, want cb-first-build", activity[0].CodebaseID)
+	}
+	if activity[0].State != WatcherStateQueued {
+		t.Fatalf("state = %q, want %q", activity[0].State, WatcherStateQueued)
+	}
+	if activity[0].PendingPaths != 2 {
+		t.Fatalf("pending paths = %d, want 2 (a.go and b.go, coalesced)", activity[0].PendingPaths)
+	}
+}
+
+// TestWatcherActivitySumsQueuedAndDeferredPaths proves a codebase waiting in
+// both places reports one row carrying both counts, rather than one source
+// hiding the other.
+func TestWatcherActivitySumsQueuedAndDeferredPaths(t *testing.T) {
+	t.Parallel()
+
+	syncer := NewBackgroundSync(config.Config{}, nil)
+	syncer.queue = NewEventQueue(time.Hour, func(string, []string) {})
+	syncer.queue.Enqueue("cb-both", "queued.go")
+	syncer.deferWatcherPaths("cb-both", []string{"deferred.go", "also-deferred.go"})
+
+	activity := syncer.WatcherActivity()
+	if len(activity) != 1 {
+		t.Fatalf("activity rows = %d, want 1: %+v", len(activity), activity)
+	}
+	if activity[0].PendingPaths != 3 {
+		t.Fatalf("pending paths = %d, want 3 (one queued plus two deferred)", activity[0].PendingPaths)
+	}
+}

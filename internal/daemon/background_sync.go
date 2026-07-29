@@ -520,6 +520,21 @@ func (syncer *BackgroundSync) deferWatcherPaths(codebaseID string, relativePaths
 	}
 }
 
+// deferredPathCounts reports how many changed paths each codebase has buffered
+// while its first build runs. That work is real and waiting: it converges the
+// moment the build promotes, so a status read that omitted it would report a
+// quiet system while edits piled up. The returned map is a copy.
+func (syncer *BackgroundSync) deferredPathCounts() map[string]int {
+	syncer.deferredWatcherMu.Lock()
+	defer syncer.deferredWatcherMu.Unlock()
+
+	counts := make(map[string]int, len(syncer.deferredWatcherPaths))
+	for codebaseID, paths := range syncer.deferredWatcherPaths {
+		counts[codebaseID] = len(paths)
+	}
+	return counts
+}
+
 func (syncer *BackgroundSync) takeDeferredWatcherPaths(codebaseID string) []string {
 	syncer.deferredWatcherMu.Lock()
 	defer syncer.deferredWatcherMu.Unlock()
@@ -662,9 +677,16 @@ func (syncer *BackgroundSync) WatcherActivity() []WatcherActivity {
 	maps.Copy(admitted, syncer.converging)
 	syncer.convergeMu.Unlock()
 
+	// Waiting paths come from two places. The event queue holds those inside a
+	// debounce window; the deferred buffer holds those a first build is standing
+	// in front of, which converge the moment that build promotes. Both are work
+	// the operator is waiting on, so both count toward one figure.
 	pending := map[string]int{}
 	if syncer.queue != nil {
 		pending = syncer.queue.PendingCounts()
+	}
+	for codebaseID, count := range syncer.deferredPathCounts() {
+		pending[codebaseID] += count
 	}
 
 	activity := make([]WatcherActivity, 0, len(admitted)+len(pending))
