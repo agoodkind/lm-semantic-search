@@ -75,18 +75,30 @@ A test asserts the journal append happens off `manager.mu`, by holding the manag
 
 A live check writes a file into a watched codebase and asserts the same work appears in both `job list` and `status`, since the defect being closed is precisely those two surfaces disagreeing.
 
-## The job journal has no retention policy
+## The job journal grows without bound, and three quarters of it is already dead
 
-The journal at `jobs.jsonl` holds 43,877 jobs written over 72.6 days, which is 605 jobs per day and about 3 megabytes per day. It stands at 223 megabytes. Nothing deletes from it and nothing compacts it.
+The journal at `jobs.jsonl` stands at 223 megabytes holding 169,195 events for 43,877 jobs, written over 72.6 days. That is 605 jobs and about 3 megabytes per day. Nothing deletes from it and nothing compacts it.
 
-Every daemon boot reads all of it. `Manager.load` calls `store.ReadJobEvents`, which scans the file line by line into a map keyed by job id. Startup cost therefore rises with the file forever.
+Every daemon boot reads all of it. `Manager.load` calls `store.ReadJobEvents`, which scans the file line by line into a map keyed by job id, keeping only the last event for each. Startup cost rises with the file forever.
 
-Registering converges makes that file grow faster. The size of the increase is unmeasured, because a converge is one debounced batch rather than one file save, and nothing counts batches today. The rate is bounded below by the periodic sync's own contribution and above by the file-save rate, which leaves a wide range.
+Registering converges makes that file grow faster. The size of the increase is unmeasured, because a converge is one debounced batch rather than one file save, and nothing counts batches today.
 
-This is a pre-existing problem that the change makes worse rather than one the change introduces. It needs its own ticket covering retention, compaction, or a bounded read at boot. Implementation should not begin on that here.
+The file averages 3.9 events per job, so 74 percent of it is superseded events that the replay discards. No single field explains the 1,383-byte average event: `progress` is the largest at 31 percent, and it is needed on the surviving record, so trimming fields is not the lever.
+
+Four remedies apply, in this order.
+
+**Compact.** Rewrite the file with one line per job, atomically. This is lossless by construction, because the replay already keeps only the last event per id, so the rebuilt map is identical. It takes the file from 223 megabytes to about 61 and needs no policy decision.
+
+**Bound the boot read.** Read backwards from the end and stop once every non-terminal job is resolved. Terminal jobs matter only to history, so startup stops paying for them. This changes no bytes on disk.
+
+**Rotate or drop old entries.** Move jobs outside a retention window to a rotated file the boot read ignores. This needs one decision: how far back `job list` should reach.
+
+**Replace old jobs with counts.** The terminal tallies already exist in the job list summary, currently 29,099 completed, 61 failed, 14,337 superseded, and 365 canceled. Storing those in place of the job objects is the largest long-term saving and the only option that loses per-job history.
+
+Compaction and the bounded read are pure wins. The other two trade history for size.
+
+This work is tracked as CLYDE-618, separately from the converge registration, because it applies to every job path and its correctness rests on the replay semantics rather than on anything the converge does. The two changes can land in either order.
 
 ## Out of scope
-
-Journal retention and compaction, for the reason above.
 
 Cancelling the periodic sync or an adoption build, both of which already cancel.
