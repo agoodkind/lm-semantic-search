@@ -75,8 +75,18 @@ A test asserts the journal append happens off `manager.mu`, by holding the manag
 
 A live check writes a file into a watched codebase and asserts the same work appears in both `job list` and `status`, since the defect being closed is precisely those two surfaces disagreeing.
 
+## The job journal has no retention policy
+
+The journal at `jobs.jsonl` holds 43,877 jobs written over 72.6 days, which is 605 jobs per day and about 3 megabytes per day. It stands at 223 megabytes. Nothing deletes from it and nothing compacts it.
+
+Every daemon boot reads all of it. `Manager.load` calls `store.ReadJobEvents`, which scans the file line by line into a map keyed by job id. Startup cost therefore rises with the file forever.
+
+Registering converges makes that file grow faster. The size of the increase is unmeasured, because a converge is one debounced batch rather than one file save, and nothing counts batches today. The rate is bounded below by the periodic sync's own contribution and above by the file-save rate, which leaves a wide range.
+
+This is a pre-existing problem that the change makes worse rather than one the change introduces. It needs its own ticket covering retention, compaction, or a bounded read at boot. Implementation should not begin on that here.
+
 ## Out of scope
 
-Converge history retention and journal compaction. The ledger already holds 43,877 jobs and grows from the existing paths; this change adds to that growth but does not create the question.
+Journal retention and compaction, for the reason above.
 
 Cancelling the periodic sync or an adoption build, both of which already cancel.
