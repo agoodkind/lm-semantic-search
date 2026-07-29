@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
@@ -23,24 +24,35 @@ import (
 // copyChunks are the only behaviors a converge exercises; the rest return inert
 // values so the manager treats the backend as available and empty.
 type fakeSemantic struct {
-	unavailable           bool
-	probeErr              error
-	reindex               func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
-	reindexWithReuse      func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
-	stageReindexWithReuse func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
-	copyChunks            func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
-	deleteConversation    func(ctx context.Context, collectionName string, conversationID string) error
-	backfillConversations func(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
-	collectionName        func(codebasePath string) string
-	conversationName      func(collectionID string) string
-	inspectCollection     func(context.Context, string) (semantic.CollectionFacts, error)
-	listCollections       func(context.Context) ([]string, error)
-	hasCollectionForPath  func(context.Context, string) (bool, error)
-	collectionState       func(context.Context, string) (bool, bool, error)
-	hasStaging            func(context.Context, string) (bool, error)
-	search                func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
-	conversationSearch    func(context.Context, string, string, int32) ([]model.StoredChunk, error)
-	count                 func(context.Context, string) (int32, error)
+	unavailable bool
+	probeErr    error
+	// backendName and embeddingProviderName are what this double reports about
+	// itself. They default to the local backend and the embedded model so a test
+	// that does not care about identity still describes a coherent backend, and a
+	// test that does care states the value it wants outright.
+	//
+	// reportProviderVerbatim turns off the default, so a test can describe a
+	// backend that built no embedder at all rather than one that left the field
+	// unset.
+	backendName            model.VectorBackend
+	embeddingProviderName  model.EmbeddingProvider
+	reportProviderVerbatim bool
+	reindex                func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
+	reindexWithReuse       func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
+	stageReindexWithReuse  func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
+	copyChunks             func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
+	deleteConversation     func(ctx context.Context, collectionName string, conversationID string) error
+	backfillConversations  func(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
+	collectionName         func(codebasePath string) string
+	conversationName       func(collectionID string) string
+	inspectCollection      func(context.Context, string) (semantic.CollectionFacts, error)
+	listCollections        func(context.Context) ([]string, error)
+	hasCollectionForPath   func(context.Context, string) (bool, error)
+	collectionState        func(context.Context, string) (bool, bool, error)
+	hasStaging             func(context.Context, string) (bool, error)
+	search                 func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
+	conversationSearch     func(context.Context, string, string, int32) ([]model.StoredChunk, error)
+	count                  func(context.Context, string) (int32, error)
 	// loadReuse, when set, supplies the reuse map a merge-down build receives and
 	// records which collections were asked for. dropped records every Drop call
 	// so a test can prove an absorb never drops the absorbed child collection.
@@ -86,6 +98,20 @@ type reindexCall struct {
 	Removed      []string
 	Removal      semantic.Removal
 	ColumnSet    semantic.StoreColumnSet
+}
+
+func (f *fakeSemantic) BackendName() model.VectorBackend {
+	if f.backendName != "" {
+		return f.backendName
+	}
+	return config.IndexBackendLocal
+}
+
+func (f *fakeSemantic) EmbeddingProviderName() model.EmbeddingProvider {
+	if f.reportProviderVerbatim || f.embeddingProviderName != "" {
+		return f.embeddingProviderName
+	}
+	return config.EmbeddingProviderONNX
 }
 
 func (f *fakeSemantic) Available() bool { return !f.unavailable }

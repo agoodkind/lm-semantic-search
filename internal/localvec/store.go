@@ -16,6 +16,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/tshash"
 )
@@ -42,10 +43,27 @@ type Store struct {
 	available   bool
 }
 
+// BackendName names this store for any surface reporting which backend is in
+// use, so the answer comes from the store that exists rather than the setting
+// that asked for one.
+func (store *Store) BackendName() model.VectorBackend {
+	return config.IndexBackendLocal
+}
+
+// EmbeddingProviderName is what this store's embedder calls itself. A store
+// constructed with no embedder reports none rather than naming one, because an
+// absent embedder is a fact a caller needs and a guessed name would hide it.
+func (store *Store) EmbeddingProviderName() model.EmbeddingProvider {
+	if store.embedder == nil {
+		return model.EmbeddingProviderNone
+	}
+	return store.embedder.ProviderName()
+}
+
 // New constructs an embedded vector store.
 func New(ctx context.Context, cfg config.Config) (*Store, error) {
 	var provider embedding.Provider
-	if strings.TrimSpace(cfg.EmbeddingProvider) != "" {
+	if cfg.EmbeddingProvider != model.EmbeddingProviderNone {
 		configuredProvider, err := embedding.NewProvider(ctx, cfg)
 		if err != nil {
 			slog.ErrorContext(

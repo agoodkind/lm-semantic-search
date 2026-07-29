@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
@@ -100,7 +101,12 @@ type Config struct {
 	// selects the embedded local store and the in-process ONNX embedder.
 	Profile string
 
-	EmbeddingProvider string
+	// EmbeddingProvider is the embedder to build, resolved to its canonical value
+	// when the config is read. Holding the parsed value rather than the raw text
+	// is what keeps the configured name and a built embedder's own name from
+	// disagreeing, which would change the config digest and discard a valid
+	// checkpoint.
+	EmbeddingProvider model.EmbeddingProvider
 	EmbeddingModel    string
 	// OfflineEmbeddingModel selects a pinned ONNX model preset for the offline
 	// profile. ApplyProfile derives EmbeddingModel and EmbeddingDimension from it.
@@ -159,9 +165,10 @@ type Config struct {
 	// load unbounded. Convert it with MilvusCollectionLoadTimeout rather than
 	// multiplying it directly.
 	MilvusCollectionLoadTimeoutMS int
-	// IndexBackend selects the vector store implementation: "milvus" (default) or
-	// "local". Derived from Profile by ApplyProfile; may also be set directly.
-	IndexBackend           string
+	// IndexBackend selects the vector store implementation, resolved to its
+	// canonical value when the config is read. Derived from Profile by
+	// ApplyProfile; may also be set directly.
+	IndexBackend           model.VectorBackend
 	CollectionNameOverride string
 	HybridMode             bool
 	BackgroundSyncEnabled  bool
@@ -267,9 +274,9 @@ func resolveEmbeddingConfigDefaults(
 		provider = fileConfig.EmbeddingProvider
 	}
 
-	model := fileConfig.EmbeddingModel
-	if model == "" {
-		model = envOrDefault("EMBEDDING_MODEL", "text-embedding-3-small")
+	embeddingModelName := fileConfig.EmbeddingModel
+	if embeddingModelName == "" {
+		embeddingModelName = envOrDefault("EMBEDDING_MODEL", "text-embedding-3-small")
 	}
 	offlineModel := fileConfig.OfflineEmbeddingModel
 	if offlineModel == "" {
@@ -278,12 +285,13 @@ func resolveEmbeddingConfigDefaults(
 	offlineModel = envOrDefault("OFFLINE_EMBEDDING_MODEL", offlineModel)
 
 	queryInstructionText := fileConfig.QueryInstructionPrefix
-	if queryInstructionText == "" && strings.Contains(model, "NV-EmbedCode") {
+	if queryInstructionText == "" &&
+		strings.Contains(embeddingModelName, "NV-EmbedCode") {
 		queryInstructionText = nvEmbedCodeQueryPrefix
 	}
 	return embeddingConfigDefaults{
 		provider:             provider,
-		model:                model,
+		model:                embeddingModelName,
 		offlineModel:         offlineModel,
 		queryInstructionText: queryInstructionText,
 	}
@@ -326,6 +334,15 @@ func Default() (Config, error) {
 	if fileConfig.EmbeddingRequestTimeoutMS != nil {
 		requestTimeoutMS = *fileConfig.EmbeddingRequestTimeoutMS
 	}
+	// Resolve the configured provider name to its canonical value here, the one
+	// place a raw name enters the config, so no later comparison and no stored
+	// record can hold a variant spelling.
+	embeddingProviderName, err := model.ParseEmbeddingProvider(
+		envOrDefault("EMBEDDING_PROVIDER", embeddingDefaults.provider),
+	)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve configured embedding provider: %w", err)
+	}
 	return ApplyProfile(Config{
 		Profile: resolveProfile(fileConfig.Profile), IndexBackend: IndexBackendMilvus,
 		ConfigRoot:                    configRoot,
@@ -343,7 +360,7 @@ func Default() (Config, error) {
 		ChunksDir:                     filepath.Join(stateRoot, "chunks"),
 		GraphDir:                      filepath.Join(stateRoot, "graph"),
 		ContextRoot:                   contextRoot,
-		EmbeddingProvider:             envOrDefault("EMBEDDING_PROVIDER", embeddingDefaults.provider),
+		EmbeddingProvider:             embeddingProviderName,
 		EmbeddingModel:                envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model),
 		OfflineEmbeddingModel:         embeddingDefaults.offlineModel,
 		EmbeddingBatchSize:            envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
@@ -637,7 +654,7 @@ func EmbedChunkByteBudgetForLimit(maxTokens int, modelLimit int) int {
 // smallest known limit because an arbitrary compatible endpoint cannot be probed
 // before indexing.
 func ActiveEmbedTokenLimit(cfg Config) int {
-	if strings.EqualFold(strings.TrimSpace(cfg.EmbeddingProvider), EmbeddingProviderONNX) {
+	if cfg.EmbeddingProvider == EmbeddingProviderONNX {
 		preset, err := offlinemodel.Resolve(cfg.OfflineEmbeddingModel)
 		if err == nil && preset.MaximumTokens > 0 {
 			return int(preset.MaximumTokens)

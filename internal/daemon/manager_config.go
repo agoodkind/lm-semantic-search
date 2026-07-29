@@ -85,6 +85,47 @@ func digestIndexConfig(indexConfig model.IndexConfig) string {
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
+// reportedVectorBackend is the vector store the daemon says it is using. It
+// asks the backend that exists, because the configured value is a request and
+// the built object is the answer, and a backend selected wrongly would
+// otherwise be reported as the one that was asked for.
+//
+// A manager with no backend yet has nothing to ask, so it reports the
+// configured value, which is the only thing it knows and is honest about being
+// an intention rather than a state.
+func (manager *Manager) reportedVectorBackend() model.VectorBackend {
+	if manager.semantic != nil {
+		return manager.semantic.BackendName()
+	}
+	if manager.config.IndexBackend == "" {
+		return config.IndexBackendMilvus
+	}
+	return manager.config.IndexBackend
+}
+
+// reportedEmbeddingProvider is the embedder the daemon says it is using, read
+// from the backend that built it for the same reason as
+// [Manager.reportedVectorBackend].
+//
+// A backend that built no embedder falls back to the configured name, unlike
+// the vector backend. The Milvus-backed service builds no embedder whenever the
+// store address is empty, so reporting none there would make this field change
+// the moment an address is configured. The field is a config digest input, and a
+// digest that moves discards the checkpoint it gates, so every file would be
+// embedded again for a setting that does not change how anything is embedded.
+//
+// The cost is that the field names the embedder the configuration selects rather
+// than proving one exists. A caller that needs to know whether an embedder is
+// usable asks the health probe, which answers from the live dependency.
+func (manager *Manager) reportedEmbeddingProvider() model.EmbeddingProvider {
+	if manager.semantic != nil {
+		if built := manager.semantic.EmbeddingProviderName(); built != model.EmbeddingProviderNone {
+			return built
+		}
+	}
+	return manager.config.EmbeddingProvider
+}
+
 func (manager *Manager) enrichIndexConfig(indexConfig model.IndexConfig) model.IndexConfig {
 	if strings.TrimSpace(indexConfig.SplitterType) == "" {
 		indexConfig.SplitterType = "ast"
@@ -95,15 +136,12 @@ func (manager *Manager) enrichIndexConfig(indexConfig model.IndexConfig) model.I
 	if indexConfig.SplitterOverlap == 0 {
 		indexConfig.SplitterOverlap = 300
 	}
-	indexConfig.EmbeddingProvider = manager.config.EmbeddingProvider
+	indexConfig.EmbeddingProvider = manager.reportedEmbeddingProvider()
 	indexConfig.EmbeddingModel = manager.config.EmbeddingModel
 	if manager.config.EmbeddingDimension > 0 {
 		indexConfig.EmbeddingDimension = manager.config.EmbeddingDimension
 	}
-	indexConfig.VectorBackend = strings.TrimSpace(manager.config.IndexBackend)
-	if indexConfig.VectorBackend == "" {
-		indexConfig.VectorBackend = config.IndexBackendMilvus
-	}
+	indexConfig.VectorBackend = manager.reportedVectorBackend()
 	indexConfig.Hybrid = manager.config.HybridMode
 	indexConfig.IgnorePatterns = mergeDistinct(indexConfig.IgnorePatterns, manager.config.CustomIgnorePatterns)
 	indexConfig.IncludeSubmodules = mergeNormalizedSubmodules(indexConfig.IncludeSubmodules, manager.config.IncludeSubmodules)

@@ -23,14 +23,18 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
 const (
-	onnxProviderName     = "onnx"
 	onnxErrorBufferBytes = 2048
 	onnxHealthToken      = "x"
 )
+
+// onnxProviderName is what this runtime calls itself, taken from the closed set
+// so the name it reports is the same value the configuration parses to.
+const onnxProviderName = model.EmbeddingProviderONNX
 
 var (
 	onnxRuntimesMutex sync.Mutex
@@ -132,7 +136,7 @@ func initializeONNXRuntime(
 	}, nil
 }
 
-func (provider *onnxProvider) ProviderName() string {
+func (provider *onnxProvider) ProviderName() model.EmbeddingProvider {
 	return onnxProviderName
 }
 

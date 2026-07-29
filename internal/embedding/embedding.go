@@ -18,10 +18,12 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// openAIProviderName is the only supported provider label.
-const openAIProviderName = "OpenAI"
+// openAIProviderName is what this adapter calls itself, taken from the closed
+// set so the name it reports is the same value the configuration parses to.
+const openAIProviderName = model.EmbeddingProviderOpenAI
 
 // Embedding retry policy for transient contention (HTTP 429/503). The endpoint
 // is reachable but rate limiting or briefly unavailable, so the batch is retried
@@ -87,7 +89,7 @@ type BatchResult struct {
 type Provider interface {
 	Embed(context.Context, string) ([]float32, error)
 	EmbedBatch(context.Context, []string) (BatchResult, error)
-	ProviderName() string
+	ProviderName() model.EmbeddingProvider
 	// Health verifies the endpoint is reachable right now without performing an
 	// embedding, so a caller can decide whether search can serve a query. A
 	// non-nil result means the endpoint is unreachable or rejecting.
@@ -99,23 +101,26 @@ type Provider interface {
 // The ONNX provider runs the embedded offline model in process. The default
 // OpenAI-compatible adapter sends requests to the configured embeddings API.
 func NewProvider(ctx context.Context, cfg config.Config) (Provider, error) {
-	provider := strings.TrimSpace(cfg.EmbeddingProvider)
-	if strings.EqualFold(provider, config.EmbeddingProviderONNX) {
+	switch cfg.EmbeddingProvider {
+	case config.EmbeddingProviderONNX:
 		return newONNXProvider(ctx, cfg)
-	}
-	if provider != "" && !strings.EqualFold(provider, "OpenAI") {
+	case model.EmbeddingProviderNone, config.EmbeddingProviderOpenAI:
+		// Both build the OpenAI-compatible adapter: an unnamed provider is the
+		// historical default rather than an error.
+	default:
 		slog.ErrorContext(
 			ctx,
 			"embedding provider is not supported",
 			"provider",
-			provider,
+			cfg.EmbeddingProvider,
 			"err",
 			errors.New("only ONNX and OpenAI-compatible adapters are supported"),
 		)
 		return nil, fmt.Errorf(
-			"embedding provider %q is not supported; use %q or the OpenAI-compatible adapter",
-			provider,
+			"embedding provider %q is not supported; use %q or %q",
+			cfg.EmbeddingProvider,
 			config.EmbeddingProviderONNX,
+			config.EmbeddingProviderOpenAI,
 		)
 	}
 	// A negative configured value would build a negative duration, which makes
@@ -127,7 +132,7 @@ func NewProvider(ctx context.Context, cfg config.Config) (Provider, error) {
 }
 
 type openAICompatibleProvider struct {
-	name       string
+	name       model.EmbeddingProvider
 	model      string
 	dimensions int32
 	client     openai.Client
@@ -165,7 +170,7 @@ func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, di
 	}, nil
 }
 
-func (provider *openAICompatibleProvider) ProviderName() string {
+func (provider *openAICompatibleProvider) ProviderName() model.EmbeddingProvider {
 	return provider.name
 }
 

@@ -81,6 +81,19 @@ type semanticMaintainer interface {
 	BackfillConversationCollectionsOnce(ctx context.Context)
 }
 
+// semanticIdentity is how a backend names itself, so a surface reporting which
+// store and embedder are in use asks the objects that exist rather than the
+// configuration that requested them. The two can disagree, and only the objects
+// know which one won.
+type semanticIdentity interface {
+	// BackendName is the vector store this backend is.
+	BackendName() model.VectorBackend
+	// EmbeddingProviderName is what the embedder this backend built calls
+	// itself. It is [model.EmbeddingProviderNone] when no embedder was built,
+	// which a backend that constructed none reports rather than guessing a name.
+	EmbeddingProviderName() model.EmbeddingProvider
+}
+
 // semanticIndex is the full embedding-and-vector-store surface the manager
 // depends on. It exists so tests can substitute a fake for the Milvus-backed
 // [semantic.Service]; the concrete service satisfies it. The method set is
@@ -92,4 +105,5 @@ type semanticIndex interface {
 	semanticWriter
 	semanticDropper
 	semanticMaintainer
+	semanticIdentity
 }

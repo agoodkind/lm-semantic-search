@@ -32,7 +32,7 @@ func (embedder *countingEmbedder) EmbedBatch(_ context.Context, texts []string) 
 	return embedding.BatchResult{Vectors: vectors}, nil
 }
 
-func (embedder *countingEmbedder) ProviderName() string { return "counting" }
+func (embedder *countingEmbedder) ProviderName() model.EmbeddingProvider { return "counting" }
 
 func (embedder *countingEmbedder) Health(_ context.Context) error { return nil }
 
@@ -63,7 +63,7 @@ func (skippingEmbedder) EmbedBatch(_ context.Context, texts []string) (embedding
 	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
 }
 
-func (skippingEmbedder) ProviderName() string { return "skipping" }
+func (skippingEmbedder) ProviderName() model.EmbeddingProvider { return "skipping" }
 
 func (skippingEmbedder) Health(_ context.Context) error { return nil }
 

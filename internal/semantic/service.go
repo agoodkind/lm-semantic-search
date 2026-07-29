@@ -73,6 +73,23 @@ type insertRowsFunc func(
 	milvusclient.InsertOption,
 ) (milvusclient.InsertResult, error)
 
+// BackendName names this service for any surface reporting which backend is in
+// use, so the answer comes from the service that exists rather than the setting
+// that asked for one.
+func (service *Service) BackendName() model.VectorBackend {
+	return config.IndexBackendMilvus
+}
+
+// EmbeddingProviderName is what this service's embedder calls itself. A service
+// constructed with no embedder reports none rather than naming one, because an
+// absent embedder is a fact a caller needs and a guessed name would hide it.
+func (service *Service) EmbeddingProviderName() model.EmbeddingProvider {
+	if service.embedder == nil {
+		return model.EmbeddingProviderNone
+	}
+	return service.embedder.ProviderName()
+}
+
 // Service owns the embedding provider and Milvus client for semantic search.
 type Service struct {
 	cfg             config.Config

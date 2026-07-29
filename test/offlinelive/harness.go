@@ -430,6 +430,15 @@ func (harness *harness) assertOfflineRuntime(
 	}
 }
 
+// requireRuntimeIndexConfig asserts the offline profile built the embedded store
+// and the embedded model, not merely that it was asked to.
+//
+// The values it reads name the backend that exists, because the daemon resolves
+// them by asking that backend what it is. A backend selected wrongly therefore
+// reports the one actually built rather than the one the configuration
+// requested, which is what makes this an assertion about construction. The
+// environment this harness sets deliberately names a remote store and a remote
+// embedder, so a profile that failed to override them is caught here.
 func requireRuntimeIndexConfig(
 	t *testing.T,
 	source string,
@@ -440,7 +449,10 @@ func requireRuntimeIndexConfig(
 	if indexConfig == nil {
 		t.Fatalf("%s did not report effective index config", source)
 	}
-	if indexConfig.GetVectorBackend() != config.IndexBackendLocal {
+	// The wire carries both names as plain strings, so each is compared against
+	// the closed-set value spelled out, which is the same comparison the daemon
+	// makes internally.
+	if indexConfig.GetVectorBackend() != config.IndexBackendLocal.String() {
 		t.Fatalf(
 			"%s vector backend = %q, want %q",
 			source,
@@ -448,7 +460,7 @@ func requireRuntimeIndexConfig(
 			config.IndexBackendLocal,
 		)
 	}
-	if indexConfig.GetEmbeddingProvider() != config.EmbeddingProviderONNX {
+	if indexConfig.GetEmbeddingProvider() != config.EmbeddingProviderONNX.String() {
 		t.Fatalf(
 			"%s embedding provider = %q, want %q",
 			source,
