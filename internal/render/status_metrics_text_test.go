@@ -130,10 +130,10 @@ func TestMetricValueTextRendersEachOneofMember(t *testing.T) {
 	}
 }
 
-// TestStatusMetricsKeepsEveryValueOneField proves a value carrying whitespace
-// stays exactly one whitespace-separated field, so reading a value by field
-// position works with awk, cut, and read no matter what the value holds.
-func TestStatusMetricsKeepsEveryValueOneField(t *testing.T) {
+// TestStatusMetricsPrintsValuesAsWritten proves a value keeps its spaces, so a
+// phase name and a path read the way a person wrote them. This text is read
+// rather than parsed; a machine consumer uses the JSON form.
+func TestStatusMetricsPrintsValuesAsWritten(t *testing.T) {
 	t.Parallel()
 
 	response := &pb.GetStatusResponse{
@@ -151,16 +151,10 @@ func TestStatusMetricsKeepsEveryValueOneField(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("records = %d, want 3; a value spanned a line:\n%s", len(lines), text)
 	}
-	for _, line := range lines {
-		if fields := strings.Fields(line); len(fields) != 2 {
-			t.Fatalf("record %q has %d fields, want exactly name and value", line, len(fields))
-		}
-	}
-
 	got := lineFields(text)
 	cases := map[string]string{
-		"activity.0.phase":          `"Reindexing\x20changed\x20files..."`,
-		"activity.0.canonical_path": `"/Users/a/my\x20project"`,
+		"activity.0.phase":          "Reindexing changed files...",
+		"activity.0.canonical_path": "/Users/a/my project",
 		"activity.0.operation":      "index",
 	}
 	for name, want := range cases {
@@ -176,8 +170,6 @@ func TestStatusMetricsValuesRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	originals := []string{
-		"Reindexing changed files...",
-		"/Users/a/my project",
 		"/tmp/a\nembed_vectors_total 999999",
 		"tab\there",
 		`quote"inside`,
@@ -188,9 +180,6 @@ func TestStatusMetricsValuesRoundTrip(t *testing.T) {
 		rendered := MetricValueText(&pb.Metric{
 			Value: &pb.Metric_StringValue{StringValue: original},
 		})
-		if strings.ContainsFunc(rendered, unicode.IsSpace) {
-			t.Fatalf("rendered %q carries whitespace, so it is not one field", rendered)
-		}
 		recovered, err := strconv.Unquote(rendered)
 		if err != nil {
 			t.Fatalf("Unquote(%q) returned error: %v", rendered, err)
