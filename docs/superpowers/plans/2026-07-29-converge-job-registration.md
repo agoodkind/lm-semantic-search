@@ -813,15 +813,25 @@ Co-authored-by: Claude <noreply@anthropic.com>"
 
 ---
 
-## Not in this plan
+## Moving the journal append off the manager lock is required, not optional
 
-Moving the journal append off the manager lock. `appendJobLocked` holds `manager.mu` across a file open, encode, and close, which serializes every manager operation behind a disk write. That is a performance property of every job path rather than something this change needs, and the three job commands reach a converge without it. It belongs with the journal work in LMS-1.
+An earlier draft of this plan excluded this work and deferred it to LMS-1, on the grounds that the three job commands reach a converge without it. That was wrong, and the reason is registration frequency.
 
-Journal retention and compaction, tracked as LMS-1.
+`appendJobLocked` holds `manager.mu` across a file open, encode, and close. `StatusSnapshot` needs that same lock for every read, and the status screen re-reads every two seconds. `CancelJob` writes under the lock too. Registering converges adds roughly three such writes per converge at file-watcher frequency, which turns a latent contention into a stall an operator watches happen.
+
+So it lands first, before registration, and registration is never exposed to the contention.
+
+Under the lock, only the in-memory job map updates and the event enters a single-writer queue. One goroutine drains that queue in order and performs the file I/O. Order survives because the boot replay keeps the last event per job id, so a reordered pair would resurrect a stale state. A full queue falls back to a synchronous write rather than dropping, because the journal stays the durable source of truth.
+
+Two consequences follow and belong with the change rather than after it. The crash-loss window widens from one throttle interval to that interval plus whatever the writer had not yet written, so the comment stating the old bound must be corrected. And a test that waits for the in-memory job map and then reads the journal file loses its synchronization, because in-memory state no longer implies file state.
+
+## Still not in this plan
+
+Journal retention and compaction, tracked as LMS-1. The file grows without bound and every daemon boot reads all of it. That is a separate concern from where the write happens.
 
 ## Self-review
 
-**Spec coverage.** Registration is Task 2. Path-scoped work preserved is Task 1 Step 4, which keeps `ConvergePaths` rather than routing through `SyncIndex`. Cancel between paths is Task 1 Steps 6 through 8. The operator-facing claims are Task 3. The journal-off-lock section of the spec is deliberately excluded and named above.
+**Spec coverage.** Path-scoped work preserved is Task 1, which keeps `ConvergePaths` rather than routing through `SyncIndex`. Cancel between paths is Task 1. The journal moves off the lock before registration, for the reason above. Registration is Task 2. The operator-facing claims are Task 3, extended to require that the status screen keeps answering while converges register.
 
 **Placeholders.** None. Every step carries the code or the command it needs.
 
