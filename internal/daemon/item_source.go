@@ -471,17 +471,6 @@ func conversationNeedsDerivedWork(conversationID string, documents []model.Conve
 	return false
 }
 
-// conversationDocumentExpectsToolRows reports whether any of a message's tool
-// calls writes at least one row.
-func conversationDocumentExpectsToolRows(document model.ConversationDocument) bool {
-	for _, toolCall := range document.Tools {
-		if !conversationToolCallStoresNothing(toolCall) {
-			return true
-		}
-	}
-	return false
-}
-
 // derivedPrefixPresent reports whether any stored derived-path key matches the
 // exact path or begins with the slash-terminated prefix. The trailing slash on
 // prefix is load-bearing: a bare prefix would like-match a sibling index

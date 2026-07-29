@@ -688,50 +688,6 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 	return chunks, nil
 }
 
-// conversationDocumentStoresNothing reports whether a delivered message would
-// write no row at all, because every field it carries holds nothing a search
-// could return.
-//
-// Such a message has no stored identity, so the delta comparison would read it
-// as new on every sync, send it, write nothing, and find it absent again the
-// next time. It names the same fields conversationDocumentsToStoredChunks reads,
-// in the same order, and TestStoresNothingAgreesWithTheGenerator holds the two
-// together.
-func conversationDocumentStoresNothing(document model.ConversationDocument) bool {
-	if conversationTextIsStorable(document.Text) {
-		return false
-	}
-	if conversationTextIsStorable(document.Thinking) {
-		return false
-	}
-	for _, toolCall := range document.Tools {
-		if !conversationToolCallStoresNothing(toolCall) {
-			return false
-		}
-	}
-	return true
-}
-
-// conversationToolCallStoresNothing reports whether one tool call writes no row,
-// because its distilled summary, its command, its input, and its output all hold
-// nothing a search could return.
-//
-// Anything that asks whether a tool call is expected to have a stored row must
-// ask this rather than whether the call is present, because a call whose every
-// field holds only spacing is present and stores nothing.
-func conversationToolCallStoresNothing(toolCall model.ConversationToolCall) bool {
-	if conversationTextIsStorable(conversationToolTokenContent(toolCall)) {
-		return false
-	}
-	if conversationTextIsStorable(toolCall.Command) {
-		return false
-	}
-	if conversationTextIsStorable(toolCall.InputJSON) {
-		return false
-	}
-	return !conversationTextIsStorable(toolCall.Output)
-}
-
 type conversationMessageDiff struct {
 	documents       []model.ConversationDocument
 	removalPaths    []string
