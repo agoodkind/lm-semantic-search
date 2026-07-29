@@ -97,7 +97,7 @@ Four remedies apply, in this order.
 
 Compaction and the bounded read are pure wins. The other two trade history for size.
 
-This work is tracked as CLYDE-618, separately from the converge registration, because it applies to every job path and its correctness rests on the replay semantics rather than on anything the converge does. The two changes can land in either order.
+This work is tracked as LMS-1, separately from the converge registration, because it applies to every job path and its correctness rests on the replay semantics rather than on anything the converge does. The two changes can land in either order.
 
 ## Out of scope
 
