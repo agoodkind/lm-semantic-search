@@ -127,7 +127,7 @@ func TestSyncLockDefersLiveOwner(t *testing.T) {
 // concurrently, so a heavily-edited repository cannot starve the others and two
 // converges of the same codebase never race on its snapshot.
 func TestBeginConvergeSerializesPerCodebase(t *testing.T) {
-	syncer := &BackgroundSync{converging: make(map[string]struct{})}
+	syncer := &BackgroundSync{converging: make(map[string]time.Time)}
 
 	if !syncer.beginConverge("cb1") {
 		t.Fatal("first beginConverge for cb1 should succeed")

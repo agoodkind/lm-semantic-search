@@ -62,3 +62,27 @@ func TestEventQueueSeparatesCodebases(t *testing.T) {
 		t.Fatalf("per-codebase drains = %v, want cb1:1 cb2:1", seen)
 	}
 }
+
+// TestEventQueuePendingCountsReportsWaitingPaths proves the queue can report
+// the coalesced path count per codebase while the debounce timer is still
+// running, which is the only record that file-change work is waiting.
+func TestEventQueuePendingCountsReportsWaitingPaths(t *testing.T) {
+	t.Parallel()
+
+	queue := NewEventQueue(time.Hour, func(string, []string) {})
+	queue.Enqueue("cb1", "a.go")
+	queue.Enqueue("cb1", "a.go")
+	queue.Enqueue("cb1", "b.go")
+	queue.Enqueue("cb2", "x.go")
+
+	counts := queue.PendingCounts()
+	if counts["cb1"] != 2 {
+		t.Fatalf("cb1 pending = %d, want 2 (a.go and b.go, coalesced)", counts["cb1"])
+	}
+	if counts["cb2"] != 1 {
+		t.Fatalf("cb2 pending = %d, want 1", counts["cb2"])
+	}
+	if len(counts) != 2 {
+		t.Fatalf("codebases with pending paths = %d, want 2", len(counts))
+	}
+}

@@ -36,6 +36,7 @@ service SemanticSearchDaemonService {
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
   rpc SearchWithinConversation(SearchWithinConversationRequest) returns (SearchWithinConversationResponse);
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
@@ -746,4 +747,61 @@ message ShutdownRequest {}
 
 message ShutdownResponse {
   bool accepted = 1;
+}
+
+// Metric is one named observation. name is a string value rather than a
+// protobuf field name, so protojson casing never touches it and a counter reads
+// identically on the terminal, in piped text, in JSON, and in the
+// daemon.perf_counters log line. group orders the human surfaces and nothing
+// else; a consumer selects by name, which is unique across every group. unit
+// names what the value counts, taken from what the counter's increment call
+// site actually counts, so a converge upsert reports paths and a skipped sync
+// reports requests.
+//
+// The value is a oneof because a oneof member has explicit presence. protojson
+// omits a plain proto3 scalar at its zero value, which would make false and
+// absent indistinguishable; inside a oneof, 0, false, "" and an unset value
+// stay four separate facts.
+message Metric {
+  string group = 1;
+  string name = 2;
+  string unit = 3;
+  oneof value {
+    int64 int_value = 4;
+    double double_value = 5;
+    bool bool_value = 6;
+    string string_value = 7;
+  }
+}
+
+// ActivityRow is one unit of work the daemon is doing or has queued, carried as
+// metrics so every field uses the same naming as the counters. A row for work
+// the file watcher started carries a job_id metric with no value, because that
+// work registers no job and the job commands cannot address it.
+message ActivityRow {
+  repeated Metric metrics = 1;
+}
+
+// DaemonIdentity names the running process. started_at is the daemon's own
+// start time, so a caller derives uptime from the process rather than from its
+// own clock.
+message DaemonIdentity {
+  string version = 1;
+  string commit = 2;
+  int32 pid = 3;
+  string socket_path = 4;
+  google.protobuf.Timestamp started_at = 5;
+}
+
+message GetStatusRequest {}
+
+// GetStatusResponse reports what the daemon is doing and what its counters
+// read. It carries only non-terminal work, so it stays a few kilobytes rather
+// than growing with job history the way ListJobs does.
+message GetStatusResponse {
+  google.protobuf.Timestamp read_at = 1;
+  DaemonIdentity daemon = 2;
+  repeated Metric metrics = 3;
+  repeated ActivityRow activity = 4;
+  string display_text = 5;
 }

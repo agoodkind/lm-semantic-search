@@ -53,6 +53,21 @@ func (queue *EventQueue) Enqueue(codebaseID string, relativePath string) {
 	})
 }
 
+// PendingCounts reports how many coalesced paths each codebase has waiting for
+// its debounce timer. A status read uses it to report file-change work that is
+// queued, which registers no job and so cannot be found in the job store. The
+// returned map is a copy, so a caller may hold it past the lock.
+func (queue *EventQueue) PendingCounts() map[string]int {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+
+	counts := make(map[string]int, len(queue.pending))
+	for codebaseID, paths := range queue.pending {
+		counts[codebaseID] = len(paths)
+	}
+	return counts
+}
+
 func (queue *EventQueue) flush(codebaseID string) {
 	queue.mu.Lock()
 	paths := queue.pending[codebaseID]

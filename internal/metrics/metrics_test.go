@@ -14,6 +14,7 @@ func reset() {
 	embedVectorsTotal.Store(0)
 	embedLatencyMSSum.Store(0)
 	embedInflight.Store(0)
+	embedChunksReusedTotal.Store(0)
 	convergeUpsertTotal.Store(0)
 	convergeRemoveTotal.Store(0)
 	convergeCopyChunksTotal.Store(0)
@@ -88,6 +89,7 @@ func TestEachIncrementMovesExactlyItsCounter(t *testing.T) {
 		{"JobCancelled", JobCancelled, "JobsCancelledTotal", 1},
 		{"JobResumed", JobResumed, "BootResumesTotal", 1},
 		{"JobStarted", JobStarted, "JobsActive", 1},
+		{"ChunksReused", func() { ChunksReused(1) }, "EmbedChunksReusedTotal", 1},
 	}
 
 	for _, tc := range cases {
@@ -98,6 +100,19 @@ func TestEachIncrementMovesExactlyItsCounter(t *testing.T) {
 			after := Read()
 			assertOnlyDelta(t, before, after, tc.field, tc.expect)
 		})
+	}
+}
+
+// TestChunksReusedIgnoresNonPositiveCounts proves the reuse counter moves only
+// on a real hit, so a caller that computed no reuse cannot inflate it.
+func TestChunksReusedIgnoresNonPositiveCounts(t *testing.T) {
+	reset()
+
+	ChunksReused(3)
+	ChunksReused(0)
+	ChunksReused(-1)
+	if got := Read().EmbedChunksReusedTotal; got != 3 {
+		t.Fatalf("EmbedChunksReusedTotal = %d, want 3", got)
 	}
 }
 
@@ -138,6 +153,7 @@ func TestResetZeroesEveryCounter(t *testing.T) {
 
 	EmbedBatchStarted()
 	EmbedBatchDone(3, time.Millisecond, true)
+	ChunksReused(4)
 	ConvergeUpsert()
 	ConvergeRemove()
 	ConvergeCopyChunks()
@@ -164,6 +180,7 @@ func snapshotFields(s Snapshot) map[string]int64 {
 		"EmbedVectorsTotal":        s.EmbedVectorsTotal,
 		"EmbedLatencyMSSum":        s.EmbedLatencyMSSum,
 		"EmbedInflight":            s.EmbedInflight,
+		"EmbedChunksReusedTotal":   s.EmbedChunksReusedTotal,
 		"ConvergeUpsertTotal":      s.ConvergeUpsertTotal,
 		"ConvergeRemoveTotal":      s.ConvergeRemoveTotal,
 		"ConvergeCopyChunksTotal":  s.ConvergeCopyChunksTotal,
