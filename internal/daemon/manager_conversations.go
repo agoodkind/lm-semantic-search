@@ -630,18 +630,30 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 			return nil, errors.New("conversation id is required")
 		}
 		parentConversationID := strings.TrimSpace(document.ParentConversationID)
-		pieces := splitConversationText(document.Text, budget)
-		for partIndex, piece := range pieces {
-			chunks = append(chunks, newConversationStoredChunk(
-				document,
-				conversationID,
-				parentConversationID,
-				conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
-				piece,
-				"",
-				0,
-				0,
-			))
+		// Write a text row only when the text holds something a search could
+		// return. Splitting an empty string yields one empty piece, so writing
+		// unconditionally stored exactly one row holding nothing for every
+		// message that carried no text, which a turn with only a tool call or
+		// only reasoning always is. Whitespace alone is the same: it occupies a
+		// vector and can never match anything.
+		//
+		// This is the rule every sibling below already follows. Each of the tool
+		// token, command, input, output, and reasoning rows writes only when its
+		// own content is present.
+		if strings.TrimSpace(document.Text) != "" {
+			pieces := splitConversationText(document.Text, budget)
+			for partIndex, piece := range pieces {
+				chunks = append(chunks, newConversationStoredChunk(
+					document,
+					conversationID,
+					parentConversationID,
+					conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
+					piece,
+					"",
+					0,
+					0,
+				))
+			}
 		}
 		for toolIndex, toolCall := range document.Tools {
 			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)

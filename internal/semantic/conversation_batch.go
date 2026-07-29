@@ -154,6 +154,15 @@ func appendConversationBatchRows(resultSet milvusclient.ResultSet, assemblies *c
 		}
 		if isDerivedConversationRelativePath(relativePath) {
 			assemblies.addDerived(conversationID, relativePath, contentHash)
+			if err := registerConversationBatchDerivedMessage(
+				assemblies,
+				conversationID,
+				roleColumn,
+				messageIndexColumn,
+				rowIndex,
+			); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := appendConversationBatchBaseRow(
@@ -169,6 +178,45 @@ func appendConversationBatchRows(resultSet milvusclient.ResultSet, assemblies *c
 			return err
 		}
 	}
+	return nil
+}
+
+// registerConversationBatchDerivedMessage records that a message exists because
+// one of its derived rows was read, so a message whose only stored rows are a
+// tool call or reasoning is still found.
+//
+// Without this the examination path treats such a message as new, re-sends it,
+// and reads its existing derived rows as orphans to remove, so the store deletes
+// and re-embeds them on every sync. It carries the role because the comparison
+// rejects a message whose stored role differs from the delivered one, and an
+// empty role would mismatch every time.
+//
+// A row with no message index is a legacy pre-scalar row that names no message,
+// so it registers nothing.
+func registerConversationBatchDerivedMessage(
+	assemblies *conversationBatchAssemblies,
+	conversationID string,
+	roleColumn column.Column,
+	messageIndexColumn column.Column,
+	rowIndex int,
+) error {
+	messageIndex, ok, messageIndexErr := messageIndexAt(messageIndexColumn, rowIndex)
+	if messageIndexErr != nil {
+		return messageIndexErr
+	}
+	if !ok {
+		return nil
+	}
+	role := ""
+	if roleColumn != nil {
+		roleValue, roleErr := roleColumn.GetAsString(rowIndex)
+		if roleErr != nil {
+			slog.Error("read conversation batch derived role column failed", "index", rowIndex, "err", roleErr)
+			return fmt.Errorf("read role column at %d: %w", rowIndex, roleErr)
+		}
+		role = roleValue
+	}
+	assemblies.addDerivedMessage(conversationID, safeInt32FromInt64(messageIndex), role)
 	return nil
 }
 
@@ -264,6 +312,29 @@ func (assemblies *conversationBatchAssemblies) addBasePart(
 		splitPartRecorded,
 		content,
 	)
+}
+
+// addDerivedMessage records a message that exists because one of its derived
+// rows was read, carrying the role that row holds. It adds no text part, so a
+// message with no base row assembles an empty text, which is what the store
+// holds for it.
+//
+// The role is filled only when the assembly has none, so a base row's role wins
+// whatever order the rows arrive in.
+func (assemblies *conversationBatchAssemblies) addDerivedMessage(
+	conversationID string,
+	messageIndex int32,
+	role string,
+) {
+	conversationMessages := assemblies.messages[conversationID]
+	if conversationMessages == nil {
+		conversationMessages = map[int32]*storedMessageAssembly{}
+		assemblies.messages[conversationID] = conversationMessages
+	}
+	markStoredMessageDerived(conversationMessages, messageIndex)
+	if assembly := conversationMessages[messageIndex]; assembly != nil && !assembly.roleFromBase {
+		assembly.role = role
+	}
 }
 
 func (assemblies *conversationBatchAssemblies) addDerived(conversationID string, relativePath string, contentHash string) {

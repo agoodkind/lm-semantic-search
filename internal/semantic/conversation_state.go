@@ -30,7 +30,12 @@ type storedMessagePart struct {
 }
 
 type storedMessageAssembly struct {
-	role              string
+	role string
+	// roleFromBase records that role came from a base text row rather than a
+	// derived one. Rows arrive in no guaranteed order, and the delta comparison
+	// is against the base row, so a base row's role must win whenever the two
+	// disagree however late it arrives.
+	roleFromBase      bool
 	parts             []storedMessagePart
 	hasDerivedContent bool
 }
@@ -257,11 +262,12 @@ func appendStoredMessagePart(
 ) {
 	assembly := assemblies[messageIndex]
 	if assembly == nil {
-		assembly = &storedMessageAssembly{role: "", parts: nil, hasDerivedContent: false}
+		assembly = &storedMessageAssembly{role: "", roleFromBase: false, parts: nil, hasDerivedContent: false}
 		assemblies[messageIndex] = assembly
 	}
-	if assembly.role == "" {
+	if !assembly.roleFromBase {
 		assembly.role = role
+		assembly.roleFromBase = true
 	}
 	assembly.parts = append(assembly.parts, storedMessagePart{
 		pathIndex:         pathIndex,
@@ -274,7 +280,7 @@ func appendStoredMessagePart(
 func markStoredMessageDerived(assemblies map[int32]*storedMessageAssembly, messageIndex int32) {
 	assembly := assemblies[messageIndex]
 	if assembly == nil {
-		assembly = &storedMessageAssembly{role: "", parts: nil, hasDerivedContent: false}
+		assembly = &storedMessageAssembly{role: "", roleFromBase: false, parts: nil, hasDerivedContent: false}
 		assemblies[messageIndex] = assembly
 	}
 	assembly.hasDerivedContent = true
