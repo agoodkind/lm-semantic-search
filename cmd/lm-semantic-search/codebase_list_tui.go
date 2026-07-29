@@ -233,7 +233,7 @@ func (m listModel) moveCursor(delta int) listModel {
 	if len(m.codebases) == 0 {
 		return m
 	}
-	m.cursor = clampInt(m.cursor+delta, 0, len(m.codebases)-1)
+	m.cursor = clampInt(m.cursor+delta, len(m.codebases)-1)
 	return m.clampOffset()
 }
 
@@ -247,7 +247,7 @@ func (m listModel) clampOffset() listModel {
 		m.offset = m.cursor - visible + 1
 	}
 	maxOffset := max(len(m.codebases)-visible, 0)
-	m.offset = clampInt(m.offset, 0, maxOffset)
+	m.offset = clampInt(m.offset, maxOffset)
 	return m
 }
 
@@ -565,12 +565,15 @@ func fitHead(text string, width int) string {
 	return "…" + string(runes[len(runes)-(width-1):])
 }
 
-func clampInt(value, low, high int) int {
-	if value < low {
-		return low
+// clampInt holds value inside the row range, which starts at zero for every
+// list. A high below zero (an empty list) clamps to zero rather than to a
+// negative index.
+func clampInt(value, high int) int {
+	if value < 0 {
+		return 0
 	}
 	if value > high {
-		return high
+		return max(high, 0)
 	}
 	return value
 }
