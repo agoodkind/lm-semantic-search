@@ -22,18 +22,17 @@ Leave `[conversation.semantic] enabled = false` until the last task.
 
 ```go
 	// Display is what the user saw for this call: a shell command, a file path,
-	// a search pattern. Each provider's parser fills it from its own harness's
-	// tool shapes, because only that parser knows them. Everything that shows or
-	// stores a tool call reads this rather than re-deriving it from Input, so the
-	// harness's serialization stays inside the provider package.
+	// a search pattern. It belongs to the provider's parser, which is the only
+	// layer that knows its own harness's tool shapes.
 	Display string `json:"display,omitempty"`
 	// DisplayLang names the language Display is written in, "bash" when the call
-	// ran a shell and empty otherwise. The provider's parser fills it, because
-	// only that parser knows which of its harness's tools are shells. A consumer
-	// that wants to break a command into program names and file paths reads this
-	// rather than matching tool names, so no harness name reaches a generic layer.
+	// ran a shell and empty otherwise. It belongs to the provider's parser for
+	// the same reason, since only that parser knows which of its harness's tools
+	// are shells.
 	DisplayLang string `json:"display_lang,omitempty"`
 ```
+
+Each comment states what the field means and who owns it. Neither says anything fills or reads the field, because at this task nothing does. Task 2 extends them once a parser fills them, and Task 5 extends them again once a consumer reads them. A comment never claims behavior the commit it sits in does not have.
 
 `go build ./...` names every literal `exhaustruct` now rejects. Add `Display: ""` and `DisplayLang: ""` to each; the next task fills them.
 
@@ -96,6 +95,8 @@ Claude's parser also has `toolresult.go`, which fills a call's `Output` and `IsE
 **Test each package** with a table over its own keys, asserting a shell call shows its command with the `bash` language, a file tool shows its path with an empty language, a search shows its pattern, an unknown tool shows nothing, and an empty input shows nothing.
 
 **Also test** against a real parsed fixture that the renderer is wired into the parser rather than only existing beside it. Assert an exact expected display string for each of the specific tools the key list covers, and assert that at least 90% of the fixture's tool calls carrying an input also carry display text. The floor rather than a strict every-call assertion is deliberate: the key lists are not exhaustive, so an unrecognized tool must read as a coverage number rather than a red build.
+
+**Extend the field comments.** `transcript.ToolCall` says only what each field means and who owns it, because at Task 1 nothing filled them. Now a parser does, so add that sentence to each: `Display` gains that each provider's parser fills it from its own harness's tool shapes, and `DisplayLang` gains that the same parser names the language. Say nothing yet about a consumer reading either field, since none does until Task 5.
 
 **Done when:** `go test ./internal/providers/...` passes.
 
