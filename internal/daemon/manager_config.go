@@ -93,28 +93,33 @@ func digestIndexConfig(indexConfig model.IndexConfig) string {
 // A manager with no backend yet has nothing to ask, so it reports the
 // configured value, which is the only thing it knows and is honest about being
 // an intention rather than a state.
-func (manager *Manager) reportedVectorBackend() string {
+func (manager *Manager) reportedVectorBackend() model.VectorBackend {
 	if manager.semantic != nil {
-		if built := strings.TrimSpace(manager.semantic.BackendName()); built != "" {
-			return built
-		}
+		return manager.semantic.BackendName()
 	}
-	configured := strings.TrimSpace(manager.config.IndexBackend)
-	if configured == "" {
+	if manager.config.IndexBackend == "" {
 		return config.IndexBackendMilvus
 	}
-	return configured
+	return manager.config.IndexBackend
 }
 
 // reportedEmbeddingProvider is the embedder the daemon says it is using, read
 // from the backend that built it for the same reason as
 // [Manager.reportedVectorBackend].
 //
-// A backend that built no embedder names none, and the configured value stands
-// in so the field still says which embedder was requested.
-func (manager *Manager) reportedEmbeddingProvider() string {
+// A backend that built no embedder falls back to the configured name, unlike
+// the vector backend. The Milvus-backed service builds no embedder whenever the
+// store address is empty, so reporting none there would make this field change
+// the moment an address is configured. The field is a config digest input, and a
+// digest that moves discards the checkpoint it gates, so every file would be
+// embedded again for a setting that does not change how anything is embedded.
+//
+// The cost is that the field names the embedder the configuration selects rather
+// than proving one exists. A caller that needs to know whether an embedder is
+// usable asks the health probe, which answers from the live dependency.
+func (manager *Manager) reportedEmbeddingProvider() model.EmbeddingProvider {
 	if manager.semantic != nil {
-		if built := strings.TrimSpace(manager.semantic.EmbeddingProviderName()); built != "" {
+		if built := manager.semantic.EmbeddingProviderName(); built != model.EmbeddingProviderNone {
 			return built
 		}
 	}

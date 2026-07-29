@@ -76,16 +76,16 @@ type insertRowsFunc func(
 // BackendName names this service for any surface reporting which backend is in
 // use, so the answer comes from the service that exists rather than the setting
 // that asked for one.
-func (service *Service) BackendName() string {
+func (service *Service) BackendName() model.VectorBackend {
 	return config.IndexBackendMilvus
 }
 
 // EmbeddingProviderName is what this service's embedder calls itself. A service
-// constructed with no embedder returns empty rather than naming one, because an
+// constructed with no embedder reports none rather than naming one, because an
 // absent embedder is a fact a caller needs and a guessed name would hide it.
-func (service *Service) EmbeddingProviderName() string {
+func (service *Service) EmbeddingProviderName() model.EmbeddingProvider {
 	if service.embedder == nil {
-		return ""
+		return model.EmbeddingProviderNone
 	}
 	return service.embedder.ProviderName()
 }

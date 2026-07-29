@@ -1,6 +1,9 @@
 package config
 
-import "goodkind.io/lm-semantic-search/internal/offlinemodel"
+import (
+	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/offlinemodel"
+)
 
 const (
 	// ProfileStandard is the default profile: the Milvus store and the
@@ -10,11 +13,13 @@ const (
 	// embedder so search runs with no external store or model server.
 	ProfileOffline = "offline"
 	// IndexBackendMilvus selects the Milvus-backed vector store (default).
-	IndexBackendMilvus = "milvus"
+	IndexBackendMilvus = model.VectorBackendMilvus
 	// IndexBackendLocal selects the embedded local vector store.
-	IndexBackendLocal = "local"
+	IndexBackendLocal = model.VectorBackendLocal
 	// EmbeddingProviderONNX selects the in-process ONNX embedding provider.
-	EmbeddingProviderONNX = "onnx"
+	EmbeddingProviderONNX = model.EmbeddingProviderONNX
+	// EmbeddingProviderOpenAI selects the OpenAI-compatible embedding adapter.
+	EmbeddingProviderOpenAI = model.EmbeddingProviderOpenAI
 )
 
 // ApplyProfile expands the user-facing Profile into the derived backend and

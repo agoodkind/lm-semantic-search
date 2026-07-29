@@ -101,17 +101,17 @@ type ClientInfo struct {
 
 // IndexConfig records the effective configuration of one indexing request.
 type IndexConfig struct {
-	SplitterType       string   `json:"splitter_type"`
-	SplitterChunkSize  int32    `json:"splitter_chunk_size"`
-	SplitterOverlap    int32    `json:"splitter_overlap"`
-	IgnorePatterns     []string `json:"ignore_patterns,omitempty"`
-	IncludeSubmodules  []string `json:"include_submodules,omitempty"`
-	IgnoreDigest       string   `json:"ignore_digest"`
-	EmbeddingProvider  string   `json:"embedding_provider,omitempty"`
-	EmbeddingModel     string   `json:"embedding_model,omitempty"`
-	EmbeddingDimension int32    `json:"embedding_dimension,omitempty"`
-	VectorBackend      string   `json:"vector_backend,omitempty"`
-	Hybrid             bool     `json:"hybrid"`
+	SplitterType       string            `json:"splitter_type"`
+	SplitterChunkSize  int32             `json:"splitter_chunk_size"`
+	SplitterOverlap    int32             `json:"splitter_overlap"`
+	IgnorePatterns     []string          `json:"ignore_patterns,omitempty"`
+	IncludeSubmodules  []string          `json:"include_submodules,omitempty"`
+	IgnoreDigest       string            `json:"ignore_digest"`
+	EmbeddingProvider  EmbeddingProvider `json:"embedding_provider,omitempty"`
+	EmbeddingModel     string            `json:"embedding_model,omitempty"`
+	EmbeddingDimension int32             `json:"embedding_dimension,omitempty"`
+	VectorBackend      VectorBackend     `json:"vector_backend,omitempty"`
+	Hybrid             bool              `json:"hybrid"`
 }
 
 // AdmissionBudget carries per-request fixed caps that must not enter

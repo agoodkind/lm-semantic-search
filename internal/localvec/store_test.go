@@ -45,7 +45,7 @@ func (provider *fakeEmbeddingProvider) EmbedBatch(
 	return embedding.BatchResult{Vectors: vectors}, nil
 }
 
-func (provider *fakeEmbeddingProvider) ProviderName() string {
+func (provider *fakeEmbeddingProvider) ProviderName() model.EmbeddingProvider {
 	return "fake"
 }
 

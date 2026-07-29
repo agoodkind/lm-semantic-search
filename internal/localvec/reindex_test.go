@@ -49,7 +49,7 @@ func (provider *recordingEmbeddingProvider) EmbedBatch(
 	return embedding.BatchResult{Vectors: vectors}, nil
 }
 
-func (provider *recordingEmbeddingProvider) ProviderName() string {
+func (provider *recordingEmbeddingProvider) ProviderName() model.EmbeddingProvider {
 	return "recording"
 }
 
@@ -84,7 +84,7 @@ func (provider *rejectingEmbeddingProvider) EmbedBatch(
 	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
 }
 
-func (provider *rejectingEmbeddingProvider) ProviderName() string {
+func (provider *rejectingEmbeddingProvider) ProviderName() model.EmbeddingProvider {
 	return "rejecting"
 }
 

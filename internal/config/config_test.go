@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
@@ -141,14 +142,14 @@ func TestDefaultResolvesProfileFromEnvironmentAndFile(t *testing.T) {
 		environmentProfile    string
 		fileProfile           string
 		wantProfile           string
-		wantIndexBackend      string
-		wantEmbeddingProvider string
+		wantIndexBackend      model.VectorBackend
+		wantEmbeddingProvider model.EmbeddingProvider
 	}{
 		{
 			name:                  "unset",
 			wantProfile:           ProfileStandard,
 			wantIndexBackend:      IndexBackendMilvus,
-			wantEmbeddingProvider: string(embeddingProviderOpenAI),
+			wantEmbeddingProvider: EmbeddingProviderOpenAI,
 		},
 		{
 			name:                  "file",

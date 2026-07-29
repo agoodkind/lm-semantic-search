@@ -449,7 +449,10 @@ func requireRuntimeIndexConfig(
 	if indexConfig == nil {
 		t.Fatalf("%s did not report effective index config", source)
 	}
-	if indexConfig.GetVectorBackend() != config.IndexBackendLocal {
+	// The wire carries both names as plain strings, so each is compared against
+	// the closed-set value spelled out, which is the same comparison the daemon
+	// makes internally.
+	if indexConfig.GetVectorBackend() != config.IndexBackendLocal.String() {
 		t.Fatalf(
 			"%s vector backend = %q, want %q",
 			source,
@@ -457,7 +460,7 @@ func requireRuntimeIndexConfig(
 			config.IndexBackendLocal,
 		)
 	}
-	if indexConfig.GetEmbeddingProvider() != config.EmbeddingProviderONNX {
+	if indexConfig.GetEmbeddingProvider() != config.EmbeddingProviderONNX.String() {
 		t.Fatalf(
 			"%s embedding provider = %q, want %q",
 			source,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"goodkind.io/gklog/correlation"
@@ -262,10 +261,7 @@ func (manager *Manager) bootSelfCheckSkipReason() string {
 	if manager.config.IndexBackend == config.IndexBackendLocal {
 		return "local backend search may perform crash recovery"
 	}
-	if strings.EqualFold(
-		strings.TrimSpace(manager.config.EmbeddingProvider),
-		config.EmbeddingProviderONNX,
-	) {
+	if manager.config.EmbeddingProvider == config.EmbeddingProviderONNX {
 		return "ONNX inference cannot guarantee cancellation"
 	}
 	return ""

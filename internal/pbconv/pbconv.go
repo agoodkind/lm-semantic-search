@@ -324,10 +324,10 @@ func toIndexConfig(config model.IndexConfig) *pb.IndexConfig {
 		IgnorePatterns:     append([]string{}, config.IgnorePatterns...),
 		IncludeSubmodules:  append([]string{}, config.IncludeSubmodules...),
 		IgnoreDigest:       config.IgnoreDigest,
-		EmbeddingProvider:  config.EmbeddingProvider,
+		EmbeddingProvider:  config.EmbeddingProvider.String(),
 		EmbeddingModel:     config.EmbeddingModel,
 		EmbeddingDimension: config.EmbeddingDimension,
-		VectorBackend:      config.VectorBackend,
+		VectorBackend:      config.VectorBackend.String(),
 		Hybrid:             config.Hybrid,
 	}
 }

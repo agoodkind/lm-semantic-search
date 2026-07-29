@@ -86,13 +86,12 @@ type semanticMaintainer interface {
 // configuration that requested them. The two can disagree, and only the objects
 // know which one won.
 type semanticIdentity interface {
-	// BackendName is the vector store this backend is, one of
-	// [config.IndexBackendLocal] or [config.IndexBackendMilvus].
-	BackendName() string
+	// BackendName is the vector store this backend is.
+	BackendName() model.VectorBackend
 	// EmbeddingProviderName is what the embedder this backend built calls
-	// itself. It is empty when no embedder was built, which a backend that
-	// failed to construct one reports rather than guessing a name.
-	EmbeddingProviderName() string
+	// itself. It is [model.EmbeddingProviderNone] when no embedder was built,
+	// which a backend that constructed none reports rather than guessing a name.
+	EmbeddingProviderName() model.EmbeddingProvider
 }
 
 // semanticIndex is the full embedding-and-vector-store surface the manager

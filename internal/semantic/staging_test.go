@@ -41,7 +41,7 @@ func (embedder *rejectingAllEmbedder) EmbedBatch(
 	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
 }
 
-func (embedder *rejectingAllEmbedder) ProviderName() string {
+func (embedder *rejectingAllEmbedder) ProviderName() model.EmbeddingProvider {
 	return "rejecting-all"
 }
 
