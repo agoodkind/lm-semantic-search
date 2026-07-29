@@ -10,6 +10,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
+	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/status"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
@@ -293,18 +294,13 @@ func blankStatusView(name string, updatedAt string) view.StatusView {
 
 // formatBoundaryStatusTime renders a compact wall-clock time with zone for the
 // status header, for example "4:52 PM PDT". The daemon stores UTC, so this
-// converts to the host's local zone first, loaded by name so gosmopolitan stays
-// satisfied.
+// converts to the host's zone through the shared lookup.
 func formatBoundaryStatusTime(value time.Time) string {
 	if value.IsZero() {
 		return "unknown"
 	}
 	const layout = "3:04 PM MST"
-	location, err := time.LoadLocation("Local")
-	if err != nil {
-		return value.Format(layout)
-	}
-	return value.In(location).Format(layout)
+	return render.InLocalZone(value).Format(layout)
 }
 
 func formatStatusTime(value time.Time) string {
@@ -315,13 +311,8 @@ func formatStampWithRelative(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
-	location, err := time.LoadLocation("Local")
-	localValue := value
-	localNow := relativeTimeNow()
-	if err == nil {
-		localValue = value.In(location)
-		localNow = localNow.In(location)
-	}
+	localValue := render.InLocalZone(value)
+	localNow := render.InLocalZone(relativeTimeNow())
 	layout := "3:04 PM MST"
 	if localValue.Year() != localNow.Year() || localValue.YearDay() != localNow.YearDay() {
 		layout = "Jan 2, 3:04 PM MST"

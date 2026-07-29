@@ -102,6 +102,16 @@ type Manager struct {
 	graphIndexHook   func()
 	lifecycleHook    CodebaseLifecycleHook
 	lifecycleMutex   sync.Mutex
+	// startedAt is when this daemon process built its manager. A status read
+	// reports uptime from it, so the number comes from the process rather than
+	// from a caller's clock.
+	startedAt time.Time
+	// watcherActivity reports file-change work, which registers no job and so is
+	// absent from the job store. The background syncer installs itself here at
+	// start; a manager with no syncer reports no watcher activity rather than
+	// failing, which is the case in tests and with file watching off.
+	watcherActivity      WatcherActivityReporter
+	watcherActivityMutex sync.Mutex
 	// indexSlots caps concurrently running index jobs. Each runJob holds one
 	// buffered slot for its duration; jobs that cannot acquire a slot stay
 	// queued until one frees.
@@ -188,6 +198,9 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		graphIndexHook:              nil,
 		lifecycleHook:               nil,
 		lifecycleMutex:              sync.Mutex{},
+		startedAt:                   clock.Now(),
+		watcherActivity:             nil,
+		watcherActivityMutex:        sync.Mutex{},
 		indexSlots:                  make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
 		jobCapacityTimings:          defaultJobCapacityTimings(),
 		syncLock:                    newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
@@ -853,50 +866,7 @@ func (manager *Manager) CancelJob(ctx context.Context, jobID string) (model.Job,
 
 // GetIndex / classification / synthesis helpers live in manager_status.go.
 
-// ListIndexes returns every tracked codebase in canonical path order.
-func (manager *Manager) ListIndexes(ctx context.Context) []model.Codebase {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-
-	codebases := make([]model.Codebase, 0, len(manager.codebases))
-	for _, codebase := range manager.codebases {
-		codebases = append(codebases, codebase)
-	}
-	sort.Slice(codebases, func(i int, j int) bool {
-		return codebases[i].CanonicalPath < codebases[j].CanonicalPath
-	})
-	return codebases
-}
-
-// CodebaseView pairs a codebase with its daemon-computed display status, so the
-// presentation fold (live job phase) is decided once, under the lock, rather
-// than recomputed at each rendering callsite.
-type CodebaseView struct {
-	Codebase model.Codebase
-	Display  displayStatus
-}
-
-// ListIndexesView returns every tracked codebase in canonical path order, each
-// paired with its single-source-of-truth display status. It folds the active
-// job in under the lock so the list and detail surfaces agree by construction.
-func (manager *Manager) ListIndexesView() []CodebaseView {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-
-	globalMode := manager.health.Mode
-	views := make([]CodebaseView, 0, len(manager.codebases))
-	for _, codebase := range manager.codebases {
-		activeJob := manager.activeJobSnapshotLocked(codebase)
-		views = append(views, CodebaseView{
-			Codebase: codebase,
-			Display:  computeDisplayStatus(codebase, activeJob, globalMode, collectionNotApplicable),
-		})
-	}
-	sort.Slice(views, func(i int, j int) bool {
-		return views[i].Codebase.CanonicalPath < views[j].Codebase.CanonicalPath
-	})
-	return views
-}
+// Codebase listing lives in manager_list.go.
 
 // GetJob resolves one tracked job by id.
 func (manager *Manager) GetJob(jobID string) (model.Job, bool) {

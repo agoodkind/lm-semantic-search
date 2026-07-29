@@ -39,6 +39,7 @@ const (
 	SemanticSearchDaemonService_SearchConversations_FullMethodName               = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchConversations"
 	SemanticSearchDaemonService_SearchWithinConversation_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchWithinConversation"
 	SemanticSearchDaemonService_Doctor_FullMethodName                            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Doctor"
+	SemanticSearchDaemonService_GetStatus_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetStatus"
 	SemanticSearchDaemonService_Shutdown_FullMethodName                          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Shutdown"
 )
 
@@ -75,6 +76,7 @@ type SemanticSearchDaemonServiceClient interface {
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
 	SearchWithinConversation(ctx context.Context, in *SearchWithinConversationRequest, opts ...grpc.CallOption) (*SearchWithinConversationResponse, error)
 	Doctor(ctx context.Context, in *DoctorRequest, opts ...grpc.CallOption) (*DoctorResponse, error)
+	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 }
 
@@ -301,6 +303,16 @@ func (c *semanticSearchDaemonServiceClient) Doctor(ctx context.Context, in *Doct
 	return out, nil
 }
 
+func (c *semanticSearchDaemonServiceClient) GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetStatusResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_GetStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *semanticSearchDaemonServiceClient) Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ShutdownResponse)
@@ -344,6 +356,7 @@ type SemanticSearchDaemonServiceServer interface {
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
 	SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
+	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
 
@@ -413,6 +426,9 @@ func (UnimplementedSemanticSearchDaemonServiceServer) SearchWithinConversation(c
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Doctor not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStatus not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
@@ -768,6 +784,24 @@ func _SemanticSearchDaemonService_Doctor_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SemanticSearchDaemonService_GetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).GetStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_GetStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).GetStatus(ctx, req.(*GetStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SemanticSearchDaemonService_Shutdown_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ShutdownRequest)
 	if err := dec(in); err != nil {
@@ -860,6 +894,10 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Doctor",
 			Handler:    _SemanticSearchDaemonService_Doctor_Handler,
+		},
+		{
+			MethodName: "GetStatus",
+			Handler:    _SemanticSearchDaemonService_GetStatus_Handler,
 		},
 		{
 			MethodName: "Shutdown",

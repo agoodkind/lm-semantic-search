@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -240,6 +241,11 @@ func (store *Store) embedRows(
 		}
 		missChunks = append(missChunks, chunk)
 	}
+	// Counted here as well as reported through progress, so the process counter
+	// moves on this backend too. Without it a status read shows
+	// embed_chunks_reused_total at zero while the job's own chunks_reused rises,
+	// and the two numbers on one screen contradict each other.
+	metrics.ChunksReused(reused)
 
 	if len(missChunks) > 0 {
 		// EmbedChunksSplittingOversize re-splits and retries any chunk the endpoint

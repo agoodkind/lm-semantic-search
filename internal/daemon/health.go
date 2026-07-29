@@ -236,6 +236,15 @@ func (manager *Manager) refreshDependencyHealth(ctx context.Context) {
 func (manager *Manager) DependencyHealth() dependencyHealth {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	return manager.dependencyHealthLocked()
+}
+
+// dependencyHealthLocked resolves the health record, applying the reconnect
+// shortcut described on DependencyHealth. It is separate so a caller building a
+// wider snapshot resolves health the same way every other surface does, rather
+// than copying the raw record and reporting a store as degraded after it has
+// already reconnected. Caller holds manager.mu.
+func (manager *Manager) dependencyHealthLocked() dependencyHealth {
 	probeFresh := !manager.lastDepProbeAt.IsZero() && clock.Now().Sub(manager.lastDepProbeAt) < dependencyProbeInterval
 	if !probeFresh && manager.health.Mode == dependencyStoreUnavailable && manager.semantic != nil && manager.semantic.Available() {
 		manager.noteDependencyHealthyLocked()

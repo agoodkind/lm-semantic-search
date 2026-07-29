@@ -8,6 +8,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -338,5 +339,28 @@ func assertNoRawControlBytes(t *testing.T, expression string) {
 		if expression[index] < 0x20 {
 			t.Fatalf("expression contains raw control byte 0x%02x: %q", expression[index], expression)
 		}
+	}
+}
+
+// TestEmbedChunkBatchCountsReuseInMetrics proves a reuse hit reaches the
+// process counter, so a status read reports what a run avoided rather than
+// only what it spent. It asserts a delta because the counter is a
+// package-level atomic this package's tests share.
+func TestEmbedChunkBatchCountsReuseInMetrics(t *testing.T) {
+	service := &Service{embedder: &countingEmbedder{}}
+	chunks := []model.StoredChunk{{Content: "reused-A"}, {Content: "fresh-B"}}
+	reuse := map[string][]float32{contentVectorKey("reused-A"): {7, 7}}
+
+	before := metrics.Read().EmbedChunksReusedTotal
+	_, reused, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	if err != nil {
+		t.Fatalf("embedChunkBatch returned error: %v", err)
+	}
+	if reused != 1 {
+		t.Fatalf("reused = %d, want 1", reused)
+	}
+	after := metrics.Read().EmbedChunksReusedTotal
+	if after-before != 1 {
+		t.Fatalf("EmbedChunksReusedTotal delta = %d, want 1", after-before)
 	}
 }

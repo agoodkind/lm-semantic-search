@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,7 +49,9 @@ type BackgroundSync struct {
 	lastTrigger  time.Time
 
 	convergeMu sync.Mutex
-	converging map[string]struct{}
+	// converging maps a codebase id to when its converge began, so a status read
+	// reports the age of work that holds no job record.
+	converging map[string]time.Time
 
 	deferredWatcherMu    sync.Mutex
 	deferredWatcherPaths map[string]map[string]struct{}
@@ -66,7 +69,7 @@ func NewBackgroundSync(cfg config.Config, manager *Manager) *BackgroundSync {
 		triggerTimer:         nil,
 		lastTrigger:          time.Time{},
 		convergeMu:           sync.Mutex{},
-		converging:           make(map[string]struct{}),
+		converging:           make(map[string]time.Time),
 		deferredWatcherMu:    sync.Mutex{},
 		deferredWatcherPaths: make(map[string]map[string]struct{}),
 		queue:                nil,
@@ -83,6 +86,7 @@ func (syncer *BackgroundSync) Start(ctx context.Context) {
 		})
 		syncer.watcher = NewWatcher(syncer.manager, syncer.queue)
 		syncer.manager.SetCodebaseLifecycleHook(syncer)
+		syncer.manager.SetWatcherActivityReporter(syncer)
 		go func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
@@ -473,6 +477,11 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	}
 	defer syncer.manager.syncLock.release(ctx)
 
+	// Both waits are behind us, so the converge is genuinely running rather than
+	// queued behind capacity. A status read reports the difference, and the
+	// start time is stamped here so a row's age measures work rather than wait.
+	syncer.markConvergeRunning(codebaseID)
+
 	if err := syncer.manager.ConvergePaths(ctx, codebaseID, relativePaths); err != nil {
 		slog.ErrorContext(ctx, "watcher.converge_failed", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebaseID, "err", err)
 	}
@@ -511,6 +520,21 @@ func (syncer *BackgroundSync) deferWatcherPaths(codebaseID string, relativePaths
 	}
 }
 
+// deferredPathCounts reports how many changed paths each codebase has buffered
+// while its first build runs. That work is real and waiting: it converges the
+// moment the build promotes, so a status read that omitted it would report a
+// quiet system while edits piled up. The returned map is a copy.
+func (syncer *BackgroundSync) deferredPathCounts() map[string]int {
+	syncer.deferredWatcherMu.Lock()
+	defer syncer.deferredWatcherMu.Unlock()
+
+	counts := make(map[string]int, len(syncer.deferredWatcherPaths))
+	for codebaseID, paths := range syncer.deferredWatcherPaths {
+		counts[codebaseID] = len(paths)
+	}
+	return counts
+}
+
 func (syncer *BackgroundSync) takeDeferredWatcherPaths(codebaseID string) []string {
 	syncer.deferredWatcherMu.Lock()
 	defer syncer.deferredWatcherMu.Unlock()
@@ -532,11 +556,27 @@ func (syncer *BackgroundSync) takeDeferredWatcherPaths(codebaseID string) []stri
 func (syncer *BackgroundSync) beginConverge(codebaseID string) bool {
 	syncer.convergeMu.Lock()
 	defer syncer.convergeMu.Unlock()
-	if _, running := syncer.converging[codebaseID]; running {
+	if _, admitted := syncer.converging[codebaseID]; admitted {
 		return false
 	}
-	syncer.converging[codebaseID] = struct{}{}
+	// A zero start time means admitted but not yet running: the converge still
+	// has to win an index slot and the shared advisory lock. markConvergeRunning
+	// stamps the real time once both waits are behind it, so a status read never
+	// reports a queued converge as running work whose age keeps growing.
+	syncer.converging[codebaseID] = time.Time{}
 	return true
+}
+
+// markConvergeRunning records that an admitted converge has taken its index slot
+// and the shared advisory lock, so it is doing work rather than waiting for
+// capacity.
+func (syncer *BackgroundSync) markConvergeRunning(codebaseID string) {
+	syncer.convergeMu.Lock()
+	defer syncer.convergeMu.Unlock()
+	if _, admitted := syncer.converging[codebaseID]; !admitted {
+		return
+	}
+	syncer.converging[codebaseID] = clock.Now()
 }
 
 // endConverge releases the per-codebase converge slot.
@@ -596,4 +636,85 @@ func syncConflictError(err error) bool {
 	message := err.Error()
 	return strings.Contains(message, "conflicting active job") ||
 		strings.Contains(message, "codebase not tracked")
+}
+
+// Watcher activity states. They are the words a status surface prints, and they
+// are deliberately not the job lifecycle states: file-change work registers no
+// job, so it has no job state to borrow.
+const (
+	WatcherStateRunning = "running"
+	WatcherStateQueued  = "queued"
+)
+
+// WatcherActivity is one unit of file-change work the background syncer owns.
+// It carries no job id because a converge registers no job, which is exactly
+// why the job store cannot report it and this type exists.
+type WatcherActivity struct {
+	CodebaseID   string
+	State        string
+	PendingPaths int
+	StartedAt    time.Time
+}
+
+// WatcherActivityReporter is the seam the manager holds so a status read
+// reaches file-change work without the manager depending on the syncer.
+type WatcherActivityReporter interface {
+	WatcherActivity() []WatcherActivity
+}
+
+// WatcherActivity reports every admitted converge and every codebase whose
+// changed paths are waiting on a debounce timer.
+//
+// An admitted converge with no start time is still waiting for an index slot or
+// the shared advisory lock, so it reports queued rather than running: reporting
+// it as running would show an age that measures the wait, not the work. A
+// codebase that is converging while new paths accumulate reports once, carrying
+// the paths that drain after it. Rows sort by codebase id, so two reads of an
+// unchanged daemon render identically.
+func (syncer *BackgroundSync) WatcherActivity() []WatcherActivity {
+	syncer.convergeMu.Lock()
+	admitted := make(map[string]time.Time, len(syncer.converging))
+	maps.Copy(admitted, syncer.converging)
+	syncer.convergeMu.Unlock()
+
+	// Waiting paths come from two places. The event queue holds those inside a
+	// debounce window; the deferred buffer holds those a first build is standing
+	// in front of, which converge the moment that build promotes. Both are work
+	// the operator is waiting on, so both count toward one figure.
+	pending := map[string]int{}
+	if syncer.queue != nil {
+		pending = syncer.queue.PendingCounts()
+	}
+	for codebaseID, count := range syncer.deferredPathCounts() {
+		pending[codebaseID] += count
+	}
+
+	activity := make([]WatcherActivity, 0, len(admitted)+len(pending))
+	for codebaseID, startedAt := range admitted {
+		state := WatcherStateRunning
+		if startedAt.IsZero() {
+			state = WatcherStateQueued
+		}
+		activity = append(activity, WatcherActivity{
+			CodebaseID:   codebaseID,
+			State:        state,
+			PendingPaths: pending[codebaseID],
+			StartedAt:    startedAt,
+		})
+	}
+	for codebaseID, count := range pending {
+		if _, alreadyAdmitted := admitted[codebaseID]; alreadyAdmitted {
+			continue
+		}
+		activity = append(activity, WatcherActivity{
+			CodebaseID:   codebaseID,
+			State:        WatcherStateQueued,
+			PendingPaths: count,
+			StartedAt:    time.Time{},
+		})
+	}
+	sort.Slice(activity, func(first int, second int) bool {
+		return activity[first].CodebaseID < activity[second].CodebaseID
+	})
+	return activity
 }

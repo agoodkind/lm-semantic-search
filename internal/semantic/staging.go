@@ -8,6 +8,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
@@ -282,6 +283,11 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 		missIndexes = append(missIndexes, index)
 	}
 	reused := len(chunkBatch) - len(missTexts)
+	// Counted here rather than at the insert, because the hit is decided here
+	// and a caller that never inserts still avoided the embed. It is the same
+	// boundary metrics.EmbedBatchDone counts a batch at, so the two counters
+	// together report what a batch cost and what it skipped.
+	metrics.ChunksReused(reused)
 	if len(missTexts) == 0 {
 		return vectors, reused, nil
 	}

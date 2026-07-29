@@ -14,11 +14,12 @@ import (
 // lock-free and the expvar publishers can read the live values without
 // copying. The grouping mirrors the daemon subsystems that own them.
 var (
-	embedBatchesTotal  atomic.Int64
-	embedBatchesFailed atomic.Int64
-	embedVectorsTotal  atomic.Int64
-	embedLatencyMSSum  atomic.Int64
-	embedInflight      atomic.Int64
+	embedBatchesTotal      atomic.Int64
+	embedBatchesFailed     atomic.Int64
+	embedVectorsTotal      atomic.Int64
+	embedLatencyMSSum      atomic.Int64
+	embedInflight          atomic.Int64
+	embedChunksReusedTotal atomic.Int64
 
 	convergeUpsertTotal     atomic.Int64
 	convergeRemoveTotal     atomic.Int64
@@ -41,11 +42,12 @@ var (
 // field keys. It carries no maps or interface values so callers can
 // compare two snapshots field-by-field in deterministic tests.
 type Snapshot struct {
-	EmbedBatchesTotal  int64
-	EmbedBatchesFailed int64
-	EmbedVectorsTotal  int64
-	EmbedLatencyMSSum  int64
-	EmbedInflight      int64
+	EmbedBatchesTotal      int64
+	EmbedBatchesFailed     int64
+	EmbedVectorsTotal      int64
+	EmbedLatencyMSSum      int64
+	EmbedInflight          int64
+	EmbedChunksReusedTotal int64
 
 	ConvergeUpsertTotal     int64
 	ConvergeRemoveTotal     int64
@@ -82,6 +84,18 @@ func EmbedBatchDone(vectors int, elapsed time.Duration, failed bool) {
 	if failed {
 		embedBatchesFailed.Add(1)
 	}
+}
+
+// ChunksReused counts chunks served from an already-stored vector. Those
+// chunks never reach the embedder, so [EmbedBatchDone] never sees them; the
+// two counters together report what a batch cost and what it avoided. A count
+// of zero or less is ignored, so a caller that computed no reuse cannot move
+// the counter.
+func ChunksReused(count int) {
+	if count <= 0 {
+		return
+	}
+	embedChunksReusedTotal.Add(int64(count))
 }
 
 // ConvergeUpsert counts one converge upsert operation.
@@ -155,6 +169,7 @@ func Read() Snapshot {
 		EmbedVectorsTotal:        embedVectorsTotal.Load(),
 		EmbedLatencyMSSum:        embedLatencyMSSum.Load(),
 		EmbedInflight:            embedInflight.Load(),
+		EmbedChunksReusedTotal:   embedChunksReusedTotal.Load(),
 		ConvergeUpsertTotal:      convergeUpsertTotal.Load(),
 		ConvergeRemoveTotal:      convergeRemoveTotal.Load(),
 		ConvergeCopyChunksTotal:  convergeCopyChunksTotal.Load(),
