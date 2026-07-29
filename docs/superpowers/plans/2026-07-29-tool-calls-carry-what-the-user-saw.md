@@ -16,7 +16,7 @@ Leave `[conversation.semantic] enabled = false` until the last task.
 
 ---
 
-## 1. clyde: `Display` and `DisplayLang` on the tool call
+## Task 1: clyde: `Display` and `DisplayLang` on the tool call
 
 `internal/transcript/transcript.go`, add both fields to `ToolCall`:
 
@@ -41,7 +41,7 @@ Leave `[conversation.semantic] enabled = false` until the last task.
 
 ---
 
-## 2. clyde: four parsers fill it
+## Task 2: clyde: four parsers fill it
 
 Each provider package gets a `tool_display.go` with the same shape, reading its own harness's keys. It returns the display text and the language that text is written in, because the parser is the only layer that knows which of its harness's tools are shells:
 
@@ -99,7 +99,7 @@ Fill both fields at each `transcript.ToolCall{` literal in:
 
 ---
 
-## 3. clyde: export shows it instead of JSON
+## Task 3: clyde: export shows it instead of JSON
 
 `internal/transcript/conversation.go`, `toolFullDetailText` currently marshals `tool.Input` into the exported text. A person reads an export and never saw that JSON.
 
@@ -111,7 +111,7 @@ Replace the body so each line is `[tool: <name>]` plus `tool.Display` when it is
 
 ---
 
-## 4. engine: the wire carries display, not serialization
+## Task 4: engine: the wire carries display, not serialization
 
 `proto/lmsemanticsearch/v1/service.proto`, `ConversationToolCall` becomes five fields:
 
@@ -145,7 +145,7 @@ Regenerate, then follow the compiler to rename `InputJSON` to `Display` and drop
 
 ---
 
-## 5. clyde: send display, delete the guesser
+## Task 5: clyde: send display, delete the guesser
 
 `internal/conversation/semsearch/client.go`: `SemToolCall` loses `InputJSON` and `Command`, gains `Display`.
 
@@ -170,7 +170,7 @@ This file gains no tool names. A shell call is one whose parser said so.
 
 ---
 
-## 6. engine: one row per tool call
+## Task 6: engine: one row per tool call
 
 `internal/daemon/manager_conversation_tools.go`: rename `conversationToolTokenContent` to `conversationToolContent`. It appends the tool's name, then the shell decomposition when `LangHint == "bash"`, then the display text:
 
@@ -228,7 +228,7 @@ Existing tests asserting `/tok`, `/cmd`, or `/in` paths need updating; those pat
 
 ---
 
-## 7. engine: prove it against a real store
+## Task 7: engine: prove it against a real store
 
 `test/live/tool_row_live_test.go`, following `test/live/blank_row_live_test.go` for the harness, which boots an isolated daemon and a throwaway Milvus collection that cannot collide with the operator's.
 
@@ -240,7 +240,7 @@ Add `countRowsContaining` beside the existing `countRowsHoldingNothing`.
 
 ---
 
-## 8. Land it and measure
+## Task 8: Land it and measure
 
 Merge the engine first: clyde builds against the local engine checkout through `go.work`.
 
