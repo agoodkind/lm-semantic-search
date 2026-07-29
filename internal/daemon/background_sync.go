@@ -482,7 +482,7 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	// start time is stamped here so a row's age measures work rather than wait.
 	syncer.markConvergeRunning(codebaseID)
 
-	if err := syncer.manager.ConvergePaths(ctx, codebaseID, relativePaths); err != nil {
+	if _, err := syncer.manager.ConvergePaths(ctx, codebaseID, relativePaths); err != nil {
 		slog.ErrorContext(ctx, "watcher.converge_failed", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebaseID, "err", err)
 	}
 }

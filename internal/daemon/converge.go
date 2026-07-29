@@ -16,6 +16,20 @@ import (
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
+// ConvergeOutcome reports what one ConvergePaths call handled, so a caller can
+// state the size of the work rather than guess it. PathsConverged counts the
+// paths that changed the index, which is fewer than PathsGiven whenever a path
+// was already current, was deleted before the call ran, or the call stopped
+// early on cancellation.
+//
+// It carries no embedded-chunk count. ConvergePaths does not measure embedding,
+// and a count that meant "paths seen" would be read as "work embedded" by the
+// dependency-health gate in updateJobCompleted.
+type ConvergeOutcome struct {
+	PathsGiven     int32
+	PathsConverged int32
+}
+
 // ConvergePaths makes the index match disk for each relative path in a
 // codebase. It reads each path at call time: a path present on disk is
 // upserted, a path absent is deleted, and a path whose content hash already
@@ -25,7 +39,7 @@ import (
 // Callers must serialize ConvergePaths against full syncs of the same
 // codebase; the background sync coordinator does this through its single
 // in-flight guard.
-func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, relativePaths []string) (err error) {
+func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, relativePaths []string) (outcome ConvergeOutcome, err error) {
 	ctx, done := spans.Open(ctx, "daemon.convergePaths")
 	defer done(&err)
 
@@ -33,18 +47,18 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 	codebase, found := manager.codebases[codebaseID]
 	manager.mu.Unlock()
 	if !found {
-		return nil
+		return outcome, nil
 	}
 	if sourceDirMissing(codebase.CanonicalPath) {
 		manager.markCodebaseMissing(ctx, codebaseID)
 		slog.WarnContext(ctx, "converge.root_missing_hold", "component", "daemon", "subcomponent", "converge", "codebase_id", codebaseID, "root", codebase.CanonicalPath)
-		return nil
+		return outcome, nil
 	}
 	if manager.semantic == nil || !manager.semantic.Available() {
-		return nil
+		return outcome, nil
 	}
 	if codebase.Status == model.CodebaseStatusQuarantined {
-		return nil
+		return outcome, nil
 	}
 
 	configDigest := codebase.EffectiveConfig.IgnoreDigest
@@ -64,6 +78,7 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 	// destination match the source's inode while it still lives in the
 	// snapshot.
 	orderedPaths := orderPathsByPresence(codebase.CanonicalPath, relativePaths)
+	outcome.PathsGiven = safeInt32(len(orderedPaths))
 	if signal, suspicious := assessWatcherDeleteWave(codebase, snapshot, codebase.CanonicalPath, orderedPaths); suspicious {
 		observations := manager.quarantineCodebase(ctx, codebaseID, signal)
 		slog.WarnContext(
@@ -82,24 +97,31 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 			"observations",
 			observations,
 		)
-		return nil
+		return outcome, nil
 	}
 
 	changed := false
 	for _, relativePath := range orderedPaths {
+		// A cancel stops the walk here rather than mid-path, so the snapshot
+		// written below covers exactly the paths that reached the index. The
+		// paths not reached become drift, which the periodic sync repairs.
+		if ctx.Err() != nil {
+			break
+		}
 		if converged := manager.convergeOnePath(ctx, codebase, relativePath, &snapshot, admission); converged {
 			changed = true
+			outcome.PathsConverged++
 		}
 	}
 
 	if !changed {
-		return nil
+		return outcome, nil
 	}
 	if writeErr := merkle.WriteSnapshot(snapshotPath, snapshot); writeErr != nil {
 		slog.ErrorContext(ctx, "converge.snapshot_write_failed", "component", "daemon", "subcomponent", "converge", "path", snapshotPath, "err", writeErr)
-		return fmt.Errorf("write converge snapshot %s: %w", snapshotPath, writeErr)
+		return outcome, fmt.Errorf("write converge snapshot %s: %w", snapshotPath, writeErr)
 	}
-	return nil
+	return outcome, nil
 }
 
 // convergeOnePath converges a single path against the snapshot and
