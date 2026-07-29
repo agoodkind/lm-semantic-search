@@ -86,10 +86,12 @@ Codex needs two extra cases its siblings do not. A bare JSON string input is a r
 
 Fill both fields at each `transcript.ToolCall{` literal in:
 
-- `providers/claude/parser/entry.go`
+- `providers/claude/parser/parse.go`, where an assistant entry's `tool_use` content block becomes a call
 - `providers/codex/store/messages.go` in `toolCallHistoryMessage`
 - `providers/cursor/parser/mapping.go` in `mapJSONLMessage` and `mapComposerBubble`
 - `providers/zed/parser/parser.go` in `agentMessageParts`
+
+Claude's parser also has `toolresult.go`, which fills a call's `Output` and `IsError` from a later `tool_result` block by pointer. It builds no call of its own and needs no change.
 
 **Test each package** with a table over its own keys, asserting a shell call shows its command with the `bash` language, a file tool shows its path with an empty language, a search shows its pattern, an unknown tool shows nothing, and an empty input shows nothing.
 
