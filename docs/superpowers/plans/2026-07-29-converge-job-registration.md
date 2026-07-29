@@ -757,19 +757,26 @@ func TestWatcherConvergeIsAddressableByTheJobCommands(t *testing.T) {
 
 Add `"os"`, `"path/filepath"`, and `"time"` to that file's imports if they are absent.
 
-- [ ] **Step 2: Run it to verify it fails on the current build**
+- [ ] **Step 2: Run it to verify it fails on the pre-change build**
 
-Run:
+Task 2 is already committed by this point, so the working tree is clean and stashing would stash nothing. Run the new test against a throwaway checkout of `origin/main` instead, which mutates nothing in the working worktree:
 
 ```bash
-git stash
-go test -tags offlinelive ./test/offlinelive/ -run TestWatcherConvergeIsAddressableByTheJobCommands -count=1
-git stash pop
+probe="$HOME/.worktrees/-Users-agoodkind-Sites-lm-semantic-search/converge-probe"
+git worktree add --detach "$probe" origin/main
+cp test/offlinelive/status_live_test.go "$probe/test/offlinelive/status_live_test.go"
+( cd "$probe" \
+  && export PKG_CONFIG_PATH="$probe/.make/cgo/darwin-arm64/lib/pkgconfig" \
+  && export CGO_LDFLAGS_ALLOW='-Wl,-rpath,@loader_path' \
+  && go test -tags offlinelive ./test/offlinelive/ -run TestWatcherConvergeIsAddressableByTheJobCommands -count=1 )
+git worktree remove --force "$probe"
 ```
 
-Expected: FAIL with "no converge job appeared in job list". This is the reported defect, reproduced through the same commands the operator used.
+Expected: FAIL with "no converge job appeared in job list". That is the reported defect, reproduced through the same commands the operator used, against code that predates the fix.
 
-Nothing else may run while this executes. The harness guard reports a disappeared production daemon when a linter or compiler is invoked on a path naming the daemon, which produces a failure unrelated to the code.
+If the probe worktree has no built cgo prerequisites, run `make build GO_MK_DEV_DIR=/Users/agoodkind/Sites/go-makefile` inside it first. If that is more setup than the evidence is worth, skip this step and say so in the commit body: Task 1 and Task 2 each already proved their own layer red before green, and nothing but the new registration path creates a job whose operation is `converge`, so the assertion cannot pass on the pre-change build by construction.
+
+Nothing else may run while this executes. The harness isolation guard runs `pgrep -f lm-semantic-search-daemon`, which matches any command line containing that string, including a linter invoked on repository paths, and reports it as a disappeared production daemon.
 
 - [ ] **Step 3: Run it against the change**
 
