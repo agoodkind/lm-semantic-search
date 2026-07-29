@@ -156,14 +156,18 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 			slog.Error("read conversation state relative path column failed", "index", rowIndex, "err", relativePathErr)
 			return legacyRows, fmt.Errorf("read relative path column at %d: %w", rowIndex, relativePathErr)
 		}
-		if isDerivedConversationRelativePath(relativePath) {
-			markStoredMessageDerived(assemblies, safeInt32FromInt64(messageIndex))
-			continue
-		}
 		role, roleErr := roleColumn.GetAsString(rowIndex)
 		if roleErr != nil {
 			slog.Error("read conversation state role column failed", "index", rowIndex, "err", roleErr)
 			return legacyRows, fmt.Errorf("read role column at %d: %w", rowIndex, roleErr)
+		}
+		if isDerivedConversationRelativePath(relativePath) {
+			// Read the role before the derived branch returns. A message whose
+			// only stored rows are derived would otherwise assemble with an empty
+			// role, and the delta comparison rejects a message whose stored role
+			// differs from the delivered one, so it would never match.
+			markStoredMessageDerivedWithRole(assemblies, safeInt32FromInt64(messageIndex), role)
+			continue
 		}
 		partIndex, partErr := conversationMessagePartIndex(relativePath, conversationPrefix)
 		if partErr != nil {
@@ -284,6 +288,25 @@ func markStoredMessageDerived(assemblies map[int32]*storedMessageAssembly, messa
 		assemblies[messageIndex] = assembly
 	}
 	assembly.hasDerivedContent = true
+}
+
+// markStoredMessageDerivedWithRole records a message that exists because one of
+// its derived rows was read, carrying the role that row holds. A message whose
+// only stored rows are derived has no base row to take a role from, and the
+// delta comparison rejects a message whose stored role differs from the
+// delivered one, so registering it without a role would never match.
+//
+// The role is filled only when no base row has supplied one, so a base row wins
+// whatever order the rows arrive in.
+func markStoredMessageDerivedWithRole(
+	assemblies map[int32]*storedMessageAssembly,
+	messageIndex int32,
+	role string,
+) {
+	markStoredMessageDerived(assemblies, messageIndex)
+	if assembly := assemblies[messageIndex]; assembly != nil && !assembly.roleFromBase {
+		assembly.role = role
+	}
 }
 
 func assembleStoredMessageState(assemblies map[int32]*storedMessageAssembly) map[int32]StoredMessageState {
