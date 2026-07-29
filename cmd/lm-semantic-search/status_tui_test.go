@@ -355,3 +355,41 @@ func TestViewSurvivesAnEmptyReply(t *testing.T) {
 		t.Fatalf("frame does not state the daemon is idle:\n%s", frame)
 	}
 }
+
+// TestScrollDownStopsAtTheLastLine proves the offset cannot climb past the end
+// of the body. Without the clamp on the keypress, holding Down would raise the
+// offset without bound and the same number of Up presses would appear to do
+// nothing before the screen finally moved.
+func TestScrollDownStopsAtTheLastLine(t *testing.T) {
+	t.Parallel()
+
+	response := &pb.GetStatusResponse{
+		Daemon: &pb.DaemonIdentity{Pid: 7342, Version: "test"},
+		Metrics: []*pb.Metric{
+			{
+				Group: "embed", Name: "embed_vectors_total", Unit: "vectors",
+				Value: &pb.Metric_IntValue{IntValue: 3946},
+			},
+		},
+	}
+
+	model := newStatusModel(cliOptions{}, time.Second, response)
+	model.width = 100
+	model.height = 24
+
+	ceiling := model.maxOffset()
+	current := tea.Model(model)
+	for range 500 {
+		next, _ := current.(statusModel).handleKey(tea.KeyMsg{Type: tea.KeyDown})
+		current = next
+	}
+	if got := current.(statusModel).offset; got != ceiling {
+		t.Fatalf("offset after 500 Down presses = %d, want the ceiling %d", got, ceiling)
+	}
+
+	// One Up press must move the view immediately, not burn against a backlog.
+	after, _ := current.(statusModel).handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := after.(statusModel).offset; got != max(ceiling-1, 0) {
+		t.Fatalf("offset after one Up = %d, want %d", got, max(ceiling-1, 0))
+	}
+}

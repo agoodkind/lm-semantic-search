@@ -133,7 +133,11 @@ func (m statusModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshing = true
 		return m, statusRefreshCmd(m.options)
 	case keyMatches(msg, "down", "j"):
-		m.offset++
+		// Clamped on the way down, not only when rendering. View clamps a local
+		// copy, so without this m.offset would keep climbing past the last line
+		// and the same number of Up presses would appear to do nothing before the
+		// screen finally moved.
+		m.offset = min(m.offset+1, m.maxOffset())
 		return m, nil
 	case keyMatches(msg, "up", "k"):
 		m.offset = max(m.offset-1, 0)
@@ -203,11 +207,7 @@ func (m statusModel) View() string {
 	header := m.headerBlock()
 	footer := faintStyle.Render(m.keyLine())
 
-	body := append(
-		strings.Split(statusCounterBlock(m.response, m.previous, width), "\n"),
-		"",
-	)
-	body = append(body, strings.Split(m.activityBlock(width), "\n")...)
+	body := m.bodyLines(width)
 
 	visible := m.visibleBodyRows(len(strings.Split(header, "\n")))
 	offset := min(m.offset, max(len(body)-visible, 0))
@@ -225,6 +225,28 @@ func (m statusModel) View() string {
 	builder.WriteString(footer)
 	builder.WriteString("\n")
 	return builder.String()
+}
+
+// bodyLines is everything that scrolls: the counter block, a blank separator,
+// then the activity block. View and the scroll keys both read it, so the last
+// reachable line is the same number in both.
+func (m statusModel) bodyLines(width int) []string {
+	lines := append(
+		strings.Split(statusCounterBlock(m.response, m.previous, width), "\n"),
+		"",
+	)
+	return append(lines, strings.Split(m.activityBlock(width), "\n")...)
+}
+
+// maxOffset is the furthest the body can scroll before its last line sits at
+// the bottom of the window. Scrolling past it would move nothing.
+func (m statusModel) maxOffset() int {
+	width := m.width
+	if width <= 0 {
+		width = defaultTermWidth
+	}
+	headerLines := len(strings.Split(m.headerBlock(), "\n"))
+	return max(len(m.bodyLines(width))-m.visibleBodyRows(headerLines), 0)
 }
 
 // visibleBodyRows is how many body lines fit between the pinned header and the
