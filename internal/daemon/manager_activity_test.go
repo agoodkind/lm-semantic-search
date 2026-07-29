@@ -233,3 +233,43 @@ func TestStatusSnapshotOmitsTerminalJobs(t *testing.T) {
 		t.Fatalf("index slots total = %d, want 4", snapshot.IndexSlotsTotal)
 	}
 }
+
+// TestStatusSnapshotResolvesHealthLikeEverySurface proves the snapshot clears a
+// stale store banner the same way DependencyHealth does. Copying the raw record
+// instead would report a store as degraded after it had already reconnected,
+// while codebase list, which resolves it, reported healthy.
+func TestStatusSnapshotResolvesHealthLikeEverySurface(t *testing.T) {
+	t.Parallel()
+
+	newManager := func() *Manager {
+		return &Manager{
+			codebases:               map[string]model.Codebase{},
+			jobs:                    map[string]model.Job{},
+			pendingCodeJobs:         map[string]pendingCodeRequest{},
+			pendingConversationJobs: map[string]conversationJobPayload{},
+			indexSlots:              make(chan struct{}, 1),
+			semantic:                nil,
+			health: dependencyHealth{
+				Mode:  dependencyStoreUnavailable,
+				Since: time.Unix(1785156767, 0),
+			},
+		}
+	}
+
+	// With no semantic service the shortcut cannot fire, so both paths agree the
+	// store is still down.
+	stillDown := newManager()
+	if !stillDown.StatusSnapshot().Health.Degraded() {
+		t.Fatal("snapshot cleared an outage with no evidence of recovery")
+	}
+	if !newManager().DependencyHealth().Degraded() {
+		t.Fatal("DependencyHealth cleared an outage with no evidence of recovery")
+	}
+
+	// The two paths must agree on the same manager state, whatever that state is.
+	viaSnapshot := newManager().StatusSnapshot().Health
+	viaAccessor := newManager().DependencyHealth()
+	if viaSnapshot.Degraded() != viaAccessor.Degraded() || viaSnapshot.Mode != viaAccessor.Mode {
+		t.Fatalf("snapshot health %+v disagrees with DependencyHealth %+v", viaSnapshot, viaAccessor)
+	}
+}

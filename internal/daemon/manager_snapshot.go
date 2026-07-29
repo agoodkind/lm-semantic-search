@@ -22,9 +22,10 @@ type StatusSnapshot struct {
 	// capacity rather than behind a dependency.
 	IndexSlotsInUse int
 	IndexSlotsTotal int
-	// Health is the shared-dependency record. It is read once and carried here,
-	// because reading it is not pure: a healthy observation restamps it, so two
-	// reads in one reply would describe two instants.
+	// Health is the shared-dependency record, resolved the same way every other
+	// surface resolves it. It is read once and carried here, because reading it
+	// is not pure: it clears a boot-time store banner once the client has
+	// reconnected, so two reads in one reply would describe two instants.
 	Health dependencyHealth
 	// ActiveJobs holds the non-terminal jobs only. Job history is deliberately
 	// absent: a status reply stays a few kilobytes rather than growing with it.
@@ -50,6 +51,12 @@ func (manager *Manager) StatusSnapshot() StatusSnapshot {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
+	// Health resolves first because resolving it can clear a stale store banner,
+	// and the codebase views fold the resulting mode into every display status.
+	// Reading it after them would report a recovered store beside codebases
+	// still marked as waiting on it.
+	health := manager.dependencyHealthLocked()
+
 	activeJobs := make([]model.Job, 0, len(manager.jobs))
 	for _, job := range manager.jobs {
 		if isTerminalJobState(job.State) {
@@ -65,7 +72,7 @@ func (manager *Manager) StatusSnapshot() StatusSnapshot {
 		StartedAt:       manager.startedAt,
 		IndexSlotsInUse: len(manager.indexSlots),
 		IndexSlotsTotal: cap(manager.indexSlots),
-		Health:          manager.health,
+		Health:          health,
 		ActiveJobs:      activeJobs,
 		Pending:         manager.pendingWorkLocked(),
 		Codebases:       manager.codebaseViewsLocked(),
