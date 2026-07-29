@@ -393,3 +393,59 @@ func TestScrollDownStopsAtTheLastLine(t *testing.T) {
 		t.Fatalf("offset after one Up = %d, want %d", got, max(ceiling-1, 0))
 	}
 }
+
+// TestConstantMetricShowsNoDelta proves a value that cannot change carries no
+// delta column. index_slots_total is fixed for the life of the process, so a
+// +0 beside it every refresh would be noise on every line.
+func TestConstantMetricShowsNoDelta(t *testing.T) {
+	t.Parallel()
+
+	constant := &pb.Metric{
+		Group: "jobs", Name: "index_slots_total", Unit: "slots",
+		Value: &pb.Metric_IntValue{IntValue: 4},
+	}
+	changing := &pb.Metric{
+		Group: "jobs", Name: "index_slots_in_use", Unit: "slots",
+		Value: &pb.Metric_IntValue{IntValue: 2},
+	}
+	previous := map[string]int64{"index_slots_total": 4, "index_slots_in_use": 2}
+
+	if got := statusDeltaText(constant, previous); got != "" {
+		t.Fatalf("constant metric delta = %q, want empty", got)
+	}
+	if got := statusDeltaText(changing, previous); got != "+0" {
+		t.Fatalf("changing metric delta = %q, want \"+0\"", got)
+	}
+}
+
+// TestTimestampsRenderInTheHostZone proves the screen converts the daemon's
+// UTC timestamp into the host's zone with an offset, and leaves anything that
+// is not a timestamp alone. The daemon reports one zone; this is the only
+// surface that converts, and it converts through the one shared lookup.
+func TestTimestampsRenderInTheHostZone(t *testing.T) {
+	t.Parallel()
+
+	instant := "2026-07-27T12:52:31Z"
+	rendered := displayTimeText(instant)
+
+	parsed, err := time.Parse("2006-01-02T15:04:05-07:00", rendered)
+	if err != nil {
+		t.Fatalf("rendered %q does not parse as a timestamp with offset: %v", rendered, err)
+	}
+	expected, err := time.Parse(time.RFC3339Nano, instant)
+	if err != nil {
+		t.Fatalf("parse the source instant: %v", err)
+	}
+	if !parsed.Equal(expected) {
+		t.Fatalf("rendered %q is a different instant from %q", rendered, instant)
+	}
+
+	// A path is not a timestamp and must survive untouched.
+	if got := displayTimeText("/Users/a/code"); got != "/Users/a/code" {
+		t.Fatalf("a path was rewritten to %q", got)
+	}
+	// So must a phase name.
+	if got := displayTimeText("embedding"); got != "embedding" {
+		t.Fatalf("a phase name was rewritten to %q", got)
+	}
+}

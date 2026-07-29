@@ -348,20 +348,44 @@ func statusCounterLine(
 	return line
 }
 
-// statusValueText renders a value with digits grouped, which the piped and JSON
-// forms deliberately do not do because both are parsed.
+// statusValueText renders a value for the screen: digits grouped, and a
+// timestamp shown in the operator's own zone.
+//
+// The piped and JSON forms keep UTC, because both are parsed and a machine
+// consumer wants one unambiguous zone. The screen is the only surface a person
+// reads directly, so it is the only one that converts.
 func statusValueText(metric *pb.Metric) string {
 	text := render.MetricValueText(metric)
 	if _, isInt := metric.GetValue().(*pb.Metric_IntValue); isInt {
 		return groupDigits(text)
 	}
-	return text
+	return displayTimeText(text)
+}
+
+// displayTimeText converts an RFC3339 timestamp into the host's zone with its
+// offset, and returns anything else unchanged. A counter, a phase name, and a
+// path never parse as RFC3339, so nothing else is rewritten.
+func displayTimeText(text string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil {
+		return text
+	}
+	return render.InLocalZone(parsed).Format("2006-01-02T15:04:05-07:00")
+}
+
+// constantMetrics never change while the daemon runs, so a delta column beside
+// them would only ever read +0 and add noise to every line of the screen.
+var constantMetrics = map[string]bool{
+	"index_slots_total": true,
 }
 
 // statusDeltaText reports the change since the previous read for an integer
-// value. A value with no previous read, and any non-integer value, reports
-// nothing rather than a change of zero it did not observe.
+// value. A value with no previous read, a constant, and any non-integer value
+// report nothing rather than a change of zero.
 func statusDeltaText(metric *pb.Metric, previous map[string]int64) string {
+	if constantMetrics[metric.GetName()] {
+		return ""
+	}
 	intValue, isInt := metric.GetValue().(*pb.Metric_IntValue)
 	if !isInt || previous == nil {
 		return ""
