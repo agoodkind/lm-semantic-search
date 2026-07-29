@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
@@ -640,7 +639,7 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 		// This is the rule every sibling below already follows. Each of the tool
 		// token, command, input, output, and reasoning rows writes only when its
 		// own content is present.
-		if strings.TrimSpace(document.Text) != "" {
+		if conversationTextIsStorable(document.Text) {
 			pieces := splitConversationText(document.Text, budget)
 			for partIndex, piece := range pieces {
 				chunks = append(chunks, newConversationStoredChunk(
@@ -866,7 +865,8 @@ func conversationDerivedMessageIndex(relativePath string, toolPrefix string, thi
 // proof the target row exists, so an absent target row makes the message changed
 // and the reindex inserts it, reusing the shared vector rather than re-embedding.
 func conversationDocumentMatchesStored(ctx context.Context, conversationID string, document model.ConversationDocument, message semantic.StoredMessageState, storedDerivedPaths map[string]string, chunkByteBudget ...int) (bool, error) {
-	if message.Role != document.Role || message.Text != document.Text {
+	if message.Role != document.Role ||
+		message.Text != conversationStorableText(document.Text) {
 		return false, nil
 	}
 	storedDerivedForMessage := conversationDerivedPathsForMessage(storedDerivedPaths, conversationID, document.MessageIndex)
@@ -931,49 +931,6 @@ func (diff *conversationMessageDiff) addRemoval(conversationID string, messageIn
 	thinkingPath := conversationThinkingPath(conversationID, messageIndex)
 	diff.removalPaths = append(diff.removalPaths, relativePath, toolPath, thinkingPath)
 	diff.removalPrefixes = append(diff.removalPrefixes, relativePath+"/", toolPath+"/", thinkingPath+"/")
-}
-
-func conversationRelativePath(conversationID string, messageIndex int32, partIndex int, multipart bool) string {
-	basePath := fmt.Sprintf("conv/%s/%d", conversationID, messageIndex)
-	if !multipart {
-		return basePath
-	}
-	return fmt.Sprintf("%s/%d", basePath, partIndex)
-}
-
-func conversationRelativePathPrefix(conversationID string) string {
-	return "conv/" + conversationID + "/"
-}
-
-func splitConversationText(text string, chunkByteBudget ...int) []string {
-	return splitTextByBytes(text, resolveConversationChunkBudget(chunkByteBudget))
-}
-
-// splitTextByBytes cuts text into UTF-8-aligned pieces of at most maxBytes each.
-// A non-positive maxBytes disables splitting and returns the text unchanged.
-func splitTextByBytes(text string, maxBytes int) []string {
-	if maxBytes <= 0 || len(text) <= maxBytes {
-		return []string{text}
-	}
-	pieces := make([]string, 0, (len(text)+maxBytes-1)/maxBytes)
-	start := 0
-	for start < len(text) {
-		end := start + maxBytes
-		if end >= len(text) {
-			pieces = append(pieces, text[start:])
-			break
-		}
-		for end > start && !utf8.RuneStart(text[end]) {
-			end--
-		}
-		if end == start {
-			_, size := utf8.DecodeRuneInString(text[start:])
-			end = start + size
-		}
-		pieces = append(pieces, text[start:end])
-		start = end
-	}
-	return pieces
 }
 
 func (manager *Manager) findConversationCollectionLocked(collectionID string) (model.Codebase, bool) {

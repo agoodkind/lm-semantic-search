@@ -18,8 +18,17 @@ type conversationPart struct {
 }
 
 type conversationAssembly struct {
-	role  string
-	parts []conversationPart
+	role string
+	// roleFromBase records that role came from a base text row rather than a
+	// derived one. Rows arrive in no guaranteed order, and the delta comparison
+	// is against the base row, so a base row's role must win whenever the two
+	// disagree however late it arrives.
+	roleFromBase bool
+	// hasDerivedContent records that at least one of this message's derived rows
+	// was read, which is how the comparison tells a message that lost its tool
+	// call from one that never had one.
+	hasDerivedContent bool
+	parts             []conversationPart
 }
 
 // LoadConversationDerivedBatch loads stored state for a batch of conversations.
@@ -105,6 +114,19 @@ func addConversationBatchRow(
 			derived[candidate.ConversationID] = conversationDerived
 		}
 		conversationDerived[candidate.RelativePath] = contentKey
+		// Register the message this derived row belongs to. A turn carrying just
+		// a tool call or just reasoning stores no text row, so these rows are all
+		// the store holds for it, and a message missing from the assembled state
+		// reads as new: the examination path re-sends it and removes these same
+		// rows as orphans, on every sync for as long as the conversation exists.
+		//
+		// The role comes from the row because the comparison rejects a message
+		// whose stored role differs from the delivered one.
+		assembly := conversationAssemblyFor(assemblies, candidate)
+		assembly.hasDerivedContent = true
+		if !assembly.roleFromBase {
+			assembly.role = candidate.Role
+		}
 		return nil
 	}
 	partIndex, err := conversationPartIndex(
@@ -114,6 +136,26 @@ func addConversationBatchRow(
 	if err != nil {
 		return err
 	}
+	message := conversationAssemblyFor(assemblies, candidate)
+	if !message.roleFromBase {
+		message.role = candidate.Role
+		message.roleFromBase = true
+	}
+	message.parts = append(
+		message.parts,
+		conversationPart{index: partIndex, content: candidate.Content},
+	)
+	return nil
+}
+
+// conversationAssemblyFor returns the assembly for a row's message, creating it
+// when this is the first row seen for that message. Both the base and derived
+// paths go through it so a message exists in the assembled state whichever kind
+// of row named it first.
+func conversationAssemblyFor(
+	assemblies map[string]map[int32]*conversationAssembly,
+	candidate row,
+) *conversationAssembly {
 	conversationMessages := assemblies[candidate.ConversationID]
 	if conversationMessages == nil {
 		conversationMessages = make(map[int32]*conversationAssembly)
@@ -121,17 +163,15 @@ func addConversationBatchRow(
 	}
 	message := conversationMessages[candidate.MessageIndex]
 	if message == nil {
-		message = &conversationAssembly{role: candidate.Role, parts: nil}
+		message = &conversationAssembly{
+			role:              "",
+			roleFromBase:      false,
+			hasDerivedContent: false,
+			parts:             nil,
+		}
 		conversationMessages[candidate.MessageIndex] = message
 	}
-	if message.role == "" {
-		message.role = candidate.Role
-	}
-	message.parts = append(
-		message.parts,
-		conversationPart{index: partIndex, content: candidate.Content},
-	)
-	return nil
+	return message
 }
 
 func finalizeConversationBatchRows(
@@ -331,7 +371,7 @@ func assembleConversationMessages(
 		messages[messageIndex] = semantic.StoredMessageState{
 			Role:              assembly.role,
 			Text:              text.String(),
-			HasDerivedContent: false,
+			HasDerivedContent: assembly.hasDerivedContent,
 		}
 	}
 	return messages
