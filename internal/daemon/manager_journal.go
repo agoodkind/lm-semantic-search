@@ -10,7 +10,13 @@ import (
 )
 
 // jobProgressJournalInterval throttles how often a running job's progress is
-// appended to the journal. A crash loses at most this much progress detail.
+// entered into the journal queue.
+//
+// A clean shutdown flushes the queue, so it loses nothing. A hard kill loses
+// this interval of detail plus whatever the writer had not yet written, bounded
+// by the queue capacity. Boot reconciliation then sanitizes any job left
+// non-terminal, so the recovered record understates progress rather than
+// misreporting it.
 const jobProgressJournalInterval = 10 * time.Second
 
 // journalJobProgressLocked appends a throttled job_progress event so a daemon
@@ -28,8 +34,15 @@ func (manager *Manager) journalJobProgressLocked(job model.Job) {
 	if !last.IsZero() && now.Sub(last) < jobProgressJournalInterval {
 		return
 	}
-	// Advance the throttle after the event enters the ordered journal queue. The
-	// writer logs a later disk error with the journal path and job id.
+	// Advance the throttle once the event enters the ordered journal queue, which
+	// is what success means now that the writer owns the disk. An error here is
+	// the full-queue path, where the write ran synchronously and genuinely failed,
+	// so leaving the timestamp makes the next update retry it.
+	//
+	// A write that fails later, after the queue accepted it, cannot reset this
+	// timestamp. It needs no reset: the next progress update past the interval
+	// journals again on its own, so a failed write costs at most one interval of
+	// delay rather than the progress detail itself.
 	if err := manager.appendJobLocked("job_progress", job); err != nil {
 		slog.Warn("journal job progress failed; will retry on next update", "job_id", job.ID, "err", err)
 		return

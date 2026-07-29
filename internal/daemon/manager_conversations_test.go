@@ -1611,10 +1611,22 @@ func TestConversationRPCsQueueJournaledJobs(t *testing.T) {
 		return found && job.State == model.JobStateCompleted
 	})
 
-	jobs, err := store.ReadJobEvents(cfg.JobsPath)
-	if err != nil {
-		t.Fatalf("ReadJobEvents returned error: %v", err)
-	}
+	// The journal write is asynchronous, so the in-memory state can be terminal
+	// while the file still holds the previous event. Waiting for the map alone
+	// was sufficient when the append ran synchronously under manager.mu; it is
+	// not now. Wait for the file to catch up rather than reading it the instant
+	// the map settles.
+	var jobs map[string]model.Job
+	waitForCondition(t, func() bool {
+		read, err := store.ReadJobEvents(cfg.JobsPath)
+		if err != nil {
+			return false
+		}
+		jobs = read
+		return jobs[upsertResponse.GetJobId()].State == model.JobStateCompleted &&
+			jobs[deleteResponse.GetJobId()].State == model.JobStateCompleted
+	})
+
 	if jobs[upsertResponse.GetJobId()].Operation != string(jobOperationConversationIngest) {
 		t.Fatalf("upsert job operation = %q, want %q", jobs[upsertResponse.GetJobId()].Operation, jobOperationConversationIngest)
 	}
