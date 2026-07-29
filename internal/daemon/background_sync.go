@@ -17,6 +17,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -49,8 +50,8 @@ type BackgroundSync struct {
 	lastTrigger  time.Time
 
 	convergeMu sync.Mutex
-	// converging maps a codebase id to when its converge began, so a status read
-	// reports the age of work that holds no job record.
+	// converging maps a codebase id to when its admitted converge began, so a
+	// status read can distinguish capacity waits from running work.
 	converging map[string]time.Time
 
 	deferredWatcherMu    sync.Mutex
@@ -441,11 +442,14 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	corr := correlation.New("").WithIdentityAttributes(
 		correlation.IdentityAttribute{Key: "origin", Value: "watcher"},
 		correlation.IdentityAttribute{Key: "codebase_id", Value: codebaseID},
-		correlation.IdentityAttribute{Key: "job_id", Value: fmt.Sprintf("watch-%s-%d", codebaseID, clock.Now().Unix())},
 	)
 	ctx = correlation.WithContext(ctx, corr)
 
-	if codebase, found := syncer.watcherCodebase(codebaseID); found && shouldDeferWatcherConvergeForFirstBuild(codebase) {
+	codebase, found := syncer.watcherCodebase(codebaseID)
+	if !found {
+		return
+	}
+	if shouldDeferWatcherConvergeForFirstBuild(codebase) {
 		syncer.deferWatcherPaths(codebaseID, relativePaths)
 		return
 	}
@@ -482,8 +486,87 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	// start time is stamped here so a row's age measures work rather than wait.
 	syncer.markConvergeRunning(codebaseID)
 
-	if _, err := syncer.manager.ConvergePaths(ctx, codebaseID, relativePaths); err != nil {
-		slog.ErrorContext(ctx, "watcher.converge_failed", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebaseID, "err", err)
+	registration := syncer.registerConvergeJob(ctx, codebase, len(relativePaths))
+	defer registration.release()
+
+	registration.withContext(func(runCtx context.Context) {
+		outcome, runErr := syncer.manager.ConvergePaths(runCtx, codebaseID, relativePaths)
+		terminalCtx := context.WithoutCancel(runCtx)
+		switch {
+		case runErr != nil:
+			syncer.manager.updateJobFailed(terminalCtx, registration.job.ID, runErr)
+		case runCtx.Err() != nil:
+			syncer.manager.updateJobCancelled(terminalCtx, registration.job.ID)
+		default:
+			syncer.manager.updateJobCompleted(terminalCtx, registration.job.ID, indexer.Result{
+				IndexedFiles:      outcome.PathsConverged,
+				TotalChunks:       0,
+				TotalBytes:        0,
+				Chunks:            nil,
+				FileHashes:        nil,
+				SkippedFiles:      nil,
+				SkippedOversize:   0,
+				SkippedUnreadable: 0,
+				SkippedPending:    0,
+			})
+		}
+	})
+}
+
+type convergeJobRegistration struct {
+	job         model.Job
+	withContext func(func(context.Context))
+	release     func()
+}
+
+func (syncer *BackgroundSync) registerConvergeJob(
+	ctx context.Context,
+	codebase model.Codebase,
+	pathCount int,
+) convergeJobRegistration {
+	now := clock.Now()
+	job := newQueuedJob(
+		codebase.ID,
+		codebase.CanonicalPath,
+		codebase.CanonicalPath,
+		model.ClientInfo{Name: "daemon-watcher", PID: 0},
+		"converge",
+		false,
+		codebase.EffectiveConfig,
+		emptyAdmissionBudget,
+		now,
+	)
+	job.Progress.FilesTotal = safeInt32(pathCount)
+	job.Progress.Unit = "path"
+
+	jobCorr := correlation.FromContext(ctx).WithIdentityAttributes(
+		correlation.IdentityAttribute{Key: "job_id", Value: job.ID},
+	)
+	jobCtx, cancel := context.WithCancel(correlation.WithContext(ctx, jobCorr))
+
+	syncer.manager.mu.Lock()
+	if err := syncer.manager.appendJobLocked("start_converge", job); err != nil {
+		slog.ErrorContext(jobCtx, "append converge job event failed", "job_id", job.ID, "err", err)
+	}
+	syncer.manager.cancels[job.ID] = cancel
+	// A converge does not claim codebase.ActiveJobID, so
+	// beginActiveJobCancellationLocked cannot route a waiter to it.
+	// waitForJobDone accepts a nil channel, so manager.done needs no entry.
+	syncer.manager.mu.Unlock()
+
+	syncer.manager.updateJobRunning(job)
+
+	return convergeJobRegistration{
+		job: job,
+		withContext: func(run func(context.Context)) {
+			run(jobCtx)
+		},
+		release: func() {
+			cancel()
+			syncer.manager.mu.Lock()
+			delete(syncer.manager.cancels, job.ID)
+			syncer.manager.mu.Unlock()
+		},
 	}
 }
 
@@ -638,17 +721,16 @@ func syncConflictError(err error) bool {
 		strings.Contains(message, "codebase not tracked")
 }
 
-// Watcher activity states. They are the words a status surface prints, and they
-// are deliberately not the job lifecycle states: file-change work registers no
-// job, so it has no job state to borrow.
+// Watcher activity states describe file-change work before job registration and
+// paths waiting behind a running converge.
 const (
 	WatcherStateRunning = "running"
 	WatcherStateQueued  = "queued"
 )
 
-// WatcherActivity is one unit of file-change work the background syncer owns.
-// It carries no job id because a converge registers no job, which is exactly
-// why the job store cannot report it and this type exists.
+// WatcherActivity is one unit of admission or queued-path state the background
+// syncer owns. StatusSnapshot removes an admitted entry once its converge job is
+// registered, so a status reply reports the work once through the job store.
 type WatcherActivity struct {
 	CodebaseID   string
 	State        string

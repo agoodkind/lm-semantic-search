@@ -110,10 +110,9 @@ type Manager struct {
 	// reports uptime from it, so the number comes from the process rather than
 	// from a caller's clock.
 	startedAt time.Time
-	// watcherActivity reports file-change work, which registers no job and so is
-	// absent from the job store. The background syncer installs itself here at
-	// start; a manager with no syncer reports no watcher activity rather than
-	// failing, which is the case in tests and with file watching off.
+	// watcherActivity reports file-change admission and queued paths. The
+	// background syncer installs itself here at start; StatusSnapshot filters
+	// entries that already have a converge job.
 	watcherActivity      WatcherActivityReporter
 	watcherActivityMutex sync.Mutex
 	// indexSlots caps concurrently running index jobs. Each runJob holds one
