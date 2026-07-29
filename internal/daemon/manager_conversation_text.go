@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // This file owns how a conversation message's own text becomes stored rows:
@@ -45,6 +47,27 @@ func conversationStorableText(text string) string {
 		return text
 	}
 	return ""
+}
+
+// appendStorableConversationChunk adds a row only when its content holds
+// something a search could return.
+//
+// Every conversation row, whatever kind it is, is appended through here, so the
+// rule lives in one place rather than as a condition repeated at each producer.
+// A message's text, a tool's distilled summary, its command, its input, its
+// output, and a turn's reasoning all reach the store through this function, and
+// each one used to decide for itself. They disagreed: the text row tested
+// whether its content held a non-whitespace character while the other five
+// tested only whether the field was set, so a field holding a space produced a
+// row that no search could ever return.
+//
+// It also drops an individual empty piece of a split, which a per-field
+// condition cannot see because the split happens after the field is checked.
+func appendStorableConversationChunk(chunks []model.StoredChunk, chunk model.StoredChunk) []model.StoredChunk {
+	if !conversationTextIsStorable(chunk.Content) {
+		return chunks
+	}
+	return append(chunks, chunk)
 }
 
 func splitConversationText(text string, chunkByteBudget ...int) []string {

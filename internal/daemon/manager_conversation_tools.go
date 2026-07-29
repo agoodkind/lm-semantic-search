@@ -44,6 +44,12 @@ func newConversationStoredChunk(document model.ConversationDocument, conversatio
 }
 
 func splitConversationToolPayload(ctx context.Context, dispatcher *chunk.Dispatcher, document model.ConversationDocument, conversationID string, parentConversationID string, relativePathPrefix string, splitPath string, content string) ([]model.StoredChunk, error) {
+	// Refuse before the splitter runs, so a payload with nothing to retrieve
+	// costs no parse rather than being split into pieces that are then dropped
+	// one at a time.
+	if !conversationTextIsStorable(content) {
+		return nil, nil
+	}
 	splitResult, err := dispatcher.SplitFileWithType(ctx, splitPath, []byte(content), "")
 	if err != nil {
 		slog.ErrorContext(ctx, "split conversation tool payload failed", "relative_path_prefix", relativePathPrefix, "err", err)
@@ -51,7 +57,7 @@ func splitConversationToolPayload(ctx context.Context, dispatcher *chunk.Dispatc
 	}
 	chunks := make([]model.StoredChunk, 0, len(splitResult.Chunks))
 	for partIndex, splitChunk := range splitResult.Chunks {
-		chunks = append(chunks, newConversationStoredChunk(
+		chunks = appendStorableConversationChunk(chunks, newConversationStoredChunk(
 			document,
 			conversationID,
 			parentConversationID,
@@ -66,6 +72,9 @@ func splitConversationToolPayload(ctx context.Context, dispatcher *chunk.Dispatc
 }
 
 func splitConversationDerivedContent(document model.ConversationDocument, conversationID string, parentConversationID string, relativePath string, content string, chunkByteBudget ...int) []model.StoredChunk {
+	if !conversationTextIsStorable(content) {
+		return nil
+	}
 	pieces := splitConversationText(content, chunkByteBudget...)
 	chunks := make([]model.StoredChunk, 0, len(pieces))
 	multipart := len(pieces) > 1
@@ -74,7 +83,7 @@ func splitConversationDerivedContent(document model.ConversationDocument, conver
 		if multipart {
 			chunkRelativePath = fmt.Sprintf("%s/%d", relativePath, partIndex)
 		}
-		chunks = append(chunks, newConversationStoredChunk(
+		chunks = appendStorableConversationChunk(chunks, newConversationStoredChunk(
 			document,
 			conversationID,
 			parentConversationID,

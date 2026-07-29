@@ -629,30 +629,18 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 			return nil, errors.New("conversation id is required")
 		}
 		parentConversationID := strings.TrimSpace(document.ParentConversationID)
-		// Write a text row only when the text holds something a search could
-		// return. Splitting an empty string yields one empty piece, so writing
-		// unconditionally stored exactly one row holding nothing for every
-		// message that carried no text, which a turn with only a tool call or
-		// only reasoning always is. Whitespace alone is the same: it occupies a
-		// vector and can never match anything.
-		//
-		// This is the rule every sibling below already follows. Each of the tool
-		// token, command, input, output, and reasoning rows writes only when its
-		// own content is present.
-		if conversationTextIsStorable(document.Text) {
-			pieces := splitConversationText(document.Text, budget)
-			for partIndex, piece := range pieces {
-				chunks = append(chunks, newConversationStoredChunk(
-					document,
-					conversationID,
-					parentConversationID,
-					conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
-					piece,
-					"",
-					0,
-					0,
-				))
-			}
+		pieces := splitConversationText(document.Text, budget)
+		for partIndex, piece := range pieces {
+			chunks = appendStorableConversationChunk(chunks, newConversationStoredChunk(
+				document,
+				conversationID,
+				parentConversationID,
+				conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
+				piece,
+				"",
+				0,
+				0,
+			))
 		}
 		for toolIndex, toolCall := range document.Tools {
 			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
@@ -664,42 +652,34 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 				conversationToolTokenContent(toolCall),
 				budget,
 			)...)
-			if toolCall.Command != "" {
-				chunks = append(chunks, splitConversationDerivedContent(
-					document,
-					conversationID,
-					parentConversationID,
-					toolBasePath+"/cmd",
-					toolCall.Command,
-					budget,
-				)...)
-			}
-			extension := conversationToolExtension(toolCall.LangHint)
-			if toolCall.InputJSON != "" {
-				inputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/in", "tool"+extension, toolCall.InputJSON)
-				if err != nil {
-					return nil, err
-				}
-				chunks = append(chunks, inputChunks...)
-			}
-			if toolCall.Output != "" {
-				outputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/out", "tool"+extension, toolCall.Output)
-				if err != nil {
-					return nil, err
-				}
-				chunks = append(chunks, outputChunks...)
-			}
-		}
-		if document.Thinking != "" {
 			chunks = append(chunks, splitConversationDerivedContent(
 				document,
 				conversationID,
 				parentConversationID,
-				conversationThinkingPath(conversationID, document.MessageIndex),
-				document.Thinking,
+				toolBasePath+"/cmd",
+				toolCall.Command,
 				budget,
 			)...)
+			extension := conversationToolExtension(toolCall.LangHint)
+			inputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/in", "tool"+extension, toolCall.InputJSON)
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, inputChunks...)
+			outputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/out", "tool"+extension, toolCall.Output)
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, outputChunks...)
 		}
+		chunks = append(chunks, splitConversationDerivedContent(
+			document,
+			conversationID,
+			parentConversationID,
+			conversationThinkingPath(conversationID, document.MessageIndex),
+			document.Thinking,
+			budget,
+		)...)
 	}
 	return chunks, nil
 }
