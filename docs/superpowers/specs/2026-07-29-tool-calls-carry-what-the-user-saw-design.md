@@ -9,7 +9,7 @@ Scope: what a conversation tool call sends and stores. Message text and reasonin
 
 A tool call sends the text the user saw. Nothing else.
 
-A shell call sends its command. A file read sends the path it read. A tool whose input is a document sends that document. The harness's serialization of the call never leaves clyde.
+A shell call sends its command. A file read sends the path it read. A tool whose input is not an object, such as a patch sent as a bare string, sends that payload. The harness's serialization of the call never leaves clyde.
 
 ## What sends it
 
@@ -19,13 +19,15 @@ Each provider's parser. Only the provider knows its own harness's tool shapes, s
 
 ## What the wire carries
 
-One tool call carries its name, the text the user saw, a language hint, its output, and whether it errored.
+One tool call carries its name, the text the user saw, a language hint, its output, and whether it errored. Five fields and no sixth.
 
-The language hint stays because the engine splits and decomposes by format. Shell is a language, not a harness, so the engine may keep parsing it into program names and file paths.
+The wire carries no separate command field. A shell call's display text is its command, so a command field would hold a second copy of the same string, which is the duplication this change removes appearing one layer up.
+
+The language hint is what tells the engine the display text is a shell command. Shell is a language rather than a harness, so the engine may keep breaking that text into program names and file paths.
 
 ## What the engine stores
 
-One row per tool call: the tool's name, the program names and file paths extracted from a shell command when there is one, then the text.
+One row per tool call: the tool's name, the program names and file paths broken out of the display text when the language hint says shell, then the display text.
 
 ```
 Read

@@ -102,18 +102,33 @@ Replace the body so each line is `[tool: <name>]` plus `tool.Display` when it is
 
 ## 4. engine: the wire carries display, not serialization
 
-`proto/lmsemanticsearch/v1/service.proto`, in `ConversationToolCall` replace field 2:
+`proto/lmsemanticsearch/v1/service.proto`, `ConversationToolCall` becomes five fields:
 
 ```proto
+message ConversationToolCall {
+  // name is the tool name, for example "Bash" or "run_command".
+  string name = 1;
   // display is what the user saw for this call: the command a shell ran, the
   // path a file tool touched, the pattern a search used. Empty when clyde's
   // parser does not recognize the tool's shape.
   string display = 2;
+  // lang_hint names the language the display text is written in, for example
+  // "bash", "json", or "markdown". It is how the engine knows a display text is
+  // a shell command it may break into program names and file paths. Empty when
+  // unknown.
+  string lang_hint = 4;
+  // output is the tool result text when captured.
+  string output = 5;
+  // is_error marks a tool call that returned an error result.
+  bool is_error = 6;
+  reserved 3;
+  reserved "command";
+}
 ```
 
-Field 2 is reused rather than reserved: the engine reads the wire at ingest and never replays it, so nothing stored carries the old meaning.
+Field 2 is reused rather than reserved: the engine reads the wire at ingest and never replays it, so nothing stored carries the old meaning. Field 3 is reserved because a shell call's display text is already its command, and a second field would carry the same string twice.
 
-Regenerate, then follow the compiler to rename `InputJSON` to `Display` on the engine's model and its tests.
+Regenerate, then follow the compiler to rename `InputJSON` to `Display` and drop `Command` on the engine's model and its tests.
 
 **Done when:** `go build ./... && go test ./internal/daemon/` passes.
 
@@ -121,43 +136,33 @@ Regenerate, then follow the compiler to rename `InputJSON` to `Display` on the e
 
 ## 5. clyde: send display, delete the guesser
 
-`internal/conversation/semsearch/client.go`: `SemToolCall` loses `InputJSON`, gains `Display`.
+`internal/conversation/semsearch/client.go`: `SemToolCall` loses `InputJSON` and `Command`, gains `Display`.
 
-`internal/daemon/conversation_semantic_sync.go`: delete `deriveToolCommandAndLang` and `semanticToolCommandInput`. In `semanticToolCalls`, set `projected.Display = strings.ToValidUTF8(tool.Display, "")` and derive the command from the display text rather than by re-parsing JSON:
+`internal/daemon/conversation_semantic_sync.go`: delete `deriveToolCommandAndLang` and `semanticToolCommandInput`. In `semanticToolCalls`, set `projected.Display = strings.ToValidUTF8(tool.Display, "")` and set the hint from the tool's name:
 
 ```go
-// semanticToolCommandAndLang reports the shell command a tool ran and the
-// language its payload is written in.
+// semanticToolLangHint reports the language a tool call's display text is
+// written in.
 //
-// A shell tool's display text is the command, because that is what the user
-// saw, so the command needs no second derivation. The language hint tells the
-// engine how to split the payload, which is knowledge of formats rather than of
-// any harness.
-func semanticToolCommandAndLang(tool transcript.ToolCall) (string, string) {
-	display := strings.TrimSpace(tool.Display)
-	if display == "" {
-		return "", ""
+// A shell tool's display text is the command the user saw, so the hint is what
+// tells the engine it may break that text into program names and file paths.
+// The hint is a format, which the engine may know; the tool names below are the
+// only harness knowledge in this file and they are shared across every harness
+// clyde reads.
+func semanticToolLangHint(tool transcript.ToolCall) string {
+	if strings.TrimSpace(tool.Display) == "" {
+		return ""
 	}
-	if isShellToolName(tool.Name) {
-		return display, "bash"
-	}
-	return "", ""
-}
-
-// isShellToolName reports whether a tool name is a shell across the harnesses
-// clyde reads. The names are few, stable, and shared, so listing them here is
-// smaller than routing a flag through every parser.
-func isShellToolName(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
+	switch strings.ToLower(strings.TrimSpace(tool.Name)) {
 	case "bash", "shell", "run_terminal_cmd", "terminal", "local_shell":
-		return true
+		return "bash"
 	default:
-		return false
+		return ""
 	}
 }
 ```
 
-**Test:** a projected call carries the display text, and no projected field contains `file_path`. A shell call still carries its command and a `bash` hint.
+**Test:** a projected call carries the display text, and no projected field contains `file_path`. A shell call carries a `bash` hint and a file read carries none.
 
 **Done when:** `make test` passes in clyde.
 
@@ -165,7 +170,29 @@ func isShellToolName(name string) bool {
 
 ## 6. engine: one row per tool call
 
-`internal/daemon/manager_conversation_tools.go`: rename `conversationToolTokenContent` to `conversationToolContent` and replace the `InputJSON` append with `appendConversationToken(&tokens, toolCall.Display)`. That append is the whole defect: it copied text that also took a row of its own.
+`internal/daemon/manager_conversation_tools.go`: rename `conversationToolTokenContent` to `conversationToolContent`. It appends the tool's name, then the shell decomposition when `LangHint == "bash"`, then the display text:
+
+```go
+// conversationToolContent is everything one tool call stores: the tool's name,
+// the program names and file paths its command decomposes into, then what the
+// user saw.
+//
+// A tool call used to store three rows and two carried the same text, because
+// this function appended the arguments to a summary while the arguments also
+// took a row of their own. One row cannot repeat itself.
+func conversationToolContent(toolCall model.ConversationToolCall) string {
+	tokens := make([]string, 0)
+	appendConversationToken(&tokens, toolCall.Name)
+	display := strings.TrimSpace(toolCall.Display)
+	if display != "" && toolCall.LangHint == "bash" {
+		appendConversationShellTokens(&tokens, display)
+	}
+	appendConversationToken(&tokens, toolCall.Display)
+	return strings.Join(tokens, "\n")
+}
+```
+
+The old `InputJSON` append is the whole defect: it copied text that also took a row of its own.
 
 Delete `truncateConversationToolSummary`, `conversationToolSummaryMaxBytes`, `splitConversationToolPayload`, `newConversationToolDispatcher`, `conversationToolExtension`, and `conversationToolExtensions` once the compiler shows nothing uses them.
 
@@ -191,7 +218,7 @@ func namedToolPiece(name string, piece string, partIndex int) string {
 
 `internal/daemon/item_source.go`: `conversationNeedsDerivedWork` expects a row under `conversationToolMessagePath(...) + "/"`, which still holds. Prove it with a test rather than by reading, because a classifier expecting a path the generator no longer writes reports work needed forever.
 
-**Test:** one tool call stores exactly one row at `convtool/claude:a/0/0`, containing the tool name, the decomposed program names, and the command. A payload past the budget splits, and every piece begins with the tool name. The derived-work classifier wants no work when the row is present.
+**Test:** a `Bash` call with `Display: "ls -la /tmp"` and `LangHint: "bash"` stores exactly one row at `convtool/claude:a/0/0` containing `Bash`, the decomposed `ls`, and `ls -la /tmp`. A `Read` call with no hint stores one row containing its name and path and no shell tokens. A payload past the budget splits, and every piece begins with the tool name. The derived-work classifier wants no work when the row is present.
 
 Existing tests asserting `/tok`, `/cmd`, or `/in` paths need updating; those paths no longer exist.
 
