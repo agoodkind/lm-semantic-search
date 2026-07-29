@@ -86,6 +86,7 @@ func newRoot(defaultSocketPath string) *cobra.Command {
 	root.PersistentFlags().StringVar(&options.outputValue, "output", options.outputValue, "output mode: human, json, or single-line")
 
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newStatusCmd(options))
 	root.AddCommand(newCodebaseCmd(options))
 	root.AddCommand(newJobCmd(options))
 	root.AddCommand(newDaemonCmd(options))
