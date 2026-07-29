@@ -13,13 +13,31 @@ import (
 )
 
 type conversationPart struct {
-	index   int
-	content string
+	index int
+	// splitPart is the piece's position when one stored path was cut again to
+	// fit the embedding budget, so several pieces share a relative path and are
+	// told apart only by this. Ordering by path alone would concatenate them in
+	// whatever order the snapshot returned, and a rebuilt text that differs from
+	// the delivered one makes an unchanged message read as changed on every sync.
+	splitPart int32
+	// splitPartRecorded marks a row written after the position was persisted, so
+	// a legacy row that predates the field is not read back as position zero.
+	splitPartRecorded bool
+	content           string
 }
 
 type conversationAssembly struct {
-	role  string
-	parts []conversationPart
+	role string
+	// roleFromBase records that role came from a base text row rather than a
+	// derived one. Rows arrive in no guaranteed order, and the delta comparison
+	// is against the base row, so a base row's role must win whenever the two
+	// disagree however late it arrives.
+	roleFromBase bool
+	// hasDerivedContent records that at least one of this message's derived rows
+	// was read, which is how the comparison tells a message that lost its tool
+	// call from one that never had one.
+	hasDerivedContent bool
+	parts             []conversationPart
 }
 
 // LoadConversationDerivedBatch loads stored state for a batch of conversations.
@@ -105,6 +123,19 @@ func addConversationBatchRow(
 			derived[candidate.ConversationID] = conversationDerived
 		}
 		conversationDerived[candidate.RelativePath] = contentKey
+		// Register the message this derived row belongs to. A turn carrying just
+		// a tool call or just reasoning stores no text row, so these rows are all
+		// the store holds for it, and a message missing from the assembled state
+		// reads as new: the examination path re-sends it and removes these same
+		// rows as orphans, on every sync for as long as the conversation exists.
+		//
+		// The role comes from the row because the comparison rejects a message
+		// whose stored role differs from the delivered one.
+		assembly := conversationAssemblyFor(assemblies, candidate)
+		assembly.hasDerivedContent = true
+		if !assembly.roleFromBase {
+			assembly.role = candidate.Role
+		}
 		return nil
 	}
 	partIndex, err := conversationPartIndex(
@@ -114,6 +145,31 @@ func addConversationBatchRow(
 	if err != nil {
 		return err
 	}
+	message := conversationAssemblyFor(assemblies, candidate)
+	if !message.roleFromBase {
+		message.role = candidate.Role
+		message.roleFromBase = true
+	}
+	message.parts = append(
+		message.parts,
+		conversationPart{
+			index:             partIndex,
+			splitPart:         candidate.SplitPart,
+			splitPartRecorded: candidate.SplitPartRecorded,
+			content:           candidate.Content,
+		},
+	)
+	return nil
+}
+
+// conversationAssemblyFor returns the assembly for a row's message, creating it
+// when this is the first row seen for that message. Both the base and derived
+// paths go through it so a message exists in the assembled state whichever kind
+// of row named it first.
+func conversationAssemblyFor(
+	assemblies map[string]map[int32]*conversationAssembly,
+	candidate row,
+) *conversationAssembly {
 	conversationMessages := assemblies[candidate.ConversationID]
 	if conversationMessages == nil {
 		conversationMessages = make(map[int32]*conversationAssembly)
@@ -121,17 +177,15 @@ func addConversationBatchRow(
 	}
 	message := conversationMessages[candidate.MessageIndex]
 	if message == nil {
-		message = &conversationAssembly{role: candidate.Role, parts: nil}
+		message = &conversationAssembly{
+			role:              "",
+			roleFromBase:      false,
+			hasDerivedContent: false,
+			parts:             nil,
+		}
 		conversationMessages[candidate.MessageIndex] = message
 	}
-	if message.role == "" {
-		message.role = candidate.Role
-	}
-	message.parts = append(
-		message.parts,
-		conversationPart{index: partIndex, content: candidate.Content},
-	)
-	return nil
+	return message
 }
 
 func finalizeConversationBatchRows(
@@ -316,13 +370,42 @@ func conversationPartIndex(relativePath string, conversationID string) (int, err
 	return partIndex, nil
 }
 
+// conversationPartPrecedes orders two pieces of one message's stored text. It
+// must be a total order, and it must match the Milvus loader's exactly: both
+// rebuild a message's text by concatenating its pieces, and a text that rebuilds
+// differently from the one delivered makes an unchanged message read as changed
+// on every sync for as long as the conversation exists.
+//
+// Every key is consulted before falling through to the next, so two pieces are
+// treated as equal only when they are indistinguishable. Stopping at the split
+// position would leave two pieces sharing one position ordered by whatever order
+// the store returned them in, and the two stores do not return rows in the same
+// order.
+func conversationPartPrecedes(left conversationPart, right conversationPart) bool {
+	if left.index != right.index {
+		return left.index < right.index
+	}
+	if left.splitPartRecorded != right.splitPartRecorded {
+		return left.splitPartRecorded
+	}
+	if left.splitPartRecorded && left.splitPart != right.splitPart {
+		return left.splitPart < right.splitPart
+	}
+	return left.content < right.content
+}
+
 func assembleConversationMessages(
 	assemblies map[int32]*conversationAssembly,
 ) map[int32]semantic.StoredMessageState {
 	messages := make(map[int32]semantic.StoredMessageState, len(assemblies))
 	for messageIndex, assembly := range assemblies {
+		// This ordering matches the Milvus loader's exactly. Both rebuild a
+		// message's text by concatenating its parts, and a text that rebuilds
+		// differently from the one delivered makes an unchanged message read as
+		// changed on every sync for as long as the conversation exists, so the
+		// two loaders cannot order parts differently.
 		sort.SliceStable(assembly.parts, func(left int, right int) bool {
-			return assembly.parts[left].index < assembly.parts[right].index
+			return conversationPartPrecedes(assembly.parts[left], assembly.parts[right])
 		})
 		var text strings.Builder
 		for _, part := range assembly.parts {
@@ -331,7 +414,7 @@ func assembleConversationMessages(
 		messages[messageIndex] = semantic.StoredMessageState{
 			Role:              assembly.role,
 			Text:              text.String(),
-			HasDerivedContent: false,
+			HasDerivedContent: assembly.hasDerivedContent,
 		}
 	}
 	return messages

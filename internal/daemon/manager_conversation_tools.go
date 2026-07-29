@@ -44,6 +44,13 @@ func newConversationStoredChunk(document model.ConversationDocument, conversatio
 }
 
 func splitConversationToolPayload(ctx context.Context, dispatcher *chunk.Dispatcher, document model.ConversationDocument, conversationID string, parentConversationID string, relativePathPrefix string, splitPath string, content string) ([]model.StoredChunk, error) {
+	// The decision is about the whole payload and is taken before the splitter
+	// runs, so a payload with nothing to retrieve costs no parse. Once the
+	// payload is worth storing, every piece the splitter returns is stored, the
+	// same rule the text and derived paths follow.
+	if !conversationTextIsStorable(content) {
+		return nil, nil
+	}
 	splitResult, err := dispatcher.SplitFileWithType(ctx, splitPath, []byte(content), "")
 	if err != nil {
 		slog.ErrorContext(ctx, "split conversation tool payload failed", "relative_path_prefix", relativePathPrefix, "err", err)
@@ -66,26 +73,27 @@ func splitConversationToolPayload(ctx context.Context, dispatcher *chunk.Dispatc
 }
 
 func splitConversationDerivedContent(document model.ConversationDocument, conversationID string, parentConversationID string, relativePath string, content string, chunkByteBudget ...int) []model.StoredChunk {
-	pieces := splitConversationText(content, chunkByteBudget...)
-	chunks := make([]model.StoredChunk, 0, len(pieces))
-	multipart := len(pieces) > 1
-	for partIndex, piece := range pieces {
-		chunkRelativePath := relativePath
-		if multipart {
-			chunkRelativePath = fmt.Sprintf("%s/%d", relativePath, partIndex)
-		}
-		chunks = append(chunks, newConversationStoredChunk(
-			document,
-			conversationID,
-			parentConversationID,
-			chunkRelativePath,
-			piece,
-			"",
-			0,
-			0,
-		))
-	}
-	return chunks
+	return appendStorableConversationField(
+		nil,
+		content,
+		resolveConversationChunkBudget(chunkByteBudget),
+		func(piece string, partIndex int, multipart bool) model.StoredChunk {
+			chunkRelativePath := relativePath
+			if multipart {
+				chunkRelativePath = fmt.Sprintf("%s/%d", relativePath, partIndex)
+			}
+			return newConversationStoredChunk(
+				document,
+				conversationID,
+				parentConversationID,
+				chunkRelativePath,
+				piece,
+				"",
+				0,
+				0,
+			)
+		},
+	)
 }
 
 func conversationToolTokenContent(toolCall model.ConversationToolCall) string {

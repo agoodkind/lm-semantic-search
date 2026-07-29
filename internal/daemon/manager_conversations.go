@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/clock"
@@ -630,19 +629,23 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 			return nil, errors.New("conversation id is required")
 		}
 		parentConversationID := strings.TrimSpace(document.ParentConversationID)
-		pieces := splitConversationText(document.Text, budget)
-		for partIndex, piece := range pieces {
-			chunks = append(chunks, newConversationStoredChunk(
-				document,
-				conversationID,
-				parentConversationID,
-				conversationRelativePath(conversationID, document.MessageIndex, partIndex, len(pieces) > 1),
-				piece,
-				"",
-				0,
-				0,
-			))
-		}
+		chunks = appendStorableConversationField(
+			chunks,
+			document.Text,
+			budget,
+			func(piece string, partIndex int, multipart bool) model.StoredChunk {
+				return newConversationStoredChunk(
+					document,
+					conversationID,
+					parentConversationID,
+					conversationRelativePath(conversationID, document.MessageIndex, partIndex, multipart),
+					piece,
+					"",
+					0,
+					0,
+				)
+			},
+		)
 		for toolIndex, toolCall := range document.Tools {
 			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
 			chunks = append(chunks, splitConversationDerivedContent(
@@ -653,42 +656,34 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 				conversationToolTokenContent(toolCall),
 				budget,
 			)...)
-			if toolCall.Command != "" {
-				chunks = append(chunks, splitConversationDerivedContent(
-					document,
-					conversationID,
-					parentConversationID,
-					toolBasePath+"/cmd",
-					toolCall.Command,
-					budget,
-				)...)
-			}
-			extension := conversationToolExtension(toolCall.LangHint)
-			if toolCall.InputJSON != "" {
-				inputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/in", "tool"+extension, toolCall.InputJSON)
-				if err != nil {
-					return nil, err
-				}
-				chunks = append(chunks, inputChunks...)
-			}
-			if toolCall.Output != "" {
-				outputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/out", "tool"+extension, toolCall.Output)
-				if err != nil {
-					return nil, err
-				}
-				chunks = append(chunks, outputChunks...)
-			}
-		}
-		if document.Thinking != "" {
 			chunks = append(chunks, splitConversationDerivedContent(
 				document,
 				conversationID,
 				parentConversationID,
-				conversationThinkingPath(conversationID, document.MessageIndex),
-				document.Thinking,
+				toolBasePath+"/cmd",
+				toolCall.Command,
 				budget,
 			)...)
+			extension := conversationToolExtension(toolCall.LangHint)
+			inputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/in", "tool"+extension, toolCall.InputJSON)
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, inputChunks...)
+			outputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/out", "tool"+extension, toolCall.Output)
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, outputChunks...)
 		}
+		chunks = append(chunks, splitConversationDerivedContent(
+			document,
+			conversationID,
+			parentConversationID,
+			conversationThinkingPath(conversationID, document.MessageIndex),
+			document.Thinking,
+			budget,
+		)...)
 	}
 	return chunks, nil
 }
@@ -718,11 +713,11 @@ type conversationMessageDiff struct {
 // the base state with the derived paths, so the same partially applied removal is
 // also repaired in its undelivered form rather than only when the message comes
 // back. "Unchanged" means the stored role equals document.Role and the assembled
-// stored text equals document.Text, which is also the text
-// conversationDocumentsToStoredChunks stores after multipart splitting. Stale
-// stored indices must be deleted here because the conversation source uses
-// absenceRetain, so an absent message row would otherwise survive forever once the
-// conversation fingerprint advances.
+// stored text equals the delivered text once both are reduced to what the
+// storable rule would keep, which is what conversationDocumentsToStoredChunks
+// writes after multipart splitting. Stale stored indices must be deleted here
+// because the conversation source uses absenceRetain, so an absent message row
+// would otherwise survive forever once the conversation fingerprint advances.
 func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, stored semantic.ConversationStoredRows, chunkByteBudget ...int) (conversationMessageDiff, error) {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
@@ -854,7 +849,19 @@ func conversationDerivedMessageIndex(relativePath string, toolPrefix string, thi
 // proof the target row exists, so an absent target row makes the message changed
 // and the reindex inserts it, reusing the shared vector rather than re-embedding.
 func conversationDocumentMatchesStored(ctx context.Context, conversationID string, document model.ConversationDocument, message semantic.StoredMessageState, storedDerivedPaths map[string]string, chunkByteBudget ...int) (bool, error) {
-	if message.Role != document.Role || message.Text != document.Text {
+	// Both sides are reduced before comparing. The delivered side is reduced
+	// because the store never holds text this rule calls unstorable. The stored
+	// side is reduced because rows written before this rule did hold such text:
+	// a row of spacing exists for about 1,600 messages. Comparing the raw stored
+	// spacing against the reduced delivered text would call those messages
+	// changed, replace their rows, and rewrite them, when the instruction is
+	// that existing rows stay as they are until they are removed by hand.
+	//
+	// Reducing both sides also cannot hide a real change. Text that gains or
+	// loses content still differs, because only text with nothing to retrieve
+	// reduces to empty.
+	if message.Role != document.Role ||
+		conversationStorableText(message.Text) != conversationStorableText(document.Text) {
 		return false, nil
 	}
 	storedDerivedForMessage := conversationDerivedPathsForMessage(storedDerivedPaths, conversationID, document.MessageIndex)
@@ -919,49 +926,6 @@ func (diff *conversationMessageDiff) addRemoval(conversationID string, messageIn
 	thinkingPath := conversationThinkingPath(conversationID, messageIndex)
 	diff.removalPaths = append(diff.removalPaths, relativePath, toolPath, thinkingPath)
 	diff.removalPrefixes = append(diff.removalPrefixes, relativePath+"/", toolPath+"/", thinkingPath+"/")
-}
-
-func conversationRelativePath(conversationID string, messageIndex int32, partIndex int, multipart bool) string {
-	basePath := fmt.Sprintf("conv/%s/%d", conversationID, messageIndex)
-	if !multipart {
-		return basePath
-	}
-	return fmt.Sprintf("%s/%d", basePath, partIndex)
-}
-
-func conversationRelativePathPrefix(conversationID string) string {
-	return "conv/" + conversationID + "/"
-}
-
-func splitConversationText(text string, chunkByteBudget ...int) []string {
-	return splitTextByBytes(text, resolveConversationChunkBudget(chunkByteBudget))
-}
-
-// splitTextByBytes cuts text into UTF-8-aligned pieces of at most maxBytes each.
-// A non-positive maxBytes disables splitting and returns the text unchanged.
-func splitTextByBytes(text string, maxBytes int) []string {
-	if maxBytes <= 0 || len(text) <= maxBytes {
-		return []string{text}
-	}
-	pieces := make([]string, 0, (len(text)+maxBytes-1)/maxBytes)
-	start := 0
-	for start < len(text) {
-		end := start + maxBytes
-		if end >= len(text) {
-			pieces = append(pieces, text[start:])
-			break
-		}
-		for end > start && !utf8.RuneStart(text[end]) {
-			end--
-		}
-		if end == start {
-			_, size := utf8.DecodeRuneInString(text[start:])
-			end = start + size
-		}
-		pieces = append(pieces, text[start:end])
-		start = end
-	}
-	return pieces
 }
 
 func (manager *Manager) findConversationCollectionLocked(collectionID string) (model.Codebase, bool) {

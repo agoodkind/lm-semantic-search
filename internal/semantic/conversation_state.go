@@ -30,7 +30,12 @@ type storedMessagePart struct {
 }
 
 type storedMessageAssembly struct {
-	role              string
+	role string
+	// roleFromBase records that role came from a base text row rather than a
+	// derived one. Rows arrive in no guaranteed order, and the delta comparison
+	// is against the base row, so a base row's role must win whenever the two
+	// disagree however late it arrives.
+	roleFromBase      bool
 	parts             []storedMessagePart
 	hasDerivedContent bool
 }
@@ -151,14 +156,18 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 			slog.Error("read conversation state relative path column failed", "index", rowIndex, "err", relativePathErr)
 			return legacyRows, fmt.Errorf("read relative path column at %d: %w", rowIndex, relativePathErr)
 		}
-		if isDerivedConversationRelativePath(relativePath) {
-			markStoredMessageDerived(assemblies, safeInt32FromInt64(messageIndex))
-			continue
-		}
 		role, roleErr := roleColumn.GetAsString(rowIndex)
 		if roleErr != nil {
 			slog.Error("read conversation state role column failed", "index", rowIndex, "err", roleErr)
 			return legacyRows, fmt.Errorf("read role column at %d: %w", rowIndex, roleErr)
+		}
+		if isDerivedConversationRelativePath(relativePath) {
+			// Read the role before the derived branch returns. A message whose
+			// only stored rows are derived would otherwise assemble with an empty
+			// role, and the delta comparison rejects a message whose stored role
+			// differs from the delivered one, so it would never match.
+			markStoredMessageDerivedWithRole(assemblies, safeInt32FromInt64(messageIndex), role)
+			continue
 		}
 		partIndex, partErr := conversationMessagePartIndex(relativePath, conversationPrefix)
 		if partErr != nil {
@@ -257,11 +266,12 @@ func appendStoredMessagePart(
 ) {
 	assembly := assemblies[messageIndex]
 	if assembly == nil {
-		assembly = &storedMessageAssembly{role: "", parts: nil, hasDerivedContent: false}
+		assembly = &storedMessageAssembly{role: "", roleFromBase: false, parts: nil, hasDerivedContent: false}
 		assemblies[messageIndex] = assembly
 	}
-	if assembly.role == "" {
+	if !assembly.roleFromBase {
 		assembly.role = role
+		assembly.roleFromBase = true
 	}
 	assembly.parts = append(assembly.parts, storedMessagePart{
 		pathIndex:         pathIndex,
@@ -274,28 +284,60 @@ func appendStoredMessagePart(
 func markStoredMessageDerived(assemblies map[int32]*storedMessageAssembly, messageIndex int32) {
 	assembly := assemblies[messageIndex]
 	if assembly == nil {
-		assembly = &storedMessageAssembly{role: "", parts: nil, hasDerivedContent: false}
+		assembly = &storedMessageAssembly{role: "", roleFromBase: false, parts: nil, hasDerivedContent: false}
 		assemblies[messageIndex] = assembly
 	}
 	assembly.hasDerivedContent = true
+}
+
+// markStoredMessageDerivedWithRole records a message that exists because one of
+// its derived rows was read, carrying the role that row holds. A message whose
+// only stored rows are derived has no base row to take a role from, and the
+// delta comparison rejects a message whose stored role differs from the
+// delivered one, so registering it without a role would never match.
+//
+// The role is filled only when no base row has supplied one, so a base row wins
+// whatever order the rows arrive in.
+func markStoredMessageDerivedWithRole(
+	assemblies map[int32]*storedMessageAssembly,
+	messageIndex int32,
+	role string,
+) {
+	markStoredMessageDerived(assemblies, messageIndex)
+	if assembly := assemblies[messageIndex]; assembly != nil && !assembly.roleFromBase {
+		assembly.role = role
+	}
+}
+
+// storedMessagePartPrecedes orders two pieces of one message's stored text. It
+// must be a total order, and the offline loader's equivalent must match it
+// exactly: both rebuild a message's text by concatenating its pieces, and a text
+// that rebuilds differently from the one delivered makes an unchanged message
+// read as changed on every sync for as long as the conversation exists.
+//
+// Every key is consulted before falling through to the next, so two pieces are
+// treated as equal only when they are indistinguishable. Stopping at the split
+// position would leave two pieces sharing one position ordered by whatever order
+// the store returned them in, and the two stores do not return rows in the same
+// order.
+func storedMessagePartPrecedes(left storedMessagePart, right storedMessagePart) bool {
+	if left.pathIndex != right.pathIndex {
+		return left.pathIndex < right.pathIndex
+	}
+	if left.splitPartRecorded != right.splitPartRecorded {
+		return left.splitPartRecorded
+	}
+	if left.splitPartRecorded && left.splitPart != right.splitPart {
+		return left.splitPart < right.splitPart
+	}
+	return left.content < right.content
 }
 
 func assembleStoredMessageState(assemblies map[int32]*storedMessageAssembly) map[int32]StoredMessageState {
 	state := make(map[int32]StoredMessageState, len(assemblies))
 	for messageIndex, assembly := range assemblies {
 		sort.SliceStable(assembly.parts, func(left int, right int) bool {
-			leftPart := assembly.parts[left]
-			rightPart := assembly.parts[right]
-			if leftPart.pathIndex != rightPart.pathIndex {
-				return leftPart.pathIndex < rightPart.pathIndex
-			}
-			if leftPart.splitPartRecorded && rightPart.splitPartRecorded {
-				return leftPart.splitPart < rightPart.splitPart
-			}
-			if leftPart.splitPartRecorded != rightPart.splitPartRecorded {
-				return leftPart.splitPartRecorded
-			}
-			return leftPart.content < rightPart.content
+			return storedMessagePartPrecedes(assembly.parts[left], assembly.parts[right])
 		})
 		var text strings.Builder
 		for _, part := range assembly.parts {
