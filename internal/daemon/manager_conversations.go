@@ -900,8 +900,19 @@ func conversationDerivedMessageIndex(relativePath string, toolPrefix string, thi
 // proof the target row exists, so an absent target row makes the message changed
 // and the reindex inserts it, reusing the shared vector rather than re-embedding.
 func conversationDocumentMatchesStored(ctx context.Context, conversationID string, document model.ConversationDocument, message semantic.StoredMessageState, storedDerivedPaths map[string]string, chunkByteBudget ...int) (bool, error) {
+	// Both sides are reduced before comparing. The delivered side is reduced
+	// because the store never holds text this rule calls unstorable. The stored
+	// side is reduced because rows written before this rule did hold such text:
+	// a row of spacing exists for about 1,600 messages. Comparing the raw stored
+	// spacing against the reduced delivered text would call those messages
+	// changed, replace their rows, and rewrite them, when the instruction is
+	// that existing rows stay as they are until they are removed by hand.
+	//
+	// Reducing both sides also cannot hide a real change. Text that gains or
+	// loses content still differs, because only text with nothing to retrieve
+	// reduces to empty.
 	if message.Role != document.Role ||
-		message.Text != conversationStorableText(document.Text) {
+		conversationStorableText(message.Text) != conversationStorableText(document.Text) {
 		return false, nil
 	}
 	storedDerivedForMessage := conversationDerivedPathsForMessage(storedDerivedPaths, conversationID, document.MessageIndex)

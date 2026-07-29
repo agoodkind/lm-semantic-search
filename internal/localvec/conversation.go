@@ -370,6 +370,30 @@ func conversationPartIndex(relativePath string, conversationID string) (int, err
 	return partIndex, nil
 }
 
+// conversationPartPrecedes orders two pieces of one message's stored text. It
+// must be a total order, and it must match the Milvus loader's exactly: both
+// rebuild a message's text by concatenating its pieces, and a text that rebuilds
+// differently from the one delivered makes an unchanged message read as changed
+// on every sync for as long as the conversation exists.
+//
+// Every key is consulted before falling through to the next, so two pieces are
+// treated as equal only when they are indistinguishable. Stopping at the split
+// position would leave two pieces sharing one position ordered by whatever order
+// the store returned them in, and the two stores do not return rows in the same
+// order.
+func conversationPartPrecedes(left conversationPart, right conversationPart) bool {
+	if left.index != right.index {
+		return left.index < right.index
+	}
+	if left.splitPartRecorded != right.splitPartRecorded {
+		return left.splitPartRecorded
+	}
+	if left.splitPartRecorded && left.splitPart != right.splitPart {
+		return left.splitPart < right.splitPart
+	}
+	return left.content < right.content
+}
+
 func assembleConversationMessages(
 	assemblies map[int32]*conversationAssembly,
 ) map[int32]semantic.StoredMessageState {
@@ -381,18 +405,7 @@ func assembleConversationMessages(
 		// changed on every sync for as long as the conversation exists, so the
 		// two loaders cannot order parts differently.
 		sort.SliceStable(assembly.parts, func(left int, right int) bool {
-			leftPart := assembly.parts[left]
-			rightPart := assembly.parts[right]
-			if leftPart.index != rightPart.index {
-				return leftPart.index < rightPart.index
-			}
-			if leftPart.splitPartRecorded && rightPart.splitPartRecorded {
-				return leftPart.splitPart < rightPart.splitPart
-			}
-			if leftPart.splitPartRecorded != rightPart.splitPartRecorded {
-				return leftPart.splitPartRecorded
-			}
-			return leftPart.content < rightPart.content
+			return conversationPartPrecedes(assembly.parts[left], assembly.parts[right])
 		})
 		var text strings.Builder
 		for _, part := range assembly.parts {

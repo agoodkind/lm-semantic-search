@@ -309,22 +309,35 @@ func markStoredMessageDerivedWithRole(
 	}
 }
 
+// storedMessagePartPrecedes orders two pieces of one message's stored text. It
+// must be a total order, and the offline loader's equivalent must match it
+// exactly: both rebuild a message's text by concatenating its pieces, and a text
+// that rebuilds differently from the one delivered makes an unchanged message
+// read as changed on every sync for as long as the conversation exists.
+//
+// Every key is consulted before falling through to the next, so two pieces are
+// treated as equal only when they are indistinguishable. Stopping at the split
+// position would leave two pieces sharing one position ordered by whatever order
+// the store returned them in, and the two stores do not return rows in the same
+// order.
+func storedMessagePartPrecedes(left storedMessagePart, right storedMessagePart) bool {
+	if left.pathIndex != right.pathIndex {
+		return left.pathIndex < right.pathIndex
+	}
+	if left.splitPartRecorded != right.splitPartRecorded {
+		return left.splitPartRecorded
+	}
+	if left.splitPartRecorded && left.splitPart != right.splitPart {
+		return left.splitPart < right.splitPart
+	}
+	return left.content < right.content
+}
+
 func assembleStoredMessageState(assemblies map[int32]*storedMessageAssembly) map[int32]StoredMessageState {
 	state := make(map[int32]StoredMessageState, len(assemblies))
 	for messageIndex, assembly := range assemblies {
 		sort.SliceStable(assembly.parts, func(left int, right int) bool {
-			leftPart := assembly.parts[left]
-			rightPart := assembly.parts[right]
-			if leftPart.pathIndex != rightPart.pathIndex {
-				return leftPart.pathIndex < rightPart.pathIndex
-			}
-			if leftPart.splitPartRecorded && rightPart.splitPartRecorded {
-				return leftPart.splitPart < rightPart.splitPart
-			}
-			if leftPart.splitPartRecorded != rightPart.splitPartRecorded {
-				return leftPart.splitPartRecorded
-			}
-			return leftPart.content < rightPart.content
+			return storedMessagePartPrecedes(assembly.parts[left], assembly.parts[right])
 		})
 		var text strings.Builder
 		for _, part := range assembly.parts {

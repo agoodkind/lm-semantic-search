@@ -64,6 +64,52 @@ func TestPathOrderStillWinsOverSplitOrder(t *testing.T) {
 	}
 }
 
+// TestPiecesSharingAPositionOrderByContent covers the tie the comparator has to
+// break itself.
+//
+// Two pieces sharing a path index and a recorded split position are ordered by
+// nothing else unless the comparator falls through to their content. Left
+// undecided, they keep whatever order the store returned them in, and the two
+// stores do not return rows in the same order, so the same stored rows would
+// rebuild as one text here and a different text there.
+func TestPiecesSharingAPositionOrderByContent(t *testing.T) {
+	t.Parallel()
+
+	forward := map[int32]*conversationAssembly{
+		0: {
+			role:         "assistant",
+			roleFromBase: true,
+			parts: []conversationPart{
+				{index: 0, splitPart: 0, splitPartRecorded: true, content: "A"},
+				{index: 0, splitPart: 0, splitPartRecorded: true, content: "B"},
+			},
+		},
+	}
+	reversed := map[int32]*conversationAssembly{
+		0: {
+			role:         "assistant",
+			roleFromBase: true,
+			parts: []conversationPart{
+				{index: 0, splitPart: 0, splitPartRecorded: true, content: "B"},
+				{index: 0, splitPart: 0, splitPartRecorded: true, content: "A"},
+			},
+		},
+	}
+
+	first := assembleConversationMessages(forward)[0].Text
+	second := assembleConversationMessages(reversed)[0].Text
+	if first != second {
+		t.Fatalf(
+			"the same stored rows rebuilt as %q in one order and %q in the other",
+			first,
+			second,
+		)
+	}
+	if first != "AB" {
+		t.Fatalf("rebuilt text = %q, want %q from the content tie-breaker", first, "AB")
+	}
+}
+
 // TestALegacyPieceWithoutARecordedPositionStillOrders covers a row written
 // before the split position was persisted. It must not be read back as position
 // zero and displace a piece that genuinely holds that position.
