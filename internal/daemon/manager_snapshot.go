@@ -38,6 +38,13 @@ type StatusSnapshot struct {
 	// Watcher holds the file-change converges, which register no job. The syncer
 	// owns them under its own lock and none of them ever becomes a job, so they
 	// need no atomicity with the job store.
+	//
+	// They are not atomic with IndexSlotsInUse either, because a running converge
+	// holds an index slot and no single lock covers both the syncer's set and the
+	// slot channel. The read order makes the skew one-directional: a converge
+	// that ends mid-read still shows its row while the slot count has already
+	// dropped, so the reply over-reports work for one poll rather than showing an
+	// occupied slot no row accounts for.
 	Watcher []WatcherActivity
 }
 
@@ -57,7 +64,11 @@ func (manager *Manager) StatusSnapshot() StatusSnapshot {
 	// still marked as waiting on it.
 	health := manager.dependencyHealthLocked()
 
-	activeJobs := make([]model.Job, 0, len(manager.jobs))
+	// Sized to the concurrency cap rather than to the job store. The store holds
+	// every job this daemon has ever run, tens of thousands of them, and all but
+	// a handful are terminal; reserving one slot each would allocate megabytes on
+	// every refresh to hold a few live jobs.
+	activeJobs := make([]model.Job, 0, cap(manager.indexSlots))
 	for _, job := range manager.jobs {
 		if isTerminalJobState(job.State) {
 			continue

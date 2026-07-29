@@ -81,9 +81,18 @@ func stringValueText(value string) string {
 	return value
 }
 
-// needsEscaping reports whether one rune would make a bare value ambiguous.
-// Any whitespace would split the value across fields or end the record, and a
-// quote or backslash is what the escaping itself uses.
+// needsEscaping reports whether one rune would make a bare value ambiguous or
+// unsafe to print.
+//
+// Whitespace would split the value across fields or end the record early. A
+// quote or a backslash is what the escaping itself uses. Anything unprintable
+// is escaped because a codebase path is operator-supplied and reaches a
+// terminal: a raw escape character would emit a control sequence that clears
+// the screen or moves the cursor, corrupting both the live frame and the piped
+// record. A space is printable and is handled by the caller's substitution.
 func needsEscaping(candidate rune) bool {
-	return unicode.IsSpace(candidate) || candidate == '"' || candidate == '\\'
+	if candidate == '"' || candidate == '\\' {
+		return true
+	}
+	return unicode.IsSpace(candidate) || !unicode.IsPrint(candidate)
 }

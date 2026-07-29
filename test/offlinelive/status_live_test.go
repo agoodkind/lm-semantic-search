@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -18,8 +19,38 @@ import (
 func TestStatusReportsCountersOverTheWire(t *testing.T) {
 	harness := newHarness(t)
 
+	// Poll while the index runs, so the activity assertions see real rows. A
+	// reply read only after the job completes carries none, and asserting over
+	// an empty slice would pass against an implementation that had stopped
+	// reporting activity at all.
+	observed := make(chan []*pb.ActivityRow, 1)
+	stopPolling := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopPolling:
+				select {
+				case observed <- nil:
+				default:
+				}
+				return
+			default:
+			}
+			reply, err := harness.client.GetStatus(context.Background(), &pb.GetStatusRequest{})
+			if err == nil && len(reply.GetActivity()) > 0 {
+				select {
+				case observed <- reply.GetActivity():
+				default:
+				}
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
 	job := harness.indexFixture()
 	requireCompleted(t, job)
+	close(stopPolling)
 
 	response, err := harness.client.GetStatus(context.Background(), &pb.GetStatusRequest{})
 	if err != nil {
@@ -29,7 +60,12 @@ func TestStatusReportsCountersOverTheWire(t *testing.T) {
 	assertZeroCountersSurviveJSON(t, response)
 	assertNamesMatchAcrossForms(t, response)
 	assertUnitsAreCarried(t, response)
-	assertActivityRowsCarryASource(t, response)
+
+	if rows := <-observed; len(rows) > 0 {
+		assertActivityRowsCarryASource(t, rows)
+	} else {
+		t.Log("index finished before any poll observed an activity row; source assertion skipped")
+	}
 }
 
 // assertZeroCountersSurviveJSON is the check the oneof exists for. protojson
@@ -140,10 +176,18 @@ func assertUnitsAreCarried(t *testing.T, response *pb.GetStatusResponse) {
 // assertActivityRowsCarryASource proves every activity row names what started
 // it, which is what separates a registered job from file-change work the job
 // commands cannot address.
-func assertActivityRowsCarryASource(t *testing.T, response *pb.GetStatusResponse) {
+//
+// It takes the rows rather than the reply, because a reply whose work has
+// already finished carries none and a loop over an empty slice would pass
+// against any implementation, including one that stopped emitting source
+// entirely.
+func assertActivityRowsCarryASource(t *testing.T, rows []*pb.ActivityRow) {
 	t.Helper()
 
-	for index, row := range response.GetActivity() {
+	if len(rows) == 0 {
+		t.Fatal("no activity rows to check; the caller must supply rows it observed")
+	}
+	for index, row := range rows {
 		source := ""
 		for _, metric := range row.GetMetrics() {
 			if metric.GetName() == "source" {

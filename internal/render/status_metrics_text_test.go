@@ -256,3 +256,34 @@ func TestStatusMetricsNewlineValueCannotForgeARecord(t *testing.T) {
 		t.Fatalf("a forged embed_vectors_total record appears:\n%s", text)
 	}
 }
+
+// TestStatusMetricsEscapesControlRunes proves an unprintable rune never reaches
+// the output bare. A codebase path is operator-supplied and this text goes to a
+// terminal, so a raw escape character would emit a control sequence that clears
+// the screen or moves the cursor.
+func TestStatusMetricsEscapesControlRunes(t *testing.T) {
+	t.Parallel()
+
+	// A clear-screen sequence with no whitespace in it, so the earlier
+	// whitespace-only predicate let it through untouched.
+	hostile := "/Users/a/\x1b[2Jwiped"
+	rendered := MetricValueText(&pb.Metric{
+		Value: &pb.Metric_StringValue{StringValue: hostile},
+	})
+
+	if strings.ContainsRune(rendered, '\x1b') {
+		t.Fatalf("a raw escape character survived into the output: %q", rendered)
+	}
+	for _, candidate := range rendered {
+		if !unicode.IsPrint(candidate) {
+			t.Fatalf("unprintable rune %q survived into %q", candidate, rendered)
+		}
+	}
+	recovered, err := strconv.Unquote(rendered)
+	if err != nil {
+		t.Fatalf("Unquote(%q) returned error: %v", rendered, err)
+	}
+	if recovered != hostile {
+		t.Fatalf("round trip produced %q, want the original bytes", recovered)
+	}
+}
