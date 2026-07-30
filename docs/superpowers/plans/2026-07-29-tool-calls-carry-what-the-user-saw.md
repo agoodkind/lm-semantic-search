@@ -150,6 +150,17 @@ Regenerate, then follow the compiler to rename `InputJSON` to `Display` and drop
 
 ## Task 5: clyde: send display, delete the guesser
 
+**Point clyde at the engine worktree first.** The clyde worktree's untracked `go.work` holds only `use .`, so it resolves `goodkind.io/lm-semantic-search` from the module cache at the version in `go.mod` and cannot see the new wire field. Add a second line naming the engine worktree, matching how the primary clyde checkout resolves the engine:
+
+```
+go 1.26.5
+
+use .
+use /Users/agoodkind/.worktrees/-Users-agoodkind-Sites-lm-semantic-search/one-row-per-tool-call
+```
+
+Do this at Task 5 rather than earlier. Task 4 removes `input_json` from the wire, so a clyde worktree pointed at the engine before Task 5 lands stops compiling the moment Task 4 does, which would break Tasks 2 and 3 for no reason.
+
 `internal/conversation/semsearch/client.go`: `SemToolCall` loses `InputJSON` and `Command`, gains `Display`.
 
 `internal/daemon/conversation_semantic_sync.go`: delete `deriveToolCommandAndLang` and `semanticToolCommandInput`. In `semanticToolCalls`, read both fields the parser already filled:
