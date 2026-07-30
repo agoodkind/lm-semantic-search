@@ -360,12 +360,11 @@ type ConversationDocument struct {
 
 // ConversationToolCall is one structured tool call attached to a conversation document.
 type ConversationToolCall struct {
-	Name      string `json:"name,omitempty"`
-	InputJSON string `json:"input_json,omitempty"`
-	Command   string `json:"command,omitempty"`
-	LangHint  string `json:"lang_hint,omitempty"`
-	Output    string `json:"output,omitempty"`
-	IsError   bool   `json:"is_error,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Display  string `json:"display,omitempty"`
+	LangHint string `json:"lang_hint,omitempty"`
+	Output   string `json:"output,omitempty"`
+	IsError  bool   `json:"is_error,omitempty"`
 }
 
 // PathClassificationKind reports the daemon's verdict about one queried path.

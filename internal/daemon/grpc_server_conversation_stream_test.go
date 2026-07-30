@@ -56,12 +56,11 @@ func TestPBConversationDocumentsMapsToolCallsAndThinking(t *testing.T) {
 			Archived:             true,
 			Tools: []*pb.ConversationToolCall{
 				{
-					Name:      "run_shell",
-					InputJson: "{\"cmd\":\"ls\"}",
-					Command:   "ls",
-					LangHint:  "bash",
-					Output:    "ok",
-					IsError:   true,
+					Name:     "run_shell",
+					Display:  "ls",
+					LangHint: "bash",
+					Output:   "ok",
+					IsError:  true,
 				},
 			},
 			Thinking: "private reasoning",
@@ -113,11 +112,8 @@ func TestPBConversationDocumentsMapsToolCallsAndThinking(t *testing.T) {
 	if got[0].Tools[0].Name != "run_shell" {
 		t.Fatalf("Tools[0].Name = %q, want run_shell", got[0].Tools[0].Name)
 	}
-	if got[0].Tools[0].InputJSON != "{\"cmd\":\"ls\"}" {
-		t.Fatalf("Tools[0].InputJSON = %q, want input JSON", got[0].Tools[0].InputJSON)
-	}
-	if got[0].Tools[0].Command != "ls" {
-		t.Fatalf("Tools[0].Command = %q, want ls", got[0].Tools[0].Command)
+	if got[0].Tools[0].Display != "ls" {
+		t.Fatalf("Tools[0].Display = %q, want ls", got[0].Tools[0].Display)
 	}
 	if got[0].Tools[0].LangHint != "bash" {
 		t.Fatalf("Tools[0].LangHint = %q, want bash", got[0].Tools[0].LangHint)

@@ -284,7 +284,7 @@ message ConversationDocument {
   // this value, and it defaults false when unset.
   bool archived = 8;
   // tools carries the structured tool calls made in this message, so the engine
-  // can parse and index tool inputs, commands, and outputs. clyde populates it;
+  // can index the user-visible display text. clyde populates it;
   // it is empty for messages with no tool calls.
   repeated ConversationToolCall tools = 9;
   // thinking is the assistant's internal reasoning text for this message. It can
@@ -293,26 +293,21 @@ message ConversationDocument {
   string thinking = 10;
 }
 
-// ConversationToolCall is one structured tool call attached to a conversation
-// document. clyde derives command and lang_hint from the provider-specific tool
-// input so the engine can route shell and structured payloads without knowing
-// each provider's key layout.
+// ConversationToolCall is one structured tool call attached to a conversation document.
 message ConversationToolCall {
   // name is the tool name, for example "Bash" or "run_command".
   string name = 1;
-  // input_json is the raw tool input object as JSON.
-  string input_json = 2;
-  // command is the shell command string when this tool ran a shell, extracted by
-  // clyde from the provider-specific input key. Empty for non-shell tools.
-  string command = 3;
-  // lang_hint names the payload language for chunking, for example "bash",
-  // "json", or "markdown". Empty when unknown.
+  // display is what the user saw for this call.
+  string display = 2;
+  // lang_hint names the language the display text is written in, for example
+  // "bash", "json", or "markdown". Empty when unknown.
   string lang_hint = 4;
-  // output is the tool result text when captured. Can be large and is sensitive
-  // in the same way tool inputs can be.
+  // output is the tool result text when captured.
   string output = 5;
   // is_error marks a tool call that returned an error result.
   bool is_error = 6;
+  reserved 3;
+  reserved "command";
 }
 
 message ConversationSearchResult {

@@ -1670,7 +1670,7 @@ type ConversationDocument struct {
 	// this value, and it defaults false when unset.
 	Archived bool `protobuf:"varint,8,opt,name=archived,proto3" json:"archived,omitempty"`
 	// tools carries the structured tool calls made in this message, so the engine
-	// can parse and index tool inputs, commands, and outputs. clyde populates it;
+	// can index the user-visible display text. clyde populates it;
 	// it is empty for messages with no tool calls.
 	Tools []*ConversationToolCall `protobuf:"bytes,9,rep,name=tools,proto3" json:"tools,omitempty"`
 	// thinking is the assistant's internal reasoning text for this message. It can
@@ -1781,24 +1781,17 @@ func (x *ConversationDocument) GetThinking() string {
 	return ""
 }
 
-// ConversationToolCall is one structured tool call attached to a conversation
-// document. clyde derives command and lang_hint from the provider-specific tool
-// input so the engine can route shell and structured payloads without knowing
-// each provider's key layout.
+// ConversationToolCall is one structured tool call attached to a conversation document.
 type ConversationToolCall struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name is the tool name, for example "Bash" or "run_command".
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// input_json is the raw tool input object as JSON.
-	InputJson string `protobuf:"bytes,2,opt,name=input_json,json=inputJson,proto3" json:"input_json,omitempty"`
-	// command is the shell command string when this tool ran a shell, extracted by
-	// clyde from the provider-specific input key. Empty for non-shell tools.
-	Command string `protobuf:"bytes,3,opt,name=command,proto3" json:"command,omitempty"`
-	// lang_hint names the payload language for chunking, for example "bash",
-	// "json", or "markdown". Empty when unknown.
+	// display is what the user saw for this call.
+	Display string `protobuf:"bytes,2,opt,name=display,proto3" json:"display,omitempty"`
+	// lang_hint names the language the display text is written in, for example
+	// "bash", "json", or "markdown". Empty when unknown.
 	LangHint string `protobuf:"bytes,4,opt,name=lang_hint,json=langHint,proto3" json:"lang_hint,omitempty"`
-	// output is the tool result text when captured. Can be large and is sensitive
-	// in the same way tool inputs can be.
+	// output is the tool result text when captured.
 	Output string `protobuf:"bytes,5,opt,name=output,proto3" json:"output,omitempty"`
 	// is_error marks a tool call that returned an error result.
 	IsError       bool `protobuf:"varint,6,opt,name=is_error,json=isError,proto3" json:"is_error,omitempty"`
@@ -1843,16 +1836,9 @@ func (x *ConversationToolCall) GetName() string {
 	return ""
 }
 
-func (x *ConversationToolCall) GetInputJson() string {
+func (x *ConversationToolCall) GetDisplay() string {
 	if x != nil {
-		return x.InputJson
-	}
-	return ""
-}
-
-func (x *ConversationToolCall) GetCommand() string {
-	if x != nil {
-		return x.Command
+		return x.Display
 	}
 	return ""
 }
@@ -5685,15 +5671,13 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\barchived\x18\b \x01(\bR\barchived\x12?\n" +
 	"\x05tools\x18\t \x03(\v2).lmsemanticsearch.v1.ConversationToolCallR\x05tools\x12\x1a\n" +
 	"\bthinking\x18\n" +
-	" \x01(\tR\bthinking\"\xb3\x01\n" +
+	" \x01(\tR\bthinking\"\xa3\x01\n" +
 	"\x14ConversationToolCall\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
-	"\n" +
-	"input_json\x18\x02 \x01(\tR\tinputJson\x12\x18\n" +
-	"\acommand\x18\x03 \x01(\tR\acommand\x12\x1b\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\adisplay\x18\x02 \x01(\tR\adisplay\x12\x1b\n" +
 	"\tlang_hint\x18\x04 \x01(\tR\blangHint\x12\x16\n" +
 	"\x06output\x18\x05 \x01(\tR\x06output\x12\x19\n" +
-	"\bis_error\x18\x06 \x01(\bR\aisError\"\x89\x02\n" +
+	"\bis_error\x18\x06 \x01(\bR\aisErrorJ\x04\b\x03\x10\x04R\acommand\"\x89\x02\n" +
 	"\x18ConversationSearchResult\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +

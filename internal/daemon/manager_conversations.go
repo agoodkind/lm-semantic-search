@@ -23,7 +23,6 @@ import (
 const (
 	conversationCanonicalPathPrefix = "chat:///"
 	conversationChunkMaxBytes       = 60000
-	conversationToolSummaryMaxBytes = 2000
 )
 
 // resolveConversationChunkBudget picks the effective byte cap for splitting
@@ -595,9 +594,7 @@ func fingerprintConversationDocuments(documents []model.ConversationDocument) st
 		for _, tool := range document.Tools {
 			hasher.Write([]byte(tool.Name))
 			hasher.Write([]byte{0})
-			hasher.Write([]byte(tool.InputJSON))
-			hasher.Write([]byte{0})
-			hasher.Write([]byte(tool.Command))
+			hasher.Write([]byte(tool.Display))
 			hasher.Write([]byte{0})
 			hasher.Write([]byte(tool.LangHint))
 			hasher.Write([]byte{0})
@@ -619,8 +616,7 @@ func fingerprintConversationDocuments(documents []model.ConversationDocument) st
 // test can wrap it to count regenerations and lock the chokepoint invariant that
 // the up-front presence classifier (forcedWorkSet) regenerates nothing.
 // Production never reassigns it.
-var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []model.ConversationDocument, chunkByteBudget ...int) ([]model.StoredChunk, error) {
-	dispatcher := newConversationToolDispatcher()
+var conversationDocumentsToStoredChunks = func(_ context.Context, documents []model.ConversationDocument, chunkByteBudget ...int) ([]model.StoredChunk, error) {
 	budget := resolveConversationChunkBudget(chunkByteBudget)
 	chunks := make([]model.StoredChunk, 0, len(documents))
 	for _, document := range documents {
@@ -648,33 +644,32 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 		)
 		for toolIndex, toolCall := range document.Tools {
 			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
-			chunks = append(chunks, splitConversationDerivedContent(
-				document,
-				conversationID,
-				parentConversationID,
-				toolBasePath+"/tok",
-				conversationToolTokenContent(toolCall),
-				budget,
-			)...)
-			chunks = append(chunks, splitConversationDerivedContent(
-				document,
-				conversationID,
-				parentConversationID,
-				toolBasePath+"/cmd",
-				toolCall.Command,
-				budget,
-			)...)
-			extension := conversationToolExtension(toolCall.LangHint)
-			inputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/in", "tool"+extension, toolCall.InputJSON)
-			if err != nil {
-				return nil, err
+			toolBudget := budget
+			toolName := strings.TrimSpace(toolCall.Name)
+			if toolName != "" && toolBudget > len(toolName)+1 {
+				toolBudget -= len(toolName) + 1
 			}
-			chunks = append(chunks, inputChunks...)
-			outputChunks, err := splitConversationToolPayload(ctx, dispatcher, document, conversationID, parentConversationID, toolBasePath+"/out", "tool"+extension, toolCall.Output)
-			if err != nil {
-				return nil, err
-			}
-			chunks = append(chunks, outputChunks...)
+			chunks = appendStorableConversationField(
+				chunks,
+				conversationToolContent(toolCall),
+				toolBudget,
+				func(piece string, partIndex int, multipart bool) model.StoredChunk {
+					relativePath := toolBasePath
+					if multipart {
+						relativePath = fmt.Sprintf("%s/%d", toolBasePath, partIndex)
+					}
+					return newConversationStoredChunk(
+						document,
+						conversationID,
+						parentConversationID,
+						relativePath,
+						namedToolPiece(toolCall.Name, piece, partIndex),
+						"",
+						0,
+						0,
+					)
+				},
+			)
 		}
 		chunks = append(chunks, splitConversationDerivedContent(
 			document,
@@ -686,6 +681,17 @@ var conversationDocumentsToStoredChunks = func(ctx context.Context, documents []
 		)...)
 	}
 	return chunks, nil
+}
+
+func namedToolPiece(name string, piece string, partIndex int) string {
+	if partIndex == 0 {
+		return piece
+	}
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" {
+		return piece
+	}
+	return trimmedName + "\n" + piece
 }
 
 type conversationMessageDiff struct {

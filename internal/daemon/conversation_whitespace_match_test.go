@@ -31,7 +31,7 @@ func TestWhitespaceOnlyTextSettlesAgainstItsStoredRows(t *testing.T) {
 			Role:           "assistant",
 			Text:           spacing,
 			Tools: []model.ConversationToolCall{
-				{Name: "Bash", Command: "ls -la", Output: "total 0"},
+				{Name: "Bash", Display: "ls -la", LangHint: "bash", Output: "total 0"},
 			},
 		}
 

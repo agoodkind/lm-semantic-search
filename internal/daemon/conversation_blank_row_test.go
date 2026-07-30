@@ -30,7 +30,7 @@ func TestNoTextWritesNoTextRow(t *testing.T) {
 			Role:           "assistant",
 			Text:           "",
 			Tools: []model.ConversationToolCall{
-				{Name: "Bash", Command: "ls -la"},
+				{Name: "Bash", Display: "ls -la", LangHint: "bash"},
 			},
 		},
 		{
@@ -101,7 +101,7 @@ func TestWhitespaceOnlyTextWritesNoTextRow(t *testing.T) {
 			MessageIndex:   0,
 			Role:           "assistant",
 			Text:           text,
-			Tools:          []model.ConversationToolCall{{Name: "Bash", Command: "ls"}},
+			Tools:          []model.ConversationToolCall{{Name: "Bash", Display: "ls", LangHint: "bash"}},
 		}}
 		chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents)
 		if err != nil {
@@ -134,7 +134,7 @@ func TestTextFreeMessageWithStoredDerivedRowsSettles(t *testing.T) {
 		Role:           "assistant",
 		Text:           "",
 		Tools: []model.ConversationToolCall{
-			{Name: "Bash", Command: "ls -la", Output: "total 0"},
+			{Name: "Bash", Display: "ls -la", LangHint: "bash", Output: "total 0"},
 		},
 	}
 
@@ -195,7 +195,7 @@ func TestTextFreeMessageWithNoStoredRowsIsSentOnce(t *testing.T) {
 		MessageIndex:   4,
 		Role:           "assistant",
 		Text:           "",
-		Tools:          []model.ConversationToolCall{{Name: "Bash", Command: "ls -la"}},
+		Tools:          []model.ConversationToolCall{{Name: "Bash", Display: "ls -la", LangHint: "bash"}},
 	}
 
 	matches, err := conversationDocumentMatchesStored(

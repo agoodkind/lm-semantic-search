@@ -1,26 +1,12 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
-	"log/slog"
 	"strings"
-	"unicode/utf8"
 
-	"goodkind.io/gksyntax/chunk"
 	"goodkind.io/gksyntax/shelldecomp"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
-
-var conversationToolExtensions = map[string]string{
-	"bash":     ".bash",
-	"json":     ".json",
-	"markdown": ".md",
-}
-
-func newConversationToolDispatcher() *chunk.Dispatcher {
-	return chunk.NewDispatcher()
-}
 
 func newConversationStoredChunk(document model.ConversationDocument, conversationID string, parentConversationID string, relativePath string, content string, language string, startLine int32, endLine int32) model.StoredChunk {
 	return model.StoredChunk{
@@ -41,35 +27,6 @@ func newConversationStoredChunk(document model.ConversationDocument, conversatio
 		SplitPartRecorded:    true,
 		Score:                0,
 	}
-}
-
-func splitConversationToolPayload(ctx context.Context, dispatcher *chunk.Dispatcher, document model.ConversationDocument, conversationID string, parentConversationID string, relativePathPrefix string, splitPath string, content string) ([]model.StoredChunk, error) {
-	// The decision is about the whole payload and is taken before the splitter
-	// runs, so a payload with nothing to retrieve costs no parse. Once the
-	// payload is worth storing, every piece the splitter returns is stored, the
-	// same rule the text and derived paths follow.
-	if !conversationTextIsStorable(content) {
-		return nil, nil
-	}
-	splitResult, err := dispatcher.SplitFileWithType(ctx, splitPath, []byte(content), "")
-	if err != nil {
-		slog.ErrorContext(ctx, "split conversation tool payload failed", "relative_path_prefix", relativePathPrefix, "err", err)
-		return nil, fmt.Errorf("split conversation tool payload %s: %w", relativePathPrefix, err)
-	}
-	chunks := make([]model.StoredChunk, 0, len(splitResult.Chunks))
-	for partIndex, splitChunk := range splitResult.Chunks {
-		chunks = append(chunks, newConversationStoredChunk(
-			document,
-			conversationID,
-			parentConversationID,
-			fmt.Sprintf("%s/%d", relativePathPrefix, partIndex),
-			splitChunk.Content,
-			splitChunk.Language,
-			safeInt32(splitChunk.StartLine),
-			safeInt32(splitChunk.EndLine),
-		))
-	}
-	return chunks, nil
 }
 
 func splitConversationDerivedContent(document model.ConversationDocument, conversationID string, parentConversationID string, relativePath string, content string, chunkByteBudget ...int) []model.StoredChunk {
@@ -96,16 +53,14 @@ func splitConversationDerivedContent(document model.ConversationDocument, conver
 	)
 }
 
-func conversationToolTokenContent(toolCall model.ConversationToolCall) string {
+func conversationToolContent(toolCall model.ConversationToolCall) string {
 	tokens := make([]string, 0)
 	appendConversationToken(&tokens, toolCall.Name)
-	command := strings.TrimSpace(toolCall.Command)
-	if command != "" {
-		appendConversationShellTokens(&tokens, command)
+	display := strings.TrimSpace(toolCall.Display)
+	if display != "" && toolCall.LangHint == "bash" {
+		appendConversationShellTokens(&tokens, display)
 	}
-	if toolCall.InputJSON != "" {
-		appendConversationToken(&tokens, truncateConversationToolSummary(toolCall.InputJSON))
-	}
+	appendConversationToken(&tokens, toolCall.Display)
 	return strings.Join(tokens, "\n")
 }
 
@@ -117,7 +72,7 @@ func conversationToolTokenContent(toolCall model.ConversationToolCall) string {
 func appendConversationShellTokens(tokens *[]string, command string) {
 	decomposition := shelldecomp.Parse(command, "/", "")
 	if decomposition == nil || decomposition.IsOpaque() {
-		appendConversationToken(tokens, truncateConversationToolSummary(command))
+		appendConversationToken(tokens, command)
 		return
 	}
 	tokenCount := len(*tokens)
@@ -131,7 +86,7 @@ func appendConversationShellTokens(tokens *[]string, command string) {
 		appendConversationShellTarget(tokens, writeTarget.Resolvable, writeTarget.Path, writeTarget.Raw)
 	}
 	if len(*tokens) == tokenCount {
-		appendConversationToken(tokens, truncateConversationToolSummary(command))
+		appendConversationToken(tokens, command)
 	}
 }
 
@@ -154,24 +109,6 @@ func appendConversationToken(tokens *[]string, value string) {
 		return
 	}
 	*tokens = append(*tokens, trimmedValue)
-}
-
-func truncateConversationToolSummary(value string) string {
-	return truncateUTF8Bytes(value, conversationToolSummaryMaxBytes)
-}
-
-func truncateUTF8Bytes(value string, maxBytes int) string {
-	if len(value) <= maxBytes {
-		return value
-	}
-	end := maxBytes
-	for end > 0 && !utf8.RuneStart(value[end]) {
-		end--
-	}
-	if end == 0 {
-		return ""
-	}
-	return value[:end]
 }
 
 func conversationFullRemovalPrefixes(conversationID string) []string {
@@ -200,12 +137,4 @@ func conversationToolCallPath(conversationID string, messageIndex int32, toolInd
 
 func conversationThinkingPath(conversationID string, messageIndex int32) string {
 	return fmt.Sprintf("convthink/%s/%d", conversationID, messageIndex)
-}
-
-func conversationToolExtension(langHint string) string {
-	extension, found := conversationToolExtensions[strings.ToLower(strings.TrimSpace(langHint))]
-	if !found {
-		return ""
-	}
-	return extension
 }
