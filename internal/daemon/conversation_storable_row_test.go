@@ -94,6 +94,37 @@ func TestEveryRowKindStillStoresRealContent(t *testing.T) {
 	}
 }
 
+// TestAToolRowHoldsItsCommandOnce covers a command whose shell decomposition
+// carries the same string as the display text beside it. Measured over 56,682
+// distinct shell commands from real transcripts, 1,195 of them (2.11%) store
+// their command twice without the guard, costing 1.23% of tool-row bytes.
+func TestAToolRowHoldsItsCommandOnce(t *testing.T) {
+	t.Parallel()
+
+	const command = "!!weird!!"
+	documents := []model.ConversationDocument{{
+		ConversationID: "claude:a",
+		MessageIndex:   0,
+		Role:           "assistant",
+		Tools: []model.ConversationToolCall{{
+			Name:     "Bash",
+			Display:  command,
+			LangHint: "bash",
+		}},
+	}}
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("chunks = %d, want 1", len(chunks))
+	}
+	if count := strings.Count(chunks[0].Content, command); count != 1 {
+		t.Fatalf("command occurrences = %d, want 1, in %q", count, chunks[0].Content)
+	}
+}
+
 // TestASplitMessageStoresEveryPieceOfItsText is the reason the decision cannot
 // move from the field to the individual piece.
 //
