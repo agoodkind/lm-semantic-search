@@ -20,6 +20,10 @@ lm-semantic-search profile offline --model bge-small
 
 Valid model names are `embeddinggemma` (the default) and `bge-small`. The command writes `"profile": "offline"` and the chosen `"offlineEmbeddingModel"` into the daemon `config.json`, preserving every other key. The environment variables `CLAUDE_CONTEXT_PROFILE` and `OFFLINE_EMBEDDING_MODEL` override the file. Restart the daemon after changing the profile, because the daemon reads it at startup.
 
+## Try it without switching the machine
+
+`lm-semantic-search-daemon sandbox` runs a separate daemon on the offline profile by default. It writes no `config.json`, needs no restart, and leaves the installed daemon on whatever profile it already had. See [sandbox.md](sandbox.md).
+
 ## Search engine
 
 The store keeps one on-disk vector index per collection under the state directory. Small collections use exact search, so results are the true nearest neighbors. Once a collection grows past a size threshold, the store switches to an approximate index (Hierarchical Navigable Small World, HNSW) that keeps query time low as the corpus grows to millions of vectors, at a small recall cost. This is what lets the offline profile scale to large repositories.
@@ -28,9 +32,11 @@ The code graph is unchanged and already offline, so structural search for defini
 
 ## Model delivery
 
-The default model is `embeddinggemma`, a code-specialized embedding model. The daemon downloads the selected model and tokenizer on first use, verifies a pinned checksum, and caches them under the state directory. After that first fetch, the daemon runs fully offline. The model is not committed to the repository and is not required to install the binary.
+The default model is `embeddinggemma`, a code-specialized embedding model. The daemon downloads the selected model and tokenizer on first use, verifies a pinned checksum, and caches them under the model cache root. That root defaults to the state directory and moves with `CLAUDE_CONTEXTD_MODEL_CACHE_ROOT`. After that first fetch, the daemon runs fully offline. The model is not committed to the repository and is not required to install the binary.
 
 The first offline run needs network access to fetch the selected model. Every run after the model is cached is fully offline.
+
+The cache is separate from the state root so a daemon with throwaway state still reuses an already-downloaded model. A sandbox daemon relies on this: it points its state at a temporary directory and its cache at the machine's, so only its first run anywhere needs network.
 
 ## Limits
 
