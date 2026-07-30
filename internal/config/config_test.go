@@ -418,6 +418,11 @@ func TestDefaultKeepsDaemonStateAndCompatRootsSplit(t *testing.T) {
 	if cfg.ContextRoot != wantContextRoot {
 		t.Fatalf("ContextRoot = %q, want %q", cfg.ContextRoot, wantContextRoot)
 	}
+	// The model cache follows the state root unless it is named, so an
+	// installed daemon keeps its artifacts where it always did.
+	if cfg.ModelCacheRoot != wantStateRoot {
+		t.Fatalf("ModelCacheRoot = %q, want %q", cfg.ModelCacheRoot, wantStateRoot)
+	}
 	if cfg.RegistryPath != filepath.Join(wantStateRoot, "registry.json") {
 		t.Fatalf("RegistryPath = %q", cfg.RegistryPath)
 	}
@@ -432,6 +437,47 @@ func TestDefaultKeepsDaemonStateAndCompatRootsSplit(t *testing.T) {
 	}
 	if cfg.SocketPath != filepath.Join(wantStateRoot, "sockets", "lm-semantic-search-daemon.sock") {
 		t.Fatalf("SocketPath = %q", cfg.SocketPath)
+	}
+}
+
+// TestDefaultMovesTheContextRootWhenNamed proves the directory holding the
+// advisory lock can be relocated. Without this a second daemon contends for the
+// operator's lock however much of its own state it moves, which is what stalled
+// the running daemon for twenty minutes.
+func TestDefaultMovesTheContextRootWhenNamed(t *testing.T) {
+	isolateState(t)
+	chosen := t.TempDir()
+	t.Setenv("CLAUDE_CONTEXTD_CONTEXT_ROOT", chosen)
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+
+	if cfg.ContextRoot != chosen {
+		t.Fatalf("ContextRoot = %q, want %q", cfg.ContextRoot, chosen)
+	}
+}
+
+// TestDefaultSeparatesTheModelCacheFromTheStateRoot proves a daemon can keep a
+// throwaway state root while still reading an already-downloaded model, so a
+// short-lived daemon does not refetch a checksum-verified artifact it could
+// have reused.
+func TestDefaultSeparatesTheModelCacheFromTheStateRoot(t *testing.T) {
+	isolateState(t)
+	sharedCache := t.TempDir()
+	t.Setenv("CLAUDE_CONTEXTD_MODEL_CACHE_ROOT", sharedCache)
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+
+	if cfg.ModelCacheRoot != sharedCache {
+		t.Fatalf("ModelCacheRoot = %q, want %q", cfg.ModelCacheRoot, sharedCache)
+	}
+	if cfg.StateRoot == sharedCache {
+		t.Fatal("StateRoot followed the model cache; the two roots must stay independent")
 	}
 }
 
