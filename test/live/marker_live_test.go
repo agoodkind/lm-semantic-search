@@ -311,11 +311,10 @@ func baseConversation(id string) []*pb.ConversationDocument {
 			Thinking:       "the user for " + id + " wants a directory listing, so I will run ls",
 			Tools: []*pb.ConversationToolCall{
 				{
-					Name:      "run_shell",
-					InputJson: `{"cmd":"ls -la /work/` + id + `"}`,
-					Command:   "ls -la /work/" + id,
-					LangHint:  "bash",
-					Output:    "total 0\ndrwxr-xr-x  2 user  staff   64 " + id,
+						Name:     "run_shell",
+						Display:  "ls -la /work/" + id,
+						LangHint: "bash",
+						Output:   "total 0\ndrwxr-xr-x  2 user  staff   64 " + id,
 					IsError:   false,
 				},
 			},
@@ -348,7 +347,7 @@ func fingerprint(docs []*pb.ConversationDocument) string {
 	for _, document := range docs {
 		fmt.Fprintf(hasher, "%d\x00%s\x00%s\x00%s\x00", document.MessageIndex, document.Role, document.Text, document.Thinking)
 		for _, tool := range document.Tools {
-			fmt.Fprintf(hasher, "%s\x00%s\x00%s\x00%s\x00", tool.Name, tool.Command, tool.InputJson, tool.Output)
+			fmt.Fprintf(hasher, "%s\x00%s\x00%s\x00%s\x00", tool.Name, tool.Display, tool.LangHint, tool.Output)
 		}
 	}
 	return hex.EncodeToString(hasher.Sum(nil))

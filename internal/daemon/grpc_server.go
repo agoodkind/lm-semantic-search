@@ -935,12 +935,11 @@ func pbConversationToolCalls(tools []*pb.ConversationToolCall) []model.Conversat
 			continue
 		}
 		result = append(result, model.ConversationToolCall{
-			Name:      tool.GetName(),
-			InputJSON: tool.GetInputJson(),
-			Command:   tool.GetCommand(),
-			LangHint:  tool.GetLangHint(),
-			Output:    tool.GetOutput(),
-			IsError:   tool.GetIsError(),
+			Name:     tool.GetName(),
+			Display:  tool.GetDisplay(),
+			LangHint: tool.GetLangHint(),
+			Output:   tool.GetOutput(),
+			IsError:  tool.GetIsError(),
 		})
 	}
 	if len(result) == 0 {

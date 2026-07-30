@@ -4,6 +4,7 @@ package live
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
@@ -230,11 +231,10 @@ func blankRowShapes(id string) []*pb.ConversationDocument {
 			Thinking:       "the user is asking about the blank row class",
 			Tools: []*pb.ConversationToolCall{
 				{
-					Name:      "run_shell",
-					InputJson: `{"cmd":"ls -la /work/` + id + `"}`,
-					Command:   "ls -la /work/" + id,
-					LangHint:  "bash",
-					Output:    "total 0\ndrwxr-xr-x  2 user  staff   64 " + id,
+						Name:     "run_shell",
+						Display:  "ls -la /work/" + id,
+						LangHint: "bash",
+						Output:   "total 0\ndrwxr-xr-x  2 user  staff   64 " + id,
 				},
 			},
 		},
@@ -246,11 +246,9 @@ func blankRowShapes(id string) []*pb.ConversationDocument {
 			Text:           "",
 			Tools: []*pb.ConversationToolCall{
 				{
-					Name:      "read_file",
-					InputJson: `{"path":"/work/` + id + `/main.go"}`,
-					Command:   "cat /work/" + id + "/main.go",
-					LangHint:  "bash",
-					Output:    "package main\n\nfunc main() {}\n",
+						Name:    "read_file",
+						Display: "/work/" + id + "/main.go",
+						Output:  "package main\n\nfunc main() {}\n",
 				},
 			},
 		},
@@ -270,11 +268,10 @@ func blankRowShapes(id string) []*pb.ConversationDocument {
 			Text:           "   \n  ",
 			Tools: []*pb.ConversationToolCall{
 				{
-					Name:      "run_shell",
-					InputJson: `{"cmd":"echo done"}`,
-					Command:   "echo done",
-					LangHint:  "bash",
-					Output:    "done\n",
+						Name:     "run_shell",
+						Display:  "echo done",
+						LangHint: "bash",
+						Output:   "done\n",
 				},
 			},
 		},
@@ -306,4 +303,54 @@ func (h *harness) countRowsHoldingNothing() int64 {
 		h.t.Fatalf("read empty-content count column returned error: %v", err)
 	}
 	return total
+}
+
+func (h *harness) countRowsContaining(content string) int64 {
+	h.t.Helper()
+	escapedContent := strings.ReplaceAll(content, "\\", "\\\\")
+	escapedContent = strings.ReplaceAll(escapedContent, "\"", "\\\"")
+	expression := fmt.Sprintf(`%s like "%%%s%%"`, contentField, escapedContent)
+	resultSet, err := h.milvus.Query(
+		correlatedContext(),
+		milvusclient.NewQueryOption(h.collectionName).
+			WithFilter(expression).
+			WithOutputFields(countOutputField).
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		h.t.Fatalf("Milvus content count for %q returned error: %v", content, err)
+	}
+	column := resultSet.GetColumn(countOutputField)
+	if column == nil {
+		h.t.Fatalf("Milvus content count for %q returned no count column", content)
+	}
+	total, err := column.GetAsInt64(0)
+	if err != nil {
+		h.t.Fatalf("read content count column for %q returned error: %v", content, err)
+	}
+	return total
+}
+
+func (h *harness) contentForRelativePath(relativePath string) string {
+	h.t.Helper()
+	expression := fmt.Sprintf(`%s == %q`, relativePathField, relativePath)
+	resultSet, err := h.milvus.Query(
+		correlatedContext(),
+		milvusclient.NewQueryOption(h.collectionName).
+			WithFilter(expression).
+			WithOutputFields(contentField).
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		h.t.Fatalf("Milvus content query for %q returned error: %v", relativePath, err)
+	}
+	column := resultSet.GetColumn(contentField)
+	if column == nil {
+		h.t.Fatalf("Milvus content query for %q returned no content column", relativePath)
+	}
+	content, err := column.GetAsString(0)
+	if err != nil {
+		h.t.Fatalf("read content column for %q returned error: %v", relativePath, err)
+	}
+	return content
 }

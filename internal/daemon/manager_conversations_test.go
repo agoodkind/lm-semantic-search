@@ -1439,9 +1439,8 @@ func TestConversationIngestAppendedMessageDoesNotReembedStoredDerivedRows(t *tes
 			Role:           "assistant",
 			Text:           "answer",
 			Tools: []model.ConversationToolCall{{
-				Name:      "Read",
-				InputJSON: `{"file":"/tmp/input.json"}`,
-				LangHint:  "json",
+				Name:    "Read",
+				Display: "/tmp/input.json",
 			}},
 			Thinking: "private reasoning",
 		},
@@ -2717,8 +2716,8 @@ func TestConversationIndexOneReusesOversizedDerivedChunks(t *testing.T) {
 
 	conversationID := "conv-derived-large"
 	messageIndex := int32(9)
-	toolName := strings.Repeat("n", conversationChunkMaxBytes+3)
-	command := strings.Repeat("c", conversationChunkMaxBytes+5)
+	toolName := "Bash"
+	display := strings.Repeat("c", conversationChunkMaxBytes+5)
 	thinking := strings.Repeat("t", conversationChunkMaxBytes+7)
 	document := model.ConversationDocument{
 		ConversationID: conversationID,
@@ -2727,15 +2726,21 @@ func TestConversationIndexOneReusesOversizedDerivedChunks(t *testing.T) {
 		Text:           "visible transcript text",
 		Tools: []model.ConversationToolCall{{
 			Name:    toolName,
-			Command: command,
+			Display: display,
 		}},
 		Thinking: thinking,
 	}
-	toolContent := conversationToolTokenContent(document.Tools[0])
+	chunks, err := conversationDocumentsToStoredChunks(
+		context.Background(),
+		[]model.ConversationDocument{document},
+	)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
 	reuse := make(map[string][]float32)
-	nextVector := appendConversationReusePiecesForTest(reuse, toolContent, 1)
-	nextVector = appendConversationReusePiecesForTest(reuse, command, nextVector)
-	appendConversationReusePiecesForTest(reuse, thinking, nextVector)
+	for index, chunk := range chunks {
+		reuse[semantic.ContentVectorKey(chunk.Content)] = []float32{float32(index + 1)}
+	}
 	reader := &testConversationRowReader{
 		state: map[int32]semantic.StoredMessageState{
 			messageIndex: {
@@ -2767,27 +2772,25 @@ func TestConversationIndexOneReusesOversizedDerivedChunks(t *testing.T) {
 	assertStringSliceEqual(t, result.RemovalPaths, nil)
 	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
 
-	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{document})
-	if err != nil {
-		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
-	}
 	for chunkIndex, chunk := range chunks {
 		if isDerivedConversationChunk(chunk) && len(chunk.Content) > conversationChunkMaxBytes {
 			t.Fatalf("derived chunk %d has %d bytes, want at most %d", chunkIndex, len(chunk.Content), conversationChunkMaxBytes)
 		}
 	}
-	assertMultipartConversationChunkContentForTest(
-		t,
-		chunks,
-		"convtool/"+conversationID+"/9/0/tok/",
-		toolContent,
-	)
-	assertMultipartConversationChunkContentForTest(
-		t,
-		chunks,
-		"convtool/"+conversationID+"/9/0/cmd/",
-		command,
-	)
+	toolPrefix := "convtool/" + conversationID + "/9/0/"
+	toolParts := 0
+	for _, chunk := range chunks {
+		if !strings.HasPrefix(chunk.RelativePath, toolPrefix) {
+			continue
+		}
+		toolParts++
+		if !strings.HasPrefix(chunk.Content, toolName+"\n") {
+			t.Fatalf("tool part %q = %q, want name prefix", chunk.RelativePath, chunk.Content)
+		}
+	}
+	if toolParts < 2 {
+		t.Fatalf("tool parts = %d, want a split tool payload", toolParts)
+	}
 	assertMultipartConversationChunkContentForTest(
 		t,
 		chunks,
@@ -2879,7 +2882,7 @@ func TestConversationDocumentsToStoredChunksEmbedsBashToolTokens(t *testing.T) {
 		Archived:             true,
 		Tools: []model.ConversationToolCall{{
 			Name:     "Bash",
-			Command:  "cat /tmp/input.txt > /tmp/output.txt",
+			Display:  "cat /tmp/input.txt > /tmp/output.txt",
 			LangHint: "bash",
 		}},
 	}})
@@ -2887,7 +2890,7 @@ func TestConversationDocumentsToStoredChunksEmbedsBashToolTokens(t *testing.T) {
 		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
 	}
 
-	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool/3/0/tok")
+	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool/3/0")
 	for _, expected := range []string{"Bash", "cat", "/tmp/input.txt", "/tmp/output.txt"} {
 		if !strings.Contains(tokenChunk.Content, expected) {
 			t.Fatalf("token chunk content = %q, want to contain %q", tokenChunk.Content, expected)
@@ -2903,9 +2906,8 @@ func TestConversationDocumentsToStoredChunksEmbedsBashToolTokens(t *testing.T) {
 		t.Fatal("Archived = false, want true")
 	}
 
-	commandChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool/3/0/cmd")
-	if commandChunk.Content != "cat /tmp/input.txt > /tmp/output.txt" {
-		t.Fatalf("command chunk content = %q, want raw command", commandChunk.Content)
+	if !strings.Contains(tokenChunk.Content, "cat /tmp/input.txt > /tmp/output.txt") {
+		t.Fatalf("tool chunk content = %q, want raw command", tokenChunk.Content)
 	}
 }
 
@@ -2918,15 +2920,16 @@ func TestConversationDocumentsToStoredChunksKeepsRawShellTargetTokens(t *testing
 		Role:           "assistant",
 		Text:           "ran a command",
 		Tools: []model.ConversationToolCall{{
-			Name:    "Bash",
-			Command: "cat relative/input.txt > relative/output.txt",
+			Name:     "Bash",
+			Display:  "cat relative/input.txt > relative/output.txt",
+			LangHint: "bash",
 		}},
 	}})
 	if err != nil {
 		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
 	}
 
-	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-raw-target/3/0/tok")
+	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-raw-target/3/0")
 	for _, expectedToken := range []string{
 		"/relative/input.txt",
 		"relative/input.txt",
@@ -2937,26 +2940,7 @@ func TestConversationDocumentsToStoredChunksKeepsRawShellTargetTokens(t *testing
 	}
 }
 
-func TestConversationToolTokenContentTruncatesRawCommandFallback(t *testing.T) {
-	t.Parallel()
-
-	command := "ONLY_ASSIGNMENT=" + strings.Repeat("x", conversationToolSummaryMaxBytes+100)
-	content := conversationToolTokenContent(model.ConversationToolCall{
-		Name:    "Bash",
-		Command: command,
-	})
-	tokens := strings.Split(content, "\n")
-	fallbackToken := tokens[len(tokens)-1]
-	expectedFallback := truncateConversationToolSummary(command)
-	if fallbackToken != expectedFallback {
-		t.Fatalf("fallback token has %d bytes, want truncated %d-byte command", len(fallbackToken), len(expectedFallback))
-	}
-	if len(fallbackToken) > conversationToolSummaryMaxBytes {
-		t.Fatalf("fallback token has %d bytes, want at most %d", len(fallbackToken), conversationToolSummaryMaxBytes)
-	}
-}
-
-func TestConversationDocumentsToStoredChunksSplitsJSONToolInput(t *testing.T) {
+func TestConversationDocumentsToStoredChunksStoresOneReadToolRow(t *testing.T) {
 	t.Parallel()
 
 	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{{
@@ -2965,18 +2949,17 @@ func TestConversationDocumentsToStoredChunksSplitsJSONToolInput(t *testing.T) {
 		Role:           "assistant",
 		Text:           "read input",
 		Tools: []model.ConversationToolCall{{
-			Name:      "Read",
-			InputJSON: `{"path":"/tmp/input.json","limit":5}`,
-			LangHint:  "json",
+			Name:    "Read",
+			Display: "/tmp/input.json",
 		}},
 	}})
 	if err != nil {
 		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
 	}
 
-	inputChunk := findConversationChunkWithPrefixForTest(t, chunks, "convtool/conv-json/4/0/in/")
-	if !strings.Contains(inputChunk.Content, "/tmp/input.json") {
-		t.Fatalf("input chunk content = %q, want JSON input", inputChunk.Content)
+	toolChunk := findConversationChunkForTest(t, chunks, "convtool/conv-json/4/0")
+	if toolChunk.Content != "Read\n/tmp/input.json" {
+		t.Fatalf("tool chunk content = %q, want display", toolChunk.Content)
 	}
 }
 
@@ -2989,9 +2972,8 @@ func TestConversationDocumentsToStoredChunksKeepsTextDeltaStable(t *testing.T) {
 		Role:           "assistant",
 		Text:           "visible transcript text",
 		Tools: []model.ConversationToolCall{{
-			Name:      "Read",
-			InputJSON: `{"file":"/tmp/private.json"}`,
-			LangHint:  "json",
+			Name:    "Read",
+			Display: "/tmp/private.json",
 		}},
 		Thinking: "private reasoning",
 	}
@@ -3044,16 +3026,15 @@ func TestConversationDocumentsToStoredChunksEmbedsToolOnlyTokenChunk(t *testing.
 		Role:           "assistant",
 		Text:           "",
 		Tools: []model.ConversationToolCall{{
-			Name:      "Read",
-			InputJSON: `{"file":"/tmp/tool-only.txt"}`,
-			LangHint:  "json",
+			Name:    "Read",
+			Display: "/tmp/tool-only.txt",
 		}},
 	}})
 	if err != nil {
 		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
 	}
 
-	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool-only/0/0/tok")
+	tokenChunk := findConversationChunkForTest(t, chunks, "convtool/conv-tool-only/0/0")
 	if !strings.Contains(tokenChunk.Content, "Read") {
 		t.Fatalf("token chunk content = %q, want tool name", tokenChunk.Content)
 	}
