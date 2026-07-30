@@ -120,11 +120,11 @@ Pausing replaces `read_at` with `paused_at`. A failed refresh appends `refresh_e
 
 ## Piped
 
-One snapshot, no delta column, no key line. One record per line as `name value unit`, whitespace separated, raw digits, so `grep`, `awk`, and `cut` work on it. A record with no unit ends after the value.
+One snapshot, no delta column, no key line. One record per line as `name value unit`, with raw digits so the number reads as the daemon holds it. A record with no unit ends after the value.
 
-Every value is exactly one whitespace-free field, whatever it holds, so `awk '{print $2}'` and `cut -d' ' -f2` read a value by position and never split one across fields.
+This form is for a person to read. A machine consumer reads the JSON form, where every value is a typed field. A value therefore keeps its spaces and prints as itself, so a version string reads as `202607270542-fe-6e0a44c 6e0a44c built 2026-07-27T05:42:11Z`.
 
-A value carrying whitespace, a quote, or a backslash is escaped with Go quoting, and its spaces become `\x20`, so nothing inside it is whitespace. `strconv.Unquote` and any Go-string decoder recover the original bytes exactly. Escaping also means a value holding a newline cannot end its record early and forge a second one, which matters because a codebase path is operator-supplied input that reaches this renderer.
+A value is quoted only when printing it raw would damage the output. A newline would end its line early and leave the tail reading as a separate record. An unprintable rune would reach the terminal as a control sequence, which matters because a codebase path is operator-supplied input that reaches this renderer. An empty string quotes for a third reason, so it does not collapse into an absent value, which prints as null.
 
 ```
 version 202607270542-fe-6e0a44c

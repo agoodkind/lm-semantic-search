@@ -92,39 +92,38 @@ func MetricValueText(metric *pb.Metric) string {
 	}
 }
 
-// escapedSpace is how a literal space survives inside a value. [strconv.Quote]
-// escapes every other whitespace rune already but leaves a space as itself, so
-// this is the one substitution that makes a quoted value whitespace-free.
-// [strconv.Unquote] reads it back as a space.
-const escapedSpace = `\x20`
-
-// stringValueText renders a string value as exactly one whitespace-free field,
-// so a record stays `name value unit` and reading a value by field position
-// works with awk, cut, and read.
+// stringValueText renders a string value for a person to read. This form is
+// human-facing; a machine consumer reads the JSON form, where every value is a
+// typed field rather than a line of text.
 //
-// A value carrying whitespace, a quote, or a backslash is quoted with Go
-// escaping and its spaces are escaped too, so [strconv.Unquote] recovers the
-// original bytes exactly. That also stops a value holding a newline from ending
-// its record early and forging a second one. An empty string quotes for a
-// different reason: it must not collapse into an absent value, which prints as
-// null.
+// A value therefore keeps its spaces and prints as itself. A version string
+// reads as `202607270542-fe-6e0a44c 6e0a44c built 2026-07-27T05:42:11Z` rather
+// than carrying an escape in place of each space.
+//
+// A value is quoted only when printing it raw would damage the output. A
+// newline would end the line early and leave its tail looking like a separate
+// record. An unprintable rune would reach the terminal as a control sequence: a
+// codebase path is operator-supplied, so a path holding an escape character
+// could clear the screen or move the cursor. An empty string quotes for a third
+// reason, so it does not collapse into an absent value, which prints as null.
 func stringValueText(value string) string {
 	if value == "" || strings.ContainsFunc(value, needsEscaping) {
-		return strings.ReplaceAll(strconv.Quote(value), " ", escapedSpace)
+		return strconv.Quote(value)
 	}
 	return value
 }
 
-// needsEscaping reports whether one rune would make a bare value ambiguous or
-// unsafe to print.
+// needsEscaping reports whether one rune would damage the line it appears on.
 //
-// Whitespace would split the value across fields or end the record early. A
-// quote or a backslash is what the escaping itself uses. Anything unprintable
-// is escaped because a codebase path is operator-supplied and reaches a
-// terminal: a raw escape character would emit a control sequence that clears
-// the screen or moves the cursor, corrupting both the live frame and the piped
-// record. A space is printable and is handled by the caller's substitution.
+// A space is safe and stays, because this output is read rather than parsed.
+// Every other whitespace rune is not: a newline ends the line and a tab
+// disturbs the column layout. A quote or a backslash is what the escaping
+// itself uses. Anything unprintable would reach the terminal as a control
+// sequence.
 func needsEscaping(candidate rune) bool {
+	if candidate == ' ' {
+		return false
+	}
 	if candidate == '"' || candidate == '\\' {
 		return true
 	}
