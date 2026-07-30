@@ -401,7 +401,28 @@ message GetIndexResponse {
   // single signal a caller should use to decide whether search_code can serve
   // this path right now; classification.kind alone reflects only the on-disk
   // index and stays KIND_IN_SCOPE_INDEXED even when the backend is unreachable.
-  bool searchable = 7;
+  //
+  // This field is proto3 optional so an explicit false survives JSON encoding.
+  // A plain proto3 bool is omitted from JSON at its zero value, which made a
+  // real false indistinguishable from a key the daemon never set. A consumer
+  // must check field presence, not just truthiness, because the wire carries
+  // three states:
+  //
+  //   Present and true: the path is indexed and the backend answered live.
+  //   search_code can serve it now.
+  //
+  //   Present and false: the backend answered. The path is not searchable
+  //   right now, either because it is not indexed or because the probe found
+  //   it unready.
+  //
+  //   Absent, no "searchable" key on the wire: the daemon has no answer. This
+  //   is not a false. The probe did not complete, for example because the
+  //   daemon errored before it reached the backend.
+  //
+  // A consumer that treats a missing key as false will allow a read it should
+  // have gated. Check presence first, and only trust the value when the key
+  // is present.
+  optional bool searchable = 7;
   // CollectionReadiness is the per-path readiness of this codebase's own Milvus
   // collection, distinct from dependency_health (a global fact). One of "",
   // "absent", "building", "loading", "ready", or "unknown". A not-ready
