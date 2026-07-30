@@ -578,18 +578,6 @@ func TestHostedRefusalReportsAMeasuredCountTheEndpointGaveAsZero(t *testing.T) {
 	}
 }
 
-func TestNormalizeEmbeddingInputOnlyFillsAnEmptyInput(t *testing.T) {
-	t.Parallel()
-
-	if got := normalizeEmbeddingInput(""); got != " " {
-		t.Fatalf("empty input became %q, want a single space the endpoint accepts", got)
-	}
-	oversized := strings.Repeat("c", oversizedHostedInputBytes)
-	if got := normalizeEmbeddingInput(oversized); got != oversized {
-		t.Fatalf("input of %d bytes became %d bytes; nothing may shorten it here", len(oversized), len(got))
-	}
-}
-
 func TestOversizedInputRejectionClassification(t *testing.T) {
 	t.Parallel()
 

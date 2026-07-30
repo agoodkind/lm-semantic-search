@@ -220,7 +220,7 @@ func (provider *onnxProvider) clientRejection(
 			Measured: adapterr.ReportedFigure(inputBytes),
 			Maximum:  adapterr.ReportedFigure(provider.runtime.tokenizer.maximumInputBytes()),
 		}
-	case onnxInputContainsNUL, onnxInputAccepted:
+	case onnxInputContainsNUL, onnxInputEmpty, onnxInputAccepted:
 		return adapterr.EmbedInputRejection{
 			Reason:   reason,
 			Limit:    adapterr.EmbedLimitNone,
@@ -267,6 +267,8 @@ func (provider *onnxProvider) explainRejection(
 	inputBytes int,
 ) error {
 	switch outcome.rejection {
+	case onnxInputEmpty:
+		return errors.New("input carries no non-whitespace character, so there is nothing to embed")
 	case onnxInputContainsNUL:
 		return errors.New("input contains a NUL byte, which the tokenizer cannot read past")
 	case onnxInputBytesExceeded:
@@ -422,16 +424,23 @@ func (provider *onnxProvider) EmbedBatch(
 	// the caller's split-and-retry loop divides anything that does not fit.
 	vectors := make([][]float32, len(texts))
 	var skipped []SkippedInput
+	refusedEmpty := 0
 	for index, text := range texts {
 		outcome, embedErr := provider.embedOne(ctx, text)
 		if embedErr != nil {
 			return BatchResult{}, embedErr
 		}
 		if outcome.rejection != onnxInputAccepted {
+			if outcome.rejection == onnxInputEmpty {
+				refusedEmpty++
+			}
 			skipped = append(skipped, provider.skippedInput(index, outcome))
 			continue
 		}
 		vectors[index] = outcome.vector
+	}
+	if refusedEmpty > 0 {
+		metrics.EmbedInputsRefusedEmpty(refusedEmpty)
 	}
 	return BatchResult{Vectors: vectors, Skipped: skipped}, nil
 }

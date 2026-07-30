@@ -239,6 +239,17 @@ func hostedInputRejection(
 	reportedTokens adapterr.EmbedFigure,
 	maxTokens adapterr.EmbedFigure,
 ) adapterr.EmbedInputRejection {
+	if reason == adapterr.EmbedRejectionEmptyContent {
+		// Nothing was measured and no ceiling was reached, so naming a size limit
+		// here would send the reader after a shorter input when the input was
+		// already as short as an input can be.
+		return adapterr.EmbedInputRejection{
+			Reason:   reason,
+			Limit:    adapterr.EmbedLimitNone,
+			Measured: adapterr.UnreportedFigure(),
+			Maximum:  adapterr.UnreportedFigure(),
+		}
+	}
 	limit := adapterr.EmbedLimitTokens
 	if !maxTokens.Reported && !reportedTokens.Reported {
 		limit = adapterr.EmbedLimitUnreported
@@ -256,11 +267,6 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 		return BatchResult{Vectors: nil, Skipped: nil}, nil
 	}
 
-	preprocessedTexts := make([]string, 0, len(texts))
-	for _, text := range texts {
-		preprocessedTexts = append(preprocessedTexts, normalizeEmbeddingInput(text))
-	}
-
 	// Single choke point for every embedding call, so all per-batch latency and
 	// counters flow through one defer regardless of which return fires.
 	start := clock.Now()
@@ -274,16 +280,33 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 	// its original index in texts. An oversized input is removed from surviving
 	// and its vectors slot stays nil, so the remaining inputs are re-requested
 	// until the endpoint accepts them all or nothing is left to send.
+	//
+	// An input with nothing to embed never enters surviving, so it costs no
+	// endpoint call at all. It is reported as skipped exactly like an input the
+	// endpoint refused, which keeps one promise for every nil vector: the caller
+	// reads why, and it holds whether the refusal happened here or upstream.
 	surviving := make([]int, 0, len(texts))
-	for index := range preprocessedTexts {
+	var skipped []SkippedInput
+	for index, text := range texts {
+		if hasNothingToEmbed(text) {
+			skipped = append(skipped, SkippedInput{
+				Index:          index,
+				Reason:         adapterr.EmbedRejectionEmptyContent,
+				ReportedTokens: adapterr.UnreportedFigure(),
+				MaxTokens:      adapterr.UnreportedFigure(),
+			})
+			continue
+		}
 		surviving = append(surviving, index)
 	}
-	var skipped []SkippedInput
+	if refused := len(skipped); refused > 0 {
+		metrics.EmbedInputsRefusedEmpty(refused)
+	}
 
 	for len(surviving) > 0 {
 		inputs := make([]string, 0, len(surviving))
 		for _, originalIndex := range surviving {
-			inputs = append(inputs, preprocessedTexts[originalIndex])
+			inputs = append(inputs, texts[originalIndex])
 		}
 
 		response, embedErr := provider.embedWithRetry(ctx, provider.embeddingParams(inputs))
@@ -548,17 +571,22 @@ func embedBackoff(attempt int) time.Duration {
 	return embedBackoffBase * time.Duration(multiplier)
 }
 
-// normalizeEmbeddingInput prepares one input for the embeddings request. An empty
-// input carries no content and the endpoint rejects it outright, so it becomes a
-// single space. Every other input is sent exactly as the caller supplied it.
-// Shortening a long input here would hand back a vector covering only the head of
-// the content while the caller stores that vector under the whole content's
-// identity; an input the endpoint cannot fit comes back as a
-// context_length_exceeded rejection instead, which EmbedBatch reports through
-// BatchResult.Skipped.
-func normalizeEmbeddingInput(text string) string {
-	if text == "" {
-		return " "
-	}
-	return text
+// hasNothingToEmbed reports whether an input carries no character a vector could
+// describe. It protects one invariant: a returned vector always covers the whole
+// input, and an input with no non-whitespace character offers nothing to cover,
+// so embedding it would spend a model call to store a vector that can only be
+// noise in a later search.
+//
+// Whitespace-only counts as empty because it is the same degenerate case. The
+// tokenizer reduces both to the model's special tokens alone, so they yield the
+// same vector, and treating only the zero-length string as empty would let an
+// input of one newline through a guard whose whole purpose is to stop content
+// that cannot be embedded.
+//
+// The question is deliberately physical and is asked of the string alone. This
+// is not the place to decide whether content is worth indexing. That is a
+// preference, it belongs to whoever assembles the input, and it is settled before
+// anything reaches a provider.
+func hasNothingToEmbed(text string) bool {
+	return strings.TrimSpace(text) == ""
 }

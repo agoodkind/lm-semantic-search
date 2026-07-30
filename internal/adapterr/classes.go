@@ -302,6 +302,14 @@ const (
 	// EmbedRejectionInputContainsNUL reports an input carrying a NUL byte, which
 	// a NUL-terminated tokenizer binding could read only up to.
 	EmbedRejectionInputContainsNUL EmbedRejectionReason = "input_contains_nul_byte"
+
+	// EmbedRejectionEmptyContent reports an input carrying no non-whitespace
+	// character, which no vector can describe: a vector always covers the whole
+	// input, and there is nothing here for one to cover. It names the physical
+	// state of the input, not a judgement about whether the content was worth
+	// indexing, which is the caller's decision and is made before the input is
+	// ever offered.
+	EmbedRejectionEmptyContent EmbedRejectionReason = "empty_content"
 )
 
 // EmbedLimitKind names which limit refused an embedding input, so a message
@@ -426,6 +434,7 @@ func knownEmbedRejectionReason(reason EmbedRejectionReason) EmbedRejectionReason
 	case EmbedRejectionContextLengthExceeded,
 		EmbedRejectionInputBytesExceeded,
 		EmbedRejectionInputContainsNUL,
+		EmbedRejectionEmptyContent,
 		EmbedRejectionUnspecified:
 		return reason
 	default:

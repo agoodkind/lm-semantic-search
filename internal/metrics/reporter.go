@@ -68,6 +68,7 @@ func emit(ctx context.Context) {
 		slog.Int64("embed_latency_ms_sum", snapshot.EmbedLatencyMSSum),
 		slog.Int64("embed_inflight", snapshot.EmbedInflight),
 		slog.Int64("embed_chunks_reused_total", snapshot.EmbedChunksReusedTotal),
+		slog.Int64("embed_inputs_refused_empty", snapshot.EmbedInputsRefusedEmpty),
 		slog.Int64("converge_upsert_total", snapshot.ConvergeUpsertTotal),
 		slog.Int64("converge_remove_total", snapshot.ConvergeRemoveTotal),
 		slog.Int64("converge_copy_chunks_total", snapshot.ConvergeCopyChunksTotal),

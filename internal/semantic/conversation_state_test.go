@@ -372,7 +372,8 @@ func TestLoadConversationMessageStateDerivedReuseSkipsEmbedder(t *testing.T) {
 		{Content: "private reasoning"},
 		{Content: "new appended message"},
 	}
-	_, reused, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	embedded, err := service.embedChunkBatch(context.Background(), chunks, reuse)
+	reused := embedded.reused
 	if err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
 	}

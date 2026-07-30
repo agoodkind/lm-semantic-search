@@ -46,6 +46,7 @@ func publish() {
 	expvar.Publish(expvarPrefix+"embed_latency_ms_sum", counterVar{value: &embedLatencyMSSum})
 	expvar.Publish(expvarPrefix+"embed_inflight", counterVar{value: &embedInflight})
 	expvar.Publish(expvarPrefix+"embed_chunks_reused_total", counterVar{value: &embedChunksReusedTotal})
+	expvar.Publish(expvarPrefix+"embed_inputs_refused_empty", counterVar{value: &embedInputsRefusedEmpty})
 	expvar.Publish(expvarPrefix+"converge_upsert_total", counterVar{value: &convergeUpsertTotal})
 	expvar.Publish(expvarPrefix+"converge_remove_total", counterVar{value: &convergeRemoveTotal})
 	expvar.Publish(expvarPrefix+"converge_copy_chunks_total", counterVar{value: &convergeCopyChunksTotal})
