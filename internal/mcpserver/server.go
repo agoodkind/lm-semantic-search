@@ -21,6 +21,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/orphanguard"
 	"goodkind.io/lm-semantic-search/internal/response"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -103,7 +104,7 @@ func Run(ctx context.Context) error {
 				slog.ErrorContext(runCtx, "MCP orphan guard panicked", "err", fmt.Errorf("panic: %v", r))
 			}
 		}()
-		watchParentDeath(runCtx, cancel)
+		orphanguard.Watch(runCtx, cancel)
 	}()
 
 	if err := stdioServer.Listen(runCtx, os.Stdin, os.Stdout); err != nil && !errors.Is(err, context.Canceled) {

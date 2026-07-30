@@ -37,6 +37,17 @@ func main() {
 		}
 		return
 	}
+	// The subcommand is consumed here rather than through the flag package,
+	// which treats a bare word as the end of the flags it will parse.
+	if len(os.Args) > 1 && os.Args[1] == sandboxCommandName {
+		rootContext := installCorrelationLogger("daemon-sandbox")
+		if err := runSandbox(rootContext, os.Args[2:]); err != nil {
+			slog.ErrorContext(rootContext, "sandbox failed", "err", err)
+			_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	rootContext := installCorrelationLogger("daemon-boot")
 	if err := run(rootContext); err != nil {
 		slog.ErrorContext(rootContext, "daemon failed", "err", err)
@@ -136,6 +147,16 @@ func run(rootContext context.Context) error {
 		}
 	}
 
+	return serve(rootContext, cfg)
+}
+
+// serve runs the daemon against an already-resolved configuration and returns
+// when the process is signalled, a client asks it to stop, or serving fails. It
+// is split from run so a throwaway daemon reaches the same serving path rather
+// than a reduced copy of it: where the configuration was rooted is the only
+// difference between an installed daemon and a sandbox.
+func serve(rootContext context.Context, cfg config.Config) error {
+	var err error
 	installConcernRouter(cfg.LogsDir, cfg.LogPath, rotationConfig(cfg))
 	metrics.Register()
 
@@ -214,6 +235,10 @@ func run(rootContext context.Context) error {
 		return err
 	case <-signalCh:
 	case <-shutdownCh:
+	// Serving also ends when the caller cancels the context it passed. Without
+	// this the context is accepted and then ignored, so a caller that decides
+	// this process should stop has no way to say so except a signal.
+	case <-rootContext.Done():
 	}
 
 	cancelRuntime()

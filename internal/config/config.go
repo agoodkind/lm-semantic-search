@@ -96,6 +96,14 @@ type Config struct {
 	GraphDir     string
 	ContextRoot  string
 
+	// ModelCacheRoot is where pinned offline embedding artifacts are cached. It
+	// defaults to StateRoot and is separate from it because the two have
+	// different lifetimes: state belongs to one daemon, while a checksum-verified
+	// model file is reusable by every daemon on the machine. A throwaway daemon
+	// points StateRoot at a temporary directory and leaves this at the real root,
+	// so it does not re-download the model on every run.
+	ModelCacheRoot string
+
 	// Profile is the user-facing capability selector expanded by ApplyProfile.
 	// Empty or "standard" keeps the Milvus plus OpenAI-compatible default; "offline"
 	// selects the embedded local store and the in-process ONNX embedder.
@@ -317,7 +325,11 @@ func Default() (Config, error) {
 	stateRoot = envOrDefault("CLAUDE_CONTEXTD_STATE_ROOT", stateRoot)
 	socketsDir := filepath.Join(stateRoot, "sockets")
 	logsDir := filepath.Join(stateRoot, "logs")
-	contextRoot := filepath.Join(homeDir, ".context")
+	// ContextRoot holds the advisory lock the upstream TS adapter also takes, so
+	// it needs its own override: a daemon that moves only its state root would
+	// still contend on the operator's lock and stall the daemon holding it.
+	contextRoot := envOrDefault("CLAUDE_CONTEXTD_CONTEXT_ROOT", filepath.Join(homeDir, ".context"))
+	modelCacheRoot := envOrDefault("CLAUDE_CONTEXTD_MODEL_CACHE_ROOT", stateRoot)
 
 	socketPath := envOrDefault("CLAUDE_CONTEXTD_SOCKET_PATH", filepath.Join(socketsDir, defaultSocketName))
 	logPath := envOrDefault("CLAUDE_CONTEXTD_LOG_PATH", filepath.Join(logsDir, defaultLogFileName))
@@ -360,6 +372,7 @@ func Default() (Config, error) {
 		ChunksDir:                     filepath.Join(stateRoot, "chunks"),
 		GraphDir:                      filepath.Join(stateRoot, "graph"),
 		ContextRoot:                   contextRoot,
+		ModelCacheRoot:                modelCacheRoot,
 		EmbeddingProvider:             embeddingProviderName,
 		EmbeddingModel:                envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model),
 		OfflineEmbeddingModel:         embeddingDefaults.offlineModel,

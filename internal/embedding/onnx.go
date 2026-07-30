@@ -71,7 +71,7 @@ func newONNXProvider(
 	files, err := ensureModelFiles(
 		ctx,
 		http.DefaultClient,
-		cfg.StateRoot,
+		cfg.ModelCacheRoot,
 		preset,
 	)
 	if err != nil {

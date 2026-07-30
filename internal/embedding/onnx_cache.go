@@ -36,20 +36,25 @@ type cachedModelFiles struct {
 	tokenizerPath string
 }
 
+// ensureModelFiles returns the local paths of one preset's model and tokenizer,
+// downloading and checksum-verifying whatever is missing. cacheRoot is the
+// machine-wide artifact cache rather than one daemon's state root, so a
+// throwaway daemon reuses an already-downloaded model instead of fetching it
+// again.
 func ensureModelFiles(
 	ctx context.Context,
 	httpClient *http.Client,
-	stateRoot string,
+	cacheRoot string,
 	preset offlinemodel.Preset,
 ) (cachedModelFiles, error) {
-	if stateRoot == "" {
+	if cacheRoot == "" {
 		return cachedModelFiles{}, fmt.Errorf(
-			"offline embedding model %q requires a state root",
+			"offline embedding model %q requires a model cache root",
 			preset.Name,
 		)
 	}
 	modelDirectory := filepath.Join(
-		stateRoot,
+		cacheRoot,
 		offlineModelCacheDirectory,
 		preset.Name,
 	)
