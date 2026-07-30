@@ -1,6 +1,6 @@
 //go:build !linux && !darwin
 
-package mcpserver
+package orphanguard
 
 import "context"
 

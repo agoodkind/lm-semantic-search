@@ -4,7 +4,7 @@ A fork and Go rewrite of [zilliztech/claude-context](https://github.com/zillizte
 
 ## Where Current Truth Lives
 
-CLI behavior lives in the current help output, starting with `lm-semantic-search --help` and the grouped subcommand help.
+CLI behavior lives in the current help output, starting with `lm-semantic-search --help` and the grouped subcommand help. The daemon binary takes no help output, so its two commands are described here: `lm-semantic-search-daemon version` and [`lm-semantic-search-daemon sandbox`](docs/sandbox.md).
 
 ## Configuration
 
@@ -27,6 +27,23 @@ Example `config.json`:
 ```
 
 If both `openaiBaseUrl` and `OPENAI_BASE_URL` are unset, the OpenAI SDK uses its default endpoint. `OPENAI_BASE_URL` overrides `openaiBaseUrl` when both are set.
+
+### Where the daemon keeps its files
+
+Each root below has a default and an environment variable that moves it. A variable that is set wins over the default.
+
+| Variable | Default | Holds |
+| --- | --- | --- |
+| `CLAUDE_CONTEXTD_CONFIG_ROOT` | `$XDG_CONFIG_HOME/lm-semantic-search` | `config.json` |
+| `CLAUDE_CONTEXTD_STATE_ROOT` | `$XDG_STATE_HOME/lm-semantic-search` | the registry, job ledger, merkle snapshots, chunks, and the code graph |
+| `CLAUDE_CONTEXTD_CONTEXT_ROOT` | `~/.context` | the advisory lock the daemon shares with the upstream TypeScript adapter |
+| `CLAUDE_CONTEXTD_MODEL_CACHE_ROOT` | the state root | downloaded offline embedding models |
+| `CLAUDE_CONTEXTD_SOCKET_PATH` | `<state root>/sockets/lm-semantic-search-daemon.sock` | the gRPC socket clients dial |
+| `CLAUDE_CONTEXTD_LOG_PATH` | `<state root>/logs/lm-semantic-search-daemon.log` | the combined log |
+
+The model cache is separate from the state root because the two have different lifetimes. State belongs to one daemon, while a downloaded model is checksum-verified and reusable by every daemon on the machine, so a short-lived daemon can point its state somewhere temporary and still reuse the model.
+
+Moving these by hand is rarely necessary. To run a second daemon that touches none of the operator's files, use [`lm-semantic-search-daemon sandbox`](docs/sandbox.md), which sets them all.
 
 ## Offline profile
 
@@ -55,6 +72,8 @@ The command writes `"profile": "offline"` to the daemon `config.json`. You can s
 ```
 
 `CLAUDE_CONTEXT_PROFILE=offline` overrides the file setting. Restart the daemon after changing the profile.
+
+To try the offline profile without changing the installed daemon, run [`lm-semantic-search-daemon sandbox`](docs/sandbox.md). It defaults to offline, writes no `config.json`, and needs no restart.
 
 Offline search is dense-only. It does not include the default profile's BM25 sparse search and hybrid reranking.
 

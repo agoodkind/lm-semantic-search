@@ -28,7 +28,7 @@ func skipIfArtifactUnavailable(t *testing.T, err error) {
 	}
 }
 
-// offlineModelCacheRoot returns a state root shared by every test in this
+// offlineModelCacheRoot returns a model cache root shared by every test in this
 // package, so the pinned model artifacts download once per machine instead of
 // once per test. Each artifact is checksum-verified on use, so a partial or
 // stale file is replaced rather than trusted.
@@ -45,7 +45,7 @@ func TestONNXBGEProviderDeterministicNormalizedAndConfigured(t *testing.T) {
 	cfg := config.ApplyProfile(config.Config{
 		Profile:               config.ProfileOffline,
 		OfflineEmbeddingModel: offlinemodel.BGESmall,
-		StateRoot:             offlineModelCacheRoot(t),
+		ModelCacheRoot:        offlineModelCacheRoot(t),
 	})
 	provider, err := NewProvider(context.Background(), cfg)
 	if err != nil {
@@ -206,7 +206,7 @@ func TestONNXEmbedBatchSkipsOverLimitInputInsteadOfTruncating(t *testing.T) {
 	cfg := config.ApplyProfile(config.Config{
 		Profile:               config.ProfileOffline,
 		OfflineEmbeddingModel: offlinemodel.BGESmall,
-		StateRoot:             offlineModelCacheRoot(t),
+		ModelCacheRoot:        offlineModelCacheRoot(t),
 	})
 	provider, err := NewProvider(context.Background(), cfg)
 	if err != nil {
@@ -316,7 +316,7 @@ func TestONNXEmbedRejectsNULInputThatSharesAPrefixWithAnEmbeddableOne(t *testing
 	cfg := config.ApplyProfile(config.Config{
 		Profile:               config.ProfileOffline,
 		OfflineEmbeddingModel: offlinemodel.BGESmall,
-		StateRoot:             offlineModelCacheRoot(t),
+		ModelCacheRoot:        offlineModelCacheRoot(t),
 	})
 	provider, err := NewProvider(context.Background(), cfg)
 	if err != nil {

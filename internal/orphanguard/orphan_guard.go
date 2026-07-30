@@ -1,4 +1,9 @@
-package mcpserver
+// Package orphanguard stops a process that has outlived whatever started it.
+//
+// A process launched by an editor, a shell, or a test harness holds locks,
+// ports, and state that nothing reclaims once that parent is gone. This cancels
+// the run context on the parent's exit so the process unwinds on its own.
+package orphanguard
 
 import (
 	"context"
@@ -29,7 +34,7 @@ var getppidFunc = os.Getppid
 // they do not depend on real syscalls or timing.
 var parentDeathSignalFunc = parentDeathSignal
 
-// watchParentDeath cancels ctx when the process is reparented to init.
+// Watch cancels ctx when the process is reparented to init.
 //
 // The watch is event-driven: pidfd_open + poll on Linux, kqueue with
 // EVFILT_PROC NOTE_EXIT on Darwin/BSD. Detection is immediate and independent
@@ -43,7 +48,7 @@ var parentDeathSignalFunc = parentDeathSignal
 // orphaned. Cancelling the context lets the stdio server unwind cleanly
 // instead of lingering and accumulating into the kind of pile that pushed
 // system load to 28 in the upstream TS adapter.
-func watchParentDeath(ctx context.Context, cancel context.CancelFunc) {
+func Watch(ctx context.Context, cancel context.CancelFunc) {
 	startingParent := getppidFunc()
 	if startingParent == orphanInitPID {
 		// Parent already gone (or we were launched directly by init/launchd).

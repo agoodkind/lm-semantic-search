@@ -1,11 +1,18 @@
 //go:build live
 
 // Package live holds the build-tagged, end-to-end validation of the merged
-// conversation-marker feature against a real Milvus. Every run boots the daemon
-// gRPC server in-process on a throwaway unix socket, points embedding at a local
-// fake, and ingests into a per-test UUID collection whose Milvus name can never
-// collide with the operator's production collection. Teardown drops the throwaway
-// collection and asserts the production daemon was never touched. Run with:
+// conversation-marker feature against a real Milvus.
+//
+// Every run boots the daemon gRPC server in-process on a throwaway unix socket,
+// points embedding at a local fake, and ingests into a per-test UUID collection
+// whose Milvus name can never collide with the operator's production collection.
+// Teardown drops that collection.
+//
+// Paths come from internal/sandbox, the same isolation the sandbox command
+// gives a daemon run by hand. The store and the embedder are named here instead,
+// because validating against the real store is the point.
+//
+// Run with:
 //
 //	go test -tags live -count=1 ./test/live/
 //
@@ -37,6 +44,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/sandbox"
 	"goodkind.io/lm-semantic-search/internal/store"
 	"google.golang.org/grpc"
 )
@@ -51,12 +59,6 @@ const (
 	// returns. It defines the throwaway collection's dimension, learned lazily on
 	// first insert, so a small fixed width keeps the collection cheap.
 	fakeEmbeddingDimension = 16
-
-	// daemonProcessName is the installed production daemon's process name. The
-	// production-safety guard snapshots these pids before boot and asserts none
-	// disappeared at teardown, proving the in-process server never signalled the
-	// operator's daemon.
-	daemonProcessName = "lm-semantic-search-daemon"
 
 	// relativePathField mirrors the collection's scalar column name
 	// (internal/semantic), so the scenario-4 direct query can count rows by
@@ -135,46 +137,15 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 
 	embedServer := newFakeEmbeddingServer(t, gate)
 
-	cfg := config.Config{
-		StateRoot:                 stateRoot,
-		SocketPath:                socketPath,
-		RegistryPath:              filepath.Join(stateRoot, "registry.json"),
-		JobsPath:                  filepath.Join(stateRoot, "jobs.jsonl"),
-		EventsPath:                filepath.Join(stateRoot, "events.jsonl"),
-		LogsDir:                   filepath.Join(stateRoot, "logs"),
-		LogPath:                   filepath.Join(stateRoot, "logs", "daemon.log"),
-		MerkleDir:                 filepath.Join(stateRoot, "merkle"),
-		LocksDir:                  filepath.Join(stateRoot, "locks"),
-		SocketsDir:                filepath.Join(stateRoot, "sockets"),
-		ChunksDir:                 filepath.Join(stateRoot, "chunks"),
-		GraphDir:                  filepath.Join(stateRoot, "graph"),
-		ContextRoot:               filepath.Join(stateRoot, "context"),
-		EmbeddingProvider:         "OpenAI",
-		EmbeddingModel:            "text-embedding-3-small",
-		EmbeddingBatchSize:        8,
-		EmbeddingBatchTokenBudget: 1000,
-		EmbeddingDimension:        fakeEmbeddingDimension,
-		OpenAIAPIKey:              "live-harness-dummy-key", //gitleaks:allow // not a secret: fake embedder needs any non-empty key
-		OpenAIBaseURL:             embedServer.URL,
-		QueryInstructionPrefix:    "",
-		MilvusAddress:             milvusAddress,
-		MilvusToken:               defaultConfig.MilvusToken,
-		HybridMode:                true,
-		BackgroundSyncEnabled:     false,
-		SyncIntervalMS:            300000,
-		TriggerWatcherEnabled:     false,
-		FileWatcherEnabled:        false,
-		SyncLockStaleMS:           600000,
-		DebugListenerEnabled:      false,
-		DebugListenAddr:           "127.0.0.1:0",
-		PerfCountersIntervalMS:    0,
-		MaxConcurrentIndexJobs:    1,
-		ResumeIndexingOnBoot:      false,
-	}
-	for _, dir := range []string{
-		cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir,
-		cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot,
-	} {
+	cfg := resolveLiveConfig(
+		t,
+		stateRoot,
+		socketPath,
+		embedServer.URL,
+		milvusAddress,
+		defaultConfig.MilvusToken,
+	)
+	for _, dir := range sandbox.Directories(cfg) {
 		if err := store.EnsureDir(dir); err != nil {
 			t.Fatalf("EnsureDir(%s) returned error: %v", dir, err)
 		}
@@ -256,6 +227,78 @@ func (h *harness) teardown(stopServer func()) {
 	_ = h.milvus.Close(closeCtx)
 	cancel()
 	stopServer()
+}
+
+// resolveLiveConfig takes the sandbox isolation and names the parts this suite
+// needs to differ: a real Milvus and a fake embedder.
+//
+// Naming those first and letting the sandbox fill in the rest is what proves
+// each sandbox value is a default rather than a forced setting. If this stops
+// being expressible, the resolver has started forcing values and the resolver is
+// what should change.
+func resolveLiveConfig(
+	t *testing.T,
+	sandboxRoot string,
+	socketPath string,
+	embedServerURL string,
+	milvusAddress string,
+	milvusToken string,
+) config.Config {
+	t.Helper()
+
+	chosen := []struct {
+		name  string
+		value string
+	}{
+		// The real store, which is what this suite exists to exercise.
+		{name: "CLAUDE_CONTEXT_PROFILE", value: config.ProfileStandard},
+		{name: "MILVUS_ADDRESS", value: milvusAddress},
+		{name: "MILVUS_TOKEN", value: milvusToken},
+		// A local fake stands in for the embedder, so no run spends GPU time or
+		// depends on a model server being up.
+		{name: "EMBEDDING_PROVIDER", value: "OpenAI"},
+		{name: "EMBEDDING_MODEL", value: "text-embedding-3-small"},
+		{name: "OPENAI_BASE_URL", value: embedServerURL},
+		{name: "OPENAI_API_KEY", value: "live-harness-dummy-key"}, //gitleaks:allow // not a secret: the fake embedder accepts any non-empty key
+		{name: "EMBEDDING_DIMENSION", value: strconv.Itoa(fakeEmbeddingDimension)},
+		{name: "EMBEDDING_BATCH_SIZE", value: "8"},
+		// The sandbox default sits under a temp root long enough to overflow
+		// the platform's socket path limit.
+		{name: "CLAUDE_CONTEXTD_SOCKET_PATH", value: socketPath},
+		// Background work is off so a scenario observes only what it asked for.
+		{name: "CLAUDE_CONTEXT_BACKGROUND_SYNC", value: "false"},
+		{name: "CLAUDE_CONTEXT_TRIGGER_WATCHER", value: "false"},
+		{name: "CLAUDE_CONTEXT_FILE_WATCHER", value: "false"},
+		{name: "CLAUDE_CONTEXT_DEBUG_LISTENER", value: "false"},
+		{name: "CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", value: "0"},
+		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: "1"},
+		{name: "CLAUDE_CONTEXT_RESUME_ON_BOOT", value: "false"},
+	}
+	for _, setting := range chosen {
+		t.Setenv(setting.name, setting.value)
+	}
+	for _, variable := range sandbox.Env(sandboxRoot) {
+		if _, alreadySet := os.LookupEnv(variable.Name); alreadySet {
+			continue
+		}
+		t.Setenv(variable.Name, variable.Value)
+	}
+
+	resolved, err := config.Default()
+	if err != nil {
+		t.Fatalf("resolve live config through config.Default: %v", err)
+	}
+	if resolved.MilvusAddress == "" {
+		t.Fatal("resolved config has no Milvus address; this suite must run against the real store")
+	}
+	if resolved.OpenAIBaseURL != embedServerURL {
+		t.Fatalf(
+			"resolved OpenAIBaseURL = %q, want the fake embedder at %q",
+			resolved.OpenAIBaseURL,
+			embedServerURL,
+		)
+	}
+	return resolved
 }
 
 // startInProcessServer serves the daemon gRPC service on a throwaway unix socket

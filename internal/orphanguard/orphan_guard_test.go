@@ -1,4 +1,4 @@
-package mcpserver
+package orphanguard
 
 import (
 	"context"
@@ -30,7 +30,7 @@ func TestWatchParentDeathExitsWhenReparented(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		watchParentDeath(runCtx, cancel)
+		Watch(runCtx, cancel)
 		close(done)
 	}()
 
@@ -39,7 +39,7 @@ func TestWatchParentDeathExitsWhenReparented(t *testing.T) {
 	select {
 	case <-runCtx.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("watchParentDeath did not cancel run context after parent-death signal")
+		t.Fatal("Watch did not cancel run context after parent-death signal")
 	}
 	<-done
 }
@@ -60,18 +60,18 @@ func TestWatchParentDeathReturnsImmediatelyWhenAlreadyOrphan(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		watchParentDeath(runCtx, cancel)
+		Watch(runCtx, cancel)
 		close(done)
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("watchParentDeath did not return when parent is already init")
+		t.Fatal("Watch did not return when parent is already init")
 	}
 
 	if runCtx.Err() != nil {
-		t.Fatal("watchParentDeath cancelled the run context when no transition occurred")
+		t.Fatal("Watch cancelled the run context when no transition occurred")
 	}
 }
 
@@ -96,7 +96,7 @@ func TestWatchParentDeathStopsOnContextCancel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		watchParentDeath(runCtx, cancel)
+		Watch(runCtx, cancel)
 		close(done)
 	}()
 
@@ -105,6 +105,6 @@ func TestWatchParentDeathStopsOnContextCancel(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("watchParentDeath did not return after context cancellation")
+		t.Fatal("Watch did not return after context cancellation")
 	}
 }
