@@ -448,14 +448,20 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	getIndexView := server.manager.resolveGetIndexView(requestedPath, found, codebasePointer(found, codebase), activeJob, health, readiness, classification, indexedDescendants)
 	// The daemon always answers Searchable on this path: computeSearchable folds
 	// eligibility, dependency health, and collection readiness into a definite
-	// true or false, never a missing verdict. new(...) carries that answer as an
-	// explicitly present optional field, so a false verdict is never confused on
-	// the wire with a probe the daemon never ran.
+	// true or false, never a missing verdict. Taking the address of that answer
+	// carries it as an explicitly present optional field, so a false verdict is
+	// never confused on the wire with a probe the daemon never ran.
+	//
+	// The local variable exists so the address is taken from a plain bool. A
+	// new(expr) form compiles under this module's go directive, but it reads as
+	// an error to anyone who knows the older builtin, and it needs the newer
+	// language version to build at all.
+	searchable := computeSearchable(searchableEligible, health.Mode, readiness)
 	response := &pb.GetIndexResponse{
 		Tracked:             found,
 		Classification:      pbconv.ToPathClassification(classification),
 		DependencyHealth:    toDependencyHealth(health),
-		Searchable:          new(computeSearchable(searchableEligible, health.Mode, readiness)),
+		Searchable:          &searchable,
 		CollectionReadiness: string(readiness),
 		DisplayText:         server.envelopeText(ctx, health, render.GetIndex(getIndexView), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
