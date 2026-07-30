@@ -133,6 +133,46 @@ func TestWriteJobEventsPreservesOriginalFileWhenWriteFails(t *testing.T) {
 	}
 }
 
+func TestWriteJobEventsCleansTempFileWhenEncodingFails(t *testing.T) {
+	journalDir := t.TempDir()
+	journalPath := filepath.Join(journalDir, "jobs.jsonl")
+	original := []byte("original journal\n")
+	if err := os.WriteFile(journalPath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	invalidTime := time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	writeErr := WriteJobEvents(journalPath, []model.JobEvent{{
+		Event:      "job_running",
+		OccurredAt: invalidTime,
+		Job: model.Job{
+			ID:        "job-1",
+			State:     model.JobStateRunning,
+			UpdatedAt: invalidTime,
+		},
+	}})
+	if writeErr == nil {
+		t.Fatal("WriteJobEvents returned nil, want an encoding error")
+	}
+
+	after, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatalf("ReadFile after failure returned error: %v", err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("journal after failed write = %q, want %q", after, original)
+	}
+	entries, err := os.ReadDir(journalDir)
+	if err != nil {
+		t.Fatalf("ReadDir returned error: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".tmp-") {
+			t.Fatalf("temporary journal %q was not removed", entry.Name())
+		}
+	}
+}
+
 func TestReadJobEventsProjectsLatestJobs(t *testing.T) {
 	journalPath := filepath.Join(t.TempDir(), "jobs.jsonl")
 	events := []model.JobEvent{

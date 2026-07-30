@@ -28,11 +28,14 @@ func selectRetainedJobEvents(
 	nonTerminal := make([]model.JobEvent, 0)
 	terminal := make([]model.JobEvent, 0)
 	for _, event := range latest {
-		switch event.Job.State {
-		case model.JobStateQueued, model.JobStateRunning, model.JobStateCancelling:
-			nonTerminal = append(nonTerminal, event)
-		case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
+		state := event.Job.State
+		isTerminal := state == model.JobStateCompleted ||
+			state == model.JobStateFailed ||
+			state == model.JobStateCancelled
+		if isTerminal {
 			terminal = append(terminal, event)
+		} else {
+			nonTerminal = append(nonTerminal, event)
 		}
 	}
 

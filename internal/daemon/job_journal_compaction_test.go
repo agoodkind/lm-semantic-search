@@ -133,6 +133,88 @@ func TestCompactJobJournalKeepsOldNonTerminalJob(t *testing.T) {
 	}
 }
 
+func TestCompactJobJournalKeepsUnrecognisedJobState(t *testing.T) {
+	journalPath := filepath.Join(t.TempDir(), "jobs.jsonl")
+	updatedAt := time.Date(2026, time.July, 1, 8, 0, 0, 0, time.UTC)
+	appendJournalEvents(t, journalPath, []model.JobEvent{{
+		Event:      "job_future",
+		OccurredAt: updatedAt,
+		Job: model.Job{
+			ID:         "future-job",
+			CodebaseID: "codebase-1",
+			State:      model.JobState("future"),
+			UpdatedAt:  updatedAt,
+		},
+	}})
+
+	if _, _, err := compactJobJournal(journalPath); err != nil {
+		t.Fatalf("compactJobJournal returned error: %v", err)
+	}
+	jobs := readJournalJobs(t, journalPath)
+	if _, found := jobs["future-job"]; !found {
+		t.Fatal("unrecognised job state was dropped")
+	}
+}
+
+func TestJobJournalTerminalCapNeverDropsNonTerminalJob(t *testing.T) {
+	baseTime := time.Date(2026, time.July, 1, 8, 0, 0, 0, time.UTC)
+	latest := make(
+		map[string]model.JobEvent,
+		jobJournalRetainedTerminalTotal+6,
+	)
+	for i := range jobJournalRetainedTerminalTotal + 5 {
+		completedAt := baseTime.Add(time.Duration(i) * time.Second)
+		jobID := fmt.Sprintf("terminal-%04d", i)
+		latest[jobID] = model.JobEvent{
+			Event:      "job_completed",
+			OccurredAt: completedAt,
+			Job: terminalJournalJob(
+				jobID,
+				fmt.Sprintf(
+					"codebase-%04d",
+					i/jobJournalRetainedTerminalPerCodebase,
+				),
+				model.JobStateCompleted,
+				completedAt,
+			),
+		}
+	}
+	latest["running-job"] = model.JobEvent{
+		Event:      "job_running",
+		OccurredAt: baseTime.Add(-time.Hour),
+		Job: model.Job{
+			ID:         "running-job",
+			CodebaseID: "codebase-running",
+			State:      model.JobStateRunning,
+			UpdatedAt:  baseTime.Add(-time.Hour),
+		},
+	}
+
+	retained := selectRetainedJobEvents(latest)
+	terminalCount := 0
+	runningFound := false
+	for _, event := range retained {
+		switch event.Job.State {
+		case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
+			terminalCount++
+		default:
+			if event.Job.ID == "running-job" {
+				runningFound = true
+			}
+		}
+	}
+	if !runningFound {
+		t.Fatal("terminal cap dropped non-terminal job")
+	}
+	if terminalCount != jobJournalRetainedTerminalTotal {
+		t.Fatalf(
+			"retained terminal count = %d, want %d",
+			terminalCount,
+			jobJournalRetainedTerminalTotal,
+		)
+	}
+}
+
 func TestCompactJobJournalRetainsTerminalJobsPerCodebase(t *testing.T) {
 	journalPath := filepath.Join(t.TempDir(), "jobs.jsonl")
 	baseTime := time.Date(2026, time.July, 1, 8, 0, 0, 0, time.UTC)
