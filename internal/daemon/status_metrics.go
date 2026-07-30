@@ -47,6 +47,7 @@ const (
 	unitMillis     = "ms"
 	unitPercent    = "%"
 	unitCodebases  = "codebases"
+	unitInputs     = "inputs"
 	// unitUnits counts units of work of mixed kinds: a job, a converge, and a
 	// coalesced request are each one, and no narrower noun covers all three.
 	unitUnits = "units"
@@ -172,6 +173,7 @@ func buildStatusMetrics(daemon *StatusSnapshot, snapshot metrics.Snapshot, now t
 		intMetric(statusGroupEmbed, "embed_vectors_total", snapshot.EmbedVectorsTotal, unitVectors),
 		intMetric(statusGroupEmbed, "embed_latency_ms_sum", snapshot.EmbedLatencyMSSum, unitMillis),
 		intMetric(statusGroupEmbed, "embed_chunks_reused_total", snapshot.EmbedChunksReusedTotal, unitChunks),
+		intMetric(statusGroupEmbed, "embed_inputs_refused_empty", snapshot.EmbedInputsRefusedEmpty, unitInputs),
 
 		intMetric(statusGroupConverge, "converge_upsert_total", snapshot.ConvergeUpsertTotal, unitPaths),
 		intMetric(statusGroupConverge, "converge_remove_total", snapshot.ConvergeRemoveTotal, unitPaths),
