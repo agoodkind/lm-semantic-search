@@ -297,8 +297,12 @@ message ConversationDocument {
 message ConversationToolCall {
   // name is the tool name, for example "Bash" or "run_command".
   string name = 1;
-  // display is what the user saw for this call.
-  string display = 2;
+  // display is what the user saw for this call. It takes a fresh tag rather than
+  // the one input_json held, because a sender that has not been upgraded yet
+  // still writes its serialization at tag 2. Reading that as display text would
+  // put the serialization into a stored row, which is the defect this field
+  // exists to remove.
+  string display = 7;
   // lang_hint names the language the display text is written in, for example
   // "bash", "json", or "markdown". Empty when unknown.
   string lang_hint = 4;
@@ -306,8 +310,8 @@ message ConversationToolCall {
   string output = 5;
   // is_error marks a tool call that returned an error result.
   bool is_error = 6;
-  reserved 3;
-  reserved "command";
+  reserved 2, 3;
+  reserved "input_json", "command";
 }
 
 message ConversationSearchResult {

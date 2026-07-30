@@ -1786,8 +1786,12 @@ type ConversationToolCall struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name is the tool name, for example "Bash" or "run_command".
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// display is what the user saw for this call.
-	Display string `protobuf:"bytes,2,opt,name=display,proto3" json:"display,omitempty"`
+	// display is what the user saw for this call. It takes a fresh tag rather than
+	// the one input_json held, because a sender that has not been upgraded yet
+	// still writes its serialization at tag 2. Reading that as display text would
+	// put the serialization into a stored row, which is the defect this field
+	// exists to remove.
+	Display string `protobuf:"bytes,7,opt,name=display,proto3" json:"display,omitempty"`
 	// lang_hint names the language the display text is written in, for example
 	// "bash", "json", or "markdown". Empty when unknown.
 	LangHint string `protobuf:"bytes,4,opt,name=lang_hint,json=langHint,proto3" json:"lang_hint,omitempty"`
@@ -5671,13 +5675,14 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\barchived\x18\b \x01(\bR\barchived\x12?\n" +
 	"\x05tools\x18\t \x03(\v2).lmsemanticsearch.v1.ConversationToolCallR\x05tools\x12\x1a\n" +
 	"\bthinking\x18\n" +
-	" \x01(\tR\bthinking\"\xa3\x01\n" +
+	" \x01(\tR\bthinking\"\xb5\x01\n" +
 	"\x14ConversationToolCall\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
-	"\adisplay\x18\x02 \x01(\tR\adisplay\x12\x1b\n" +
+	"\adisplay\x18\a \x01(\tR\adisplay\x12\x1b\n" +
 	"\tlang_hint\x18\x04 \x01(\tR\blangHint\x12\x16\n" +
 	"\x06output\x18\x05 \x01(\tR\x06output\x12\x19\n" +
-	"\bis_error\x18\x06 \x01(\bR\aisErrorJ\x04\b\x03\x10\x04R\acommand\"\x89\x02\n" +
+	"\bis_error\x18\x06 \x01(\bR\aisErrorJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\n" +
+	"input_jsonR\acommand\"\x89\x02\n" +
 	"\x18ConversationSearchResult\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +
