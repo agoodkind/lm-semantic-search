@@ -122,7 +122,7 @@ build install release: | daemon-entitlements-signer
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: daemon-entitlements-signer go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live offline-live
+.PHONY: daemon-entitlements-signer go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live offline-live proto
 
 # live runs the opt-in conversation-marker validation suite against a real local
 # Milvus, fully isolated from the operator's daemon (build tag `live`). It reuses
@@ -140,6 +140,27 @@ offline-live: | $(GO_MK_PREREQS)
 # daemon-status and daemon-wait call the installed CLI; kill-orphans matches the
 # installed MCP binary by name.
 CLI_INSTALL_BIN := $(INSTALL_DIR)/$(CLI_BINARY)
+
+# ---------------------------------------------------------------------------
+# Protobuf
+# ---------------------------------------------------------------------------
+# proto regenerates the Go bindings under gen/go from proto/lmsemanticsearch/v1,
+# using the module declared in buf.yaml and the plugins declared in
+# buf.gen.yaml. It is a manual target, run by hand after editing a .proto file,
+# not a GO_MK_GENERATE prerequisite: gen/go is committed rather than produced by
+# every build, lint, and test run, so wiring codegen in there would run buf on
+# every target for no reason. Commit the regenerated files under gen/go after
+# running this; nothing under gen/ is hand-edited.
+#
+# This fails loudly instead of silently doing nothing when buf is missing,
+# because a no-op codegen target would let stale generated code pass as
+# regenerated.
+proto:
+	@command -v buf >/dev/null 2>&1 || { \
+		echo "proto: buf is not installed on PATH; install it (for example: brew install bufbuild/buf/buf) and re-run make proto" >&2; \
+		exit 1; \
+	}
+	buf generate
 
 # ---------------------------------------------------------------------------
 # gksyntax submodule grammars
