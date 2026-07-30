@@ -15,29 +15,23 @@ import (
 	"goodkind.io/lm-semantic-search/internal/store"
 )
 
-// sandboxCommandName is the argument that selects a throwaway daemon instead of
-// the installed one.
-const sandboxCommandName = "sandbox"
-
-// sandboxRootFlag names the flag that keeps a chosen root rather than making and
-// removing a temporary one.
-const sandboxRootFlag = "--root"
-
-// sandboxRootPattern prefixes the temporary root. Temporary directories on macOS
-// live under a long path, and a unix socket path is capped near 104 bytes, so the
-// root is created under /tmp where the socket beneath it still fits.
 const (
+	sandboxCommandName = "sandbox"
+	sandboxRootFlag    = "--root"
+
+	// The root sits under /tmp because a socket path is capped near 104 bytes
+	// and the platform temp directory is long enough to overflow that.
 	sandboxRootPattern = "lms-sandbox-"
 	sandboxRootParent  = "/tmp"
 	sandboxDirMode     = 0o700
 )
 
 // runSandbox serves a throwaway daemon rooted in its own directory and returns
-// when the process is interrupted. It is one process: it starts no child, writes
-// no pid file, and watches nothing, so the daemon cannot outlive this call.
+// when the process stops. It starts no child and writes no pid file, so nothing
+// it owns can outlive this call.
 //
-// Isolation comes from where the config is rooted, not from a reduced daemon.
-// Everything below the resolve is the same code path the installed daemon runs.
+// Isolation comes from where the configuration is rooted, not from a reduced
+// daemon: everything past the resolve is the installed daemon's own path.
 func runSandbox(rootContext context.Context, arguments []string) error {
 	root, keepRoot, err := resolveSandboxRoot(arguments)
 	if err != nil {
@@ -63,11 +57,10 @@ func runSandbox(rootContext context.Context, arguments []string) error {
 		return err
 	}
 
-	// Ctrl-C, a kill, and a closed terminal all signal this process, and serve
-	// already returns on those. A launcher that dies without signalling leaves
-	// nothing to notice, so watch for that case too and stop rather than keep
-	// serving with no one left to stop us. The installed daemon is meant to
-	// outlive its launcher and never arms this.
+	// Ctrl-C, a kill, and a closed terminal already signal this process. A
+	// launcher that dies without signalling leaves nothing to notice, so watch
+	// for that too. The installed daemon outlives its launcher by design and
+	// never arms this.
 	serveContext, stopServing := context.WithCancel(rootContext)
 	defer stopServing()
 	goSafe(serveContext, func() { orphanguard.Watch(serveContext, stopServing) })
@@ -75,9 +68,9 @@ func runSandbox(rootContext context.Context, arguments []string) error {
 	return serve(serveContext, resolved)
 }
 
-// resolveSandboxRoot returns the directory to root the daemon in and whether it
-// belongs to the caller. A caller-supplied root is left in place on exit, since
-// removing a directory the caller named would destroy state they chose to keep.
+// resolveSandboxRoot returns the directory to root the daemon in and whether the
+// caller named it. A named root survives the run, because deleting a directory
+// somebody chose would destroy state they meant to keep.
 func resolveSandboxRoot(arguments []string) (root string, keepRoot bool, err error) {
 	supplied, err := parseSandboxRootFlag(arguments)
 	if err != nil {
@@ -107,8 +100,8 @@ func resolveSandboxRoot(arguments []string) (root string, keepRoot bool, err err
 }
 
 // parseSandboxRootFlag reads the one flag this command owns. Every other setting
-// reaches the daemon through the environment and the flags the daemon already
-// parses, so this deliberately understands nothing else.
+// arrives through the environment and the daemon's existing flags, so this
+// understands nothing else on purpose.
 func parseSandboxRootFlag(arguments []string) (string, error) {
 	for index := range arguments {
 		argument := arguments[index]
@@ -137,10 +130,9 @@ func trimFlagPrefix(argument string, prefix string) (string, bool) {
 
 // removeSandboxRoot deletes a root this command created. It re-derives that the
 // path is one of ours rather than trusting the caller, because this is the only
-// recursive delete in the daemon and a wrong path here would remove a directory
-// somebody cares about. A failure is reported and not returned, since the daemon
-// has already stopped and a leftover temporary directory is not worth a nonzero
-// exit.
+// recursive delete in the daemon. A failure is logged rather than returned: the
+// daemon has already stopped, and a leftover temporary directory is not worth a
+// nonzero exit.
 func removeSandboxRoot(root string) {
 	cleaned := filepath.Clean(root)
 	if filepath.Dir(cleaned) != sandboxRootParent ||
@@ -154,8 +146,8 @@ func removeSandboxRoot(root string) {
 }
 
 // writeSandboxBanner prints where this daemon put everything, so a second
-// terminal can reach it and a reader can confirm at a glance that nothing points
-// at the installed daemon's state.
+// terminal can reach it and a reader can see that nothing points at the
+// installed daemon's state.
 func writeSandboxBanner(writer io.Writer, root string, resolved config.Config, keepRoot bool) error {
 	rootNote := "removed on exit"
 	if keepRoot {

@@ -25,15 +25,16 @@ import (
 	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/sandbox"
 	"goodkind.io/lm-semantic-search/internal/store"
 	"google.golang.org/grpc"
 )
 
+// The offline profile replaces both shared backends with local ones, so this
+// suite names neither address. A constant for either would suggest it can reach
+// them, which is the property the suite exists to disprove.
 const (
 	daemonProcessName = "lm-semantic-search-daemon"
-
-	milvusAddress = "127.0.0.1:19530"
-	lmdAddress    = "127.0.0.1:5400"
 
 	// The query describes transferred-data corruption without reusing the target
 	// identifier or its archive, checksum, validation, and storage vocabulary.
@@ -127,42 +128,35 @@ func resolveOfflineConfig(
 ) config.Config {
 	t.Helper()
 
-	environment := []struct {
+	// These go first, because the sandbox leaves a name alone once it is set.
+	// The socket is among them: it needs a path short enough for the platform's
+	// socket limit, which the caller already picked.
+	suiteSettings := []struct {
 		name  string
 		value string
 	}{
-		{name: "HOME", value: t.TempDir()},
-		{name: "CLAUDE_CONTEXTD_CONFIG_ROOT", value: t.TempDir()},
-		{name: "CLAUDE_CONTEXTD_STATE_ROOT", value: stateRoot},
 		{name: "CLAUDE_CONTEXTD_SOCKET_PATH", value: socketPath},
-		{
-			name:  "CLAUDE_CONTEXTD_LOG_PATH",
-			value: filepath.Join(stateRoot, "logs", "daemon.log"),
-		},
-		{name: "CLAUDE_CONTEXT_PROFILE", value: config.ProfileOffline},
-		{name: "EMBEDDING_PROVIDER", value: "OpenAI"},
-		{name: "EMBEDDING_MODEL", value: "BAAI/bge-small-en-v1.5"},
 		{name: "EMBEDDING_BATCH_SIZE", value: "8"},
-		{name: "OPENAI_API_KEY", value: ""},
-		{name: "OPENAI_BASE_URL", value: "http://" + lmdAddress + "/v1"},
-		{name: "MILVUS_ADDRESS", value: milvusAddress},
-		{name: "MILVUS_TOKEN", value: ""},
-		{name: "HYBRID_MODE", value: "true"},
-		{name: "CUSTOM_IGNORE_PATTERNS", value: ""},
-		{name: "CLAUDE_CONTEXT_INCLUDE_SUBMODULES", value: ""},
 		{name: "CLAUDE_CONTEXT_BACKGROUND_SYNC", value: "false"},
-		{name: "CLAUDE_CONTEXT_SYNC_INTERVAL_MS", value: "300000"},
 		{name: "CLAUDE_CONTEXT_TRIGGER_WATCHER", value: "false"},
 		{name: "CLAUDE_CONTEXT_FILE_WATCHER", value: "false"},
-		{name: "CLAUDE_CONTEXT_SYNC_LOCK_STALE_MS", value: "600000"},
 		{name: "CLAUDE_CONTEXT_DEBUG_LISTENER", value: "false"},
-		{name: "CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR", value: "127.0.0.1:0"},
 		{name: "CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", value: "0"},
 		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: "1"},
 		{name: "CLAUDE_CONTEXT_RESUME_ON_BOOT", value: "false"},
 	}
-	for _, variable := range environment {
-		t.Setenv(variable.name, variable.value)
+	for _, setting := range suiteSettings {
+		t.Setenv(setting.name, setting.value)
+	}
+
+	// Isolation comes from the same resolver the sandbox command uses, so this
+	// suite cannot drift from what a person running that command gets. t.Setenv
+	// rather than the resolver's own writes, so the values unwind per test.
+	for _, variable := range sandbox.Env(stateRoot) {
+		if _, alreadySet := os.LookupEnv(variable.Name); alreadySet {
+			continue
+		}
+		t.Setenv(variable.Name, variable.Value)
 	}
 
 	resolvedConfig, err := config.Default()

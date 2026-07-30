@@ -440,10 +440,9 @@ func TestDefaultKeepsDaemonStateAndCompatRootsSplit(t *testing.T) {
 	}
 }
 
-// TestDefaultMovesTheContextRootWhenNamed proves the directory holding the
-// advisory lock can be relocated. Without this a second daemon contends for the
-// operator's lock however much of its own state it moves, which is what stalled
-// the running daemon for twenty minutes.
+// The directory holding the advisory lock must be relocatable. Without it a
+// second daemon contends for the operator's lock however much of its own state
+// it moves, which is what stalled the running daemon for twenty minutes.
 func TestDefaultMovesTheContextRootWhenNamed(t *testing.T) {
 	isolateState(t)
 	chosen := t.TempDir()
@@ -459,10 +458,8 @@ func TestDefaultMovesTheContextRootWhenNamed(t *testing.T) {
 	}
 }
 
-// TestDefaultSeparatesTheModelCacheFromTheStateRoot proves a daemon can keep a
-// throwaway state root while still reading an already-downloaded model, so a
-// short-lived daemon does not refetch a checksum-verified artifact it could
-// have reused.
+// A daemon can keep a throwaway state root and still read an already-downloaded
+// model, so a short-lived daemon does not refetch an artifact it could reuse.
 func TestDefaultSeparatesTheModelCacheFromTheStateRoot(t *testing.T) {
 	isolateState(t)
 	sharedCache := t.TempDir()

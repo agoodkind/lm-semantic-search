@@ -1,12 +1,8 @@
 // Package orphanguard stops a process that has outlived whatever started it.
 //
-// A process launched by an editor, a shell, or a test harness has no reason to
-// keep running once that parent is gone: it holds locks, ports, and state that
-// nothing will reclaim. This watches for the parent's exit and cancels the run
-// context so the process unwinds on its own.
-//
-// It asks only about its own parentage and never tracks another process by
-// identifier, so a recycled process identifier cannot make it fire or miss.
+// A process launched by an editor, a shell, or a test harness holds locks,
+// ports, and state that nothing reclaims once that parent is gone. This cancels
+// the run context on the parent's exit so the process unwinds on its own.
 package orphanguard
 
 import (

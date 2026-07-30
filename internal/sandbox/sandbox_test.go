@@ -9,9 +9,9 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 )
 
-// isolateAmbient clears the variables a developer machine may already carry, so
-// a test observes the sandbox defaults rather than the operator's environment.
-// HOME moves too, because ContextRoot falls back to it.
+// isolateAmbient clears variables a developer machine may already carry, so a
+// test observes the sandbox defaults rather than the operator's environment.
+// HOME moves too, because the context root falls back to it.
 func isolateAmbient(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -23,10 +23,8 @@ func isolateAmbient(t *testing.T) {
 	}
 }
 
-// TestResolveKeepsEveryDaemonPathInsideTheRoot proves the isolation claim the
-// command rests on: nothing a sandbox daemon reads or writes lands outside the
-// directory it was given. The model cache is the one deliberate exception and is
-// asserted separately below.
+// Nothing a sandbox daemon reads or writes lands outside the directory it was
+// given. The model cache is the one exception, asserted separately below.
 func TestResolveKeepsEveryDaemonPathInsideTheRoot(t *testing.T) {
 	isolateAmbient(t)
 	root := t.TempDir()
@@ -57,10 +55,9 @@ func TestResolveKeepsEveryDaemonPathInsideTheRoot(t *testing.T) {
 	}
 }
 
-// TestResolveKeepsTheModelCacheOutsideTheRoot proves the one value that must not
-// move with the root. A checksum-verified model is identical for every daemon,
-// so rooting the cache in a throwaway directory would re-download it every run
-// and make the command need network on an otherwise fully local path.
+// The model cache must not move with the root. A checksum-verified model is
+// identical for every daemon, so rooting the cache in a throwaway directory
+// would re-download it every run and need network on an otherwise local path.
 func TestResolveKeepsTheModelCacheOutsideTheRoot(t *testing.T) {
 	isolateAmbient(t)
 	root := t.TempDir()
@@ -82,9 +79,8 @@ func TestResolveKeepsTheModelCacheOutsideTheRoot(t *testing.T) {
 	}
 }
 
-// TestResolveDefaultsToTheLocalBackends proves a sandbox reaches neither the
-// shared vector store nor the shared embedding server, which is what kept a
-// throwaway daemon competing with the operator's for the GPU.
+// A sandbox reaches neither shared backend, which is what let a throwaway
+// daemon compete with the operator's for the GPU.
 func TestResolveDefaultsToTheLocalBackends(t *testing.T) {
 	isolateAmbient(t)
 
@@ -111,9 +107,8 @@ func TestResolveDefaultsToTheLocalBackends(t *testing.T) {
 	}
 }
 
-// TestResolveLeavesACallerSuppliedValueAlone proves each default is an override
-// point rather than a forced setting. The live suite depends on this: it keeps
-// the isolation while asking for the real vector store.
+// Each default is an override point rather than a forced setting. The live
+// suite depends on this: it keeps the isolation while asking for the real store.
 func TestResolveLeavesACallerSuppliedValueAlone(t *testing.T) {
 	isolateAmbient(t)
 	root := t.TempDir()
@@ -139,9 +134,8 @@ func TestResolveLeavesACallerSuppliedValueAlone(t *testing.T) {
 	}
 }
 
-// TestResolveKeepsTheDebugListenerOffTheFixedPort proves a sandbox does not
-// compete for the loopback port the installed daemon binds, which is what made
-// the first working sandbox fail to start while the real daemon was running.
+// A sandbox must not compete for the loopback port the installed daemon binds,
+// which made the first working sandbox fail to start while it was running.
 func TestResolveKeepsTheDebugListenerOffTheFixedPort(t *testing.T) {
 	isolateAmbient(t)
 
