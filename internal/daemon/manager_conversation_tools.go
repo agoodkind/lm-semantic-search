@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"goodkind.io/gksyntax/shelldecomp"
@@ -103,9 +104,20 @@ func appendConversationShellTarget(tokens *[]string, resolvable bool, path strin
 	appendConversationToken(tokens, raw)
 }
 
+// appendConversationToken adds one searchable token to a tool row, skipping a
+// value the row already holds.
+//
+// A shell decomposition and the display text beside it produce the same string
+// whenever the command is one word, since its program name is the whole command,
+// and whenever the parser reports the command opaque, since the decomposition
+// then falls back to the command text. One row holding that string twice is the
+// duplication a tool call's single row exists to remove.
 func appendConversationToken(tokens *[]string, value string) {
 	trimmedValue := strings.TrimSpace(value)
 	if trimmedValue == "" {
+		return
+	}
+	if slices.Contains(*tokens, trimmedValue) {
 		return
 	}
 	*tokens = append(*tokens, trimmedValue)
