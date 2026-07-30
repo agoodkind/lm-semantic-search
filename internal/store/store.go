@@ -102,19 +102,125 @@ func AppendJobEvent(path string, event model.JobEvent) error {
 	return nil
 }
 
-// ReadJobEvents replays the JSONL journal into a latest-by-id map.
-func ReadJobEvents(path string) (map[string]model.Job, error) {
+// WriteJobEvents atomically replaces the JSONL journal so a failed rewrite
+// leaves the previous journal intact.
+func WriteJobEvents(path string, events []model.JobEvent) error {
+	slog.Info(
+		"write jobs journal",
+		"component",
+		"store",
+		"subcomponent",
+		"journal",
+		"path",
+		path,
+		"events",
+		len(events),
+	)
+
+	if err := EnsureDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+
+	tempFile, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		slog.Error(
+			"create temp jobs journal failed",
+			"component",
+			"store",
+			"subcomponent",
+			"journal",
+			"dir",
+			filepath.Dir(path),
+			"err",
+			err,
+		)
+		return fmt.Errorf("create temp jobs journal in %s: %w", filepath.Dir(path), err)
+	}
+	tempPath := tempFile.Name()
+
+	encoder := json.NewEncoder(tempFile)
+	for _, event := range events {
+		if err := encoder.Encode(event); err != nil {
+			tempFile.Close()
+			os.Remove(tempPath)
+			slog.Error(
+				"write temp jobs journal failed",
+				"component",
+				"store",
+				"subcomponent",
+				"journal",
+				"path",
+				tempPath,
+				"err",
+				err,
+			)
+			return fmt.Errorf("write temp jobs journal %s: %w", tempPath, err)
+		}
+	}
+	if err := tempFile.Close(); err != nil {
+		os.Remove(tempPath)
+		slog.Error(
+			"close temp jobs journal failed",
+			"component",
+			"store",
+			"subcomponent",
+			"journal",
+			"path",
+			tempPath,
+			"err",
+			err,
+		)
+		return fmt.Errorf("close temp jobs journal %s: %w", tempPath, err)
+	}
+	if err := os.Chmod(tempPath, 0o644); err != nil {
+		os.Remove(tempPath)
+		slog.Error(
+			"chmod temp jobs journal failed",
+			"component",
+			"store",
+			"subcomponent",
+			"journal",
+			"path",
+			tempPath,
+			"err",
+			err,
+		)
+		return fmt.Errorf("chmod temp jobs journal %s: %w", tempPath, err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		os.Remove(tempPath)
+		slog.Error(
+			"rename temp jobs journal failed",
+			"component",
+			"store",
+			"subcomponent",
+			"journal",
+			"from",
+			tempPath,
+			"to",
+			path,
+			"err",
+			err,
+		)
+		return fmt.Errorf("rename temp jobs journal %s to %s: %w", tempPath, path, err)
+	}
+	return nil
+}
+
+// ReadJobEventsLatest replays the JSONL journal and keeps each complete latest
+// event so compaction preserves its event name and timestamp.
+func ReadJobEventsLatest(path string) (map[string]model.JobEvent, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return map[string]model.Job{}, nil
+			return map[string]model.JobEvent{}, nil
 		}
 		slog.Error("open jobs journal failed", "path", path, "err", err)
 		return nil, fmt.Errorf("open jobs journal %s: %w", path, err)
 	}
 	defer func() { _ = file.Close() }()
 
-	jobs := map[string]model.Job{}
+	events := map[string]model.JobEvent{}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		var event model.JobEvent
@@ -122,11 +228,25 @@ func ReadJobEvents(path string) (map[string]model.Job, error) {
 			slog.Error("unmarshal jobs journal line failed", "path", path, "err", err)
 			return nil, fmt.Errorf("unmarshal jobs journal line in %s: %w", path, err)
 		}
-		jobs[event.Job.ID] = event.Job
+		events[event.Job.ID] = event
 	}
 	if err := scanner.Err(); err != nil {
 		slog.Error("scan jobs journal failed", "path", path, "err", err)
 		return nil, fmt.Errorf("scan jobs journal %s: %w", path, err)
+	}
+	return events, nil
+}
+
+// ReadJobEvents projects the latest complete journal events to their jobs so
+// existing callers keep the same result type.
+func ReadJobEvents(path string) (map[string]model.Job, error) {
+	events, err := ReadJobEventsLatest(path)
+	if err != nil {
+		return nil, err
+	}
+	jobs := make(map[string]model.Job, len(events))
+	for id, event := range events {
+		jobs[id] = event.Job
 	}
 	return jobs, nil
 }

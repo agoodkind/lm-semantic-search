@@ -1,14 +1,22 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 const jobJournalQueueCapacity = 256
+
+// jobJournalCompactionThresholdBytes is the journal size at which the writer
+// rewrites the file. Eight megabytes bounds the file at roughly this plus the
+// retained set, so a boot reads about 12 MB rather than the 235 MB this change
+// was written against.
+const jobJournalCompactionThresholdBytes = 8 * 1024 * 1024
 
 type jobJournalWriteRequest struct {
 	event  model.JobEvent
@@ -21,19 +29,32 @@ type jobJournalWriter struct {
 	queue          chan jobJournalWriteRequest
 	done           chan bool
 	closeOnce      sync.Once
+	// currentSizeBytes includes the existing journal so the first new event can
+	// compact an oversized file immediately after deployment.
+	currentSizeBytes int64
+	// compactionThresholdBytes stays configurable for tests that exercise the
+	// boundary without writing an eight megabyte fixture.
+	compactionThresholdBytes int64
 }
 
 func newJobJournalWriter(
 	path string,
 	appendJobEvent appendJobEventFunc,
 	queueCapacity int,
+	testCompactionThresholdBytes ...int64,
 ) *jobJournalWriter {
+	compactionThresholdBytes := int64(jobJournalCompactionThresholdBytes)
+	if len(testCompactionThresholdBytes) > 0 {
+		compactionThresholdBytes = testCompactionThresholdBytes[0]
+	}
 	writer := &jobJournalWriter{
-		path:           path,
-		appendJobEvent: appendJobEvent,
-		queue:          make(chan jobJournalWriteRequest, queueCapacity),
-		done:           make(chan bool, 1),
-		closeOnce:      sync.Once{},
+		path:                     path,
+		appendJobEvent:           appendJobEvent,
+		queue:                    make(chan jobJournalWriteRequest, queueCapacity),
+		done:                     make(chan bool, 1),
+		closeOnce:                sync.Once{},
+		currentSizeBytes:         initialJobJournalSize(path),
+		compactionThresholdBytes: compactionThresholdBytes,
 	}
 	go func() {
 		defer func() {
@@ -80,10 +101,94 @@ func (writer *jobJournalWriter) enqueue(event model.JobEvent) error {
 func (writer *jobJournalWriter) run() {
 	for request := range writer.queue {
 		err := writer.write(request.event)
+		if err == nil {
+			writer.recordSuccessfulAppend(request.event)
+		}
 		if request.result != nil {
 			request.result <- err
 		}
 	}
+}
+
+// recordSuccessfulAppend measures growth only after durability and retries a
+// failed compaction after the next successful append.
+func (writer *jobJournalWriter) recordSuccessfulAppend(event model.JobEvent) {
+	eventSize, err := marshalJobEventsSize([]model.JobEvent{event})
+	if err != nil {
+		slog.Error(
+			"measure appended job journal event failed",
+			"component",
+			"daemon",
+			"subcomponent",
+			"journal",
+			"path",
+			writer.path,
+			"job_id",
+			event.Job.ID,
+			"err",
+			err,
+		)
+		return
+	}
+	writer.currentSizeBytes += eventSize
+	if writer.currentSizeBytes < writer.compactionThresholdBytes {
+		return
+	}
+
+	if _, _, err := compactJobJournal(writer.path); err != nil {
+		slog.Error(
+			"compact job journal failed",
+			"component",
+			"daemon",
+			"subcomponent",
+			"journal",
+			"path",
+			writer.path,
+			"err",
+			err,
+		)
+		return
+	}
+	info, err := os.Stat(writer.path)
+	if err != nil {
+		slog.Error(
+			"stat compacted job journal failed",
+			"component",
+			"daemon",
+			"subcomponent",
+			"journal",
+			"path",
+			writer.path,
+			"err",
+			err,
+		)
+		return
+	}
+	writer.currentSizeBytes = info.Size()
+}
+
+// initialJobJournalSize treats a missing journal as empty while surfacing other
+// stat failures before the writer starts serving its queue.
+func initialJobJournalSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err == nil {
+		return info.Size()
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	slog.Error(
+		"stat jobs journal failed",
+		"component",
+		"daemon",
+		"subcomponent",
+		"journal",
+		"path",
+		path,
+		"err",
+		err,
+	)
+	return 0
 }
 
 func (writer *jobJournalWriter) write(event model.JobEvent) (err error) {
