@@ -3,12 +3,14 @@ package daemon
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/response"
 )
 
 // refreshDependencyHealth turns an active backend probe into the health record:
@@ -110,6 +112,54 @@ func TestGetIndexSearchableReflectsBackendHealth(t *testing.T) {
 			}
 			if got := resp.GetSearchable(); got != testCase.wantSearchable {
 				t.Fatalf("searchable = %v, want %v", got, testCase.wantSearchable)
+			}
+		})
+	}
+}
+
+// GetIndex's searchable answer must survive JSON encoding as an explicit key,
+// including the false case. protojson omits a plain proto3 bool at its zero
+// value, so before this field carried explicit presence, a real false verdict
+// and a key the daemon never set produced byte-identical JSON: no key at all.
+// This asserts against the encoded bytes, because that omission happens in the
+// encoder, not in the pb.GetIndexResponse struct fields a Go-level check would
+// see.
+func TestGetIndexSearchableSurvivesJSONEncoding(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusIndexed
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+
+	server := NewGRPCServer(manager, nil)
+
+	cases := []struct {
+		name     string
+		semantic *fakeSemantic
+		wantJSON string
+	}{
+		{"indexed and healthy encodes true", &fakeSemantic{}, `"searchable":true`},
+		{"indexed but embedder down encodes false", &fakeSemantic{probeErr: adapterr.NewEmbedderUnreachable(nil)}, `"searchable":false`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			resetProbeClock(manager)
+			manager.semantic = testCase.semantic
+			resp, getErr := server.GetIndex(context.Background(), &pb.GetIndexRequest{Path: repoPath})
+			if getErr != nil {
+				t.Fatalf("GetIndex returned error: %v", getErr)
+			}
+			encoded, marshalErr := response.MarshalCompactJSON(resp)
+			if marshalErr != nil {
+				t.Fatalf("MarshalCompactJSON returned error: %v", marshalErr)
+			}
+			if !strings.Contains(encoded, testCase.wantJSON) {
+				t.Fatalf("encoded JSON = %q, want it to contain %q", encoded, testCase.wantJSON)
 			}
 		})
 	}

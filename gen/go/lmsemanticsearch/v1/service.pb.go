@@ -2566,7 +2566,13 @@ type GetIndexResponse struct {
 	// single signal a caller should use to decide whether search_code can serve
 	// this path right now; classification.kind alone reflects only the on-disk
 	// index and stays KIND_IN_SCOPE_INDEXED even when the backend is unreachable.
-	Searchable bool `protobuf:"varint,7,opt,name=searchable,proto3" json:"searchable,omitempty"`
+	//
+	// This field is proto3 optional so an explicit false survives JSON encoding.
+	// A plain proto3 bool is omitted from JSON at its zero value, which made a
+	// real false indistinguishable from a key the daemon never set. A consumer
+	// must check field presence, not just truthiness: a present false means the
+	// daemon answered no, and an absent key means the daemon has no answer.
+	Searchable *bool `protobuf:"varint,7,opt,name=searchable,proto3,oneof" json:"searchable,omitempty"`
 	// CollectionReadiness is the per-path readiness of this codebase's own Milvus
 	// collection, distinct from dependency_health (a global fact). One of "",
 	// "absent", "building", "loading", "ready", or "unknown". A not-ready
@@ -2650,8 +2656,8 @@ func (x *GetIndexResponse) GetDependencyHealth() *DependencyHealth {
 }
 
 func (x *GetIndexResponse) GetSearchable() bool {
-	if x != nil {
-		return x.Searchable
+	if x != nil && x.Searchable != nil {
+		return *x.Searchable
 	}
 	return false
 }
@@ -5735,7 +5741,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\"^\n" +
 	"\x0fGetIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x127\n" +
-	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\xbb\x03\n" +
+	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\xcf\x03\n" +
 	"\x10GetIndexResponse\x129\n" +
 	"\bcodebase\x18\x01 \x01(\v2\x1d.lmsemanticsearch.v1.CodebaseR\bcodebase\x127\n" +
 	"\n" +
@@ -5743,11 +5749,12 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\atracked\x18\x03 \x01(\bR\atracked\x12!\n" +
 	"\fdisplay_text\x18\x04 \x01(\tR\vdisplayText\x12O\n" +
 	"\x0eclassification\x18\x05 \x01(\v2'.lmsemanticsearch.v1.PathClassificationR\x0eclassification\x12R\n" +
-	"\x11dependency_health\x18\x06 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\x12\x1e\n" +
+	"\x11dependency_health\x18\x06 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\x12#\n" +
 	"\n" +
-	"searchable\x18\a \x01(\bR\n" +
-	"searchable\x121\n" +
-	"\x14collection_readiness\x18\b \x01(\tR\x13collectionReadiness\"\xf6\x02\n" +
+	"searchable\x18\a \x01(\bH\x00R\n" +
+	"searchable\x88\x01\x01\x121\n" +
+	"\x14collection_readiness\x18\b \x01(\tR\x13collectionReadinessB\r\n" +
+	"\v_searchable\"\xf6\x02\n" +
 	"\x12PathClassification\x12@\n" +
 	"\x04kind\x18\x01 \x01(\x0e2,.lmsemanticsearch.v1.PathClassification.KindR\x04kind\x12.\n" +
 	"\x13excluded_by_pattern\x18\x02 \x01(\tR\x11excludedByPattern\x122\n" +
@@ -6206,6 +6213,7 @@ func file_lmsemanticsearch_v1_service_proto_init() {
 	if File_lmsemanticsearch_v1_service_proto != nil {
 		return
 	}
+	file_lmsemanticsearch_v1_service_proto_msgTypes[27].OneofWrappers = []any{}
 	file_lmsemanticsearch_v1_service_proto_msgTypes[50].OneofWrappers = []any{
 		(*UpsertConversationDocumentsChunk_Header)(nil),
 		(*UpsertConversationDocumentsChunk_Documents)(nil),
