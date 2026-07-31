@@ -9,6 +9,8 @@ A fork and Go rewrite of [zilliztech/claude-context](https://github.com/zillizte
 
 CLI behavior lives in the current help output, starting with `lm-semantic-search --help` and the grouped subcommand help. The daemon binary takes no help output, so its two commands are described here: `lm-semantic-search-daemon version` and [`lm-semantic-search-daemon sandbox`](docs/sandbox.md).
 
+[`docs/metrics.md`](docs/metrics.md) explains the historical `status --since` report.
+
 ## Configuration
 
 The daemon reads `config.json` from `$XDG_CONFIG_HOME/lm-semantic-search/`, or from `~/.config/lm-semantic-search/` when `XDG_CONFIG_HOME` is unset.
