@@ -724,7 +724,7 @@ type conversationMessageDiff struct {
 // writes after multipart splitting. Stale stored indices must be deleted here
 // because the conversation source uses absenceRetain, so an absent message row
 // would otherwise survive forever once the conversation fingerprint advances.
-func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, stored semantic.ConversationStoredRows, chunkByteBudget ...int) (conversationMessageDiff, error) {
+func diffConversationMessages(ctx context.Context, conversationID string, documents []model.ConversationDocument, stored semantic.ConversationStoredRows) conversationMessageDiff {
 	diff := conversationMessageDiff{
 		documents:       make([]model.ConversationDocument, 0, len(documents)),
 		removalPaths:    make([]string, 0),
@@ -745,11 +745,7 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 			}
 			continue
 		}
-		matches, err := conversationDocumentMatchesStored(ctx, conversationID, document, message, stored.DerivedPaths, chunkByteBudget...)
-		if err != nil {
-			return diff, err
-		}
-		if matches {
+		if conversationDocumentMatchesStored(conversationID, document, message, stored.DerivedPaths) {
 			continue
 		}
 		// A stored message whose content changed replaces only its own rows.
@@ -767,7 +763,7 @@ func diffConversationMessages(ctx context.Context, conversationID string, docume
 	for _, staleIndex := range staleIndexes {
 		diff.addRemoval(conversationID, staleIndex)
 	}
-	return diff, nil
+	return diff
 }
 
 // conversationStoredMessageIndexes reports, in ascending order, every message
@@ -846,15 +842,21 @@ func conversationDerivedMessageIndex(relativePath string, toolPrefix string, thi
 	return messageIndex, true
 }
 
-// conversationDocumentMatchesStored treats a delivered message as unchanged only
-// when its stored role and assembled text match and its derived rows match by
-// full identity: every expected derived chunk has a stored row at its exact
-// relativePath whose content hash matches, and the stored derived paths for the
-// message are exactly the expected set. Keying on (conversationID, relativePath,
-// contentHash) is load-bearing: a vector present elsewhere in the batch is not
-// proof the target row exists, so an absent target row makes the message changed
-// and the reindex inserts it, reusing the shared vector rather than re-embedding.
-func conversationDocumentMatchesStored(ctx context.Context, conversationID string, document model.ConversationDocument, message semantic.StoredMessageState, storedDerivedPaths map[string]string, chunkByteBudget ...int) (bool, error) {
+// conversationDocumentMatchesStored treats a delivered message as unchanged when
+// its stored role and assembled text match and it already carries derived rows.
+//
+// A message's derived rows are asked only whether they exist, never whether they
+// have the shape this build would write. A transcript is append-only, so a tool
+// call that has already been recorded never changes afterward: its stored rows
+// still hold what the person saw, whichever rule wrote them. Requiring the stored
+// set to equal the expected set instead makes every message written under an
+// earlier rule read as changed forever, which deletes rows that are still good
+// and re-embeds content the store already holds.
+//
+// Absence still counts. A message with no derived rows at all is changed, so its
+// rows are written, and the reindex reuses a vector present elsewhere in the batch
+// rather than re-embedding.
+func conversationDocumentMatchesStored(conversationID string, document model.ConversationDocument, message semantic.StoredMessageState, storedDerivedPaths map[string]string) bool {
 	// Both sides are reduced before comparing. The delivered side is reduced
 	// because the store never holds text this rule calls unstorable. The stored
 	// side is reduced because rows written before this rule did hold such text:
@@ -868,32 +870,16 @@ func conversationDocumentMatchesStored(ctx context.Context, conversationID strin
 	// reduces to empty.
 	if message.Role != document.Role ||
 		conversationStorableText(message.Text) != conversationStorableText(document.Text) {
-		return false, nil
+		return false
 	}
 	storedDerivedForMessage := conversationDerivedPathsForMessage(storedDerivedPaths, conversationID, document.MessageIndex)
-	documentHasDerived := len(document.Tools) > 0 || document.Thinking != ""
-	if !documentHasDerived {
-		return len(storedDerivedForMessage) == 0, nil
+	if len(storedDerivedForMessage) > 0 {
+		return true
 	}
-	chunks, err := conversationDocumentsToStoredChunks(ctx, []model.ConversationDocument{document}, chunkByteBudget...)
-	if err != nil {
-		return false, err
-	}
-	expectedDerived := make(map[string]string)
-	for _, chunk := range chunks {
-		if isDerivedConversationChunk(chunk) {
-			expectedDerived[chunk.RelativePath] = semantic.ContentVectorKey(chunk.Content)
-		}
-	}
-	if len(expectedDerived) != len(storedDerivedForMessage) {
-		return false, nil
-	}
-	for relativePath, contentHash := range expectedDerived {
-		if storedDerivedForMessage[relativePath] != contentHash {
-			return false, nil
-		}
-	}
-	return true, nil
+	// No derived rows are stored for this message. Whether that is correct depends
+	// on whether the delivered message has anything to derive: a message carrying
+	// neither a tool call nor thinking is complete without them.
+	return len(document.Tools) == 0 && document.Thinking == ""
 }
 
 // conversationDerivedPathsForMessage selects the stored derived paths that belong
@@ -915,10 +901,6 @@ func conversationDerivedPathsForMessage(storedDerivedPaths map[string]string, co
 		}
 	}
 	return forMessage
-}
-
-func isDerivedConversationChunk(chunk model.StoredChunk) bool {
-	return strings.HasPrefix(chunk.RelativePath, "convtool/") || strings.HasPrefix(chunk.RelativePath, "convthink/")
 }
 
 // addRemoval emits both the exact path and the slash-suffixed prefix for one

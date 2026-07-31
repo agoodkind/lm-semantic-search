@@ -55,8 +55,7 @@ func TestWhitespaceOnlyTextSettlesAgainstItsStoredRows(t *testing.T) {
 			}
 		}
 
-		matches, err := conversationDocumentMatchesStored(
-			context.Background(),
+		matches := conversationDocumentMatchesStored(
 			"claude:a",
 			document,
 			semantic.StoredMessageState{
@@ -66,9 +65,6 @@ func TestWhitespaceOnlyTextSettlesAgainstItsStoredRows(t *testing.T) {
 			},
 			storedDerived,
 		)
-		if err != nil {
-			t.Fatalf("conversationDocumentMatchesStored(%q) returned error: %v", spacing, err)
-		}
 		if !matches {
 			t.Fatalf(
 				"text %q did not match its own stored rows, so every sync would re-send it and delete its derived rows",
@@ -95,16 +91,12 @@ func TestTextWithContentStillComparesExactly(t *testing.T) {
 		Text:           "  answer  ",
 	}
 
-	matches, err := conversationDocumentMatchesStored(
-		context.Background(),
+	matches := conversationDocumentMatchesStored(
 		"claude:a",
 		document,
 		semantic.StoredMessageState{Role: "assistant", Text: "answer", HasDerivedContent: false},
 		map[string]string{},
 	)
-	if err != nil {
-		t.Fatalf("conversationDocumentMatchesStored returned error: %v", err)
-	}
 	if matches {
 		t.Fatal("text differing only in surrounding spacing matched, so the stored row would never be corrected")
 	}

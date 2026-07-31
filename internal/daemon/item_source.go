@@ -547,20 +547,7 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 		batchReuse = map[string][]float32{}
 	}
 
-	delta, diffErr := diffConversationMessages(ctx, conversationID, documents, stored, source.chunkByteBudget)
-	if diffErr != nil {
-		return indexer.OneFileResult{
-			Chunks:          nil,
-			FileHash:        "",
-			Skipped:         false,
-			SkipReason:      indexer.SkipNone,
-			Removed:         false,
-			RemovalOverride: false,
-			RemovalPaths:    nil,
-			RemovalPrefixes: nil,
-			ReuseVectors:    nil,
-		}, diffErr
-	}
+	delta := diffConversationMessages(ctx, conversationID, documents, stored)
 	chunks, err := conversationDocumentsToStoredChunks(ctx, delta.documents, source.chunkByteBudget)
 	if err != nil {
 		return indexer.OneFileResult{
