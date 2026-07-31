@@ -182,6 +182,12 @@ func TestEmbedderBusyBannerReportsThrottlingWithoutClaimingPause(t *testing.T) {
 	if !strings.Contains(headline, "throttling requests") {
 		t.Fatalf("busy headline does not report throttling: %q", headline)
 	}
+	// Saying what throttling is not leaves room for a replacement that stops
+	// short of the word "paused" and still tells the operator work has halted,
+	// so the headline has to say outright that it continues.
+	if !strings.Contains(headline, "Active indexing may continue between rejected batches") {
+		t.Fatalf("busy headline does not report that indexing continues: %q", headline)
+	}
 	if strings.Contains(headline, "paused") {
 		t.Fatalf("busy headline claims indexing stopped: %q", headline)
 	}
