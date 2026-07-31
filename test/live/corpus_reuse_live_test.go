@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
@@ -341,6 +342,7 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 	harness := newHarness(t)
 	content := "two known model catalog sentinel"
+	emptyModelContent := "empty model catalog sentinel"
 	seed := harness.upsert(
 		map[string][]*pb.ConversationDocument{
 			"model-a": {{
@@ -390,6 +392,7 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 	}
 	modelBCollection := serviceB.CollectionName(modelBPath)
 	t.Cleanup(func() { dropLiveCollection(t, harness, modelBCollection) })
+	insertEmptyModelCatalogRow(t, harness, emptyModelContent)
 
 	models := reuseCatalogModels(t, harness, content)
 	wantModels := []string{"known-model-b", "text-embedding-3-small"}
@@ -431,9 +434,62 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 	if len(knownUnequal) != 0 {
 		t.Fatalf("model C catalog reuse vectors = %d, want 0", len(knownUnequal))
 	}
+	emptyIdentity, err := serviceC.LoadReuseVectorsForContents(
+		context.Background(),
+		"",
+		[]model.StoredChunk{{Content: emptyModelContent}},
+	)
+	if err != nil {
+		t.Fatalf("load empty model catalog reuse: %v", err)
+	}
+	if len(emptyIdentity) != 1 {
+		t.Fatalf("empty model catalog reuse vectors = %d, want 1", len(emptyIdentity))
+	}
 }
 
-func TestDimensionChangeIndexesFreshVector(t *testing.T) {
+func TestCompleteCatalogHitSkipsCollectionFallback(t *testing.T) {
+	harness := newHarness(t)
+	content := "complete catalog hit sentinel"
+	seed := harness.upsert(
+		map[string][]*pb.ConversationDocument{
+			"complete-hit": {{
+				ConversationId: "complete-hit",
+				MessageIndex:   0,
+				Role:           "user",
+				Text:           content,
+			}},
+		},
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		false,
+		false,
+	)
+	requireCompleted(t, seed, "complete catalog hit seed")
+
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("load complete catalog hit config: %v", err)
+	}
+	cfg.RegistryPath = filepath.Join(t.TempDir(), "missing-registry.json")
+	service, err := semantic.NewService(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open complete catalog hit service: %v", err)
+	}
+	t.Cleanup(func() { _ = service.Close(context.Background()) })
+
+	reuse, err := service.LoadReuseVectorsForContents(
+		context.Background(),
+		harness.collectionName,
+		[]model.StoredChunk{{Content: content}},
+	)
+	if err != nil {
+		t.Fatalf("load complete catalog hit: %v", err)
+	}
+	if len(reuse) != 1 {
+		t.Fatalf("complete catalog hit reuse vectors = %d, want 1", len(reuse))
+	}
+}
+
+func TestUnknownConfiguredDimensionScopesCatalogByReturnedVectorWidth(t *testing.T) {
 	const (
 		initialDimension = 1536
 		targetDimension  = 4096
@@ -448,10 +504,9 @@ func TestDimensionChangeIndexesFreshVector(t *testing.T) {
 		t.Fatalf("load initial dimension config: %v", err)
 	}
 	initialConfig.OpenAIBaseURL = initialServer.URL
-	initialConfig.EmbeddingDimension = initialDimension
+	initialConfig.EmbeddingDimension = 0
 	targetConfig := initialConfig
 	targetConfig.OpenAIBaseURL = targetServer.URL
-	targetConfig.EmbeddingDimension = targetDimension
 
 	initialService, err := semantic.NewService(context.Background(), initialConfig)
 	if err != nil {
@@ -464,13 +519,19 @@ func TestDimensionChangeIndexesFreshVector(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = targetService.Close(context.Background()) })
 
-	initialCatalogName := semantic.ReuseCatalogCollectionName(initialConfig)
-	targetCatalogName := semantic.ReuseCatalogCollectionName(targetConfig)
+	configuredCatalogName := semantic.ReuseCatalogCollectionName(initialConfig)
+	initialCatalogConfig := initialConfig
+	initialCatalogConfig.EmbeddingDimension = initialDimension
+	initialCatalogName := semantic.ReuseCatalogCollectionName(initialCatalogConfig)
+	targetCatalogConfig := targetConfig
+	targetCatalogConfig.EmbeddingDimension = targetDimension
+	targetCatalogName := semantic.ReuseCatalogCollectionName(targetCatalogConfig)
 	initialPath := filepath.Join(harness.stateRoot, "dimension-1536-"+randomID())
 	targetPath := filepath.Join(harness.stateRoot, "dimension-4096-"+randomID())
 	sharedContent := "dimension transition shared content"
 	newContent := "dimension transition new content"
 	for _, collectionName := range []string{
+		configuredCatalogName,
 		initialCatalogName,
 		targetCatalogName,
 		initialService.CollectionName(initialPath),
@@ -515,6 +576,28 @@ func TestDimensionChangeIndexesFreshVector(t *testing.T) {
 	}
 	if initialCatalogName == targetCatalogName {
 		t.Fatal("initial and target dimensions share a reuse catalog")
+	}
+	for _, collectionName := range []string{initialCatalogName, targetCatalogName} {
+		exists, existsErr := harness.milvus.HasCollection(
+			context.Background(),
+			milvusclient.NewHasCollectionOption(collectionName),
+		)
+		if existsErr != nil {
+			t.Fatalf("check reuse catalog %s: %v", collectionName, existsErr)
+		}
+		if !exists {
+			t.Fatalf("reuse catalog %s does not exist", collectionName)
+		}
+	}
+	configuredCatalogExists, err := harness.milvus.HasCollection(
+		context.Background(),
+		milvusclient.NewHasCollectionOption(configuredCatalogName),
+	)
+	if err != nil {
+		t.Fatalf("check configured-zero reuse catalog: %v", err)
+	}
+	if configuredCatalogExists {
+		t.Fatalf("configured-zero reuse catalog %s exists", configuredCatalogName)
 	}
 	if targetProgress.ChunksEmbedded != 2 || targetProgress.ChunksReused != 0 {
 		t.Fatalf(
@@ -834,6 +917,48 @@ func reuseCatalogModels(t *testing.T, harness *harness, content string) []string
 	}
 	slices.Sort(models)
 	return models
+}
+
+func insertEmptyModelCatalogRow(t *testing.T, harness *harness, content string) {
+	t.Helper()
+	contentHash := semantic.ContentVectorKey(content)
+	rowKeySum := sha256.Sum256([]byte(contentHash + "\x00"))
+	rowKey := hex.EncodeToString(rowKeySum[:])
+	embeddingModelColumn, err := column.NewNullableColumnVarChar(
+		"embeddingModel",
+		[]string{""},
+		[]bool{false},
+		column.WithSparseNullableMode[string](true),
+	)
+	if err != nil {
+		t.Fatalf("build empty model catalog column: %v", err)
+	}
+	vector := make([]float32, fakeEmbeddingDimension)
+	vector[0] = 1
+	result, err := harness.milvus.Insert(
+		context.Background(),
+		milvusclient.NewColumnBasedInsertOption(harness.reuseCatalogName).
+			WithVarcharColumn("catalogKey", []string{rowKey}).
+			WithVarcharColumn("contentHash", []string{contentHash}).
+			WithColumns(embeddingModelColumn).
+			WithFloatVectorColumn("vector", len(vector), [][]float32{vector}),
+	)
+	if err != nil {
+		t.Fatalf("insert empty model catalog row: %v", err)
+	}
+	if result.InsertCount != 1 {
+		t.Fatalf("empty model catalog insert count = %d, want 1", result.InsertCount)
+	}
+	flushTask, err := harness.milvus.Flush(
+		context.Background(),
+		milvusclient.NewFlushOption(harness.reuseCatalogName),
+	)
+	if err != nil {
+		t.Fatalf("flush empty model catalog row: %v", err)
+	}
+	if err := flushTask.Await(context.Background()); err != nil {
+		t.Fatalf("await empty model catalog flush: %v", err)
+	}
 }
 
 func dropLiveCollection(t *testing.T, harness *harness, collectionName string) {

@@ -418,3 +418,20 @@ func TestReuseCatalogCollectionNameScopesStateRootAndDimension(t *testing.T) {
 		t.Fatal("different embedding dimensions share a reuse catalog")
 	}
 }
+
+func TestLoadReuseVectorsForContentsSkipsCatalogWhenDimensionIsUnknown(t *testing.T) {
+	service := &Service{cfg: config.Config{EmbeddingDimension: 0}}
+	service.available.Store(true)
+
+	reuse, err := service.LoadReuseVectorsForContents(
+		context.Background(),
+		"",
+		[]model.StoredChunk{{Content: "unknown dimension content"}},
+	)
+	if err != nil {
+		t.Fatalf("load reuse with unknown dimension: %v", err)
+	}
+	if len(reuse) != 0 {
+		t.Fatalf("reuse vectors = %d, want 0", len(reuse))
+	}
+}

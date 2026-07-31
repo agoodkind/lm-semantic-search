@@ -48,6 +48,9 @@ func (service *Service) LoadReuseVectorsForContents(
 	if err := service.loadCatalogReuse(ctx, storageKeys, contentsByStorageKey, reuse); err != nil {
 		return nil, err
 	}
+	if len(missingReuseContents(contentsByStorageKey, reuse)) == 0 {
+		return reuse, nil
+	}
 	if err := service.loadCollectionReuse(
 		ctx,
 		collectionName,
@@ -82,7 +85,11 @@ func (service *Service) loadCatalogReuse(
 	contentsByStorageKey map[string]string,
 	reuse map[string][]float32,
 ) error {
-	catalogAvailable, err := service.reuseCatalogAvailable(ctx, 0)
+	dimension := int(service.cfg.EmbeddingDimension)
+	if dimension <= 0 {
+		return nil
+	}
+	catalogAvailable, err := service.reuseCatalogAvailable(ctx, dimension, false)
 	if err != nil {
 		return err
 	}
@@ -90,7 +97,7 @@ func (service *Service) loadCatalogReuse(
 		return nil
 	}
 	for _, batch := range reuseLookupBatches(storageKeys) {
-		catalogVectors, loadErr := service.loadReuseCatalogKeys(ctx, batch)
+		catalogVectors, loadErr := service.loadReuseCatalogKeys(ctx, batch, dimension)
 		if loadErr != nil {
 			return loadErr
 		}

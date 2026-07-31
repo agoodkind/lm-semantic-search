@@ -102,7 +102,7 @@ type Service struct {
 	reconnectCancel         context.CancelFunc
 	reconnectDone           chan struct{}
 	closeOnce               sync.Once
-	reuseCatalogReady       atomic.Bool
+	reuseCatalogReady       sync.Map
 	reuseCatalogMutex       sync.Mutex
 	reuseCatalogAppendMutex sync.Mutex
 	// collectionLoads collapses concurrent initial load, wait, and recovery work
@@ -140,7 +140,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			reconnectCancel:         nil,
 			reconnectDone:           nil,
 			closeOnce:               sync.Once{},
-			reuseCatalogReady:       atomic.Bool{},
+			reuseCatalogReady:       sync.Map{},
 			reuseCatalogMutex:       sync.Mutex{},
 			reuseCatalogAppendMutex: sync.Mutex{},
 			collectionLoads: collectionLoadCoordinator{
@@ -170,7 +170,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		reconnectCancel:         nil,
 		reconnectDone:           nil,
 		closeOnce:               sync.Once{},
-		reuseCatalogReady:       atomic.Bool{},
+		reuseCatalogReady:       sync.Map{},
 		reuseCatalogMutex:       sync.Mutex{},
 		reuseCatalogAppendMutex: sync.Mutex{},
 		collectionLoads: collectionLoadCoordinator{
