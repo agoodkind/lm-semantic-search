@@ -329,7 +329,7 @@ func TestStartIndexPersistsSkippedFiles(t *testing.T) {
 		t.Fatalf("LastSuccessfulRun.SkippedFiles = %v, want %v", codebase.LastSuccessfulRun.SkippedFiles, wantSkipped)
 	}
 
-	diagnostics := manager.Doctor()
+	diagnostics := manager.Doctor(context.Background())
 	wantSuffix := "2 non-UTF-8 files skipped during last indexing run"
 	foundDiagnostic := false
 	for _, diagnostic := range diagnostics {

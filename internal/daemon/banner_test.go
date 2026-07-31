@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,7 +33,8 @@ func TestRenderHealthBannerVariants(t *testing.T) {
 	}{
 		{dependencyEmbedderUnreachable, "unreachable", "OPENAI_BASE_URL=http://localhost:5400/v1"},
 		{dependencyEmbedderRejected, "rejecting requests", "Check the model name, dimensions, and credentials"},
-		{dependencyEmbedderBusy, "at capacity", "OPENAI_BASE_URL=http://localhost:5400/v1"},
+		{dependencyEmbedderPaused, "paused to preserve battery", "Leave low power mode or resume the embedding service"},
+		{dependencyEmbedderBusy, "throttling requests", "OPENAI_BASE_URL=http://localhost:5400/v1"},
 		{dependencyStoreUnavailable, "Vector store unavailable", "MILVUS_ADDRESS=127.0.0.1:19530"},
 	}
 	for _, testCase := range cases {
@@ -48,6 +50,56 @@ func TestRenderHealthBannerVariants(t *testing.T) {
 		}
 		if strings.Count(out, "🟥") != 1 {
 			t.Fatalf("%s banner should have exactly one marker: %q", testCase.mode, out)
+		}
+	}
+}
+
+func TestListJobsPauseFailureShowsPauseRecoveryGuidance(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusIndexing
+	job := model.Job{
+		ID:            "job-paused",
+		CodebaseID:    codebase.ID,
+		CanonicalPath: canonical,
+		Operation:     "index",
+		State:         model.JobStateRunning,
+	}
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+
+	manager.updateJobFailed(
+		context.Background(),
+		job.ID,
+		adapterr.NewEmbedderPaused(
+			"embedding endpoint reported: service paused to preserve battery (low_power_mode)",
+			"leave low power mode or resume the embedding service",
+			errors.New("503 service_paused"),
+		),
+	)
+
+	server := NewGRPCServer(manager, nil)
+	response, err := server.ListJobs(context.Background(), &pb.ListJobsRequest{})
+	if err != nil {
+		t.Fatalf("ListJobs returned error: %v", err)
+	}
+	text := response.GetDisplayText()
+	if !strings.Contains(text, "paused to preserve battery") {
+		t.Fatalf("ListJobs omitted the battery pause explanation:\n%s", text)
+	}
+	if !strings.Contains(text, "Leave low power mode or resume the embedding service") {
+		t.Fatalf("ListJobs omitted pause recovery guidance:\n%s", text)
+	}
+	for _, contradictory := range []string{"rejecting requests", "embedding config is fixed", "model name, dimensions, and credentials"} {
+		if strings.Contains(text, contradictory) {
+			t.Fatalf("ListJobs included contradictory configuration guidance %q:\n%s", contradictory, text)
 		}
 	}
 }

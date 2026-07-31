@@ -151,13 +151,22 @@ message JobError {
 
 // DependencyHealth reports the daemon's view of shared-infrastructure health
 // (the embedding pipeline and the vector store). It is one global fact, not a
-// per-codebase value, observed from job outcomes rather than a live probe. When
-// degraded is true a hard outage is in effect and the human surfaces show a
-// banner; mode names which one. Timestamps are UTC on the wire.
+// per-codebase value. It is observed from job and search outcomes, and readiness
+// surfaces additionally run a debounced store probe before reading it.
+// Timestamps are UTC on the wire.
 message DependencyHealth {
+  // degraded reports that some dependency condition is in effect and the human
+  // surfaces show a banner. It does not report that work has stopped, so a
+  // client that needs to know whether the pipeline is still moving reads mode
+  // rather than this field. A store that cannot answer and an endpoint that is
+  // unreachable, rejecting, or paused all stop indexing; a throttled endpoint
+  // does not, and work continues between the batches it rejects.
   bool degraded = 1;
-  // mode is the degraded condition: "embedder_unreachable", "embedder_rejected",
-  // "store_unavailable", or empty when healthy.
+  // mode names the condition: "embedder_unreachable" and "embedder_rejected"
+  // stop indexing until the endpoint or its configuration is fixed,
+  // "embedder_paused" stops it until the endpoint resumes, "embedder_busy" is
+  // throttling and indexing may continue between rejected batches,
+  // "store_unavailable" stops search and indexing, and empty is healthy.
   string mode = 2;
   google.protobuf.Timestamp since = 3;
   google.protobuf.Timestamp last_healthy_at = 4;

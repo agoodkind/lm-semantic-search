@@ -23,6 +23,11 @@ func resolveBannerView(health dependencyHealth, cfg config.Config) view.BannerVi
 			Headline: headline,
 			Detail:   joinBannerDetail("Check the model name, dimensions, and credentials", embedderEndpointRef(cfg)),
 		}
+	case dependencyEmbedderPaused:
+		return view.BannerView{
+			Headline: headline,
+			Detail:   joinBannerDetail("Leave low power mode or resume the embedding service", embedderEndpointRef(cfg)),
+		}
 	case dependencyStoreUnavailable:
 		return view.BannerView{
 			Headline: headline,

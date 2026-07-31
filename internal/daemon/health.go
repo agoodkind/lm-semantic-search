@@ -39,6 +39,7 @@ const (
 	dependencyHealthy             = status.Healthy
 	dependencyEmbedderUnreachable = status.EmbedderUnreachable
 	dependencyEmbedderRejected    = status.EmbedderRejected
+	dependencyEmbedderPaused      = status.EmbedderPaused
 	dependencyEmbedderBusy        = status.EmbedderBusy
 	dependencyStoreUnavailable    = status.StoreUnavailable
 )
@@ -86,6 +87,8 @@ func degradeModeFor(err error) dependencyMode {
 		return dependencyEmbedderUnreachable
 	case adapterr.ClassEmbedderRejected:
 		return dependencyEmbedderRejected
+	case adapterr.ClassEmbedderPaused:
+		return dependencyEmbedderPaused
 	case adapterr.ClassEmbedderBusy:
 		return dependencyEmbedderBusy
 	case adapterr.ClassMilvusUnavailable:

@@ -58,6 +58,11 @@ const (
 	// dimensions, or credentials rather than a transient condition.
 	ClassEmbedderRejected Class = "embedder_rejected"
 
+	// ClassEmbedderPaused reports that the embedding endpoint deliberately
+	// paused service, for example to preserve battery in low power mode. It is
+	// reachable and is not rejecting the configured model or credentials.
+	ClassEmbedderPaused Class = "embedder_paused"
+
 	// ClassEmbedCancelled reports that the embedding request was cancelled
 	// (context cancellation or deadline), for example because the job was
 	// cancelled or the daemon is shutting down. Not a fault of the endpoint.
@@ -105,7 +110,7 @@ func CodeFor(class Class) codes.Code {
 		return codes.Canceled
 	case ClassInvalidPath, ClassInvalidArgument:
 		return codes.InvalidArgument
-	case ClassSearchResultIncomplete, ClassEmbedderRejected, ClassInternal:
+	case ClassSearchResultIncomplete, ClassEmbedderRejected, ClassEmbedderPaused, ClassInternal:
 		return codes.Internal
 	default:
 		return codes.Unknown
@@ -204,6 +209,19 @@ func NewEmbedderRejected(cause error) *AdapterError {
 		Message:       "embedding endpoint rejected the request",
 		Code:          "embedder_rejected",
 		Hint:          "check the embedding model name, dimensions, and credentials",
+		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
+// NewEmbedderPaused reports a deliberate endpoint pause with the safe reason
+// and recovery guidance supplied by the HTTP adapter.
+func NewEmbedderPaused(message string, hint string, cause error) *AdapterError {
+	return &AdapterError{
+		Class:         ClassEmbedderPaused,
+		Message:       message,
+		Code:          "embedder_paused",
+		Hint:          hint,
 		Cause:         cause,
 		SafeForClient: true,
 	}

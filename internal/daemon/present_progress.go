@@ -104,12 +104,14 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 	active := job.State == model.JobStateQueued || job.State == model.JobStateRunning || job.State == model.JobStateCancelling
 
 	percentLabel := fmt.Sprintf("%.1f%%", resolveOverallPercent(progress))
+	percentScopeLabel := percentLabel + " run progress"
 	if active && !jobScopeKnown(progress) {
 		if jobOperation(job.Operation) == jobOperationSync {
 			percentLabel = "Changes detected, preparing to index"
 		} else {
 			percentLabel = "Preparing to index"
 		}
+		percentScopeLabel = percentLabel
 	}
 
 	scopeLine := ""
@@ -133,11 +135,12 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 	}
 
 	return view.ProgressSurface{
-		Heading:      progressHeading(job),
-		Breakdown:    resolveOutcomeBreakdown(progress),
-		ScopeLine:    scopeLine,
-		PercentLabel: percentLabel,
-		BatchLine:    batchLine,
+		Heading:           progressHeading(job),
+		Breakdown:         resolveOutcomeBreakdown(progress),
+		ScopeLine:         scopeLine,
+		PercentLabel:      percentLabel,
+		PercentScopeLabel: percentScopeLabel,
+		BatchLine:         batchLine,
 	}
 }
 

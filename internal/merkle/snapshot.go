@@ -290,23 +290,37 @@ func WriteSnapshot(path string, snapshot Snapshot) error {
 	return nil
 }
 
+// ErrConfigDigestMismatch reports that a snapshot on disk was written under a
+// different index config than the one the caller is reading it for, so its
+// per-file hashes cannot seed the current build.
+var ErrConfigDigestMismatch = errors.New("merkle snapshot was written for a different index config")
+
 // LoadSnapshotForConfig returns the snapshot at path when its ConfigDigest
-// matches the requested digest. A missing, unreadable, or mismatched
-// snapshot returns an empty snapshot stamped with the requested digest so
-// the caller can begin writing per-file checkpoints under the new config.
+// matches the requested digest. A missing, unreadable, or mismatched snapshot
+// returns an empty snapshot stamped with the requested digest so the caller can
+// begin writing per-file checkpoints under the new config, along with the error
+// that says which of those three it was: an [os.ErrNotExist] for no file,
+// [ErrConfigDigestMismatch] for another config's file, and the read or parse
+// failure otherwise.
+//
+// An absent snapshot is never reported here as a fault. Whether a codebase
+// should own a checkpoint depends on its recorded indexing history, which this
+// package does not hold, so the caller that does holds that decision and this
+// package only says what it found. A caller that only needs a seed can ignore
+// the error and use the empty snapshot.
 //
 // legacyAcceptDigest salvages snapshots that predate the ConfigDigest
 // field. When a snapshot's stored digest is empty and the supplied
 // legacy digest matches the request, the snapshot is treated as valid
 // and returned with the request digest stamped in memory.
-func LoadSnapshotForConfig(path string, configDigest string, legacyAcceptDigest string) Snapshot {
+func LoadSnapshotForConfig(path string, configDigest string, legacyAcceptDigest string) (Snapshot, error) {
 	empty := Snapshot{ConfigDigest: configDigest, Files: map[string]string{}, Inodes: nil}
 	snapshot, err := ReadSnapshot(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("load merkle snapshot failed; treating as empty", "path", path, "err", err)
 		}
-		return empty
+		return empty, err
 	}
 	storedDigest := snapshot.ConfigDigest
 	if storedDigest == "" {
@@ -314,19 +328,36 @@ func LoadSnapshotForConfig(path string, configDigest string, legacyAcceptDigest 
 	}
 	if storedDigest != configDigest {
 		slog.Info("merkle snapshot config digest mismatch; starting fresh checkpoint", "path", path, "snapshot_digest", snapshot.ConfigDigest, "request_digest", configDigest)
-		return empty
+		return empty, fmt.Errorf("load snapshot %s: %w", path, ErrConfigDigestMismatch)
 	}
 	snapshot.ConfigDigest = configDigest
+	return snapshot, nil
+}
+
+// LoadOptionalSnapshotForConfig is [LoadSnapshotForConfig] for a checkpoint
+// whose absence carries no information, so the caller has nothing to do with
+// the error. That is the staging bootstrap checkpoint, which a build that was
+// interrupted before its first per-file write legitimately never created.
+func LoadOptionalSnapshotForConfig(path string, configDigest string, legacyAcceptDigest string) Snapshot {
+	snapshot, _ := LoadSnapshotForConfig(path, configDigest, legacyAcceptDigest)
 	return snapshot
 }
 
-// ReadSnapshot loads one persisted snapshot.
+// ReadSnapshot loads one persisted snapshot. A missing file returns an error
+// wrapping [os.ErrNotExist] and is logged at debug: this package cannot tell a
+// lost checkpoint from one that was never written, so it never reports an
+// absent file as a fault. A file that exists but cannot be read or parsed is a
+// real failure and is logged as one.
 func ReadSnapshot(path string) (Snapshot, error) {
 	slog.Debug("read Merkle snapshot", "path", path)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		slog.Error("read Merkle snapshot failed", "path", path, "err", err)
+		if errors.Is(err, os.ErrNotExist) {
+			slog.Debug("read Merkle snapshot not found; starting fresh", "path", path)
+		} else {
+			slog.Error("read Merkle snapshot failed", "path", path, "err", err)
+		}
 		return Snapshot{}, fmt.Errorf("read snapshot %s: %w", path, err)
 	}
 

@@ -113,6 +113,9 @@ func TestIsTransient(t *testing.T) {
 		{"context deadline", context.DeadlineExceeded, true},
 		{"unreachable", NewEmbedderUnreachable(nil), true},
 		{"milvus unavailable", &AdapterError{Class: ClassMilvusUnavailable}, true},
+		// A deliberate pause ends by itself when low power mode ends or the
+		// operator resumes the service, so it is retryable and the surface says so.
+		{"paused", NewEmbedderPaused("paused to preserve battery", "resume the service", nil), true},
 		{"rejected", NewEmbedderRejected(nil), false},
 		{"non-adapter", errors.New("boom"), false},
 		{"nil", nil, false},
@@ -141,6 +144,9 @@ func TestIsInfraFailure(t *testing.T) {
 		{"unreachable", NewEmbedderUnreachable(nil), true},
 		{"milvus unavailable", &AdapterError{Class: ClassMilvusUnavailable}, true},
 		{"rejected", NewEmbedderRejected(nil), true},
+		// A pause is shared infrastructure too: it stops every codebase the same
+		// way, so it must never become one codebase's terminal state.
+		{"paused", NewEmbedderPaused("paused to preserve battery", "resume the service", nil), true},
 		{"internal", NewInternal("boom", nil), false},
 		{"not indexed", NewNotIndexed("/x", nil), false},
 		{"non-adapter", errors.New("boom"), false},

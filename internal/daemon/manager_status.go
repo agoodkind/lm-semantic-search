@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -130,7 +129,7 @@ func (manager *Manager) classifyTrackedPath(ctx context.Context, codebase model.
 	// that is in scope and not excluded is only actually searchable when it, or
 	// for a directory a file beneath it, is recorded there. Without this check
 	// every non-root path reports unindexed even when its file is in the index.
-	if manager.pathHasIndexedFiles(codebase, filepath.ToSlash(relative)) {
+	if manager.pathHasIndexedFiles(ctx, codebase, filepath.ToSlash(relative)) {
 		return classification
 	}
 	classification.Kind = model.PathClassificationInScopeUnindexed
@@ -142,12 +141,17 @@ func (manager *Manager) classifyTrackedPath(ctx context.Context, codebase model.
 // directory any indexed file beneath it. Membership means the path is
 // searchable through the index. The per-file decision lives on the snapshot
 // ([merkle.Snapshot.CoversPath]) so every caller shares one source of truth.
-func (manager *Manager) pathHasIndexedFiles(codebase model.Codebase, relative string) bool {
-	snapshot, err := merkle.ReadSnapshot(manager.snapshotPathForCodebase(codebase))
-	if err != nil {
+func (manager *Manager) pathHasIndexedFiles(ctx context.Context, codebase model.Codebase, relative string) bool {
+	// A codebase mid-first-build reaches here, because classifyTrackedPath
+	// returns early only for pending, discovered, and not-indexed, and it is the
+	// case that made this probe log an error during every first build. The read
+	// goes through the one live-checkpoint reader so that stays quiet while a
+	// checkpoint lost after a real run is still reported.
+	checkpoint := manager.loadLiveCheckpoint(ctx, codebase, codebase.EffectiveConfig.IgnoreDigest)
+	if !checkpoint.usable() {
 		return false
 	}
-	return snapshot.CoversPath(relative)
+	return checkpoint.snapshot.CoversPath(relative)
 }
 
 // snapshotPathForCodebase returns the on-disk merkle snapshot path for a
@@ -189,6 +193,23 @@ func (manager *Manager) fillLiveChunkTotal(ctx context.Context, codebase model.C
 		return
 	}
 	if manager.semantic == nil || !manager.semantic.Available() {
+		return
+	}
+	// The gate is the same rule the checkpoint read uses, on the collection's
+	// axis: count rows only where a collection exists to count. Keying on the run
+	// record alone let a run that indexed zero files through, and so did any
+	// later job whose operation is not an index, and counting rows in a
+	// collection that was never created logs a row-count failure for every status
+	// read until the job ends. It reads the whole codebase because an adopted one
+	// owns a collection while carrying no run record.
+	if !ownsLiveCollection(codebase) {
+		slog.DebugContext(
+			ctx,
+			"no live collection to count yet",
+			"codebase_id", codebase.ID,
+			"path", codebase.CanonicalPath,
+			"job_id", activeJob.ID,
+		)
 		return
 	}
 	count, err := manager.semantic.Count(ctx, codebase.CanonicalPath)

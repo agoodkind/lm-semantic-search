@@ -137,8 +137,18 @@ func isPreIndexedStatus(status model.CodebaseStatus) bool {
 	}
 }
 
+// shouldQueueMissingCollectionRepair reports whether a codebase's missing
+// collection is damage to rebuild. A run that indexed no file promoted no
+// collection, so for that codebase the collection is not missing, it was never
+// created; queuing a repair marks a healthy empty repository stale and rebuilds
+// it on every sweep, forever. That is the same mistake the checkpoint reads
+// made, on the collection, so it reads the same run record through the same
+// place.
 func shouldQueueMissingCollectionRepair(codebase model.Codebase, hasActiveJob bool, presence collectionPresence) bool {
 	if hasActiveJob || presence != collectionPresenceMissing {
+		return false
+	}
+	if ranWithoutCreatingACollection(codebase.LastSuccessfulRun) {
 		return false
 	}
 	switch codebase.Status {

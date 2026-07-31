@@ -172,6 +172,47 @@ func TestEmbedBatchPersistentBusyReturnsErrEmbedderBusy(t *testing.T) {
 	}
 }
 
+func TestEmbedBatchServicePausedReportsEndpointMessageWithoutCapacityClaim(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = writer.Write([]byte(`{"error":{"message":"service paused to preserve battery (low_power_mode)","type":"service_paused"}}`))
+	}))
+	defer server.Close()
+
+	provider, err := newOpenAICompatibleProvider("test-key", server.URL, "model", 0, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+
+	_, err = provider.EmbedBatch(context.Background(), []string{"alpha"})
+	if err == nil {
+		t.Fatal("EmbedBatch returned nil error for a paused service")
+	}
+	message := adapterr.SafeMessage(err)
+	want := "embedding endpoint reported: service paused to preserve battery (low_power_mode); leave low power mode or resume the embedding service"
+	if message != want {
+		t.Fatalf("paused service message = %q, want %q", message, want)
+	}
+	var adapterErr *adapterr.AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Class != adapterr.ClassEmbedderPaused {
+		t.Fatalf("paused service class = %v, want %q", adapterErr, adapterr.ClassEmbedderPaused)
+	}
+	if errors.Is(err, ErrEmbedderBusy) {
+		t.Fatalf("paused service was classified as capacity: %v", err)
+	}
+	if errors.Is(err, ErrEmbedderRejected) {
+		t.Fatalf("paused service was classified as a configuration rejection: %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("paused service received %d requests, want 1 without capacity retries", got)
+	}
+}
+
 func TestEmbedBatchNon429NotBusy(t *testing.T) {
 	t.Parallel()
 

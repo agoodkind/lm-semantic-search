@@ -347,9 +347,16 @@ type ProgressSurface struct {
 	// "Changed since last sync: 1,004 conversations added · 7 modified".
 	// Empty when the run classified nothing.
 	ScopeLine string
-	// PercentLabel is the progress figure ("23.5%") or the preparing label
-	// when the scope is not measured yet.
+	// PercentLabel is the run-progress figure on its own ("23.5%"), or the
+	// preparing label when the scope is not measured yet. Surfaces that print
+	// their own key, such as the job detail block's "Run progress:" line, use
+	// this one so the scope is named exactly once.
 	PercentLabel string
+	// PercentScopeLabel is the same value with its scope named inline
+	// ("23.5% run progress"), for surfaces with no adjacent key, such as the
+	// job-list bracket. It equals PercentLabel when the value is a preparing
+	// label rather than a figure, since that text already reads as a sentence.
+	PercentScopeLabel string
 	// BatchLine is the within-item embed progress ("embedding batch 34 of 120")
 	// for an active run, so a single large item shows a bounded denominator while
 	// it embeds. Empty for a terminal entry or before any batch.

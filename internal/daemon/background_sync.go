@@ -385,8 +385,7 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(ctx context.Context, cod
 		return
 	}
 
-	snapshotPath := syncer.manager.snapshotPathForCodebase(codebase)
-	snapshot := merkle.LoadSnapshotForConfig(snapshotPath, codebase.EffectiveConfig.IgnoreDigest, syncer.manager.legacyDigestForCodebase(codebase.ID))
+	snapshot := syncer.manager.loadLiveCheckpoint(ctx, codebase, codebase.EffectiveConfig.IgnoreDigest).snapshot
 	currentSnapshot, err := merkle.Capture(ctx, syncer.manager.indexability, codebase.ID, codebase.CanonicalPath, codebase.EffectiveConfig)
 	if err != nil {
 		slog.ErrorContext(ctx, "quarantine capture failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
@@ -682,16 +681,15 @@ func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase mode
 		return false, nil
 	}
 
-	snapshotPath := syncer.manager.snapshotPathForCodebase(codebase)
-
-	existingSnapshot, err := merkle.ReadSnapshot(snapshotPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return true, nil
-		}
-		slog.ErrorContext(ctx, "read Merkle snapshot failed", "path", snapshotPath, "err", err)
-		return false, fmt.Errorf("read Merkle snapshot %s: %w", snapshotPath, err)
-	}
+	// The checkpoint read goes through the manager's one live-checkpoint reader,
+	// so an empty codebase that never wrote a file is not reported as damaged on
+	// every sweep. Its absent checkpoint reads as the empty snapshot it would
+	// have written, which matches the empty capture below, so the sweep also
+	// stops enqueuing a sync for a codebase where nothing changed. A codebase
+	// that did index files and lost its checkpoint still reports the loss, and
+	// its empty snapshot differs from a non-empty capture, so the resync it
+	// needs still starts.
+	existingSnapshot := syncer.manager.loadLiveCheckpoint(ctx, codebase, codebase.EffectiveConfig.IgnoreDigest).snapshot
 
 	currentSnapshot, err := merkle.Capture(
 		ctx,

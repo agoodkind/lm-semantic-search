@@ -650,7 +650,8 @@ func TestResumeOrphanedJobsResumesFromStagingCheckpoint(t *testing.T) {
 	if err := merkle.WriteSnapshot(manager.merklePath(codebaseID), staleLive); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
-	if manager.resumableCheckpointKind(codebaseID, cfg.IgnoreDigest) != resumeCheckpointStaging {
+	probeCodebase := model.Codebase{ID: codebaseID, CanonicalPath: canonical, EffectiveConfig: cfg}
+	if manager.resumableCheckpointKind(context.Background(), probeCodebase, cfg.IgnoreDigest) != resumeCheckpointStaging {
 		t.Fatal("resumableCheckpointKind did not report a staging checkpoint")
 	}
 
