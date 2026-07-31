@@ -19,23 +19,14 @@ func (store *Store) LoadReuseVectorsForContents(
 	for _, chunk := range chunks {
 		wanted[semantic.ContentVectorKey(chunk.Content)] = struct{}{}
 	}
-	reuse := make(map[string][]float32, len(wanted))
 	if err := operationContextError(ctx, "load local vector reuse contents"); err != nil {
 		return nil, err
 	}
-	err := store.loadReuseWhere(
-		collectionName,
-		func(candidate row) bool {
-			key := candidate.ContentVectorKey
-			if key == "" {
-				key = semantic.ContentVectorKey(candidate.Content)
-			}
-			_, found := wanted[key]
-			return found
-		},
-		reuse,
-	)
-	return reuse, err
+	stored, err := store.collectionForName(collectionName, false)
+	if err != nil {
+		return nil, err
+	}
+	return stored.reuseVectorsForKeys(wanted)
 }
 
 // LoadReuseVectors loads reusable vectors from collections.

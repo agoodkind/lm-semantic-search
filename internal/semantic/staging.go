@@ -184,6 +184,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 		reused := embedded.reused
 
 		keptChunks, keptVectors := filterEmbeddedChunks(embeddingBatch, embedded.vectors)
+		catalogVectors := newlyEmbeddedReuseCatalog(keptChunks, keptVectors, reuse)
 
 		if emptyRefused := collectEmptyRefusedChunks(embeddingBatch, embedded); len(emptyRefused) > 0 {
 			logEmptyContentRefused(ctx, collectionName, emptyRefused)
@@ -207,40 +208,25 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			}
 			keptChunks = append(keptChunks, retryChunks...)
 			keptVectors = append(keptVectors, retryVectors...)
+			addReuseCatalogVectors(catalogVectors, retryChunks, retryVectors)
 			droppedInputs += safeInt32FromInt(dropped)
 		}
-		if len(keptChunks) > 0 {
-			dimension := len(keptVectors[0])
-			if !collectionReady {
-				if err := service.createCollection(ctx, collectionName, dimension); err != nil {
-					return err
-				}
-				collectionReady = true
-			}
-
-			insertPacks := packChunksByEstimatedInsertBytes(
-				keptChunks,
-				dimension,
-				insertBatchEstimatedByteBudget,
-				columnSet,
-			)
-			vectorStart := 0
-			for _, insertBatch := range insertPacks {
-				vectorEnd := vectorStart + len(insertBatch)
-				if err := service.insertBatch(
-					ctx,
-					collectionName,
-					insertBatch,
-					keptVectors[vectorStart:vectorEnd],
-					columnSet,
-				); err != nil {
-					return err
-				}
-				vectorStart = vectorEnd
-				totalInsertBatches++
-				writtenRows += safeInt32FromInt(len(insertBatch))
-			}
-
+		writeResult, writeErr := service.writeEmbeddedChunkBatch(
+			ctx,
+			collectionName,
+			keptChunks,
+			keptVectors,
+			catalogVectors,
+			collectionReady,
+			columnSet,
+		)
+		if writeErr != nil {
+			return writeErr
+		}
+		collectionReady = writeResult.collectionReady
+		totalInsertBatches += writeResult.insertBatches
+		writtenRows += writeResult.writtenRows
+		if writeResult.writtenRows > 0 {
 			reusedRows += safeInt32FromInt(reused)
 			embeddedRows += safeInt32FromInt(len(keptChunks) - reused)
 		}
@@ -261,6 +247,90 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 	logEmbedRunExceptions(ctx, collectionName, droppedInputs, refusedEmptyInputs)
 	slog.InfoContext(ctx, "semantic.chunks_written", "collection", collectionName, "embedding_batches", totalEmbeddingBatches, "insert_batches", totalInsertBatches, "chunks", writtenRows, "embedded", embeddedRows, "reused", reusedRows)
 	return nil
+}
+
+type embeddedChunkWriteResult struct {
+	collectionReady bool
+	insertBatches   int
+	writtenRows     int32
+}
+
+func (service *Service) writeEmbeddedChunkBatch(
+	ctx context.Context,
+	collectionName string,
+	chunks []model.StoredChunk,
+	vectors [][]float32,
+	catalogVectors reuseCatalogVectors,
+	collectionReady bool,
+	columnSet StoreColumnSet,
+) (embeddedChunkWriteResult, error) {
+	result := embeddedChunkWriteResult{
+		collectionReady: collectionReady,
+		insertBatches:   0,
+		writtenRows:     0,
+	}
+	if len(chunks) == 0 {
+		return result, nil
+	}
+	if err := service.appendReuseCatalog(ctx, catalogVectors); err != nil {
+		return result, err
+	}
+	dimension := len(vectors[0])
+	if !result.collectionReady {
+		if err := service.createCollection(ctx, collectionName, dimension); err != nil {
+			return result, err
+		}
+		result.collectionReady = true
+	}
+
+	insertPacks := packChunksByEstimatedInsertBytes(
+		chunks,
+		dimension,
+		insertBatchEstimatedByteBudget,
+		columnSet,
+	)
+	vectorStart := 0
+	for _, insertBatch := range insertPacks {
+		vectorEnd := vectorStart + len(insertBatch)
+		if err := service.insertBatch(
+			ctx,
+			collectionName,
+			insertBatch,
+			vectors[vectorStart:vectorEnd],
+			columnSet,
+		); err != nil {
+			return result, err
+		}
+		vectorStart = vectorEnd
+		result.insertBatches++
+		result.writtenRows += safeInt32FromInt(len(insertBatch))
+	}
+	return result, nil
+}
+
+func addReuseCatalogVectors(
+	catalog reuseCatalogVectors,
+	chunks []model.StoredChunk,
+	vectors [][]float32,
+) {
+	for chunkIndex, chunk := range chunks {
+		catalog[chunk.Content] = vectors[chunkIndex]
+	}
+}
+
+func newlyEmbeddedReuseCatalog(
+	chunks []model.StoredChunk,
+	vectors [][]float32,
+	reuse map[string][]float32,
+) reuseCatalogVectors {
+	catalog := make(reuseCatalogVectors)
+	for chunkIndex, chunk := range chunks {
+		if _, found := reuse[contentVectorKey(chunk.Content)]; found {
+			continue
+		}
+		catalog[chunk.Content] = vectors[chunkIndex]
+	}
+	return catalog
 }
 
 // chunkBatchEmbedding is the outcome of embedding one packed batch. vectors holds

@@ -45,6 +45,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/sandbox"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
 	"google.golang.org/grpc"
 )
@@ -75,17 +76,18 @@ const (
 // assertions and teardown. Every field is scoped to this test; nothing is shared
 // with the operator's running daemon.
 type harness struct {
-	t              *testing.T
-	manager        *daemon.Manager
-	conn           *grpc.ClientConn
-	client         pb.SemanticSearchDaemonServiceClient
-	milvus         *milvusclient.Client
-	collectionID   string
-	collectionName string
-	codebaseID     string
-	stateRoot      string
-	merkleDir      string
-	embedGate      *embedGate
+	t                *testing.T
+	manager          *daemon.Manager
+	conn             *grpc.ClientConn
+	client           pb.SemanticSearchDaemonServiceClient
+	milvus           *milvusclient.Client
+	collectionID     string
+	collectionName   string
+	reuseCatalogName string
+	codebaseID       string
+	stateRoot        string
+	merkleDir        string
+	embedGate        *embedGate
 }
 
 // newHarness builds the isolated daemon and returns a ready harness, or skips the
@@ -188,17 +190,18 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 	}
 
 	h := &harness{
-		t:              t,
-		manager:        manager,
-		conn:           conn,
-		client:         client,
-		milvus:         milvus,
-		collectionID:   collectionID,
-		collectionName: codebase.CollectionName,
-		codebaseID:     codebase.ID,
-		stateRoot:      stateRoot,
-		merkleDir:      cfg.MerkleDir,
-		embedGate:      gate,
+		t:                t,
+		manager:          manager,
+		conn:             conn,
+		client:           client,
+		milvus:           milvus,
+		collectionID:     collectionID,
+		collectionName:   codebase.CollectionName,
+		reuseCatalogName: semantic.ReuseCatalogCollectionName(cfg),
+		codebaseID:       codebase.ID,
+		stateRoot:        stateRoot,
+		merkleDir:        cfg.MerkleDir,
+		embedGate:        gate,
 	}
 	t.Cleanup(func() { h.teardown(stopServer) })
 	return h
@@ -217,6 +220,18 @@ func (h *harness) teardown(stopServer func()) {
 			if !strings.Contains(err.Error(), "not exist") && !strings.Contains(err.Error(), "not found") {
 				h.t.Errorf("DropCollection(%s) returned error: %v", h.collectionName, err)
 			}
+		}
+		cancel()
+	}
+	if h.reuseCatalogName != "" {
+		dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := h.milvus.DropCollection(
+			dropCtx,
+			milvusclient.NewDropCollectionOption(h.reuseCatalogName),
+		); err != nil &&
+			!strings.Contains(err.Error(), "not exist") &&
+			!strings.Contains(err.Error(), "not found") {
+			h.t.Errorf("DropCollection(%s) returned error: %v", h.reuseCatalogName, err)
 		}
 		cancel()
 	}

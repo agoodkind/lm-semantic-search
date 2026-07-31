@@ -121,11 +121,13 @@ func (store *Store) PromoteStaging(
 		live.index.Close()
 	}
 	live.rows = cloneRows(staging.rows)
+	live.reuseRows = buildReuseRowIndex(live.rows)
 	live.index = staging.index
 	live.dimensions = staging.dimensions
 	live.loaded = true
 	live.exists = true
 	staging.rows = nil
+	staging.reuseRows = nil
 	staging.index = nil
 	staging.dimensions = 0
 	staging.loaded = true

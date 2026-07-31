@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/client/v2/entity"
+	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
@@ -48,6 +51,34 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 	})
 
 	harness := newHarnessWithGate(t, gate)
+	secondCollectionID := "live-reuse-" + randomID()
+	secondCodebase, err := harness.manager.RegisterConversationCollection(
+		context.Background(),
+		secondCollectionID,
+	)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection for second corpus returned error: %v", err)
+	}
+	secondHarness := *harness
+	secondHarness.collectionID = secondCollectionID
+	secondHarness.collectionName = secondCodebase.CollectionName
+	secondHarness.codebaseID = secondCodebase.ID
+	t.Cleanup(func() {
+		dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if dropErr := harness.milvus.DropCollection(
+			dropCtx,
+			milvusclient.NewDropCollectionOption(secondHarness.collectionName),
+		); dropErr != nil &&
+			!strings.Contains(dropErr.Error(), "not exist") &&
+			!strings.Contains(dropErr.Error(), "not found") {
+			t.Errorf(
+				"DropCollection(%s) returned error: %v",
+				secondHarness.collectionName,
+				dropErr,
+			)
+		}
+	})
 	sharedContent := "cross conversation reuse sentinel"
 
 	first := harness.upsert(
@@ -68,7 +99,7 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 		t.Fatalf("first ingest embedded = %d, want 1", first.Progress.ChunksEmbedded)
 	}
 
-	second := harness.upsert(
+	second := secondHarness.upsert(
 		map[string][]*pb.ConversationDocument{
 			"reuse-second": {{
 				ConversationId: "reuse-second",
@@ -88,8 +119,31 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 	if second.Progress.ChunksEmbedded != 0 {
 		t.Fatalf("second ingest embedded = %d, want 0", second.Progress.ChunksEmbedded)
 	}
-	if count := harness.countRowsContaining(sharedContent); count != 2 {
-		t.Fatalf("stored rows with shared content = %d, want 2", count)
+	if count := harness.countRowsContaining(sharedContent); count != 1 {
+		t.Fatalf("first corpus rows with shared content = %d, want 1", count)
+	}
+	if count := secondHarness.countRowsContaining(sharedContent); count != 1 {
+		t.Fatalf("second corpus rows with shared content = %d, want 1", count)
+	}
+	catalogCount, err := harness.milvus.Query(
+		context.Background(),
+		milvusclient.NewQueryOption(harness.reuseCatalogName).
+			WithOutputFields(countOutputField).
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		t.Fatalf("count reuse catalog rows: %v", err)
+	}
+	countColumn := catalogCount.GetColumn(countOutputField)
+	if countColumn == nil {
+		t.Fatal("reuse catalog count query returned no count column")
+	}
+	count, err := countColumn.GetAsInt64(0)
+	if err != nil {
+		t.Fatalf("read reuse catalog count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("reuse catalog rows = %d, want 1", count)
 	}
 	mutex.Lock()
 	callCount := embedCalls

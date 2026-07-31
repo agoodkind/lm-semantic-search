@@ -93,14 +93,17 @@ func (service *Service) EmbeddingProviderName() model.EmbeddingProvider {
 
 // Service owns the embedding provider and Milvus client for semantic search.
 type Service struct {
-	cfg             config.Config
-	embedder        embedding.Provider
-	milvus          *milvusclient.Client
-	insertRows      insertRowsFunc
-	available       atomic.Bool
-	reconnectCancel context.CancelFunc
-	reconnectDone   chan struct{}
-	closeOnce       sync.Once
+	cfg                     config.Config
+	embedder                embedding.Provider
+	milvus                  *milvusclient.Client
+	insertRows              insertRowsFunc
+	available               atomic.Bool
+	reconnectCancel         context.CancelFunc
+	reconnectDone           chan struct{}
+	closeOnce               sync.Once
+	reuseCatalogReady       atomic.Bool
+	reuseCatalogMutex       sync.Mutex
+	reuseCatalogAppendMutex sync.Mutex
 	// collectionLoads collapses concurrent initial load, wait, and recovery work
 	// for the same collection name into one shared flight.
 	collectionLoads collectionLoadCoordinator
@@ -128,14 +131,17 @@ type Service struct {
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
 		return &Service{
-			cfg:             cfg,
-			embedder:        nil,
-			milvus:          nil,
-			insertRows:      nil,
-			available:       atomic.Bool{},
-			reconnectCancel: nil,
-			reconnectDone:   nil,
-			closeOnce:       sync.Once{},
+			cfg:                     cfg,
+			embedder:                nil,
+			milvus:                  nil,
+			insertRows:              nil,
+			available:               atomic.Bool{},
+			reconnectCancel:         nil,
+			reconnectDone:           nil,
+			closeOnce:               sync.Once{},
+			reuseCatalogReady:       atomic.Bool{},
+			reuseCatalogMutex:       sync.Mutex{},
+			reuseCatalogAppendMutex: sync.Mutex{},
 			collectionLoads: collectionLoadCoordinator{
 				mutex:   sync.Mutex{},
 				flights: nil,
@@ -155,14 +161,17 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	service := &Service{
-		cfg:             cfg,
-		embedder:        embedder,
-		milvus:          nil,
-		insertRows:      nil,
-		available:       atomic.Bool{},
-		reconnectCancel: nil,
-		reconnectDone:   nil,
-		closeOnce:       sync.Once{},
+		cfg:                     cfg,
+		embedder:                embedder,
+		milvus:                  nil,
+		insertRows:              nil,
+		available:               atomic.Bool{},
+		reconnectCancel:         nil,
+		reconnectDone:           nil,
+		closeOnce:               sync.Once{},
+		reuseCatalogReady:       atomic.Bool{},
+		reuseCatalogMutex:       sync.Mutex{},
+		reuseCatalogAppendMutex: sync.Mutex{},
 		collectionLoads: collectionLoadCoordinator{
 			mutex:   sync.Mutex{},
 			flights: nil,

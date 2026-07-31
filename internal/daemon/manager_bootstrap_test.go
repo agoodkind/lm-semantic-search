@@ -329,6 +329,80 @@ func TestRunBootstrapMissingLiveCollectionEmbedsEverything(t *testing.T) {
 	})
 }
 
+func TestRunBootstrapReusesCatalogWithoutLiveCollection(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 2)
+	const liveCollection = "cc_bootstrap_catalog"
+	candidateCalls := 0
+	fake := &fakeSemantic{
+		inspectCollection: func(_ context.Context, collectionName string) (semantic.CollectionFacts, error) {
+			if collectionName != liveCollection {
+				t.Fatalf("InspectCollection(%q), want %q", collectionName, liveCollection)
+			}
+			return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
+		},
+		hasStaging: func(context.Context, string) (bool, error) { return true, nil },
+		loadReuseForContents: func(
+			_ context.Context,
+			collectionName string,
+			chunks []model.StoredChunk,
+		) (map[string][]float32, error) {
+			candidateCalls++
+			if collectionName != liveCollection {
+				t.Fatalf("candidate collection = %q, want %q", collectionName, liveCollection)
+			}
+			return map[string][]float32{hashText(chunks[0].Content): {1, 2, 3}}, nil
+		},
+		stageReindexWithReuse: func(
+			_ context.Context,
+			_ string,
+			chunks []model.StoredChunk,
+			_ []string,
+			progress func(semantic.Progress),
+			reuse map[string][]float32,
+		) error {
+			emitReuseProgress(progress, chunks, reuse)
+			return nil
+		},
+	}
+	manager.semantic = fake
+
+	var mutex sync.Mutex
+	embedded := make([]string, 0)
+	manager.runner = recordingRunner(&mutex, &embedded)
+	canonical := newMultiFileRepo(t, "main.go")
+	configuration := defaultIndexConfig()
+	configuration.IgnoreDigest = "sha256:bootstrap-catalog"
+	codebaseID, job := seedBootstrapCodebase(t, manager, canonical, configuration)
+	setBootstrapCollectionName(t, manager, codebaseID, liveCollection)
+	source := newCodeItemSource(
+		manager.runner,
+		manager.indexability,
+		job.CodebaseID,
+		job.CanonicalPath,
+		job.Config,
+	).withCollectionName(liveCollection)
+
+	runBootstrapAndGraph(t, manager, job, source)
+
+	completed, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatalf("job %s was not found", job.ID)
+	}
+	if completed.State != model.JobStateCompleted {
+		t.Fatalf("job state = %q, want completed", completed.State)
+	}
+	if candidateCalls != 1 {
+		t.Fatalf("candidate calls = %d, want 1", candidateCalls)
+	}
+	if completed.Progress.ChunksEmbedded != 0 || completed.Progress.ChunksReused != 1 {
+		t.Fatalf(
+			"embedded/reused = %d/%d, want 0/1",
+			completed.Progress.ChunksEmbedded,
+			completed.Progress.ChunksReused,
+		)
+	}
+}
+
 func TestRunBootstrapForcedSkipsLiveItemReuse(t *testing.T) {
 	manager, _ := newTestManagerWithCap(t, 2)
 	liveCollection := "cc_bootstrap_forced"
@@ -340,6 +414,14 @@ func TestRunBootstrapForcedSkipsLiveItemReuse(t *testing.T) {
 			return semantic.CollectionFacts{Exists: true, Rows: 1, RowsKnown: true}, nil
 		},
 		hasStaging: func(context.Context, string) (bool, error) { return true, nil },
+		loadReuseForContents: func(
+			context.Context,
+			string,
+			[]model.StoredChunk,
+		) (map[string][]float32, error) {
+			t.Fatal("forced bootstrap loaded catalog reuse")
+			return nil, nil
+		},
 		stageReindexWithReuse: func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string][]float32) error {
 			emitReuseProgress(progress, chunks, reuse)
 			return nil

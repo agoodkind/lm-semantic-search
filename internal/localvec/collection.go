@@ -25,6 +25,7 @@ type collection struct {
 	path       string
 	mutex      sync.RWMutex
 	rows       []row
+	reuseRows  map[string]int
 	index      *usearch.Index
 	dimensions int
 	loaded     bool
@@ -37,11 +38,46 @@ func newCollection(name string, path string) *collection {
 		path:       path,
 		mutex:      sync.RWMutex{},
 		rows:       nil,
+		reuseRows:  nil,
 		index:      nil,
 		dimensions: 0,
 		loaded:     false,
 		exists:     false,
 	}
+}
+
+func buildReuseRowIndex(rows []row) map[string]int {
+	reuseRows := make(map[string]int, len(rows))
+	for rowIndex, candidate := range rows {
+		key := candidate.ContentVectorKey
+		if key == "" {
+			key = semantic.ContentVectorKey(candidate.Content)
+		}
+		reuseRows[key] = rowIndex
+	}
+	return reuseRows
+}
+
+func (stored *collection) reuseVectorsForKeys(
+	keys map[string]struct{},
+) (map[string][]float32, error) {
+	stored.mutex.Lock()
+	defer stored.mutex.Unlock()
+	if err := stored.loadLocked(); err != nil {
+		return nil, err
+	}
+	reuse := make(map[string][]float32, len(keys))
+	if !stored.exists {
+		return reuse, nil
+	}
+	for key := range keys {
+		rowIndex, found := stored.reuseRows[key]
+		if !found {
+			continue
+		}
+		reuse[key] = append([]float32(nil), stored.rows[rowIndex].Vector...)
+	}
+	return reuse, nil
 }
 
 func (stored *collection) snapshot() ([]row, bool, error) {
@@ -213,6 +249,7 @@ func (stored *collection) drop() error {
 		return fmt.Errorf("remove local vector collection %s: %w", stored.path, err)
 	}
 	stored.rows = nil
+	stored.reuseRows = nil
 	stored.dimensions = 0
 	stored.loaded = true
 	stored.exists = false
@@ -286,6 +323,7 @@ func (stored *collection) loadLocked() error {
 		return err
 	}
 	stored.rows = rows
+	stored.reuseRows = buildReuseRowIndex(rows)
 	stored.index = vectorIndex
 	stored.dimensions = indexDimensions
 	stored.exists = true
@@ -476,6 +514,7 @@ func (stored *collection) persistLocked(rows []row) error {
 		stored.index.Close()
 	}
 	stored.rows = rewritten
+	stored.reuseRows = buildReuseRowIndex(rewritten)
 	stored.index = vectorIndex
 	stored.dimensions = dimensions
 	stored.exists = true

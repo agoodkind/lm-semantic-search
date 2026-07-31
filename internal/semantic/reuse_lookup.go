@@ -45,36 +45,32 @@ func contentVectorStorageKeys(cfg config.Config, contents []string) []string {
 	return keys
 }
 
-// LoadReuseVectorsForContents resolves only vectors needed by chunks. New rows
-// use the indexed identity-aware key. Rows written before that field existed use
-// exact-content fallback and remain unchanged.
+// LoadReuseVectorsForContents resolves only vectors needed by chunks through the
+// identity-scoped catalog. Catalog misses fall back only to legacy corpus rows
+// whose indexed content key is null, and those rows remain unchanged.
 func (service *Service) LoadReuseVectorsForContents(
 	ctx context.Context,
 	collectionName string,
 	chunks []model.StoredChunk,
 ) (map[string][]float32, error) {
 	reuse := make(map[string][]float32)
-	if !service.Available() || collectionName == "" || len(chunks) == 0 {
+	if !service.Available() || len(chunks) == 0 {
 		return reuse, nil
 	}
-	hasCollection, err := service.hasCollection(
-		ctx,
-		collectionName,
-		"check collection before corpus reuse",
-	)
-	if err != nil {
+	contentsByStorageKey, storageKeys := service.reuseCandidates(chunks)
+	if err := service.loadCatalogReuse(ctx, storageKeys, contentsByStorageKey, reuse); err != nil {
 		return nil, err
 	}
-	if !hasCollection {
-		return reuse, nil
-	}
-	if err := service.ensureContentVectorKeyColumnOnce(ctx, collectionName); err != nil {
+	legacyContents := missingReuseContents(contentsByStorageKey, reuse)
+	if err := service.loadLegacyReuse(ctx, collectionName, legacyContents, reuse); err != nil {
 		return nil, err
 	}
-	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
-		return nil, err
-	}
+	return reuse, nil
+}
 
+func (service *Service) reuseCandidates(
+	chunks []model.StoredChunk,
+) (map[string]string, []string) {
 	contentsByStorageKey := make(map[string]string, len(chunks))
 	storageKeys := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
@@ -86,35 +82,93 @@ func (service *Service) LoadReuseVectorsForContents(
 		contentsByStorageKey[storageKey] = content
 		storageKeys = append(storageKeys, storageKey)
 	}
+	return contentsByStorageKey, storageKeys
+}
+
+func (service *Service) loadCatalogReuse(
+	ctx context.Context,
+	storageKeys []string,
+	contentsByStorageKey map[string]string,
+	reuse map[string][]float32,
+) error {
+	catalogAvailable, err := service.reuseCatalogAvailable(ctx, 0)
+	if err != nil {
+		return err
+	}
+	if !catalogAvailable {
+		return nil
+	}
 	for _, batch := range reuseLookupBatches(storageKeys) {
-		if err := service.loadReuseKeyBatch(
-			ctx,
-			collectionName,
-			batch,
-			contentsByStorageKey,
-			reuse,
-		); err != nil {
-			return nil, err
+		catalogVectors, loadErr := service.loadReuseCatalogKeys(ctx, batch)
+		if loadErr != nil {
+			return loadErr
+		}
+		for storageKey, vector := range catalogVectors {
+			content, found := contentsByStorageKey[storageKey]
+			if found {
+				reuse[contentVectorKey(content)] = vector
+			}
 		}
 	}
+	return nil
+}
 
+func missingReuseContents(
+	contentsByStorageKey map[string]string,
+	reuse map[string][]float32,
+) []string {
 	legacyContents := make([]string, 0, len(contentsByStorageKey))
 	for _, content := range contentsByStorageKey {
 		if _, found := reuse[contentVectorKey(content)]; !found {
 			legacyContents = append(legacyContents, content)
 		}
 	}
+	return legacyContents
+}
+
+func (service *Service) loadLegacyReuse(
+	ctx context.Context,
+	collectionName string,
+	legacyContents []string,
+	reuse map[string][]float32,
+) error {
+	if len(legacyContents) == 0 || collectionName == "" {
+		return nil
+	}
+	hasCollection, err := service.hasCollection(
+		ctx,
+		collectionName,
+		"check collection before legacy reuse",
+	)
+	if err != nil {
+		return err
+	}
+	if !hasCollection {
+		return nil
+	}
+	if err := service.ensureContentVectorKeyColumnOnce(ctx, collectionName); err != nil {
+		return err
+	}
+	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
+		return err
+	}
+
+	legacyCatalog := make(reuseCatalogVectors)
 	for _, batch := range reuseLookupBatches(legacyContents) {
 		if err := service.loadLegacyReuseBatch(
 			ctx,
 			collectionName,
 			batch,
 			reuse,
+			legacyCatalog,
 		); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return reuse, nil
+	if err := service.appendReuseCatalog(ctx, legacyCatalog); err != nil {
+		return err
+	}
+	return nil
 }
 
 func reuseLookupBatches(values []string) [][]string {
@@ -136,65 +190,12 @@ func reuseLookupBatches(values []string) [][]string {
 	return batches
 }
 
-func (service *Service) loadReuseKeyBatch(
-	ctx context.Context,
-	collectionName string,
-	storageKeys []string,
-	contentsByStorageKey map[string]string,
-	reuse map[string][]float32,
-) error {
-	iterator, err := service.milvus.QueryIterator(
-		ctx,
-		milvusclient.NewQueryIteratorOption(collectionName).
-			WithBatchSize(reuseVectorBatchSize).
-			WithFilter(inStringClause(contentVectorKeyFieldName, storageKeys)).
-			WithOutputFields(contentVectorKeyFieldName, denseVectorFieldName),
-	)
-	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"open content-key reuse iterator failed",
-			"collection", collectionName,
-			"err", err,
-		)
-		return fmt.Errorf("open content-key reuse iterator for %s: %w", collectionName, err)
-	}
-	for {
-		resultSet, nextErr := iterator.Next(ctx)
-		if errors.Is(nextErr, io.EOF) {
-			return nil
-		}
-		if nextErr != nil {
-			return fmt.Errorf("iterate content-key reuse for %s: %w", collectionName, nextErr)
-		}
-		keyColumn := resultSet.GetColumn(contentVectorKeyFieldName)
-		vectorColumn := resultSet.GetColumn(denseVectorFieldName)
-		if keyColumn == nil || vectorColumn == nil {
-			return ErrSearchResultIncomplete
-		}
-		for rowIndex := range resultSet.ResultCount {
-			storageKey, keyErr := keyColumn.GetAsString(rowIndex)
-			if keyErr != nil {
-				return fmt.Errorf("read content vector key at %d: %w", rowIndex, keyErr)
-			}
-			content, found := contentsByStorageKey[storageKey]
-			if !found {
-				continue
-			}
-			vector, vectorErr := vectorAt(vectorColumn, rowIndex)
-			if vectorErr != nil {
-				return vectorErr
-			}
-			reuse[contentVectorKey(content)] = vector
-		}
-	}
-}
-
 func (service *Service) loadLegacyReuseBatch(
 	ctx context.Context,
 	collectionName string,
 	contents []string,
 	reuse map[string][]float32,
+	legacyCatalog reuseCatalogVectors,
 ) error {
 	iterator, err := service.milvus.QueryIterator(
 		ctx,
@@ -238,6 +239,10 @@ func (service *Service) loadLegacyReuseBatch(
 				return vectorErr
 			}
 			reuse[contentVectorKey(content)] = vector
+			if service.cfg.EmbeddingDimension > 0 &&
+				len(vector) == int(service.cfg.EmbeddingDimension) {
+				legacyCatalog[content] = vector
+			}
 		}
 	}
 }
