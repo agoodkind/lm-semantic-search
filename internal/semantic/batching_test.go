@@ -210,6 +210,7 @@ func TestReuseAwareEmbeddingAndInsertPackingUseIndependentBudgets(t *testing.T) 
 		len(vector),
 		insertByteCeiling,
 		StoreColumnSetCode,
+		"model-a",
 	)
 	assertGroupsCoverChunksInOrder(t, insertGroups, chunks)
 	if len(insertGroups) < 2 {
@@ -222,6 +223,7 @@ func TestReuseAwareEmbeddingAndInsertPackingUseIndependentBudgets(t *testing.T) 
 				chunk,
 				len(vector),
 				StoreColumnSetCode,
+				"model-a",
 			)
 		}
 		if estimatedBytes > insertByteCeiling {
@@ -292,6 +294,7 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 				vectorDimension,
 				scaledInsertBudget,
 				test.columnSet,
+				"model-a",
 			)
 
 			for groupIndex, group := range groups {
@@ -299,6 +302,7 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 					group,
 					vectorDimension,
 					test.columnSet,
+					"model-a",
 				)
 				if requestBytes > scaledTransportLimit {
 					t.Fatalf(
@@ -317,10 +321,12 @@ func actualInsertRequestBytes(
 	chunks []model.StoredChunk,
 	vectorDimension int,
 	columnSet StoreColumnSet,
+	embeddingModel string,
 ) int {
 	ids := make([]string, 0, len(chunks))
 	contents := make([]string, 0, len(chunks))
-	contentVectorKeys := make([]string, 0, len(chunks))
+	contentHashes := make([]string, 0, len(chunks))
+	embeddingModels := make([]string, 0, len(chunks))
 	relativePaths := make([]string, 0, len(chunks))
 	startLines := make([]int64, 0, len(chunks))
 	endLines := make([]int64, 0, len(chunks))
@@ -335,7 +341,8 @@ func actualInsertRequestBytes(
 		metadataValue, _ := sanitizeUTF8(encodeMetadata(chunk))
 		ids = append(ids, generateID(chunk, index))
 		contents = append(contents, content)
-		contentVectorKeys = append(contentVectorKeys, ContentVectorKey(content))
+		contentHashes = append(contentHashes, ContentVectorKey(content))
+		embeddingModels = append(embeddingModels, embeddingModel)
 		relativePaths = append(relativePaths, relativePath)
 		startLines = append(startLines, int64(chunk.StartLine))
 		endLines = append(endLines, int64(chunk.EndLine))
@@ -348,7 +355,8 @@ func actualInsertRequestBytes(
 	fieldsData := []*schemapb.FieldData{
 		column.NewColumnVarChar(idFieldName, ids).FieldData(),
 		column.NewColumnVarChar(contentFieldName, contents).FieldData(),
-		column.NewColumnVarChar(contentVectorKeyFieldName, contentVectorKeys).FieldData(),
+		column.NewColumnVarChar(contentHashFieldName, contentHashes).FieldData(),
+		column.NewColumnVarChar(embeddingModelFieldName, embeddingModels).FieldData(),
 		column.NewColumnVarChar(relativePathFieldName, relativePaths).FieldData(),
 		column.NewColumnInt64(startLineFieldName, startLines).FieldData(),
 		column.NewColumnInt64(endLineFieldName, endLines).FieldData(),

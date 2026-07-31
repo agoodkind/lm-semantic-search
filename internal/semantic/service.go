@@ -29,20 +29,21 @@ import (
 // writes the same collections the TS adapter does. The names are camelCase
 // because that is what the TS adapter wrote.
 const (
-	maxCollectionNameLength   = 255
-	stagingCollectionSuffix   = "_stg"
-	denseVectorFieldName      = "vector"
-	sparseVectorFieldName     = "sparse_vector"
-	contentFieldName          = "content"
-	relativePathFieldName     = "relativePath"
-	startLineFieldName        = "startLine"
-	endLineFieldName          = "endLine"
-	fileExtensionFieldName    = "fileExtension"
-	metadataFieldName         = "metadata"
-	idFieldName               = "id"
-	splitPartFieldName        = "splitPart"
-	contentVectorKeyFieldName = "contentVectorKey"
-	countOutputField          = "count(*)"
+	maxCollectionNameLength = 255
+	stagingCollectionSuffix = "_stg"
+	denseVectorFieldName    = "vector"
+	sparseVectorFieldName   = "sparse_vector"
+	contentFieldName        = "content"
+	relativePathFieldName   = "relativePath"
+	startLineFieldName      = "startLine"
+	endLineFieldName        = "endLine"
+	fileExtensionFieldName  = "fileExtension"
+	metadataFieldName       = "metadata"
+	idFieldName             = "id"
+	splitPartFieldName      = "splitPart"
+	contentHashFieldName    = "contentHash"
+	embeddingModelFieldName = "embeddingModel"
+	countOutputField        = "count(*)"
 )
 
 // Progress reports semantic indexing progress after chunk extraction.
@@ -114,9 +115,9 @@ type Service struct {
 	// ensuredSplitPartColumns gates the nullable splitPart schema migration once
 	// per collection per process.
 	ensuredSplitPartColumns sync.Map
-	// ensuredContentVectorKeyColumns gates the nullable reuse-key column and
-	// scalar-index migration once per collection per process.
-	ensuredContentVectorKeyColumns sync.Map
+	// ensuredReuseIdentityColumns gates the nullable content hash and embedding
+	// model columns plus the content-hash index once per collection per process.
+	ensuredReuseIdentityColumns sync.Map
 	// ensuredMmapEnabled records the collections this process has confirmed
 	// mmap-migrated, so the daemon's periodic mmap sweep skips them with no RPC.
 	// See ensureMmapEnabledOnce.
@@ -146,11 +147,11 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 				mutex:   sync.Mutex{},
 				flights: nil,
 			},
-			ensuredConvColumns:             sync.Map{},
-			ensuredSplitPartColumns:        sync.Map{},
-			ensuredContentVectorKeyColumns: sync.Map{},
-			ensuredMmapEnabled:             sync.Map{},
-			ensuredBackfill:                sync.Map{},
+			ensuredConvColumns:          sync.Map{},
+			ensuredSplitPartColumns:     sync.Map{},
+			ensuredReuseIdentityColumns: sync.Map{},
+			ensuredMmapEnabled:          sync.Map{},
+			ensuredBackfill:             sync.Map{},
 		}, nil
 	}
 
@@ -176,11 +177,11 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			mutex:   sync.Mutex{},
 			flights: nil,
 		},
-		ensuredConvColumns:             sync.Map{},
-		ensuredSplitPartColumns:        sync.Map{},
-		ensuredContentVectorKeyColumns: sync.Map{},
-		ensuredMmapEnabled:             sync.Map{},
-		ensuredBackfill:                sync.Map{},
+		ensuredConvColumns:          sync.Map{},
+		ensuredSplitPartColumns:     sync.Map{},
+		ensuredReuseIdentityColumns: sync.Map{},
+		ensuredMmapEnabled:          sync.Map{},
+		ensuredBackfill:             sync.Map{},
 	}
 
 	client, err := service.dialMilvus(ctx)
@@ -310,7 +311,7 @@ func (service *Service) renameCollection(ctx context.Context, oldName string, ne
 func (service *Service) invalidateCollectionCaches(collectionName string) {
 	service.ensuredConvColumns.Delete(collectionName)
 	service.ensuredSplitPartColumns.Delete(collectionName)
-	service.ensuredContentVectorKeyColumns.Delete(collectionName)
+	service.ensuredReuseIdentityColumns.Delete(collectionName)
 	service.ensuredMmapEnabled.Delete(collectionName)
 	service.ensuredBackfill.Delete(collectionName)
 }

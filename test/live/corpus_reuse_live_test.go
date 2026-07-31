@@ -4,8 +4,13 @@ package live
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -80,6 +85,7 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 		}
 	})
 	sharedContent := "cross conversation reuse sentinel"
+	uniqueContent := "cross conversation unique control"
 
 	first := harness.upsert(
 		map[string][]*pb.ConversationDocument{
@@ -101,12 +107,20 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 
 	second := secondHarness.upsert(
 		map[string][]*pb.ConversationDocument{
-			"reuse-second": {{
-				ConversationId: "reuse-second",
-				MessageIndex:   0,
-				Role:           "user",
-				Text:           sharedContent,
-			}},
+			"reuse-second": {
+				{
+					ConversationId: "reuse-second",
+					MessageIndex:   0,
+					Role:           "user",
+					Text:           sharedContent,
+				},
+				{
+					ConversationId: "reuse-second",
+					MessageIndex:   1,
+					Role:           "assistant",
+					Text:           uniqueContent,
+				},
+			},
 		},
 		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 		false,
@@ -116,14 +130,17 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 	if second.Progress.ChunksReused != 1 {
 		t.Fatalf("second ingest reused = %d, want 1", second.Progress.ChunksReused)
 	}
-	if second.Progress.ChunksEmbedded != 0 {
-		t.Fatalf("second ingest embedded = %d, want 0", second.Progress.ChunksEmbedded)
+	if second.Progress.ChunksEmbedded != 1 {
+		t.Fatalf("second ingest embedded = %d, want 1", second.Progress.ChunksEmbedded)
 	}
 	if count := harness.countRowsContaining(sharedContent); count != 1 {
 		t.Fatalf("first corpus rows with shared content = %d, want 1", count)
 	}
 	if count := secondHarness.countRowsContaining(sharedContent); count != 1 {
 		t.Fatalf("second corpus rows with shared content = %d, want 1", count)
+	}
+	if count := secondHarness.countRowsContaining(uniqueContent); count != 1 {
+		t.Fatalf("second corpus rows with unique content = %d, want 1", count)
 	}
 	catalogCount, err := harness.milvus.Query(
 		context.Background(),
@@ -142,18 +159,18 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read reuse catalog count: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("reuse catalog rows = %d, want 1", count)
+	if count != 2 {
+		t.Fatalf("reuse catalog rows = %d, want 2", count)
 	}
 	mutex.Lock()
 	callCount := embedCalls
 	mutex.Unlock()
-	if callCount != 1 {
-		t.Fatalf("embedding calls = %d, want 1", callCount)
+	if callCount != 2 {
+		t.Fatalf("embedding calls = %d, want 2", callCount)
 	}
 }
 
-func TestLegacyReuseDoesNotSeedCrossCorpusCatalog(t *testing.T) {
+func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	harness := newHarness(t)
 	seed := harness.upsert(
 		map[string][]*pb.ConversationDocument{
@@ -170,34 +187,39 @@ func TestLegacyReuseDoesNotSeedCrossCorpusCatalog(t *testing.T) {
 	)
 	requireCompleted(t, seed, "catalog seed ingest")
 
-	legacyContent := "unknown identity legacy vector"
+	legacyContent := "untagged legacy vector"
 	legacyVector := make([]float32, fakeEmbeddingDimension)
 	legacyVector[0] = 1
-	insertLegacyRow(t, harness, legacyContent, legacyVector)
-
-	local := harness.upsert(
-		map[string][]*pb.ConversationDocument{
-			"legacy-local": {{
-				ConversationId: "legacy-local",
-				MessageIndex:   0,
-				Role:           "user",
-				Text:           legacyContent,
-			}},
-		},
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
-		false,
-		false,
-	)
-	requireCompleted(t, local, "collection-local legacy reuse")
-	if local.Progress.ChunksReused != 1 || local.Progress.ChunksEmbedded != 0 {
-		t.Fatalf(
-			"local legacy reused/embedded = %d/%d, want 1/0",
-			local.Progress.ChunksReused,
-			local.Progress.ChunksEmbedded,
-		)
+	legacyID := insertLegacyRow(t, harness, legacyContent, legacyVector)
+	legacyBefore := snapshotRow(t, harness, harness.collectionName, legacyID)
+	if legacyBefore.contentHashKnown || legacyBefore.embeddingModelKnown {
+		t.Fatalf("legacy identity = hash:%t model:%t, want both absent", legacyBefore.contentHashKnown, legacyBefore.embeddingModelKnown)
 	}
-	if count := reuseCatalogRowCount(t, harness); count != 1 {
-		t.Fatalf("reuse catalog rows after legacy fallback = %d, want 1", count)
+	searchConfig, err := config.Default()
+	if err != nil {
+		t.Fatalf("load search config: %v", err)
+	}
+	searchService, err := semantic.NewService(context.Background(), searchConfig)
+	if err != nil {
+		t.Fatalf("open search service: %v", err)
+	}
+	t.Cleanup(func() { _ = searchService.Close(context.Background()) })
+	searchResults, err := searchService.SearchConversationCollectionCapped(
+		context.Background(),
+		harness.collectionName,
+		"untagged legacy search probe",
+		10,
+		10,
+		-1,
+		semantic.ConversationFilter{},
+	)
+	if err != nil {
+		t.Fatalf("search collection containing untagged row: %v", err)
+	}
+	if !slices.ContainsFunc(searchResults, func(chunk model.StoredChunk) bool {
+		return chunk.Content == legacyContent
+	}) {
+		t.Fatalf("search results omitted untagged content: %+v", searchResults)
 	}
 
 	secondCollectionID := "live-legacy-reuse-" + randomID()
@@ -214,26 +236,200 @@ func TestLegacyReuseDoesNotSeedCrossCorpusCatalog(t *testing.T) {
 	secondHarness.codebaseID = secondCodebase.ID
 	t.Cleanup(func() { dropLiveCollection(t, harness, secondHarness.collectionName) })
 
+	secondDocuments := map[string][]*pb.ConversationDocument{
+		"legacy-second": {{
+			ConversationId: "legacy-second",
+			MessageIndex:   0,
+			Role:           "user",
+			Text:           legacyContent,
+		}},
+	}
 	second := secondHarness.upsert(
+		secondDocuments,
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		false,
+		false,
+	)
+	requireCompleted(t, second, "second corpus after legacy reuse")
+	if second.Progress.ChunksReused != 1 || second.Progress.ChunksEmbedded != 0 {
+		t.Fatalf(
+			"cross-corpus legacy reused/embedded = %d/%d, want 1/0",
+			second.Progress.ChunksReused,
+			second.Progress.ChunksEmbedded,
+		)
+	}
+	legacyAfter := snapshotRow(t, harness, harness.collectionName, legacyID)
+	if legacyAfter != legacyBefore {
+		t.Fatalf("legacy row changed: before=%+v after=%+v", legacyBefore, legacyAfter)
+	}
+	secondRows := snapshotsForContent(t, harness, secondHarness.collectionName, legacyContent)
+	if len(secondRows) != 1 {
+		t.Fatalf("second corpus rows = %d, want 1", len(secondRows))
+	}
+	inserted := secondRows[0]
+	if !inserted.contentHashKnown || inserted.contentHash != semantic.ContentVectorKey(legacyContent) {
+		t.Fatalf("new row content hash = %q known=%t", inserted.contentHash, inserted.contentHashKnown)
+	}
+	if !inserted.embeddingModelKnown || inserted.embeddingModel != "text-embedding-3-small" {
+		t.Fatalf("new row embedding model = %q known=%t", inserted.embeddingModel, inserted.embeddingModelKnown)
+	}
+	if inserted.vectorChecksum != legacyBefore.vectorChecksum {
+		t.Fatalf("new row vector checksum = %s, want legacy %s", inserted.vectorChecksum, legacyBefore.vectorChecksum)
+	}
+	t.Logf(
+		"legacy_id=%s legacy_vector_sha256=%s new_id=%s new_vector_sha256=%s",
+		legacyID,
+		legacyBefore.vectorChecksum,
+		inserted.id,
+		inserted.vectorChecksum,
+	)
+
+	repeatBefore := snapshotsForContent(t, harness, secondHarness.collectionName, legacyContent)
+	repeat := secondHarness.upsert(
+		secondDocuments,
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		false,
+		false,
+	)
+	requireCompleted(t, repeat, "repeat legacy reuse")
+	if repeat.Progress.FilesModified != 0 || repeat.Progress.FilesEmbedded != 0 ||
+		repeat.Progress.ChunksReused != 0 || repeat.Progress.ChunksEmbedded != 0 {
+		t.Fatalf("repeat wrote work: %s", progressString(repeat))
+	}
+	repeatAfter := snapshotsForContent(t, harness, secondHarness.collectionName, legacyContent)
+	if !slices.Equal(repeatAfter, repeatBefore) {
+		t.Fatalf("repeat changed rows: before=%+v after=%+v", repeatBefore, repeatAfter)
+	}
+
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("load isolated config: %v", err)
+	}
+	cfg.EmbeddingModel = "known-unequal-model"
+	unequalService, err := semantic.NewService(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open unequal-model service: %v", err)
+	}
+	t.Cleanup(func() { _ = unequalService.Close(context.Background()) })
+	untaggedReuse, err := unequalService.LoadReuseVectorsForContents(
+		context.Background(),
+		harness.collectionName,
+		[]model.StoredChunk{{Content: legacyContent}},
+	)
+	if err != nil {
+		t.Fatalf("load untagged reuse under unequal current model: %v", err)
+	}
+	if len(untaggedReuse) != 1 {
+		t.Fatalf("untagged reuse vectors = %d, want 1", len(untaggedReuse))
+	}
+	knownUnequal, err := unequalService.LoadReuseVectorsForContents(
+		context.Background(),
+		harness.collectionName,
+		[]model.StoredChunk{{Content: "current identity catalog seed"}},
+	)
+	if err != nil {
+		t.Fatalf("load known unequal reuse: %v", err)
+	}
+	if len(knownUnequal) != 0 {
+		t.Fatalf("known unequal reuse vectors = %d, want 0", len(knownUnequal))
+	}
+	if count := reuseCatalogRowCount(t, harness); count != 1 {
+		t.Fatalf("reuse catalog rows after read-only legacy reuse = %d, want 1", count)
+	}
+}
+
+func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
+	harness := newHarness(t)
+	content := "two known model catalog sentinel"
+	seed := harness.upsert(
 		map[string][]*pb.ConversationDocument{
-			"legacy-second": {{
-				ConversationId: "legacy-second",
+			"model-a": {{
+				ConversationId: "model-a",
 				MessageIndex:   0,
 				Role:           "user",
-				Text:           legacyContent,
+				Text:           content,
 			}},
 		},
 		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
-	requireCompleted(t, second, "second corpus after legacy reuse")
-	if second.Progress.ChunksReused != 0 || second.Progress.ChunksEmbedded != 1 {
-		t.Fatalf(
-			"second corpus reused/embedded = %d/%d, want 0/1",
-			second.Progress.ChunksReused,
-			second.Progress.ChunksEmbedded,
+	requireCompleted(t, seed, "model A catalog seed")
+
+	cfgA, err := config.Default()
+	if err != nil {
+		t.Fatalf("load model A config: %v", err)
+	}
+	serviceA, err := semantic.NewService(context.Background(), cfgA)
+	if err != nil {
+		t.Fatalf("open model A service: %v", err)
+	}
+	t.Cleanup(func() { _ = serviceA.Close(context.Background()) })
+
+	cfgB := cfgA
+	cfgB.EmbeddingModel = "known-model-b"
+	serviceB, err := semantic.NewService(context.Background(), cfgB)
+	if err != nil {
+		t.Fatalf("open model B service: %v", err)
+	}
+	t.Cleanup(func() { _ = serviceB.Close(context.Background()) })
+	modelBPath := filepath.Join(harness.stateRoot, "model-b-"+randomID())
+	if err := serviceB.StageReindex(
+		context.Background(),
+		modelBPath,
+		[]model.StoredChunk{{Content: content, RelativePath: "model-b.txt"}},
+		semantic.Removal{},
+		nil,
+		map[string][]float32{},
+		semantic.StoreColumnSetCode,
+	); err != nil {
+		t.Fatalf("stage model B row: %v", err)
+	}
+	if err := serviceB.PromoteStaging(context.Background(), modelBPath); err != nil {
+		t.Fatalf("promote model B row: %v", err)
+	}
+	modelBCollection := serviceB.CollectionName(modelBPath)
+	t.Cleanup(func() { dropLiveCollection(t, harness, modelBCollection) })
+
+	models := reuseCatalogModels(t, harness, content)
+	wantModels := []string{"known-model-b", "text-embedding-3-small"}
+	if !slices.Equal(models, wantModels) {
+		t.Fatalf("catalog models = %v, want %v", models, wantModels)
+	}
+	for name, service := range map[string]*semantic.Service{
+		"model A": serviceA,
+		"model B": serviceB,
+	} {
+		reuse, loadErr := service.LoadReuseVectorsForContents(
+			context.Background(),
+			"",
+			[]model.StoredChunk{{Content: content}},
 		)
+		if loadErr != nil {
+			t.Fatalf("load %s catalog reuse: %v", name, loadErr)
+		}
+		if len(reuse) != 1 {
+			t.Fatalf("%s catalog reuse vectors = %d, want 1", name, len(reuse))
+		}
+	}
+
+	cfgC := cfgA
+	cfgC.EmbeddingModel = "known-model-c"
+	serviceC, err := semantic.NewService(context.Background(), cfgC)
+	if err != nil {
+		t.Fatalf("open model C service: %v", err)
+	}
+	t.Cleanup(func() { _ = serviceC.Close(context.Background()) })
+	knownUnequal, err := serviceC.LoadReuseVectorsForContents(
+		context.Background(),
+		"",
+		[]model.StoredChunk{{Content: content}},
+	)
+	if err != nil {
+		t.Fatalf("load model C catalog reuse: %v", err)
+	}
+	if len(knownUnequal) != 0 {
+		t.Fatalf("model C catalog reuse vectors = %d, want 0", len(knownUnequal))
 	}
 }
 
@@ -242,12 +438,13 @@ func insertLegacyRow(
 	harness *harness,
 	content string,
 	vector []float32,
-) {
+) string {
 	t.Helper()
+	rowID := "legacy-" + randomID()
 	result, err := harness.milvus.Insert(
 		context.Background(),
 		milvusclient.NewColumnBasedInsertOption(harness.collectionName).
-			WithVarcharColumn("id", []string{"legacy-" + randomID()}).
+			WithVarcharColumn("id", []string{rowID}).
 			WithVarcharColumn("content", []string{content}).
 			WithVarcharColumn("relativePath", []string{"conv/legacy/0/0"}).
 			WithInt64Column("startLine", []int64{0}).
@@ -272,6 +469,196 @@ func insertLegacyRow(
 	if err := flushTask.Await(context.Background()); err != nil {
 		t.Fatalf("await legacy row flush: %v", err)
 	}
+	return rowID
+}
+
+type storedRowSnapshot struct {
+	id                  string
+	content             string
+	relativePath        string
+	startLine           int64
+	endLine             int64
+	fileExtension       string
+	metadata            string
+	contentHash         string
+	contentHashKnown    bool
+	embeddingModel      string
+	embeddingModelKnown bool
+	vectorChecksum      string
+}
+
+func snapshotRow(
+	t *testing.T,
+	harness *harness,
+	collectionName string,
+	rowID string,
+) storedRowSnapshot {
+	t.Helper()
+	rows := queryRowSnapshots(
+		t,
+		harness,
+		collectionName,
+		fmt.Sprintf(`id == "%s"`, rowID),
+	)
+	if len(rows) != 1 {
+		t.Fatalf("row %s snapshots = %d, want 1", rowID, len(rows))
+	}
+	return rows[0]
+}
+
+func snapshotsForContent(
+	t *testing.T,
+	harness *harness,
+	collectionName string,
+	content string,
+) []storedRowSnapshot {
+	t.Helper()
+	return queryRowSnapshots(
+		t,
+		harness,
+		collectionName,
+		fmt.Sprintf(`content == "%s"`, strings.ReplaceAll(content, `"`, `\"`)),
+	)
+}
+
+func queryRowSnapshots(
+	t *testing.T,
+	harness *harness,
+	collectionName string,
+	filter string,
+) []storedRowSnapshot {
+	t.Helper()
+	result, err := harness.milvus.Query(
+		context.Background(),
+		milvusclient.NewQueryOption(collectionName).
+			WithFilter(filter).
+			WithOutputFields(
+				"id",
+				"content",
+				"relativePath",
+				"startLine",
+				"endLine",
+				"fileExtension",
+				"metadata",
+				"contentHash",
+				"embeddingModel",
+				"vector",
+			).
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		t.Fatalf("query row snapshots from %s: %v", collectionName, err)
+	}
+	idColumn := result.GetColumn("id")
+	contentColumn := result.GetColumn("content")
+	pathColumn := result.GetColumn("relativePath")
+	startLineColumn := result.GetColumn("startLine")
+	endLineColumn := result.GetColumn("endLine")
+	fileExtensionColumn := result.GetColumn("fileExtension")
+	metadataColumn := result.GetColumn("metadata")
+	hashColumn := result.GetColumn("contentHash")
+	modelColumn := result.GetColumn("embeddingModel")
+	vectorColumn := result.GetColumn("vector")
+	if idColumn == nil || contentColumn == nil || pathColumn == nil ||
+		startLineColumn == nil || endLineColumn == nil || fileExtensionColumn == nil ||
+		metadataColumn == nil || vectorColumn == nil {
+		t.Fatal("row snapshot query omitted a required column")
+	}
+	rows := make([]storedRowSnapshot, 0, result.ResultCount)
+	for rowIndex := range result.ResultCount {
+		rowID, idErr := idColumn.GetAsString(rowIndex)
+		if idErr != nil {
+			t.Fatalf("read row id at %d: %v", rowIndex, idErr)
+		}
+		content, contentErr := contentColumn.GetAsString(rowIndex)
+		if contentErr != nil {
+			t.Fatalf("read row content at %d: %v", rowIndex, contentErr)
+		}
+		relativePath, pathErr := pathColumn.GetAsString(rowIndex)
+		if pathErr != nil {
+			t.Fatalf("read row path at %d: %v", rowIndex, pathErr)
+		}
+		startLine, startLineErr := startLineColumn.GetAsInt64(rowIndex)
+		if startLineErr != nil {
+			t.Fatalf("read row start line at %d: %v", rowIndex, startLineErr)
+		}
+		endLine, endLineErr := endLineColumn.GetAsInt64(rowIndex)
+		if endLineErr != nil {
+			t.Fatalf("read row end line at %d: %v", rowIndex, endLineErr)
+		}
+		fileExtension, fileExtensionErr := fileExtensionColumn.GetAsString(rowIndex)
+		if fileExtensionErr != nil {
+			t.Fatalf("read row file extension at %d: %v", rowIndex, fileExtensionErr)
+		}
+		metadata, metadataErr := metadataColumn.GetAsString(rowIndex)
+		if metadataErr != nil {
+			t.Fatalf("read row metadata at %d: %v", rowIndex, metadataErr)
+		}
+		contentHash, contentHashKnown := nullableSnapshotString(t, hashColumn, rowIndex)
+		embeddingModel, embeddingModelKnown := nullableSnapshotString(t, modelColumn, rowIndex)
+		vectorValue, vectorErr := vectorColumn.Get(rowIndex)
+		if vectorErr != nil {
+			t.Fatalf("read row vector at %d: %v", rowIndex, vectorErr)
+		}
+		vector, ok := vectorValue.(entity.FloatVector)
+		if !ok {
+			t.Fatalf("row vector at %d has type %T", rowIndex, vectorValue)
+		}
+		rows = append(rows, storedRowSnapshot{
+			id:                  rowID,
+			content:             content,
+			relativePath:        relativePath,
+			startLine:           startLine,
+			endLine:             endLine,
+			fileExtension:       fileExtension,
+			metadata:            metadata,
+			contentHash:         contentHash,
+			contentHashKnown:    contentHashKnown,
+			embeddingModel:      embeddingModel,
+			embeddingModelKnown: embeddingModelKnown,
+			vectorChecksum:      checksumVector(vector),
+		})
+	}
+	slices.SortFunc(rows, func(left storedRowSnapshot, right storedRowSnapshot) int {
+		return strings.Compare(left.id, right.id)
+	})
+	return rows
+}
+
+func nullableSnapshotString(
+	t *testing.T,
+	field interface {
+		IsNull(int) (bool, error)
+		GetAsString(int) (string, error)
+	},
+	rowIndex int,
+) (string, bool) {
+	t.Helper()
+	if field == nil {
+		return "", false
+	}
+	isNull, err := field.IsNull(rowIndex)
+	if err != nil {
+		t.Fatalf("read nullable marker at %d: %v", rowIndex, err)
+	}
+	if isNull {
+		return "", false
+	}
+	value, err := field.GetAsString(rowIndex)
+	if err != nil {
+		t.Fatalf("read nullable string at %d: %v", rowIndex, err)
+	}
+	return value, true
+}
+
+func checksumVector(vector entity.FloatVector) string {
+	hash := sha256.New()
+	buffer := make([]byte, 4)
+	for _, value := range vector {
+		binary.LittleEndian.PutUint32(buffer, math.Float32bits(value))
+		_, _ = hash.Write(buffer)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func reuseCatalogRowCount(t *testing.T, harness *harness) int64 {
@@ -294,6 +681,36 @@ func reuseCatalogRowCount(t *testing.T, harness *harness) int64 {
 		t.Fatalf("read reuse catalog count: %v", err)
 	}
 	return count
+}
+
+func reuseCatalogModels(t *testing.T, harness *harness, content string) []string {
+	t.Helper()
+	contentHash := semantic.ContentVectorKey(content)
+	result, err := harness.milvus.Query(
+		context.Background(),
+		milvusclient.NewQueryOption(harness.reuseCatalogName).
+			WithFilter(fmt.Sprintf(`contentHash == "%s"`, contentHash)).
+			WithOutputFields("embeddingModel").
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		t.Fatalf("query reuse catalog models: %v", err)
+	}
+	modelColumn := result.GetColumn("embeddingModel")
+	if modelColumn == nil && result.ResultCount > 0 {
+		t.Fatal("reuse catalog model query returned no model column")
+	}
+	models := make([]string, 0, result.ResultCount)
+	for rowIndex := range result.ResultCount {
+		modelName, known := nullableSnapshotString(t, modelColumn, rowIndex)
+		if !known {
+			models = append(models, "")
+			continue
+		}
+		models = append(models, modelName)
+	}
+	slices.Sort(models)
+	return models
 }
 
 func dropLiveCollection(t *testing.T, harness *harness, collectionName string) {

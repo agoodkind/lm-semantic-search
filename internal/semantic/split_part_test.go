@@ -40,6 +40,7 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 	}
 	var capturedOption milvusclient.InsertOption
 	service := &Service{
+		cfg: config.Config{EmbeddingModel: "model-a"},
 		insertRows: func(
 			_ context.Context,
 			option milvusclient.InsertOption,
@@ -51,9 +52,9 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 	migration := &splitPartMigration{}
 	migration.once.Do(func() {})
 	service.ensuredSplitPartColumns.Store(collectionName, migration)
-	contentKeyMigration := &contentVectorKeyMigration{}
-	contentKeyMigration.once.Do(func() {})
-	service.ensuredContentVectorKeyColumns.Store(collectionName, contentKeyMigration)
+	reuseIdentityMigration := &reuseIdentityMigration{}
+	reuseIdentityMigration.once.Do(func() {})
+	service.ensuredReuseIdentityColumns.Store(collectionName, reuseIdentityMigration)
 
 	err := service.insertBatch(
 		context.Background(),
@@ -84,18 +85,29 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 		ResultCount: int(request.GetNumRows()),
 		Fields:      fields,
 	}
-	contentKeys := resultSet.GetColumn(contentVectorKeyFieldName)
-	if contentKeys == nil {
-		t.Fatal("inserted row has no content vector key column")
+	contentHashes := resultSet.GetColumn(contentHashFieldName)
+	if contentHashes == nil {
+		t.Fatal("inserted row has no content hash column")
+	}
+	embeddingModels := resultSet.GetColumn(embeddingModelFieldName)
+	if embeddingModels == nil {
+		t.Fatal("inserted row has no embedding model column")
 	}
 	for index, chunk := range input {
-		got, keyErr := contentKeys.GetAsString(index)
+		got, keyErr := contentHashes.GetAsString(index)
 		if keyErr != nil {
-			t.Fatalf("read content vector key %d: %v", index, keyErr)
+			t.Fatalf("read content hash %d: %v", index, keyErr)
 		}
-		want := contentVectorStorageKey(service.cfg, chunk.Content)
+		want := contentHash(chunk.Content)
 		if got != want {
-			t.Fatalf("content vector key %d = %q, want %q", index, got, want)
+			t.Fatalf("content hash %d = %q, want %q", index, got, want)
+		}
+		modelName, modelErr := embeddingModels.GetAsString(index)
+		if modelErr != nil {
+			t.Fatalf("read embedding model %d: %v", index, modelErr)
+		}
+		if modelName != "model-a" {
+			t.Fatalf("embedding model %d = %q, want model-a", index, modelName)
 		}
 	}
 
@@ -114,24 +126,43 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 	}
 }
 
-func TestContentVectorStorageKeyIncludesEmbedderIdentity(t *testing.T) {
+func TestContentHashContainsOnlyNormalizedExactContent(t *testing.T) {
 	t.Parallel()
 
-	first := config.Config{
-		EmbeddingProvider:  "OpenAI",
-		EmbeddingModel:     "model-a",
-		EmbeddingDimension: 3,
-		OpenAIBaseURL:      "https://embedder-a.example/v1",
+	want := contentHash("same content")
+	if got := contentHash("same content"); got != want {
+		t.Fatalf("content hash is unstable: got %q, want %q", got, want)
 	}
-	second := first
-	second.EmbeddingModel = "model-b"
+	if want == contentHash("different content") {
+		t.Fatal("different exact content shared a content storage key")
+	}
+	invalidUTF8 := string([]byte{'x', 0xff})
+	if contentHash(invalidUTF8) != contentHash("x\uFFFD") {
+		t.Fatal("invalid UTF-8 and its normalized exact content have different keys")
+	}
+}
 
-	firstKey := contentVectorStorageKey(first, "same content")
-	if firstKey != contentVectorStorageKey(first, "same content") {
-		t.Fatal("content vector storage key is unstable")
+func TestEmbeddingModelCompatibilityRejectsOnlyKnownUnequalNames(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		stored  string
+		current string
+		want    bool
+	}{
+		{name: "both absent", stored: "", current: "", want: true},
+		{name: "stored absent", stored: "", current: "model-a", want: true},
+		{name: "current absent", stored: "model-a", current: "", want: true},
+		{name: "equal known", stored: "model-a", current: "model-a", want: true},
+		{name: "unequal known", stored: "model-a", current: "model-b", want: false},
 	}
-	if firstKey == contentVectorStorageKey(second, "same content") {
-		t.Fatal("different embedding models share a content vector storage key")
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := embeddingModelsCompatible(testCase.stored, testCase.current); got != testCase.want {
+				t.Fatalf("embeddingModelsCompatible(%q, %q) = %t, want %t", testCase.stored, testCase.current, got, testCase.want)
+			}
+		})
 	}
 }
 
@@ -165,7 +196,8 @@ func testInsertCollection(collectionName string, dimension int64) *entity.Collec
 			WithName(metadataFieldName).
 			WithDataType(entity.FieldTypeVarChar).
 			WithMaxLength(65535)).
-		WithField(contentVectorKeyField()).
+		WithField(contentHashField()).
+		WithField(embeddingModelField()).
 		WithField(splitPartField()).
 		WithField(entity.NewField().
 			WithName(denseVectorFieldName).
@@ -189,9 +221,9 @@ func TestInsertBatchRejectsPartialInsertCount(t *testing.T) {
 	migration := &splitPartMigration{}
 	migration.once.Do(func() {})
 	service.ensuredSplitPartColumns.Store(collectionName, migration)
-	contentKeyMigration := &contentVectorKeyMigration{}
-	contentKeyMigration.once.Do(func() {})
-	service.ensuredContentVectorKeyColumns.Store(collectionName, contentKeyMigration)
+	reuseIdentityMigration := &reuseIdentityMigration{}
+	reuseIdentityMigration.once.Do(func() {})
+	service.ensuredReuseIdentityColumns.Store(collectionName, reuseIdentityMigration)
 	chunks := []model.StoredChunk{
 		{Content: "first", RelativePath: "first.go"},
 		{Content: "second", RelativePath: "second.go"},
@@ -361,7 +393,7 @@ func TestInvalidateCollectionCachesClearsSchemaState(t *testing.T) {
 	service := &Service{}
 	service.ensuredConvColumns.Store(collectionName, "conversation")
 	service.ensuredSplitPartColumns.Store(collectionName, "split-part")
-	service.ensuredContentVectorKeyColumns.Store(collectionName, "content-key")
+	service.ensuredReuseIdentityColumns.Store(collectionName, "reuse-identity")
 	service.ensuredMmapEnabled.Store(collectionName, "mmap")
 	service.ensuredBackfill.Store(collectionName, "backfill")
 
@@ -370,7 +402,7 @@ func TestInvalidateCollectionCachesClearsSchemaState(t *testing.T) {
 	caches := []*sync.Map{
 		&service.ensuredConvColumns,
 		&service.ensuredSplitPartColumns,
-		&service.ensuredContentVectorKeyColumns,
+		&service.ensuredReuseIdentityColumns,
 		&service.ensuredMmapEnabled,
 		&service.ensuredBackfill,
 	}

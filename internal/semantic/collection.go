@@ -33,6 +33,7 @@ const (
 	conversationRoleFieldMaxLength = 64
 	conversationProviderMaxLength  = 32
 	conversationWorkspaceMaxLength = 1024
+	embeddingModelFieldMaxLength   = 65535
 )
 
 // isConversationCollection reports whether a collection name addresses a
@@ -109,11 +110,19 @@ func splitPartField() *entity.Field {
 		WithNullable(true)
 }
 
-func contentVectorKeyField() *entity.Field {
+func contentHashField() *entity.Field {
 	return entity.NewField().
-		WithName(contentVectorKeyFieldName).
+		WithName(contentHashFieldName).
 		WithDataType(entity.FieldTypeVarChar).
 		WithMaxLength(64).
+		WithNullable(true)
+}
+
+func embeddingModelField() *entity.Field {
+	return entity.NewField().
+		WithName(embeddingModelFieldName).
+		WithDataType(entity.FieldTypeVarChar).
+		WithMaxLength(embeddingModelFieldMaxLength).
 		WithNullable(true)
 }
 
@@ -137,7 +146,8 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		WithField(entity.NewField().WithName(endLineFieldName).WithDataType(entity.FieldTypeInt64)).
 		WithField(entity.NewField().WithName(fileExtensionFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(32)).
 		WithField(entity.NewField().WithName(metadataFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
-		WithField(contentVectorKeyField()).
+		WithField(contentHashField()).
+		WithField(embeddingModelField()).
 		WithField(splitPartField()).
 		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)))
 
@@ -156,7 +166,7 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 	// one mistake that breaks every new-collection build on Milvus 2.6.
 	indexOptions := []milvusclient.CreateIndexOption{
 		milvusclient.NewCreateIndexOption(collectionName, denseVectorFieldName, index.NewAutoIndex(entity.COSINE)),
-		milvusclient.NewCreateIndexOption(collectionName, contentVectorKeyFieldName, index.NewInvertedIndex()),
+		milvusclient.NewCreateIndexOption(collectionName, contentHashFieldName, index.NewInvertedIndex()),
 	}
 
 	if service.cfg.HybridMode {
@@ -192,37 +202,37 @@ type splitPartMigration struct {
 	err  error
 }
 
-type contentVectorKeyMigration struct {
+type reuseIdentityMigration struct {
 	once sync.Once
 	err  error
 }
 
-func (service *Service) ensureContentVectorKeyColumnOnce(
+func (service *Service) ensureReuseIdentityColumnsOnce(
 	ctx context.Context,
 	collectionName string,
 ) error {
-	loaded, _ := service.ensuredContentVectorKeyColumns.LoadOrStore(
+	loaded, _ := service.ensuredReuseIdentityColumns.LoadOrStore(
 		collectionName,
-		&contentVectorKeyMigration{once: sync.Once{}, err: nil},
+		&reuseIdentityMigration{once: sync.Once{}, err: nil},
 	)
-	migration, ok := loaded.(*contentVectorKeyMigration)
+	migration, ok := loaded.(*reuseIdentityMigration)
 	if !ok {
 		return fmt.Errorf(
-			"content vector key migration guard for %s has unexpected type %T",
+			"reuse identity migration guard for %s has unexpected type %T",
 			collectionName,
 			loaded,
 		)
 	}
 	migration.once.Do(func() {
-		migration.err = service.ensureContentVectorKeyColumn(ctx, collectionName)
+		migration.err = service.ensureReuseIdentityColumns(ctx, collectionName)
 		if migration.err != nil {
-			service.ensuredContentVectorKeyColumns.CompareAndDelete(collectionName, loaded)
+			service.ensuredReuseIdentityColumns.CompareAndDelete(collectionName, loaded)
 		}
 	})
 	return migration.err
 }
 
-func (service *Service) ensureContentVectorKeyColumn(
+func (service *Service) ensureReuseIdentityColumns(
 	ctx context.Context,
 	collectionName string,
 ) error {
@@ -233,34 +243,34 @@ func (service *Service) ensureContentVectorKeyColumn(
 	if err != nil {
 		slog.ErrorContext(
 			ctx,
-			"describe collection for content vector key failed",
+			"describe collection for reuse identity failed",
 			"collection", collectionName,
 			"err", err,
 		)
-		return fmt.Errorf("describe collection %s for content vector key: %w", collectionName, err)
+		return fmt.Errorf("describe collection %s for reuse identity: %w", collectionName, err)
 	}
-	fieldExists := false
+	existingFields := make(map[string]struct{}, len(collection.Schema.Fields))
 	for _, field := range collection.Schema.Fields {
-		if field.Name == contentVectorKeyFieldName {
-			fieldExists = true
-			break
-		}
+		existingFields[field.Name] = struct{}{}
 	}
-	if !fieldExists {
+	for _, field := range []*entity.Field{contentHashField(), embeddingModelField()} {
+		if _, found := existingFields[field.Name]; found {
+			continue
+		}
 		if err := service.milvus.AddCollectionField(
 			ctx,
-			milvusclient.NewAddCollectionFieldOption(collectionName, contentVectorKeyField()),
+			milvusclient.NewAddCollectionFieldOption(collectionName, field),
 		); err != nil {
-			return fmt.Errorf("add content vector key column to %s: %w", collectionName, err)
+			return fmt.Errorf("add %s column to %s: %w", field.Name, collectionName, err)
 		}
 	}
 	indexes, err := service.milvus.ListIndexes(
 		ctx,
 		milvusclient.NewListIndexOption(collectionName).
-			WithFieldName(contentVectorKeyFieldName),
+			WithFieldName(contentHashFieldName),
 	)
 	if err != nil {
-		return fmt.Errorf("list content vector key indexes on %s: %w", collectionName, err)
+		return fmt.Errorf("list content hash indexes on %s: %w", collectionName, err)
 	}
 	if len(indexes) > 0 {
 		return nil
@@ -269,15 +279,15 @@ func (service *Service) ensureContentVectorKeyColumn(
 		ctx,
 		milvusclient.NewCreateIndexOption(
 			collectionName,
-			contentVectorKeyFieldName,
+			contentHashFieldName,
 			index.NewInvertedIndex(),
 		),
 	)
 	if err != nil {
-		return fmt.Errorf("create content vector key index on %s: %w", collectionName, err)
+		return fmt.Errorf("create content hash index on %s: %w", collectionName, err)
 	}
 	if err := task.Await(ctx); err != nil {
-		return fmt.Errorf("await content vector key index on %s: %w", collectionName, err)
+		return fmt.Errorf("await content hash index on %s: %w", collectionName, err)
 	}
 	return nil
 }

@@ -2470,6 +2470,49 @@ func TestConversationDeltaLoadsReuseAcrossWholeCollection(t *testing.T) {
 	}
 }
 
+func TestConversationForceSkipsWholeStoreReuse(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, _ := newTestManager(t)
+	fake := &fakeSemantic{
+		loadReuseForContents: func(
+			context.Context,
+			string,
+			[]model.StoredChunk,
+		) (map[string][]float32, error) {
+			t.Fatal("forced conversation loaded whole-store reuse")
+			return nil, nil
+		},
+	}
+	manager.semantic = fake
+	state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
+		result: indexer.OneFileResult{
+			Chunks: []model.StoredChunk{{
+				Content:        "forced content",
+				RelativePath:   "conv/forced/0",
+				ConversationID: "forced",
+			}},
+			FileHash:     "fp-forced",
+			ReuseVectors: map[string][]float32{},
+		},
+		reuse: itemReuseSource{Scope: itemReuseScopeNone},
+	})
+	state.itemReuseEnabled = true
+	result := emptyOverrideResult()
+
+	outcome := manager.handleChangedFile(
+		context.Background(),
+		model.Job{ID: "job-forced-no-reuse"},
+		state,
+		"forced",
+		&result,
+	)
+
+	if outcome.fallback || outcome.handled || !outcome.progressed {
+		t.Fatalf("outcome = %+v, want progressed", outcome)
+	}
+}
+
 type oneFileResultOverrideSource struct {
 	result          indexer.OneFileResult
 	fallbackRemoval semantic.Removal

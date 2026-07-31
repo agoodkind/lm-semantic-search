@@ -10,7 +10,7 @@ const (
 	boolBytes                         = 1
 	float32Bytes                      = 4
 	int64Bytes                        = 8
-	insertRowProtobufFramingAllowance = 40
+	insertRowProtobufFramingAllowance = 48
 	insertBatchEstimatedByteBudget    = 192 << 20
 )
 
@@ -104,6 +104,7 @@ func packChunksByEstimatedInsertBytes(
 	vectorDimension int,
 	byteBudget int,
 	columnSet StoreColumnSet,
+	embeddingModel string,
 ) [][]model.StoredChunk {
 	if vectorDimension < 0 {
 		vectorDimension = 0
@@ -116,7 +117,7 @@ func packChunksByEstimatedInsertBytes(
 	current := make([]model.StoredChunk, 0)
 	currentBytes := 0
 	for _, chunk := range chunks {
-		rowBytes := estimatedInsertRowBytes(chunk, vectorDimension, columnSet)
+		rowBytes := estimatedInsertRowBytes(chunk, vectorDimension, columnSet, embeddingModel)
 		overBudget := currentBytes+rowBytes > byteBudget
 		if len(current) > 0 && overBudget {
 			groups = append(groups, current)
@@ -134,24 +135,28 @@ func packChunksByEstimatedInsertBytes(
 
 // estimatedInsertRowBytes charges the raw values in every column insertBatch
 // sends. The framing allowance covers the row-scaling protobuf overhead that is
-// not part of those values. Ten schema-valid string columns need at most 28
+// not part of those values. Twelve schema-valid string columns need at most 32
 // bytes for their repeated-field tags and length varints. Four int64 columns
 // can each need two bytes beyond their eight-byte raw width when encoded as
-// varints. Rounding that 36-byte maximum to 40 leaves four bytes per row for
+// varints. Rounding that 40-byte maximum to 48 leaves eight bytes per row for
 // implementation framing. Per-column and per-request wrappers do not scale
 // with rows and fit inside the 64 MiB gap to the transport limit.
 func estimatedInsertRowBytes(
 	chunk model.StoredChunk,
 	vectorDimension int,
 	columnSet StoreColumnSet,
+	embeddingModel string,
 ) int {
 	content, _ := sanitizeUTF8(chunk.Content)
 	relativePath, _ := sanitizeUTF8(chunk.RelativePath)
 	fileExtension, _ := sanitizeUTF8(chunk.FileExtension)
 	metadataValue, _ := sanitizeUTF8(encodeMetadata(chunk))
+	normalizedModel, _ := sanitizeUTF8(embeddingModel)
 
 	rowBytes := len(generateID(chunk, 0)) +
 		len(content) +
+		64 +
+		len(normalizedModel) +
 		len(relativePath) +
 		int64Bytes +
 		int64Bytes +
