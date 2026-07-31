@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/model"
-	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
 // TestNoTextWritesNoTextRow proves a delivered message carrying no text stores
@@ -112,95 +111,5 @@ func TestWhitespaceOnlyTextWritesNoTextRow(t *testing.T) {
 				t.Fatalf("text %q stored a chunk with nothing to retrieve at %q", text, chunk.RelativePath)
 			}
 		}
-	}
-}
-
-// TestTextFreeMessageWithStoredDerivedRowsSettles is the convergence guarantee.
-//
-// A message with no text now stores no base row, so the store holds only its
-// derived rows. Reading those back registers the message with the role they
-// carry and an empty text, which is exactly what the delivered document says, so
-// the comparison finds no difference and the sync does nothing.
-//
-// Without that registration the message would be absent from the stored state,
-// read as new, re-sent, and its derived rows read as orphans to delete, so every
-// sync would delete and re-embed them for as long as the conversation exists.
-func TestTextFreeMessageWithStoredDerivedRowsSettles(t *testing.T) {
-	t.Parallel()
-
-	document := model.ConversationDocument{
-		ConversationID: "claude:a",
-		MessageIndex:   4,
-		Role:           "assistant",
-		Text:           "",
-		Tools: []model.ConversationToolCall{
-			{Name: "Bash", Display: "ls -la", LangHint: "bash", Output: "total 0"},
-		},
-	}
-
-	chunks, err := conversationDocumentsToStoredChunks(context.Background(), []model.ConversationDocument{document})
-	if err != nil {
-		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
-	}
-
-	// Build the stored state the way the loader does: from the chunks that were
-	// actually written, not from the document, so a drift between the two shows
-	// up here rather than passing silently.
-	storedDerived := map[string]string{}
-	storedRole := ""
-	storedText := strings.Builder{}
-	for _, chunk := range chunks {
-		if isDerivedConversationChunk(chunk) {
-			storedDerived[chunk.RelativePath] = semantic.ContentVectorKey(chunk.Content)
-			if storedRole == "" {
-				storedRole = chunk.Role
-			}
-			continue
-		}
-		storedText.WriteString(chunk.Content)
-		storedRole = chunk.Role
-	}
-	stored := semantic.StoredMessageState{
-		Role:              storedRole,
-		Text:              storedText.String(),
-		HasDerivedContent: len(storedDerived) > 0,
-	}
-
-	matches := conversationDocumentMatchesStored(
-		"claude:a",
-		document,
-		stored,
-		storedDerived,
-	)
-	if !matches {
-		t.Fatalf(
-			"a text-free message with its own stored derived rows did not match, so every sync would re-do it: stored=%#v derived=%v",
-			stored,
-			storedDerived,
-		)
-	}
-}
-
-// TestTextFreeMessageWithNoStoredRowsIsSentOnce covers the first delivery, where
-// the store holds nothing for the message and it must be sent.
-func TestTextFreeMessageWithNoStoredRowsIsSentOnce(t *testing.T) {
-	t.Parallel()
-
-	document := model.ConversationDocument{
-		ConversationID: "claude:a",
-		MessageIndex:   4,
-		Role:           "assistant",
-		Text:           "",
-		Tools:          []model.ConversationToolCall{{Name: "Bash", Display: "ls -la", LangHint: "bash"}},
-	}
-
-	matches := conversationDocumentMatchesStored(
-		"claude:a",
-		document,
-		semantic.StoredMessageState{Role: "assistant", Text: "", HasDerivedContent: false},
-		map[string]string{},
-	)
-	if matches {
-		t.Fatal("a text-free message whose derived rows are absent matched, so it would never be stored")
 	}
 }

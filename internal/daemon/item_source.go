@@ -436,13 +436,13 @@ func (source conversationItemSource) columnSet() semantic.StoreColumnSet {
 
 // conversationNeedsDerivedWork reports whether a delivered conversation still has
 // derived (tool or thinking) rows missing from the store, judged CHEAPLY from
-// message metadata and stored derived-path presence alone. A tool-carrying
-// message expects at least one stored row under convtool/<id>/<msgIdx>/, and a
-// thinking-carrying message expects a stored row at convthink/<id>/<msgIdx> or
-// under its multipart prefix. It never regenerates chunks, so a fully present
-// conversation is classified as a no-op without paying the per-item embed cost.
-// A message carrying no tools and no thinking expects no derived rows, so a
-// conversation of only such messages needs no work.
+// message metadata and stored derived-path presence alone. Each tool call expects
+// a stored row at convtool/<id>/<msgIdx>/<toolIdx> or under its multipart prefix,
+// and a thinking-carrying message expects a stored row at
+// convthink/<id>/<msgIdx> or under its multipart prefix. It never regenerates
+// chunks, so a fully present conversation is classified as a no-op without paying
+// the per-item embed cost. A message carrying no tools and no thinking expects no
+// derived rows, so a conversation of only such messages needs no work.
 //
 // It judges PRESENCE only: a message whose expected derived prefix is present
 // needs no work, regardless of the pipeline version that produced the stored row.
@@ -450,9 +450,9 @@ func (source conversationItemSource) columnSet() semantic.StoreColumnSet {
 // not this backfill classifier's.
 func conversationNeedsDerivedWork(conversationID string, documents []model.ConversationDocument, storedDerivedPaths map[string]string) bool {
 	for _, document := range documents {
-		if len(document.Tools) > 0 {
-			toolPrefix := conversationToolMessagePath(conversationID, document.MessageIndex) + "/"
-			if !derivedPrefixPresent(storedDerivedPaths, toolPrefix, "") {
+		for toolIndex := range document.Tools {
+			toolPath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
+			if !derivedPrefixPresent(storedDerivedPaths, toolPath+"/", toolPath) {
 				return true
 			}
 		}
@@ -528,8 +528,18 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 
 	batch, err := source.loadDerivedBatch(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "load conversation derived batch failed; falling back to full conversation reindex", "conversation_id", conversationID, "collection", source.collectionName, "err", err)
-		return source.fullConversationResult(ctx, conversationID, documents, true)
+		slog.WarnContext(
+			ctx,
+			"load stored conversation rows failed",
+			"conversation_id", conversationID,
+			"collection", source.collectionName,
+			"err", err,
+		)
+		return indexer.OneFileResult{}, fmt.Errorf(
+			"load stored conversation rows for %q: %w",
+			conversationID,
+			err,
+		)
 	}
 	stored := batch.Rows[conversationID]
 	if stored.Messages == nil {
@@ -547,8 +557,7 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 		batchReuse = map[string][]float32{}
 	}
 
-	delta := diffConversationMessages(ctx, conversationID, documents, stored)
-	chunks, err := conversationDocumentsToStoredChunks(ctx, delta.documents, source.chunkByteBudget)
+	chunks, err := conversationDocumentsToStoredChunks(ctx, documents, source.chunkByteBudget)
 	if err != nil {
 		return indexer.OneFileResult{
 			Chunks:          nil,
@@ -562,6 +571,7 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 			ReuseVectors:    nil,
 		}, err
 	}
+	chunks = missingConversationFamilyChunks(conversationID, documents, chunks, stored)
 	return indexer.OneFileResult{
 		Chunks:          chunks,
 		FileHash:        source.manifest[conversationID],
@@ -569,10 +579,57 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 		SkipReason:      indexer.SkipNone,
 		Removed:         false,
 		RemovalOverride: true,
-		RemovalPaths:    delta.removalPaths,
-		RemovalPrefixes: delta.removalPrefixes,
+		RemovalPaths:    nil,
+		RemovalPrefixes: nil,
 		ReuseVectors:    batchReuse,
 	}, nil
+}
+
+func missingConversationFamilyChunks(
+	conversationID string,
+	documents []model.ConversationDocument,
+	chunks []model.StoredChunk,
+	stored semantic.ConversationStoredRows,
+) []model.StoredChunk {
+	presentDerivedFamilies := make(map[string]struct{})
+	for _, document := range documents {
+		for toolIndex := range document.Tools {
+			toolPath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
+			if derivedPrefixPresent(stored.DerivedPaths, toolPath+"/", toolPath) {
+				presentDerivedFamilies[toolPath] = struct{}{}
+			}
+		}
+		thinkingPath := conversationThinkingPath(conversationID, document.MessageIndex)
+		if derivedPrefixPresent(stored.DerivedPaths, thinkingPath+"/", thinkingPath) {
+			presentDerivedFamilies[thinkingPath] = struct{}{}
+		}
+	}
+
+	missing := make([]model.StoredChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if strings.HasPrefix(chunk.RelativePath, "conv/"+conversationID+"/") {
+			message, found := stored.Messages[chunk.MessageIndex]
+			if found && conversationStorableText(message.Text) != "" {
+				continue
+			}
+			missing = append(missing, chunk)
+			continue
+		}
+		if conversationChunkFamilyPresent(chunk.RelativePath, presentDerivedFamilies) {
+			continue
+		}
+		missing = append(missing, chunk)
+	}
+	return missing
+}
+
+func conversationChunkFamilyPresent(relativePath string, presentFamilies map[string]struct{}) bool {
+	for familyPath := range presentFamilies {
+		if relativePath == familyPath || strings.HasPrefix(relativePath, familyPath+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (source conversationItemSource) fullConversationResult(ctx context.Context, conversationID string, documents []model.ConversationDocument, removalOverride bool) (indexer.OneFileResult, error) {

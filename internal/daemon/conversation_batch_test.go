@@ -24,16 +24,22 @@ func TestConversationIndexOneInsertsMissingTargetWithSharedVector(t *testing.T) 
 		MessageIndex:   0,
 		Role:           "assistant",
 		Text:           "answer b",
-		Thinking:       sharedThinking,
+		Tools: []model.ConversationToolCall{
+			{Name: "Read", Display: "/tmp/already-stored.txt"},
+		},
+		Thinking: sharedThinking,
 	}
+	toolPath := conversationToolCallPath(conversationID, 0, 0)
 	// The base message matches, but the derived target row (convthink/conv-b/0) is
 	// absent for this conversation. The shared thinking vector is present in the
 	// batch reuse from a different conversation.
 	batch := semantic.ConversationBatchState{
 		Rows: map[string]semantic.ConversationStoredRows{
 			conversationID: {
-				Messages:     map[int32]semantic.StoredMessageState{0: {Role: "assistant", Text: "answer b"}},
-				DerivedPaths: map[string]string{},
+				Messages: map[int32]semantic.StoredMessageState{0: {Role: "assistant", Text: "answer b"}},
+				DerivedPaths: map[string]string{
+					toolPath: semantic.ContentVectorKey("already stored tool"),
+				},
 			},
 		},
 		Reuse: map[string][]float32{
@@ -58,17 +64,233 @@ func TestConversationIndexOneInsertsMissingTargetWithSharedVector(t *testing.T) 
 	}
 
 	thinkingPath := conversationThinkingPath(conversationID, 0)
-	foundTarget := false
-	for _, chunk := range result.Chunks {
-		if chunk.RelativePath == thinkingPath && chunk.Content == sharedThinking {
-			foundTarget = true
-		}
-	}
-	if !foundTarget {
-		t.Fatalf("missing target row %q not re-emitted: %+v", thinkingPath, result.Chunks)
+	if len(result.Chunks) != 1 || result.Chunks[0].RelativePath != thinkingPath || result.Chunks[0].Content != sharedThinking {
+		t.Fatalf("chunks = %+v, want only missing thinking %q", result.Chunks, thinkingPath)
 	}
 	if result.ReuseVectors[semantic.ContentVectorKey(sharedThinking)] == nil {
 		t.Fatalf("shared thinking vector not offered for reuse: %+v", result.ReuseVectors)
+	}
+}
+
+func TestConversationIndexOnePreservesChangedStoredBase(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-changed-base"
+	document := model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   1,
+		Role:           "assistant",
+		Text:           "new parser output",
+	}
+	batch := semantic.ConversationBatchState{
+		Rows: map[string]semantic.ConversationStoredRows{
+			conversationID: {
+				Messages: map[int32]semantic.StoredMessageState{
+					1: {Role: "assistant", Text: "stored usable output"},
+				},
+				DerivedPaths: map[string]string{},
+			},
+		},
+		Reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-changed"},
+		[]model.ConversationDocument{document},
+		&testConversationRowReader{batch: &batch},
+		absenceRetain,
+		false,
+		false,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+	if len(result.Chunks) != 0 {
+		t.Fatalf("changed stored base was re-emitted: %+v", result.Chunks)
+	}
+	if len(result.RemovalPaths) != 0 || len(result.RemovalPrefixes) != 0 {
+		t.Fatalf("changed stored base was removed: %v / %v", result.RemovalPaths, result.RemovalPrefixes)
+	}
+}
+
+func TestConversationIndexOneFillsBlankStoredBaseWithoutRemovingIt(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-blank-base"
+	document := model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   2,
+		Role:           "assistant",
+		Text:           "usable parser output",
+	}
+	batch := semantic.ConversationBatchState{
+		Rows: map[string]semantic.ConversationStoredRows{
+			conversationID: {
+				Messages: map[int32]semantic.StoredMessageState{
+					2: {Role: "assistant", Text: "  \n"},
+				},
+				DerivedPaths: map[string]string{},
+			},
+		},
+		Reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-blank"},
+		[]model.ConversationDocument{document},
+		&testConversationRowReader{batch: &batch},
+		absenceRetain,
+		false,
+		false,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+	wantPath := conversationRelativePath(conversationID, 2, 0, false)
+	if len(result.Chunks) != 1 || result.Chunks[0].RelativePath != wantPath {
+		t.Fatalf("chunks = %+v, want only usable base %q", result.Chunks, wantPath)
+	}
+	if len(result.RemovalPaths) != 0 || len(result.RemovalPrefixes) != 0 {
+		t.Fatalf("blank stored base was removed: %v / %v", result.RemovalPaths, result.RemovalPrefixes)
+	}
+}
+
+func TestConversationIndexOneAddsOnlyMissingToolFamily(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-missing-tool"
+	document := model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   3,
+		Role:           "assistant",
+		Text:           "answer",
+		Tools: []model.ConversationToolCall{
+			{Name: "read", Output: "already stored"},
+			{Name: "grep", Output: "new result"},
+		},
+		Thinking: "already stored reasoning",
+	}
+	firstToolPath := conversationToolCallPath(conversationID, 3, 0)
+	thinkingPath := conversationThinkingPath(conversationID, 3)
+	batch := semantic.ConversationBatchState{
+		Rows: map[string]semantic.ConversationStoredRows{
+			conversationID: {
+				Messages: map[int32]semantic.StoredMessageState{
+					3: {Role: "assistant", Text: "answer"},
+				},
+				DerivedPaths: map[string]string{
+					firstToolPath: semantic.ContentVectorKey("already stored"),
+					thinkingPath:  semantic.ContentVectorKey(document.Thinking),
+				},
+			},
+		},
+		Reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-tools"},
+		[]model.ConversationDocument{document},
+		&testConversationRowReader{batch: &batch},
+		absenceRetain,
+		false,
+		false,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+	wantPath := conversationToolCallPath(conversationID, 3, 1)
+	if len(result.Chunks) != 1 || result.Chunks[0].RelativePath != wantPath {
+		t.Fatalf("chunks = %+v, want only %q", result.Chunks, wantPath)
+	}
+	if len(result.RemovalPaths) != 0 || len(result.RemovalPrefixes) != 0 {
+		t.Fatalf("existing families were removed: %v / %v", result.RemovalPaths, result.RemovalPrefixes)
+	}
+}
+
+func TestConversationBackfillForcesMissingToolCallFamily(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-backfill-tool"
+	document := model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   4,
+		Role:           "assistant",
+		Tools: []model.ConversationToolCall{
+			{Name: "read", Output: "already stored"},
+			{Name: "grep", Output: "missing result"},
+		},
+	}
+	firstToolPath := conversationToolCallPath(conversationID, 4, 0)
+	batch := semantic.ConversationBatchState{
+		Rows: map[string]semantic.ConversationStoredRows{
+			conversationID: {
+				Messages: map[int32]semantic.StoredMessageState{},
+				DerivedPaths: map[string]string{
+					firstToolPath: semantic.ContentVectorKey("already stored"),
+				},
+			},
+		},
+		Reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-tools"},
+		[]model.ConversationDocument{document},
+		&testConversationRowReader{batch: &batch},
+		absenceRetain,
+		true,
+		false,
+	)
+
+	forced, err := source.forcedWorkSet(context.Background())
+	if err != nil {
+		t.Fatalf("forcedWorkSet returned error: %v", err)
+	}
+	if len(forced) != 1 || forced[0] != conversationID {
+		t.Fatalf("forcedWorkSet = %v, want [%s] for the missing second tool family", forced, conversationID)
+	}
+}
+
+func TestConversationIndexOneRetainsStoredMessageAbsentFromDelivery(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-retain-absent"
+	batch := semantic.ConversationBatchState{
+		Rows: map[string]semantic.ConversationStoredRows{
+			conversationID: {
+				Messages: map[int32]semantic.StoredMessageState{
+					0: {Role: "user", Text: "still usable"},
+				},
+				DerivedPaths: map[string]string{},
+			},
+		},
+		Reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-retain"},
+		nil,
+		&testConversationRowReader{batch: &batch},
+		absenceRetain,
+		false,
+		false,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+	if len(result.Chunks) != 0 {
+		t.Fatalf("absent delivery emitted chunks: %+v", result.Chunks)
+	}
+	if len(result.RemovalPaths) != 0 || len(result.RemovalPrefixes) != 0 {
+		t.Fatalf("absent stored message was removed: %v / %v", result.RemovalPaths, result.RemovalPrefixes)
 	}
 }
 
