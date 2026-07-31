@@ -16,9 +16,8 @@ type conversationPart struct {
 	index int
 	// splitPart is the piece's position when one stored path was cut again to
 	// fit the embedding budget, so several pieces share a relative path and are
-	// told apart only by this. Ordering by path alone would concatenate them in
-	// whatever order the snapshot returned, and a rebuilt text that differs from
-	// the delivered one makes an unchanged message read as changed on every sync.
+	// told apart only by this. Ordering by path alone would assemble stored base
+	// content in whatever order the snapshot returned.
 	splitPart int32
 	// splitPartRecorded marks a row written after the position was persisted, so
 	// a legacy row that predates the field is not read back as position zero.
@@ -29,13 +28,10 @@ type conversationPart struct {
 type conversationAssembly struct {
 	role string
 	// roleFromBase records that role came from a base text row rather than a
-	// derived one. Rows arrive in no guaranteed order, and the delta comparison
-	// is against the base row, so a base row's role must win whenever the two
-	// disagree however late it arrives.
+	// derived one. Rows arrive in no guaranteed order, so a base row's role must
+	// win whenever the two disagree however late it arrives.
 	roleFromBase bool
-	// hasDerivedContent records that at least one of this message's derived rows
-	// was read, which is how the comparison tells a message that lost its tool
-	// call from one that never had one.
+	// hasDerivedContent records that at least one usable derived row was read.
 	hasDerivedContent bool
 	parts             []conversationPart
 }
@@ -88,27 +84,95 @@ func buildConversationBatchState(
 	}
 	assemblies := make(map[string]map[int32]*conversationAssembly)
 	derived := make(map[string]map[string]string)
+	usableDerived := make(map[string]map[string]struct{})
 	for _, candidate := range rows {
-		if _, found := requested[candidate.ConversationID]; !found {
+		conversationID, found := requestedConversationID(
+			candidate.ConversationID,
+			candidate.RelativePath,
+			requested,
+		)
+		if !found {
 			continue
+		}
+		hasMessageIndex := true
+		if candidate.ConversationID != conversationID {
+			candidate.ConversationID = conversationID
+			candidate.MessageIndex, hasMessageIndex = conversationMessageIndexFromPath(
+				candidate.RelativePath,
+				conversationID,
+			)
 		}
 		if err := addConversationBatchRow(
 			candidate,
+			hasMessageIndex,
 			assemblies,
 			derived,
+			usableDerived,
 			state.Reuse,
 		); err != nil {
 			return semantic.ConversationBatchState{}, err
 		}
 	}
-	state.Rows = finalizeConversationBatchRows(assemblies, derived)
+	state.Rows = finalizeConversationBatchRows(assemblies, derived, usableDerived)
 	return state, nil
+}
+
+func requestedConversationID(
+	conversationID string,
+	relativePath string,
+	requested map[string]struct{},
+) (string, bool) {
+	if _, found := requested[conversationID]; found && conversationID != "" {
+		return conversationID, true
+	}
+	matchedID := ""
+	matchedPrefixLength := 0
+	for requestedID := range requested {
+		prefixes := []string{
+			"conv/" + requestedID + "/",
+			"convtool/" + requestedID + "/",
+			"convthink/" + requestedID + "/",
+		}
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(relativePath, prefix) && len(prefix) > matchedPrefixLength {
+				matchedID = requestedID
+				matchedPrefixLength = len(prefix)
+			}
+		}
+	}
+	return matchedID, matchedID != ""
+}
+
+func conversationMessageIndexFromPath(
+	relativePath string,
+	conversationID string,
+) (int32, bool) {
+	prefixes := []string{
+		"conv/" + conversationID + "/",
+		"convtool/" + conversationID + "/",
+		"convthink/" + conversationID + "/",
+	}
+	for _, prefix := range prefixes {
+		remainder, found := strings.CutPrefix(relativePath, prefix)
+		if !found {
+			continue
+		}
+		indexText, _, _ := strings.Cut(remainder, "/")
+		messageIndex, err := strconv.ParseInt(indexText, 10, 32)
+		if err != nil || messageIndex < 0 {
+			return 0, false
+		}
+		return int32(messageIndex), true
+	}
+	return 0, false
 }
 
 func addConversationBatchRow(
 	candidate row,
+	hasMessageIndex bool,
 	assemblies map[string]map[int32]*conversationAssembly,
 	derived map[string]map[string]string,
+	usableDerived map[string]map[string]struct{},
 	reuse map[string][]float32,
 ) error {
 	contentKey := candidate.ContentVectorKey
@@ -117,25 +181,17 @@ func addConversationBatchRow(
 	}
 	reuse[contentKey] = append([]float32(nil), candidate.Vector...)
 	if isDerivedConversationPath(candidate.RelativePath) {
-		conversationDerived := derived[candidate.ConversationID]
-		if conversationDerived == nil {
-			conversationDerived = make(map[string]string)
-			derived[candidate.ConversationID] = conversationDerived
-		}
-		conversationDerived[candidate.RelativePath] = contentKey
-		// Register the message this derived row belongs to. A turn carrying just
-		// a tool call or just reasoning stores no text row, so these rows are all
-		// the store holds for it, and a message missing from the assembled state
-		// reads as new: the examination path re-sends it and removes these same
-		// rows as orphans, on every sync for as long as the conversation exists.
-		//
-		// The role comes from the row because the comparison rejects a message
-		// whose stored role differs from the delivered one.
-		assembly := conversationAssemblyFor(assemblies, candidate)
-		assembly.hasDerivedContent = true
-		if !assembly.roleFromBase {
-			assembly.role = candidate.Role
-		}
+		addDerivedConversationBatchRow(
+			candidate,
+			hasMessageIndex,
+			assemblies,
+			derived,
+			usableDerived,
+			contentKey,
+		)
+		return nil
+	}
+	if !hasMessageIndex {
 		return nil
 	}
 	partIndex, err := conversationPartIndex(
@@ -160,6 +216,39 @@ func addConversationBatchRow(
 		},
 	)
 	return nil
+}
+
+func addDerivedConversationBatchRow(
+	candidate row,
+	hasMessageIndex bool,
+	assemblies map[string]map[int32]*conversationAssembly,
+	derived map[string]map[string]string,
+	usableDerived map[string]map[string]struct{},
+	contentKey string,
+) {
+	conversationDerived := derived[candidate.ConversationID]
+	if conversationDerived == nil {
+		conversationDerived = make(map[string]string)
+		derived[candidate.ConversationID] = conversationDerived
+	}
+	conversationDerived[candidate.RelativePath] = contentKey
+	if strings.TrimSpace(candidate.Content) == "" {
+		return
+	}
+	conversationUsable := usableDerived[candidate.ConversationID]
+	if conversationUsable == nil {
+		conversationUsable = make(map[string]struct{})
+		usableDerived[candidate.ConversationID] = conversationUsable
+	}
+	conversationUsable[candidate.RelativePath] = struct{}{}
+	if !hasMessageIndex {
+		return
+	}
+	assembly := conversationAssemblyFor(assemblies, candidate)
+	assembly.hasDerivedContent = true
+	if !assembly.roleFromBase {
+		assembly.role = candidate.Role
+	}
 }
 
 // conversationAssemblyFor returns the assembly for a row's message, creating it
@@ -191,12 +280,18 @@ func conversationAssemblyFor(
 func finalizeConversationBatchRows(
 	assemblies map[string]map[int32]*conversationAssembly,
 	derived map[string]map[string]string,
+	usableDerived map[string]map[string]struct{},
 ) map[string]semantic.ConversationStoredRows {
 	rows := make(map[string]semantic.ConversationStoredRows)
 	for conversationID, messages := range assemblies {
+		conversationUsable := usableDerived[conversationID]
+		if conversationUsable == nil {
+			conversationUsable = make(map[string]struct{})
+		}
 		rows[conversationID] = semantic.ConversationStoredRows{
-			Messages:     assembleConversationMessages(messages),
-			DerivedPaths: derived[conversationID],
+			Messages:           assembleConversationMessages(messages),
+			DerivedPaths:       derived[conversationID],
+			UsableDerivedPaths: conversationUsable,
 		}
 	}
 	for conversationID, derivedPaths := range derived {
@@ -204,8 +299,9 @@ func finalizeConversationBatchRows(
 			continue
 		}
 		rows[conversationID] = semantic.ConversationStoredRows{
-			Messages:     map[int32]semantic.StoredMessageState{},
-			DerivedPaths: derivedPaths,
+			Messages:           map[int32]semantic.StoredMessageState{},
+			DerivedPaths:       derivedPaths,
+			UsableDerivedPaths: map[string]struct{}{},
 		}
 	}
 	return rows
@@ -372,9 +468,7 @@ func conversationPartIndex(relativePath string, conversationID string) (int, err
 
 // conversationPartPrecedes orders two pieces of one message's stored text. It
 // must be a total order, and it must match the Milvus loader's exactly: both
-// rebuild a message's text by concatenating its pieces, and a text that rebuilds
-// differently from the one delivered makes an unchanged message read as changed
-// on every sync for as long as the conversation exists.
+// rebuild a message's text by concatenating its pieces for base-family presence.
 //
 // Every key is consulted before falling through to the next, so two pieces are
 // treated as equal only when they are indistinguishable. Stopping at the split
@@ -399,11 +493,8 @@ func assembleConversationMessages(
 ) map[int32]semantic.StoredMessageState {
 	messages := make(map[int32]semantic.StoredMessageState, len(assemblies))
 	for messageIndex, assembly := range assemblies {
-		// This ordering matches the Milvus loader's exactly. Both rebuild a
-		// message's text by concatenating its parts, and a text that rebuilds
-		// differently from the one delivered makes an unchanged message read as
-		// changed on every sync for as long as the conversation exists, so the
-		// two loaders cannot order parts differently.
+		// This ordering matches the Milvus loader's exactly so both backends
+		// assemble the same stored base-family text.
 		sort.SliceStable(assembly.parts, func(left int, right int) bool {
 			return conversationPartPrecedes(assembly.parts[left], assembly.parts[right])
 		})

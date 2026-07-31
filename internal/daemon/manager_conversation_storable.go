@@ -15,11 +15,8 @@ import (
 // could return. Content that is empty or only spacing does not, so no row is
 // written for it.
 //
-// Two rules depend on this one answer and have to agree: whether a row is
-// written, and whether a delivered message matches what was stored. If they
-// disagreed, a message whose content was declined would compare unequal to what
-// the store holds, so it would be re-sent and its derived rows removed on every
-// sync for as long as the conversation existed.
+// Row generation and stored-family presence use this same rule. Content that
+// generation declines cannot suppress a later usable family insert.
 func conversationTextIsStorable(text string) bool {
 	return strings.TrimSpace(text) != ""
 }
@@ -27,11 +24,8 @@ func conversationTextIsStorable(text string) bool {
 // conversationStorableText is the text a message actually stores: itself when it
 // holds something, and empty when it does not.
 //
-// Both sides of the comparison are reduced through this. The delivered side
-// because the store never holds text this rule calls unstorable. The stored side
-// because rows written before this rule did hold such text, and reducing only
-// one side would call those messages changed and rewrite rows that are meant to
-// stay exactly as they are.
+// Stored base-family checks reduce historical blank rows through this helper so
+// they do not suppress a later usable base insert.
 func conversationStorableText(text string) string {
 	if conversationTextIsStorable(text) {
 		return text
@@ -53,9 +47,8 @@ func conversationStorableText(text string) string {
 //
 // The decision cannot move to the individual piece. A message's stored text is
 // rebuilt by concatenating its pieces in order, so a declined interior piece
-// would leave the rebuilt text shorter than the delivered one, and the message
-// would compare unequal to itself on every later sync forever. A field that is
-// worth storing stores all of itself, spacing included.
+// would make the assembled base-family content incomplete. A field that is worth
+// storing stores all of itself, spacing included.
 func appendStorableConversationField(
 	chunks []model.StoredChunk,
 	content string,

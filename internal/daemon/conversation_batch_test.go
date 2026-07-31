@@ -396,6 +396,160 @@ func TestConversationIndexOneKeepsDerivedRowsOfAnotherShape(t *testing.T) {
 	}
 }
 
+func TestConversationIndexOneFillsBlankStoredToolFamily(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-blank-tool"
+	document := model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   3,
+		Role:           "assistant",
+		Text:           "answer",
+		Tools: []model.ConversationToolCall{
+			{Name: "read", Output: "usable tool output"},
+		},
+	}
+	toolPath := conversationToolCallPath(conversationID, 3, 0)
+	batch := semantic.ConversationBatchState{
+		Rows: map[string]semantic.ConversationStoredRows{
+			conversationID: {
+				Messages: map[int32]semantic.StoredMessageState{
+					3: {Role: "assistant", Text: "answer"},
+				},
+				DerivedPaths: map[string]string{
+					toolPath + "/old": semantic.ContentVectorKey(" \n"),
+				},
+				UsableDerivedPaths: map[string]struct{}{},
+			},
+		},
+		Reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-blank-tool"},
+		[]model.ConversationDocument{document},
+		&testConversationRowReader{batch: &batch},
+		absenceRetain,
+		false,
+		false,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+	if len(result.Chunks) != 1 || result.Chunks[0].RelativePath != toolPath {
+		t.Fatalf("chunks = %+v, want one usable tool row at %q", result.Chunks, toolPath)
+	}
+	if len(result.RemovalPaths) != 0 || len(result.RemovalPrefixes) != 0 {
+		t.Fatalf("removals = %v / %v, want none", result.RemovalPaths, result.RemovalPrefixes)
+	}
+}
+
+func TestConversationIndexOneFillsBlankStoredThinkingFamily(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-blank-thinking"
+	document := model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   4,
+		Role:           "assistant",
+		Text:           "answer",
+		Thinking:       "usable reasoning",
+	}
+	thinkingPath := conversationThinkingPath(conversationID, 4)
+	batch := semantic.ConversationBatchState{
+		Rows: map[string]semantic.ConversationStoredRows{
+			conversationID: {
+				Messages: map[int32]semantic.StoredMessageState{
+					4: {Role: "assistant", Text: "answer"},
+				},
+				DerivedPaths: map[string]string{
+					thinkingPath + "/old": semantic.ContentVectorKey("\t"),
+				},
+				UsableDerivedPaths: map[string]struct{}{},
+			},
+		},
+		Reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-blank-thinking"},
+		[]model.ConversationDocument{document},
+		&testConversationRowReader{batch: &batch},
+		absenceRetain,
+		false,
+		false,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+	if len(result.Chunks) != 1 || result.Chunks[0].RelativePath != thinkingPath {
+		t.Fatalf("chunks = %+v, want one usable thinking row at %q", result.Chunks, thinkingPath)
+	}
+	if len(result.RemovalPaths) != 0 || len(result.RemovalPrefixes) != 0 {
+		t.Fatalf("removals = %v / %v, want none", result.RemovalPaths, result.RemovalPrefixes)
+	}
+}
+
+func TestConversationIndexOneKeepsScalarLessLegacyFamilies(t *testing.T) {
+	t.Parallel()
+
+	conversationID := "conv-legacy-scalars"
+	document := model.ConversationDocument{
+		ConversationID: conversationID,
+		MessageIndex:   5,
+		Role:           "assistant",
+		Text:           "stored answer",
+		Tools: []model.ConversationToolCall{
+			{Name: "read", Output: "stored tool output"},
+		},
+		Thinking: "stored reasoning",
+	}
+	toolPath := conversationToolCallPath(conversationID, 5, 0)
+	thinkingPath := conversationThinkingPath(conversationID, 5)
+	batch := semantic.ConversationBatchState{
+		Rows: map[string]semantic.ConversationStoredRows{
+			conversationID: {
+				Messages: map[int32]semantic.StoredMessageState{
+					5: {Role: "", Text: "stored answer"},
+				},
+				DerivedPaths: map[string]string{
+					toolPath + "/tok":     semantic.ContentVectorKey("read"),
+					thinkingPath + "/old": semantic.ContentVectorKey("stored reasoning"),
+				},
+				UsableDerivedPaths: map[string]struct{}{
+					toolPath + "/tok":     {},
+					thinkingPath + "/old": {},
+				},
+			},
+		},
+		Reuse: map[string][]float32{},
+	}
+	source := newConversationItemSource(
+		"conv_chunks_live",
+		map[string]string{conversationID: "fp-legacy"},
+		[]model.ConversationDocument{document},
+		&testConversationRowReader{batch: &batch},
+		absenceRetain,
+		false,
+		false,
+	)
+
+	result, err := source.indexOne(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("indexOne returned error: %v", err)
+	}
+	if len(result.Chunks) != 0 {
+		t.Fatalf("chunks = %+v, want none for usable legacy families", result.Chunks)
+	}
+	if len(result.RemovalPaths) != 0 || len(result.RemovalPrefixes) != 0 {
+		t.Fatalf("removals = %v / %v, want none", result.RemovalPaths, result.RemovalPrefixes)
+	}
+}
+
 // TestReexamineBackfillFullyPresentEmbedsZero proves the store-presence no-op:
 // a reexamine upsert over a corpus whose delivered conversation already has all
 // its expected derived rows present classifies it as done via forcedWorkSet and

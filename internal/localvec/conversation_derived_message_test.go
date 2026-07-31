@@ -10,15 +10,8 @@ import (
 // the guarantee the Milvus-backed one makes: a message whose only stored rows
 // are derived is still found when the stored state is read back.
 //
-// A turn carrying just a tool call or just reasoning stores no text row, so its
-// derived rows are all the store holds for it. If reading them back does not
-// register the message, the examination path treats it as new, re-sends it, and
-// reads those same derived rows as orphans to remove, on every sync for as long
-// as the conversation exists.
-//
-// The role comes with it because the comparison rejects a message whose stored
-// role differs from the delivered one, so an empty role would mismatch every
-// time and churn exactly as if the message were missing.
+// A turn carrying just a tool call or reasoning stores no text row. Registering
+// derived-only messages preserves the stored message index and role.
 func TestOfflineDerivedRowsRegisterTheirMessage(t *testing.T) {
 	t.Parallel()
 
@@ -82,10 +75,8 @@ func TestOfflineDerivedRowsRegisterTheirMessage(t *testing.T) {
 	}
 }
 
-// TestOfflineBaseRoleWinsOverDerivedRole pins that a base row's role is the one
-// the comparison sees, whatever order the rows arrive in. Both rows carry the
-// same role in practice, so a disagreement means one is wrong, and the base row
-// is the one the delivered document is compared against.
+// TestOfflineBaseRoleWinsOverDerivedRole pins that a base row owns the assembled
+// role, whatever order the rows arrive in.
 func TestOfflineBaseRoleWinsOverDerivedRole(t *testing.T) {
 	t.Parallel()
 
@@ -126,9 +117,7 @@ func TestOfflineBaseRoleWinsOverDerivedRole(t *testing.T) {
 }
 
 // TestOfflineDerivedContentIsReported proves a message with both a text row and
-// derived rows reports that it has derived content, which the comparison needs
-// in order to tell a message that lost its tool call from one that never had
-// one.
+// derived rows reports that it has usable derived content.
 func TestOfflineDerivedContentIsReported(t *testing.T) {
 	t.Parallel()
 
@@ -165,6 +154,78 @@ func TestOfflineDerivedContentIsReported(t *testing.T) {
 	}
 	if _, found := stored.DerivedPaths["convtool/claude:a/0/0/cmd"]; !found {
 		t.Fatalf("derived paths = %v, want the command row", stored.DerivedPaths)
+	}
+}
+
+func TestOfflineBatchMarksOnlyUsableDerivedPaths(t *testing.T) {
+	t.Parallel()
+
+	rows := []row{
+		{
+			ConversationID: "claude:a",
+			RelativePath:   "convtool/claude:a/2/0/tok",
+			MessageIndex:   2,
+			Role:           "assistant",
+			Content:        " \n",
+			Vector:         []float32{1},
+		},
+		{
+			ConversationID: "claude:a",
+			RelativePath:   "convthink/claude:a/2",
+			MessageIndex:   2,
+			Role:           "assistant",
+			Content:        "usable reasoning",
+			Vector:         []float32{2},
+		},
+	}
+
+	state, err := buildConversationBatchState(rows, map[string]struct{}{"claude:a": {}})
+	if err != nil {
+		t.Fatalf("buildConversationBatchState returned error: %v", err)
+	}
+	stored := state.Rows["claude:a"]
+
+	if len(stored.DerivedPaths) != 2 {
+		t.Fatalf("derived paths = %v, want both stored identities", stored.DerivedPaths)
+	}
+	if _, found := stored.UsableDerivedPaths["convtool/claude:a/2/0/tok"]; found {
+		t.Fatalf("usable derived paths = %v, blank tool row must not satisfy a family", stored.UsableDerivedPaths)
+	}
+	if _, found := stored.UsableDerivedPaths["convthink/claude:a/2"]; !found {
+		t.Fatalf("usable derived paths = %v, want usable thinking row", stored.UsableDerivedPaths)
+	}
+}
+
+func TestOfflineBatchResolvesScalarLessLegacyPaths(t *testing.T) {
+	t.Parallel()
+
+	rows := []row{
+		{
+			RelativePath: "conv/claude:legacy/5/0",
+			Content:      "stored answer",
+			Vector:       []float32{1},
+		},
+		{
+			RelativePath: "convthink/claude:legacy/5/old",
+			Content:      "stored reasoning",
+			Vector:       []float32{2},
+		},
+	}
+
+	state, err := buildConversationBatchState(
+		rows,
+		map[string]struct{}{"claude:legacy": {}},
+	)
+	if err != nil {
+		t.Fatalf("buildConversationBatchState returned error: %v", err)
+	}
+	stored := state.Rows["claude:legacy"]
+
+	if got := stored.Messages[5].Text; got != "stored answer" {
+		t.Fatalf("legacy message text = %q, want stored answer", got)
+	}
+	if _, found := stored.UsableDerivedPaths["convthink/claude:legacy/5/old"]; !found {
+		t.Fatalf("usable derived paths = %v, want scalar-less thinking row", stored.UsableDerivedPaths)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2408,65 +2407,6 @@ func TestHandleRemovedFileSkipsSemanticForEmptyRemoval(t *testing.T) {
 	}
 	if _, present := state.working["conv-empty-delete"]; present {
 		t.Fatalf("working still contains removed item")
-	}
-}
-
-func TestConversationDeltaLoadsReuseAcrossWholeCollection(t *testing.T) {
-	t.Parallel()
-
-	manager, cfg, _ := newTestManager(t)
-	sharedContent := "already embedded in another conversation"
-	fake := &fakeSemantic{
-		loadReuseForContents: func(
-			_ context.Context,
-			collectionName string,
-			chunks []model.StoredChunk,
-		) (map[string][]float32, error) {
-			if collectionName != "conv_chunks_test" {
-				t.Fatalf("collection = %q, want conv_chunks_test", collectionName)
-			}
-			if len(chunks) != 1 || chunks[0].Content != sharedContent {
-				t.Fatalf("candidate chunks = %+v", chunks)
-			}
-			return map[string][]float32{
-				semantic.ContentVectorKey(sharedContent): {7, 8},
-			}, nil
-		},
-	}
-	manager.semantic = fake
-	state := overrideDeltaState(cfg.MerkleDir, oneFileResultOverrideSource{
-		result: indexer.OneFileResult{
-			Chunks: []model.StoredChunk{{
-				Content:        sharedContent,
-				RelativePath:   "conv/target/0",
-				ConversationID: "target",
-			}},
-			FileHash:     "fp-target",
-			ReuseVectors: map[string][]float32{},
-		},
-		reuse: itemReuseSource{
-			CollectionName: "conv_chunks_test",
-			RelativePath:   "conv/target/",
-			Scope:          itemReuseScopePrefix,
-		},
-	})
-	state.itemReuseEnabled = true
-	result := emptyOverrideResult()
-
-	outcome := manager.handleChangedFile(
-		context.Background(),
-		model.Job{ID: "job-global-reuse"},
-		state,
-		"target",
-		&result,
-	)
-
-	if outcome.fallback || outcome.handled || !outcome.progressed {
-		t.Fatalf("outcome = %+v, want progressed", outcome)
-	}
-	reuse := fake.reindexReuseSnapshot()["target"]
-	if got := reuse[semantic.ContentVectorKey(sharedContent)]; !slices.Equal(got, []float32{7, 8}) {
-		t.Fatalf("reindex reuse = %v, want [7 8]", got)
 	}
 }
 
