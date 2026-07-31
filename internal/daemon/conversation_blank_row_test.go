@@ -166,16 +166,12 @@ func TestTextFreeMessageWithStoredDerivedRowsSettles(t *testing.T) {
 		HasDerivedContent: len(storedDerived) > 0,
 	}
 
-	matches, err := conversationDocumentMatchesStored(
-		context.Background(),
+	matches := conversationDocumentMatchesStored(
 		"claude:a",
 		document,
 		stored,
 		storedDerived,
 	)
-	if err != nil {
-		t.Fatalf("conversationDocumentMatchesStored returned error: %v", err)
-	}
 	if !matches {
 		t.Fatalf(
 			"a text-free message with its own stored derived rows did not match, so every sync would re-do it: stored=%#v derived=%v",
@@ -198,16 +194,12 @@ func TestTextFreeMessageWithNoStoredRowsIsSentOnce(t *testing.T) {
 		Tools:          []model.ConversationToolCall{{Name: "Bash", Display: "ls -la", LangHint: "bash"}},
 	}
 
-	matches, err := conversationDocumentMatchesStored(
-		context.Background(),
+	matches := conversationDocumentMatchesStored(
 		"claude:a",
 		document,
 		semantic.StoredMessageState{Role: "assistant", Text: "", HasDerivedContent: false},
 		map[string]string{},
 	)
-	if err != nil {
-		t.Fatalf("conversationDocumentMatchesStored returned error: %v", err)
-	}
 	if matches {
 		t.Fatal("a text-free message whose derived rows are absent matched, so it would never be stored")
 	}

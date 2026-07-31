@@ -112,11 +112,16 @@ func TestConversationIndexOnePresentDerivedRowsSkip(t *testing.T) {
 	}
 }
 
-// TestConversationIndexOneReconcilesDerivedPathShapeChange proves an obsolete
-// derived row deletes on a path-shape change: a message whose thinking shrank
-// from multipart to single re-emits and removes the message's tool and thinking
-// prefixes, so the stale multipart rows are dropped.
-func TestConversationIndexOneReconcilesDerivedPathShapeChange(t *testing.T) {
+// TestConversationIndexOneKeepsDerivedRowsOfAnotherShape proves a message keeps
+// derived rows whose paths differ from the ones this build would write.
+//
+// A derived path changes shape only when a chunking rule changes, never when a
+// transcript changes, because a transcript is append-only and a recorded message
+// keeps the reasoning and tool calls it was recorded with. Reconciling the shape
+// therefore rewrites rows that still hold what the person saw. Against a store
+// holding millions of rows from an earlier rule, it deletes and re-embeds all of
+// them, which is why presence is the test rather than shape.
+func TestConversationIndexOneKeepsDerivedRowsOfAnotherShape(t *testing.T) {
 	t.Parallel()
 
 	conversationID := "conv-shape-derived"
@@ -128,15 +133,15 @@ func TestConversationIndexOneReconcilesDerivedPathShapeChange(t *testing.T) {
 		Thinking:       "short reasoning",
 	}
 	thinkingPath := conversationThinkingPath(conversationID, 2)
-	// The stored thinking was multipart; the new thinking is a single row, so the
-	// stored derived path set differs from the expected set.
+	// The stored thinking is multipart; this build would write a single row, so
+	// the stored derived paths differ from the ones it would produce.
 	batch := semantic.ConversationBatchState{
 		Rows: map[string]semantic.ConversationStoredRows{
 			conversationID: {
 				Messages: map[int32]semantic.StoredMessageState{2: {Role: "assistant", Text: "answer"}},
 				DerivedPaths: map[string]string{
-					thinkingPath + "/0": semantic.ContentVectorKey("stale part zero"),
-					thinkingPath + "/1": semantic.ContentVectorKey("stale part one"),
+					thinkingPath + "/0": semantic.ContentVectorKey("stored part zero"),
+					thinkingPath + "/1": semantic.ContentVectorKey("stored part one"),
 				},
 			},
 		},
@@ -157,16 +162,15 @@ func TestConversationIndexOneReconcilesDerivedPathShapeChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("indexOne returned error: %v", err)
 	}
-	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest(conversationID, 2))
-	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest(conversationID, 2))
-	foundThinking := false
-	for _, chunk := range result.Chunks {
-		if chunk.RelativePath == thinkingPath && chunk.Content == "short reasoning" {
-			foundThinking = true
-		}
+	if len(result.RemovalPaths) != 0 || len(result.RemovalPrefixes) != 0 {
+		t.Fatalf(
+			"stored derived rows of another shape were removed: paths=%v prefixes=%v",
+			result.RemovalPaths,
+			result.RemovalPrefixes,
+		)
 	}
-	if !foundThinking {
-		t.Fatalf("reshaped thinking row %q not re-emitted: %+v", thinkingPath, result.Chunks)
+	if len(result.Chunks) != 0 {
+		t.Fatalf("a message whose rows are already stored re-emitted %d chunks: %+v", len(result.Chunks), result.Chunks)
 	}
 }
 

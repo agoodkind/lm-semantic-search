@@ -3244,10 +3244,7 @@ func TestDiffConversationMessagesAppendIssuesNoRemoval(t *testing.T) {
 		{ConversationID: "conv-append", MessageIndex: 4, Role: "user", Text: "fifth"},
 	}
 
-	diff, err := diffConversationMessages(context.Background(), "conv-append", documents, stored)
-	if err != nil {
-		t.Fatalf("diffConversationMessages returned error: %v", err)
-	}
+	diff := diffConversationMessages(context.Background(), "conv-append", documents, stored)
 
 	gotIndexes := diffDocumentIndexes(diff.documents)
 	wantIndexes := []int32{3, 4}
@@ -3305,10 +3302,7 @@ func TestDiffConversationMessagesAbsentBaseWithOrphanedDerivedRowsRemoves(t *tes
 		t.Fatalf("replacement derived paths = %d, want fewer than the stored %d", len(replacementPaths), len(stored.DerivedPaths))
 	}
 
-	diff, err := diffConversationMessages(context.Background(), conversationID, documents, stored)
-	if err != nil {
-		t.Fatalf("diffConversationMessages returned error: %v", err)
-	}
+	diff := diffConversationMessages(context.Background(), conversationID, documents, stored)
 
 	gotIndexes := diffDocumentIndexes(diff.documents)
 	if !slices.Equal(gotIndexes, []int32{7}) {
@@ -3354,10 +3348,7 @@ func TestDiffConversationMessagesAbsentBaseWithUnrelatedDerivedRowsAppends(t *te
 		Text:           "next question",
 	})
 
-	diff, err := diffConversationMessages(context.Background(), conversationID, documents, stored)
-	if err != nil {
-		t.Fatalf("diffConversationMessages returned error: %v", err)
-	}
+	diff := diffConversationMessages(context.Background(), conversationID, documents, stored)
 
 	gotIndexes := diffDocumentIndexes(diff.documents)
 	if !slices.Equal(gotIndexes, []int32{2}) {
@@ -3384,10 +3375,7 @@ func TestDiffConversationMessagesChangedMessageStillRemoves(t *testing.T) {
 		{ConversationID: "conv-change", MessageIndex: 1, Role: "assistant", Text: "new answer"},
 	}
 
-	diff, err := diffConversationMessages(context.Background(), "conv-change", documents, stored)
-	if err != nil {
-		t.Fatalf("diffConversationMessages returned error: %v", err)
-	}
+	diff := diffConversationMessages(context.Background(), "conv-change", documents, stored)
 
 	gotIndexes := diffDocumentIndexes(diff.documents)
 	if !slices.Equal(gotIndexes, []int32{1}) {
@@ -3423,10 +3411,7 @@ func TestDiffConversationMessagesRewindRemovesStale(t *testing.T) {
 		{ConversationID: "conv-rewind", MessageIndex: 2, Role: "user", Text: "third"},
 	}
 
-	diff, err := diffConversationMessages(context.Background(), "conv-rewind", documents, stored)
-	if err != nil {
-		t.Fatalf("diffConversationMessages returned error: %v", err)
-	}
+	diff := diffConversationMessages(context.Background(), "conv-rewind", documents, stored)
 
 	if len(diff.documents) != 0 {
 		t.Fatalf("diff.documents = %v, want empty when only a stale message is dropped", diffDocumentIndexes(diff.documents))
@@ -3487,10 +3472,7 @@ func TestDiffConversationMessagesRewindRemovesDerivedOnlyStaleIndex(t *testing.T
 		{ConversationID: conversationID, MessageIndex: 1, Role: "assistant", Text: "second"},
 	}
 
-	diff, err := diffConversationMessages(context.Background(), conversationID, documents, stored)
-	if err != nil {
-		t.Fatalf("diffConversationMessages returned error: %v", err)
-	}
+	diff := diffConversationMessages(context.Background(), conversationID, documents, stored)
 
 	if len(diff.documents) != 0 {
 		t.Fatalf("diff.documents = %v, want empty when only a derived-only stale index is swept", diffDocumentIndexes(diff.documents))
@@ -3543,10 +3525,7 @@ func TestDiffConversationMessagesSkipsUnparseableDerivedPaths(t *testing.T) {
 		{ConversationID: conversationID, MessageIndex: 0, Role: "user", Text: "first"},
 	}
 
-	diff, err := diffConversationMessages(context.Background(), conversationID, documents, stored)
-	if err != nil {
-		t.Fatalf("diffConversationMessages returned error: %v", err)
-	}
+	diff := diffConversationMessages(context.Background(), conversationID, documents, stored)
 
 	gotIndexes := diffDocumentIndexes(diff.documents)
 	if !slices.Equal(gotIndexes, []int32{0}) {
