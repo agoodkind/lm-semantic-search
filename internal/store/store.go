@@ -13,6 +13,10 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
+// syncJobJournalFile stays replaceable so tests can verify that journal data
+// and its directory entry reach durable storage in the required order.
+var syncJobJournalFile = (*os.File).Sync
+
 // EnsureDir creates a directory tree when it is missing.
 func EnsureDir(path string) error {
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -138,6 +142,36 @@ func WriteJobEvents(path string, events []model.JobEvent) error {
 	}
 	tempPath := tempFile.Name()
 
+	if err := writeJobEventsTempFile(tempFile, tempPath, events); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		os.Remove(tempPath)
+		slog.Error(
+			"rename temp jobs journal failed",
+			"component",
+			"store",
+			"subcomponent",
+			"journal",
+			"from",
+			tempPath,
+			"to",
+			path,
+			"err",
+			err,
+		)
+		return fmt.Errorf("rename temp jobs journal %s to %s: %w", tempPath, path, err)
+	}
+	return syncJobJournalDirectory(filepath.Dir(path))
+}
+
+// writeJobEventsTempFile makes the replacement durable before its original
+// journal can be unlinked by rename.
+func writeJobEventsTempFile(
+	tempFile *os.File,
+	tempPath string,
+	events []model.JobEvent,
+) error {
 	encoder := json.NewEncoder(tempFile)
 	for _, event := range events {
 		if err := encoder.Encode(event); err != nil {
@@ -156,6 +190,22 @@ func WriteJobEvents(path string, events []model.JobEvent) error {
 			)
 			return fmt.Errorf("write temp jobs journal %s: %w", tempPath, err)
 		}
+	}
+	if err := syncJobJournalFile(tempFile); err != nil {
+		tempFile.Close()
+		os.Remove(tempPath)
+		slog.Error(
+			"sync temp jobs journal failed",
+			"component",
+			"store",
+			"subcomponent",
+			"journal",
+			"path",
+			tempPath,
+			"err",
+			err,
+		)
+		return fmt.Errorf("sync temp jobs journal %s: %w", tempPath, err)
 	}
 	if err := tempFile.Close(); err != nil {
 		os.Remove(tempPath)
@@ -187,22 +237,55 @@ func WriteJobEvents(path string, events []model.JobEvent) error {
 		)
 		return fmt.Errorf("chmod temp jobs journal %s: %w", tempPath, err)
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		os.Remove(tempPath)
+	return nil
+}
+
+// syncJobJournalDirectory makes the atomic rename survive a host crash.
+func syncJobJournalDirectory(directoryPath string) error {
+	directoryFile, err := os.Open(directoryPath)
+	if err != nil {
 		slog.Error(
-			"rename temp jobs journal failed",
+			"open jobs journal directory failed",
 			"component",
 			"store",
 			"subcomponent",
 			"journal",
-			"from",
-			tempPath,
-			"to",
-			path,
+			"path",
+			directoryPath,
 			"err",
 			err,
 		)
-		return fmt.Errorf("rename temp jobs journal %s to %s: %w", tempPath, path, err)
+		return fmt.Errorf("open jobs journal directory %s: %w", directoryPath, err)
+	}
+	syncErr := syncJobJournalFile(directoryFile)
+	closeErr := directoryFile.Close()
+	if syncErr != nil {
+		slog.Error(
+			"sync jobs journal directory failed",
+			"component",
+			"store",
+			"subcomponent",
+			"journal",
+			"path",
+			directoryPath,
+			"err",
+			syncErr,
+		)
+		return fmt.Errorf("sync jobs journal directory %s: %w", directoryPath, syncErr)
+	}
+	if closeErr != nil {
+		slog.Error(
+			"close jobs journal directory failed",
+			"component",
+			"store",
+			"subcomponent",
+			"journal",
+			"path",
+			directoryPath,
+			"err",
+			closeErr,
+		)
+		return fmt.Errorf("close jobs journal directory %s: %w", directoryPath, closeErr)
 	}
 	return nil
 }

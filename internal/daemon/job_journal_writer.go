@@ -35,6 +35,9 @@ type jobJournalWriter struct {
 	// compactionThresholdBytes stays configurable for tests that exercise the
 	// boundary without writing an eight megabyte fixture.
 	compactionThresholdBytes int64
+	// compactionRetryAtBytes prevents a persistent compaction failure from
+	// blocking every append while preserving retries after bounded growth.
+	compactionRetryAtBytes int64
 }
 
 func newJobJournalWriter(
@@ -55,6 +58,7 @@ func newJobJournalWriter(
 		closeOnce:                sync.Once{},
 		currentSizeBytes:         initialJobJournalSize(path),
 		compactionThresholdBytes: compactionThresholdBytes,
+		compactionRetryAtBytes:   0,
 	}
 	go func() {
 		defer func() {
@@ -110,8 +114,8 @@ func (writer *jobJournalWriter) run() {
 	}
 }
 
-// recordSuccessfulAppend measures growth only after durability and retries a
-// failed compaction after the next successful append.
+// recordSuccessfulAppend measures growth only after durability and spaces
+// failed compaction retries by one full compaction threshold.
 func (writer *jobJournalWriter) recordSuccessfulAppend(event model.JobEvent) {
 	eventSize, err := marshalJobEventsSize([]model.JobEvent{event})
 	if err != nil {
@@ -134,8 +138,14 @@ func (writer *jobJournalWriter) recordSuccessfulAppend(event model.JobEvent) {
 	if writer.currentSizeBytes < writer.compactionThresholdBytes {
 		return
 	}
+	if writer.compactionRetryAtBytes > 0 &&
+		writer.currentSizeBytes < writer.compactionRetryAtBytes {
+		return
+	}
 
 	if _, _, err := compactJobJournal(writer.path); err != nil {
+		writer.compactionRetryAtBytes = writer.currentSizeBytes +
+			writer.compactionThresholdBytes
 		slog.Error(
 			"compact job journal failed",
 			"component",
@@ -151,6 +161,8 @@ func (writer *jobJournalWriter) recordSuccessfulAppend(event model.JobEvent) {
 	}
 	info, err := os.Stat(writer.path)
 	if err != nil {
+		writer.compactionRetryAtBytes = writer.currentSizeBytes +
+			writer.compactionThresholdBytes
 		slog.Error(
 			"stat compacted job journal failed",
 			"component",
@@ -165,6 +177,7 @@ func (writer *jobJournalWriter) recordSuccessfulAppend(event model.JobEvent) {
 		return
 	}
 	writer.currentSizeBytes = info.Size()
+	writer.compactionRetryAtBytes = 0
 }
 
 // initialJobJournalSize treats a missing journal as empty while surfacing other

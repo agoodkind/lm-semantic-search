@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -399,6 +401,48 @@ func TestJobJournalWriterCompactsFirstAppendWhenSeededAboveThreshold(t *testing.
 			"job state = %q, want %q",
 			jobs["job-seeded"].State,
 			model.JobStateCompleted,
+		)
+	}
+}
+
+func TestJobJournalWriterBacksOffAfterCompactionFailure(t *testing.T) {
+	const threshold = int64(1024)
+
+	journalPath := filepath.Join(t.TempDir(), "jobs.jsonl")
+	invalidJournal := []byte(strings.Repeat("{", int(threshold)+1))
+	if err := os.WriteFile(journalPath, invalidJournal, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var logBuffer bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuffer, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	writer := newJobJournalWriter(journalPath, store.AppendJobEvent, 8, threshold)
+	baseTime := time.Date(2026, time.July, 31, 8, 0, 0, 0, time.UTC)
+	for i := range 2 {
+		event := model.JobEvent{
+			Event:      fmt.Sprintf("job_progress_%d", i),
+			OccurredAt: baseTime.Add(time.Duration(i) * time.Minute),
+			Job: model.Job{
+				ID:         "job-retry",
+				CodebaseID: "codebase-1",
+				State:      model.JobStateRunning,
+				UpdatedAt:  baseTime.Add(time.Duration(i) * time.Minute),
+			},
+		}
+		if err := writer.enqueue(event); err != nil {
+			t.Fatalf("enqueue event %d returned error: %v", i, err)
+		}
+	}
+	writer.close()
+
+	compactionAttempts := strings.Count(logBuffer.String(), "compact job journal failed")
+	if compactionAttempts != 1 {
+		t.Fatalf(
+			"compaction attempts = %d, want 1 before journal grows by retry threshold",
+			compactionAttempts,
 		)
 	}
 }

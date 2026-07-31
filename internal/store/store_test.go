@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -90,6 +91,79 @@ func TestWriteJobEventsWritesOneLinePerEventAndRoundTrips(t *testing.T) {
 	}
 	if !reflect.DeepEqual(latest, wantLatest) {
 		t.Fatalf("ReadJobEventsLatest = %#v, want %#v", latest, wantLatest)
+	}
+}
+
+func TestWriteJobEventsSyncsFileBeforeRenameAndDirectoryAfter(t *testing.T) {
+	journalDir := t.TempDir()
+	journalPath := filepath.Join(journalDir, "jobs.jsonl")
+	original := []byte("original journal\n")
+	if err := os.WriteFile(journalPath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	originalSync := syncJobJournalFile
+	syncPaths := make([]string, 0, 2)
+	syncJobJournalFile = func(file *os.File) error {
+		syncPaths = append(syncPaths, file.Name())
+		if len(syncPaths) == 1 {
+			current, err := os.ReadFile(journalPath)
+			if err != nil {
+				t.Fatalf("ReadFile during temporary file sync returned error: %v", err)
+			}
+			if !bytes.Equal(current, original) {
+				t.Fatalf("journal was replaced before temporary file sync: %q", current)
+			}
+		}
+		return originalSync(file)
+	}
+	t.Cleanup(func() { syncJobJournalFile = originalSync })
+
+	events := []model.JobEvent{{
+		Event: "job_completed",
+		Job:   model.Job{ID: "job-1", State: model.JobStateCompleted},
+	}}
+	if err := WriteJobEvents(journalPath, events); err != nil {
+		t.Fatalf("WriteJobEvents returned error: %v", err)
+	}
+
+	if len(syncPaths) != 2 {
+		t.Fatalf("sync calls = %d, want 2", len(syncPaths))
+	}
+	if filepath.Dir(syncPaths[0]) != journalDir {
+		t.Fatalf("temporary file sync path = %q, want directory %q", syncPaths[0], journalDir)
+	}
+	if syncPaths[1] != journalDir {
+		t.Fatalf("directory sync path = %q, want %q", syncPaths[1], journalDir)
+	}
+}
+
+func TestWriteJobEventsPreservesOriginalWhenTempSyncFails(t *testing.T) {
+	journalDir := t.TempDir()
+	journalPath := filepath.Join(journalDir, "jobs.jsonl")
+	original := []byte("original journal\n")
+	if err := os.WriteFile(journalPath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	originalSync := syncJobJournalFile
+	syncErr := errors.New("injected sync failure")
+	syncJobJournalFile = func(*os.File) error { return syncErr }
+	t.Cleanup(func() { syncJobJournalFile = originalSync })
+
+	writeErr := WriteJobEvents(
+		journalPath,
+		[]model.JobEvent{{Event: "job_completed", Job: model.Job{ID: "job-1"}}},
+	)
+	if !errors.Is(writeErr, syncErr) {
+		t.Fatalf("WriteJobEvents error = %v, want injected sync failure", writeErr)
+	}
+	after, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatalf("ReadFile after sync failure returned error: %v", err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("journal after sync failure = %q, want %q", after, original)
 	}
 }
 
