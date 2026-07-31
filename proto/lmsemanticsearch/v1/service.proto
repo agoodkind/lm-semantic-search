@@ -151,7 +151,8 @@ message JobError {
 
 // DependencyHealth reports the daemon's view of shared-infrastructure health
 // (the embedding pipeline and the vector store). It is one global fact, not a
-// per-codebase value, observed from job outcomes rather than a live probe. When
+// per-codebase value. It is observed from job and search outcomes, and readiness
+// surfaces additionally run a debounced store probe before reading it. When
 // degraded is true a hard outage is in effect and the human surfaces show a
 // banner; mode names which one. Timestamps are UTC on the wire.
 message DependencyHealth {

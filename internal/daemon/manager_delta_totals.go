@@ -22,9 +22,20 @@ import (
 // unavailability or any error it falls back to fallbackChunks, which the
 // caller passes as either the loop's running TotalChunks (incremental
 // path) or zero (empty-diff fast path).
+//
+// A run that committed no file promoted no collection, so there is nothing to
+// count and the fallback is already the whole answer. Asking anyway makes the
+// store report a collection it does not hold, which the store logs as an error
+// because it cannot tell an absent collection from a lost one. That is the same
+// false fault the checkpoint reads produced, on the collection's axis, so the
+// working set decides here the way the run record decides there.
 func (manager *Manager) codebaseTotals(ctx context.Context, canonicalPath string, working map[string]string, fallbackChunks int32) (int32, int32) {
 	fileCount := safeInt32(len(working))
 	if manager.semantic == nil || !manager.semantic.Available() {
+		return fileCount, fallbackChunks
+	}
+	if fileCount == 0 {
+		slog.DebugContext(ctx, "no live collection to count for a run that committed no file", "path", canonicalPath)
 		return fileCount, fallbackChunks
 	}
 	count, err := manager.semantic.Count(ctx, canonicalPath)

@@ -196,12 +196,13 @@ func (manager *Manager) fillLiveChunkTotal(ctx context.Context, codebase model.C
 		return
 	}
 	// The gate is the same rule the checkpoint read uses, on the collection's
-	// axis: a live collection exists only where the last completed run committed
-	// files. Keying on the run record alone let a run that indexed zero files
-	// through, and so did any later job whose operation is not an index, and
-	// counting rows in a collection that was never created logs a row-count
-	// failure for every status read until the job ends.
-	if !expectsLiveCollection(codebase.LastSuccessfulRun) {
+	// axis: count rows only where a collection exists to count. Keying on the run
+	// record alone let a run that indexed zero files through, and so did any
+	// later job whose operation is not an index, and counting rows in a
+	// collection that was never created logs a row-count failure for every status
+	// read until the job ends. It reads the whole codebase because an adopted one
+	// owns a collection while carrying no run record.
+	if !ownsLiveCollection(codebase) {
 		slog.DebugContext(
 			ctx,
 			"no live collection to count yet",

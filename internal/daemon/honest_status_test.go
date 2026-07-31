@@ -30,6 +30,7 @@ func TestFillLiveChunkTotalQueriesOnlyACollectionThatWasCreated(t *testing.T) {
 	cases := []struct {
 		name          string
 		lastRun       *model.IndexRunSummary
+		status        model.CodebaseStatus
 		operation     string
 		wantCalls     int32
 		wantChunkText string
@@ -39,6 +40,7 @@ func TestFillLiveChunkTotalQueriesOnlyACollectionThatWasCreated(t *testing.T) {
 			// no live collection to count while it runs.
 			name:      "first build has no promoted collection",
 			lastRun:   nil,
+			status:    model.CodebaseStatusIndexing,
 			operation: "index",
 			wantCalls: 0,
 		},
@@ -47,6 +49,7 @@ func TestFillLiveChunkTotalQueriesOnlyACollectionThatWasCreated(t *testing.T) {
 			// however many later jobs the codebase runs.
 			name:      "zero file run created no collection",
 			lastRun:   zeroFileRun,
+			status:    model.CodebaseStatusIndexing,
 			operation: "index",
 			wantCalls: 0,
 		},
@@ -55,6 +58,7 @@ func TestFillLiveChunkTotalQueriesOnlyACollectionThatWasCreated(t *testing.T) {
 			// watcher-fired sync on the same codebase walked straight past it.
 			name:      "zero file run followed by a sync",
 			lastRun:   zeroFileRun,
+			status:    model.CodebaseStatusIndexing,
 			operation: "sync",
 			wantCalls: 0,
 		},
@@ -63,7 +67,20 @@ func TestFillLiveChunkTotalQueriesOnlyACollectionThatWasCreated(t *testing.T) {
 			// still serving while the staging build runs.
 			name:      "reindex over a committed run counts the live collection",
 			lastRun:   committedRun,
+			status:    model.CodebaseStatusIndexing,
 			operation: "streaming_reindex",
+			wantCalls: 1,
+		},
+		{
+			// Adoption takes a path whose collection already exists and records it as
+			// indexed without a run summary, so this shape owns rows to count while
+			// carrying the same empty run record a first build carries. Reading the
+			// run record alone left an adopted codebase uncounted until its first
+			// sync finished.
+			name:      "adopted codebase counts the collection it was adopted for",
+			lastRun:   nil,
+			status:    model.CodebaseStatusIndexed,
+			operation: "sync",
 			wantCalls: 1,
 		},
 	}
@@ -80,7 +97,7 @@ func TestFillLiveChunkTotalQueriesOnlyACollectionThatWasCreated(t *testing.T) {
 			codebase := model.Codebase{
 				ID:                "cb_" + testCase.name,
 				CanonicalPath:     repoPath,
-				Status:            model.CodebaseStatusIndexing,
+				Status:            testCase.status,
 				LastSuccessfulRun: testCase.lastRun,
 			}
 			job := model.Job{
@@ -111,6 +128,59 @@ func TestFillLiveChunkTotalQueriesOnlyACollectionThatWasCreated(t *testing.T) {
 			}
 			if lines := logs.linesContaining("no live collection to count yet", codebase.ID); len(lines) > 0 {
 				t.Fatalf("a codebase with a live collection was reported as having none:\n%s", strings.Join(lines, "\n"))
+			}
+		})
+	}
+}
+
+// The run-completion totals read the collection too, on a path the status read
+// does not share, so the same absent collection produced the same false fault
+// there. A run that committed no file has nothing to count, and the pair below
+// keeps the skip from being an always-closed gate.
+func TestCodebaseTotalsQueriesOnlyACollectionThatWasCreated(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+
+	cases := []struct {
+		name       string
+		working    map[string]string
+		wantCalls  int32
+		wantChunks int32
+	}{
+		{
+			// A run whose working set is empty committed no file, so it promoted no
+			// collection and the fallback total is already the whole answer.
+			name:       "run that committed no file is not counted",
+			working:    map[string]string{},
+			wantCalls:  0,
+			wantChunks: 7,
+		},
+		{
+			// A run that committed files promoted a collection, and its live row
+			// count replaces the running fallback.
+			name:       "run that committed files counts the live collection",
+			working:    map[string]string{"main.go": "hash"},
+			wantCalls:  1,
+			wantChunks: 512,
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var countCalls atomic.Int32
+			manager.semantic = &fakeSemantic{
+				count: func(context.Context, string) (int32, error) {
+					countCalls.Add(1)
+					return 512, nil
+				},
+			}
+
+			_, chunkCount := manager.codebaseTotals(context.Background(), repoPath, testCase.working, 7)
+
+			if got := countCalls.Load(); got != testCase.wantCalls {
+				t.Fatalf("collection row count ran %d time(s), want %d", got, testCase.wantCalls)
+			}
+			if chunkCount != testCase.wantChunks {
+				t.Fatalf("chunk total = %d, want %d", chunkCount, testCase.wantChunks)
 			}
 		})
 	}
@@ -161,7 +231,7 @@ func TestConvergePathsKeepsEmptyCodebaseQuietAboutItsAbsentCheckpoint(t *testing
 	codebase, snapshotPath := indexEmptyCodebase(t, manager)
 
 	logs := captureLogs(t)
-	if err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"new.go"}); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"new.go"}); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 

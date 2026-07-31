@@ -77,13 +77,38 @@ func expectsLiveCheckpoint(run *model.IndexRunSummary) bool {
 	return runArtifactsFor(run) == runArtifactsWritten
 }
 
-// expectsLiveCollection reports whether a codebase should own a live semantic
-// collection right now, which is the condition under which counting its rows
-// can succeed. Only positive evidence counts here too, because the caller runs
+// expectsLiveCollection reports whether a completed run left a live semantic
+// collection behind, which is the condition under which counting its rows can
+// succeed. Only positive evidence counts here too, because the caller runs
 // while a job is in flight and an unknown record there is a first build writing
 // to staging, whose live collection does not exist yet.
+//
+// A codebase can own a collection without a run record, so callers holding the
+// whole codebase use ownsLiveCollection instead.
 func expectsLiveCollection(run *model.IndexRunSummary) bool {
 	return runArtifactsFor(run) == runArtifactsWritten
+}
+
+// ownsLiveCollection reports whether a codebase should own a live semantic
+// collection right now, reading the whole record rather than the run summary
+// alone. Two shapes qualify and they reach the answer differently.
+//
+// A codebase whose last completed run indexed files promoted a collection, so
+// its run record carries the evidence.
+//
+// An adopted codebase carries no run record at all and still owns a collection.
+// adoptUnregisteredCodebase runs only for a path whose collection already
+// exists, which is what makes it adoptable, and it records the codebase as
+// indexed in the same critical section. Reading the run record alone left the
+// adopted case counted as a first build, so an adopted codebase's rows went
+// uncounted until its first sync completed. A first build is still excluded,
+// because it writes to staging and is recorded as indexing rather than indexed
+// until it promotes.
+func ownsLiveCollection(codebase model.Codebase) bool {
+	if expectsLiveCollection(codebase.LastSuccessfulRun) {
+		return true
+	}
+	return codebase.LastSuccessfulRun == nil && codebase.Status == model.CodebaseStatusIndexed
 }
 
 // ranWithoutCreatingACollection reports positive evidence that a codebase's
