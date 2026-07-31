@@ -37,22 +37,28 @@ type fakeSemantic struct {
 	backendName            model.VectorBackend
 	embeddingProviderName  model.EmbeddingProvider
 	reportProviderVerbatim bool
-	reindex                func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
-	reindexWithReuse       func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
-	stageReindexWithReuse  func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
-	copyChunks             func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
-	deleteConversation     func(ctx context.Context, collectionName string, conversationID string) error
-	backfillConversations  func(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
-	collectionName         func(codebasePath string) string
-	conversationName       func(collectionID string) string
-	inspectCollection      func(context.Context, string) (semantic.CollectionFacts, error)
-	listCollections        func(context.Context) ([]string, error)
-	hasCollectionForPath   func(context.Context, string) (bool, error)
-	collectionState        func(context.Context, string) (bool, bool, error)
-	hasStaging             func(context.Context, string) (bool, error)
-	search                 func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
-	conversationSearch     func(context.Context, string, string, int32) ([]model.StoredChunk, error)
-	count                  func(context.Context, string) (int32, error)
+	// probe, when set, replaces the canned probe outcome so a test can observe
+	// the context the probe runs under or hold the probe open. probeCount records
+	// every ProbeHealth call, which is how a test measures probe volume rather
+	// than assuming the debounce holds.
+	probe                 func(ctx context.Context) error
+	probeCount            atomic.Int64
+	reindex               func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
+	reindexWithReuse      func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
+	stageReindexWithReuse func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
+	copyChunks            func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
+	deleteConversation    func(ctx context.Context, collectionName string, conversationID string) error
+	backfillConversations func(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
+	collectionName        func(codebasePath string) string
+	conversationName      func(collectionID string) string
+	inspectCollection     func(context.Context, string) (semantic.CollectionFacts, error)
+	listCollections       func(context.Context) ([]string, error)
+	hasCollectionForPath  func(context.Context, string) (bool, error)
+	collectionState       func(context.Context, string) (bool, bool, error)
+	hasStaging            func(context.Context, string) (bool, error)
+	search                func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
+	conversationSearch    func(context.Context, string, string, int32) ([]model.StoredChunk, error)
+	count                 func(context.Context, string) (int32, error)
 	// loadReuse, when set, supplies the reuse map a merge-down build receives and
 	// records which collections were asked for. dropped records every Drop call
 	// so a test can prove an absorb never drops the absorbed child collection.
@@ -115,7 +121,11 @@ func (f *fakeSemantic) EmbeddingProviderName() model.EmbeddingProvider {
 }
 
 func (f *fakeSemantic) Available() bool { return !f.unavailable }
-func (f *fakeSemantic) ProbeHealth(context.Context) error {
+func (f *fakeSemantic) ProbeHealth(ctx context.Context) error {
+	f.probeCount.Add(1)
+	if f.probe != nil {
+		return f.probe(ctx)
+	}
 	if f.unavailable {
 		return semantic.ErrUnavailable
 	}

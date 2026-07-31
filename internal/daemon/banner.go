@@ -15,7 +15,11 @@ func resolveBannerView(health dependencyHealth, cfg config.Config) view.BannerVi
 	if !health.Degraded() {
 		return view.BannerView{Headline: "", Detail: ""}
 	}
-	lastReachable := "last reachable " + formatStatusTime(health.LastHealthyAt)
+	// The time is read for the dependency this banner is about to name, so the
+	// detail line never reports a store probe's round trip as the moment the
+	// embedding endpoint last answered. A dependency that has not answered in this
+	// daemon's lifetime reads as unknown, which is the true state of the evidence.
+	lastReachable := "last reachable " + formatStatusTime(health.lastReachableAt())
 	headline := status.BannerHeadlineFor(health.Mode)
 	switch health.Mode {
 	case dependencyEmbedderRejected:

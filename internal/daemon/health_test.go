@@ -159,8 +159,14 @@ func TestDependencyHealthFollowsJobOutcomes(t *testing.T) {
 	if manager.DependencyHealth().Degraded() {
 		t.Fatal("health still degraded after a completed job, want cleared")
 	}
-	if manager.DependencyHealth().LastHealthyAt.IsZero() {
-		t.Fatal("LastHealthyAt is zero after a completed job, want a timestamp")
+	// A completed job that embedded a file reached both dependencies, so both
+	// carry a reachability time.
+	recovered := manager.DependencyHealth()
+	if recovered.EmbedderReachableAt.IsZero() {
+		t.Fatal("EmbedderReachableAt is zero after a job embedded a file, want a timestamp")
+	}
+	if recovered.StoreReachableAt.IsZero() {
+		t.Fatal("StoreReachableAt is zero after a job wrote to the store, want a timestamp")
 	}
 }
 

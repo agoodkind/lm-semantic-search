@@ -256,8 +256,20 @@ func (store *Store) HasStaging(_ context.Context, codebasePath string) (bool, er
 	return exists, err
 }
 
-// ProbeHealth checks whether the embedded vector store is reachable.
-func (store *Store) ProbeHealth(context.Context) error {
+// ProbeHealth checks whether the embedded vector store is reachable right now by
+// reading its root directory, the resource every collection read and write goes
+// through. The daemon treats a nil return as proof the store answered and clears
+// a recorded store outage on it, so returning nil unconditionally would make the
+// probe evidence-free and hand back the same false recovery the caller's own
+// availability latch used to give.
+func (store *Store) ProbeHealth(ctx context.Context) error {
+	if !store.Available() {
+		return semantic.ErrUnavailable
+	}
+	if _, err := os.ReadDir(store.root); err != nil {
+		slog.ErrorContext(ctx, "probe local vector store failed", "path", store.root, "err", err)
+		return fmt.Errorf("probe local vector store %s: %w", store.root, err)
+	}
 	return nil
 }
 

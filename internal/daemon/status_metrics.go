@@ -150,7 +150,10 @@ func buildStatusMetrics(daemon *StatusSnapshot, snapshot metrics.Snapshot, now t
 			boolMetric(statusGroupDependency, "dependency_health.degraded", daemon.Health.Degraded()),
 			stringMetric(statusGroupDependency, "dependency_health.mode", string(daemon.Health.Mode)),
 			timeMetric(statusGroupDependency, "dependency_health.since", daemon.Health.Since),
-			timeMetric(statusGroupDependency, "dependency_health.last_healthy_at", daemon.Health.LastHealthyAt),
+			// The time reported beside the mode belongs to the dependency the mode
+			// names, so this metric and the human banner cannot disagree about which
+			// dependency they describe.
+			timeMetric(statusGroupDependency, "dependency_health.last_healthy_at", daemon.Health.lastReachableAt()),
 		)
 
 		list = append(list,

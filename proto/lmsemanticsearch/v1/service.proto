@@ -168,7 +168,14 @@ message DependencyHealth {
   // throttling and indexing may continue between rejected batches,
   // "store_unavailable" stops search and indexing, and empty is healthy.
   string mode = 2;
+  // since is when the current degraded mode began. Omitted while healthy.
   google.protobuf.Timestamp since = 3;
+  // last_healthy_at is the last time the dependency named by mode answered, so
+  // it describes the same dependency the mode does and matches what the human
+  // banner shows. A dependency that has not answered in this daemon's lifetime
+  // is omitted rather than filled in from the other dependency's evidence. A
+  // healthy record names no single dependency, so it carries whichever of the
+  // two answered most recently.
   google.protobuf.Timestamp last_healthy_at = 4;
 }
 

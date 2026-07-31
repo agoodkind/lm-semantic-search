@@ -23,7 +23,7 @@ func TestListIndexesRowCarriesWaitingTokens(t *testing.T) {
 		Status:          model.CodebaseStatusIndexing,
 		EffectiveConfig: defaultIndexConfig(),
 	}
-	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), LastHealthyAt: clock.Now()}
+	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), StoreReachableAt: clock.Now(), EmbedderReachableAt: clock.Now()}
 	manager.mu.Unlock()
 
 	server := NewGRPCServer(manager, nil)

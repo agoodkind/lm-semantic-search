@@ -133,11 +133,23 @@ type Manager struct {
 	// pipeline and the vector store). It is global, not per-codebase, observed
 	// from job outcomes, and drives the status banner. Guarded by mu.
 	health dependencyHealth
-	// dependencyFailureGeneration advances for every classified dependency
-	// failure, including repeated failures in the same mode. A background success
-	// can compare its starting generation before clearing newer evidence.
-	// Guarded by mu.
+	// dependencyFailureGeneration advances for every dependency failure that
+	// reached the record, including a repeat of the mode already on it. A
+	// background success compares its starting generation before clearing newer
+	// evidence. Guarded by mu.
 	dependencyFailureGeneration uint64
+	// healthObservations numbers dependency evidence in the order it is gathered.
+	// Every observation takes the next number under mu at the moment it starts
+	// looking at a dependency, so a probe's number is older than anything recorded
+	// while it was in flight. Guarded by mu.
+	healthObservations healthObservation
+	// appliedStoreObservation and appliedEmbedderObservation are the numbers of
+	// the newest evidence already applied for each dependency. An observation
+	// numbered below one of them lost the race and its verdict is dropped, in
+	// both directions: a slow passing probe cannot erase a newer failure, and a
+	// slow failing probe cannot erase a newer success. Guarded by mu.
+	appliedStoreObservation    healthObservation
+	appliedEmbedderObservation healthObservation
 	// lastDepProbeAt debounces refreshDependencyHealth's backend probe. Guarded by mu.
 	lastDepProbeAt time.Time
 	// deferredBuildDelay is the post-discovery wait before a worktree build starts; settable so a test can keep the timer from firing mid-test.
@@ -209,8 +221,11 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		indexSlots:                  make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
 		jobCapacityTimings:          defaultJobCapacityTimings(),
 		syncLock:                    newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
-		health:                      dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, LastHealthyAt: time.Time{}},
+		health:                      dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, StoreReachableAt: time.Time{}, EmbedderReachableAt: time.Time{}},
 		dependencyFailureGeneration: 0,
+		healthObservations:          0,
+		appliedStoreObservation:     0,
+		appliedEmbedderObservation:  0,
 		lastDepProbeAt:              time.Time{},
 		deferredBuildDelay:          defaultDeferredBuildDelay,
 		bootSelfCheckDelay:          defaultBootSelfCheckDelay,
@@ -250,7 +265,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	}
 	manager.semantic = semanticBackend
 	if svc, ok := semanticBackend.(*semantic.Service); ok && svc.Degraded() {
-		manager.health = dependencyHealth{Mode: dependencyStoreUnavailable, Since: clock.Now(), LastHealthyAt: time.Time{}}
+		manager.health = dependencyHealth{Mode: dependencyStoreUnavailable, Since: clock.Now(), StoreReachableAt: time.Time{}, EmbedderReachableAt: time.Time{}}
 	}
 	if err := manager.load(ctx); err != nil {
 		slog.ErrorContext(ctx, "load daemon state failed", "state_root", cfg.StateRoot, "err", err)

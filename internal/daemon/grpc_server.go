@@ -26,6 +26,13 @@ import (
 // toDependencyHealth converts the daemon's cached shared-dependency health into
 // its protobuf form for JSON consumers. Timestamps stay UTC on the wire and are
 // omitted while zero, so a never-degraded record carries no since stamp.
+//
+// last_healthy_at carries the last time the dependency named by mode answered,
+// the same value the human banner shows, so the two surfaces cannot disagree
+// about the dependency they are both describing. A dependency that has not
+// answered in this daemon's lifetime is omitted rather than filled in from the
+// other dependency's evidence. A healthy record names no single dependency, so
+// it carries whichever of the two answered most recently.
 func toDependencyHealth(health dependencyHealth) *pb.DependencyHealth {
 	result := &pb.DependencyHealth{
 		Degraded:      health.Degraded(),
@@ -36,8 +43,8 @@ func toDependencyHealth(health dependencyHealth) *pb.DependencyHealth {
 	if !health.Since.IsZero() {
 		result.Since = timestamppb.New(health.Since)
 	}
-	if !health.LastHealthyAt.IsZero() {
-		result.LastHealthyAt = timestamppb.New(health.LastHealthyAt)
+	if reachableAt := health.lastReachableAt(); !reachableAt.IsZero() {
+		result.LastHealthyAt = timestamppb.New(reachableAt)
 	}
 	return result
 }
@@ -857,6 +864,9 @@ func (server *GRPCServer) Doctor(ctx context.Context, request *pb.DoctorRequest)
 	ctx, done := beginRPC(ctx, "Doctor")
 	defer done(&err)
 	_ = request
+	// Doctor exists to answer whether the system is healthy right now, so it
+	// probes rather than reporting whatever the last caller happened to record.
+	server.manager.refreshDependencyHealth(ctx)
 	diagnostics := server.manager.Doctor(ctx)
 	response := &pb.DoctorResponse{
 		Diagnostics: make([]*pb.Diagnostic, 0, len(diagnostics)),
