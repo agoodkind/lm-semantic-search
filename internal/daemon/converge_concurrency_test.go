@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -463,8 +464,8 @@ func (f *fakeSemantic) DropStaging(_ context.Context, codebasePath string) error
 
 // TestConvergeViaWatcherRunsCodebasesConcurrentlyUpToCap proves that several
 // codebases converge at once up to the index-slot cap while another waits, that
-// the shared lock exists while any converge runs, and that it is gone once all
-// converges finish.
+// the shared lock is held while any converge runs, and that another holder can
+// acquire it once all converges finish.
 func TestConvergeViaWatcherRunsCodebasesConcurrentlyUpToCap(t *testing.T) {
 	const cap = 2
 	const codebases = 3
@@ -526,11 +527,13 @@ func TestConvergeViaWatcherRunsCodebasesConcurrentlyUpToCap(t *testing.T) {
 		t.Fatalf("max concurrent converges = %d, want <= %d", got, cap)
 	}
 
-	lockPath := filepath.Join(cfg.ContextRoot, "mcp-sync.lock")
-	if _, err := os.Stat(lockPath); err != nil {
-		t.Fatalf("sync lock should exist while converges run: %v", err)
+	// The kernel lock file is never unlinked, so its presence proves nothing. An
+	// independent descriptor conflicts with the converge's own hold, which is what
+	// proves the lock is still held while the embeds run.
+	lockPath := filepath.Join(cfg.ContextRoot, "mcp-sync.flock")
+	if !probeLockHeld(t, lockPath) {
+		t.Fatal("sync lock should be held while converges run")
 	}
-
 	close(release)
 	for i := cap; i < codebases; i++ {
 		<-entered
@@ -540,16 +543,14 @@ func TestConvergeViaWatcherRunsCodebasesConcurrentlyUpToCap(t *testing.T) {
 	if got := maxInFlight.Load(); got > int32(cap) {
 		t.Fatalf("max concurrent converges over the run = %d, want <= %d", got, cap)
 	}
-	waitForCondition(t, func() bool {
-		_, err := os.Stat(lockPath)
-		return os.IsNotExist(err)
-	})
+
+	if probeLockHeld(t, lockPath) {
+		t.Fatal("sync lock should be released after converges finish")
+	}
 }
 
 // TestConvergeViaWatcherDefersToExternalLock proves a converge yields when the
-// shared lock is held externally (a fresh directory with no daemon owner
-// marker, as the upstream TS adapter leaves it) and requeues its paths instead
-// of embedding.
+// shared lock is held externally and requeues its paths instead of embedding.
 func TestConvergeViaWatcherDefersToExternalLock(t *testing.T) {
 	manager, cfg := newTestManagerWithCap(t, 2)
 	var reindexCalls atomic.Int32
@@ -577,13 +578,19 @@ func TestConvergeViaWatcherDefersToExternalLock(t *testing.T) {
 	}
 	manager.mu.Unlock()
 
-	// An external holder: a fresh lock directory with no owner marker.
-	lockPath := filepath.Join(cfg.ContextRoot, "mcp-sync.lock")
+	lockPath := filepath.Join(cfg.ContextRoot, "mcp-sync.flock")
 	if err := os.MkdirAll(cfg.ContextRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
-	if err := os.Mkdir(lockPath, 0o755); err != nil {
-		t.Fatalf("Mkdir returned error: %v", err)
+	holder, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = holder.Close()
+	})
+	if err := syscall.Flock(int(holder.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("Flock returned error: %v", err)
 	}
 
 	syncer.convergeViaWatcher(context.Background(), codebaseID, []string{"main.go"})

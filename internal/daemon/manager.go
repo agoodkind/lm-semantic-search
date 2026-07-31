@@ -124,10 +124,10 @@ type Manager struct {
 	// are settable so the public-boundary contention tests do not pay the
 	// production waits.
 	jobCapacityTimings jobCapacityTimings
-	// syncLock is the process-wide refcounted hold of the shared advisory lock
-	// that coordinates embedding with the upstream TS adapter. Index jobs and
-	// background converges all take a reference for the duration of their
-	// embed, so the external tool backs off while any daemon embed runs.
+	// syncLock is the process-wide refcounted hold of the daemon's kernel file
+	// lock. Index jobs and background converges take a reference for their embed,
+	// so any other process holding the same lock file backs off while a daemon
+	// embed runs. The upstream TypeScript tool does not take this lock.
 	syncLock *syncLock
 	// health is the daemon's view of shared-infrastructure health (the embedding
 	// pipeline and the vector store). It is global, not per-codebase, observed
@@ -220,7 +220,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		watcherActivityMutex:        sync.Mutex{},
 		indexSlots:                  make(chan struct{}, max(1, cfg.MaxConcurrentIndexJobs)),
 		jobCapacityTimings:          defaultJobCapacityTimings(),
-		syncLock:                    newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.lock"), cfg.ContextRoot, cfg.SyncLockStaleMS),
+		syncLock:                    newSyncLock(filepath.Join(cfg.ContextRoot, "mcp-sync.flock"), cfg.ContextRoot),
 		health:                      dependencyHealth{Mode: dependencyHealthy, Since: time.Time{}, StoreReachableAt: time.Time{}, EmbedderReachableAt: time.Time{}},
 		dependencyFailureGeneration: 0,
 		healthObservations:          0,

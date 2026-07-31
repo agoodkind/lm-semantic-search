@@ -2,6 +2,9 @@
 
 A fork and Go rewrite of [zilliztech/claude-context](https://github.com/zilliztech/claude-context) that keeps backward compatibility with the Milvus data store used by Claude Context while adding local improvements and features on top.
 
+> [!WARNING]
+> This daemon does not coordinate with the upstream TypeScript `claude-context` tool. Running both against the same index at the same time is unsafe: they embed into the same shared Milvus collection, they track their progress in separate checkpoints, and neither one excludes the other. The daemon takes a kernel file lock at `~/.context/mcp-sync.flock`, which the upstream tool does not take. Anything at `~/.context/mcp-sync.lock` belongs to another tool, and the daemon neither reads nor removes it.
+
 ## Where Current Truth Lives
 
 CLI behavior lives in the current help output, starting with `lm-semantic-search --help` and the grouped subcommand help. The daemon binary takes no help output, so its two commands are described here: `lm-semantic-search-daemon version` and [`lm-semantic-search-daemon sandbox`](docs/sandbox.md).

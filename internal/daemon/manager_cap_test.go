@@ -42,7 +42,6 @@ func newTestManagerWithCap(t *testing.T, maxConcurrent int) (*Manager, config.Co
 		EmbeddingModel:         "nvidia/NV-EmbedCode-7b-v1",
 		HybridMode:             true,
 		SyncIntervalMS:         300000,
-		SyncLockStaleMS:        600000,
 		MaxConcurrentIndexJobs: maxConcurrent,
 		ResumeIndexingOnBoot:   true,
 	}

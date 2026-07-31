@@ -192,7 +192,6 @@ func TestNewManagerMarksStoreUnavailableWhenMilvusBootDialFails(t *testing.T) {
 		MilvusAddress:          closedDaemonMilvusAddress(t),
 		HybridMode:             true,
 		SyncIntervalMS:         300000,
-		SyncLockStaleMS:        600000,
 		MaxConcurrentIndexJobs: 1,
 	}
 	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot} {

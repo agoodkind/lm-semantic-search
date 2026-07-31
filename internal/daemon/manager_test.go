@@ -1266,6 +1266,24 @@ func TestGetIndexMatchesTrackedParentForSubdirectory(t *testing.T) {
 func newTestManager(t *testing.T) (*Manager, config.Config, string) {
 	t.Helper()
 
+	cfg, repoPath := newTestManagerConfig(t)
+	manager, err := NewManager(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+	// Close cached graph engines before the t.TempDir cleanup removes the graph
+	// db, otherwise the open SQLite handle races RemoveAll ("directory not empty").
+	t.Cleanup(manager.CloseGraphEngines)
+	return manager, cfg, repoPath
+}
+
+// newTestManagerConfig builds the on-disk layout a test manager needs and
+// returns its config plus the repository path, without constructing the
+// manager. A test that must seed daemon state before startup reads it uses this
+// and calls NewManager itself.
+func newTestManagerConfig(t *testing.T) (config.Config, string) {
+	t.Helper()
+
 	stateRoot := t.TempDir()
 	repoPath := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
@@ -1293,7 +1311,6 @@ func newTestManager(t *testing.T) (*Manager, config.Config, string) {
 		EmbeddingModel:    "nvidia/NV-EmbedCode-7b-v1",
 		HybridMode:        true,
 		SyncIntervalMS:    300000,
-		SyncLockStaleMS:   600000,
 	}
 	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot} {
 		if err := store.EnsureDir(path); err != nil {
@@ -1304,14 +1321,7 @@ func newTestManager(t *testing.T) (*Manager, config.Config, string) {
 		t.Fatalf("WriteRegistry returned error: %v", err)
 	}
 
-	manager, err := NewManager(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("NewManager returned error: %v", err)
-	}
-	// Close cached graph engines before the t.TempDir cleanup removes the graph
-	// db, otherwise the open SQLite handle races RemoveAll ("directory not empty").
-	t.Cleanup(manager.CloseGraphEngines)
-	return manager, cfg, repoPath
+	return cfg, repoPath
 }
 
 func defaultIndexConfig() model.IndexConfig {

@@ -30,7 +30,7 @@ lm-semantic-search --socket /tmp/lms-sandbox-a1b2c3/daemon.sock codebase search 
 
 ## What it isolates
 
-The sandbox roots every path the daemon reads or writes inside one directory, including `mcp-sync.lock`. That lock is the reason the context root moves: a daemon that relocates only its state still competes for the operator's lock, and a daemon holding it blocks every indexing job in the daemon that wants it.
+The sandbox roots every path the daemon reads or writes inside one directory, including `mcp-sync.flock`. That lock is the reason the context root moves: a daemon that relocates only its state still competes for the operator's lock, and a daemon holding it blocks every indexing job in the daemon that wants it.
 
 It also defaults to the `offline` profile, which replaces the shared vector store with an on-disk index and the hosted embedder with an in-process one. A sandbox therefore dials neither Milvus nor the embedding server, and spends no GPU time that the installed daemon is competing for.
 

@@ -75,6 +75,12 @@ type jobCapacity struct {
 	mu           sync.Mutex
 	slotHeld     bool
 	syncLockHeld bool
+	// syncLockLease is the release handle for the reference this capacity holds.
+	// The watchdog releases it from its own goroutine and a resume takes a fresh
+	// one, so the handle is stored rather than re-derived: a lease releases at
+	// most once, which is what keeps a watchdog release from dropping the
+	// reference a later resume took.
+	syncLockLease syncLockLease
 }
 
 func withJobCapacity(ctx context.Context, capacity *jobCapacity) context.Context {
@@ -86,21 +92,26 @@ func jobCapacityFromContext(ctx context.Context) *jobCapacity {
 	return capacity
 }
 
-func (capacity *jobCapacity) acquireSyncLock(ctx context.Context) bool {
+// acquireSyncLock takes this job's reference on the sync lock and reports the
+// outcome, so a caller can tell a caller that walked away from a machine that
+// cannot give the lock at all.
+func (capacity *jobCapacity) acquireSyncLock(ctx context.Context) (syncLockOutcome, error) {
 	capacity.mu.Lock()
 	defer capacity.mu.Unlock()
 	return capacity.acquireSyncLockLocked(ctx)
 }
 
-func (capacity *jobCapacity) acquireSyncLockLocked(ctx context.Context) bool {
+func (capacity *jobCapacity) acquireSyncLockLocked(ctx context.Context) (syncLockOutcome, error) {
 	if capacity.syncLockHeld {
-		return true
+		return syncLockAcquired, nil
 	}
-	if !capacity.manager.syncLock.acquireBlocking(ctx) {
-		return false
+	lease, outcome, err := capacity.manager.syncLock.acquireBlocking(ctx)
+	if outcome != syncLockAcquired {
+		return outcome, err
 	}
+	capacity.syncLockLease = lease
 	capacity.syncLockHeld = true
-	return true
+	return syncLockAcquired, nil
 }
 
 func (capacity *jobCapacity) acquire(ctx context.Context, holdSyncLock bool) bool {
@@ -114,9 +125,11 @@ func (capacity *jobCapacity) acquire(ctx context.Context, holdSyncLock bool) boo
 			return false
 		}
 	}
-	if holdSyncLock && !capacity.acquireSyncLockLocked(ctx) {
-		capacity.releaseLocked(ctx)
-		return false
+	if holdSyncLock {
+		if outcome, _ := capacity.acquireSyncLockLocked(ctx); outcome != syncLockAcquired {
+			capacity.releaseLocked(ctx)
+			return false
+		}
 	}
 	return true
 }
@@ -140,7 +153,8 @@ func (capacity *jobCapacity) releaseHeld(ctx context.Context) bool {
 
 func (capacity *jobCapacity) releaseLocked(ctx context.Context) {
 	if capacity.syncLockHeld {
-		capacity.manager.syncLock.release(ctx)
+		capacity.syncLockLease.release(ctx)
+		capacity.syncLockLease = syncLockLease{lock: nil, once: nil}
 		capacity.syncLockHeld = false
 	}
 	if capacity.slotHeld {

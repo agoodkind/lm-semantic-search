@@ -21,7 +21,6 @@ const (
 	defaultSocketName                = "lm-semantic-search-daemon.sock"
 	defaultLogFileName               = "lm-semantic-search-daemon.log"
 	defaultSyncInterval              = 300000
-	defaultSyncLockAge               = 600000
 	defaultDebugListenAddr           = "127.0.0.1:6480"
 	defaultPerfCountersIntervalMS    = 60000
 	defaultMaxConcurrentIndexJobs    = 3
@@ -183,7 +182,6 @@ type Config struct {
 	SyncIntervalMS         int
 	TriggerWatcherEnabled  bool
 	FileWatcherEnabled     bool
-	SyncLockStaleMS        int
 
 	// DebugListenerEnabled controls whether the daemon starts a
 	// loopback-only HTTP listener exposing pprof and expvar handlers for
@@ -396,7 +394,6 @@ func Default() (Config, error) {
 		SyncIntervalMS:                envIntOrDefault("CLAUDE_CONTEXT_SYNC_INTERVAL_MS", defaultSyncInterval),
 		TriggerWatcherEnabled:         envBoolOrDefault("CLAUDE_CONTEXT_TRIGGER_WATCHER", true),
 		FileWatcherEnabled:            envBoolOrDefault("CLAUDE_CONTEXT_FILE_WATCHER", true),
-		SyncLockStaleMS:               envIntOrDefault("CLAUDE_CONTEXT_SYNC_LOCK_STALE_MS", defaultSyncLockAge),
 		DebugListenerEnabled:          envBoolOrDefault("CLAUDE_CONTEXT_DEBUG_LISTENER", true),
 		DebugListenAddr:               envOrDefault("CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR", defaultDebugListenAddr),
 		PerfCountersIntervalMS:        envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),

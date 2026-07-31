@@ -3,123 +3,199 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/store"
 )
 
+const syncLockRetryInterval = 500 * time.Millisecond
+
+// syncLockOutcome classifies one acquire attempt so a caller can tell ordinary
+// contention, which clears when the other holder finishes, from a failure
+// waiting cannot fix.
+type syncLockOutcome string
+
 const (
-	defaultSyncLockStale  = 10 * time.Minute
-	syncLockRetryInterval = 500 * time.Millisecond
-	// ownerPidFileName marks the lock directory with the PID of the daemon
-	// that created it, so a successor can tell its own crashed predecessor's
-	// lock (reclaim at once) from one the external TS adapter holds.
-	ownerPidFileName = "owner.pid"
+	// syncLockAcquired means the caller holds a reference and must release the
+	// returned lease exactly once.
+	syncLockAcquired syncLockOutcome = "acquired"
+	// syncLockBusy means another holder owns the lock right now, so a later
+	// attempt may succeed.
+	syncLockBusy syncLockOutcome = "busy"
+	// syncLockCancelled means the caller's context ended before the lock could
+	// be taken.
+	syncLockCancelled syncLockOutcome = "cancelled"
+	// syncLockFailed means waiting cannot make the current failure succeed.
+	syncLockFailed syncLockOutcome = "failed"
 )
 
-// syncLock is a process-wide refcounted hold of the advisory lock that
-// coordinates embedding with the upstream TS adapter. The lock is the directory
-// at lockPath (~/.context/mcp-sync.lock by default). The first daemon embed to
-// acquire creates the directory; the last to release removes it. While the
-// daemon holds it, many daemon embeds proceed under the single hold and the
-// index-slot semaphore bounds real concurrency; the external TS tool, which
-// takes the same lock for a whole sync, backs off while it is present.
-//
-// A daemon embed that finds the lock already held by the daemon's own refcount
-// proceeds. One that finds the directory present with a zero refcount treats it
-// as held by the external tool and defers, unless the directory is older than
-// the stale window, in which case it reclaims a lock a crashed holder left
-// behind.
+// errSyncLockUnavailable stands in when a caller must report a lock it could
+// not take but the attempt carried no underlying error of its own.
+var errSyncLockUnavailable = errors.New("sync lock unavailable")
+
+// errSyncLockWaitCancelled reports a wait that ended because the caller's
+// context ended.
+var errSyncLockWaitCancelled = errors.New("sync lock wait cancelled")
+
+// syncLock is a process-wide refcounted hold of the kernel file lock that
+// serializes daemon embeds against any other process holding the same lock
+// file. The kernel releases the lock when the holding process exits. The
+// upstream TypeScript claude-context tool takes a different lock and is not
+// excluded by this one, so the two tools do not coordinate in either direction.
 type syncLock struct {
 	lockPath string
 	rootDir  string
-	staleMS  int
-
 	mu       sync.Mutex
 	refcount int
+	file     *os.File
 }
 
-// newSyncLock builds a refcounted hold of the lock directory at lockPath.
-// rootDir is created before the lock so the first acquire never fails on a
-// missing parent. staleMS bounds how long a zero-refcount directory is honored
-// before it is treated as abandoned; a non-positive value uses the default.
-func newSyncLock(lockPath string, rootDir string, staleMS int) *syncLock {
+// newSyncLock builds a refcounted hold of the kernel file lock at lockPath.
+// rootDir is created before the first acquisition.
+func newSyncLock(lockPath string, rootDir string) *syncLock {
 	return &syncLock{
 		lockPath: lockPath,
 		rootDir:  rootDir,
-		staleMS:  staleMS,
 		mu:       sync.Mutex{},
 		refcount: 0,
+		file:     nil,
 	}
 }
 
-// acquire takes one reference to the lock and reports whether the caller may
-// embed. A true result means the caller must pair it with exactly one release.
-// A false result means the external tool holds the lock, so the caller defers.
-func (lock *syncLock) acquire(ctx context.Context) bool {
+// syncLockLease is one acquisition's release handle. Every successful acquire
+// returns a fresh lease whose release runs at most once, so a duplicate release
+// cannot drop a reference that a later acquisition took.
+type syncLockLease struct {
+	lock *syncLock
+	once *sync.Once
+}
+
+// release drops this acquisition's reference and releases the kernel lock when
+// the last reference leaves.
+func (lease syncLockLease) release(ctx context.Context) {
+	if lease.lock == nil || lease.once == nil {
+		return
+	}
+	lease.once.Do(func() {
+		lease.lock.releaseReference(ctx)
+	})
+}
+
+// acquire takes one reference to the kernel file lock. Ordinary contention
+// returns syncLockBusy. A filesystem or lock failure returns syncLockFailed
+// because waiting cannot repair it.
+func (lock *syncLock) acquire(ctx context.Context) (syncLockLease, syncLockOutcome, error) {
 	lock.mu.Lock()
 	defer lock.mu.Unlock()
 
 	if lock.refcount > 0 {
 		lock.refcount++
-		return true
+		return newSyncLockLease(lock), syncLockAcquired, nil
 	}
 
 	if err := store.EnsureDir(lock.rootDir); err != nil {
 		slog.ErrorContext(ctx, "ensure sync lock root failed", "path", lock.rootDir, "err", err)
-		return false
+		return syncLockLease{lock: nil, once: nil}, syncLockFailed,
+			fmt.Errorf("ensure sync lock root %s: %w", lock.rootDir, err)
 	}
 
-	if err := os.Mkdir(lock.lockPath, 0o755); err == nil {
-		lock.refcount = 1
-		lock.writeOwnerLocked(ctx)
-		return true
-	} else if !errors.Is(err, os.ErrExist) {
-		slog.ErrorContext(ctx, "acquire sync lock failed", "path", lock.lockPath, "err", err)
-		return false
+	file, outcome, err := lock.lockFileLocked(ctx)
+	if outcome != syncLockAcquired {
+		return syncLockLease{lock: nil, once: nil}, outcome, err
 	}
 
-	// The directory exists with no local refcount: either a crashed predecessor
-	// of this daemon left it (reclaim at once) or the external TS adapter holds
-	// it (honor the stale window).
-	if !lock.reclaimLocked(ctx) {
-		return false
-	}
+	lock.file = file
 	lock.refcount = 1
-	lock.writeOwnerLocked(ctx)
-	return true
+	return newSyncLockLease(lock), syncLockAcquired, nil
 }
 
-// acquireBlocking waits until it can take a reference or ctx is cancelled. User
-// index jobs use it because they must complete their embed rather than drop the
-// work the way a background converge does; the wait ends when the external tool
-// releases the lock or its stale window elapses. It returns false only when ctx
-// is cancelled before the lock could be taken, and a true result must be paired
-// with exactly one release.
-func (lock *syncLock) acquireBlocking(ctx context.Context) bool {
+// newSyncLockLease builds the release handle for one acquisition.
+func newSyncLockLease(lock *syncLock) syncLockLease {
+	return syncLockLease{lock: lock, once: &sync.Once{}}
+}
+
+// lockFileLocked opens the lock file and takes a non-blocking exclusive lock.
+// The caller holds lock.mu.
+func (lock *syncLock) lockFileLocked(
+	ctx context.Context,
+) (*os.File, syncLockOutcome, error) {
+	file, err := os.OpenFile(lock.lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		slog.ErrorContext(ctx, "open sync lock failed", "path", lock.lockPath, "err", err)
+		return nil, syncLockFailed, fmt.Errorf("open sync lock %s: %w", lock.lockPath, err)
+	}
+
+	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if errors.Is(err, syscall.EWOULDBLOCK) {
+		_ = file.Close()
+		return nil, syncLockBusy, nil
+	}
+	if err != nil {
+		_ = file.Close()
+		slog.ErrorContext(ctx, "acquire sync lock failed", "path", lock.lockPath, "err", err)
+		return nil, syncLockFailed, fmt.Errorf("acquire sync lock %s: %w", lock.lockPath, err)
+	}
+	return file, syncLockAcquired, nil
+}
+
+// unlockFileLocked drops the kernel lock and closes the descriptor. The caller
+// holds lock.mu.
+func (lock *syncLock) unlockFileLocked(ctx context.Context) {
+	if lock.file == nil {
+		return
+	}
+	if err := syscall.Flock(int(lock.file.Fd()), syscall.LOCK_UN); err != nil {
+		slog.ErrorContext(ctx, "release sync lock failed", "path", lock.lockPath, "err", err)
+	}
+	if err := lock.file.Close(); err != nil {
+		slog.ErrorContext(ctx, "close sync lock failed", "path", lock.lockPath, "err", err)
+	}
+	lock.file = nil
+}
+
+// acquireBlocking waits out ordinary contention until it takes a reference,
+// the context ends, or a permanent failure occurs.
+func (lock *syncLock) acquireBlocking(
+	ctx context.Context,
+) (syncLockLease, syncLockOutcome, error) {
 	for {
-		if lock.acquire(ctx) {
-			return true
+		if ctx.Err() != nil {
+			return lock.cancelledWait(ctx)
+		}
+		lease, outcome, err := lock.acquire(ctx)
+		switch outcome {
+		case syncLockAcquired:
+			return lease, syncLockAcquired, nil
+		case syncLockFailed:
+			return syncLockLease{lock: nil, once: nil}, syncLockFailed, err
+		case syncLockBusy, syncLockCancelled:
 		}
 		select {
 		case <-ctx.Done():
-			return false
+			return lock.cancelledWait(ctx)
 		case <-time.After(syncLockRetryInterval):
 		}
 	}
 }
 
-// release drops one reference and removes the lock directory when the last
-// reference is gone.
-func (lock *syncLock) release(ctx context.Context) {
+// cancelledWait reports a wait that ended because the caller's context did.
+func (lock *syncLock) cancelledWait(
+	ctx context.Context,
+) (syncLockLease, syncLockOutcome, error) {
+	slog.DebugContext(ctx, "sync lock wait cancelled", "path", lock.lockPath, "err", ctx.Err())
+	return syncLockLease{lock: nil, once: nil},
+		syncLockCancelled,
+		errSyncLockWaitCancelled
+}
+
+// releaseReference drops one reference and releases the kernel lock when the
+// last reference leaves.
+func (lock *syncLock) releaseReference(ctx context.Context) {
 	lock.mu.Lock()
 	defer lock.mu.Unlock()
 
@@ -130,98 +206,5 @@ func (lock *syncLock) release(ctx context.Context) {
 	if lock.refcount > 0 {
 		return
 	}
-	if err := os.RemoveAll(lock.lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.ErrorContext(ctx, "release sync lock failed", "path", lock.lockPath, "err", err)
-	}
-}
-
-// reclaimLocked decides whether an existing lock directory with no local
-// reference can be taken over, and recreates it when so. A lock whose owner PID
-// is recorded but no longer alive belongs to a crashed predecessor of this
-// daemon and is reclaimed at once, so a restart resumes indexing without
-// waiting out the stale window. A lock with a live owner is left alone. A lock
-// with no owner marker is the external TS adapter's; it is reclaimed only once
-// older than the stale window. The caller holds lock.mu.
-func (lock *syncLock) reclaimLocked(ctx context.Context) bool {
-	owner, hasOwner := lock.readOwnerLocked()
-	switch {
-	case hasOwner && processAlive(owner):
-		return false
-	case hasOwner:
-		slog.InfoContext(ctx, "reclaiming sync lock from a dead owner", "path", lock.lockPath, "owner_pid", owner)
-	default:
-		if !lock.staleByModTimeLocked(ctx) {
-			return false
-		}
-		slog.InfoContext(ctx, "reclaiming stale sync lock", "path", lock.lockPath)
-	}
-	return lock.recreateLocked(ctx)
-}
-
-// staleByModTimeLocked reports whether the lock directory is older than the
-// stale window. The caller holds lock.mu.
-func (lock *syncLock) staleByModTimeLocked(ctx context.Context) bool {
-	info, err := os.Stat(lock.lockPath)
-	if err != nil {
-		slog.ErrorContext(ctx, "inspect sync lock failed", "path", lock.lockPath, "err", err)
-		return false
-	}
-	staleAge := defaultSyncLockStale
-	if lock.staleMS > 0 {
-		staleAge = time.Duration(lock.staleMS) * time.Millisecond
-	}
-	return clock.Now().Sub(info.ModTime()) > staleAge
-}
-
-// recreateLocked removes the existing lock directory and creates a fresh one.
-// The caller holds lock.mu.
-func (lock *syncLock) recreateLocked(ctx context.Context) bool {
-	if err := os.RemoveAll(lock.lockPath); err != nil {
-		slog.ErrorContext(ctx, "remove sync lock failed", "path", lock.lockPath, "err", err)
-		return false
-	}
-	if err := os.Mkdir(lock.lockPath, 0o755); err != nil {
-		slog.ErrorContext(ctx, "reacquire sync lock failed", "path", lock.lockPath, "err", err)
-		return false
-	}
-	return true
-}
-
-// writeOwnerLocked stamps the lock directory with this process's PID so a
-// successor can recognize a lock this daemon left behind. Best effort: a write
-// failure only forfeits the fast dead-owner reclaim, falling back to the stale
-// window. The caller holds lock.mu.
-func (lock *syncLock) writeOwnerLocked(ctx context.Context) {
-	ownerPath := filepath.Join(lock.lockPath, ownerPidFileName)
-	if err := os.WriteFile(ownerPath, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
-		slog.WarnContext(ctx, "stamp sync lock owner failed", "path", ownerPath, "err", err)
-	}
-}
-
-// readOwnerLocked returns the PID recorded in the lock directory and whether a
-// valid one was found. The caller holds lock.mu.
-func (lock *syncLock) readOwnerLocked() (int, bool) {
-	data, err := os.ReadFile(filepath.Join(lock.lockPath, ownerPidFileName))
-	if err != nil {
-		return 0, false
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
-		return 0, false
-	}
-	return pid, true
-}
-
-// processAlive reports whether a process with the given PID currently exists.
-// Signal 0 performs the liveness check without delivering a signal; ESRCH means
-// the process is gone, while EPERM means it exists but is owned by another user.
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	if err == nil {
-		return true
-	}
-	return errors.Is(err, syscall.EPERM)
+	lock.unlockFileLocked(ctx)
 }
