@@ -102,9 +102,9 @@ func TestWriteJobEventsSyncsFileBeforeRenameAndDirectoryAfter(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	originalSync := syncJobJournalFile
+	originalSync := syncFile
 	syncPaths := make([]string, 0, 2)
-	syncJobJournalFile = func(file *os.File) error {
+	syncFile = func(file *os.File) error {
 		syncPaths = append(syncPaths, file.Name())
 		if len(syncPaths) == 1 {
 			current, err := os.ReadFile(journalPath)
@@ -117,7 +117,7 @@ func TestWriteJobEventsSyncsFileBeforeRenameAndDirectoryAfter(t *testing.T) {
 		}
 		return originalSync(file)
 	}
-	t.Cleanup(func() { syncJobJournalFile = originalSync })
+	t.Cleanup(func() { syncFile = originalSync })
 
 	events := []model.JobEvent{{
 		Event: "job_completed",
@@ -146,10 +146,10 @@ func TestWriteJobEventsPreservesOriginalWhenTempSyncFails(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	originalSync := syncJobJournalFile
+	originalSync := syncFile
 	syncErr := errors.New("injected sync failure")
-	syncJobJournalFile = func(*os.File) error { return syncErr }
-	t.Cleanup(func() { syncJobJournalFile = originalSync })
+	syncFile = func(*os.File) error { return syncErr }
+	t.Cleanup(func() { syncFile = originalSync })
 
 	writeErr := WriteJobEvents(
 		journalPath,

@@ -13,9 +13,9 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// syncJobJournalFile stays replaceable so tests can verify that journal data
-// and its directory entry reach durable storage in the required order.
-var syncJobJournalFile = (*os.File).Sync
+// syncFile stays replaceable so tests can verify that file data and its
+// directory entry reach durable storage in the required order.
+var syncFile = (*os.File).Sync
 
 // EnsureDir creates a directory tree when it is missing.
 func EnsureDir(path string) error {
@@ -52,36 +52,146 @@ func WriteRegistry(path string, registry model.RegistryFile) error {
 		return fmt.Errorf("marshal registry file %s: %w", path, err)
 	}
 
+	return replaceFileAtomically(path, "registry file", func(file *os.File) error {
+		if _, writeErr := file.Write(data); writeErr != nil {
+			return fmt.Errorf("write registry bytes: %w", writeErr)
+		}
+		return nil
+	})
+}
+
+// replaceFileAtomically is the single home for durably replacing a whole file.
+// It writes a temporary file beside the target, flushes both that file and the
+// directory entry, then renames, so a crash leaves either the old contents or
+// the new ones and never a truncated file. description names the file in errors
+// and logs, so each caller reads naturally without forking this logic.
+func replaceFileAtomically(
+	path string,
+	description string,
+	writeContents func(file *os.File) error,
+) error {
 	if err := EnsureDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 
 	tempFile, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
-		slog.Error("create temp registry file failed", "dir", filepath.Dir(path), "err", err)
-		return fmt.Errorf("create temp registry file in %s: %w", filepath.Dir(path), err)
+		slog.Error(
+			"create temp file failed",
+			"component", "store",
+			"description", description,
+			"dir", filepath.Dir(path),
+			"err", err,
+		)
+		return fmt.Errorf("create temp %s in %s: %w", description, filepath.Dir(path), err)
 	}
 	tempPath := tempFile.Name()
 
-	if _, err := tempFile.Write(data); err != nil {
+	if err := writeTempFileContents(tempFile, tempPath, description, writeContents); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		os.Remove(tempPath)
+		slog.Error(
+			"rename temp file failed",
+			"component", "store",
+			"description", description,
+			"from", tempPath,
+			"to", path,
+			"err", err,
+		)
+		return fmt.Errorf("rename temp %s %s to %s: %w", description, tempPath, path, err)
+	}
+	return syncFileDirectory(filepath.Dir(path), description)
+}
+
+// writeTempFileContents fills the temporary file and makes it durable before
+// the rename can unlink whatever the target already held.
+func writeTempFileContents(
+	tempFile *os.File,
+	tempPath string,
+	description string,
+	writeContents func(file *os.File) error,
+) error {
+	failTemp := func(stage string, err error) error {
 		tempFile.Close()
 		os.Remove(tempPath)
-		slog.Error("write temp registry file failed", "path", tempPath, "err", err)
-		return fmt.Errorf("write temp registry file %s: %w", tempPath, err)
+		slog.Error(
+			stage+" temp file failed",
+			"component", "store",
+			"description", description,
+			"path", tempPath,
+			"err", err,
+		)
+		return fmt.Errorf("%s temp %s %s: %w", stage, description, tempPath, err)
+	}
+
+	if err := writeContents(tempFile); err != nil {
+		return failTemp("write", err)
+	}
+	if err := syncFile(tempFile); err != nil {
+		return failTemp("sync", err)
 	}
 	if err := tempFile.Close(); err != nil {
 		os.Remove(tempPath)
-		slog.Error("close temp registry file failed", "path", tempPath, "err", err)
-		return fmt.Errorf("close temp registry file %s: %w", tempPath, err)
+		slog.Error(
+			"close temp file failed",
+			"component", "store",
+			"description", description,
+			"path", tempPath,
+			"err", err,
+		)
+		return fmt.Errorf("close temp %s %s: %w", description, tempPath, err)
 	}
 	if err := os.Chmod(tempPath, 0o644); err != nil {
 		os.Remove(tempPath)
-		slog.Error("chmod temp registry file failed", "path", tempPath, "err", err)
-		return fmt.Errorf("chmod temp registry file %s: %w", tempPath, err)
+		slog.Error(
+			"chmod temp file failed",
+			"component", "store",
+			"description", description,
+			"path", tempPath,
+			"err", err,
+		)
+		return fmt.Errorf("chmod temp %s %s: %w", description, tempPath, err)
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		slog.Error("rename temp registry file failed", "from", tempPath, "to", path, "err", err)
-		return fmt.Errorf("rename temp registry file %s to %s: %w", tempPath, path, err)
+	return nil
+}
+
+// syncFileDirectory flushes the directory entry so the rename itself survives a
+// host crash, not just the bytes the renamed file holds.
+func syncFileDirectory(directoryPath string, description string) error {
+	directoryFile, err := os.Open(directoryPath)
+	if err != nil {
+		slog.Error(
+			"open directory failed",
+			"component", "store",
+			"description", description,
+			"path", directoryPath,
+			"err", err,
+		)
+		return fmt.Errorf("open %s directory %s: %w", description, directoryPath, err)
+	}
+	syncErr := syncFile(directoryFile)
+	closeErr := directoryFile.Close()
+	if syncErr != nil {
+		slog.Error(
+			"sync directory failed",
+			"component", "store",
+			"description", description,
+			"path", directoryPath,
+			"err", syncErr,
+		)
+		return fmt.Errorf("sync %s directory %s: %w", description, directoryPath, syncErr)
+	}
+	if closeErr != nil {
+		slog.Error(
+			"close directory failed",
+			"component", "store",
+			"description", description,
+			"path", directoryPath,
+			"err", closeErr,
+		)
+		return fmt.Errorf("close %s directory %s: %w", description, directoryPath, closeErr)
 	}
 	return nil
 }
@@ -121,173 +231,28 @@ func WriteJobEvents(path string, events []model.JobEvent) error {
 		len(events),
 	)
 
-	if err := EnsureDir(filepath.Dir(path)); err != nil {
-		return err
-	}
-
-	tempFile, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
-	if err != nil {
-		slog.Error(
-			"create temp jobs journal failed",
-			"component",
-			"store",
-			"subcomponent",
-			"journal",
-			"dir",
-			filepath.Dir(path),
-			"err",
-			err,
-		)
-		return fmt.Errorf("create temp jobs journal in %s: %w", filepath.Dir(path), err)
-	}
-	tempPath := tempFile.Name()
-
-	if err := writeJobEventsTempFile(tempFile, tempPath, events); err != nil {
-		return err
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		os.Remove(tempPath)
-		slog.Error(
-			"rename temp jobs journal failed",
-			"component",
-			"store",
-			"subcomponent",
-			"journal",
-			"from",
-			tempPath,
-			"to",
-			path,
-			"err",
-			err,
-		)
-		return fmt.Errorf("rename temp jobs journal %s to %s: %w", tempPath, path, err)
-	}
-	return syncJobJournalDirectory(filepath.Dir(path))
-}
-
-// writeJobEventsTempFile makes the replacement durable before its original
-// journal can be unlinked by rename.
-func writeJobEventsTempFile(
-	tempFile *os.File,
-	tempPath string,
-	events []model.JobEvent,
-) error {
-	encoder := json.NewEncoder(tempFile)
-	for _, event := range events {
-		if err := encoder.Encode(event); err != nil {
-			tempFile.Close()
-			os.Remove(tempPath)
-			slog.Error(
-				"write temp jobs journal failed",
-				"component",
-				"store",
-				"subcomponent",
-				"journal",
-				"path",
-				tempPath,
-				"err",
-				err,
-			)
-			return fmt.Errorf("write temp jobs journal %s: %w", tempPath, err)
+	return replaceFileAtomically(path, "jobs journal", func(file *os.File) error {
+		encoder := json.NewEncoder(file)
+		for _, event := range events {
+			if err := encoder.Encode(event); err != nil {
+				slog.Error(
+					"encode job event for journal failed",
+					"component",
+					"store",
+					"subcomponent",
+					"journal",
+					"path",
+					path,
+					"job_id",
+					event.Job.ID,
+					"err",
+					err,
+				)
+				return fmt.Errorf("encode job event %s: %w", event.Job.ID, err)
+			}
 		}
-	}
-	if err := syncJobJournalFile(tempFile); err != nil {
-		tempFile.Close()
-		os.Remove(tempPath)
-		slog.Error(
-			"sync temp jobs journal failed",
-			"component",
-			"store",
-			"subcomponent",
-			"journal",
-			"path",
-			tempPath,
-			"err",
-			err,
-		)
-		return fmt.Errorf("sync temp jobs journal %s: %w", tempPath, err)
-	}
-	if err := tempFile.Close(); err != nil {
-		os.Remove(tempPath)
-		slog.Error(
-			"close temp jobs journal failed",
-			"component",
-			"store",
-			"subcomponent",
-			"journal",
-			"path",
-			tempPath,
-			"err",
-			err,
-		)
-		return fmt.Errorf("close temp jobs journal %s: %w", tempPath, err)
-	}
-	if err := os.Chmod(tempPath, 0o644); err != nil {
-		os.Remove(tempPath)
-		slog.Error(
-			"chmod temp jobs journal failed",
-			"component",
-			"store",
-			"subcomponent",
-			"journal",
-			"path",
-			tempPath,
-			"err",
-			err,
-		)
-		return fmt.Errorf("chmod temp jobs journal %s: %w", tempPath, err)
-	}
-	return nil
-}
-
-// syncJobJournalDirectory makes the atomic rename survive a host crash.
-func syncJobJournalDirectory(directoryPath string) error {
-	directoryFile, err := os.Open(directoryPath)
-	if err != nil {
-		slog.Error(
-			"open jobs journal directory failed",
-			"component",
-			"store",
-			"subcomponent",
-			"journal",
-			"path",
-			directoryPath,
-			"err",
-			err,
-		)
-		return fmt.Errorf("open jobs journal directory %s: %w", directoryPath, err)
-	}
-	syncErr := syncJobJournalFile(directoryFile)
-	closeErr := directoryFile.Close()
-	if syncErr != nil {
-		slog.Error(
-			"sync jobs journal directory failed",
-			"component",
-			"store",
-			"subcomponent",
-			"journal",
-			"path",
-			directoryPath,
-			"err",
-			syncErr,
-		)
-		return fmt.Errorf("sync jobs journal directory %s: %w", directoryPath, syncErr)
-	}
-	if closeErr != nil {
-		slog.Error(
-			"close jobs journal directory failed",
-			"component",
-			"store",
-			"subcomponent",
-			"journal",
-			"path",
-			directoryPath,
-			"err",
-			closeErr,
-		)
-		return fmt.Errorf("close jobs journal directory %s: %w", directoryPath, closeErr)
-	}
-	return nil
+		return nil
+	})
 }
 
 // ReadJobEventsLatest replays the JSONL journal and keeps each complete latest
