@@ -385,7 +385,7 @@ func TestNewlyEmbeddedReuseCatalogExcludesReusedVectors(t *testing.T) {
 	}
 }
 
-func TestReuseCatalogCollectionNameScopesOnlyStateRoot(t *testing.T) {
+func TestReuseCatalogCollectionNameScopesStateRootAndDimension(t *testing.T) {
 	first := config.Config{
 		StateRoot:             "/state/one",
 		EmbeddingProvider:     "OpenAI",
@@ -396,12 +396,13 @@ func TestReuseCatalogCollectionNameScopesOnlyStateRoot(t *testing.T) {
 	}
 	secondStateRoot := first
 	secondStateRoot.StateRoot = "/state/two"
-	identityVariant := first
-	identityVariant.EmbeddingProvider = "onnx"
-	identityVariant.EmbeddingModel = "model-b"
-	identityVariant.OfflineEmbeddingModel = "inactive-b"
-	identityVariant.EmbeddingDimension = 1536
-	identityVariant.OpenAIBaseURL = "https://embedder-b.example/v1"
+	modelVariant := first
+	modelVariant.EmbeddingProvider = "onnx"
+	modelVariant.EmbeddingModel = "model-b"
+	modelVariant.OfflineEmbeddingModel = "inactive-b"
+	modelVariant.OpenAIBaseURL = "https://embedder-b.example/v1"
+	dimensionVariant := first
+	dimensionVariant.EmbeddingDimension = 1536
 
 	firstName := ReuseCatalogCollectionName(first)
 	if firstName != ReuseCatalogCollectionName(first) {
@@ -410,7 +411,10 @@ func TestReuseCatalogCollectionNameScopesOnlyStateRoot(t *testing.T) {
 	if firstName == ReuseCatalogCollectionName(secondStateRoot) {
 		t.Fatal("different state roots share a reuse catalog")
 	}
-	if firstName != ReuseCatalogCollectionName(identityVariant) {
-		t.Fatal("embedding configuration changed the state-root catalog name")
+	if firstName != ReuseCatalogCollectionName(modelVariant) {
+		t.Fatal("embedding identity changed the dimension-scoped catalog name")
+	}
+	if firstName == ReuseCatalogCollectionName(dimensionVariant) {
+		t.Fatal("different embedding dimensions share a reuse catalog")
 	}
 }

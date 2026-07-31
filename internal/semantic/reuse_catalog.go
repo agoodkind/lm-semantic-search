@@ -29,11 +29,16 @@ type reuseCatalogEntry struct {
 
 type reuseCatalogEntries map[string][]reuseCatalogEntry
 
-// ReuseCatalogCollectionName returns the state-root-scoped catalog.
+// ReuseCatalogCollectionName returns the state-root and dimension-scoped catalog.
 func ReuseCatalogCollectionName(cfg config.Config) string {
 	stateRootSum := sha256.Sum256([]byte(cfg.StateRoot))
 	stateRootIdentity := hex.EncodeToString(stateRootSum[:])
-	return reuseCatalogCollectionPrefix + stateRootIdentity
+	return fmt.Sprintf(
+		"%s%s_%d",
+		reuseCatalogCollectionPrefix,
+		stateRootIdentity,
+		cfg.EmbeddingDimension,
+	)
 }
 
 func (service *Service) reuseCatalogAvailable(

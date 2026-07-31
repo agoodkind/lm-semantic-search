@@ -433,6 +433,129 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 	}
 }
 
+func TestDimensionChangeIndexesFreshVector(t *testing.T) {
+	const (
+		initialDimension = 1536
+		targetDimension  = 4096
+	)
+
+	harness := newHarness(t)
+	initialServer := newFakeEmbeddingServerWithDimension(t, nil, initialDimension)
+	targetServer := newFakeEmbeddingServerWithDimension(t, nil, targetDimension)
+
+	initialConfig, err := config.Default()
+	if err != nil {
+		t.Fatalf("load initial dimension config: %v", err)
+	}
+	initialConfig.OpenAIBaseURL = initialServer.URL
+	initialConfig.EmbeddingDimension = initialDimension
+	targetConfig := initialConfig
+	targetConfig.OpenAIBaseURL = targetServer.URL
+	targetConfig.EmbeddingDimension = targetDimension
+
+	initialService, err := semantic.NewService(context.Background(), initialConfig)
+	if err != nil {
+		t.Fatalf("open initial dimension service: %v", err)
+	}
+	t.Cleanup(func() { _ = initialService.Close(context.Background()) })
+	targetService, err := semantic.NewService(context.Background(), targetConfig)
+	if err != nil {
+		t.Fatalf("open target dimension service: %v", err)
+	}
+	t.Cleanup(func() { _ = targetService.Close(context.Background()) })
+
+	initialCatalogName := semantic.ReuseCatalogCollectionName(initialConfig)
+	targetCatalogName := semantic.ReuseCatalogCollectionName(targetConfig)
+	initialPath := filepath.Join(harness.stateRoot, "dimension-1536-"+randomID())
+	targetPath := filepath.Join(harness.stateRoot, "dimension-4096-"+randomID())
+	sharedContent := "dimension transition shared content"
+	newContent := "dimension transition new content"
+	for _, collectionName := range []string{
+		initialCatalogName,
+		targetCatalogName,
+		initialService.CollectionName(initialPath),
+		targetService.CollectionName(targetPath),
+	} {
+		name := collectionName
+		t.Cleanup(func() { dropLiveCollection(t, harness, name) })
+	}
+
+	if err := initialService.StageReindex(
+		context.Background(),
+		initialPath,
+		[]model.StoredChunk{{Content: sharedContent, RelativePath: "seed.txt"}},
+		semantic.Removal{},
+		nil,
+		map[string][]float32{},
+		semantic.StoreColumnSetCode,
+	); err != nil {
+		t.Fatalf("stage initial dimension row: %v", err)
+	}
+	if err := initialService.PromoteStaging(context.Background(), initialPath); err != nil {
+		t.Fatalf("promote initial dimension row: %v", err)
+	}
+
+	var targetProgress semantic.Progress
+	if err := targetService.StageReindex(
+		context.Background(),
+		targetPath,
+		[]model.StoredChunk{
+			{Content: sharedContent, RelativePath: "shared.txt"},
+			{Content: newContent, RelativePath: "new.txt"},
+		},
+		semantic.Removal{},
+		func(progress semantic.Progress) { targetProgress = progress },
+		map[string][]float32{},
+		semantic.StoreColumnSetCode,
+	); err != nil {
+		t.Fatalf("stage target dimension row: %v", err)
+	}
+	if err := targetService.PromoteStaging(context.Background(), targetPath); err != nil {
+		t.Fatalf("promote target dimension row: %v", err)
+	}
+	if initialCatalogName == targetCatalogName {
+		t.Fatal("initial and target dimensions share a reuse catalog")
+	}
+	if targetProgress.ChunksEmbedded != 2 || targetProgress.ChunksReused != 0 {
+		t.Fatalf(
+			"target embedded/reused = %d/%d, want 2/0",
+			targetProgress.ChunksEmbedded,
+			targetProgress.ChunksReused,
+		)
+	}
+
+	targetCollectionName := targetService.CollectionName(targetPath)
+	targetRows := snapshotsForContent(t, harness, targetCollectionName, sharedContent)
+	if len(targetRows) != 1 {
+		t.Fatalf("target dimension rows = %d, want 1", len(targetRows))
+	}
+	result, err := harness.milvus.Query(
+		context.Background(),
+		milvusclient.NewQueryOption(targetCollectionName).
+			WithFilter(fmt.Sprintf(`content == "%s"`, sharedContent)).
+			WithOutputFields("vector").
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		t.Fatalf("query target dimension vector: %v", err)
+	}
+	vectorColumn := result.GetColumn("vector")
+	if vectorColumn == nil || result.ResultCount != 1 {
+		t.Fatalf("target dimension vector rows = %d, want 1", result.ResultCount)
+	}
+	vectorValue, err := vectorColumn.Get(0)
+	if err != nil {
+		t.Fatalf("read target dimension vector: %v", err)
+	}
+	vector, ok := vectorValue.(entity.FloatVector)
+	if !ok {
+		t.Fatalf("target dimension vector has type %T", vectorValue)
+	}
+	if len(vector) != targetDimension {
+		t.Fatalf("target vector dimension = %d, want %d", len(vector), targetDimension)
+	}
+}
+
 func insertLegacyRow(
 	t *testing.T,
 	harness *harness,

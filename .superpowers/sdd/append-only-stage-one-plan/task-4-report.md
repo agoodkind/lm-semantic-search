@@ -6,9 +6,9 @@ LMS-5 separates content identity from embedding model identity.
 
 New Milvus rows store indexed `contentHash` and nullable `embeddingModel` fields. The content hash is the normalized exact content only. Provider, endpoint, dimension, and inactive offline model settings do not affect it.
 
-Reuse checks the state-root catalog, then every registered current or legacy collection. Untagged rows remain valid. Only two known unequal model names block reuse. Lookup never updates an existing row.
+Reuse checks the current-dimension state-root catalog, then every registered current or legacy collection. Untagged rows remain valid. Only two known unequal model names block reuse. Lookup never updates an existing row.
 
-The catalog uses a separate model-qualified `catalogKey` primary key. This permits one indexed content hash to retain vectors for multiple known models.
+Each dimension-scoped catalog uses a separate model-qualified `catalogKey` primary key. This permits one indexed content hash to retain vectors for multiple known models at that dimension.
 
 ## Verified evidence
 
@@ -33,9 +33,21 @@ The catalog uses a separate model-qualified `catalogKey` primary key. This permi
 - `make live`: passed the isolated real-Milvus suite in 92.537 seconds.
 - Production daemon and production collections were untouched. Background feeders stayed disabled in the live harness.
 
+## Review round 1
+
+- Real Milvus red: a state-root catalog seeded at dimension 1536 rejected the next 4096 insert with `vector dim 4096 not match collection definition, which has dim of 1536`. The target staging collection did not exist.
+- Unit red: dimensions 3 and 1536 resolved to the same catalog name.
+- Fix: catalog collection names now include the configured embedding dimension. Indexed `contentHash`, nullable `embeddingModel`, and model-qualified `catalogKey` remain unchanged.
+- Real Milvus green: `TestDimensionChangeIndexesFreshVector` indexed identical old content plus one new control at dimension 4096. Progress reported embedded/reused `2/0`, and the stored shared-content vector had dimension 4096.
+- Fresh `make test`: passed.
+- `make check`: passed all five gates.
+- Full `make live`: passed in 100.160 seconds.
+- Enabled p95 gate: lookup p95 was 10.198 ms. Configured embedding p95 was 624.213 ms. Lookup was 1.63 percent of embedding.
+- Production remained untouched. The live harness kept background feeders disabled.
+
 ## Inferred
 
-- Later reuse normally hits the state-root catalog or an indexed content hash. Untagged legacy fallback remains an exact-content query.
+- Later reuse normally hits the current-dimension state-root catalog or an indexed content hash. Untagged legacy fallback remains an exact-content query.
 - SHA-256 collision resistance makes the catalog hash an effective exact-content locator. Legacy queries still compare exact stored text.
 
 ## Assumed
