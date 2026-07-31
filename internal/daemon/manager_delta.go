@@ -748,6 +748,19 @@ func (manager *Manager) reuseStateForChangedFile(
 	fileResult indexer.OneFileResult,
 	removal semantic.Removal,
 ) (deltaState, error) {
+	contentReuse, err := manager.contentReuseForChangedFile(
+		ctx,
+		state,
+		relativePath,
+		fileResult.Chunks,
+	)
+	if err != nil {
+		return state, err
+	}
+	state.reuse = mergedReuse(state.reuse, contentReuse)
+	if state.chunkCounts != nil {
+		state.chunkCounts.reuseVectorsLoaded += safeInt32(len(contentReuse))
+	}
 	if fileResult.ReuseVectors != nil {
 		state.reuse = mergedReuse(state.reuse, fileResult.ReuseVectors)
 		if state.chunkCounts != nil {
