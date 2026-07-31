@@ -60,9 +60,9 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 	}()
 }
 
-// acquireJobSyncLock takes the sync lock for one job's embed and reports what
-// happened, so the caller can tell a caller that walked away from a machine
-// that cannot give the lock at all.
+// acquireJobSyncLock takes the sync lock for one job's embed and reports the
+// outcome, so the caller can separate a cancelled request from a machine that
+// cannot grant the lock at all.
 //
 // A job running under a capacity hold takes the lock through that hold, because
 // the stall watchdog gives up the lock from its own goroutine while the job

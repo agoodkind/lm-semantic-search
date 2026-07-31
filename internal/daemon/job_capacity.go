@@ -93,8 +93,8 @@ func jobCapacityFromContext(ctx context.Context) *jobCapacity {
 }
 
 // acquireSyncLock takes this job's reference on the sync lock and reports the
-// outcome, so a caller can tell a caller that walked away from a machine that
-// cannot give the lock at all.
+// outcome, so the caller can separate a cancelled request from a machine that
+// cannot grant the lock at all.
 func (capacity *jobCapacity) acquireSyncLock(ctx context.Context) (syncLockOutcome, error) {
 	capacity.mu.Lock()
 	defer capacity.mu.Unlock()
@@ -126,7 +126,14 @@ func (capacity *jobCapacity) acquire(ctx context.Context, holdSyncLock bool) boo
 		}
 	}
 	if holdSyncLock {
-		if outcome, _ := capacity.acquireSyncLockLocked(ctx); outcome != syncLockAcquired {
+		// This function answers yes or no, so a failure that waiting cannot repair
+		// reads the same as a caller that walked away. Report the failure before
+		// collapsing it, or the machine-level fault the typed outcome exists to
+		// surface would leave no record anywhere.
+		if outcome, err := capacity.acquireSyncLockLocked(ctx); outcome != syncLockAcquired {
+			if outcome == syncLockFailed {
+				slog.ErrorContext(ctx, "job capacity sync lock failed", "component", "daemon", "subcomponent", "job_capacity", "outcome", string(outcome), "err", err)
+			}
 			capacity.releaseLocked(ctx)
 			return false
 		}
