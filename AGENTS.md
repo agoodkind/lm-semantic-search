@@ -36,6 +36,8 @@ Sources of truth:
 
 The Milvus collection is the portable index, shared byte-for-byte with the upstream Typescript adapter. Both tools name it `hybrid_code_chunks_<md5(path)[:8]>`, use the same schema, and compute the same deterministic chunk id `chunk_<sha256(path:start:end:content)[:16]>`.
 
+Compatibility is a data-format contract only. The two tools do not exclude each other at run time: the daemon's sync lock is a kernel file lock at `~/.context/mcp-sync.flock`, and the upstream tool does not take it. Running both against the same collection concurrently is unsafe, so the supported use is one tool at a time.
+
 Each tool keeps its own private bookkeeping outside Milvus:
 
 - Typescript at `~/.context/mcp-codebase-snapshot.json` and `~/.context/merkle/<md5(path)>.json`
@@ -43,7 +45,7 @@ Each tool keeps its own private bookkeeping outside Milvus:
 
 The Go daemon never writes TS's bookkeeping files. It reads `~/.context` for compatibility inputs such as `.env`, `.sync-trigger`, and the TS snapshot or merkle it adopts from.
 
-It does write one thing there: `mcp-sync.lock`, the advisory lock both tools take around an embed. The daemon creates that directory when it acquires the lock and removes it when the last holder releases, and it creates `~/.context` itself when the directory is absent. `CLAUDE_CONTEXTD_CONTEXT_ROOT` moves that root, which is how a throwaway daemon avoids competing for the operator's lock.
+It does write one thing there: `mcp-sync.flock`, the file whose kernel lock serializes daemon embeds against any other process holding the same file. The daemon creates the file when it first acquires the lock, and it creates `~/.context` itself when the directory is absent. The kernel releases the lock when the holding process exits, so the file stays behind between runs and carries no state of its own. `CLAUDE_CONTEXTD_CONTEXT_ROOT` moves that root, which is how a throwaway daemon avoids competing for the operator's lock.
 
 The contract is two-way and reduces to one rule the daemon fully controls: Never silently drop or rename a shared collection, and never write TS's bookkeeping files (the Go daemon only reads the TS merkle to seed adoption).
 

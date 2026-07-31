@@ -488,7 +488,6 @@ func newRealSemanticManager(t *testing.T, openAIBaseURL string) (*Manager, strin
 		SyncIntervalMS:            300000,
 		TriggerWatcherEnabled:     false,
 		FileWatcherEnabled:        false,
-		SyncLockStaleMS:           600000,
 		DebugListenerEnabled:      false,
 		DebugListenAddr:           "127.0.0.1:0",
 		PerfCountersIntervalMS:    0,

@@ -2,6 +2,9 @@
 
 A fork and Go rewrite of [zilliztech/claude-context](https://github.com/zilliztech/claude-context) that keeps backward compatibility with the Milvus data store used by Claude Context while adding local improvements and features on top.
 
+> [!WARNING]
+> This daemon does not coordinate with the upstream TypeScript `claude-context` tool. Running both against the same index at the same time is unsafe: they embed into the same shared Milvus collection, they track their progress in separate checkpoints, and neither one excludes the other. The daemon takes a kernel file lock on `mcp-sync.flock` in its context root, `~/.context` by default and wherever `CLAUDE_CONTEXTD_CONTEXT_ROOT` points otherwise. The upstream tool does not take that lock. A `mcp-sync.lock` directory in the same root is the retired lock protocol's leftover, which the daemon ignores and leaves untouched.
+
 ## Where Current Truth Lives
 
 CLI behavior lives in the current help output, starting with `lm-semantic-search --help` and the grouped subcommand help. The daemon binary takes no help output, so its two commands are described here: `lm-semantic-search-daemon version` and [`lm-semantic-search-daemon sandbox`](docs/sandbox.md).
@@ -36,7 +39,7 @@ Each root below has a default and an environment variable that moves it. A varia
 | --- | --- | --- |
 | `CLAUDE_CONTEXTD_CONFIG_ROOT` | `$XDG_CONFIG_HOME/lm-semantic-search` | `config.json` |
 | `CLAUDE_CONTEXTD_STATE_ROOT` | `$XDG_STATE_HOME/lm-semantic-search` | the registry, job ledger, merkle snapshots, chunks, and the code graph |
-| `CLAUDE_CONTEXTD_CONTEXT_ROOT` | `~/.context` | the advisory lock the daemon shares with the upstream TypeScript adapter |
+| `CLAUDE_CONTEXTD_CONTEXT_ROOT` | `~/.context` | `mcp-sync.flock`, the file whose kernel lock serializes this daemon's embeds |
 | `CLAUDE_CONTEXTD_MODEL_CACHE_ROOT` | the state root | downloaded offline embedding models |
 | `CLAUDE_CONTEXTD_SOCKET_PATH` | `<state root>/sockets/lm-semantic-search-daemon.sock` | the gRPC socket clients dial |
 | `CLAUDE_CONTEXTD_LOG_PATH` | `<state root>/logs/lm-semantic-search-daemon.log` | the combined log |

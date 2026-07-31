@@ -38,9 +38,9 @@ const (
 //
 // Watcher converges run through the manager's index-slot semaphore, so several
 // codebases converge at once up to the cap and a single heavily-edited
-// repository never blocks the others. Per-codebase serialization, plus the
-// shared advisory lock held for the embed window, keeps two converges of the
-// same codebase from racing and keeps the upstream TS adapter coordinated.
+// repository never blocks the others. Per-codebase serialization keeps two
+// converges of the same codebase from racing, and the sync lock held for the
+// embed window keeps a second process on this machine off that window.
 type BackgroundSync struct {
 	cfg     config.Config
 	manager *Manager
@@ -431,8 +431,8 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(ctx context.Context, cod
 // convergeViaWatcher runs the debounced path set for one codebase through the
 // manager's index-slot semaphore, so several codebases converge at once up to
 // the cap and a heavily-edited repository never blocks the others. A second
-// converge of the same codebase, or one that finds the shared lock held by the
-// external tool, requeues its paths so no change is lost.
+// converge of the same codebase, or one that finds the sync lock held by
+// another process, requeues its paths so no change is lost.
 func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID string, relativePaths []string) {
 	if ctx.Err() != nil {
 		return
@@ -471,14 +471,28 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 		return
 	}
 
-	// Hold the shared advisory lock for the embed window. A zero-refcount lock
-	// held on disk means the external TS tool owns it, so defer and requeue.
-	if !syncer.manager.syncLock.acquire(ctx) {
+	// Hold the sync lock for the embed window. A lock another process holds means
+	// someone else owns the window, so defer and requeue. A
+	// permanent lock failure is reported and dropped instead of requeued,
+	// because every redelivery would hit the same error and no converge can
+	// embed until the machine's configuration changes.
+	lease, outcome, lockErr := syncer.manager.syncLock.acquire(ctx)
+	switch outcome {
+	case syncLockAcquired:
+		defer lease.release(ctx)
+	case syncLockBusy, syncLockCancelled:
 		metrics.SyncSkippedInflight()
 		syncer.requeuePaths(codebaseID, relativePaths)
 		return
+	case syncLockFailed:
+		slog.ErrorContext(ctx, "watcher.sync_lock_failed", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebaseID, "err", lockErr)
+		return
+	default:
+		// An outcome this switch does not name skips the embed rather than
+		// converging with no lock held, which is the safe direction to fall in.
+		slog.ErrorContext(ctx, "watcher.sync_lock_unknown_outcome", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebaseID, "outcome", string(outcome), "err", errSyncLockUnavailable)
+		return
 	}
-	defer syncer.manager.syncLock.release(ctx)
 
 	// Both waits are behind us, so the converge is genuinely running rather than
 	// queued behind capacity. A status read reports the difference, and the

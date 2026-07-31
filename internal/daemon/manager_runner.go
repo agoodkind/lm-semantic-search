@@ -42,10 +42,11 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 		select {
 		case manager.indexSlots <- struct{}{}:
 			capacity := &jobCapacity{
-				manager:      manager,
-				mu:           sync.Mutex{},
-				slotHeld:     true,
-				syncLockHeld: false,
+				manager:       manager,
+				mu:            sync.Mutex{},
+				slotHeld:      true,
+				syncLockHeld:  false,
+				syncLockLease: syncLockLease{lock: nil, once: nil},
 			}
 			defer capacity.release(backgroundContext)
 			runContext := withJobCapacity(backgroundContext, capacity)
@@ -57,6 +58,27 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 			return
 		}
 	}()
+}
+
+// acquireJobSyncLock takes the sync lock for one job's embed and reports the
+// outcome, so the caller can separate a cancelled request from a machine that
+// cannot grant the lock at all.
+//
+// A job running under a capacity hold takes the lock through that hold, because
+// the stall watchdog gives up the lock from its own goroutine while the job
+// waits inside a read and a resume takes it back. Such a job gets an empty
+// lease: the capacity owns the reference and releasing it twice would drop the
+// one the resume took. A job with no capacity hold gets its own lease and
+// releases it when the job ends.
+func (manager *Manager) acquireJobSyncLock(
+	ctx context.Context,
+	capacity *jobCapacity,
+) (syncLockLease, syncLockOutcome, error) {
+	if capacity != nil {
+		outcome, err := capacity.acquireSyncLock(ctx)
+		return syncLockLease{lock: nil, once: nil}, outcome, err
+	}
+	return manager.syncLock.acquireBlocking(ctx)
 }
 
 func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTask {
@@ -75,21 +97,41 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 
 	manager.updateJobRunning(job)
 
-	// Hold the shared advisory lock for the embed so the upstream TS adapter
+	// Hold the sync lock for the embed so every other holder of that lock file
 	// backs off while this job writes the collection. Skip it when there is no
 	// semantic backend, since then the job performs no embedding to coordinate.
+	// A permanent lock failure fails the job rather than waiting, because the
+	// wait would never end and the job would hold its index slot the whole time.
 	if manager.semantic != nil && manager.semantic.Available() {
+		// A job that runs under a capacity hold takes the lock through it, so the
+		// stall watchdog can give the lock back and a resume can take it again.
+		// Without one the job holds a lease for its own duration.
 		capacity := jobCapacityFromContext(ctx)
-		if capacity != nil && !capacity.acquireSyncLock(ctx) {
+		lease, outcome, lockErr := manager.acquireJobSyncLock(ctx, capacity)
+		switch outcome {
+		case syncLockAcquired:
+			// The lease is empty when the capacity hold owns the reference, and
+			// releasing an empty lease does nothing, so this one line covers both
+			// shapes without asking again which one is in play.
+			defer lease.release(ctx)
+		case syncLockCancelled:
 			manager.updateJobCancelled(ctx, job.ID)
 			return nil
-		}
-		if capacity == nil {
-			if !manager.syncLock.acquireBlocking(ctx) {
-				manager.updateJobCancelled(ctx, job.ID)
-				return nil
-			}
-			defer manager.syncLock.release(ctx)
+		case syncLockFailed:
+			manager.updateJobFailed(ctx, job.ID, lockErr)
+			return nil
+		case syncLockBusy:
+			// acquireBlocking waits out ordinary contention, so it never returns
+			// busy; the exhaustive switch check still requires the case. A busy
+			// outcome carries no error of its own, so the job reports the lock as
+			// unavailable rather than embedding with no lock held.
+			manager.updateJobFailed(ctx, job.ID, errSyncLockUnavailable)
+			return nil
+		default:
+			// Any outcome this switch does not name ends the job for the same
+			// reason, which puts the safe direction on the fallback.
+			manager.updateJobFailed(ctx, job.ID, errSyncLockUnavailable)
+			return nil
 		}
 	}
 

@@ -102,21 +102,27 @@ func TestManagerGraphToolIndexesAndQueriesCodebase(t *testing.T) {
 }
 
 func TestRunJobAsyncRunsGraphIndexAfterSemanticLockAndSlotRelease(t *testing.T) {
-	manager, _ := newTestManagerWithCap(t, 1)
+	manager, cfg := newTestManagerWithCap(t, 1)
 	manager.semantic = &fakeSemantic{
 		count: func(context.Context, string) (int32, error) {
 			return 1, nil
 		},
 	}
 
+	// The hook runs on the job's goroutine, so it probes the kernel lock through
+	// an independent descriptor and reports through the channel rather than
+	// failing the test from off the test goroutine.
+	lockPath := filepath.Join(cfg.ContextRoot, "mcp-sync.flock")
 	observed := make(chan string, 1)
 	manager.graphIndexHook = func() {
-		manager.syncLock.mu.Lock()
-		refcount := manager.syncLock.refcount
-		manager.syncLock.mu.Unlock()
+		held, err := lockHeldByAnother(lockPath)
+		if err != nil {
+			observed <- fmt.Sprintf("probe sync lock returned error: %v", err)
+			return
+		}
 		slotCount := len(manager.indexSlots)
-		if refcount != 0 || slotCount != 0 {
-			observed <- fmt.Sprintf("syncLock refcount = %d, index slot count = %d", refcount, slotCount)
+		if held || slotCount != 0 {
+			observed <- fmt.Sprintf("sync lock held = %t, index slot count = %d", held, slotCount)
 			return
 		}
 		observed <- ""
