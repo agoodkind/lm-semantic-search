@@ -114,7 +114,9 @@ func (service *Service) loadReuseCatalogKeys(
 	ctx context.Context,
 	storageKeys []string,
 ) (map[string][]float32, error) {
-	return service.queryReuseCatalogKeys(ctx, storageKeys, entity.ClBounded)
+	// A completed catalog append must be visible to the next changed item or
+	// corpus so that one embedding remains sufficient.
+	return service.queryReuseCatalogKeys(ctx, storageKeys, entity.ClStrong)
 }
 
 func (service *Service) loadReuseCatalogKeysForAppend(

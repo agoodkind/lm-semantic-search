@@ -153,20 +153,17 @@ func (service *Service) loadLegacyReuse(
 		return err
 	}
 
-	legacyCatalog := make(reuseCatalogVectors)
+	// Null-key rows record no embedding identity, so their vectors remain local
+	// to the collection where exact content matched them.
 	for _, batch := range reuseLookupBatches(legacyContents) {
 		if err := service.loadLegacyReuseBatch(
 			ctx,
 			collectionName,
 			batch,
 			reuse,
-			legacyCatalog,
 		); err != nil {
 			return err
 		}
-	}
-	if err := service.appendReuseCatalog(ctx, legacyCatalog); err != nil {
-		return err
 	}
 	return nil
 }
@@ -195,7 +192,6 @@ func (service *Service) loadLegacyReuseBatch(
 	collectionName string,
 	contents []string,
 	reuse map[string][]float32,
-	legacyCatalog reuseCatalogVectors,
 ) error {
 	iterator, err := service.milvus.QueryIterator(
 		ctx,
@@ -239,10 +235,6 @@ func (service *Service) loadLegacyReuseBatch(
 				return vectorErr
 			}
 			reuse[contentVectorKey(content)] = vector
-			if service.cfg.EmbeddingDimension > 0 &&
-				len(vector) == int(service.cfg.EmbeddingDimension) {
-				legacyCatalog[content] = vector
-			}
 		}
 	}
 }

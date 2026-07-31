@@ -153,6 +153,163 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 	}
 }
 
+func TestLegacyReuseDoesNotSeedCrossCorpusCatalog(t *testing.T) {
+	harness := newHarness(t)
+	seed := harness.upsert(
+		map[string][]*pb.ConversationDocument{
+			"catalog-seed": {{
+				ConversationId: "catalog-seed",
+				MessageIndex:   0,
+				Role:           "user",
+				Text:           "current identity catalog seed",
+			}},
+		},
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		false,
+		false,
+	)
+	requireCompleted(t, seed, "catalog seed ingest")
+
+	legacyContent := "unknown identity legacy vector"
+	legacyVector := make([]float32, fakeEmbeddingDimension)
+	legacyVector[0] = 1
+	insertLegacyRow(t, harness, legacyContent, legacyVector)
+
+	local := harness.upsert(
+		map[string][]*pb.ConversationDocument{
+			"legacy-local": {{
+				ConversationId: "legacy-local",
+				MessageIndex:   0,
+				Role:           "user",
+				Text:           legacyContent,
+			}},
+		},
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		false,
+		false,
+	)
+	requireCompleted(t, local, "collection-local legacy reuse")
+	if local.Progress.ChunksReused != 1 || local.Progress.ChunksEmbedded != 0 {
+		t.Fatalf(
+			"local legacy reused/embedded = %d/%d, want 1/0",
+			local.Progress.ChunksReused,
+			local.Progress.ChunksEmbedded,
+		)
+	}
+	if count := reuseCatalogRowCount(t, harness); count != 1 {
+		t.Fatalf("reuse catalog rows after legacy fallback = %d, want 1", count)
+	}
+
+	secondCollectionID := "live-legacy-reuse-" + randomID()
+	secondCodebase, err := harness.manager.RegisterConversationCollection(
+		context.Background(),
+		secondCollectionID,
+	)
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection for second corpus returned error: %v", err)
+	}
+	secondHarness := *harness
+	secondHarness.collectionID = secondCollectionID
+	secondHarness.collectionName = secondCodebase.CollectionName
+	secondHarness.codebaseID = secondCodebase.ID
+	t.Cleanup(func() { dropLiveCollection(t, harness, secondHarness.collectionName) })
+
+	second := secondHarness.upsert(
+		map[string][]*pb.ConversationDocument{
+			"legacy-second": {{
+				ConversationId: "legacy-second",
+				MessageIndex:   0,
+				Role:           "user",
+				Text:           legacyContent,
+			}},
+		},
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		false,
+		false,
+	)
+	requireCompleted(t, second, "second corpus after legacy reuse")
+	if second.Progress.ChunksReused != 0 || second.Progress.ChunksEmbedded != 1 {
+		t.Fatalf(
+			"second corpus reused/embedded = %d/%d, want 0/1",
+			second.Progress.ChunksReused,
+			second.Progress.ChunksEmbedded,
+		)
+	}
+}
+
+func insertLegacyRow(
+	t *testing.T,
+	harness *harness,
+	content string,
+	vector []float32,
+) {
+	t.Helper()
+	result, err := harness.milvus.Insert(
+		context.Background(),
+		milvusclient.NewColumnBasedInsertOption(harness.collectionName).
+			WithVarcharColumn("id", []string{"legacy-" + randomID()}).
+			WithVarcharColumn("content", []string{content}).
+			WithVarcharColumn("relativePath", []string{"conv/legacy/0/0"}).
+			WithInt64Column("startLine", []int64{0}).
+			WithInt64Column("endLine", []int64{0}).
+			WithVarcharColumn("fileExtension", []string{"txt"}).
+			WithVarcharColumn("metadata", []string{"{}"}).
+			WithFloatVectorColumn("vector", len(vector), [][]float32{vector}),
+	)
+	if err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	if result.InsertCount != 1 {
+		t.Fatalf("insert legacy row count = %d, want 1", result.InsertCount)
+	}
+	flushTask, err := harness.milvus.Flush(
+		context.Background(),
+		milvusclient.NewFlushOption(harness.collectionName),
+	)
+	if err != nil {
+		t.Fatalf("flush legacy row: %v", err)
+	}
+	if err := flushTask.Await(context.Background()); err != nil {
+		t.Fatalf("await legacy row flush: %v", err)
+	}
+}
+
+func reuseCatalogRowCount(t *testing.T, harness *harness) int64 {
+	t.Helper()
+	result, err := harness.milvus.Query(
+		context.Background(),
+		milvusclient.NewQueryOption(harness.reuseCatalogName).
+			WithOutputFields(countOutputField).
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		t.Fatalf("count reuse catalog rows: %v", err)
+	}
+	countColumn := result.GetColumn(countOutputField)
+	if countColumn == nil {
+		t.Fatal("reuse catalog count query returned no count column")
+	}
+	count, err := countColumn.GetAsInt64(0)
+	if err != nil {
+		t.Fatalf("read reuse catalog count: %v", err)
+	}
+	return count
+}
+
+func dropLiveCollection(t *testing.T, harness *harness, collectionName string) {
+	t.Helper()
+	dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := harness.milvus.DropCollection(
+		dropCtx,
+		milvusclient.NewDropCollectionOption(collectionName),
+	); err != nil &&
+		!strings.Contains(err.Error(), "not exist") &&
+		!strings.Contains(err.Error(), "not found") {
+		t.Errorf("DropCollection(%s) returned error: %v", collectionName, err)
+	}
+}
+
 func TestCorpusReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 	if os.Getenv("LMS_CORPUS_REUSE_PERF") != "1" {
 		t.Skip("set LMS_CORPUS_REUSE_PERF=1 to measure the configured embedder")
