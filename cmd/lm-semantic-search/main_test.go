@@ -13,6 +13,8 @@ import (
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
+	"goodkind.io/lm-semantic-search/internal/response"
+	"goodkind.io/lm-semantic-search/internal/statushistory"
 )
 
 func TestRootNoArgsShowsHelp(t *testing.T) {
@@ -326,6 +328,39 @@ func TestCodebaseStatusRequiresPath(t *testing.T) {
 	}
 	if err.Error() != "codebase status requires PATH" {
 		t.Fatalf("error = %q", err.Error())
+	}
+}
+
+func TestStatusSinceRejectsZeroDuration(t *testing.T) {
+	root, _, _ := testRoot()
+	root.SetArgs([]string{"status", "--since", "0s"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected --since 0s to fail")
+	}
+	if err.Error() != "--since must be positive" {
+		t.Fatalf("error = %q, want --since must be positive", err)
+	}
+}
+
+func TestHistoricalStatusRejectsMismatchedSocket(t *testing.T) {
+	err := validateHistoricalSocket(cliOptions{socketPath: "/tmp/other.sock"}, "/tmp/daemon.sock")
+	if err == nil {
+		t.Fatal("expected mismatched socket to fail")
+	}
+	if err.Error() != "--socket does not match the configured daemon socket" {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestMarshalHistoricalStatusSingleLine(t *testing.T) {
+	output, err := MarshalHistoricalStatus(response.ModeSingleLine, statushistory.Report{})
+	if err != nil {
+		t.Fatalf("MarshalHistoricalStatus: %v", err)
+	}
+	if output != "Historical status" {
+		t.Fatalf("output = %q, want one status line", output)
 	}
 }
 
