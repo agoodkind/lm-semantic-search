@@ -45,6 +45,7 @@ type semanticReuseLoader interface {
 	LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error)
 	LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
 	LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
+	LoadReuseVectorsForContents(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string][]float32, error)
 	// LoadConversationDerivedBatch resolves the stored rows for a batch of
 	// conversations in one Milvus query per id batch, replacing the
 	// per-conversation message-state iterator in the examination path.

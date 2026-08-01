@@ -13,15 +13,16 @@ import (
 )
 
 type insertBatchColumns struct {
-	contents       []string
-	relativePaths  []string
-	startLines     []int64
-	endLines       []int64
-	fileExtensions []string
-	metadataValues []string
-	splitParts     []int64
-	scalars        conversationScalarColumns
-	sanitizedCount int
+	contents          []string
+	contentVectorKeys []string
+	relativePaths     []string
+	startLines        []int64
+	endLines          []int64
+	fileExtensions    []string
+	metadataValues    []string
+	splitParts        []int64
+	scalars           conversationScalarColumns
+	sanitizedCount    int
 }
 
 func (service *Service) insertBatch(
@@ -69,17 +70,17 @@ func (service *Service) insertBatchWithIDs(
 	); err != nil {
 		return err
 	}
-	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
-		return err
-	}
 	conversationCollection := columnSet.ConversationScalars()
-	if conversationCollection {
-		if err := service.ensureConversationScalarColumnsOnce(ctx, collectionName); err != nil {
-			return err
-		}
+	if err := service.ensureInsertColumns(
+		ctx,
+		collectionName,
+		conversationCollection,
+	); err != nil {
+		return err
 	}
 
 	columns := buildInsertBatchColumns(ctx, chunks, conversationCollection)
+	columns.contentVectorKeys = contentVectorStorageKeys(service.cfg, columns.contents)
 	if columns.sanitizedCount > 0 {
 		slog.WarnContext(
 			ctx,
@@ -103,6 +104,7 @@ func (service *Service) insertBatchWithIDs(
 	insertOption := milvusclient.NewColumnBasedInsertOption(collectionName).
 		WithVarcharColumn(idFieldName, ids).
 		WithVarcharColumn(contentFieldName, columns.contents).
+		WithVarcharColumn(contentVectorKeyFieldName, columns.contentVectorKeys).
 		WithVarcharColumn(relativePathFieldName, columns.relativePaths).
 		WithInt64Column(startLineFieldName, columns.startLines).
 		WithInt64Column(endLineFieldName, columns.endLines).
@@ -147,6 +149,23 @@ func (service *Service) insertBatchWithIDs(
 		return fmt.Errorf("insert Milvus batch into %s: %w", collectionName, countErr)
 	}
 	return nil
+}
+
+func (service *Service) ensureInsertColumns(
+	ctx context.Context,
+	collectionName string,
+	conversationCollection bool,
+) error {
+	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+		return err
+	}
+	if err := service.ensureContentVectorKeyColumnOnce(ctx, collectionName); err != nil {
+		return err
+	}
+	if !conversationCollection {
+		return nil
+	}
+	return service.ensureConversationScalarColumnsOnce(ctx, collectionName)
 }
 
 func (service *Service) executeInsert(
@@ -204,15 +223,16 @@ func buildInsertBatchColumns(
 	conversationCollection bool,
 ) insertBatchColumns {
 	columns := insertBatchColumns{
-		contents:       make([]string, 0, len(chunks)),
-		relativePaths:  make([]string, 0, len(chunks)),
-		startLines:     make([]int64, 0, len(chunks)),
-		endLines:       make([]int64, 0, len(chunks)),
-		fileExtensions: make([]string, 0, len(chunks)),
-		metadataValues: make([]string, 0, len(chunks)),
-		splitParts:     make([]int64, 0, len(chunks)),
-		scalars:        newConversationScalarColumns(conversationCollection, len(chunks)),
-		sanitizedCount: 0,
+		contents:          make([]string, 0, len(chunks)),
+		contentVectorKeys: make([]string, 0, len(chunks)),
+		relativePaths:     make([]string, 0, len(chunks)),
+		startLines:        make([]int64, 0, len(chunks)),
+		endLines:          make([]int64, 0, len(chunks)),
+		fileExtensions:    make([]string, 0, len(chunks)),
+		metadataValues:    make([]string, 0, len(chunks)),
+		splitParts:        make([]int64, 0, len(chunks)),
+		scalars:           newConversationScalarColumns(conversationCollection, len(chunks)),
+		sanitizedCount:    0,
 	}
 	for _, chunk := range chunks {
 		content, contentChanged := sanitizeUTF8(chunk.Content)

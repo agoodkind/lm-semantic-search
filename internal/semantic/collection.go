@@ -109,6 +109,14 @@ func splitPartField() *entity.Field {
 		WithNullable(true)
 }
 
+func contentVectorKeyField() *entity.Field {
+	return entity.NewField().
+		WithName(contentVectorKeyFieldName).
+		WithDataType(entity.FieldTypeVarChar).
+		WithMaxLength(64).
+		WithNullable(true)
+}
+
 func splitPartFieldsToAdd(schema *entity.Schema) []*entity.Field {
 	if schema != nil {
 		for _, field := range schema.Fields {
@@ -129,6 +137,7 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		WithField(entity.NewField().WithName(endLineFieldName).WithDataType(entity.FieldTypeInt64)).
 		WithField(entity.NewField().WithName(fileExtensionFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(32)).
 		WithField(entity.NewField().WithName(metadataFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
+		WithField(contentVectorKeyField()).
 		WithField(splitPartField()).
 		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)))
 
@@ -147,6 +156,7 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 	// one mistake that breaks every new-collection build on Milvus 2.6.
 	indexOptions := []milvusclient.CreateIndexOption{
 		milvusclient.NewCreateIndexOption(collectionName, denseVectorFieldName, index.NewAutoIndex(entity.COSINE)),
+		milvusclient.NewCreateIndexOption(collectionName, contentVectorKeyFieldName, index.NewInvertedIndex()),
 	}
 
 	if service.cfg.HybridMode {
@@ -180,6 +190,96 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 type splitPartMigration struct {
 	once sync.Once
 	err  error
+}
+
+type contentVectorKeyMigration struct {
+	once sync.Once
+	err  error
+}
+
+func (service *Service) ensureContentVectorKeyColumnOnce(
+	ctx context.Context,
+	collectionName string,
+) error {
+	loaded, _ := service.ensuredContentVectorKeyColumns.LoadOrStore(
+		collectionName,
+		&contentVectorKeyMigration{once: sync.Once{}, err: nil},
+	)
+	migration, ok := loaded.(*contentVectorKeyMigration)
+	if !ok {
+		return fmt.Errorf(
+			"content vector key migration guard for %s has unexpected type %T",
+			collectionName,
+			loaded,
+		)
+	}
+	migration.once.Do(func() {
+		migration.err = service.ensureContentVectorKeyColumn(ctx, collectionName)
+		if migration.err != nil {
+			service.ensuredContentVectorKeyColumns.CompareAndDelete(collectionName, loaded)
+		}
+	})
+	return migration.err
+}
+
+func (service *Service) ensureContentVectorKeyColumn(
+	ctx context.Context,
+	collectionName string,
+) error {
+	collection, err := service.milvus.DescribeCollection(
+		ctx,
+		milvusclient.NewDescribeCollectionOption(collectionName),
+	)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"describe collection for content vector key failed",
+			"collection", collectionName,
+			"err", err,
+		)
+		return fmt.Errorf("describe collection %s for content vector key: %w", collectionName, err)
+	}
+	fieldExists := false
+	for _, field := range collection.Schema.Fields {
+		if field.Name == contentVectorKeyFieldName {
+			fieldExists = true
+			break
+		}
+	}
+	if !fieldExists {
+		if err := service.milvus.AddCollectionField(
+			ctx,
+			milvusclient.NewAddCollectionFieldOption(collectionName, contentVectorKeyField()),
+		); err != nil {
+			return fmt.Errorf("add content vector key column to %s: %w", collectionName, err)
+		}
+	}
+	indexes, err := service.milvus.ListIndexes(
+		ctx,
+		milvusclient.NewListIndexOption(collectionName).
+			WithFieldName(contentVectorKeyFieldName),
+	)
+	if err != nil {
+		return fmt.Errorf("list content vector key indexes on %s: %w", collectionName, err)
+	}
+	if len(indexes) > 0 {
+		return nil
+	}
+	task, err := service.milvus.CreateIndex(
+		ctx,
+		milvusclient.NewCreateIndexOption(
+			collectionName,
+			contentVectorKeyFieldName,
+			index.NewInvertedIndex(),
+		),
+	)
+	if err != nil {
+		return fmt.Errorf("create content vector key index on %s: %w", collectionName, err)
+	}
+	if err := task.Await(ctx); err != nil {
+		return fmt.Errorf("await content vector key index on %s: %w", collectionName, err)
+	}
+	return nil
 }
 
 func (service *Service) addMissingSplitPartColumn(ctx context.Context, collectionName string) error {

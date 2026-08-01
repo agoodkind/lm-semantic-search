@@ -320,6 +320,7 @@ func actualInsertRequestBytes(
 ) int {
 	ids := make([]string, 0, len(chunks))
 	contents := make([]string, 0, len(chunks))
+	contentVectorKeys := make([]string, 0, len(chunks))
 	relativePaths := make([]string, 0, len(chunks))
 	startLines := make([]int64, 0, len(chunks))
 	endLines := make([]int64, 0, len(chunks))
@@ -334,6 +335,7 @@ func actualInsertRequestBytes(
 		metadataValue, _ := sanitizeUTF8(encodeMetadata(chunk))
 		ids = append(ids, generateID(chunk, index))
 		contents = append(contents, content)
+		contentVectorKeys = append(contentVectorKeys, ContentVectorKey(content))
 		relativePaths = append(relativePaths, relativePath)
 		startLines = append(startLines, int64(chunk.StartLine))
 		endLines = append(endLines, int64(chunk.EndLine))
@@ -346,6 +348,7 @@ func actualInsertRequestBytes(
 	fieldsData := []*schemapb.FieldData{
 		column.NewColumnVarChar(idFieldName, ids).FieldData(),
 		column.NewColumnVarChar(contentFieldName, contents).FieldData(),
+		column.NewColumnVarChar(contentVectorKeyFieldName, contentVectorKeys).FieldData(),
 		column.NewColumnVarChar(relativePathFieldName, relativePaths).FieldData(),
 		column.NewColumnInt64(startLineFieldName, startLines).FieldData(),
 		column.NewColumnInt64(endLineFieldName, endLines).FieldData(),

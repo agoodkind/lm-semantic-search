@@ -4,8 +4,30 @@ import (
 	"context"
 	"strings"
 
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
+
+// LoadReuseVectorsForContents resolves candidate contents across one complete
+// collection without changing any row.
+func (store *Store) LoadReuseVectorsForContents(
+	ctx context.Context,
+	collectionName string,
+	chunks []model.StoredChunk,
+) (map[string][]float32, error) {
+	wanted := make(map[string]struct{}, len(chunks))
+	for _, chunk := range chunks {
+		wanted[semantic.ContentVectorKey(chunk.Content)] = struct{}{}
+	}
+	if err := operationContextError(ctx, "load local vector reuse contents"); err != nil {
+		return nil, err
+	}
+	stored, err := store.collectionForName(collectionName, false)
+	if err != nil {
+		return nil, err
+	}
+	return stored.reuseVectorsForKeys(wanted)
+}
 
 // LoadReuseVectors loads reusable vectors from collections.
 func (store *Store) LoadReuseVectors(

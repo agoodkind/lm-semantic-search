@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -366,5 +367,44 @@ func TestEmbedChunkBatchCountsReuseInMetrics(t *testing.T) {
 	after := metrics.Read().EmbedChunksReusedTotal
 	if after-before != 1 {
 		t.Fatalf("EmbedChunksReusedTotal delta = %d, want 1", after-before)
+	}
+}
+
+func TestNewlyEmbeddedReuseCatalogExcludesReusedVectors(t *testing.T) {
+	chunks := []model.StoredChunk{{Content: "reused"}, {Content: "fresh"}}
+	vectors := [][]float32{{1, 2}, {3, 4}}
+	reuse := map[string][]float32{contentVectorKey("reused"): {1, 2}}
+
+	catalog := newlyEmbeddedReuseCatalog(chunks, vectors, reuse)
+
+	if _, found := catalog["reused"]; found {
+		t.Fatal("catalog included a reused vector")
+	}
+	if got := catalog["fresh"]; !slices.Equal(got, []float32{3, 4}) {
+		t.Fatalf("fresh catalog vector = %v, want [3 4]", got)
+	}
+}
+
+func TestReuseCatalogCollectionNameScopesStateRootAndEmbeddingIdentity(t *testing.T) {
+	first := config.Config{
+		StateRoot:          "/state/one",
+		EmbeddingProvider:  "OpenAI",
+		EmbeddingModel:     "model-a",
+		EmbeddingDimension: 3,
+	}
+	secondStateRoot := first
+	secondStateRoot.StateRoot = "/state/two"
+	secondModel := first
+	secondModel.EmbeddingModel = "model-b"
+
+	firstName := ReuseCatalogCollectionName(first)
+	if firstName != ReuseCatalogCollectionName(first) {
+		t.Fatal("reuse catalog collection name is unstable")
+	}
+	if firstName == ReuseCatalogCollectionName(secondStateRoot) {
+		t.Fatal("different state roots share a reuse catalog")
+	}
+	if firstName == ReuseCatalogCollectionName(secondModel) {
+		t.Fatal("different embedding identities share a reuse catalog")
 	}
 }

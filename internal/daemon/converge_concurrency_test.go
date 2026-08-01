@@ -69,12 +69,13 @@ type fakeSemantic struct {
 	// conversation ingest loads by conv/<id>/ prefix; reusePrefixCalls records
 	// every such load and reindexReuse records the reuse map each conversation's
 	// Reindex actually received.
-	loadReuseForPrefix func(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
-	reusePrefixCalls   []reusePrefixCall
-	loadReuseForPath   func(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
-	reusePathCalls     []reusePathCall
-	loadMessageState   func(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error)
-	messageStateCalls  []messageStateCall
+	loadReuseForPrefix   func(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
+	reusePrefixCalls     []reusePrefixCall
+	loadReuseForPath     func(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
+	reusePathCalls       []reusePathCall
+	loadReuseForContents func(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string][]float32, error)
+	loadMessageState     func(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error)
+	messageStateCalls    []messageStateCall
 	// loadDerivedBatch, when set, supplies the batched stored-row read the
 	// examination path issues once per run; derivedBatchCalls records the
 	// conversation-id batches each call asked for. When it is nil but
@@ -263,6 +264,17 @@ func (f *fakeSemantic) LoadReuseVectorsForPath(ctx context.Context, collectionNa
 	f.mu.Unlock()
 	if f.loadReuseForPath != nil {
 		return f.loadReuseForPath(ctx, collectionName, relativePath)
+	}
+	return map[string][]float32{}, nil
+}
+
+func (f *fakeSemantic) LoadReuseVectorsForContents(
+	ctx context.Context,
+	collectionName string,
+	chunks []model.StoredChunk,
+) (map[string][]float32, error) {
+	if f.loadReuseForContents != nil {
+		return f.loadReuseForContents(ctx, collectionName, chunks)
 	}
 	return map[string][]float32{}, nil
 }

@@ -730,7 +730,14 @@ func (manager *Manager) handleRemovedFile(ctx context.Context, job model.Job, st
 
 func (manager *Manager) applyChangedFileSemantic(ctx context.Context, job model.Job, state deltaState, relativePath string, fileResult indexer.OneFileResult, removal semantic.Removal) deltaOutcome {
 	var reuseErr error
-	state, reuseErr = manager.reuseStateForChangedFile(ctx, state, relativePath, fileResult, removal)
+	state, reuseErr = manager.reuseStateForChangedFile(
+		ctx,
+		state,
+		relativePath,
+		fileResult,
+		removal,
+		job.Forced,
+	)
 	if reuseErr != nil {
 		manager.finishJobForReuseFailure(ctx, job.ID, reuseErr)
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
@@ -739,34 +746,6 @@ func (manager *Manager) applyChangedFileSemantic(ctx context.Context, job model.
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 	return manager.applyReindexForState(ctx, job, state, fileResult.Chunks, removal, "per-file reindex")
-}
-
-func (manager *Manager) reuseStateForChangedFile(
-	ctx context.Context,
-	state deltaState,
-	relativePath string,
-	fileResult indexer.OneFileResult,
-	removal semantic.Removal,
-) (deltaState, error) {
-	if fileResult.ReuseVectors != nil {
-		state.reuse = mergedReuse(state.reuse, fileResult.ReuseVectors)
-		if state.chunkCounts != nil {
-			state.chunkCounts.reuseVectorsLoaded += safeInt32(len(fileResult.ReuseVectors))
-		}
-		return state, nil
-	}
-	if len(fileResult.Chunks) == 0 && removal.Empty() {
-		return state, nil
-	}
-	reuse, loaded, err := manager.itemReuse(ctx, state, relativePath)
-	if err != nil {
-		return state, err
-	}
-	state.reuse = reuse
-	if state.chunkCounts != nil {
-		state.chunkCounts.reuseVectorsLoaded += loaded
-	}
-	return state, nil
 }
 
 func effectiveRemoval(source itemSource, fileResult indexer.OneFileResult, relativePath string) semantic.Removal {

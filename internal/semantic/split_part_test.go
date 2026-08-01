@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -50,6 +51,9 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 	migration := &splitPartMigration{}
 	migration.once.Do(func() {})
 	service.ensuredSplitPartColumns.Store(collectionName, migration)
+	contentKeyMigration := &contentVectorKeyMigration{}
+	contentKeyMigration.once.Do(func() {})
+	service.ensuredContentVectorKeyColumns.Store(collectionName, contentKeyMigration)
 
 	err := service.insertBatch(
 		context.Background(),
@@ -80,6 +84,20 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 		ResultCount: int(request.GetNumRows()),
 		Fields:      fields,
 	}
+	contentKeys := resultSet.GetColumn(contentVectorKeyFieldName)
+	if contentKeys == nil {
+		t.Fatal("inserted row has no content vector key column")
+	}
+	for index, chunk := range input {
+		got, keyErr := contentKeys.GetAsString(index)
+		if keyErr != nil {
+			t.Fatalf("read content vector key %d: %v", index, keyErr)
+		}
+		want := contentVectorStorageKey(service.cfg, chunk.Content)
+		if got != want {
+			t.Fatalf("content vector key %d = %q, want %q", index, got, want)
+		}
+	}
 
 	chunks, err := resultSetsToChunks([]milvusclient.ResultSet{resultSet})
 	if err != nil {
@@ -93,6 +111,27 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 	}
 	if generateID(chunks[0], 0) == generateID(chunks[1], 1) {
 		t.Fatal("round-tripped split pieces share a primary key")
+	}
+}
+
+func TestContentVectorStorageKeyIncludesEmbedderIdentity(t *testing.T) {
+	t.Parallel()
+
+	first := config.Config{
+		EmbeddingProvider:  "OpenAI",
+		EmbeddingModel:     "model-a",
+		EmbeddingDimension: 3,
+		OpenAIBaseURL:      "https://embedder-a.example/v1",
+	}
+	second := first
+	second.EmbeddingModel = "model-b"
+
+	firstKey := contentVectorStorageKey(first, "same content")
+	if firstKey != contentVectorStorageKey(first, "same content") {
+		t.Fatal("content vector storage key is unstable")
+	}
+	if firstKey == contentVectorStorageKey(second, "same content") {
+		t.Fatal("different embedding models share a content vector storage key")
 	}
 }
 
@@ -126,6 +165,7 @@ func testInsertCollection(collectionName string, dimension int64) *entity.Collec
 			WithName(metadataFieldName).
 			WithDataType(entity.FieldTypeVarChar).
 			WithMaxLength(65535)).
+		WithField(contentVectorKeyField()).
 		WithField(splitPartField()).
 		WithField(entity.NewField().
 			WithName(denseVectorFieldName).
@@ -149,6 +189,9 @@ func TestInsertBatchRejectsPartialInsertCount(t *testing.T) {
 	migration := &splitPartMigration{}
 	migration.once.Do(func() {})
 	service.ensuredSplitPartColumns.Store(collectionName, migration)
+	contentKeyMigration := &contentVectorKeyMigration{}
+	contentKeyMigration.once.Do(func() {})
+	service.ensuredContentVectorKeyColumns.Store(collectionName, contentKeyMigration)
 	chunks := []model.StoredChunk{
 		{Content: "first", RelativePath: "first.go"},
 		{Content: "second", RelativePath: "second.go"},
@@ -318,6 +361,7 @@ func TestInvalidateCollectionCachesClearsSchemaState(t *testing.T) {
 	service := &Service{}
 	service.ensuredConvColumns.Store(collectionName, "conversation")
 	service.ensuredSplitPartColumns.Store(collectionName, "split-part")
+	service.ensuredContentVectorKeyColumns.Store(collectionName, "content-key")
 	service.ensuredMmapEnabled.Store(collectionName, "mmap")
 	service.ensuredBackfill.Store(collectionName, "backfill")
 
@@ -326,6 +370,7 @@ func TestInvalidateCollectionCachesClearsSchemaState(t *testing.T) {
 	caches := []*sync.Map{
 		&service.ensuredConvColumns,
 		&service.ensuredSplitPartColumns,
+		&service.ensuredContentVectorKeyColumns,
 		&service.ensuredMmapEnabled,
 		&service.ensuredBackfill,
 	}

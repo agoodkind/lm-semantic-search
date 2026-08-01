@@ -29,19 +29,20 @@ import (
 // writes the same collections the TS adapter does. The names are camelCase
 // because that is what the TS adapter wrote.
 const (
-	maxCollectionNameLength = 255
-	stagingCollectionSuffix = "_stg"
-	denseVectorFieldName    = "vector"
-	sparseVectorFieldName   = "sparse_vector"
-	contentFieldName        = "content"
-	relativePathFieldName   = "relativePath"
-	startLineFieldName      = "startLine"
-	endLineFieldName        = "endLine"
-	fileExtensionFieldName  = "fileExtension"
-	metadataFieldName       = "metadata"
-	idFieldName             = "id"
-	splitPartFieldName      = "splitPart"
-	countOutputField        = "count(*)"
+	maxCollectionNameLength   = 255
+	stagingCollectionSuffix   = "_stg"
+	denseVectorFieldName      = "vector"
+	sparseVectorFieldName     = "sparse_vector"
+	contentFieldName          = "content"
+	relativePathFieldName     = "relativePath"
+	startLineFieldName        = "startLine"
+	endLineFieldName          = "endLine"
+	fileExtensionFieldName    = "fileExtension"
+	metadataFieldName         = "metadata"
+	idFieldName               = "id"
+	splitPartFieldName        = "splitPart"
+	contentVectorKeyFieldName = "contentVectorKey"
+	countOutputField          = "count(*)"
 )
 
 // Progress reports semantic indexing progress after chunk extraction.
@@ -92,14 +93,17 @@ func (service *Service) EmbeddingProviderName() model.EmbeddingProvider {
 
 // Service owns the embedding provider and Milvus client for semantic search.
 type Service struct {
-	cfg             config.Config
-	embedder        embedding.Provider
-	milvus          *milvusclient.Client
-	insertRows      insertRowsFunc
-	available       atomic.Bool
-	reconnectCancel context.CancelFunc
-	reconnectDone   chan struct{}
-	closeOnce       sync.Once
+	cfg                     config.Config
+	embedder                embedding.Provider
+	milvus                  *milvusclient.Client
+	insertRows              insertRowsFunc
+	available               atomic.Bool
+	reconnectCancel         context.CancelFunc
+	reconnectDone           chan struct{}
+	closeOnce               sync.Once
+	reuseCatalogReady       atomic.Bool
+	reuseCatalogMutex       sync.Mutex
+	reuseCatalogAppendMutex sync.Mutex
 	// collectionLoads collapses concurrent initial load, wait, and recovery work
 	// for the same collection name into one shared flight.
 	collectionLoads collectionLoadCoordinator
@@ -110,6 +114,9 @@ type Service struct {
 	// ensuredSplitPartColumns gates the nullable splitPart schema migration once
 	// per collection per process.
 	ensuredSplitPartColumns sync.Map
+	// ensuredContentVectorKeyColumns gates the nullable reuse-key column and
+	// scalar-index migration once per collection per process.
+	ensuredContentVectorKeyColumns sync.Map
 	// ensuredMmapEnabled records the collections this process has confirmed
 	// mmap-migrated, so the daemon's periodic mmap sweep skips them with no RPC.
 	// See ensureMmapEnabledOnce.
@@ -124,22 +131,26 @@ type Service struct {
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
 		return &Service{
-			cfg:             cfg,
-			embedder:        nil,
-			milvus:          nil,
-			insertRows:      nil,
-			available:       atomic.Bool{},
-			reconnectCancel: nil,
-			reconnectDone:   nil,
-			closeOnce:       sync.Once{},
+			cfg:                     cfg,
+			embedder:                nil,
+			milvus:                  nil,
+			insertRows:              nil,
+			available:               atomic.Bool{},
+			reconnectCancel:         nil,
+			reconnectDone:           nil,
+			closeOnce:               sync.Once{},
+			reuseCatalogReady:       atomic.Bool{},
+			reuseCatalogMutex:       sync.Mutex{},
+			reuseCatalogAppendMutex: sync.Mutex{},
 			collectionLoads: collectionLoadCoordinator{
 				mutex:   sync.Mutex{},
 				flights: nil,
 			},
-			ensuredConvColumns:      sync.Map{},
-			ensuredSplitPartColumns: sync.Map{},
-			ensuredMmapEnabled:      sync.Map{},
-			ensuredBackfill:         sync.Map{},
+			ensuredConvColumns:             sync.Map{},
+			ensuredSplitPartColumns:        sync.Map{},
+			ensuredContentVectorKeyColumns: sync.Map{},
+			ensuredMmapEnabled:             sync.Map{},
+			ensuredBackfill:                sync.Map{},
 		}, nil
 	}
 
@@ -150,22 +161,26 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	service := &Service{
-		cfg:             cfg,
-		embedder:        embedder,
-		milvus:          nil,
-		insertRows:      nil,
-		available:       atomic.Bool{},
-		reconnectCancel: nil,
-		reconnectDone:   nil,
-		closeOnce:       sync.Once{},
+		cfg:                     cfg,
+		embedder:                embedder,
+		milvus:                  nil,
+		insertRows:              nil,
+		available:               atomic.Bool{},
+		reconnectCancel:         nil,
+		reconnectDone:           nil,
+		closeOnce:               sync.Once{},
+		reuseCatalogReady:       atomic.Bool{},
+		reuseCatalogMutex:       sync.Mutex{},
+		reuseCatalogAppendMutex: sync.Mutex{},
 		collectionLoads: collectionLoadCoordinator{
 			mutex:   sync.Mutex{},
 			flights: nil,
 		},
-		ensuredConvColumns:      sync.Map{},
-		ensuredSplitPartColumns: sync.Map{},
-		ensuredMmapEnabled:      sync.Map{},
-		ensuredBackfill:         sync.Map{},
+		ensuredConvColumns:             sync.Map{},
+		ensuredSplitPartColumns:        sync.Map{},
+		ensuredContentVectorKeyColumns: sync.Map{},
+		ensuredMmapEnabled:             sync.Map{},
+		ensuredBackfill:                sync.Map{},
 	}
 
 	client, err := service.dialMilvus(ctx)
@@ -295,6 +310,7 @@ func (service *Service) renameCollection(ctx context.Context, oldName string, ne
 func (service *Service) invalidateCollectionCaches(collectionName string) {
 	service.ensuredConvColumns.Delete(collectionName)
 	service.ensuredSplitPartColumns.Delete(collectionName)
+	service.ensuredContentVectorKeyColumns.Delete(collectionName)
 	service.ensuredMmapEnabled.Delete(collectionName)
 	service.ensuredBackfill.Delete(collectionName)
 }
