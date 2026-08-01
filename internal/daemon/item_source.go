@@ -380,10 +380,8 @@ func (source conversationItemSource) loadDerivedBatch(ctx context.Context) (sema
 // Rebuilding present rows is the force path's job: it re-embeds present units
 // unpruned rather than relying on this classifier.
 //
-// The backfill path never calls diffConversationMessages or
-// conversationDocumentsToStoredChunks: those regenerate chunks and would
-// reintroduce the per-item cost this prune removes. On a batch-load error it logs
-// and fails safe by returning every delivered id, so a store read failure never
+// The backfill classifier never regenerates chunks. On a batch-load error it
+// fails safe by returning every delivered id, so a store read failure never
 // causes an under-embed.
 func (source conversationItemSource) forcedWorkSet(ctx context.Context) ([]string, error) {
 	if source.force {
@@ -408,7 +406,7 @@ func (source conversationItemSource) forcedWorkSet(ctx context.Context) ([]strin
 	forced := make([]string, 0, len(source.documents))
 	for conversationID, documents := range source.documents {
 		stored := batch.Rows[conversationID]
-		if conversationNeedsDerivedWork(conversationID, documents, stored.DerivedPaths) {
+		if conversationNeedsDerivedWork(conversationID, documents, stored) {
 			forced = append(forced, conversationID)
 		}
 	}
@@ -436,23 +434,28 @@ func (source conversationItemSource) columnSet() semantic.StoreColumnSet {
 
 // conversationNeedsDerivedWork reports whether a delivered conversation still has
 // derived (tool or thinking) rows missing from the store, judged CHEAPLY from
-// message metadata and stored derived-path presence alone. A tool-carrying
-// message expects at least one stored row under convtool/<id>/<msgIdx>/, and a
-// thinking-carrying message expects a stored row at convthink/<id>/<msgIdx> or
-// under its multipart prefix. It never regenerates chunks, so a fully present
-// conversation is classified as a no-op without paying the per-item embed cost.
-// A message carrying no tools and no thinking expects no derived rows, so a
-// conversation of only such messages needs no work.
+// message metadata and usable stored-path presence. Each tool call expects
+// a stored row at convtool/<id>/<msgIdx>/<toolIdx> or under its multipart prefix,
+// and a thinking-carrying message expects a stored row at
+// convthink/<id>/<msgIdx> or under its multipart prefix. It never regenerates
+// chunks, so a fully present conversation is classified as a no-op without paying
+// the per-item embed cost. A message carrying no tools and no thinking expects no
+// derived rows, so a conversation of only such messages needs no work.
 //
-// It judges PRESENCE only: a message whose expected derived prefix is present
+// It judges USABLE PRESENCE only: a message whose expected derived prefix is present
 // needs no work, regardless of the pipeline version that produced the stored row.
 // Detecting stale or older-version content is the force path's responsibility,
 // not this backfill classifier's.
-func conversationNeedsDerivedWork(conversationID string, documents []model.ConversationDocument, storedDerivedPaths map[string]string) bool {
+func conversationNeedsDerivedWork(
+	conversationID string,
+	documents []model.ConversationDocument,
+	stored semantic.ConversationStoredRows,
+) bool {
+	storedDerivedPaths := usableConversationDerivedPaths(stored)
 	for _, document := range documents {
-		if len(document.Tools) > 0 {
-			toolPrefix := conversationToolMessagePath(conversationID, document.MessageIndex) + "/"
-			if !derivedPrefixPresent(storedDerivedPaths, toolPrefix, "") {
+		for toolIndex := range document.Tools {
+			toolPath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
+			if !derivedPrefixPresent(storedDerivedPaths, toolPath+"/", toolPath) {
 				return true
 			}
 		}
@@ -471,7 +474,7 @@ func conversationNeedsDerivedWork(conversationID string, documents []model.Conve
 // prefix is load-bearing: a bare prefix would like-match a sibling index
 // (message 1 catching message 12), the same boundary conversationDerivedPathsForMessage
 // enforces.
-func derivedPrefixPresent(storedDerivedPaths map[string]string, prefix string, exact string) bool {
+func derivedPrefixPresent(storedDerivedPaths map[string]struct{}, prefix string, exact string) bool {
 	for relativePath := range storedDerivedPaths {
 		if exact != "" && relativePath == exact {
 			return true
@@ -483,13 +486,26 @@ func derivedPrefixPresent(storedDerivedPaths map[string]string, prefix string, e
 	return false
 }
 
+func usableConversationDerivedPaths(
+	stored semantic.ConversationStoredRows,
+) map[string]struct{} {
+	if stored.UsableDerivedPaths != nil {
+		return stored.UsableDerivedPaths
+	}
+	paths := make(map[string]struct{}, len(stored.DerivedPaths))
+	for relativePath := range stored.DerivedPaths {
+		paths[relativePath] = struct{}{}
+	}
+	return paths
+}
+
 func (source conversationItemSource) capture(_ context.Context) (merkle.Snapshot, error) {
 	files := make(map[string]string, len(source.manifest))
 	maps.Copy(files, source.manifest)
 	return merkle.Snapshot{ConfigDigest: "", Files: files, Inodes: nil}, nil
 }
 
-// indexOne diffs the delivered messages against the LIVE collection's rows.
+// indexOne emits only delivered families absent from the live collection.
 // A bootstrap writes into a staging collection, so this is safe only because
 // every route into a conversation bootstrap guarantees the live collection is
 // missing or empty (decideEmptyDiffMode requires definitive evidence, the
@@ -528,8 +544,18 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 
 	batch, err := source.loadDerivedBatch(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "load conversation derived batch failed; falling back to full conversation reindex", "conversation_id", conversationID, "collection", source.collectionName, "err", err)
-		return source.fullConversationResult(ctx, conversationID, documents, true)
+		slog.WarnContext(
+			ctx,
+			"load stored conversation rows failed",
+			"conversation_id", conversationID,
+			"collection", source.collectionName,
+			"err", err,
+		)
+		return indexer.OneFileResult{}, fmt.Errorf(
+			"load stored conversation rows for %q: %w",
+			conversationID,
+			err,
+		)
 	}
 	stored := batch.Rows[conversationID]
 	if stored.Messages == nil {
@@ -538,17 +564,15 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 	if stored.DerivedPaths == nil {
 		stored.DerivedPaths = map[string]string{}
 	}
-	// The batch-wide reuse map spans every delivered conversation, so a changed
-	// message reuses a vector embedded for identical content anywhere in the batch
-	// while its missing target row is still inserted. A non-nil map keeps the
-	// message-delta path from falling back to a per-conversation reuse load.
+	// The batch-wide reuse map spans every delivered conversation, so a missing
+	// family can reuse a vector embedded for identical content anywhere in the
+	// batch. A non-nil map avoids a per-conversation reuse load.
 	batchReuse := batch.Reuse
 	if batchReuse == nil {
 		batchReuse = map[string][]float32{}
 	}
 
-	delta := diffConversationMessages(ctx, conversationID, documents, stored)
-	chunks, err := conversationDocumentsToStoredChunks(ctx, delta.documents, source.chunkByteBudget)
+	chunks, err := conversationDocumentsToStoredChunks(ctx, documents, source.chunkByteBudget)
 	if err != nil {
 		return indexer.OneFileResult{
 			Chunks:          nil,
@@ -562,6 +586,7 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 			ReuseVectors:    nil,
 		}, err
 	}
+	chunks = missingConversationFamilyChunks(conversationID, documents, chunks, stored)
 	return indexer.OneFileResult{
 		Chunks:          chunks,
 		FileHash:        source.manifest[conversationID],
@@ -569,10 +594,58 @@ func (source conversationItemSource) indexOne(ctx context.Context, conversationI
 		SkipReason:      indexer.SkipNone,
 		Removed:         false,
 		RemovalOverride: true,
-		RemovalPaths:    delta.removalPaths,
-		RemovalPrefixes: delta.removalPrefixes,
+		RemovalPaths:    nil,
+		RemovalPrefixes: nil,
 		ReuseVectors:    batchReuse,
 	}, nil
+}
+
+func missingConversationFamilyChunks(
+	conversationID string,
+	documents []model.ConversationDocument,
+	chunks []model.StoredChunk,
+	stored semantic.ConversationStoredRows,
+) []model.StoredChunk {
+	storedDerivedPaths := usableConversationDerivedPaths(stored)
+	presentDerivedFamilies := make(map[string]struct{})
+	for _, document := range documents {
+		for toolIndex := range document.Tools {
+			toolPath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
+			if derivedPrefixPresent(storedDerivedPaths, toolPath+"/", toolPath) {
+				presentDerivedFamilies[toolPath] = struct{}{}
+			}
+		}
+		thinkingPath := conversationThinkingPath(conversationID, document.MessageIndex)
+		if derivedPrefixPresent(storedDerivedPaths, thinkingPath+"/", thinkingPath) {
+			presentDerivedFamilies[thinkingPath] = struct{}{}
+		}
+	}
+
+	missing := make([]model.StoredChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if strings.HasPrefix(chunk.RelativePath, "conv/"+conversationID+"/") {
+			message, found := stored.Messages[chunk.MessageIndex]
+			if found && conversationStorableText(message.Text) != "" {
+				continue
+			}
+			missing = append(missing, chunk)
+			continue
+		}
+		if conversationChunkFamilyPresent(chunk.RelativePath, presentDerivedFamilies) {
+			continue
+		}
+		missing = append(missing, chunk)
+	}
+	return missing
+}
+
+func conversationChunkFamilyPresent(relativePath string, presentFamilies map[string]struct{}) bool {
+	for familyPath := range presentFamilies {
+		if relativePath == familyPath || strings.HasPrefix(relativePath, familyPath+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (source conversationItemSource) fullConversationResult(ctx context.Context, conversationID string, documents []model.ConversationDocument, removalOverride bool) (indexer.OneFileResult, error) {
@@ -625,9 +698,9 @@ func (source conversationItemSource) absencePolicy() absencePolicy {
 	return source.absence
 }
 
-// reuseSource stays prefix scoped for loader-error fallback. The normal
-// message-delta path carries reuse in OneFileResult and skips this per-item
-// load, but a full fallback still needs the existing conv/<id>/ rows. Under
+// reuseSource stays prefix scoped for full-delivery fallback. The normal family
+// filter carries reuse in OneFileResult and skips this per-item load, but a full
+// fallback still needs the existing conv/<id>/ rows. Under
 // force the reuse lever is disabled: it returns the no-reuse scope so a present
 // chunk cannot be served from a stored vector and every chunk re-embeds, which
 // is what makes force rebuild present-but-stale rows.

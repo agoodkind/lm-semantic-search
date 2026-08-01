@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -981,7 +980,7 @@ func assertDerivedBatchCalls(t *testing.T, got []derivedBatchCall, wantCollectio
 	assertStringSliceEqual(t, got[0].ConversationIDs, wantIDs)
 }
 
-func TestConversationIndexOneReindexesOnlyEditedMessage(t *testing.T) {
+func TestConversationIndexOnePreservesEditedStoredMessage(t *testing.T) {
 	t.Parallel()
 
 	reader := &testConversationRowReader{
@@ -1011,14 +1010,12 @@ func TestConversationIndexOneReindexesOnlyEditedMessage(t *testing.T) {
 		t.Fatalf("indexOne returned error: %v", err)
 	}
 
-	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
-		{relativePath: "conv/conv-edit/1", messageIndex: 1, role: "assistant", content: "new answer"},
-	})
-	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-edit", 1))
-	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-edit", 1))
+	assertConversationDeltaChunks(t, result.Chunks, nil)
+	assertStringSliceEqual(t, result.RemovalPaths, nil)
+	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
 }
 
-func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
+func TestConversationIndexOnePreservesStoredMessagesAbsentFromDelivery(t *testing.T) {
 	t.Parallel()
 
 	reader := &testConversationRowReader{
@@ -1050,58 +1047,12 @@ func TestConversationIndexOneDeletesStaleMessages(t *testing.T) {
 	if len(result.Chunks) != 0 {
 		t.Fatalf("Chunks = %+v, want none for stale-only delta", result.Chunks)
 	}
-	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-stale", 2))
-	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-stale", 2))
+	assertStringSliceEqual(t, result.RemovalPaths, nil)
+	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
 	assertReuseVector(t, result.ReuseVectors, "reuse-stale", []float32{3})
-
-	manager, _, _ := newTestManager(t)
-	fake := &fakeSemantic{
-		loadMessageState: func(context.Context, string, string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
-			return cloneStoredMessageState(reader.state), map[string][]float32{}, nil
-		},
-	}
-	manager.semantic = fake
-	ctx := context.Background()
-	collectionID := "thread-stale-checkpoint"
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
-		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
-		Files:        map[string]string{"conv-stale": "fp-stale-old"},
-		Inodes:       nil,
-	}); err != nil {
-		t.Fatalf("WriteSnapshot returned error: %v", err)
-	}
-
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, source.documents["conv-stale"], source.manifest, testClientInfo(), absenceRetain, false, false)
-	if err != nil {
-		t.Fatalf("upsertConversationDocuments returned error: %v", err)
-	}
-	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
-
-	snapshot, err := merkle.ReadSnapshot(manager.merklePath(codebase.ID))
-	if err != nil {
-		t.Fatalf("ReadSnapshot returned error: %v", err)
-	}
-	if snapshot.Files["conv-stale"] != "fp-stale" {
-		t.Fatalf("checkpoint fingerprint = %q, want fp-stale", snapshot.Files["conv-stale"])
-	}
-	calls := fake.reindexCallsSnapshot()
-	if len(calls) != 1 {
-		t.Fatalf("Reindex calls = %+v, want one stale removal call", calls)
-	}
-	if calls[0].Chunks != 0 {
-		t.Fatalf("stale removal chunks = %d, want 0", calls[0].Chunks)
-	}
-	assertRemovalEqual(t, calls[0].Removal, semantic.Removal{
-		Paths:    conversationRemovalPathsForTest("conv-stale", 2),
-		Prefixes: conversationRemovalPrefixesForTest("conv-stale", 2),
-	})
 }
 
-func TestConversationIndexOneMultipartTransitions(t *testing.T) {
+func TestConversationIndexOnePreservesStoredBaseAcrossChunkingTransitions(t *testing.T) {
 	t.Parallel()
 
 	t.Run("multipart stored row becomes single part", func(t *testing.T) {
@@ -1130,11 +1081,9 @@ func TestConversationIndexOneMultipartTransitions(t *testing.T) {
 			t.Fatalf("indexOne returned error: %v", err)
 		}
 
-		assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
-			{relativePath: "conv/conv-shape/7", messageIndex: 7, role: "assistant", content: "short"},
-		})
-		assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-shape", 7))
-		assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-shape", 7))
+		assertConversationDeltaChunks(t, result.Chunks, nil)
+		assertStringSliceEqual(t, result.RemovalPaths, nil)
+		assertStringSliceEqual(t, result.RemovalPrefixes, nil)
 	})
 
 	t.Run("single stored row becomes multipart", func(t *testing.T) {
@@ -1164,22 +1113,13 @@ func TestConversationIndexOneMultipartTransitions(t *testing.T) {
 			t.Fatalf("indexOne returned error: %v", err)
 		}
 
-		if len(result.Chunks) != 2 {
-			t.Fatalf("chunks = %d, want 2 multipart chunks", len(result.Chunks))
-		}
-		assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
-			{relativePath: "conv/conv-shape/8/0", messageIndex: 8, role: "assistant", content: result.Chunks[0].Content},
-			{relativePath: "conv/conv-shape/8/1", messageIndex: 8, role: "assistant", content: result.Chunks[1].Content},
-		})
-		if result.Chunks[0].Content+result.Chunks[1].Content != text {
-			t.Fatalf("multipart content did not round trip to delivered text")
-		}
-		assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-shape", 8))
-		assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-shape", 8))
+		assertConversationDeltaChunks(t, result.Chunks, nil)
+		assertStringSliceEqual(t, result.RemovalPaths, nil)
+		assertStringSliceEqual(t, result.RemovalPrefixes, nil)
 	})
 }
 
-func TestConversationIndexOneSiblingIndexSafety(t *testing.T) {
+func TestConversationIndexOnePreservesChangedSiblingIndexes(t *testing.T) {
 	t.Parallel()
 
 	reader := &testConversationRowReader{
@@ -1207,17 +1147,16 @@ func TestConversationIndexOneSiblingIndexSafety(t *testing.T) {
 		t.Fatalf("indexOne returned error: %v", err)
 	}
 
-	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
-		{relativePath: "conv/conv-sibling/12", messageIndex: 12, role: "user", content: "new twelve"},
-	})
-	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest("conv-sibling", 12))
-	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest("conv-sibling", 12))
+	assertConversationDeltaChunks(t, result.Chunks, nil)
+	assertStringSliceEqual(t, result.RemovalPaths, nil)
+	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
 }
 
-func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T) {
+func TestConversationIndexOneStateLoadFailureStopsWithoutWrites(t *testing.T) {
 	t.Parallel()
 
-	reader := &testConversationRowReader{err: errors.New("state load failed")}
+	stateLoadErr := errors.New("state load failed")
+	reader := &testConversationRowReader{err: stateLoadErr}
 	documents := []model.ConversationDocument{
 		{ConversationID: "conv-load-failure", MessageIndex: 0, Role: "user", Text: "hello"},
 		{ConversationID: "conv-load-failure", MessageIndex: 1, Role: "assistant", Text: "answer"},
@@ -1233,56 +1172,12 @@ func TestConversationIndexOneStateLoadFailureFallsBackToFullReindex(t *testing.T
 	)
 
 	result, err := source.indexOne(context.Background(), "conv-load-failure")
-	if err != nil {
-		t.Fatalf("indexOne returned error: %v", err)
+	if !errors.Is(err, stateLoadErr) {
+		t.Fatalf("indexOne error = %v, want state load failure", err)
 	}
-
-	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
-		{relativePath: "conv/conv-load-failure/0", messageIndex: 0, role: "user", content: "hello"},
-		{relativePath: "conv/conv-load-failure/1", messageIndex: 1, role: "assistant", content: "answer"},
-	})
-	assertStringSliceEqual(t, result.RemovalPaths, nil)
-	assertStringSliceEqual(t, result.RemovalPrefixes, conversationFullRemovalPrefixes("conv-load-failure"))
-	if result.ReuseVectors != nil {
-		t.Fatalf("ReuseVectors = %v, want nil on loader-error fallback", result.ReuseVectors)
+	if len(result.Chunks) != 0 || len(result.RemovalPaths) != 0 || len(result.RemovalPrefixes) != 0 {
+		t.Fatalf("state load failure produced writes: %+v", result)
 	}
-
-	manager, _, _ := newTestManager(t)
-	fake := &fakeSemantic{
-		loadMessageState: func(context.Context, string, string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
-			return nil, nil, errors.New("state load failed")
-		},
-		loadReuseForPrefix: func(context.Context, string, string) (map[string][]float32, error) {
-			return map[string][]float32{"fallback-reuse": {5}}, nil
-		},
-	}
-	manager.semantic = fake
-	ctx := context.Background()
-	collectionID := "thread-load-failure"
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
-		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
-		Files:        map[string]string{"conv-load-failure": "fp-load-failure-old"},
-		Inodes:       nil,
-	}); err != nil {
-		t.Fatalf("WriteSnapshot returned error: %v", err)
-	}
-
-	job, err := manager.upsertConversationDocuments(ctx, collectionID, documents, map[string]string{"conv-load-failure": "fp-load-failure"}, testClientInfo(), absenceRetain, false, false)
-	if err != nil {
-		t.Fatalf("upsertConversationDocuments returned error: %v", err)
-	}
-	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
-
-	prefixCalls := fake.reusePrefixCallsSnapshot()
-	if len(prefixCalls) != 1 || prefixCalls[0].Prefix != "conv/conv-load-failure/" {
-		t.Fatalf("reuse prefix calls = %+v, want one fallback prefix load", prefixCalls)
-	}
-	reuseByConversation := fake.reindexReuseSnapshot()
-	assertReuseVector(t, reuseByConversation["conv-load-failure"], "fallback-reuse", []float32{5})
 }
 
 func TestConversationIndexOneHealsMissingRows(t *testing.T) {
@@ -1363,7 +1258,7 @@ func TestConversationIndexOneColdConversationEmbedsEveryMessageWithoutRemoval(t 
 	assertReuseVector(t, result.ReuseVectors, "batch-answer", []float32{2})
 }
 
-func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
+func TestConversationIngestAppendsOnlyMissingRows(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
@@ -1419,20 +1314,11 @@ func TestConversationIngestWritesOnlyMessageDeltas(t *testing.T) {
 	editedDocuments := append([]model.ConversationDocument{}, appendedDocuments...)
 	editedDocuments[1].Text = "edited answer"
 	runConversationDeltaIngest(t, manager, ctx, collectionID, editedDocuments, map[string]string{conversationID: "fp-edited"})
-	assertReindexCallCount(t, fake, 3)
-	assertReindexCall(t, fake.reindexCallsSnapshot()[2], 1, semantic.Removal{
-		Paths:    conversationRemovalPathsForTest("conv-e2e", 1),
-		Prefixes: conversationRemovalPrefixesForTest("conv-e2e", 1),
-	})
-	stateStore.setFromDocuments(prefix, editedDocuments)
+	assertReindexCallCount(t, fake, 2)
 
 	staleDocuments := []model.ConversationDocument{editedDocuments[0], editedDocuments[1]}
 	runConversationDeltaIngest(t, manager, ctx, collectionID, staleDocuments, map[string]string{conversationID: "fp-stale"})
-	assertReindexCallCount(t, fake, 4)
-	assertReindexCall(t, fake.reindexCallsSnapshot()[3], 0, semantic.Removal{
-		Paths:    conversationRemovalPathsForTest("conv-e2e", 2),
-		Prefixes: conversationRemovalPrefixesForTest("conv-e2e", 2),
-	})
+	assertReindexCallCount(t, fake, 2)
 }
 
 func TestConversationIngestAppendedMessageDoesNotReembedStoredDerivedRows(t *testing.T) {
@@ -1484,7 +1370,7 @@ func TestConversationIngestAppendedMessageDoesNotReembedStoredDerivedRows(t *tes
 	assertReindexCall(t, fake.reindexCallsSnapshot()[1], 1, semantic.Removal{Paths: nil, Prefixes: nil})
 }
 
-func TestConversationIndexOneReemitsChangedDerivedContentWithSameText(t *testing.T) {
+func TestConversationIndexOnePreservesChangedStoredDerivedContent(t *testing.T) {
 	t.Parallel()
 
 	conversationID := "conv-derived-change"
@@ -1494,6 +1380,9 @@ func TestConversationIndexOneReemitsChangedDerivedContentWithSameText(t *testing
 		},
 		reuse: map[string][]float32{
 			semantic.ContentVectorKey("old private reasoning"): {1},
+		},
+		derivedPaths: map[string]string{
+			conversationThinkingPath(conversationID, 1): semantic.ContentVectorKey("old private reasoning"),
 		},
 	}
 	source := newConversationItemSource(
@@ -1517,12 +1406,9 @@ func TestConversationIndexOneReemitsChangedDerivedContentWithSameText(t *testing
 		t.Fatalf("indexOne returned error: %v", err)
 	}
 
-	assertConversationDeltaChunks(t, result.Chunks, []conversationDeltaChunkWant{
-		{relativePath: "conv/conv-derived-change/1", messageIndex: 1, role: "assistant", content: "answer"},
-		{relativePath: "convthink/conv-derived-change/1", messageIndex: 1, role: "assistant", content: "new private reasoning"},
-	})
-	assertStringSliceEqual(t, result.RemovalPaths, conversationRemovalPathsForTest(conversationID, 1))
-	assertStringSliceEqual(t, result.RemovalPrefixes, conversationRemovalPrefixesForTest(conversationID, 1))
+	assertConversationDeltaChunks(t, result.Chunks, nil)
+	assertStringSliceEqual(t, result.RemovalPaths, nil)
+	assertStringSliceEqual(t, result.RemovalPrefixes, nil)
 }
 
 func TestConversationRPCsQueueJournaledJobs(t *testing.T) {
@@ -2822,11 +2708,7 @@ func TestConversationIndexOneReusesOversizedDerivedChunks(t *testing.T) {
 	}
 }
 
-// TestConversationIngestReuseLoadFailureFallsBackToFullEmbed proves a failed
-// message state and reuse load does not fail the job: the conversation falls
-// back to a full prefix reindex with nil override reuse, and the per-item reuse
-// load can fail independently without failing the job.
-func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
+func TestConversationIngestStoredRowLoadFailureStopsWithoutWrites(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _ := newTestManager(t)
@@ -2848,23 +2730,17 @@ func TestConversationIngestReuseLoadFailureFallsBackToFullEmbed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsertConversationDocuments returned error: %v", err)
 	}
-	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
+	waitForConversationJobState(t, manager, job.ID, model.JobStateFailed)
 
-	reuseByConversation := fake.reindexReuseSnapshot()
-	soloReuse, soloSeen := reuseByConversation["conv-solo"]
-	if !soloSeen {
-		t.Fatal("conv-solo was not reindexed after reuse load failure")
-	}
-	if len(soloReuse) != 0 {
-		t.Fatalf("conv-solo reindex reuse = %v, want empty after load failure", soloReuse)
+	if calls := fake.reindexCallsSnapshot(); len(calls) != 0 {
+		t.Fatalf("stored row load failure produced reindex calls: %+v", calls)
 	}
 	stateCalls := fake.messageStateCallsSnapshot()
 	if len(stateCalls) != 1 || stateCalls[0].Prefix != "conv/conv-solo/" {
 		t.Fatalf("message state loads = %+v, want one conv/conv-solo/ load", stateCalls)
 	}
-	prefixCalls := fake.reusePrefixCallsSnapshot()
-	if len(prefixCalls) != 1 || prefixCalls[0].Prefix != "conv/conv-solo/" {
-		t.Fatalf("fallback reuse prefix loads = %+v, want one conv/conv-solo/ load", prefixCalls)
+	if prefixCalls := fake.reusePrefixCallsSnapshot(); len(prefixCalls) != 0 {
+		t.Fatalf("stored row load failure triggered fallback reuse reads: %+v", prefixCalls)
 	}
 }
 
@@ -3219,342 +3095,3 @@ func TestUpsertConversationDocumentsRejectsAuthoritativeWithoutManifest(t *testi
 // conversationMessageRemovalPaths and conversationMessageRemovalPrefixes recompute
 // the exact strings addRemoval emits for one message, so the diff tests assert
 // membership against the production path helpers rather than hardcoded literals.
-func conversationMessageRemovalPaths(conversationID string, messageIndex int32) []string {
-	return []string{
-		conversationRelativePath(conversationID, messageIndex, 0, false),
-		conversationToolMessagePath(conversationID, messageIndex),
-		conversationThinkingPath(conversationID, messageIndex),
-	}
-}
-
-func conversationMessageRemovalPrefixes(conversationID string, messageIndex int32) []string {
-	paths := conversationMessageRemovalPaths(conversationID, messageIndex)
-	prefixes := make([]string, len(paths))
-	for index, path := range paths {
-		prefixes[index] = path + "/"
-	}
-	return prefixes
-}
-
-func diffDocumentIndexes(documents []model.ConversationDocument) []int32 {
-	indexes := make([]int32, len(documents))
-	for index, document := range documents {
-		indexes[index] = document.MessageIndex
-	}
-	slices.Sort(indexes)
-	return indexes
-}
-
-func TestDiffConversationMessagesAppendIssuesNoRemoval(t *testing.T) {
-	t.Parallel()
-
-	stored := semantic.ConversationStoredRows{
-		Messages: map[int32]semantic.StoredMessageState{
-			0: {Role: "user", Text: "first"},
-			1: {Role: "assistant", Text: "second"},
-			2: {Role: "user", Text: "third"},
-		},
-		DerivedPaths: map[string]string{},
-	}
-	documents := []model.ConversationDocument{
-		{ConversationID: "conv-append", MessageIndex: 0, Role: "user", Text: "first"},
-		{ConversationID: "conv-append", MessageIndex: 1, Role: "assistant", Text: "second"},
-		{ConversationID: "conv-append", MessageIndex: 2, Role: "user", Text: "third"},
-		{ConversationID: "conv-append", MessageIndex: 3, Role: "assistant", Text: "fourth"},
-		{ConversationID: "conv-append", MessageIndex: 4, Role: "user", Text: "fifth"},
-	}
-
-	diff := diffConversationMessages(context.Background(), "conv-append", documents, stored)
-
-	gotIndexes := diffDocumentIndexes(diff.documents)
-	wantIndexes := []int32{3, 4}
-	if !slices.Equal(gotIndexes, wantIndexes) {
-		t.Fatalf("diff.documents message indexes = %v, want %v", gotIndexes, wantIndexes)
-	}
-	if len(diff.removalPaths) != 0 {
-		t.Fatalf("diff.removalPaths = %v, want empty for a pure append", diff.removalPaths)
-	}
-	if len(diff.removalPrefixes) != 0 {
-		t.Fatalf("diff.removalPrefixes = %v, want empty for a pure append", diff.removalPrefixes)
-	}
-}
-
-// TestDiffConversationMessagesAbsentBaseWithOrphanedDerivedRowsRemoves locks the
-// recovery path for a partially applied removal. deleteByRemoval deletes the exact
-// base path before it issues the tool and thinking prefix deletes, so a failure
-// between those steps leaves the base row gone and the convtool rows behind. The
-// retry then reads the message as absent from Messages while DerivedPaths still
-// holds its tool rows, and treating that as a pure append would embed the
-// replacement without purging the superseded tool row, which would stay searchable
-// once the successful retry advances the conversation checkpoint.
-func TestDiffConversationMessagesAbsentBaseWithOrphanedDerivedRowsRemoves(t *testing.T) {
-	t.Parallel()
-
-	conversationID := "conv-orphan-derived"
-	orphanedDocuments := []model.ConversationDocument{{
-		ConversationID: conversationID,
-		MessageIndex:   7,
-		Role:           "assistant",
-		Text:           "answer",
-		Tools: []model.ConversationToolCall{
-			{Name: "read", Output: "kept tool output"},
-			{Name: "grep", Output: "removed tool output"},
-		},
-	}}
-	stored := semantic.ConversationStoredRows{
-		Messages:     map[int32]semantic.StoredMessageState{},
-		DerivedPaths: conversationDerivedPathsForDocumentsTest(t, orphanedDocuments),
-	}
-	if len(stored.DerivedPaths) == 0 {
-		t.Fatal("stored.DerivedPaths is empty; the orphaned-derived fixture must carry tool rows")
-	}
-	documents := []model.ConversationDocument{{
-		ConversationID: conversationID,
-		MessageIndex:   7,
-		Role:           "assistant",
-		Text:           "answer",
-		Tools: []model.ConversationToolCall{
-			{Name: "read", Output: "kept tool output"},
-		},
-	}}
-	replacementPaths := conversationDerivedPathsForDocumentsTest(t, documents)
-	if len(replacementPaths) >= len(stored.DerivedPaths) {
-		t.Fatalf("replacement derived paths = %d, want fewer than the stored %d", len(replacementPaths), len(stored.DerivedPaths))
-	}
-
-	diff := diffConversationMessages(context.Background(), conversationID, documents, stored)
-
-	gotIndexes := diffDocumentIndexes(diff.documents)
-	if !slices.Equal(gotIndexes, []int32{7}) {
-		t.Fatalf("diff.documents message indexes = %v, want [7]", gotIndexes)
-	}
-	for _, path := range conversationMessageRemovalPaths(conversationID, 7) {
-		if !slices.Contains(diff.removalPaths, path) {
-			t.Fatalf("diff.removalPaths %v is missing %q for the orphaned derived rows", diff.removalPaths, path)
-		}
-	}
-	for _, prefix := range conversationMessageRemovalPrefixes(conversationID, 7) {
-		if !slices.Contains(diff.removalPrefixes, prefix) {
-			t.Fatalf("diff.removalPrefixes %v is missing %q for the orphaned derived rows", diff.removalPrefixes, prefix)
-		}
-	}
-}
-
-// TestDiffConversationMessagesAbsentBaseWithUnrelatedDerivedRowsAppends proves the
-// orphan check is keyed to the delivered message index, so a neighbouring
-// message's stored derived rows do not turn a genuine append back into a delete.
-func TestDiffConversationMessagesAbsentBaseWithUnrelatedDerivedRowsAppends(t *testing.T) {
-	t.Parallel()
-
-	conversationID := "conv-orphan-neighbour"
-	neighbourDocuments := []model.ConversationDocument{{
-		ConversationID: conversationID,
-		MessageIndex:   1,
-		Role:           "assistant",
-		Text:           "answer",
-		Thinking:       "private reasoning",
-	}}
-	stored := semantic.ConversationStoredRows{
-		Messages: map[int32]semantic.StoredMessageState{
-			1: {Role: "assistant", Text: "answer", HasDerivedContent: true},
-		},
-		DerivedPaths: conversationDerivedPathsForDocumentsTest(t, neighbourDocuments),
-	}
-	documents := append([]model.ConversationDocument{}, neighbourDocuments...)
-	documents = append(documents, model.ConversationDocument{
-		ConversationID: conversationID,
-		MessageIndex:   2,
-		Role:           "user",
-		Text:           "next question",
-	})
-
-	diff := diffConversationMessages(context.Background(), conversationID, documents, stored)
-
-	gotIndexes := diffDocumentIndexes(diff.documents)
-	if !slices.Equal(gotIndexes, []int32{2}) {
-		t.Fatalf("diff.documents message indexes = %v, want [2]", gotIndexes)
-	}
-	if len(diff.removalPaths) != 0 {
-		t.Fatalf("diff.removalPaths = %v, want empty for an append beside another message's derived rows", diff.removalPaths)
-	}
-	if len(diff.removalPrefixes) != 0 {
-		t.Fatalf("diff.removalPrefixes = %v, want empty for an append beside another message's derived rows", diff.removalPrefixes)
-	}
-}
-
-func TestDiffConversationMessagesChangedMessageStillRemoves(t *testing.T) {
-	t.Parallel()
-
-	stored := semantic.ConversationStoredRows{
-		Messages: map[int32]semantic.StoredMessageState{
-			1: {Role: "assistant", Text: "old answer"},
-		},
-		DerivedPaths: map[string]string{},
-	}
-	documents := []model.ConversationDocument{
-		{ConversationID: "conv-change", MessageIndex: 1, Role: "assistant", Text: "new answer"},
-	}
-
-	diff := diffConversationMessages(context.Background(), "conv-change", documents, stored)
-
-	gotIndexes := diffDocumentIndexes(diff.documents)
-	if !slices.Equal(gotIndexes, []int32{1}) {
-		t.Fatalf("diff.documents message indexes = %v, want [1]", gotIndexes)
-	}
-	for _, path := range conversationMessageRemovalPaths("conv-change", 1) {
-		if !slices.Contains(diff.removalPaths, path) {
-			t.Fatalf("diff.removalPaths %v is missing %q for the changed message", diff.removalPaths, path)
-		}
-	}
-	for _, prefix := range conversationMessageRemovalPrefixes("conv-change", 1) {
-		if !slices.Contains(diff.removalPrefixes, prefix) {
-			t.Fatalf("diff.removalPrefixes %v is missing %q for the changed message", diff.removalPrefixes, prefix)
-		}
-	}
-}
-
-func TestDiffConversationMessagesRewindRemovesStale(t *testing.T) {
-	t.Parallel()
-
-	stored := semantic.ConversationStoredRows{
-		Messages: map[int32]semantic.StoredMessageState{
-			0: {Role: "user", Text: "first"},
-			1: {Role: "assistant", Text: "second"},
-			2: {Role: "user", Text: "third"},
-			3: {Role: "assistant", Text: "fourth"},
-		},
-		DerivedPaths: map[string]string{},
-	}
-	documents := []model.ConversationDocument{
-		{ConversationID: "conv-rewind", MessageIndex: 0, Role: "user", Text: "first"},
-		{ConversationID: "conv-rewind", MessageIndex: 1, Role: "assistant", Text: "second"},
-		{ConversationID: "conv-rewind", MessageIndex: 2, Role: "user", Text: "third"},
-	}
-
-	diff := diffConversationMessages(context.Background(), "conv-rewind", documents, stored)
-
-	if len(diff.documents) != 0 {
-		t.Fatalf("diff.documents = %v, want empty when only a stale message is dropped", diffDocumentIndexes(diff.documents))
-	}
-	staleRemovalPaths := conversationMessageRemovalPaths("conv-rewind", 3)
-	for _, path := range staleRemovalPaths {
-		if !slices.Contains(diff.removalPaths, path) {
-			t.Fatalf("diff.removalPaths %v is missing stale message path %q", diff.removalPaths, path)
-		}
-	}
-	if len(diff.removalPaths) != len(staleRemovalPaths) {
-		t.Fatalf("diff.removalPaths = %v, want only the stale message %d removals", diff.removalPaths, 3)
-	}
-	staleRemovalPrefixes := conversationMessageRemovalPrefixes("conv-rewind", 3)
-	for _, prefix := range staleRemovalPrefixes {
-		if !slices.Contains(diff.removalPrefixes, prefix) {
-			t.Fatalf("diff.removalPrefixes %v is missing stale message prefix %q", diff.removalPrefixes, prefix)
-		}
-	}
-	if len(diff.removalPrefixes) != len(staleRemovalPrefixes) {
-		t.Fatalf("diff.removalPrefixes = %v, want only the stale message %d prefixes", diff.removalPrefixes, 3)
-	}
-}
-
-// TestDiffConversationMessagesRewindRemovesDerivedOnlyStaleIndex is the
-// undelivered half of the partial-removal defect. Message 4's base row is already
-// gone while its convtool rows survive, and the conversation has since rewound so
-// message 4 is not delivered at all. Sweeping stored.Messages alone would never
-// see that index again, so the orphaned tool rows would stay searchable with no
-// path that ever removes them. The sweep unions the indices parsed out of
-// stored.DerivedPaths, so message 4 is still purged.
-func TestDiffConversationMessagesRewindRemovesDerivedOnlyStaleIndex(t *testing.T) {
-	t.Parallel()
-
-	conversationID := "conv-derived-only-stale"
-	orphanedDocuments := []model.ConversationDocument{{
-		ConversationID: conversationID,
-		MessageIndex:   4,
-		Role:           "assistant",
-		Text:           "dropped answer",
-		Tools:          []model.ConversationToolCall{{Name: "read", Output: "dropped tool output"}},
-	}}
-	stored := semantic.ConversationStoredRows{
-		Messages: map[int32]semantic.StoredMessageState{
-			0: {Role: "user", Text: "first"},
-			1: {Role: "assistant", Text: "second"},
-		},
-		DerivedPaths: conversationDerivedPathsForDocumentsTest(t, orphanedDocuments),
-	}
-	if len(stored.DerivedPaths) == 0 {
-		t.Fatal("stored.DerivedPaths is empty; the derived-only fixture must carry tool rows")
-	}
-	if _, found := stored.Messages[4]; found {
-		t.Fatal("stored.Messages carries message 4; the fixture must model a base row that is already gone")
-	}
-	documents := []model.ConversationDocument{
-		{ConversationID: conversationID, MessageIndex: 0, Role: "user", Text: "first"},
-		{ConversationID: conversationID, MessageIndex: 1, Role: "assistant", Text: "second"},
-	}
-
-	diff := diffConversationMessages(context.Background(), conversationID, documents, stored)
-
-	if len(diff.documents) != 0 {
-		t.Fatalf("diff.documents = %v, want empty when only a derived-only stale index is swept", diffDocumentIndexes(diff.documents))
-	}
-	staleRemovalPaths := conversationMessageRemovalPaths(conversationID, 4)
-	for _, path := range staleRemovalPaths {
-		if !slices.Contains(diff.removalPaths, path) {
-			t.Fatalf("diff.removalPaths %v is missing derived-only stale path %q", diff.removalPaths, path)
-		}
-	}
-	if len(diff.removalPaths) != len(staleRemovalPaths) {
-		t.Fatalf("diff.removalPaths = %v, want only the derived-only stale message 4 removals", diff.removalPaths)
-	}
-	staleRemovalPrefixes := conversationMessageRemovalPrefixes(conversationID, 4)
-	for _, prefix := range staleRemovalPrefixes {
-		if !slices.Contains(diff.removalPrefixes, prefix) {
-			t.Fatalf("diff.removalPrefixes %v is missing derived-only stale prefix %q", diff.removalPrefixes, prefix)
-		}
-	}
-	if len(diff.removalPrefixes) != len(staleRemovalPrefixes) {
-		t.Fatalf("diff.removalPrefixes = %v, want only the derived-only stale message 4 prefixes", diff.removalPrefixes)
-	}
-}
-
-// TestDiffConversationMessagesSkipsUnparseableDerivedPaths pins the defensive half
-// of the derived-path index parse. A misread index would delete a live message's
-// rows, so a path that carries no known conversation prefix, an empty or
-// non-numeric segment, a value outside int32, or a non-canonical spelling must be
-// skipped rather than guessed at or read as index zero. Every path here is
-// unparseable, and the one delivered message is a genuine append, so the whole
-// diff must stay removal-free.
-func TestDiffConversationMessagesSkipsUnparseableDerivedPaths(t *testing.T) {
-	t.Parallel()
-
-	conversationID := "conv-defensive"
-	contentHash := semantic.ContentVectorKey("orphan")
-	stored := semantic.ConversationStoredRows{
-		Messages: map[int32]semantic.StoredMessageState{},
-		DerivedPaths: map[string]string{
-			"convtool/conv-defensive/abc/0/tok":            contentHash,
-			"convtool/conv-defensive/99999999999999/0/tok": contentHash,
-			"convtool/other-conversation/9/0/tok":          contentHash,
-			"convthink/conv-defensive/007":                 contentHash,
-			"convthink/conv-defensive/+3":                  contentHash,
-			"convthink/conv-defensive/":                    contentHash,
-			"conv/conv-defensive/3":                        contentHash,
-		},
-	}
-	documents := []model.ConversationDocument{
-		{ConversationID: conversationID, MessageIndex: 0, Role: "user", Text: "first"},
-	}
-
-	diff := diffConversationMessages(context.Background(), conversationID, documents, stored)
-
-	gotIndexes := diffDocumentIndexes(diff.documents)
-	if !slices.Equal(gotIndexes, []int32{0}) {
-		t.Fatalf("diff.documents message indexes = %v, want [0]", gotIndexes)
-	}
-	if len(diff.removalPaths) != 0 {
-		t.Fatalf("diff.removalPaths = %v, want empty when every derived path is unparseable", diff.removalPaths)
-	}
-	if len(diff.removalPrefixes) != 0 {
-		t.Fatalf("diff.removalPrefixes = %v, want empty when every derived path is unparseable", diff.removalPrefixes)
-	}
-}

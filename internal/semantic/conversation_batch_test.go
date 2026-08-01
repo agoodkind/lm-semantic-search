@@ -9,21 +9,25 @@ import (
 )
 
 type conversationBatchTestRow struct {
-	conversationID  string
-	relativePath    string
-	role            string
-	content         string
-	messageIndex    int64
-	hasMessageIndex bool
-	vector          []float32
+	conversationID    string
+	hasConversationID bool
+	relativePath      string
+	role              string
+	missingRole       bool
+	content           string
+	messageIndex      int64
+	hasMessageIndex   bool
+	vector            []float32
 }
 
 func conversationBatchResultSet(t *testing.T, rows []conversationBatchTestRow) milvusclient.ResultSet {
 	t.Helper()
 	vectorDimension := 0
 	conversationIDs := make([]string, 0, len(rows))
+	conversationIDValidData := make([]bool, 0, len(rows))
 	relativePaths := make([]string, 0, len(rows))
 	roles := make([]string, 0, len(rows))
+	roleValidData := make([]bool, 0, len(rows))
 	contents := make([]string, 0, len(rows))
 	vectors := make([][]float32, 0, len(rows))
 	messageIndexes := make([]int64, 0, len(rows))
@@ -33,8 +37,13 @@ func conversationBatchResultSet(t *testing.T, rows []conversationBatchTestRow) m
 			vectorDimension = len(row.vector)
 		}
 		conversationIDs = append(conversationIDs, row.conversationID)
+		conversationIDValidData = append(
+			conversationIDValidData,
+			row.hasConversationID || row.conversationID != "",
+		)
 		relativePaths = append(relativePaths, row.relativePath)
 		roles = append(roles, row.role)
+		roleValidData = append(roleValidData, !row.missingRole)
 		contents = append(contents, row.content)
 		vectors = append(vectors, row.vector)
 		messageIndexes = append(messageIndexes, row.messageIndex)
@@ -44,10 +53,28 @@ func conversationBatchResultSet(t *testing.T, rows []conversationBatchTestRow) m
 	if err != nil {
 		t.Fatalf("NewNullableColumnInt64 returned error: %v", err)
 	}
+	conversationIDColumn, err := column.NewNullableColumnVarChar(
+		conversationIDFieldName,
+		conversationIDs,
+		conversationIDValidData,
+		column.WithSparseNullableMode[string](true),
+	)
+	if err != nil {
+		t.Fatalf("NewNullableColumnVarChar returned error: %v", err)
+	}
+	roleColumn, err := column.NewNullableColumnVarChar(
+		roleFieldName,
+		roles,
+		roleValidData,
+		column.WithSparseNullableMode[string](true),
+	)
+	if err != nil {
+		t.Fatalf("NewNullableColumnVarChar role returned error: %v", err)
+	}
 	fields := milvusclient.DataSet{
-		column.NewColumnVarChar(conversationIDFieldName, conversationIDs),
+		conversationIDColumn,
 		column.NewColumnVarChar(relativePathFieldName, relativePaths),
-		column.NewColumnVarChar(roleFieldName, roles),
+		roleColumn,
 		column.NewColumnVarChar(contentFieldName, contents),
 		column.NewColumnFloatVector(denseVectorFieldName, vectorDimension, vectors),
 		messageIndexColumn,
@@ -63,7 +90,7 @@ func TestAppendConversationBatchRowsBucketsBaseAndDerived(t *testing.T) {
 	}
 	assemblies := newConversationBatchAssemblies()
 	reuse := map[string][]float32{}
-	if err := appendConversationBatchRows(conversationBatchResultSet(t, rows), assemblies, reuse); err != nil {
+	if err := appendConversationBatchRows(conversationBatchResultSet(t, rows), []string{"claude:a", "claude:b"}, assemblies, reuse); err != nil {
 		t.Fatalf("appendConversationBatchRows returned error: %v", err)
 	}
 	batchRows := assemblies.finalize()
@@ -102,16 +129,8 @@ func TestAppendConversationBatchRowsBucketsBaseAndDerived(t *testing.T) {
 // stored rows are derived, which is what a turn carrying just a tool call or
 // just reasoning leaves behind once no blank text row is written for it.
 //
-// The examination path treats a delivered message absent from Messages as new,
-// re-sends it, and reads its existing derived rows as orphans to remove. So a
-// message the store does hold would be deleted and embedded again on every sync,
-// forever. Registering it from its derived rows is what lets the comparison find
-// it and settle.
-//
-// The role has to come with it. The comparison rejects a message whose stored
-// role differs from the delivered one, so registering with an empty role would
-// mismatch every time and churn exactly as if the message were missing. Every
-// stored row carries the role, including a derived one.
+// Registering derived-only messages preserves the stored message index and role
+// even when no base row exists.
 func TestDerivedRowsRegisterTheirMessageWithItsRole(t *testing.T) {
 	rows := []conversationBatchTestRow{
 		{conversationID: "claude:a", relativePath: "conv/claude:a/0", role: "user", content: "ask", messageIndex: 0, hasMessageIndex: true, vector: []float32{1}},
@@ -120,7 +139,7 @@ func TestDerivedRowsRegisterTheirMessageWithItsRole(t *testing.T) {
 		{conversationID: "claude:a", relativePath: "convthink/claude:a/2", role: "assistant", content: "considering", messageIndex: 2, hasMessageIndex: true, vector: []float32{4}},
 	}
 	assemblies := newConversationBatchAssemblies()
-	if err := appendConversationBatchRows(conversationBatchResultSet(t, rows), assemblies, map[string][]float32{}); err != nil {
+	if err := appendConversationBatchRows(conversationBatchResultSet(t, rows), []string{"claude:a"}, assemblies, map[string][]float32{}); err != nil {
 		t.Fatalf("appendConversationBatchRows returned error: %v", err)
 	}
 	stored := assemblies.finalize()["claude:a"]
@@ -154,15 +173,14 @@ func TestDerivedRowsRegisterTheirMessageWithItsRole(t *testing.T) {
 
 // TestDerivedRowRegistrationKeepsTheBaseRole proves a base row's role wins over
 // a derived row's, whatever order the rows arrive in. Both carry the same role
-// in practice, so a disagreement means one of them is wrong, and the base row is
-// the one the comparison is against.
+// in practice, and the base row owns the assembled base state.
 func TestDerivedRowRegistrationKeepsTheBaseRole(t *testing.T) {
 	derivedFirst := []conversationBatchTestRow{
 		{conversationID: "claude:a", relativePath: "convtool/claude:a/0/0/tok", role: "assistant", content: "Bash", messageIndex: 0, hasMessageIndex: true, vector: []float32{1}},
 		{conversationID: "claude:a", relativePath: "conv/claude:a/0", role: "user", content: "text", messageIndex: 0, hasMessageIndex: true, vector: []float32{2}},
 	}
 	assemblies := newConversationBatchAssemblies()
-	if err := appendConversationBatchRows(conversationBatchResultSet(t, derivedFirst), assemblies, map[string][]float32{}); err != nil {
+	if err := appendConversationBatchRows(conversationBatchResultSet(t, derivedFirst), []string{"claude:a"}, assemblies, map[string][]float32{}); err != nil {
 		t.Fatalf("appendConversationBatchRows returned error: %v", err)
 	}
 	stored := assemblies.finalize()["claude:a"]
@@ -172,6 +190,93 @@ func TestDerivedRowRegistrationKeepsTheBaseRole(t *testing.T) {
 	}
 	if stored.Messages[0].Text != "text" {
 		t.Fatalf("message 0 text = %q, want text", stored.Messages[0].Text)
+	}
+}
+
+func TestAppendConversationBatchRowsMarksOnlyUsableDerivedPaths(t *testing.T) {
+	rows := []conversationBatchTestRow{
+		{
+			conversationID:  "claude:a",
+			relativePath:    "convtool/claude:a/3/0/tok",
+			role:            "assistant",
+			content:         " \n",
+			messageIndex:    3,
+			hasMessageIndex: true,
+			vector:          []float32{1},
+		},
+		{
+			conversationID:  "claude:a",
+			relativePath:    "convthink/claude:a/3",
+			role:            "assistant",
+			content:         "usable reasoning",
+			messageIndex:    3,
+			hasMessageIndex: true,
+			vector:          []float32{2},
+		},
+	}
+	assemblies := newConversationBatchAssemblies()
+	if err := appendConversationBatchRows(
+		conversationBatchResultSet(t, rows),
+		[]string{"claude:a"},
+		assemblies,
+		map[string][]float32{},
+	); err != nil {
+		t.Fatalf("appendConversationBatchRows returned error: %v", err)
+	}
+	stored := assemblies.finalize()["claude:a"]
+
+	if len(stored.DerivedPaths) != 2 {
+		t.Fatalf("derived paths = %v, want both stored identities", stored.DerivedPaths)
+	}
+	if _, found := stored.UsableDerivedPaths["convtool/claude:a/3/0/tok"]; found {
+		t.Fatalf("usable derived paths = %v, blank tool row must not satisfy a family", stored.UsableDerivedPaths)
+	}
+	if _, found := stored.UsableDerivedPaths["convthink/claude:a/3"]; !found {
+		t.Fatalf("usable derived paths = %v, want usable thinking row", stored.UsableDerivedPaths)
+	}
+}
+
+func TestAppendConversationBatchRowsResolvesScalarLessLegacyPaths(t *testing.T) {
+	rows := []conversationBatchTestRow{
+		{
+			relativePath:    "conv/claude:legacy/4/0",
+			missingRole:     true,
+			content:         "stored answer",
+			hasMessageIndex: false,
+			vector:          []float32{1},
+		},
+		{
+			relativePath:    "convtool/claude:legacy/4/0/tok",
+			missingRole:     true,
+			content:         "Bash",
+			hasMessageIndex: false,
+			vector:          []float32{2},
+		},
+	}
+	assemblies := newConversationBatchAssemblies()
+	if err := appendConversationBatchRows(
+		conversationBatchResultSet(t, rows),
+		[]string{"claude:legacy"},
+		assemblies,
+		map[string][]float32{},
+	); err != nil {
+		t.Fatalf("appendConversationBatchRows returned error: %v", err)
+	}
+	stored := assemblies.finalize()["claude:legacy"]
+
+	if got := stored.Messages[4].Text; got != "stored answer" {
+		t.Fatalf("legacy message text = %q, want stored answer", got)
+	}
+	if _, found := stored.UsableDerivedPaths["convtool/claude:legacy/4/0/tok"]; !found {
+		t.Fatalf("usable derived paths = %v, want scalar-less tool row", stored.UsableDerivedPaths)
+	}
+}
+
+func TestConversationBatchFilterExpressionIncludesLegacyFamilyPrefixes(t *testing.T) {
+	got := conversationBatchFilterExpression([]string{"claude:a"})
+	want := `(conversationId in ["claude:a"] or relativePath like "conv/claude:a/%" or relativePath like "convtool/claude:a/%" or relativePath like "convthink/claude:a/%")`
+	if got != want {
+		t.Fatalf("conversationBatchFilterExpression = %q, want %q", got, want)
 	}
 }
 
