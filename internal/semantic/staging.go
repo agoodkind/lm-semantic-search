@@ -288,6 +288,7 @@ func (service *Service) writeEmbeddedChunkBatch(
 		dimension,
 		insertBatchEstimatedByteBudget,
 		columnSet,
+		service.cfg.EmbeddingModel,
 	)
 	vectorStart := 0
 	for _, insertBatch := range insertPacks {

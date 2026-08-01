@@ -361,13 +361,21 @@ type embedGate struct {
 }
 
 func newFakeEmbeddingServer(t *testing.T, gate *embedGate) *httptest.Server {
+	return newFakeEmbeddingServerWithDimension(t, gate, fakeEmbeddingDimension)
+}
+
+func newFakeEmbeddingServerWithDimension(
+	t *testing.T,
+	gate *embedGate,
+	dimension int,
+) *httptest.Server {
 	t.Helper()
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch {
 		case strings.HasSuffix(request.URL.Path, "/models"):
 			writeModelsList(writer)
 		case strings.HasSuffix(request.URL.Path, "/embeddings"):
-			writeEmbeddings(t, writer, request, gate)
+			writeEmbeddings(t, writer, request, gate, dimension)
 		default:
 			http.Error(writer, "unexpected path "+request.URL.Path, http.StatusNotFound)
 		}
@@ -387,7 +395,13 @@ func writeModelsList(writer http.ResponseWriter) {
 	})
 }
 
-func writeEmbeddings(t *testing.T, writer http.ResponseWriter, request *http.Request, gate *embedGate) {
+func writeEmbeddings(
+	t *testing.T,
+	writer http.ResponseWriter,
+	request *http.Request,
+	gate *embedGate,
+	dimension int,
+) {
 	inputs, err := decodeEmbeddingInputs(request)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
@@ -404,7 +418,11 @@ func writeEmbeddings(t *testing.T, writer http.ResponseWriter, request *http.Req
 	}
 	rows := make([]row, 0, len(inputs))
 	for index, text := range inputs {
-		rows = append(rows, row{Object: "embedding", Index: index, Embedding: deterministicVector(text)})
+		rows = append(rows, row{
+			Object:    "embedding",
+			Index:     index,
+			Embedding: deterministicVector(text, dimension),
+		})
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(writer).Encode(map[string]any{
@@ -441,12 +459,12 @@ func decodeEmbeddingInputs(request *http.Request) ([]string, error) {
 // deterministicVector maps content to a fixed-width unit vector derived from its
 // SHA-256 digest, so identical content always yields an identical vector (reuse
 // works) and distinct content yields a distinct one.
-func deterministicVector(content string) []float64 {
+func deterministicVector(content string, dimension int) []float64 {
 	digest := sha256.Sum256([]byte(content))
-	vector := make([]float64, fakeEmbeddingDimension)
+	vector := make([]float64, dimension)
 	var norm float64
-	for i := 0; i < fakeEmbeddingDimension; i++ {
-		value := (float64(digest[i]) - 128.0) / 128.0
+	for i := range dimension {
+		value := (float64(digest[i%len(digest)]) - 128.0) / 128.0
 		vector[i] = value
 		norm += value * value
 	}

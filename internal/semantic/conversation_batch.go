@@ -27,9 +27,8 @@ type ConversationStoredRows struct {
 // for a set of conversation ids. Rows maps each requested id to its stored rows;
 // Reuse is the batch-wide content-hash -> dense-vector map. A missing target row
 // can reuse a vector Reuse holds for identical content embedded anywhere in the
-// batch, so the row is inserted without re-embedding. Every row is read from the
-// one live collection, which is built with the current embedding model, so a
-// reused vector is always valid for that model.
+// batch, so the row is inserted without re-embedding. Rows with no recorded
+// embedding model remain reusable, while known unequal model names are excluded.
 type ConversationBatchState struct {
 	Rows  map[string]ConversationStoredRows
 	Reuse map[string][]float32
@@ -64,6 +63,9 @@ func (service *Service) LoadConversationDerivedBatch(ctx context.Context, collec
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return ConversationBatchState{}, err
 	}
+	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
+		return ConversationBatchState{}, err
+	}
 	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
 		return ConversationBatchState{}, err
 	}
@@ -92,7 +94,16 @@ func (service *Service) loadConversationBatchGroup(ctx context.Context, collecti
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(reuseVectorBatchSize).
 		WithFilter(conversationBatchFilterExpression(conversationIDs)).
-		WithOutputFields(conversationIDFieldName, relativePathFieldName, messageIndexFieldName, roleFieldName, contentFieldName, denseVectorFieldName, splitPartFieldName))
+		WithOutputFields(
+			conversationIDFieldName,
+			relativePathFieldName,
+			messageIndexFieldName,
+			roleFieldName,
+			contentFieldName,
+			embeddingModelFieldName,
+			denseVectorFieldName,
+			splitPartFieldName,
+		))
 	if err != nil {
 		slog.ErrorContext(ctx, "open conversation batch query iterator failed", "collection", collectionName, "err", err)
 		return fmt.Errorf("open conversation batch iterator for %s: %w", collectionName, err)
@@ -106,7 +117,7 @@ func (service *Service) loadConversationBatchGroup(ctx context.Context, collecti
 			slog.ErrorContext(ctx, "conversation batch query iterator next failed", "collection", collectionName, "err", nextErr)
 			return fmt.Errorf("iterate %s for conversation batch: %w", collectionName, nextErr)
 		}
-		if err := appendConversationBatchRows(resultSet, conversationIDs, assemblies, reuse); err != nil {
+		if err := appendConversationBatchRows(resultSet, conversationIDs, service.cfg.EmbeddingModel, assemblies, reuse); err != nil {
 			return err
 		}
 	}
@@ -210,6 +221,7 @@ func readOptionalStringAt(valueColumn column.Column, rowIndex int) (string, bool
 func appendConversationBatchRows(
 	resultSet milvusclient.ResultSet,
 	conversationIDs []string,
+	currentEmbeddingModel string,
 	assemblies *conversationBatchAssemblies,
 	reuse map[string][]float32,
 ) error {
@@ -223,6 +235,7 @@ func appendConversationBatchRows(
 	roleColumn := resultSet.GetColumn(roleFieldName)
 	messageIndexColumn := resultSet.GetColumn(messageIndexFieldName)
 	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
+	embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
 
 	for rowIndex := range resultSet.ResultCount {
 		contentValue, vector, contentErr := conversationContentVectorAt(contentColumn, vectorColumn, rowIndex)
@@ -230,7 +243,13 @@ func appendConversationBatchRows(
 			return contentErr
 		}
 		contentHash := contentVectorKey(contentValue)
-		reuse[contentHash] = vector
+		embeddingModel, modelErr := nullableStringAt(embeddingModelColumn, rowIndex)
+		if modelErr != nil {
+			return fmt.Errorf("read conversation batch embedding model at %d: %w", rowIndex, modelErr)
+		}
+		if embeddingModelsCompatible(embeddingModel, currentEmbeddingModel) {
+			reuse[contentHash] = vector
+		}
 
 		relativePath, relativePathErr := relativePathColumn.GetAsString(rowIndex)
 		if relativePathErr != nil {

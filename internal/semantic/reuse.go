@@ -19,10 +19,8 @@ import (
 const reuseVectorBatchSize = 1000
 
 // ContentVectorKey is the reuse-map key for one chunk: the hex SHA-256 of its
-// content. The dense embedding is a pure function of content (the embedder
-// receives content only, with no path or codebase salt), so identical content
-// anywhere produces the same vector. Keying on content lets a fresh build
-// reuse an already-embedded vector instead of calling the embedder again.
+// content. The key deliberately carries no model or provider configuration.
+// Callers that know model identities decide whether the stored vector is valid.
 func ContentVectorKey(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(sum[:])

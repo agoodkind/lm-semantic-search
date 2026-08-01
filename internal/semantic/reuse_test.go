@@ -385,17 +385,24 @@ func TestNewlyEmbeddedReuseCatalogExcludesReusedVectors(t *testing.T) {
 	}
 }
 
-func TestReuseCatalogCollectionNameScopesStateRootAndEmbeddingIdentity(t *testing.T) {
+func TestReuseCatalogCollectionNameScopesStateRootAndDimension(t *testing.T) {
 	first := config.Config{
-		StateRoot:          "/state/one",
-		EmbeddingProvider:  "OpenAI",
-		EmbeddingModel:     "model-a",
-		EmbeddingDimension: 3,
+		StateRoot:             "/state/one",
+		EmbeddingProvider:     "OpenAI",
+		EmbeddingModel:        "model-a",
+		OfflineEmbeddingModel: "inactive-a",
+		EmbeddingDimension:    3,
+		OpenAIBaseURL:         "https://embedder-a.example/v1",
 	}
 	secondStateRoot := first
 	secondStateRoot.StateRoot = "/state/two"
-	secondModel := first
-	secondModel.EmbeddingModel = "model-b"
+	modelVariant := first
+	modelVariant.EmbeddingProvider = "onnx"
+	modelVariant.EmbeddingModel = "model-b"
+	modelVariant.OfflineEmbeddingModel = "inactive-b"
+	modelVariant.OpenAIBaseURL = "https://embedder-b.example/v1"
+	dimensionVariant := first
+	dimensionVariant.EmbeddingDimension = 1536
 
 	firstName := ReuseCatalogCollectionName(first)
 	if firstName != ReuseCatalogCollectionName(first) {
@@ -404,7 +411,27 @@ func TestReuseCatalogCollectionNameScopesStateRootAndEmbeddingIdentity(t *testin
 	if firstName == ReuseCatalogCollectionName(secondStateRoot) {
 		t.Fatal("different state roots share a reuse catalog")
 	}
-	if firstName == ReuseCatalogCollectionName(secondModel) {
-		t.Fatal("different embedding identities share a reuse catalog")
+	if firstName != ReuseCatalogCollectionName(modelVariant) {
+		t.Fatal("embedding identity changed the dimension-scoped catalog name")
+	}
+	if firstName == ReuseCatalogCollectionName(dimensionVariant) {
+		t.Fatal("different embedding dimensions share a reuse catalog")
+	}
+}
+
+func TestLoadReuseVectorsForContentsSkipsCatalogWhenDimensionIsUnknown(t *testing.T) {
+	service := &Service{cfg: config.Config{EmbeddingDimension: 0}}
+	service.available.Store(true)
+
+	reuse, err := service.LoadReuseVectorsForContents(
+		context.Background(),
+		"",
+		[]model.StoredChunk{{Content: "unknown dimension content"}},
+	)
+	if err != nil {
+		t.Fatalf("load reuse with unknown dimension: %v", err)
+	}
+	if len(reuse) != 0 {
+		t.Fatalf("reuse vectors = %d, want 0", len(reuse))
 	}
 }

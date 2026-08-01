@@ -2,16 +2,15 @@ package semantic
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 
+	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/store"
 )
 
 const (
@@ -19,35 +18,23 @@ const (
 	reuseLookupMaxEscapedBytes = 256 * 1024
 )
 
-func embeddingIdentity(cfg config.Config) string {
-	value := fmt.Sprintf(
-		"%s\x00%s\x00%s\x00%d\x00%s",
-		cfg.EmbeddingProvider,
-		cfg.EmbeddingModel,
-		cfg.OfflineEmbeddingModel,
-		cfg.EmbeddingDimension,
-		cfg.OpenAIBaseURL,
-	)
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
+func contentHash(content string) string {
+	normalized, _ := sanitizeUTF8(content)
+	return contentVectorKey(normalized)
 }
 
-func contentVectorStorageKey(cfg config.Config, content string) string {
-	sum := sha256.Sum256([]byte(embeddingIdentity(cfg) + "\x00" + content))
-	return hex.EncodeToString(sum[:])
-}
-
-func contentVectorStorageKeys(cfg config.Config, contents []string) []string {
-	keys := make([]string, 0, len(contents))
+func contentHashes(contents []string) []string {
+	hashes := make([]string, 0, len(contents))
 	for _, content := range contents {
-		keys = append(keys, contentVectorStorageKey(cfg, content))
+		hashes = append(hashes, contentHash(content))
 	}
-	return keys
+	return hashes
 }
 
-// LoadReuseVectorsForContents resolves only vectors needed by chunks through the
-// identity-scoped catalog. Catalog misses fall back only to legacy corpus rows
-// whose indexed content key is null, and those rows remain unchanged.
+// LoadReuseVectorsForContents resolves only vectors needed by chunks. It reads
+// the content catalog first, then indexed hashes and exact-content legacy rows
+// across the registered store. Stored vectors qualify unless both stored and
+// current model names are known and unequal. Every lookup is read-only.
 func (service *Service) LoadReuseVectorsForContents(
 	ctx context.Context,
 	collectionName string,
@@ -61,8 +48,15 @@ func (service *Service) LoadReuseVectorsForContents(
 	if err := service.loadCatalogReuse(ctx, storageKeys, contentsByStorageKey, reuse); err != nil {
 		return nil, err
 	}
-	legacyContents := missingReuseContents(contentsByStorageKey, reuse)
-	if err := service.loadLegacyReuse(ctx, collectionName, legacyContents, reuse); err != nil {
+	if len(missingReuseContents(contentsByStorageKey, reuse)) == 0 {
+		return reuse, nil
+	}
+	if err := service.loadCollectionReuse(
+		ctx,
+		collectionName,
+		contentsByStorageKey,
+		reuse,
+	); err != nil {
 		return nil, err
 	}
 	return reuse, nil
@@ -75,7 +69,7 @@ func (service *Service) reuseCandidates(
 	storageKeys := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
 		content, _ := sanitizeUTF8(chunk.Content)
-		storageKey := contentVectorStorageKey(service.cfg, content)
+		storageKey := contentHash(content)
 		if _, found := contentsByStorageKey[storageKey]; found {
 			continue
 		}
@@ -91,7 +85,11 @@ func (service *Service) loadCatalogReuse(
 	contentsByStorageKey map[string]string,
 	reuse map[string][]float32,
 ) error {
-	catalogAvailable, err := service.reuseCatalogAvailable(ctx, 0)
+	dimension := int(service.cfg.EmbeddingDimension)
+	if dimension <= 0 {
+		return nil
+	}
+	catalogAvailable, err := service.reuseCatalogAvailable(ctx, dimension, false)
 	if err != nil {
 		return err
 	}
@@ -99,14 +97,20 @@ func (service *Service) loadCatalogReuse(
 		return nil
 	}
 	for _, batch := range reuseLookupBatches(storageKeys) {
-		catalogVectors, loadErr := service.loadReuseCatalogKeys(ctx, batch)
+		catalogVectors, loadErr := service.loadReuseCatalogKeys(ctx, batch, dimension)
 		if loadErr != nil {
 			return loadErr
 		}
-		for storageKey, vector := range catalogVectors {
+		for storageKey, entries := range catalogVectors {
 			content, found := contentsByStorageKey[storageKey]
-			if found {
-				reuse[contentVectorKey(content)] = vector
+			if !found {
+				continue
+			}
+			for _, entry := range entries {
+				if embeddingModelsCompatible(entry.embeddingModel, service.cfg.EmbeddingModel) {
+					reuse[contentVectorKey(content)] = entry.vector
+					break
+				}
 			}
 		}
 	}
@@ -117,44 +121,121 @@ func missingReuseContents(
 	contentsByStorageKey map[string]string,
 	reuse map[string][]float32,
 ) []string {
-	legacyContents := make([]string, 0, len(contentsByStorageKey))
+	missingContents := make([]string, 0, len(contentsByStorageKey))
 	for _, content := range contentsByStorageKey {
 		if _, found := reuse[contentVectorKey(content)]; !found {
-			legacyContents = append(legacyContents, content)
+			missingContents = append(missingContents, content)
 		}
 	}
-	return legacyContents
+	return missingContents
 }
 
-func (service *Service) loadLegacyReuse(
+func embeddingModelsCompatible(stored string, current string) bool {
+	return stored == "" || current == "" || stored == current
+}
+
+func (service *Service) loadCollectionReuse(
 	ctx context.Context,
 	collectionName string,
-	legacyContents []string,
+	contentsByStorageKey map[string]string,
 	reuse map[string][]float32,
 ) error {
-	if len(legacyContents) == 0 || collectionName == "" {
+	if len(contentsByStorageKey) == 0 || collectionName == "" {
 		return nil
 	}
-	hasCollection, err := service.hasCollection(
-		ctx,
-		collectionName,
-		"check collection before legacy reuse",
-	)
+	collectionNames, err := service.reuseSourceCollections(collectionName)
 	if err != nil {
 		return err
 	}
-	if !hasCollection {
-		return nil
+	for _, sourceCollectionName := range collectionNames {
+		hasCollection, hasErr := service.hasCollection(
+			ctx,
+			sourceCollectionName,
+			"check collection before whole-store reuse",
+		)
+		if hasErr != nil {
+			return hasErr
+		}
+		if !hasCollection {
+			continue
+		}
+		if ensureErr := service.ensureReuseIdentityColumnsOnce(
+			ctx,
+			sourceCollectionName,
+		); ensureErr != nil {
+			return ensureErr
+		}
+		if loadErr := service.loadCollectionForRead(ctx, sourceCollectionName); loadErr != nil {
+			return loadErr
+		}
+		if loadErr := service.loadCollectionReuseFromSource(
+			ctx,
+			sourceCollectionName,
+			contentsByStorageKey,
+			reuse,
+		); loadErr != nil {
+			return loadErr
+		}
+		if len(missingReuseContents(contentsByStorageKey, reuse)) == 0 {
+			break
+		}
 	}
-	if err := service.ensureContentVectorKeyColumnOnce(ctx, collectionName); err != nil {
-		return err
+	return nil
+}
+
+func (service *Service) reuseSourceCollections(collectionName string) ([]string, error) {
+	collectionNames := []string{collectionName}
+	seen := map[string]struct{}{collectionName: {}}
+	if service.cfg.RegistryPath == "" {
+		return collectionNames, nil
 	}
-	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
-		return err
+	registry, err := store.ReadRegistry(service.cfg.RegistryPath)
+	if err != nil {
+		wrappedErr := fmt.Errorf("read registry for whole-store content reuse: %w", err)
+		slog.Error("read registry for whole-store content reuse failed", "err", wrappedErr)
+		return nil, wrappedErr
+	}
+	for _, codebase := range registry.Codebases {
+		names := append([]string{codebase.CollectionName}, codebase.LegacyCollectionNames...)
+		for _, name := range names {
+			if name == "" {
+				continue
+			}
+			if _, found := seen[name]; found {
+				continue
+			}
+			seen[name] = struct{}{}
+			collectionNames = append(collectionNames, name)
+		}
+	}
+	return collectionNames, nil
+}
+
+func (service *Service) loadCollectionReuseFromSource(
+	ctx context.Context,
+	collectionName string,
+	contentsByStorageKey map[string]string,
+	reuse map[string][]float32,
+) error {
+	missingStorageKeys := make([]string, 0, len(contentsByStorageKey))
+	for storageKey, content := range contentsByStorageKey {
+		if _, found := reuse[contentVectorKey(content)]; !found {
+			missingStorageKeys = append(missingStorageKeys, storageKey)
+		}
+	}
+	for _, batch := range reuseLookupBatches(missingStorageKeys) {
+		if err := service.loadStoredHashReuseBatch(
+			ctx,
+			collectionName,
+			batch,
+			contentsByStorageKey,
+			reuse,
+		); err != nil {
+			return err
+		}
 	}
 
-	// Null-key rows record no embedding identity, so their vectors remain local
-	// to the collection where exact content matched them.
+	legacyContents := missingReuseContents(contentsByStorageKey, reuse)
 	for _, batch := range reuseLookupBatches(legacyContents) {
 		if err := service.loadLegacyReuseBatch(
 			ctx,
@@ -166,6 +247,22 @@ func (service *Service) loadLegacyReuse(
 		}
 	}
 	return nil
+}
+
+func (service *Service) loadStoredHashReuseBatch(
+	ctx context.Context,
+	collectionName string,
+	contentHashes []string,
+	contentsByHash map[string]string,
+	reuse map[string][]float32,
+) error {
+	return service.loadCollectionReuseBatch(
+		ctx,
+		collectionName,
+		inStringClause(contentHashFieldName, contentHashes),
+		contentsByHash,
+		reuse,
+	)
 }
 
 func reuseLookupBatches(values []string) [][]string {
@@ -193,24 +290,42 @@ func (service *Service) loadLegacyReuseBatch(
 	contents []string,
 	reuse map[string][]float32,
 ) error {
+	contentsByHash := make(map[string]string, len(contents))
+	for _, content := range contents {
+		contentsByHash[contentVectorKey(content)] = content
+	}
+	return service.loadCollectionReuseBatch(
+		ctx,
+		collectionName,
+		contentHashFieldName+" is null and ("+
+			inStringClause(contentFieldName, contents)+")",
+		contentsByHash,
+		reuse,
+	)
+}
+
+func (service *Service) loadCollectionReuseBatch(
+	ctx context.Context,
+	collectionName string,
+	filter string,
+	contentsByHash map[string]string,
+	reuse map[string][]float32,
+) error {
 	iterator, err := service.milvus.QueryIterator(
 		ctx,
 		milvusclient.NewQueryIteratorOption(collectionName).
 			WithBatchSize(reuseVectorBatchSize).
-			WithFilter(
-				contentVectorKeyFieldName+" is null and ("+
-					inStringClause(contentFieldName, contents)+")",
-			).
-			WithOutputFields(contentFieldName, denseVectorFieldName),
+			WithFilter(filter).
+			WithOutputFields(contentFieldName, embeddingModelFieldName, denseVectorFieldName),
 	)
 	if err != nil {
 		slog.ErrorContext(
 			ctx,
-			"open legacy content reuse iterator failed",
+			"open content reuse iterator failed",
 			"collection", collectionName,
 			"err", err,
 		)
-		return fmt.Errorf("open legacy content reuse iterator for %s: %w", collectionName, err)
+		return fmt.Errorf("open content reuse iterator for %s: %w", collectionName, err)
 	}
 	for {
 		resultSet, nextErr := iterator.Next(ctx)
@@ -218,9 +333,10 @@ func (service *Service) loadLegacyReuseBatch(
 			return nil
 		}
 		if nextErr != nil {
-			return fmt.Errorf("iterate legacy content reuse for %s: %w", collectionName, nextErr)
+			return fmt.Errorf("iterate content reuse for %s: %w", collectionName, nextErr)
 		}
 		contentColumn := resultSet.GetColumn(contentFieldName)
+		embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
 		vectorColumn := resultSet.GetColumn(denseVectorFieldName)
 		if contentColumn == nil || vectorColumn == nil {
 			return ErrSearchResultIncomplete
@@ -228,13 +344,47 @@ func (service *Service) loadLegacyReuseBatch(
 		for rowIndex := range resultSet.ResultCount {
 			content, contentErr := contentColumn.GetAsString(rowIndex)
 			if contentErr != nil {
-				return fmt.Errorf("read legacy reuse content at %d: %w", rowIndex, contentErr)
+				return fmt.Errorf("read reuse content at %d: %w", rowIndex, contentErr)
+			}
+			contentHash := contentVectorKey(content)
+			wantedContent, found := contentsByHash[contentHash]
+			if !found || wantedContent != content {
+				continue
+			}
+			embeddingModel, modelErr := nullableStringAt(embeddingModelColumn, rowIndex)
+			if modelErr != nil {
+				return fmt.Errorf("read reuse embedding model at %d: %w", rowIndex, modelErr)
+			}
+			if !embeddingModelsCompatible(embeddingModel, service.cfg.EmbeddingModel) {
+				continue
 			}
 			vector, vectorErr := vectorAt(vectorColumn, rowIndex)
 			if vectorErr != nil {
 				return vectorErr
 			}
-			reuse[contentVectorKey(content)] = vector
+			reuse[contentHash] = vector
 		}
 	}
+}
+
+func nullableStringAt(field column.Column, rowIndex int) (string, error) {
+	if field == nil {
+		return "", nil
+	}
+	isNull, err := field.IsNull(rowIndex)
+	if err != nil {
+		wrappedErr := fmt.Errorf("read nullable marker at %d: %w", rowIndex, err)
+		slog.Error("read nullable string marker failed", "row_index", rowIndex, "err", wrappedErr)
+		return "", wrappedErr
+	}
+	if isNull {
+		return "", nil
+	}
+	value, err := field.GetAsString(rowIndex)
+	if err != nil {
+		wrappedErr := fmt.Errorf("read nullable string at %d: %w", rowIndex, err)
+		slog.Error("read nullable string failed", "row_index", rowIndex, "err", wrappedErr)
+		return "", wrappedErr
+	}
+	return value, nil
 }

@@ -64,6 +64,9 @@ func (manager *Manager) contentReuseForChangedFile(
 		return nil, nil
 	}
 	source := state.source.reuseSource(relativePath)
+	if source.Scope == itemReuseScopeNone {
+		return nil, nil
+	}
 	var reuse map[string][]float32
 	err := manager.runReleasingCapacityIfStalled(ctx, func() error {
 		loaded, loadErr := manager.semantic.LoadReuseVectorsForContents(

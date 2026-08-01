@@ -15,31 +15,61 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 )
 
-const reuseCatalogCollectionPrefix = "content_vector_catalog_"
+const (
+	reuseCatalogCollectionPrefix = "content_vector_catalog_"
+	reuseCatalogRowKeyFieldName  = "catalogKey"
+)
 
 type reuseCatalogVectors map[string][]float32
 
-// ReuseCatalogCollectionName returns the state-root and identity-scoped catalog.
+type reuseCatalogEntry struct {
+	embeddingModel string
+	vector         []float32
+}
+
+type reuseCatalogEntries map[string][]reuseCatalogEntry
+
+// ReuseCatalogCollectionName returns the catalog for the configured dimension.
 func ReuseCatalogCollectionName(cfg config.Config) string {
-	stateRootSum := sha256.Sum256([]byte(cfg.StateRoot))
+	return formatReuseCatalogCollectionName(cfg.StateRoot, int(cfg.EmbeddingDimension))
+}
+
+func reuseCatalogCollectionName(cfg config.Config, dimension int) string {
+	if int64(dimension) == int64(cfg.EmbeddingDimension) {
+		return ReuseCatalogCollectionName(cfg)
+	}
+	return formatReuseCatalogCollectionName(cfg.StateRoot, dimension)
+}
+
+func formatReuseCatalogCollectionName(stateRoot string, dimension int) string {
+	stateRootSum := sha256.Sum256([]byte(stateRoot))
 	stateRootIdentity := hex.EncodeToString(stateRootSum[:])
-	return reuseCatalogCollectionPrefix + stateRootIdentity + "_" + embeddingIdentity(cfg)
+	return fmt.Sprintf(
+		"%s%s_%d",
+		reuseCatalogCollectionPrefix,
+		stateRootIdentity,
+		dimension,
+	)
 }
 
 func (service *Service) reuseCatalogAvailable(
 	ctx context.Context,
-	createDimension int,
+	dimension int,
+	create bool,
 ) (bool, error) {
-	if service.reuseCatalogReady.Load() {
+	if dimension <= 0 {
+		return false, nil
+	}
+	if _, ready := service.reuseCatalogReady.Load(dimension); ready {
 		return true, nil
 	}
 	service.reuseCatalogMutex.Lock()
 	defer service.reuseCatalogMutex.Unlock()
-	if service.reuseCatalogReady.Load() {
+	if _, ready := service.reuseCatalogReady.Load(dimension); ready {
 		return true, nil
 	}
 
-	collectionName := ReuseCatalogCollectionName(service.cfg)
+	collectionName := reuseCatalogCollectionName(service.cfg, dimension)
 	exists, err := service.hasCollection(
 		ctx,
 		collectionName,
@@ -49,16 +79,16 @@ func (service *Service) reuseCatalogAvailable(
 		return false, err
 	}
 	if !exists {
-		if createDimension <= 0 {
+		if !create {
 			return false, nil
 		}
-		if err := service.createReuseCatalog(ctx, collectionName, createDimension); err != nil {
+		if err := service.createReuseCatalog(ctx, collectionName, dimension); err != nil {
 			return false, err
 		}
 	} else if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
 		return false, err
 	}
-	service.reuseCatalogReady.Store(true)
+	service.reuseCatalogReady.Store(dimension, struct{}{})
 	return true, nil
 }
 
@@ -69,20 +99,32 @@ func (service *Service) createReuseCatalog(
 ) error {
 	schema := entity.NewSchema().
 		WithField(entity.NewField().
-			WithName(contentVectorKeyFieldName).
+			WithName(reuseCatalogRowKeyFieldName).
 			WithDataType(entity.FieldTypeVarChar).
 			WithMaxLength(64).
 			WithIsPrimaryKey(true)).
+		WithField(entity.NewField().
+			WithName(contentHashFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(64)).
+		WithField(embeddingModelField()).
 		WithField(entity.NewField().
 			WithName(denseVectorFieldName).
 			WithDataType(entity.FieldTypeFloatVector).
 			WithDim(int64(dimension)))
 	option := milvusclient.NewCreateCollectionOption(collectionName, schema).
-		WithIndexOptions(milvusclient.NewCreateIndexOption(
-			collectionName,
-			denseVectorFieldName,
-			index.NewAutoIndex(entity.COSINE),
-		))
+		WithIndexOptions(
+			milvusclient.NewCreateIndexOption(
+				collectionName,
+				denseVectorFieldName,
+				index.NewAutoIndex(entity.COSINE),
+			),
+			milvusclient.NewCreateIndexOption(
+				collectionName,
+				contentHashFieldName,
+				index.NewInvertedIndex(),
+			),
+		)
 	if err := service.milvus.CreateCollection(ctx, option); err != nil {
 		exists, existsErr := service.hasCollection(
 			ctx,
@@ -113,35 +155,166 @@ func (service *Service) createReuseCatalog(
 func (service *Service) loadReuseCatalogKeys(
 	ctx context.Context,
 	storageKeys []string,
-) (map[string][]float32, error) {
-	// A completed catalog append must be visible to the next changed item or
-	// corpus so that one embedding remains sufficient.
-	return service.queryReuseCatalogKeys(ctx, storageKeys, entity.ClStrong)
+	dimension int,
+) (reuseCatalogEntries, error) {
+	// Catalog rows are immutable, so a bounded hit is valid. Retry misses with
+	// strong consistency so a completed append is visible to the next item.
+	if service.cfg.EmbeddingModel != "" {
+		return service.getReuseCatalogKeys(ctx, storageKeys, dimension)
+	}
+	return service.queryReuseCatalogKeys(ctx, storageKeys, dimension, entity.ClStrong)
 }
 
-func (service *Service) loadReuseCatalogKeysForAppend(
+func (service *Service) getReuseCatalogKeys(
 	ctx context.Context,
 	storageKeys []string,
-) (map[string][]float32, error) {
-	return service.queryReuseCatalogKeys(ctx, storageKeys, entity.ClStrong)
+	dimension int,
+) (reuseCatalogEntries, error) {
+	entries, err := service.getReuseCatalogModelKeys(
+		ctx,
+		storageKeys,
+		dimension,
+		service.cfg.EmbeddingModel,
+		entity.ClBounded,
+	)
+	if err != nil {
+		return nil, err
+	}
+	missingStorageKeys := missingReuseCatalogKeys(storageKeys, entries)
+	strongEntries, err := service.getReuseCatalogModelKeys(
+		ctx,
+		missingStorageKeys,
+		dimension,
+		service.cfg.EmbeddingModel,
+		entity.ClStrong,
+	)
+	if err != nil {
+		return nil, err
+	}
+	mergeReuseCatalogEntries(entries, strongEntries)
+	missingStorageKeys = missingReuseCatalogKeys(storageKeys, entries)
+	legacyEntries, err := service.getReuseCatalogModelKeys(
+		ctx,
+		missingStorageKeys,
+		dimension,
+		"",
+		entity.ClBounded,
+	)
+	if err != nil {
+		return nil, err
+	}
+	mergeReuseCatalogEntries(entries, legacyEntries)
+	missingStorageKeys = missingReuseCatalogKeys(storageKeys, entries)
+	strongLegacyEntries, err := service.getReuseCatalogModelKeys(
+		ctx,
+		missingStorageKeys,
+		dimension,
+		"",
+		entity.ClStrong,
+	)
+	if err != nil {
+		return nil, err
+	}
+	mergeReuseCatalogEntries(entries, strongLegacyEntries)
+	return entries, nil
+}
+
+func missingReuseCatalogKeys(
+	storageKeys []string,
+	entries reuseCatalogEntries,
+) []string {
+	missingStorageKeys := make([]string, 0, len(storageKeys))
+	for _, storageKey := range storageKeys {
+		if len(entries[storageKey]) == 0 {
+			missingStorageKeys = append(missingStorageKeys, storageKey)
+		}
+	}
+	return missingStorageKeys
+}
+
+func mergeReuseCatalogEntries(entries reuseCatalogEntries, additions reuseCatalogEntries) {
+	for storageKey, candidates := range additions {
+		entries[storageKey] = append(entries[storageKey], candidates...)
+	}
+}
+
+func (service *Service) getReuseCatalogModelKeys(
+	ctx context.Context,
+	storageKeys []string,
+	dimension int,
+	embeddingModel string,
+	consistency entity.ConsistencyLevel,
+) (reuseCatalogEntries, error) {
+	entries := make(reuseCatalogEntries, len(storageKeys))
+	if len(storageKeys) == 0 {
+		return entries, nil
+	}
+	rowKeys := make([]string, 0, len(storageKeys))
+	storageKeyByRowKey := make(map[string]string, len(storageKeys))
+	for _, storageKey := range storageKeys {
+		rowKey := reuseCatalogRowKey(storageKey, embeddingModel)
+		rowKeys = append(rowKeys, rowKey)
+		storageKeyByRowKey[rowKey] = storageKey
+	}
+	collectionName := reuseCatalogCollectionName(service.cfg, dimension)
+	resultSet, err := service.milvus.Get(
+		ctx,
+		milvusclient.NewQueryOption(collectionName).
+			WithIDs(column.NewColumnVarChar(reuseCatalogRowKeyFieldName, rowKeys)).
+			WithOutputFields(reuseCatalogRowKeyFieldName, denseVectorFieldName).
+			WithConsistencyLevel(consistency),
+	)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"get content vector reuse catalog failed",
+			"collection", collectionName,
+			"err", err,
+		)
+		return nil, fmt.Errorf("get content vector reuse catalog: %w", err)
+	}
+	rowKeyColumn := resultSet.GetColumn(reuseCatalogRowKeyFieldName)
+	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
+	if resultSet.ResultCount > 0 && (rowKeyColumn == nil || vectorColumn == nil) {
+		return nil, ErrSearchResultIncomplete
+	}
+	for rowIndex := range resultSet.ResultCount {
+		rowKey, keyErr := rowKeyColumn.GetAsString(rowIndex)
+		if keyErr != nil {
+			return nil, fmt.Errorf("read catalog row key at %d: %w", rowIndex, keyErr)
+		}
+		storageKey, found := storageKeyByRowKey[rowKey]
+		if !found {
+			return nil, fmt.Errorf("read unrequested catalog row key %q", rowKey)
+		}
+		vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+		if vectorErr != nil {
+			return nil, vectorErr
+		}
+		entries[storageKey] = append(entries[storageKey], reuseCatalogEntry{
+			embeddingModel: embeddingModel,
+			vector:         vector,
+		})
+	}
+	return entries, nil
 }
 
 func (service *Service) queryReuseCatalogKeys(
 	ctx context.Context,
 	storageKeys []string,
+	dimension int,
 	consistency entity.ConsistencyLevel,
-) (map[string][]float32, error) {
-	vectors := make(map[string][]float32, len(storageKeys))
+) (reuseCatalogEntries, error) {
+	entries := make(reuseCatalogEntries, len(storageKeys))
 	if len(storageKeys) == 0 {
-		return vectors, nil
+		return entries, nil
 	}
-	queryKeys := append([]string(nil), storageKeys...)
-	collectionName := ReuseCatalogCollectionName(service.cfg)
-	resultSet, err := service.milvus.Get(
+	collectionName := reuseCatalogCollectionName(service.cfg, dimension)
+	resultSet, err := service.milvus.Query(
 		ctx,
 		milvusclient.NewQueryOption(collectionName).
-			WithIDs(column.NewColumnVarChar(contentVectorKeyFieldName, queryKeys)).
-			WithOutputFields(contentVectorKeyFieldName, denseVectorFieldName).
+			WithFilter(inStringClause(contentHashFieldName, storageKeys)).
+			WithOutputFields(contentHashFieldName, embeddingModelFieldName, denseVectorFieldName).
 			WithConsistencyLevel(consistency),
 	)
 	if err != nil {
@@ -153,10 +326,19 @@ func (service *Service) queryReuseCatalogKeys(
 		)
 		return nil, fmt.Errorf("query content vector reuse catalog: %w", err)
 	}
+	return readReuseCatalogEntries(ctx, resultSet, entries)
+}
+
+func readReuseCatalogEntries(
+	ctx context.Context,
+	resultSet milvusclient.ResultSet,
+	entries reuseCatalogEntries,
+) (reuseCatalogEntries, error) {
 	if resultSet.ResultCount == 0 {
-		return vectors, nil
+		return entries, nil
 	}
-	keyColumn := resultSet.GetColumn(contentVectorKeyFieldName)
+	keyColumn := resultSet.GetColumn(contentHashFieldName)
+	embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
 	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
 	if keyColumn == nil || vectorColumn == nil {
 		return nil, ErrSearchResultIncomplete
@@ -164,15 +346,64 @@ func (service *Service) queryReuseCatalogKeys(
 	for rowIndex := range resultSet.ResultCount {
 		storageKey, keyErr := keyColumn.GetAsString(rowIndex)
 		if keyErr != nil {
-			return nil, fmt.Errorf("read catalog content vector key at %d: %w", rowIndex, keyErr)
+			wrappedErr := fmt.Errorf("read catalog content hash at %d: %w", rowIndex, keyErr)
+			slog.ErrorContext(ctx, "read catalog content hash failed", "err", wrappedErr)
+			return nil, wrappedErr
+		}
+		embeddingModel, modelErr := nullableStringAt(embeddingModelColumn, rowIndex)
+		if modelErr != nil {
+			wrappedErr := fmt.Errorf("read catalog embedding model at %d: %w", rowIndex, modelErr)
+			slog.ErrorContext(ctx, "read catalog embedding model failed", "err", wrappedErr)
+			return nil, wrappedErr
 		}
 		vector, vectorErr := vectorAt(vectorColumn, rowIndex)
 		if vectorErr != nil {
 			return nil, vectorErr
 		}
-		vectors[storageKey] = vector
+		entries[storageKey] = append(entries[storageKey], reuseCatalogEntry{
+			embeddingModel: embeddingModel,
+			vector:         vector,
+		})
 	}
-	return vectors, nil
+	return entries, nil
+}
+
+func reuseCatalogRowKey(contentHashValue string, embeddingModel string) string {
+	normalizedModel, _ := sanitizeUTF8(embeddingModel)
+	sum := sha256.Sum256([]byte(contentHashValue + "\x00" + normalizedModel))
+	return hex.EncodeToString(sum[:])
+}
+
+func (service *Service) loadReuseCatalogRowKeys(
+	ctx context.Context,
+	rowKeys []string,
+	dimension int,
+) (map[string]struct{}, error) {
+	existing := make(map[string]struct{}, len(rowKeys))
+	resultSet, err := service.milvus.Get(
+		ctx,
+		milvusclient.NewQueryOption(reuseCatalogCollectionName(service.cfg, dimension)).
+			WithIDs(column.NewColumnVarChar(reuseCatalogRowKeyFieldName, rowKeys)).
+			WithOutputFields(reuseCatalogRowKeyFieldName).
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		wrappedErr := fmt.Errorf("query content vector catalog row keys: %w", err)
+		slog.ErrorContext(ctx, "query content vector catalog row keys failed", "err", wrappedErr)
+		return nil, wrappedErr
+	}
+	rowKeyColumn := resultSet.GetColumn(reuseCatalogRowKeyFieldName)
+	if resultSet.ResultCount > 0 && rowKeyColumn == nil {
+		return nil, ErrSearchResultIncomplete
+	}
+	for rowIndex := range resultSet.ResultCount {
+		rowKey, keyErr := rowKeyColumn.GetAsString(rowIndex)
+		if keyErr != nil {
+			return nil, fmt.Errorf("read catalog row key at %d: %w", rowIndex, keyErr)
+		}
+		existing[rowKey] = struct{}{}
+	}
+	return existing, nil
 }
 
 func (service *Service) appendReuseCatalog(
@@ -199,7 +430,7 @@ func (service *Service) appendReuseCatalog(
 				len(vector),
 			)
 		}
-		storageKey := contentVectorStorageKey(service.cfg, content)
+		storageKey := contentHash(content)
 		vectorsByStorageKey[storageKey] = vector
 	}
 	if len(vectorsByStorageKey) == 0 {
@@ -208,33 +439,55 @@ func (service *Service) appendReuseCatalog(
 
 	service.reuseCatalogAppendMutex.Lock()
 	defer service.reuseCatalogAppendMutex.Unlock()
-	if _, err := service.reuseCatalogAvailable(ctx, dimension); err != nil {
+	if _, err := service.reuseCatalogAvailable(ctx, dimension, true); err != nil {
 		return err
 	}
 	storageKeys := make([]string, 0, len(vectorsByStorageKey))
+	rowKeysByStorageKey := make(map[string]string, len(vectorsByStorageKey))
 	for storageKey := range vectorsByStorageKey {
 		storageKeys = append(storageKeys, storageKey)
+		rowKeysByStorageKey[storageKey] = reuseCatalogRowKey(
+			storageKey,
+			service.cfg.EmbeddingModel,
+		)
 	}
-	existing, err := service.loadReuseCatalogKeysForAppend(ctx, storageKeys)
+	rowKeys := make([]string, 0, len(storageKeys))
+	for _, storageKey := range storageKeys {
+		rowKeys = append(rowKeys, rowKeysByStorageKey[storageKey])
+	}
+	existing, err := service.loadReuseCatalogRowKeys(ctx, rowKeys, dimension)
 	if err != nil {
 		return err
 	}
 	missingKeys := make([]string, 0, len(storageKeys))
+	missingRowKeys := make([]string, 0, len(storageKeys))
 	missingVectors := make([][]float32, 0, len(storageKeys))
 	for _, storageKey := range storageKeys {
-		if _, found := existing[storageKey]; found {
+		rowKey := rowKeysByStorageKey[storageKey]
+		if _, found := existing[rowKey]; found {
 			continue
 		}
 		missingKeys = append(missingKeys, storageKey)
+		missingRowKeys = append(missingRowKeys, rowKey)
 		missingVectors = append(missingVectors, vectorsByStorageKey[storageKey])
 	}
 	if len(missingKeys) == 0 {
 		return nil
 	}
+	embeddingModelColumn, err := newEmbeddingModelColumn(
+		reuseCatalogCollectionName(service.cfg, dimension),
+		service.cfg.EmbeddingModel,
+		len(missingKeys),
+	)
+	if err != nil {
+		return err
+	}
 	result, err := service.milvus.Insert(
 		ctx,
-		milvusclient.NewColumnBasedInsertOption(ReuseCatalogCollectionName(service.cfg)).
-			WithVarcharColumn(contentVectorKeyFieldName, missingKeys).
+		milvusclient.NewColumnBasedInsertOption(reuseCatalogCollectionName(service.cfg, dimension)).
+			WithVarcharColumn(reuseCatalogRowKeyFieldName, missingRowKeys).
+			WithVarcharColumn(contentHashFieldName, missingKeys).
+			WithColumns(embeddingModelColumn).
 			WithFloatVectorColumn(denseVectorFieldName, dimension, missingVectors),
 	)
 	if err != nil {

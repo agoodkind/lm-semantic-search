@@ -15,6 +15,8 @@ type conversationBatchTestRow struct {
 	role              string
 	missingRole       bool
 	content           string
+	embeddingModel    string
+	hasEmbeddingModel bool
 	messageIndex      int64
 	hasMessageIndex   bool
 	vector            []float32
@@ -29,6 +31,8 @@ func conversationBatchResultSet(t *testing.T, rows []conversationBatchTestRow) m
 	roles := make([]string, 0, len(rows))
 	roleValidData := make([]bool, 0, len(rows))
 	contents := make([]string, 0, len(rows))
+	embeddingModels := make([]string, 0, len(rows))
+	embeddingModelValidData := make([]bool, 0, len(rows))
 	vectors := make([][]float32, 0, len(rows))
 	messageIndexes := make([]int64, 0, len(rows))
 	validData := make([]bool, 0, len(rows))
@@ -45,6 +49,11 @@ func conversationBatchResultSet(t *testing.T, rows []conversationBatchTestRow) m
 		roles = append(roles, row.role)
 		roleValidData = append(roleValidData, !row.missingRole)
 		contents = append(contents, row.content)
+		embeddingModels = append(embeddingModels, row.embeddingModel)
+		embeddingModelValidData = append(
+			embeddingModelValidData,
+			row.hasEmbeddingModel || row.embeddingModel != "",
+		)
 		vectors = append(vectors, row.vector)
 		messageIndexes = append(messageIndexes, row.messageIndex)
 		validData = append(validData, row.hasMessageIndex)
@@ -71,15 +80,58 @@ func conversationBatchResultSet(t *testing.T, rows []conversationBatchTestRow) m
 	if err != nil {
 		t.Fatalf("NewNullableColumnVarChar role returned error: %v", err)
 	}
+	embeddingModelColumn, err := column.NewNullableColumnVarChar(
+		embeddingModelFieldName,
+		embeddingModels,
+		embeddingModelValidData,
+		column.WithSparseNullableMode[string](true),
+	)
+	if err != nil {
+		t.Fatalf("NewNullableColumnVarChar embedding model returned error: %v", err)
+	}
 	fields := milvusclient.DataSet{
 		conversationIDColumn,
 		column.NewColumnVarChar(relativePathFieldName, relativePaths),
 		roleColumn,
 		column.NewColumnVarChar(contentFieldName, contents),
+		embeddingModelColumn,
 		column.NewColumnFloatVector(denseVectorFieldName, vectorDimension, vectors),
 		messageIndexColumn,
 	}
 	return milvusclient.ResultSet{ResultCount: len(rows), Fields: fields}
+}
+
+func TestAppendConversationBatchRowsRejectsOnlyKnownUnequalEmbeddingModels(t *testing.T) {
+	currentModel := "model-b"
+	rows := []conversationBatchTestRow{
+		{conversationID: "claude:a", relativePath: "conv/claude:a/0", content: "known unequal", embeddingModel: "model-a", messageIndex: 0, hasMessageIndex: true, vector: []float32{1}},
+		{conversationID: "claude:a", relativePath: "conv/claude:a/1", content: "legacy unknown", messageIndex: 1, hasMessageIndex: true, vector: []float32{2}},
+		{conversationID: "claude:a", relativePath: "conv/claude:a/2", content: "known equal", embeddingModel: currentModel, messageIndex: 2, hasMessageIndex: true, vector: []float32{3}},
+	}
+	assemblies := newConversationBatchAssemblies()
+	reuse := map[string][]float32{}
+	if err := appendConversationBatchRows(
+		conversationBatchResultSet(t, rows),
+		[]string{"claude:a"},
+		currentModel,
+		assemblies,
+		reuse,
+	); err != nil {
+		t.Fatalf("appendConversationBatchRows returned error: %v", err)
+	}
+
+	if vector := reuse[contentVectorKey("known unequal")]; vector != nil {
+		t.Fatalf("known unequal model vector = %v under current model %q, want absent", vector, currentModel)
+	}
+	if vector := reuse[contentVectorKey("legacy unknown")]; vector == nil {
+		t.Fatal("legacy row with no embedding model was not reusable")
+	}
+	if vector := reuse[contentVectorKey("known equal")]; vector == nil {
+		t.Fatal("row with the current embedding model was not reusable")
+	}
+	if messages := assemblies.finalize()["claude:a"].Messages; len(messages) != len(rows) {
+		t.Fatalf("stored messages = %d, want all %d rows retained", len(messages), len(rows))
+	}
 }
 
 func TestAppendConversationBatchRowsBucketsBaseAndDerived(t *testing.T) {
@@ -90,7 +142,7 @@ func TestAppendConversationBatchRowsBucketsBaseAndDerived(t *testing.T) {
 	}
 	assemblies := newConversationBatchAssemblies()
 	reuse := map[string][]float32{}
-	if err := appendConversationBatchRows(conversationBatchResultSet(t, rows), []string{"claude:a", "claude:b"}, assemblies, reuse); err != nil {
+	if err := appendConversationBatchRows(conversationBatchResultSet(t, rows), []string{"claude:a", "claude:b"}, "", assemblies, reuse); err != nil {
 		t.Fatalf("appendConversationBatchRows returned error: %v", err)
 	}
 	batchRows := assemblies.finalize()
@@ -139,7 +191,7 @@ func TestDerivedRowsRegisterTheirMessageWithItsRole(t *testing.T) {
 		{conversationID: "claude:a", relativePath: "convthink/claude:a/2", role: "assistant", content: "considering", messageIndex: 2, hasMessageIndex: true, vector: []float32{4}},
 	}
 	assemblies := newConversationBatchAssemblies()
-	if err := appendConversationBatchRows(conversationBatchResultSet(t, rows), []string{"claude:a"}, assemblies, map[string][]float32{}); err != nil {
+	if err := appendConversationBatchRows(conversationBatchResultSet(t, rows), []string{"claude:a"}, "", assemblies, map[string][]float32{}); err != nil {
 		t.Fatalf("appendConversationBatchRows returned error: %v", err)
 	}
 	stored := assemblies.finalize()["claude:a"]
@@ -180,7 +232,7 @@ func TestDerivedRowRegistrationKeepsTheBaseRole(t *testing.T) {
 		{conversationID: "claude:a", relativePath: "conv/claude:a/0", role: "user", content: "text", messageIndex: 0, hasMessageIndex: true, vector: []float32{2}},
 	}
 	assemblies := newConversationBatchAssemblies()
-	if err := appendConversationBatchRows(conversationBatchResultSet(t, derivedFirst), []string{"claude:a"}, assemblies, map[string][]float32{}); err != nil {
+	if err := appendConversationBatchRows(conversationBatchResultSet(t, derivedFirst), []string{"claude:a"}, "", assemblies, map[string][]float32{}); err != nil {
 		t.Fatalf("appendConversationBatchRows returned error: %v", err)
 	}
 	stored := assemblies.finalize()["claude:a"]
@@ -218,6 +270,7 @@ func TestAppendConversationBatchRowsMarksOnlyUsableDerivedPaths(t *testing.T) {
 	if err := appendConversationBatchRows(
 		conversationBatchResultSet(t, rows),
 		[]string{"claude:a"},
+		"",
 		assemblies,
 		map[string][]float32{},
 	); err != nil {
@@ -257,6 +310,7 @@ func TestAppendConversationBatchRowsResolvesScalarLessLegacyPaths(t *testing.T) 
 	if err := appendConversationBatchRows(
 		conversationBatchResultSet(t, rows),
 		[]string{"claude:legacy"},
+		"",
 		assemblies,
 		map[string][]float32{},
 	); err != nil {
