@@ -421,7 +421,6 @@ func newQueuedJob(
 		Forced:        forced,
 		Progress: model.Progress{
 			Phase:                     "queued",
-			PhasePercent:              0,
 			OverallPercent:            0,
 			Unit:                      "",
 			RunMode:                   "",
