@@ -130,10 +130,13 @@ func ToProgress(p model.Progress) *pb.Progress {
 	if chunksProcessed == 0 {
 		chunksProcessed = chunksEmbedded + p.ChunksReused
 	}
+	// Both percents read the same counter snapshot, so they can never describe
+	// two different moments of the same job.
+	counts := ProgressCounts(p)
 	return &pb.Progress{
 		Phase:                     p.Phase,
-		PhasePercent:              p.PhasePercent,
-		OverallPercent:            view.ResolveOverallPercent(ProgressCounts(p), p.OverallPercent),
+		PhasePercent:              view.ResolvePhasePercent(counts),
+		OverallPercent:            view.ResolveOverallPercent(counts, p.OverallPercent),
 		Unit:                      p.Unit,
 		FilesTotal:                p.FilesTotal,
 		FilesProcessed:            p.FilesProcessed,
@@ -174,6 +177,9 @@ func ProgressCounts(p model.Progress) view.ProgressCounts {
 		ChunksEmbedded:         p.ChunksEmbedded,
 		ChunksGenerated:        p.ChunksGenerated,
 		ReuseVectorsLoaded:     p.ReuseVectorsLoaded,
+
+		EmbeddingBatchesTotal:     p.EmbeddingBatchesTotal,
+		EmbeddingBatchesCompleted: p.EmbeddingBatchesCompleted,
 	}
 }
 

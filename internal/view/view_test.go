@@ -195,3 +195,66 @@ func TestResolveBreakdownChangedModeKeepsReusePresentation(t *testing.T) {
 		t.Fatalf("reused chunks = %d, want 0 for unchanged changed-mode behavior", reused)
 	}
 }
+
+// TestResolvePhasePercentReadsTheCurrentScope proves the phase percent answers
+// how far the run is through the work it is doing now, and that it prefers the
+// file cursor over the embed-batch cursor whenever a file scope exists. The
+// batch denominator belongs to the item being embedded and resets between
+// items, so reading it while files are in flight would saw-tooth.
+func TestResolvePhasePercentReadsTheCurrentScope(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		counts ProgressCounts
+		want   float64
+	}{
+		{
+			name:   "file scope reads by the file cursor",
+			counts: ProgressCounts{FilesTotal: 452, FilesProcessed: 226},
+			want:   50.0,
+		},
+		{
+			// The file cursor wins even while an embed loop reports batches, so a
+			// multi-item run climbs once rather than resetting per item.
+			name: "file scope wins over the embed batch cursor",
+			counts: ProgressCounts{
+				FilesTotal: 100, FilesProcessed: 25,
+				EmbeddingBatchesTotal: 10, EmbeddingBatchesCompleted: 9,
+			},
+			want: 25.0,
+		},
+		{
+			// One large item with no file scope still shows movement across its
+			// embed batches instead of sitting at zero until it finishes.
+			name:   "batch scope carries a run with no file scope",
+			counts: ProgressCounts{EmbeddingBatchesTotal: 16, EmbeddingBatchesCompleted: 12},
+			want:   75.0,
+		},
+		{
+			name:   "a finished file scope reads fully done",
+			counts: ProgressCounts{FilesTotal: 58, FilesProcessed: 58},
+			want:   100.0,
+		},
+		{
+			// A cursor can pass its denominator when the scope was measured before
+			// the run counted extra items; a percent above 100 reads as a defect.
+			name:   "a cursor past its denominator clamps to fully done",
+			counts: ProgressCounts{FilesTotal: 10, FilesProcessed: 14},
+			want:   100.0,
+		},
+		{
+			name:   "an unmeasured scope claims nothing",
+			counts: ProgressCounts{ChunksEmbedded: 400, ChunksTotal: 40000},
+			want:   0,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got := ResolvePhasePercent(testCase.counts)
+			if got != testCase.want {
+				t.Fatalf("ResolvePhasePercent = %.4f, want %.4f", got, testCase.want)
+			}
+		})
+	}
+}
