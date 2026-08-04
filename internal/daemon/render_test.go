@@ -1465,3 +1465,52 @@ func TestRenderListIndexesShowsIDAndPluralHeader(t *testing.T) {
 		t.Fatalf("list still uses a (s) suffix:\n%s", outMany)
 	}
 }
+
+// TestWirePhasePercentTracksTheCurrentScope proves the wire carries a live
+// phase percent derived from the run's own counters, distinct from the headline
+// percent. A reuse-heavy run reads mostly done overall while its file cursor,
+// the work it is actually doing now, sits low.
+func TestWirePhasePercentTracksTheCurrentScope(t *testing.T) {
+	t.Parallel()
+	job := model.Job{
+		ID:            "job_phase",
+		CanonicalPath: "/repo",
+		State:         model.JobStateRunning,
+		Operation:     "conversation_ingest",
+		Progress: model.Progress{
+			RunMode:        model.RunModeChanged,
+			OverallPercent: 5.0,
+			FilesTotal:     1000, FilesProcessed: 250,
+			ChunksReused: 30000, ChunksEmbedded: 1000, ChunksTotal: 40000,
+			LastEventAt: renderTestTime,
+		},
+	}
+	progress := pbconv.ToJob(job).GetProgress()
+	if got := progress.GetPhasePercent(); got != 25.0 {
+		t.Fatalf("wire PhasePercent = %.4f, want 25.0 (250 of 1000 files this phase)", got)
+	}
+	// The headline percent is a different question and keeps its own answer.
+	if got := progress.GetOverallPercent(); got != 77.5 {
+		t.Fatalf("wire OverallPercent = %.4f, want 77.5 (unchanged by the phase percent)", got)
+	}
+}
+
+// TestWirePhasePercentFallsBackToEmbedBatches proves a run whose only measured
+// scope is one item's embed loop still reports movement, rather than the flat
+// zero the field carried before it was derived.
+func TestWirePhasePercentFallsBackToEmbedBatches(t *testing.T) {
+	t.Parallel()
+	job := model.Job{
+		ID:            "job_batches",
+		CanonicalPath: "/repo",
+		State:         model.JobStateRunning,
+		Operation:     "conversation_ingest",
+		Progress: model.Progress{
+			EmbeddingBatchesTotal: 20, EmbeddingBatchesCompleted: 5,
+			LastEventAt: renderTestTime,
+		},
+	}
+	if got := pbconv.ToJob(job).GetProgress().GetPhasePercent(); got != 25.0 {
+		t.Fatalf("wire PhasePercent = %.4f, want 25.0 (5 of 20 embed batches)", got)
+	}
+}

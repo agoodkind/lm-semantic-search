@@ -190,9 +190,22 @@ func (manager *Manager) classifyCodebaseRepair(
 	switch codebase.Status {
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed,
 		model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed, model.CodebaseStatusMissing:
-	case model.CodebaseStatusDiscovered, model.CodebaseStatusPending:
-		// A discovered or pending codebase has no collection yet by design; its
-		// build is deferred or queued, so the repair pass leaves it alone.
+	case model.CodebaseStatusPending:
+		// A pending codebase normally has its first build live or coalesced, and
+		// the repair pass leaves that alone. One with neither has lost its first
+		// build (a queued job cancelled at a daemon shutdown parks it here), so
+		// it falls through to the interrupted-build resume check below; no other
+		// path ever re-queues it.
+		if manager.activeJobSnapshotLocked(codebase) != nil {
+			return repairOutcome{persist: false, cleanup: false, plan: nil}
+		}
+		if _, coalesced := manager.pendingCodeJobs[codebaseID]; coalesced {
+			return repairOutcome{persist: false, cleanup: false, plan: nil}
+		}
+	case model.CodebaseStatusDiscovered:
+		// A discovered worktree has no collection yet by design; its build is
+		// driven by the deferred timer and the periodic sweep, so the repair
+		// pass leaves it alone.
 		return repairOutcome{persist: false, cleanup: false, plan: nil}
 	case model.CodebaseStatusQuarantined:
 		// Quarantined codebases are owned by the background-sync corroboration

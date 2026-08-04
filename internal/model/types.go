@@ -123,8 +123,12 @@ type AdmissionBudget struct {
 
 // Progress records daemon-visible structured progress for a job.
 type Progress struct {
-	Phase          string  `json:"phase"`
-	PhasePercent   float64 `json:"phase_percent"`
+	Phase string `json:"phase"`
+	// OverallPercent is the run's own cursor through its work. The wire figure
+	// is resolved from it and the chunk counters, so a reader wanting the
+	// headline percent should take the resolved one rather than this raw value.
+	// The wire's companion phase percent is derived from the counters alone and
+	// is therefore not stored here.
 	OverallPercent float64 `json:"overall_percent"`
 	// Unit is the human progress noun for the counted items: "file" for a code
 	// index and "document" for a conversation index. An empty value reads as

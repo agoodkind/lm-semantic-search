@@ -139,3 +139,110 @@ func TestRepairLeavesActiveJobCodebaseUntouched(t *testing.T) {
 		t.Fatal("LastFailedRun cleared while a job is active, want it preserved")
 	}
 }
+
+// TestPlanRepairsResumesPendingWithLostFirstBuild pins the strand this pass
+// exists to heal: a first build cancelled while queued leaves its codebase at
+// pending with no live job and no coalesced request, and nothing else ever
+// re-queues it. The plan must include it so the sweep restarts the build.
+func TestPlanRepairsResumesPendingWithLostFirstBuild(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusPending
+	codebase.ActiveJobID = "job-cancelled-at-shutdown"
+	codebase.CollectionName = "pending_lost_collection"
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.jobs["job-cancelled-at-shutdown"] = model.Job{
+		ID:         "job-cancelled-at-shutdown",
+		CodebaseID: codebase.ID,
+		State:      model.JobStateCancelled,
+	}
+	manager.mu.Unlock()
+	manager.semantic = &fakeSemantic{
+		collectionName:  func(string) string { return "pending_lost_collection" },
+		listCollections: func(context.Context) ([]string, error) { return []string{}, nil },
+	}
+
+	plans, _, err := manager.planMissingCollectionRepairs(context.Background())
+	if err != nil {
+		t.Fatalf("planMissingCollectionRepairs returned error: %v", err)
+	}
+	found := false
+	for _, plan := range plans {
+		if plan.codebaseID == codebase.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("pending codebase with a lost first build was not queued for retry; plans=%+v", plans)
+	}
+}
+
+// TestPlanRepairsLeavesPendingWithLiveOrCoalescedBuildAlone pins the healthy
+// side of the same gate: a pending codebase whose first build is live, or whose
+// next build waits in the coalesced slot, is normal queued work the repair pass
+// must not duplicate.
+func TestPlanRepairsLeavesPendingWithLiveOrCoalescedBuildAlone(t *testing.T) {
+	t.Run("live first build", func(t *testing.T) {
+		manager, _, repoPath := newTestManager(t)
+		canonical, err := filepath.EvalSymlinks(repoPath)
+		if err != nil {
+			t.Fatalf("EvalSymlinks returned error: %v", err)
+		}
+		codebase := newCodebaseRecord(canonical)
+		codebase.Status = model.CodebaseStatusPending
+		codebase.ActiveJobID = "job-live-first-build"
+		codebase.CollectionName = "pending_live_collection"
+		manager.mu.Lock()
+		manager.codebases[codebase.ID] = codebase
+		manager.jobs["job-live-first-build"] = model.Job{
+			ID:         "job-live-first-build",
+			CodebaseID: codebase.ID,
+			State:      model.JobStateQueued,
+		}
+		manager.mu.Unlock()
+		manager.semantic = &fakeSemantic{
+			collectionName:  func(string) string { return "pending_live_collection" },
+			listCollections: func(context.Context) ([]string, error) { return []string{}, nil },
+		}
+
+		plans, _, err := manager.planMissingCollectionRepairs(context.Background())
+		if err != nil {
+			t.Fatalf("planMissingCollectionRepairs returned error: %v", err)
+		}
+		if len(plans) != 0 {
+			t.Fatalf("pending codebase with a live first build was planned for repair; plans=%+v", plans)
+		}
+	})
+
+	t.Run("coalesced request", func(t *testing.T) {
+		manager, _, repoPath := newTestManager(t)
+		canonical, err := filepath.EvalSymlinks(repoPath)
+		if err != nil {
+			t.Fatalf("EvalSymlinks returned error: %v", err)
+		}
+		codebase := newCodebaseRecord(canonical)
+		codebase.Status = model.CodebaseStatusPending
+		codebase.CollectionName = "pending_coalesced_collection"
+		manager.mu.Lock()
+		manager.codebases[codebase.ID] = codebase
+		manager.pendingCodeJobs[codebase.ID] = pendingCodeRequest{}
+		manager.mu.Unlock()
+		manager.semantic = &fakeSemantic{
+			collectionName:  func(string) string { return "pending_coalesced_collection" },
+			listCollections: func(context.Context) ([]string, error) { return []string{}, nil },
+		}
+
+		plans, _, err := manager.planMissingCollectionRepairs(context.Background())
+		if err != nil {
+			t.Fatalf("planMissingCollectionRepairs returned error: %v", err)
+		}
+		if len(plans) != 0 {
+			t.Fatalf("pending codebase with a coalesced request was planned for repair; plans=%+v", plans)
+		}
+	})
+}

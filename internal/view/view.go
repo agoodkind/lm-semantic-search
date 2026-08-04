@@ -149,6 +149,11 @@ type ProgressCounts struct {
 	ChunksEmbedded         int32
 	ChunksGenerated        int32
 	ReuseVectorsLoaded     int32
+	// EmbeddingBatchesTotal and EmbeddingBatchesCompleted are the current item's
+	// embed-loop denominator and cursor. ResolvePhasePercent reads them;
+	// ResolveBreakdown ignores them, because a batch is not an outcome.
+	EmbeddingBatchesTotal     int32
+	EmbeddingBatchesCompleted int32
 }
 
 // ResolveBreakdown is the single source of truth for the outcome tree. Every
@@ -227,6 +232,42 @@ func ResolveOverallPercent(counts ProgressCounts, runPercent float64) float64 {
 		}
 	}
 	return runPercent
+}
+
+// ResolvePhasePercent returns how far the run is through the work it is doing
+// right now, as distinct from ResolveOverallPercent, which answers how much of
+// the corpus is embedded. A run scanning and embedding a changed-file set reads
+// by its file cursor; a run whose only measured scope is one item's embed loop
+// reads by its batch cursor.
+//
+// The file cursor wins whenever a file scope exists, because the batch
+// denominator belongs to the item being embedded and resets when the next item
+// starts. Reading batches while files are also in flight would saw-tooth
+// between items rather than climb.
+//
+// A run with neither scope measured yet returns zero, matching how the surfaces
+// already treat an unmeasured scope: nothing is known, so nothing is claimed.
+func ResolvePhasePercent(counts ProgressCounts) float64 {
+	if counts.FilesTotal > 0 {
+		return clampPercent(float64(counts.FilesProcessed) / float64(counts.FilesTotal) * 100)
+	}
+	if counts.EmbeddingBatchesTotal > 0 {
+		return clampPercent(float64(counts.EmbeddingBatchesCompleted) / float64(counts.EmbeddingBatchesTotal) * 100)
+	}
+	return 0
+}
+
+// clampPercent holds a derived percent inside [0, 100]. A cursor can exceed its
+// denominator when a run counts an item the scope was measured before, and a
+// percent above 100 reads as a defect on every surface.
+func clampPercent(percent float64) float64 {
+	if percent < 0 {
+		return 0
+	}
+	if percent > 100 {
+		return 100
+	}
+	return percent
 }
 
 // breakdownFileRows builds the file children in fixed order, omitting a zero
