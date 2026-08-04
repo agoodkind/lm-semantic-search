@@ -175,7 +175,8 @@ func buildInsertOption(
 			WithVarcharColumn(workspaceRootFieldName, columns.scalars.workspaceRoots).
 			WithBoolColumn(archivedFieldName, columns.scalars.archiveds).
 			WithInt64Column(timestampUnixFieldName, columns.scalars.timestamps).
-			WithInt64Column(messageIndexFieldName, columns.scalars.messageIndexes)
+			WithInt64Column(messageIndexFieldName, columns.scalars.messageIndexes).
+			WithVarcharColumn(loadRulesFieldName, columns.scalars.loadRules)
 	}
 	return insertOption
 }

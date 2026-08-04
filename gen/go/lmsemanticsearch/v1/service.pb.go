@@ -941,16 +941,32 @@ func (x *JobError) GetCode() string {
 
 // DependencyHealth reports the daemon's view of shared-infrastructure health
 // (the embedding pipeline and the vector store). It is one global fact, not a
-// per-codebase value, observed from job outcomes rather than a live probe. When
-// degraded is true a hard outage is in effect and the human surfaces show a
-// banner; mode names which one. Timestamps are UTC on the wire.
+// per-codebase value. It is observed from job and search outcomes, and readiness
+// surfaces additionally run a debounced store probe before reading it.
+// Timestamps are UTC on the wire.
 type DependencyHealth struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	Degraded bool                   `protobuf:"varint,1,opt,name=degraded,proto3" json:"degraded,omitempty"`
-	// mode is the degraded condition: "embedder_unreachable", "embedder_rejected",
-	// "store_unavailable", or empty when healthy.
-	Mode          string                 `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"`
-	Since         *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=since,proto3" json:"since,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// degraded reports that some dependency condition is in effect and the human
+	// surfaces show a banner. It does not report that work has stopped, so a
+	// client that needs to know whether the pipeline is still moving reads mode
+	// rather than this field. A store that cannot answer and an endpoint that is
+	// unreachable, rejecting, or paused all stop indexing; a throttled endpoint
+	// does not, and work continues between the batches it rejects.
+	Degraded bool `protobuf:"varint,1,opt,name=degraded,proto3" json:"degraded,omitempty"`
+	// mode names the condition: "embedder_unreachable" and "embedder_rejected"
+	// stop indexing until the endpoint or its configuration is fixed,
+	// "embedder_paused" stops it until the endpoint resumes, "embedder_busy" is
+	// throttling and indexing may continue between rejected batches,
+	// "store_unavailable" stops search and indexing, and empty is healthy.
+	Mode string `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"`
+	// since is when the current degraded mode began. Omitted while healthy.
+	Since *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=since,proto3" json:"since,omitempty"`
+	// last_healthy_at is the last time the dependency named by mode answered, so
+	// it describes the same dependency the mode does and matches what the human
+	// banner shows. A dependency that has not answered in this daemon's lifetime
+	// is omitted rather than filled in from the other dependency's evidence. A
+	// healthy record names no single dependency, so it carries whichever of the
+	// two answered most recently.
 	LastHealthyAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=last_healthy_at,json=lastHealthyAt,proto3" json:"last_healthy_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1676,7 +1692,13 @@ type ConversationDocument struct {
 	// thinking is the assistant's internal reasoning text for this message. It can
 	// be sensitive, so a consumer that persists or exposes conversation content
 	// should treat it as private and index it only where that is intended.
-	Thinking      string `protobuf:"bytes,10,opt,name=thinking,proto3" json:"thinking,omitempty"`
+	Thinking string `protobuf:"bytes,10,opt,name=thinking,proto3" json:"thinking,omitempty"`
+	// load_rules names the loading rules that produced this document's
+	// message_index, so a reader can rebuild the same message sequence the index
+	// positions refer to. clyde owns the value and treats it as opaque here; the
+	// engine stores it per row and returns it on search hits. Empty means the row
+	// predates the tag and was written under the sender's default rules.
+	LoadRules     string `protobuf:"bytes,11,opt,name=load_rules,json=loadRules,proto3" json:"load_rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1781,6 +1803,13 @@ func (x *ConversationDocument) GetThinking() string {
 	return ""
 }
 
+func (x *ConversationDocument) GetLoadRules() string {
+	if x != nil {
+		return x.LoadRules
+	}
+	return ""
+}
+
 // ConversationToolCall is one structured tool call attached to a conversation document.
 type ConversationToolCall struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1879,8 +1908,12 @@ type ConversationSearchResult struct {
 	// parent_conversation_id names the conversation this one forked from, carried
 	// through from the indexed document. Empty when the conversation has no parent.
 	ParentConversationId string `protobuf:"bytes,7,opt,name=parent_conversation_id,json=parentConversationId,proto3" json:"parent_conversation_id,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// load_rules is the opaque loading-rules tag stored with this row, carried
+	// back so the caller can rebuild the message sequence message_index refers
+	// to. Empty when the row predates the tag.
+	LoadRules     string `protobuf:"bytes,8,opt,name=load_rules,json=loadRules,proto3" json:"load_rules,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConversationSearchResult) Reset() {
@@ -1958,6 +1991,13 @@ func (x *ConversationSearchResult) GetContent() string {
 func (x *ConversationSearchResult) GetParentConversationId() string {
 	if x != nil {
 		return x.ParentConversationId
+	}
+	return ""
+}
+
+func (x *ConversationSearchResult) GetLoadRules() string {
+	if x != nil {
+		return x.LoadRules
 	}
 	return ""
 }
@@ -5684,7 +5724,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\bend_line\x18\x03 \x01(\x05R\aendLine\x12\x1a\n" +
 	"\blanguage\x18\x04 \x01(\tR\blanguage\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
-	"\acontent\x18\x06 \x01(\tR\acontent\"\x89\x03\n" +
+	"\acontent\x18\x06 \x01(\tR\acontent\"\xa8\x03\n" +
 	"\x14ConversationDocument\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +
@@ -5696,14 +5736,16 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\barchived\x18\b \x01(\bR\barchived\x12?\n" +
 	"\x05tools\x18\t \x03(\v2).lmsemanticsearch.v1.ConversationToolCallR\x05tools\x12\x1a\n" +
 	"\bthinking\x18\n" +
-	" \x01(\tR\bthinking\"\xb5\x01\n" +
+	" \x01(\tR\bthinking\x12\x1d\n" +
+	"\n" +
+	"load_rules\x18\v \x01(\tR\tloadRules\"\xb5\x01\n" +
 	"\x14ConversationToolCall\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\adisplay\x18\a \x01(\tR\adisplay\x12\x1b\n" +
 	"\tlang_hint\x18\x04 \x01(\tR\blangHint\x12\x16\n" +
 	"\x06output\x18\x05 \x01(\tR\x06output\x12\x19\n" +
 	"\bis_error\x18\x06 \x01(\bR\aisErrorJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\n" +
-	"input_jsonR\acommand\"\x89\x02\n" +
+	"input_jsonR\acommand\"\xa8\x02\n" +
 	"\x18ConversationSearchResult\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +
@@ -5711,7 +5753,9 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
 	"\acontent\x18\x06 \x01(\tR\acontent\x124\n" +
-	"\x16parent_conversation_id\x18\a \x01(\tR\x14parentConversationId\"\xd9\x02\n" +
+	"\x16parent_conversation_id\x18\a \x01(\tR\x14parentConversationId\x12\x1d\n" +
+	"\n" +
+	"load_rules\x18\b \x01(\tR\tloadRules\"\xd9\x02\n" +
 	"\x11StartIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x12?\n" +

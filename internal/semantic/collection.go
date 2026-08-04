@@ -29,10 +29,12 @@ const (
 	providerFieldName              = "provider"
 	workspaceRootFieldName         = "workspaceRoot"
 	archivedFieldName              = "archived"
+	loadRulesFieldName             = "loadRules"
 	conversationIDFieldMaxLength   = 256
 	conversationRoleFieldMaxLength = 64
 	conversationProviderMaxLength  = 32
 	conversationWorkspaceMaxLength = 1024
+	conversationLoadRulesMaxLength = 256
 	embeddingModelFieldMaxLength   = 65535
 )
 
@@ -100,6 +102,7 @@ func conversationScalarFields() []*entity.Field {
 		entity.NewField().WithName(archivedFieldName).WithDataType(entity.FieldTypeBool).WithNullable(true),
 		entity.NewField().WithName(timestampUnixFieldName).WithDataType(entity.FieldTypeInt64).WithNullable(true),
 		entity.NewField().WithName(messageIndexFieldName).WithDataType(entity.FieldTypeInt64).WithNullable(true),
+		entity.NewField().WithName(loadRulesFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(conversationLoadRulesMaxLength).WithNullable(true),
 	}
 }
 

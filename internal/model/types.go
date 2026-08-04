@@ -339,6 +339,11 @@ type StoredChunk struct {
 	// SplitPartRecorded distinguishes a stored nullable splitPart value from a
 	// legacy row written before the field existed.
 	SplitPartRecorded bool `json:"-"`
+	// LoadRules is the caller's opaque loading-rules tag for a conversation
+	// chunk: it names the rules that produced MessageIndex so a reader can
+	// rebuild the same message sequence. Empty for code chunks and for rows
+	// written before the tag existed.
+	LoadRules string `json:"load_rules,omitempty"`
 	// Score is the vector similarity for a semantic search. Zero on chunks that
 	// did not come from a search.
 	Score float64 `json:"score,omitempty"`
@@ -360,6 +365,10 @@ type ConversationDocument struct {
 	// it so the engine can store it as a filterable scalar column.
 	WorkspaceRoot string `json:"workspace_root,omitempty"`
 	Archived      bool   `json:"archived,omitempty"`
+	// LoadRules is the caller's opaque loading-rules tag: it names the rules
+	// that produced MessageIndex so a reader can rebuild the same message
+	// sequence. The engine stores it per row and returns it on search hits.
+	LoadRules string `json:"load_rules,omitempty"`
 }
 
 // ConversationToolCall is one structured tool call attached to a conversation document.

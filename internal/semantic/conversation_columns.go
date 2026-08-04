@@ -22,6 +22,7 @@ type conversationScalarColumns struct {
 	archiveds             []bool
 	timestamps            []int64
 	messageIndexes        []int64
+	loadRules             []string
 }
 
 func newConversationScalarColumns(enabled bool, capacity int) conversationScalarColumns {
@@ -36,6 +37,7 @@ func newConversationScalarColumns(enabled bool, capacity int) conversationScalar
 			archiveds:             nil,
 			timestamps:            nil,
 			messageIndexes:        nil,
+			loadRules:             nil,
 		}
 	}
 	return conversationScalarColumns{
@@ -48,6 +50,7 @@ func newConversationScalarColumns(enabled bool, capacity int) conversationScalar
 		archiveds:             make([]bool, 0, capacity),
 		timestamps:            make([]int64, 0, capacity),
 		messageIndexes:        make([]int64, 0, capacity),
+		loadRules:             make([]string, 0, capacity),
 	}
 }
 
@@ -63,6 +66,7 @@ func (columns *conversationScalarColumns) append(chunk model.StoredChunk) {
 	columns.archiveds = append(columns.archiveds, chunk.Archived)
 	columns.timestamps = append(columns.timestamps, chunk.TimestampUnix)
 	columns.messageIndexes = append(columns.messageIndexes, int64(chunk.MessageIndex))
+	columns.loadRules = append(columns.loadRules, chunk.LoadRules)
 }
 
 // providerFromConversationID returns the provider encoded as the prefix of a
