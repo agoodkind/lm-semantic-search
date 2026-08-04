@@ -509,8 +509,9 @@ func (service *Service) searchCollectionWithVector(ctx context.Context, collecti
 		// Conversation collections carry workspaceRoot as a native scalar column.
 		// Request it so a workspace_roots post-filter on the daemon side sees the
 		// real value rather than the empty default; code collections have no such
-		// column, so they keep the base output set.
-		outputFields = append(outputFields, workspaceRootFieldName)
+		// column, so they keep the base output set. loadRules rides along so a
+		// search hit can report which loading rules produced its message index.
+		outputFields = append(outputFields, workspaceRootFieldName, loadRulesFieldName)
 	}
 
 	if service.cfg.HybridMode {
@@ -700,8 +701,9 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 	// workspaceRoot is only present on conversation-collection result sets, where
 	// the search requests the native scalar column. It is nil for code
 	// collections and on rows that never carried a workspace root, so reads stay
-	// optional and default to empty.
+	// optional and default to empty. loadRules follows the same contract.
 	workspaceRootColumn := resultSet.GetColumn(workspaceRootFieldName)
+	loadRulesColumn := resultSet.GetColumn(loadRulesFieldName)
 	if contentColumn == nil || relativePathColumn == nil || startLineColumn == nil || endLineColumn == nil || fileExtensionColumn == nil {
 		return nil, ErrSearchResultIncomplete
 	}
@@ -741,12 +743,8 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			}
 		}
 
-		workspaceRootValue := ""
-		if workspaceRootColumn != nil {
-			if rootValue, rootErr := workspaceRootColumn.GetAsString(index); rootErr == nil {
-				workspaceRootValue = rootValue
-			}
-		}
+		workspaceRootValue := backfillString(workspaceRootColumn, index)
+		loadRulesValue := backfillString(loadRulesColumn, index)
 		splitPartValue, splitPartRecorded, splitPartErr := splitPartAt(
 			splitPartColumn,
 			index,
@@ -775,6 +773,7 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			Archived:             false,
 			SplitPart:            splitPartValue,
 			SplitPartRecorded:    splitPartRecorded,
+			LoadRules:            loadRulesValue,
 			Score:                score,
 		})
 	}

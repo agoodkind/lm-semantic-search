@@ -810,6 +810,7 @@ func conversationSearchResults(results []model.StoredChunk) []*pb.ConversationSe
 			TimestampUnix:        result.TimestampUnix,
 			Score:                result.Score,
 			Content:              result.Content,
+			LoadRules:            result.LoadRules,
 		})
 	}
 	return out
@@ -940,6 +941,7 @@ func pbConversationDocuments(documents []*pb.ConversationDocument) []model.Conve
 			Thinking:             document.GetThinking(),
 			WorkspaceRoot:        document.GetWorkspaceRoot(),
 			Archived:             document.GetArchived(),
+			LoadRules:            document.GetLoadRules(),
 		})
 	}
 	return result
