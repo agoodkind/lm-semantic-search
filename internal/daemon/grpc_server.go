@@ -452,7 +452,7 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	server.manager.refreshDependencyHealth(ctx)
 	health := server.manager.DependencyHealth()
 	readiness := server.manager.pathCollectionReadiness(ctx, codebase.CanonicalPath, searchableEligible)
-	getIndexView := server.manager.resolveGetIndexView(requestedPath, found, codebasePointer(found, codebase), activeJob, health, readiness, classification, indexedDescendants)
+	getIndexView := server.manager.resolveGetIndexView(ctx, requestedPath, found, codebasePointer(found, codebase), activeJob, health, readiness, classification, indexedDescendants)
 	// The daemon always answers Searchable on this path: computeSearchable folds
 	// eligibility, dependency health, and collection readiness into a definite
 	// true or false, never a missing verdict. Taking the address of that answer

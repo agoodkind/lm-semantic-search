@@ -395,6 +395,7 @@ func TestRenderIndexedDetailReady(t *testing.T) {
 	t.Parallel()
 	codebase := &model.Codebase{
 		CanonicalPath: "/Users/agoodkind/Sites/swift-makefile",
+		Status:        model.CodebaseStatusIndexed,
 		UpdatedAt:     renderTestTime,
 		LastSuccessfulRun: &model.IndexRunSummary{
 			IndexedFiles: 58,
@@ -404,7 +405,15 @@ func TestRenderIndexedDetailReady(t *testing.T) {
 		},
 	}
 	out := renderReadyStatusForTest(codebase)
-	for _, want := range []string{"📁 swift-makefile", "✅ Ready to search", "📊 58 files, 600 chunks"} {
+	for _, want := range []string{
+		"📁 swift-makefile",
+		"✅ Ready to search",
+		"codebase.status: indexed",
+		"current_index.indexed_files: null",
+		"current_index.total_chunks: null",
+		"last_successful_run.indexed_files: 58",
+		"last_successful_run.total_chunks: 600",
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("ready status missing %q in:\n%s", want, out)
 		}
@@ -639,7 +648,13 @@ func TestRenderGetIndexBodySyncKeepsReady(t *testing.T) {
 		Progress:  model.Progress{OverallPercent: 33, FilesInCodebase: 58, FilesModified: 3, FilesProcessed: 1, LastEventAt: renderTestTime},
 	}
 	out := renderGetIndexBodyForTest("/Users/agoodkind/Sites/swift-makefile", true, codebase, job, dependencyHealth{})
-	for _, want := range []string{"✅ Ready to search", "📊 58 files, 600 chunks", "🔄 Syncing 3 changed files in the background (33%)"} {
+	for _, want := range []string{
+		"✅ Ready to search",
+		"codebase.status: indexing",
+		"last_successful_run.indexed_files: 58",
+		"last_successful_run.total_chunks: 600",
+		"🔄 Syncing 3 changed files in the background (33%)",
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("sync-reconcile status missing %q in:\n%s", want, out)
 		}
@@ -1274,6 +1289,7 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 	t.Parallel()
 	codebase := &model.Codebase{
 		CanonicalPath: "/Users/agoodkind/Sites/swift-makefile",
+		Status:        model.CodebaseStatusIndexed,
 		UpdatedAt:     renderTestTime,
 		LastSuccessfulRun: &model.IndexRunSummary{
 			IndexedFiles: 58,
@@ -1288,7 +1304,7 @@ func TestStatusTemplateNoBlankLines(t *testing.T) {
 		"building":    renderActiveStatusForTest(codebase, &model.Job{Operation: "index", Progress: model.Progress{RunMode: model.RunModeForcedReindex, FilesTotal: 58, FilesProcessed: 7, FilesEmbedded: 7, ChunksGenerated: 84}}),
 		"incremental": renderActiveStatusForTest(codebase, &model.Job{Operation: "sync", Progress: model.Progress{RunMode: model.RunModeChanged, FilesTotal: 58, FilesProcessed: 7, FilesInCodebase: 100, FilesAdded: 5, FilesModified: 50, FilesRemoved: 3, FilesEmbedded: 2, ChunksGenerated: 84, ChunksTotal: 620}}),
 	}
-	wantLines := map[string]int{"ready": 4, "preparing": 3, "building": 8, "incremental": 11}
+	wantLines := map[string]int{"ready": 9, "preparing": 3, "building": 8, "incremental": 11}
 	for name, out := range cases {
 		for _, line := range strings.Split(out, "\n") {
 			if strings.TrimSpace(line) == "" {

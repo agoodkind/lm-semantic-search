@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -197,10 +198,12 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 		statusView.WaitLabel = waitLabel
 		return statusView, "waiting.md.tmpl"
 	case displayIndexed:
+		statusView.RawStatus = string(codebase.Status)
 		if run := codebase.LastSuccessfulRun; run != nil {
 			statusView.HasStats = true
 			statusView.Files = run.IndexedFiles
 			statusView.Chunks = run.TotalChunks
+			statusView.LastSuccessfulRunCompletedAt = formatBoundaryStatusTime(run.CompletedAt)
 			statusView.SkippedLine = skippedFilesLine(run.SkippedFiles)
 			statusView.UpdatedAt = formatStampWithRelative(run.CompletedAt)
 		}
@@ -282,13 +285,19 @@ func blankStatusView(name string, updatedAt string) view.StatusView {
 		FilesUnchanged:    0,
 		Breakdown:         view.ZeroBreakdown(),
 		ReuseForecastLine: "",
-		UpdatedAt:         updatedAt,
-		SyncNote:          "",
-		GraphUpdatedAt:    "",
-		GraphBuilding:     false,
-		GraphFailed:       false,
-		GraphReadyNoTime:  false,
-		GraphNotBuilt:     false,
+		RawStatus:         "",
+		CurrentIndex: view.CurrentIndexCounts{
+			IndexedFiles: nil,
+			TotalChunks:  nil,
+		},
+		UpdatedAt:                    updatedAt,
+		LastSuccessfulRunCompletedAt: "",
+		SyncNote:                     "",
+		GraphUpdatedAt:               "",
+		GraphBuilding:                false,
+		GraphFailed:                  false,
+		GraphReadyNoTime:             false,
+		GraphNotBuilt:                false,
 	}
 }
 
@@ -429,6 +438,7 @@ func jobScopeKnown(progress model.Progress) bool {
 
 // resolveGetIndexView assembles the full codebase status response view.
 func (manager *Manager) resolveGetIndexView(
+	ctx context.Context,
 	requestedPath string,
 	tracked bool,
 	codebase *model.Codebase,
@@ -473,6 +483,9 @@ func (manager *Manager) resolveGetIndexView(
 	getIndex.Failure = resolveCodebaseFailure(*codebase)
 	getIndex.Quarantine = resolveQuarantineSurface(*codebase)
 	statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
+	if display == displayIndexed {
+		statusView.CurrentIndex = manager.currentIndexCounts(ctx, *codebase)
+	}
 	if display == displayDiscovered {
 		statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
 	}
@@ -481,6 +494,35 @@ func (manager *Manager) resolveGetIndexView(
 	getIndex.TemplateName = templateName
 	getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, getIndex.Failure, getIndex.Quarantine, statusView)
 	return getIndex
+}
+
+func (manager *Manager) currentIndexCounts(ctx context.Context, codebase model.Codebase) view.CurrentIndexCounts {
+	if ranWithoutCreatingACollection(codebase.LastSuccessfulRun) {
+		indexedFiles := int32(0)
+		totalChunks := int32(0)
+		return view.CurrentIndexCounts{
+			IndexedFiles: &indexedFiles,
+			TotalChunks:  &totalChunks,
+		}
+	}
+
+	counts := view.CurrentIndexCounts{
+		IndexedFiles: nil,
+		TotalChunks:  nil,
+	}
+	checkpoint := manager.loadLiveCheckpoint(ctx, codebase, codebase.EffectiveConfig.IgnoreDigest)
+	if checkpoint.usable() {
+		indexedFiles := safeInt32(len(checkpoint.snapshot.Files))
+		counts.IndexedFiles = &indexedFiles
+	}
+	if manager.semantic == nil || !manager.semantic.Available() || !ownsLiveCollection(codebase) {
+		return counts
+	}
+	totalChunks, err := manager.semantic.Count(ctx, codebase.CanonicalPath)
+	if err == nil {
+		counts.TotalChunks = &totalChunks
+	}
+	return counts
 }
 
 func resolveGraphStatusFields(statusView *view.StatusView, codebase model.Codebase, graphBuilding bool) {
