@@ -1,8 +1,11 @@
 📁 {{ .Name }}
 ✅ Ready to search
-{{- if .HasStats }}
-📊 {{ .Files }} files, {{ .Chunks }} chunks
-{{- end }}
+codebase.status: {{ .RawStatus }}
+current_index.indexed_files: {{ if .CurrentIndex.IndexedFiles }}{{ .CurrentIndex.IndexedFiles }}{{ else }}null{{ end }}
+current_index.total_chunks: {{ if .CurrentIndex.TotalChunks }}{{ .CurrentIndex.TotalChunks }}{{ else }}null{{ end }}
+last_successful_run.indexed_files: {{ if .HasStats }}{{ .Files }}{{ else }}null{{ end }}
+last_successful_run.total_chunks: {{ if .HasStats }}{{ .Chunks }}{{ else }}null{{ end }}
+last_successful_run.completed_at: {{ if .LastSuccessfulRunCompletedAt }}{{ .LastSuccessfulRunCompletedAt }}{{ else }}null{{ end }}
 {{- if .SkippedLine }}
 {{ .SkippedLine }}
 {{- end }}

@@ -436,6 +436,12 @@ type ListSummary struct {
 	Canceled   int
 }
 
+// CurrentIndexCounts holds independently available live index totals.
+type CurrentIndexCounts struct {
+	IndexedFiles *int32
+	TotalChunks  *int32
+}
+
 // StatusView is the codebase status template view.
 type StatusView struct {
 	Name            string
@@ -455,11 +461,14 @@ type StatusView struct {
 	// sibling worktree". Empty for every other state. It is built from git
 	// topology and the registry with no vector-store call, so the status read that
 	// produces it stays cheap.
-	ReuseForecastLine string
-	Files             int32
-	Chunks            int32
-	SkippedLine       string
-	SyncNote          string
+	ReuseForecastLine            string
+	RawStatus                    string
+	CurrentIndex                 CurrentIndexCounts
+	Files                        int32
+	Chunks                       int32
+	LastSuccessfulRunCompletedAt string
+	SkippedLine                  string
+	SyncNote                     string
 	// GraphUpdatedAt is the pre-formatted last-build stamp for the graph: an
 	// absolute local time with a relative value in parentheses, for example
 	// "9:20 AM PDT (44m ago)". Non-empty renders "Code graph: updated <stamp>".
