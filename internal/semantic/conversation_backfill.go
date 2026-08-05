@@ -194,6 +194,7 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 	metadataColumn := resultSet.GetColumn(metadataFieldName)
 	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
 	workspaceRootColumn := resultSet.GetColumn(workspaceRootFieldName)
+	loadRulesColumn := resultSet.GetColumn(loadRulesFieldName)
 	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
 	if idColumn == nil || contentColumn == nil || relativePathColumn == nil || vectorColumn == nil {
 		return nil, nil, nil, ErrSearchResultIncomplete
@@ -258,6 +259,7 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 			Archived:             false,
 			SplitPart:            splitPart,
 			SplitPartRecorded:    splitPartRecorded,
+			LoadRules:            backfillString(loadRulesColumn, rowIndex),
 			Score:                0,
 		})
 	}

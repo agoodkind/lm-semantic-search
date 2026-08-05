@@ -307,6 +307,12 @@ message ConversationDocument {
   // be sensitive, so a consumer that persists or exposes conversation content
   // should treat it as private and index it only where that is intended.
   string thinking = 10;
+  // load_rules names the loading rules that produced this document's
+  // message_index, so a reader can rebuild the same message sequence the index
+  // positions refer to. clyde owns the value and treats it as opaque here; the
+  // engine stores it per row and returns it on search hits. Empty means the row
+  // predates the tag and was written under the sender's default rules.
+  string load_rules = 11;
 }
 
 // ConversationToolCall is one structured tool call attached to a conversation document.
@@ -340,6 +346,10 @@ message ConversationSearchResult {
   // parent_conversation_id names the conversation this one forked from, carried
   // through from the indexed document. Empty when the conversation has no parent.
   string parent_conversation_id = 7;
+  // load_rules is the opaque loading-rules tag stored with this row, carried
+  // back so the caller can rebuild the message sequence message_index refers
+  // to. Empty when the row predates the tag.
+  string load_rules = 8;
 }
 
 message StartIndexRequest {

@@ -41,6 +41,9 @@ type row struct {
 	TimestampUnix        int64     `json:"timestampUnix,omitempty"`
 	WorkspaceRoot        string    `json:"workspaceRoot,omitempty"`
 	Archived             bool      `json:"archived,omitempty"`
+	// LoadRules is the caller's opaque loading-rules tag for a conversation
+	// row; empty for code rows and rows written before the tag existed.
+	LoadRules string `json:"loadRules,omitempty"`
 	// SplitPart carries the source chunk's SplitPart so a split child keeps a
 	// distinct, stable primary key across a rewrite (CopyChunks regenerates the id
 	// from the row's chunk). Zero for an unsplit row.
@@ -80,6 +83,7 @@ func newRow(chunk model.StoredChunk, vector []float32) (row, error) {
 		TimestampUnix:        chunk.TimestampUnix,
 		WorkspaceRoot:        chunk.WorkspaceRoot,
 		Archived:             chunk.Archived,
+		LoadRules:            chunk.LoadRules,
 		SplitPart:            chunk.SplitPart,
 		SplitPartRecorded:    true,
 	}, nil
@@ -169,6 +173,7 @@ func (stored row) chunk(score float64) model.StoredChunk {
 		Archived:             stored.Archived,
 		SplitPart:            stored.SplitPart,
 		SplitPartRecorded:    stored.SplitPartRecorded,
+		LoadRules:            stored.LoadRules,
 		Score:                score,
 	}
 }

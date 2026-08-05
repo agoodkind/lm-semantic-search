@@ -356,6 +356,7 @@ func copiedRowAt(
 			Archived:             false,
 			SplitPart:            splitPartValue,
 			SplitPartRecorded:    splitPartRecorded,
+			LoadRules:            "",
 			Score:                0,
 		},
 		id:                idValue,

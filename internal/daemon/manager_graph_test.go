@@ -498,6 +498,7 @@ func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
 				manager.graphMutex.Unlock()
 			}
 			got := manager.resolveGetIndexView(
+				context.Background(),
 				testCase.codebase.CanonicalPath,
 				true,
 				&testCase.codebase,
