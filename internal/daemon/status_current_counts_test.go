@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ func TestGetIndexReadyStatusShowsCurrentAndLastRunCounts(t *testing.T) {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
 
-	completedAt := time.Date(2026, time.August, 5, 6, 46, 0, 0, time.Local)
+	completedAt := time.Date(2026, time.August, 5, 13, 46, 0, 0, time.UTC)
 	indexConfig := defaultIndexConfig()
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 	codebase := newCodebaseRecord(canonicalPath)
@@ -90,6 +91,29 @@ func TestGetIndexReadyStatusShowsCurrentAndLastRunCounts(t *testing.T) {
 	}
 	if strings.Contains(displayText, "📊 1 files, 0 chunks") {
 		t.Fatalf("ready status still contains the ambiguous count line:\n%s", displayText)
+	}
+
+	manager.semantic = &fakeSemantic{
+		count: func(context.Context, string) (int32, error) {
+			return 0, errors.New("count unavailable")
+		},
+	}
+	response, err = NewGRPCServer(manager, nil).GetIndex(
+		context.Background(),
+		&pb.GetIndexRequest{Path: repoPath},
+	)
+	if err != nil {
+		t.Fatalf("GetIndex with failed count returned error: %v", err)
+	}
+	displayText = response.GetDisplayText()
+	for _, want := range []string{
+		"current_index.total_chunks: null",
+		"last_successful_run.indexed_files: 1",
+		"last_successful_run.total_chunks: 0",
+	} {
+		if !strings.Contains(displayText, want) {
+			t.Fatalf("failed count status missing %q:\n%s", want, displayText)
+		}
 	}
 
 	manager.mu.Lock()
