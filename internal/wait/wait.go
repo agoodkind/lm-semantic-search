@@ -58,6 +58,7 @@ func ForIndexStatusWithClientInfo(ctx context.Context, socketPath string, path s
 func forIndexStatusWithClient(ctx context.Context, client pb.SemanticSearchDaemonServiceClient, path string, clientInfo *pb.ClientInfo) (*pb.GetIndexResponse, error) {
 	ticker := time.NewTicker(watchPollInterval)
 	defer ticker.Stop()
+	var lastResponse *pb.GetIndexResponse
 
 	for {
 		current, getErr := client.GetIndex(ctx, &pb.GetIndexRequest{
@@ -66,9 +67,14 @@ func forIndexStatusWithClient(ctx context.Context, client pb.SemanticSearchDaemo
 		})
 		if getErr != nil {
 			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				// Timeout or interrupt; return what we have or the last error
 				if current != nil {
-					return current, nil
+					lastResponse = current
+				}
+				if lastResponse != nil {
+					if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+						return lastResponse, fmt.Errorf("wait timeout expired")
+					}
+					return lastResponse, fmt.Errorf("wait cancelled")
 				}
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 					return nil, fmt.Errorf("wait timeout expired")
@@ -77,9 +83,12 @@ func forIndexStatusWithClient(ctx context.Context, client pb.SemanticSearchDaemo
 			}
 			return nil, fmt.Errorf("GetIndex: %w", getErr)
 		}
+		if current != nil {
+			lastResponse = current
+		}
 
 		// Check if searchable
-		if current.GetSearchable() {
+		if current != nil && current.Searchable != nil && *current.Searchable {
 			return current, nil
 		}
 
@@ -88,7 +97,7 @@ func forIndexStatusWithClient(ctx context.Context, client pb.SemanticSearchDaemo
 		isInProgress := readiness == "building" || readiness == "loading"
 		hasActiveJob := current.GetActiveJob() != nil
 
-		if !isInProgress && !hasActiveJob {
+		if current != nil && current.Searchable != nil && !isInProgress && !hasActiveJob {
 			// Terminal nonready state
 			return current, nil
 		}
@@ -96,9 +105,9 @@ func forIndexStatusWithClient(ctx context.Context, client pb.SemanticSearchDaemo
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return current, fmt.Errorf("wait timeout expired")
+				return lastResponse, fmt.Errorf("wait timeout expired")
 			}
-			return current, fmt.Errorf("wait cancelled")
+			return lastResponse, fmt.Errorf("wait cancelled")
 		case <-ticker.C:
 		}
 	}
