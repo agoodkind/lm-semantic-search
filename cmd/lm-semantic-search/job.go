@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -85,7 +86,7 @@ func newJobCancelCmd(options *rootOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
-				return err
+				return fmt.Errorf("resolve client info: %w", err)
 			}
 			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
 				return client.CancelJob(ctx, &pb.CancelJobRequest{JobId: args[0], Client: clientInfo})
