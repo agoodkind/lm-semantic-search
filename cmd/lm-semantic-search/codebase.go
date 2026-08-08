@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -72,7 +73,7 @@ func newCodebaseStatusCmd(options *rootOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
-				return err
+				return fmt.Errorf("resolve client info: %w", err)
 			}
 			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
 				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: args[0], Client: clientInfo})
@@ -106,7 +107,7 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
-				return err
+				return fmt.Errorf("resolve client info: %w", err)
 			}
 			cliOpts := options.cliOptions()
 			if waitTimeout > 0 && cliOpts.outputMode != response.ModeHuman {
@@ -169,7 +170,7 @@ func newCodebaseSyncCmd(options *rootOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
-				return err
+				return fmt.Errorf("resolve client info: %w", err)
 			}
 			cliOpts := options.cliOptions()
 			if waitTimeout > 0 && cliOpts.outputMode != response.ModeHuman {
@@ -264,7 +265,7 @@ func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
-				return err
+				return fmt.Errorf("resolve client info: %w", err)
 			}
 			searchLimit, err := safeSearchLimit(limit)
 			if err != nil {
@@ -303,7 +304,7 @@ func newCodebaseClearCmd(options *rootOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
-				return err
+				return fmt.Errorf("resolve client info: %w", err)
 			}
 			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
 				return client.ClearIndex(ctx, &pb.ClearIndexRequest{Path: args[0], Client: clientInfo})
