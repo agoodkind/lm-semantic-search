@@ -12,8 +12,6 @@ import (
 )
 
 func TestForIndexStatusWithClientReturnsImmediatelyWhenSearchable(t *testing.T) {
-	t.Parallel()
-
 	client := &mockDaemonClient{
 		responses: []*pb.GetIndexResponse{
 			{Searchable: proto.Bool(true)},
@@ -38,6 +36,10 @@ func TestForIndexStatusWithClientReturnsImmediatelyWhenSearchable(t *testing.T) 
 }
 
 func TestForIndexStatusWithClientPollsUntilSearchable(t *testing.T) {
+	originalInterval := watchPollInterval
+	watchPollInterval = time.Millisecond
+	t.Cleanup(func() { watchPollInterval = originalInterval })
+
 	client := &mockDaemonClient{
 		responses: []*pb.GetIndexResponse{
 			{CollectionReadiness: "building"},
@@ -62,11 +64,9 @@ func TestForIndexStatusWithClientPollsUntilSearchable(t *testing.T) {
 }
 
 func TestForIndexStatusWithClientReturnsTerminalNonreadyState(t *testing.T) {
-	t.Parallel()
-
 	client := &mockDaemonClient{
 		responses: []*pb.GetIndexResponse{
-			{CollectionReadiness: "idle", Searchable: proto.Bool(false)},
+			{CollectionReadiness: "unknown", Searchable: proto.Bool(false)},
 		},
 	}
 
@@ -82,8 +82,8 @@ func TestForIndexStatusWithClientReturnsTerminalNonreadyState(t *testing.T) {
 	if result.GetSearchable() {
 		t.Fatal("forIndexStatusWithClient returned searchable result")
 	}
-	if result.GetCollectionReadiness() != "idle" {
-		t.Fatalf("collection readiness = %q, want idle", result.GetCollectionReadiness())
+	if result.GetCollectionReadiness() != "unknown" {
+		t.Fatalf("collection readiness = %q, want unknown", result.GetCollectionReadiness())
 	}
 }
 
@@ -132,8 +132,6 @@ func TestForIndexStatusWithClientReturnsCancellation(t *testing.T) {
 }
 
 func TestForIndexStatusWithClientReturnsRPCError(t *testing.T) {
-	t.Parallel()
-
 	client := &mockDaemonClient{
 		getIndexErr: errors.New("rpc failed"),
 	}
@@ -153,10 +151,14 @@ func TestForIndexStatusWithClientReturnsRPCError(t *testing.T) {
 }
 
 func TestForIndexStatusWithClientKeepsWaitingWhenActiveJobExists(t *testing.T) {
+	originalInterval := watchPollInterval
+	watchPollInterval = time.Millisecond
+	t.Cleanup(func() { watchPollInterval = originalInterval })
+
 	client := &mockDaemonClient{
 		responses: []*pb.GetIndexResponse{
 			{
-				CollectionReadiness: "idle",
+				CollectionReadiness: "unknown",
 				ActiveJob:           &pb.Job{Id: "job-1"},
 			},
 			{Searchable: proto.Bool(true)},
