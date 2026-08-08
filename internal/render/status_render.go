@@ -15,7 +15,13 @@ import (
 //go:embed templates/status/*.md.tmpl
 var statusTemplateFS embed.FS
 
-var statusTemplates = template.Must(template.ParseFS(statusTemplateFS, "templates/status/*.md.tmpl"))
+var statusTemplates = template.Must(template.New("status").Funcs(template.FuncMap{
+	"shellQuote": shellQuote,
+}).ParseFS(statusTemplateFS, "templates/status/*.md.tmpl"))
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
 
 // statusTemplateData is the data passed to a status template. It embeds the
 // resolved StatusView (so {{ .Name }} and friends are promoted) and adds

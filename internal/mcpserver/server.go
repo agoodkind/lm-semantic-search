@@ -228,13 +228,16 @@ func registerWaitForIndexingTool(mcpServer *server.MCPServer, socketPath string,
 				timeoutSeconds = defaultIndexWaitSeconds
 			}
 			timeout := time.Duration(timeoutSeconds) * time.Second
-			result, err := wait.ForIndexStatus(ctx, socketPath, absolutePath, timeout)
-			if err != nil {
-				return toolErrorResult(fmt.Sprintf("Error waiting for indexing: %v", err)), nil
+			result, waitErr := wait.ForIndexStatusWithClientInfo(ctx, socketPath, absolutePath, timeout, mcpClientInfo())
+			resultJSON, marshalErr := protojson.Marshal(result)
+			if marshalErr != nil {
+				return toolErrorResult(fmt.Sprintf("Error marshaling result: %v", marshalErr)), nil
 			}
-			resultJSON, err := protojson.Marshal(result)
-			if err != nil {
-				return toolErrorResult(fmt.Sprintf("Error marshaling result: %v", err)), nil
+			if result != nil {
+				return mcp.NewToolResultText(string(resultJSON)), nil
+			}
+			if waitErr != nil {
+				return toolErrorResult(fmt.Sprintf("Error waiting for indexing: %v", waitErr)), nil
 			}
 			return mcp.NewToolResultText(string(resultJSON)), nil
 		}),

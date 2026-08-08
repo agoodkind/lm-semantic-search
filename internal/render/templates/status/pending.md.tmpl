@@ -1,4 +1,4 @@
 📁 {{ .Name }}
 ⏳ Indexing is queued but has not started yet.
-💡 Wait for indexing to complete with `lm-semantic-search codebase wait {{ .Path }}` or use the `wait_for_indexing` MCP tool.
+💡 Wait for indexing to complete with `lm-semantic-search codebase wait {{ shellQuote .Path }}` or use the `wait_for_indexing` MCP tool.
 {{ template "statusFooter" . }}

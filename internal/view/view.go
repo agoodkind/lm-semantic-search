@@ -445,6 +445,7 @@ type CurrentIndexCounts struct {
 // StatusView is the codebase status template view.
 type StatusView struct {
 	Name            string
+	Path            string
 	UpdatedAt       string
 	PrepareLabel    string
 	WaitLabel       string
