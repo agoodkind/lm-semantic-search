@@ -13,7 +13,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/response"
 )
 
-const watchPollInterval = 1500 * time.Millisecond
+var watchPollInterval = 1500 * time.Millisecond
 
 // ForIndexStatus polls GetIndex until the codebase becomes searchable,
 // reaches a terminal nonready state, the context is cancelled, or the timeout
@@ -24,6 +24,15 @@ const watchPollInterval = 1500 * time.Millisecond
 // response) with no active indexing job and collection_readiness outside the
 // in-progress states (building, loading).
 func ForIndexStatus(ctx context.Context, socketPath string, path string, timeout time.Duration) (*pb.GetIndexResponse, error) {
+	clientInfo, err := response.CurrentClientInfo()
+	if err != nil {
+		return nil, err
+	}
+	return ForIndexStatusWithClientInfo(ctx, socketPath, path, timeout, clientInfo)
+}
+
+// ForIndexStatusWithClientInfo polls GetIndex using the supplied caller metadata.
+func ForIndexStatusWithClientInfo(ctx context.Context, socketPath string, path string, timeout time.Duration, clientInfo *pb.ClientInfo) (*pb.GetIndexResponse, error) {
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -40,11 +49,6 @@ func ForIndexStatus(ctx context.Context, socketPath string, path string, timeout
 		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
-
-	clientInfo, err := response.CurrentClientInfo()
-	if err != nil {
-		return nil, err
-	}
 
 	return forIndexStatusWithClient(ctx, client, path, clientInfo)
 }
