@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/signal"
 	"syscall"
 	"time"
@@ -26,7 +27,7 @@ var watchPollInterval = 1500 * time.Millisecond
 func ForIndexStatus(ctx context.Context, socketPath string, path string, timeout time.Duration) (*pb.GetIndexResponse, error) {
 	clientInfo, err := response.CurrentClientInfo()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve client info: %w", err)
 	}
 	return ForIndexStatusWithClientInfo(ctx, socketPath, path, timeout, clientInfo)
 }
@@ -46,6 +47,7 @@ func ForIndexStatusWithClientInfo(ctx context.Context, socketPath string, path s
 
 	connection, client, err := daemonclient.DialDaemon(ctx, socketPath)
 	if err != nil {
+		slog.Error("dial daemon failed", "err", err)
 		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
@@ -81,6 +83,7 @@ func forIndexStatusWithClient(ctx context.Context, client pb.SemanticSearchDaemo
 				}
 				return nil, fmt.Errorf("wait cancelled")
 			}
+			slog.Error("GetIndex failed", "err", getErr)
 			return nil, fmt.Errorf("GetIndex: %w", getErr)
 		}
 		if current != nil {
