@@ -216,7 +216,7 @@ func newCodebaseWaitCmd(options *rootOptions) *cobra.Command {
 			"Arguments:",
 			"  PATH|ID    A codebase path, a symlink to it, or its codebase id",
 		}, "\n"),
-		Args: requireExactArgs("codebase wait requires PATH", 1),
+		Args: requireExactArgs("codebase wait requires PATH|ID", 1),
 		Example: strings.Join([]string{
 			"  lm-semantic-search codebase wait /abs/path/to/repo",
 			"  lm-semantic-search codebase wait /abs/path/to/repo --wait-timeout 1m",
@@ -226,14 +226,19 @@ func newCodebaseWaitCmd(options *rootOptions) *cobra.Command {
 			if cliOpts.outputMode != response.ModeHuman {
 				return errors.New("wait requires human output mode")
 			}
-			result, err := wait.ForIndexStatus(context.Background(), cliOpts.socketPath, args[0], waitTimeout)
+			result, err := wait.ForIndexStatus(cmd.Context(), cliOpts.socketPath, args[0], waitTimeout)
 			if err != nil {
+				if result != nil {
+					if printErr := printResponse(cliOpts, result); printErr != nil {
+						return printErr
+					}
+				}
 				return err
 			}
 			return printResponse(cliOpts, result)
 		},
 	}
-	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "timeout for waiting; use the = form (--wait-timeout=30s)")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "timeout for waiting")
 	return cmd
 }
 
