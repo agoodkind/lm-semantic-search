@@ -4,15 +4,17 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/response"
 )
 
 func TestCurrentClientInfoCarriesCallerCwd(t *testing.T) {
-	info, err := currentClientInfo()
+	info, err := response.CurrentClientInfo()
 	if err != nil {
-		t.Fatalf("currentClientInfo returned error: %v", err)
+		t.Fatalf("response.CurrentClientInfo returned error: %v", err)
 	}
 	if info.GetCallerCwd() == "" {
-		t.Fatal("currentClientInfo did not set caller_cwd")
+		t.Fatal("response.CurrentClientInfo did not set caller_cwd")
 	}
 	if !filepath.IsAbs(info.GetCallerCwd()) {
 		t.Fatalf("caller_cwd %q is not absolute", info.GetCallerCwd())
