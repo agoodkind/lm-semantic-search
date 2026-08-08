@@ -21,23 +21,6 @@ type protoMessage = proto.Message
 
 type rpcCall func(context.Context, pb.SemanticSearchDaemonServiceClient) (protoMessage, error)
 
-func currentClientInfo() (*pb.ClientInfo, error) {
-	pid := os.Getpid()
-	if pid < 0 || pid > math.MaxInt32 {
-		return nil, fmt.Errorf("process id %d does not fit in int32", pid)
-	}
-	workingDir, err := os.Getwd()
-	if err != nil {
-		slog.Error("resolve working directory failed", "err", err)
-		return nil, fmt.Errorf("resolve working directory: %w", err)
-	}
-	return &pb.ClientInfo{
-		Name:      "cli",
-		Pid:       int32(pid),
-		CallerCwd: workingDir,
-	}, nil
-}
-
 // callDaemon dials the daemon, runs one RPC, and returns the raw proto reply.
 // It is the shared seam under callAndPrint and the interactive list view, so the
 // TUI can fetch records without the print step double-emitting output.
