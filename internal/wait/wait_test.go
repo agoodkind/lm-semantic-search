@@ -109,6 +109,33 @@ func TestForIndexStatusWithClientReturnsTimeout(t *testing.T) {
 	}
 }
 
+func TestForIndexStatusWithClientReturnsLastResponseWhenRPCTimesOut(t *testing.T) {
+	originalInterval := watchPollInterval
+	watchPollInterval = time.Millisecond
+	t.Cleanup(func() { watchPollInterval = originalInterval })
+
+	client := &mockDaemonClient{
+		responses: []*pb.GetIndexResponse{
+			{CollectionReadiness: "building", Searchable: proto.Bool(false)},
+		},
+		blockAfterFirst: true,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	result, err := forIndexStatusWithClient(ctx, client, "/repo", &pb.ClientInfo{Name: "test"})
+	if err == nil {
+		t.Fatal("forIndexStatusWithClient returned nil error")
+	}
+	if err.Error() != "wait timeout expired" {
+		t.Fatalf("error = %q, want wait timeout expired", err.Error())
+	}
+	if result == nil || result.GetCollectionReadiness() != "building" {
+		t.Fatal("forIndexStatusWithClient did not return the last successful response")
+	}
+}
+
 func TestForIndexStatusWithClientReturnsCancellation(t *testing.T) {
 	client := &mockDaemonClient{
 		responses: []*pb.GetIndexResponse{
@@ -181,13 +208,18 @@ func TestForIndexStatusWithClientKeepsWaitingWhenActiveJobExists(t *testing.T) {
 }
 
 type mockDaemonClient struct {
-	responses     []*pb.GetIndexResponse
-	getIndexErr   error
-	getIndexCalls int
+	responses       []*pb.GetIndexResponse
+	getIndexErr     error
+	getIndexCalls   int
+	blockAfterFirst bool
 }
 
-func (client *mockDaemonClient) GetIndex(context.Context, *pb.GetIndexRequest, ...grpc.CallOption) (*pb.GetIndexResponse, error) {
+func (client *mockDaemonClient) GetIndex(ctx context.Context, _ *pb.GetIndexRequest, _ ...grpc.CallOption) (*pb.GetIndexResponse, error) {
 	client.getIndexCalls++
+	if client.blockAfterFirst && client.getIndexCalls > 1 {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if client.getIndexErr != nil {
 		return nil, client.getIndexErr
 	}
