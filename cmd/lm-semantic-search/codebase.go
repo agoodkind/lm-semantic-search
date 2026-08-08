@@ -12,6 +12,7 @@ import (
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/response"
+	"goodkind.io/lm-semantic-search/internal/wait"
 )
 
 func newCodebaseCmd(options *rootOptions) *cobra.Command {
@@ -27,6 +28,7 @@ func newCodebaseCmd(options *rootOptions) *cobra.Command {
 	codebase.AddCommand(newCodebaseStatusCmd(options))
 	codebase.AddCommand(newCodebaseIndexCmd(options))
 	codebase.AddCommand(newCodebaseSyncCmd(options))
+	codebase.AddCommand(newCodebaseWaitCmd(options))
 	codebase.AddCommand(newCodebaseSearchCmd(options))
 	codebase.AddCommand(newCodebaseClearCmd(options))
 	return codebase
@@ -68,7 +70,7 @@ func newCodebaseStatusCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase status /abs/path/to/repo",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := currentClientInfo()
+			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
 				return err
 			}
@@ -102,7 +104,7 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase index /abs/path/to/repo --splitter ast",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := currentClientInfo()
+			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
 				return err
 			}
@@ -165,7 +167,7 @@ func newCodebaseSyncCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase sync /abs/path/to/repo",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := currentClientInfo()
+			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
 				return err
 			}
@@ -197,6 +199,44 @@ func newCodebaseSyncCmd(options *rootOptions) *cobra.Command {
 	return cmd
 }
 
+func newCodebaseWaitCmd(options *rootOptions) *cobra.Command {
+	var waitTimeout time.Duration
+
+	cmd := &cobra.Command{
+		Use:   "wait PATH|ID",
+		Short: "Wait for one codebase to become searchable",
+		Long: strings.Join([]string{
+			"Wait for one codebase to become searchable.",
+			"",
+			"This command polls the indexing status until the codebase is ready for",
+			"search, reaches a terminal nonready state, the timeout expires, or the",
+			"command is interrupted. The operation is read-only and never starts",
+			"or mutates an index.",
+			"",
+			"Arguments:",
+			"  PATH|ID    A codebase path, a symlink to it, or its codebase id",
+		}, "\n"),
+		Args: requireExactArgs("codebase wait requires PATH", 1),
+		Example: strings.Join([]string{
+			"  lm-semantic-search codebase wait /abs/path/to/repo",
+			"  lm-semantic-search codebase wait /abs/path/to/repo --wait-timeout 1m",
+		}, "\n"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cliOpts := options.cliOptions()
+			if cliOpts.outputMode != response.ModeHuman {
+				return errors.New("wait requires human output mode")
+			}
+			result, err := wait.ForIndexStatus(context.Background(), cliOpts.socketPath, args[0], waitTimeout)
+			if err != nil {
+				return err
+			}
+			return printResponse(cliOpts, result)
+		},
+	}
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "timeout for waiting; use the = form (--wait-timeout=30s)")
+	return cmd
+}
+
 func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
 	var limit int
 	var extensions []string
@@ -217,7 +257,7 @@ func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase search /abs/path/to/repo splitter --limit 5",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := currentClientInfo()
+			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
 				return err
 			}
@@ -256,7 +296,7 @@ func newCodebaseClearCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase clear /abs/path/to/repo",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := currentClientInfo()
+			clientInfo, err := response.CurrentClientInfo()
 			if err != nil {
 				return err
 			}
