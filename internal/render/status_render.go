@@ -15,22 +15,26 @@ import (
 //go:embed templates/status/*.md.tmpl
 var statusTemplateFS embed.FS
 
-var statusTemplates = template.Must(template.New("status").Funcs(template.FuncMap{
-	"shellQuote": shellQuote,
-}).ParseFS(statusTemplateFS, "templates/status/*.md.tmpl"))
+var statusTemplates = template.Must(template.ParseFS(statusTemplateFS, "templates/status/*.md.tmpl"))
 
+// shellQuote wraps a value in single quotes so a path containing a space or a
+// shell metacharacter survives being pasted onto a command line. An embedded
+// single quote is closed, escaped outside the quotes, and reopened.
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 // statusTemplateData is the data passed to a status template. It embeds the
-// resolved StatusView (so {{ .Name }} and friends are promoted) and adds
-// BreakdownBlock, the pre-formatted shared outcome tree. Formatting the tree in
-// the render layer and injecting it as one block keeps the template free of row
-// logic, so the status tree stays identical to the compact job tree.
+// resolved StatusView (so {{ .Name }} and friends are promoted) and adds two
+// pre-formatted values: BreakdownBlock, the shared outcome tree, and
+// QuotedPath, the shell-quoted codebase path used by the copy-paste wait
+// command. Formatting both in the render layer and injecting them as finished
+// strings keeps the templates free of row logic and quoting rules, so the
+// status tree stays identical to the compact job tree.
 type statusTemplateData struct {
 	view.StatusView
 	BreakdownBlock string
+	QuotedPath     string
 }
 
 // renderStatusTemplate executes one embedded status template by file name and

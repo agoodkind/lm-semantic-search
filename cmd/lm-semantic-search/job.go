@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
-	"goodkind.io/lm-semantic-search/internal/response"
 )
 
 func newJobCmd(options *rootOptions) *cobra.Command {
@@ -84,9 +82,9 @@ func newJobCancelCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search job cancel job_123",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := response.CurrentClientInfo()
+			clientInfo, err := resolveClientInfo()
 			if err != nil {
-				return fmt.Errorf("resolve client info: %w", err)
+				return err
 			}
 			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
 				return client.CancelJob(ctx, &pb.CancelJobRequest{JobId: args[0], Client: clientInfo})

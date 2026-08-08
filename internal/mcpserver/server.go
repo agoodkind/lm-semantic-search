@@ -25,7 +25,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/response"
 	"goodkind.io/lm-semantic-search/internal/wait"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -229,17 +228,19 @@ func registerWaitForIndexingTool(mcpServer *server.MCPServer, socketPath string,
 			}
 			timeout := time.Duration(timeoutSeconds) * time.Second
 			result, waitErr := wait.ForIndexStatusWithClientInfo(ctx, socketPath, absolutePath, timeout, mcpClientInfo())
-			resultJSON, marshalErr := protojson.Marshal(result)
-			if marshalErr != nil {
-				return toolErrorResult(fmt.Sprintf("Error marshaling result: %v", marshalErr)), nil
+			// A timeout or an interrupt still carries the last status the daemon
+			// answered, and that progress is the useful reply, so it renders like
+			// any other status. Only a wait that produced no status at all is
+			// reported as a tool error.
+			if result == nil {
+				message := "wait for indexing returned no status"
+				if waitErr != nil {
+					message = "wait for indexing: " + waitErr.Error()
+				}
+				slog.ErrorContext(ctx, "wait for indexing returned no status", "path", absolutePath, "err", waitErr)
+				return toolErrorResult(message), nil
 			}
-			if result != nil {
-				return mcp.NewToolResultText(string(resultJSON)), nil
-			}
-			if waitErr != nil {
-				return toolErrorResult(fmt.Sprintf("Error waiting for indexing: %v", waitErr)), nil
-			}
-			return mcp.NewToolResultText(string(resultJSON)), nil
+			return renderToolResponse(outputMode, result)
 		}),
 	)
 }

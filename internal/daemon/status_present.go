@@ -273,6 +273,7 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 func blankStatusView(name string, updatedAt string) view.StatusView {
 	return view.StatusView{
 		Name:              name,
+		Path:              "",
 		HasStats:          false,
 		Files:             0,
 		Chunks:            0,
