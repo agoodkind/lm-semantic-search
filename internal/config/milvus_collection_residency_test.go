@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -83,6 +86,62 @@ func TestDefaultRejectsInvalidMilvusCollectionResidencyTimeouts(t *testing.T) {
 					"MilvusCollectionIdleTimeoutMS = %d want 900000",
 					cfg.MilvusCollectionIdleTimeoutMS,
 				)
+			}
+		})
+	}
+}
+
+func TestDefaultWarnsForMalformedMilvusResidencyEnvironmentValues(t *testing.T) {
+	testCases := []struct {
+		name        string
+		environment string
+		value       string
+		configField string
+	}{
+		{
+			name:        "load wait overflow",
+			environment: "CLAUDE_CONTEXT_MILVUS_COLLECTION_LOAD_WAIT_TIMEOUT_MS",
+			value:       strconv.FormatUint(math.MaxUint64, 10),
+			configField: "milvusCollectionLoadWaitTimeoutMs",
+		},
+		{
+			name:        "idle parse failure",
+			environment: "CLAUDE_CONTEXT_MILVUS_COLLECTION_IDLE_TIMEOUT_MS",
+			value:       "not-a-millisecond-count",
+			configField: "milvusCollectionIdleTimeoutMs",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONTEXT_MILVUS_COLLECTION_LOAD_WAIT_TIMEOUT_MS", "")
+			t.Setenv("CLAUDE_CONTEXT_MILVUS_COLLECTION_IDLE_TIMEOUT_MS", "")
+			t.Setenv(testCase.environment, testCase.value)
+
+			var logs bytes.Buffer
+			previousLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() {
+				slog.SetDefault(previousLogger)
+			})
+
+			cfg := defaultWithPersistedConfig(t, persistedConfig{})
+			if cfg.MilvusCollectionLoadWaitTimeoutMS != 15000 {
+				t.Errorf(
+					"MilvusCollectionLoadWaitTimeoutMS = %d want 15000",
+					cfg.MilvusCollectionLoadWaitTimeoutMS,
+				)
+			}
+			if cfg.MilvusCollectionIdleTimeoutMS != 900000 {
+				t.Errorf(
+					"MilvusCollectionIdleTimeoutMS = %d want 900000",
+					cfg.MilvusCollectionIdleTimeoutMS,
+				)
+			}
+			if !strings.Contains(logs.String(), "config_field="+testCase.configField) {
+				t.Errorf("warning does not name config field: %s", logs.String())
+			}
+			if !strings.Contains(logs.String(), "env_var="+testCase.environment) {
+				t.Errorf("warning does not name environment variable: %s", logs.String())
 			}
 		})
 	}

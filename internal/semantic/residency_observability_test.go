@@ -81,6 +81,36 @@ func requireResidencyEventFields(t *testing.T, record slog.Record) {
 	}
 }
 
+func requireResidencyEventValues(
+	t *testing.T,
+	record slog.Record,
+	progress int64,
+	elapsedMS int64,
+	leaseCount int64,
+	idleMS int64,
+) {
+	t.Helper()
+	want := map[string]int64{
+		"progress":    progress,
+		"elapsed_ms":  elapsedMS,
+		"lease_count": leaseCount,
+		"idle_ms":     idleMS,
+	}
+	record.Attrs(func(attribute slog.Attr) bool {
+		wantValue, found := want[attribute.Key]
+		if found && attribute.Value.Int64() != wantValue {
+			t.Errorf(
+				"%s %s = %d want %d",
+				record.Message,
+				attribute.Key,
+				attribute.Value.Int64(),
+				wantValue,
+			)
+		}
+		return true
+	})
+}
+
 func TestResidencyEmitsLoadAndUnloadMetricsAndEvents(t *testing.T) {
 	handler := captureResidencyLogs(t)
 	before := metrics.Read()
@@ -95,6 +125,7 @@ func TestResidencyEmitsLoadAndUnloadMetricsAndEvents(t *testing.T) {
 			return nil
 		},
 		unload: func(context.Context, string) error {
+			clock.Advance(250 * time.Millisecond)
 			unloaded <- struct{}{}
 			return nil
 		},
@@ -108,7 +139,7 @@ func TestResidencyEmitsLoadAndUnloadMetricsAndEvents(t *testing.T) {
 		t.Fatalf("Acquire returned error: %v", err)
 	}
 	lease.Release()
-	clock.Advance(time.Minute)
+	clock.Advance(75 * time.Second)
 	select {
 	case <-unloaded:
 	case <-time.After(time.Second):
@@ -136,18 +167,20 @@ func TestResidencyEmitsLoadAndUnloadMetricsAndEvents(t *testing.T) {
 	if after.MilvusCollectionLeasesActive != before.MilvusCollectionLeasesActive {
 		t.Fatalf("active leases = %d, want %d", after.MilvusCollectionLeasesActive, before.MilvusCollectionLeasesActive)
 	}
-	for _, message := range []string{
-		"semantic.collection_load_started",
-		"semantic.collection_load_ready",
-		"semantic.collection_unload_started",
-		"semantic.collection_unloaded",
-	} {
+	wantEvents := map[string][4]int64{
+		"semantic.collection_load_started":   {0, 0, 1, 0},
+		"semantic.collection_load_ready":     {100, 0, 1, 0},
+		"semantic.collection_unload_started": {0, 0, 0, 75000},
+		"semantic.collection_unloaded":       {100, 250, 0, 75000},
+	}
+	for message, want := range wantEvents {
 		record, found := handler.record(message)
 		if !found {
 			t.Errorf("missing event %q", message)
 			continue
 		}
 		requireResidencyEventFields(t, record)
+		requireResidencyEventValues(t, record, want[0], want[1], want[2], want[3])
 	}
 }
 
@@ -189,6 +222,99 @@ func TestResidencyReportsLoadWaitTimeout(t *testing.T) {
 		t.Fatal("load wait timeout event was not emitted")
 	}
 	requireResidencyEventFields(t, record)
+	requireResidencyEventValues(t, record, 0, 15000, 1, 0)
+}
+
+func TestResidencyCountsTimerLeaseRaceAsSkippedInUse(t *testing.T) {
+	clock := newTestResidencyClock()
+	unloaded := make(chan struct{}, 1)
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(context.Context, string) error {
+			unloaded <- struct{}{}
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	firstLease, err := controller.Acquire(context.Background(), "live")
+	if err != nil {
+		t.Fatalf("first Acquire returned error: %v", err)
+	}
+	firstLease.Release()
+	staleTimer := clock.LastTimer()
+	activeLease, err := controller.Acquire(context.Background(), "live")
+	if err != nil {
+		t.Fatalf("second Acquire returned error: %v", err)
+	}
+	defer activeLease.Release()
+
+	before := metrics.Read()
+	staleTimer.FireStale()
+	after := metrics.Read()
+	if delta := after.MilvusCollectionUnloadSkippedInUseTotal -
+		before.MilvusCollectionUnloadSkippedInUseTotal; delta != 1 {
+		t.Fatalf("skipped unload delta = %d want 1", delta)
+	}
+	select {
+	case <-unloaded:
+		t.Fatal("timer and lease race unloaded an active collection")
+	default:
+	}
+}
+
+func TestResidencyDoesNotCountUnrelatedStaleTimerAsSkippedInUse(t *testing.T) {
+	clock := newTestResidencyClock()
+	unloaded := make(chan struct{}, 1)
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(context.Context, string) error {
+			unloaded <- struct{}{}
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	firstLease, err := controller.Acquire(context.Background(), "live")
+	if err != nil {
+		t.Fatalf("first Acquire returned error: %v", err)
+	}
+	firstLease.Release()
+	staleTimer := clock.LastTimer()
+	secondLease, err := controller.Acquire(context.Background(), "live")
+	if err != nil {
+		t.Fatalf("second Acquire returned error: %v", err)
+	}
+	secondLease.Release()
+
+	before := metrics.Read()
+	staleTimer.FireStale()
+	after := metrics.Read()
+	if delta := after.MilvusCollectionUnloadSkippedInUseTotal -
+		before.MilvusCollectionUnloadSkippedInUseTotal; delta != 0 {
+		t.Fatalf("skipped unload delta = %d want 0", delta)
+	}
+	select {
+	case <-unloaded:
+		t.Fatal("unrelated stale timer unloaded a collection")
+	default:
+	}
 }
 
 func TestResidencyStateGaugesExcludeStagingCollections(t *testing.T) {
@@ -254,6 +380,7 @@ func TestResidencyReportsLoadAndUnloadFailures(t *testing.T) {
 			return nil
 		},
 		unload: func(context.Context, string) error {
+			clock.Advance(500 * time.Millisecond)
 			unloadAttempted <- struct{}{}
 			return ErrCollectionNotReady
 		},
@@ -266,7 +393,7 @@ func TestResidencyReportsLoadAndUnloadFailures(t *testing.T) {
 		t.Fatalf("Acquire returned error: %v", err)
 	}
 	lease.Release()
-	clock.Advance(time.Minute)
+	clock.Advance(75 * time.Second)
 	select {
 	case <-unloadAttempted:
 	case <-time.After(time.Second):
@@ -295,6 +422,7 @@ func TestResidencyReportsLoadAndUnloadFailures(t *testing.T) {
 		t.Fatal("unload failure event missing")
 	}
 	requireResidencyEventFields(t, record)
+	requireResidencyEventValues(t, record, 0, 500, 0, 75000)
 	errorClass := ""
 	record.Attrs(func(attribute slog.Attr) bool {
 		if attribute.Key == "error_class" {

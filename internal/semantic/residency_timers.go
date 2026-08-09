@@ -84,15 +84,18 @@ func (controller *collectionResidencyController) startUnload(
 ) {
 	controller.mutex.Lock()
 	entry := controller.entries[collectionName]
-	if controller.closed || isRecoveryCollection(collectionName) || entry == nil ||
-		entry.idleGeneration != generation ||
-		entry.state != collectionResidencyReady || entry.leases != 0 ||
-		entry.observations != 0 || entry.pins != 0 || entry.load != nil ||
-		entry.activeTransition != nil || entry.maintenance {
-		if entry != nil && entry.idleGeneration == generation &&
-			(entry.leases != 0 || entry.observations != 0 || entry.pins != 0 || entry.maintenance) {
-			metrics.MilvusCollectionUnloadSkippedInUse()
-		}
+	if controller.closed || isRecoveryCollection(collectionName) || entry == nil {
+		controller.mutex.Unlock()
+		return
+	}
+	if entry.leases != 0 || entry.observations != 0 || entry.pins != 0 || entry.maintenance {
+		metrics.MilvusCollectionUnloadSkippedInUse()
+		controller.mutex.Unlock()
+		return
+	}
+	if entry.idleGeneration != generation ||
+		entry.state != collectionResidencyReady || entry.load != nil ||
+		entry.activeTransition != nil {
 		controller.mutex.Unlock()
 		return
 	}
@@ -129,11 +132,12 @@ func (controller *collectionResidencyController) startUnload(
 					collectionName,
 					entry,
 					startedAt,
+					idle,
 					err,
 				)
 			}
 		}()
-		controller.runUnload(unloadCtx, collectionName, entry, startedAt)
+		controller.runUnload(unloadCtx, collectionName, entry, startedAt, idle)
 	}()
 }
 
@@ -142,10 +146,11 @@ func (controller *collectionResidencyController) runUnload(
 	collectionName string,
 	entry *collectionResidencyEntry,
 	startedAt time.Time,
+	idle time.Duration,
 ) {
 	defer controller.transitions.Done()
 	err := controller.config.unload(ctx, collectionName)
-	controller.finishUnload(ctx, collectionName, entry, startedAt, err)
+	controller.finishUnload(ctx, collectionName, entry, startedAt, idle, err)
 }
 
 func (controller *collectionResidencyController) finishUnload(
@@ -153,6 +158,7 @@ func (controller *collectionResidencyController) finishUnload(
 	collectionName string,
 	entry *collectionResidencyEntry,
 	startedAt time.Time,
+	idle time.Duration,
 	err error,
 ) {
 	controller.mutex.Lock()
@@ -177,7 +183,7 @@ func (controller *collectionResidencyController) finishUnload(
 			100,
 			elapsed,
 			entry.leases,
-			controller.config.idleTimeout,
+			idle,
 			nil,
 		)
 		return
@@ -194,7 +200,7 @@ func (controller *collectionResidencyController) finishUnload(
 		0,
 		elapsed,
 		entry.leases,
-		controller.config.idleTimeout,
+		idle,
 		err,
 	)
 }

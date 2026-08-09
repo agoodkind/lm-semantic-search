@@ -640,7 +640,22 @@ func resolveMilvusCollectionResidencyTimeoutMS(
 	defaultValue int,
 	allowZero bool,
 ) int {
-	value := envIntOrDefault(environmentVariable, fileValue)
+	value := fileValue
+	rawValue := os.Getenv(environmentVariable)
+	if rawValue != "" {
+		parsedValue, err := strconv.Atoi(rawValue)
+		if err != nil {
+			slog.Warn(
+				"Milvus collection residency timeout is not a usable millisecond count; keeping the default",
+				"value", rawValue,
+				"max", MaxMilvusCollectionLoadTimeoutMS,
+				"config_field", configField,
+				"env_var", environmentVariable,
+			)
+			return defaultValue
+		}
+		value = parsedValue
+	}
 	if value == 0 && !allowZero {
 		return defaultValue
 	}
