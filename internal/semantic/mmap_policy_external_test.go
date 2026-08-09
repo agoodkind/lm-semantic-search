@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,23 +27,29 @@ const mmapTestCollection = "hybrid_code_chunks_mmaptest"
 type mmapPolicyServer struct {
 	milvuspb.UnimplementedMilvusServiceServer
 
-	mutex           sync.Mutex
-	exists          bool
-	loaded          bool
-	schema          *schemapb.CollectionSchema
-	fieldProperties map[string]map[string]string
-	indexProperties map[string]map[string]string
-	indexTypes      map[string]string
-	indexFields     map[string]string
-	failAlterOnce   string
-	ignoreAlterOnce string
-	fieldAlterCalls map[string]int
-	awaitPending    map[string]bool
-	delayedLists    int
-	invisibleField  string
-	createMmapParam bool
-	loadedTooEarly  bool
-	events          []string
+	mutex            sync.Mutex
+	exists           bool
+	loaded           bool
+	schema           *schemapb.CollectionSchema
+	fieldProperties  map[string]map[string]string
+	indexProperties  map[string]map[string]string
+	indexTypes       map[string]string
+	indexFields      map[string]string
+	failAlterOnce    string
+	ignoreAlterOnce  string
+	ignoreAlter      string
+	fieldAlterCalls  map[string]int
+	awaitPending     map[string]bool
+	delayedLists     int
+	invisibleField   string
+	hideAfterIndexes bool
+	hiddenHasCalls   int
+	createMmapParam  bool
+	loadedTooEarly   bool
+	events           []string
+	blockMmapField   string
+	inspectionReady  chan struct{}
+	resumeInspect    chan struct{}
 }
 
 func newMmapPolicyServer() *mmapPolicyServer {
@@ -98,7 +105,13 @@ func (server *mmapPolicyServer) HasCollection(
 	context.Context,
 	*milvuspb.HasCollectionRequest,
 ) (*milvuspb.BoolResponse, error) {
-	return &milvuspb.BoolResponse{Status: mmapSuccessStatus(), Value: true}, nil
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	if server.exists && server.hiddenHasCalls > 0 {
+		server.hiddenHasCalls--
+		return &milvuspb.BoolResponse{Status: mmapSuccessStatus(), Value: false}, nil
+	}
+	return &milvuspb.BoolResponse{Status: mmapSuccessStatus(), Value: server.exists}, nil
 }
 
 func (server *mmapPolicyServer) DescribeCollection(
@@ -106,9 +119,9 @@ func (server *mmapPolicyServer) DescribeCollection(
 	request *milvuspb.DescribeCollectionRequest,
 ) (*milvuspb.DescribeCollectionResponse, error) {
 	server.mutex.Lock()
-	defer server.mutex.Unlock()
 	server.events = append(server.events, "describe_collection")
 	if !server.exists {
+		server.mutex.Unlock()
 		return &milvuspb.DescribeCollectionResponse{
 			Status: &commonpb.Status{
 				ErrorCode: commonpb.ErrorCode_CollectionNotExists,
@@ -116,42 +129,61 @@ func (server *mmapPolicyServer) DescribeCollection(
 			},
 		}, nil
 	}
+	var schema *schemapb.CollectionSchema
 	if server.schema != nil {
-		schema := proto.Clone(server.schema).(*schemapb.CollectionSchema)
+		schema = proto.Clone(server.schema).(*schemapb.CollectionSchema)
 		for _, field := range schema.GetFields() {
 			properties := server.fieldProperties[field.GetName()]
-			field.TypeParams = field.TypeParams[:0]
 			for key, value := range properties {
-				field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
-					Key: key, Value: value,
-				})
+				found := false
+				for _, parameter := range field.TypeParams {
+					if parameter.GetKey() == key {
+						parameter.Value = value
+						found = true
+						break
+					}
+				}
+				if !found {
+					field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+						Key: key, Value: value,
+					})
+				}
 			}
 		}
-		return &milvuspb.DescribeCollectionResponse{
-			Status:         mmapSuccessStatus(),
-			CollectionName: request.GetCollectionName(),
-			Schema:         schema,
-		}, nil
-	}
-	schema := entity.NewSchema().WithName(request.GetCollectionName())
-	fields := []*entity.Field{
-		entity.NewField().WithName("id").WithDataType(entity.FieldTypeVarChar).WithIsPrimaryKey(true),
-		entity.NewField().WithName("content").WithDataType(entity.FieldTypeVarChar),
-		entity.NewField().WithName("relativePath").WithDataType(entity.FieldTypeVarChar),
-		entity.NewField().WithName("contentHash").WithDataType(entity.FieldTypeVarChar),
-		entity.NewField().WithName("vector").WithDataType(entity.FieldTypeFloatVector).WithDim(3),
-		entity.NewField().WithName("sparse_vector").WithDataType(entity.FieldTypeSparseVector),
-	}
-	for _, field := range fields {
-		for key, value := range server.fieldProperties[field.Name] {
-			field.WithTypeParams(key, value)
+	} else {
+		entitySchema := entity.NewSchema().WithName(request.GetCollectionName())
+		fields := []*entity.Field{
+			entity.NewField().WithName("id").WithDataType(entity.FieldTypeVarChar).WithIsPrimaryKey(true),
+			entity.NewField().WithName("content").WithDataType(entity.FieldTypeVarChar),
+			entity.NewField().WithName("relativePath").WithDataType(entity.FieldTypeVarChar),
+			entity.NewField().WithName("contentHash").WithDataType(entity.FieldTypeVarChar),
+			entity.NewField().WithName("vector").WithDataType(entity.FieldTypeFloatVector).WithDim(3),
+			entity.NewField().WithName("sparse_vector").WithDataType(entity.FieldTypeSparseVector),
 		}
-		schema.WithField(field)
+		for _, field := range fields {
+			for key, value := range server.fieldProperties[field.Name] {
+				field.WithTypeParams(key, value)
+			}
+			entitySchema.WithField(field)
+		}
+		schema = entitySchema.ProtoMessage()
+	}
+	block := server.blockMmapField != "" &&
+		server.fieldProperties[server.blockMmapField]["mmap.enabled"] == "true"
+	inspectionReady := server.inspectionReady
+	resumeInspect := server.resumeInspect
+	if block {
+		server.blockMmapField = ""
+	}
+	server.mutex.Unlock()
+	if block {
+		close(inspectionReady)
+		<-resumeInspect
 	}
 	return &milvuspb.DescribeCollectionResponse{
 		Status:         mmapSuccessStatus(),
 		CollectionName: request.GetCollectionName(),
-		Schema:         schema.ProtoMessage(),
+		Schema:         schema,
 	}, nil
 }
 
@@ -201,11 +233,13 @@ func (server *mmapPolicyServer) GetLoadState(
 ) (*milvuspb.GetLoadStateResponse, error) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-	server.events = append(server.events, "get_load_state")
 	state := commonpb.LoadState_LoadStateNotLoad
+	event := "get_load_state:not_load"
 	if server.loaded {
 		state = commonpb.LoadState_LoadStateLoaded
+		event = "get_load_state:loaded"
 	}
+	server.events = append(server.events, event)
 	return &milvuspb.GetLoadStateResponse{Status: mmapSuccessStatus(), State: state}, nil
 }
 
@@ -239,6 +273,12 @@ func (server *mmapPolicyServer) AlterCollectionField(
 		server.ignoreAlterOnce = ""
 		return mmapSuccessStatus(), nil
 	}
+	if server.ignoreAlter == request.GetFieldName() {
+		return mmapSuccessStatus(), nil
+	}
+	if server.fieldProperties[request.GetFieldName()] == nil {
+		server.fieldProperties[request.GetFieldName()] = make(map[string]string)
+	}
 	for _, property := range request.GetProperties() {
 		server.fieldProperties[request.GetFieldName()][property.GetKey()] = property.GetValue()
 	}
@@ -252,6 +292,9 @@ func (server *mmapPolicyServer) AlterIndex(
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 	server.events = append(server.events, "alter_index:"+request.GetIndexName())
+	if server.indexProperties[request.GetIndexName()] == nil {
+		server.indexProperties[request.GetIndexName()] = make(map[string]string)
+	}
 	for _, property := range request.GetExtraParams() {
 		server.indexProperties[request.GetIndexName()][property.GetKey()] = property.GetValue()
 	}
@@ -336,6 +379,9 @@ func (server *mmapPolicyServer) CreateIndex(
 	server.indexTypes[indexName] = indexType
 	server.indexFields[indexName] = request.GetFieldName()
 	server.awaitPending[request.GetFieldName()] = true
+	if server.hideAfterIndexes && request.GetFieldName() == "sparse_vector" {
+		server.hiddenHasCalls = 1
+	}
 	return mmapSuccessStatus(), nil
 }
 
@@ -343,6 +389,9 @@ func (server *mmapPolicyServer) Insert(
 	context.Context,
 	*milvuspb.InsertRequest,
 ) (*milvuspb.MutationResult, error) {
+	server.mutex.Lock()
+	server.events = append(server.events, "insert")
+	server.mutex.Unlock()
 	return &milvuspb.MutationResult{
 		Status:       mmapSuccessStatus(),
 		Acknowledged: true,
@@ -430,6 +479,69 @@ func TestMmapPolicyMigratesEverySupportedPresentObjectAndRestoresReady(t *testin
 	assertMmapMigrationOrder(t, server.eventSnapshot())
 }
 
+func TestMmapPolicyHandlesMissingCollectionSchema(t *testing.T) {
+	t.Parallel()
+
+	server, service := newMmapPolicyTestService(t)
+	server.mutex.Lock()
+	server.schema = nil
+	server.mutex.Unlock()
+
+	service.EnsureMmapEnabledAllCollections(context.Background())
+}
+
+func TestMmapPolicyFakeInitializesPropertyMaps(t *testing.T) {
+	t.Parallel()
+
+	server := newMmapPolicyServer()
+	delete(server.fieldProperties, "content")
+	delete(server.indexProperties, "vector_idx")
+
+	if _, err := server.AlterCollectionField(context.Background(), &milvuspb.AlterCollectionFieldRequest{
+		FieldName: "content",
+		Properties: []*commonpb.KeyValuePair{{
+			Key:   "mmap.enabled",
+			Value: "true",
+		}},
+	}); err != nil {
+		t.Fatalf("AlterCollectionField returned error: %v", err)
+	}
+	if _, err := server.AlterIndex(context.Background(), &milvuspb.AlterIndexRequest{
+		IndexName: "vector_idx",
+		ExtraParams: []*commonpb.KeyValuePair{{
+			Key:   "mmap.enabled",
+			Value: "true",
+		}},
+	}); err != nil {
+		t.Fatalf("AlterIndex returned error: %v", err)
+	}
+}
+
+func TestMmapPolicyFakePreservesSchemaTypeParams(t *testing.T) {
+	t.Parallel()
+
+	server := newMmapPolicyServer()
+	response, err := server.DescribeCollection(
+		context.Background(),
+		&milvuspb.DescribeCollectionRequest{CollectionName: mmapTestCollection},
+	)
+	if err != nil {
+		t.Fatalf("DescribeCollection returned error: %v", err)
+	}
+	for _, field := range response.GetSchema().GetFields() {
+		if field.GetName() != "vector" {
+			continue
+		}
+		for _, parameter := range field.GetTypeParams() {
+			if parameter.GetKey() == "dim" && parameter.GetValue() == "3" {
+				return
+			}
+		}
+		t.Fatalf("vector type parameters = %v, want dim=3", field.GetTypeParams())
+	}
+	t.Fatal("DescribeCollection omitted vector field")
+}
+
 func TestMmapPolicyPreservesIdleCollection(t *testing.T) {
 	t.Parallel()
 
@@ -511,6 +623,38 @@ func TestMmapPolicyRechecksEveryTargetBeforeStampingComplete(t *testing.T) {
 	}
 }
 
+func TestMmapPolicyBacksOffWhenAPropertyNeverPersists(t *testing.T) {
+	t.Parallel()
+
+	server, service := newMmapPolicyTestService(t)
+	server.mutex.Lock()
+	server.ignoreAlter = "contentHash"
+	server.mutex.Unlock()
+
+	service.EnsureMmapEnabledAllCollections(context.Background())
+	service.EnsureMmapEnabledAllCollections(context.Background())
+	releasesAfterThreshold := countMmapEvents(server.eventSnapshot(), "release")
+	service.EnsureMmapEnabledAllCollections(context.Background())
+	if releases := countMmapEvents(server.eventSnapshot(), "release"); releases != releasesAfterThreshold {
+		t.Fatalf("release calls during mmap backoff = %d, want %d", releases, releasesAfterThreshold)
+	}
+
+	server.mutex.Lock()
+	server.ignoreAlter = ""
+	server.mutex.Unlock()
+	for range 11 {
+		service.EnsureMmapEnabledAllCollections(context.Background())
+	}
+	if releases := countMmapEvents(server.eventSnapshot(), "release"); releases != releasesAfterThreshold {
+		t.Fatalf("release calls before mmap backoff expired = %d, want %d", releases, releasesAfterThreshold)
+	}
+	service.EnsureMmapEnabledAllCollections(context.Background())
+	fields, _, _ := server.propertySnapshot()
+	if fields["contentHash"] != "true" {
+		t.Fatalf("contentHash mmap.enabled = %q after retry, want true", fields["contentHash"])
+	}
+}
+
 func TestMmapPolicyStampInvalidatesAfterConfirmedAbsence(t *testing.T) {
 	t.Parallel()
 
@@ -541,6 +685,72 @@ func TestMmapPolicyStampInvalidatesAfterConfirmedAbsence(t *testing.T) {
 	server.mutex.Unlock()
 	if newScalarMmap != "true" {
 		t.Fatalf("recreated scalar mmap.enabled = %q, want true", newScalarMmap)
+	}
+}
+
+func TestMmapPolicyDoesNotRestampAfterConcurrentInvalidation(t *testing.T) {
+	t.Parallel()
+
+	server, service := newMmapPolicyTestService(t)
+	service.EnsureMmapEnabledAllCollections(context.Background())
+
+	server.mutex.Lock()
+	server.exists = false
+	server.mutex.Unlock()
+	if _, err := service.InspectCollection(context.Background(), mmapTestCollection); err != nil {
+		t.Fatalf("invalidate initial mmap stamp: %v", err)
+	}
+
+	inspectionReady := make(chan struct{})
+	resumeInspect := make(chan struct{})
+	server.mutex.Lock()
+	server.exists = true
+	server.schema = mmapPolicySchemaWithExtraScalar()
+	server.fieldProperties["newScalar"] = make(map[string]string)
+	server.blockMmapField = "newScalar"
+	server.inspectionReady = inspectionReady
+	server.resumeInspect = resumeInspect
+	server.mutex.Unlock()
+
+	migrationDone := make(chan struct{})
+	go func() {
+		service.EnsureMmapEnabledAllCollections(context.Background())
+		close(migrationDone)
+	}()
+	select {
+	case <-inspectionReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("mmap verification did not reach deterministic race point")
+	}
+
+	server.mutex.Lock()
+	server.exists = false
+	server.mutex.Unlock()
+	if _, err := service.InspectCollection(context.Background(), mmapTestCollection); err != nil {
+		t.Fatalf("invalidate mmap stamp during verification: %v", err)
+	}
+	server.mutex.Lock()
+	server.exists = true
+	server.schema.Fields = append(server.schema.Fields, &schemapb.FieldSchema{
+		Name:     "concurrentScalar",
+		DataType: schemapb.DataType_Int64,
+	})
+	server.fieldProperties["concurrentScalar"] = make(map[string]string)
+	server.mutex.Unlock()
+	close(resumeInspect)
+	select {
+	case <-migrationDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("mmap migration did not finish after verification resumed")
+	}
+
+	service.EnsureMmapEnabledAllCollections(context.Background())
+	fields, _, _ := server.propertySnapshot()
+	if fields["concurrentScalar"] != "true" {
+		t.Fatalf(
+			"concurrent scalar mmap.enabled = %q, want true after invalidation retry",
+			fields["concurrentScalar"],
+		)
 	}
 }
 
@@ -589,6 +799,33 @@ func TestCreatedCollectionWaitsForIndexesAndLoadsAfterPolicy(t *testing.T) {
 	}
 }
 
+func TestCreatedCollectionRetriesBriefPostCreateInvisibility(t *testing.T) {
+	t.Parallel()
+
+	server, service := newMmapCreateTestService(t)
+	server.mutex.Lock()
+	server.hideAfterIndexes = true
+	server.mutex.Unlock()
+
+	err := stageMmapTestChunk(context.Background(), service, t.TempDir(), "briefly invisible")
+	if err != nil {
+		t.Fatalf("StageReindex returned error: %v", err)
+	}
+	server.mutex.Lock()
+	loadedTooEarly := server.loadedTooEarly
+	loaded := server.loaded
+	server.mutex.Unlock()
+	if countMmapEvents(server.eventSnapshot(), "create_index:sparse_vector") == 0 {
+		t.Fatal("post-create invisibility trigger index was not created")
+	}
+	if loadedTooEarly {
+		t.Fatal("fresh collection loaded after skipped mmap migration")
+	}
+	if !loaded {
+		t.Fatal("fresh collection did not load after visibility recovered")
+	}
+}
+
 func TestCreatedCollectionFailsWithoutLoadWhenRequiredIndexStaysInvisible(t *testing.T) {
 	t.Parallel()
 
@@ -597,7 +834,7 @@ func TestCreatedCollectionFailsWithoutLoadWhenRequiredIndexStaysInvisible(t *tes
 	server.invisibleField = "contentHash"
 	server.mutex.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	err := service.StageReindex(
 		ctx,
@@ -619,6 +856,9 @@ func TestCreatedCollectionFailsWithoutLoadWhenRequiredIndexStaysInvisible(t *tes
 	if err == nil {
 		t.Fatal("StageReindex returned nil while contentHash index stayed invisible")
 	}
+	if !strings.Contains(err.Error(), "wait for required mmap indexes") {
+		t.Fatalf("StageReindex error = %v, want required mmap index wait failure", err)
+	}
 	server.mutex.Lock()
 	loaded := server.loaded
 	events := append([]string(nil), server.events...)
@@ -633,9 +873,104 @@ func TestCreatedCollectionFailsWithoutLoadWhenRequiredIndexStaysInvisible(t *tes
 	}
 }
 
+func TestCreatedCollectionRetryResumesMmapWithoutCreatingAgain(t *testing.T) {
+	t.Parallel()
+
+	server, service := newMmapCreateTestService(t)
+	server.mutex.Lock()
+	server.invisibleField = "contentHash"
+	server.mutex.Unlock()
+
+	firstCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	codebasePath := t.TempDir()
+	if err := stageMmapTestChunk(firstCtx, service, codebasePath, "first attempt"); err == nil {
+		t.Fatal("first StageReindex returned nil while contentHash index stayed invisible")
+	} else if !strings.Contains(err.Error(), "wait for required mmap indexes") {
+		t.Fatalf("first StageReindex error = %v, want required mmap index wait failure", err)
+	}
+	server.mutex.Lock()
+	server.invisibleField = ""
+	server.mutex.Unlock()
+	if err := stageMmapTestChunk(context.Background(), service, codebasePath, "retry attempt"); err != nil {
+		t.Fatalf("retry StageReindex returned error: %v", err)
+	}
+
+	events := server.eventSnapshot()
+	if creates := countMmapEvents(events, "create_collection"); creates != 1 {
+		t.Fatalf("create collection calls = %d, want 1 across retry", creates)
+	}
+	fields, indexes, loaded := server.propertySnapshot()
+	if fields["contentHash"] != "true" || indexes["contentHash_idx"] != "true" {
+		t.Fatalf("retry left mmap incomplete: fields=%v indexes=%v", fields, indexes)
+	}
+	if !loaded {
+		t.Fatal("retry did not load the repaired collection")
+	}
+}
+
+func TestCreatedCollectionContinuesWhenMmapPropertyDoesNotPersist(t *testing.T) {
+	t.Parallel()
+
+	server, service := newMmapCreateTestService(t)
+	server.mutex.Lock()
+	server.ignoreAlter = "contentHash"
+	server.mutex.Unlock()
+
+	if err := stageMmapTestChunk(
+		context.Background(),
+		service,
+		t.TempDir(),
+		"unsupported mmap property",
+	); err != nil {
+		t.Fatalf("StageReindex returned error: %v", err)
+	}
+	events := server.eventSnapshot()
+	if countMmapEvents(events, "insert") == 0 {
+		t.Fatalf("StageReindex did not write after mmap nonconvergence: %v", events)
+	}
+}
+
+func stageMmapTestChunk(
+	ctx context.Context,
+	service *semantic.Service,
+	codebasePath string,
+	content string,
+) error {
+	return service.StageReindex(
+		ctx,
+		codebasePath,
+		[]model.StoredChunk{{
+			Content:       content,
+			RelativePath:  "created.go",
+			StartLine:     1,
+			EndLine:       1,
+			FileExtension: ".go",
+		}},
+		semantic.Removal{},
+		nil,
+		map[string][]float32{
+			semantic.ContentVectorKey(content): {1, 0, 0},
+		},
+		semantic.StoreColumnSetCode,
+	)
+}
+
+func countMmapEvents(events []string, expected string) int {
+	count := 0
+	for _, event := range events {
+		if event == expected {
+			count++
+		}
+	}
+	return count
+}
+
 func assertMmapMigrationOrder(t *testing.T, events []string) {
 	t.Helper()
 	releaseIndex := -1
+	notLoadIndex := -1
+	firstAlterIndex := -1
 	loadIndex := -1
 	lastAlterIndex := -1
 	recheckIndex := -1
@@ -643,20 +978,25 @@ func assertMmapMigrationOrder(t *testing.T, events []string) {
 		switch {
 		case event == "release":
 			releaseIndex = index
-		case event == "load":
-			loadIndex = index
 		case len(event) >= len("alter_") && event[:len("alter_")] == "alter_":
-			if releaseIndex < 0 {
-				t.Fatalf("alteration preceded release: %v", events)
-			}
 			lastAlterIndex = index
-		case event == "describe_collection" && lastAlterIndex >= 0 && index > lastAlterIndex:
-			if recheckIndex < 0 {
-				recheckIndex = index
-			}
 		}
 	}
-	if releaseIndex < 0 || lastAlterIndex < releaseIndex || recheckIndex < lastAlterIndex ||
+	for index, event := range events {
+		switch {
+		case event == "get_load_state:not_load" && index > releaseIndex && notLoadIndex < 0:
+			notLoadIndex = index
+		case len(event) >= len("alter_") && event[:len("alter_")] == "alter_" &&
+			index > releaseIndex && firstAlterIndex < 0:
+			firstAlterIndex = index
+		case event == "describe_collection" && index > lastAlterIndex && recheckIndex < 0:
+			recheckIndex = index
+		case event == "load" && index > recheckIndex && recheckIndex >= 0 && loadIndex < 0:
+			loadIndex = index
+		}
+	}
+	if releaseIndex < 0 || notLoadIndex < releaseIndex || firstAlterIndex < notLoadIndex ||
+		recheckIndex < lastAlterIndex ||
 		loadIndex < recheckIndex {
 		t.Fatalf("migration call order = %v", events)
 	}

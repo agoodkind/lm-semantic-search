@@ -21,7 +21,11 @@ const (
 	releasePollInterval         = 250 * time.Millisecond
 	releasePollTimeout          = 90 * time.Second
 	indexVisibilityPollInterval = 250 * time.Millisecond
+	mmapFailureThreshold        = 2
+	mmapFailureBackoffSweeps    = 12
 )
+
+var errMmapPolicyIncomplete = errors.New("mmap policy incomplete after alteration")
 
 type mmapOutcome int
 
@@ -30,6 +34,7 @@ const (
 	mmapOutcomeMigrated
 	mmapOutcomeAlready
 	mmapOutcomeSkipped
+	mmapOutcomeBackoff
 )
 
 type mmapMigrationMode int
@@ -57,6 +62,59 @@ type mmapInspection struct {
 	denseIndexPresent  bool
 	contentHashPresent bool
 	sparseIndexPresent bool
+}
+
+type mmapPolicyFailure struct {
+	consecutive int
+	skipSweeps  int
+}
+
+func (service *Service) mmapPolicyComplete(collectionName string) bool {
+	service.mmapPolicyMutex.Lock()
+	defer service.mmapPolicyMutex.Unlock()
+	version, found := service.mmapPolicyVersions[collectionName]
+	return found && version == mmapPolicyVersion
+}
+
+func (service *Service) consumeMmapBackoffSweep(
+	collectionName string,
+	mode mmapMigrationMode,
+) bool {
+	if mode != mmapExistingCollection {
+		return false
+	}
+	service.mmapPolicyMutex.Lock()
+	defer service.mmapPolicyMutex.Unlock()
+	if service.mmapPolicyFailures == nil {
+		service.mmapPolicyFailures = make(map[string]mmapPolicyFailure)
+	}
+	failure := service.mmapPolicyFailures[collectionName]
+	if failure.skipSweeps == 0 {
+		return false
+	}
+	failure.skipSweeps--
+	service.mmapPolicyFailures[collectionName] = failure
+	return true
+}
+
+func (service *Service) recordMmapNonConvergence(collectionName string) {
+	service.mmapPolicyMutex.Lock()
+	defer service.mmapPolicyMutex.Unlock()
+	if service.mmapPolicyFailures == nil {
+		service.mmapPolicyFailures = make(map[string]mmapPolicyFailure)
+	}
+	failure := service.mmapPolicyFailures[collectionName]
+	failure.consecutive++
+	if failure.consecutive >= mmapFailureThreshold {
+		failure.skipSweeps = mmapFailureBackoffSweeps
+	}
+	service.mmapPolicyFailures[collectionName] = failure
+}
+
+func (service *Service) clearMmapNonConvergence(collectionName string) {
+	service.mmapPolicyMutex.Lock()
+	defer service.mmapPolicyMutex.Unlock()
+	delete(service.mmapPolicyFailures, collectionName)
 }
 
 func (service *Service) releaseCollection(ctx context.Context, collectionName string) error {
@@ -109,6 +167,12 @@ func (service *Service) inspectMmapPolicy(
 			ctx,
 			err,
 			"describe collection for mmap "+collectionName,
+		)
+	}
+	if collection.Schema == nil {
+		return mmapInspection{}, fmt.Errorf(
+			"describe collection for mmap %s: missing schema",
+			collectionName,
 		)
 	}
 
@@ -265,6 +329,77 @@ func (service *Service) waitForCreatedMmapTargets(
 	}
 }
 
+func (service *Service) ensureCreatedCollectionReady(
+	ctx context.Context,
+	collectionName string,
+) error {
+	if service.mmapPolicyComplete(collectionName) {
+		return nil
+	}
+	if err := service.ensureCreatedCollectionMmap(ctx, collectionName); err != nil {
+		return err
+	}
+	if err := service.loadCollection(ctx, collectionName); err != nil {
+		service.invalidateMmapPolicy(collectionName)
+		return err
+	}
+	return nil
+}
+
+func (service *Service) ensureCreatedCollectionReadyForWrite(
+	ctx context.Context,
+	collectionName string,
+) error {
+	err := service.ensureCreatedCollectionReady(ctx, collectionName)
+	if err == nil || !errors.Is(err, errMmapPolicyIncomplete) {
+		return err
+	}
+	slog.WarnContext(
+		ctx,
+		"semantic.mmap_created_collection_nonconvergent",
+		"collection", collectionName,
+		"policy_version", mmapPolicyVersion,
+		"err", err,
+	)
+	return service.loadCollection(ctx, collectionName)
+}
+
+func (service *Service) ensureCreatedCollectionMmap(
+	ctx context.Context,
+	collectionName string,
+) error {
+	if service.mmapPolicyComplete(collectionName) {
+		return nil
+	}
+	pollCtx, cancel := context.WithTimeout(ctx, service.callTimeouts().Metadata)
+	defer cancel()
+	for {
+		outcome, err := service.ensureMmapEnabledOnce(
+			pollCtx,
+			collectionName,
+			mmapCreatedCollection,
+		)
+		if err != nil {
+			return err
+		}
+		if outcome != mmapOutcomeSkipped {
+			return nil
+		}
+		select {
+		case <-pollCtx.Done():
+			err := fmt.Errorf(
+				"wait for mmap policy %d on created collection %s: %w",
+				mmapPolicyVersion,
+				collectionName,
+				pollCtx.Err(),
+			)
+			slog.ErrorContext(ctx, "wait for created collection mmap policy failed", "err", err)
+			return err
+		case <-time.After(indexVisibilityPollInterval):
+		}
+	}
+}
+
 func (service *Service) alterMmapTargets(
 	ctx context.Context,
 	collectionName string,
@@ -410,7 +545,12 @@ func (service *Service) migrateMmapUnderMaintenance(
 	}
 	rechecked, err := service.inspectMmapPolicy(ctx, collectionName)
 	if err == nil && !service.mmapInspectionComplete(rechecked, mode) {
-		err = fmt.Errorf("mmap policy %d incomplete after alteration on %s", mmapPolicyVersion, collectionName)
+		err = fmt.Errorf(
+			"mmap policy %d incomplete after alteration on %s: %w",
+			mmapPolicyVersion,
+			collectionName,
+			errMmapPolicyIncomplete,
+		)
 	}
 	if err != nil {
 		if releaseStarted {
@@ -438,16 +578,33 @@ func (service *Service) ensureMmapEnabledOnce(
 	collectionName string,
 	mode mmapMigrationMode,
 ) (mmapOutcome, error) {
-	if version, done := service.ensuredMmapEnabled.Load(collectionName); done &&
-		version == mmapPolicyVersion {
+	if service.consumeMmapBackoffSweep(collectionName, mode) {
+		return mmapOutcomeBackoff, nil
+	}
+	service.mmapPolicyMutex.Lock()
+	generation := service.mmapPolicyGeneration[collectionName]
+	version, done := service.mmapPolicyVersions[collectionName]
+	service.mmapPolicyMutex.Unlock()
+	if done && version == mmapPolicyVersion {
 		return mmapOutcomeAlready, nil
 	}
 	outcome, err := service.ensureMmapEnabledOnCollection(ctx, collectionName, mode)
 	if err != nil {
+		if errors.Is(err, errMmapPolicyIncomplete) {
+			service.recordMmapNonConvergence(collectionName)
+		}
 		return mmapOutcomeUnknown, err
 	}
 	if outcome == mmapOutcomeMigrated || outcome == mmapOutcomeAlready {
-		service.ensuredMmapEnabled.Store(collectionName, mmapPolicyVersion)
+		service.clearMmapNonConvergence(collectionName)
+		service.mmapPolicyMutex.Lock()
+		if service.mmapPolicyGeneration[collectionName] == generation {
+			if service.mmapPolicyVersions == nil {
+				service.mmapPolicyVersions = make(map[string]int)
+			}
+			service.mmapPolicyVersions[collectionName] = mmapPolicyVersion
+		}
+		service.mmapPolicyMutex.Unlock()
 	}
 	return outcome, nil
 }
@@ -467,6 +624,7 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 	migrated := 0
 	already := 0
 	skipped := 0
+	backoff := 0
 	failed := 0
 	for _, collectionName := range collections {
 		if isStagingCollection(collectionName) {
@@ -489,6 +647,8 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 			already++
 		case mmapOutcomeSkipped:
 			skipped++
+		case mmapOutcomeBackoff:
+			backoff++
 		case mmapOutcomeUnknown:
 		}
 	}
@@ -498,6 +658,7 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 		slog.Int("migrated", migrated),
 		slog.Int("already_mmapped", already),
 		slog.Int("skipped_no_index", skipped),
+		slog.Int("backoff", backoff),
 		slog.Int("failed", failed),
 	}
 	level := slog.LevelDebug

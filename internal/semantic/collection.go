@@ -178,15 +178,7 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		return wrapStoreError(ctx, err, "create Milvus collection "+collectionName)
 	}
 	service.invalidateCollectionCaches(collectionName)
-	_, err := service.ensureMmapEnabledOnce(
-		ctx,
-		collectionName,
-		mmapCreatedCollection,
-	)
-	if err != nil {
-		return err
-	}
-	return service.loadCollection(ctx, collectionName)
+	return service.ensureCreatedCollectionReadyForWrite(ctx, collectionName)
 }
 
 type splitPartMigration struct {
