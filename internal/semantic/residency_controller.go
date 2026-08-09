@@ -10,6 +10,7 @@ import (
 	"time"
 
 	internalclock "goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 )
 
 const (
@@ -117,13 +118,17 @@ type collectionMaintenance struct {
 }
 
 func (service *Service) initializeResidencyController() {
+	service.initializeResidencyControllerWithLoad(service.loadCollectionTransition)
+}
+
+func (service *Service) initializeResidencyControllerWithLoad(load collectionTransition) {
 	service.residency = newCollectionResidencyController(residencyControllerConfig{
 		clock:       wallResidencyClock{},
 		waitTimeout: defaultCollectionLoadWaitTimeout,
 		// Task 4 enables this only after every collection operation holds protection.
 		idleTimeout: 0,
 		loadCeiling: service.sharedCollectionLoadCeiling(),
-		load:        service.loadCollection,
+		load:        load,
 		unload: func(ctx context.Context, collectionName string) error {
 			if err := service.releaseCollection(ctx, collectionName); err != nil {
 				return err
@@ -141,6 +146,10 @@ func newCollectionResidencyController(
 	}
 	if config.waitTimeout <= 0 {
 		config.waitTimeout = defaultCollectionLoadWaitTimeout
+	}
+	if config.loadCeiling <= 0 {
+		config.loadCeiling = milvusgrpc.DefaultCallTimeouts().Metadata +
+			3*defaultCollectionLoadBound
 	}
 	return &collectionResidencyController{
 		mutex:       sync.Mutex{},
@@ -242,19 +251,32 @@ func (controller *collectionResidencyController) Observe(
 func (controller *collectionResidencyController) Pin(
 	collectionName string,
 ) (*collectionPin, error) {
-	controller.mutex.Lock()
-	defer controller.mutex.Unlock()
-	if controller.closed {
-		return nil, ErrResidencyControllerClosed
+	for {
+		controller.mutex.Lock()
+		if controller.closed {
+			controller.mutex.Unlock()
+			return nil, ErrResidencyControllerClosed
+		}
+		entry := controller.entryLocked(collectionName)
+		if entry.activeTransition != nil && entry.load == nil {
+			changed := entry.changed
+			controller.mutex.Unlock()
+			select {
+			case <-controller.closedCh:
+				return nil, ErrResidencyControllerClosed
+			case <-changed:
+			}
+			continue
+		}
+		entry.pins++
+		controller.cancelIdleTimerLocked(entry)
+		controller.mutex.Unlock()
+		return &collectionPin{
+			once:       sync.Once{},
+			controller: controller,
+			name:       collectionName,
+		}, nil
 	}
-	entry := controller.entryLocked(collectionName)
-	entry.pins++
-	controller.cancelIdleTimerLocked(entry)
-	return &collectionPin{
-		once:       sync.Once{},
-		controller: controller,
-		name:       collectionName,
-	}, nil
 }
 
 func (controller *collectionResidencyController) Maintain(
@@ -659,11 +681,14 @@ func (controller *collectionResidencyController) armIdleTimerLocked(
 ) {
 	controller.cancelIdleTimerLocked(entry)
 	if controller.config.idleTimeout <= 0 || controller.config.unload == nil ||
-		entry.leases != 0 || entry.observations != 0 || entry.pins != 0 ||
+		entry.leases != 0 || entry.pins != 0 ||
 		entry.activeTransition != nil || entry.maintenance {
 		return
 	}
 	entry.idleDeadline = controller.config.clock.Now().Add(controller.config.idleTimeout)
+	if entry.observations != 0 {
+		return
+	}
 	generation := entry.idleGeneration
 	transitionContext := context.WithoutCancel(ctx)
 	entry.idleTimer = controller.config.clock.AfterFunc(controller.config.idleTimeout, func() {
@@ -714,7 +739,7 @@ func (controller *collectionResidencyController) startUnload(
 			if recovered := recover(); recovered != nil {
 				err := fmt.Errorf("collection unload panic: %v", recovered)
 				slog.ErrorContext(unloadCtx, "semantic.collection_unload_panic", "err", err)
-				controller.finishUnload(unloadCtx, collectionName, entry, err)
+				controller.finishUnload(entry, err)
 			}
 		}()
 		controller.runUnload(unloadCtx, collectionName, entry)
@@ -729,12 +754,10 @@ func (controller *collectionResidencyController) runUnload(
 	defer controller.transitions.Done()
 	err := controller.config.unload(ctx, collectionName)
 
-	controller.finishUnload(ctx, collectionName, entry, err)
+	controller.finishUnload(entry, err)
 }
 
 func (controller *collectionResidencyController) finishUnload(
-	ctx context.Context,
-	collectionName string,
 	entry *collectionResidencyEntry,
 	err error,
 ) {
@@ -750,9 +773,8 @@ func (controller *collectionResidencyController) finishUnload(
 		entry.idleDeadline = time.Time{}
 		return
 	}
-	if !controller.closed && entry.leases == 0 {
-		controller.armIdleTimerLocked(ctx, collectionName, entry)
-	}
+	entry.state = collectionResidencyUnknown
+	entry.idleDeadline = time.Time{}
 }
 
 func (controller *collectionResidencyController) Close(ctx context.Context) error {

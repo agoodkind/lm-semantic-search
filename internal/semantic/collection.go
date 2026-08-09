@@ -515,10 +515,20 @@ func (service *Service) loadCollection(ctx context.Context, collectionName strin
 		collectionName,
 		service.sharedCollectionLoadCeiling(),
 		func(loadCtx context.Context) error {
-			if _, err := service.milvus.LoadCollection(loadCtx, milvusclient.NewLoadCollectionOption(collectionName)); err != nil {
-				return wrapStoreError(loadCtx, err, "load Milvus collection "+collectionName)
-			}
-			return service.awaitCollectionLoaded(loadCtx, collectionName)
+			return service.loadCollectionTransition(loadCtx, collectionName)
 		},
 	)
+}
+
+func (service *Service) loadCollectionTransition(
+	ctx context.Context,
+	collectionName string,
+) error {
+	if _, err := service.milvus.LoadCollection(
+		ctx,
+		milvusclient.NewLoadCollectionOption(collectionName),
+	); err != nil {
+		return wrapStoreError(ctx, err, "load Milvus collection "+collectionName)
+	}
+	return service.awaitCollectionLoaded(ctx, collectionName)
 }

@@ -217,13 +217,15 @@ func (service *Service) Close(ctx context.Context) error {
 			case <-service.reconnectDone:
 			case <-ctx.Done():
 				closeErr = fmt.Errorf("wait for Milvus reconnect shutdown: %w", ctx.Err())
-				return
 			}
 		}
 		if service.residency != nil {
 			if err := service.residency.Close(ctx); err != nil {
-				closeErr = fmt.Errorf("close collection residency controller: %w", err)
-				return
+				slog.ErrorContext(ctx, "close collection residency controller failed", "err", err)
+				closeErr = errors.Join(
+					closeErr,
+					fmt.Errorf("close collection residency controller: %w", err),
+				)
 			}
 		}
 		if !service.Available() || service.milvus == nil {
@@ -231,7 +233,7 @@ func (service *Service) Close(ctx context.Context) error {
 		}
 		if err := service.milvus.Close(ctx); err != nil {
 			slog.ErrorContext(ctx, "close Milvus client failed", "err", err)
-			closeErr = fmt.Errorf("close Milvus client: %w", err)
+			closeErr = errors.Join(closeErr, fmt.Errorf("close Milvus client: %w", err))
 			return
 		}
 		service.available.Store(false)
