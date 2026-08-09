@@ -541,11 +541,15 @@ func (lease *collectionLease) Release() {
 }
 
 func (observation *collectionObservation) Release() {
+	observation.ReleaseContext(context.Background())
+}
+
+func (observation *collectionObservation) ReleaseContext(ctx context.Context) {
 	if observation == nil {
 		return
 	}
 	observation.once.Do(func() {
-		observation.controller.releaseObservation(context.Background(), observation.name)
+		observation.controller.releaseObservation(ctx, observation.name)
 	})
 }
 
@@ -559,11 +563,15 @@ func (pin *collectionPin) Release() {
 }
 
 func (maintenance *collectionMaintenance) Release() {
+	maintenance.ReleaseContext(context.Background())
+}
+
+func (maintenance *collectionMaintenance) ReleaseContext(ctx context.Context) {
 	if maintenance == nil {
 		return
 	}
 	maintenance.once.Do(func() {
-		maintenance.controller.releaseMaintenance(context.Background(), maintenance.names)
+		maintenance.controller.releaseMaintenance(ctx, maintenance.names)
 	})
 }
 

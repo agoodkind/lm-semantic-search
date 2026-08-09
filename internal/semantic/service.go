@@ -119,9 +119,8 @@ type Service struct {
 	// ensuredReuseIdentityColumns gates the nullable content hash and embedding
 	// model columns plus the content-hash index once per collection per process.
 	ensuredReuseIdentityColumns sync.Map
-	// ensuredMmapEnabled records the collections this process has confirmed
-	// mmap-migrated, so the daemon's periodic mmap sweep skips them with no RPC.
-	// See ensureMmapEnabledOnce.
+	// ensuredMmapEnabled records the mmap policy version fully verified for each
+	// collection. Lifecycle and metadata changes invalidate the stored version.
 	ensuredMmapEnabled sync.Map
 	// ensuredBackfill records the conversation collections this process has
 	// scalar-column backfilled, so the daemon's periodic backfill sweep runs the
@@ -326,8 +325,12 @@ func (service *Service) invalidateCollectionCaches(collectionName string) {
 	service.ensuredConvColumns.Delete(collectionName)
 	service.ensuredSplitPartColumns.Delete(collectionName)
 	service.ensuredReuseIdentityColumns.Delete(collectionName)
-	service.ensuredMmapEnabled.Delete(collectionName)
+	service.invalidateMmapPolicy(collectionName)
 	service.ensuredBackfill.Delete(collectionName)
+}
+
+func (service *Service) invalidateMmapPolicy(collectionName string) {
+	service.ensuredMmapEnabled.Delete(collectionName)
 }
 
 // hasCollection centralizes collection-presence probes and invalidates every
