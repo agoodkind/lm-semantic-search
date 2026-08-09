@@ -183,7 +183,16 @@ func serve(rootContext context.Context, cfg config.Config) error {
 		slog.ErrorContext(rootContext, "create manager failed", "err", err)
 		return fmt.Errorf("create manager: %w", err)
 	}
-	defer manager.CloseGraphEngines()
+	defer func() {
+		closeContext, cancelClose := context.WithTimeout(
+			context.WithoutCancel(rootContext),
+			15*time.Second,
+		)
+		defer cancelClose()
+		if closeErr := manager.Close(closeContext); closeErr != nil {
+			slog.ErrorContext(rootContext, "close manager failed", "err", closeErr)
+		}
+	}()
 
 	runtimeContext, cancelRuntime := context.WithCancel(rootContext)
 	defer cancelRuntime()

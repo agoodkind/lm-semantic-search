@@ -65,7 +65,8 @@ func (service *Service) dialMilvus(ctx context.Context) (*milvusclient.Client, e
 	clientConfig := &milvusclient.ClientConfig{
 		Address:     service.cfg.MilvusAddress,
 		APIKey:      service.cfg.MilvusToken,
-		DialOptions: milvusgrpc.DialOptions(slog.Default(), service.callTimeouts()),
+		DBName:      service.cfg.MilvusDatabase,
+		DialOptions: milvusgrpc.DialOptions(ctx, slog.Default(), service.callTimeouts()),
 	}
 	client, err := milvusclient.New(dialContext, clientConfig)
 	if err != nil {

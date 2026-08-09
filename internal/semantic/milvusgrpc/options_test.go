@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -406,6 +407,39 @@ func TestMilvusDeadlineInterceptorLogsOnDeadlineExceeded(t *testing.T) {
 	}
 }
 
+func TestDialOptionsReportsEveryUnaryCall(t *testing.T) {
+	address := startFakeMilvus(t, time.Millisecond)
+	var observedMethod string
+	var observedRequest proto.Message
+	observerContext := context.WithValue(
+		context.Background(),
+		CallObserverContextKey{},
+		CallObserver(func(method string, request proto.Message) {
+			observedMethod = method
+			observedRequest = request
+		}),
+	)
+	options := DialOptions(observerContext, slog.Default(), DefaultCallTimeouts())
+	options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient("passthrough:///"+address.String(), options...)
+	if err != nil {
+		t.Fatalf("dial fake Milvus: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	if err := invokeFakeMilvus(conn, "DescribeCollection"); err != nil {
+		t.Fatalf("invoke fake Milvus: %v", err)
+	}
+	if observedMethod != "/"+fakeMilvusServiceName+"/DescribeCollection" {
+		t.Fatalf("observed method = %q, want DescribeCollection", observedMethod)
+	}
+	if _, ok := observedRequest.(*emptypb.Empty); !ok {
+		t.Fatalf("observed request type = %T, want *emptypb.Empty", observedRequest)
+	}
+}
+
 // fakeMilvusServiceName mirrors the real Milvus gRPC service name so the
 // interceptor classifies the fake server's methods exactly as it classifies the
 // deployed ones.
@@ -483,7 +517,7 @@ func startFakeMilvus(t *testing.T, delay time.Duration) net.Addr {
 func dialFakeMilvus(t *testing.T, address net.Addr, timeouts CallTimeouts) *grpc.ClientConn {
 	t.Helper()
 
-	options := DialOptions(slog.Default(), timeouts)
+	options := DialOptions(context.Background(), slog.Default(), timeouts)
 	options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	conn, err := grpc.NewClient("passthrough:///"+address.String(), options...)
 	if err != nil {
