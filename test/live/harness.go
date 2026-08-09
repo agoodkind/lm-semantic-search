@@ -110,9 +110,10 @@ type harness struct {
 type milvusInventory map[string]map[string]string
 
 type milvusCall struct {
-	databaseName    string
-	method          string
-	collectionNames []string
+	databaseName            string
+	destinationDatabaseName string
+	method                  string
+	collectionNames         []string
 }
 
 type milvusCallRecorder struct {
@@ -121,14 +122,12 @@ type milvusCallRecorder struct {
 }
 
 func (recorder *milvusCallRecorder) observe(
-	databaseName string,
 	method string,
+	databaseName string,
 	request proto.Message,
 ) {
-	if named, ok := request.(interface{ GetDbName() string }); ok {
-		databaseName = firstNonEmpty(named.GetDbName(), databaseName)
-	}
 	collectionNames := make([]string, 0, 2)
+	destinationDatabaseName := ""
 	if named, ok := request.(interface{ GetCollectionName() string }); ok {
 		collectionNames = appendNonEmpty(collectionNames, named.GetCollectionName())
 	}
@@ -140,29 +139,23 @@ func (recorder *milvusCallRecorder) observe(
 	if renamed, ok := request.(interface {
 		GetOldName() string
 		GetNewName() string
+		GetNewDBName() string
 	}); ok {
 		collectionNames = appendNonEmpty(collectionNames, renamed.GetOldName())
 		collectionNames = appendNonEmpty(collectionNames, renamed.GetNewName())
+		destinationDatabaseName = renamed.GetNewDBName()
 	}
 	if separator := strings.LastIndex(method, "/"); separator >= 0 {
 		method = method[separator+1:]
 	}
 	recorder.mutex.Lock()
 	recorder.calls = append(recorder.calls, milvusCall{
-		databaseName:    databaseName,
-		method:          method,
-		collectionNames: slices.Clone(collectionNames),
+		databaseName:            databaseName,
+		destinationDatabaseName: destinationDatabaseName,
+		method:                  method,
+		collectionNames:         slices.Clone(collectionNames),
 	})
 	recorder.mutex.Unlock()
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func appendNonEmpty(values []string, value string) []string {
@@ -178,9 +171,10 @@ func (recorder *milvusCallRecorder) snapshot() []milvusCall {
 	result := make([]milvusCall, len(recorder.calls))
 	for index, call := range recorder.calls {
 		result[index] = milvusCall{
-			databaseName:    call.databaseName,
-			method:          call.method,
-			collectionNames: slices.Clone(call.collectionNames),
+			databaseName:            call.databaseName,
+			destinationDatabaseName: call.destinationDatabaseName,
+			method:                  call.method,
+			collectionNames:         slices.Clone(call.collectionNames),
 		}
 	}
 	return result
@@ -246,13 +240,10 @@ func newHarnessWithOptions(
 	harnessID := randomID()
 	databaseName := liveDatabasePrefix + harnessID
 	callRecorder := &milvusCallRecorder{}
-	operatorObserver := func(method string, request proto.Message) {
-		callRecorder.observe(defaultMilvusDatabase, method, request)
-	}
 	operatorContext := context.WithValue(
 		context.Background(),
 		milvusgrpc.CallObserverContextKey{},
-		milvusgrpc.CallObserver(operatorObserver),
+		milvusgrpc.CallObserver(callRecorder.observe),
 	)
 	// Probe Milvus directly first. A dial failure here means the backend is down,
 	// so the whole scenario is blocked on the environment rather than the code.
@@ -294,8 +285,14 @@ func newHarnessWithOptions(
 		)
 	})
 
-	operatorBefore := readMilvusInventory(t, operatorMilvus)
-	beforeDatabases := listMilvusDatabases(t, operatorMilvus)
+	operatorBefore, err := readMilvusInventory(operatorMilvus)
+	if err != nil {
+		t.Fatalf("read operator Milvus inventory before: %v", err)
+	}
+	beforeDatabases, err := listMilvusDatabases(operatorMilvus)
+	if err != nil {
+		t.Fatalf("list Milvus databases before: %v", err)
+	}
 	t.Logf("Milvus operator inventory before: %v", operatorBefore)
 	t.Logf("Milvus databases before: %v", beforeDatabases)
 	if slices.Contains(beforeDatabases, databaseName) {
@@ -312,13 +309,10 @@ func newHarnessWithOptions(
 	createCancel()
 	databaseCreated = true
 
-	sandboxObserver := func(method string, request proto.Message) {
-		callRecorder.observe(databaseName, method, request)
-	}
 	sandboxContext := context.WithValue(
 		context.Background(),
 		milvusgrpc.CallObserverContextKey{},
-		milvusgrpc.CallObserver(sandboxObserver),
+		milvusgrpc.CallObserver(callRecorder.observe),
 	)
 	dialCtx, dialCancel = context.WithTimeout(sandboxContext, 5*time.Second)
 	sandboxMilvus, err = milvusclient.New(dialCtx, &milvusclient.ClientConfig{
@@ -331,7 +325,10 @@ func newHarnessWithOptions(
 	if err != nil {
 		t.Fatalf("connect to temporary Milvus database %s: %v", databaseName, err)
 	}
-	sandboxBefore := readMilvusInventory(t, sandboxMilvus)
+	sandboxBefore, err := readMilvusInventory(sandboxMilvus)
+	if err != nil {
+		t.Fatalf("read sandbox Milvus inventory before: %v", err)
+	}
 	if len(sandboxBefore) != 0 {
 		t.Fatalf(
 			"temporary Milvus database %q started with collections: %v",
@@ -454,7 +451,9 @@ func cleanupPartialHarness(
 		cancel()
 	}
 	if sandboxMilvus != nil {
-		dropEveryCollection(t, sandboxMilvus)
+		for _, cleanupErr := range dropEveryCollection(sandboxMilvus) {
+			t.Errorf("clean partial sandbox Milvus: %v", cleanupErr)
+		}
 		closeMilvusClient(sandboxMilvus)
 	}
 	if databaseCreated && operatorMilvus != nil {
@@ -482,24 +481,41 @@ func (h *harness) teardown(stopServer func()) {
 		h.t.Errorf("close manager returned error: %v", err)
 	}
 	cancelManagerClose()
+	for _, cleanupErr := range h.cleanupMilvus() {
+		h.t.Error(cleanupErr)
+	}
 
+	calls := h.callRecorder.snapshot()
+	h.t.Logf("Milvus calls: %+v", calls)
+	h.assertNoPreexistingProtectedCalls(calls)
+}
+
+func (h *harness) cleanupMilvus() []error {
+	cleanupErrors := make([]error, 0)
 	temporaryNames := make([]string, 0, len(h.temporaryNames))
 	for collectionName := range h.temporaryNames {
 		temporaryNames = append(temporaryNames, collectionName)
 	}
 	slices.Sort(temporaryNames)
 	for _, collectionName := range temporaryNames {
-		dropCollectionIfPresent(h.t, h.milvus, collectionName)
+		if err := dropCollectionIfPresent(h.milvus, collectionName); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+		}
 	}
-	sandboxAfter := readMilvusInventory(h.t, h.milvus)
-	h.t.Logf("Milvus sandbox inventory after: %v", sandboxAfter)
-	if !reflect.DeepEqual(sandboxAfter, h.sandboxBefore) {
-		h.t.Errorf(
+	sandboxAfter, err := readMilvusInventory(h.milvus)
+	if err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("read sandbox Milvus inventory after: %w", err))
+		cleanupErrors = append(cleanupErrors, dropEveryCollection(h.milvus)...)
+	} else {
+		h.t.Logf("Milvus sandbox inventory after: %v", sandboxAfter)
+	}
+	if err == nil && !reflect.DeepEqual(sandboxAfter, h.sandboxBefore) {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf(
 			"temporary Milvus database inventory changed\nbefore: %v\nafter: %v",
 			h.sandboxBefore,
 			sandboxAfter,
-		)
-		dropEveryCollection(h.t, h.milvus)
+		))
+		cleanupErrors = append(cleanupErrors, dropEveryCollection(h.milvus)...)
 	}
 	closeMilvusClient(h.milvus)
 
@@ -508,26 +524,43 @@ func (h *harness) teardown(stopServer func()) {
 		dropDatabaseCtx,
 		milvusclient.NewDropDatabaseOption(h.databaseName),
 	); err != nil {
-		h.t.Errorf("DropDatabase(%s) returned error: %v", h.databaseName, err)
+		cleanupErrors = append(cleanupErrors, fmt.Errorf(
+			"DropDatabase(%s) returned error: %w",
+			h.databaseName,
+			err,
+		))
 	}
 	cancelDropDatabase()
-	afterDatabases := listMilvusDatabases(h.t, h.operatorMilvus)
-	h.t.Logf("Milvus databases after: %v", afterDatabases)
-	operatorAfter := readMilvusInventory(h.t, h.operatorMilvus)
-	h.t.Logf("Milvus operator inventory after: %v", operatorAfter)
-	for _, violation := range operatorStateViolations(
-		h.beforeDatabases,
-		afterDatabases,
-		h.operatorBefore,
-		operatorAfter,
-	) {
-		h.t.Error(violation)
+	afterDatabases, databaseErr := listMilvusDatabases(h.operatorMilvus)
+	if databaseErr != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("list Milvus databases after: %w", databaseErr))
+	} else {
+		h.t.Logf("Milvus databases after: %v", afterDatabases)
+		for _, violation := range operatorStateViolations(
+			h.beforeDatabases,
+			afterDatabases,
+			h.operatorBefore,
+			h.operatorBefore,
+		) {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("%s", violation))
+		}
+	}
+	operatorAfter, inventoryErr := readMilvusInventory(h.operatorMilvus)
+	if inventoryErr != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("read operator Milvus inventory after: %w", inventoryErr))
+	} else {
+		h.t.Logf("Milvus operator inventory after: %v", operatorAfter)
+		for _, violation := range operatorStateViolations(
+			h.beforeDatabases,
+			h.beforeDatabases,
+			h.operatorBefore,
+			operatorAfter,
+		) {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("%s", violation))
+		}
 	}
 	closeMilvusClient(h.operatorMilvus)
-
-	calls := h.callRecorder.snapshot()
-	h.t.Logf("Milvus calls: %+v", calls)
-	h.assertNoPreexistingProtectedCalls(calls)
+	return cleanupErrors
 }
 
 func (h *harness) assertNoPreexistingProtectedCalls(calls []milvusCall) {
@@ -595,6 +628,15 @@ func milvusIsolationViolations(
 			))
 			continue
 		}
+		if call.destinationDatabaseName != "" && call.destinationDatabaseName != databaseName {
+			violations = append(violations, fmt.Sprintf(
+				"protected Milvus call %s targeted destination database %q, want temporary database %q",
+				call.method,
+				call.destinationDatabaseName,
+				databaseName,
+			))
+			continue
+		}
 		if len(call.collectionNames) == 0 {
 			violations = append(violations, fmt.Sprintf(
 				"protected Milvus call %s in database %s has no auditable collection target",
@@ -625,7 +667,8 @@ func protectedMilvusCall(method string) bool {
 	case "CreateAlias", "CreateCollection", "CreateIndex", "CreatePartition",
 		"Delete", "DropAlias", "DropCollection", "DropIndex", "DropPartition",
 		"Flush", "FlushAll", "Import", "Insert", "LoadCollection",
-		"ReleaseCollection", "RenameCollection", "TruncateCollection", "Upsert":
+		"ReleaseCollection", "RenameCollection", "ReplicateMessage",
+		"TruncateCollection", "Upsert":
 		return true
 	default:
 		return false
@@ -672,13 +715,12 @@ func (h *harness) trackCodebasePath(codebasePath string) string {
 	return collectionName
 }
 
-func readMilvusInventory(t *testing.T, client *milvusclient.Client) milvusInventory {
-	t.Helper()
+func readMilvusInventory(client *milvusclient.Client) (milvusInventory, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	collectionNames, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
 	if err != nil {
-		t.Fatalf("list Milvus collections for inventory: %v", err)
+		return nil, fmt.Errorf("list Milvus collections for inventory: %w", err)
 	}
 	slices.Sort(collectionNames)
 	inventory := make(milvusInventory, len(collectionNames))
@@ -689,7 +731,11 @@ func readMilvusInventory(t *testing.T, client *milvusclient.Client) milvusInvent
 			milvusclient.NewGetLoadStateOption(collectionName),
 		)
 		if loadErr != nil {
-			t.Fatalf("get Milvus load state for %s inventory: %v", collectionName, loadErr)
+			return nil, fmt.Errorf(
+				"get Milvus load state for %s inventory: %w",
+				collectionName,
+				loadErr,
+			)
 		}
 		properties["load_state"] = strconv.FormatInt(int64(loadState.State), 10)
 		collection, describeErr := client.DescribeCollection(
@@ -697,17 +743,30 @@ func readMilvusInventory(t *testing.T, client *milvusclient.Client) milvusInvent
 			milvusclient.NewDescribeCollectionOption(collectionName),
 		)
 		if describeErr != nil {
-			t.Fatalf("describe Milvus collection %s for inventory: %v", collectionName, describeErr)
+			return nil, fmt.Errorf(
+				"describe Milvus collection %s for inventory: %w",
+				collectionName,
+				describeErr,
+			)
 		}
-		for _, field := range collection.Schema.Fields {
-			properties["field:"+field.Name] = field.TypeParams["mmap.enabled"]
+		for key, value := range collection.Properties {
+			properties["collection:"+key] = value
+		}
+		if collection.Schema != nil {
+			for _, field := range collection.Schema.Fields {
+				properties["field:"+field.Name] = field.TypeParams["mmap.enabled"]
+			}
 		}
 		indexNames, listErr := client.ListIndexes(
 			ctx,
 			milvusclient.NewListIndexOption(collectionName),
 		)
 		if listErr != nil {
-			t.Fatalf("list Milvus indexes for %s inventory: %v", collectionName, listErr)
+			return nil, fmt.Errorf(
+				"list Milvus indexes for %s inventory: %w",
+				collectionName,
+				listErr,
+			)
 		}
 		slices.Sort(indexNames)
 		for _, indexName := range indexNames {
@@ -716,33 +775,35 @@ func readMilvusInventory(t *testing.T, client *milvusclient.Client) milvusInvent
 				milvusclient.NewDescribeIndexOption(collectionName, indexName),
 			)
 			if indexErr != nil {
-				t.Fatalf("describe Milvus index %s on %s: %v", indexName, collectionName, indexErr)
+				return nil, fmt.Errorf(
+					"describe Milvus index %s on %s: %w",
+					indexName,
+					collectionName,
+					indexErr,
+				)
 			}
 			properties["index:"+indexName] = description.Params()["mmap.enabled"]
 		}
 		inventory[collectionName] = properties
 	}
-	return inventory
+	return inventory, nil
 }
 
-func listMilvusDatabases(t *testing.T, client *milvusclient.Client) []string {
-	t.Helper()
+func listMilvusDatabases(client *milvusclient.Client) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	databaseNames, err := client.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
 	if err != nil {
-		t.Fatalf("list Milvus databases: %v", err)
+		return nil, fmt.Errorf("list Milvus databases: %w", err)
 	}
 	slices.Sort(databaseNames)
-	return databaseNames
+	return databaseNames, nil
 }
 
 func dropCollectionIfPresent(
-	t *testing.T,
 	client *milvusclient.Client,
 	collectionName string,
-) {
-	t.Helper()
+) error {
 	dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := client.DropCollection(
@@ -750,24 +811,27 @@ func dropCollectionIfPresent(
 		milvusclient.NewDropCollectionOption(collectionName),
 	); err != nil {
 		if !strings.Contains(err.Error(), "not exist") && !strings.Contains(err.Error(), "not found") {
-			t.Errorf("DropCollection(%s) returned error: %v", collectionName, err)
+			return fmt.Errorf("DropCollection(%s) returned error: %w", collectionName, err)
 		}
 	}
+	return nil
 }
 
-func dropEveryCollection(t *testing.T, client *milvusclient.Client) {
-	t.Helper()
+func dropEveryCollection(client *milvusclient.Client) []error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	collectionNames, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
 	cancel()
 	if err != nil {
-		t.Errorf("list temporary Milvus collections for cleanup: %v", err)
-		return
+		return []error{fmt.Errorf("list temporary Milvus collections for cleanup: %w", err)}
 	}
+	cleanupErrors := make([]error, 0)
 	slices.Sort(collectionNames)
 	for _, collectionName := range collectionNames {
-		dropCollectionIfPresent(t, client, collectionName)
+		if err := dropCollectionIfPresent(client, collectionName); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+		}
 	}
+	return cleanupErrors
 }
 
 func closeMilvusClient(client *milvusclient.Client) {

@@ -12,19 +12,28 @@ import (
 func TestMilvusCallRecorderExtractsDatabaseTargets(t *testing.T) {
 	recorder := &milvusCallRecorder{}
 	recorder.observe(
-		"live_sandbox",
 		"/milvus.proto.milvus.MilvusService/ReleaseCollection",
+		"live_sandbox",
 		&milvuspb.ReleaseCollectionRequest{CollectionName: "temporary_collection"},
 	)
 	recorder.observe(
-		defaultMilvusDatabase,
 		"/milvus.proto.milvus.MilvusService/CreateDatabase",
+		"live_sandbox",
 		&milvuspb.CreateDatabaseRequest{DbName: "live_sandbox"},
+	)
+	recorder.observe(
+		"/milvus.proto.milvus.MilvusService/RenameCollection",
+		"live_sandbox",
+		&milvuspb.RenameCollectionRequest{
+			OldName:   "temporary_collection",
+			NewName:   "temporary_collection_next",
+			NewDBName: defaultMilvusDatabase,
+		},
 	)
 
 	calls := recorder.snapshot()
-	if len(calls) != 2 {
-		t.Fatalf("recorded calls = %d, want 2", len(calls))
+	if len(calls) != 3 {
+		t.Fatalf("recorded calls = %d, want 3", len(calls))
 	}
 	if calls[0].databaseName != "live_sandbox" ||
 		calls[0].method != "ReleaseCollection" ||
@@ -34,6 +43,13 @@ func TestMilvusCallRecorderExtractsDatabaseTargets(t *testing.T) {
 	}
 	if calls[1].databaseName != "live_sandbox" || calls[1].method != "CreateDatabase" {
 		t.Fatalf("database call = %+v, want request database target", calls[1])
+	}
+	if calls[2].destinationDatabaseName != defaultMilvusDatabase {
+		t.Fatalf(
+			"rename destination database = %q, want %q",
+			calls[2].destinationDatabaseName,
+			defaultMilvusDatabase,
+		)
 	}
 }
 
@@ -101,6 +117,7 @@ func TestMilvusIsolationRejectsEveryDefaultDatabaseMutation(t *testing.T) {
 		"Insert",
 		"LoadCollection",
 		"ReleaseCollection",
+		"ReplicateMessage",
 		"RenameCollection",
 		"TruncateCollection",
 		"Upsert",
@@ -133,5 +150,41 @@ func TestMilvusIsolationRejectsEveryDefaultDatabaseMutation(t *testing.T) {
 				t.Fatalf("default database %s produced no isolation violation", method)
 			}
 		})
+	}
+}
+
+func TestMilvusIsolationRejectsAbsentDatabaseAndRenameDestination(t *testing.T) {
+	temporaryNames := map[string]struct{}{
+		"temporary_collection":      {},
+		"temporary_collection_next": {},
+	}
+	violations := milvusIsolationViolations(
+		"live_sandbox",
+		temporaryNames,
+		[]milvusCall{
+			{
+				databaseName:    "",
+				method:          "ReleaseCollection",
+				collectionNames: []string{"temporary_collection"},
+			},
+			{
+				databaseName:            "live_sandbox",
+				destinationDatabaseName: defaultMilvusDatabase,
+				method:                  "RenameCollection",
+				collectionNames: []string{
+					"temporary_collection",
+					"temporary_collection_next",
+				},
+			},
+		},
+	)
+	joined := strings.Join(violations, "\n")
+	for _, expected := range []string{
+		"targeted database \"\"",
+		"destination database \"default\"",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("violations = %v, want %q", violations, expected)
+		}
 	}
 }

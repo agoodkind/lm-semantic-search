@@ -6,12 +6,14 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -89,7 +91,7 @@ type CallTimeouts struct {
 // CallObserver receives every unary Milvus method and its request before the
 // transport sends it. Callers install one on a construction context when they
 // need an isolated audit of a client's backend activity.
-type CallObserver func(method string, request proto.Message)
+type CallObserver func(method string, databaseName string, request proto.Message)
 
 // CallObserverContextKey installs a CallObserver on a Milvus construction
 // context. It exists for isolated transport audits such as the live harness.
@@ -118,7 +120,20 @@ func (handler callObserverStatsHandler) HandleRPC(ctx context.Context, rpcStats 
 		return
 	}
 	method, _ := ctx.Value(callObserverMethodContextKey{}).(string)
-	handler.observer(method, request)
+	handler.observer(method, transmittedDatabaseName(ctx, request), request)
+}
+
+func transmittedDatabaseName(ctx context.Context, request proto.Message) string {
+	if named, ok := request.(interface{ GetDbName() string }); ok {
+		if databaseName := named.GetDbName(); databaseName != "" {
+			return databaseName
+		}
+	}
+	outgoingMetadata, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		return ""
+	}
+	return strings.Join(outgoingMetadata.Get("dbname"), ",")
 }
 
 func (callObserverStatsHandler) TagConn(
