@@ -43,6 +43,7 @@ type mmapMigrationMode int
 const (
 	mmapExistingCollection mmapMigrationMode = iota
 	mmapCreatedCollection
+	mmapCreatedReuseCatalog
 )
 
 type mmapTargetKind int
@@ -288,11 +289,14 @@ func (service *Service) mmapInspectionComplete(
 	if len(inspection.missingTargets) != 0 || !inspection.denseIndexPresent {
 		return false
 	}
-	if mode != mmapCreatedCollection {
+	if mode == mmapExistingCollection {
 		return true
 	}
 	if !inspection.contentHashPresent {
 		return false
+	}
+	if mode == mmapCreatedReuseCatalog {
+		return true
 	}
 	return !service.cfg.HybridMode || inspection.sparseIndexPresent
 }
@@ -304,6 +308,7 @@ func mmapLoadStateStable(state entity.LoadStateCode) bool {
 func (service *Service) waitForCreatedMmapTargets(
 	ctx context.Context,
 	collectionName string,
+	mode mmapMigrationMode,
 ) (mmapInspection, error) {
 	pollCtx, cancel := context.WithTimeout(ctx, service.callTimeouts().Metadata)
 	defer cancel()
@@ -312,8 +317,9 @@ func (service *Service) waitForCreatedMmapTargets(
 		if err != nil {
 			return mmapInspection{}, err
 		}
+		sparseRequired := mode != mmapCreatedReuseCatalog && service.cfg.HybridMode
 		if inspection.denseIndexPresent && inspection.contentHashPresent &&
-			(!service.cfg.HybridMode || inspection.sparseIndexPresent) {
+			(!sparseRequired || inspection.sparseIndexPresent) {
 			return inspection, nil
 		}
 		select {
@@ -491,8 +497,8 @@ func (service *Service) migrateMmapUnderMaintenance(
 	var inspection mmapInspection
 	var err error
 
-	if mode == mmapCreatedCollection {
-		inspection, err = service.waitForCreatedMmapTargets(ctx, collectionName)
+	if mode == mmapCreatedCollection || mode == mmapCreatedReuseCatalog {
+		inspection, err = service.waitForCreatedMmapTargets(ctx, collectionName, mode)
 	} else {
 		inspection, err = service.inspectMmapPolicy(ctx, collectionName)
 	}

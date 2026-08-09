@@ -1172,3 +1172,150 @@ func TestResidencyRenameTransfersPinToNewCollectionName(t *testing.T) {
 		t.Fatalf("unloaded %q, want collection", collectionName)
 	}
 }
+
+func TestResidencyForgetPreservesActivePinEntry(t *testing.T) {
+	clock := newTestResidencyClock()
+	unloads := make(chan string, 1)
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(_ context.Context, collectionName string) error {
+			unloads <- collectionName
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	const collectionName = "collection_stg"
+	pin, err := controller.Pin(collectionName)
+	if err != nil {
+		t.Fatalf("Pin returned error: %v", err)
+	}
+	pinnedEntry := pin.entry
+	controller.Forget(collectionName)
+
+	controller.mutex.Lock()
+	mappedEntry := controller.entries[collectionName]
+	pinnedCount := pinnedEntry.pins
+	mappedPinCount := 0
+	if mappedEntry != nil {
+		mappedPinCount = mappedEntry.pins
+	}
+	controller.mutex.Unlock()
+	t.Logf(
+		"pin lifecycle collection=%q pin_entry=%p pin_count=%d mapped_entry=%p mapped_pin_count=%d",
+		collectionName,
+		pinnedEntry,
+		pinnedCount,
+		mappedEntry,
+		mappedPinCount,
+	)
+	if pinnedCount != 1 {
+		t.Fatalf("active pin count = %d, want 1 before handle release", pinnedCount)
+	}
+	if mappedEntry != pinnedEntry {
+		t.Fatalf(
+			"Forget replaced the active pin entry: pin_entry=%p mapped_entry=%p",
+			pinnedEntry,
+			mappedEntry,
+		)
+	}
+
+	lease, err := controller.Acquire(context.Background(), collectionName)
+	if err != nil {
+		t.Fatalf("Acquire after Forget returned error: %v", err)
+	}
+	lease.Release()
+	clock.Advance(2 * time.Minute)
+	select {
+	case unloadedCollection := <-unloads:
+		t.Fatalf("unloaded %q while the original pin remained active", unloadedCollection)
+	default:
+	}
+
+	pin.Release()
+	clock.Advance(time.Minute)
+	if unloadedCollection := <-unloads; unloadedCollection != collectionName {
+		t.Fatalf("unloaded %q, want %q", unloadedCollection, collectionName)
+	}
+}
+
+func TestResidencyForgetPreservesActiveLeaseAndObservationEntry(t *testing.T) {
+	clock := newTestResidencyClock()
+	var loadCalls atomic.Int32
+	unloads := make(chan string, 1)
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			loadCalls.Add(1)
+			return nil
+		},
+		unload: func(_ context.Context, collectionName string) error {
+			unloads <- collectionName
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	const collectionName = "collection"
+	lease, err := controller.Acquire(context.Background(), collectionName)
+	if err != nil {
+		t.Fatalf("Acquire returned error: %v", err)
+	}
+	_, observation, err := controller.Observe(context.Background(), collectionName)
+	if err != nil {
+		t.Fatalf("Observe returned error: %v", err)
+	}
+
+	controller.mutex.Lock()
+	protectedEntry := controller.entries[collectionName]
+	controller.mutex.Unlock()
+	controller.Forget(collectionName)
+
+	controller.mutex.Lock()
+	mappedEntry := controller.entries[collectionName]
+	leaseCount := protectedEntry.leases
+	observationCount := protectedEntry.observations
+	controller.mutex.Unlock()
+	if mappedEntry != protectedEntry {
+		t.Fatalf(
+			"Forget replaced an entry with active holders: protected_entry=%p mapped_entry=%p",
+			protectedEntry,
+			mappedEntry,
+		)
+	}
+	if leaseCount != 1 || observationCount != 1 {
+		t.Fatalf(
+			"holder counts after Forget = leases %d observations %d, want 1 and 1",
+			leaseCount,
+			observationCount,
+		)
+	}
+
+	observation.Release()
+	lease.Release()
+	reloadedLease, err := controller.Acquire(context.Background(), collectionName)
+	if err != nil {
+		t.Fatalf("Acquire after holder release returned error: %v", err)
+	}
+	reloadedLease.Release()
+	if got := loadCalls.Load(); got != 2 {
+		t.Fatalf("load calls after confirmed absence = %d, want 2", got)
+	}
+	clock.Advance(time.Minute)
+	if unloadedCollection := <-unloads; unloadedCollection != collectionName {
+		t.Fatalf("unloaded %q, want %q", unloadedCollection, collectionName)
+	}
+}

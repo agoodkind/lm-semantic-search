@@ -452,6 +452,13 @@ func (controller *collectionResidencyController) Forget(collectionName string) {
 		return
 	}
 	controller.cancelIdleTimerLocked(entry)
+	if entry.leases != 0 || entry.observations != 0 || entry.pins != 0 {
+		entry.state = collectionResidencyUnknown
+		entry.reconciliation = 0
+		controller.notifyLocked(entry)
+		controller.updateStateMetricsLocked()
+		return
+	}
 	controller.notifyLocked(entry)
 	delete(controller.entries, collectionName)
 	controller.updateStateMetricsLocked()

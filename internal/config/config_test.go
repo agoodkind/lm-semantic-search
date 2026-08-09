@@ -585,6 +585,28 @@ func TestDefaultLogRotationAndCleanupEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestDefaultResolvesMilvusDatabase(t *testing.T) {
+	t.Run("unset keeps production default", func(t *testing.T) {
+		t.Setenv("MILVUS_DATABASE", "")
+		cfg := defaultWithPersistedConfig(t, persistedConfig{})
+		if cfg.MilvusDatabase != "" {
+			t.Fatalf("MilvusDatabase = %q, want empty", cfg.MilvusDatabase)
+		}
+	})
+
+	t.Run("environment selects isolated database", func(t *testing.T) {
+		t.Setenv("MILVUS_DATABASE", "lms_live_child_config")
+		cfg := defaultWithPersistedConfig(t, persistedConfig{})
+		if cfg.MilvusDatabase != "lms_live_child_config" {
+			t.Fatalf(
+				"MilvusDatabase = %q, want %q",
+				cfg.MilvusDatabase,
+				"lms_live_child_config",
+			)
+		}
+	})
+}
+
 // TestDefaultResolvesMilvusMutationCallTimeout pins the operator's tuning path
 // for the Milvus mutation bound. That bound covers calls whose duration scales
 // with the number of rows they match, so an operator with a large collection

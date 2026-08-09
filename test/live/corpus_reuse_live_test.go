@@ -65,26 +65,11 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterConversationCollection for second corpus returned error: %v", err)
 	}
+	harness.trackCollectionFamily(secondCodebase.CollectionName)
 	secondHarness := *harness
 	secondHarness.collectionID = secondCollectionID
 	secondHarness.collectionName = secondCodebase.CollectionName
 	secondHarness.codebaseID = secondCodebase.ID
-	t.Cleanup(func() {
-		dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if dropErr := harness.milvus.DropCollection(
-			dropCtx,
-			milvusclient.NewDropCollectionOption(secondHarness.collectionName),
-		); dropErr != nil &&
-			!strings.Contains(dropErr.Error(), "not exist") &&
-			!strings.Contains(dropErr.Error(), "not found") {
-			t.Errorf(
-				"DropCollection(%s) returned error: %v",
-				secondHarness.collectionName,
-				dropErr,
-			)
-		}
-	})
 	sharedContent := "cross conversation reuse sentinel"
 	uniqueContent := "cross conversation unique control"
 
@@ -196,11 +181,8 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	if legacyBefore.contentHashKnown || legacyBefore.embeddingModelKnown {
 		t.Fatalf("legacy identity = hash:%t model:%t, want both absent", legacyBefore.contentHashKnown, legacyBefore.embeddingModelKnown)
 	}
-	searchConfig, err := config.Default()
-	if err != nil {
-		t.Fatalf("load search config: %v", err)
-	}
-	searchService, err := semantic.NewService(context.Background(), searchConfig)
+	searchConfig := harness.childConfig()
+	searchService, err := semantic.NewService(harness.milvusContext, searchConfig)
 	if err != nil {
 		t.Fatalf("open search service: %v", err)
 	}
@@ -231,11 +213,11 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterConversationCollection for second corpus returned error: %v", err)
 	}
+	harness.trackCollectionFamily(secondCodebase.CollectionName)
 	secondHarness := *harness
 	secondHarness.collectionID = secondCollectionID
 	secondHarness.collectionName = secondCodebase.CollectionName
 	secondHarness.codebaseID = secondCodebase.ID
-	t.Cleanup(func() { dropLiveCollection(t, harness, secondHarness.collectionName) })
 
 	secondDocuments := map[string][]*pb.ConversationDocument{
 		"legacy-second": {{
@@ -271,7 +253,7 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	if !inserted.contentHashKnown || inserted.contentHash != semantic.ContentVectorKey(legacyContent) {
 		t.Fatalf("new row content hash = %q known=%t", inserted.contentHash, inserted.contentHashKnown)
 	}
-	if !inserted.embeddingModelKnown || inserted.embeddingModel != "text-embedding-3-small" {
+	if !inserted.embeddingModelKnown || inserted.embeddingModel != harness.config.EmbeddingModel {
 		t.Fatalf("new row embedding model = %q known=%t", inserted.embeddingModel, inserted.embeddingModelKnown)
 	}
 	if inserted.vectorChecksum != legacyBefore.vectorChecksum {
@@ -302,12 +284,9 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 		t.Fatalf("repeat changed rows: before=%+v after=%+v", repeatBefore, repeatAfter)
 	}
 
-	cfg, err := config.Default()
-	if err != nil {
-		t.Fatalf("load isolated config: %v", err)
-	}
+	cfg := harness.childConfig()
 	cfg.EmbeddingModel = "known-unequal-model"
-	unequalService, err := semantic.NewService(context.Background(), cfg)
+	unequalService, err := semantic.NewService(harness.milvusContext, cfg)
 	if err != nil {
 		t.Fatalf("open unequal-model service: %v", err)
 	}
@@ -358,11 +337,8 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 	)
 	requireCompleted(t, seed, "model A catalog seed")
 
-	cfgA, err := config.Default()
-	if err != nil {
-		t.Fatalf("load model A config: %v", err)
-	}
-	serviceA, err := semantic.NewService(context.Background(), cfgA)
+	cfgA := harness.childConfig()
+	serviceA, err := semantic.NewService(harness.milvusContext, cfgA)
 	if err != nil {
 		t.Fatalf("open model A service: %v", err)
 	}
@@ -370,12 +346,14 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 
 	cfgB := cfgA
 	cfgB.EmbeddingModel = "known-model-b"
-	serviceB, err := semantic.NewService(context.Background(), cfgB)
+	serviceB, err := semantic.NewService(harness.milvusContext, cfgB)
 	if err != nil {
 		t.Fatalf("open model B service: %v", err)
 	}
 	t.Cleanup(func() { _ = serviceB.Close(context.Background()) })
 	modelBPath := filepath.Join(harness.stateRoot, "model-b-"+randomID())
+	modelBCollection := serviceB.CollectionName(modelBPath)
+	harness.trackCollectionFamily(modelBCollection)
 	if err := serviceB.StageReindex(
 		context.Background(),
 		modelBPath,
@@ -390,12 +368,10 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 	if err := serviceB.PromoteStaging(context.Background(), modelBPath); err != nil {
 		t.Fatalf("promote model B row: %v", err)
 	}
-	modelBCollection := serviceB.CollectionName(modelBPath)
-	t.Cleanup(func() { dropLiveCollection(t, harness, modelBCollection) })
 	insertEmptyModelCatalogRow(t, harness, emptyModelContent)
 
 	models := reuseCatalogModels(t, harness, content)
-	wantModels := []string{"known-model-b", "text-embedding-3-small"}
+	wantModels := []string{"known-model-b", harness.config.EmbeddingModel}
 	if !slices.Equal(models, wantModels) {
 		t.Fatalf("catalog models = %v, want %v", models, wantModels)
 	}
@@ -418,7 +394,7 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 
 	cfgC := cfgA
 	cfgC.EmbeddingModel = "known-model-c"
-	serviceC, err := semantic.NewService(context.Background(), cfgC)
+	serviceC, err := semantic.NewService(harness.milvusContext, cfgC)
 	if err != nil {
 		t.Fatalf("open model C service: %v", err)
 	}
@@ -465,12 +441,9 @@ func TestCompleteCatalogHitSkipsCollectionFallback(t *testing.T) {
 	)
 	requireCompleted(t, seed, "complete catalog hit seed")
 
-	cfg, err := config.Default()
-	if err != nil {
-		t.Fatalf("load complete catalog hit config: %v", err)
-	}
+	cfg := harness.childConfig()
 	cfg.RegistryPath = filepath.Join(t.TempDir(), "missing-registry.json")
-	service, err := semantic.NewService(context.Background(), cfg)
+	service, err := semantic.NewService(harness.milvusContext, cfg)
 	if err != nil {
 		t.Fatalf("open complete catalog hit service: %v", err)
 	}
@@ -499,21 +472,18 @@ func TestUnknownConfiguredDimensionScopesCatalogByReturnedVectorWidth(t *testing
 	initialServer := newFakeEmbeddingServerWithDimension(t, nil, initialDimension)
 	targetServer := newFakeEmbeddingServerWithDimension(t, nil, targetDimension)
 
-	initialConfig, err := config.Default()
-	if err != nil {
-		t.Fatalf("load initial dimension config: %v", err)
-	}
+	initialConfig := harness.childConfig()
 	initialConfig.OpenAIBaseURL = initialServer.URL
 	initialConfig.EmbeddingDimension = 0
 	targetConfig := initialConfig
 	targetConfig.OpenAIBaseURL = targetServer.URL
 
-	initialService, err := semantic.NewService(context.Background(), initialConfig)
+	initialService, err := semantic.NewService(harness.milvusContext, initialConfig)
 	if err != nil {
 		t.Fatalf("open initial dimension service: %v", err)
 	}
 	t.Cleanup(func() { _ = initialService.Close(context.Background()) })
-	targetService, err := semantic.NewService(context.Background(), targetConfig)
+	targetService, err := semantic.NewService(harness.milvusContext, targetConfig)
 	if err != nil {
 		t.Fatalf("open target dimension service: %v", err)
 	}
@@ -534,12 +504,11 @@ func TestUnknownConfiguredDimensionScopesCatalogByReturnedVectorWidth(t *testing
 		configuredCatalogName,
 		initialCatalogName,
 		targetCatalogName,
-		initialService.CollectionName(initialPath),
-		targetService.CollectionName(targetPath),
 	} {
-		name := collectionName
-		t.Cleanup(func() { dropLiveCollection(t, harness, name) })
+		harness.trackTemporaryCollection(collectionName)
 	}
+	harness.trackCollectionFamily(initialService.CollectionName(initialPath))
+	harness.trackCollectionFamily(targetService.CollectionName(targetPath))
 
 	if err := initialService.StageReindex(
 		context.Background(),
@@ -989,10 +958,7 @@ func TestCorpusReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 	}
 
 	harness := newHarness(t)
-	lookupConfig, err := config.Default()
-	if err != nil {
-		t.Fatalf("load isolated lookup config: %v", err)
-	}
+	lookupConfig := harness.childConfig()
 	const sampleCount = 20
 	contents := make([]string, 0, sampleCount)
 	documents := make([]*pb.ConversationDocument, 0, sampleCount)
@@ -1014,7 +980,7 @@ func TestCorpusReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 	)
 	requireCompleted(t, completed, "reuse performance seed")
 
-	service, err := semantic.NewService(context.Background(), lookupConfig)
+	service, err := semantic.NewService(harness.milvusContext, lookupConfig)
 	if err != nil {
 		t.Fatalf("open semantic service for lookup measurement: %v", err)
 	}
