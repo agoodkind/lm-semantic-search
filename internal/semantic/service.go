@@ -108,6 +108,7 @@ type Service struct {
 	// collectionLoads collapses concurrent initial load, wait, and recovery work
 	// for the same collection name into one shared flight.
 	collectionLoads collectionLoadCoordinator
+	residency       *collectionResidencyController
 	// ensuredConvColumns maps a conversation collection name to its
 	// *conversationScalarMigration, gating the one-time scalar-column migration to
 	// once per collection per process. See ensureConversationScalarColumnsOnce.
@@ -131,7 +132,7 @@ type Service struct {
 // NewService constructs the semantic search runtime.
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
-		return &Service{
+		service := &Service{
 			cfg:                     cfg,
 			embedder:                nil,
 			milvus:                  nil,
@@ -147,12 +148,15 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 				mutex:   sync.Mutex{},
 				flights: nil,
 			},
+			residency:                   nil,
 			ensuredConvColumns:          sync.Map{},
 			ensuredSplitPartColumns:     sync.Map{},
 			ensuredReuseIdentityColumns: sync.Map{},
 			ensuredMmapEnabled:          sync.Map{},
 			ensuredBackfill:             sync.Map{},
-		}, nil
+		}
+		service.initializeResidencyController()
+		return service, nil
 	}
 
 	embedder, err := embedding.NewProvider(ctx, cfg)
@@ -177,12 +181,14 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			mutex:   sync.Mutex{},
 			flights: nil,
 		},
+		residency:                   nil,
 		ensuredConvColumns:          sync.Map{},
 		ensuredSplitPartColumns:     sync.Map{},
 		ensuredReuseIdentityColumns: sync.Map{},
 		ensuredMmapEnabled:          sync.Map{},
 		ensuredBackfill:             sync.Map{},
 	}
+	service.initializeResidencyController()
 
 	client, err := service.dialMilvus(ctx)
 	if err != nil {
@@ -211,7 +217,15 @@ func (service *Service) Close(ctx context.Context) error {
 			case <-service.reconnectDone:
 			case <-ctx.Done():
 				closeErr = fmt.Errorf("wait for Milvus reconnect shutdown: %w", ctx.Err())
-				return
+			}
+		}
+		if service.residency != nil {
+			if err := service.residency.Close(ctx); err != nil {
+				slog.ErrorContext(ctx, "close collection residency controller failed", "err", err)
+				closeErr = errors.Join(
+					closeErr,
+					fmt.Errorf("close collection residency controller: %w", err),
+				)
 			}
 		}
 		if !service.Available() || service.milvus == nil {
@@ -219,7 +233,7 @@ func (service *Service) Close(ctx context.Context) error {
 		}
 		if err := service.milvus.Close(ctx); err != nil {
 			slog.ErrorContext(ctx, "close Milvus client failed", "err", err)
-			closeErr = fmt.Errorf("close Milvus client: %w", err)
+			closeErr = errors.Join(closeErr, fmt.Errorf("close Milvus client: %w", err))
 			return
 		}
 		service.available.Store(false)
