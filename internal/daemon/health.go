@@ -8,6 +8,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/status"
 )
 
@@ -434,19 +435,31 @@ func (manager *Manager) dependencyHealthLocked() dependencyHealth {
 // per-path not-ready collection can never raise the global store banner. The
 // global banner is owned by refreshDependencyHealth and ProbeHealth alone, which
 // the caller consults separately for shared-dependency health.
-func (manager *Manager) pathCollectionReadiness(ctx context.Context, canonicalPath string, searchableEligible bool) status.CollectionReadiness {
+func (manager *Manager) pathCollectionObservation(
+	ctx context.Context,
+	canonicalPath string,
+	searchableEligible bool,
+) (status.CollectionReadiness, *int32) {
 	if !searchableEligible || manager.semantic == nil || canonicalPath == "" {
-		return status.CollectionNotApplicable
+		return status.CollectionNotApplicable, nil
 	}
-	exists, loaded, err := manager.semantic.CollectionState(ctx, canonicalPath)
+	observation, err := manager.semantic.ObserveCollection(ctx, canonicalPath)
 	switch {
 	case err != nil:
-		return status.CollectionUnknown
-	case !exists:
-		return status.CollectionAbsent
-	case !loaded:
-		return status.CollectionLoading
+		return status.CollectionUnknown, nil
+	case observation.State == semantic.CollectionStateAbsent:
+		return status.CollectionAbsent, nil
+	case observation.State == semantic.CollectionStateIdle:
+		return status.CollectionIdle, nil
+	case observation.State == semantic.CollectionStateLoading:
+		return status.CollectionLoading, nil
+	case observation.State == semantic.CollectionStateReady:
+		if observation.RowsKnown {
+			rows := observation.Rows
+			return status.CollectionReady, &rows
+		}
+		return status.CollectionReady, nil
 	default:
-		return status.CollectionReady
+		return status.CollectionUnknown, nil
 	}
 }

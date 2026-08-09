@@ -11,10 +11,29 @@ import (
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 )
 
+// CollectionState is the observed residency of one semantic collection.
+type CollectionState string
+
+// Collection residency states.
+const (
+	CollectionStateAbsent  CollectionState = "absent"
+	CollectionStateIdle    CollectionState = "idle"
+	CollectionStateLoading CollectionState = "loading"
+	CollectionStateReady   CollectionState = "ready"
+	CollectionStateUnknown CollectionState = "unknown"
+)
+
+// CollectionObservation carries one readiness and row-count observation.
+type CollectionObservation struct {
+	State     CollectionState
+	Rows      int32
+	RowsKnown bool
+}
+
 // ProbeHealth verifies the vector store is reachable right now. It is the global
 // shared-dependency probe for surfaces that have no single codebase path (the
 // status banner, list views). It checks store reachability only: per-path
-// searchability is decided by CollectionState against the specific
+// searchability is decided by ObserveCollection against the specific
 // collection's load state, and embedder health is observed from real embed
 // outcomes on the search and index paths rather than a synthetic probe. That
 // keeps a slow real embed (seconds) from blocking a status read and stops a
@@ -64,4 +83,87 @@ func (service *Service) CollectionState(ctx context.Context, codebasePath string
 		return true, false, adapterr.NewMilvusUnavailable(fmt.Errorf("load state %s: %w", collectionName, err))
 	}
 	return true, loadState.State == entity.LoadStateLoaded, nil
+}
+
+// ObserveCollection reads readiness first and counts rows only while one
+// controller observation protects a ready collection.
+func (service *Service) ObserveCollection(
+	ctx context.Context,
+	codebasePath string,
+) (CollectionObservation, error) {
+	unknown := CollectionObservation{
+		State:     CollectionStateUnknown,
+		Rows:      0,
+		RowsKnown: false,
+	}
+	if service == nil || !service.Available() || service.milvus == nil {
+		return unknown, nil
+	}
+	collectionName := service.CollectionName(codebasePath)
+	controllerState, observation, err := service.residency.Observe(ctx, collectionName)
+	if err != nil {
+		return unknown, err
+	}
+	defer observation.ReleaseContext(ctx)
+
+	has, err := service.hasCollection(ctx, collectionName, "check collection "+collectionName)
+	if err != nil {
+		return unknown, adapterr.NewMilvusUnavailable(err)
+	}
+	if !has {
+		return CollectionObservation{
+			State:     CollectionStateAbsent,
+			Rows:      0,
+			RowsKnown: false,
+		}, nil
+	}
+	loadState, err := service.milvus.GetLoadState(
+		ctx,
+		milvusclient.NewGetLoadStateOption(collectionName),
+	)
+	if err != nil {
+		return unknown, adapterr.NewMilvusUnavailable(
+			fmt.Errorf("load state %s: %w", collectionName, err),
+		)
+	}
+	observedState := resolveObservedCollectionState(controllerState, loadState.State)
+	switch observedState {
+	case CollectionStateIdle:
+		return CollectionObservation{State: CollectionStateIdle, Rows: 0, RowsKnown: false}, nil
+	case CollectionStateLoading:
+		return CollectionObservation{State: CollectionStateLoading, Rows: 0, RowsKnown: false}, nil
+	case CollectionStateReady:
+		rows, countErr := service.collectionRowCount(ctx, collectionName)
+		if countErr != nil {
+			return CollectionObservation{State: CollectionStateReady, Rows: 0, RowsKnown: false}, nil
+		}
+		return CollectionObservation{
+			State:     CollectionStateReady,
+			Rows:      rows,
+			RowsKnown: true,
+		}, nil
+	case CollectionStateAbsent, CollectionStateUnknown:
+		return unknown, nil
+	}
+	return unknown, nil
+}
+
+func resolveObservedCollectionState(
+	controllerState collectionResidencyState,
+	milvusState entity.LoadStateCode,
+) CollectionState {
+	if controllerState == collectionResidencyLoading {
+		return CollectionStateLoading
+	}
+	switch milvusState {
+	case entity.LoadStateNotLoad:
+		return CollectionStateIdle
+	case entity.LoadStateLoading:
+		return CollectionStateLoading
+	case entity.LoadStateLoaded:
+		return CollectionStateReady
+	case entity.LoadStateUnloading:
+		return CollectionStateUnknown
+	}
+	return CollectionStateUnknown
 }

@@ -507,6 +507,7 @@ func TestResolveGetIndexViewPopulatesGraphFields(t *testing.T) {
 				collectionNotApplicable,
 				nil,
 				nil,
+				nil,
 			)
 			if testCase.wantBuilding {
 				manager.graphMutex.Lock()

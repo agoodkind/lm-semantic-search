@@ -555,10 +555,23 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 		TimestampUnix:        1712345678,
 	}}
 	searchCalls := 0
+	leaseCount := 0
+	activeLeases := 0
 	manager.semantic = &fakeSemantic{
+		acquireCollection: func(_ context.Context, collectionName string) (semantic.CollectionLease, error) {
+			leaseCount++
+			if collectionName != codebase.CollectionName {
+				t.Fatalf("lease collectionName = %q, want %q", collectionName, codebase.CollectionName)
+			}
+			activeLeases++
+			return &fakeCollectionLease{release: func() { activeLeases-- }}, nil
+		},
 		conversationSearch: func(ctx context.Context, collectionName string, query string, limit int32) ([]model.StoredChunk, error) {
 			_ = ctx
 			searchCalls++
+			if activeLeases != 1 {
+				t.Fatalf("active leases during search = %d, want 1", activeLeases)
+			}
 			if collectionName != codebase.CollectionName {
 				t.Fatalf("collectionName = %q, want %q", collectionName, codebase.CollectionName)
 			}
@@ -593,6 +606,9 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 	}
 	if chunks[0].TimestampUnix != expectedChunks[0].TimestampUnix {
 		t.Fatalf("TimestampUnix = %d, want %d", chunks[0].TimestampUnix, expectedChunks[0].TimestampUnix)
+	}
+	if activeLeases != 0 {
+		t.Fatalf("active leases after manager search = %d, want 0", activeLeases)
 	}
 
 	server := NewGRPCServer(manager, nil)
@@ -632,6 +648,9 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 	if !strings.Contains(response.GetDisplayText(), "Found 1 conversation results") {
 		t.Fatalf("SearchConversations RPC DisplayText = %q, want result summary", response.GetDisplayText())
 	}
+	if activeLeases != 0 {
+		t.Fatalf("active leases after RPC search = %d, want 0", activeLeases)
+	}
 
 	callsBeforeUnregistered := searchCalls
 	unregisteredChunks, err := manager.SearchConversations(context.Background(), "missing-thread", "needle", 5, conversationSearchFilter{Roles: nil, FromUnix: 0, UntilUnix: 0, ConversationIDs: nil, ParentConversationID: "", MinScore: 0, MessageIndexFrom: 0, MessageIndexUntil: 0}, 0)
@@ -658,6 +677,9 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 	}
 	if searchCalls != callsBeforeUnregistered {
 		t.Fatalf("SearchConversations RPC called semantic backend for unregistered collection")
+	}
+	if leaseCount != 2 {
+		t.Fatalf("unregistered searches changed lease count to %d, want 2", leaseCount)
 	}
 }
 

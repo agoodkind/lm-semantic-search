@@ -3,9 +3,11 @@ package adapterr
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/gklog/correlation"
 	"google.golang.org/grpc/codes"
@@ -93,6 +95,51 @@ func TestRespondUnknownWithoutCorrelation(t *testing.T) {
 	_, msg := Respond(context.Background(), errors.New("boom"))
 	if msg != "internal error" {
 		t.Fatalf("message = %q, want \"internal error\"", msg)
+	}
+}
+
+func TestRespondPreservesCallerCancellationAndDeadline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{name: "canceled", err: context.Canceled, want: codes.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded, want: codes.DeadlineExceeded},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancelCause(context.Background())
+			cancel(test.err)
+			if errors.Is(test.err, context.DeadlineExceeded) {
+				deadlineCtx, deadlineCancel := context.WithDeadline(
+					context.Background(),
+					time.Now().Add(-time.Second),
+				)
+				defer deadlineCancel()
+				ctx = deadlineCtx
+			}
+			code, _ := Respond(ctx, fmt.Errorf("acquire collection: %w", test.err))
+			if code != test.want {
+				t.Fatalf("Respond code = %v, want %v", code, test.want)
+			}
+		})
+	}
+}
+
+func TestRespondHonorsClassifiedOutageWithNestedDeadline(t *testing.T) {
+	t.Parallel()
+
+	err := NewMilvusUnavailable(fmt.Errorf("Milvus metadata call: %w", context.DeadlineExceeded))
+	code, message := Respond(context.Background(), err)
+	if code != codes.Unavailable {
+		t.Fatalf("Respond code = %v, want %v", code, codes.Unavailable)
+	}
+	if !strings.Contains(message, "vector store is unavailable") {
+		t.Fatalf("Respond message = %q, want classified outage", message)
 	}
 }
 

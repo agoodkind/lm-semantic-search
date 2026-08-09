@@ -19,12 +19,32 @@ func Respond(ctx context.Context, err error) (codes.Code, string) {
 	if err == nil {
 		return codes.OK, ""
 	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return respondContextError(ctx, codes.Canceled, context.Canceled, err)
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return respondContextError(ctx, codes.DeadlineExceeded, context.DeadlineExceeded, err)
+	}
 	adapterErr := classify(err)
 	logRespond(ctx, adapterErr)
 	if adapterErr.SafeForClient {
 		return CodeFor(adapterErr.Class), formatKnown(adapterErr, ctx)
 	}
 	return CodeFor(adapterErr.Class), formatUnknown(ctx)
+}
+
+func respondContextError(
+	ctx context.Context,
+	code codes.Code,
+	publicError error,
+	cause error,
+) (codes.Code, string) {
+	slog.WarnContext(ctx, "adapter.context_error.responded", "code", code.String(), "cause", cause)
+	message := publicError.Error()
+	if refs := formatDiagRefs(ctx); refs != "" {
+		message = refs + "\n" + message
+	}
+	return code, message
 }
 
 // RespondMCP classifies err, logs it on the daemon side with the

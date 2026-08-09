@@ -2601,11 +2601,11 @@ type GetIndexResponse struct {
 	DisplayText      string                 `protobuf:"bytes,4,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
 	Classification   *PathClassification    `protobuf:"bytes,5,opt,name=classification,proto3" json:"classification,omitempty"`
 	DependencyHealth *DependencyHealth      `protobuf:"bytes,6,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
-	// Searchable is true only when the path is indexed AND the search backend
-	// (store and embedder) answered a liveness probe at status time. It is the
-	// single signal a caller should use to decide whether search_code can serve
-	// this path right now; classification.kind alone reflects only the on-disk
-	// index and stays KIND_IN_SCOPE_INDEXED even when the backend is unreachable.
+	// Searchable is true when the path is indexed and search_code may accept a
+	// request. An idle collection is searchable because the request starts its
+	// load. A loading collection is searchable because the request joins that
+	// load. Classification.kind alone reflects only the on-disk index and stays
+	// KIND_IN_SCOPE_INDEXED when the collection state is unknown.
 	//
 	// This field is proto3 optional so an explicit false survives JSON encoding.
 	// A plain proto3 bool is omitted from JSON at its zero value, which made a
@@ -2613,12 +2613,11 @@ type GetIndexResponse struct {
 	// must check field presence, not just truthiness, because the wire carries
 	// three states:
 	//
-	//	Present and true: the path is indexed and the backend answered live.
-	//	search_code can serve it now.
+	//	Present and true: the path is indexed, and its collection is idle,
+	//	loading, or ready. search_code may serve it after any required load.
 	//
-	//	Present and false: the backend answered. The path is not searchable
-	//	right now, either because it is not indexed or because the probe found
-	//	it unready.
+	//	Present and false: the path is not indexed, the collection is absent, the
+	//	collection state is unknown, or the shared backend is unavailable.
 	//
 	//	Absent, no "searchable" key on the wire: the daemon has no answer. This
 	//	is not a false. The probe did not complete, for example because the
@@ -2628,11 +2627,10 @@ type GetIndexResponse struct {
 	// have gated. Check presence first, and only trust the value when the key
 	// is present.
 	Searchable *bool `protobuf:"varint,7,opt,name=searchable,proto3,oneof" json:"searchable,omitempty"`
-	// CollectionReadiness is the per-path readiness of this codebase's own Milvus
+	// CollectionReadiness is the per-path state of this codebase's own Milvus
 	// collection, distinct from dependency_health (a global fact). One of "",
-	// "absent", "building", "loading", "ready", or "unknown". A not-ready
-	// collection here means this codebase is still indexing or its collection is
-	// loading; it is never a global store outage, which dependency_health reports.
+	// "absent", "idle", "building", "loading", "ready", or "unknown". Status
+	// observations never load an idle collection. Search loads it on demand.
 	CollectionReadiness string `protobuf:"bytes,8,opt,name=collection_readiness,json=collectionReadiness,proto3" json:"collection_readiness,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache

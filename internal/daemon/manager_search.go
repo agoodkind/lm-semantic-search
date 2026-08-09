@@ -55,6 +55,17 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		slog.ErrorContext(ctx, "semantic search unavailable", "codebase_path", codebase.CanonicalPath, "err", storeErr)
 		return SearchOutcome{}, storeErr
 	}
+	collectionName := manager.semantic.CollectionName(codebase.CanonicalPath)
+	lease, leaseErr := manager.semantic.AcquireCollection(ctx, collectionName)
+	if leaseErr != nil {
+		manager.noteDependencyFailure(leaseErr)
+		return SearchOutcome{}, fmt.Errorf(
+			"acquire search collection %s: %w",
+			collectionName,
+			leaseErr,
+		)
+	}
+	defer lease.Release()
 
 	chunks, semanticErr := manager.semantic.Search(ctx, codebase.CanonicalPath, query, limit, normalizedExtensions, relativePathPrefix)
 	switch {

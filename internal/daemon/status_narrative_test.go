@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/status"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
 
@@ -13,7 +14,7 @@ func narrativeText(narrative view.StatusNarrative) string {
 
 func TestResolveStatusNarrativeMissing(t *testing.T) {
 	t.Parallel()
-	out := narrativeText(resolveStatusNarrative(displayMissing, "/repo", view.FailureSurface{}, view.QuarantineSurface{}, view.StatusView{}))
+	out := narrativeText(resolveStatusNarrative(displayMissing, "/repo", status.CollectionNotApplicable, view.FailureSurface{}, view.QuarantineSurface{}, view.StatusView{}))
 	for _, want := range []string{"source directory is missing", "Re-create the directory to resume indexing"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing narrative lacks %q in:\n%s", want, out)
@@ -24,7 +25,7 @@ func TestResolveStatusNarrativeMissing(t *testing.T) {
 func TestResolveStatusNarrativeFailedIncludesCorrelationIds(t *testing.T) {
 	t.Parallel()
 	failure := view.FailureSurface{HasFailure: true, Message: "boom", JobID: "job-xyz", TraceID: "trace-abc"}
-	out := narrativeText(resolveStatusNarrative(displayFailed, "/repo", failure, view.QuarantineSurface{}, view.StatusView{}))
+	out := narrativeText(resolveStatusNarrative(displayFailed, "/repo", status.CollectionNotApplicable, failure, view.QuarantineSurface{}, view.StatusView{}))
 	for _, want := range []string{"could not be indexed", "🚧 boom", "Failed job job-xyz", "trace_id=trace-abc"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("failed narrative lacks %q in:\n%s", want, out)
@@ -34,7 +35,7 @@ func TestResolveStatusNarrativeFailedIncludesCorrelationIds(t *testing.T) {
 
 func TestResolveStatusNarrativeFailedFallsBackWithoutDetail(t *testing.T) {
 	t.Parallel()
-	out := narrativeText(resolveStatusNarrative(displayFailed, "/repo", view.FailureSurface{}, view.QuarantineSurface{}, view.StatusView{}))
+	out := narrativeText(resolveStatusNarrative(displayFailed, "/repo", status.CollectionNotApplicable, view.FailureSurface{}, view.QuarantineSurface{}, view.StatusView{}))
 	if !strings.Contains(out, "could not be indexed. Re-run index_codebase to retry.") {
 		t.Fatalf("failed narrative without detail lacks retry prompt in:\n%s", out)
 	}
@@ -49,7 +50,7 @@ func TestResolveStatusNarrativeStaleIncludesRepairDetail(t *testing.T) {
 		JobID:         "job-xyz",
 		TraceID:       "trace-abc",
 	}
-	out := narrativeText(resolveStatusNarrative(displayStale, "/repo", failure, view.QuarantineSurface{}, view.StatusView{}))
+	out := narrativeText(resolveStatusNarrative(displayStale, "/repo", status.CollectionNotApplicable, failure, view.QuarantineSurface{}, view.StatusView{}))
 	for _, want := range []string{"is stale since 4:52 PM PDT", "Repair detail: Milvus collection missing", "automatic rebuild could not start", "trace_id=trace-abc"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stale narrative lacks %q in:\n%s", want, out)
@@ -70,7 +71,7 @@ func TestResolveStatusNarrativeQuarantinedFormatsCounts(t *testing.T) {
 		Trigger:            quarantineTriggerWatcher,
 	}
 	statusView := view.StatusView{HasStats: true, Files: 58, Chunks: 600}
-	out := narrativeText(resolveStatusNarrative(displayQuarantined, "/repo", view.FailureSurface{}, quarantine, statusView))
+	out := narrativeText(resolveStatusNarrative(displayQuarantined, "/repo", status.CollectionNotApplicable, view.FailureSurface{}, quarantine, statusView))
 	for _, want := range []string{
 		"is quarantined after a suspicious large disappearance",
 		"Search continues to serve the last known-good index",
@@ -85,7 +86,7 @@ func TestResolveStatusNarrativeQuarantinedFormatsCounts(t *testing.T) {
 
 func TestResolveStatusNarrativeTemplateStateIsEmpty(t *testing.T) {
 	t.Parallel()
-	narrative := resolveStatusNarrative(displayIndexed, "/repo", view.FailureSurface{}, view.QuarantineSurface{}, view.StatusView{})
+	narrative := resolveStatusNarrative(displayIndexed, "/repo", status.CollectionNotApplicable, view.FailureSurface{}, view.QuarantineSurface{}, view.StatusView{})
 	if len(narrative.Lines) != 0 {
 		t.Fatalf("template-state narrative should be empty, got: %#v", narrative.Lines)
 	}

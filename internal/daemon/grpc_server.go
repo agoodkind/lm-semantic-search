@@ -435,29 +435,25 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}
-	if found {
-		server.manager.fillLiveChunkTotal(ctx, codebase, activeJob)
-	}
 	var indexedDescendants []model.Codebase
 	if !found {
 		indexedDescendants = server.manager.IndexedDescendants(requestedPath)
 	}
-	// The global dependency health (store reachability, embedder) owns the banner.
-	// The per-path collection readiness is computed separately and is never folded
-	// into the global mode, so a single not-ready collection reads as loading or
-	// pending, not as a store outage. Searchable and display both flow through the
-	// status resolver with these two inputs kept distinct. Non-indexed paths get a
-	// not-applicable readiness and reflect only the global mode.
+	// Global dependency health owns the banner. Per-path readiness remains
+	// separate, so one idle or loading collection never raises a store outage.
 	searchableEligible := classification != nil && classification.Kind == model.PathClassificationInScopeIndexed
 	server.manager.refreshDependencyHealth(ctx)
 	health := server.manager.DependencyHealth()
-	readiness := server.manager.pathCollectionReadiness(ctx, codebase.CanonicalPath, searchableEligible)
-	getIndexView := server.manager.resolveGetIndexView(ctx, requestedPath, found, codebasePointer(found, codebase), activeJob, health, readiness, classification, indexedDescendants)
-	// The daemon always answers Searchable on this path: computeSearchable folds
-	// eligibility, dependency health, and collection readiness into a definite
-	// true or false, never a missing verdict. Taking the address of that answer
-	// carries it as an explicitly present optional field, so a false verdict is
-	// never confused on the wire with a probe the daemon never ran.
+	readiness, observedRows := server.manager.pathCollectionObservation(
+		ctx,
+		codebase.CanonicalPath,
+		searchableEligible,
+	)
+	if activeJob != nil && observedRows != nil {
+		activeJob.Progress.ChunksTotal = *observedRows
+	}
+	getIndexView := server.manager.resolveGetIndexView(ctx, requestedPath, found, codebasePointer(found, codebase), activeJob, health, readiness, observedRows, classification, indexedDescendants)
+	// The daemon always answers Searchable with a definite true or false.
 	//
 	// The local variable exists so the address is taken from a plain bool. A
 	// new(expr) form compiles under this module's go directive, but it reads as

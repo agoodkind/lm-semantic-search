@@ -56,9 +56,11 @@ type fakeSemantic struct {
 	listCollections       func(context.Context) ([]string, error)
 	hasCollectionForPath  func(context.Context, string) (bool, error)
 	collectionState       func(context.Context, string) (bool, bool, error)
+	observeCollection     func(context.Context, string) (semantic.CollectionObservation, error)
 	hasStaging            func(context.Context, string) (bool, error)
 	search                func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
 	conversationSearch    func(context.Context, string, string, int32) ([]model.StoredChunk, error)
+	acquireCollection     func(context.Context, string) (semantic.CollectionLease, error)
 	count                 func(context.Context, string) (int32, error)
 	// loadReuse, when set, supplies the reuse map a merge-down build receives and
 	// records which collections were asked for. dropped records every Drop call
@@ -162,6 +164,26 @@ func (f *fakeSemantic) Search(ctx context.Context, codebasePath string, query st
 	return nil, nil
 }
 
+func (f *fakeSemantic) AcquireCollection(
+	ctx context.Context,
+	collectionName string,
+) (semantic.CollectionLease, error) {
+	if f.acquireCollection != nil {
+		return f.acquireCollection(ctx, collectionName)
+	}
+	return fakeCollectionLease{}, nil
+}
+
+type fakeCollectionLease struct {
+	release func()
+}
+
+func (lease fakeCollectionLease) Release() {
+	if lease.release != nil {
+		lease.release()
+	}
+}
+
 func (f *fakeSemantic) SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, _ int32, _ float64, filter semantic.ConversationFilter) ([]model.StoredChunk, error) {
 	f.mu.Lock()
 	f.conversationSearchScopes = append(f.conversationSearchScopes, append([]string(nil), filter.ConversationIDs...))
@@ -217,6 +239,34 @@ func (f *fakeSemantic) CollectionState(ctx context.Context, codebasePath string)
 		return f.collectionState(ctx, codebasePath)
 	}
 	return true, true, nil
+}
+
+func (f *fakeSemantic) ObserveCollection(
+	ctx context.Context,
+	codebasePath string,
+) (semantic.CollectionObservation, error) {
+	if f.observeCollection != nil {
+		return f.observeCollection(ctx, codebasePath)
+	}
+	exists, loaded, err := f.CollectionState(ctx, codebasePath)
+	if err != nil {
+		return semantic.CollectionObservation{}, err
+	}
+	state := semantic.CollectionStateReady
+	if !exists {
+		state = semantic.CollectionStateAbsent
+	} else if !loaded {
+		state = semantic.CollectionStateLoading
+	}
+	observation := semantic.CollectionObservation{State: state}
+	if state == semantic.CollectionStateReady {
+		rows, countErr := f.Count(ctx, codebasePath)
+		if countErr == nil {
+			observation.Rows = rows
+			observation.RowsKnown = true
+		}
+	}
+	return observation, nil
 }
 
 func (f *fakeSemantic) LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error) {

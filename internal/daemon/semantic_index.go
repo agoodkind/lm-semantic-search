@@ -11,15 +11,24 @@ import (
 // surface the manager queries.
 type semanticReader interface {
 	Available() bool
+	semanticResidencyReader
 	CollectionName(codebasePath string) string
 	ConversationCollectionName(collectionID string) string
 	Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error)
 	SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, perConversationLimit int32, minScore float64, filter semantic.ConversationFilter) ([]model.StoredChunk, error)
 	Count(ctx context.Context, codebasePath string) (int32, error)
-	ListCollections(ctx context.Context) ([]string, error)
-	InspectCollection(ctx context.Context, collectionName string) (semantic.CollectionFacts, error)
+	semanticCollectionInspector
 	HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error)
 	HasStaging(ctx context.Context, codebasePath string) (bool, error)
+}
+
+type semanticResidencyReader interface {
+	AcquireCollection(ctx context.Context, collectionName string) (semantic.CollectionLease, error)
+}
+
+type semanticCollectionInspector interface {
+	ListCollections(ctx context.Context) ([]string, error)
+	InspectCollection(ctx context.Context, collectionName string) (semantic.CollectionFacts, error)
 }
 
 // semanticHealthReader probes whether search can serve a query, both globally
@@ -29,12 +38,11 @@ type semanticHealthReader interface {
 	// adapterr-classified error when it is not. It is the global shared-dependency
 	// probe for surfaces without a single path.
 	ProbeHealth(ctx context.Context) error
-	// CollectionState reports the per-path collection facts the daemon maps to a
-	// status.CollectionReadiness: whether the collection exists and whether it is
-	// loaded into query nodes now. A store that cannot answer returns a classified
-	// error; the daemon treats that as unknown readiness without raising the global
-	// banner (the global ProbeHealth covers a real outage). It returns
-	// (false, false, nil) when semantic is not configured.
+	// ObserveCollection returns readiness and, only when ready, the row count
+	// from one protected observation. It never starts a collection load.
+	ObserveCollection(ctx context.Context, codebasePath string) (semantic.CollectionObservation, error)
+	// CollectionState is retained for callers that need only existence and loaded
+	// state. New status surfaces use ObserveCollection.
 	CollectionState(ctx context.Context, codebasePath string) (exists bool, loaded bool, err error)
 }
 

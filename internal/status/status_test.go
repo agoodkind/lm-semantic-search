@@ -53,7 +53,7 @@ func TestResolvePendingAndLoading(t *testing.T) {
 		{"pending status is pending", Inputs{Status: model.CodebaseStatusPending}, DisplayPending},
 		{"running scoped is indexing", Inputs{HasActiveJob: true, JobScopeKnown: true}, DisplayIndexing},
 		{"indexed collection loading reads loading", Inputs{Status: model.CodebaseStatusIndexed, Collection: CollectionLoading}, DisplayLoading},
-		{"indexed collection absent reads loading", Inputs{Status: model.CodebaseStatusIndexed, Collection: CollectionAbsent}, DisplayLoading},
+		{"indexed collection absent reads missing", Inputs{Status: model.CodebaseStatusIndexed, Collection: CollectionAbsent}, DisplayMissing},
 		{"indexed collection ready stays indexed", Inputs{Status: model.CodebaseStatusIndexed, Collection: CollectionReady}, DisplayIndexed},
 	}
 	for _, testCase := range cases {
@@ -63,6 +63,52 @@ func TestResolvePendingAndLoading(t *testing.T) {
 		}
 		if surface := Resolve(testCase.in); surface.BannerPresent {
 			t.Errorf("%s: pending/loading must not raise the global banner", testCase.name)
+		}
+	}
+}
+
+func TestResolveIdleCollectionAcceptsSearch(t *testing.T) {
+	t.Parallel()
+
+	surface := Resolve(Inputs{
+		Status:             model.CodebaseStatusIndexed,
+		Collection:         CollectionIdle,
+		SearchableEligible: true,
+	})
+	if surface.Display != DisplayIdle {
+		t.Fatalf("Display = %q, want %q", surface.Display, DisplayIdle)
+	}
+	if !surface.Searchable {
+		t.Fatal("Searchable = false, want true for an idle collection")
+	}
+}
+
+func TestResolveCollectionResidencyMatrix(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		readiness   CollectionReadiness
+		wantDisplay Display
+		searchable  bool
+	}{
+		{"absent", CollectionAbsent, DisplayMissing, false},
+		{"idle", CollectionIdle, DisplayIdle, true},
+		{"loading", CollectionLoading, DisplayLoading, true},
+		{"ready", CollectionReady, DisplayIndexed, true},
+		{"unknown", CollectionUnknown, DisplayIndexed, false},
+	}
+	for _, testCase := range testCases {
+		surface := Resolve(Inputs{
+			Status:             model.CodebaseStatusIndexed,
+			Collection:         testCase.readiness,
+			SearchableEligible: true,
+		})
+		if surface.Display != testCase.wantDisplay {
+			t.Errorf("%s: Display = %q, want %q", testCase.name, surface.Display, testCase.wantDisplay)
+		}
+		if surface.Searchable != testCase.searchable {
+			t.Errorf("%s: Searchable = %v, want %v", testCase.name, surface.Searchable, testCase.searchable)
 		}
 	}
 }

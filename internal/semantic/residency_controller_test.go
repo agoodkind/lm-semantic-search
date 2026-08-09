@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 )
 
@@ -462,6 +463,60 @@ func TestResidencyLoadCompletionPreservesDeadlineUnderObservation(t *testing.T) 
 	case <-unloaded:
 	case <-time.After(time.Second):
 		t.Fatal("overdue load did not unload after its observation ended")
+	}
+}
+
+func TestCollectionObservationPreservesControllerLoadingBeforeMilvusCatchesUp(t *testing.T) {
+	loadStarted := make(chan struct{})
+	finishLoad := make(chan struct{})
+	var finishLoadOnce sync.Once
+	finish := func() { finishLoadOnce.Do(func() { close(finishLoad) }) }
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       newTestResidencyClock(),
+		waitTimeout: 15 * time.Second,
+		loadCeiling: time.Minute,
+		load: func(ctx context.Context, _ string) error {
+			close(loadStarted)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-finishLoad:
+				return nil
+			}
+		},
+	})
+	t.Cleanup(func() {
+		finish()
+		_ = controller.Close(context.Background())
+	})
+
+	acquireResult := make(chan error, 1)
+	go func() {
+		lease, err := controller.Acquire(context.Background(), "collection")
+		if lease != nil {
+			lease.Release()
+		}
+		acquireResult <- err
+	}()
+	<-loadStarted
+	controllerState, observation, err := controller.Observe(
+		context.Background(),
+		"collection",
+	)
+	if err != nil {
+		t.Fatalf("Observe returned error: %v", err)
+	}
+	observation.Release()
+	if got := resolveObservedCollectionState(
+		controllerState,
+		entity.LoadStateNotLoad,
+	); got != CollectionStateLoading {
+		t.Fatalf("observed state = %q, want %q", got, CollectionStateLoading)
+	}
+
+	finish()
+	if err := <-acquireResult; err != nil {
+		t.Fatalf("Acquire returned error: %v", err)
 	}
 }
 
