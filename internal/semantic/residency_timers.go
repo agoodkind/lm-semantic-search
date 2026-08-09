@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"goodkind.io/lm-semantic-search/internal/metrics"
 )
 
 func (controller *collectionResidencyController) cancelIdleTimerLocked(
@@ -87,24 +89,51 @@ func (controller *collectionResidencyController) startUnload(
 		entry.state != collectionResidencyReady || entry.leases != 0 ||
 		entry.observations != 0 || entry.pins != 0 || entry.load != nil ||
 		entry.activeTransition != nil || entry.maintenance {
+		if entry != nil && entry.idleGeneration == generation &&
+			(entry.leases != 0 || entry.observations != 0 || entry.pins != 0 || entry.maintenance) {
+			metrics.MilvusCollectionUnloadSkippedInUse()
+		}
 		controller.mutex.Unlock()
 		return
 	}
+	idle := controller.config.clock.Now().Sub(
+		entry.idleDeadline.Add(-controller.config.idleTimeout),
+	)
 	entry.idleTimer = nil
 	unloadCtx, cancelUnload := context.WithCancel(context.WithoutCancel(ctx))
 	entry.activeTransition = cancelUnload
+	metrics.MilvusCollectionUnloadStarted()
+	logCollectionResidencyEvent(
+		unloadCtx,
+		slog.LevelInfo,
+		"semantic.collection_unload_started",
+		collectionName,
+		collectionResidencyReady,
+		0,
+		0,
+		entry.leases,
+		idle,
+		nil,
+	)
 	controller.transitions.Add(1)
 	controller.mutex.Unlock()
 
+	startedAt := controller.config.clock.Now()
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				err := fmt.Errorf("collection unload panic: %v", recovered)
 				slog.ErrorContext(unloadCtx, "semantic.collection_unload_panic", "err", err)
-				controller.finishUnload(entry, err)
+				controller.finishUnload(
+					unloadCtx,
+					collectionName,
+					entry,
+					startedAt,
+					err,
+				)
 			}
 		}()
-		controller.runUnload(unloadCtx, collectionName, entry)
+		controller.runUnload(unloadCtx, collectionName, entry, startedAt)
 	}()
 }
 
@@ -112,15 +141,18 @@ func (controller *collectionResidencyController) runUnload(
 	ctx context.Context,
 	collectionName string,
 	entry *collectionResidencyEntry,
+	startedAt time.Time,
 ) {
 	defer controller.transitions.Done()
 	err := controller.config.unload(ctx, collectionName)
-
-	controller.finishUnload(entry, err)
+	controller.finishUnload(ctx, collectionName, entry, startedAt, err)
 }
 
 func (controller *collectionResidencyController) finishUnload(
+	ctx context.Context,
+	collectionName string,
 	entry *collectionResidencyEntry,
+	startedAt time.Time,
 	err error,
 ) {
 	controller.mutex.Lock()
@@ -129,12 +161,40 @@ func (controller *collectionResidencyController) finishUnload(
 		return
 	}
 	entry.activeTransition = nil
+	elapsed := controller.config.clock.Now().Sub(startedAt)
+	metrics.MilvusCollectionUnloadDone(elapsed, err != nil)
 	controller.notifyLocked(entry)
 	if err == nil {
 		entry.state = collectionResidencyCold
 		entry.idleDeadline = time.Time{}
+		controller.updateStateMetricsLocked()
+		logCollectionResidencyEvent(
+			ctx,
+			slog.LevelInfo,
+			"semantic.collection_unloaded",
+			collectionName,
+			collectionResidencyCold,
+			100,
+			elapsed,
+			entry.leases,
+			controller.config.idleTimeout,
+			nil,
+		)
 		return
 	}
 	entry.state = collectionResidencyUnknown
 	entry.idleDeadline = time.Time{}
+	controller.updateStateMetricsLocked()
+	logCollectionResidencyEvent(
+		ctx,
+		slog.LevelWarn,
+		"semantic.collection_unload_failed",
+		collectionName,
+		collectionResidencyUnknown,
+		0,
+		elapsed,
+		entry.leases,
+		controller.config.idleTimeout,
+		err,
+	)
 }

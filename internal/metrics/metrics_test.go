@@ -26,6 +26,21 @@ func reset() {
 	jobsCancelledTotal.Store(0)
 	bootResumesTotal.Store(0)
 	jobsActive.Store(0)
+	milvusCollectionLoadsTotal.Store(0)
+	milvusCollectionLoadFailuresTotal.Store(0)
+	milvusCollectionLoadWaitTimeoutsTotal.Store(0)
+	milvusCollectionLoadInflight.Store(0)
+	milvusCollectionLoadLatencyMSSum.Store(0)
+	milvusCollectionUnloadsTotal.Store(0)
+	milvusCollectionUnloadFailuresTotal.Store(0)
+	milvusCollectionUnloadSkippedInUseTotal.Store(0)
+	milvusCollectionUnloadLatencyMSSum.Store(0)
+	milvusCollectionLeasesActive.Store(0)
+	milvusCollectionsIdle.Store(0)
+	milvusCollectionsLoading.Store(0)
+	milvusCollectionsReady.Store(0)
+	milvusMmapMigrationsTotal.Store(0)
+	milvusMmapMigrationFailuresTotal.Store(0)
 }
 
 func TestEmbedBatchStartedAndDoneTrackInflight(t *testing.T) {
@@ -148,6 +163,48 @@ func TestJobFinishedLowersGauge(t *testing.T) {
 	}
 }
 
+func TestMilvusCollectionMetricsTrackAggregateResidency(t *testing.T) {
+	reset()
+
+	MilvusCollectionLoadStarted()
+	MilvusCollectionLoadWaitTimedOut()
+	MilvusCollectionLoadDone(25*time.Millisecond, false)
+	MilvusCollectionUnloadStarted()
+	MilvusCollectionUnloadSkippedInUse()
+	MilvusCollectionUnloadDone(10*time.Millisecond, true)
+	MilvusCollectionLeaseAcquired()
+	MilvusCollectionLeaseReleased()
+	SetMilvusCollectionStates(3, 2, 5)
+	MilvusMmapMigrationDone(false)
+	MilvusMmapMigrationDone(true)
+
+	got := Read()
+	if got.MilvusCollectionLoadsTotal != 1 || got.MilvusCollectionLoadInflight != 0 {
+		t.Fatalf("load totals = (%d, %d), want (1, 0)", got.MilvusCollectionLoadsTotal, got.MilvusCollectionLoadInflight)
+	}
+	if got.MilvusCollectionLoadFailuresTotal != 0 || got.MilvusCollectionLoadWaitTimeoutsTotal != 1 {
+		t.Fatalf("load failures and waits = (%d, %d), want (0, 1)", got.MilvusCollectionLoadFailuresTotal, got.MilvusCollectionLoadWaitTimeoutsTotal)
+	}
+	if got.MilvusCollectionLoadLatencyMSSum != 25 {
+		t.Fatalf("MilvusCollectionLoadLatencyMSSum = %d, want 25", got.MilvusCollectionLoadLatencyMSSum)
+	}
+	if got.MilvusCollectionUnloadsTotal != 1 || got.MilvusCollectionUnloadFailuresTotal != 1 {
+		t.Fatalf("unload totals = (%d, %d), want (1, 1)", got.MilvusCollectionUnloadsTotal, got.MilvusCollectionUnloadFailuresTotal)
+	}
+	if got.MilvusCollectionUnloadSkippedInUseTotal != 1 || got.MilvusCollectionUnloadLatencyMSSum != 10 {
+		t.Fatalf("unload skip and latency = (%d, %d), want (1, 10)", got.MilvusCollectionUnloadSkippedInUseTotal, got.MilvusCollectionUnloadLatencyMSSum)
+	}
+	if got.MilvusCollectionLeasesActive != 0 {
+		t.Fatalf("MilvusCollectionLeasesActive = %d, want 0", got.MilvusCollectionLeasesActive)
+	}
+	if got.MilvusCollectionsIdle != 3 || got.MilvusCollectionsLoading != 2 || got.MilvusCollectionsReady != 5 {
+		t.Fatalf("state gauges = (%d, %d, %d), want (3, 2, 5)", got.MilvusCollectionsIdle, got.MilvusCollectionsLoading, got.MilvusCollectionsReady)
+	}
+	if got.MilvusMmapMigrationsTotal != 2 || got.MilvusMmapMigrationFailuresTotal != 1 {
+		t.Fatalf("mmap totals = (%d, %d), want (2, 1)", got.MilvusMmapMigrationsTotal, got.MilvusMmapMigrationFailuresTotal)
+	}
+}
+
 func TestResetZeroesEveryCounter(t *testing.T) {
 	reset()
 
@@ -175,23 +232,38 @@ func TestResetZeroesEveryCounter(t *testing.T) {
 // assert on one field by name and hold every other field steady.
 func snapshotFields(s Snapshot) map[string]int64 {
 	return map[string]int64{
-		"EmbedBatchesTotal":        s.EmbedBatchesTotal,
-		"EmbedBatchesFailed":       s.EmbedBatchesFailed,
-		"EmbedVectorsTotal":        s.EmbedVectorsTotal,
-		"EmbedLatencyMSSum":        s.EmbedLatencyMSSum,
-		"EmbedInflight":            s.EmbedInflight,
-		"EmbedChunksReusedTotal":   s.EmbedChunksReusedTotal,
-		"ConvergeUpsertTotal":      s.ConvergeUpsertTotal,
-		"ConvergeRemoveTotal":      s.ConvergeRemoveTotal,
-		"ConvergeCopyChunksTotal":  s.ConvergeCopyChunksTotal,
-		"SweepRunsTotal":           s.SweepRunsTotal,
-		"SweepChangedTotal":        s.SweepChangedTotal,
-		"SyncSkippedInflightTotal": s.SyncSkippedInflightTotal,
-		"JobsCompletedTotal":       s.JobsCompletedTotal,
-		"JobsFailedTotal":          s.JobsFailedTotal,
-		"JobsCancelledTotal":       s.JobsCancelledTotal,
-		"BootResumesTotal":         s.BootResumesTotal,
-		"JobsActive":               s.JobsActive,
+		"EmbedBatchesTotal":                       s.EmbedBatchesTotal,
+		"EmbedBatchesFailed":                      s.EmbedBatchesFailed,
+		"EmbedVectorsTotal":                       s.EmbedVectorsTotal,
+		"EmbedLatencyMSSum":                       s.EmbedLatencyMSSum,
+		"EmbedInflight":                           s.EmbedInflight,
+		"EmbedChunksReusedTotal":                  s.EmbedChunksReusedTotal,
+		"ConvergeUpsertTotal":                     s.ConvergeUpsertTotal,
+		"ConvergeRemoveTotal":                     s.ConvergeRemoveTotal,
+		"ConvergeCopyChunksTotal":                 s.ConvergeCopyChunksTotal,
+		"SweepRunsTotal":                          s.SweepRunsTotal,
+		"SweepChangedTotal":                       s.SweepChangedTotal,
+		"SyncSkippedInflightTotal":                s.SyncSkippedInflightTotal,
+		"JobsCompletedTotal":                      s.JobsCompletedTotal,
+		"JobsFailedTotal":                         s.JobsFailedTotal,
+		"JobsCancelledTotal":                      s.JobsCancelledTotal,
+		"BootResumesTotal":                        s.BootResumesTotal,
+		"JobsActive":                              s.JobsActive,
+		"MilvusCollectionLoadsTotal":              s.MilvusCollectionLoadsTotal,
+		"MilvusCollectionLoadFailuresTotal":       s.MilvusCollectionLoadFailuresTotal,
+		"MilvusCollectionLoadWaitTimeoutsTotal":   s.MilvusCollectionLoadWaitTimeoutsTotal,
+		"MilvusCollectionLoadInflight":            s.MilvusCollectionLoadInflight,
+		"MilvusCollectionLoadLatencyMSSum":        s.MilvusCollectionLoadLatencyMSSum,
+		"MilvusCollectionUnloadsTotal":            s.MilvusCollectionUnloadsTotal,
+		"MilvusCollectionUnloadFailuresTotal":     s.MilvusCollectionUnloadFailuresTotal,
+		"MilvusCollectionUnloadSkippedInUseTotal": s.MilvusCollectionUnloadSkippedInUseTotal,
+		"MilvusCollectionUnloadLatencyMSSum":      s.MilvusCollectionUnloadLatencyMSSum,
+		"MilvusCollectionLeasesActive":            s.MilvusCollectionLeasesActive,
+		"MilvusCollectionsIdle":                   s.MilvusCollectionsIdle,
+		"MilvusCollectionsLoading":                s.MilvusCollectionsLoading,
+		"MilvusCollectionsReady":                  s.MilvusCollectionsReady,
+		"MilvusMmapMigrationsTotal":               s.MilvusMmapMigrationsTotal,
+		"MilvusMmapMigrationFailuresTotal":        s.MilvusMmapMigrationFailuresTotal,
 	}
 }
 

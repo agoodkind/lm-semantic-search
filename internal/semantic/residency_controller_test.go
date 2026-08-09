@@ -11,6 +11,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/config"
 )
 
 type testResidencyClock struct {
@@ -239,15 +240,21 @@ func TestResidencyAcquireSharesLoadWithIndependentCallerLimits(t *testing.T) {
 }
 
 func TestServiceResidencyUsesConfiguredIdleDelay(t *testing.T) {
-	service := &Service{}
+	service := &Service{cfg: config.Config{
+		MilvusCollectionLoadWaitTimeoutMS: 23000,
+		MilvusCollectionIdleTimeoutMS:     42000,
+	}}
 	service.initializeResidencyControllerWithLoad(func(context.Context, string) error {
 		return nil
 	})
 	t.Cleanup(func() {
 		_ = service.Close(context.Background())
 	})
-	if got := service.residency.config.idleTimeout; got != defaultCollectionIdleTimeout {
-		t.Fatalf("idle timeout = %s, want %s", got, defaultCollectionIdleTimeout)
+	if got := service.residency.config.waitTimeout; got != 23*time.Second {
+		t.Fatalf("wait timeout = %s, want 23s", got)
+	}
+	if got := service.residency.config.idleTimeout; got != 42*time.Second {
+		t.Fatalf("idle timeout = %s, want 42s", got)
 	}
 }
 

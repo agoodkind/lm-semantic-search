@@ -21,6 +21,7 @@ const (
 	statusGroupJobs       = "jobs"
 	statusGroupEmbed      = "embed"
 	statusGroupConverge   = "converge"
+	statusGroupMilvus     = "milvus"
 	statusGroupRuntime    = "runtime"
 	statusGroupCodebases  = "codebases"
 	statusGroupActivity   = "activity"
@@ -30,24 +31,30 @@ const (
 // A converge upsert is one path and a skipped sync is one request, so neither
 // borrows the other's noun.
 const (
-	unitSeconds    = "s"
-	unitSlots      = "slots"
-	unitJobs       = "jobs"
-	unitRequests   = "requests"
-	unitBatches    = "batches"
-	unitVectors    = "vectors"
-	unitChunks     = "chunks"
-	unitPaths      = "paths"
-	unitRuns       = "runs"
-	unitFiles      = "files"
-	unitRows       = "rows"
-	unitGoroutines = "goroutines"
-	unitCycles     = "cycles"
-	unitBytes      = "bytes"
-	unitMillis     = "ms"
-	unitPercent    = "%"
-	unitCodebases  = "codebases"
-	unitInputs     = "inputs"
+	unitSeconds     = "s"
+	unitSlots       = "slots"
+	unitJobs        = "jobs"
+	unitRequests    = "requests"
+	unitBatches     = "batches"
+	unitVectors     = "vectors"
+	unitChunks      = "chunks"
+	unitPaths       = "paths"
+	unitRuns        = "runs"
+	unitFiles       = "files"
+	unitRows        = "rows"
+	unitGoroutines  = "goroutines"
+	unitCycles      = "cycles"
+	unitBytes       = "bytes"
+	unitMillis      = "ms"
+	unitPercent     = "%"
+	unitCodebases   = "codebases"
+	unitInputs      = "inputs"
+	unitLoads       = "loads"
+	unitUnloads     = "unloads"
+	unitTimeouts    = "timeouts"
+	unitLeases      = "leases"
+	unitCollections = "collections"
+	unitMigrations  = "migrations"
 	// unitUnits counts units of work of mixed kinds: a job, a converge, and a
 	// coalesced request are each one, and no narrower noun covers all three.
 	unitUnits = "units"
@@ -140,7 +147,7 @@ func safeInt64FromUint64(value uint64) int64 {
 // the counter projection alone; the daemon-derived groups are then omitted
 // rather than defaulted to a value nobody measured.
 func buildStatusMetrics(daemon *StatusSnapshot, snapshot metrics.Snapshot, now time.Time) []*pb.Metric {
-	list := make([]*pb.Metric, 0, 48)
+	list := make([]*pb.Metric, 0, 64)
 
 	if daemon != nil {
 		list = append(list, intMetric(statusGroupDaemon, "uptime_s",
@@ -183,6 +190,22 @@ func buildStatusMetrics(daemon *StatusSnapshot, snapshot metrics.Snapshot, now t
 		intMetric(statusGroupConverge, "converge_copy_chunks_total", snapshot.ConvergeCopyChunksTotal, unitPaths),
 		intMetric(statusGroupConverge, "sweep_runs_total", snapshot.SweepRunsTotal, unitRuns),
 		intMetric(statusGroupConverge, "sweep_changed_total", snapshot.SweepChangedTotal, unitRuns),
+
+		intMetric(statusGroupMilvus, "milvus_collection_loads_total", snapshot.MilvusCollectionLoadsTotal, unitLoads),
+		intMetric(statusGroupMilvus, "milvus_collection_load_failures_total", snapshot.MilvusCollectionLoadFailuresTotal, unitLoads),
+		intMetric(statusGroupMilvus, "milvus_collection_load_wait_timeouts_total", snapshot.MilvusCollectionLoadWaitTimeoutsTotal, unitTimeouts),
+		intMetric(statusGroupMilvus, "milvus_collection_load_inflight", snapshot.MilvusCollectionLoadInflight, unitLoads),
+		intMetric(statusGroupMilvus, "milvus_collection_load_latency_ms_sum", snapshot.MilvusCollectionLoadLatencyMSSum, unitMillis),
+		intMetric(statusGroupMilvus, "milvus_collection_unloads_total", snapshot.MilvusCollectionUnloadsTotal, unitUnloads),
+		intMetric(statusGroupMilvus, "milvus_collection_unload_failures_total", snapshot.MilvusCollectionUnloadFailuresTotal, unitUnloads),
+		intMetric(statusGroupMilvus, "milvus_collection_unload_skipped_in_use_total", snapshot.MilvusCollectionUnloadSkippedInUseTotal, unitUnloads),
+		intMetric(statusGroupMilvus, "milvus_collection_unload_latency_ms_sum", snapshot.MilvusCollectionUnloadLatencyMSSum, unitMillis),
+		intMetric(statusGroupMilvus, "milvus_collection_leases_active", snapshot.MilvusCollectionLeasesActive, unitLeases),
+		intMetric(statusGroupMilvus, "milvus_collections_idle", snapshot.MilvusCollectionsIdle, unitCollections),
+		intMetric(statusGroupMilvus, "milvus_collections_loading", snapshot.MilvusCollectionsLoading, unitCollections),
+		intMetric(statusGroupMilvus, "milvus_collections_ready", snapshot.MilvusCollectionsReady, unitCollections),
+		intMetric(statusGroupMilvus, "milvus_mmap_migrations_total", snapshot.MilvusMmapMigrationsTotal, unitMigrations),
+		intMetric(statusGroupMilvus, "milvus_mmap_migration_failures_total", snapshot.MilvusMmapMigrationFailuresTotal, unitMigrations),
 	)
 
 	list = append(list, runtimeMetrics()...)

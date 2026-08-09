@@ -10,6 +10,7 @@ import (
 	"time"
 
 	internalclock "goodkind.io/lm-semantic-search/internal/clock"
+	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 )
 
@@ -85,9 +86,10 @@ const (
 )
 
 type collectionResidencyLoad struct {
-	done   chan struct{}
-	cancel context.CancelFunc
-	err    error
+	done      chan struct{}
+	cancel    context.CancelFunc
+	startedAt time.Time
+	err       error
 }
 
 type collectionResidencyEntry struct {
@@ -148,8 +150,8 @@ func (service *Service) initializeResidencyController() {
 func (service *Service) initializeResidencyControllerWithLoad(load collectionTransition) {
 	service.residency = newCollectionResidencyController(residencyControllerConfig{
 		clock:       wallResidencyClock{},
-		waitTimeout: defaultCollectionLoadWaitTimeout,
-		idleTimeout: defaultCollectionIdleTimeout,
+		waitTimeout: time.Duration(service.cfg.MilvusCollectionLoadWaitTimeoutMS) * time.Millisecond,
+		idleTimeout: time.Duration(service.cfg.MilvusCollectionIdleTimeoutMS) * time.Millisecond,
 		loadCeiling: service.sharedCollectionLoadCeiling(),
 		load:        load,
 		unload: func(ctx context.Context, collectionName string) error {
@@ -222,6 +224,7 @@ func (controller *collectionResidencyController) beginReconciliation() uint64 {
 		}
 		controller.notifyLocked(entry)
 	}
+	controller.updateStateMetricsLocked()
 	return generation
 }
 
@@ -239,6 +242,7 @@ func (controller *collectionResidencyController) invalidateResidency() {
 		entry.reconciliation = 0
 		controller.notifyLocked(entry)
 	}
+	controller.updateStateMetricsLocked()
 }
 
 func (controller *collectionResidencyController) applyReconciliation(
@@ -272,6 +276,7 @@ func (controller *collectionResidencyController) applyReconciliation(
 	entry.state = state
 	entry.reconciliation = 0
 	controller.notifyLocked(entry)
+	controller.updateStateMetricsLocked()
 	if state == collectionResidencyReady && !isRecoveryCollection(collectionName) {
 		controller.armIdleTimerLocked(ctx, collectionName, entry)
 	}
@@ -319,6 +324,7 @@ func (controller *collectionResidencyController) Acquire(
 			continue
 		}
 		entry.leases++
+		metrics.MilvusCollectionLeaseAcquired()
 		controller.cancelIdleTimerLocked(entry)
 		if entry.state == collectionResidencyReady {
 			controller.mutex.Unlock()
@@ -434,6 +440,7 @@ func (controller *collectionResidencyController) Rename(oldName string, newName 
 	delete(controller.entries, oldName)
 	entry.name = newName
 	controller.entries[newName] = entry
+	controller.updateStateMetricsLocked()
 }
 
 func (controller *collectionResidencyController) Forget(collectionName string) {
@@ -447,6 +454,7 @@ func (controller *collectionResidencyController) Forget(collectionName string) {
 	controller.cancelIdleTimerLocked(entry)
 	controller.notifyLocked(entry)
 	delete(controller.entries, collectionName)
+	controller.updateStateMetricsLocked()
 }
 
 func (controller *collectionResidencyController) Maintain(
@@ -584,13 +592,28 @@ func (controller *collectionResidencyController) startLoadLocked(
 ) *collectionResidencyLoad {
 	loadCtx, cancelLoad := context.WithCancel(context.WithoutCancel(ctx))
 	flight := &collectionResidencyLoad{
-		done:   make(chan struct{}),
-		cancel: cancelLoad,
-		err:    nil,
+		done:      make(chan struct{}),
+		cancel:    cancelLoad,
+		startedAt: controller.config.clock.Now(),
+		err:       nil,
 	}
 	entry.state = collectionResidencyLoading
 	entry.load = flight
 	entry.activeTransition = cancelLoad
+	metrics.MilvusCollectionLoadStarted()
+	controller.updateStateMetricsLocked()
+	logCollectionResidencyEvent(
+		loadCtx,
+		slog.LevelInfo,
+		"semantic.collection_load_started",
+		collectionName,
+		collectionResidencyLoading,
+		0,
+		0,
+		entry.leases,
+		0,
+		nil,
+	)
 	controller.transitions.Add(1)
 	go func() {
 		defer func() {
@@ -635,16 +658,31 @@ func (controller *collectionResidencyController) finishLoad(
 		return
 	}
 	flight.err = err
+	elapsed := controller.config.clock.Now().Sub(flight.startedAt)
+	metrics.MilvusCollectionLoadDone(elapsed, err != nil)
 	entry.load = nil
 	entry.activeTransition = nil
 	if err == nil {
 		entry.state = collectionResidencyReady
+		logCollectionResidencyEvent(
+			ctx,
+			slog.LevelInfo,
+			"semantic.collection_load_ready",
+			collectionName,
+			collectionResidencyReady,
+			100,
+			elapsed,
+			entry.leases,
+			0,
+			nil,
+		)
 		if entry.leases == 0 {
 			controller.armIdleTimerLocked(ctx, collectionName, entry)
 		}
 	} else {
 		entry.state = collectionResidencyUnknown
 	}
+	controller.updateStateMetricsLocked()
 	close(flight.done)
 	controller.notifyLocked(entry)
 }
@@ -674,7 +712,30 @@ func (controller *collectionResidencyController) waitForLoad(
 			collectionName,
 			ErrCollectionLoadWaitTimeout,
 		)
-		slog.WarnContext(ctx, "semantic.collection_load_wait_timeout", "err", err)
+		metrics.MilvusCollectionLoadWaitTimedOut()
+		controller.mutex.Lock()
+		entry := controller.entries[collectionName]
+		leaseCount := 0
+		elapsed := controller.config.waitTimeout
+		if entry != nil {
+			leaseCount = entry.leases
+			if entry.load == flight {
+				elapsed = controller.config.clock.Now().Sub(flight.startedAt)
+			}
+		}
+		controller.mutex.Unlock()
+		logCollectionResidencyEvent(
+			ctx,
+			slog.LevelWarn,
+			"semantic.collection_load_wait_timeout",
+			collectionName,
+			collectionResidencyLoading,
+			0,
+			elapsed,
+			leaseCount,
+			0,
+			ErrCollectionNotReady,
+		)
 		return err
 	case <-flight.done:
 		if err := ctx.Err(); err != nil {
@@ -767,6 +828,7 @@ func (controller *collectionResidencyController) releaseLease(
 		return
 	}
 	entry.leases--
+	metrics.MilvusCollectionLeaseReleased()
 	controller.notifyLocked(entry)
 	if entry.leases == 0 && entry.state == collectionResidencyReady {
 		controller.armIdleTimerLocked(ctx, collectionName, entry)
