@@ -160,13 +160,8 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		}
 	}
 
-	// The dense AutoIndex is created with its metric type only. Milvus rejects any
-	// extra index param on AutoIndex ("only metric type can be passed when use
-	// AutoIndex"), so mmap is NOT set in the create call. mmap is enabled on the
-	// dense field and dense index after creation through the supported
-	// alter-properties path (ensureMmapEnabledOnce below), which matches the
-	// migration sweep and the documented restore recipe. Setting mmap here is the
-	// one mistake that breaks every new-collection build on Milvus 2.6.
+	// Milvus 2.6 rejects mmap.enabled on AUTOINDEX creation. The policy is applied
+	// through field and index property changes after every required index exists.
 	indexOptions := []milvusclient.CreateIndexOption{
 		milvusclient.NewCreateIndexOption(collectionName, denseVectorFieldName, index.NewAutoIndex(entity.COSINE)),
 		milvusclient.NewCreateIndexOption(collectionName, contentHashFieldName, index.NewInvertedIndex()),
@@ -183,21 +178,7 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		return wrapStoreError(ctx, err, "create Milvus collection "+collectionName)
 	}
 	service.invalidateCollectionCaches(collectionName)
-	// Enable mmap on the dense field and index through the supported alter path,
-	// which also loads the collection. A freshly created collection is unloaded, so
-	// the alter needs no release first, and enabling mmap before any rows load keeps
-	// load memory flat (the dense vectors are the memory hog that caused the S0).
-	// If the dense index is not yet visible the enable skips without mmapping; in
-	// that case load the collection directly so it is usable and let the periodic
-	// sweep mmap it on a later tick.
-	outcome, err := service.ensureMmapEnabledOnce(ctx, collectionName)
-	if err != nil {
-		return err
-	}
-	if outcome == mmapOutcomeSkipped {
-		return service.loadCollection(ctx, collectionName)
-	}
-	return nil
+	return service.ensureCreatedCollectionReadyForWrite(ctx, collectionName)
 }
 
 type splitPartMigration struct {
@@ -266,6 +247,7 @@ func (service *Service) ensureReuseIdentityColumns(
 		); err != nil {
 			return fmt.Errorf("add %s column to %s: %w", field.Name, collectionName, err)
 		}
+		service.invalidateMmapPolicy(collectionName)
 	}
 	indexes, err := service.milvus.ListIndexes(
 		ctx,
@@ -292,6 +274,7 @@ func (service *Service) ensureReuseIdentityColumns(
 	if err := task.Await(ctx); err != nil {
 		return fmt.Errorf("await content hash index on %s: %w", collectionName, err)
 	}
+	service.invalidateMmapPolicy(collectionName)
 	return nil
 }
 
@@ -329,6 +312,7 @@ func (service *Service) addMissingSplitPartColumn(ctx context.Context, collectio
 			)
 			return fmt.Errorf("add split part column to %s: %w", collectionName, err)
 		}
+		service.invalidateMmapPolicy(collectionName)
 	}
 	if len(fields) > 0 {
 		slog.InfoContext(ctx, "semantic.split_part_column_added", "collection", collectionName)
@@ -399,6 +383,7 @@ func (service *Service) addMissingConversationScalarColumns(ctx context.Context,
 			slog.ErrorContext(ctx, "add conversation scalar column failed", "collection", collectionName, "field", field.Name, "err", err)
 			return added, fmt.Errorf("add scalar column %s to %s: %w", field.Name, collectionName, err)
 		}
+		service.invalidateMmapPolicy(collectionName)
 		added = append(added, field.Name)
 	}
 	return added, nil

@@ -394,7 +394,7 @@ func TestInvalidateCollectionCachesClearsSchemaState(t *testing.T) {
 	service.ensuredConvColumns.Store(collectionName, "conversation")
 	service.ensuredSplitPartColumns.Store(collectionName, "split-part")
 	service.ensuredReuseIdentityColumns.Store(collectionName, "reuse-identity")
-	service.ensuredMmapEnabled.Store(collectionName, "mmap")
+	service.mmapPolicyVersions = map[string]int{collectionName: mmapPolicyVersion}
 	service.ensuredBackfill.Store(collectionName, "backfill")
 
 	service.invalidateCollectionCaches(collectionName)
@@ -403,13 +403,15 @@ func TestInvalidateCollectionCachesClearsSchemaState(t *testing.T) {
 		&service.ensuredConvColumns,
 		&service.ensuredSplitPartColumns,
 		&service.ensuredReuseIdentityColumns,
-		&service.ensuredMmapEnabled,
 		&service.ensuredBackfill,
 	}
 	for index, cache := range caches {
 		if _, found := cache.Load(collectionName); found {
 			t.Fatalf("cache %d retained collection state", index)
 		}
+	}
+	if _, found := service.mmapPolicyVersions[collectionName]; found {
+		t.Fatal("mmap policy cache retained collection state")
 	}
 }
 

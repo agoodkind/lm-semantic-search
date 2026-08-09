@@ -73,7 +73,7 @@ type semanticDropper interface {
 // collection storage layout in place without re-embedding. The daemon's periodic
 // sync loop drives these; they are idempotent and safe to call every tick.
 type semanticMaintainer interface {
-	// EnsureMmapEnabledAllCollections enables dense-vector mmap on every
+	// EnsureMmapEnabledAllCollections applies the current mmap policy to every
 	// collection, converging across ticks and skipping already-migrated ones.
 	EnsureMmapEnabledAllCollections(ctx context.Context)
 	// BackfillConversationCollectionsOnce populates the native scalar columns on

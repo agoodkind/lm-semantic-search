@@ -119,10 +119,12 @@ type Service struct {
 	// ensuredReuseIdentityColumns gates the nullable content hash and embedding
 	// model columns plus the content-hash index once per collection per process.
 	ensuredReuseIdentityColumns sync.Map
-	// ensuredMmapEnabled records the collections this process has confirmed
-	// mmap-migrated, so the daemon's periodic mmap sweep skips them with no RPC.
-	// See ensureMmapEnabledOnce.
-	ensuredMmapEnabled sync.Map
+	// mmapPolicyVersions records the mmap policy version fully verified for each
+	// collection. Lifecycle and metadata changes invalidate the stored version.
+	mmapPolicyVersions   map[string]int
+	mmapPolicyMutex      sync.Mutex
+	mmapPolicyGeneration map[string]uint64
+	mmapPolicyFailures   map[string]mmapPolicyFailure
 	// ensuredBackfill records the conversation collections this process has
 	// scalar-column backfilled, so the daemon's periodic backfill sweep runs the
 	// metadata-only backfill at most once per collection per process.
@@ -152,7 +154,10 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			ensuredConvColumns:          sync.Map{},
 			ensuredSplitPartColumns:     sync.Map{},
 			ensuredReuseIdentityColumns: sync.Map{},
-			ensuredMmapEnabled:          sync.Map{},
+			mmapPolicyVersions:          make(map[string]int),
+			mmapPolicyMutex:             sync.Mutex{},
+			mmapPolicyGeneration:        make(map[string]uint64),
+			mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
 			ensuredBackfill:             sync.Map{},
 		}
 		service.initializeResidencyController()
@@ -185,7 +190,10 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		ensuredConvColumns:          sync.Map{},
 		ensuredSplitPartColumns:     sync.Map{},
 		ensuredReuseIdentityColumns: sync.Map{},
-		ensuredMmapEnabled:          sync.Map{},
+		mmapPolicyVersions:          make(map[string]int),
+		mmapPolicyMutex:             sync.Mutex{},
+		mmapPolicyGeneration:        make(map[string]uint64),
+		mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
 		ensuredBackfill:             sync.Map{},
 	}
 	service.initializeResidencyController()
@@ -326,8 +334,19 @@ func (service *Service) invalidateCollectionCaches(collectionName string) {
 	service.ensuredConvColumns.Delete(collectionName)
 	service.ensuredSplitPartColumns.Delete(collectionName)
 	service.ensuredReuseIdentityColumns.Delete(collectionName)
-	service.ensuredMmapEnabled.Delete(collectionName)
+	service.invalidateMmapPolicy(collectionName)
 	service.ensuredBackfill.Delete(collectionName)
+}
+
+func (service *Service) invalidateMmapPolicy(collectionName string) {
+	service.mmapPolicyMutex.Lock()
+	defer service.mmapPolicyMutex.Unlock()
+	if service.mmapPolicyGeneration == nil {
+		service.mmapPolicyGeneration = make(map[string]uint64)
+	}
+	service.mmapPolicyGeneration[collectionName]++
+	delete(service.mmapPolicyVersions, collectionName)
+	delete(service.mmapPolicyFailures, collectionName)
 }
 
 // hasCollection centralizes collection-presence probes and invalidates every

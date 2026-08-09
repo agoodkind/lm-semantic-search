@@ -2,36 +2,31 @@ package semantic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 )
 
-// mmap storage moves a field or index off the query node's heap onto
-// memory-mapped, disk-backed files. We enable it for the dense vector field and
-// its index on every collection alike, which is where almost all of the
-// per-collection resident memory sits, while leaving the scalar fields, scalar
-// indexes, and the sparse BM25 index resident so native filtering and keyword
-// lookup stay fast. The rule is uniform across conversation and code
-// collections; nothing here branches on collection content.
 const (
-	mmapEnabledKey   = "mmap.enabled"
-	mmapEnabledValue = "true"
-	// releasePoll* bound the wait for a release to take effect. Milvus
-	// ReleaseCollection returns as soon as the request is accepted, but the unload
-	// is asynchronous, and AlterCollectionFieldProperty is rejected while the
-	// collection still reports loaded, so the migration polls GetLoadState until
-	// the collection is NotLoad before it alters.
-	releasePollInterval = 250 * time.Millisecond
-	releasePollTimeout  = 90 * time.Second
+	mmapEnabledKey              = "mmap.enabled"
+	mmapEnabledValue            = "true"
+	mmapPolicyVersion           = 2
+	mmapInvertedIndexType       = "INVERTED"
+	mmapSparseInvertedIndexType = "SPARSE_INVERTED_INDEX"
+	releasePollInterval         = 250 * time.Millisecond
+	releasePollTimeout          = 90 * time.Second
+	indexVisibilityPollInterval = 250 * time.Millisecond
+	mmapFailureThreshold        = 2
+	mmapFailureBackoffSweeps    = 12
 )
 
-// mmapOutcome is the per-collection result of an mmap-enable attempt, used to
-// build the end-of-sweep summary. The zero value is the unknown outcome so an
-// error path never reports as a real result.
+var errMmapPolicyIncomplete = errors.New("mmap policy incomplete after alteration")
+
 type mmapOutcome int
 
 const (
@@ -39,39 +34,110 @@ const (
 	mmapOutcomeMigrated
 	mmapOutcomeAlready
 	mmapOutcomeSkipped
+	mmapOutcomeBackoff
 )
 
-// releaseCollection unloads collectionName from the query node's memory.
-// Enabling mmap on an already-loaded collection requires releasing it first,
-// because the in-memory layout of a loaded collection is fixed until it is
-// released and loaded again.
+type mmapMigrationMode int
+
+const (
+	mmapExistingCollection mmapMigrationMode = iota
+	mmapCreatedCollection
+)
+
+type mmapTargetKind int
+
+const (
+	mmapFieldTarget mmapTargetKind = iota
+	mmapIndexTarget
+)
+
+type mmapTarget struct {
+	kind mmapTargetKind
+	name string
+}
+
+type mmapInspection struct {
+	loadState          entity.LoadStateCode
+	missingTargets     []mmapTarget
+	denseIndexPresent  bool
+	contentHashPresent bool
+	sparseIndexPresent bool
+}
+
+type mmapPolicyFailure struct {
+	consecutive int
+	skipSweeps  int
+}
+
+func (service *Service) mmapPolicyComplete(collectionName string) bool {
+	service.mmapPolicyMutex.Lock()
+	defer service.mmapPolicyMutex.Unlock()
+	version, found := service.mmapPolicyVersions[collectionName]
+	return found && version == mmapPolicyVersion
+}
+
+func (service *Service) consumeMmapBackoffSweep(
+	collectionName string,
+	mode mmapMigrationMode,
+) bool {
+	if mode != mmapExistingCollection {
+		return false
+	}
+	service.mmapPolicyMutex.Lock()
+	defer service.mmapPolicyMutex.Unlock()
+	if service.mmapPolicyFailures == nil {
+		service.mmapPolicyFailures = make(map[string]mmapPolicyFailure)
+	}
+	failure := service.mmapPolicyFailures[collectionName]
+	if failure.skipSweeps == 0 {
+		return false
+	}
+	failure.skipSweeps--
+	service.mmapPolicyFailures[collectionName] = failure
+	return true
+}
+
+func (service *Service) recordMmapNonConvergence(collectionName string) {
+	service.mmapPolicyMutex.Lock()
+	defer service.mmapPolicyMutex.Unlock()
+	if service.mmapPolicyFailures == nil {
+		service.mmapPolicyFailures = make(map[string]mmapPolicyFailure)
+	}
+	failure := service.mmapPolicyFailures[collectionName]
+	failure.consecutive++
+	if failure.consecutive >= mmapFailureThreshold {
+		failure.skipSweeps = mmapFailureBackoffSweeps
+	}
+	service.mmapPolicyFailures[collectionName] = failure
+}
+
+func (service *Service) clearMmapNonConvergence(collectionName string) {
+	service.mmapPolicyMutex.Lock()
+	defer service.mmapPolicyMutex.Unlock()
+	delete(service.mmapPolicyFailures, collectionName)
+}
+
 func (service *Service) releaseCollection(ctx context.Context, collectionName string) error {
-	if err := service.milvus.ReleaseCollection(ctx, milvusclient.NewReleaseCollectionOption(collectionName)); err != nil {
+	if err := service.milvus.ReleaseCollection(
+		ctx,
+		milvusclient.NewReleaseCollectionOption(collectionName),
+	); err != nil {
 		return wrapStoreError(ctx, err, "release Milvus collection "+collectionName)
 	}
 	return nil
 }
 
-// collectionLoaded reports whether collectionName is loaded, read from the
-// authoritative GetLoadState RPC. DescribeCollection's Loaded field is not
-// reliably populated, so the alter/release decision must not key off it.
-func (service *Service) collectionLoaded(ctx context.Context, collectionName string) (bool, error) {
-	state, err := service.milvus.GetLoadState(ctx, milvusclient.NewGetLoadStateOption(collectionName))
-	if err != nil {
-		return false, wrapStoreError(ctx, err, "get load state for "+collectionName)
-	}
-	return state.State == entity.LoadStateLoaded, nil
-}
-
-// awaitCollectionReleased polls GetLoadState until collectionName reports
-// NotLoad, because ReleaseCollection returns before the unload completes and the
-// subsequent property alter is rejected while the collection still reports
-// loaded.
-func (service *Service) awaitCollectionReleased(ctx context.Context, collectionName string) error {
+func (service *Service) awaitCollectionReleased(
+	ctx context.Context,
+	collectionName string,
+) error {
 	pollCtx, cancel := context.WithTimeout(ctx, releasePollTimeout)
 	defer cancel()
 	for {
-		state, err := service.milvus.GetLoadState(pollCtx, milvusclient.NewGetLoadStateOption(collectionName))
+		state, err := service.milvus.GetLoadState(
+			pollCtx,
+			milvusclient.NewGetLoadStateOption(collectionName),
+		)
 		if err != nil {
 			return wrapStoreError(ctx, err, "poll release state for "+collectionName)
 		}
@@ -80,25 +146,319 @@ func (service *Service) awaitCollectionReleased(ctx context.Context, collectionN
 		}
 		select {
 		case <-pollCtx.Done():
-			slog.ErrorContext(ctx, "await collection release timed out", "collection", collectionName, "last_state", int(state.State), "err", pollCtx.Err())
-			return fmt.Errorf("await release of %s: %w", collectionName, pollCtx.Err())
+			err := fmt.Errorf("await release of %s: %w", collectionName, pollCtx.Err())
+			slog.ErrorContext(ctx, "await collection release failed", "err", err)
+			return err
 		case <-time.After(releasePollInterval):
 		}
 	}
 }
 
-// ensureMmapEnabledOnCollection enables mmap on collectionName's dense vector
-// field and dense index in place, preserving the existing vectors with no
-// re-embedding. It is idempotent: a collection whose dense index already reports
-// mmap is left untouched (a describe-only no-op, no release/reload). A collection
-// with no dense index is skipped, never treated as an error, so an odd or
-// half-built collection does not break the sweep; a genuine list/describe RPC
-// fault is returned so the caller can surface it rather than swallow it as a
-// skip. The describe gate sits ahead of the release, so a steady-state run never
-// unloads a collection it has already migrated, and the release before the alter
-// is gated on the collection's load state, so a collection that came up unloaded
-// skips straight to the alter and a single load.
-func (service *Service) ensureMmapEnabledOnCollection(ctx context.Context, collectionName string) (mmapOutcome, error) {
+func (service *Service) inspectMmapPolicy(
+	ctx context.Context,
+	collectionName string,
+) (mmapInspection, error) {
+	collection, err := service.milvus.DescribeCollection(
+		ctx,
+		milvusclient.NewDescribeCollectionOption(collectionName),
+	)
+	if err != nil {
+		return mmapInspection{}, wrapStoreError(
+			ctx,
+			err,
+			"describe collection for mmap "+collectionName,
+		)
+	}
+	if collection.Schema == nil {
+		return mmapInspection{}, fmt.Errorf(
+			"describe collection for mmap %s: missing schema",
+			collectionName,
+		)
+	}
+
+	missingTargets := make([]mmapTarget, 0, len(collection.Schema.Fields))
+	for _, field := range collection.Schema.Fields {
+		if !mmapFieldSupported(field) {
+			continue
+		}
+		if field.TypeParams[mmapEnabledKey] != mmapEnabledValue {
+			missingTargets = append(missingTargets, mmapTarget{
+				kind: mmapFieldTarget,
+				name: field.Name,
+			})
+		}
+	}
+
+	inspection := mmapInspection{
+		loadState:          entity.LoadStateNotLoad,
+		missingTargets:     missingTargets,
+		denseIndexPresent:  false,
+		contentHashPresent: false,
+		sparseIndexPresent: false,
+	}
+	indexFields := []string{
+		denseVectorFieldName,
+		contentHashFieldName,
+		sparseVectorFieldName,
+	}
+	for _, fieldName := range indexFields {
+		indexNames, err := service.milvus.ListIndexes(
+			ctx,
+			milvusclient.NewListIndexOption(collectionName).WithFieldName(fieldName),
+		)
+		if err != nil {
+			return mmapInspection{}, wrapStoreError(
+				ctx,
+				err,
+				"list indexes on "+fieldName+" for "+collectionName,
+			)
+		}
+		slices.Sort(indexNames)
+		for _, indexName := range indexNames {
+			description, describeErr := service.milvus.DescribeIndex(
+				ctx,
+				milvusclient.NewDescribeIndexOption(collectionName, indexName),
+			)
+			if describeErr != nil {
+				return mmapInspection{}, wrapStoreError(
+					ctx,
+					describeErr,
+					"describe index "+indexName+" on "+collectionName,
+				)
+			}
+			params := description.Params()
+			if !noteMmapIndexPresence(&inspection, fieldName, params["index_type"]) {
+				continue
+			}
+			if params[mmapEnabledKey] != mmapEnabledValue {
+				inspection.missingTargets = append(inspection.missingTargets, mmapTarget{
+					kind: mmapIndexTarget,
+					name: indexName,
+				})
+			}
+		}
+	}
+
+	loadState, err := service.milvus.GetLoadState(
+		ctx,
+		milvusclient.NewGetLoadStateOption(collectionName),
+	)
+	if err != nil {
+		return mmapInspection{}, wrapStoreError(ctx, err, "get load state for "+collectionName)
+	}
+	inspection.loadState = loadState.State
+	return inspection, nil
+}
+
+func mmapFieldSupported(field *entity.Field) bool {
+	if field.PrimaryKey || field.Name == idFieldName || field.Name == sparseVectorFieldName {
+		return false
+	}
+	if field.Name == denseVectorFieldName {
+		return true
+	}
+	return !field.DataType.IsVectorType()
+}
+
+func noteMmapIndexPresence(
+	inspection *mmapInspection,
+	fieldName string,
+	indexType string,
+) bool {
+	switch {
+	case fieldName == denseVectorFieldName:
+		inspection.denseIndexPresent = true
+		return true
+	case fieldName == contentHashFieldName && indexType == mmapInvertedIndexType:
+		inspection.contentHashPresent = true
+		return true
+	case fieldName == sparseVectorFieldName && indexType == mmapSparseInvertedIndexType:
+		inspection.sparseIndexPresent = true
+		return true
+	default:
+		return false
+	}
+}
+
+func (service *Service) mmapInspectionComplete(
+	inspection mmapInspection,
+	mode mmapMigrationMode,
+) bool {
+	if len(inspection.missingTargets) != 0 || !inspection.denseIndexPresent {
+		return false
+	}
+	if mode != mmapCreatedCollection {
+		return true
+	}
+	if !inspection.contentHashPresent {
+		return false
+	}
+	return !service.cfg.HybridMode || inspection.sparseIndexPresent
+}
+
+func mmapLoadStateStable(state entity.LoadStateCode) bool {
+	return state == entity.LoadStateLoaded || state == entity.LoadStateNotLoad
+}
+
+func (service *Service) waitForCreatedMmapTargets(
+	ctx context.Context,
+	collectionName string,
+) (mmapInspection, error) {
+	pollCtx, cancel := context.WithTimeout(ctx, service.callTimeouts().Metadata)
+	defer cancel()
+	for {
+		inspection, err := service.inspectMmapPolicy(pollCtx, collectionName)
+		if err != nil {
+			return mmapInspection{}, err
+		}
+		if inspection.denseIndexPresent && inspection.contentHashPresent &&
+			(!service.cfg.HybridMode || inspection.sparseIndexPresent) {
+			return inspection, nil
+		}
+		select {
+		case <-pollCtx.Done():
+			err := fmt.Errorf(
+				"wait for required mmap indexes on %s: %w",
+				collectionName,
+				pollCtx.Err(),
+			)
+			slog.ErrorContext(ctx, "wait for required mmap indexes failed", "err", err)
+			return mmapInspection{}, err
+		case <-time.After(indexVisibilityPollInterval):
+		}
+	}
+}
+
+func (service *Service) ensureCreatedCollectionReady(
+	ctx context.Context,
+	collectionName string,
+) error {
+	if service.mmapPolicyComplete(collectionName) {
+		return nil
+	}
+	if err := service.ensureCreatedCollectionMmap(ctx, collectionName); err != nil {
+		return err
+	}
+	if err := service.loadCollection(ctx, collectionName); err != nil {
+		service.invalidateMmapPolicy(collectionName)
+		return err
+	}
+	return nil
+}
+
+func (service *Service) ensureCreatedCollectionReadyForWrite(
+	ctx context.Context,
+	collectionName string,
+) error {
+	err := service.ensureCreatedCollectionReady(ctx, collectionName)
+	if err == nil || !errors.Is(err, errMmapPolicyIncomplete) {
+		return err
+	}
+	slog.WarnContext(
+		ctx,
+		"semantic.mmap_created_collection_nonconvergent",
+		"collection", collectionName,
+		"policy_version", mmapPolicyVersion,
+		"err", err,
+	)
+	return service.loadCollection(ctx, collectionName)
+}
+
+func (service *Service) ensureCreatedCollectionMmap(
+	ctx context.Context,
+	collectionName string,
+) error {
+	if service.mmapPolicyComplete(collectionName) {
+		return nil
+	}
+	pollCtx, cancel := context.WithTimeout(ctx, service.callTimeouts().Metadata)
+	defer cancel()
+	for {
+		outcome, err := service.ensureMmapEnabledOnce(
+			pollCtx,
+			collectionName,
+			mmapCreatedCollection,
+		)
+		if err != nil {
+			return err
+		}
+		if outcome != mmapOutcomeSkipped {
+			return nil
+		}
+		select {
+		case <-pollCtx.Done():
+			err := fmt.Errorf(
+				"wait for mmap policy %d on created collection %s: %w",
+				mmapPolicyVersion,
+				collectionName,
+				pollCtx.Err(),
+			)
+			slog.ErrorContext(ctx, "wait for created collection mmap policy failed", "err", err)
+			return err
+		case <-time.After(indexVisibilityPollInterval):
+		}
+	}
+}
+
+func (service *Service) alterMmapTargets(
+	ctx context.Context,
+	collectionName string,
+	targets []mmapTarget,
+) error {
+	for _, target := range targets {
+		switch target.kind {
+		case mmapFieldTarget:
+			if err := service.milvus.AlterCollectionFieldProperty(
+				ctx,
+				milvusclient.NewAlterCollectionFieldPropertiesOption(
+					collectionName,
+					target.name,
+				).WithProperty(mmapEnabledKey, mmapEnabledValue),
+			); err != nil {
+				return wrapStoreError(ctx, err, "enable mmap on field "+target.name+" of "+collectionName)
+			}
+		case mmapIndexTarget:
+			if err := service.milvus.AlterIndexProperties(
+				ctx,
+				milvusclient.NewAlterIndexPropertiesOption(
+					collectionName,
+					target.name,
+				).WithProperty(mmapEnabledKey, mmapEnabledValue),
+			); err != nil {
+				return wrapStoreError(ctx, err, "enable mmap on index "+target.name+" of "+collectionName)
+			}
+		}
+	}
+	return nil
+}
+
+func (service *Service) restoreMmapReadyState(
+	ctx context.Context,
+	collectionName string,
+	operationErr error,
+) error {
+	restoreCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		service.sharedCollectionLoadCeiling(),
+	)
+	defer cancel()
+	restoreErr := service.loadCollection(restoreCtx, collectionName)
+	if restoreErr == nil {
+		return operationErr
+	}
+	joinedErr := errors.Join(
+		operationErr,
+		fmt.Errorf("restore ready collection %s after mmap failure: %w", collectionName, restoreErr),
+	)
+	slog.ErrorContext(ctx, "restore ready collection after mmap failure failed", "err", joinedErr)
+	return joinedErr
+}
+
+func (service *Service) ensureMmapEnabledOnCollection(
+	ctx context.Context,
+	collectionName string,
+	mode mmapMigrationMode,
+) (mmapOutcome, error) {
 	hasCollection, err := service.hasCollection(
 		ctx,
 		collectionName,
@@ -111,96 +471,146 @@ func (service *Service) ensureMmapEnabledOnCollection(ctx context.Context, colle
 		return mmapOutcomeSkipped, nil
 	}
 
-	indexNames, err := service.milvus.ListIndexes(ctx, milvusclient.NewListIndexOption(collectionName).WithFieldName(denseVectorFieldName))
-	if err != nil {
-		return mmapOutcomeUnknown, wrapStoreError(ctx, err, "list dense indexes for "+collectionName)
-	}
-	if len(indexNames) == 0 {
-		slog.DebugContext(ctx, "semantic.mmap_skip_no_dense_index", "collection", collectionName)
-		return mmapOutcomeSkipped, nil
-	}
-	indexName := indexNames[0]
-
-	indexDesc, err := service.milvus.DescribeIndex(ctx, milvusclient.NewDescribeIndexOption(collectionName, indexName))
-	if err != nil {
-		return mmapOutcomeUnknown, wrapStoreError(ctx, err, "describe index "+indexName+" on "+collectionName)
-	}
-	alreadyMmapped := indexDesc.Params()[mmapEnabledKey] == mmapEnabledValue
-
-	loaded, err := service.collectionLoaded(ctx, collectionName)
+	observedState, observation, err := service.residency.Observe(ctx, collectionName)
 	if err != nil {
 		return mmapOutcomeUnknown, err
 	}
-
-	if alreadyMmapped {
-		// Already migrated. Normally the collection is loaded (Milvus restores
-		// load state on restart), so this is a no-op. Only load it if it somehow
-		// came up released.
-		if loaded {
-			return mmapOutcomeAlready, nil
-		}
-		if err := service.loadCollection(ctx, collectionName); err != nil {
-			return mmapOutcomeUnknown, err
-		}
+	inspection, err := service.inspectMmapPolicy(ctx, collectionName)
+	observation.ReleaseContext(ctx)
+	if err != nil {
+		return mmapOutcomeUnknown, err
+	}
+	if observedState == collectionResidencyLoading ||
+		!mmapLoadStateStable(inspection.loadState) {
+		return mmapOutcomeSkipped, nil
+	}
+	if !inspection.denseIndexPresent && mode == mmapExistingCollection {
+		return mmapOutcomeSkipped, nil
+	}
+	if service.mmapInspectionComplete(inspection, mode) {
 		return mmapOutcomeAlready, nil
 	}
 
-	// Altering mmap requires a released collection, and ReleaseCollection returns
-	// before the unload completes, so release and then wait until the collection
-	// actually reports NotLoad before the alter, otherwise the alter is rejected
-	// with "collection already loaded".
-	if loaded {
-		if err := service.releaseCollection(ctx, collectionName); err != nil {
-			return mmapOutcomeUnknown, err
-		}
-		if err := service.awaitCollectionReleased(ctx, collectionName); err != nil {
-			return mmapOutcomeUnknown, err
-		}
-	}
-	if err := service.milvus.AlterCollectionFieldProperty(ctx, milvusclient.NewAlterCollectionFieldPropertiesOption(collectionName, denseVectorFieldName).WithProperty(mmapEnabledKey, mmapEnabledValue)); err != nil {
-		return mmapOutcomeUnknown, wrapStoreError(ctx, err, "enable mmap on dense field of "+collectionName)
-	}
-	if err := service.milvus.AlterIndexProperties(ctx, milvusclient.NewAlterIndexPropertiesOption(collectionName, indexName).WithProperty(mmapEnabledKey, mmapEnabledValue)); err != nil {
-		return mmapOutcomeUnknown, wrapStoreError(ctx, err, "enable mmap on dense index "+indexName+" of "+collectionName)
-	}
-	if err := service.loadCollection(ctx, collectionName); err != nil {
+	maintenance, err := service.residency.Maintain(ctx, collectionName)
+	if err != nil {
 		return mmapOutcomeUnknown, err
 	}
-	slog.InfoContext(ctx, "semantic.mmap_enabled", "collection", collectionName, "index", indexName, "was_loaded", loaded)
+	defer maintenance.ReleaseContext(ctx)
+	return service.migrateMmapUnderMaintenance(ctx, collectionName, mode)
+}
+
+func (service *Service) migrateMmapUnderMaintenance(
+	ctx context.Context,
+	collectionName string,
+	mode mmapMigrationMode,
+) (mmapOutcome, error) {
+	var inspection mmapInspection
+	var err error
+
+	if mode == mmapCreatedCollection {
+		inspection, err = service.waitForCreatedMmapTargets(ctx, collectionName)
+	} else {
+		inspection, err = service.inspectMmapPolicy(ctx, collectionName)
+	}
+	if err != nil {
+		return mmapOutcomeUnknown, err
+	}
+	if !inspection.denseIndexPresent && mode == mmapExistingCollection {
+		return mmapOutcomeSkipped, nil
+	}
+	if service.mmapInspectionComplete(inspection, mode) {
+		return mmapOutcomeAlready, nil
+	}
+	if !mmapLoadStateStable(inspection.loadState) {
+		return mmapOutcomeSkipped, nil
+	}
+
+	priorReady := inspection.loadState == entity.LoadStateLoaded
+	releaseStarted := false
+	if priorReady {
+		releaseStarted = true
+		if err := service.releaseCollection(ctx, collectionName); err != nil {
+			return mmapOutcomeUnknown, service.restoreMmapReadyState(ctx, collectionName, err)
+		}
+		if err := service.awaitCollectionReleased(ctx, collectionName); err != nil {
+			return mmapOutcomeUnknown, service.restoreMmapReadyState(ctx, collectionName, err)
+		}
+	}
+
+	if err := service.alterMmapTargets(ctx, collectionName, inspection.missingTargets); err != nil {
+		if releaseStarted {
+			err = service.restoreMmapReadyState(ctx, collectionName, err)
+		}
+		return mmapOutcomeUnknown, err
+	}
+	rechecked, err := service.inspectMmapPolicy(ctx, collectionName)
+	if err == nil && !service.mmapInspectionComplete(rechecked, mode) {
+		err = fmt.Errorf(
+			"mmap policy %d incomplete after alteration on %s: %w",
+			mmapPolicyVersion,
+			collectionName,
+			errMmapPolicyIncomplete,
+		)
+	}
+	if err != nil {
+		if releaseStarted {
+			err = service.restoreMmapReadyState(ctx, collectionName, err)
+		}
+		return mmapOutcomeUnknown, err
+	}
+	if priorReady {
+		if err := service.loadCollection(ctx, collectionName); err != nil {
+			return mmapOutcomeUnknown, service.restoreMmapReadyState(ctx, collectionName, err)
+		}
+	}
+	slog.InfoContext(
+		ctx,
+		"semantic.mmap_enabled",
+		"collection", collectionName,
+		"policy_version", mmapPolicyVersion,
+		"was_loaded", priorReady,
+	)
 	return mmapOutcomeMigrated, nil
 }
 
-// ensureMmapEnabledOnce runs the dense mmap migration at most once per collection
-// per process. The per-process guard means exactly "confirmed mmap-migrated":
-// it is recorded only when mmap is verified enabled (a fresh migration or an
-// already-mmapped collection), never on an error and never on a no-index skip.
-// So a transient fault retries on the next sweep, and a collection that was still
-// mid-staging (no dense index yet) stays eligible until its index exists.
-func (service *Service) ensureMmapEnabledOnce(ctx context.Context, collectionName string) (mmapOutcome, error) {
-	if _, done := service.ensuredMmapEnabled.Load(collectionName); done {
+func (service *Service) ensureMmapEnabledOnce(
+	ctx context.Context,
+	collectionName string,
+	mode mmapMigrationMode,
+) (mmapOutcome, error) {
+	if service.consumeMmapBackoffSweep(collectionName, mode) {
+		return mmapOutcomeBackoff, nil
+	}
+	service.mmapPolicyMutex.Lock()
+	generation := service.mmapPolicyGeneration[collectionName]
+	version, done := service.mmapPolicyVersions[collectionName]
+	service.mmapPolicyMutex.Unlock()
+	if done && version == mmapPolicyVersion {
 		return mmapOutcomeAlready, nil
 	}
-	outcome, err := service.ensureMmapEnabledOnCollection(ctx, collectionName)
+	outcome, err := service.ensureMmapEnabledOnCollection(ctx, collectionName, mode)
 	if err != nil {
+		if errors.Is(err, errMmapPolicyIncomplete) {
+			service.recordMmapNonConvergence(collectionName)
+		}
 		return mmapOutcomeUnknown, err
 	}
 	if outcome == mmapOutcomeMigrated || outcome == mmapOutcomeAlready {
-		service.ensuredMmapEnabled.Store(collectionName, struct{}{})
+		service.clearMmapNonConvergence(collectionName)
+		service.mmapPolicyMutex.Lock()
+		if service.mmapPolicyGeneration[collectionName] == generation {
+			if service.mmapPolicyVersions == nil {
+				service.mmapPolicyVersions = make(map[string]int)
+			}
+			service.mmapPolicyVersions[collectionName] = mmapPolicyVersion
+		}
+		service.mmapPolicyMutex.Unlock()
 	}
 	return outcome, nil
 }
 
-// EnsureMmapEnabledAllCollections sweeps every collection and enables dense mmap
-// on each, uniformly and content-agnostically. The daemon's periodic sync loop
-// drives it on the startup tick and every interval tick, which gives the
-// migration convergence (a failed collection retries next tick), self-heal on a
-// degraded boot (the first tick no-ops while Milvus is down, a later tick catches
-// it coming up), and coverage of collections created after the first sweep, all
-// without owning any scheduling of its own. After the first fully successful
-// sweep, later ticks are near-free: every migrated collection is a guard hit with
-// no RPC. It is fault-tolerant per collection: one failure is counted and the
-// sweep continues, and a non-zero failed count is surfaced in the end-of-sweep
-// summary so a broken sweep cannot look healthy.
+// EnsureMmapEnabledAllCollections applies mmap policy version 2 to durable
+// collections and leaves staging collections to create-time migration.
 func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 	if !service.Available() {
 		return
@@ -214,19 +624,19 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 	migrated := 0
 	already := 0
 	skipped := 0
+	backoff := 0
 	failed := 0
 	for _, collectionName := range collections {
-		// Skip transient staging collections: they are promoted or dropped, may have
-		// no dense index yet, and migrating them only logs sweep failures every tick.
 		if isStagingCollection(collectionName) {
 			skipped++
 			continue
 		}
-		// ensureMmapEnabledOnce logs the specific failing operation at its source;
-		// here we only count it so one collection's failure never blocks the rest
-		// and the end-of-sweep summary still surfaces a non-zero failed count.
-		outcome, err := service.ensureMmapEnabledOnce(ctx, collectionName)
-		if err != nil {
+		outcome, ensureErr := service.ensureMmapEnabledOnce(
+			ctx,
+			collectionName,
+			mmapExistingCollection,
+		)
+		if ensureErr != nil {
 			failed++
 			continue
 		}
@@ -237,6 +647,8 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 			already++
 		case mmapOutcomeSkipped:
 			skipped++
+		case mmapOutcomeBackoff:
+			backoff++
 		case mmapOutcomeUnknown:
 		}
 	}
@@ -246,11 +658,9 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 		slog.Int("migrated", migrated),
 		slog.Int("already_mmapped", already),
 		slog.Int("skipped_no_index", skipped),
+		slog.Int("backoff", backoff),
 		slog.Int("failed", failed),
 	}
-	// Keep the steady state quiet: a tick that changed nothing logs at debug, a
-	// tick that migrated something logs at info, and any failure logs at warn so
-	// a persistently-failing collection stays visible across the retry cadence.
 	level := slog.LevelDebug
 	message := "semantic.mmap_sweep_complete"
 	switch {

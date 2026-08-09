@@ -49,6 +49,11 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 	if len(chunks) == 0 {
 		return nil
 	}
+	if hasStaging {
+		if err := service.ensureCreatedCollectionReadyForWrite(ctx, stagingName); err != nil {
+			return err
+		}
+	}
 	chunks = service.guardrailExpand(ctx, codebasePath, chunks, "stage")
 	return service.insertChunksBatched(ctx, stagingName, chunks, hasStaging, "Generating embeddings and writing to Milvus...", progress, reuse, columnSet)
 }
