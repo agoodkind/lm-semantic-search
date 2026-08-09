@@ -10,6 +10,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/metrics"
 )
 
 const (
@@ -576,7 +577,11 @@ func (service *Service) ensureMmapEnabledOnce(
 		if errors.Is(err, errMmapPolicyIncomplete) {
 			service.recordMmapNonConvergence(collectionName)
 		}
+		metrics.MilvusMmapMigrationDone(true)
 		return mmapOutcomeUnknown, err
+	}
+	if outcome == mmapOutcomeMigrated {
+		metrics.MilvusMmapMigrationDone(false)
 	}
 	if outcome == mmapOutcomeMigrated || outcome == mmapOutcomeAlready {
 		service.clearMmapNonConvergence(collectionName)

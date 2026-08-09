@@ -16,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"google.golang.org/grpc"
@@ -23,6 +24,35 @@ import (
 )
 
 const mmapTestCollection = "hybrid_code_chunks_mmaptest"
+
+func TestMmapPolicyRecordsMigrationSuccessAndFailure(t *testing.T) {
+	before := metrics.Read()
+	_, successfulService := newMmapPolicyTestService(t)
+	successfulService.EnsureMmapEnabledAllCollections(context.Background())
+	afterSuccess := metrics.Read()
+	if afterSuccess.MilvusMmapMigrationsTotal-before.MilvusMmapMigrationsTotal != 1 {
+		t.Fatalf(
+			"successful migration delta = %d, want 1",
+			afterSuccess.MilvusMmapMigrationsTotal-before.MilvusMmapMigrationsTotal,
+		)
+	}
+	if afterSuccess.MilvusMmapMigrationFailuresTotal != before.MilvusMmapMigrationFailuresTotal {
+		t.Fatalf("successful migration changed failure total")
+	}
+
+	failingServer, failingService := newMmapPolicyTestService(t)
+	failingServer.mutex.Lock()
+	failingServer.failAlterOnce = "contentHash"
+	failingServer.mutex.Unlock()
+	failingService.EnsureMmapEnabledAllCollections(context.Background())
+	afterFailure := metrics.Read()
+	if afterFailure.MilvusMmapMigrationsTotal-afterSuccess.MilvusMmapMigrationsTotal != 1 {
+		t.Fatalf("failed migration delta = %d, want 1", afterFailure.MilvusMmapMigrationsTotal-afterSuccess.MilvusMmapMigrationsTotal)
+	}
+	if afterFailure.MilvusMmapMigrationFailuresTotal-afterSuccess.MilvusMmapMigrationFailuresTotal != 1 {
+		t.Fatalf("migration failure delta = %d, want 1", afterFailure.MilvusMmapMigrationFailuresTotal-afterSuccess.MilvusMmapMigrationFailuresTotal)
+	}
+}
 
 type mmapPolicyServer struct {
 	milvuspb.UnimplementedMilvusServiceServer

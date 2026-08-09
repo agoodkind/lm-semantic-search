@@ -58,6 +58,64 @@ func TestStatusMetricsCarryCounterNamesAndUnits(t *testing.T) {
 	}
 }
 
+func TestStatusMetricsExposeMilvusCollectionMetrics(t *testing.T) {
+	t.Parallel()
+
+	snapshot := metrics.Snapshot{
+		MilvusCollectionLoadsTotal:              1,
+		MilvusCollectionLoadFailuresTotal:       2,
+		MilvusCollectionLoadWaitTimeoutsTotal:   3,
+		MilvusCollectionLoadInflight:            4,
+		MilvusCollectionLoadLatencyMSSum:        5,
+		MilvusCollectionUnloadsTotal:            6,
+		MilvusCollectionUnloadFailuresTotal:     7,
+		MilvusCollectionUnloadSkippedInUseTotal: 8,
+		MilvusCollectionUnloadLatencyMSSum:      9,
+		MilvusCollectionLeasesActive:            10,
+		MilvusCollectionsIdle:                   11,
+		MilvusCollectionsLoading:                12,
+		MilvusCollectionsReady:                  13,
+		MilvusMmapMigrationsTotal:               14,
+		MilvusMmapMigrationFailuresTotal:        15,
+	}
+	list := buildStatusMetrics(nil, snapshot, time.Unix(1785156767, 0))
+	cases := []struct {
+		name string
+		unit string
+	}{
+		{"milvus_collection_loads_total", unitLoads},
+		{"milvus_collection_load_failures_total", unitLoads},
+		{"milvus_collection_load_wait_timeouts_total", unitTimeouts},
+		{"milvus_collection_load_inflight", unitLoads},
+		{"milvus_collection_load_latency_ms_sum", unitMillis},
+		{"milvus_collection_unloads_total", unitUnloads},
+		{"milvus_collection_unload_failures_total", unitUnloads},
+		{"milvus_collection_unload_skipped_in_use_total", unitUnloads},
+		{"milvus_collection_unload_latency_ms_sum", unitMillis},
+		{"milvus_collection_leases_active", unitLeases},
+		{"milvus_collections_idle", unitCollections},
+		{"milvus_collections_loading", unitCollections},
+		{"milvus_collections_ready", unitCollections},
+		{"milvus_mmap_migrations_total", unitMigrations},
+		{"milvus_mmap_migration_failures_total", unitMigrations},
+	}
+	for index, testCase := range cases {
+		metric := metricByName(list, testCase.name)
+		if metric == nil {
+			t.Fatalf("%s absent", testCase.name)
+		}
+		if metric.GetGroup() != statusGroupMilvus {
+			t.Errorf("%s group = %q, want %q", testCase.name, metric.GetGroup(), statusGroupMilvus)
+		}
+		if metric.GetUnit() != testCase.unit {
+			t.Errorf("%s unit = %q, want %q", testCase.name, metric.GetUnit(), testCase.unit)
+		}
+		if metric.GetIntValue() != int64(index+1) {
+			t.Errorf("%s = %d, want %d", testCase.name, metric.GetIntValue(), index+1)
+		}
+	}
+}
+
 // TestStatusMetricsSetZeroValuedOneofs proves a zero counter still carries a
 // value. protojson omits a plain proto3 scalar at its zero value, so a metric
 // whose oneof went unset would be indistinguishable from an absent measurement

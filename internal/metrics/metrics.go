@@ -36,6 +36,22 @@ var (
 	jobsCancelledTotal atomic.Int64
 	bootResumesTotal   atomic.Int64
 	jobsActive         atomic.Int64
+
+	milvusCollectionLoadsTotal              atomic.Int64
+	milvusCollectionLoadFailuresTotal       atomic.Int64
+	milvusCollectionLoadWaitTimeoutsTotal   atomic.Int64
+	milvusCollectionLoadInflight            atomic.Int64
+	milvusCollectionLoadLatencyMSSum        atomic.Int64
+	milvusCollectionUnloadsTotal            atomic.Int64
+	milvusCollectionUnloadFailuresTotal     atomic.Int64
+	milvusCollectionUnloadSkippedInUseTotal atomic.Int64
+	milvusCollectionUnloadLatencyMSSum      atomic.Int64
+	milvusCollectionLeasesActive            atomic.Int64
+	milvusCollectionsIdle                   atomic.Int64
+	milvusCollectionsLoading                atomic.Int64
+	milvusCollectionsReady                  atomic.Int64
+	milvusMmapMigrationsTotal               atomic.Int64
+	milvusMmapMigrationFailuresTotal        atomic.Int64
 )
 
 // Snapshot is a point-in-time copy of every counter. The field names map
@@ -72,6 +88,22 @@ type Snapshot struct {
 	JobsCancelledTotal int64
 	BootResumesTotal   int64
 	JobsActive         int64
+
+	MilvusCollectionLoadsTotal              int64
+	MilvusCollectionLoadFailuresTotal       int64
+	MilvusCollectionLoadWaitTimeoutsTotal   int64
+	MilvusCollectionLoadInflight            int64
+	MilvusCollectionLoadLatencyMSSum        int64
+	MilvusCollectionUnloadsTotal            int64
+	MilvusCollectionUnloadFailuresTotal     int64
+	MilvusCollectionUnloadSkippedInUseTotal int64
+	MilvusCollectionUnloadLatencyMSSum      int64
+	MilvusCollectionLeasesActive            int64
+	MilvusCollectionsIdle                   int64
+	MilvusCollectionsLoading                int64
+	MilvusCollectionsReady                  int64
+	MilvusMmapMigrationsTotal               int64
+	MilvusMmapMigrationFailuresTotal        int64
 }
 
 // EmbedBatchStarted records that an embedding batch entered flight,
@@ -174,28 +206,106 @@ func JobResumed() {
 	bootResumesTotal.Add(1)
 }
 
+// MilvusCollectionLoadStarted records one collection load attempt.
+func MilvusCollectionLoadStarted() {
+	milvusCollectionLoadsTotal.Add(1)
+	milvusCollectionLoadInflight.Add(1)
+}
+
+// MilvusCollectionLoadDone records one completed collection load attempt.
+func MilvusCollectionLoadDone(elapsed time.Duration, failed bool) {
+	milvusCollectionLoadInflight.Add(-1)
+	milvusCollectionLoadLatencyMSSum.Add(elapsed.Milliseconds())
+	if failed {
+		milvusCollectionLoadFailuresTotal.Add(1)
+	}
+}
+
+// MilvusCollectionLoadWaitTimedOut records one caller wait timeout.
+func MilvusCollectionLoadWaitTimedOut() {
+	milvusCollectionLoadWaitTimeoutsTotal.Add(1)
+}
+
+// MilvusCollectionUnloadStarted records one collection unload attempt.
+func MilvusCollectionUnloadStarted() {
+	milvusCollectionUnloadsTotal.Add(1)
+}
+
+// MilvusCollectionUnloadDone records one completed collection unload attempt.
+func MilvusCollectionUnloadDone(elapsed time.Duration, failed bool) {
+	milvusCollectionUnloadLatencyMSSum.Add(elapsed.Milliseconds())
+	if failed {
+		milvusCollectionUnloadFailuresTotal.Add(1)
+	}
+}
+
+// MilvusCollectionUnloadSkippedInUse records an unload prevented by protection.
+func MilvusCollectionUnloadSkippedInUse() {
+	milvusCollectionUnloadSkippedInUseTotal.Add(1)
+}
+
+// MilvusCollectionLeaseAcquired raises the active lease gauge.
+func MilvusCollectionLeaseAcquired() {
+	milvusCollectionLeasesActive.Add(1)
+}
+
+// MilvusCollectionLeaseReleased lowers the active lease gauge.
+func MilvusCollectionLeaseReleased() {
+	milvusCollectionLeasesActive.Add(-1)
+}
+
+// SetMilvusCollectionStates replaces aggregate non-staging residency gauges.
+func SetMilvusCollectionStates(idle, loading, ready int) {
+	milvusCollectionsIdle.Store(int64(idle))
+	milvusCollectionsLoading.Store(int64(loading))
+	milvusCollectionsReady.Store(int64(ready))
+}
+
+// MilvusMmapMigrationDone records one mmap migration attempt.
+func MilvusMmapMigrationDone(failed bool) {
+	milvusMmapMigrationsTotal.Add(1)
+	if failed {
+		milvusMmapMigrationFailuresTotal.Add(1)
+	}
+}
+
 // Read returns a consistent-enough snapshot of every counter. Each load
 // is individually atomic; the snapshot is not a single transactional
 // read, which is acceptable for monitoring counters.
 func Read() Snapshot {
 	return Snapshot{
-		EmbedBatchesTotal:        embedBatchesTotal.Load(),
-		EmbedBatchesFailed:       embedBatchesFailed.Load(),
-		EmbedVectorsTotal:        embedVectorsTotal.Load(),
-		EmbedLatencyMSSum:        embedLatencyMSSum.Load(),
-		EmbedInflight:            embedInflight.Load(),
-		EmbedChunksReusedTotal:   embedChunksReusedTotal.Load(),
-		EmbedInputsRefusedEmpty:  embedInputsRefusedEmpty.Load(),
-		ConvergeUpsertTotal:      convergeUpsertTotal.Load(),
-		ConvergeRemoveTotal:      convergeRemoveTotal.Load(),
-		ConvergeCopyChunksTotal:  convergeCopyChunksTotal.Load(),
-		SweepRunsTotal:           sweepRunsTotal.Load(),
-		SweepChangedTotal:        sweepChangedTotal.Load(),
-		SyncSkippedInflightTotal: syncSkippedInflightTotal.Load(),
-		JobsCompletedTotal:       jobsCompletedTotal.Load(),
-		JobsFailedTotal:          jobsFailedTotal.Load(),
-		JobsCancelledTotal:       jobsCancelledTotal.Load(),
-		BootResumesTotal:         bootResumesTotal.Load(),
-		JobsActive:               jobsActive.Load(),
+		EmbedBatchesTotal:                       embedBatchesTotal.Load(),
+		EmbedBatchesFailed:                      embedBatchesFailed.Load(),
+		EmbedVectorsTotal:                       embedVectorsTotal.Load(),
+		EmbedLatencyMSSum:                       embedLatencyMSSum.Load(),
+		EmbedInflight:                           embedInflight.Load(),
+		EmbedChunksReusedTotal:                  embedChunksReusedTotal.Load(),
+		EmbedInputsRefusedEmpty:                 embedInputsRefusedEmpty.Load(),
+		ConvergeUpsertTotal:                     convergeUpsertTotal.Load(),
+		ConvergeRemoveTotal:                     convergeRemoveTotal.Load(),
+		ConvergeCopyChunksTotal:                 convergeCopyChunksTotal.Load(),
+		SweepRunsTotal:                          sweepRunsTotal.Load(),
+		SweepChangedTotal:                       sweepChangedTotal.Load(),
+		SyncSkippedInflightTotal:                syncSkippedInflightTotal.Load(),
+		JobsCompletedTotal:                      jobsCompletedTotal.Load(),
+		JobsFailedTotal:                         jobsFailedTotal.Load(),
+		JobsCancelledTotal:                      jobsCancelledTotal.Load(),
+		BootResumesTotal:                        bootResumesTotal.Load(),
+		JobsActive:                              jobsActive.Load(),
+		MilvusCollectionLoadsTotal:              milvusCollectionLoadsTotal.Load(),
+		MilvusCollectionLoadFailuresTotal:       milvusCollectionLoadFailuresTotal.Load(),
+		MilvusCollectionLoadWaitTimeoutsTotal:   milvusCollectionLoadWaitTimeoutsTotal.Load(),
+		MilvusCollectionLoadInflight:            milvusCollectionLoadInflight.Load(),
+		MilvusCollectionLoadLatencyMSSum:        milvusCollectionLoadLatencyMSSum.Load(),
+		MilvusCollectionUnloadsTotal:            milvusCollectionUnloadsTotal.Load(),
+		MilvusCollectionUnloadFailuresTotal:     milvusCollectionUnloadFailuresTotal.Load(),
+		MilvusCollectionUnloadSkippedInUseTotal: milvusCollectionUnloadSkippedInUseTotal.Load(),
+		MilvusCollectionUnloadLatencyMSSum:      milvusCollectionUnloadLatencyMSSum.Load(),
+		MilvusCollectionLeasesActive:            milvusCollectionLeasesActive.Load(),
+		MilvusCollectionsIdle:                   milvusCollectionsIdle.Load(),
+		MilvusCollectionsLoading:                milvusCollectionsLoading.Load(),
+		MilvusCollectionsReady:                  milvusCollectionsReady.Load(),
+		MilvusMmapMigrationsTotal:               milvusMmapMigrationsTotal.Load(),
+		MilvusMmapMigrationFailuresTotal:        milvusMmapMigrationFailuresTotal.Load(),
 	}
 }

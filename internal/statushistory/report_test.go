@@ -14,6 +14,31 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+func TestMilvusMetricDefinitionsCarryKindsAndUnits(t *testing.T) {
+	cases := map[string]metricDefinition{
+		"milvus_collection_loads_total":                 {kind: metricKindCounter, unit: "loads"},
+		"milvus_collection_load_failures_total":         {kind: metricKindCounter, unit: "loads"},
+		"milvus_collection_load_wait_timeouts_total":    {kind: metricKindCounter, unit: "timeouts"},
+		"milvus_collection_load_inflight":               {kind: metricKindGauge, unit: "loads"},
+		"milvus_collection_load_latency_ms_sum":         {kind: metricKindCounter, unit: "ms"},
+		"milvus_collection_unloads_total":               {kind: metricKindCounter, unit: "unloads"},
+		"milvus_collection_unload_failures_total":       {kind: metricKindCounter, unit: "unloads"},
+		"milvus_collection_unload_skipped_in_use_total": {kind: metricKindCounter, unit: "unloads"},
+		"milvus_collection_unload_latency_ms_sum":       {kind: metricKindCounter, unit: "ms"},
+		"milvus_collection_leases_active":               {kind: metricKindGauge, unit: "leases"},
+		"milvus_collections_idle":                       {kind: metricKindGauge, unit: "collections"},
+		"milvus_collections_loading":                    {kind: metricKindGauge, unit: "collections"},
+		"milvus_collections_ready":                      {kind: metricKindGauge, unit: "collections"},
+		"milvus_mmap_migrations_total":                  {kind: metricKindCounter, unit: "migrations"},
+		"milvus_mmap_migration_failures_total":          {kind: metricKindCounter, unit: "migrations"},
+	}
+	for name, want := range cases {
+		if got := metricDefinitions[name]; got != want {
+			t.Errorf("%s definition = %+v, want %+v", name, got, want)
+		}
+	}
+}
+
 func TestBuildUsesOnlyDaemonStateAndReportsExclusiveTime(t *testing.T) {
 	t.Parallel()
 
