@@ -325,6 +325,16 @@ func (manager *Manager) searchConversationCollectionFiltered(ctx context.Context
 		manager.noteDependencyFailure(semantic.ErrUnavailable)
 		return nil, semantic.ErrUnavailable
 	}
+	lease, leaseErr := manager.semantic.AcquireCollection(ctx, codebase.CollectionName)
+	if leaseErr != nil {
+		manager.noteDependencyFailure(leaseErr)
+		return nil, fmt.Errorf(
+			"acquire conversation collection %s: %w",
+			codebase.CollectionName,
+			leaseErr,
+		)
+	}
+	defer lease.Release()
 	chunks, err := manager.semantic.SearchConversationCollectionCapped(ctx, codebase.CollectionName, query, limit, perConversationLimit, filter.MinScore, filter.toSemanticFilter())
 	if err != nil {
 		manager.noteDependencyFailure(err)

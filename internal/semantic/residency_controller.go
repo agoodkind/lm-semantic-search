@@ -27,6 +27,11 @@ var (
 
 type collectionTransition func(context.Context, string) error
 
+// CollectionLease protects one collection for the full duration of a search.
+type CollectionLease interface {
+	Release()
+}
+
 type residencyTimer interface {
 	Stop() bool
 }
@@ -136,6 +141,24 @@ func (service *Service) initializeResidencyControllerWithLoad(load collectionTra
 			return service.awaitCollectionReleased(ctx, collectionName)
 		},
 	})
+}
+
+// AcquireCollection makes a collection searchable and protects it until release.
+func (service *Service) AcquireCollection(
+	ctx context.Context,
+	collectionName string,
+) (CollectionLease, error) {
+	lease, err := service.residency.Acquire(ctx, collectionName)
+	if errors.Is(err, ErrCollectionLoadWaitTimeout) {
+		wrappedErr := fmt.Errorf(
+			"acquire collection %s: %w",
+			collectionName,
+			ErrCollectionNotReady,
+		)
+		slog.WarnContext(ctx, "collection load wait expired", "err", wrappedErr)
+		return nil, wrappedErr
+	}
+	return lease, err
 }
 
 func newCollectionResidencyController(

@@ -25,6 +25,15 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 	}
 	rows := make([]view.CodebaseRowView, 0, len(views))
 	for _, codebaseView := range views {
+		readiness, _ := server.manager.pathCollectionObservation(
+			ctx,
+			codebaseView.Codebase.CanonicalPath,
+			ownsLiveCollection(codebaseView.Codebase),
+		)
+		codebaseView.Display = server.manager.displayForCollectionReadiness(
+			codebaseView.Codebase,
+			readiness,
+		)
 		pbCodebase := pbconv.ToCodebase(codebaseView.Codebase)
 		applyDisplayTokens(pbCodebase, codebaseView.Display)
 		reuseSiblingCount := int32(0)

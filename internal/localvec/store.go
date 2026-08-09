@@ -43,6 +43,10 @@ type Store struct {
 	available   bool
 }
 
+type collectionLease struct{}
+
+func (collectionLease) Release() {}
+
 // BackendName names this store for any surface reporting which backend is in
 // use, so the answer comes from the store that exists rather than the setting
 // that asked for one.
@@ -107,6 +111,17 @@ func newStoreWithProvider(
 // Available reports whether the embedded vector store can serve requests.
 func (store *Store) Available() bool {
 	return store != nil && store.available
+}
+
+// AcquireCollection protects a local collection, which is always resident.
+func (store *Store) AcquireCollection(
+	ctx context.Context,
+	_ string,
+) (semantic.CollectionLease, error) {
+	if err := operationContextError(ctx, "acquire local collection"); err != nil {
+		return nil, err
+	}
+	return collectionLease{}, nil
 }
 
 // CollectionName returns the local collection name for a codebase path.
@@ -280,6 +295,29 @@ func (store *Store) CollectionState(
 ) (exists bool, loaded bool, err error) {
 	exists, err = store.HasCollectionForPath(ctx, codebasePath)
 	return exists, true, err
+}
+
+// ObserveCollection reports local collections as always resident.
+func (store *Store) ObserveCollection(
+	ctx context.Context,
+	codebasePath string,
+) (semantic.CollectionObservation, error) {
+	facts, err := store.InspectCollection(ctx, store.CollectionName(codebasePath))
+	if err != nil {
+		return semantic.CollectionObservation{}, err
+	}
+	if !facts.Exists {
+		return semantic.CollectionObservation{
+			State:     semantic.CollectionStateAbsent,
+			Rows:      0,
+			RowsKnown: false,
+		}, nil
+	}
+	return semantic.CollectionObservation{
+		State:     semantic.CollectionStateReady,
+		Rows:      facts.Rows,
+		RowsKnown: facts.RowsKnown,
+	}, nil
 }
 
 // Drop removes a live collection.

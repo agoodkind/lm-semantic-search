@@ -23,7 +23,7 @@ var ErrCollectionNotReady error = newSentinel(
 	adapterr.ClassCollectionNotReady,
 	"semantic collection is not ready",
 	"collection_not_ready",
-	"retry in a few seconds while the collection loads",
+	"retry in a few seconds; the background collection load continues",
 )
 
 // ErrSearchResultIncomplete reports that Milvus returned a result set without the requested fields.

@@ -33,9 +33,9 @@ func TestResolveSearchable(t *testing.T) {
 	}
 }
 
-// Per-path collection readiness blocks search on its own, with the store globally
-// healthy, so a not-loaded collection is not searchable without raising any global
-// dependency banner. The zero value (not probed) and ready do not block.
+// Per-path collection readiness distinguishes requests the daemon accepts from
+// those it rejects. Idle and loading accept a search and resolve residency on
+// demand without raising a global dependency banner.
 func TestResolveSearchableCollection(t *testing.T) {
 	t.Parallel()
 
@@ -46,9 +46,10 @@ func TestResolveSearchableCollection(t *testing.T) {
 	}{
 		{"not probed stays searchable", CollectionNotApplicable, true},
 		{"ready is searchable", CollectionReady, true},
+		{"idle is searchable", CollectionIdle, true},
 		{"absent blocks", CollectionAbsent, false},
 		{"building blocks", CollectionBuilding, false},
-		{"loading blocks", CollectionLoading, false},
+		{"loading is searchable", CollectionLoading, true},
 		{"unknown blocks", CollectionUnknown, false},
 	}
 	for _, testCase := range cases {

@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"goodkind.io/lm-semantic-search/internal/model"
+	statusresolver "goodkind.io/lm-semantic-search/internal/status"
 )
 
 // ListIndexes returns every tracked codebase in canonical path order.
@@ -38,6 +39,24 @@ func (manager *Manager) ListIndexesView() []CodebaseView {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	return manager.codebaseViewsLocked()
+}
+
+func (manager *Manager) displayForCollectionReadiness(
+	codebase model.Codebase,
+	readiness statusresolver.CollectionReadiness,
+) displayStatus {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	current, found := manager.codebases[codebase.ID]
+	if found {
+		codebase = current
+	}
+	return computeDisplayStatus(
+		codebase,
+		manager.activeJobSnapshotLocked(codebase),
+		manager.health.Mode,
+		readiness,
+	)
 }
 
 // codebaseViewsLocked builds the view list. It is separate from ListIndexesView

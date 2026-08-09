@@ -11,6 +11,7 @@ func TestDisplayVocabularyCoversEveryStatus(t *testing.T) {
 		displayPreparing,
 		displayIndexing,
 		displayWaiting,
+		displayIdle,
 		displayIndexed,
 		displayStale,
 		displayFailed,

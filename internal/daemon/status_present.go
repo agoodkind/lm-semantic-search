@@ -33,6 +33,7 @@ const (
 	displayDiscovered  = status.DisplayDiscovered
 	displayPending     = status.DisplayPending
 	displayLoading     = status.DisplayLoading
+	displayIdle        = status.DisplayIdle
 )
 
 // collectionNotApplicable is the daemon's short name for a surface that does not
@@ -174,7 +175,7 @@ func resolveQuarantineSurface(codebase model.Codebase) view.QuarantineSurface {
 // resolveStatusView builds the template view for an active or ready codebase.
 // It is the relocated body of the render-side builder, so the templates keep
 // their exact output. templateName selects among preparing, building,
-// incremental, ready, and waiting.
+// incremental, idle, ready, and waiting.
 func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display displayStatus, waitLabel string) (view.StatusView, string) {
 	statusView := blankStatusView(filepath.Base(codebase.CanonicalPath), formatStampWithRelative(codebase.UpdatedAt))
 	switch display {
@@ -194,26 +195,13 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 		// the store itself is reachable. A per-path, self-healing condition, never
 		// the global store banner.
 		return statusView, "loading.md.tmpl"
+	case displayIdle:
+		return statusView, "idle.md.tmpl"
 	case displayWaiting:
 		statusView.WaitLabel = waitLabel
 		return statusView, "waiting.md.tmpl"
 	case displayIndexed:
-		statusView.RawStatus = string(codebase.Status)
-		if run := codebase.LastSuccessfulRun; run != nil {
-			statusView.HasStats = true
-			statusView.Files = run.IndexedFiles
-			statusView.Chunks = run.TotalChunks
-			statusView.LastSuccessfulRunCompletedAt = formatBoundaryStatusTime(run.CompletedAt)
-			statusView.SkippedLine = skippedFilesLine(run.SkippedFiles)
-			statusView.UpdatedAt = formatStampWithRelative(run.CompletedAt)
-		}
-		if activeJob != nil && isBackgroundSyncReconcile(&codebase, activeJob) {
-			if !activeJob.Progress.LastEventAt.IsZero() {
-				statusView.UpdatedAt = formatStampWithRelative(activeJob.Progress.LastEventAt)
-			}
-			statusView.SyncNote = backgroundSyncNote(activeJob)
-		}
-		return statusView, "ready.md.tmpl"
+		return resolveIndexedStatusView(statusView, codebase, activeJob)
 	case displayQuarantined:
 		if run := codebase.LastSuccessfulRun; run != nil {
 			statusView.HasStats = true
@@ -265,6 +253,29 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 		return statusView, "building.md.tmpl"
 	}
 	return statusView, "incremental.md.tmpl"
+}
+
+func resolveIndexedStatusView(
+	statusView view.StatusView,
+	codebase model.Codebase,
+	activeJob *model.Job,
+) (view.StatusView, string) {
+	statusView.RawStatus = string(codebase.Status)
+	if run := codebase.LastSuccessfulRun; run != nil {
+		statusView.HasStats = true
+		statusView.Files = run.IndexedFiles
+		statusView.Chunks = run.TotalChunks
+		statusView.LastSuccessfulRunCompletedAt = formatBoundaryStatusTime(run.CompletedAt)
+		statusView.SkippedLine = skippedFilesLine(run.SkippedFiles)
+		statusView.UpdatedAt = formatStampWithRelative(run.CompletedAt)
+	}
+	if activeJob != nil && isBackgroundSyncReconcile(&codebase, activeJob) {
+		if !activeJob.Progress.LastEventAt.IsZero() {
+			statusView.UpdatedAt = formatStampWithRelative(activeJob.Progress.LastEventAt)
+		}
+		statusView.SyncNote = backgroundSyncNote(activeJob)
+	}
+	return statusView, "ready.md.tmpl"
 }
 
 // blankStatusView returns a fully zeroed status view with only the name and
@@ -445,6 +456,7 @@ func (manager *Manager) resolveGetIndexView(
 	activeJob *model.Job,
 	health dependencyHealth,
 	readiness status.CollectionReadiness,
+	observedRows *int32,
 	classification *model.PathClassification,
 	descendants []model.Codebase,
 ) view.GetIndexView {
@@ -484,7 +496,7 @@ func (manager *Manager) resolveGetIndexView(
 	getIndex.Quarantine = resolveQuarantineSurface(*codebase)
 	statusView, templateName := resolveStatusView(*codebase, activeJob, display, waitingLabel(health.Mode))
 	if display == displayIndexed {
-		statusView.CurrentIndex = manager.currentIndexCounts(ctx, *codebase)
+		statusView.CurrentIndex = manager.currentIndexCounts(ctx, *codebase, observedRows)
 	}
 	if display == displayDiscovered {
 		statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
@@ -496,7 +508,11 @@ func (manager *Manager) resolveGetIndexView(
 	return getIndex
 }
 
-func (manager *Manager) currentIndexCounts(ctx context.Context, codebase model.Codebase) view.CurrentIndexCounts {
+func (manager *Manager) currentIndexCounts(
+	ctx context.Context,
+	codebase model.Codebase,
+	observedRows *int32,
+) view.CurrentIndexCounts {
 	if ranWithoutCreatingACollection(codebase.LastSuccessfulRun) {
 		indexedFiles := int32(0)
 		totalChunks := int32(0)
@@ -515,12 +531,8 @@ func (manager *Manager) currentIndexCounts(ctx context.Context, codebase model.C
 		indexedFiles := safeInt32(len(checkpoint.snapshot.Files))
 		counts.IndexedFiles = &indexedFiles
 	}
-	if manager.semantic == nil || !manager.semantic.Available() || !ownsLiveCollection(codebase) {
-		return counts
-	}
-	totalChunks, err := manager.semantic.Count(ctx, codebase.CanonicalPath)
-	if err == nil {
-		counts.TotalChunks = &totalChunks
+	if ownsLiveCollection(codebase) && observedRows != nil {
+		counts.TotalChunks = observedRows
 	}
 	return counts
 }

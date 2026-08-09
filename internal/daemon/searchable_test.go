@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +12,9 @@ import (
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/response"
+	"goodkind.io/lm-semantic-search/internal/semantic"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // refreshDependencyHealth turns an active backend probe into the health record:
@@ -94,7 +98,7 @@ func TestGetIndexSearchableReflectsBackendHealth(t *testing.T) {
 		{"healthy backend", &fakeSemantic{}, true},
 		{"embedder down", &fakeSemantic{probeErr: adapterr.NewEmbedderUnreachable(nil)}, false},
 		{"store down", &fakeSemantic{unavailable: true}, false},
-		{"collection not loaded", &fakeSemantic{collectionState: func(context.Context, string) (bool, bool, error) { return true, false, nil }}, false},
+		{"collection loading", &fakeSemantic{collectionState: func(context.Context, string) (bool, bool, error) { return true, false, nil }}, true},
 		{"collection load state unanswerable", &fakeSemantic{collectionState: func(context.Context, string) (bool, bool, error) {
 			return false, false, adapterr.NewMilvusUnavailable(nil)
 		}}, false},
@@ -166,7 +170,7 @@ func TestGetIndexSearchableSurvivesJSONEncoding(t *testing.T) {
 }
 
 // A per-path collection that is not loaded into query nodes, while the store
-// itself is reachable, reads not-searchable and loading, NOT the global
+// itself is reachable, accepts search and reads loading, not the global
 // store-unavailable banner. The per-path readiness drives searchable and the
 // display; the global dependency banner stays off because no global probe failed.
 // A separate genuine store outage still raises the banner (covered by the
@@ -194,8 +198,8 @@ func TestGetIndexCollectionNotLoadedReadsLoading(t *testing.T) {
 	if getErr != nil {
 		t.Fatalf("GetIndex returned error: %v", getErr)
 	}
-	if resp.GetSearchable() {
-		t.Fatal("searchable = true for a not-loaded collection, want false")
+	if !resp.GetSearchable() {
+		t.Fatal("searchable = false for a loading collection, want true")
 	}
 	if got := resp.GetCodebase().GetDisplayStatus(); got != "loading" {
 		t.Fatalf("display status = %q, want loading (not the global waiting banner)", got)
@@ -205,6 +209,241 @@ func TestGetIndexCollectionNotLoadedReadsLoading(t *testing.T) {
 	}
 	if got := resp.GetCollectionReadiness(); got != "loading" {
 		t.Fatalf("collection_readiness = %q, want loading", got)
+	}
+}
+
+func TestGetIndexReportsIdleAsSearchableWithoutCountingRows(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusIndexed
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+
+	observationCalls := 0
+	manager.semantic = &fakeSemantic{
+		observeCollection: func(context.Context, string) (semantic.CollectionObservation, error) {
+			observationCalls++
+			return semantic.CollectionObservation{State: semantic.CollectionStateIdle}, nil
+		},
+		count: func(context.Context, string) (int32, error) {
+			t.Fatal("idle status counted rows")
+			return 0, nil
+		},
+	}
+
+	response, getErr := NewGRPCServer(manager, nil).GetIndex(
+		context.Background(),
+		&pb.GetIndexRequest{Path: repoPath},
+	)
+	if getErr != nil {
+		t.Fatalf("GetIndex returned error: %v", getErr)
+	}
+	if observationCalls != 1 {
+		t.Fatalf("observation calls = %d, want 1", observationCalls)
+	}
+	if got := response.GetCollectionReadiness(); got != "idle" {
+		t.Fatalf("collection readiness = %q, want idle", got)
+	}
+	if !response.GetSearchable() {
+		t.Fatal("searchable = false, want true")
+	}
+	if got := response.GetCodebase().GetDisplayStatus(); got != "idle" {
+		t.Fatalf("display status = %q, want idle", got)
+	}
+	if !strings.Contains(response.GetDisplayText(), "loads on demand") {
+		t.Fatalf("idle display text does not explain on-demand loading:\n%s", response.GetDisplayText())
+	}
+}
+
+func TestGetIndexUsesOneReadyObservationForReadinessAndRows(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusIndexed
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+
+	observationCalls := 0
+	manager.semantic = &fakeSemantic{
+		observeCollection: func(context.Context, string) (semantic.CollectionObservation, error) {
+			observationCalls++
+			return semantic.CollectionObservation{
+				State:     semantic.CollectionStateReady,
+				Rows:      359,
+				RowsKnown: true,
+			}, nil
+		},
+		count: func(context.Context, string) (int32, error) {
+			t.Fatal("ready status issued a second row-count query")
+			return 0, nil
+		},
+	}
+
+	response, getErr := NewGRPCServer(manager, nil).GetIndex(
+		context.Background(),
+		&pb.GetIndexRequest{Path: repoPath},
+	)
+	if getErr != nil {
+		t.Fatalf("GetIndex returned error: %v", getErr)
+	}
+	if observationCalls != 1 {
+		t.Fatalf("observation calls = %d, want 1", observationCalls)
+	}
+	if !strings.Contains(response.GetDisplayText(), "current_index.total_chunks: 359") {
+		t.Fatalf("display text did not use observed row count:\n%s", response.GetDisplayText())
+	}
+}
+
+func TestListIndexesReportsIdleWithoutLoading(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusIndexed
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+
+	observationCalls := 0
+	manager.semantic = &fakeSemantic{
+		observeCollection: func(context.Context, string) (semantic.CollectionObservation, error) {
+			observationCalls++
+			return semantic.CollectionObservation{State: semantic.CollectionStateIdle}, nil
+		},
+		acquireCollection: func(context.Context, string) (semantic.CollectionLease, error) {
+			t.Fatal("ListIndexes acquired a search lease")
+			return nil, nil
+		},
+		count: func(context.Context, string) (int32, error) {
+			t.Fatal("ListIndexes counted idle rows")
+			return 0, nil
+		},
+	}
+
+	response, listErr := NewGRPCServer(manager, nil).ListIndexes(
+		context.Background(),
+		&pb.ListIndexesRequest{},
+	)
+	if listErr != nil {
+		t.Fatalf("ListIndexes returned error: %v", listErr)
+	}
+	if observationCalls != 1 {
+		t.Fatalf("observation calls = %d, want 1", observationCalls)
+	}
+	if len(response.GetIndexes()) != 1 {
+		t.Fatalf("indexes = %d, want 1", len(response.GetIndexes()))
+	}
+	if got := response.GetIndexes()[0].GetDisplayStatus(); got != "idle" {
+		t.Fatalf("display status = %q, want idle", got)
+	}
+}
+
+func TestSearchCodeHoldsCollectionLeaseThroughSearch(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusIndexed
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+
+	var leases atomic.Int32
+	manager.semantic = &fakeSemantic{
+		acquireCollection: func(_ context.Context, collectionName string) (semantic.CollectionLease, error) {
+			if collectionName != "code_chunks_test" {
+				t.Fatalf("collection name = %q, want code_chunks_test", collectionName)
+			}
+			leases.Add(1)
+			return fakeCollectionLease{release: func() { leases.Add(-1) }}, nil
+		},
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
+			if leases.Load() != 1 {
+				t.Fatalf("active leases during search = %d, want 1", leases.Load())
+			}
+			return []model.StoredChunk{}, nil
+		},
+	}
+
+	_, searchErr := NewGRPCServer(manager, nil).SearchCode(
+		context.Background(),
+		&pb.SearchCodeRequest{Path: repoPath, Query: "needle"},
+	)
+	if searchErr != nil {
+		t.Fatalf("SearchCode returned error: %v", searchErr)
+	}
+	if leases.Load() != 0 {
+		t.Fatalf("active leases after search = %d, want 0", leases.Load())
+	}
+}
+
+func TestSearchCodeMapsCollectionLeaseErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantCode    codes.Code
+		wantMessage string
+	}{
+		{
+			name:        "load wait timeout",
+			err:         semantic.ErrCollectionNotReady,
+			wantCode:    codes.FailedPrecondition,
+			wantMessage: "background collection load continues",
+		},
+		{
+			name:     "Milvus outage",
+			err:      adapterr.NewMilvusUnavailable(nil),
+			wantCode: codes.Unavailable,
+		},
+		{name: "caller cancellation", err: context.Canceled, wantCode: codes.Canceled},
+		{
+			name:     "caller deadline",
+			err:      context.DeadlineExceeded,
+			wantCode: codes.DeadlineExceeded,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager, _, repoPath := newTestManager(t)
+			canonical, err := filepath.EvalSymlinks(repoPath)
+			if err != nil {
+				t.Fatalf("EvalSymlinks returned error: %v", err)
+			}
+			codebase := newCodebaseRecord(canonical)
+			codebase.Status = model.CodebaseStatusIndexed
+			manager.mu.Lock()
+			manager.codebases[codebase.ID] = codebase
+			manager.mu.Unlock()
+			manager.semantic = &fakeSemantic{
+				acquireCollection: func(context.Context, string) (semantic.CollectionLease, error) {
+					return nil, test.err
+				},
+			}
+
+			_, searchErr := NewGRPCServer(manager, nil).SearchCode(
+				context.Background(),
+				&pb.SearchCodeRequest{Path: repoPath, Query: "needle"},
+			)
+			if got := grpcstatus.Code(searchErr); got != test.wantCode {
+				t.Fatalf("SearchCode status = %v, want %v: %v", got, test.wantCode, searchErr)
+			}
+			if test.wantMessage != "" && !strings.Contains(searchErr.Error(), test.wantMessage) {
+				t.Fatalf("SearchCode error = %q, want %q", searchErr, test.wantMessage)
+			}
+		})
 	}
 }
 

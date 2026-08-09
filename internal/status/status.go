@@ -21,6 +21,7 @@ const (
 	DisplayStale       Display = "stale"
 	DisplayFailed      Display = "failed"
 	DisplayMissing     Display = "missing"
+	DisplayIdle        Display = "idle"
 	// DisplayDiscovered is a worktree registered by a read but not yet built. It
 	// has no active job and is not searchable yet; the deferred build will move it
 	// to indexing. It reads distinctly from indexing (which implies live work) and
@@ -73,6 +74,9 @@ const (
 	// CollectionAbsent means the collection does not exist yet (a first build that
 	// has not created or promoted it).
 	CollectionAbsent CollectionReadiness = "absent"
+	// CollectionIdle means the collection exists but is not resident. Search can
+	// accept the request and load it on demand.
+	CollectionIdle CollectionReadiness = "idle"
 	// CollectionBuilding means a build is writing the collection (staging) now.
 	CollectionBuilding CollectionReadiness = "building"
 	// CollectionLoading means the collection exists but is not loaded into query
@@ -85,14 +89,13 @@ const (
 	CollectionUnknown CollectionReadiness = "unknown"
 )
 
-// blocksSearch reports whether this readiness should hold back a search. Only an
-// explicit not-ready state blocks; the zero value (not probed) and ready do not,
-// so a caller that never sets readiness behaves exactly as before.
+// blocksSearch reports whether the daemon must reject a search. Idle and loading
+// accept searches because the residency controller starts or joins their load.
 func (readiness CollectionReadiness) blocksSearch() bool {
 	switch readiness {
-	case CollectionAbsent, CollectionBuilding, CollectionLoading, CollectionUnknown:
+	case CollectionAbsent, CollectionBuilding, CollectionUnknown:
 		return true
-	case CollectionNotApplicable, CollectionReady:
+	case CollectionNotApplicable, CollectionIdle, CollectionLoading, CollectionReady:
 		return false
 	default:
 		return false
@@ -216,11 +219,19 @@ func ResolveDisplay(in Inputs) Display {
 	if in.Dependency.Degraded() && (base == DisplayPreparing || base == DisplayIndexed) {
 		return DisplayWaiting
 	}
-	// Store globally healthy, but this codebase's own collection is not loaded yet:
-	// a per-path, self-healing condition, so an indexed base reads loading rather
-	// than indexed. This never raises the global store banner.
-	if !in.Dependency.Degraded() && base == DisplayIndexed && in.Collection.blocksSearch() {
-		return DisplayLoading
+	if !in.Dependency.Degraded() && base == DisplayIndexed {
+		switch in.Collection {
+		case CollectionAbsent:
+			return DisplayMissing
+		case CollectionIdle:
+			return DisplayIdle
+		case CollectionBuilding, CollectionLoading:
+			return DisplayLoading
+		case CollectionNotApplicable, CollectionReady, CollectionUnknown:
+			return base
+		default:
+			return base
+		}
 	}
 	return base
 }

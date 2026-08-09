@@ -3,6 +3,7 @@ package adapterr
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -93,6 +94,28 @@ func TestRespondUnknownWithoutCorrelation(t *testing.T) {
 	_, msg := Respond(context.Background(), errors.New("boom"))
 	if msg != "internal error" {
 		t.Fatalf("message = %q, want \"internal error\"", msg)
+	}
+}
+
+func TestRespondPreservesCallerCancellationAndDeadline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{name: "canceled", err: context.Canceled, want: codes.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded, want: codes.DeadlineExceeded},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			code, _ := Respond(context.Background(), fmt.Errorf("acquire collection: %w", test.err))
+			if code != test.want {
+				t.Fatalf("Respond code = %v, want %v", code, test.want)
+			}
+		})
 	}
 }
 
