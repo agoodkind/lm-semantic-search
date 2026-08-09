@@ -889,6 +889,54 @@ func TestResidencyMaintenanceReleaseStartsIdleUnload(t *testing.T) {
 	}
 }
 
+func TestResidencyRecoveryMaintenanceReleaseNeverStartsIdleUnload(t *testing.T) {
+	clock := newTestResidencyClock()
+	unloads := make(chan string, 1)
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		loadCeiling: time.Minute,
+		idleTimeout: time.Minute,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(_ context.Context, collectionName string) error {
+			unloads <- collectionName
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	recoveryName := "collection" + recoveryCollectionSuffix
+	lease, err := controller.Acquire(context.Background(), recoveryName)
+	if err != nil {
+		t.Fatalf("Acquire returned error: %v", err)
+	}
+	lease.Release()
+	maintenance, err := controller.Maintain(context.Background(), recoveryName)
+	if err != nil {
+		t.Fatalf("Maintain returned error: %v", err)
+	}
+	maintenance.Release()
+
+	controller.mutex.Lock()
+	entry := controller.entries[recoveryName]
+	idleTimer := entry.idleTimer
+	idleDeadline := entry.idleDeadline
+	controller.mutex.Unlock()
+	if idleTimer != nil || !idleDeadline.IsZero() {
+		t.Fatal("recovery collection received an idle timer after maintenance")
+	}
+	clock.Advance(2 * time.Minute)
+	select {
+	case collectionName := <-unloads:
+		t.Fatalf("unloaded recovery collection %q", collectionName)
+	default:
+	}
+}
+
 func TestResidencyUnloadTransitionBlocksNewReaders(t *testing.T) {
 	clock := newTestResidencyClock()
 	unloadStarted := make(chan struct{})

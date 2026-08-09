@@ -60,6 +60,7 @@ type fakeSemantic struct {
 	hasStaging            func(context.Context, string) (bool, error)
 	search                func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
 	conversationSearch    func(context.Context, string, string, int32) ([]model.StoredChunk, error)
+	prepareCollection     func(context.Context, string) error
 	acquireCollection     func(context.Context, string) (semantic.CollectionLease, error)
 	pinStaging            func(context.Context, string) (semantic.CollectionPin, error)
 	count                 func(context.Context, string) (int32, error)
@@ -176,7 +177,10 @@ func (f *fakeSemantic) AcquireCollection(
 	return fakeCollectionLease{}, nil
 }
 
-func (f *fakeSemantic) PrepareCollection(context.Context, string) error {
+func (f *fakeSemantic) PrepareCollection(ctx context.Context, collectionName string) error {
+	if f.prepareCollection != nil {
+		return f.prepareCollection(ctx, collectionName)
+	}
 	return nil
 }
 

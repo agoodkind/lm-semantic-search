@@ -58,12 +58,15 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 		return err
 	}
 	var lease CollectionLease
-	if hasStaging {
-		if len(chunks) > 0 {
-			if err := service.PrepareCollection(ctx, stagingName); err != nil {
-				return err
-			}
+	if hasStaging && len(chunks) > 0 {
+		if err := service.ensureCreatedCollectionMmapForWrite(ctx, stagingName); err != nil {
+			return err
 		}
+		if err := service.PrepareCollection(ctx, stagingName); err != nil {
+			return err
+		}
+	}
+	if hasStaging {
 		lease, err = service.AcquireCollection(ctx, stagingName)
 		if err != nil {
 			return err
@@ -79,23 +82,22 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 	if len(chunks) == 0 {
 		return nil
 	}
-	if hasStaging {
-		if err := service.ensureCreatedCollectionReadyForWrite(ctx, stagingName); err != nil {
-			return err
-		}
-	}
 	chunks = service.guardrailExpand(ctx, codebasePath, chunks, "stage")
 	return service.insertChunksBatched(ctx, stagingName, chunks, hasStaging, "Generating embeddings and writing to Milvus...", progress, reuse, columnSet)
 }
 
 const recoveryCollectionSuffix = "_swap_previous"
 
-func recoveryCollectionName(collectionName string) string {
+func recoveryCollectionName(collectionName string) (string, error) {
 	maxBase := maxCollectionNameLength - len(recoveryCollectionSuffix)
 	if len(collectionName) > maxBase {
-		collectionName = collectionName[:maxBase]
+		return "", fmt.Errorf(
+			"recovery collection name: live name length %d exceeds reversible limit %d",
+			len(collectionName),
+			maxBase,
+		)
 	}
-	return collectionName + recoveryCollectionSuffix
+	return collectionName + recoveryCollectionSuffix, nil
 }
 
 func isRecoveryCollection(collectionName string) bool {
@@ -113,8 +115,11 @@ func (service *Service) PromoteStaging(ctx context.Context, codebasePath string)
 	}
 
 	collectionName := service.CollectionName(codebasePath)
+	recoveryName, err := recoveryCollectionName(collectionName)
+	if err != nil {
+		return err
+	}
 	stagingName := stagingCollectionName(collectionName)
-	recoveryName := recoveryCollectionName(collectionName)
 	maintenance, err := service.residency.Maintain(
 		ctx,
 		collectionName,

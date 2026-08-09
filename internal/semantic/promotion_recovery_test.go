@@ -44,6 +44,7 @@ type promotionRecoveryServer struct {
 	afterLoadState        string
 	afterLoadStateStarted chan struct{}
 	loadCollectionCalls   int
+	renameCollectionCalls int
 }
 
 var (
@@ -80,6 +81,7 @@ func resetPromotionRecoveryServer() *promotionRecoveryServer {
 	server.afterLoadState = ""
 	server.afterLoadStateStarted = nil
 	server.loadCollectionCalls = 0
+	server.renameCollectionCalls = 0
 	return server
 }
 
@@ -297,6 +299,7 @@ func (server *promotionRecoveryServer) RenameCollection(
 	request *milvuspb.RenameCollectionRequest,
 ) (*commonpb.Status, error) {
 	server.mutex.Lock()
+	server.renameCollectionCalls++
 	if request.GetOldName() == server.failRenameOld {
 		server.failRenameOld = ""
 		server.mutex.Unlock()
@@ -376,6 +379,12 @@ func (server *promotionRecoveryServer) loadCallCount() int {
 	return server.loadCollectionCalls
 }
 
+func (server *promotionRecoveryServer) renameCallCount() int {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	return server.renameCollectionCalls
+}
+
 func promotionSuccessStatus() *commonpb.Status {
 	return &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}
 }
@@ -442,6 +451,29 @@ func TestPromoteStagingRestoresLiveWhenStagingRenameFails(t *testing.T) {
 	}
 }
 
+func TestPromoteStagingRejectsIrreversibleRecoveryNameBeforeRename(t *testing.T) {
+	server := resetPromotionRecoveryServer()
+	service := newPromotionTestService(t, server)
+	service.cfg.CollectionNameOverride = strings.Repeat("x", maxCollectionNameLength)
+	codebasePath := t.TempDir()
+	liveName := service.CollectionName(codebasePath)
+	if len(liveName) != maxCollectionNameLength {
+		t.Fatalf("live name length = %d, want %d", len(liveName), maxCollectionNameLength)
+	}
+	stagingName := stagingCollectionName(liveName)
+	server.setCollections(liveName, stagingName)
+
+	if err := service.PromoteStaging(context.Background(), codebasePath); err == nil {
+		t.Fatal("PromoteStaging accepted an irreversible recovery name")
+	}
+	if calls := server.renameCallCount(); calls != 0 {
+		t.Fatalf("RenameCollection calls = %d, want 0", calls)
+	}
+	if !server.hasCollection(liveName) || !server.hasCollection(stagingName) {
+		t.Fatal("rejected promotion changed live or staging collection presence")
+	}
+}
+
 func TestRecoverInterruptedPromotionsUsesCollectionPresence(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -491,6 +523,27 @@ func TestRecoverInterruptedPromotionsUsesCollectionPresence(t *testing.T) {
 				t.Fatalf("staging present = %t, want %t", got, testCase.wantStg)
 			}
 		})
+	}
+}
+
+func TestRecoverInterruptedPromotionsRestoresEveryAcceptedRecoveryNameLength(t *testing.T) {
+	server := resetPromotionRecoveryServer()
+	service := newPromotionTestService(t, server)
+	maxLiveLength := maxCollectionNameLength - len(recoveryCollectionSuffix)
+	for liveLength := 1; liveLength <= maxLiveLength; liveLength++ {
+		liveName := strings.Repeat("x", liveLength)
+		recoveryName := mustRecoveryCollectionName(t, liveName)
+		server.setCollections(recoveryName)
+
+		if err := service.recoverInterruptedPromotions(context.Background()); err != nil {
+			t.Fatalf("recover length %d returned error: %v", liveLength, err)
+		}
+		if !server.hasCollection(liveName) {
+			t.Fatalf("recover length %d did not restore the exact live name", liveLength)
+		}
+		if server.hasCollection(recoveryName) {
+			t.Fatalf("recover length %d retained the recovery name", liveLength)
+		}
 	}
 }
 
@@ -644,16 +697,37 @@ func TestCountHoldsLeaseThroughQuery(t *testing.T) {
 	}
 }
 
-func TestReservedCollectionsStayWithinLimitAndOutOfListings(t *testing.T) {
-	longLiveName := strings.Repeat("x", maxCollectionNameLength)
-	recoveryName := recoveryCollectionName(longLiveName)
-	if len(recoveryName) > maxCollectionNameLength {
-		t.Fatalf("recovery name length = %d, max %d", len(recoveryName), maxCollectionNameLength)
+func TestRecoveryCollectionNameRejectsTruncationCollisions(t *testing.T) {
+	maxLiveLength := maxCollectionNameLength - len(recoveryCollectionSuffix)
+	maxLiveName := strings.Repeat("x", maxLiveLength)
+	recoveryName, err := recoveryCollectionName(maxLiveName)
+	if err != nil {
+		t.Fatalf("maximum reversible live name returned error: %v", err)
 	}
-	if !strings.HasSuffix(recoveryName, recoveryCollectionSuffix) {
-		t.Fatalf("recovery name %q lost reserved suffix", recoveryName)
+	if recoveryName != maxLiveName+recoveryCollectionSuffix {
+		t.Fatalf("recovery name = %q, want exact reversible suffix", recoveryName)
 	}
 
+	for _, liveName := range []string{
+		maxLiveName + "a",
+		maxLiveName + "b",
+	} {
+		if _, nameErr := recoveryCollectionName(liveName); nameErr == nil {
+			t.Fatalf("overlength live name ending in %q was accepted", liveName[len(liveName)-1:])
+		}
+	}
+}
+
+func mustRecoveryCollectionName(t *testing.T, liveName string) string {
+	t.Helper()
+	recoveryName, err := recoveryCollectionName(liveName)
+	if err != nil {
+		t.Fatalf("recoveryCollectionName(%q) returned error: %v", liveName, err)
+	}
+	return recoveryName
+}
+
+func TestReservedCollectionsStayWithinLimitAndOutOfListings(t *testing.T) {
 	server := resetPromotionRecoveryServer()
 	service := newPromotionTestService(t, server)
 	codebasePath := t.TempDir()
@@ -661,7 +735,7 @@ func TestReservedCollectionsStayWithinLimitAndOutOfListings(t *testing.T) {
 	server.setCollections(
 		liveName,
 		stagingCollectionName(liveName),
-		recoveryCollectionName(liveName),
+		mustRecoveryCollectionName(t, liveName),
 	)
 	collections, err := service.ListCollections(context.Background())
 	if err != nil {
@@ -678,7 +752,7 @@ func TestPromoteStagingRepairsInterruptedSwapBeforePromotion(t *testing.T) {
 	codebasePath := t.TempDir()
 	liveName := service.CollectionName(codebasePath)
 	stagingName := stagingCollectionName(liveName)
-	recoveryName := recoveryCollectionName(liveName)
+	recoveryName := mustRecoveryCollectionName(t, liveName)
 	server.setCollections(stagingName, recoveryName)
 
 	if err := service.PromoteStaging(context.Background(), codebasePath); err != nil {
@@ -857,6 +931,59 @@ func TestReconciliationRejectsStaleStateWithoutOrphaningProtection(t *testing.T)
 	}
 	lease.Release()
 	pin.Release()
+}
+
+func TestReconciliationExcludesRecoveryEntriesFromStateAndTimers(t *testing.T) {
+	clock := newTestResidencyClock()
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Second,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(context.Context, string) error {
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		if err := controller.Close(context.Background()); err != nil {
+			t.Errorf("Close returned error: %v", err)
+		}
+	})
+	recoveryName := "live" + recoveryCollectionSuffix
+	lease, err := controller.Acquire(context.Background(), recoveryName)
+	if err != nil {
+		t.Fatalf("Acquire returned error: %v", err)
+	}
+	lease.Release()
+
+	generation := controller.beginReconciliation()
+	controller.applyReconciliation(
+		context.Background(),
+		generation,
+		recoveryName,
+		collectionResidencyCold,
+	)
+	controller.invalidateResidency()
+
+	controller.mutex.Lock()
+	entry := controller.entries[recoveryName]
+	state := entry.state
+	reconciliation := entry.reconciliation
+	idleTimer := entry.idleTimer
+	idleDeadline := entry.idleDeadline
+	controller.mutex.Unlock()
+	if state != collectionResidencyReady {
+		t.Fatalf("recovery state = %d, want unchanged ready state", state)
+	}
+	if reconciliation != 0 {
+		t.Fatalf("recovery reconciliation generation = %d, want 0", reconciliation)
+	}
+	if idleTimer != nil || !idleDeadline.IsZero() {
+		t.Fatal("reconciliation admitted a recovery idle timer")
+	}
 }
 
 func TestPublishReconcilesAsynchronouslyWithoutWarmingOrStaleOverwrite(t *testing.T) {

@@ -87,7 +87,8 @@ func (manager *Manager) StartBootSelfCheck(ctx context.Context) {
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(ctx, "daemon.selfcheck.panic",
+				slog.ErrorContext(
+					ctx, "daemon.selfcheck.panic",
 					"component", "daemon",
 					"subcomponent", "selfcheck",
 					"err", fmt.Errorf("panic: %v", recovered),
@@ -121,7 +122,8 @@ func (manager *Manager) runBootSelfCheckSequence(
 		}
 		if ctx.Err() != nil {
 			contextErr := ctx.Err()
-			slog.ErrorContext(ctx, "daemon.selfcheck.cancelled",
+			slog.ErrorContext(
+				ctx, "daemon.selfcheck.cancelled",
 				"component", "daemon",
 				"subcomponent", "selfcheck",
 				"outcome", outcome,
@@ -132,7 +134,8 @@ func (manager *Manager) runBootSelfCheckSequence(
 		if attempt < bootSelfCheckMaxAttempts &&
 			!waitForBootSelfCheck(ctx, retryDelay) {
 			contextErr := ctx.Err()
-			slog.ErrorContext(ctx, "daemon.selfcheck.cancelled",
+			slog.ErrorContext(
+				ctx, "daemon.selfcheck.cancelled",
 				"component", "daemon",
 				"subcomponent", "selfcheck",
 				"outcome", outcome,
@@ -147,7 +150,8 @@ func (manager *Manager) runBootSelfCheckSequence(
 		Outcome:  outcome,
 		Cause:    lastErr,
 	}
-	slog.ErrorContext(ctx, "daemon.selfcheck.exhausted",
+	slog.ErrorContext(
+		ctx, "daemon.selfcheck.exhausted",
 		"component", "daemon",
 		"subcomponent", "selfcheck",
 		"attempts", bootSelfCheckMaxAttempts,
@@ -183,7 +187,8 @@ func waitForBootSelfCheck(ctx context.Context, delay time.Duration) bool {
 // when no newer dependency failure arrived while the query was in flight.
 func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutcome, error) {
 	if reason := manager.bootSelfCheckSkipReason(); reason != "" {
-		slog.InfoContext(ctx, "daemon.selfcheck.skipped",
+		slog.InfoContext(
+			ctx, "daemon.selfcheck.skipped",
 			"component", "daemon",
 			"subcomponent", "selfcheck",
 			"reason", reason,
@@ -191,7 +196,8 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 		return bootSelfCheckSkipped, nil
 	}
 	if manager.semantic == nil {
-		slog.InfoContext(ctx, "daemon.selfcheck.skipped",
+		slog.InfoContext(
+			ctx, "daemon.selfcheck.skipped",
 			"component", "daemon",
 			"subcomponent", "selfcheck",
 			"reason", "no vector backend configured",
@@ -200,7 +206,8 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 	}
 	if !manager.semantic.Available() {
 		manager.noteDependencyFailure(semantic.ErrUnavailable)
-		slog.ErrorContext(ctx, "daemon.selfcheck.failed",
+		slog.ErrorContext(
+			ctx, "daemon.selfcheck.failed",
 			"component", "daemon",
 			"subcomponent", "selfcheck",
 			"reason", "vector store is not connected",
@@ -211,7 +218,8 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 
 	codebase, found := manager.bootSelfCheckTarget()
 	if !found {
-		slog.InfoContext(ctx, "daemon.selfcheck.skipped",
+		slog.InfoContext(
+			ctx, "daemon.selfcheck.skipped",
 			"component", "daemon",
 			"subcomponent", "selfcheck",
 			"reason", "no indexed codebase to query",
@@ -221,12 +229,13 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 
 	failureGeneration := manager.dependencyFailureGenerationNow()
 	startedAt := clock.Now()
-	_, err := manager.semantic.Search(ctx, codebase.CanonicalPath, bootSelfCheckQuery, bootSelfCheckLimit, nil, "")
+	err := manager.runBootSelfCheckQuery(ctx, codebase.CanonicalPath)
 	durationMS := clock.Now().Sub(startedAt).Milliseconds()
 	if err != nil {
 		manager.noteDependencyFailure(err)
 		checkErr := fmt.Errorf("boot self-check query against %s: %w", codebase.CanonicalPath, err)
-		slog.ErrorContext(ctx, "daemon.selfcheck.failed",
+		slog.ErrorContext(
+			ctx, "daemon.selfcheck.failed",
 			"component", "daemon",
 			"subcomponent", "selfcheck",
 			"codebase_id", codebase.ID,
@@ -238,7 +247,8 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 	}
 
 	if !manager.noteDependencyHealthyIfGeneration(failureGeneration) {
-		slog.WarnContext(ctx, "daemon.selfcheck.superseded",
+		slog.WarnContext(
+			ctx, "daemon.selfcheck.superseded",
 			"component", "daemon",
 			"subcomponent", "selfcheck",
 			"codebase_id", codebase.ID,
@@ -247,7 +257,8 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 		)
 		return bootSelfCheckSuperseded, nil
 	}
-	slog.InfoContext(ctx, "daemon.selfcheck.passed",
+	slog.InfoContext(
+		ctx, "daemon.selfcheck.passed",
 		"component", "daemon",
 		"subcomponent", "selfcheck",
 		"codebase_id", codebase.ID,
@@ -255,6 +266,44 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 		"duration_ms", durationMS,
 	)
 	return bootSelfCheckPassed, nil
+}
+
+func (manager *Manager) runBootSelfCheckQuery(ctx context.Context, codebasePath string) error {
+	collectionName := manager.semantic.CollectionName(codebasePath)
+	if err := manager.semantic.PrepareCollection(ctx, collectionName); err != nil {
+		wrappedErr := fmt.Errorf(
+			"prepare boot self-check collection %s: %w",
+			collectionName,
+			err,
+		)
+		slog.WarnContext(ctx, "daemon.selfcheck.prepare_failed", "err", wrappedErr)
+		return wrappedErr
+	}
+	lease, err := manager.semantic.AcquireCollection(ctx, collectionName)
+	if err != nil {
+		wrappedErr := fmt.Errorf(
+			"acquire boot self-check collection %s: %w",
+			collectionName,
+			err,
+		)
+		slog.WarnContext(ctx, "daemon.selfcheck.acquire_failed", "err", wrappedErr)
+		return wrappedErr
+	}
+	defer lease.Release()
+	_, err = manager.semantic.Search(
+		ctx,
+		codebasePath,
+		bootSelfCheckQuery,
+		bootSelfCheckLimit,
+		nil,
+		"",
+	)
+	if err != nil {
+		wrappedErr := fmt.Errorf("search boot self-check collection %s: %w", collectionName, err)
+		slog.WarnContext(ctx, "daemon.selfcheck.search_failed", "err", wrappedErr)
+		return wrappedErr
+	}
+	return nil
 }
 
 func (manager *Manager) bootSelfCheckSkipReason() string {

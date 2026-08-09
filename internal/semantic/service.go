@@ -244,8 +244,7 @@ func (service *Service) Close(ctx context.Context) error {
 			}
 		}
 		if err := service.stopResidencyReconciliation(ctx); err != nil {
-			closeErr = err
-			return
+			closeErr = errors.Join(closeErr, err)
 		}
 		if service.residency != nil {
 			if err := service.residency.Close(ctx); err != nil {

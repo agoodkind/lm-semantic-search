@@ -329,33 +329,6 @@ func (service *Service) waitForCreatedMmapTargets(
 	}
 }
 
-func (service *Service) ensureCreatedCollectionReady(
-	ctx context.Context,
-	collectionName string,
-) error {
-	if service.mmapPolicyComplete(collectionName) {
-		return nil
-	}
-	if err := service.ensureCreatedCollectionMmap(ctx, collectionName); err != nil {
-		return err
-	}
-	if err := service.loadCollection(ctx, collectionName); err != nil {
-		service.invalidateMmapPolicy(collectionName)
-		return err
-	}
-	return nil
-}
-
-func (service *Service) ensureCreatedCollectionReadyForWrite(
-	ctx context.Context,
-	collectionName string,
-) error {
-	if err := service.ensureCreatedCollectionMmapForWrite(ctx, collectionName); err != nil {
-		return err
-	}
-	return service.loadCollection(ctx, collectionName)
-}
-
 func (service *Service) ensureCreatedCollectionMmapForWrite(
 	ctx context.Context,
 	collectionName string,
