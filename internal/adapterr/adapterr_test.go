@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/gklog/correlation"
 	"google.golang.org/grpc/codes"
@@ -111,11 +112,34 @@ func TestRespondPreservesCallerCancellationAndDeadline(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			code, _ := Respond(context.Background(), fmt.Errorf("acquire collection: %w", test.err))
+			ctx, cancel := context.WithCancelCause(context.Background())
+			cancel(test.err)
+			if errors.Is(test.err, context.DeadlineExceeded) {
+				deadlineCtx, deadlineCancel := context.WithDeadline(
+					context.Background(),
+					time.Now().Add(-time.Second),
+				)
+				defer deadlineCancel()
+				ctx = deadlineCtx
+			}
+			code, _ := Respond(ctx, fmt.Errorf("acquire collection: %w", test.err))
 			if code != test.want {
 				t.Fatalf("Respond code = %v, want %v", code, test.want)
 			}
 		})
+	}
+}
+
+func TestRespondHonorsClassifiedOutageWithNestedDeadline(t *testing.T) {
+	t.Parallel()
+
+	err := NewMilvusUnavailable(fmt.Errorf("Milvus metadata call: %w", context.DeadlineExceeded))
+	code, message := Respond(context.Background(), err)
+	if code != codes.Unavailable {
+		t.Fatalf("Respond code = %v, want %v", code, codes.Unavailable)
+	}
+	if !strings.Contains(message, "vector store is unavailable") {
+		t.Fatalf("Respond message = %q, want classified outage", message)
 	}
 }
 

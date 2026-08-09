@@ -851,7 +851,7 @@ func TestRenderHistoricalFailureIncludesCorrelationIds(t *testing.T) {
 		CanonicalPath: codebase.CanonicalPath,
 		Display:       view.Display(displayFailed),
 		Failure:       failure,
-		Narrative:     resolveStatusNarrative(displayFailed, codebase.CanonicalPath, failure, view.QuarantineSurface{}, view.StatusView{}),
+		Narrative:     resolveStatusNarrative(displayFailed, codebase.CanonicalPath, collectionNotApplicable, failure, view.QuarantineSurface{}, view.StatusView{}),
 	})
 	if !strings.Contains(out, "trace_id=trace-abc") {
 		t.Fatalf("render output missing trace_id; got %q", out)
@@ -884,7 +884,7 @@ func TestRenderStaleStatusIncludesRepairReason(t *testing.T) {
 		CanonicalPath: codebase.CanonicalPath,
 		Display:       view.Display(displayStale),
 		Failure:       failure,
-		Narrative:     resolveStatusNarrative(displayStale, codebase.CanonicalPath, failure, view.QuarantineSurface{}, view.StatusView{}),
+		Narrative:     resolveStatusNarrative(displayStale, codebase.CanonicalPath, collectionNotApplicable, failure, view.QuarantineSurface{}, view.StatusView{}),
 	})
 	if !strings.Contains(out, "is stale") {
 		t.Fatalf("render output missing stale marker; got %q", out)

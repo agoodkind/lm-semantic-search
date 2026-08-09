@@ -19,10 +19,10 @@ func Respond(ctx context.Context, err error) (codes.Code, string) {
 	if err == nil {
 		return codes.OK, ""
 	}
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(ctx.Err(), context.Canceled) {
 		return respondContextError(ctx, codes.Canceled, context.Canceled, err)
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return respondContextError(ctx, codes.DeadlineExceeded, context.DeadlineExceeded, err)
 	}
 	adapterErr := classify(err)

@@ -504,7 +504,7 @@ func (manager *Manager) resolveGetIndexView(
 	resolveGraphStatusFields(&statusView, *codebase, manager.graphIndexing(codebase.ID))
 	getIndex.Status = statusView
 	getIndex.TemplateName = templateName
-	getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, getIndex.Failure, getIndex.Quarantine, statusView)
+	getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, readiness, getIndex.Failure, getIndex.Quarantine, statusView)
 	return getIndex
 }
 

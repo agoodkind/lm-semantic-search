@@ -100,7 +100,7 @@ func (service *Service) ObserveCollection(
 		return unknown, nil
 	}
 	collectionName := service.CollectionName(codebasePath)
-	_, observation, err := service.residency.Observe(ctx, collectionName)
+	controllerState, observation, err := service.residency.Observe(ctx, collectionName)
 	if err != nil {
 		return unknown, err
 	}
@@ -126,12 +126,13 @@ func (service *Service) ObserveCollection(
 			fmt.Errorf("load state %s: %w", collectionName, err),
 		)
 	}
-	switch loadState.State {
-	case entity.LoadStateNotLoad:
+	observedState := resolveObservedCollectionState(controllerState, loadState.State)
+	switch observedState {
+	case CollectionStateIdle:
 		return CollectionObservation{State: CollectionStateIdle, Rows: 0, RowsKnown: false}, nil
-	case entity.LoadStateLoading:
+	case CollectionStateLoading:
 		return CollectionObservation{State: CollectionStateLoading, Rows: 0, RowsKnown: false}, nil
-	case entity.LoadStateLoaded:
+	case CollectionStateReady:
 		rows, countErr := service.collectionRowCount(ctx, collectionName)
 		if countErr != nil {
 			return CollectionObservation{State: CollectionStateReady, Rows: 0, RowsKnown: false}, nil
@@ -141,8 +142,28 @@ func (service *Service) ObserveCollection(
 			Rows:      rows,
 			RowsKnown: true,
 		}, nil
-	case entity.LoadStateUnloading:
+	case CollectionStateAbsent, CollectionStateUnknown:
 		return unknown, nil
 	}
 	return unknown, nil
+}
+
+func resolveObservedCollectionState(
+	controllerState collectionResidencyState,
+	milvusState entity.LoadStateCode,
+) CollectionState {
+	if controllerState == collectionResidencyLoading {
+		return CollectionStateLoading
+	}
+	switch milvusState {
+	case entity.LoadStateNotLoad:
+		return CollectionStateIdle
+	case entity.LoadStateLoading:
+		return CollectionStateLoading
+	case entity.LoadStateLoaded:
+		return CollectionStateReady
+	case entity.LoadStateUnloading:
+		return CollectionStateUnknown
+	}
+	return CollectionStateUnknown
 }

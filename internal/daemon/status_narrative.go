@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/render"
+	"goodkind.io/lm-semantic-search/internal/status"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
 
@@ -13,11 +14,14 @@ import (
 // wording live here behind the view wall rather than in render. Template states
 // (preparing, building, incremental, ready, discovered, waiting) return an empty
 // narrative and are rendered from their templates.
-func resolveStatusNarrative(display displayStatus, canonicalPath string, failure view.FailureSurface, quarantine view.QuarantineSurface, statusView view.StatusView) view.StatusNarrative {
+func resolveStatusNarrative(display displayStatus, canonicalPath string, readiness status.CollectionReadiness, failure view.FailureSurface, quarantine view.QuarantineSurface, statusView view.StatusView) view.StatusNarrative {
 	switch display {
 	case displayFailed:
 		return view.StatusNarrative{Lines: withGraphLine(failedNarrativeLines(canonicalPath, failure), statusView)}
 	case displayMissing:
+		if readiness == status.CollectionAbsent {
+			return view.StatusNarrative{Lines: withGraphLine(collectionMissingNarrativeLines(canonicalPath), statusView)}
+		}
 		return view.StatusNarrative{Lines: withGraphLine(missingNarrativeLines(canonicalPath), statusView)}
 	case displayStale:
 		return view.StatusNarrative{Lines: withGraphLine(staleNarrativeLines(canonicalPath, failure), statusView)}
@@ -25,6 +29,13 @@ func resolveStatusNarrative(display displayStatus, canonicalPath string, failure
 		return view.StatusNarrative{Lines: withGraphLine(quarantinedNarrativeLines(canonicalPath, quarantine, statusView), statusView)}
 	default:
 		return view.StatusNarrative{Lines: nil}
+	}
+}
+
+func collectionMissingNarrativeLines(canonicalPath string) []string {
+	return []string{
+		"🚫 Codebase '" + canonicalPath + "' semantic collection is missing.",
+		"💡 Wait for background repair, or re-run index_codebase to rebuild it.",
 	}
 }
 

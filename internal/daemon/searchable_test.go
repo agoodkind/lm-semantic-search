@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -260,6 +261,41 @@ func TestGetIndexReportsIdleAsSearchableWithoutCountingRows(t *testing.T) {
 	}
 }
 
+func TestGetIndexAbsentCollectionNamesIndexRecovery(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	canonical, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+	codebase := newCodebaseRecord(canonical)
+	codebase.Status = model.CodebaseStatusIndexed
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+	manager.semantic = &fakeSemantic{
+		observeCollection: func(context.Context, string) (semantic.CollectionObservation, error) {
+			return semantic.CollectionObservation{State: semantic.CollectionStateAbsent}, nil
+		},
+	}
+
+	response, getErr := NewGRPCServer(manager, nil).GetIndex(
+		context.Background(),
+		&pb.GetIndexRequest{Path: repoPath},
+	)
+	if getErr != nil {
+		t.Fatalf("GetIndex returned error: %v", getErr)
+	}
+	text := response.GetDisplayText()
+	for _, want := range []string{"semantic collection is missing", "background repair", "index_codebase"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("absent collection guidance lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "source directory is missing") {
+		t.Fatalf("absent collection used filesystem recovery guidance:\n%s", text)
+	}
+}
+
 func TestGetIndexUsesOneReadyObservationForReadinessAndRows(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	canonical, err := filepath.EvalSymlinks(repoPath)
@@ -432,9 +468,22 @@ func TestSearchCodeMapsCollectionLeaseErrors(t *testing.T) {
 					return nil, test.err
 				},
 			}
+			requestCtx := context.Background()
+			cancelRequest := func() {}
+			switch {
+			case errors.Is(test.err, context.Canceled):
+				requestCtx, cancelRequest = context.WithCancel(context.Background())
+				cancelRequest()
+			case errors.Is(test.err, context.DeadlineExceeded):
+				requestCtx, cancelRequest = context.WithDeadline(
+					context.Background(),
+					time.Now().Add(-time.Second),
+				)
+			}
+			defer cancelRequest()
 
 			_, searchErr := NewGRPCServer(manager, nil).SearchCode(
-				context.Background(),
+				requestCtx,
 				&pb.SearchCodeRequest{Path: repoPath, Query: "needle"},
 			)
 			if got := grpcstatus.Code(searchErr); got != test.wantCode {

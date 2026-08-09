@@ -150,6 +150,7 @@ func TestResolveStatusNarrativeAppendsGraphLineFromViewFields(t *testing.T) {
 			narrative := resolveStatusNarrative(
 				displayMissing,
 				"/repo",
+				collectionNotApplicable,
 				view.FailureSurface{},
 				view.QuarantineSurface{},
 				testCase.statusView,
