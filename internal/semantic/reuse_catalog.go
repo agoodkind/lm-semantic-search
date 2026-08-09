@@ -151,7 +151,12 @@ func (service *Service) createReuseCatalog(
 	}
 	service.invalidateCollectionCaches(collectionName)
 	maintenance.ReleaseContext(ctx)
-	return nil
+	_, err = service.ensureMmapEnabledOnce(
+		ctx,
+		collectionName,
+		mmapCreatedReuseCatalog,
+	)
+	return err
 }
 
 func (service *Service) loadReuseCatalogKeys(

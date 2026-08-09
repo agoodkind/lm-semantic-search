@@ -401,7 +401,7 @@ func Default() (Config, error) {
 		IncludeSubmodules:                 parseCommaSeparated(os.Getenv("CLAUDE_CONTEXT_INCLUDE_SUBMODULES")),
 		MilvusAddress:                     envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),
 		MilvusToken:                       envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),
-		MilvusDatabase:                    "",
+		MilvusDatabase:                    envOrDefault("MILVUS_DATABASE", ""),
 		MilvusMutationCallTimeoutMS:       resolveMilvusMutationCallTimeoutMS(fileConfig.MilvusMutationCallTimeoutMS),
 		MilvusCollectionLoadTimeoutMS:     resolveMilvusCollectionLoadTimeoutMS(fileConfig.MilvusCollectionLoadTimeoutMS),
 		MilvusCollectionLoadWaitTimeoutMS: loadWaitTimeoutMS,

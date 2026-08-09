@@ -379,6 +379,12 @@ func (server *promotionRecoveryServer) loadCallCount() int {
 	return server.loadCollectionCalls
 }
 
+func (server *promotionRecoveryServer) addStartedSnapshot() <-chan struct{} {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	return server.addStarted
+}
+
 func (server *promotionRecoveryServer) renameCallCount() int {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
@@ -835,6 +841,7 @@ func TestSchemaMigrationUsesExclusiveMaintenance(t *testing.T) {
 	server.setCollections(collectionName)
 	server.addStarted = make(chan struct{})
 	server.resumeAdd = make(chan struct{})
+	addStarted := server.addStartedSnapshot()
 	migrationContext, cancelMigration := context.WithCancel(context.Background())
 	t.Cleanup(cancelMigration)
 	migrationResult := make(chan error, 1)
@@ -844,7 +851,7 @@ func TestSchemaMigrationUsesExclusiveMaintenance(t *testing.T) {
 			collectionName,
 		)
 	}()
-	<-server.addStarted
+	<-addStarted
 	waitForMaintenance(t, service.residency, collectionName)
 	close(server.resumeAdd)
 	if err := <-migrationResult; err != nil {
@@ -1108,6 +1115,7 @@ func TestConversationBackfillUsesMaintenanceForSchemaMigration(t *testing.T) {
 	server.setCollections(collectionName)
 	server.addStarted = make(chan struct{})
 	server.resumeAdd = make(chan struct{})
+	addStarted := server.addStartedSnapshot()
 	backfillContext, cancelBackfill := context.WithCancel(context.Background())
 	backfillResult := make(chan error, 1)
 	go func() {
@@ -1118,7 +1126,7 @@ func TestConversationBackfillUsesMaintenanceForSchemaMigration(t *testing.T) {
 		backfillResult <- backfillErr
 	}()
 	select {
-	case <-server.addStarted:
+	case <-addStarted:
 	case <-time.After(time.Second):
 		t.Fatal("backfill did not reach AddCollectionField")
 	}

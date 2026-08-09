@@ -34,6 +34,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -85,40 +86,70 @@ const (
 // assertions and teardown. Every field is scoped to this test; nothing is shared
 // with the operator's running daemon.
 type harness struct {
-	t                *testing.T
-	config           config.Config
-	manager          *daemon.Manager
-	conn             *grpc.ClientConn
-	client           pb.SemanticSearchDaemonServiceClient
-	operatorMilvus   *milvusclient.Client
-	milvus           *milvusclient.Client
-	databaseName     string
-	collectionID     string
-	collectionName   string
-	reuseCatalogName string
-	codebaseID       string
-	stateRoot        string
-	merkleDir        string
-	embedGate        *embedGate
-	beforeDatabases  []string
-	operatorBefore   milvusInventory
-	sandboxBefore    milvusInventory
-	temporaryNames   map[string]struct{}
-	callRecorder     *milvusCallRecorder
+	t                 *testing.T
+	config            config.Config
+	manager           *daemon.Manager
+	conn              *grpc.ClientConn
+	client            pb.SemanticSearchDaemonServiceClient
+	operatorMilvus    *milvusclient.Client
+	milvus            *milvusclient.Client
+	databaseName      string
+	collectionID      string
+	collectionName    string
+	reuseCatalogName  string
+	codebaseID        string
+	stateRoot         string
+	merkleDir         string
+	embedGate         *embedGate
+	beforeDatabases   []string
+	operatorBefore    milvusInventory
+	sandboxBefore     milvusInventory
+	temporaryNames    map[string]struct{}
+	callRecorder      *milvusCallRecorder
+	embeddingRecorder *embeddingCallRecorder
+	milvusContext     context.Context
 }
 
 type milvusInventory map[string]map[string]string
+
+type operatorStateAudit struct {
+	violations          []string
+	concurrentAdditions []string
+}
 
 type milvusCall struct {
 	databaseName            string
 	destinationDatabaseName string
 	method                  string
 	collectionNames         []string
+	recordedAt              time.Time
+	caller                  string
 }
 
 type milvusCallRecorder struct {
 	mutex sync.Mutex
 	calls []milvusCall
+}
+
+type embeddingCallRecorder struct {
+	mutex sync.Mutex
+	calls [][]string
+}
+
+func (recorder *embeddingCallRecorder) record(inputs []string) {
+	recorder.mutex.Lock()
+	recorder.calls = append(recorder.calls, slices.Clone(inputs))
+	recorder.mutex.Unlock()
+}
+
+func (recorder *embeddingCallRecorder) snapshot() [][]string {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	calls := make([][]string, len(recorder.calls))
+	for index, inputs := range recorder.calls {
+		calls[index] = slices.Clone(inputs)
+	}
+	return calls
 }
 
 func (recorder *milvusCallRecorder) observe(
@@ -154,8 +185,31 @@ func (recorder *milvusCallRecorder) observe(
 		destinationDatabaseName: destinationDatabaseName,
 		method:                  method,
 		collectionNames:         slices.Clone(collectionNames),
+		recordedAt:              time.Now(),
+		caller:                  milvusCallContext(),
 	})
 	recorder.mutex.Unlock()
+}
+
+func milvusCallContext() string {
+	programCounters := make([]uintptr, 64)
+	count := runtime.Callers(2, programCounters)
+	frames := runtime.CallersFrames(programCounters[:count])
+	for {
+		frame, more := frames.Next()
+		isRepositoryFrame := strings.HasPrefix(
+			frame.Function,
+			"goodkind.io/lm-semantic-search/",
+		)
+		isRecorderFrame := strings.Contains(frame.Function, "milvusCallRecorder")
+		isTransportFrame := strings.Contains(frame.Function, "/internal/semantic/milvusgrpc.")
+		if isRepositoryFrame && !isRecorderFrame && !isTransportFrame {
+			return fmt.Sprintf("%s:%d", frame.Function, frame.Line)
+		}
+		if !more {
+			return ""
+		}
+	}
 }
 
 func appendNonEmpty(values []string, value string) []string {
@@ -175,6 +229,8 @@ func (recorder *milvusCallRecorder) snapshot() []milvusCall {
 			destinationDatabaseName: call.destinationDatabaseName,
 			method:                  call.method,
 			collectionNames:         slices.Clone(call.collectionNames),
+			recordedAt:              call.recordedAt,
+			caller:                  call.caller,
 		}
 	}
 	return result
@@ -349,7 +405,13 @@ func newHarnessWithOptions(
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	socketPath := filepath.Join(socketDir, "daemon.sock")
 
-	embedServer := newFakeEmbeddingServer(t, gate)
+	embeddingRecorder := &embeddingCallRecorder{}
+	embedServer := newFakeEmbeddingServerWithRecorder(
+		t,
+		gate,
+		fakeEmbeddingDimension,
+		embeddingRecorder,
+	)
 
 	cfg := resolveLiveConfig(
 		t,
@@ -358,10 +420,10 @@ func newHarnessWithOptions(
 		embedServer.URL,
 		milvusAddress,
 		defaultConfig.MilvusToken,
+		databaseName,
 		harnessID,
 		idleTimeout,
 	)
-	cfg.MilvusDatabase = databaseName
 	for _, dir := range sandbox.Directories(cfg) {
 		if err := store.EnsureDir(dir); err != nil {
 			t.Fatalf("EnsureDir(%s) returned error: %v", dir, err)
@@ -398,32 +460,50 @@ func newHarnessWithOptions(
 	}
 
 	h := &harness{
-		t:                t,
-		config:           cfg,
-		manager:          manager,
-		conn:             conn,
-		client:           client,
-		operatorMilvus:   operatorMilvus,
-		milvus:           sandboxMilvus,
-		databaseName:     databaseName,
-		collectionID:     collectionID,
-		collectionName:   codebase.CollectionName,
-		reuseCatalogName: semantic.ReuseCatalogCollectionName(cfg),
-		codebaseID:       codebase.ID,
-		stateRoot:        stateRoot,
-		merkleDir:        cfg.MerkleDir,
-		embedGate:        gate,
-		beforeDatabases:  beforeDatabases,
-		operatorBefore:   operatorBefore,
-		sandboxBefore:    sandboxBefore,
-		temporaryNames:   make(map[string]struct{}),
-		callRecorder:     callRecorder,
+		t:                 t,
+		config:            cfg,
+		manager:           manager,
+		conn:              conn,
+		client:            client,
+		operatorMilvus:    operatorMilvus,
+		milvus:            sandboxMilvus,
+		databaseName:      databaseName,
+		collectionID:      collectionID,
+		collectionName:    codebase.CollectionName,
+		reuseCatalogName:  semantic.ReuseCatalogCollectionName(cfg),
+		codebaseID:        codebase.ID,
+		stateRoot:         stateRoot,
+		merkleDir:         cfg.MerkleDir,
+		embedGate:         gate,
+		beforeDatabases:   beforeDatabases,
+		operatorBefore:    operatorBefore,
+		sandboxBefore:     sandboxBefore,
+		temporaryNames:    make(map[string]struct{}),
+		callRecorder:      callRecorder,
+		embeddingRecorder: embeddingRecorder,
+		milvusContext:     sandboxContext,
 	}
 	h.trackCollectionFamily(codebase.CollectionName)
 	h.trackTemporaryCollection(h.reuseCatalogName)
 	t.Cleanup(func() { h.teardown(stopServer) })
 	setupComplete = true
 	return h
+}
+
+func (h *harness) childConfig() config.Config {
+	h.t.Helper()
+	childConfig, err := config.Default()
+	if err != nil {
+		h.t.Fatalf("load child live config: %v", err)
+	}
+	if childConfig.MilvusDatabase != h.databaseName {
+		h.t.Fatalf(
+			"child MilvusDatabase = %q, want temporary database %q",
+			childConfig.MilvusDatabase,
+			h.databaseName,
+		)
+	}
+	return childConfig
 }
 
 func cleanupPartialHarness(
@@ -487,7 +567,6 @@ func (h *harness) teardown(stopServer func()) {
 
 	calls := h.callRecorder.snapshot()
 	h.t.Logf("Milvus calls: %+v", calls)
-	h.assertNoPreexistingProtectedCalls(calls)
 }
 
 func (h *harness) cleanupMilvus() []error {
@@ -531,71 +610,110 @@ func (h *harness) cleanupMilvus() []error {
 		))
 	}
 	cancelDropDatabase()
-	afterDatabases, databaseErr := listMilvusDatabases(h.operatorMilvus)
+	afterDatabases := h.beforeDatabases
+	listedDatabases, databaseErr := listMilvusDatabases(h.operatorMilvus)
 	if databaseErr != nil {
 		cleanupErrors = append(cleanupErrors, fmt.Errorf("list Milvus databases after: %w", databaseErr))
 	} else {
+		afterDatabases = listedDatabases
 		h.t.Logf("Milvus databases after: %v", afterDatabases)
-		for _, violation := range operatorStateViolations(
-			h.beforeDatabases,
-			afterDatabases,
-			h.operatorBefore,
-			h.operatorBefore,
-		) {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("%s", violation))
-		}
 	}
-	operatorAfter, inventoryErr := readMilvusInventory(h.operatorMilvus)
+	operatorAfter := h.operatorBefore
+	readOperatorAfter, inventoryErr := readMilvusInventory(h.operatorMilvus)
 	if inventoryErr != nil {
 		cleanupErrors = append(cleanupErrors, fmt.Errorf("read operator Milvus inventory after: %w", inventoryErr))
 	} else {
+		operatorAfter = readOperatorAfter
 		h.t.Logf("Milvus operator inventory after: %v", operatorAfter)
-		for _, violation := range operatorStateViolations(
-			h.beforeDatabases,
-			h.beforeDatabases,
-			h.operatorBefore,
-			operatorAfter,
-		) {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("%s", violation))
-		}
+	}
+	audit := auditOperatorState(
+		h.databaseName,
+		h.beforeDatabases,
+		afterDatabases,
+		h.operatorBefore,
+		operatorAfter,
+		h.temporaryNames,
+		h.callRecorder.snapshot(),
+	)
+	if len(audit.concurrentAdditions) > 0 {
+		h.t.Logf("Concurrent operator additions: %v", audit.concurrentAdditions)
+	}
+	for _, violation := range audit.violations {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("%s", violation))
 	}
 	closeMilvusClient(h.operatorMilvus)
 	return cleanupErrors
 }
 
-func (h *harness) assertNoPreexistingProtectedCalls(calls []milvusCall) {
-	h.t.Helper()
-	for _, violation := range milvusIsolationViolations(
-		h.databaseName,
-		h.temporaryNames,
-		calls,
-	) {
-		h.t.Error(violation)
-	}
-}
-
-func operatorStateViolations(
+func auditOperatorState(
+	databaseName string,
 	beforeDatabases []string,
 	afterDatabases []string,
 	beforeInventory milvusInventory,
 	afterInventory milvusInventory,
-) []string {
-	violations := make([]string, 0, 2)
+	temporaryNames map[string]struct{},
+	calls []milvusCall,
+) operatorStateAudit {
+	audit := operatorStateAudit{
+		violations: milvusIsolationViolations(databaseName, temporaryNames, calls),
+	}
+	hasHarnessMutationEvidence := len(audit.violations) > 0
 	if !reflect.DeepEqual(afterDatabases, beforeDatabases) {
-		violations = append(violations, fmt.Sprintf(
+		audit.violations = append(audit.violations, fmt.Sprintf(
 			"Milvus database inventory changed\nbefore: %v\nafter: %v",
 			beforeDatabases,
 			afterDatabases,
 		))
 	}
-	if !reflect.DeepEqual(afterInventory, beforeInventory) {
-		violations = append(violations, fmt.Sprintf(
-			"operator Milvus inventory changed\nbefore: %v\nafter: %v",
-			beforeInventory,
-			afterInventory,
-		))
+	baselineNames := make([]string, 0, len(beforeInventory))
+	for collectionName := range beforeInventory {
+		baselineNames = append(baselineNames, collectionName)
 	}
-	return violations
+	slices.Sort(baselineNames)
+	for _, collectionName := range baselineNames {
+		beforeProperties := beforeInventory[collectionName]
+		afterProperties, present := afterInventory[collectionName]
+		if !present {
+			audit.violations = append(audit.violations, fmt.Sprintf(
+				"operator Milvus baseline collection %q was removed",
+				collectionName,
+			))
+			continue
+		}
+		if !reflect.DeepEqual(afterProperties, beforeProperties) {
+			audit.violations = append(audit.violations, fmt.Sprintf(
+				"operator Milvus baseline collection %q changed\nbefore: %v\nafter: %v",
+				collectionName,
+				beforeProperties,
+				afterProperties,
+			))
+		}
+	}
+	addedNames := make([]string, 0)
+	for collectionName := range afterInventory {
+		if _, present := beforeInventory[collectionName]; !present {
+			addedNames = append(addedNames, collectionName)
+		}
+	}
+	slices.Sort(addedNames)
+	for _, collectionName := range addedNames {
+		if _, temporary := temporaryNames[collectionName]; temporary {
+			audit.violations = append(audit.violations, fmt.Sprintf(
+				"tracked temporary collection %q appeared in operator Milvus database",
+				collectionName,
+			))
+			continue
+		}
+		if hasHarnessMutationEvidence {
+			audit.violations = append(audit.violations, fmt.Sprintf(
+				"untracked operator collection %q appeared with harness mutation evidence",
+				collectionName,
+			))
+			continue
+		}
+		audit.concurrentAdditions = append(audit.concurrentAdditions, collectionName)
+	}
+	return audit
 }
 
 func milvusIsolationViolations(
@@ -857,6 +975,7 @@ func resolveLiveConfig(
 	embedServerURL string,
 	milvusAddress string,
 	milvusToken string,
+	databaseName string,
 	harnessID string,
 	idleTimeout time.Duration,
 ) config.Config {
@@ -870,6 +989,7 @@ func resolveLiveConfig(
 		{name: "CLAUDE_CONTEXT_PROFILE", value: config.ProfileStandard},
 		{name: "MILVUS_ADDRESS", value: milvusAddress},
 		{name: "MILVUS_TOKEN", value: milvusToken},
+		{name: "MILVUS_DATABASE", value: databaseName},
 		// A local fake stands in for the embedder, so no run spends GPU time or
 		// depends on a model server being up.
 		{name: "EMBEDDING_PROVIDER", value: "OpenAI"},
@@ -907,6 +1027,13 @@ func resolveLiveConfig(
 	}
 	if resolved.MilvusAddress == "" {
 		t.Fatal("resolved config has no Milvus address; this suite must run against the real store")
+	}
+	if resolved.MilvusDatabase != databaseName {
+		t.Fatalf(
+			"resolved MilvusDatabase = %q, want temporary database %q",
+			resolved.MilvusDatabase,
+			databaseName,
+		)
 	}
 	if resolved.OpenAIBaseURL != embedServerURL {
 		t.Fatalf(
@@ -971,13 +1098,22 @@ func newFakeEmbeddingServerWithDimension(
 	gate *embedGate,
 	dimension int,
 ) *httptest.Server {
+	return newFakeEmbeddingServerWithRecorder(t, gate, dimension, nil)
+}
+
+func newFakeEmbeddingServerWithRecorder(
+	t *testing.T,
+	gate *embedGate,
+	dimension int,
+	recorder *embeddingCallRecorder,
+) *httptest.Server {
 	t.Helper()
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch {
 		case strings.HasSuffix(request.URL.Path, "/models"):
 			writeModelsList(writer)
 		case strings.HasSuffix(request.URL.Path, "/embeddings"):
-			writeEmbeddings(t, writer, request, gate, dimension)
+			writeEmbeddings(t, writer, request, gate, dimension, recorder)
 		default:
 			http.Error(writer, "unexpected path "+request.URL.Path, http.StatusNotFound)
 		}
@@ -1003,11 +1139,15 @@ func writeEmbeddings(
 	request *http.Request,
 	gate *embedGate,
 	dimension int,
+	recorder *embeddingCallRecorder,
 ) {
 	inputs, err := decodeEmbeddingInputs(request)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if recorder != nil {
+		recorder.record(inputs)
 	}
 	if gate != nil {
 		gate.arrived <- len(inputs)

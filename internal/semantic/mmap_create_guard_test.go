@@ -5,7 +5,38 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/config"
 )
+
+func TestCreatedReuseCatalogMmapRequiresDenseAndContentHashWithoutSparse(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{cfg: config.Config{HybridMode: true}}
+	complete := mmapInspection{
+		denseIndexPresent:  true,
+		contentHashPresent: true,
+		sparseIndexPresent: false,
+	}
+	if !service.mmapInspectionComplete(complete, mmapCreatedReuseCatalog) {
+		t.Fatal("created reuse catalog with dense and contentHash indexes remained incomplete")
+	}
+	if service.mmapInspectionComplete(
+		mmapInspection{contentHashPresent: true},
+		mmapCreatedReuseCatalog,
+	) {
+		t.Fatal("created reuse catalog without a dense index reported complete")
+	}
+	if service.mmapInspectionComplete(
+		mmapInspection{denseIndexPresent: true},
+		mmapCreatedReuseCatalog,
+	) {
+		t.Fatal("created reuse catalog without a contentHash index reported complete")
+	}
+	if service.mmapInspectionComplete(complete, mmapCreatedCollection) {
+		t.Fatal("hybrid code collection without a sparse index reported complete")
+	}
+}
 
 // TestNoMmapExtraParamOnCreateIndex guards the Milvus 2.6 regression that broke
 // every new-collection build. createCollection once passed mmap.enabled into the
