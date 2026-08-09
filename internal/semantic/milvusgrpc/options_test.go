@@ -12,7 +12,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -406,6 +408,76 @@ func TestMilvusDeadlineInterceptorLogsOnDeadlineExceeded(t *testing.T) {
 	}
 }
 
+func TestDialOptionsReportsEveryUnaryCall(t *testing.T) {
+	address := startFakeMilvus(t, time.Millisecond)
+	var observedMethod string
+	var observedRequest proto.Message
+	observerContext := context.WithValue(
+		context.Background(),
+		CallObserverContextKey{},
+		CallObserver(func(method string, _ string, request proto.Message) {
+			observedMethod = method
+			observedRequest = request
+		}),
+	)
+	options := DialOptions(observerContext, slog.Default(), DefaultCallTimeouts())
+	options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient("passthrough:///"+address.String(), options...)
+	if err != nil {
+		t.Fatalf("dial fake Milvus: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	if err := invokeFakeMilvus(conn, "DescribeCollection"); err != nil {
+		t.Fatalf("invoke fake Milvus: %v", err)
+	}
+	if observedMethod != "/"+fakeMilvusServiceName+"/DescribeCollection" {
+		t.Fatalf("observed method = %q, want DescribeCollection", observedMethod)
+	}
+	if _, ok := observedRequest.(*emptypb.Empty); !ok {
+		t.Fatalf("observed request type = %T, want *emptypb.Empty", observedRequest)
+	}
+}
+
+func TestDialOptionsReportsTransmittedDatabaseMetadata(t *testing.T) {
+	address := startFakeMilvus(t, time.Millisecond)
+	observedDatabases := make(chan string, 2)
+	observerContext := context.WithValue(
+		context.Background(),
+		CallObserverContextKey{},
+		CallObserver(func(_ string, databaseName string, _ proto.Message) {
+			observedDatabases <- databaseName
+		}),
+	)
+	options := DialOptions(observerContext, slog.Default(), DefaultCallTimeouts())
+	options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient("passthrough:///"+address.String(), options...)
+	if err != nil {
+		t.Fatalf("dial fake Milvus: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	transmittedContext := metadata.NewOutgoingContext(
+		context.Background(),
+		metadata.Pairs("dbname", "live_sandbox"),
+	)
+	if err := invokeFakeMilvusWithContext(transmittedContext, conn, "DescribeCollection"); err != nil {
+		t.Fatalf("invoke fake Milvus with database metadata: %v", err)
+	}
+	if err := invokeFakeMilvus(conn, "DescribeCollection"); err != nil {
+		t.Fatalf("invoke fake Milvus without database metadata: %v", err)
+	}
+
+	if databaseName := <-observedDatabases; databaseName != "live_sandbox" {
+		t.Fatalf("transmitted database = %q, want live_sandbox", databaseName)
+	}
+	if databaseName := <-observedDatabases; databaseName != "" {
+		t.Fatalf("absent transmitted database = %q, want empty", databaseName)
+	}
+}
+
 // fakeMilvusServiceName mirrors the real Milvus gRPC service name so the
 // interceptor classifies the fake server's methods exactly as it classifies the
 // deployed ones.
@@ -483,7 +555,7 @@ func startFakeMilvus(t *testing.T, delay time.Duration) net.Addr {
 func dialFakeMilvus(t *testing.T, address net.Addr, timeouts CallTimeouts) *grpc.ClientConn {
 	t.Helper()
 
-	options := DialOptions(slog.Default(), timeouts)
+	options := DialOptions(context.Background(), slog.Default(), timeouts)
 	options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	conn, err := grpc.NewClient("passthrough:///"+address.String(), options...)
 	if err != nil {
@@ -496,8 +568,16 @@ func dialFakeMilvus(t *testing.T, address net.Addr, timeouts CallTimeouts) *grpc
 }
 
 func invokeFakeMilvus(conn *grpc.ClientConn, method string) error {
+	return invokeFakeMilvusWithContext(context.Background(), conn, method)
+}
+
+func invokeFakeMilvusWithContext(
+	ctx context.Context,
+	conn *grpc.ClientConn,
+	method string,
+) error {
 	return conn.Invoke(
-		context.Background(),
+		ctx,
 		"/"+fakeMilvusServiceName+"/"+method,
 		&emptypb.Empty{},
 		&emptypb.Empty{},

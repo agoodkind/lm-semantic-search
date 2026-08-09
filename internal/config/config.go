@@ -148,6 +148,9 @@ type Config struct {
 	IncludeSubmodules      []string
 	MilvusAddress          string
 	MilvusToken            string
+	// MilvusDatabase selects a non-default database for an isolated internal
+	// client. An empty value preserves the operator's default database.
+	MilvusDatabase string
 	// MilvusMutationCallTimeoutMS bounds one Milvus row-mutating call: Insert,
 	// Upsert, Delete, Flush, FlushAll, Import, ReplicateMessage, and
 	// TruncateCollection. The duration of those calls scales with the number of
@@ -398,6 +401,7 @@ func Default() (Config, error) {
 		IncludeSubmodules:                 parseCommaSeparated(os.Getenv("CLAUDE_CONTEXT_INCLUDE_SUBMODULES")),
 		MilvusAddress:                     envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),
 		MilvusToken:                       envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),
+		MilvusDatabase:                    "",
 		MilvusMutationCallTimeoutMS:       resolveMilvusMutationCallTimeoutMS(fileConfig.MilvusMutationCallTimeoutMS),
 		MilvusCollectionLoadTimeoutMS:     resolveMilvusCollectionLoadTimeoutMS(fileConfig.MilvusCollectionLoadTimeoutMS),
 		MilvusCollectionLoadWaitTimeoutMS: loadWaitTimeoutMS,

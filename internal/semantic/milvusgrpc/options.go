@@ -6,13 +6,17 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -83,6 +87,63 @@ type CallTimeouts struct {
 	// Mutation bounds row-writing and row-deleting calls.
 	Mutation time.Duration
 }
+
+// CallObserver receives every unary Milvus method and its request before the
+// transport sends it. Callers install one on a construction context when they
+// need an isolated audit of a client's backend activity.
+type CallObserver func(method string, databaseName string, request proto.Message)
+
+// CallObserverContextKey installs a CallObserver on a Milvus construction
+// context. It exists for isolated transport audits such as the live harness.
+type CallObserverContextKey struct{}
+
+type callObserverMethodContextKey struct{}
+
+type callObserverStatsHandler struct {
+	observer CallObserver
+}
+
+func (handler callObserverStatsHandler) TagRPC(
+	ctx context.Context,
+	info *stats.RPCTagInfo,
+) context.Context {
+	return context.WithValue(ctx, callObserverMethodContextKey{}, info.FullMethodName)
+}
+
+func (handler callObserverStatsHandler) HandleRPC(ctx context.Context, rpcStats stats.RPCStats) {
+	payload, ok := rpcStats.(*stats.OutPayload)
+	if !ok {
+		return
+	}
+	request, ok := payload.Payload.(proto.Message)
+	if !ok {
+		return
+	}
+	method, _ := ctx.Value(callObserverMethodContextKey{}).(string)
+	handler.observer(method, transmittedDatabaseName(ctx, request), request)
+}
+
+func transmittedDatabaseName(ctx context.Context, request proto.Message) string {
+	if named, ok := request.(interface{ GetDbName() string }); ok {
+		if databaseName := named.GetDbName(); databaseName != "" {
+			return databaseName
+		}
+	}
+	outgoingMetadata, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		return ""
+	}
+	return strings.Join(outgoingMetadata.Get("dbname"), ",")
+}
+
+func (callObserverStatsHandler) TagConn(
+	ctx context.Context,
+	_ *stats.ConnTagInfo,
+) context.Context {
+	return ctx
+}
+
+func (callObserverStatsHandler) HandleConn(context.Context, stats.ConnStats) {}
 
 // DefaultCallTimeouts returns the deadline policy a Milvus client uses unless
 // its caller tunes the bounds.
@@ -170,13 +231,25 @@ func (reporter *deadlineReporter) PostCall(err error, duration time.Duration) {
 	)
 }
 
-// DialOptions returns the keepalive and unary deadline policy for a Milvus
-// client connection.
-func DialOptions(logger *slog.Logger, timeouts CallTimeouts) []grpc.DialOption {
-	return []grpc.DialOption{
-		grpc.WithKeepaliveParams(keepaliveParameters()),
-		grpc.WithChainUnaryInterceptor(milvusDeadlineInterceptor(logger, timeouts)),
+// DialOptions returns the keepalive, unary deadline, and optional call observer
+// policy for a Milvus client connection.
+func DialOptions(
+	ctx context.Context,
+	logger *slog.Logger,
+	timeouts CallTimeouts,
+) []grpc.DialOption {
+	unaryInterceptors := []grpc.UnaryClientInterceptor{
+		milvusDeadlineInterceptor(logger, timeouts),
 	}
+	dialOptions := []grpc.DialOption{
+		grpc.WithKeepaliveParams(keepaliveParameters()),
+		grpc.WithChainUnaryInterceptor(unaryInterceptors...),
+	}
+	observer, _ := ctx.Value(CallObserverContextKey{}).(CallObserver)
+	if observer != nil {
+		dialOptions = append(dialOptions, grpc.WithStatsHandler(callObserverStatsHandler{observer: observer}))
+	}
+	return dialOptions
 }
 
 // keepaliveParameters returns the client keepalive policy. It never pings an

@@ -4,9 +4,8 @@
 // conversation-marker feature against a real Milvus.
 //
 // Every run boots the daemon gRPC server in-process on a throwaway unix socket,
-// points embedding at a local fake, and ingests into a per-test UUID collection
-// whose Milvus name can never collide with the operator's production collection.
-// Teardown drops that collection.
+// points embedding at a local fake, and connects every Milvus client to a unique
+// per-test database. Teardown drops every tracked collection and that database.
 //
 // Paths come from internal/sandbox, the same isolation the sandbox command
 // gives a daemon run by hand. The store and the embedder are named here instead,
@@ -16,8 +15,8 @@
 //
 //	go test -tags live -count=1 ./test/live/
 //
-// or `make live`. Milvus must be reachable; when it is not, each test skips with a
-// clear environment note rather than failing.
+// or `make live`. Residency tests fail when Milvus is unavailable because a skip
+// cannot satisfy their acceptance gate.
 package live
 
 import (
@@ -27,14 +26,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,11 +49,17 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/sandbox"
 	"goodkind.io/lm-semantic-search/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 	"goodkind.io/lm-semantic-search/internal/store"
+	"goodkind.io/lm-semantic-search/internal/tshash"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
+	defaultMilvusDatabase = "default"
+	liveDatabasePrefix    = "lms_live_"
+
 	// productionConversationCollection is the operator's real conversation
 	// collection. The harness asserts every throwaway collection differs from it,
 	// so a live run can never read, write, or drop production conversation rows.
@@ -77,10 +86,13 @@ const (
 // with the operator's running daemon.
 type harness struct {
 	t                *testing.T
+	config           config.Config
 	manager          *daemon.Manager
 	conn             *grpc.ClientConn
 	client           pb.SemanticSearchDaemonServiceClient
+	operatorMilvus   *milvusclient.Client
 	milvus           *milvusclient.Client
+	databaseName     string
 	collectionID     string
 	collectionName   string
 	reuseCatalogName string
@@ -88,6 +100,100 @@ type harness struct {
 	stateRoot        string
 	merkleDir        string
 	embedGate        *embedGate
+	beforeDatabases  []string
+	operatorBefore   milvusInventory
+	sandboxBefore    milvusInventory
+	temporaryNames   map[string]struct{}
+	callRecorder     *milvusCallRecorder
+}
+
+type milvusInventory map[string]map[string]string
+
+type milvusCall struct {
+	databaseName            string
+	destinationDatabaseName string
+	method                  string
+	collectionNames         []string
+}
+
+type milvusCallRecorder struct {
+	mutex sync.Mutex
+	calls []milvusCall
+}
+
+func (recorder *milvusCallRecorder) observe(
+	method string,
+	databaseName string,
+	request proto.Message,
+) {
+	collectionNames := make([]string, 0, 2)
+	destinationDatabaseName := ""
+	if named, ok := request.(interface{ GetCollectionName() string }); ok {
+		collectionNames = appendNonEmpty(collectionNames, named.GetCollectionName())
+	}
+	if named, ok := request.(interface{ GetCollectionNames() []string }); ok {
+		for _, collectionName := range named.GetCollectionNames() {
+			collectionNames = appendNonEmpty(collectionNames, collectionName)
+		}
+	}
+	if renamed, ok := request.(interface {
+		GetOldName() string
+		GetNewName() string
+		GetNewDBName() string
+	}); ok {
+		collectionNames = appendNonEmpty(collectionNames, renamed.GetOldName())
+		collectionNames = appendNonEmpty(collectionNames, renamed.GetNewName())
+		destinationDatabaseName = renamed.GetNewDBName()
+	}
+	if separator := strings.LastIndex(method, "/"); separator >= 0 {
+		method = method[separator+1:]
+	}
+	recorder.mutex.Lock()
+	recorder.calls = append(recorder.calls, milvusCall{
+		databaseName:            databaseName,
+		destinationDatabaseName: destinationDatabaseName,
+		method:                  method,
+		collectionNames:         slices.Clone(collectionNames),
+	})
+	recorder.mutex.Unlock()
+}
+
+func appendNonEmpty(values []string, value string) []string {
+	if value == "" || slices.Contains(values, value) {
+		return values
+	}
+	return append(values, value)
+}
+
+func (recorder *milvusCallRecorder) snapshot() []milvusCall {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	result := make([]milvusCall, len(recorder.calls))
+	for index, call := range recorder.calls {
+		result[index] = milvusCall{
+			databaseName:            call.databaseName,
+			destinationDatabaseName: call.destinationDatabaseName,
+			method:                  call.method,
+			collectionNames:         slices.Clone(call.collectionNames),
+		}
+	}
+	return result
+}
+
+func (recorder *milvusCallRecorder) reset() {
+	recorder.mutex.Lock()
+	recorder.calls = nil
+	recorder.mutex.Unlock()
+}
+
+func (recorder *milvusCallRecorder) count(method string, collectionName string) int {
+	count := 0
+	for _, call := range recorder.snapshot() {
+		if call.method == method && slices.Contains(call.collectionNames, collectionName) {
+			count++
+		}
+	}
+	return count
 }
 
 // newHarness builds the isolated daemon and returns a ready harness, or skips the
@@ -98,10 +204,25 @@ func newHarness(t *testing.T) *harness {
 	return newHarnessWithGate(t, nil)
 }
 
+func newResidencyHarness(t *testing.T, idleTimeout time.Duration) *harness {
+	t.Helper()
+	return newHarnessWithOptions(t, nil, idleTimeout, true)
+}
+
 // newHarnessWithGate builds the isolated daemon like newHarness but installs an
 // embedGate so a test can pace embedding requests and read the job's progress
 // between batches. A nil gate is the normal, ungated path.
 func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
+	t.Helper()
+	return newHarnessWithOptions(t, gate, 0, false)
+}
+
+func newHarnessWithOptions(
+	t *testing.T,
+	gate *embedGate,
+	idleTimeout time.Duration,
+	requireMilvus bool,
+) *harness {
 	t.Helper()
 
 	defaultConfig, err := config.Default()
@@ -110,19 +231,110 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 	}
 	milvusAddress := strings.TrimSpace(defaultConfig.MilvusAddress)
 	if milvusAddress == "" {
+		if requireMilvus {
+			t.Fatal("BLOCKED: MilvusAddress is empty; set MILVUS_ADDRESS or local config before running the residency suite")
+		}
 		t.Skip("BLOCKED: MilvusAddress is empty; set MILVUS_ADDRESS or local config before running the live suite")
 	}
 
+	harnessID := randomID()
+	databaseName := liveDatabasePrefix + harnessID
+	callRecorder := &milvusCallRecorder{}
+	operatorContext := context.WithValue(
+		context.Background(),
+		milvusgrpc.CallObserverContextKey{},
+		milvusgrpc.CallObserver(callRecorder.observe),
+	)
 	// Probe Milvus directly first. A dial failure here means the backend is down,
 	// so the whole scenario is blocked on the environment rather than the code.
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	milvus, err := milvusclient.New(dialCtx, &milvusclient.ClientConfig{
-		Address: milvusAddress,
-		APIKey:  defaultConfig.MilvusToken,
+	dialCtx, dialCancel := context.WithTimeout(operatorContext, 5*time.Second)
+	operatorMilvus, err := milvusclient.New(dialCtx, &milvusclient.ClientConfig{
+		Address:     milvusAddress,
+		APIKey:      defaultConfig.MilvusToken,
+		DialOptions: milvusgrpc.DialOptions(operatorContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
 	})
 	dialCancel()
 	if err != nil {
+		if requireMilvus {
+			t.Fatalf("BLOCKED: Milvus unreachable at %s: %v", milvusAddress, err)
+		}
 		t.Skipf("BLOCKED: Milvus unreachable at %s: %v", milvusAddress, err)
+	}
+
+	var (
+		databaseCreated bool
+		manager         *daemon.Manager
+		conn            *grpc.ClientConn
+		sandboxMilvus   *milvusclient.Client
+		setupComplete   bool
+		stopServer      func()
+	)
+	t.Cleanup(func() {
+		if setupComplete {
+			return
+		}
+		cleanupPartialHarness(
+			t,
+			conn,
+			stopServer,
+			manager,
+			sandboxMilvus,
+			operatorMilvus,
+			databaseName,
+			databaseCreated,
+		)
+	})
+
+	operatorBefore, err := readMilvusInventory(operatorMilvus)
+	if err != nil {
+		t.Fatalf("read operator Milvus inventory before: %v", err)
+	}
+	beforeDatabases, err := listMilvusDatabases(operatorMilvus)
+	if err != nil {
+		t.Fatalf("list Milvus databases before: %v", err)
+	}
+	t.Logf("Milvus operator inventory before: %v", operatorBefore)
+	t.Logf("Milvus databases before: %v", beforeDatabases)
+	if slices.Contains(beforeDatabases, databaseName) {
+		t.Fatalf("temporary Milvus database %q already exists; refusing collision", databaseName)
+	}
+	createCtx, createCancel := context.WithTimeout(operatorContext, 15*time.Second)
+	if err := operatorMilvus.CreateDatabase(
+		createCtx,
+		milvusclient.NewCreateDatabaseOption(databaseName),
+	); err != nil {
+		createCancel()
+		t.Fatalf("CreateDatabase(%s) returned error: %v", databaseName, err)
+	}
+	createCancel()
+	databaseCreated = true
+
+	sandboxContext := context.WithValue(
+		context.Background(),
+		milvusgrpc.CallObserverContextKey{},
+		milvusgrpc.CallObserver(callRecorder.observe),
+	)
+	dialCtx, dialCancel = context.WithTimeout(sandboxContext, 5*time.Second)
+	sandboxMilvus, err = milvusclient.New(dialCtx, &milvusclient.ClientConfig{
+		Address:     milvusAddress,
+		APIKey:      defaultConfig.MilvusToken,
+		DBName:      databaseName,
+		DialOptions: milvusgrpc.DialOptions(sandboxContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
+	})
+	dialCancel()
+	if err != nil {
+		t.Fatalf("connect to temporary Milvus database %s: %v", databaseName, err)
+	}
+	sandboxBefore, err := readMilvusInventory(sandboxMilvus)
+	if err != nil {
+		t.Fatalf("read sandbox Milvus inventory before: %v", err)
+	}
+	if len(sandboxBefore) != 0 {
+		t.Fatalf(
+			"temporary Milvus database %q started with collections: %v",
+			databaseName,
+			sandboxBefore,
+		)
 	}
 
 	stateRoot := t.TempDir()
@@ -146,7 +358,10 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 		embedServer.URL,
 		milvusAddress,
 		defaultConfig.MilvusToken,
+		harnessID,
+		idleTimeout,
 	)
+	cfg.MilvusDatabase = databaseName
 	for _, dir := range sandbox.Directories(cfg) {
 		if err := store.EnsureDir(dir); err != nil {
 			t.Fatalf("EnsureDir(%s) returned error: %v", dir, err)
@@ -156,45 +371,41 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 		t.Fatalf("WriteRegistry returned error: %v", err)
 	}
 
-	manager, err := daemon.NewManager(context.Background(), cfg)
+	manager, err = daemon.NewManager(sandboxContext, cfg)
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
 
-	stopServer := startInProcessServer(t, manager, socketPath)
+	stopServer = startInProcessServer(t, manager, socketPath)
 
 	conn, client, err := grpcutil.DialDaemon(context.Background(), socketPath)
 	if err != nil {
-		stopServer()
 		t.Fatalf("DialDaemon returned error: %v", err)
 	}
 
 	// A fresh random id derives a unique conv_chunks_<hash> collection name, so
 	// the throwaway collection can never be the production one.
-	collectionID := "live-marker-" + randomID()
+	collectionID := "live-marker-" + harnessID
 	codebase, err := manager.RegisterConversationCollection(context.Background(), collectionID)
 	if err != nil {
-		_ = conn.Close()
-		stopServer()
 		t.Fatalf("RegisterConversationCollection returned error: %v", err)
 	}
 	if codebase.CollectionName == "" {
-		_ = conn.Close()
-		stopServer()
 		t.Fatal("RegisterConversationCollection returned an empty collection name")
 	}
 	if codebase.CollectionName == productionConversationCollection {
-		_ = conn.Close()
-		stopServer()
 		t.Fatalf("throwaway collection name equals production %q; refusing to run", productionConversationCollection)
 	}
 
 	h := &harness{
 		t:                t,
+		config:           cfg,
 		manager:          manager,
 		conn:             conn,
 		client:           client,
-		milvus:           milvus,
+		operatorMilvus:   operatorMilvus,
+		milvus:           sandboxMilvus,
+		databaseName:     databaseName,
 		collectionID:     collectionID,
 		collectionName:   codebase.CollectionName,
 		reuseCatalogName: semantic.ReuseCatalogCollectionName(cfg),
@@ -202,46 +413,434 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 		stateRoot:        stateRoot,
 		merkleDir:        cfg.MerkleDir,
 		embedGate:        gate,
+		beforeDatabases:  beforeDatabases,
+		operatorBefore:   operatorBefore,
+		sandboxBefore:    sandboxBefore,
+		temporaryNames:   make(map[string]struct{}),
+		callRecorder:     callRecorder,
 	}
+	h.trackCollectionFamily(codebase.CollectionName)
+	h.trackTemporaryCollection(h.reuseCatalogName)
 	t.Cleanup(func() { h.teardown(stopServer) })
+	setupComplete = true
 	return h
 }
 
-// teardown drops the throwaway collection, closes the clients, and stops the
-// in-process server. It re-asserts the collection name was never the production
-// one, so an isolation breach fails the test even on the teardown path.
-func (h *harness) teardown(stopServer func()) {
-	if h.collectionName == productionConversationCollection {
-		h.t.Errorf("isolation breach: harness collection was the production collection %q", productionConversationCollection)
-	} else {
-		dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := h.milvus.DropCollection(dropCtx, milvusclient.NewDropCollectionOption(h.collectionName)); err != nil {
-			// A missing collection (a scenario that never inserted) is not an error.
-			if !strings.Contains(err.Error(), "not exist") && !strings.Contains(err.Error(), "not found") {
-				h.t.Errorf("DropCollection(%s) returned error: %v", h.collectionName, err)
-			}
+func cleanupPartialHarness(
+	t *testing.T,
+	conn *grpc.ClientConn,
+	stopServer func(),
+	manager *daemon.Manager,
+	sandboxMilvus *milvusclient.Client,
+	operatorMilvus *milvusclient.Client,
+	databaseName string,
+	databaseCreated bool,
+) {
+	t.Helper()
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if stopServer != nil {
+		stopServer()
+	}
+	if manager != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := manager.Close(closeCtx); err != nil {
+			t.Errorf("close partial manager returned error: %v", err)
 		}
 		cancel()
 	}
-	if h.reuseCatalogName != "" {
+	if sandboxMilvus != nil {
+		for _, cleanupErr := range dropEveryCollection(sandboxMilvus) {
+			t.Errorf("clean partial sandbox Milvus: %v", cleanupErr)
+		}
+		closeMilvusClient(sandboxMilvus)
+	}
+	if databaseCreated && operatorMilvus != nil {
 		dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := h.milvus.DropCollection(
+		if err := operatorMilvus.DropDatabase(
 			dropCtx,
-			milvusclient.NewDropCollectionOption(h.reuseCatalogName),
-		); err != nil &&
-			!strings.Contains(err.Error(), "not exist") &&
-			!strings.Contains(err.Error(), "not found") {
-			h.t.Errorf("DropCollection(%s) returned error: %v", h.reuseCatalogName, err)
+			milvusclient.NewDropDatabaseOption(databaseName),
+		); err != nil {
+			t.Errorf("DropDatabase(%s) after partial setup returned error: %v", databaseName, err)
 		}
 		cancel()
 	}
+	closeMilvusClient(operatorMilvus)
+}
+
+// teardown drops every tracked collection and the unique temporary database.
+// It then verifies the operator database and database list are unchanged.
+func (h *harness) teardown(stopServer func()) {
 	if err := h.conn.Close(); err != nil {
 		h.t.Errorf("close gRPC connection returned error: %v", err)
 	}
-	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = h.milvus.Close(closeCtx)
-	cancel()
 	stopServer()
+	closeManagerContext, cancelManagerClose := context.WithTimeout(context.Background(), 15*time.Second)
+	if err := h.manager.Close(closeManagerContext); err != nil {
+		h.t.Errorf("close manager returned error: %v", err)
+	}
+	cancelManagerClose()
+	for _, cleanupErr := range h.cleanupMilvus() {
+		h.t.Error(cleanupErr)
+	}
+
+	calls := h.callRecorder.snapshot()
+	h.t.Logf("Milvus calls: %+v", calls)
+	h.assertNoPreexistingProtectedCalls(calls)
+}
+
+func (h *harness) cleanupMilvus() []error {
+	cleanupErrors := make([]error, 0)
+	temporaryNames := make([]string, 0, len(h.temporaryNames))
+	for collectionName := range h.temporaryNames {
+		temporaryNames = append(temporaryNames, collectionName)
+	}
+	slices.Sort(temporaryNames)
+	for _, collectionName := range temporaryNames {
+		if err := dropCollectionIfPresent(h.milvus, collectionName); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+		}
+	}
+	sandboxAfter, err := readMilvusInventory(h.milvus)
+	if err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("read sandbox Milvus inventory after: %w", err))
+		cleanupErrors = append(cleanupErrors, dropEveryCollection(h.milvus)...)
+	} else {
+		h.t.Logf("Milvus sandbox inventory after: %v", sandboxAfter)
+	}
+	if err == nil && !reflect.DeepEqual(sandboxAfter, h.sandboxBefore) {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf(
+			"temporary Milvus database inventory changed\nbefore: %v\nafter: %v",
+			h.sandboxBefore,
+			sandboxAfter,
+		))
+		cleanupErrors = append(cleanupErrors, dropEveryCollection(h.milvus)...)
+	}
+	closeMilvusClient(h.milvus)
+
+	dropDatabaseCtx, cancelDropDatabase := context.WithTimeout(context.Background(), 15*time.Second)
+	if err := h.operatorMilvus.DropDatabase(
+		dropDatabaseCtx,
+		milvusclient.NewDropDatabaseOption(h.databaseName),
+	); err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf(
+			"DropDatabase(%s) returned error: %w",
+			h.databaseName,
+			err,
+		))
+	}
+	cancelDropDatabase()
+	afterDatabases, databaseErr := listMilvusDatabases(h.operatorMilvus)
+	if databaseErr != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("list Milvus databases after: %w", databaseErr))
+	} else {
+		h.t.Logf("Milvus databases after: %v", afterDatabases)
+		for _, violation := range operatorStateViolations(
+			h.beforeDatabases,
+			afterDatabases,
+			h.operatorBefore,
+			h.operatorBefore,
+		) {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("%s", violation))
+		}
+	}
+	operatorAfter, inventoryErr := readMilvusInventory(h.operatorMilvus)
+	if inventoryErr != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("read operator Milvus inventory after: %w", inventoryErr))
+	} else {
+		h.t.Logf("Milvus operator inventory after: %v", operatorAfter)
+		for _, violation := range operatorStateViolations(
+			h.beforeDatabases,
+			h.beforeDatabases,
+			h.operatorBefore,
+			operatorAfter,
+		) {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("%s", violation))
+		}
+	}
+	closeMilvusClient(h.operatorMilvus)
+	return cleanupErrors
+}
+
+func (h *harness) assertNoPreexistingProtectedCalls(calls []milvusCall) {
+	h.t.Helper()
+	for _, violation := range milvusIsolationViolations(
+		h.databaseName,
+		h.temporaryNames,
+		calls,
+	) {
+		h.t.Error(violation)
+	}
+}
+
+func operatorStateViolations(
+	beforeDatabases []string,
+	afterDatabases []string,
+	beforeInventory milvusInventory,
+	afterInventory milvusInventory,
+) []string {
+	violations := make([]string, 0, 2)
+	if !reflect.DeepEqual(afterDatabases, beforeDatabases) {
+		violations = append(violations, fmt.Sprintf(
+			"Milvus database inventory changed\nbefore: %v\nafter: %v",
+			beforeDatabases,
+			afterDatabases,
+		))
+	}
+	if !reflect.DeepEqual(afterInventory, beforeInventory) {
+		violations = append(violations, fmt.Sprintf(
+			"operator Milvus inventory changed\nbefore: %v\nafter: %v",
+			beforeInventory,
+			afterInventory,
+		))
+	}
+	return violations
+}
+
+func milvusIsolationViolations(
+	databaseName string,
+	temporaryNames map[string]struct{},
+	calls []milvusCall,
+) []string {
+	violations := make([]string, 0)
+	for _, call := range calls {
+		if call.method == "CreateDatabase" || call.method == "DropDatabase" {
+			if call.databaseName != databaseName {
+				violations = append(violations, fmt.Sprintf(
+					"Milvus call %s targeted database %q, want temporary database %q",
+					call.method,
+					call.databaseName,
+					databaseName,
+				))
+			}
+			continue
+		}
+		if !protectedMilvusCall(call.method) {
+			continue
+		}
+		if call.databaseName != databaseName {
+			violations = append(violations, fmt.Sprintf(
+				"protected Milvus call %s targeted database %q, want temporary database %q",
+				call.method,
+				call.databaseName,
+				databaseName,
+			))
+			continue
+		}
+		if call.destinationDatabaseName != "" && call.destinationDatabaseName != databaseName {
+			violations = append(violations, fmt.Sprintf(
+				"protected Milvus call %s targeted destination database %q, want temporary database %q",
+				call.method,
+				call.destinationDatabaseName,
+				databaseName,
+			))
+			continue
+		}
+		if len(call.collectionNames) == 0 {
+			violations = append(violations, fmt.Sprintf(
+				"protected Milvus call %s in database %s has no auditable collection target",
+				call.method,
+				call.databaseName,
+			))
+			continue
+		}
+		for _, collectionName := range call.collectionNames {
+			if _, temporary := temporaryNames[collectionName]; !temporary {
+				violations = append(violations, fmt.Sprintf(
+					"protected Milvus call %s touched untracked collection %s in database %s",
+					call.method,
+					collectionName,
+					call.databaseName,
+				))
+			}
+		}
+	}
+	return violations
+}
+
+func protectedMilvusCall(method string) bool {
+	if strings.HasPrefix(method, "Alter") {
+		return true
+	}
+	switch method {
+	case "CreateAlias", "CreateCollection", "CreateIndex", "CreatePartition",
+		"Delete", "DropAlias", "DropCollection", "DropIndex", "DropPartition",
+		"Flush", "FlushAll", "Import", "Insert", "LoadCollection",
+		"ReleaseCollection", "RenameCollection", "ReplicateMessage",
+		"TruncateCollection", "Upsert":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *harness) trackTemporaryCollection(collectionName string) {
+	h.t.Helper()
+	if collectionName == "" {
+		return
+	}
+	if _, preexisting := h.sandboxBefore[collectionName]; preexisting {
+		h.t.Fatalf("temporary collection %q collides with a preexisting collection", collectionName)
+	}
+	h.temporaryNames[collectionName] = struct{}{}
+}
+
+func (h *harness) trackCollectionFamily(collectionName string) {
+	h.t.Helper()
+	for _, name := range []string{
+		collectionName,
+		collectionName + "_stg",
+		collectionName + "_swap_previous",
+	} {
+		h.trackTemporaryCollection(name)
+	}
+}
+
+func (h *harness) trackCodebasePath(codebasePath string) string {
+	h.t.Helper()
+	if h.config.CollectionNameOverride != "" {
+		h.t.Fatalf("live harness requires an empty collection name override, got %q", h.config.CollectionNameOverride)
+	}
+	canonicalPath, err := filepath.EvalSymlinks(codebasePath)
+	if err != nil {
+		h.t.Fatalf("resolve live codebase path: %v", err)
+	}
+	prefix := "code_chunks"
+	if h.config.HybridMode {
+		prefix = "hybrid_code_chunks"
+	}
+	collectionName := prefix + "_" + tshash.PathPrefix(canonicalPath)
+	h.trackCollectionFamily(collectionName)
+	return collectionName
+}
+
+func readMilvusInventory(client *milvusclient.Client) (milvusInventory, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	collectionNames, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
+	if err != nil {
+		return nil, fmt.Errorf("list Milvus collections for inventory: %w", err)
+	}
+	slices.Sort(collectionNames)
+	inventory := make(milvusInventory, len(collectionNames))
+	for _, collectionName := range collectionNames {
+		properties := make(map[string]string)
+		loadState, loadErr := client.GetLoadState(
+			ctx,
+			milvusclient.NewGetLoadStateOption(collectionName),
+		)
+		if loadErr != nil {
+			return nil, fmt.Errorf(
+				"get Milvus load state for %s inventory: %w",
+				collectionName,
+				loadErr,
+			)
+		}
+		properties["load_state"] = strconv.FormatInt(int64(loadState.State), 10)
+		collection, describeErr := client.DescribeCollection(
+			ctx,
+			milvusclient.NewDescribeCollectionOption(collectionName),
+		)
+		if describeErr != nil {
+			return nil, fmt.Errorf(
+				"describe Milvus collection %s for inventory: %w",
+				collectionName,
+				describeErr,
+			)
+		}
+		for key, value := range collection.Properties {
+			properties["collection:"+key] = value
+		}
+		if collection.Schema != nil {
+			for _, field := range collection.Schema.Fields {
+				properties["field:"+field.Name] = field.TypeParams["mmap.enabled"]
+			}
+		}
+		indexNames, listErr := client.ListIndexes(
+			ctx,
+			milvusclient.NewListIndexOption(collectionName),
+		)
+		if listErr != nil {
+			return nil, fmt.Errorf(
+				"list Milvus indexes for %s inventory: %w",
+				collectionName,
+				listErr,
+			)
+		}
+		slices.Sort(indexNames)
+		for _, indexName := range indexNames {
+			description, indexErr := client.DescribeIndex(
+				ctx,
+				milvusclient.NewDescribeIndexOption(collectionName, indexName),
+			)
+			if indexErr != nil {
+				return nil, fmt.Errorf(
+					"describe Milvus index %s on %s: %w",
+					indexName,
+					collectionName,
+					indexErr,
+				)
+			}
+			properties["index:"+indexName] = description.Params()["mmap.enabled"]
+		}
+		inventory[collectionName] = properties
+	}
+	return inventory, nil
+}
+
+func listMilvusDatabases(client *milvusclient.Client) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	databaseNames, err := client.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
+	if err != nil {
+		return nil, fmt.Errorf("list Milvus databases: %w", err)
+	}
+	slices.Sort(databaseNames)
+	return databaseNames, nil
+}
+
+func dropCollectionIfPresent(
+	client *milvusclient.Client,
+	collectionName string,
+) error {
+	dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := client.DropCollection(
+		dropCtx,
+		milvusclient.NewDropCollectionOption(collectionName),
+	); err != nil {
+		if !strings.Contains(err.Error(), "not exist") && !strings.Contains(err.Error(), "not found") {
+			return fmt.Errorf("DropCollection(%s) returned error: %w", collectionName, err)
+		}
+	}
+	return nil
+}
+
+func dropEveryCollection(client *milvusclient.Client) []error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	collectionNames, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
+	cancel()
+	if err != nil {
+		return []error{fmt.Errorf("list temporary Milvus collections for cleanup: %w", err)}
+	}
+	cleanupErrors := make([]error, 0)
+	slices.Sort(collectionNames)
+	for _, collectionName := range collectionNames {
+		if err := dropCollectionIfPresent(client, collectionName); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+		}
+	}
+	return cleanupErrors
+}
+
+func closeMilvusClient(client *milvusclient.Client) {
+	if client == nil {
+		return
+	}
+	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = client.Close(closeCtx)
+	cancel()
 }
 
 // resolveLiveConfig takes the sandbox isolation and names the parts this suite
@@ -258,6 +857,8 @@ func resolveLiveConfig(
 	embedServerURL string,
 	milvusAddress string,
 	milvusToken string,
+	harnessID string,
+	idleTimeout time.Duration,
 ) config.Config {
 	t.Helper()
 
@@ -272,7 +873,7 @@ func resolveLiveConfig(
 		// A local fake stands in for the embedder, so no run spends GPU time or
 		// depends on a model server being up.
 		{name: "EMBEDDING_PROVIDER", value: "OpenAI"},
-		{name: "EMBEDDING_MODEL", value: "text-embedding-3-small"},
+		{name: "EMBEDDING_MODEL", value: "live-harness-" + harnessID},
 		{name: "OPENAI_BASE_URL", value: embedServerURL},
 		{name: "OPENAI_API_KEY", value: "live-harness-dummy-key"}, //gitleaks:allow // not a secret: the fake embedder accepts any non-empty key
 		{name: "EMBEDDING_DIMENSION", value: strconv.Itoa(fakeEmbeddingDimension)},
@@ -288,6 +889,7 @@ func resolveLiveConfig(
 		{name: "CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", value: "0"},
 		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: "1"},
 		{name: "CLAUDE_CONTEXT_RESUME_ON_BOOT", value: "false"},
+		{name: "CLAUDE_CONTEXT_MILVUS_COLLECTION_IDLE_TIMEOUT_MS", value: strconv.FormatInt(idleTimeout.Milliseconds(), 10)},
 	}
 	for _, setting := range chosen {
 		t.Setenv(setting.name, setting.value)

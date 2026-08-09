@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -190,6 +189,14 @@ type indexingRunner interface {
 
 // NewManager loads persisted daemon state from disk.
 func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
+	return newManagerWithSemanticFactory(ctx, cfg, newSemanticIndex)
+}
+
+func newManagerWithSemanticFactory(
+	ctx context.Context,
+	cfg config.Config,
+	semanticFactory func(context.Context, config.Config) (semanticIndex, error),
+) (*Manager, error) {
 	manager := &Manager{
 		config:                      cfg,
 		conversationChunkByteBudget: conversationChunkMaxBytes,
@@ -259,7 +266,7 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	// The observer is the sole caller of the resolver's invalidate, so every
 	// consumer signals it instead of invalidating the cache itself.
 	manager.observer = newIgnoreObserver(manager.indexability)
-	semanticBackend, err := newSemanticIndex(ctx, cfg)
+	semanticBackend, err := semanticFactory(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +276,12 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 	}
 	if err := manager.load(ctx); err != nil {
 		slog.ErrorContext(ctx, "load daemon state failed", "state_root", cfg.StateRoot, "err", err)
-		return nil, fmt.Errorf("load daemon state: %w", err)
+		loadErr := fmt.Errorf("load daemon state: %w", err)
+		if closeErr := manager.Close(context.WithoutCancel(ctx)); closeErr != nil {
+			slog.ErrorContext(ctx, "close manager after state load failure", "err", closeErr)
+			return nil, errors.Join(loadErr, fmt.Errorf("close manager after state load failure: %w", closeErr))
+		}
+		return nil, loadErr
 	}
 	manager.jobJournal = newJobJournalWriter(
 		cfg.JobsPath,
@@ -279,30 +291,6 @@ func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
 		jobJournalQueueCapacity,
 	)
 	return manager, nil
-}
-
-func (manager *Manager) load(ctx context.Context) error {
-	registry, err := store.ReadRegistry(manager.config.RegistryPath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.ErrorContext(ctx, "read registry failed", "path", manager.config.RegistryPath, "err", err)
-		return fmt.Errorf("read registry: %w", err)
-	}
-	for _, codebase := range registry.Codebases {
-		if codebase.Kind == "" {
-			codebase.Kind = model.CodebaseKindCode
-		}
-		manager.codebases[codebase.ID] = codebase
-	}
-	dropGhostURICodebases(manager.codebases)
-
-	jobs, err := store.ReadJobEvents(manager.config.JobsPath)
-	if err != nil {
-		slog.ErrorContext(ctx, "read jobs failed", "path", manager.config.JobsPath, "err", err)
-		return fmt.Errorf("read jobs: %w", err)
-	}
-	maps.Copy(manager.jobs, jobs)
-	manager.reconcileJournalOnStartLocked()
-	return nil
 }
 
 // dropGhostURICodebases removes code-kind records whose canonical path is a
