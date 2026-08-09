@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
@@ -13,6 +14,22 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
+
+// PinStaging protects a staging collection throughout one daemon build.
+func (service *Service) PinStaging(
+	ctx context.Context,
+	codebasePath string,
+) (CollectionPin, error) {
+	if err := ctx.Err(); err != nil {
+		wrappedErr := fmt.Errorf("pin staging collection: %w", err)
+		slog.WarnContext(ctx, "pin staging collection cancelled", "error", wrappedErr)
+		return nil, wrappedErr
+	}
+	if !service.Available() {
+		return nil, ErrUnavailable
+	}
+	return service.residency.Pin(stagingCollectionName(service.CollectionName(codebasePath)))
+}
 
 // StageReindex embeds chunks into the staging collection that PromoteStaging
 // later swaps onto the live name. The daemon calls it once per file during a
@@ -40,6 +57,22 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 	if err != nil {
 		return err
 	}
+	var lease CollectionLease
+	if hasStaging && len(chunks) > 0 {
+		if err := service.ensureCreatedCollectionMmapForWrite(ctx, stagingName); err != nil {
+			return err
+		}
+		if err := service.PrepareCollection(ctx, stagingName); err != nil {
+			return err
+		}
+	}
+	if hasStaging {
+		lease, err = service.AcquireCollection(ctx, stagingName)
+		if err != nil {
+			return err
+		}
+		defer lease.Release()
+	}
 
 	if hasStaging && !removal.Empty() {
 		if err := service.deleteByRemoval(ctx, stagingName, removal); err != nil {
@@ -49,20 +82,30 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 	if len(chunks) == 0 {
 		return nil
 	}
-	if hasStaging {
-		if err := service.ensureCreatedCollectionReadyForWrite(ctx, stagingName); err != nil {
-			return err
-		}
-	}
 	chunks = service.guardrailExpand(ctx, codebasePath, chunks, "stage")
 	return service.insertChunksBatched(ctx, stagingName, chunks, hasStaging, "Generating embeddings and writing to Milvus...", progress, reuse, columnSet)
 }
 
-// PromoteStaging atomically swaps the staging collection onto the live
-// collection name: it drops the current live collection, which is a no-op on a
-// first index where none exists, then renames staging onto it. The daemon runs
-// it once, after every file's chunks are staged. It returns
-// ErrCollectionMissing when no staging collection exists to promote.
+const recoveryCollectionSuffix = "_swap_previous"
+
+func recoveryCollectionName(collectionName string) (string, error) {
+	maxBase := maxCollectionNameLength - len(recoveryCollectionSuffix)
+	if len(collectionName) > maxBase {
+		return "", fmt.Errorf(
+			"recovery collection name: live name length %d exceeds reversible limit %d",
+			len(collectionName),
+			maxBase,
+		)
+	}
+	return collectionName + recoveryCollectionSuffix, nil
+}
+
+func isRecoveryCollection(collectionName string) bool {
+	return strings.HasSuffix(collectionName, recoveryCollectionSuffix)
+}
+
+// PromoteStaging swaps the staging collection onto the live collection name
+// while retaining the previous live collection until the replacement exists.
 func (service *Service) PromoteStaging(ctx context.Context, codebasePath string) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.promoteStaging")
 	defer done(&err)
@@ -72,7 +115,36 @@ func (service *Service) PromoteStaging(ctx context.Context, codebasePath string)
 	}
 
 	collectionName := service.CollectionName(codebasePath)
+	recoveryName, err := recoveryCollectionName(collectionName)
+	if err != nil {
+		return err
+	}
 	stagingName := stagingCollectionName(collectionName)
+	maintenance, err := service.residency.Maintain(
+		ctx,
+		collectionName,
+		stagingName,
+		recoveryName,
+	)
+	if err != nil {
+		return err
+	}
+	defer maintenance.ReleaseContext(ctx)
+
+	hasRecovery, err := service.hasCollection(
+		ctx,
+		recoveryName,
+		"check recovery collection "+recoveryName,
+	)
+	if err != nil {
+		return err
+	}
+	if hasRecovery {
+		if err := service.recoverPromotionNames(ctx, collectionName, recoveryName); err != nil {
+			return err
+		}
+	}
+
 	hasStaging, err := service.hasCollection(ctx, stagingName, "check staging collection "+stagingName)
 	if err != nil {
 		return err
@@ -81,12 +153,31 @@ func (service *Service) PromoteStaging(ctx context.Context, codebasePath string)
 		return ErrCollectionMissing
 	}
 
-	// A failure before this point leaves the previous live collection serving
-	// queries; only these two metadata operations replace it.
-	if err := service.dropIfExists(ctx, collectionName); err != nil {
+	hasLive, err := service.hasCollection(ctx, collectionName, "check live collection "+collectionName)
+	if err != nil {
 		return err
 	}
-	return service.renameCollection(ctx, stagingName, collectionName)
+	if hasLive {
+		if err := service.renameCollection(ctx, collectionName, recoveryName); err != nil {
+			return err
+		}
+	}
+	if err := service.renameCollection(ctx, stagingName, collectionName); err != nil {
+		if !hasLive {
+			return err
+		}
+		restoreErr := service.renameCollection(ctx, recoveryName, collectionName)
+		if restoreErr != nil {
+			joinedErr := errors.Join(err, fmt.Errorf("restore prior live collection: %w", restoreErr))
+			slog.ErrorContext(ctx, "restore prior live collection failed", "error", joinedErr)
+			return joinedErr
+		}
+		return err
+	}
+	if !hasLive {
+		return nil
+	}
+	return service.dropIfExists(ctx, recoveryName)
 }
 
 // HasStaging reports whether a staging collection exists for the codebase.
@@ -113,7 +204,13 @@ func (service *Service) DropStaging(ctx context.Context, codebasePath string) er
 	if !service.Available() {
 		return nil
 	}
-	return service.dropIfExists(ctx, stagingCollectionName(service.CollectionName(codebasePath)))
+	stagingName := stagingCollectionName(service.CollectionName(codebasePath))
+	maintenance, err := service.residency.Maintain(ctx, stagingName)
+	if err != nil {
+		return err
+	}
+	defer maintenance.ReleaseContext(ctx)
+	return service.dropIfExists(ctx, stagingName)
 }
 
 const (
@@ -180,6 +277,12 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 	var embeddedRows int32
 	var droppedInputs int32
 	var refusedEmptyInputs int32
+	var newCollectionLease CollectionLease
+	defer func() {
+		if newCollectionLease != nil {
+			newCollectionLease.Release()
+		}
+	}()
 
 	for embeddingBatchIndex, embeddingBatch := range embeddingPacks {
 		embedded, err := service.embedChunkBatch(ctx, embeddingBatch, reuse)
@@ -225,6 +328,9 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			collectionReady,
 			columnSet,
 		)
+		if writeResult.lease != nil {
+			newCollectionLease = writeResult.lease
+		}
 		if writeErr != nil {
 			return writeErr
 		}
@@ -258,6 +364,7 @@ type embeddedChunkWriteResult struct {
 	collectionReady bool
 	insertBatches   int
 	writtenRows     int32
+	lease           CollectionLease
 }
 
 func (service *Service) writeEmbeddedChunkBatch(
@@ -273,6 +380,7 @@ func (service *Service) writeEmbeddedChunkBatch(
 		collectionReady: collectionReady,
 		insertBatches:   0,
 		writtenRows:     0,
+		lease:           nil,
 	}
 	if len(chunks) == 0 {
 		return result, nil
@@ -282,9 +390,11 @@ func (service *Service) writeEmbeddedChunkBatch(
 	}
 	dimension := len(vectors[0])
 	if !result.collectionReady {
-		if err := service.createCollection(ctx, collectionName, dimension); err != nil {
+		lease, err := service.createCollection(ctx, collectionName, dimension)
+		if err != nil {
 			return result, err
 		}
+		result.lease = lease
 		result.collectionReady = true
 	}
 

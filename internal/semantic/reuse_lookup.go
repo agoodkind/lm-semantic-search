@@ -96,6 +96,12 @@ func (service *Service) loadCatalogReuse(
 	if !catalogAvailable {
 		return nil
 	}
+	catalogName := reuseCatalogCollectionName(service.cfg, dimension)
+	lease, err := service.AcquireCollection(ctx, catalogName)
+	if err != nil {
+		return err
+	}
+	defer lease.Release()
 	for _, batch := range reuseLookupBatches(storageKeys) {
 		catalogVectors, loadErr := service.loadReuseCatalogKeys(ctx, batch, dimension)
 		if loadErr != nil {
@@ -165,15 +171,18 @@ func (service *Service) loadCollectionReuse(
 		); ensureErr != nil {
 			return ensureErr
 		}
-		if loadErr := service.loadCollectionForRead(ctx, sourceCollectionName); loadErr != nil {
-			return loadErr
+		lease, leaseErr := service.AcquireCollection(ctx, sourceCollectionName)
+		if leaseErr != nil {
+			return leaseErr
 		}
-		if loadErr := service.loadCollectionReuseFromSource(
+		loadErr := service.loadCollectionReuseFromSource(
 			ctx,
 			sourceCollectionName,
 			contentsByStorageKey,
 			reuse,
-		); loadErr != nil {
+		)
+		lease.Release()
+		if loadErr != nil {
 			return loadErr
 		}
 		if len(missingReuseContents(contentsByStorageKey, reuse)) == 0 {

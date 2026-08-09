@@ -32,6 +32,21 @@ type CollectionLease interface {
 	Release()
 }
 
+// CollectionPin keeps a staging collection resident across a complete build.
+type CollectionPin interface {
+	Release()
+	ReleaseContext(context.Context)
+}
+
+// NoopCollectionPin lets a backend without residency management share the API.
+type NoopCollectionPin struct{}
+
+// Release completes the no-op pin contract.
+func (NoopCollectionPin) Release() {}
+
+// ReleaseContext completes the no-op pin contract with caller context.
+func (NoopCollectionPin) ReleaseContext(context.Context) {}
+
 type residencyTimer interface {
 	Stop() bool
 }
@@ -76,6 +91,7 @@ type collectionResidencyLoad struct {
 }
 
 type collectionResidencyEntry struct {
+	name             string
 	state            collectionResidencyState
 	leases           int
 	observations     int
@@ -86,16 +102,19 @@ type collectionResidencyEntry struct {
 	idleDeadline     time.Time
 	activeTransition context.CancelFunc
 	maintenance      bool
+	reconciliation   uint64
 	changed          chan struct{}
 }
 
 type collectionResidencyController struct {
-	mutex       sync.Mutex
-	config      residencyControllerConfig
-	entries     map[string]*collectionResidencyEntry
-	closed      bool
-	closedCh    chan struct{}
-	transitions sync.WaitGroup
+	mutex                    sync.Mutex
+	config                   residencyControllerConfig
+	entries                  map[string]*collectionResidencyEntry
+	reconciliationGeneration uint64
+	reconciliationActivity   map[string]uint64
+	closed                   bool
+	closedCh                 chan struct{}
+	transitions              sync.WaitGroup
 }
 
 type collectionLease struct {
@@ -113,7 +132,7 @@ type collectionObservation struct {
 type collectionPin struct {
 	once       sync.Once
 	controller *collectionResidencyController
-	name       string
+	entry      *collectionResidencyEntry
 }
 
 type collectionMaintenance struct {
@@ -130,8 +149,7 @@ func (service *Service) initializeResidencyControllerWithLoad(load collectionTra
 	service.residency = newCollectionResidencyController(residencyControllerConfig{
 		clock:       wallResidencyClock{},
 		waitTimeout: defaultCollectionLoadWaitTimeout,
-		// Task 4 enables this only after every collection operation holds protection.
-		idleTimeout: 0,
+		idleTimeout: defaultCollectionIdleTimeout,
 		loadCeiling: service.sharedCollectionLoadCeiling(),
 		load:        load,
 		unload: func(ctx context.Context, collectionName string) error {
@@ -175,13 +193,103 @@ func newCollectionResidencyController(
 			3*defaultCollectionLoadBound
 	}
 	return &collectionResidencyController{
-		mutex:       sync.Mutex{},
-		config:      config,
-		entries:     make(map[string]*collectionResidencyEntry),
-		closed:      false,
-		closedCh:    make(chan struct{}),
-		transitions: sync.WaitGroup{},
+		mutex:                    sync.Mutex{},
+		config:                   config,
+		entries:                  make(map[string]*collectionResidencyEntry),
+		reconciliationGeneration: 0,
+		reconciliationActivity:   make(map[string]uint64),
+		closed:                   false,
+		closedCh:                 make(chan struct{}),
+		transitions:              sync.WaitGroup{},
 	}
+}
+
+func (controller *collectionResidencyController) beginReconciliation() uint64 {
+	controller.mutex.Lock()
+	defer controller.mutex.Unlock()
+	controller.reconciliationGeneration++
+	generation := controller.reconciliationGeneration
+	for _, entry := range controller.entries {
+		controller.cancelIdleTimerLocked(entry)
+		if isRecoveryCollection(entry.name) {
+			entry.reconciliation = 0
+			continue
+		}
+		entry.state = collectionResidencyUnknown
+		entry.reconciliation = generation
+		if controller.entryHasActivityLocked(entry) {
+			entry.reconciliation = 0
+		}
+		controller.notifyLocked(entry)
+	}
+	return generation
+}
+
+func (controller *collectionResidencyController) invalidateResidency() {
+	controller.mutex.Lock()
+	defer controller.mutex.Unlock()
+	controller.reconciliationGeneration++
+	for _, entry := range controller.entries {
+		controller.cancelIdleTimerLocked(entry)
+		if isRecoveryCollection(entry.name) {
+			entry.reconciliation = 0
+			continue
+		}
+		entry.state = collectionResidencyUnknown
+		entry.reconciliation = 0
+		controller.notifyLocked(entry)
+	}
+}
+
+func (controller *collectionResidencyController) applyReconciliation(
+	ctx context.Context,
+	generation uint64,
+	collectionName string,
+	state collectionResidencyState,
+) {
+	controller.mutex.Lock()
+	defer controller.mutex.Unlock()
+	if isRecoveryCollection(collectionName) {
+		if entry := controller.entries[collectionName]; entry != nil {
+			controller.cancelIdleTimerLocked(entry)
+			entry.reconciliation = 0
+		}
+		return
+	}
+	if controller.closed || generation != controller.reconciliationGeneration ||
+		controller.reconciliationActivity[collectionName] >= generation {
+		return
+	}
+	entry := controller.entries[collectionName]
+	if entry == nil {
+		entry = controller.entryLocked(collectionName)
+		entry.reconciliation = generation
+	}
+	if entry.reconciliation != generation {
+		return
+	}
+	controller.cancelIdleTimerLocked(entry)
+	entry.state = state
+	entry.reconciliation = 0
+	controller.notifyLocked(entry)
+	if state == collectionResidencyReady && !isRecoveryCollection(collectionName) {
+		controller.armIdleTimerLocked(ctx, collectionName, entry)
+	}
+}
+
+func (controller *collectionResidencyController) entryHasActivityLocked(
+	entry *collectionResidencyEntry,
+) bool {
+	return entry.leases != 0 || entry.observations != 0 || entry.pins != 0 ||
+		entry.load != nil || entry.activeTransition != nil || entry.maintenance
+}
+
+func (controller *collectionResidencyController) markReconciliationActivityLocked(
+	collectionName string,
+	entry *collectionResidencyEntry,
+) {
+	entry.reconciliation = 0
+	controller.reconciliationActivity[collectionName] = controller.reconciliationGeneration
 }
 
 func (controller *collectionResidencyController) Acquire(
@@ -200,6 +308,7 @@ func (controller *collectionResidencyController) Acquire(
 			return nil, ErrResidencyControllerClosed
 		}
 		entry := controller.entryLocked(collectionName)
+		controller.markReconciliationActivityLocked(collectionName, entry)
 		if entry.maintenance ||
 			(entry.activeTransition != nil && entry.load == nil) {
 			changed := entry.changed
@@ -249,6 +358,7 @@ func (controller *collectionResidencyController) Observe(
 			return collectionResidencyUnknown, nil, ErrResidencyControllerClosed
 		}
 		entry := controller.entryLocked(collectionName)
+		controller.markReconciliationActivityLocked(collectionName, entry)
 		if entry.maintenance ||
 			(entry.activeTransition != nil && entry.load == nil) {
 			changed := entry.changed
@@ -281,7 +391,9 @@ func (controller *collectionResidencyController) Pin(
 			return nil, ErrResidencyControllerClosed
 		}
 		entry := controller.entryLocked(collectionName)
-		if entry.activeTransition != nil && entry.load == nil {
+		controller.markReconciliationActivityLocked(collectionName, entry)
+		if entry.maintenance ||
+			(entry.activeTransition != nil && entry.load == nil) {
 			changed := entry.changed
 			controller.mutex.Unlock()
 			select {
@@ -297,9 +409,44 @@ func (controller *collectionResidencyController) Pin(
 		return &collectionPin{
 			once:       sync.Once{},
 			controller: controller,
-			name:       collectionName,
+			entry:      entry,
 		}, nil
 	}
+}
+
+func (controller *collectionResidencyController) Rename(oldName string, newName string) {
+	controller.mutex.Lock()
+	defer controller.mutex.Unlock()
+	entry := controller.entries[oldName]
+	controller.reconciliationActivity[oldName] = controller.reconciliationGeneration
+	controller.reconciliationActivity[newName] = controller.reconciliationGeneration
+	if entry == nil || oldName == newName {
+		return
+	}
+	entry.reconciliation = 0
+	if replaced := controller.entries[newName]; replaced != nil && replaced != entry {
+		replaced.reconciliation = 0
+		controller.cancelIdleTimerLocked(replaced)
+		controller.notifyLocked(replaced)
+	}
+	controller.cancelIdleTimerLocked(entry)
+	controller.notifyLocked(entry)
+	delete(controller.entries, oldName)
+	entry.name = newName
+	controller.entries[newName] = entry
+}
+
+func (controller *collectionResidencyController) Forget(collectionName string) {
+	controller.mutex.Lock()
+	defer controller.mutex.Unlock()
+	controller.reconciliationActivity[collectionName] = controller.reconciliationGeneration
+	entry := controller.entries[collectionName]
+	if entry == nil {
+		return
+	}
+	controller.cancelIdleTimerLocked(entry)
+	controller.notifyLocked(entry)
+	delete(controller.entries, collectionName)
 }
 
 func (controller *collectionResidencyController) Maintain(
@@ -321,6 +468,7 @@ func (controller *collectionResidencyController) Maintain(
 				return nil, ErrResidencyControllerClosed
 			}
 			entry := controller.entryLocked(collectionName)
+			controller.markReconciliationActivityLocked(collectionName, entry)
 			if !entry.maintenance {
 				entry.maintenance = true
 				controller.cancelIdleTimerLocked(entry)
@@ -410,6 +558,7 @@ func (controller *collectionResidencyController) entryLocked(
 	entry := controller.entries[collectionName]
 	if entry == nil {
 		entry = &collectionResidencyEntry{
+			name:             collectionName,
 			state:            collectionResidencyUnknown,
 			leases:           0,
 			observations:     0,
@@ -420,6 +569,7 @@ func (controller *collectionResidencyController) entryLocked(
 			idleDeadline:     time.Time{},
 			activeTransition: nil,
 			maintenance:      false,
+			reconciliation:   0,
 			changed:          make(chan struct{}),
 		}
 		controller.entries[collectionName] = entry
@@ -555,11 +705,15 @@ func (controller *collectionResidencyController) newLease(
 }
 
 func (lease *collectionLease) Release() {
+	lease.ReleaseContext(context.Background())
+}
+
+func (lease *collectionLease) ReleaseContext(ctx context.Context) {
 	if lease == nil {
 		return
 	}
 	lease.once.Do(func() {
-		lease.controller.releaseLease(context.Background(), lease.name)
+		lease.controller.releaseLease(ctx, lease.name)
 	})
 }
 
@@ -577,11 +731,15 @@ func (observation *collectionObservation) ReleaseContext(ctx context.Context) {
 }
 
 func (pin *collectionPin) Release() {
+	pin.ReleaseContext(context.Background())
+}
+
+func (pin *collectionPin) ReleaseContext(ctx context.Context) {
 	if pin == nil {
 		return
 	}
 	pin.once.Do(func() {
-		pin.controller.releasePin(context.Background(), pin.name)
+		pin.controller.releasePin(ctx, pin.entry)
 	})
 }
 
@@ -634,18 +792,17 @@ func (controller *collectionResidencyController) releaseObservation(
 
 func (controller *collectionResidencyController) releasePin(
 	ctx context.Context,
-	collectionName string,
+	entry *collectionResidencyEntry,
 ) {
 	controller.mutex.Lock()
 	defer controller.mutex.Unlock()
-	entry := controller.entries[collectionName]
 	if entry == nil || entry.pins == 0 {
 		return
 	}
 	entry.pins--
 	controller.notifyLocked(entry)
 	if entry.pins == 0 && entry.state == collectionResidencyReady {
-		controller.armIdleTimerLocked(ctx, collectionName, entry)
+		controller.armIdleTimerLocked(ctx, entry.name, entry)
 	}
 }
 
@@ -680,132 +837,6 @@ func (controller *collectionResidencyController) notifyLocked(
 ) {
 	close(entry.changed)
 	entry.changed = make(chan struct{})
-}
-
-func (controller *collectionResidencyController) cancelIdleTimerLocked(
-	entry *collectionResidencyEntry,
-) {
-	controller.stopIdleTimerLocked(entry)
-	entry.idleDeadline = time.Time{}
-}
-
-func (controller *collectionResidencyController) pauseIdleTimerLocked(
-	entry *collectionResidencyEntry,
-) {
-	controller.stopIdleTimerLocked(entry)
-}
-
-func (controller *collectionResidencyController) stopIdleTimerLocked(
-	entry *collectionResidencyEntry,
-) {
-	entry.idleGeneration++
-	if entry.idleTimer != nil {
-		entry.idleTimer.Stop()
-		entry.idleTimer = nil
-	}
-}
-
-func (controller *collectionResidencyController) armIdleTimerLocked(
-	ctx context.Context,
-	collectionName string,
-	entry *collectionResidencyEntry,
-) {
-	controller.cancelIdleTimerLocked(entry)
-	if controller.config.idleTimeout <= 0 || controller.config.unload == nil ||
-		entry.leases != 0 || entry.pins != 0 ||
-		entry.activeTransition != nil || entry.maintenance {
-		return
-	}
-	entry.idleDeadline = controller.config.clock.Now().Add(controller.config.idleTimeout)
-	if entry.observations != 0 {
-		return
-	}
-	generation := entry.idleGeneration
-	transitionContext := context.WithoutCancel(ctx)
-	entry.idleTimer = controller.config.clock.AfterFunc(controller.config.idleTimeout, func() {
-		controller.startUnload(transitionContext, collectionName, generation)
-	})
-}
-
-func (controller *collectionResidencyController) resumeIdleTimerLocked(
-	ctx context.Context,
-	collectionName string,
-	entry *collectionResidencyEntry,
-) {
-	controller.stopIdleTimerLocked(entry)
-	if controller.config.idleTimeout <= 0 || controller.config.unload == nil ||
-		entry.idleDeadline.IsZero() {
-		return
-	}
-	delay := max(entry.idleDeadline.Sub(controller.config.clock.Now()), 0)
-	generation := entry.idleGeneration
-	transitionContext := context.WithoutCancel(ctx)
-	entry.idleTimer = controller.config.clock.AfterFunc(delay, func() {
-		controller.startUnload(transitionContext, collectionName, generation)
-	})
-}
-
-func (controller *collectionResidencyController) startUnload(
-	ctx context.Context,
-	collectionName string,
-	generation uint64,
-) {
-	controller.mutex.Lock()
-	entry := controller.entries[collectionName]
-	if controller.closed || entry == nil || entry.idleGeneration != generation ||
-		entry.state != collectionResidencyReady || entry.leases != 0 ||
-		entry.observations != 0 || entry.pins != 0 || entry.load != nil ||
-		entry.activeTransition != nil || entry.maintenance {
-		controller.mutex.Unlock()
-		return
-	}
-	entry.idleTimer = nil
-	unloadCtx, cancelUnload := context.WithCancel(context.WithoutCancel(ctx))
-	entry.activeTransition = cancelUnload
-	controller.transitions.Add(1)
-	controller.mutex.Unlock()
-
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				err := fmt.Errorf("collection unload panic: %v", recovered)
-				slog.ErrorContext(unloadCtx, "semantic.collection_unload_panic", "err", err)
-				controller.finishUnload(entry, err)
-			}
-		}()
-		controller.runUnload(unloadCtx, collectionName, entry)
-	}()
-}
-
-func (controller *collectionResidencyController) runUnload(
-	ctx context.Context,
-	collectionName string,
-	entry *collectionResidencyEntry,
-) {
-	defer controller.transitions.Done()
-	err := controller.config.unload(ctx, collectionName)
-
-	controller.finishUnload(entry, err)
-}
-
-func (controller *collectionResidencyController) finishUnload(
-	entry *collectionResidencyEntry,
-	err error,
-) {
-	controller.mutex.Lock()
-	defer controller.mutex.Unlock()
-	if entry.activeTransition == nil {
-		return
-	}
-	entry.activeTransition = nil
-	controller.notifyLocked(entry)
-	if err == nil {
-		entry.state = collectionResidencyCold
-		entry.idleDeadline = time.Time{}
-		return
-	}
-	entry.state = collectionResidencyUnknown
-	entry.idleDeadline = time.Time{}
 }
 
 func (controller *collectionResidencyController) Close(ctx context.Context) error {

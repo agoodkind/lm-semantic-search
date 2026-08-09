@@ -23,6 +23,7 @@ type semanticReader interface {
 }
 
 type semanticResidencyReader interface {
+	PrepareCollection(ctx context.Context, collectionName string) error
 	AcquireCollection(ctx context.Context, collectionName string) (semantic.CollectionLease, error)
 }
 
@@ -62,6 +63,7 @@ type semanticReuseLoader interface {
 
 // semanticWriter is the slice that mutates the live or staging collection.
 type semanticWriter interface {
+	PinStaging(ctx context.Context, codebasePath string) (semantic.CollectionPin, error)
 	Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error
 	StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error
 	PromoteStaging(ctx context.Context, codebasePath string) error

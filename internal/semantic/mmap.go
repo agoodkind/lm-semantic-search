@@ -329,28 +329,11 @@ func (service *Service) waitForCreatedMmapTargets(
 	}
 }
 
-func (service *Service) ensureCreatedCollectionReady(
+func (service *Service) ensureCreatedCollectionMmapForWrite(
 	ctx context.Context,
 	collectionName string,
 ) error {
-	if service.mmapPolicyComplete(collectionName) {
-		return nil
-	}
-	if err := service.ensureCreatedCollectionMmap(ctx, collectionName); err != nil {
-		return err
-	}
-	if err := service.loadCollection(ctx, collectionName); err != nil {
-		service.invalidateMmapPolicy(collectionName)
-		return err
-	}
-	return nil
-}
-
-func (service *Service) ensureCreatedCollectionReadyForWrite(
-	ctx context.Context,
-	collectionName string,
-) error {
-	err := service.ensureCreatedCollectionReady(ctx, collectionName)
+	err := service.ensureCreatedCollectionMmap(ctx, collectionName)
 	if err == nil || !errors.Is(err, errMmapPolicyIncomplete) {
 		return err
 	}
@@ -361,7 +344,7 @@ func (service *Service) ensureCreatedCollectionReadyForWrite(
 		"policy_version", mmapPolicyVersion,
 		"err", err,
 	)
-	return service.loadCollection(ctx, collectionName)
+	return nil
 }
 
 func (service *Service) ensureCreatedCollectionMmap(

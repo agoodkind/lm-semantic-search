@@ -3,6 +3,8 @@ package semantic
 import (
 	"context"
 	"time"
+
+	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 )
 
 // Test hooks for the external reconnect test, which lives in package
@@ -26,6 +28,16 @@ func SetReconnectJitterForTest(jitter func(time.Duration) time.Duration) func() 
 	previous := reconnectJitter
 	reconnectJitter = jitter
 	return func() { reconnectJitter = previous }
+}
+
+// PromotionRecoveryServerForTest returns the shared fake registered externally.
+func PromotionRecoveryServerForTest() milvuspb.MilvusServiceServer {
+	return sharedPromotionRecoveryServer
+}
+
+// SetPromotionRecoveryServerAddressForTest publishes the external listener.
+func SetPromotionRecoveryServerAddressForTest(address string) {
+	promotionRecoveryServerAddress = address
 }
 
 // WrapStoreErrorForTest exposes wrapStoreError to the external semantic_test

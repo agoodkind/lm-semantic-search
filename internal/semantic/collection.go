@@ -140,7 +140,11 @@ func splitPartFieldsToAdd(schema *entity.Schema) []*entity.Field {
 	return []*entity.Field{splitPartField()}
 }
 
-func (service *Service) createCollection(ctx context.Context, collectionName string, dimension int) error {
+func (service *Service) createCollection(
+	ctx context.Context,
+	collectionName string,
+	dimension int,
+) (CollectionLease, error) {
 	schema := entity.NewSchema().
 		WithField(entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(512).WithIsPrimaryKey(true)).
 		WithField(entity.NewField().WithName(contentFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535).WithEnableAnalyzer(true).WithEnableMatch(true)).
@@ -174,11 +178,27 @@ func (service *Service) createCollection(ctx context.Context, collectionName str
 		indexOptions = append(indexOptions, milvusclient.NewCreateIndexOption(collectionName, sparseVectorFieldName, index.NewSparseInvertedIndex(entity.BM25, 0.2)))
 	}
 
+	maintenance, err := service.residency.Maintain(ctx, collectionName)
+	if err != nil {
+		return nil, err
+	}
 	if err := service.milvus.CreateCollection(ctx, milvusclient.NewCreateCollectionOption(collectionName, schema).WithIndexOptions(indexOptions...)); err != nil {
-		return wrapStoreError(ctx, err, "create Milvus collection "+collectionName)
+		maintenance.ReleaseContext(ctx)
+		return nil, wrapStoreError(ctx, err, "create Milvus collection "+collectionName)
 	}
 	service.invalidateCollectionCaches(collectionName)
-	return service.ensureCreatedCollectionReadyForWrite(ctx, collectionName)
+	maintenance.ReleaseContext(ctx)
+	if err := service.ensureCreatedCollectionMmapForWrite(ctx, collectionName); err != nil {
+		return nil, err
+	}
+	if err := service.PrepareCollection(ctx, collectionName); err != nil {
+		return nil, err
+	}
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
+		return nil, err
+	}
+	return lease, nil
 }
 
 type splitPartMigration struct {
@@ -208,6 +228,13 @@ func (service *Service) ensureReuseIdentityColumnsOnce(
 		)
 	}
 	migration.once.Do(func() {
+		maintenance, maintainErr := service.residency.Maintain(ctx, collectionName)
+		if maintainErr != nil {
+			migration.err = maintainErr
+			service.ensuredReuseIdentityColumns.CompareAndDelete(collectionName, loaded)
+			return
+		}
+		defer maintenance.ReleaseContext(ctx)
 		migration.err = service.ensureReuseIdentityColumns(ctx, collectionName)
 		if migration.err != nil {
 			service.ensuredReuseIdentityColumns.CompareAndDelete(collectionName, loaded)
@@ -339,6 +366,13 @@ func (service *Service) ensureSplitPartColumnOnce(
 		return typeErr
 	}
 	migration.once.Do(func() {
+		maintenance, maintainErr := service.residency.Maintain(ctx, collectionName)
+		if maintainErr != nil {
+			migration.err = maintainErr
+			service.ensuredSplitPartColumns.CompareAndDelete(collectionName, loaded)
+			return
+		}
+		defer maintenance.ReleaseContext(ctx)
 		migration.err = service.addMissingSplitPartColumn(ctx, collectionName)
 		if migration.err != nil {
 			service.ensuredSplitPartColumns.CompareAndDelete(collectionName, loaded)
@@ -410,14 +444,6 @@ func (service *Service) ensureConversationScalarColumns(ctx context.Context, col
 	}
 	if len(added) > 0 {
 		slog.InfoContext(ctx, "semantic.conversation_scalar_columns_added", "collection", collectionName, "fields", strings.Join(added, ","), "count", len(added))
-		needsBackfill, backfillCheckErr := service.conversationCollectionNeedsBackfill(ctx, collectionName)
-		if backfillCheckErr != nil {
-			slog.ErrorContext(ctx, "check conversation scalar backfill need failed", "collection", collectionName, "err", backfillCheckErr)
-			return nil
-		}
-		if !needsBackfill {
-			return nil
-		}
 		// Columns were just added to a collection that already holds rows, so
 		// those rows read null until backfilled. Run the no-reindex backfill in
 		// the background, detached from this request's cancellation, so this call
@@ -465,6 +491,13 @@ func (service *Service) ensureConversationScalarColumnsOnce(ctx context.Context,
 		return fmt.Errorf("conversation scalar migration guard for %s has unexpected type %T", collectionName, loaded)
 	}
 	migration.once.Do(func() {
+		maintenance, maintainErr := service.residency.Maintain(ctx, collectionName)
+		if maintainErr != nil {
+			migration.err = maintainErr
+			service.ensuredConvColumns.CompareAndDelete(collectionName, loaded)
+			return
+		}
+		defer maintenance.ReleaseContext(ctx)
 		migration.err = service.ensureConversationScalarColumns(ctx, collectionName)
 		if migration.err != nil {
 			// Drop the failed guard so a later call retries the migration instead of
@@ -474,6 +507,24 @@ func (service *Service) ensureConversationScalarColumnsOnce(ctx context.Context,
 		}
 	})
 	return migration.err
+}
+
+// PrepareCollection applies schema migrations before a caller acquires a data lease.
+func (service *Service) PrepareCollection(
+	ctx context.Context,
+	collectionName string,
+) error {
+	if isRecoveryCollection(collectionName) ||
+		strings.HasPrefix(collectionName, reuseCatalogCollectionPrefix) {
+		return nil
+	}
+	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+		return err
+	}
+	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
+		return err
+	}
+	return service.ensureConversationScalarColumnsOnce(ctx, collectionName)
 }
 
 // loadCollection loads collectionName into memory and waits for the load to

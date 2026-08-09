@@ -748,3 +748,72 @@ func TestResumeOrphanedJobsResumesFromStagingCheckpoint(t *testing.T) {
 		t.Fatalf("embedded files = %v, want %v (a.go must be skipped via staging checkpoint)", got, want)
 	}
 }
+
+func TestRunBootstrapHoldsOneStagingPinThroughPromotion(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 2)
+	var pinMutex sync.Mutex
+	pinned := false
+	releaseCount := 0
+	assertPinned := func(operation string) {
+		pinMutex.Lock()
+		defer pinMutex.Unlock()
+		if !pinned {
+			t.Errorf("staging pin was not held during %s", operation)
+		}
+	}
+	fake := &fakeSemantic{
+		hasStaging: func(context.Context, string) (bool, error) { return true, nil },
+		pinStaging: func(context.Context, string) (semantic.CollectionPin, error) {
+			pinMutex.Lock()
+			defer pinMutex.Unlock()
+			if pinned {
+				t.Fatal("bootstrap acquired more than one staging pin")
+			}
+			pinned = true
+			return fakeCollectionLease{release: func() {
+				pinMutex.Lock()
+				defer pinMutex.Unlock()
+				pinned = false
+				releaseCount++
+			}}, nil
+		},
+		stageReindexWithReuse: func(_ context.Context, _ string, _ []model.StoredChunk, _ []string, _ func(semantic.Progress), _ map[string][]float32) error {
+			assertPinned("staging write")
+			return nil
+		},
+		promoteStaging: func(context.Context, string) error {
+			assertPinned("promotion")
+			return nil
+		},
+	}
+	manager.semantic = fake
+	var embeddedMutex sync.Mutex
+	embedded := make([]string, 0)
+	manager.runner = recordingRunner(&embeddedMutex, &embedded)
+	canonical := newMultiFileRepo(t, "main.go")
+	cfg := defaultIndexConfig()
+	cfg.IgnoreDigest = "sha256:staging-pin-lifecycle"
+	codebaseID, job := seedBootstrapCodebase(t, manager, canonical, cfg)
+
+	runBootstrapAndGraph(
+		t,
+		manager,
+		job,
+		newCodeItemSource(
+			manager.runner,
+			manager.indexability,
+			codebaseID,
+			canonical,
+			cfg,
+		),
+	)
+
+	pinMutex.Lock()
+	defer pinMutex.Unlock()
+	if pinned {
+		t.Fatal("bootstrap left the staging pin held after completion")
+	}
+	if releaseCount != 1 {
+		t.Fatalf("staging pin release count = %d, want 1", releaseCount)
+	}
+}

@@ -62,9 +62,11 @@ func (service *Service) LoadConversationMessageState(ctx context.Context, collec
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return nil, nil, err
 	}
-	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
 		return nil, nil, err
 	}
+	defer lease.Release()
 
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(reuseVectorBatchSize).

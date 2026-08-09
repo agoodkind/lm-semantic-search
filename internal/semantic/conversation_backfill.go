@@ -32,19 +32,14 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 	if !isConversationCollection(collectionName) {
 		return 0, fmt.Errorf("backfill: %s is not a conversation collection", collectionName)
 	}
-	// A dormant conversation collection that never went through the on-access
-	// column migration lacks the scalar columns, so the upsert below would reject
-	// every batch with a schema mismatch. Add the columns first; this is a no-op
-	// when they already exist.
-	if _, err := service.addMissingConversationScalarColumns(ctx, collectionName); err != nil {
+	if err := service.PrepareCollection(ctx, collectionName); err != nil {
 		return 0, err
 	}
-	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
 		return 0, err
 	}
-	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
-		return 0, err
-	}
+	defer lease.Release()
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(conversationBackfillBatchSize).
 		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName, splitPartFieldName))
@@ -106,7 +101,17 @@ func (service *Service) BackfillConversationCollectionsOnce(ctx context.Context)
 		if _, done := service.ensuredBackfill.Load(collectionName); done {
 			continue
 		}
+		state, observation, observeErr := service.residency.Observe(ctx, collectionName)
+		if observeErr != nil {
+			slog.ErrorContext(ctx, "semantic.conversation_backfill_observe_failed", "collection", collectionName, "err", observeErr)
+			continue
+		}
+		if state != collectionResidencyReady {
+			observation.ReleaseContext(ctx)
+			continue
+		}
 		needs, err := service.conversationCollectionNeedsBackfill(ctx, collectionName)
+		observation.ReleaseContext(ctx)
 		if err != nil {
 			slog.ErrorContext(ctx, "semantic.conversation_backfill_check_failed", "collection", collectionName, "err", err)
 			continue
@@ -157,9 +162,11 @@ func (service *Service) conversationCollectionNeedsBackfill(ctx context.Context,
 	if !hasProvider {
 		return true, nil
 	}
-	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
 		return false, err
 	}
+	defer lease.Release()
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(1).
 		WithFilter(providerFieldName+" is null").
@@ -427,15 +434,14 @@ func (service *Service) BackfillConversationEnrichment(ctx context.Context, coll
 	if !isConversationCollection(collectionName) {
 		return 0, 0, fmt.Errorf("workspace backfill: %s is not a conversation collection", collectionName)
 	}
-	if _, err := service.addMissingConversationScalarColumns(ctx, collectionName); err != nil {
+	if err := service.PrepareCollection(ctx, collectionName); err != nil {
 		return 0, 0, err
 	}
-	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
 		return 0, 0, err
 	}
-	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
-		return 0, 0, err
-	}
+	defer lease.Release()
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(conversationBackfillBatchSize).
 		WithFilter(workspaceRootFieldName+` == "" or `+archivedFieldName+` is null`).

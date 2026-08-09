@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -260,6 +261,68 @@ func TestBootSelfCheckPassesAndClearsBootBanner(t *testing.T) {
 	}
 	if got := healthModeNow(manager); got != dependencyHealthy {
 		t.Fatalf("health mode = %q after a passing self-check, want %q", got, dependencyHealthy)
+	}
+}
+
+func TestBootSelfCheckLoadsColdCollectionAndProtectsSearch(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	indexedTestCodebase(t, manager, repoPath)
+	const collectionName = "cold_boot_collection"
+	prepared := false
+	joinedLoad := false
+	protected := false
+	manager.semantic = &fakeSemantic{
+		collectionName: func(string) string {
+			return collectionName
+		},
+		prepareCollection: func(_ context.Context, gotCollectionName string) error {
+			if gotCollectionName != collectionName {
+				return fmt.Errorf(
+					"prepare collection = %q, want %q",
+					gotCollectionName,
+					collectionName,
+				)
+			}
+			prepared = true
+			return nil
+		},
+		acquireCollection: func(_ context.Context, gotCollectionName string) (semantic.CollectionLease, error) {
+			if !prepared {
+				return nil, errors.New("cold collection load started before preparation")
+			}
+			if gotCollectionName != collectionName {
+				return nil, fmt.Errorf(
+					"acquire collection = %q, want %q",
+					gotCollectionName,
+					collectionName,
+				)
+			}
+			joinedLoad = true
+			protected = true
+			return fakeCollectionLease{release: func() {
+				protected = false
+			}}, nil
+		},
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
+			if !joinedLoad {
+				return nil, errors.New("boot search ran before the cold load joined")
+			}
+			if !protected {
+				return nil, errors.New("boot search ran without residency protection")
+			}
+			return []model.StoredChunk{{Content: "package main", RelativePath: "main.go"}}, nil
+		},
+	}
+
+	outcome, err := manager.runBootSelfCheck(context.Background())
+	if err != nil {
+		t.Fatalf("runBootSelfCheck returned error: %v", err)
+	}
+	if outcome != bootSelfCheckPassed {
+		t.Fatalf("outcome = %q, want %q", outcome, bootSelfCheckPassed)
+	}
+	if protected {
+		t.Fatal("boot self-check retained its collection lease after search")
 	}
 }
 

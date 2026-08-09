@@ -56,6 +56,14 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		return SearchOutcome{}, storeErr
 	}
 	collectionName := manager.semantic.CollectionName(codebase.CanonicalPath)
+	if prepareErr := manager.semantic.PrepareCollection(ctx, collectionName); prepareErr != nil {
+		manager.noteDependencyFailure(prepareErr)
+		return SearchOutcome{}, fmt.Errorf(
+			"prepare search collection %s: %w",
+			collectionName,
+			prepareErr,
+		)
+	}
 	lease, leaseErr := manager.semantic.AcquireCollection(ctx, collectionName)
 	if leaseErr != nil {
 		manager.noteDependencyFailure(leaseErr)
