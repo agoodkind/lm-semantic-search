@@ -61,6 +61,7 @@ type fakeSemantic struct {
 	search                func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error)
 	conversationSearch    func(context.Context, string, string, int32) ([]model.StoredChunk, error)
 	acquireCollection     func(context.Context, string) (semantic.CollectionLease, error)
+	pinStaging            func(context.Context, string) (semantic.CollectionPin, error)
 	count                 func(context.Context, string) (int32, error)
 	// loadReuse, when set, supplies the reuse map a merge-down build receives and
 	// records which collections were asked for. dropped records every Drop call
@@ -95,6 +96,7 @@ type fakeSemantic struct {
 	reindexCalls             []reindexCall
 	stageCalls               []reindexCall
 	promoted                 []string
+	promoteStaging           func(context.Context, string) error
 	// reindexEmit, when set, is invoked with the live progress callback during
 	// Reindex and StageReindex so a test can drive reuse-vs-embed progress
 	// reporting, including a conversation ingest's batch progress.
@@ -174,6 +176,20 @@ func (f *fakeSemantic) AcquireCollection(
 	return fakeCollectionLease{}, nil
 }
 
+func (f *fakeSemantic) PrepareCollection(context.Context, string) error {
+	return nil
+}
+
+func (f *fakeSemantic) PinStaging(
+	ctx context.Context,
+	codebasePath string,
+) (semantic.CollectionPin, error) {
+	if f.pinStaging != nil {
+		return f.pinStaging(ctx, codebasePath)
+	}
+	return fakeCollectionLease{}, nil
+}
+
 type fakeCollectionLease struct {
 	release func()
 }
@@ -182,6 +198,10 @@ func (lease fakeCollectionLease) Release() {
 	if lease.release != nil {
 		lease.release()
 	}
+}
+
+func (lease fakeCollectionLease) ReleaseContext(context.Context) {
+	lease.Release()
 }
 
 func (f *fakeSemantic) SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, _ int32, _ float64, filter semantic.ConversationFilter) ([]model.StoredChunk, error) {
@@ -460,10 +480,13 @@ func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, ch
 	return nil
 }
 
-func (f *fakeSemantic) PromoteStaging(_ context.Context, codebasePath string) error {
+func (f *fakeSemantic) PromoteStaging(ctx context.Context, codebasePath string) error {
 	f.mu.Lock()
 	f.promoted = append(f.promoted, codebasePath)
 	f.mu.Unlock()
+	if f.promoteStaging != nil {
+		return f.promoteStaging(ctx, codebasePath)
+	}
 	return nil
 }
 

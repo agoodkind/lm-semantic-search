@@ -325,6 +325,14 @@ func (manager *Manager) searchConversationCollectionFiltered(ctx context.Context
 		manager.noteDependencyFailure(semantic.ErrUnavailable)
 		return nil, semantic.ErrUnavailable
 	}
+	if prepareErr := manager.semantic.PrepareCollection(ctx, codebase.CollectionName); prepareErr != nil {
+		manager.noteDependencyFailure(prepareErr)
+		return nil, fmt.Errorf(
+			"prepare conversation collection %s: %w",
+			codebase.CollectionName,
+			prepareErr,
+		)
+	}
 	lease, leaseErr := manager.semantic.AcquireCollection(ctx, codebase.CollectionName)
 	if leaseErr != nil {
 		manager.noteDependencyFailure(leaseErr)

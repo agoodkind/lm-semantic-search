@@ -50,6 +50,13 @@ func (server *splitPartLifecycleServer) Connect(
 	}, nil
 }
 
+func (server *splitPartLifecycleServer) ShowCollections(
+	context.Context,
+	*milvuspb.ShowCollectionsRequest,
+) (*milvuspb.ShowCollectionsResponse, error) {
+	return &milvuspb.ShowCollectionsResponse{Status: successStatus()}, nil
+}
+
 func (server *splitPartLifecycleServer) DescribeCollection(
 	_ context.Context,
 	request *milvuspb.DescribeCollectionRequest,

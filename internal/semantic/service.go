@@ -101,6 +101,9 @@ type Service struct {
 	available               atomic.Bool
 	reconnectCancel         context.CancelFunc
 	reconnectDone           chan struct{}
+	reconciliationMutex     sync.Mutex
+	reconciliationCancel    context.CancelFunc
+	reconciliationWork      sync.WaitGroup
 	closeOnce               sync.Once
 	reuseCatalogReady       sync.Map
 	reuseCatalogMutex       sync.Mutex
@@ -142,6 +145,9 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			available:               atomic.Bool{},
 			reconnectCancel:         nil,
 			reconnectDone:           nil,
+			reconciliationMutex:     sync.Mutex{},
+			reconciliationCancel:    nil,
+			reconciliationWork:      sync.WaitGroup{},
 			closeOnce:               sync.Once{},
 			reuseCatalogReady:       sync.Map{},
 			reuseCatalogMutex:       sync.Mutex{},
@@ -178,6 +184,9 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		available:               atomic.Bool{},
 		reconnectCancel:         nil,
 		reconnectDone:           nil,
+		reconciliationMutex:     sync.Mutex{},
+		reconciliationCancel:    nil,
+		reconciliationWork:      sync.WaitGroup{},
 		closeOnce:               sync.Once{},
 		reuseCatalogReady:       sync.Map{},
 		reuseCatalogMutex:       sync.Mutex{},
@@ -205,7 +214,14 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		return service, nil
 	}
 
-	service.publishClient(client)
+	if err := service.publishClient(ctx, client); err != nil {
+		slog.WarnContext(ctx, "recover Milvus collections failed; starting degraded semantic service", "address", cfg.MilvusAddress, "err", err)
+		if closeErr := client.Close(ctx); closeErr != nil {
+			slog.WarnContext(ctx, "close Milvus client after recovery failure", "err", closeErr)
+		}
+		service.milvus = nil
+		service.startReconnector(context.WithoutCancel(ctx))
+	}
 	return service, nil
 }
 
@@ -226,6 +242,10 @@ func (service *Service) Close(ctx context.Context) error {
 			case <-ctx.Done():
 				closeErr = fmt.Errorf("wait for Milvus reconnect shutdown: %w", ctx.Err())
 			}
+		}
+		if err := service.stopResidencyReconciliation(ctx); err != nil {
+			closeErr = err
+			return
 		}
 		if service.residency != nil {
 			if err := service.residency.Close(ctx); err != nil {
@@ -325,6 +345,7 @@ func (service *Service) renameCollection(ctx context.Context, oldName string, ne
 	if err := service.milvus.RenameCollection(ctx, milvusclient.NewRenameCollectionOption(oldName, newName)); err != nil {
 		return wrapStoreError(ctx, err, "rename Milvus collection "+oldName+" to "+newName)
 	}
+	service.residency.Rename(oldName, newName)
 	service.invalidateCollectionCaches(oldName)
 	service.invalidateCollectionCaches(newName)
 	return nil
@@ -394,6 +415,16 @@ func (service *Service) Reindex(ctx context.Context, codebasePath string, addedO
 	if !hasCollection {
 		return ErrCollectionMissing
 	}
+	if len(addedOrModifiedChunks) > 0 {
+		if err := service.PrepareCollection(ctx, collectionName); err != nil {
+			return err
+		}
+	}
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
+		return err
+	}
+	defer lease.Release()
 
 	if !removal.Empty() {
 		if err := service.deleteByRemoval(ctx, collectionName, removal); err != nil {
@@ -426,6 +457,11 @@ func (service *Service) PruneToCurrent(ctx context.Context, codebasePath string,
 	if !hasCollection {
 		return ErrCollectionMissing
 	}
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
+		return err
+	}
+	defer lease.Release()
 
 	quoted := make([]string, 0, len(currentRelativePaths))
 	for _, path := range currentRelativePaths {
@@ -605,7 +641,13 @@ func (service *Service) Drop(ctx context.Context, codebasePath string) error {
 	if !service.Available() {
 		return nil
 	}
-	return service.dropIfExists(ctx, service.CollectionName(codebasePath))
+	collectionName := service.CollectionName(codebasePath)
+	maintenance, err := service.residency.Maintain(ctx, collectionName)
+	if err != nil {
+		return err
+	}
+	defer maintenance.ReleaseContext(ctx)
+	return service.dropIfExists(ctx, collectionName)
 }
 
 // Count returns the current number of chunk rows in one semantic collection.
@@ -619,6 +661,11 @@ func (service *Service) Count(ctx context.Context, codebasePath string) (int32, 
 	}
 
 	collectionName := service.CollectionName(codebasePath)
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
+		return 0, err
+	}
+	defer lease.Release()
 	return service.collectionRowCount(ctx, collectionName)
 }
 
@@ -658,10 +705,15 @@ func (service *Service) InspectCollection(ctx context.Context, collectionName st
 	if !hasCollection {
 		return CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
 	}
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
+		return CollectionFacts{}, err
+	}
+	defer lease.Release()
 
 	rows, err := service.collectionRowCount(ctx, collectionName)
 	if err != nil {
-		return collectionExistsWithUnknownRows()
+		return collectionExistsWithUnknownRows(), nil
 	}
 	return CollectionFacts{Exists: true, Rows: rows, RowsKnown: true}, nil
 }
@@ -669,8 +721,8 @@ func (service *Service) InspectCollection(ctx context.Context, collectionName st
 // collectionExistsWithUnknownRows keeps Exists true when only the row count
 // failed, because a count error must never demote a Present collection: a
 // false Missing verdict is what routes callers into a full rebuild.
-func collectionExistsWithUnknownRows() (CollectionFacts, error) {
-	return CollectionFacts{Exists: true, Rows: 0, RowsKnown: false}, nil
+func collectionExistsWithUnknownRows() CollectionFacts {
+	return CollectionFacts{Exists: true, Rows: 0, RowsKnown: false}
 }
 
 // ListCollections returns the current semantic collection names from Milvus.
@@ -683,7 +735,14 @@ func (service *Service) ListCollections(ctx context.Context) ([]string, error) {
 		slog.ErrorContext(ctx, "list Milvus collections failed", "err", err)
 		return nil, fmt.Errorf("list Milvus collections: %w", err)
 	}
-	return collections, nil
+	visible := make([]string, 0, len(collections))
+	for _, collectionName := range collections {
+		if isStagingCollection(collectionName) || isRecoveryCollection(collectionName) {
+			continue
+		}
+		visible = append(visible, collectionName)
+	}
+	return visible, nil
 }
 
 // HasCollectionForPath reports whether Milvus has the collection for the
@@ -706,118 +765,17 @@ func (service *Service) dropIfExists(ctx context.Context, collectionName string)
 		return err
 	}
 	if !hasCollection {
+		service.residency.Forget(collectionName)
 		return nil
 	}
 	if err := service.milvus.DropCollection(ctx, milvusclient.NewDropCollectionOption(collectionName)); err != nil {
 		return wrapStoreError(ctx, err, "drop Milvus collection "+collectionName)
 	}
 	service.invalidateCollectionCaches(collectionName)
+	service.residency.Forget(collectionName)
 	return nil
 }
 
-func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChunk, error) {
-	if len(resultSets) == 0 {
-		return []model.StoredChunk{}, nil
-	}
-
-	resultSet := resultSets[0]
-	if resultSet.ResultCount == 0 {
-		return []model.StoredChunk{}, nil
-	}
-	contentColumn := resultSet.GetColumn(contentFieldName)
-	relativePathColumn := resultSet.GetColumn(relativePathFieldName)
-	startLineColumn := resultSet.GetColumn(startLineFieldName)
-	endLineColumn := resultSet.GetColumn(endLineFieldName)
-	fileExtensionColumn := resultSet.GetColumn(fileExtensionFieldName)
-	metadataColumn := resultSet.GetColumn(metadataFieldName)
-	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
-	// workspaceRoot is only present on conversation-collection result sets, where
-	// the search requests the native scalar column. It is nil for code
-	// collections and on rows that never carried a workspace root, so reads stay
-	// optional and default to empty. loadRules follows the same contract.
-	workspaceRootColumn := resultSet.GetColumn(workspaceRootFieldName)
-	loadRulesColumn := resultSet.GetColumn(loadRulesFieldName)
-	if contentColumn == nil || relativePathColumn == nil || startLineColumn == nil || endLineColumn == nil || fileExtensionColumn == nil {
-		return nil, ErrSearchResultIncomplete
-	}
-
-	chunks := make([]model.StoredChunk, 0, resultSet.ResultCount)
-	for index := range resultSet.ResultCount {
-		contentValue, err := contentColumn.GetAsString(index)
-		if err != nil {
-			slog.Error("read content column failed", "index", index, "err", err)
-			return nil, fmt.Errorf("read content column at %d: %w", index, err)
-		}
-		relativePathValue, err := relativePathColumn.GetAsString(index)
-		if err != nil {
-			slog.Error("read relative path column failed", "index", index, "err", err)
-			return nil, fmt.Errorf("read relative path column at %d: %w", index, err)
-		}
-		startLineValue, err := startLineColumn.GetAsInt64(index)
-		if err != nil {
-			slog.Error("read start line column failed", "index", index, "err", err)
-			return nil, fmt.Errorf("read start line column at %d: %w", index, err)
-		}
-		endLineValue, err := endLineColumn.GetAsInt64(index)
-		if err != nil {
-			slog.Error("read end line column failed", "index", index, "err", err)
-			return nil, fmt.Errorf("read end line column at %d: %w", index, err)
-		}
-		fileExtensionValue, err := fileExtensionColumn.GetAsString(index)
-		if err != nil {
-			slog.Error("read file extension column failed", "index", index, "err", err)
-			return nil, fmt.Errorf("read file extension column at %d: %w", index, err)
-		}
-		metadataValue := emptyChunkMetadata()
-		if metadataColumn != nil {
-			rawMetadata, metadataErr := metadataColumn.GetAsString(index)
-			if metadataErr == nil {
-				metadataValue = decodeMetadata(rawMetadata)
-			}
-		}
-
-		workspaceRootValue := backfillString(workspaceRootColumn, index)
-		loadRulesValue := backfillString(loadRulesColumn, index)
-		splitPartValue, splitPartRecorded, splitPartErr := splitPartAt(
-			splitPartColumn,
-			index,
-		)
-		if splitPartErr != nil {
-			return nil, splitPartErr
-		}
-
-		score := 0.0
-		if index < len(resultSet.Scores) {
-			score = float64(resultSet.Scores[index])
-		}
-		chunks = append(chunks, model.StoredChunk{
-			Content:              contentValue,
-			RelativePath:         relativePathValue,
-			StartLine:            safeInt32FromInt64(startLineValue),
-			EndLine:              safeInt32FromInt64(endLineValue),
-			Language:             metadataValue.Language,
-			FileExtension:        fileExtensionValue,
-			ConversationID:       metadataValue.ConversationID,
-			ParentConversationID: metadataValue.ParentConversationID,
-			MessageIndex:         metadataValue.messageIndex(),
-			Role:                 metadataValue.Role,
-			TimestampUnix:        metadataValue.timestampUnix(),
-			WorkspaceRoot:        workspaceRootValue,
-			Archived:             false,
-			SplitPart:            splitPartValue,
-			SplitPartRecorded:    splitPartRecorded,
-			LoadRules:            loadRulesValue,
-			Score:                score,
-		})
-	}
-	return chunks, nil
-}
-
-// generateID matches the TS chunk-ID format at packages/core/src/context.ts:1067
-// for an unsplit chunk. A split child (SplitPart > 0) folds its split position
-// into the hash so identical pieces of repeated oversized content get distinct
-// primary keys; an unsplit chunk keeps the original identity so the normal
-// single-chunk case is not re-embedded.
 func generateID(chunk model.StoredChunk, _ int) string {
 	hashInput := fmt.Sprintf("%s:%d:%d:%s", chunk.RelativePath, chunk.StartLine, chunk.EndLine, chunk.Content)
 	if chunk.SplitPart > 0 {

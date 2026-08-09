@@ -38,9 +38,11 @@ func (service *Service) DeleteConversation(ctx context.Context, collectionName s
 	if !hasCollection {
 		return nil
 	}
-	if err := service.loadCollection(ctx, trimmedCollectionName); err != nil {
+	lease, err := service.AcquireCollection(ctx, trimmedCollectionName)
+	if err != nil {
 		return err
 	}
+	defer lease.Release()
 	for _, prefix := range conversationRelativePathPrefixes(trimmedConversationID) {
 		if _, err := service.deleteByRelativePathPrefix(
 			ctx,

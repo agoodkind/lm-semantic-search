@@ -435,6 +435,19 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	if !codebaseFound {
 		return nil
 	}
+	semanticReady := manager.semantic != nil && manager.semantic.Available()
+	if semanticReady {
+		stagingPin, err := manager.semantic.PinStaging(ctx, job.CanonicalPath)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				manager.updateJobCancelled(ctx, job.ID)
+			} else {
+				manager.updateJobFailed(ctx, job.ID, fmt.Errorf("pin staging collection: %w", err))
+			}
+			return nil
+		}
+		defer stagingPin.Release()
+	}
 
 	plan := manager.planBootstrap(ctx, job, codebase.ID, source)
 	if plan.handled {
@@ -449,7 +462,6 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 	}
 	manager.setJobRunMode(job.ID, runMode)
 
-	semanticReady := manager.semantic != nil && manager.semantic.Available()
 	state := deltaState{
 		plan:             plan,
 		snapshotPath:     manager.stagingMerklePath(codebase.ID),

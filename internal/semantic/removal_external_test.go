@@ -85,6 +85,13 @@ type removalMilvusServer struct {
 	events          *removalTestEvents
 }
 
+func (server *removalMilvusServer) ShowCollections(
+	context.Context,
+	*milvuspb.ShowCollectionsRequest,
+) (*milvuspb.ShowCollectionsResponse, error) {
+	return &milvuspb.ShowCollectionsResponse{Status: removalSuccessStatus()}, nil
+}
+
 func (server *removalMilvusServer) DescribeCollection(
 	_ context.Context,
 	request *milvuspb.DescribeCollectionRequest,

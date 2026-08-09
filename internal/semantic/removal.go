@@ -37,9 +37,8 @@ func RemovePrefixes(prefixes []string) Removal {
 }
 
 // deleteByRemoval drops an item's prior rows by exact relativePath, by
-// relativePath prefix, or both. The prefix branch loads the collection first
-// because Milvus serves an expression-filtered Delete only on a loaded
-// collection, and a daemon that did not create this collection never loaded it.
+// relativePath prefix, or both. The caller holds the collection lease because
+// Milvus serves an expression-filtered Delete only on a loaded collection.
 //
 // The span separates the delete from the embed and insert phases of the same
 // reindex. An expression-filtered Delete matches an unbounded row count and a
@@ -63,9 +62,6 @@ func (service *Service) deleteByRemoval(ctx context.Context, collectionName stri
 	}
 	var prefixRowsRemoved int64
 	if len(removal.Prefixes) > 0 {
-		if err := service.loadCollection(ctx, collectionName); err != nil {
-			return err
-		}
 		for _, prefix := range removal.Prefixes {
 			removed, deleteErr := service.deleteByRelativePathPrefix(
 				ctx,

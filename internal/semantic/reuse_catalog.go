@@ -85,8 +85,6 @@ func (service *Service) reuseCatalogAvailable(
 		if err := service.createReuseCatalog(ctx, collectionName, dimension); err != nil {
 			return false, err
 		}
-	} else if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
-		return false, err
 	}
 	service.reuseCatalogReady.Store(dimension, struct{}{})
 	return true, nil
@@ -125,6 +123,10 @@ func (service *Service) createReuseCatalog(
 				index.NewInvertedIndex(),
 			),
 		)
+	maintenance, err := service.residency.Maintain(ctx, collectionName)
+	if err != nil {
+		return err
+	}
 	if err := service.milvus.CreateCollection(ctx, option); err != nil {
 		exists, existsErr := service.hasCollection(
 			ctx,
@@ -132,6 +134,7 @@ func (service *Service) createReuseCatalog(
 			"recheck content vector reuse catalog after create failure",
 		)
 		if existsErr != nil {
+			maintenance.ReleaseContext(ctx)
 			combinedErr := errors.Join(err, existsErr)
 			slog.ErrorContext(
 				ctx,
@@ -142,13 +145,12 @@ func (service *Service) createReuseCatalog(
 			return combinedErr
 		}
 		if !exists {
+			maintenance.ReleaseContext(ctx)
 			return wrapStoreError(ctx, err, "create content vector reuse catalog")
 		}
 	}
 	service.invalidateCollectionCaches(collectionName)
-	if err := service.loadCollection(ctx, collectionName); err != nil {
-		return err
-	}
+	maintenance.ReleaseContext(ctx)
 	return nil
 }
 
@@ -413,25 +415,9 @@ func (service *Service) appendReuseCatalog(
 	if !service.Available() || len(vectorsByContent) == 0 {
 		return nil
 	}
-	vectorsByStorageKey := make(map[string][]float32, len(vectorsByContent))
-	dimension := 0
-	for rawContent, vector := range vectorsByContent {
-		content, _ := sanitizeUTF8(rawContent)
-		if len(vector) == 0 {
-			continue
-		}
-		if dimension == 0 {
-			dimension = len(vector)
-		}
-		if len(vector) != dimension {
-			return fmt.Errorf(
-				"append content vector reuse catalog: vector dimensions %d and %d differ",
-				dimension,
-				len(vector),
-			)
-		}
-		storageKey := contentHash(content)
-		vectorsByStorageKey[storageKey] = vector
+	vectorsByStorageKey, dimension, err := reuseCatalogStorageVectors(vectorsByContent)
+	if err != nil {
+		return err
 	}
 	if len(vectorsByStorageKey) == 0 {
 		return nil
@@ -442,6 +428,12 @@ func (service *Service) appendReuseCatalog(
 	if _, err := service.reuseCatalogAvailable(ctx, dimension, true); err != nil {
 		return err
 	}
+	collectionName := reuseCatalogCollectionName(service.cfg, dimension)
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
+		return err
+	}
+	defer lease.Release()
 	storageKeys := make([]string, 0, len(vectorsByStorageKey))
 	rowKeysByStorageKey := make(map[string]string, len(vectorsByStorageKey))
 	for storageKey := range vectorsByStorageKey {
@@ -502,4 +494,30 @@ func (service *Service) appendReuseCatalog(
 	}
 	slog.DebugContext(ctx, "semantic.reuse_catalog_appended", "count", len(missingKeys))
 	return nil
+}
+
+func reuseCatalogStorageVectors(
+	vectorsByContent reuseCatalogVectors,
+) (map[string][]float32, int, error) {
+	vectorsByStorageKey := make(map[string][]float32, len(vectorsByContent))
+	dimension := 0
+	for rawContent, vector := range vectorsByContent {
+		content, _ := sanitizeUTF8(rawContent)
+		if len(vector) == 0 {
+			continue
+		}
+		if dimension == 0 {
+			dimension = len(vector)
+		}
+		if len(vector) != dimension {
+			return nil, 0, fmt.Errorf(
+				"append content vector reuse catalog: vector dimensions %d and %d differ",
+				dimension,
+				len(vector),
+			)
+		}
+		storageKey := contentHash(content)
+		vectorsByStorageKey[storageKey] = vector
+	}
+	return vectorsByStorageKey, dimension, nil
 }

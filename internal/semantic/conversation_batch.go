@@ -66,9 +66,11 @@ func (service *Service) LoadConversationDerivedBatch(ctx context.Context, collec
 	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
 		return ConversationBatchState{}, err
 	}
-	if err := service.loadCollectionForRead(ctx, collectionName); err != nil {
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
 		return ConversationBatchState{}, err
 	}
+	defer lease.Release()
 
 	assemblies := newConversationBatchAssemblies()
 	for _, idBatch := range batchConversationIDs(uniqueIDs, conversationBatchIDFilterSize) {

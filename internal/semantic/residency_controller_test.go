@@ -238,6 +238,19 @@ func TestResidencyAcquireSharesLoadWithIndependentCallerLimits(t *testing.T) {
 	}
 }
 
+func TestServiceResidencyUsesConfiguredIdleDelay(t *testing.T) {
+	service := &Service{}
+	service.initializeResidencyControllerWithLoad(func(context.Context, string) error {
+		return nil
+	})
+	t.Cleanup(func() {
+		_ = service.Close(context.Background())
+	})
+	if got := service.residency.config.idleTimeout; got != defaultCollectionIdleTimeout {
+		t.Fatalf("idle timeout = %s, want %s", got, defaultCollectionIdleTimeout)
+	}
+}
+
 func TestResidencyAcquireHonorsEarlierCancellationWithoutStartingLoad(t *testing.T) {
 	var loadCalls atomic.Int32
 	loadStarted := make(chan struct{}, 1)
@@ -678,6 +691,13 @@ func TestResidencyMaintenanceWaitsForHoldersAndBlocksNewReaders(t *testing.T) {
 		observationResult <- observation
 		observationErrors <- observeErr
 	}()
+	pinResult := make(chan *collectionPin, 1)
+	pinErrors := make(chan error, 1)
+	go func() {
+		pin, pinErr := controller.Pin("collection")
+		pinResult <- pin
+		pinErrors <- pinErr
+	}()
 	select {
 	case err := <-leaseErrors:
 		t.Fatalf("Acquire returned during maintenance setup: %v", err)
@@ -688,6 +708,11 @@ func TestResidencyMaintenanceWaitsForHoldersAndBlocksNewReaders(t *testing.T) {
 		t.Fatalf("Observe returned during maintenance setup: %v", err)
 	default:
 	}
+	select {
+	case err := <-pinErrors:
+		t.Fatalf("Pin returned during maintenance setup: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
 
 	activeLease.Release()
 	maintenance := <-maintenanceResult
@@ -697,6 +722,11 @@ func TestResidencyMaintenanceWaitsForHoldersAndBlocksNewReaders(t *testing.T) {
 	select {
 	case err := <-leaseErrors:
 		t.Fatalf("Acquire returned while maintenance remained active: %v", err)
+	default:
+	}
+	select {
+	case err := <-pinErrors:
+		t.Fatalf("Pin returned while maintenance remained active: %v", err)
 	default:
 	}
 
@@ -711,6 +741,11 @@ func TestResidencyMaintenanceWaitsForHoldersAndBlocksNewReaders(t *testing.T) {
 		t.Fatalf("Observe returned error after maintenance: %v", err)
 	}
 	observation.Release()
+	pin := <-pinResult
+	if err := <-pinErrors; err != nil {
+		t.Fatalf("Pin returned error after maintenance: %v", err)
+	}
+	pin.Release()
 }
 
 func TestResidencyCanceledMaintenanceUnblocksEveryCollection(t *testing.T) {
@@ -1027,5 +1062,58 @@ func TestServiceCloseClosesMilvusAfterResidencyDeadline(t *testing.T) {
 	<-loadStopped
 	if err := <-acquireResult; !errors.Is(err, ErrResidencyControllerClosed) {
 		t.Fatalf("Acquire error after Service.Close = %v, want controller closed", err)
+	}
+}
+
+func TestResidencyRenameTransfersPinToNewCollectionName(t *testing.T) {
+	clock := newTestResidencyClock()
+	unloads := make(chan string, 1)
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(_ context.Context, collectionName string) error {
+			unloads <- collectionName
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	lease, err := controller.Acquire(context.Background(), "collection_stg")
+	if err != nil {
+		t.Fatalf("Acquire returned error: %v", err)
+	}
+	lease.Release()
+	pin, err := controller.Pin("collection_stg")
+	if err != nil {
+		t.Fatalf("Pin returned error: %v", err)
+	}
+	maintenance, err := controller.Maintain(
+		context.Background(),
+		"collection",
+		"collection_stg",
+	)
+	if err != nil {
+		t.Fatalf("Maintain returned error: %v", err)
+	}
+	controller.Rename("collection_stg", "collection")
+	maintenance.Release()
+
+	clock.Advance(2 * time.Minute)
+	select {
+	case collectionName := <-unloads:
+		t.Fatalf("unloaded %q while the transferred pin remained active", collectionName)
+	default:
+	}
+	pin.Release()
+	clock.Advance(time.Minute)
+	if collectionName := <-unloads; collectionName != "collection" {
+		t.Fatalf("unloaded %q, want collection", collectionName)
 	}
 }

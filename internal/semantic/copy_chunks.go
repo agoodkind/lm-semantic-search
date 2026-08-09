@@ -44,6 +44,14 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 	if !hasCollection {
 		return 0, ErrCollectionMissing
 	}
+	if err := service.PrepareCollection(ctx, collectionName); err != nil {
+		return 0, err
+	}
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
+		return 0, err
+	}
+	defer lease.Release()
 
 	source, err := service.fetchChunksForPath(ctx, collectionName, srcRelativePath)
 	if err != nil {
