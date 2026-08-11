@@ -32,9 +32,9 @@ func contentHashes(contents []string) []string {
 }
 
 // LoadReuseVectorsForContents resolves only vectors needed by chunks. It reads
-// the content catalog first, then indexed hashes and exact-content legacy rows
-// across the registered store. Stored vectors qualify unless both stored and
-// current model names are known and unequal. Every lookup is read-only.
+// the content catalog first, then the target collection, then resident fallback
+// collections. Stored vectors qualify unless both stored and current model
+// names are known and unequal. Every lookup is read-only.
 func (service *Service) LoadReuseVectorsForContents(
 	ctx context.Context,
 	collectionName string,
@@ -153,36 +153,14 @@ func (service *Service) loadCollectionReuse(
 	if err != nil {
 		return err
 	}
-	for _, sourceCollectionName := range collectionNames {
-		hasCollection, hasErr := service.hasCollection(
+	for sourceIndex, sourceCollectionName := range collectionNames {
+		if loadErr := service.loadRegisteredReuseSource(
 			ctx,
 			sourceCollectionName,
-			"check collection before whole-store reuse",
-		)
-		if hasErr != nil {
-			return hasErr
-		}
-		if !hasCollection {
-			continue
-		}
-		if ensureErr := service.ensureReuseIdentityColumnsOnce(
-			ctx,
-			sourceCollectionName,
-		); ensureErr != nil {
-			return ensureErr
-		}
-		lease, leaseErr := service.AcquireCollection(ctx, sourceCollectionName)
-		if leaseErr != nil {
-			return leaseErr
-		}
-		loadErr := service.loadCollectionReuseFromSource(
-			ctx,
-			sourceCollectionName,
+			sourceIndex == 0,
 			contentsByStorageKey,
 			reuse,
-		)
-		lease.Release()
-		if loadErr != nil {
+		); loadErr != nil {
 			return loadErr
 		}
 		if len(missingReuseContents(contentsByStorageKey, reuse)) == 0 {
@@ -190,6 +168,81 @@ func (service *Service) loadCollectionReuse(
 		}
 	}
 	return nil
+}
+
+func (service *Service) loadRegisteredReuseSource(
+	ctx context.Context,
+	collectionName string,
+	primary bool,
+	contentsByStorageKey map[string]string,
+	reuse map[string][]float32,
+) error {
+	var residentProbe CollectionLease
+	if !primary {
+		lease, ready, err := service.acquireReuseSourceCollection(
+			ctx,
+			collectionName,
+			false,
+		)
+		if err != nil || !ready {
+			return err
+		}
+		residentProbe = lease
+	}
+	hasCollection, err := service.hasCollection(
+		ctx,
+		collectionName,
+		"check collection before whole-store reuse",
+	)
+	if err != nil {
+		if residentProbe != nil {
+			residentProbe.Release()
+		}
+		return err
+	}
+	if !hasCollection {
+		if residentProbe != nil {
+			residentProbe.Release()
+		}
+		return nil
+	}
+	if residentProbe != nil {
+		residentProbe.Release()
+	}
+	if err := service.ensureReuseIdentityColumnsOnce(
+		ctx,
+		collectionName,
+	); err != nil {
+		return err
+	}
+	lease, ready, err := service.acquireReuseSourceCollection(
+		ctx,
+		collectionName,
+		primary,
+	)
+	if err != nil || !ready {
+		return err
+	}
+	loadErr := service.loadCollectionReuseFromSource(
+		ctx,
+		collectionName,
+		contentsByStorageKey,
+		reuse,
+	)
+	lease.Release()
+	return loadErr
+}
+
+func (service *Service) acquireReuseSourceCollection(
+	ctx context.Context,
+	collectionName string,
+	primary bool,
+) (CollectionLease, bool, error) {
+	if primary {
+		lease, err := service.AcquireCollection(ctx, collectionName)
+		return lease, err == nil, err
+	}
+	return service.acquireResidentCollection(ctx, collectionName)
 }
 
 func (service *Service) reuseSourceCollections(collectionName string) ([]string, error) {

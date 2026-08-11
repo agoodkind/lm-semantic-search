@@ -96,6 +96,7 @@ type collectionResidencyEntry struct {
 	name             string
 	state            collectionResidencyState
 	leases           int
+	idleResetPending bool
 	observations     int
 	pins             int
 	load             *collectionResidencyLoad
@@ -179,6 +180,17 @@ func (service *Service) AcquireCollection(
 		return nil, wrappedErr
 	}
 	return lease, err
+}
+
+func (service *Service) acquireResidentCollection(
+	ctx context.Context,
+	collectionName string,
+) (CollectionLease, bool, error) {
+	lease, ready, err := service.residency.AcquireResident(ctx, collectionName)
+	if lease == nil {
+		return nil, ready, err
+	}
+	return lease, ready, err
 }
 
 func newCollectionResidencyController(
@@ -324,6 +336,7 @@ func (controller *collectionResidencyController) Acquire(
 			continue
 		}
 		entry.leases++
+		entry.idleResetPending = true
 		metrics.MilvusCollectionLeaseAcquired()
 		controller.cancelIdleTimerLocked(entry)
 		if entry.state == collectionResidencyReady {
@@ -575,6 +588,7 @@ func (controller *collectionResidencyController) entryLocked(
 			name:             collectionName,
 			state:            collectionResidencyUnknown,
 			leases:           0,
+			idleResetPending: false,
 			observations:     0,
 			pins:             0,
 			load:             nil,
@@ -836,9 +850,19 @@ func (controller *collectionResidencyController) releaseLease(
 	entry.leases--
 	metrics.MilvusCollectionLeaseReleased()
 	controller.notifyLocked(entry)
-	if entry.leases == 0 && entry.state == collectionResidencyReady {
-		controller.armIdleTimerLocked(ctx, collectionName, entry)
+	if entry.leases != 0 {
+		return
 	}
+	resetsIdle := entry.idleResetPending
+	entry.idleResetPending = false
+	if entry.state != collectionResidencyReady {
+		return
+	}
+	if resetsIdle {
+		controller.armIdleTimerLocked(ctx, collectionName, entry)
+		return
+	}
+	controller.resumeIdleTimerLocked(ctx, collectionName, entry)
 }
 
 func (controller *collectionResidencyController) releaseObservation(

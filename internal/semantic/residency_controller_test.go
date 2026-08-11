@@ -1451,3 +1451,145 @@ func TestResidencyForgetPreservesActiveLeaseAndObservationEntry(t *testing.T) {
 		t.Fatalf("unloaded %q, want %q", unloadedCollection, collectionName)
 	}
 }
+
+func TestResidencyAcquireResidentSkipsColdWithoutLoading(t *testing.T) {
+	clock := newTestResidencyClock()
+	var loadCalls atomic.Int32
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			loadCalls.Add(1)
+			return nil
+		},
+		unload: func(context.Context, string) error {
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	lease, err := controller.Acquire(context.Background(), "collection")
+	if err != nil {
+		t.Fatalf("Acquire returned error: %v", err)
+	}
+	lease.Release()
+	clock.Advance(time.Minute)
+	waitForResidencyState(t, controller, "collection", collectionResidencyCold)
+
+	residentLease, ready, err := controller.AcquireResident(
+		context.Background(),
+		"collection",
+	)
+	if err != nil {
+		t.Fatalf("AcquireResident returned error: %v", err)
+	}
+	if ready || residentLease != nil {
+		t.Fatalf("cold resident acquire = (%v, %v), want (nil, false)", residentLease, ready)
+	}
+	if got := loadCalls.Load(); got != 1 {
+		t.Fatalf("load calls = %d, want 1", got)
+	}
+}
+
+func TestResidencyResidentLeasePreservesIdleDeadline(t *testing.T) {
+	clock := newTestResidencyClock()
+	unloads := make(chan string, 1)
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(_ context.Context, collectionName string) error {
+			unloads <- collectionName
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	lease, err := controller.Acquire(context.Background(), "collection")
+	if err != nil {
+		t.Fatalf("Acquire returned error: %v", err)
+	}
+	lease.Release()
+	before := controller.ResidencySnapshot().Collections[0].IdleDeadlineUnixMS
+	clock.Advance(30 * time.Second)
+
+	residentLease, ready, err := controller.AcquireResident(
+		context.Background(),
+		"collection",
+	)
+	if err != nil {
+		t.Fatalf("AcquireResident returned error: %v", err)
+	}
+	if !ready || residentLease == nil {
+		t.Fatal("ready collection did not return a resident lease")
+	}
+	clock.Advance(31 * time.Second)
+	select {
+	case collectionName := <-unloads:
+		t.Fatalf("unloaded %q while resident lease remained active", collectionName)
+	default:
+	}
+
+	residentLease.Release()
+	after := controller.ResidencySnapshot().Collections[0].IdleDeadlineUnixMS
+	if after != before {
+		t.Fatalf("resident lease moved idle deadline from %d to %d", before, after)
+	}
+	clock.Advance(0)
+	if collectionName := <-unloads; collectionName != "collection" {
+		t.Fatalf("unloaded %q, want collection", collectionName)
+	}
+}
+
+func TestResidencyNormalLeaseResetsDeadlineAcrossResidentLease(t *testing.T) {
+	clock := newTestResidencyClock()
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(context.Context, string) error {
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	normalLease, err := controller.Acquire(context.Background(), "collection")
+	if err != nil {
+		t.Fatalf("Acquire returned error: %v", err)
+	}
+	residentLease, ready, err := controller.AcquireResident(
+		context.Background(),
+		"collection",
+	)
+	if err != nil {
+		t.Fatalf("AcquireResident returned error: %v", err)
+	}
+	if !ready {
+		t.Fatal("resident lease did not join ready collection")
+	}
+	clock.Advance(30 * time.Second)
+	normalLease.Release()
+	residentLease.Release()
+
+	deadline := controller.ResidencySnapshot().Collections[0].IdleDeadlineUnixMS
+	want := clock.Now().Add(time.Minute).UnixMilli()
+	if deadline != want {
+		t.Fatalf("idle deadline = %d, want %d after normal use", deadline, want)
+	}
+}
