@@ -714,6 +714,74 @@ func TestCountHoldsLeaseThroughQuery(t *testing.T) {
 	}
 }
 
+func TestInspectCollectionPreservesIdleDeadline(t *testing.T) {
+	server := resetPromotionRecoveryServer()
+	service := newPromotionTestService(t, server)
+	if err := service.residency.Close(context.Background()); err != nil {
+		t.Fatalf("close initial residency controller: %v", err)
+	}
+	clock := newTestResidencyClock()
+	service.residency = newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(context.Context, string) error {
+			return nil
+		},
+	})
+	collectionName := "inspect_collection"
+	server.setCollections(collectionName)
+	server.mutex.Lock()
+	server.loadStates = map[string]commonpb.LoadState{
+		collectionName: commonpb.LoadState_LoadStateLoaded,
+	}
+	server.mutex.Unlock()
+	lease, err := service.residency.Acquire(context.Background(), collectionName)
+	if err != nil {
+		t.Fatalf("Acquire returned error: %v", err)
+	}
+	lease.Release()
+	before := service.residency.ResidencySnapshot().Collections[0].IdleDeadlineUnixMS
+	clock.Advance(30 * time.Second)
+
+	facts, err := service.InspectCollection(context.Background(), collectionName)
+	if err != nil {
+		t.Fatalf("InspectCollection returned error: %v", err)
+	}
+	if !facts.Exists || !facts.RowsKnown || facts.Rows != 42 {
+		t.Fatalf("InspectCollection facts = %+v, want 42 ready rows", facts)
+	}
+	after := service.residency.ResidencySnapshot().Collections[0].IdleDeadlineUnixMS
+	if after != before {
+		t.Fatalf("inspection moved idle deadline from %d to %d", before, after)
+	}
+}
+
+func TestInspectCollectionDoesNotLoadColdCollection(t *testing.T) {
+	server := resetPromotionRecoveryServer()
+	service := newPromotionTestService(t, server)
+	collectionName := "cold_inspect_collection"
+	server.setCollections(collectionName)
+	service.residency.mutex.Lock()
+	service.residency.entryLocked(collectionName).state = collectionResidencyCold
+	service.residency.mutex.Unlock()
+
+	facts, err := service.InspectCollection(context.Background(), collectionName)
+	if err != nil {
+		t.Fatalf("InspectCollection returned error: %v", err)
+	}
+	if !facts.Exists || facts.RowsKnown {
+		t.Fatalf("InspectCollection facts = %+v, want existing cold collection", facts)
+	}
+	if calls := server.loadCallCount(); calls != 0 {
+		t.Fatalf("cold inspection load calls = %d, want 0", calls)
+	}
+}
+
 func TestRecoveryCollectionNameRejectsTruncationCollisions(t *testing.T) {
 	maxLiveLength := maxCollectionNameLength - len(recoveryCollectionSuffix)
 	maxLiveName := strings.Repeat("x", maxLiveLength)

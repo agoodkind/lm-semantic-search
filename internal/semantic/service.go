@@ -690,31 +690,29 @@ func (service *Service) collectionRowCount(ctx context.Context, collectionName s
 	return safeInt32FromInt64(total), nil
 }
 
-// InspectCollection reports whether one collection exists and, when possible,
-// how many rows it currently holds.
+// InspectCollection reports whether one collection exists and counts rows only
+// when the collection is already ready. Inspection never loads a cold collection
+// or postpones its idle deadline.
 func (service *Service) InspectCollection(ctx context.Context, collectionName string) (CollectionFacts, error) {
 	if !service.Available() {
 		return CollectionFacts{}, ErrUnavailable
 	}
 
-	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
+	observation, err := service.observeCollectionName(ctx, collectionName)
 	if err != nil {
 		return CollectionFacts{}, err
 	}
-	if !hasCollection {
+	if observation.State == CollectionStateAbsent {
 		return CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
 	}
-	lease, err := service.AcquireCollection(ctx, collectionName)
-	if err != nil {
-		return CollectionFacts{}, err
-	}
-	defer lease.Release()
-
-	rows, err := service.collectionRowCount(ctx, collectionName)
-	if err != nil {
+	if !observation.RowsKnown {
 		return collectionExistsWithUnknownRows(), nil
 	}
-	return CollectionFacts{Exists: true, Rows: rows, RowsKnown: true}, nil
+	return CollectionFacts{
+		Exists:    true,
+		Rows:      observation.Rows,
+		RowsKnown: true,
+	}, nil
 }
 
 // collectionExistsWithUnknownRows keeps Exists true when only the row count

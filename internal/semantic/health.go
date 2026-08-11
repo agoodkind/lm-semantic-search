@@ -91,15 +91,21 @@ func (service *Service) ObserveCollection(
 	ctx context.Context,
 	codebasePath string,
 ) (CollectionObservation, error) {
+	if service == nil || !service.Available() || service.milvus == nil {
+		return unknownCollectionObservation(), nil
+	}
+	return service.observeCollectionName(ctx, service.CollectionName(codebasePath))
+}
+
+func (service *Service) observeCollectionName(
+	ctx context.Context,
+	collectionName string,
+) (CollectionObservation, error) {
 	unknown := CollectionObservation{
 		State:     CollectionStateUnknown,
 		Rows:      0,
 		RowsKnown: false,
 	}
-	if service == nil || !service.Available() || service.milvus == nil {
-		return unknown, nil
-	}
-	collectionName := service.CollectionName(codebasePath)
 	controllerState, observation, err := service.residency.Observe(ctx, collectionName)
 	if err != nil {
 		return unknown, err
@@ -146,6 +152,14 @@ func (service *Service) ObserveCollection(
 		return unknown, nil
 	}
 	return unknown, nil
+}
+
+func unknownCollectionObservation() CollectionObservation {
+	return CollectionObservation{
+		State:     CollectionStateUnknown,
+		Rows:      0,
+		RowsKnown: false,
+	}
 }
 
 func resolveObservedCollectionState(
