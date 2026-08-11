@@ -36,11 +36,14 @@ type Server struct {
 	addr       string
 }
 
-// New validates that the host portion of addr is a loopback address and
-// returns a Server bound to a dedicated mux carrying the net/http/pprof
-// and expvar /debug/vars handlers. A non-loopback host is rejected with
-// a wrapped error so the profiling surface cannot be exposed off-host.
-func New(addr string) (*Server, error) {
+// JSONSnapshotProvider returns one complete JSON diagnostic snapshot.
+type JSONSnapshotProvider func() ([]byte, error)
+
+// NewWithResidencySnapshot adds a read-only residency diagnostic endpoint.
+func NewWithResidencySnapshot(
+	addr string,
+	provider JSONSnapshotProvider,
+) (*Server, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		slog.Error("debugserver: split host/port failed", "addr", addr, "err", err)
@@ -64,6 +67,19 @@ func New(addr string) (*Server, error) {
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	mux.Handle("/debug/vars", expvar.Handler())
+	if provider != nil {
+		mux.HandleFunc("/debug/residency", func(writer http.ResponseWriter, _ *http.Request) {
+			body, snapshotErr := provider()
+			if snapshotErr != nil {
+				http.Error(writer, "residency snapshot unavailable", http.StatusInternalServerError)
+				return
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			if _, writeErr := writer.Write(body); writeErr != nil {
+				slog.Warn("debugserver: write residency snapshot failed", "err", writeErr)
+			}
+		})
+	}
 
 	return &Server{
 		httpServer: &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: readHeaderTimeout},

@@ -41,6 +41,81 @@ func TestResidencyControllerDefaultsDetachedLoadCeiling(t *testing.T) {
 	}
 }
 
+func TestResidencySnapshotReportsProtectionAndTimerState(t *testing.T) {
+	clock := newTestResidencyClock()
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(context.Context, string) error {
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	lease, err := controller.Acquire(context.Background(), "z_collection")
+	if err != nil {
+		t.Fatalf("Acquire returned error: %v", err)
+	}
+	lease.Release()
+	if _, observation, observeErr := controller.Observe(
+		context.Background(),
+		"z_collection",
+	); observeErr != nil {
+		t.Fatalf("Observe returned error: %v", observeErr)
+	} else {
+		defer observation.Release()
+	}
+	pin, err := controller.Pin("z_collection")
+	if err != nil {
+		t.Fatalf("Pin returned error: %v", err)
+	}
+	defer pin.Release()
+	_, sortedObservation, err := controller.Observe(context.Background(), "a_collection")
+	if err != nil {
+		t.Fatalf("Observe sorting collection returned error: %v", err)
+	}
+	sortedObservation.Release()
+
+	snapshot := controller.ResidencySnapshot()
+	if snapshot.IdleTimeoutMS != 60_000 {
+		t.Fatalf("idle timeout = %d, want 60000", snapshot.IdleTimeoutMS)
+	}
+	if len(snapshot.Collections) != 2 {
+		t.Fatalf("collections = %d, want 2", len(snapshot.Collections))
+	}
+	if snapshot.Collections[0].Collection != "a_collection" {
+		t.Fatalf("first collection = %q, want a_collection", snapshot.Collections[0].Collection)
+	}
+	entry := snapshot.Collections[1]
+	if entry.Collection != "z_collection" || entry.State != "ready" {
+		t.Fatalf("collection snapshot = (%q, %q), want (z_collection, ready)", entry.Collection, entry.State)
+	}
+	if entry.Leases != 0 || entry.Observations != 1 || entry.Pins != 1 {
+		t.Fatalf(
+			"protection = (%d leases, %d observations, %d pins), want (0, 1, 1)",
+			entry.Leases,
+			entry.Observations,
+			entry.Pins,
+		)
+	}
+	if entry.TimerArmed {
+		t.Fatal("timer remained armed while the collection was protected")
+	}
+	if entry.IdleDeadlineUnixMS != 0 {
+		t.Fatalf("idle deadline = %d, want 0 after pin canceled it", entry.IdleDeadlineUnixMS)
+	}
+	if entry.Loading || entry.Transitioning || entry.Maintenance {
+		t.Fatalf("inactive flags are set: %+v", entry)
+	}
+}
+
 func (clock *testResidencyClock) Now() time.Time {
 	clock.mutex.Lock()
 	defer clock.mutex.Unlock()
