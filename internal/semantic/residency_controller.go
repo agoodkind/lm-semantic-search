@@ -364,7 +364,6 @@ func (controller *collectionResidencyController) Observe(
 			return collectionResidencyUnknown, nil, ErrResidencyControllerClosed
 		}
 		entry := controller.entryLocked(collectionName)
-		controller.markReconciliationActivityLocked(collectionName, entry)
 		if entry.maintenance ||
 			(entry.activeTransition != nil && entry.load == nil) {
 			changed := entry.changed
@@ -584,7 +583,7 @@ func (controller *collectionResidencyController) entryLocked(
 			idleDeadline:     time.Time{},
 			activeTransition: nil,
 			maintenance:      false,
-			reconciliation:   0,
+			reconciliation:   controller.reconciliationGeneration,
 			changed:          make(chan struct{}),
 		}
 		controller.entries[collectionName] = entry

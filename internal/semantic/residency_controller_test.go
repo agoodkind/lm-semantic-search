@@ -421,6 +421,63 @@ func TestResidencyObservationDoesNotLoadOrPostponeIdleDeadline(t *testing.T) {
 	}
 }
 
+func TestResidencyObservationKeepsStartupReconciliationLive(t *testing.T) {
+	clock := newTestResidencyClock()
+	unloaded := make(chan struct{}, 1)
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(context.Context, string) error {
+			unloaded <- struct{}{}
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	generation := controller.beginReconciliation()
+	state, observation, err := controller.Observe(context.Background(), "collection")
+	if err != nil {
+		t.Fatalf("Observe returned error: %v", err)
+	}
+	if state != collectionResidencyUnknown {
+		t.Fatalf("state before reconciliation = %v, want unknown", state)
+	}
+	controller.applyReconciliation(
+		context.Background(),
+		generation,
+		"collection",
+		collectionResidencyReady,
+	)
+
+	controller.mutex.Lock()
+	reconciledState := controller.entries["collection"].state
+	controller.mutex.Unlock()
+	if reconciledState != collectionResidencyReady {
+		t.Fatalf("state after reconciliation = %v, want ready", reconciledState)
+	}
+	clock.Advance(2 * time.Minute)
+	select {
+	case <-unloaded:
+		t.Fatal("active observation did not protect the reconciled collection")
+	default:
+	}
+
+	observation.Release()
+	clock.Advance(0)
+	select {
+	case <-unloaded:
+	case <-time.After(time.Second):
+		t.Fatal("overdue reconciled collection did not unload after observation")
+	}
+}
+
 func TestResidencyLoadCompletionPreservesDeadlineUnderObservation(t *testing.T) {
 	clock := newTestResidencyClock()
 	loadStarted := make(chan struct{})
