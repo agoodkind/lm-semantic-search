@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -208,7 +209,7 @@ func serve(rootContext context.Context, cfg config.Config) error {
 	metrics.StartReporter(runtimeContext, time.Duration(cfg.PerfCountersIntervalMS)*time.Millisecond)
 	var debugSrv *debugserver.Server
 	if cfg.DebugListenerEnabled {
-		if debugSrv, err = startDebugServer(runtimeContext, cfg); err != nil {
+		if debugSrv, err = startDebugServer(runtimeContext, cfg, manager); err != nil {
 			return err
 		}
 		defer stopDebugServer(rootContext, debugSrv)
@@ -365,8 +366,21 @@ func refuseIfDaemonAlreadyServing(ctx context.Context, socketPath string) error 
 	return conflict
 }
 
-func startDebugServer(ctx context.Context, cfg config.Config) (*debugserver.Server, error) {
-	srv, err := debugserver.New(cfg.DebugListenAddr)
+func startDebugServer(
+	ctx context.Context,
+	cfg config.Config,
+	manager *daemon.Manager,
+) (*debugserver.Server, error) {
+	srv, err := debugserver.NewWithResidencySnapshot(
+		cfg.DebugListenAddr,
+		func() ([]byte, error) {
+			payload, marshalErr := json.Marshal(manager.ResidencySnapshot())
+			if marshalErr != nil {
+				return nil, fmt.Errorf("marshal residency snapshot: %w", marshalErr)
+			}
+			return payload, nil
+		},
+	)
 	if err != nil {
 		slog.ErrorContext(ctx, "create debug listener failed", "addr", cfg.DebugListenAddr, "err", err)
 		return nil, fmt.Errorf("create debug listener on %s: %w", cfg.DebugListenAddr, err)

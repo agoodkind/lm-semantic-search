@@ -10,9 +10,9 @@ import (
 )
 
 func TestServerServesDebugSurfaces(t *testing.T) {
-	server, err := New("127.0.0.1:0")
+	server, err := NewWithResidencySnapshot("127.0.0.1:0", nil)
 	if err != nil {
-		t.Fatalf("New returned error: %v", err)
+		t.Fatalf("NewWithResidencySnapshot returned error: %v", err)
 	}
 
 	ctx := context.Background()
@@ -42,18 +42,61 @@ func TestServerServesDebugSurfaces(t *testing.T) {
 	pprofResp.Body.Close()
 }
 
+func TestServerServesResidencySnapshot(t *testing.T) {
+	server, err := NewWithResidencySnapshot(
+		"127.0.0.1:0",
+		func() ([]byte, error) {
+			return []byte(`{"collections":[{"collection":"test","timer_armed":true}]}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewWithResidencySnapshot returned error: %v", err)
+	}
+	if startErr := server.Start(context.Background()); startErr != nil {
+		t.Fatalf("Start returned error: %v", startErr)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	})
+
+	response := getOK(t, "http://"+server.Addr()+"/debug/residency")
+	defer response.Body.Close()
+	if contentType := response.Header.Get("Content-Type"); contentType != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", contentType)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	if readErr != nil {
+		t.Fatalf("read residency body: %v", readErr)
+	}
+	var decoded struct {
+		Collections []struct {
+			Collection string `json:"collection"`
+			TimerArmed bool   `json:"timer_armed"`
+		} `json:"collections"`
+	}
+	if jsonErr := json.Unmarshal(body, &decoded); jsonErr != nil {
+		t.Fatalf("decode residency body: %v", jsonErr)
+	}
+	if len(decoded.Collections) != 1 || decoded.Collections[0].Collection != "test" ||
+		!decoded.Collections[0].TimerArmed {
+		t.Fatalf("residency snapshot = %+v", decoded)
+	}
+}
+
 func TestNewRejectsNonLoopbackHost(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0:0", "8.8.8.8:0"} {
-		if _, err := New(addr); err == nil {
-			t.Errorf("New(%q) expected error, got nil", addr)
+		if _, err := NewWithResidencySnapshot(addr, nil); err == nil {
+			t.Errorf("NewWithResidencySnapshot(%q) expected error, got nil", addr)
 		}
 	}
 }
 
 func TestShutdownStopsServer(t *testing.T) {
-	server, err := New("127.0.0.1:0")
+	server, err := NewWithResidencySnapshot("127.0.0.1:0", nil)
 	if err != nil {
-		t.Fatalf("New returned error: %v", err)
+		t.Fatalf("NewWithResidencySnapshot returned error: %v", err)
 	}
 
 	if startErr := server.Start(context.Background()); startErr != nil {
