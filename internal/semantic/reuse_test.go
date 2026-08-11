@@ -2,15 +2,19 @@ package semantic
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/store"
 )
 
 // countingEmbedder records every EmbedBatch call so a test can prove that a
@@ -433,5 +437,98 @@ func TestLoadReuseVectorsForContentsSkipsCatalogWhenDimensionIsUnknown(t *testin
 	}
 	if len(reuse) != 0 {
 		t.Fatalf("reuse vectors = %d, want 0", len(reuse))
+	}
+}
+
+func TestAcquireReuseSourceLoadsPrimaryButSkipsColdFallback(t *testing.T) {
+	clock := newTestResidencyClock()
+	var loadCalls atomic.Int32
+	service := &Service{}
+	service.residency = newCollectionResidencyController(residencyControllerConfig{
+		clock:       clock,
+		waitTimeout: 15 * time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Minute,
+		load: func(context.Context, string) error {
+			loadCalls.Add(1)
+			return nil
+		},
+		unload: func(context.Context, string) error {
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = service.residency.Close(context.Background())
+	})
+
+	primaryLease, ready, err := service.acquireReuseSourceCollection(
+		context.Background(),
+		"collection",
+		true,
+	)
+	if err != nil {
+		t.Fatalf("acquire primary reuse source: %v", err)
+	}
+	if !ready || primaryLease == nil {
+		t.Fatal("primary reuse source did not load")
+	}
+	primaryLease.Release()
+	clock.Advance(time.Minute)
+	waitForResidencyState(t, service.residency, "collection", collectionResidencyCold)
+
+	fallbackLease, ready, err := service.acquireReuseSourceCollection(
+		context.Background(),
+		"collection",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("acquire cold fallback reuse source: %v", err)
+	}
+	if ready || fallbackLease != nil {
+		t.Fatalf("cold fallback acquire = (%v, %v), want (nil, false)", fallbackLease, ready)
+	}
+	if got := loadCalls.Load(); got != 1 {
+		t.Fatalf("load calls = %d, want 1", got)
+	}
+}
+
+func TestColdFallbackReuseSkipsCollectionInspection(t *testing.T) {
+	server := resetPromotionRecoveryServer()
+	server.collections["fallback"] = true
+	service, client := newDisconnectedPromotionTestService(t, server)
+	service.milvus = client
+	service.available.Store(true)
+	service.cfg.RegistryPath = filepath.Join(t.TempDir(), "registry.json")
+	if err := store.WriteRegistry(service.cfg.RegistryPath, model.RegistryFile{
+		Codebases: []model.Codebase{{CollectionName: "fallback"}},
+		UpdatedAt: time.Time{},
+	}); err != nil {
+		t.Fatalf("write reuse registry: %v", err)
+	}
+	service.residency.mutex.Lock()
+	service.residency.entryLocked("fallback").state = collectionResidencyCold
+	service.residency.mutex.Unlock()
+	sources, err := service.reuseSourceCollections("missing-primary")
+	if err != nil {
+		t.Fatalf("list reuse sources: %v", err)
+	}
+	if !slices.Equal(sources, []string{"missing-primary", "fallback"}) {
+		t.Fatalf("reuse sources = %v, want missing-primary and fallback", sources)
+	}
+
+	err = service.loadCollectionReuse(
+		context.Background(),
+		"missing-primary",
+		map[string]string{contentHash("new content"): "new content"},
+		map[string][]float32{},
+	)
+	if err != nil {
+		t.Fatalf("load collection reuse: %v", err)
+	}
+	if calls := server.describeCallCount("missing-primary"); calls != 1 {
+		t.Fatalf("primary DescribeCollection calls = %d, want 1", calls)
+	}
+	if calls := server.describeCallCount("fallback"); calls != 0 {
+		t.Fatalf("cold fallback DescribeCollection calls = %d, want 0", calls)
 	}
 }

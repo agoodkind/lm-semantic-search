@@ -45,6 +45,7 @@ type promotionRecoveryServer struct {
 	afterLoadStateStarted chan struct{}
 	loadCollectionCalls   int
 	renameCollectionCalls int
+	describeCalls         map[string]int
 }
 
 var (
@@ -82,6 +83,7 @@ func resetPromotionRecoveryServer() *promotionRecoveryServer {
 	server.afterLoadStateStarted = nil
 	server.loadCollectionCalls = 0
 	server.renameCollectionCalls = 0
+	server.describeCalls = make(map[string]int)
 	return server
 }
 
@@ -254,6 +256,7 @@ func (server *promotionRecoveryServer) DescribeCollection(
 ) (*milvuspb.DescribeCollectionResponse, error) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
+	server.describeCalls[request.GetCollectionName()]++
 	if !server.collections[request.GetCollectionName()] {
 		return &milvuspb.DescribeCollectionResponse{
 			Status: &commonpb.Status{
@@ -275,6 +278,14 @@ func (server *promotionRecoveryServer) DescribeCollection(
 		CollectionName: request.GetCollectionName(),
 		Schema:         schema,
 	}, nil
+}
+
+func (server *promotionRecoveryServer) describeCallCount(
+	collectionName string,
+) int {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	return server.describeCalls[collectionName]
 }
 
 func (server *promotionRecoveryServer) ShowCollections(
