@@ -160,7 +160,7 @@ func serve(rootContext context.Context, cfg config.Config) error {
 	installConcernRouter(cfg.LogsDir, cfg.LogPath, rotationConfig(cfg))
 	metrics.Register()
 
-	slog.InfoContext(rootContext, "daemon identity", "build", version.String(), "commit", version.Commit, "socket", cfg.SocketPath, "state_root", cfg.StateRoot, "pid", os.Getpid())
+	logDaemonIdentity(rootContext, cfg)
 
 	if err := refuseIfDaemonAlreadyServing(rootContext, cfg.SocketPath); err != nil {
 		return err
@@ -253,6 +253,22 @@ func serve(rootContext context.Context, cfg config.Config) error {
 	cancelRuntime()
 	server.GracefulStop()
 	return nil
+}
+
+func logDaemonIdentity(ctx context.Context, cfg config.Config) {
+	slog.InfoContext(
+		ctx,
+		"daemon identity",
+		"build", version.String(),
+		"commit", version.Commit,
+		"socket", cfg.SocketPath,
+		"state_root", cfg.StateRoot,
+		"pid", os.Getpid(),
+		"milvus_collection_load_wait_timeout_ms",
+		cfg.MilvusCollectionLoadWaitTimeoutMS,
+		"milvus_collection_idle_timeout_ms",
+		cfg.MilvusCollectionIdleTimeoutMS,
+	)
 }
 
 // startLogRetentionSweep launches the background log retention walker. It runs
