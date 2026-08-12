@@ -38,6 +38,9 @@ export PATH := $(SIGNING_WRAPPER_DIR):$(PATH)
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 BUILD_CHECKS := true
 STATICCHECK_EXTRA_FLAGS = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_STRICT_FLAGS)
+# Cold Linux runners need more than the generated three-minute default.
+GOLANGCI_LINT_RUN_FLAGS = $(GOLANGCI_LINT_FLAGS) --allow-parallel-runners --timeout=10m \
+	$(if $(filter-out 0 auto,$(strip $(LINT_CONCURRENCY))),--concurrency=$(LINT_CONCURRENCY))
 # go.mk owns the rest of the cgo contract: the per-target GO_MK_CGO_PREFIX with
 # its host fallback, the PKG_CONFIG_PATH export, the go-mk-cgo-deps prerequisite
 # on every compile-bearing target, and the GO_MK_CC/GO_MK_CXX toolchain
