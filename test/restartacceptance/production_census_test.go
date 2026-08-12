@@ -241,10 +241,11 @@ func TestReadProductionMilvusCensusSamplesLoadedCollectionsLargerThanSampleLimit
 	}
 }
 
-func TestReadProductionMilvusCensusHashesSparseVectorSamples(t *testing.T) {
+func TestReadProductionMilvusCensusDoesNotRequestSparseVectorSamples(t *testing.T) {
 	server := &productionCensusMilvusServer{
-		databases:   []string{"default"},
-		collections: []string{"hybrid"},
+		databases:          []string{"default"},
+		collections:        []string{"hybrid"},
+		rejectSparseOutput: true,
 		loadStates: map[string]commonpb.LoadState{
 			"hybrid": commonpb.LoadState_LoadStateLoaded,
 		},
@@ -255,21 +256,9 @@ func TestReadProductionMilvusCensusHashesSparseVectorSamples(t *testing.T) {
 	}
 	address := startProductionCensusServer(t, server)
 	settings := productionMilvusSettings{Address: address, Database: "default"}
-	identity := collectionIdentity{Database: "default", Collection: "hybrid"}
-
-	baseline, err := readProductionMilvusCensus(context.Background(), settings)
+	_, err := readProductionMilvusCensus(context.Background(), settings)
 	if err != nil {
-		t.Fatalf("read baseline census: %v", err)
-	}
-	server.mutex.Lock()
-	server.rows["hybrid"][0].sparse = 9
-	server.mutex.Unlock()
-	changed, err := readProductionMilvusCensus(context.Background(), settings)
-	if err != nil {
-		t.Fatalf("read changed census: %v", err)
-	}
-	if changed.Samples[identity] == baseline.Samples[identity] {
-		t.Fatal("sparse-vector change did not change the collection hash")
+		t.Fatalf("read census without raw sparse vectors: %v", err)
 	}
 }
 
@@ -347,6 +336,7 @@ type productionCensusMilvusServer struct {
 	methods            []string
 	requestDatabases   []string
 	queriedCollections []string
+	rejectSparseOutput bool
 }
 
 type productionCensusRow struct {
@@ -450,6 +440,14 @@ func (server *productionCensusMilvusServer) Query(
 	request *milvuspb.QueryRequest,
 ) (*milvuspb.QueryResults, error) {
 	server.record("Query")
+	if server.rejectSparseOutput && slices.Contains(request.GetOutputFields(), "sparse") {
+		return &milvuspb.QueryResults{
+			Status: &commonpb.Status{
+				ErrorCode: commonpb.ErrorCode_IllegalArgument,
+				Reason:    "not allowed to retrieve raw data of field sparse",
+			},
+		}, nil
+	}
 	server.mutex.Lock()
 	server.queriedCollections = append(server.queriedCollections, request.GetCollectionName())
 	logicalCount, hasLogicalCount := server.logicalCounts[request.GetCollectionName()]

@@ -282,7 +282,7 @@ func readLoadedCollectionSamples(
 	}
 	vectorFields := make([]string, 0)
 	for _, field := range schema.Fields {
-		if field.DataType.IsVectorType() {
+		if field.DataType.IsVectorType() && field.DataType != entity.FieldTypeSparseVector {
 			vectorFields = append(vectorFields, field.Name)
 		}
 	}
