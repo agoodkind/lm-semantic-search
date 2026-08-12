@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/go-makefile/selfupdate"
 )
@@ -89,6 +90,23 @@ func TestSelectReleasesSkipsDrafts(t *testing.T) {
 	}
 	if selection.previous.TagName != releases[2].TagName {
 		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[2].TagName)
+	}
+}
+
+func TestSelectReleasesUsesPublishedOrder(t *testing.T) {
+	t.Parallel()
+	releases := []githubRelease{
+		{TagName: "202608122028-d1-1234567", PublishedAt: time.Date(2026, time.August, 12, 20, 28, 0, 0, time.UTC)},
+		{TagName: "202608122141-d2-abcdef1", PublishedAt: time.Date(2026, time.August, 12, 21, 41, 0, 0, time.UTC)},
+	}
+	environment := environment{commit: "abcdef1234567890", refType: "branch"}
+
+	selection, err := selectReleases(releases, environment)
+	if err != nil {
+		t.Fatalf("selectReleases() error = %v", err)
+	}
+	if selection.previous.TagName != releases[0].TagName {
+		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[0].TagName)
 	}
 }
 

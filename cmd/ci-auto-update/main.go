@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -53,8 +54,9 @@ type environment struct {
 }
 
 type githubRelease struct {
-	TagName string `json:"tag_name"`
-	Draft   bool   `json:"draft"`
+	TagName     string    `json:"tag_name"`
+	Draft       bool      `json:"draft"`
+	PublishedAt time.Time `json:"published_at"`
 }
 
 type releaseSelection struct {
@@ -202,10 +204,13 @@ func loadEnvironment(getenv func(string) string) (environment, error) {
 func selectReleases(releases []githubRelease, environment environment) (releaseSelection, error) {
 	eligible := make([]githubRelease, 0, len(releases))
 	for _, release := range releases {
-		if !release.Draft {
+		if !release.Draft && strings.TrimSpace(release.TagName) != "" {
 			eligible = append(eligible, release)
 		}
 	}
+	sort.SliceStable(eligible, func(i int, j int) bool {
+		return eligible[i].PublishedAt.After(eligible[j].PublishedAt)
+	})
 	targetTag := environment.refName
 	if environment.refType != "tag" {
 		targetTag = ""
