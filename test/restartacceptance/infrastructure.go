@@ -20,12 +20,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
 const (
 	minioUserEnvironment     = "LMS_RESTART_MINIO_USER"
 	minioPasswordEnvironment = "LMS_RESTART_MINIO_PASSWORD"
+	maximumTreeRemovalTime   = 2 * time.Minute
 )
 
 type recordedImage struct {
@@ -294,6 +296,18 @@ func cloneWritableTree(source string, destination string) error {
 }
 
 func removeTree(ctx context.Context, root string) error {
+	return removeTreeWith(ctx, root, os.RemoveAll, 100*time.Millisecond, maximumTreeRemovalTime)
+}
+
+func removeTreeWith(
+	ctx context.Context,
+	root string,
+	removeAll func(string) error,
+	retryDelay time.Duration,
+	maximumDuration time.Duration,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, maximumDuration)
+	defer cancel()
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -311,10 +325,23 @@ func removeTree(ctx context.Context, root string) error {
 	}); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("make cleanup tree writable: %w", err)
 	}
-	if err := os.RemoveAll(root); err != nil {
-		return fmt.Errorf("remove cleanup tree: %w", err)
+	for {
+		if err := context.Cause(ctx); err != nil {
+			return fmt.Errorf("remove cleanup tree: %w", err)
+		}
+		err := removeAll(root)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.ENOTEMPTY) {
+			return fmt.Errorf("remove cleanup tree: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("remove cleanup tree: %w", context.Cause(ctx))
+		case <-time.After(retryDelay):
+		}
 	}
-	return nil
 }
 
 func renderCompose(paths runPaths, caseName string) string {
