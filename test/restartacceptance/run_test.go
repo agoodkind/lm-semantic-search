@@ -11,10 +11,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestPrepareAcceptanceRunRejectsMissingOptInBeforeDockerProbe(t *testing.T) {
+	t.Setenv(restartAcceptanceOptIn, "")
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := prepareAcceptanceRun(context.Background(), time.Now(), bytes.NewReader(make([]byte, 4)))
+	if err == nil {
+		t.Fatal("missing opt-in was accepted")
+	}
+	if !strings.Contains(err.Error(), restartAcceptanceOptIn) {
+		t.Fatalf("prepare error = %q, want opt-in error", err)
+	}
+}
 
 func TestPrepareRunValidatesEveryGuardBeforeCreatingRunRoot(t *testing.T) {
 	root := t.TempDir()

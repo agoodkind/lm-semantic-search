@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,9 +23,10 @@ func TestComposeFilePinsImagesPortsAndWritableCaseData(t *testing.T) {
 	paths := pathsForRun("/Volumes/Chaos Storage/lms-restart-acceptance/20260812T010203Z-abcdef01")
 	content := renderCompose(paths, "g-restore")
 	for _, literal := range []string{
-		etcdImage,
-		minioImage,
-		milvusImage,
+		etcdImage.Tag,
+		minioImage.Tag,
+		milvusImage.Tag,
+		"pull_policy: never",
 		"127.0.0.1:22379:2379",
 		"127.0.0.1:29000:9000",
 		"127.0.0.1:29001:9001",
@@ -43,6 +45,11 @@ func TestComposeFilePinsImagesPortsAndWritableCaseData(t *testing.T) {
 			t.Fatalf("compose file missing %q:\n%s", literal, content)
 		}
 	}
+	for _, image := range []recordedImage{etcdImage, minioImage, milvusImage} {
+		if strings.Contains(content, image.ID) {
+			t.Fatalf("compose file uses local image ID as a registry digest: %s", image.ID)
+		}
+	}
 	if strings.Contains(content, "restart: unless-stopped") {
 		t.Fatal("compose file inherited production restart policy")
 	}
@@ -53,6 +60,31 @@ func TestComposeFilePinsImagesPortsAndWritableCaseData(t *testing.T) {
 		if isCredential && !strings.Contains(line, "${") {
 			t.Fatal("compose file contains a credential literal")
 		}
+	}
+}
+
+func TestValidateRecordedImagesRequiresExactLocalImageIDs(t *testing.T) {
+	runner := &recordingRunner{outputs: [][]byte{
+		[]byte(etcdImage.ID + "\n"),
+		[]byte(minioImage.ID + "\n"),
+		[]byte(milvusImage.ID + "\n"),
+	}}
+	if err := validateRecordedImages(context.Background(), runner); err != nil {
+		t.Fatalf("validate recorded images: %v", err)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("image inspection calls = %d, want 3", len(runner.calls))
+	}
+	for index, image := range []recordedImage{etcdImage, minioImage, milvusImage} {
+		want := []string{"docker", "image", "inspect", "--format={{.Id}}", image.Tag}
+		if !slices.Equal(runner.calls[index], want) {
+			t.Fatalf("image inspection call %d = %v, want %v", index, runner.calls[index], want)
+		}
+	}
+
+	mismatch := &recordingRunner{outputs: [][]byte{[]byte("sha256:wrong\n")}}
+	if err := validateRecordedImages(context.Background(), mismatch); err == nil {
+		t.Fatal("mismatched local image ID was accepted")
 	}
 }
 

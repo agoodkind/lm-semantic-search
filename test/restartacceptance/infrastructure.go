@@ -24,12 +24,28 @@ import (
 )
 
 const (
-	etcdImage   = "quay.io/coreos/etcd@sha256:b2317748a97a43c82040cdfacb68041b83bb6a01072a7da564a4c2562b3a3bcb"
-	minioImage  = "minio/minio@sha256:8ce3a2b6c83521fabbde58b4f06e5fb7f95e64bfc05bc10def264479327c407b"
-	milvusImage = "milvusdb/milvus@sha256:fea7ed1d226c93292f476e4283584ce01f0ff01e45762206b9cd7486f9c68c5d"
-
 	minioUserEnvironment     = "LMS_RESTART_MINIO_USER"
 	minioPasswordEnvironment = "LMS_RESTART_MINIO_PASSWORD"
+)
+
+type recordedImage struct {
+	Tag string
+	ID  string
+}
+
+var (
+	etcdImage = recordedImage{
+		Tag: "quay.io/coreos/etcd:v3.5.18",
+		ID:  "sha256:b2317748a97a43c82040cdfacb68041b83bb6a01072a7da564a4c2562b3a3bcb",
+	}
+	minioImage = recordedImage{
+		Tag: "minio/minio:RELEASE.2024-12-18T13-15-44Z",
+		ID:  "sha256:8ce3a2b6c83521fabbde58b4f06e5fb7f95e64bfc05bc10def264479327c407b",
+	}
+	milvusImage = recordedImage{
+		Tag: "milvusdb/milvus:v2.6.18",
+		ID:  "sha256:fea7ed1d226c93292f476e4283584ce01f0ff01e45762206b9cd7486f9c68c5d",
+	}
 )
 
 type runPaths struct {
@@ -306,6 +322,7 @@ func renderCompose(paths runPaths, caseName string) string {
 	return fmt.Sprintf(`services:
   etcd:
     image: %s
+    pull_policy: never
     command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls=http://0.0.0.0:2379 --data-dir=/etcd
     ports:
       - "127.0.0.1:%d:2379"
@@ -318,6 +335,7 @@ func renderCompose(paths runPaths, caseName string) string {
       retries: 12
   minio:
     image: %s
+    pull_policy: never
     command: minio server /minio_data --console-address :9001
     environment:
       MINIO_ROOT_USER: ${%s:?required}
@@ -335,6 +353,7 @@ func renderCompose(paths runPaths, caseName string) string {
       retries: 12
   standalone:
     image: %s
+    pull_policy: never
     command: ["milvus", "run", "standalone"]
     security_opt:
       - seccomp:unconfined
@@ -358,10 +377,26 @@ func renderCompose(paths runPaths, caseName string) string {
         condition: service_healthy
       minio:
         condition: service_healthy
-`, etcdImage, etcdClientPort, caseRoot, minioImage, minioUserEnvironment,
+`, etcdImage.Tag, etcdClientPort, caseRoot, minioImage.Tag, minioUserEnvironment,
 		minioPasswordEnvironment, minioAPIPort, minioConsolePort, caseRoot, caseRoot,
-		milvusImage, minioUserEnvironment, minioPasswordEnvironment, milvusGRPCPort,
+		milvusImage.Tag, minioUserEnvironment, minioPasswordEnvironment, milvusGRPCPort,
 		milvusHealthPort, caseRoot)
+}
+
+func validateRecordedImages(ctx context.Context, runner commandRunner) error {
+	if runner == nil {
+		return fmt.Errorf("recorded image validation requires a command runner")
+	}
+	for _, image := range []recordedImage{etcdImage, minioImage, milvusImage} {
+		output, err := runner.Run(ctx, nil, "docker", "image", "inspect", "--format={{.Id}}", image.Tag)
+		if err != nil {
+			return fmt.Errorf("inspect recorded image %q: %w", image.Tag, err)
+		}
+		if actual := strings.TrimSpace(string(output)); actual != image.ID {
+			return fmt.Errorf("recorded image %q has local ID %q, want %q", image.Tag, actual, image.ID)
+		}
+	}
+	return nil
 }
 
 type evidenceEvent struct {
