@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,10 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
+	"github.com/milvus-io/milvus/client/v2/entity"
+	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -194,6 +199,56 @@ func TestMilvusProxyForwardsNormalTrafficAndInterceptsConfiguredLoadOnly(t *test
 	}
 }
 
+func TestMilvusProxyUnavailableRemainsATransportOutageThroughSDKRetry(t *testing.T) {
+	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("backend listen: %v", err)
+	}
+	backend := grpc.NewServer()
+	milvuspb.RegisterMilvusServiceServer(backend, &proxyTestMilvusServer{})
+	go func() { _ = backend.Serve(backendListener) }()
+	t.Cleanup(backend.Stop)
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("proxy listen: %v", err)
+	}
+	proxy, err := newMilvusProxy(proxyListener, backendListener.Addr().String())
+	if err != nil {
+		t.Fatalf("new Milvus proxy: %v", err)
+	}
+	go func() { _ = proxy.Serve() }()
+	t.Cleanup(func() { _ = proxy.Close() })
+	proxy.SetUnavailable(codes.Unavailable, "acceptance Milvus outage")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{
+		Address: proxyListener.Addr().String(),
+		DBName:  cloneMilvusDatabase,
+		DialOptions: milvusgrpc.DialOptions(
+			ctx,
+			slog.Default(),
+			milvusgrpc.DefaultCallTimeouts().WithMetadata(100*time.Millisecond),
+		),
+	})
+	if err != nil {
+		t.Fatalf("create Milvus SDK client: %v", err)
+	}
+	t.Cleanup(func() { closeMilvusClient(client) })
+
+	_, err = client.ListCollections(ctx, milvusclient.NewListCollectionOption())
+	if !adapterr.IsGRPCUnavailable(err) {
+		t.Fatalf("SDK error type=%T code=%s error=%v, want a transport outage", err, status.Code(err), err)
+	}
+	dense := milvusclient.NewAnnRequest("vector", 10, entity.FloatVector{1})
+	sparse := milvusclient.NewAnnRequest("sparse_vector", 10, entity.Text("acceptance"))
+	_, err = client.HybridSearch(ctx, milvusclient.NewHybridSearchOption("blocked", 1, dense, sparse))
+	if !adapterr.IsGRPCUnavailable(err) {
+		t.Fatalf("hybrid search error type=%T code=%s error=%v, want a transport outage", err, status.Code(err), err)
+	}
+}
+
 func TestMilvusProxyRelaysServerAndBidirectionalStreams(t *testing.T) {
 	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -300,6 +355,16 @@ func TestMilvusProxyWaitsForBothRelayDirections(t *testing.T) {
 type proxyTestMilvusServer struct {
 	milvuspb.UnimplementedMilvusServiceServer
 	replicateCount atomic.Int32
+}
+
+func (*proxyTestMilvusServer) Connect(
+	context.Context,
+	*milvuspb.ConnectRequest,
+) (*milvuspb.ConnectResponse, error) {
+	return &milvuspb.ConnectResponse{
+		Status:     &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+		Identifier: 1,
+	}, nil
 }
 
 func (*proxyTestMilvusServer) GetLoadState(
