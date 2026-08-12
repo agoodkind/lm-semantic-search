@@ -129,7 +129,7 @@ func TestRemoveTreeRetriesDirectoryNotEmpty(t *testing.T) {
 		return os.RemoveAll(path)
 	}
 
-	if err := removeTreeWith(context.Background(), root, removeAll, 0); err != nil {
+	if err := removeTreeWith(context.Background(), root, removeAll, 0, time.Second); err != nil {
 		t.Fatalf("remove tree after transient directory recreation: %v", err)
 	}
 	if attempts != 2 {
@@ -137,6 +137,60 @@ func TestRemoveTreeRetriesDirectoryNotEmpty(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cleanup root still exists: %v", err)
+	}
+}
+
+func TestRemoveTreeStopsAfterCleanupDeadline(t *testing.T) {
+	root := t.TempDir()
+	attempts := 0
+	removeAll := func(path string) error {
+		attempts++
+		return &os.PathError{Op: "unlinkat", Path: path, Err: syscall.ENOTEMPTY}
+	}
+
+	err := removeTreeWith(context.Background(), root, removeAll, time.Millisecond, 10*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("remove tree error = %v, want deadline exceeded", err)
+	}
+	if attempts < 1 {
+		t.Fatal("remove tree did not attempt removal")
+	}
+}
+
+func TestRemoveTreeChecksCancellationBeforeRetry(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	attempts := 0
+	removeAll := func(path string) error {
+		attempts++
+		cancel()
+		return &os.PathError{Op: "unlinkat", Path: path, Err: syscall.ENOTEMPTY}
+	}
+
+	err := removeTreeWith(ctx, root, removeAll, 0, time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("remove tree error = %v, want context canceled", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("remove attempts = %d, want 1", attempts)
+	}
+}
+
+func TestRemoveTreeStopsAfterNonRetryableError(t *testing.T) {
+	root := t.TempDir()
+	attempts := 0
+	wantErr := syscall.EACCES
+	removeAll := func(path string) error {
+		attempts++
+		return &os.PathError{Op: "unlinkat", Path: path, Err: wantErr}
+	}
+
+	err := removeTreeWith(context.Background(), root, removeAll, 0, time.Second)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("remove tree error = %v, want permission denied", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("remove attempts = %d, want 1", attempts)
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 const (
 	minioUserEnvironment     = "LMS_RESTART_MINIO_USER"
 	minioPasswordEnvironment = "LMS_RESTART_MINIO_PASSWORD"
+	maximumTreeRemovalTime   = 2 * time.Minute
 )
 
 type recordedImage struct {
@@ -295,7 +296,7 @@ func cloneWritableTree(source string, destination string) error {
 }
 
 func removeTree(ctx context.Context, root string) error {
-	return removeTreeWith(ctx, root, os.RemoveAll, 100*time.Millisecond)
+	return removeTreeWith(ctx, root, os.RemoveAll, 100*time.Millisecond, maximumTreeRemovalTime)
 }
 
 func removeTreeWith(
@@ -303,7 +304,10 @@ func removeTreeWith(
 	root string,
 	removeAll func(string) error,
 	retryDelay time.Duration,
+	maximumDuration time.Duration,
 ) error {
+	ctx, cancel := context.WithTimeout(ctx, maximumDuration)
+	defer cancel()
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -322,6 +326,9 @@ func removeTreeWith(
 		return fmt.Errorf("make cleanup tree writable: %w", err)
 	}
 	for {
+		if err := context.Cause(ctx); err != nil {
+			return fmt.Errorf("remove cleanup tree: %w", err)
+		}
 		err := removeAll(root)
 		if err == nil {
 			return nil
