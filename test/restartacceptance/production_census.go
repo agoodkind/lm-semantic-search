@@ -40,7 +40,6 @@ type collectionFingerprint struct {
 	PhysicalChannels []string           `json:"physical_channels"`
 	VirtualChannels  []string           `json:"virtual_channels"`
 	Indexes          []indexFingerprint `json:"indexes"`
-	RowCount         int64              `json:"row_count"`
 }
 
 type rowFingerprint struct {
@@ -54,7 +53,6 @@ type indexFingerprint struct {
 }
 
 type sampleFingerprint struct {
-	RowCount   int64            `json:"row_count"`
 	RowSamples []rowFingerprint `json:"row_samples"`
 }
 
@@ -131,13 +129,15 @@ func readProductionMilvusCensus(ctx context.Context, settings productionMilvusSe
 	slices.Sort(collectionNames)
 	collections := make(collectionCensus, len(collectionNames))
 	samples := make(collectionCensus)
+	rowCounts := make(collectionRowCounts, len(collectionNames))
 	for _, collectionName := range collectionNames {
-		hash, sampleHash, hashErr := readCollectionFingerprints(ctx, client, collectionName)
+		hash, sampleHash, rowCount, hashErr := readCollectionFingerprints(ctx, client, collectionName)
 		if hashErr != nil {
 			return productionMilvusCensus{}, hashErr
 		}
 		identity := collectionIdentity{Database: settings.Database, Collection: collectionName}
 		collections[identity] = hash
+		rowCounts[identity] = rowCount
 		if sampleHash != "" {
 			samples[identity] = sampleHash
 		}
@@ -146,34 +146,39 @@ func readProductionMilvusCensus(ctx context.Context, settings productionMilvusSe
 		Databases:   slices.Clone(databases),
 		Collections: collections,
 		Samples:     samples,
+		RowCounts:   rowCounts,
 	}, nil
 }
 
-func readCollectionFingerprints(ctx context.Context, client *milvusclient.Client, collectionName string) (string, string, error) {
+func readCollectionFingerprints(
+	ctx context.Context,
+	client *milvusclient.Client,
+	collectionName string,
+) (string, string, int64, error) {
 	loadState, err := client.GetLoadState(ctx, milvusclient.NewGetLoadStateOption(collectionName))
 	if err != nil {
-		return "", "", fmt.Errorf("get production collection %q load state: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("get production collection %q load state: %w", collectionName, err)
 	}
 	collection, err := client.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
 	if err != nil {
-		return "", "", fmt.Errorf("describe production collection %q: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("describe production collection %q: %w", collectionName, err)
 	}
 	if collection.Schema == nil {
-		return "", "", fmt.Errorf("production collection %q has no schema", collectionName)
+		return "", "", 0, fmt.Errorf("production collection %q has no schema", collectionName)
 	}
 	stats, err := client.GetCollectionStats(ctx, milvusclient.NewGetCollectionStatsOption(collectionName))
 	if err != nil {
-		return "", "", fmt.Errorf("get production collection %q statistics: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("get production collection %q statistics: %w", collectionName, err)
 	}
 	rowCount, err := strconv.ParseInt(stats["row_count"], 10, 64)
 	if err != nil {
-		return "", "", fmt.Errorf("parse production collection %q row count: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("parse production collection %q row count: %w", collectionName, err)
 	}
 	strongRowCount := rowCount
 	if loadState.State == entity.LoadStateLoaded {
 		strongRowCount, err = readStrongCollectionRowCount(ctx, client, collectionName)
 		if err != nil {
-			return "", "", err
+			return "", "", 0, err
 		}
 	}
 	rowSamples, err := readLoadedCollectionSamples(
@@ -185,15 +190,15 @@ func readCollectionFingerprints(ctx context.Context, client *milvusclient.Client
 		strongRowCount,
 	)
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 	schemaBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(collection.Schema.ProtoMessage())
 	if err != nil {
-		return "", "", fmt.Errorf("encode production collection %q schema: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("encode production collection %q schema: %w", collectionName, err)
 	}
 	indexNames, err := client.ListIndexes(ctx, milvusclient.NewListIndexOption(collectionName))
 	if err != nil {
-		return "", "", fmt.Errorf("list production collection %q indexes: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("list production collection %q indexes: %w", collectionName, err)
 	}
 	slices.Sort(indexNames)
 	indexes := make([]indexFingerprint, 0, len(indexNames))
@@ -203,7 +208,7 @@ func readCollectionFingerprints(ctx context.Context, client *milvusclient.Client
 			milvusclient.NewDescribeIndexOption(collectionName, indexName),
 		)
 		if describeErr != nil {
-			return "", "", fmt.Errorf("describe production index %q on %q: %w", indexName, collectionName, describeErr)
+			return "", "", 0, fmt.Errorf("describe production index %q on %q: %w", indexName, collectionName, describeErr)
 		}
 		indexes = append(indexes, indexFingerprint{
 			Name:       indexName,
@@ -217,27 +222,26 @@ func readCollectionFingerprints(ctx context.Context, client *milvusclient.Client
 		PhysicalChannels: slices.Clone(collection.PhysicalChannels),
 		VirtualChannels:  slices.Clone(collection.VirtualChannels),
 		Indexes:          indexes,
-		RowCount:         rowCount,
 	}
 	slices.Sort(fingerprint.PhysicalChannels)
 	slices.Sort(fingerprint.VirtualChannels)
 	fingerprintBody, err := json.Marshal(fingerprint)
 	if err != nil {
-		return "", "", fmt.Errorf("encode production collection %q properties: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("encode production collection %q properties: %w", collectionName, err)
 	}
 	digest := sha256.New()
 	_, _ = digest.Write(schemaBody)
 	_, _ = digest.Write(fingerprintBody)
 	durableHash := hex.EncodeToString(digest.Sum(nil))
 	if loadState.State != entity.LoadStateLoaded {
-		return durableHash, "", nil
+		return durableHash, "", strongRowCount, nil
 	}
-	sampleBody, err := json.Marshal(sampleFingerprint{RowCount: strongRowCount, RowSamples: rowSamples})
+	sampleBody, err := json.Marshal(sampleFingerprint{RowSamples: rowSamples})
 	if err != nil {
-		return "", "", fmt.Errorf("encode production collection %q samples: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("encode production collection %q samples: %w", collectionName, err)
 	}
 	sampleDigest := sha256.Sum256(sampleBody)
-	return durableHash, hex.EncodeToString(sampleDigest[:]), nil
+	return durableHash, hex.EncodeToString(sampleDigest[:]), strongRowCount, nil
 }
 
 func readStrongCollectionRowCount(
