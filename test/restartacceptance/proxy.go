@@ -32,14 +32,15 @@ type embeddingFailure struct {
 }
 
 type embeddingProxy struct {
-	listener  net.Listener
-	server    *http.Server
-	mutex     sync.RWMutex
-	failure   *embeddingFailure
-	gateAfter int
-	forwarded int
-	gate      chan struct{}
-	inputs    []string
+	listener               net.Listener
+	server                 *http.Server
+	mutex                  sync.RWMutex
+	failure                *embeddingFailure
+	gateAfter              int
+	fixtureInputsForwarded int
+	gate                   chan struct{}
+	gateReached            chan struct{}
+	inputs                 []string
 }
 
 var acceptanceInputPattern = regexp.MustCompile(`restart_acceptance_id:([0-9]+\.go)`)
@@ -65,6 +66,7 @@ func newEmbeddingProxy(listener net.Listener, backendURL string) (*embeddingProx
 				return
 			}
 			request.Body = io.NopCloser(bytes.NewReader(body))
+			inputIDs := embeddingInputIDs(body)
 			for {
 				proxy.mutex.Lock()
 				failure := proxy.failure
@@ -73,8 +75,12 @@ func newEmbeddingProxy(listener net.Listener, backendURL string) (*embeddingProx
 					http.Error(writer, failure.body, failure.statusCode)
 					return
 				}
-				if proxy.gateAfter > 0 && proxy.forwarded >= proxy.gateAfter {
+				if len(inputIDs) > 0 && proxy.gateAfter > 0 && proxy.fixtureInputsForwarded >= proxy.gateAfter {
 					gate := proxy.gate
+					select {
+					case proxy.gateReached <- struct{}{}:
+					default:
+					}
 					proxy.mutex.Unlock()
 					select {
 					case <-gate:
@@ -84,8 +90,8 @@ func newEmbeddingProxy(listener net.Listener, backendURL string) (*embeddingProx
 						return
 					}
 				}
-				proxy.forwarded++
-				proxy.inputs = append(proxy.inputs, embeddingInputIDs(body)...)
+				proxy.fixtureInputsForwarded += len(inputIDs)
+				proxy.inputs = append(proxy.inputs, inputIDs...)
 				proxy.mutex.Unlock()
 				break
 			}
@@ -125,7 +131,14 @@ func (proxy *embeddingProxy) GateAfter(forwarded int) {
 	proxy.clearGateLocked()
 	proxy.gateAfter = forwarded
 	proxy.gate = make(chan struct{})
+	proxy.gateReached = make(chan struct{}, 1)
 	proxy.mutex.Unlock()
+}
+
+func (proxy *embeddingProxy) GateReached() <-chan struct{} {
+	proxy.mutex.RLock()
+	defer proxy.mutex.RUnlock()
+	return proxy.gateReached
 }
 
 func (proxy *embeddingProxy) ClearGate() {
@@ -139,6 +152,7 @@ func (proxy *embeddingProxy) clearGateLocked() {
 		close(proxy.gate)
 	}
 	proxy.gate = nil
+	proxy.gateReached = nil
 	proxy.gateAfter = 0
 }
 
