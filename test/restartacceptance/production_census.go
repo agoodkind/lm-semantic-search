@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
@@ -192,7 +194,7 @@ func readCollectionFingerprints(
 	if err != nil {
 		return "", "", 0, err
 	}
-	schemaBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(collection.Schema.ProtoMessage())
+	schemaBody, err := marshalStableCollectionSchema(collection.Schema.ProtoMessage())
 	if err != nil {
 		return "", "", 0, fmt.Errorf("encode production collection %q schema: %w", collectionName, err)
 	}
@@ -242,6 +244,30 @@ func readCollectionFingerprints(
 	}
 	sampleDigest := sha256.Sum256(sampleBody)
 	return durableHash, hex.EncodeToString(sampleDigest[:]), strongRowCount, nil
+}
+
+func marshalStableCollectionSchema(schema *schemapb.CollectionSchema) ([]byte, error) {
+	if schema == nil {
+		return nil, fmt.Errorf("collection schema is nil")
+	}
+	normalized := proto.Clone(schema).(*schemapb.CollectionSchema)
+	for _, field := range normalized.Fields {
+		sortSchemaParameters(field.TypeParams)
+		sortSchemaParameters(field.IndexParams)
+	}
+	for _, function := range normalized.Functions {
+		sortSchemaParameters(function.Params)
+	}
+	return proto.MarshalOptions{Deterministic: true}.Marshal(normalized)
+}
+
+func sortSchemaParameters(parameters []*commonpb.KeyValuePair) {
+	slices.SortFunc(parameters, func(left *commonpb.KeyValuePair, right *commonpb.KeyValuePair) int {
+		if keyOrder := strings.Compare(left.GetKey(), right.GetKey()); keyOrder != 0 {
+			return keyOrder
+		}
+		return strings.Compare(left.GetValue(), right.GetValue())
+	})
 }
 
 func readStrongCollectionRowCount(

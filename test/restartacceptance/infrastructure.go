@@ -329,7 +329,7 @@ func renderCompose(paths runPaths, caseName string) string {
     volumes:
       - "%s/etcd:/etcd"
     healthcheck:
-      test: ["CMD-SHELL", "etcdctl endpoint health"]
+      test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 5s
       timeout: 5s
       retries: 12

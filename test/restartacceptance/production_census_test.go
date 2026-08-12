@@ -92,6 +92,61 @@ func TestReadProductionMilvusCensusIgnoresResidencyChanges(t *testing.T) {
 	}
 }
 
+func TestMarshalStableCollectionSchemaNormalizesPropertyOrder(t *testing.T) {
+	first := &schemapb.CollectionSchema{
+		Fields: []*schemapb.FieldSchema{{
+			Name: "content",
+			TypeParams: []*commonpb.KeyValuePair{
+				{Key: "max_length", Value: "65535"},
+				{Key: "mmap.enabled", Value: "true"},
+			},
+			IndexParams: []*commonpb.KeyValuePair{
+				{Key: "metric_type", Value: "COSINE"},
+				{Key: "index_type", Value: "AUTOINDEX"},
+			},
+		}},
+		Functions: []*schemapb.FunctionSchema{{
+			Name: "bm25",
+			Params: []*commonpb.KeyValuePair{
+				{Key: "b", Value: "0.75"},
+				{Key: "k1", Value: "1.2"},
+			},
+		}},
+	}
+	second := &schemapb.CollectionSchema{
+		Fields: []*schemapb.FieldSchema{{
+			Name: "content",
+			TypeParams: []*commonpb.KeyValuePair{
+				{Key: "mmap.enabled", Value: "true"},
+				{Key: "max_length", Value: "65535"},
+			},
+			IndexParams: []*commonpb.KeyValuePair{
+				{Key: "index_type", Value: "AUTOINDEX"},
+				{Key: "metric_type", Value: "COSINE"},
+			},
+		}},
+		Functions: []*schemapb.FunctionSchema{{
+			Name: "bm25",
+			Params: []*commonpb.KeyValuePair{
+				{Key: "k1", Value: "1.2"},
+				{Key: "b", Value: "0.75"},
+			},
+		}},
+	}
+
+	firstBody, err := marshalStableCollectionSchema(first)
+	if err != nil {
+		t.Fatalf("marshal first schema: %v", err)
+	}
+	secondBody, err := marshalStableCollectionSchema(second)
+	if err != nil {
+		t.Fatalf("marshal second schema: %v", err)
+	}
+	if !slices.Equal(firstBody, secondBody) {
+		t.Fatal("equivalent schema property order produced different bytes")
+	}
+}
+
 func TestReadProductionMilvusCensusHashesLoadedRowIdentityAndDenseVector(t *testing.T) {
 	server := &productionCensusMilvusServer{
 		databases:   []string{"default"},
