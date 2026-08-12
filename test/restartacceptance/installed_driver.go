@@ -53,7 +53,18 @@ type realAcceptanceDriver struct {
 
 func newRealAcceptanceLifecycleOperations() (acceptanceLifecycleOperations, error) {
 	driver := &realAcceptanceDriver{}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return acceptanceLifecycleOperations{}, fmt.Errorf("resolve home directory: %w", err)
+	}
+	binaries, err := validateInstalledBinaries(home)
+	if err != nil {
+		return acceptanceLifecycleOperations{}, err
+	}
 	return acceptanceLifecycleOperations{
+		ValidateProduction: func(ctx context.Context) error {
+			return captureProductionReadiness(ctx, binaries, driver.runner)
+		},
 		Prepare: func(ctx context.Context) (acceptanceRun, error) {
 			return prepareAcceptanceRun(ctx, time.Now(), rand.Reader)
 		},
@@ -139,7 +150,7 @@ func (driver *realAcceptanceDriver) runCase(ctx context.Context, run acceptanceR
 		valueEntropy: rand.Reader, archiveSizes: run.ArchiveSizes, inventory: token,
 		census: configuredProductionMilvusCensus, proxyCalls: driver.proxyCalls,
 		readiness: func(readinessContext context.Context) error {
-			return captureProductionReadiness(readinessContext, run.Binaries, driver.runner)
+			return captureProductionHealth(readinessContext, run.Binaries, driver.runner)
 		},
 		protectedCollections: acceptanceCollectionIdentities(run),
 	}

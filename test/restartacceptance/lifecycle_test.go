@@ -16,7 +16,7 @@ func TestExecuteRestartAcceptanceRunsOneCompleteLifecycle(t *testing.T) {
 	if err := executeRestartAcceptance(context.Background(), operations.operations()); err != nil {
 		t.Fatalf("execute restart acceptance: %v", err)
 	}
-	wantEvents := []string{"prepare", "capture-baseline"}
+	wantEvents := []string{"validate-production", "prepare", "capture-baseline"}
 	for _, name := range acceptanceScenarioNames {
 		wantEvents = append(wantEvents, "capture-"+name, "case-"+name, "capture-"+name+"-after", "audit-"+name)
 	}
@@ -75,6 +75,21 @@ func TestExecuteRestartAcceptanceRecordsFailureAndCleansEveryStartedStage(t *tes
 				t.Fatalf("terminal result = %+v", operations.finished)
 			}
 		})
+	}
+}
+
+func TestExecuteRestartAcceptanceRejectsActiveProductionBeforePrepare(t *testing.T) {
+	operations := newLifecycleOperationsRecorder()
+	operations.failEvent = "validate-production"
+	err := executeRestartAcceptance(context.Background(), operations.operations())
+	if err == nil || !strings.Contains(err.Error(), "injected validate-production") {
+		t.Fatalf("execute error = %v", err)
+	}
+	if !slices.Equal(operations.events, []string{"validate-production"}) {
+		t.Fatalf("lifecycle events = %v, want only initial validation", operations.events)
+	}
+	if operations.finished.Status != "" {
+		t.Fatalf("unexpected terminal result = %+v", operations.finished)
 	}
 }
 
@@ -158,14 +173,24 @@ func newLifecycleOperationsRecorder() *lifecycleOperationsRecorder {
 
 func (recorder *lifecycleOperationsRecorder) operations() acceptanceLifecycleOperations {
 	return acceptanceLifecycleOperations{
-		Prepare:           recorder.prepare,
-		CaptureProduction: recorder.capture,
-		RunCase:           recorder.runCase,
-		ConfirmProduction: recorder.confirm,
-		AuditProduction:   recorder.audit,
-		Cleanup:           recorder.cleanup,
-		Finish:            recorder.finish,
+		ValidateProduction: recorder.validateProduction,
+		Prepare:            recorder.prepare,
+		CaptureProduction:  recorder.capture,
+		RunCase:            recorder.runCase,
+		ConfirmProduction:  recorder.confirm,
+		AuditProduction:    recorder.audit,
+		Cleanup:            recorder.cleanup,
+		Finish:             recorder.finish,
 	}
+}
+
+func (recorder *lifecycleOperationsRecorder) validateProduction(context.Context) error {
+	event := "validate-production"
+	recorder.events = append(recorder.events, event)
+	if recorder.failEvent == event {
+		return errors.New("injected " + event)
+	}
+	return nil
 }
 
 func (recorder *lifecycleOperationsRecorder) prepare(context.Context) (acceptanceRun, error) {
