@@ -346,6 +346,20 @@ func TestCallTimeoutsUsesConfiguredMutationBound(t *testing.T) {
 	}
 }
 
+func TestCallTimeoutsUsesConfiguredMetadataBound(t *testing.T) {
+	t.Parallel()
+
+	const configuredTimeoutMS = 10000
+	configured := &Service{cfg: config.Config{MilvusMetadataCallTimeoutMS: configuredTimeoutMS}}
+	wantMetadata := time.Duration(configuredTimeoutMS) * time.Millisecond
+	if got := configured.callTimeouts().Metadata; got != wantMetadata {
+		t.Fatalf("configured metadata bound = %s, want %s", got, wantMetadata)
+	}
+	if got := configured.callTimeouts().Mutation; got != milvusgrpc.DefaultCallTimeouts().Mutation {
+		t.Fatalf("configured metadata changed mutation bound to %s", got)
+	}
+}
+
 // TestCallTimeoutsRejectsUnconvertibleMutationBound covers the dial site
 // directly rather than through config.Default. The field is a plain int that any
 // caller can set, so the conversion at the dial site has to be total on its own:

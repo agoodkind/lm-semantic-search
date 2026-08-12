@@ -47,15 +47,14 @@ var reconnectJitter = func(limit time.Duration) time.Duration {
 }
 
 // callTimeouts resolves the per-call Milvus deadline policy from configuration.
-// Only the mutation bound is operator-tunable, because it is the one bound whose
-// sufficient value depends on how many rows a call matches.
-//
-// The millisecond count is converted by config.MilvusMutationCallTimeout rather
-// than multiplied here, so a count too large to hold as a duration falls back to
-// the built-in bound instead of wrapping into one that is effectively absent.
+// The millisecond counts are converted by config before reaching the transport,
+// so invalid values keep the built-in bounds.
 func (service *Service) callTimeouts() milvusgrpc.CallTimeouts {
+	configuredMetadata := config.MilvusMetadataCallTimeout(service.cfg.MilvusMetadataCallTimeoutMS)
 	configuredMutation := config.MilvusMutationCallTimeout(service.cfg.MilvusMutationCallTimeoutMS)
-	return milvusgrpc.DefaultCallTimeouts().WithMutation(configuredMutation)
+	return milvusgrpc.DefaultCallTimeouts().
+		WithMetadata(configuredMetadata).
+		WithMutation(configuredMutation)
 }
 
 func (service *Service) dialMilvus(ctx context.Context) (*milvusclient.Client, error) {
