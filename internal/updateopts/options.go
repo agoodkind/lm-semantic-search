@@ -164,7 +164,7 @@ func configForBinary(binary string) selfupdate.Config {
 		CurrentVersion:   version.Version,
 		CurrentCommit:    version.Commit,
 		CurrentBuildHash: version.BuildHash(),
-		CurrentDirty:     version.Dirty == "true",
+		CurrentDirty:     isLocalBuild(version.Version, version.Dirty == "true"),
 		AllowPrerelease:  nil,
 		Interval:         24 * time.Hour,
 		APIBaseURLEnv:    updateAPIBaseURLEnv,
