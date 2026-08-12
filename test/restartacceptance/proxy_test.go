@@ -63,6 +63,61 @@ func TestEmbeddingProxyForwardsAndCanFailRequests(t *testing.T) {
 	proxy.ClearFailure()
 }
 
+func TestEmbeddingProxyGateCountsOnlyAcceptanceFixtureRequests(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(backend.Close)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	proxy, err := newEmbeddingProxy(listener, backend.URL)
+	if err != nil {
+		t.Fatalf("new embedding proxy: %v", err)
+	}
+	t.Cleanup(func() { _ = proxy.Close() })
+	go func() { _ = proxy.Serve() }()
+	client := &http.Client{Timeout: time.Second}
+	post := func(input string) error {
+		body := strings.NewReader(`{"input":["` + input + `"]}`)
+		response, postErr := client.Post("http://"+listener.Addr().String()+"/v1/embeddings", "application/json", body)
+		if postErr != nil {
+			return postErr
+		}
+		return response.Body.Close()
+	}
+
+	proxy.GateAfter(1)
+	if err := post("daemon boot check"); err != nil {
+		t.Fatalf("untracked request: %v", err)
+	}
+	if err := post("restart_acceptance_id:01.go"); err != nil {
+		t.Fatalf("first fixture request: %v", err)
+	}
+	gated := make(chan error, 1)
+	go func() { gated <- post("restart_acceptance_id:02.go") }()
+	select {
+	case <-proxy.GateReached():
+	case <-time.After(time.Second):
+		t.Fatal("second fixture request did not reach the gate")
+	}
+	select {
+	case err = <-gated:
+		t.Fatalf("second fixture request passed the active gate: %v", err)
+	default:
+	}
+	proxy.ClearGate()
+	select {
+	case err = <-gated:
+		if err != nil {
+			t.Fatalf("second fixture request after clearing gate: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second fixture request remained gated after clear")
+	}
+}
+
 func TestMilvusProxyForwardsNormalTrafficAndInterceptsConfiguredLoadOnly(t *testing.T) {
 	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
