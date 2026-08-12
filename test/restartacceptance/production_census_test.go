@@ -356,7 +356,7 @@ func TestReadProductionMilvusCensusReportsStrongLoadedRowCountWithoutChangingSam
 	}
 }
 
-func TestAuditProductionMutationAllowsOnlyAppendOnlyRowGrowth(t *testing.T) {
+func TestAuditProductionMutationRejectsLoadedRowLoss(t *testing.T) {
 	t.Parallel()
 
 	identity := collectionIdentity{Database: "default", Collection: "operator"}
@@ -379,6 +379,26 @@ func TestAuditProductionMutationAllowsOnlyAppendOnlyRowGrowth(t *testing.T) {
 	shrunk.RowCounts = collectionRowCounts{identity: 9}
 	if err := auditProductionMutation(before, shrunk, nil, nil); err == nil {
 		t.Fatal("production row loss was accepted")
+	}
+}
+
+func TestAuditProductionMutationAllowsColdStatisticsToCompact(t *testing.T) {
+	t.Parallel()
+
+	identity := collectionIdentity{Database: "default", Collection: "operator"}
+	before := productionInventory{
+		Databases:   []string{"default"},
+		Collections: collectionCensus{identity: "metadata"},
+		RowCounts:   collectionRowCounts{identity: 1131},
+	}
+	after := productionInventory{
+		Databases:   []string{"default"},
+		Collections: collectionCensus{identity: "metadata"},
+		RowCounts:   collectionRowCounts{identity: 1017},
+	}
+
+	if err := auditProductionMutation(before, after, nil, nil); err != nil {
+		t.Fatalf("cold statistics compaction was rejected: %v", err)
 	}
 }
 
