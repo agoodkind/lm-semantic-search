@@ -11,6 +11,7 @@ func TestIsLocalBuild(t *testing.T) {
 		want    bool
 	}{
 		{name: "release", version: "202608122028-d1-ec6489d", want: false},
+		{name: "semver release", version: "v1.4.2", want: false},
 		{name: "prerelease", version: "v1.4.2-rc.1", want: false},
 		{name: "dirty release", version: "202608122028-d1-ec6489d", dirty: true, want: true},
 		{name: "git describe ahead", version: "202608122028-d1-ec6489d-1-gabc1234", want: true},
@@ -18,7 +19,12 @@ func TestIsLocalBuild(t *testing.T) {
 		{name: "unknown", version: "unknown", want: true},
 		{name: "unstamped", version: "", want: true},
 		{name: "invalid describe hex", version: "v1.4.2-3-gzzzz", want: false},
-		{name: "missing describe count", version: "v1.4.2-gdeadbee", want: false},
+		{name: "semver prerelease without describe count", version: "v1.4.2-gdeadbee", want: false},
+		{name: "unrecognized stamp", version: "custom-build", want: true},
+		{name: "malformed rolling timestamp", version: "20260812-d1-ec6489d", want: true},
+		{name: "malformed rolling sequence", version: "202608122028-d.1-ec6489d", want: true},
+		{name: "malformed rolling commit", version: "202608122028-d1-nothex", want: true},
+		{name: "empty describe tag", version: "-3-gdeadbee", want: true},
 	}
 
 	for _, testCase := range cases {

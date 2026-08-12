@@ -1,6 +1,10 @@
 package updateopts
 
-import "strings"
+import (
+	"strings"
+
+	"golang.org/x/mod/semver"
+)
 
 // isLocalBuild reports whether a binary did not come from a release artifact.
 func isLocalBuild(version string, dirty bool) bool {
@@ -11,7 +15,25 @@ func isLocalBuild(version string, dirty bool) bool {
 	if trimmed == "" || trimmed == "dev" || trimmed == "unknown" {
 		return true
 	}
-	return hasGitDescribeSuffix(trimmed)
+	if hasGitDescribeSuffix(trimmed) {
+		return true
+	}
+	return !semver.IsValid(trimmed) && !isRollingRelease(trimmed)
+}
+
+func isRollingRelease(version string) bool {
+	fields := strings.Split(version, "-")
+	if len(fields) != 3 {
+		return false
+	}
+	timestamp, sequence, commit := fields[0], fields[1], fields[2]
+	if len(timestamp) != 12 || !isDigits(timestamp) {
+		return false
+	}
+	if !isAlphaNumeric(sequence) {
+		return false
+	}
+	return len(commit) >= 7 && isHex(commit)
 }
 
 func hasGitDescribeSuffix(version string) bool {
@@ -25,10 +47,25 @@ func hasGitDescribeSuffix(version string) bool {
 	}
 	countField := version[:lastDash]
 	countDash := strings.LastIndex(countField, "-")
-	if countDash < 0 {
+	if countDash <= 0 {
 		return false
 	}
 	return isDigits(countField[countDash+1:])
+}
+
+func isAlphaNumeric(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		isDigit := character >= '0' && character <= '9'
+		isLower := character >= 'a' && character <= 'z'
+		isUpper := character >= 'A' && character <= 'Z'
+		if !isDigit && !isLower && !isUpper {
+			return false
+		}
+	}
+	return true
 }
 
 func isDigits(value string) bool {
