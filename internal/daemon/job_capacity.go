@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"goodkind.io/lm-semantic-search/internal/clock"
 )
 
 const (
@@ -189,6 +191,7 @@ func startStallRelease(
 	capacity *jobCapacity,
 	grace time.Duration,
 ) *stallRelease {
+	startedAt := clock.Now()
 	watchdog := &stallRelease{
 		stopped:          make(chan struct{}),
 		finished:         make(chan struct{}),
@@ -213,13 +216,14 @@ func startStallRelease(
 			return
 		case <-graceTimer.C:
 		}
-		slog.WarnContext(ctx, "releasing indexing capacity for a stalled read",
+		watchdog.releasedSyncLock = capacity.releaseHeld(ctx)
+		watchdog.released = true
+		slog.WarnContext(ctx, "released indexing capacity for a stalled read",
 			"component", "daemon",
 			"subcomponent", "capacity",
 			"grace_ms", grace.Milliseconds(),
+			"elapsed_ms", clock.Now().Sub(startedAt).Milliseconds(),
 		)
-		watchdog.releasedSyncLock = capacity.releaseHeld(ctx)
-		watchdog.released = true
 	}()
 	return watchdog
 }

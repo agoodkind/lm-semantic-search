@@ -557,11 +557,11 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	}
 	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
 	if pathErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+		return nil, adapterr.RespondGRPC(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr))
 	}
 	outcome, callErr := server.manager.SearchCode(ctx, requestedPath, request.GetQuery(), request.GetLimit(), request.GetExtensionFilter())
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
+		return nil, adapterr.RespondGRPC(ctx, classifyManagerError(requestedPath, callErr))
 	}
 	server.manager.fillLiveChunkTotal(ctx, outcome.Codebase, outcome.ActiveJob)
 	health := server.manager.DependencyHealth()

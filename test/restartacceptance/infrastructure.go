@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -49,6 +50,7 @@ type runPaths struct {
 	ClydeState          string
 	ClydeCache          string
 	ClydeRuntime        string
+	ClydeHome           string
 	ClydeConfigFile     string
 	Artifacts           string
 	EventsJSONL         string
@@ -82,6 +84,7 @@ func pathsForRun(runRoot string) runPaths {
 		ClydeState:          filepath.Join(clyde, "state"),
 		ClydeCache:          filepath.Join(clyde, "cache"),
 		ClydeRuntime:        filepath.Join(clyde, "runtime"),
+		ClydeHome:           filepath.Join(clyde, "home"),
 		ClydeConfigFile:     filepath.Join(clyde, "config", "clyde", "config.toml"),
 		Artifacts:           artifacts,
 		EventsJSONL:         filepath.Join(artifacts, "events.jsonl"),
@@ -107,6 +110,7 @@ func createIsolationLayout(paths runPaths) error {
 		paths.ClydeState,
 		paths.ClydeCache,
 		paths.ClydeRuntime,
+		paths.ClydeHome,
 		paths.Artifacts,
 	}
 	for _, directory := range directories {
@@ -117,7 +121,8 @@ func createIsolationLayout(paths runPaths) error {
 			return fmt.Errorf("create isolation directory %q: %w", directory, err)
 		}
 	}
-	configuration := fmt.Sprintf("[conversation.semantic]\nsocket_path = %q\n", paths.LMSSocket)
+	collectionID := "restart-" + filepath.Base(paths.RunRoot)
+	configuration := fmt.Sprintf("[conversation.semantic]\nenabled = true\nsearch_enabled = true\nsocket_path = %q\ncollection_id = %q\n\n[adapter]\nenabled = false\n\n[mitm]\nenabled_default = false\n", paths.LMSSocket, collectionID)
 	if err := os.WriteFile(paths.ClydeConfigFile, []byte(configuration), 0o600); err != nil {
 		return fmt.Errorf("write isolated Clyde configuration: %w", err)
 	}
@@ -541,13 +546,17 @@ func (h *harness) withCompose(
 		if cleanupErr != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("clean compose project %q: %w", h.composeProject, cleanupErr))
 		}
-		collections, censusErr := h.census(cleanupContext)
+		milvusSnapshot, censusErr := h.census(cleanupContext)
 		calls := []milvusProxyCall(nil)
 		if h.proxyCalls != nil {
 			calls = h.proxyCalls()
 		}
 		if censusErr == nil {
-			censusErr = auditProductionMutation(h.inventory.Inventory, productionInventory{Collections: collections}, calls)
+			censusErr = auditProductionMutation(h.inventory.Inventory, productionInventory{
+				Databases:   slices.Clone(milvusSnapshot.Databases),
+				Collections: cloneCollectionCensus(milvusSnapshot.Collections),
+				Samples:     cloneCollectionCensus(milvusSnapshot.Samples),
+			}, calls, h.protectedCollections)
 		}
 		if censusErr != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("audit production after case: %w", censusErr))
@@ -609,11 +618,13 @@ func isolatedLMSEnvironment(paths runPaths) map[string]string {
 
 func isolatedClydeEnvironment(paths runPaths) map[string]string {
 	return map[string]string{
-		"XDG_CONFIG_HOME": paths.ClydeConfig,
-		"XDG_DATA_HOME":   paths.ClydeData,
-		"XDG_STATE_HOME":  paths.ClydeState,
-		"XDG_CACHE_HOME":  paths.ClydeCache,
-		"XDG_RUNTIME_DIR": paths.ClydeRuntime,
+		"HOME":                        paths.ClydeHome,
+		"XDG_CONFIG_HOME":             paths.ClydeConfig,
+		"XDG_DATA_HOME":               paths.ClydeData,
+		"XDG_STATE_HOME":              paths.ClydeState,
+		"XDG_CACHE_HOME":              paths.ClydeCache,
+		"XDG_RUNTIME_DIR":             paths.ClydeRuntime,
+		"CLAUDE_CONTEXTD_SOCKET_PATH": paths.LMSSocket,
 	}
 }
 
@@ -648,15 +659,16 @@ func captureProductionInventory(
 	if err := validateProductionReadiness(outputs[0], outputs[1]); err != nil {
 		return inventoryToken{}, err
 	}
-	collections, err := census(ctx)
+	milvusSnapshot, err := census(ctx)
 	if err != nil {
 		return inventoryToken{}, fmt.Errorf("capture production collection census: %w", err)
 	}
-	if len(collections) == 0 {
+	if len(milvusSnapshot.Databases) == 0 || len(milvusSnapshot.Collections) == 0 {
 		return inventoryToken{}, fmt.Errorf("production collection census is empty")
 	}
 	inventory := productionInventory{
-		Collections: cloneCollectionCensus(collections),
+		Databases:   slices.Clone(milvusSnapshot.Databases),
+		Collections: cloneCollectionCensus(milvusSnapshot.Collections),
 		Samples:     cloneCollectionCensus(milvusSnapshot.Samples),
 		Codebases:   outputs[0],
 		Jobs:        outputs[1],
@@ -696,7 +708,13 @@ func captureProductionReadiness(
 	return validateProductionReadiness(outputs[0], outputs[1])
 }
 
-type collectionCensusFunc func(context.Context) (collectionCensus, error)
+type collectionCensusFunc func(context.Context) (productionMilvusCensus, error)
+
+type productionMilvusCensus struct {
+	Databases   []string         `json:"databases"`
+	Collections collectionCensus `json:"collections"`
+	Samples     collectionCensus `json:"samples,omitempty"`
+}
 
 type collectionIdentity struct {
 	Database   string `json:"database"`
@@ -755,7 +773,7 @@ func validateInventoryToken(token inventoryToken, runID string, now time.Time) e
 	if token.CapturedAt.IsZero() || token.CapturedAt.After(now) || now.Sub(token.CapturedAt) > 5*time.Minute {
 		return fmt.Errorf("production inventory token timestamp is invalid or stale")
 	}
-	if token.ContentHash == "" || len(token.Inventory.Collections) == 0 {
+	if token.ContentHash == "" || len(token.Inventory.Databases) == 0 || len(token.Inventory.Collections) == 0 {
 		return fmt.Errorf("production inventory token content is empty")
 	}
 	expected, err := newInventoryToken(token.RunID, token.CapturedAt, token.Inventory)
@@ -827,6 +845,7 @@ func validateProductionReadiness(indexesBody json.RawMessage, jobsBody json.RawM
 }
 
 type productionInventory struct {
+	Databases   []string         `json:"databases"`
 	Collections collectionCensus `json:"collections"`
 	Samples     collectionCensus `json:"samples,omitempty"`
 	Codebases   json.RawMessage  `json:"codebases,omitempty"`
@@ -846,6 +865,13 @@ func auditProductionMutation(
 	calls []milvusProxyCall,
 	protectedCollections map[collectionIdentity]struct{},
 ) error {
+	beforeDatabases := slices.Clone(before.Databases)
+	afterDatabases := slices.Clone(after.Databases)
+	slices.Sort(beforeDatabases)
+	slices.Sort(afterDatabases)
+	if !slices.Equal(beforeDatabases, afterDatabases) {
+		return fmt.Errorf("production database set changed from %v to %v", beforeDatabases, afterDatabases)
+	}
 	for identity, beforeHash := range before.Collections {
 		afterHash, exists := after.Collections[identity]
 		if !exists {

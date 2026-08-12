@@ -3,7 +3,9 @@
 package restartacceptance
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"sync"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -29,11 +32,17 @@ type embeddingFailure struct {
 }
 
 type embeddingProxy struct {
-	listener net.Listener
-	server   *http.Server
-	mutex    sync.RWMutex
-	failure  *embeddingFailure
+	listener  net.Listener
+	server    *http.Server
+	mutex     sync.RWMutex
+	failure   *embeddingFailure
+	gateAfter int
+	forwarded int
+	gate      chan struct{}
+	inputs    []string
 }
+
+var acceptanceInputPattern = regexp.MustCompile(`restart_acceptance_id:([0-9]+\.go)`)
 
 func newEmbeddingProxy(listener net.Listener, backendURL string) (*embeddingProxy, error) {
 	parsedURL, err := url.Parse(backendURL)
@@ -50,12 +59,35 @@ func newEmbeddingProxy(listener net.Listener, backendURL string) (*embeddingProx
 	reverseProxy := httputil.NewSingleHostReverseProxy(parsedURL)
 	proxy.server = &http.Server{
 		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			proxy.mutex.RLock()
-			failure := proxy.failure
-			proxy.mutex.RUnlock()
-			if failure != nil {
-				http.Error(writer, failure.body, failure.statusCode)
+			body, readErr := io.ReadAll(request.Body)
+			if readErr != nil {
+				http.Error(writer, "read embedding request", http.StatusBadRequest)
 				return
+			}
+			request.Body = io.NopCloser(bytes.NewReader(body))
+			for {
+				proxy.mutex.Lock()
+				failure := proxy.failure
+				if failure != nil {
+					proxy.mutex.Unlock()
+					http.Error(writer, failure.body, failure.statusCode)
+					return
+				}
+				if proxy.gateAfter > 0 && proxy.forwarded >= proxy.gateAfter {
+					gate := proxy.gate
+					proxy.mutex.Unlock()
+					select {
+					case <-gate:
+						continue
+					case <-request.Context().Done():
+						proxy.ClearGate()
+						return
+					}
+				}
+				proxy.forwarded++
+				proxy.inputs = append(proxy.inputs, embeddingInputIDs(body)...)
+				proxy.mutex.Unlock()
+				break
 			}
 			reverseProxy.ServeHTTP(writer, request)
 		}),
@@ -78,6 +110,7 @@ func (proxy *embeddingProxy) Close() error {
 func (proxy *embeddingProxy) SetFailure(statusCode int, body string) {
 	proxy.mutex.Lock()
 	proxy.failure = &embeddingFailure{statusCode: statusCode, body: body}
+	proxy.clearGateLocked()
 	proxy.mutex.Unlock()
 }
 
@@ -85,6 +118,58 @@ func (proxy *embeddingProxy) ClearFailure() {
 	proxy.mutex.Lock()
 	proxy.failure = nil
 	proxy.mutex.Unlock()
+}
+
+func (proxy *embeddingProxy) GateAfter(forwarded int) {
+	proxy.mutex.Lock()
+	proxy.clearGateLocked()
+	proxy.gateAfter = forwarded
+	proxy.gate = make(chan struct{})
+	proxy.mutex.Unlock()
+}
+
+func (proxy *embeddingProxy) ClearGate() {
+	proxy.mutex.Lock()
+	proxy.clearGateLocked()
+	proxy.mutex.Unlock()
+}
+
+func (proxy *embeddingProxy) clearGateLocked() {
+	if proxy.gate != nil {
+		close(proxy.gate)
+	}
+	proxy.gate = nil
+	proxy.gateAfter = 0
+}
+
+func (proxy *embeddingProxy) Inputs() []string {
+	proxy.mutex.RLock()
+	defer proxy.mutex.RUnlock()
+	return append([]string(nil), proxy.inputs...)
+}
+
+func embeddingInputIDs(body []byte) []string {
+	var request struct {
+		Input json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal(body, &request) != nil {
+		return nil
+	}
+	var values []string
+	if json.Unmarshal(request.Input, &values) != nil {
+		var value string
+		if json.Unmarshal(request.Input, &value) == nil {
+			values = []string{value}
+		}
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		match := acceptanceInputPattern.FindStringSubmatch(value)
+		if len(match) == 2 {
+			result = append(result, match[1])
+		}
+	}
+	return result
 }
 
 type loadFault struct {
@@ -105,12 +190,14 @@ type loadTarget struct {
 }
 
 type milvusProxy struct {
-	listener net.Listener
-	server   *grpc.Server
-	backend  *grpc.ClientConn
-	mutex    sync.RWMutex
-	faults   map[loadTarget]loadFault
-	counts   map[loadCallKey]int
+	listener    net.Listener
+	server      *grpc.Server
+	backend     *grpc.ClientConn
+	mutex       sync.RWMutex
+	faults      map[loadTarget]loadFault
+	counts      map[loadCallKey]int
+	calls       []milvusProxyCall
+	unavailable *loadFault
 }
 
 func newMilvusProxy(listener net.Listener, backendAddress string) (*milvusProxy, error) {
@@ -172,16 +259,40 @@ func (proxy *milvusProxy) ClearLoadFault(database string, collection string) {
 	proxy.mutex.Unlock()
 }
 
+func (proxy *milvusProxy) SetUnavailable(code codes.Code, message string) {
+	proxy.mutex.Lock()
+	proxy.unavailable = &loadFault{failureCode: code, failureText: message}
+	proxy.mutex.Unlock()
+}
+
+func (proxy *milvusProxy) ClearUnavailable() {
+	proxy.mutex.Lock()
+	proxy.unavailable = nil
+	proxy.mutex.Unlock()
+}
+
 func (proxy *milvusProxy) CallCount(method string, database string, collection string) int {
 	proxy.mutex.RLock()
 	defer proxy.mutex.RUnlock()
 	return proxy.counts[loadCallKey{method: method, database: database, collection: collection}]
 }
 
+func (proxy *milvusProxy) Calls() []milvusProxyCall {
+	proxy.mutex.RLock()
+	defer proxy.mutex.RUnlock()
+	return append([]milvusProxyCall(nil), proxy.calls...)
+}
+
 func (proxy *milvusProxy) forward(_ interface{}, stream grpc.ServerStream) error {
 	method, ok := grpc.MethodFromServerStream(stream)
 	if !ok {
 		return status.Error(codes.Internal, "Milvus proxy cannot identify method")
+	}
+	proxy.mutex.RLock()
+	unavailable := proxy.unavailable
+	proxy.mutex.RUnlock()
+	if unavailable != nil {
+		return status.Error(unavailable.failureCode, unavailable.failureText)
 	}
 	var request []byte
 	if err := stream.RecvMsg(&request); err != nil {
@@ -197,6 +308,7 @@ func (proxy *milvusProxy) forward(_ interface{}, stream grpc.ServerStream) error
 	if target.collection != "" {
 		proxy.mutex.Lock()
 		proxy.counts[loadCallKey{method: methodName, database: target.database, collection: target.collection}]++
+		proxy.calls = append(proxy.calls, milvusProxyCall{Database: target.database, Collection: target.collection, Method: methodName})
 		fault, configured := proxy.faults[target]
 		proxy.mutex.Unlock()
 		if configured {

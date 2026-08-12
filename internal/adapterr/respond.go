@@ -6,8 +6,24 @@ import (
 	"log/slog"
 
 	"goodkind.io/gklog/correlation"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+const errorInfoDomain = "goodkind.io/lm-semantic-search"
+
+type grpcError struct {
+	response *status.Status
+}
+
+func (err *grpcError) Error() string {
+	return err.response.Err().Error()
+}
+
+func (err *grpcError) GRPCStatus() *status.Status {
+	return err.response
+}
 
 // Respond classifies err, logs it on the daemon side with the active
 // correlation, and returns the gRPC code plus message for the
@@ -31,6 +47,32 @@ func Respond(ctx context.Context, err error) (codes.Code, string) {
 		return CodeFor(adapterErr.Class), formatKnown(adapterErr, ctx)
 	}
 	return CodeFor(adapterErr.Class), formatUnknown(ctx)
+}
+
+// RespondGRPC returns the same safe status as [Respond] with a machine-readable
+// ErrorInfo reason for callers that must route on the stable adapter code.
+func RespondGRPC(ctx context.Context, err error) *grpcError {
+	if err == nil {
+		return nil
+	}
+	code, message := Respond(ctx, err)
+	reason := Code(err)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		reason = "canceled"
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		reason = "deadline_exceeded"
+	}
+	base := status.New(code, message)
+	withDetails, detailErr := base.WithDetails(&errdetails.ErrorInfo{
+		Reason: reason,
+		Domain: errorInfoDomain,
+	})
+	if detailErr != nil {
+		slog.ErrorContext(ctx, "adapter.error_detail.failed", "reason", reason, "err", detailErr)
+		return &grpcError{response: base}
+	}
+	return &grpcError{response: withDetails}
 }
 
 func respondContextError(
