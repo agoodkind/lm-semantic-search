@@ -635,6 +635,10 @@ func TestValidateProductionHealthAllowsOperatorJobsAfterInitialPreflight(t *test
 	if err := validateProductionReadiness(indexes, jobs); err == nil {
 		t.Fatal("initial production readiness accepted an active job")
 	}
+	unknownJobs := json.RawMessage(`{"jobs":[{"id":"operator","state":"mystery"}],"dependencyHealth":{}}`)
+	if err := validateProductionHealth(indexes, unknownJobs); err == nil {
+		t.Fatal("production health accepted an unknown job state")
+	}
 }
 
 func TestValidateProductionReadinessRequiresZeroActiveJobsAndHealthyDependencies(t *testing.T) {

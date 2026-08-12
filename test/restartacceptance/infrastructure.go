@@ -948,6 +948,13 @@ func validateProductionHealth(indexesBody json.RawMessage, jobsBody json.RawMess
 	if jobs.DependencyHealth.Degraded || jobs.DependencyHealth.Mode != "" {
 		return fmt.Errorf("production dependencies are degraded: %s", jobs.DependencyHealth.Mode)
 	}
+	for _, job := range jobs.Jobs {
+		switch job.State {
+		case "completed", "failed", "cancelled", "queued", "running", "cancelling":
+		default:
+			return fmt.Errorf("production job %q has unknown state %q", job.ID, job.State)
+		}
+	}
 	return nil
 }
 
