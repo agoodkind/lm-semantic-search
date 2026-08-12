@@ -429,7 +429,7 @@ func TestHarnessRechecksSpaceAndDeletesCaseAfterCleanup(t *testing.T) {
 
 func TestInventoryTokenRejectsStaleMismatchedAndTamperedValues(t *testing.T) {
 	now := time.Date(2026, 8, 12, 1, 7, 3, 0, time.UTC)
-	inventory := productionInventory{Collections: collectionCensus{{Database: "default", Collection: "operator"}: "hash"}}
+	inventory := productionInventory{Databases: []string{"default"}, Collections: collectionCensus{{Database: "default", Collection: "operator"}: "hash"}}
 	token, err := newInventoryToken("20260812T010203Z-abcdef01", now.Add(-5*time.Minute), inventory)
 	if err != nil {
 		t.Fatalf("new token: %v", err)
@@ -492,11 +492,13 @@ func TestIsolatedEnvironmentRoutesOnlyCloneResources(t *testing.T) {
 	}
 	clydeEnvironment := isolatedClydeEnvironment(paths)
 	wantClyde := map[string]string{
-		"XDG_CONFIG_HOME": paths.ClydeConfig,
-		"XDG_DATA_HOME":   paths.ClydeData,
-		"XDG_STATE_HOME":  paths.ClydeState,
-		"XDG_CACHE_HOME":  paths.ClydeCache,
-		"XDG_RUNTIME_DIR": paths.ClydeRuntime,
+		"HOME":                        paths.ClydeHome,
+		"XDG_CONFIG_HOME":             paths.ClydeConfig,
+		"XDG_DATA_HOME":               paths.ClydeData,
+		"XDG_STATE_HOME":              paths.ClydeState,
+		"XDG_CACHE_HOME":              paths.ClydeCache,
+		"XDG_RUNTIME_DIR":             paths.ClydeRuntime,
+		"CLAUDE_CONTEXTD_SOCKET_PATH": paths.LMSSocket,
 	}
 	if !reflect.DeepEqual(clydeEnvironment, wantClyde) {
 		t.Fatalf("Clyde environment = %#v, want %#v", clydeEnvironment, wantClyde)
@@ -522,8 +524,11 @@ func TestCaptureProductionInventoryWritesSeparateReadOnlyArtifact(t *testing.T) 
 		runner,
 		runID,
 		time.Date(2026, 8, 12, 1, 2, 3, 0, time.UTC),
-		func(context.Context) (collectionCensus, error) {
-			return collectionCensus{{Database: "default", Collection: "operator"}: "properties-loadstate-hash"}, nil
+		func(context.Context) (productionMilvusCensus, error) {
+			return productionMilvusCensus{
+				Databases:   []string{"default"},
+				Collections: collectionCensus{{Database: "default", Collection: "operator"}: "properties-loadstate-hash"},
+			}, nil
 		},
 	)
 	if err != nil {
@@ -668,7 +673,7 @@ func configuredTestHarness(t *testing.T, paths runPaths, runner commandRunner) *
 	}
 	capturedAt := time.Date(2026, 8, 12, 1, 2, 3, 0, time.UTC)
 	collections := collectionCensus{{Database: "default", Collection: "operator"}: "properties-loadstate-hash"}
-	token, err := newInventoryToken(filepath.Base(paths.RunRoot), capturedAt, productionInventory{Collections: collections})
+	token, err := newInventoryToken(filepath.Base(paths.RunRoot), capturedAt, productionInventory{Databases: []string{"default"}, Collections: collections})
 	if err != nil {
 		t.Fatalf("create inventory token: %v", err)
 	}
@@ -680,8 +685,8 @@ func configuredTestHarness(t *testing.T, paths runPaths, runner commandRunner) *
 		availableBytes: func(string) (int64, error) { return 1 << 30, nil },
 		inventory:      token,
 		now:            func() time.Time { return capturedAt },
-		census: func(context.Context) (collectionCensus, error) {
-			return cloneCollectionCensus(collections), nil
+		census: func(context.Context) (productionMilvusCensus, error) {
+			return productionMilvusCensus{Databases: []string{"default"}, Collections: cloneCollectionCensus(collections)}, nil
 		},
 		readiness: func(context.Context) error { return nil },
 	}

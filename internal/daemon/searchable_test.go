@@ -14,6 +14,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/response"
 	"goodkind.io/lm-semantic-search/internal/semantic"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 )
@@ -431,18 +432,21 @@ func TestSearchCodeMapsCollectionLeaseErrors(t *testing.T) {
 		name        string
 		err         error
 		wantCode    codes.Code
+		wantReason  string
 		wantMessage string
 	}{
 		{
 			name:        "load wait timeout",
 			err:         semantic.ErrCollectionNotReady,
 			wantCode:    codes.FailedPrecondition,
+			wantReason:  "collection_not_ready",
 			wantMessage: "background collection load continues",
 		},
 		{
-			name:     "Milvus outage",
-			err:      adapterr.NewMilvusUnavailable(nil),
-			wantCode: codes.Unavailable,
+			name:       "Milvus outage",
+			err:        adapterr.NewMilvusUnavailable(nil),
+			wantCode:   codes.Unavailable,
+			wantReason: "milvus_unavailable",
 		},
 		{name: "caller cancellation", err: context.Canceled, wantCode: codes.Canceled},
 		{
@@ -491,6 +495,18 @@ func TestSearchCodeMapsCollectionLeaseErrors(t *testing.T) {
 			}
 			if test.wantMessage != "" && !strings.Contains(searchErr.Error(), test.wantMessage) {
 				t.Fatalf("SearchCode error = %q, want %q", searchErr, test.wantMessage)
+			}
+			if test.wantReason != "" {
+				responded := grpcstatus.Convert(searchErr)
+				var reason string
+				for _, detail := range responded.Details() {
+					if info, ok := detail.(*errdetails.ErrorInfo); ok {
+						reason = info.GetReason()
+					}
+				}
+				if reason != test.wantReason {
+					t.Fatalf("SearchCode ErrorInfo reason = %q, want %q", reason, test.wantReason)
+				}
 			}
 		})
 	}
