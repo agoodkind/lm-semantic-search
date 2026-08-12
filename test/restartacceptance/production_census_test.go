@@ -139,7 +139,7 @@ func TestReadProductionMilvusCensusHashesLoadedRowIdentityAndDenseVector(t *test
 
 }
 
-func TestReadProductionMilvusCensusHashesColdRowCountWithoutQuery(t *testing.T) {
+func TestReadProductionMilvusCensusReportsColdRowCountWithoutChangingMetadataHash(t *testing.T) {
 	server := &productionCensusMilvusServer{
 		databases:   []string{"default"},
 		collections: []string{"cold"},
@@ -163,8 +163,11 @@ func TestReadProductionMilvusCensusHashesColdRowCountWithoutQuery(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read count-changed census: %v", err)
 	}
-	if changed.Collections[identity] == baseline.Collections[identity] {
-		t.Fatal("row-count change did not change the collection hash")
+	if changed.Collections[identity] != baseline.Collections[identity] {
+		t.Fatal("row-count change altered the collection metadata hash")
+	}
+	if baseline.RowCounts[identity] != 1 || changed.RowCounts[identity] != 2 {
+		t.Fatalf("row counts = %d then %d, want 1 then 2", baseline.RowCounts[identity], changed.RowCounts[identity])
 	}
 	server.mutex.Lock()
 	queriedCollections := slices.Clone(server.queriedCollections)
@@ -262,7 +265,7 @@ func TestReadProductionMilvusCensusDoesNotRequestSparseVectorSamples(t *testing.
 	}
 }
 
-func TestReadProductionMilvusCensusUsesStrongLoadedRowCount(t *testing.T) {
+func TestReadProductionMilvusCensusReportsStrongLoadedRowCountWithoutChangingSample(t *testing.T) {
 	server := &productionCensusMilvusServer{
 		databases:   []string{"default"},
 		collections: []string{"loaded"},
@@ -290,8 +293,37 @@ func TestReadProductionMilvusCensusUsesStrongLoadedRowCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read logical-count-changed census: %v", err)
 	}
-	if changed.Samples[identity] == baseline.Samples[identity] {
-		t.Fatal("strong logical row-count change did not change the collection hash")
+	if changed.Samples[identity] != baseline.Samples[identity] {
+		t.Fatal("strong logical row-count change altered the stable row sample")
+	}
+	if baseline.RowCounts[identity] != 1 || changed.RowCounts[identity] != 2 {
+		t.Fatalf("row counts = %d then %d, want 1 then 2", baseline.RowCounts[identity], changed.RowCounts[identity])
+	}
+}
+
+func TestAuditProductionMutationAllowsOnlyAppendOnlyRowGrowth(t *testing.T) {
+	t.Parallel()
+
+	identity := collectionIdentity{Database: "default", Collection: "operator"}
+	before := productionInventory{
+		Databases:   []string{"default"},
+		Collections: collectionCensus{identity: "metadata"},
+		Samples:     collectionCensus{identity: "sample"},
+		RowCounts:   collectionRowCounts{identity: 10},
+	}
+	appended := productionInventory{
+		Databases:   []string{"default"},
+		Collections: collectionCensus{identity: "metadata"},
+		Samples:     collectionCensus{identity: "sample"},
+		RowCounts:   collectionRowCounts{identity: 12},
+	}
+	if err := auditProductionMutation(before, appended, nil, nil); err != nil {
+		t.Fatalf("append-only production growth was rejected: %v", err)
+	}
+	shrunk := appended
+	shrunk.RowCounts = collectionRowCounts{identity: 9}
+	if err := auditProductionMutation(before, shrunk, nil, nil); err == nil {
+		t.Fatal("production row loss was accepted")
 	}
 }
 

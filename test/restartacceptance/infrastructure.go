@@ -597,6 +597,7 @@ func (h *harness) withCompose(
 				Databases:   slices.Clone(milvusSnapshot.Databases),
 				Collections: cloneCollectionCensus(milvusSnapshot.Collections),
 				Samples:     cloneCollectionCensus(milvusSnapshot.Samples),
+				RowCounts:   cloneCollectionRowCounts(milvusSnapshot.RowCounts),
 			}, calls, h.protectedCollections)
 		}
 		if censusErr != nil {
@@ -711,6 +712,7 @@ func captureProductionInventory(
 		Databases:   slices.Clone(milvusSnapshot.Databases),
 		Collections: cloneCollectionCensus(milvusSnapshot.Collections),
 		Samples:     cloneCollectionCensus(milvusSnapshot.Samples),
+		RowCounts:   cloneCollectionRowCounts(milvusSnapshot.RowCounts),
 		Codebases:   outputs[0],
 		Jobs:        outputs[1],
 		Daemon:      outputs[2],
@@ -752,9 +754,10 @@ func captureProductionReadiness(
 type collectionCensusFunc func(context.Context) (productionMilvusCensus, error)
 
 type productionMilvusCensus struct {
-	Databases   []string         `json:"databases"`
-	Collections collectionCensus `json:"collections"`
-	Samples     collectionCensus `json:"samples,omitempty"`
+	Databases   []string            `json:"databases"`
+	Collections collectionCensus    `json:"collections"`
+	Samples     collectionCensus    `json:"samples,omitempty"`
+	RowCounts   collectionRowCounts `json:"row_counts"`
 }
 
 type collectionIdentity struct {
@@ -763,6 +766,8 @@ type collectionIdentity struct {
 }
 
 type collectionCensus map[collectionIdentity]string
+
+type collectionRowCounts map[collectionIdentity]int64
 
 type collectionCensusEntry struct {
 	Database   string `json:"database"`
@@ -784,6 +789,28 @@ func (census collectionCensus) MarshalJSON() ([]byte, error) {
 		return entries[left].Collection < entries[right].Collection
 	})
 	return json.Marshal(entries)
+}
+
+func (counts collectionRowCounts) MarshalJSON() ([]byte, error) {
+	entries := make([]collectionRowCountEntry, 0, len(counts))
+	for identity, count := range counts {
+		entries = append(entries, collectionRowCountEntry{
+			Database: identity.Database, Collection: identity.Collection, Count: count,
+		})
+	}
+	sort.Slice(entries, func(left int, right int) bool {
+		if entries[left].Database != entries[right].Database {
+			return entries[left].Database < entries[right].Database
+		}
+		return entries[left].Collection < entries[right].Collection
+	})
+	return json.Marshal(entries)
+}
+
+type collectionRowCountEntry struct {
+	Database   string `json:"database"`
+	Collection string `json:"collection"`
+	Count      int64  `json:"count"`
 }
 
 type inventoryToken struct {
@@ -831,6 +858,14 @@ func cloneCollectionCensus(collections collectionCensus) collectionCensus {
 	result := make(collectionCensus, len(collections))
 	for identity, hash := range collections {
 		result[identity] = hash
+	}
+	return result
+}
+
+func cloneCollectionRowCounts(counts collectionRowCounts) collectionRowCounts {
+	result := make(collectionRowCounts, len(counts))
+	for identity, count := range counts {
+		result[identity] = count
 	}
 	return result
 }
@@ -886,12 +921,13 @@ func validateProductionReadiness(indexesBody json.RawMessage, jobsBody json.RawM
 }
 
 type productionInventory struct {
-	Databases   []string         `json:"databases"`
-	Collections collectionCensus `json:"collections"`
-	Samples     collectionCensus `json:"samples,omitempty"`
-	Codebases   json.RawMessage  `json:"codebases,omitempty"`
-	Jobs        json.RawMessage  `json:"jobs,omitempty"`
-	Daemon      json.RawMessage  `json:"daemon,omitempty"`
+	Databases   []string            `json:"databases"`
+	Collections collectionCensus    `json:"collections"`
+	Samples     collectionCensus    `json:"samples,omitempty"`
+	RowCounts   collectionRowCounts `json:"row_counts,omitempty"`
+	Codebases   json.RawMessage     `json:"codebases,omitempty"`
+	Jobs        json.RawMessage     `json:"jobs,omitempty"`
+	Daemon      json.RawMessage     `json:"daemon,omitempty"`
 }
 
 type milvusProxyCall struct {
@@ -920,6 +956,21 @@ func auditProductionMutation(
 		}
 		if afterHash != beforeHash {
 			return fmt.Errorf("production collection %q/%q changed", identity.Database, identity.Collection)
+		}
+		if beforeCount, countedBefore := before.RowCounts[identity]; countedBefore {
+			afterCount, countedAfter := after.RowCounts[identity]
+			if !countedAfter {
+				return fmt.Errorf("production collection %q/%q row count is missing", identity.Database, identity.Collection)
+			}
+			if afterCount < beforeCount {
+				return fmt.Errorf(
+					"production collection %q/%q row count fell from %d to %d",
+					identity.Database,
+					identity.Collection,
+					beforeCount,
+					afterCount,
+				)
+			}
 		}
 		beforeSample, sampledBefore := before.Samples[identity]
 		afterSample, sampledAfter := after.Samples[identity]
