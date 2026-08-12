@@ -155,6 +155,11 @@ func (driver *realAcceptanceDriver) runCase(ctx context.Context, run acceptanceR
 		protectedCollections: acceptanceCollectionIdentities(run),
 	}
 	return h.withCompose(ctx, name, func(caseContext context.Context) (scenarioErr error) {
+		defer func() {
+			if scenarioErr != nil {
+				scenarioErr = errors.Join(scenarioErr, preserveCaseDiagnostics(run.Paths, name))
+			}
+		}()
 		if err := resetIsolatedRuntime(run.Paths); err != nil {
 			return err
 		}
@@ -173,6 +178,27 @@ func (driver *realAcceptanceDriver) runCase(ctx context.Context, run acceptanceR
 		recorder := newEvidenceRecorder(run.Paths, time.Now)
 		return driver.runInstalledScenario(caseContext, run, h, proxies, fixture, name, recorder)
 	})
+}
+
+func preserveCaseDiagnostics(paths runPaths, scenarioName string) error {
+	if !caseNamePattern.MatchString(scenarioName) {
+		return fmt.Errorf("scenario name %q is invalid", scenarioName)
+	}
+	body, err := os.ReadFile(installedLMSLogPath(paths))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read scenario %s LMS log: %w", scenarioName, err)
+	}
+	if err := os.MkdirAll(paths.Artifacts, 0o700); err != nil {
+		return fmt.Errorf("create scenario diagnostics directory: %w", err)
+	}
+	destination := filepath.Join(paths.Artifacts, "scenario-"+scenarioName+"-lms.log")
+	if err := os.WriteFile(destination, body, 0o600); err != nil {
+		return fmt.Errorf("write scenario %s LMS log: %w", scenarioName, err)
+	}
+	return nil
 }
 
 func (driver *realAcceptanceDriver) recordTeardownError(err error) {
