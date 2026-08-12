@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 )
 
@@ -397,6 +398,9 @@ func (service *Service) loadReuseCatalogRowKeys(
 	if err != nil {
 		wrappedErr := fmt.Errorf("query content vector catalog row keys: %w", err)
 		slog.ErrorContext(ctx, "query content vector catalog row keys failed", "err", wrappedErr)
+		if storeUnavailable(err) {
+			return nil, adapterr.NewMilvusUnavailable(wrappedErr)
+		}
 		return nil, wrappedErr
 	}
 	rowKeyColumn := resultSet.GetColumn(reuseCatalogRowKeyFieldName)

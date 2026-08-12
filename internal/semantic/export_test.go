@@ -47,3 +47,13 @@ func SetPromotionRecoveryServerAddressForTest(address string) {
 func WrapStoreErrorForTest(ctx context.Context, err error, operation string) error {
 	return wrapStoreError(ctx, err, operation)
 }
+
+func LoadReuseCatalogRowKeysForTest(
+	ctx context.Context,
+	service *Service,
+	rowKeys []string,
+	dimension int,
+) error {
+	_, err := service.loadReuseCatalogRowKeys(ctx, rowKeys, dimension)
+	return err
+}
