@@ -18,18 +18,22 @@ const restartAcceptanceCleanupTimeout = 2 * time.Minute
 var acceptanceScenarioNames = []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 
 type acceptanceLifecycleOperations struct {
-	Prepare           func(context.Context) (acceptanceRun, error)
-	CaptureProduction func(context.Context, acceptanceRun) (inventoryToken, error)
-	RunCase           func(context.Context, acceptanceRun, string, inventoryToken) error
-	ConfirmProduction func(context.Context, acceptanceRun) error
-	AuditProduction   func(context.Context, inventoryToken, inventoryToken) error
-	Cleanup           func(context.Context, acceptanceRun) error
-	Finish            func(acceptanceRun, acceptanceResult) error
+	ValidateProduction func(context.Context) error
+	Prepare            func(context.Context) (acceptanceRun, error)
+	CaptureProduction  func(context.Context, acceptanceRun) (inventoryToken, error)
+	RunCase            func(context.Context, acceptanceRun, string, inventoryToken) error
+	ConfirmProduction  func(context.Context, acceptanceRun) error
+	AuditProduction    func(context.Context, inventoryToken, inventoryToken) error
+	Cleanup            func(context.Context, acceptanceRun) error
+	Finish             func(acceptanceRun, acceptanceResult) error
 }
 
 func executeRestartAcceptance(ctx context.Context, operations acceptanceLifecycleOperations) (runErr error) {
 	if err := validateLifecycleOperations(operations); err != nil {
 		return err
+	}
+	if err := operations.ValidateProduction(ctx); err != nil {
+		return fmt.Errorf("validate production readiness: %w", err)
 	}
 	run, err := operations.Prepare(ctx)
 	if err != nil {
@@ -94,7 +98,7 @@ func executeRestartAcceptance(ctx context.Context, operations acceptanceLifecycl
 }
 
 func validateLifecycleOperations(operations acceptanceLifecycleOperations) error {
-	if operations.Prepare == nil || operations.CaptureProduction == nil || operations.RunCase == nil ||
+	if operations.ValidateProduction == nil || operations.Prepare == nil || operations.CaptureProduction == nil || operations.RunCase == nil ||
 		operations.ConfirmProduction == nil || operations.AuditProduction == nil ||
 		operations.Cleanup == nil || operations.Finish == nil {
 		return fmt.Errorf("restart acceptance lifecycle operations are incomplete")

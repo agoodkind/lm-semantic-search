@@ -24,7 +24,7 @@ func TestProductionReadOnlySearchConfirmation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = connection.Close() })
 
-	requireProductionDaemonReady(t, client)
+	requireProductionDaemonHealthy(t, client)
 	codeContext, codeCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	codeResponse, err := client.SearchCode(codeContext, &pb.SearchCodeRequest{
 		Path:  codePath,
@@ -54,10 +54,10 @@ func TestProductionReadOnlySearchConfirmation(t *testing.T) {
 	if len(conversationResponse.GetResults()) == 0 {
 		t.Fatalf("production conversation search returned no results: %s", conversationResponse.GetDisplayText())
 	}
-	requireProductionDaemonReady(t, client)
+	requireProductionDaemonHealthy(t, client)
 }
 
-func requireProductionDaemonReady(t *testing.T, client pb.SemanticSearchDaemonServiceClient) {
+func requireProductionDaemonHealthy(t *testing.T, client pb.SemanticSearchDaemonServiceClient) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -80,9 +80,7 @@ func requireProductionDaemonReady(t *testing.T, client pb.SemanticSearchDaemonSe
 	}
 	for _, job := range jobs.GetJobs() {
 		switch job.GetState() {
-		case "completed", "failed", "cancelled":
-		case "queued", "running", "cancelling":
-			t.Fatalf("production job %q is active in state %q", job.GetId(), job.GetState())
+		case "completed", "failed", "cancelled", "queued", "running", "cancelling":
 		default:
 			t.Fatalf("production job %q has unknown state %q", job.GetId(), job.GetState())
 		}

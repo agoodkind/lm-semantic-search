@@ -585,7 +585,7 @@ func TestCaptureProductionInventoryWritesSeparateReadOnlyArtifact(t *testing.T) 
 	}
 	runner := &recordingRunner{outputs: [][]byte{
 		[]byte(`{"indexes":[],"dependencyHealth":{}}`),
-		[]byte(`{"jobs":[],"dependencyHealth":{}}`),
+		[]byte(`{"jobs":[{"id":"operator","state":"running"}],"dependencyHealth":{}}`),
 		[]byte(`{"commit":"abc"}`),
 	}}
 	binaries := installedBinaries{CLI: "/home/test/.local/bin/lm-semantic-search"}
@@ -621,6 +621,23 @@ func TestCaptureProductionInventoryWritesSeparateReadOnlyArtifact(t *testing.T) 
 	}
 	if !strings.Contains(string(body), `"commit": "abc"`) {
 		t.Fatalf("production inventory = %s", body)
+	}
+}
+
+func TestValidateProductionHealthAllowsOperatorJobsAfterInitialPreflight(t *testing.T) {
+	t.Parallel()
+
+	indexes := json.RawMessage(`{"indexes":[],"dependencyHealth":{}}`)
+	jobs := json.RawMessage(`{"jobs":[{"id":"operator","state":"running"}],"dependencyHealth":{}}`)
+	if err := validateProductionHealth(indexes, jobs); err != nil {
+		t.Fatalf("healthy production with operator activity: %v", err)
+	}
+	if err := validateProductionReadiness(indexes, jobs); err == nil {
+		t.Fatal("initial production readiness accepted an active job")
+	}
+	unknownJobs := json.RawMessage(`{"jobs":[{"id":"operator","state":"mystery"}],"dependencyHealth":{}}`)
+	if err := validateProductionHealth(indexes, unknownJobs); err == nil {
+		t.Fatal("production health accepted an unknown job state")
 	}
 }
 

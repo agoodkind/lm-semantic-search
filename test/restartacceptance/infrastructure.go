@@ -698,7 +698,7 @@ func captureProductionInventory(
 		}
 		outputs[index] = append(json.RawMessage(nil), body...)
 	}
-	if err := validateProductionReadiness(outputs[0], outputs[1]); err != nil {
+	if err := validateProductionHealth(outputs[0], outputs[1]); err != nil {
 		return inventoryToken{}, err
 	}
 	milvusSnapshot, err := census(ctx)
@@ -749,6 +749,26 @@ func captureProductionReadiness(
 		outputs[index] = append(json.RawMessage(nil), body...)
 	}
 	return validateProductionReadiness(outputs[0], outputs[1])
+}
+
+func captureProductionHealth(
+	ctx context.Context,
+	binaries installedBinaries,
+	runner commandRunner,
+) error {
+	commands := [][]string{{"--json", "codebase", "list"}, {"--json", "job", "list"}}
+	outputs := make([]json.RawMessage, len(commands))
+	for index, arguments := range commands {
+		body, err := runner.Run(ctx, nil, binaries.CLI, arguments...)
+		if err != nil {
+			return fmt.Errorf("recheck production command %q: %w", strings.Join(arguments, " "), err)
+		}
+		if !json.Valid(body) {
+			return fmt.Errorf("production command %q returned invalid JSON", strings.Join(arguments, " "))
+		}
+		outputs[index] = append(json.RawMessage(nil), body...)
+	}
+	return validateProductionHealth(outputs[0], outputs[1])
 }
 
 type collectionCensusFunc func(context.Context) (productionMilvusCensus, error)
@@ -888,6 +908,26 @@ type jobsInventoryJSON struct {
 }
 
 func validateProductionReadiness(indexesBody json.RawMessage, jobsBody json.RawMessage) error {
+	if err := validateProductionHealth(indexesBody, jobsBody); err != nil {
+		return err
+	}
+	var jobs jobsInventoryJSON
+	if err := json.Unmarshal(jobsBody, &jobs); err != nil {
+		return fmt.Errorf("decode production job inventory: %w", err)
+	}
+	for _, job := range jobs.Jobs {
+		switch job.State {
+		case "completed", "failed", "cancelled":
+		case "queued", "running", "cancelling":
+			return fmt.Errorf("production job %q is active in state %q", job.ID, job.State)
+		default:
+			return fmt.Errorf("production job %q has unknown state %q", job.ID, job.State)
+		}
+	}
+	return nil
+}
+
+func validateProductionHealth(indexesBody json.RawMessage, jobsBody json.RawMessage) error {
 	var indexes indexesInventoryJSON
 	if err := json.Unmarshal(indexesBody, &indexes); err != nil {
 		return fmt.Errorf("decode production codebase inventory: %w", err)
@@ -910,9 +950,7 @@ func validateProductionReadiness(indexesBody json.RawMessage, jobsBody json.RawM
 	}
 	for _, job := range jobs.Jobs {
 		switch job.State {
-		case "completed", "failed", "cancelled":
-		case "queued", "running", "cancelling":
-			return fmt.Errorf("production job %q is active in state %q", job.ID, job.State)
+		case "completed", "failed", "cancelled", "queued", "running", "cancelling":
 		default:
 			return fmt.Errorf("production job %q has unknown state %q", job.ID, job.State)
 		}
