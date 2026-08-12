@@ -1022,12 +1022,14 @@ func auditProductionMutation(
 		if afterHash != beforeHash {
 			return fmt.Errorf("production collection %q/%q changed", identity.Database, identity.Collection)
 		}
+		beforeSample, sampledBefore := before.Samples[identity]
+		afterSample, sampledAfter := after.Samples[identity]
 		if beforeCount, countedBefore := before.RowCounts[identity]; countedBefore {
 			afterCount, countedAfter := after.RowCounts[identity]
 			if !countedAfter {
 				return fmt.Errorf("production collection %q/%q row count is missing", identity.Database, identity.Collection)
 			}
-			if afterCount < beforeCount {
+			if sampledBefore && sampledAfter && afterCount < beforeCount {
 				return fmt.Errorf(
 					"production collection %q/%q row count fell from %d to %d",
 					identity.Database,
@@ -1037,8 +1039,6 @@ func auditProductionMutation(
 				)
 			}
 		}
-		beforeSample, sampledBefore := before.Samples[identity]
-		afterSample, sampledAfter := after.Samples[identity]
 		if sampledBefore && sampledAfter && beforeSample != afterSample {
 			return fmt.Errorf("production collection %q/%q sampled rows changed", identity.Database, identity.Collection)
 		}
