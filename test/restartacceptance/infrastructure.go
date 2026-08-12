@@ -177,7 +177,13 @@ func restoreImmutableArchiveReader(ctx context.Context, archive io.Reader, desti
 			return fmt.Errorf("read restore archive: %w", readErr)
 		}
 		cleanName := filepath.Clean(header.Name)
-		if filepath.IsAbs(header.Name) || cleanName == "." || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+		if cleanName == "." {
+			if header.Typeflag != tar.TypeDir {
+				return fmt.Errorf("restore archive root entry %q is not a directory", header.Name)
+			}
+			continue
+		}
+		if filepath.IsAbs(header.Name) || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
 			return fmt.Errorf("restore archive entry %q escapes destination", header.Name)
 		}
 		target := filepath.Join(destination, cleanName)

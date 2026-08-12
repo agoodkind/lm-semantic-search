@@ -156,6 +156,9 @@ func TestCreateIsolationLayoutUsesOnlyRunRoot(t *testing.T) {
 func TestRestoreArchiveMakesImmutableSourceAndWritableCaseCopy(t *testing.T) {
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
+	if err := writer.WriteHeader(&tar.Header{Name: "./", Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+		t.Fatalf("write root directory header: %v", err)
+	}
 	if err := writer.WriteHeader(&tar.Header{Name: "nested", Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
 		t.Fatalf("write directory header: %v", err)
 	}
@@ -206,6 +209,41 @@ func TestRestoreArchiveMakesImmutableSourceAndWritableCaseCopy(t *testing.T) {
 	}
 	if string(sourceBody) != "restored" {
 		t.Fatalf("source changed through case copy: %q", sourceBody)
+	}
+}
+
+func TestRestoreArchiveRejectsUnsafeRootEntries(t *testing.T) {
+	testCases := []struct {
+		name     string
+		header   tar.Header
+		contents []byte
+	}{
+		{name: "root file", header: tar.Header{Name: ".", Typeflag: tar.TypeReg, Size: 1}, contents: []byte("x")},
+		{name: "parent traversal", header: tar.Header{Name: "../outside", Typeflag: tar.TypeReg}},
+		{name: "absolute path", header: tar.Header{Name: "/outside", Typeflag: tar.TypeReg}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var archive bytes.Buffer
+			writer := tar.NewWriter(&archive)
+			if err := writer.WriteHeader(&testCase.header); err != nil {
+				t.Fatalf("write unsafe header: %v", err)
+			}
+			if _, err := writer.Write(testCase.contents); err != nil {
+				t.Fatalf("write unsafe contents: %v", err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("close unsafe archive: %v", err)
+			}
+			err := restoreImmutableArchiveReader(
+				context.Background(),
+				bytes.NewReader(archive.Bytes()),
+				filepath.Join(t.TempDir(), "restored"),
+			)
+			if err == nil {
+				t.Fatal("unsafe archive entry was accepted")
+			}
+		})
 	}
 }
 
