@@ -361,6 +361,25 @@ func TestCallTimeoutsWithMutationIsOperatorTunable(t *testing.T) {
 	}
 }
 
+func TestCallTimeoutsWithMetadataIsOperatorTunable(t *testing.T) {
+	base := DefaultCallTimeouts()
+	const configuredMetadata = 10 * time.Second
+
+	tuned := base.WithMetadata(configuredMetadata)
+	if tuned.Metadata != configuredMetadata {
+		t.Fatalf("tuned metadata bound = %s, want %s", tuned.Metadata, configuredMetadata)
+	}
+	if tuned.Mutation != base.Mutation {
+		t.Fatalf("tuning metadata changed mutation bound to %s, want %s", tuned.Mutation, base.Mutation)
+	}
+
+	for _, unusable := range []time.Duration{0, -time.Second} {
+		if got := base.WithMetadata(unusable).Metadata; got != base.Metadata {
+			t.Fatalf("WithMetadata(%s) = %s, want %s", unusable, got, base.Metadata)
+		}
+	}
+}
+
 func TestMilvusDeadlineInterceptorLogsOnDeadlineExceeded(t *testing.T) {
 	handler := &deadlineLogHandler{}
 	logger := slog.New(handler)

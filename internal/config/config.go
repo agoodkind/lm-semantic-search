@@ -151,6 +151,9 @@ type Config struct {
 	// MilvusDatabase selects a non-default database for an isolated internal
 	// client. An empty value preserves the operator's default database.
 	MilvusDatabase string
+	// MilvusMetadataCallTimeoutMS bounds one Milvus schema, load-state, search,
+	// or query call. Zero keeps the transport's built-in 60-second bound.
+	MilvusMetadataCallTimeoutMS int
 	// MilvusMutationCallTimeoutMS bounds one Milvus row-mutating call: Insert,
 	// Upsert, Delete, Flush, FlushAll, Import, ReplicateMessage, and
 	// TruncateCollection. The duration of those calls scales with the number of
@@ -253,13 +256,14 @@ type persistedConfig struct {
 	// is distinct from an explicit 0, which disables the bound. A plain int would
 	// collapse a persisted 0 into the default and make the disable case
 	// unexpressible from config.json.
-	EmbeddingRequestTimeoutMS *int   `json:"embeddingRequestTimeoutMs"`
-	EmbeddingDimension        int32  `json:"embeddingDimension"`
-	OpenAIAPIKey              string `json:"openaiApiKey"`
-	OpenAIBaseURL             string `json:"openaiBaseUrl"`
-	QueryInstructionPrefix    string `json:"queryInstructionPrefix"`
-	MilvusAddress             string `json:"milvusAddress"`
-	MilvusToken               string `json:"milvusToken"`
+	EmbeddingRequestTimeoutMS   *int   `json:"embeddingRequestTimeoutMs"`
+	EmbeddingDimension          int32  `json:"embeddingDimension"`
+	OpenAIAPIKey                string `json:"openaiApiKey"`
+	OpenAIBaseURL               string `json:"openaiBaseUrl"`
+	QueryInstructionPrefix      string `json:"queryInstructionPrefix"`
+	MilvusAddress               string `json:"milvusAddress"`
+	MilvusToken                 string `json:"milvusToken"`
+	MilvusMetadataCallTimeoutMS int    `json:"milvusMetadataCallTimeoutMs"`
 	// MilvusMutationCallTimeoutMS is a plain int because zero is not a distinct
 	// setting here: it means "use the transport default", the same as an omitted
 	// field, since a mutation must never run unbounded.
@@ -402,6 +406,7 @@ func Default() (Config, error) {
 		MilvusAddress:                     envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress),
 		MilvusToken:                       envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),
 		MilvusDatabase:                    envOrDefault("MILVUS_DATABASE", ""),
+		MilvusMetadataCallTimeoutMS:       resolveMilvusMetadataCallTimeoutMS(fileConfig.MilvusMetadataCallTimeoutMS),
 		MilvusMutationCallTimeoutMS:       resolveMilvusMutationCallTimeoutMS(fileConfig.MilvusMutationCallTimeoutMS),
 		MilvusCollectionLoadTimeoutMS:     resolveMilvusCollectionLoadTimeoutMS(fileConfig.MilvusCollectionLoadTimeoutMS),
 		MilvusCollectionLoadWaitTimeoutMS: loadWaitTimeoutMS,
@@ -548,6 +553,34 @@ func resolveEmbeddingMaxTokens(fileValue int) int {
 // to a [time.Duration] without overflowing its int64 nanosecond range. Anything
 // larger wraps on multiplication, so it is rejected rather than converted.
 const MaxMilvusMutationCallTimeoutMS = int64(math.MaxInt64) / int64(time.Millisecond)
+
+// MilvusMetadataCallTimeout converts a configured millisecond count into the
+// Milvus metadata bound. Invalid values keep the transport default.
+func MilvusMetadataCallTimeout(milliseconds int) time.Duration {
+	count := int64(milliseconds)
+	if count <= 0 || count > MaxMilvusMutationCallTimeoutMS {
+		return 0
+	}
+	return time.Duration(count) * time.Millisecond
+}
+
+func resolveMilvusMetadataCallTimeoutMS(fileValue int) int {
+	value := envIntOrDefault("CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS", fileValue)
+	if value == 0 {
+		return 0
+	}
+	if MilvusMetadataCallTimeout(value) == 0 {
+		slog.Warn(
+			"milvusMetadataCallTimeoutMs is not a usable millisecond count; keeping the built-in Milvus metadata bound",
+			"value", value,
+			"max", MaxMilvusMutationCallTimeoutMS,
+			"config_field", "milvusMetadataCallTimeoutMs",
+			"env_var", "CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS",
+		)
+		return 0
+	}
+	return value
+}
 
 // MilvusMutationCallTimeout converts a configured millisecond count into the
 // Milvus mutation bound. Zero, a negative count, and a count above

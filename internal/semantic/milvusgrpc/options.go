@@ -154,6 +154,16 @@ func DefaultCallTimeouts() CallTimeouts {
 	}
 }
 
+// WithMetadata returns the policy with the metadata bound replaced.
+// A non-positive duration keeps the built-in bound.
+func (timeouts CallTimeouts) WithMetadata(metadata time.Duration) CallTimeouts {
+	if metadata <= 0 {
+		return timeouts
+	}
+	timeouts.Metadata = metadata
+	return timeouts
+}
+
 // WithMutation returns the policy with the mutation bound replaced, so an
 // operator whose collection is large enough for a valid bulk delete to outlast
 // the default raises it from configuration instead of a rebuild.

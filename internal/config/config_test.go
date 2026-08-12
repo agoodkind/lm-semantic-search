@@ -607,6 +607,35 @@ func TestDefaultResolvesMilvusDatabase(t *testing.T) {
 	})
 }
 
+func TestDefaultResolvesMilvusMetadataCallTimeout(t *testing.T) {
+	const fileTimeoutMS = 12000
+	const environmentTimeoutMS = 10000
+
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS", "")
+		cfg := defaultWithPersistedConfig(t, persistedConfig{})
+		if cfg.MilvusMetadataCallTimeoutMS != 0 {
+			t.Fatalf("MilvusMetadataCallTimeoutMS = %d, want 0", cfg.MilvusMetadataCallTimeoutMS)
+		}
+	})
+
+	t.Run("config file", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS", "")
+		cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMetadataCallTimeoutMS: fileTimeoutMS})
+		if cfg.MilvusMetadataCallTimeoutMS != fileTimeoutMS {
+			t.Fatalf("MilvusMetadataCallTimeoutMS = %d, want %d", cfg.MilvusMetadataCallTimeoutMS, fileTimeoutMS)
+		}
+	})
+
+	t.Run("environment overrides config file", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS", strconv.Itoa(environmentTimeoutMS))
+		cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMetadataCallTimeoutMS: fileTimeoutMS})
+		if cfg.MilvusMetadataCallTimeoutMS != environmentTimeoutMS {
+			t.Fatalf("MilvusMetadataCallTimeoutMS = %d, want %d", cfg.MilvusMetadataCallTimeoutMS, environmentTimeoutMS)
+		}
+	})
+}
+
 // TestDefaultResolvesMilvusMutationCallTimeout pins the operator's tuning path
 // for the Milvus mutation bound. That bound covers calls whose duration scales
 // with the number of rows they match, so an operator with a large collection
