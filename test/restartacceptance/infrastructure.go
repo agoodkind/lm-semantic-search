@@ -589,7 +589,7 @@ func (h *harness) withCompose(
 	if err != nil {
 		return err
 	}
-	if err := validateFreeSpace(available, h.archiveSizes); err != nil {
+	if err := validateCaseFreeSpace(available, h.archiveSizes); err != nil {
 		return fmt.Errorf("recheck case free space: %w", err)
 	}
 	defer func() {

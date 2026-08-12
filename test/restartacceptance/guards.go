@@ -105,6 +105,19 @@ func validateFreeSpace(available int64, sizes []int64) error {
 	return nil
 }
 
+func validateCaseFreeSpace(available int64, sizes []int64) error {
+	var total int64
+	for _, size := range sizes {
+		total += size
+	}
+	// The initial 125 percent gate leaves this 25 percent reserve after extraction.
+	required := (total + 3) / 4
+	if available < required {
+		return fmt.Errorf("free space %d bytes is less than case reserve %d bytes", available, required)
+	}
+	return nil
+}
+
 func validatePorts(ports []int) error {
 	seen := make(map[int]struct{}, len(ports))
 	for _, port := range ports {
