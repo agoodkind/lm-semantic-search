@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -111,6 +112,31 @@ func TestRemoveTreeDoesNotFollowRuntimeSymlinks(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o400 {
 		t.Fatalf("external mode = %o, want 400", info.Mode().Perm())
+	}
+}
+
+func TestRemoveTreeRetriesDirectoryNotEmpty(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".DS_Store"), []byte("finder"), 0o600); err != nil {
+		t.Fatalf("write Finder metadata: %v", err)
+	}
+	attempts := 0
+	removeAll := func(path string) error {
+		attempts++
+		if attempts == 1 {
+			return &os.PathError{Op: "unlinkat", Path: path, Err: syscall.ENOTEMPTY}
+		}
+		return os.RemoveAll(path)
+	}
+
+	if err := removeTreeWith(context.Background(), root, removeAll, 0); err != nil {
+		t.Fatalf("remove tree after transient directory recreation: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("remove attempts = %d, want 2", attempts)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cleanup root still exists: %v", err)
 	}
 }
 

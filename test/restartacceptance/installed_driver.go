@@ -255,7 +255,11 @@ func (driver *realAcceptanceDriver) runInstalledScenarioA(
 		Proxy:                 proxies.embedding,
 		ExpectedUnfinishedIDs: fixture.files[1:],
 		ObserveRows:           rowObserver(milvusClient, codeCollectionName(fixture.root)),
-		ObserveCheckpoint:     checkpointObserver(runtime.client, fixture.root),
+		ObserveCheckpoint: checkpointObserver(
+			runtime.client,
+			fixture.root,
+			installedLMSMerklePath(run.Paths),
+		),
 		ObserveEmbeddingCalls: proxies.embedding.Inputs,
 		Recorder:              recorder,
 	})
@@ -305,8 +309,12 @@ func (driver *realAcceptanceDriver) runInstalledScenarioC(
 		Path:                  fixture.root,
 		ExpectedUnfinishedIDs: fixture.files[1:],
 		ObserveRows:           rowObserver(milvusClient, codeCollectionName(fixture.root)),
-		ObserveCheckpoint:     checkpointObserverForSocket(run.Paths.LMSSocket, fixture.root),
-		Recorder:              recorder,
+		ObserveCheckpoint: checkpointObserverForSocket(
+			run.Paths.LMSSocket,
+			fixture.root,
+			installedLMSMerklePath(run.Paths),
+		),
+		Recorder: recorder,
 	})
 	return err
 }
@@ -1111,14 +1119,14 @@ func snapshotCheckpointFiles(root string) ([]string, error) {
 	return checkpoints, err
 }
 
-func checkpointObserverForSocket(socket string, path string) checkpointSnapshotObserver {
+func checkpointObserverForSocket(socket string, path string, merkleRoot string) checkpointSnapshotObserver {
 	return func(ctx context.Context) (checkpointSnapshot, error) {
 		client, connection, err := waitForDaemon(ctx, socket, defaultScenarioReadyTimeout, defaultScenarioPollInterval)
 		if err != nil {
 			return checkpointSnapshot{}, err
 		}
 		defer func() { _ = connection.Close() }()
-		return checkpointObserver(client, path)(ctx)
+		return checkpointObserver(client, path, merkleRoot)(ctx)
 	}
 }
 
@@ -1463,13 +1471,27 @@ func hashDenseVector(vector entity.FloatVector) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func checkpointObserver(client pb.SemanticSearchDaemonServiceClient, path string) checkpointSnapshotObserver {
+func checkpointObserver(
+	client pb.SemanticSearchDaemonServiceClient,
+	path string,
+	merkleRoot string,
+) checkpointSnapshotObserver {
 	return func(ctx context.Context) (checkpointSnapshot, error) {
 		response, err := client.GetIndex(ctx, &pb.GetIndexRequest{Path: path, Client: scenarioClientInfo()})
 		if err != nil {
 			return checkpointSnapshot{}, err
 		}
-		checkpointPath := response.GetCodebase().GetMerkleSnapshotPath()
+		codebase := response.GetCodebase()
+		if codebase == nil {
+			return checkpointSnapshot{}, fmt.Errorf("index response omitted codebase")
+		}
+		checkpointPath := strings.TrimSpace(codebase.GetMerkleSnapshotPath())
+		if checkpointPath == "" {
+			if codebase.GetId() == "" || merkleRoot == "" {
+				return checkpointSnapshot{}, fmt.Errorf("index response omitted checkpoint identity")
+			}
+			checkpointPath = filepath.Join(merkleRoot, codebase.GetId()+".json")
+		}
 		stagingPath := strings.TrimSuffix(checkpointPath, ".json") + ".staging.json"
 		if _, err := os.Stat(stagingPath); err == nil {
 			checkpointPath = stagingPath

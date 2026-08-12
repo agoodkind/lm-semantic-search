@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -294,6 +295,15 @@ func cloneWritableTree(source string, destination string) error {
 }
 
 func removeTree(ctx context.Context, root string) error {
+	return removeTreeWith(ctx, root, os.RemoveAll, 100*time.Millisecond)
+}
+
+func removeTreeWith(
+	ctx context.Context,
+	root string,
+	removeAll func(string) error,
+	retryDelay time.Duration,
+) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -311,10 +321,20 @@ func removeTree(ctx context.Context, root string) error {
 	}); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("make cleanup tree writable: %w", err)
 	}
-	if err := os.RemoveAll(root); err != nil {
-		return fmt.Errorf("remove cleanup tree: %w", err)
+	for {
+		err := removeAll(root)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.ENOTEMPTY) {
+			return fmt.Errorf("remove cleanup tree: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("remove cleanup tree: %w", context.Cause(ctx))
+		case <-time.After(retryDelay):
+		}
 	}
-	return nil
 }
 
 func renderCompose(paths runPaths, caseName string) string {
