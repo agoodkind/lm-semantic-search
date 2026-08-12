@@ -14,10 +14,11 @@ require (
 	github.com/openai/openai-go/v2 v2.7.1
 	github.com/rjeczalik/notify v0.9.3
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/mod v0.37.0
 	golang.org/x/term v0.45.0
 	goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e
 	goodkind.io/gksyntax v0.0.0-20260608044551-dcae2f033996
-	goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910
+	goodkind.io/go-makefile/selfupdate v0.0.0-20260704231913-34a64a4d9458
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.11
 )
@@ -116,7 +117,6 @@ require (
 	go.etcd.io/raft/v3 v3.6.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/mod v0.37.0 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	sigs.k8s.io/json v0.0.0-20241010143419-9aa6b5e7a4b3 // indirect
 )
@@ -220,7 +220,7 @@ require (
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
