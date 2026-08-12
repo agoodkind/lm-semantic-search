@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 )
 
 // Conversation collections carry their filterable attributes as native scalar
@@ -519,12 +520,25 @@ func (service *Service) PrepareCollection(
 		return nil
 	}
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
-		return err
+		return classifyPrepareCollectionError(collectionName, err)
 	}
 	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
-		return err
+		return classifyPrepareCollectionError(collectionName, err)
 	}
-	return service.ensureConversationScalarColumnsOnce(ctx, collectionName)
+	return classifyPrepareCollectionError(
+		collectionName,
+		service.ensureConversationScalarColumnsOnce(ctx, collectionName),
+	)
+}
+
+func classifyPrepareCollectionError(collectionName string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if storeUnavailable(err) {
+		return adapterr.NewMilvusUnavailable(fmt.Errorf("prepare Milvus collection %s: %w", collectionName, err))
+	}
+	return err
 }
 
 // loadCollection loads collectionName into memory and waits for the load to
