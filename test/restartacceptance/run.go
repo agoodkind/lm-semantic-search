@@ -39,6 +39,13 @@ type acceptanceRun struct {
 }
 
 func prepareAcceptanceRun(ctx context.Context, now time.Time, entropy io.Reader) (acceptanceRun, error) {
+	confirmation := os.Getenv(restartAcceptanceOptIn)
+	if err := validateOptIn(confirmation); err != nil {
+		return acceptanceRun{}, err
+	}
+	if err := validateRecordedImages(ctx, execCommandRunner{}); err != nil {
+		return acceptanceRun{}, err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return acceptanceRun{}, fmt.Errorf("resolve home directory: %w", err)
@@ -49,7 +56,7 @@ func prepareAcceptanceRun(ctx context.Context, now time.Time, entropy io.Reader)
 	}
 	return prepareRun(preparationInput{
 		Context:           ctx,
-		Confirmation:      os.Getenv(restartAcceptanceOptIn),
+		Confirmation:      confirmation,
 		BackupRoot:        backupRootFromEnvironment(),
 		RunParent:         runParent,
 		Home:              home,
