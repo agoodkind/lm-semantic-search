@@ -83,4 +83,7 @@ func TestPrepareCollectionClassifiesMilvusTransportOutage(t *testing.T) {
 	if adapterErr.Class != adapterr.ClassMilvusUnavailable {
 		t.Fatalf("PrepareCollection class = %q, want %q", adapterErr.Class, adapterr.ClassMilvusUnavailable)
 	}
+	if got := status.Code(err); got != codes.DeadlineExceeded {
+		t.Fatalf("PrepareCollection cause code = %s, want %s", got, codes.DeadlineExceeded)
+	}
 }
