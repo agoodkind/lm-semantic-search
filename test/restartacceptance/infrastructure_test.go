@@ -36,7 +36,7 @@ func TestComposeFilePinsImagesPortsAndWritableCaseData(t *testing.T) {
 		paths.Cases + "/g-restore/milvus:/var/lib/milvus",
 		paths.Cases + "/g-restore/minio:/minio_data",
 		paths.Cases + "/g-restore/minio-default:/data",
-		"etcdctl endpoint health",
+		`test: ["CMD", "etcdctl", "endpoint", "health"]`,
 		"http://localhost:9000/minio/health/live",
 		"http://localhost:9091/healthz",
 		"condition: service_healthy",
@@ -52,6 +52,9 @@ func TestComposeFilePinsImagesPortsAndWritableCaseData(t *testing.T) {
 	}
 	if strings.Contains(content, "restart: unless-stopped") {
 		t.Fatal("compose file inherited production restart policy")
+	}
+	if strings.Contains(content, `test: ["CMD-SHELL", "etcdctl endpoint health"]`) {
+		t.Fatal("etcd health check requires a shell that the recorded image does not contain")
 	}
 	for _, line := range strings.Split(content, "\n") {
 		isCredential := strings.Contains(line, "ACCESS_KEY") ||
