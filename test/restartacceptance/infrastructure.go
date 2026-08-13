@@ -468,16 +468,23 @@ func (execCommandRunner) ImageConfigID(ctx context.Context, tag string) (string,
 
 func readDockerSaveConfigID(reader io.Reader) (string, error) {
 	archive := tar.NewReader(reader)
+	configID := ""
 	for {
 		header, err := archive.Next()
 		if errors.Is(err, io.EOF) {
-			return "", fmt.Errorf("Docker image archive is missing manifest.json")
+			if configID == "" {
+				return "", fmt.Errorf("Docker image archive is missing manifest.json")
+			}
+			return configID, nil
 		}
 		if err != nil {
 			return "", fmt.Errorf("read Docker image archive: %w", err)
 		}
 		if header.Name != "manifest.json" {
 			continue
+		}
+		if configID != "" {
+			return "", fmt.Errorf("Docker image archive contains duplicate manifest.json")
 		}
 		var manifest []struct {
 			Config string `json:"Config"`
@@ -497,7 +504,7 @@ func readDockerSaveConfigID(reader io.Reader) (string, error) {
 		if !found || len(configDigest) != sha256.Size*2 {
 			return "", fmt.Errorf("Docker image manifest has invalid config %q", manifest[0].Config)
 		}
-		return "sha256:" + configDigest, nil
+		configID = "sha256:" + configDigest
 	}
 }
 
