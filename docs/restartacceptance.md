@@ -40,6 +40,30 @@ Keep `TART_NO_AUTO_PRUNE=1`. Tart must not delete cached images during acceptanc
 
 Use a Linux guest. A macOS guest would need another virtual machine to run Linux containers.
 
+## Prepare copy-on-write guest storage
+
+The writable run directory must support copy-on-write file clones, also called reflinks. The harness uses reflinks to create isolated case data without copying every restored byte.
+
+Use XFS with reflinks enabled or another Linux file system that supports `FICLONE`. A default ext4 root does not meet this requirement.
+
+For an Ubuntu guest with an ext4 root, create a new sparse XFS image on the guest disk. The following command formats only the new file named by `ACCEPTANCE_DISK_IMAGE`:
+
+```sh
+export ACCEPTANCE_DISK_IMAGE="${ACCEPTANCE_DISK_IMAGE:?set the guest XFS image path}"
+export ACCEPTANCE_DISK_SIZE="${ACCEPTANCE_DISK_SIZE:?set the XFS image size}"
+export LMS_RESTART_ACCEPTANCE_RUN_PARENT="${LMS_RESTART_ACCEPTANCE_RUN_PARENT:?set the guest run directory}"
+
+sudo apt-get install xfsprogs
+truncate -s "$ACCEPTANCE_DISK_SIZE" "$ACCEPTANCE_DISK_IMAGE"
+sudo mkfs.xfs -f -m reflink=1 "$ACCEPTANCE_DISK_IMAGE"
+sudo mkdir -p "$LMS_RESTART_ACCEPTANCE_RUN_PARENT"
+sudo mount -o loop "$ACCEPTANCE_DISK_IMAGE" "$LMS_RESTART_ACCEPTANCE_RUN_PARENT"
+sudo chown "$USER" "$LMS_RESTART_ACCEPTANCE_RUN_PARENT"
+df -h "$LMS_RESTART_ACCEPTANCE_RUN_PARENT"
+```
+
+Set the image size above the harness reserve plus expected case growth. Stop if the reported free space is below the harness requirement.
+
 ## Mount only the backup
 
 Expose the backup as a read-only share with the chosen virtual machine system. Verify the read-only setting before extraction.
@@ -55,7 +79,7 @@ findmnt "$BACKUP_MOUNT"
 
 The output must include `ro`. Stop if it reports a writable mount.
 
-Create the writable run parent on the guest disk:
+Create the writable run parent on the guest disk when its file system already supports `FICLONE`:
 
 ```sh
 export LMS_RESTART_ACCEPTANCE_RUN_PARENT="${LMS_RESTART_ACCEPTANCE_RUN_PARENT:?set the guest run directory}"

@@ -1,9 +1,9 @@
-//go:build restartacceptance && !darwin
+//go:build restartacceptance && !darwin && !linux
 
 package restartacceptance
 
 import "fmt"
 
 func cloneFile(_, _ string) error {
-	return fmt.Errorf("APFS clonefile semantics are unavailable on this platform")
+	return fmt.Errorf("copy-on-write file cloning is unavailable on this platform")
 }
