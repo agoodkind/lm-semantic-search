@@ -35,7 +35,7 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 
 	currentJob, found := manager.jobs[job.ID]
 	if !found {
-		return nil
+		return fmt.Errorf("start job: job missing")
 	}
 	now := clock.Now()
 	previousJob := currentJob

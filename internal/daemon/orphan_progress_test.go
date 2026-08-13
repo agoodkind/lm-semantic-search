@@ -526,3 +526,22 @@ func TestUpdateJobRunningRejectsStaleIndexingOwner(t *testing.T) {
 		t.Fatalf("codebase after stale job = %+v, want newer indexing owner", gotCodebase)
 	}
 }
+
+func TestUpdateJobRunningRejectsMissingJob(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-missing-running-job",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+
+	if err := manager.updateJobRunning(job); err == nil {
+		t.Fatal("updateJobRunning accepted a missing job")
+	}
+}
