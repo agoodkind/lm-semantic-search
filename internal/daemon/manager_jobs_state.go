@@ -617,6 +617,7 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 	// duplicate terminal transition (an explicit CancelJob plus this context-cancel
 	// path) never clobbers a drained successor.
 	codebase.ActiveJobID = ""
+	codebase.Status = codebaseStatusAfterCancellation(codebase)
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
@@ -630,6 +631,16 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 	if drained {
 		manager.runDrainedJob(ctx, codebaseID, drainedJobID)
 	}
+}
+
+func codebaseStatusAfterCancellation(codebase model.Codebase) model.CodebaseStatus {
+	if codebase.Status != model.CodebaseStatusPending && codebase.Status != model.CodebaseStatusIndexing {
+		return codebase.Status
+	}
+	if codebase.LastSuccessfulRun != nil {
+		return model.CodebaseStatusIndexed
+	}
+	return model.CodebaseStatusNotIndexed
 }
 
 func waitForJobDone(ctx context.Context, jobDone chan struct{}) error {

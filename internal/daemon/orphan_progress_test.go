@@ -444,6 +444,9 @@ func TestRunJobAsyncStopsAfterPersistentRunningStateFailure(t *testing.T) {
 	if gotCodebase.ActiveJobID != "" {
 		t.Fatalf("codebase active job = %q, want empty", gotCodebase.ActiveJobID)
 	}
+	if gotCodebase.Status != model.CodebaseStatusNotIndexed {
+		t.Fatalf("codebase status = %q, want not indexed after exhausted start", gotCodebase.Status)
+	}
 	if hasCancel || hasDone {
 		t.Fatalf("exhausted retry left cancel=%v done=%v, want both removed", hasCancel, hasDone)
 	}

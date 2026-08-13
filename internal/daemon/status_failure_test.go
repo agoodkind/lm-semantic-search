@@ -177,8 +177,11 @@ func TestUpdateJobCancelledDoesNotFailCodebase(t *testing.T) {
 	}
 
 	codebase := newCodebaseRecord(canonical)
-	codebase.Status = model.CodebaseStatusIndexed
+	codebase.Status = model.CodebaseStatusIndexing
 	job := model.Job{ID: "job-cancel", CodebaseID: codebase.ID, State: model.JobStateCancelling}
+	codebase.ActiveJobID = job.ID
+	completedAt := time.Now().Add(-time.Minute)
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{CompletedAt: completedAt}
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
 	manager.jobs[job.ID] = job
