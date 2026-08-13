@@ -15,18 +15,30 @@ func cloneFile(source string, destination string) (cloneErr error) {
 	if err != nil {
 		return fmt.Errorf("open clone source: %w", err)
 	}
-	defer func() {
-		cloneErr = errors.Join(cloneErr, sourceFile.Close())
-	}()
 	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return fmt.Errorf("create clone destination: %w", err)
+		openErr := fmt.Errorf("create clone destination: %w", err)
+		if closeErr := sourceFile.Close(); closeErr != nil {
+			return errors.Join(openErr, fmt.Errorf("close clone source: %w", closeErr))
+		}
+		return openErr
 	}
 	defer func() {
-		cloneErr = errors.Join(cloneErr, destinationFile.Close())
+		if err := destinationFile.Close(); err != nil {
+			cloneErr = errors.Join(cloneErr, fmt.Errorf("close clone destination: %w", err))
+		}
+		if err := sourceFile.Close(); err != nil {
+			cloneErr = errors.Join(cloneErr, fmt.Errorf("close clone source: %w", err))
+		}
+		if cloneErr == nil {
+			return
+		}
+		if err := os.Remove(destination); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cloneErr = errors.Join(cloneErr, fmt.Errorf("remove failed clone destination: %w", err))
+		}
 	}()
 	if err := unix.IoctlFileClone(int(destinationFile.Fd()), int(sourceFile.Fd())); err != nil {
-		return fmt.Errorf("clone file with FICLONE: %w", err)
+		return fmt.Errorf("clone with FICLONE from %q to %q: %w", source, destination, err)
 	}
 	return nil
 }
