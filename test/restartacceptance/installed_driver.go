@@ -40,15 +40,18 @@ import (
 )
 
 const (
-	cloneMilvusAddress = "127.0.0.1:29530"
-	fixtureQuery       = "restart acceptance"
+	cloneMilvusAddress                   = "127.0.0.1:29530"
+	fixtureQuery                         = "restart acceptance"
+	scenarioBMetadataTimeoutMilliseconds = 10000
 )
 
 type realAcceptanceDriver struct {
-	runner        execCommandRunner
-	mutex         sync.Mutex
-	calls         []milvusProxyCall
-	teardownError error
+	runner                 execCommandRunner
+	startScenarioBDaemon   func(context.Context, installedProcess, string) (*daemonRuntime, error)
+	openScenarioBObservers func(context.Context, *daemonRuntime, acceptanceRun, acceptanceFixture) (rowSnapshotObserver, checkpointSnapshotObserver, func(), error)
+	mutex                  sync.Mutex
+	calls                  []milvusProxyCall
+	teardownError          error
 }
 
 func newRealAcceptanceLifecycleOperations() (acceptanceLifecycleOperations, error) {
@@ -303,20 +306,63 @@ func (driver *realAcceptanceDriver) runInstalledScenarioB(
 	fixture acceptanceFixture,
 	recorder *evidenceRecorder,
 ) error {
-	proxies.embedding.GateAfter(1)
-	runtime, err := startDaemonRuntime(ctx, installedLMSProcess(run), run.Paths.LMSSocket)
+	startDaemon := driver.startScenarioBDaemon
+	if startDaemon == nil {
+		startDaemon = startDaemonRuntime
+	}
+	runtime, err := startDaemon(ctx, installedLMSProcessForScenarioB(run), run.Paths.LMSSocket)
 	if err != nil {
 		return err
 	}
 	defer driver.stopDaemonRuntime(runtime)
+	if _, err := waitForCompletedIndex(ctx, runtime.client, fixture.root); err != nil {
+		return fmt.Errorf("seed scenario B live target: %w", err)
+	}
+	openObservers := driver.openScenarioBObservers
+	if openObservers == nil {
+		openObservers = openInstalledScenarioBObservers
+	}
+	observeRows, observeCheckpoint, closeObservers, err := openObservers(ctx, runtime, run, fixture)
+	if err != nil {
+		return err
+	}
+	defer closeObservers()
+	proxies.embedding.GateAfter(len(proxies.embedding.Inputs()))
+	addedHashes, err := prepareScenarioBRebuild(fixture)
+	if err != nil {
+		return fmt.Errorf("prepare scenario B rebuild: %w", err)
+	}
 	_, err = runScenarioB(ctx, scenarioBInput{
-		Client:               runtime.client,
-		Path:                 fixture.root,
-		Proxy:                proxies.milvus,
-		ReleaseEmbeddingGate: proxies.embedding.ClearGate,
+		Client: runtime.client,
+		Path:   fixture.root,
+		Proxy:  proxies.milvus,
+		ReleaseEmbeddingGate: func() error {
+			return releaseScenarioBEmbeddingGate(proxies.milvus, proxies.embedding.ClearGate)
+		},
+		EmbeddingGateReached: proxies.embedding.GateReached(),
+		ExpectedAddedHashes:  addedHashes,
+		ObserveRows:          observeRows,
+		ObserveCheckpoint:    observeCheckpoint,
 		Recorder:             recorder,
 	})
 	return err
+}
+
+func openInstalledScenarioBObservers(
+	ctx context.Context,
+	runtime *daemonRuntime,
+	run acceptanceRun,
+	fixture acceptanceFixture,
+) (rowSnapshotObserver, checkpointSnapshotObserver, func(), error) {
+	milvusClient, err := newCloneMilvusClient(ctx)
+	if err != nil {
+		return nil, nil, func() {}, err
+	}
+	return rowObserver(milvusClient, codeCollectionName(fixture.root)), checkpointObserver(
+		runtime.client,
+		fixture.root,
+		installedLMSMerklePath(run.Paths),
+	), func() { closeMilvusClient(milvusClient) }, nil
 }
 
 func (driver *realAcceptanceDriver) runInstalledScenarioC(
@@ -1034,6 +1080,40 @@ func appendFixtureChange(root string, relativePath string, marker string) error 
 	return errors.Join(writeErr, closeErr)
 }
 
+func prepareScenarioBRebuild(fixture acceptanceFixture) (map[string]string, error) {
+	added := []string{"04.go", "05.go"}
+	paths := make([]string, len(added))
+	for index, name := range added {
+		paths[index] = filepath.Join(fixture.root, name)
+		if _, err := os.Lstat(paths[index]); err == nil {
+			return nil, fmt.Errorf("scenario B fixture target %q already exists", name)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
+	written := make([]string, 0, len(paths))
+	hashes := make(map[string]string, len(paths))
+	for index, name := range added {
+		body := fmt.Sprintf(
+			"package fixture\n\n// restart_acceptance_id:%s\nfunc ScenarioB%d() string { return %q }\n",
+			name,
+			index+1,
+			fixture.marker,
+		)
+		if err := os.WriteFile(paths[index], []byte(body), 0o600); err != nil {
+			cleanupErrors := []error{err}
+			for _, path := range written {
+				cleanupErrors = append(cleanupErrors, os.Remove(path))
+			}
+			return nil, errors.Join(cleanupErrors...)
+		}
+		written = append(written, paths[index])
+		digest := sha256.Sum256([]byte(body))
+		hashes[name] = hex.EncodeToString(digest[:])
+	}
+	return hashes, nil
+}
+
 func snapshotCloneState(
 	ctx context.Context,
 	client *milvusclient.Client,
@@ -1340,6 +1420,15 @@ func installedLMSProcess(run acceptanceRun) installedProcess {
 	return installedProcess{Path: run.Binaries.Daemon, Environment: environment}
 }
 
+func installedLMSProcessForScenarioB(run acceptanceRun) installedProcess {
+	process := installedLMSProcess(run)
+	process.Environment["CLAUDE_CONTEXT_BACKGROUND_SYNC"] = "false"
+	process.Environment["CLAUDE_CONTEXT_TRIGGER_WATCHER"] = "false"
+	process.Environment["CLAUDE_CONTEXT_FILE_WATCHER"] = "false"
+	process.Environment["CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS"] = strconv.Itoa(scenarioBMetadataTimeoutMilliseconds)
+	return process
+}
+
 func installedLMSLogPath(paths runPaths) string {
 	return filepath.Join(paths.LMSState, "lm-semantic-search", "logs", "lm-semantic-search-daemon.log")
 }
@@ -1537,11 +1626,7 @@ func checkpointObserver(
 		if err := json.Unmarshal(body, &snapshot); err != nil {
 			return checkpointSnapshot{}, fmt.Errorf("decode checkpoint snapshot: %w", err)
 		}
-		tracked := make(map[string]struct{}, len(snapshot.Files))
-		for name := range snapshot.Files {
-			tracked[name] = struct{}{}
-		}
-		return checkpointSnapshot{TrackedIDs: tracked, CompletedCount: len(tracked)}, nil
+		return checkpointSnapshot{FileHashes: snapshot.Files, CompletedCount: len(snapshot.Files)}, nil
 	}
 }
 
