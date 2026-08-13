@@ -2,14 +2,21 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
+)
+
+const (
+	jobStartRetryAttempts = 3
+	jobStartRetryDelay    = time.Second
 )
 
 func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
@@ -36,28 +43,50 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 			manager.mu.Unlock()
 			close(done)
 		}()
-		// The slot is acquired inside the goroutine so callers never block on
-		// the cap; the job stays JobStateQueued until runJob calls
-		// updateJobRunning, so a queued-behind-the-cap job reports queued.
-		select {
-		case manager.indexSlots <- struct{}{}:
-			capacity := &jobCapacity{
-				manager:       manager,
-				mu:            sync.Mutex{},
-				slotHeld:      true,
-				syncLockHeld:  false,
-				syncLockLease: syncLockLease{lock: nil, once: nil},
+		for attempt := 1; attempt <= jobStartRetryAttempts; attempt++ {
+			// The slot is acquired inside the goroutine so callers never block on
+			// the cap; the job stays JobStateQueued until runJob calls
+			// updateJobRunning, so a queued-behind-the-cap job reports queued.
+			select {
+			case manager.indexSlots <- struct{}{}:
+				capacity := &jobCapacity{
+					manager:       manager,
+					mu:            sync.Mutex{},
+					slotHeld:      true,
+					syncLockHeld:  false,
+					syncLockLease: syncLockLease{lock: nil, once: nil},
+				}
+				runContext := withJobCapacity(backgroundContext, capacity)
+				graphTask, retryStart := manager.runJob(runContext, jobID)
+				capacity.release(backgroundContext)
+				if retryStart && attempt < jobStartRetryAttempts {
+					select {
+					case <-time.After(jobStartRetryDelay):
+						continue
+					case <-backgroundContext.Done():
+						manager.updateJobCancelled(backgroundContext, jobID)
+						return
+					}
+				}
+				if manager.jobIsQueued(jobID) {
+					manager.updateJobCancelled(backgroundContext, jobID)
+					return
+				}
+				manager.runGraphIndexTask(backgroundContext, graphTask)
+				return
+			case <-backgroundContext.Done():
+				manager.updateJobCancelled(backgroundContext, jobID)
+				return
 			}
-			defer capacity.release(backgroundContext)
-			runContext := withJobCapacity(backgroundContext, capacity)
-			graphTask := manager.runJob(runContext, jobID)
-			capacity.release(backgroundContext)
-			manager.runGraphIndexTask(backgroundContext, graphTask)
-		case <-backgroundContext.Done():
-			manager.updateJobCancelled(backgroundContext, jobID)
-			return
 		}
 	}()
+}
+
+func (manager *Manager) jobIsQueued(jobID string) bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	job, found := manager.jobs[jobID]
+	return found && job.State == model.JobStateQueued
 }
 
 // acquireJobSyncLock takes the sync lock for one job's embed and reports the
@@ -81,7 +110,7 @@ func (manager *Manager) acquireJobSyncLock(
 	return manager.syncLock.acquireBlocking(ctx)
 }
 
-func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTask {
+func (manager *Manager) runJob(ctx context.Context, jobID string) (*graphIndexTask, bool) {
 	ctx, done := spans.Open(ctx, "daemon.runJob")
 	defer done(nil)
 
@@ -92,10 +121,13 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 	job, found := manager.jobs[jobID]
 	manager.mu.Unlock()
 	if !found {
-		return nil
+		return nil, false
 	}
 
-	manager.updateJobRunning(job)
+	if err := manager.updateJobRunning(job); err != nil {
+		slog.ErrorContext(ctx, "start job persistence failed", "job_id", job.ID, "err", err)
+		return nil, errors.Is(err, errRetryJobStart)
+	}
 
 	// Hold the sync lock for the embed so every other holder of that lock file
 	// backs off while this job writes the collection. Skip it when there is no
@@ -116,22 +148,22 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 			defer lease.release(ctx)
 		case syncLockCancelled:
 			manager.updateJobCancelled(ctx, job.ID)
-			return nil
+			return nil, false
 		case syncLockFailed:
 			manager.updateJobFailed(ctx, job.ID, lockErr)
-			return nil
+			return nil, false
 		case syncLockBusy:
 			// acquireBlocking waits out ordinary contention, so it never returns
 			// busy; the exhaustive switch check still requires the case. A busy
 			// outcome carries no error of its own, so the job reports the lock as
 			// unavailable rather than embedding with no lock held.
 			manager.updateJobFailed(ctx, job.ID, errSyncLockUnavailable)
-			return nil
+			return nil, false
 		default:
 			// Any outcome this switch does not name ends the job for the same
 			// reason, which puts the safe direction on the fallback.
 			manager.updateJobFailed(ctx, job.ID, errSyncLockUnavailable)
-			return nil
+			return nil, false
 		}
 	}
 
@@ -150,26 +182,26 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 	case jobOperationSync:
 		handled, graphTask := manager.runDeltaSync(ctx, job, codeSource)
 		if handled {
-			return graphTask
+			return graphTask, false
 		}
-		return manager.runBootstrap(ctx, job, codeSource)
+		return manager.runBootstrap(ctx, job, codeSource), false
 	case jobOperationStreamingReindex:
 		handled, graphTask := manager.runDeltaSync(ctx, job, codeSource)
 		if handled {
-			return graphTask
+			return graphTask, false
 		}
-		return manager.runBootstrap(ctx, job, codeSource)
+		return manager.runBootstrap(ctx, job, codeSource), false
 	case jobOperationIndex:
 		reason := bootstrapReasonFirstIndex
 		if job.Forced {
 			reason = bootstrapReasonForcedReindex
 		}
 		manager.routeToBootstrap(ctx, job.ID, reason)
-		return manager.runBootstrap(ctx, job, codeSource)
+		return manager.runBootstrap(ctx, job, codeSource), false
 	case jobOperationConversationIngest:
 		manager.runConversationIngest(ctx, job)
 	}
-	return nil
+	return nil, false
 }
 
 // JobSuccessorID returns the id of the immediate next terminal job for job's
