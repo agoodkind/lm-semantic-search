@@ -458,6 +458,10 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 func (manager *Manager) updateDetachedJobFailed(ctx context.Context, jobID string, runErr error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	job, found := manager.jobs[jobID]
+	if !found || isTerminalJobState(job.State) {
+		return
+	}
 	_, _ = manager.markJobFailedLocked(ctx, jobID, runErr)
 }
 
@@ -466,7 +470,7 @@ func (manager *Manager) updateDetachedJobCompleted(ctx context.Context, jobID st
 	defer manager.mu.Unlock()
 
 	job, found := manager.jobs[jobID]
-	if !found || job.State == model.JobStateCancelled {
+	if !found || isTerminalJobState(job.State) {
 		return
 	}
 	now := clock.Now()
@@ -493,7 +497,7 @@ func (manager *Manager) updateDetachedJobCancelled(ctx context.Context, jobID st
 	defer manager.mu.Unlock()
 
 	job, found := manager.jobs[jobID]
-	if !found {
+	if !found || isTerminalJobState(job.State) {
 		return
 	}
 	manager.forgetJobJournalLocked(jobID)

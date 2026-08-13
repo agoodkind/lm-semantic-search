@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/indexer"
@@ -269,7 +270,7 @@ func TestStaleConvergeTerminalStatePreservesNewerFirstBuild(t *testing.T) {
 			manager.codebases[staleCodebase.ID] = staleCodebase
 			manager.mu.Unlock()
 			syncer := NewBackgroundSync(manager.config, manager)
-			registration, err := syncer.registerConvergeJob(context.Background(), staleCodebase, 1)
+			registration, err := syncer.registerConvergeJob(context.Background(), staleCodebase, []string{"main.go"})
 			if err != nil {
 				t.Fatalf("registerConvergeJob returned error: %v", err)
 			}
@@ -330,7 +331,8 @@ func TestRegisterConvergeJobRejectsChangedOwnership(t *testing.T) {
 	manager.mu.Unlock()
 
 	syncer := NewBackgroundSync(manager.config, manager)
-	if _, err := syncer.registerConvergeJob(context.Background(), staleCodebase, 1); err == nil {
+	syncer.queue = NewEventQueue(time.Hour, func(string, []string) {})
+	if _, err := syncer.registerConvergeJob(context.Background(), staleCodebase, []string{"main.go"}); err == nil {
 		t.Fatal("registerConvergeJob returned nil after ownership changed")
 	}
 	manager.mu.Lock()
@@ -342,6 +344,56 @@ func TestRegisterConvergeJobRejectsChangedOwnership(t *testing.T) {
 	}
 	if jobCount != 0 {
 		t.Fatalf("job count after rejected converge = %d, want 0", jobCount)
+	}
+	if got := syncer.queue.PendingCounts()[current.ID]; got != 1 {
+		t.Fatalf("requeued path count = %d, want 1", got)
+	}
+}
+
+func TestDetachedJobTerminalTransitionsPreserveFirstTerminalState(t *testing.T) {
+	testCases := []struct {
+		name   string
+		finish func(context.Context, *Manager, string)
+	}{
+		{name: "completed", finish: func(ctx context.Context, manager *Manager, jobID string) {
+			manager.updateDetachedJobCompleted(ctx, jobID, indexer.Result{IndexedFiles: 1, TotalChunks: 1})
+		}},
+		{name: "failed", finish: func(ctx context.Context, manager *Manager, jobID string) {
+			manager.updateDetachedJobFailed(ctx, jobID, errors.New("converge failed"))
+		}},
+		{name: "cancelled", finish: func(ctx context.Context, manager *Manager, jobID string) {
+			manager.updateDetachedJobCancelled(ctx, jobID)
+		}},
+	}
+	terminalStates := []model.JobState{
+		model.JobStateCompleted,
+		model.JobStateFailed,
+		model.JobStateCancelled,
+	}
+	for _, initialState := range terminalStates {
+		for _, testCase := range testCases {
+			t.Run(string(initialState)+"/"+testCase.name, func(t *testing.T) {
+				manager, _, repoPath := newTestManager(t)
+				completedAt := clock.Now().Add(-time.Minute)
+				job := newQueuedJob("cb-terminal", repoPath, repoPath, testClientInfo(), "converge", false, defaultIndexConfig(), emptyAdmissionBudget, completedAt)
+				job.State = initialState
+				job.CompletedAt = &completedAt
+				job.Progress.Phase = string(initialState)
+				manager.mu.Lock()
+				manager.jobs[job.ID] = job
+				manager.mu.Unlock()
+
+				testCase.finish(context.Background(), manager, job.ID)
+
+				got, found := manager.GetJob(job.ID)
+				if !found {
+					t.Fatalf("GetJob(%q) did not find terminal job", job.ID)
+				}
+				if got.State != initialState || got.Progress.Phase != string(initialState) || got.CompletedAt == nil || !got.CompletedAt.Equal(completedAt) {
+					t.Fatalf("job after %s transition = %+v, want original %s terminal state", testCase.name, got, initialState)
+				}
+			})
+		}
 	}
 }
 

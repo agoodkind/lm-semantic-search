@@ -512,7 +512,7 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	}
 	syncer.markConvergeRunning(codebaseID)
 
-	registration, err := syncer.registerConvergeJob(ctx, codebase, len(relativePaths))
+	registration, err := syncer.registerConvergeJob(ctx, codebase, relativePaths)
 	if err != nil {
 		slog.ErrorContext(ctx, "register converge job failed", "codebase_id", codebaseID, "err", err)
 		return
@@ -552,7 +552,7 @@ type convergeJobRegistration struct {
 func (syncer *BackgroundSync) registerConvergeJob(
 	ctx context.Context,
 	codebase model.Codebase,
-	pathCount int,
+	relativePaths []string,
 ) (convergeJobRegistration, error) {
 	now := clock.Now()
 	job := newQueuedJob(
@@ -566,7 +566,7 @@ func (syncer *BackgroundSync) registerConvergeJob(
 		emptyAdmissionBudget,
 		now,
 	)
-	job.Progress.FilesTotal = safeInt32(pathCount)
+	job.Progress.FilesTotal = safeInt32(len(relativePaths))
 	job.Progress.Unit = "path"
 
 	jobCorr := correlation.FromContext(ctx).WithIdentityAttributes(
@@ -579,6 +579,7 @@ func (syncer *BackgroundSync) registerConvergeJob(
 	if !found || current.ActiveJobID != "" || current.Status != codebase.Status || current.ActiveJobID != codebase.ActiveJobID || !current.UpdatedAt.Equal(codebase.UpdatedAt) {
 		syncer.manager.mu.Unlock()
 		cancel()
+		syncer.requeuePaths(codebase.ID, relativePaths)
 		return convergeJobRegistration{}, fmt.Errorf("start converge job: codebase ownership changed")
 	}
 	if err := syncer.manager.appendJobLocked("start_converge", job); err != nil {
