@@ -8,10 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -21,7 +22,7 @@ import (
 func TestComposeFilePinsImagesPortsAndWritableCaseData(t *testing.T) {
 	t.Parallel()
 
-	paths := pathsForRun("/Volumes/Chaos Storage/lms-restart-acceptance/20260812T010203Z-abcdef01")
+	paths := pathsForRun(filepath.Join(t.TempDir(), "20260812T010203Z-abcdef01"))
 	content := renderCompose(paths, "g-restore")
 	for _, literal := range []string{
 		etcdImage.Tag,
@@ -68,27 +69,116 @@ func TestComposeFilePinsImagesPortsAndWritableCaseData(t *testing.T) {
 }
 
 func TestValidateRecordedImagesRequiresExactLocalImageIDs(t *testing.T) {
-	runner := &recordingRunner{outputs: [][]byte{
-		[]byte(etcdImage.ID + "\n"),
-		[]byte(minioImage.ID + "\n"),
-		[]byte(milvusImage.ID + "\n"),
+	source := &recordingImageConfigIDSource{ids: map[string]string{
+		etcdImage.Tag:   etcdImage.ID,
+		minioImage.Tag:  minioImage.ID,
+		milvusImage.Tag: milvusImage.ID,
 	}}
-	if err := validateRecordedImages(context.Background(), runner); err != nil {
+	if err := validateRecordedImages(context.Background(), source); err != nil {
 		t.Fatalf("validate recorded images: %v", err)
 	}
-	if len(runner.calls) != 3 {
-		t.Fatalf("image inspection calls = %d, want 3", len(runner.calls))
+	if len(source.calls) != 3 {
+		t.Fatalf("image config ID calls = %d, want 3", len(source.calls))
 	}
 	for index, image := range []recordedImage{etcdImage, minioImage, milvusImage} {
-		want := []string{"docker", "image", "inspect", "--format={{.Id}}", image.Tag}
-		if !slices.Equal(runner.calls[index], want) {
-			t.Fatalf("image inspection call %d = %v, want %v", index, runner.calls[index], want)
+		if source.calls[index] != image.Tag {
+			t.Fatalf("image config ID call %d = %q, want %q", index, source.calls[index], image.Tag)
 		}
 	}
 
-	mismatch := &recordingRunner{outputs: [][]byte{[]byte("sha256:wrong\n")}}
+	mismatch := &recordingImageConfigIDSource{ids: map[string]string{
+		etcdImage.Tag:   "sha256:wrong",
+		minioImage.Tag:  minioImage.ID,
+		milvusImage.Tag: milvusImage.ID,
+	}}
 	if err := validateRecordedImages(context.Background(), mismatch); err == nil {
 		t.Fatal("mismatched local image ID was accepted")
+	}
+}
+
+type recordingImageConfigIDSource struct {
+	ids   map[string]string
+	calls []string
+}
+
+func (source *recordingImageConfigIDSource) ImageConfigID(_ context.Context, tag string) (string, error) {
+	source.calls = append(source.calls, tag)
+	return source.ids[tag], nil
+}
+
+func TestReadDockerSaveConfigIDSupportsContainerdImageStore(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	manifest := fmt.Sprintf(`[{"Config":"blobs/sha256/%s"}]`, strings.TrimPrefix(etcdImage.ID, "sha256:"))
+	if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Size: int64(len(manifest)), Mode: 0o600}); err != nil {
+		t.Fatalf("write manifest header: %v", err)
+	}
+	if _, err := writer.Write([]byte(manifest)); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+
+	configID, err := readDockerSaveConfigID(&archive)
+	if err != nil {
+		t.Fatalf("read Docker save config ID: %v", err)
+	}
+	if configID != etcdImage.ID {
+		t.Fatalf("config ID = %q, want %q", configID, etcdImage.ID)
+	}
+}
+
+func TestReadDockerSaveConfigIDSupportsLegacyImageStore(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	manifest := fmt.Sprintf(`[{"Config":"%s.json"}]`, strings.TrimPrefix(etcdImage.ID, "sha256:"))
+	if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Size: int64(len(manifest)), Mode: 0o600}); err != nil {
+		t.Fatalf("write manifest header: %v", err)
+	}
+	if _, err := writer.Write([]byte(manifest)); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+
+	configID, err := readDockerSaveConfigID(&archive)
+	if err != nil {
+		t.Fatalf("read Docker save config ID: %v", err)
+	}
+	if configID != etcdImage.ID {
+		t.Fatalf("config ID = %q, want %q", configID, etcdImage.ID)
+	}
+}
+
+func TestReadDockerSaveConfigIDDrainsArchiveAfterManifest(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	manifest := fmt.Sprintf(`[{"Config":"blobs/sha256/%s"}]`, strings.TrimPrefix(etcdImage.ID, "sha256:"))
+	if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Size: int64(len(manifest)), Mode: 0o600}); err != nil {
+		t.Fatalf("write manifest header: %v", err)
+	}
+	if _, err := writer.Write([]byte(manifest)); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	trailing := bytes.Repeat([]byte("x"), 128*1024)
+	if err := writer.WriteHeader(&tar.Header{Name: "blobs/sha256/trailing", Size: int64(len(trailing)), Mode: 0o600}); err != nil {
+		t.Fatalf("write trailing header: %v", err)
+	}
+	if _, err := writer.Write(trailing); err != nil {
+		t.Fatalf("write trailing data: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+
+	reader := bytes.NewReader(archive.Bytes())
+	if _, err := readDockerSaveConfigID(reader); err != nil {
+		t.Fatalf("read Docker save config ID: %v", err)
+	}
+	if reader.Len() != 0 {
+		t.Fatalf("Docker image archive has %d unread bytes", reader.Len())
 	}
 }
 
@@ -222,10 +312,29 @@ func TestHarnessPassesGeneratedCredentialsOnlyThroughComposeEnvironment(t *testi
 	if err != nil {
 		t.Fatalf("read compose file: %v", err)
 	}
-	for _, value := range runner.environments[0] {
+	for _, key := range []string{minioUserEnvironment, minioPasswordEnvironment} {
+		value := runner.environments[0][key]
 		if strings.Contains(string(composeBody), value) {
 			t.Fatal("compose file contains generated credential value")
 		}
+	}
+}
+
+func TestHarnessRunsCloneServicesAsTheHarnessUser(t *testing.T) {
+	paths := pathsForRun(filepath.Join(t.TempDir(), "lms-restart-acceptance", "20260812T010203Z-abcdef01"))
+	harness := configuredTestHarness(t, paths, &recordingRunner{})
+	environment, err := harness.composeEnvironment()
+	if err != nil {
+		t.Fatalf("compose environment: %v", err)
+	}
+	wantUID := strconv.Itoa(os.Getuid())
+	if environment[hostUserEnvironment] != wantUID {
+		t.Fatalf("compose host user = %q, want %q", environment[hostUserEnvironment], wantUID)
+	}
+	compose := renderCompose(paths, "a")
+	wantUser := "user: \"${" + hostUserEnvironment + ":?required}:0\""
+	if count := strings.Count(compose, wantUser); count != 3 {
+		t.Fatalf("compose service user count = %d, want 3", count)
 	}
 }
 
@@ -580,7 +689,7 @@ func TestHarnessRechecksSpaceAndDeletesCaseAfterCleanup(t *testing.T) {
 	}
 }
 
-func TestHarnessUsesPostRestoreCopyOnWriteReserve(t *testing.T) {
+func TestHarnessRequiresFullWritableCaseReserveAfterRestore(t *testing.T) {
 	paths := pathsForRun(filepath.Join(t.TempDir(), "lms-restart-acceptance", "20260812T010203Z-abcdef01"))
 	for _, path := range []string{paths.SourceEtcd, paths.SourceMilvus, paths.SourceMinIO, paths.SourceMinIODefault} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
@@ -589,11 +698,11 @@ func TestHarnessUsesPostRestoreCopyOnWriteReserve(t *testing.T) {
 	}
 	harness := configuredTestHarness(t, paths, &recordingRunner{})
 	harness.archiveSizes = []int64{100}
-	harness.availableBytes = func(string) (int64, error) { return 25, nil }
+	harness.availableBytes = func(string) (int64, error) { return 125, nil }
 	if err := harness.runCompose(context.Background(), "a-space"); err != nil {
 		t.Fatalf("run compose with post-restore reserve: %v", err)
 	}
-	harness.availableBytes = func(string) (int64, error) { return 24, nil }
+	harness.availableBytes = func(string) (int64, error) { return 124, nil }
 	if err := harness.runCompose(context.Background(), "b-space"); err == nil {
 		t.Fatal("run compose without post-restore reserve succeeded")
 	}
@@ -649,7 +758,7 @@ func TestCollectionCensusSerializationIsDeterministic(t *testing.T) {
 func TestIsolatedEnvironmentRoutesOnlyCloneResources(t *testing.T) {
 	t.Parallel()
 
-	paths := pathsForRun("/Volumes/Chaos Storage/lms-restart-acceptance/20260812T010203Z-abcdef01")
+	paths := pathsForRun(filepath.Join(t.TempDir(), "20260812T010203Z-abcdef01"))
 	lmsEnvironment := isolatedLMSEnvironment(paths)
 	wantLMS := map[string]string{
 		"XDG_STATE_HOME":               paths.LMSState,

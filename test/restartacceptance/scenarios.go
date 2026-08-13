@@ -66,7 +66,7 @@ type rowSnapshot struct {
 }
 
 type checkpointSnapshot struct {
-	TrackedIDs     map[string]struct{}
+	FileHashes     map[string]string
 	CompletedCount int
 }
 
@@ -110,7 +110,7 @@ func runScenarioA(ctx context.Context, input scenarioAInput) (scenarioAResult, e
 	if err != nil {
 		return scenarioAResult{}, fmt.Errorf("scenario A start ingest: %w", err)
 	}
-	checkpoint, err := waitForJob(ctx, input.Client, started.GetJobId(), timeouts.Ready, timeouts.Poll, func(job *pb.Job) bool {
+	checkpoint, err := waitForJob(ctx, input.Client, started.GetJobId(), timeouts.Recovery, timeouts.Poll, func(job *pb.Job) bool {
 		return job.GetState() == "running" && job.GetProgress().GetChunksEmbedded() > 0
 	})
 	if err != nil {
@@ -194,7 +194,11 @@ type scenarioBInput struct {
 	Client               pb.SemanticSearchDaemonServiceClient
 	Path                 string
 	Proxy                *milvusProxy
-	ReleaseEmbeddingGate func()
+	ReleaseEmbeddingGate func() error
+	EmbeddingGateReached <-chan struct{}
+	ExpectedAddedHashes  map[string]string
+	ObserveRows          rowSnapshotObserver
+	ObserveCheckpoint    checkpointSnapshotObserver
 	Recorder             *evidenceRecorder
 	Timeouts             scenarioTimeouts
 }
@@ -208,72 +212,105 @@ type scenarioBResult struct {
 	DaemonPIDAfter  int32
 }
 
+func releaseScenarioBEmbeddingGate(proxy *milvusProxy, clearGate func()) error {
+	if !proxy.IsUnavailable() {
+		return fmt.Errorf("Milvus fault is not active")
+	}
+	clearGate()
+	return nil
+}
+
 func runScenarioB(ctx context.Context, input scenarioBInput) (scenarioBResult, error) {
 	if input.Recorder == nil {
 		return scenarioBResult{}, fmt.Errorf("scenario B requires an evidence recorder")
 	}
-	if input.Client == nil || input.Proxy == nil {
-		return scenarioBResult{}, fmt.Errorf("scenario B requires a daemon client and Milvus proxy")
+	if input.Client == nil || input.Proxy == nil || input.EmbeddingGateReached == nil || input.ObserveRows == nil || input.ObserveCheckpoint == nil {
+		return scenarioBResult{}, fmt.Errorf("scenario B requires daemon, proxy, embedding gate, row, and checkpoint observers")
 	}
 	timeouts := input.Timeouts.resolved()
 	before, err := input.Client.GetStatus(ctx, &pb.GetStatusRequest{})
 	if err != nil {
 		return scenarioBResult{}, fmt.Errorf("scenario B read daemon identity: %w", err)
 	}
-	started, err := input.Client.StartIndex(ctx, &pb.StartIndexRequest{Path: input.Path, Client: scenarioClientInfo()})
+	preflight, err := searchCodeWithin(ctx, input.Client, input.Path, timeouts.Ready)
+	if err != nil {
+		return scenarioBResult{}, fmt.Errorf("scenario B verify live search target: %w", err)
+	}
+	if len(preflight.GetResults()) == 0 {
+		return scenarioBResult{}, fmt.Errorf("scenario B live search target returned no results")
+	}
+	beforeRows, beforeCheckpoint, err := captureRecoverySnapshots(ctx, input.ObserveRows, input.ObserveCheckpoint)
+	if err != nil {
+		return scenarioBResult{}, fmt.Errorf("scenario B capture pre-fault snapshots: %w", err)
+	}
+	started, err := input.Client.SyncIndex(ctx, &pb.SyncIndexRequest{Path: input.Path, Client: scenarioClientInfo()})
 	if err != nil {
 		return scenarioBResult{}, fmt.Errorf("scenario B start ingest: %w", err)
 	}
-	if _, err := waitForJob(ctx, input.Client, started.GetJobId(), timeouts.Ready, timeouts.Poll, func(job *pb.Job) bool {
-		return job.GetState() == "running" && job.GetProgress().GetChunksEmbedded() > 0
-	}); err != nil {
-		return scenarioBResult{}, fmt.Errorf("scenario B wait for mid-ingest progress: %w", err)
-	}
-	preFaultJobs, err := captureJobSet(ctx, input.Client, started.GetCodebaseId())
-	if err != nil {
-		return scenarioBResult{}, fmt.Errorf("scenario B capture pre-fault jobs: %w", err)
+	if err := waitForScenarioBActiveIngest(ctx, input.Client, started.GetJobId(), input.EmbeddingGateReached, timeouts); err != nil {
+		return scenarioBResult{}, err
 	}
 	faultActivatedAt := time.Now()
 	input.Proxy.SetUnavailable(codes.Unavailable, "acceptance Milvus outage")
-	if input.ReleaseEmbeddingGate != nil {
-		input.ReleaseEmbeddingGate()
+	if err := releaseScenarioBGate(input.ReleaseEmbeddingGate); err != nil {
+		return scenarioBResult{}, err
 	}
 	defer input.Proxy.ClearUnavailable()
 	failureContext, cancelFailure := context.WithTimeout(ctx, timeouts.Failure)
-	failureStarted := faultActivatedAt
 	_, searchErr := input.Client.SearchCode(failureContext, &pb.SearchCodeRequest{Path: input.Path, Query: "acceptance", Limit: 1, Client: scenarioClientInfo()})
-	failureElapsed := time.Since(failureStarted)
-	cancelFailure()
 	if status.Code(searchErr) != codes.Unavailable {
+		cancelFailure()
 		return scenarioBResult{}, fmt.Errorf("scenario B search error code=%s, want Unavailable", status.Code(searchErr))
+	}
+	unhealthyMode, err := waitForDaemonHealth(failureContext, input.Client, "store_unavailable", timeouts.Failure, timeouts.Poll)
+	if err != nil {
+		cancelFailure()
+		return scenarioBResult{}, fmt.Errorf("scenario B wait for unhealthy readiness: %w", err)
+	}
+	failed, err := waitForJob(failureContext, input.Client, started.GetJobId(), timeouts.Failure, timeouts.Poll, func(job *pb.Job) bool {
+		return job.GetState() == "failed"
+	})
+	failureElapsed := time.Since(faultActivatedAt)
+	cancelFailure()
+	if err != nil {
+		return scenarioBResult{}, fmt.Errorf("scenario B wait for failed ingest: %w", err)
 	}
 	if failureElapsed > timeouts.Failure {
 		return scenarioBResult{}, fmt.Errorf("scenario B failure took %s, exceeds %s", failureElapsed, timeouts.Failure)
-	}
-	unhealthy, err := waitForIndexHealth(ctx, input.Client, input.Path, "store_unavailable", timeouts.Failure, timeouts.Poll)
-	if err != nil {
-		return scenarioBResult{}, fmt.Errorf("scenario B wait for unhealthy readiness: %w", err)
-	}
-	failed, err := waitForJob(ctx, input.Client, started.GetJobId(), timeouts.Failure, timeouts.Poll, func(job *pb.Job) bool {
-		return job.GetState() == "failed"
-	})
-	if err != nil {
-		return scenarioBResult{}, fmt.Errorf("scenario B wait for failed ingest: %w", err)
 	}
 	if failed.GetError().GetCode() != "milvus_unavailable" || !failed.GetError().GetRetryable() {
 		return scenarioBResult{}, fmt.Errorf("scenario B ingest failure code=%q retryable=%v", failed.GetError().GetCode(), failed.GetError().GetRetryable())
 	}
 	input.Proxy.ClearUnavailable()
-	if _, err := waitForSuccessor(ctx, input.Client, started.GetCodebaseId(), preFaultJobs, faultActivatedAt, timeouts.Recovery, timeouts.Poll); err != nil {
-		return scenarioBResult{}, fmt.Errorf("scenario B wait for ingest reconnect: %w", err)
+	recoveryContext, cancelRecovery := context.WithTimeout(ctx, timeouts.Recovery)
+	defer cancelRecovery()
+	recovered, err := input.Client.SyncIndex(recoveryContext, &pb.SyncIndexRequest{Path: input.Path, Client: scenarioClientInfo()})
+	if err != nil {
+		return scenarioBResult{}, fmt.Errorf("scenario B retry ingest after reconnect: %w", err)
 	}
-	if _, err := waitForIndexHealth(ctx, input.Client, input.Path, "", timeouts.Recovery, timeouts.Poll); err != nil {
-		return scenarioBResult{}, fmt.Errorf("scenario B wait for healthy readiness: %w", err)
+	if _, err := waitForJob(recoveryContext, input.Client, recovered.GetJobId(), timeouts.Recovery, timeouts.Poll, func(job *pb.Job) bool {
+		return job.GetState() == "completed"
+	}); err != nil {
+		return scenarioBResult{}, fmt.Errorf("scenario B wait for recovered ingest: %w", err)
 	}
-	if _, err := input.Client.SearchCode(ctx, &pb.SearchCodeRequest{Path: input.Path, Query: "acceptance", Limit: 1, Client: scenarioClientInfo()}); err != nil {
+	recoveredSearch, err := searchCodeWithin(recoveryContext, input.Client, input.Path, timeouts.Recovery)
+	if err != nil {
 		return scenarioBResult{}, fmt.Errorf("scenario B search after reconnect: %w", err)
 	}
-	after, err := input.Client.GetStatus(ctx, &pb.GetStatusRequest{})
+	if len(recoveredSearch.GetResults()) == 0 {
+		return scenarioBResult{}, fmt.Errorf("scenario B search after reconnect returned no results")
+	}
+	if _, err := waitForIndexHealth(recoveryContext, input.Client, input.Path, "", timeouts.Recovery, timeouts.Poll); err != nil {
+		return scenarioBResult{}, fmt.Errorf("scenario B wait for healthy readiness: %w", err)
+	}
+	afterRows, afterCheckpoint, err := captureRecoverySnapshots(recoveryContext, input.ObserveRows, input.ObserveCheckpoint)
+	if err != nil {
+		return scenarioBResult{}, fmt.Errorf("scenario B capture recovered snapshots: %w", err)
+	}
+	if err := validateRecoverySnapshotsWithHashes(beforeRows, beforeCheckpoint, afterRows, afterCheckpoint, input.ExpectedAddedHashes); err != nil {
+		return scenarioBResult{}, fmt.Errorf("scenario B validate recovery preservation: %w", err)
+	}
+	after, err := input.Client.GetStatus(recoveryContext, &pb.GetStatusRequest{})
 	if err != nil {
 		return scenarioBResult{}, fmt.Errorf("scenario B read recovered daemon identity: %w", err)
 	}
@@ -284,7 +321,7 @@ func runScenarioB(ctx context.Context, input scenarioBInput) (scenarioBResult, e
 		SearchCode:      status.Code(searchErr),
 		FailureCode:     failed.GetError().GetCode(),
 		FailureElapsed:  failureElapsed,
-		UnhealthyMode:   unhealthy.GetDependencyHealth().GetMode(),
+		UnhealthyMode:   unhealthyMode,
 		DaemonPIDBefore: before.GetDaemon().GetPid(),
 		DaemonPIDAfter:  after.GetDaemon().GetPid(),
 	}
@@ -298,6 +335,27 @@ func runScenarioB(ctx context.Context, input scenarioBInput) (scenarioBResult, e
 		return scenarioBResult{}, err
 	}
 	return result, nil
+}
+
+func releaseScenarioBGate(release func() error) error {
+	if release == nil {
+		return nil
+	}
+	if err := release(); err != nil {
+		return fmt.Errorf("scenario B release embedding gate: %w", err)
+	}
+	return nil
+}
+
+func searchCodeWithin(
+	ctx context.Context,
+	client pb.SemanticSearchDaemonServiceClient,
+	path string,
+	timeout time.Duration,
+) (*pb.SearchCodeResponse, error) {
+	searchContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return client.SearchCode(searchContext, &pb.SearchCodeRequest{Path: path, Query: "acceptance", Limit: 1, Client: scenarioClientInfo()})
 }
 
 type installedProcess struct {
@@ -570,6 +628,28 @@ func waitForJob(ctx context.Context, client pb.SemanticSearchDaemonServiceClient
 	}
 }
 
+func waitForScenarioBActiveIngest(
+	ctx context.Context,
+	client pb.SemanticSearchDaemonServiceClient,
+	jobID string,
+	gateReached <-chan struct{},
+	timeouts scenarioTimeouts,
+) error {
+	if _, err := waitForJob(ctx, client, jobID, timeouts.Ready, timeouts.Poll, func(job *pb.Job) bool {
+		return job.GetState() == "running"
+	}); err != nil {
+		return fmt.Errorf("scenario B wait for active ingest: %w", err)
+	}
+	gateContext, cancel := context.WithTimeout(ctx, timeouts.Ready)
+	defer cancel()
+	select {
+	case <-gateReached:
+		return nil
+	case <-gateContext.Done():
+		return fmt.Errorf("scenario B wait for blocked embedding request: %w", context.Cause(gateContext))
+	}
+}
+
 func captureJobSet(ctx context.Context, client pb.SemanticSearchDaemonServiceClient, codebaseID string) (map[string]struct{}, error) {
 	response, err := client.ListJobs(ctx, &pb.ListJobsRequest{CodebaseId: codebaseID})
 	if err != nil {
@@ -633,14 +713,34 @@ func captureRecoverySnapshots(ctx context.Context, observeRows rowSnapshotObserv
 	if err != nil {
 		return rowSnapshot{}, checkpointSnapshot{}, err
 	}
-	if len(rows.Entries) == 0 || checkpoint.CompletedCount != len(checkpoint.TrackedIDs) {
+	if len(rows.Entries) == 0 || checkpoint.CompletedCount != len(checkpoint.FileHashes) {
 		return rowSnapshot{}, checkpointSnapshot{}, fmt.Errorf("snapshot counts are inconsistent")
+	}
+	if len(rows.Entries) != len(checkpoint.FileHashes) {
+		return rowSnapshot{}, checkpointSnapshot{}, fmt.Errorf("snapshot row and checkpoint identities differ")
+	}
+	for id := range rows.Entries {
+		if _, found := checkpoint.FileHashes[id]; !found {
+			return rowSnapshot{}, checkpointSnapshot{}, fmt.Errorf("snapshot row %q has no checkpoint hash", id)
+		}
 	}
 	return rows, checkpoint, nil
 }
 
-func validateRecoverySnapshots(beforeRows rowSnapshot, beforeCheckpoint checkpointSnapshot, afterRows rowSnapshot, afterCheckpoint checkpointSnapshot, unfinishedIDs []string) error {
-	for id := range beforeCheckpoint.TrackedIDs {
+func validateRecoverySnapshots(beforeRows rowSnapshot, beforeCheckpoint checkpointSnapshot, afterRows rowSnapshot, afterCheckpoint checkpointSnapshot, addedIDs []string) error {
+	addedHashes := make(map[string]string, len(addedIDs))
+	for _, id := range addedIDs {
+		hash, found := afterCheckpoint.FileHashes[id]
+		if !found {
+			return fmt.Errorf("recovered checkpoint does not track %q", id)
+		}
+		addedHashes[id] = hash
+	}
+	return validateRecoverySnapshotsWithHashes(beforeRows, beforeCheckpoint, afterRows, afterCheckpoint, addedHashes)
+}
+
+func validateRecoverySnapshotsWithHashes(beforeRows rowSnapshot, beforeCheckpoint checkpointSnapshot, afterRows rowSnapshot, afterCheckpoint checkpointSnapshot, addedHashes map[string]string) error {
+	for id, beforeHash := range beforeCheckpoint.FileHashes {
 		before, found := beforeRows.Entries[id]
 		if !found {
 			return fmt.Errorf("checkpoint ID %q has no row", id)
@@ -649,12 +749,15 @@ func validateRecoverySnapshots(beforeRows rowSnapshot, beforeCheckpoint checkpoi
 		if !found || after != before {
 			return fmt.Errorf("completed row %q changed or disappeared", id)
 		}
+		if afterCheckpoint.FileHashes[id] != beforeHash {
+			return fmt.Errorf("completed checkpoint hash for %q changed", id)
+		}
 	}
-	expectedAfter := make(map[string]struct{}, len(beforeRows.Entries)+len(unfinishedIDs))
+	expectedAfter := make(map[string]struct{}, len(beforeRows.Entries)+len(addedHashes))
 	for id := range beforeRows.Entries {
 		expectedAfter[id] = struct{}{}
 	}
-	for _, id := range unfinishedIDs {
+	for id := range addedHashes {
 		expectedAfter[id] = struct{}{}
 	}
 	if len(afterRows.Entries) != len(expectedAfter) {
@@ -669,8 +772,13 @@ func validateRecoverySnapshots(beforeRows rowSnapshot, beforeCheckpoint checkpoi
 		return fmt.Errorf("recovered checkpoint completed=%d, want %d", afterCheckpoint.CompletedCount, len(expectedAfter))
 	}
 	for id := range expectedAfter {
-		if _, tracked := afterCheckpoint.TrackedIDs[id]; !tracked {
+		if _, tracked := afterCheckpoint.FileHashes[id]; !tracked {
 			return fmt.Errorf("recovered checkpoint does not track %q", id)
+		}
+	}
+	for id, expectedHash := range addedHashes {
+		if afterCheckpoint.FileHashes[id] != expectedHash {
+			return fmt.Errorf("recovered checkpoint hash for %q does not match the added file", id)
 		}
 	}
 	return nil
@@ -742,6 +850,26 @@ func waitForIndexHealth(ctx context.Context, client pb.SemanticSearchDaemonServi
 		select {
 		case <-deadlineContext.Done():
 			return nil, fmt.Errorf("wait for dependency mode %q: %w", mode, context.Cause(deadlineContext))
+		case <-time.After(poll):
+		}
+	}
+}
+
+func waitForDaemonHealth(ctx context.Context, client pb.SemanticSearchDaemonServiceClient, mode string, timeout time.Duration, poll time.Duration) (string, error) {
+	deadlineContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		response, err := client.GetStatus(deadlineContext, &pb.GetStatusRequest{})
+		if err == nil {
+			for _, metric := range response.GetMetrics() {
+				if metric.GetName() == "dependency_health.mode" && metric.GetStringValue() == mode {
+					return mode, nil
+				}
+			}
+		}
+		select {
+		case <-deadlineContext.Done():
+			return "", fmt.Errorf("wait for dependency mode %q: %w", mode, context.Cause(deadlineContext))
 		case <-time.After(poll):
 		}
 	}

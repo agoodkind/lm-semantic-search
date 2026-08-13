@@ -5,7 +5,10 @@ package restartacceptance
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -111,6 +114,56 @@ func TestRunScenarioAResumesAfterEmbeddingOutageWithoutDuplicateWork(t *testing.
 	assertSingleScenarioRecord(t, evidencePaths.EventsJSONL, "scenario_a")
 }
 
+func TestRunScenarioAAllowsCloneStartupBeforeMidIngestCheckpoint(t *testing.T) {
+	var backendMutex sync.Mutex
+	backendIDs := make([]string, 0)
+	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		backendMutex.Lock()
+		backendIDs = append(backendIDs, request.Header.Get("X-Acceptance-Row-ID"))
+		backendMutex.Unlock()
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"data":[{"embedding":[1]}]}`))
+	}))
+	t.Cleanup(backend.Close)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := newEmbeddingProxy(listener, backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = proxy.Serve() }()
+	t.Cleanup(func() { _ = proxy.Close() })
+
+	server := newScenarioFakeServer()
+	server.embeddingURL = "http://" + listener.Addr().String()
+	server.initialCheckpointDelay = 80 * time.Millisecond
+	client := startScenarioFakeGRPC(t, server)
+	recorder, _ := scenarioTestRecorder(t)
+	timeouts := focusedScenarioTimeouts()
+	timeouts.Ready = 20 * time.Millisecond
+	timeouts.Recovery = time.Second
+
+	if _, err := runScenarioA(context.Background(), scenarioAInput{
+		Client:                client,
+		Path:                  t.TempDir(),
+		Proxy:                 proxy,
+		ExpectedUnfinishedIDs: []string{"row-2", "row-3"},
+		ObserveRows:           server.observeRows,
+		ObserveCheckpoint:     server.observeCheckpoint,
+		ObserveEmbeddingCalls: func() []string {
+			backendMutex.Lock()
+			defer backendMutex.Unlock()
+			return slices.Clone(backendIDs)
+		},
+		Recorder: recorder,
+		Timeouts: timeouts,
+	}); err != nil {
+		t.Fatalf("runScenarioA returned error after delayed checkpoint: %v", err)
+	}
+}
+
 func TestRunScenarioBReconnectsAfterMilvusOutageWithoutDaemonRestart(t *testing.T) {
 	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -134,14 +187,22 @@ func TestRunScenarioBReconnectsAfterMilvusOutageWithoutDaemonRestart(t *testing.
 
 	server := newScenarioFakeServer()
 	server.milvusAddress = proxyListener.Addr().String()
+	server.requireSearchBeforeIndex = true
+	server.requireSyncForRebuild = true
+	server.requireExplicitRecovery = true
+	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
 	client := startScenarioFakeGRPC(t, server)
 	recorder, evidencePaths := scenarioTestRecorder(t)
 	result, err := runScenarioB(context.Background(), scenarioBInput{
-		Client:   client,
-		Path:     t.TempDir(),
-		Proxy:    proxy,
-		Recorder: recorder,
-		Timeouts: focusedScenarioTimeouts(),
+		Client:               client,
+		Path:                 t.TempDir(),
+		Proxy:                proxy,
+		EmbeddingGateReached: closedScenarioSignal(),
+		ExpectedAddedHashes:  scenarioBAddedHashes(),
+		ObserveRows:          server.observeRows,
+		ObserveCheckpoint:    server.observeCheckpoint,
+		Recorder:             recorder,
+		Timeouts:             focusedScenarioTimeouts(),
 	})
 	if err != nil {
 		t.Fatalf("runScenarioB returned error: %v", err)
@@ -156,6 +217,290 @@ func TestRunScenarioBReconnectsAfterMilvusOutageWithoutDaemonRestart(t *testing.
 		t.Fatalf("typed failure took %s, want at most 500ms in focused test", result.FailureElapsed)
 	}
 	assertSingleScenarioRecord(t, evidencePaths.EventsJSONL, "scenario_b")
+}
+
+func TestRunScenarioBReadsResponsiveDaemonStatusDuringBlockedCollectionProbe(t *testing.T) {
+	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendServer := grpc.NewServer()
+	milvuspb.RegisterMilvusServiceServer(backendServer, &proxyTestMilvusServer{})
+	go func() { _ = backendServer.Serve(backendListener) }()
+	t.Cleanup(backendServer.Stop)
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := newMilvusProxy(proxyListener, backendListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = proxy.Serve() }()
+	t.Cleanup(func() { _ = proxy.Close() })
+
+	server := newScenarioFakeServer()
+	server.milvusAddress = proxyListener.Addr().String()
+	server.requireSearchBeforeIndex = true
+	server.requireSyncForRebuild = true
+	server.requireExplicitRecovery = true
+	server.blockGetIndexWhenUnhealthy = true
+	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	client := startScenarioFakeGRPC(t, server)
+	recorder, _ := scenarioTestRecorder(t)
+
+	if _, err := runScenarioB(context.Background(), scenarioBInput{
+		Client:               client,
+		Path:                 t.TempDir(),
+		Proxy:                proxy,
+		EmbeddingGateReached: closedScenarioSignal(),
+		ExpectedAddedHashes:  scenarioBAddedHashes(),
+		ObserveRows:          server.observeRows,
+		ObserveCheckpoint:    server.observeCheckpoint,
+		Recorder:             recorder,
+		Timeouts:             focusedScenarioTimeouts(),
+	}); err != nil {
+		t.Fatalf("runScenarioB returned error while collection status was blocked: %v", err)
+	}
+}
+
+func TestRunScenarioBRejectsEmptySearchAfterMilvusRecovery(t *testing.T) {
+	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendServer := grpc.NewServer()
+	milvuspb.RegisterMilvusServiceServer(backendServer, &proxyTestMilvusServer{})
+	go func() { _ = backendServer.Serve(backendListener) }()
+	t.Cleanup(backendServer.Stop)
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := newMilvusProxy(proxyListener, backendListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = proxy.Serve() }()
+	t.Cleanup(func() { _ = proxy.Close() })
+
+	server := newScenarioFakeServer()
+	server.milvusAddress = proxyListener.Addr().String()
+	server.requireSearchBeforeIndex = true
+	server.requireSyncForRebuild = true
+	server.requireExplicitRecovery = true
+	server.emptyRecoveredSearch = true
+	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	client := startScenarioFakeGRPC(t, server)
+	recorder, _ := scenarioTestRecorder(t)
+	_, err = runScenarioB(context.Background(), scenarioBInput{
+		Client:               client,
+		Path:                 t.TempDir(),
+		Proxy:                proxy,
+		EmbeddingGateReached: closedScenarioSignal(),
+		ExpectedAddedHashes:  scenarioBAddedHashes(),
+		ObserveRows:          server.observeRows,
+		ObserveCheckpoint:    server.observeCheckpoint,
+		Recorder:             recorder,
+		Timeouts:             focusedScenarioTimeouts(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "search after reconnect returned no results") {
+		t.Fatalf("runScenarioB error = %v, want empty recovered search rejection", err)
+	}
+}
+
+func TestRunScenarioBRejectsCompletedRowLossAfterRecovery(t *testing.T) {
+	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendServer := grpc.NewServer()
+	milvuspb.RegisterMilvusServiceServer(backendServer, &proxyTestMilvusServer{})
+	go func() { _ = backendServer.Serve(backendListener) }()
+	t.Cleanup(backendServer.Stop)
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := newMilvusProxy(proxyListener, backendListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = proxy.Serve() }()
+	t.Cleanup(func() { _ = proxy.Close() })
+
+	server := newScenarioFakeServer()
+	server.milvusAddress = proxyListener.Addr().String()
+	server.requireSearchBeforeIndex = true
+	server.requireSyncForRebuild = true
+	server.requireExplicitRecovery = true
+	server.dropCompletedRowOnFailure = true
+	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	client := startScenarioFakeGRPC(t, server)
+	recorder, _ := scenarioTestRecorder(t)
+	_, err = runScenarioB(context.Background(), scenarioBInput{
+		Client:               client,
+		Path:                 t.TempDir(),
+		Proxy:                proxy,
+		EmbeddingGateReached: closedScenarioSignal(),
+		ExpectedAddedHashes:  scenarioBAddedHashes(),
+		ObserveRows:          server.observeRows,
+		ObserveCheckpoint:    server.observeCheckpoint,
+		Recorder:             recorder,
+		Timeouts:             focusedScenarioTimeouts(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "completed row \"row-1\" changed or disappeared") {
+		t.Fatalf("runScenarioB error = %v, want completed row loss rejection", err)
+	}
+}
+
+func TestRunScenarioBRejectsIngestFailureAfterSharedDeadline(t *testing.T) {
+	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendServer := grpc.NewServer()
+	milvuspb.RegisterMilvusServiceServer(backendServer, &proxyTestMilvusServer{})
+	go func() { _ = backendServer.Serve(backendListener) }()
+	t.Cleanup(backendServer.Stop)
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := newMilvusProxy(proxyListener, backendListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = proxy.Serve() }()
+	t.Cleanup(func() { _ = proxy.Close() })
+
+	server := newScenarioFakeServer()
+	server.milvusAddress = proxyListener.Addr().String()
+	server.requireSearchBeforeIndex = true
+	server.requireSyncForRebuild = true
+	server.requireExplicitRecovery = true
+	server.milvusJobDelay = 700 * time.Millisecond
+	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	client := startScenarioFakeGRPC(t, server)
+	recorder, _ := scenarioTestRecorder(t)
+	started := time.Now()
+	_, err = runScenarioB(context.Background(), scenarioBInput{
+		Client:               client,
+		Path:                 t.TempDir(),
+		Proxy:                proxy,
+		EmbeddingGateReached: closedScenarioSignal(),
+		ExpectedAddedHashes:  scenarioBAddedHashes(),
+		ObserveRows:          server.observeRows,
+		ObserveCheckpoint:    server.observeCheckpoint,
+		Recorder:             recorder,
+		Timeouts:             focusedScenarioTimeouts(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "wait for failed ingest") {
+		t.Fatalf("runScenarioB error = %v, want bounded ingest failure", err)
+	}
+	if elapsed := time.Since(started); elapsed > 900*time.Millisecond {
+		t.Fatalf("bounded failure took %s, want at most 900ms", elapsed)
+	}
+}
+
+func TestRunScenarioBRejectsRecoveryPastSharedDeadline(t *testing.T) {
+	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendServer := grpc.NewServer()
+	milvuspb.RegisterMilvusServiceServer(backendServer, &proxyTestMilvusServer{})
+	go func() { _ = backendServer.Serve(backendListener) }()
+	t.Cleanup(backendServer.Stop)
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := newMilvusProxy(proxyListener, backendListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = proxy.Serve() }()
+	t.Cleanup(func() { _ = proxy.Close() })
+
+	server := newScenarioFakeServer()
+	server.milvusAddress = proxyListener.Addr().String()
+	server.requireSearchBeforeIndex = true
+	server.requireSyncForRebuild = true
+	server.requireExplicitRecovery = true
+	server.recoveredJobDelay = 700 * time.Millisecond
+	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	client := startScenarioFakeGRPC(t, server)
+	recorder, _ := scenarioTestRecorder(t)
+	timeouts := focusedScenarioTimeouts()
+	timeouts.Recovery = 500 * time.Millisecond
+	started := time.Now()
+	_, err = runScenarioB(context.Background(), scenarioBInput{
+		Client:               client,
+		Path:                 t.TempDir(),
+		Proxy:                proxy,
+		EmbeddingGateReached: closedScenarioSignal(),
+		ExpectedAddedHashes:  scenarioBAddedHashes(),
+		ObserveRows:          server.observeRows,
+		ObserveCheckpoint:    server.observeCheckpoint,
+		Recorder:             recorder,
+		Timeouts:             timeouts,
+	})
+	if err == nil || !strings.Contains(err.Error(), "wait for recovered ingest") {
+		t.Fatalf("runScenarioB error = %v, want bounded recovery failure", err)
+	}
+	if elapsed := time.Since(started); elapsed > 1200*time.Millisecond {
+		t.Fatalf("bounded recovery took %s, want at most 1.2s", elapsed)
+	}
+}
+
+func TestSearchCodeWithinBoundsPublicRequest(t *testing.T) {
+	server := newScenarioFakeServer()
+	server.blockSearchCall = 1
+	client := startScenarioFakeGRPC(t, server)
+	started := time.Now()
+	_, err := searchCodeWithin(context.Background(), client, t.TempDir(), 40*time.Millisecond)
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("search code = %s, want DeadlineExceeded", status.Code(err))
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("bounded search took %s, want at most 500ms", elapsed)
+	}
+}
+
+func TestRunScenarioBRejectsGateReleaseBeforeMilvusFault(t *testing.T) {
+	proxy := &milvusProxy{}
+	if err := releaseScenarioBEmbeddingGate(proxy, func() {}); err == nil || !strings.Contains(err.Error(), "not active") {
+		t.Fatalf("release error = %v, want inactive fault rejection", err)
+	}
+}
+
+func TestValidateRecoverySnapshotsRejectsCheckpointHashChange(t *testing.T) {
+	rows := rowSnapshot{Entries: map[string]rowSnapshotEntry{"row-1": testRow("row-1", 0, "hash-1")}}
+	before := checkpointSnapshot{FileHashes: map[string]string{"row-1": "checkpoint-before"}, CompletedCount: 1}
+	after := checkpointSnapshot{FileHashes: map[string]string{"row-1": "checkpoint-after"}, CompletedCount: 1}
+	err := validateRecoverySnapshotsWithHashes(rows, before, rows, after, nil)
+	if err == nil || !strings.Contains(err.Error(), "checkpoint hash") {
+		t.Fatalf("validateRecoverySnapshotsWithHashes error = %v, want checkpoint hash rejection", err)
+	}
+}
+
+func TestCaptureRecoverySnapshotsRejectsRowWithoutCheckpoint(t *testing.T) {
+	observeRows := func(context.Context) (rowSnapshot, error) {
+		return rowSnapshot{Entries: map[string]rowSnapshotEntry{
+			"row-1": testRow("row-1", 0, "hash-1"),
+			"row-2": testRow("row-2", 1, "hash-2"),
+		}}, nil
+	}
+	observeCheckpoint := func(context.Context) (checkpointSnapshot, error) {
+		return checkpointSnapshot{FileHashes: map[string]string{"row-1": "checkpoint-row-1"}, CompletedCount: 1}, nil
+	}
+	_, _, err := captureRecoverySnapshots(context.Background(), observeRows, observeCheckpoint)
+	if err == nil || !strings.Contains(err.Error(), "identities differ") {
+		t.Fatalf("captureRecoverySnapshots error = %v, want identity mismatch", err)
+	}
 }
 
 func TestRunScenarioCKillReclaimsKernelLockAndResumesCheckpoint(t *testing.T) {
@@ -365,6 +710,12 @@ func focusedScenarioTimeouts() scenarioTimeouts {
 	}
 }
 
+func closedScenarioSignal() <-chan struct{} {
+	reached := make(chan struct{})
+	close(reached)
+	return reached
+}
+
 func currentTestExecutable(t *testing.T) string {
 	t.Helper()
 	path, err := os.Executable()
@@ -434,12 +785,12 @@ func (sequence *recoverySnapshotSequence) observeCheckpoint(context.Context) (ch
 	sequence.mutex.Lock()
 	defer sequence.mutex.Unlock()
 	sequence.checkpointCalls++
-	tracked := map[string]struct{}{"row-1": {}}
+	tracked := map[string]string{"row-1": "checkpoint-row-1"}
 	if sequence.checkpointCalls > 1 {
-		tracked["row-2"] = struct{}{}
-		tracked["row-3"] = struct{}{}
+		tracked["row-2"] = "checkpoint-row-2"
+		tracked["row-3"] = "checkpoint-row-3"
 	}
-	return checkpointSnapshot{TrackedIDs: tracked, CompletedCount: len(tracked)}, nil
+	return checkpointSnapshot{FileHashes: tracked, CompletedCount: len(tracked)}, nil
 }
 
 func testRow(id string, splitPosition int, vectorHash string) rowSnapshotEntry {
@@ -456,28 +807,99 @@ func testRow(id string, splitPosition int, vectorHash string) rowSnapshotEntry {
 
 type scenarioFakeServer struct {
 	pb.UnimplementedSemanticSearchDaemonServiceServer
-	mutex         sync.Mutex
-	embeddingURL  string
-	milvusAddress string
-	jobs          []*pb.Job
-	rows          map[string]rowSnapshotEntry
-	health        string
-	startedAt     time.Time
+	mutex                      sync.Mutex
+	embeddingURL               string
+	milvusAddress              string
+	jobs                       []*pb.Job
+	rows                       map[string]rowSnapshotEntry
+	health                     string
+	startedAt                  time.Time
+	initialCheckpointDelay     time.Duration
+	requireSearchBeforeIndex   bool
+	requireSyncForRebuild      bool
+	requireExplicitRecovery    bool
+	emptyRecoveredSearch       bool
+	allowInitialSeed           bool
+	orchestrateScenarioB       bool
+	dropCompletedRowOnFailure  bool
+	blockGetIndexWhenUnhealthy bool
+	blockSearchCall            int
+	searchCalls                int
+	milvusJobDelay             time.Duration
+	recoveredJobDelay          time.Duration
+	checkpointRoot             string
+	expectedPath               string
+	scenarioBEmbeddingDelay    time.Duration
+	preflightSearches          int
 }
 
 func newScenarioFakeServer() *scenarioFakeServer {
 	return &scenarioFakeServer{rows: make(map[string]rowSnapshotEntry), startedAt: time.Now()}
 }
 
-func (server *scenarioFakeServer) StartIndex(_ context.Context, _ *pb.StartIndexRequest) (*pb.StartIndexResponse, error) {
+func (server *scenarioFakeServer) StartIndex(_ context.Context, request *pb.StartIndexRequest) (*pb.StartIndexResponse, error) {
 	server.mutex.Lock()
+	jobCount := len(server.jobs)
+	server.mutex.Unlock()
+	if server.requireSyncForRebuild && (!server.allowInitialSeed || jobCount > 0) {
+		return nil, status.Error(codes.FailedPrecondition, "scenario B rebuild used StartIndex instead of SyncIndex")
+	}
+	return server.startJob(request.GetPath())
+}
+
+func (server *scenarioFakeServer) SyncIndex(_ context.Context, request *pb.SyncIndexRequest) (*pb.SyncIndexResponse, error) {
+	started, err := server.startJob(request.GetPath())
+	if err != nil {
+		return nil, err
+	}
+	return &pb.SyncIndexResponse{JobId: started.GetJobId(), CodebaseId: started.GetCodebaseId(), State: started.GetState()}, nil
+}
+
+func (server *scenarioFakeServer) startJob(path string) (*pb.StartIndexResponse, error) {
+	server.mutex.Lock()
+	if server.expectedPath != "" && path != server.expectedPath {
+		server.mutex.Unlock()
+		return nil, status.Errorf(codes.InvalidArgument, "scenario B path = %q, want %q", path, server.expectedPath)
+	}
+	if server.requireSearchBeforeIndex && server.preflightSearches == 0 && !(server.allowInitialSeed && len(server.jobs) == 0) {
+		server.mutex.Unlock()
+		return nil, status.Error(codes.FailedPrecondition, "scenario B target was not searchable before ingest")
+	}
 	now := time.Now()
-	job := &pb.Job{Id: "job-1", CodebaseId: "cb-1", State: "running", Progress: &pb.Progress{ChunksEmbedded: 1}, StartedAt: timestamppb.New(now), UpdatedAt: timestamppb.New(now)}
+	jobID := fmt.Sprintf("job-%d", len(server.jobs)+1)
+	job := &pb.Job{Id: jobID, CodebaseId: "cb-1", State: "running", Progress: &pb.Progress{}, StartedAt: timestamppb.New(now), UpdatedAt: timestamppb.New(now)}
 	server.jobs = append(server.jobs, job)
-	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	jobNumber := len(server.jobs)
+	orchestrateScenarioB := server.orchestrateScenarioB
+	if server.initialCheckpointDelay == 0 && !(server.dropCompletedRowOnFailure && len(server.jobs) > 1) {
+		job.Progress.ChunksEmbedded = 1
+		server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	}
 	result := &pb.StartIndexResponse{JobId: job.Id, CodebaseId: job.CodebaseId, State: job.State}
 	server.mutex.Unlock()
+	if orchestrateScenarioB {
+		if jobNumber == 1 {
+			response, err := postScenarioBEmbedding(server.embeddingURL, "01.go")
+			if err != nil {
+				return nil, fmt.Errorf("seed scenario B embedding: %w", err)
+			}
+			if response != nil {
+				_ = response.Body.Close()
+			}
+			if response == nil || response.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("seed scenario B embedding returned an invalid response")
+			}
+			go server.runMilvusJob(job)
+			return result, nil
+		}
+		go server.runScenarioBEmbeddingJob(job, path, jobNumber)
+		return result, nil
+	}
 	if server.embeddingURL != "" {
+		if server.initialCheckpointDelay > 0 {
+			go server.startEmbeddingJobAfterDelay(job)
+			return result, nil
+		}
 		response, err := postEmbedding(server.embeddingURL, "row-1")
 		if err != nil {
 			return nil, err
@@ -489,6 +911,78 @@ func (server *scenarioFakeServer) StartIndex(_ context.Context, _ *pb.StartIndex
 		go server.runMilvusJob(job)
 	}
 	return result, nil
+}
+
+func (server *scenarioFakeServer) runScenarioBEmbeddingJob(job *pb.Job, path string, jobNumber int) {
+	if server.scenarioBEmbeddingDelay > 0 {
+		time.Sleep(server.scenarioBEmbeddingDelay)
+	}
+	ids := []string{"04.go"}
+	if jobNumber > 2 {
+		ids = append(ids, "05.go")
+	}
+	for _, id := range ids {
+		if _, err := os.Stat(filepath.Join(path, id)); err != nil {
+			server.failScenarioBJob(job, "fixture_missing")
+			return
+		}
+		response, err := postScenarioBEmbedding(server.embeddingURL, id)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		if err != nil || response == nil || response.StatusCode != http.StatusOK {
+			server.failScenarioBJob(job, "embedder_busy")
+			return
+		}
+	}
+	server.completeScenarioBMilvusJob(job, ids)
+}
+
+func (server *scenarioFakeServer) completeScenarioBMilvusJob(job *pb.Job, ids []string) {
+	if callMilvusLoadState(server.milvusAddress) != nil {
+		server.failScenarioBJob(job, "milvus_unavailable")
+		return
+	}
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	server.health = ""
+	for index, id := range ids {
+		server.rows[id] = testRow(id, index+1, fmt.Sprintf("hash-%d", index+2))
+	}
+	job.Progress.ChunksEmbedded = int32(len(ids))
+	job.State = "completed"
+	job.UpdatedAt = timestamppb.Now()
+}
+
+func (server *scenarioFakeServer) failScenarioBJob(job *pb.Job, code string) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	job.State = "failed"
+	job.Error = &pb.JobError{Code: code, Retryable: true}
+	if code == "milvus_unavailable" {
+		server.health = "store_unavailable"
+	}
+}
+
+func (server *scenarioFakeServer) startEmbeddingJobAfterDelay(job *pb.Job) {
+	time.Sleep(server.initialCheckpointDelay)
+	response, err := postEmbedding(server.embeddingURL, "row-1")
+	if response != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil || response == nil || response.StatusCode != http.StatusOK {
+		return
+	}
+	server.recordInitialCheckpoint(job)
+	server.runEmbeddingJob(job)
+}
+
+func (server *scenarioFakeServer) recordInitialCheckpoint(job *pb.Job) {
+	server.mutex.Lock()
+	job.Progress.ChunksEmbedded = 1
+	job.UpdatedAt = timestamppb.Now()
+	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	server.mutex.Unlock()
 }
 
 func (server *scenarioFakeServer) runEmbeddingJob(job *pb.Job) {
@@ -539,15 +1033,39 @@ func (server *scenarioFakeServer) resumeEmbeddingWhenHealthy() {
 }
 
 func (server *scenarioFakeServer) runMilvusJob(job *pb.Job) {
-	time.Sleep(80 * time.Millisecond)
+	delay := server.milvusJobDelay
+	if job.GetId() != "job-1" && server.recoveredJobDelay > 0 {
+		delay = server.recoveredJobDelay
+	}
+	if delay <= 0 {
+		delay = 80 * time.Millisecond
+	}
+	time.Sleep(delay)
 	if err := callMilvusLoadState(server.milvusAddress); err == nil {
+		server.mutex.Lock()
+		server.health = ""
+		if job.GetId() != "job-1" {
+			server.rows["04.go"] = testRow("04.go", 1, "hash-2")
+			server.rows["05.go"] = testRow("05.go", 2, "hash-3")
+			job.Progress.ChunksEmbedded = 2
+		}
+		job.State = "completed"
+		job.UpdatedAt = timestamppb.Now()
+		server.mutex.Unlock()
 		return
 	}
 	server.mutex.Lock()
 	job.State = "failed"
 	job.Error = &pb.JobError{Code: "milvus_unavailable", Retryable: true}
 	server.health = "store_unavailable"
+	if server.dropCompletedRowOnFailure {
+		delete(server.rows, "row-1")
+	}
+	explicitRecovery := server.requireExplicitRecovery
 	server.mutex.Unlock()
+	if explicitRecovery {
+		return
+	}
 	go server.resumeMilvusWhenHealthy()
 }
 
@@ -601,7 +1119,21 @@ func (server *scenarioFakeServer) ListJobs(_ context.Context, _ *pb.ListJobsRequ
 	return &pb.ListJobsResponse{Jobs: jobs, DependencyHealth: &pb.DependencyHealth{Degraded: server.health != "", Mode: server.health}}, nil
 }
 
-func (server *scenarioFakeServer) SearchCode(_ context.Context, _ *pb.SearchCodeRequest) (*pb.SearchCodeResponse, error) {
+func (server *scenarioFakeServer) SearchCode(ctx context.Context, _ *pb.SearchCodeRequest) (*pb.SearchCodeResponse, error) {
+	server.mutex.Lock()
+	server.searchCalls++
+	blockSearch := server.searchCalls == server.blockSearchCall
+	if blockSearch {
+		server.mutex.Unlock()
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	if server.requireSearchBeforeIndex && server.preflightSearches == 0 {
+		server.preflightSearches++
+		server.mutex.Unlock()
+		return &pb.SearchCodeResponse{Results: []*pb.SearchResult{{RelativePath: "01.go"}}}, nil
+	}
+	server.mutex.Unlock()
 	if server.milvusAddress != "" {
 		if err := callMilvusLoadState(server.milvusAddress); err != nil {
 			server.mutex.Lock()
@@ -609,11 +1141,25 @@ func (server *scenarioFakeServer) SearchCode(_ context.Context, _ *pb.SearchCode
 			server.mutex.Unlock()
 			return nil, status.Error(codes.Unavailable, "vector store is unavailable")
 		}
+		server.mutex.Lock()
+		emptyRecoveredSearch := server.emptyRecoveredSearch && len(server.jobs) > 1
+		server.health = ""
+		server.mutex.Unlock()
+		if emptyRecoveredSearch {
+			return &pb.SearchCodeResponse{}, nil
+		}
 	}
-	return &pb.SearchCodeResponse{}, nil
+	return &pb.SearchCodeResponse{Results: []*pb.SearchResult{{RelativePath: "01.go"}}}, nil
 }
 
-func (server *scenarioFakeServer) GetIndex(_ context.Context, _ *pb.GetIndexRequest) (*pb.GetIndexResponse, error) {
+func (server *scenarioFakeServer) GetIndex(ctx context.Context, _ *pb.GetIndexRequest) (*pb.GetIndexResponse, error) {
+	server.mutex.Lock()
+	block := server.blockGetIndexWhenUnhealthy && server.health == "store_unavailable"
+	server.mutex.Unlock()
+	if block {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	if server.milvusAddress != "" {
 		_ = callMilvusLoadState(server.milvusAddress)
 	}
@@ -623,7 +1169,16 @@ func (server *scenarioFakeServer) GetIndex(_ context.Context, _ *pb.GetIndexRequ
 }
 
 func (server *scenarioFakeServer) GetStatus(_ context.Context, _ *pb.GetStatusRequest) (*pb.GetStatusResponse, error) {
-	return &pb.GetStatusResponse{Daemon: &pb.DaemonIdentity{Pid: 4242}}, nil
+	server.mutex.Lock()
+	health := server.health
+	server.mutex.Unlock()
+	return &pb.GetStatusResponse{
+		Daemon: &pb.DaemonIdentity{Pid: 4242},
+		Metrics: []*pb.Metric{{
+			Name:  "dependency_health.mode",
+			Value: &pb.Metric_StringValue{StringValue: health},
+		}},
+	}, nil
 }
 
 func (server *scenarioFakeServer) observeRows(context.Context) (rowSnapshot, error) {
@@ -639,11 +1194,22 @@ func (server *scenarioFakeServer) observeRows(context.Context) (rowSnapshot, err
 func (server *scenarioFakeServer) observeCheckpoint(context.Context) (checkpointSnapshot, error) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-	tracked := make(map[string]struct{}, len(server.rows))
+	tracked := make(map[string]string, len(server.rows))
 	for id := range server.rows {
-		tracked[id] = struct{}{}
+		tracked[id] = "checkpoint-" + id
+		if server.checkpointRoot != "" {
+			body, err := os.ReadFile(filepath.Join(server.checkpointRoot, id))
+			if err == nil {
+				digest := sha256.Sum256(body)
+				tracked[id] = hex.EncodeToString(digest[:])
+			}
+		}
 	}
-	return checkpointSnapshot{TrackedIDs: tracked, CompletedCount: len(tracked)}, nil
+	return checkpointSnapshot{FileHashes: tracked, CompletedCount: len(tracked)}, nil
+}
+
+func scenarioBAddedHashes() map[string]string {
+	return map[string]string{"04.go": "checkpoint-04.go", "05.go": "checkpoint-05.go"}
 }
 
 func postEmbedding(baseURL string, id string) (*http.Response, error) {
@@ -652,6 +1218,16 @@ func postEmbedding(baseURL string, id string) (*http.Response, error) {
 		return nil, err
 	}
 	request.Header.Set("X-Acceptance-Row-ID", id)
+	return http.DefaultClient.Do(request)
+}
+
+func postScenarioBEmbedding(baseURL string, id string) (*http.Response, error) {
+	body := strings.NewReader(`{"input":"restart_acceptance_id:` + id + `"}`)
+	request, err := http.NewRequest(http.MethodPost, baseURL, body)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
 	return http.DefaultClient.Do(request)
 }
 

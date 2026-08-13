@@ -27,6 +27,62 @@ func TestValidateOptInRequiresExactConfirmation(t *testing.T) {
 	}
 }
 
+func TestRequiredDirectoryFromEnvironmentRejectsMissingRelativeAndSymlinkPaths(t *testing.T) {
+	realDirectory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve real directory: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(realDirectory, "nested"), 0o700); err != nil {
+		t.Fatalf("create nested directory: %v", err)
+	}
+	symlinkParent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve symlink parent: %v", err)
+	}
+	symlink := filepath.Join(symlinkParent, "linked")
+	if err := os.Symlink(realDirectory, symlink); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	for _, testCase := range []struct {
+		name  string
+		value string
+	}{
+		{name: "missing"},
+		{name: "relative", value: "relative/path"},
+		{name: "symlink", value: symlink},
+		{name: "symlink_ancestor", value: filepath.Join(symlink, "nested")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			variable := "LMS_RESTART_ACCEPTANCE_TEST_" + strings.ToUpper(testCase.name)
+			t.Setenv(variable, testCase.value)
+			if _, err := requiredDirectoryFromEnvironment(variable); err == nil {
+				t.Fatalf("environment path %q was accepted", testCase.value)
+			}
+		})
+	}
+
+	variable := "LMS_RESTART_ACCEPTANCE_TEST_REAL"
+	t.Setenv(variable, realDirectory)
+	got, err := requiredDirectoryFromEnvironment(variable)
+	if err != nil {
+		t.Fatalf("resolve real directory: %v", err)
+	}
+	if got != realDirectory {
+		t.Fatalf("directory = %q, want %q", got, realDirectory)
+	}
+
+	redundantVariable := "LMS_RESTART_ACCEPTANCE_TEST_REDUNDANT"
+	redundantPath := realDirectory + string(os.PathSeparator) + "." + string(os.PathSeparator)
+	t.Setenv(redundantVariable, redundantPath)
+	got, err = requiredDirectoryFromEnvironment(redundantVariable)
+	if err != nil {
+		t.Fatalf("resolve directory with redundant segments: %v", err)
+	}
+	if got != realDirectory {
+		t.Fatalf("redundant directory = %q, want %q", got, realDirectory)
+	}
+}
+
 func TestNewRunIDUsesUTCAndEightLowercaseHexCharacters(t *testing.T) {
 	t.Parallel()
 
