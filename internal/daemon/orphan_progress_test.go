@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/indexer"
@@ -276,5 +278,97 @@ func TestRunJobKeepsFirstBuildQueuedWhenRunningStateCannotPersist(t *testing.T) 
 	manager.mu.Unlock()
 	if gotCodebase.Status != model.CodebaseStatusPending || gotCodebase.ActiveJobID != job.ID {
 		t.Fatalf("codebase after failed running persistence = %+v, want pending with active job %q", gotCodebase, job.ID)
+	}
+}
+
+func TestRunJobAsyncRetriesRunningStatePersistence(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-run-persistence-retry",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.codebases[job.CodebaseID] = model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusPending,
+		ActiveJobID:     job.ID,
+		EffectiveConfig: job.Config,
+	}
+	manager.jobs[job.ID] = job
+	if err := manager.saveLocked(); err != nil {
+		manager.mu.Unlock()
+		t.Fatalf("saveLocked returned error: %v", err)
+	}
+	manager.mu.Unlock()
+	manager.jobJournal.close()
+	manager.jobJournal = nil
+	originalAppend := manager.appendJobEvent
+	var runningEvents atomic.Int32
+	retried := make(chan struct{})
+	manager.appendJobEvent = func(path string, event model.JobEvent) error {
+		if event.Event == "job_running" {
+			if runningEvents.Add(1) == 1 {
+				return errors.New("journal temporarily unavailable")
+			}
+			select {
+			case <-retried:
+			default:
+				close(retried)
+			}
+		}
+		return originalAppend(path, event)
+	}
+	enteredBackend := make(chan struct{})
+	manager.runner = fakeRunner{indexOne: func(ctx context.Context, _ string, _ string, _ model.IndexConfig) (indexer.OneFileResult, error) {
+		select {
+		case <-enteredBackend:
+		default:
+			close(enteredBackend)
+		}
+		<-ctx.Done()
+		return indexer.OneFileResult{}, ctx.Err()
+	}}
+	manager.runJobAsync(context.Background(), job.ID)
+	manager.mu.Lock()
+	done := manager.done[job.ID]
+	manager.mu.Unlock()
+	defer func() {
+		manager.mu.Lock()
+		stop := manager.cancels[job.ID]
+		manager.mu.Unlock()
+		if stop != nil {
+			stop()
+		}
+	}()
+
+	select {
+	case <-retried:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runJobAsync did not retry running-state persistence")
+	}
+	select {
+	case <-enteredBackend:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retried job did not reach the backend")
+	}
+	manager.mu.Lock()
+	stop := manager.cancels[job.ID]
+	manager.mu.Unlock()
+	if stop == nil {
+		t.Fatal("retried job had no cancellation handle")
+	}
+	stop()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retried job did not stop after cancellation")
 	}
 }

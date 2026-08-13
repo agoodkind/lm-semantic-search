@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
+
+const jobStartRetryDelay = time.Second
 
 func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 	detachedCorr := correlation.FromContext(ctx).Child()
@@ -36,28 +39,46 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 			manager.mu.Unlock()
 			close(done)
 		}()
-		// The slot is acquired inside the goroutine so callers never block on
-		// the cap; the job stays JobStateQueued until runJob calls
-		// updateJobRunning, so a queued-behind-the-cap job reports queued.
-		select {
-		case manager.indexSlots <- struct{}{}:
-			capacity := &jobCapacity{
-				manager:       manager,
-				mu:            sync.Mutex{},
-				slotHeld:      true,
-				syncLockHeld:  false,
-				syncLockLease: syncLockLease{lock: nil, once: nil},
+		for {
+			// The slot is acquired inside the goroutine so callers never block on
+			// the cap; the job stays JobStateQueued until runJob calls
+			// updateJobRunning, so a queued-behind-the-cap job reports queued.
+			select {
+			case manager.indexSlots <- struct{}{}:
+				capacity := &jobCapacity{
+					manager:       manager,
+					mu:            sync.Mutex{},
+					slotHeld:      true,
+					syncLockHeld:  false,
+					syncLockLease: syncLockLease{lock: nil, once: nil},
+				}
+				runContext := withJobCapacity(backgroundContext, capacity)
+				graphTask := manager.runJob(runContext, jobID)
+				capacity.release(backgroundContext)
+				if manager.jobIsQueued(jobID) {
+					select {
+					case <-time.After(jobStartRetryDelay):
+						continue
+					case <-backgroundContext.Done():
+						manager.updateJobCancelled(backgroundContext, jobID)
+						return
+					}
+				}
+				manager.runGraphIndexTask(backgroundContext, graphTask)
+				return
+			case <-backgroundContext.Done():
+				manager.updateJobCancelled(backgroundContext, jobID)
+				return
 			}
-			defer capacity.release(backgroundContext)
-			runContext := withJobCapacity(backgroundContext, capacity)
-			graphTask := manager.runJob(runContext, jobID)
-			capacity.release(backgroundContext)
-			manager.runGraphIndexTask(backgroundContext, graphTask)
-		case <-backgroundContext.Done():
-			manager.updateJobCancelled(backgroundContext, jobID)
-			return
 		}
 	}()
+}
+
+func (manager *Manager) jobIsQueued(jobID string) bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	job, found := manager.jobs[jobID]
+	return found && job.State == model.JobStateQueued
 }
 
 // acquireJobSyncLock takes the sync lock for one job's embed and reports the
