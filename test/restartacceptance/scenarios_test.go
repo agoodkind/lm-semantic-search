@@ -219,6 +219,52 @@ func TestRunScenarioBReconnectsAfterMilvusOutageWithoutDaemonRestart(t *testing.
 	assertSingleScenarioRecord(t, evidencePaths.EventsJSONL, "scenario_b")
 }
 
+func TestRunScenarioBReadsResponsiveDaemonStatusDuringBlockedCollectionProbe(t *testing.T) {
+	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendServer := grpc.NewServer()
+	milvuspb.RegisterMilvusServiceServer(backendServer, &proxyTestMilvusServer{})
+	go func() { _ = backendServer.Serve(backendListener) }()
+	t.Cleanup(backendServer.Stop)
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := newMilvusProxy(proxyListener, backendListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = proxy.Serve() }()
+	t.Cleanup(func() { _ = proxy.Close() })
+
+	server := newScenarioFakeServer()
+	server.milvusAddress = proxyListener.Addr().String()
+	server.requireSearchBeforeIndex = true
+	server.requireSyncForRebuild = true
+	server.requireExplicitRecovery = true
+	server.blockGetIndexWhenUnhealthy = true
+	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	client := startScenarioFakeGRPC(t, server)
+	recorder, _ := scenarioTestRecorder(t)
+
+	if _, err := runScenarioB(context.Background(), scenarioBInput{
+		Client:               client,
+		Path:                 t.TempDir(),
+		Proxy:                proxy,
+		EmbeddingGateReached: closedScenarioSignal(),
+		ExpectedAddedHashes:  scenarioBAddedHashes(),
+		ObserveRows:          server.observeRows,
+		ObserveCheckpoint:    server.observeCheckpoint,
+		Recorder:             recorder,
+		Timeouts:             focusedScenarioTimeouts(),
+	}); err != nil {
+		t.Fatalf("runScenarioB returned error while collection status was blocked: %v", err)
+	}
+}
+
 func TestRunScenarioBRejectsEmptySearchAfterMilvusRecovery(t *testing.T) {
 	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -761,29 +807,30 @@ func testRow(id string, splitPosition int, vectorHash string) rowSnapshotEntry {
 
 type scenarioFakeServer struct {
 	pb.UnimplementedSemanticSearchDaemonServiceServer
-	mutex                     sync.Mutex
-	embeddingURL              string
-	milvusAddress             string
-	jobs                      []*pb.Job
-	rows                      map[string]rowSnapshotEntry
-	health                    string
-	startedAt                 time.Time
-	initialCheckpointDelay    time.Duration
-	requireSearchBeforeIndex  bool
-	requireSyncForRebuild     bool
-	requireExplicitRecovery   bool
-	emptyRecoveredSearch      bool
-	allowInitialSeed          bool
-	orchestrateScenarioB      bool
-	dropCompletedRowOnFailure bool
-	blockSearchCall           int
-	searchCalls               int
-	milvusJobDelay            time.Duration
-	recoveredJobDelay         time.Duration
-	checkpointRoot            string
-	expectedPath              string
-	scenarioBEmbeddingDelay   time.Duration
-	preflightSearches         int
+	mutex                      sync.Mutex
+	embeddingURL               string
+	milvusAddress              string
+	jobs                       []*pb.Job
+	rows                       map[string]rowSnapshotEntry
+	health                     string
+	startedAt                  time.Time
+	initialCheckpointDelay     time.Duration
+	requireSearchBeforeIndex   bool
+	requireSyncForRebuild      bool
+	requireExplicitRecovery    bool
+	emptyRecoveredSearch       bool
+	allowInitialSeed           bool
+	orchestrateScenarioB       bool
+	dropCompletedRowOnFailure  bool
+	blockGetIndexWhenUnhealthy bool
+	blockSearchCall            int
+	searchCalls                int
+	milvusJobDelay             time.Duration
+	recoveredJobDelay          time.Duration
+	checkpointRoot             string
+	expectedPath               string
+	scenarioBEmbeddingDelay    time.Duration
+	preflightSearches          int
 }
 
 func newScenarioFakeServer() *scenarioFakeServer {
@@ -1105,7 +1152,14 @@ func (server *scenarioFakeServer) SearchCode(ctx context.Context, _ *pb.SearchCo
 	return &pb.SearchCodeResponse{Results: []*pb.SearchResult{{RelativePath: "01.go"}}}, nil
 }
 
-func (server *scenarioFakeServer) GetIndex(_ context.Context, _ *pb.GetIndexRequest) (*pb.GetIndexResponse, error) {
+func (server *scenarioFakeServer) GetIndex(ctx context.Context, _ *pb.GetIndexRequest) (*pb.GetIndexResponse, error) {
+	server.mutex.Lock()
+	block := server.blockGetIndexWhenUnhealthy && server.health == "store_unavailable"
+	server.mutex.Unlock()
+	if block {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	if server.milvusAddress != "" {
 		_ = callMilvusLoadState(server.milvusAddress)
 	}
@@ -1115,7 +1169,16 @@ func (server *scenarioFakeServer) GetIndex(_ context.Context, _ *pb.GetIndexRequ
 }
 
 func (server *scenarioFakeServer) GetStatus(_ context.Context, _ *pb.GetStatusRequest) (*pb.GetStatusResponse, error) {
-	return &pb.GetStatusResponse{Daemon: &pb.DaemonIdentity{Pid: 4242}}, nil
+	server.mutex.Lock()
+	health := server.health
+	server.mutex.Unlock()
+	return &pb.GetStatusResponse{
+		Daemon: &pb.DaemonIdentity{Pid: 4242},
+		Metrics: []*pb.Metric{{
+			Name:  "dependency_health.mode",
+			Value: &pb.Metric_StringValue{StringValue: health},
+		}},
+	}, nil
 }
 
 func (server *scenarioFakeServer) observeRows(context.Context) (rowSnapshot, error) {
