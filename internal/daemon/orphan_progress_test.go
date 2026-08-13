@@ -527,6 +527,91 @@ func TestUpdateJobRunningRejectsStaleIndexingOwner(t *testing.T) {
 	}
 }
 
+func TestUpdateJobRunningRejectsTerminalCodebaseStatus(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-terminal-running-status",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationSync),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.codebases[job.CodebaseID] = model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusIndexed,
+		ActiveJobID:     job.ID,
+		EffectiveConfig: job.Config,
+	}
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+
+	if err := manager.updateJobRunning(job); err == nil {
+		t.Fatal("updateJobRunning accepted an indexed codebase")
+	}
+	gotJob, found := manager.GetJob(job.ID)
+	if !found || gotJob.State != model.JobStateQueued {
+		t.Fatalf("job after invalid status = %+v found=%v, want queued", gotJob, found)
+	}
+}
+
+func TestUpdateJobCancelledDoesNotMutateNewerOwner(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-stale-cancel-owner",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationSync),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	updatedAt := clock.Now().Add(-time.Minute)
+	codebase := model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusIndexing,
+		ActiveJobID:     "newer-job",
+		EffectiveConfig: job.Config,
+		UpdatedAt:       updatedAt,
+	}
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+	var stopped atomic.Bool
+	manager.SetCodebaseLifecycleHook(callbackLifecycleHook{
+		indexStopped: func(context.Context, string) {
+			stopped.Store(true)
+		},
+	})
+
+	manager.updateJobCancelled(context.Background(), job.ID)
+
+	gotJob, found := manager.GetJob(job.ID)
+	if !found || gotJob.State != model.JobStateCancelled {
+		t.Fatalf("stale job after cancellation = %+v found=%v, want cancelled", gotJob, found)
+	}
+	manager.mu.Lock()
+	gotCodebase := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if gotCodebase.Status != codebase.Status ||
+		gotCodebase.ActiveJobID != codebase.ActiveJobID ||
+		!gotCodebase.UpdatedAt.Equal(codebase.UpdatedAt) {
+		t.Fatalf("newer codebase after stale cancellation = %+v, want owner state %+v", gotCodebase, codebase)
+	}
+	if stopped.Load() {
+		t.Fatal("stale cancellation notified IndexStopped for the newer owner")
+	}
+}
+
 func TestUpdateJobRunningRejectsMissingJob(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	job := newQueuedJob(

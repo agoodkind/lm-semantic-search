@@ -52,7 +52,8 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 	if codebase.ActiveJobID != currentJob.ID {
 		return fmt.Errorf("start job: codebase ownership changed")
 	}
-	if codebase.Status == model.CodebaseStatusPending {
+	switch codebase.Status {
+	case model.CodebaseStatusPending:
 		previousCodebase := codebase
 		codebase.Status = model.CodebaseStatusIndexing
 		codebase.UpdatedAt = now
@@ -63,10 +64,22 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 			slog.Error("persist running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
 			return wrapped
 		}
-	} else if err := manager.saveLocked(); err != nil {
-		wrapped := errors.Join(errRetryJobStart, fmt.Errorf("revalidate running codebase state: %w", err))
-		slog.Error("revalidate running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
-		return wrapped
+	case model.CodebaseStatusIndexing:
+		if err := manager.saveLocked(); err != nil {
+			wrapped := errors.Join(errRetryJobStart, fmt.Errorf("revalidate running codebase state: %w", err))
+			slog.Error("revalidate running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
+			return wrapped
+		}
+	case model.CodebaseStatusNotIndexed,
+		model.CodebaseStatusIndexed,
+		model.CodebaseStatusFailed,
+		model.CodebaseStatusStale,
+		model.CodebaseStatusMissing,
+		model.CodebaseStatusDiscovered,
+		model.CodebaseStatusQuarantined:
+		return fmt.Errorf("start job: codebase status %q cannot run", codebase.Status)
+	default:
+		return fmt.Errorf("start job: codebase status %q cannot run", codebase.Status)
 	}
 	currentJob.State = model.JobStateRunning
 	currentJob.UpdatedAt = now
@@ -594,14 +607,16 @@ func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 		manager.mu.Unlock()
 		return
 	}
+	if codebase.ActiveJobID != jobID {
+		manager.mu.Unlock()
+		return
+	}
 	// A cancellation is not a failure: leave the codebase at its last-good state
 	// so a status check reflects the current usable state, not a stale failure.
 	// Clear ActiveJobID only when it still points at this job, so a raced or
 	// duplicate terminal transition (an explicit CancelJob plus this context-cancel
 	// path) never clobbers a drained successor.
-	if codebase.ActiveJobID == jobID {
-		codebase.ActiveJobID = ""
-	}
+	codebase.ActiveJobID = ""
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
