@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -102,6 +103,7 @@ func TestUpdateJobRunningPersistsIndexingForRestart(t *testing.T) {
 		EffectiveConfig: job.Config,
 	}
 	manager.jobs[job.ID] = job
+	manager.jobs[job.ID] = job
 	if err := manager.saveLocked(); err != nil {
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked returned error: %v", err)
@@ -158,8 +160,12 @@ func TestUpdateJobRunningDoesNotJournalRunningAfterRegistryFailure(t *testing.T)
 	manager.config.RegistryPath = t.TempDir()
 	manager.mu.Unlock()
 
-	if err := manager.updateJobRunning(job); err == nil {
+	err := manager.updateJobRunning(job)
+	if err == nil {
 		t.Fatal("updateJobRunning returned nil error after registry failure")
+	}
+	if !strings.Contains(err.Error(), "persist running codebase state") {
+		t.Fatalf("updateJobRunning error = %q, want registry persistence failure", err)
 	}
 	manager.closeJobJournal()
 
