@@ -172,7 +172,7 @@ func TestUpdateJobRunningDoesNotJournalRunningAfterRegistryFailure(t *testing.T)
 	}
 }
 
-func TestUpdateJobRunningRestoresQueuedStateAfterJournalFailure(t *testing.T) {
+func TestUpdateJobRunningPreservesResumableIndexingAfterJournalFailure(t *testing.T) {
 	manager, cfg, repoPath := newTestManager(t)
 	job := newQueuedJob(
 		"cb-running-journal-failure",
@@ -213,15 +213,15 @@ func TestUpdateJobRunningRestoresQueuedStateAfterJournalFailure(t *testing.T) {
 	if gotJob.State != model.JobStateQueued {
 		t.Fatalf("in-memory job state = %q, want %q", gotJob.State, model.JobStateQueued)
 	}
-	if gotCodebase.Status != model.CodebaseStatusPending {
-		t.Fatalf("in-memory codebase status = %q, want %q", gotCodebase.Status, model.CodebaseStatusPending)
+	if gotCodebase.Status != model.CodebaseStatusIndexing {
+		t.Fatalf("in-memory codebase status = %q, want %q", gotCodebase.Status, model.CodebaseStatusIndexing)
 	}
 	registry, err := store.ReadRegistry(cfg.RegistryPath)
 	if err != nil {
 		t.Fatalf("ReadRegistry returned error: %v", err)
 	}
-	if len(registry.Codebases) != 1 || registry.Codebases[0].Status != model.CodebaseStatusPending {
-		t.Fatalf("registry after journal failure = %+v, want one pending codebase", registry.Codebases)
+	if len(registry.Codebases) != 1 || registry.Codebases[0].Status != model.CodebaseStatusIndexing {
+		t.Fatalf("registry after journal failure = %+v, want one resumable indexing codebase", registry.Codebases)
 	}
 }
 
@@ -276,8 +276,8 @@ func TestRunJobKeepsFirstBuildQueuedWhenRunningStateCannotPersist(t *testing.T) 
 	manager.mu.Lock()
 	gotCodebase := manager.codebases[job.CodebaseID]
 	manager.mu.Unlock()
-	if gotCodebase.Status != model.CodebaseStatusPending || gotCodebase.ActiveJobID != job.ID {
-		t.Fatalf("codebase after failed running persistence = %+v, want pending with active job %q", gotCodebase, job.ID)
+	if gotCodebase.Status != model.CodebaseStatusIndexing || gotCodebase.ActiveJobID != job.ID {
+		t.Fatalf("codebase after failed running persistence = %+v, want resumable indexing with active job %q", gotCodebase, job.ID)
 	}
 }
 
@@ -543,5 +543,31 @@ func TestUpdateJobRunningRejectsMissingJob(t *testing.T) {
 
 	if err := manager.updateJobRunning(job); err == nil {
 		t.Fatal("updateJobRunning accepted a missing job")
+	}
+}
+
+func TestUpdateJobRunningRejectsMissingCodebase(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-missing-running-codebase",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+
+	if err := manager.updateJobRunning(job); err == nil {
+		t.Fatal("updateJobRunning accepted a missing codebase")
+	}
+	gotJob, found := manager.GetJob(job.ID)
+	if !found || gotJob.State != model.JobStateQueued {
+		t.Fatalf("orphaned job after rejection = %+v found=%v, want queued", gotJob, found)
 	}
 }

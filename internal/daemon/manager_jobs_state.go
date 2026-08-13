@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -39,28 +38,27 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 	}
 	now := clock.Now()
 	previousJob := currentJob
-	var previousCodebase model.Codebase
-	transitionedCodebase := false
 	// A first build was pending while its job sat queued; now that the job is
 	// running, the codebase is actively indexing. Persist this transition before
 	// journaling the running job so a crash leaves boot recovery a resumable
 	// registry state. A rebuild was already indexing.
-	if codebase, ok := manager.codebases[currentJob.CodebaseID]; ok {
-		if codebase.ActiveJobID != currentJob.ID {
-			return fmt.Errorf("start job: codebase ownership changed")
-		}
-		if codebase.Status == model.CodebaseStatusPending {
-			previousCodebase = codebase
-			transitionedCodebase = true
-			codebase.Status = model.CodebaseStatusIndexing
-			codebase.UpdatedAt = now
-			manager.codebases[codebase.ID] = codebase
-			if err := manager.saveLocked(); err != nil {
-				manager.codebases[codebase.ID] = previousCodebase
-				wrapped := fmt.Errorf("persist running codebase state: %w", err)
-				slog.Error("persist running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
-				return wrapped
-			}
+	codebase, found := manager.codebases[currentJob.CodebaseID]
+	if !found {
+		return fmt.Errorf("start job: codebase missing")
+	}
+	if codebase.ActiveJobID != currentJob.ID {
+		return fmt.Errorf("start job: codebase ownership changed")
+	}
+	if codebase.Status == model.CodebaseStatusPending {
+		previousCodebase := codebase
+		codebase.Status = model.CodebaseStatusIndexing
+		codebase.UpdatedAt = now
+		manager.codebases[codebase.ID] = codebase
+		if err := manager.saveLocked(); err != nil {
+			manager.codebases[codebase.ID] = previousCodebase
+			wrapped := fmt.Errorf("persist running codebase state: %w", err)
+			slog.Error("persist running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
+			return wrapped
 		}
 	}
 	currentJob.State = model.JobStateRunning
@@ -72,15 +70,6 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 	manager.jobs[currentJob.ID] = currentJob
 	if err := manager.appendJobLocked("job_running", currentJob); err != nil {
 		manager.jobs[currentJob.ID] = previousJob
-		if transitionedCodebase {
-			manager.codebases[previousCodebase.ID] = previousCodebase
-			if rollbackErr := manager.saveLocked(); rollbackErr != nil {
-				return errors.Join(
-					fmt.Errorf("append running job event: %w", err),
-					fmt.Errorf("restore queued codebase state: %w", rollbackErr),
-				)
-			}
-		}
 		return fmt.Errorf("append running job event: %w", err)
 	}
 	return nil
