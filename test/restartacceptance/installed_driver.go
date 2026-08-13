@@ -1336,14 +1336,16 @@ type caseProxies struct {
 }
 
 func startCaseProxies(ctx context.Context) (caseProxies, error) {
-	cfg, err := config.Default()
+	readinessContext, cancel := context.WithTimeout(ctx, embeddingReadinessTimeout)
+	defer cancel()
+	cfg, err := resolveEmbeddingConfig(readinessContext, config.Default)
 	if err != nil {
 		return caseProxies{}, fmt.Errorf("resolve installed embedding backend: %w", err)
 	}
 	if strings.TrimSpace(cfg.OpenAIBaseURL) == "" {
 		return caseProxies{}, fmt.Errorf("installed embedding backend URL is empty")
 	}
-	if err := verifyEmbeddingReadiness(ctx, cfg); err != nil {
+	if err := verifyEmbeddingReadiness(readinessContext, cfg); err != nil {
 		return caseProxies{}, err
 	}
 	embeddingListener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", embeddingProxyPort))
@@ -1370,6 +1372,29 @@ func startCaseProxies(ctx context.Context) (caseProxies, error) {
 	go func() { serveError <- embedding.Serve() }()
 	go func() { serveError <- milvus.Serve() }()
 	return caseProxies{embedding: embedding, milvus: milvus, serveError: serveError}, nil
+}
+
+func resolveEmbeddingConfig(
+	ctx context.Context,
+	resolver func() (config.Config, error),
+) (config.Config, error) {
+	result := make(chan struct {
+		config config.Config
+		err    error
+	}, 1)
+	go func() {
+		cfg, err := resolver()
+		result <- struct {
+			config config.Config
+			err    error
+		}{config: cfg, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return config.Config{}, ctx.Err()
+	case resolved := <-result:
+		return resolved.config, resolved.err
+	}
 }
 
 func verifyEmbeddingReadiness(ctx context.Context, cfg config.Config) error {

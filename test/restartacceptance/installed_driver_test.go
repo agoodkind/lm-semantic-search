@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -41,7 +42,6 @@ func TestStartCaseProxiesWarmsEmbeddingBackendBeforeScenario(t *testing.T) {
 	releaseResponse := make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
-	t.Cleanup(release)
 	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var payload struct {
 			Model      string   `json:"model"`
@@ -62,6 +62,7 @@ func TestStartCaseProxiesWarmsEmbeddingBackendBeforeScenario(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"model":"readiness-model","usage":{"prompt_tokens":1,"total_tokens":1}}`))
 	}))
 	t.Cleanup(backend.Close)
+	t.Cleanup(release)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	t.Setenv("OPENAI_BASE_URL", backend.URL+"/v1")
 	t.Setenv("EMBEDDING_MODEL", "readiness-model")
@@ -145,6 +146,28 @@ func TestVerifyEmbeddingReadinessReusesConnectionAfterRejectedProbe(t *testing.T
 	}
 	if got := connectionCount.Load(); got != 1 {
 		t.Fatalf("embedding readiness connections = %d, want 1", got)
+	}
+}
+
+func TestResolveEmbeddingConfigHonorsReadinessDeadline(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	started := make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := resolveEmbeddingConfig(ctx, func() (config.Config, error) {
+		close(started)
+		<-release
+		return config.Config{}, nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("resolve embedding config error = %v, want deadline exceeded", err)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("embedding config resolver did not start")
 	}
 }
 
