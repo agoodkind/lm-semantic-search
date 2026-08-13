@@ -372,3 +372,118 @@ func TestRunJobAsyncRetriesRunningStatePersistence(t *testing.T) {
 		t.Fatal("retried job did not stop after cancellation")
 	}
 }
+
+func TestRunJobAsyncStopsAfterPersistentRunningStateFailure(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-run-persistence-exhausted",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.codebases[job.CodebaseID] = model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusPending,
+		ActiveJobID:     job.ID,
+		EffectiveConfig: job.Config,
+	}
+	manager.jobs[job.ID] = job
+	if err := manager.saveLocked(); err != nil {
+		manager.mu.Unlock()
+		t.Fatalf("saveLocked returned error: %v", err)
+	}
+	manager.mu.Unlock()
+	manager.jobJournal.close()
+	manager.jobJournal = nil
+	var runningEvents atomic.Int32
+	manager.appendJobEvent = func(_ string, event model.JobEvent) error {
+		if event.Event == "job_running" {
+			runningEvents.Add(1)
+			return errors.New("journal unavailable")
+		}
+		return nil
+	}
+	backendCalled := false
+	manager.runner = fakeRunner{index: func(context.Context, string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error) {
+		backendCalled = true
+		return indexer.Result{}, nil
+	}}
+
+	manager.runJobAsync(context.Background(), job.ID)
+	manager.mu.Lock()
+	done := manager.done[job.ID]
+	manager.mu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runJobAsync did not stop after persistent running-state failure")
+	}
+
+	if backendCalled {
+		t.Fatal("persistently failing job reached the backend")
+	}
+	if got := runningEvents.Load(); got != jobStartRetryAttempts {
+		t.Fatalf("job_running attempts = %d, want %d", got, jobStartRetryAttempts)
+	}
+	gotJob, found := manager.GetJob(job.ID)
+	if !found || gotJob.State != model.JobStateCancelled {
+		t.Fatalf("job after exhausted retries = %+v found=%v, want cancelled", gotJob, found)
+	}
+	manager.mu.Lock()
+	gotCodebase := manager.codebases[job.CodebaseID]
+	_, hasCancel := manager.cancels[job.ID]
+	_, hasDone := manager.done[job.ID]
+	manager.mu.Unlock()
+	if gotCodebase.ActiveJobID != "" {
+		t.Fatalf("codebase active job = %q, want empty", gotCodebase.ActiveJobID)
+	}
+	if hasCancel || hasDone {
+		t.Fatalf("exhausted retry left cancel=%v done=%v, want both removed", hasCancel, hasDone)
+	}
+}
+
+func TestUpdateJobRunningRejectsStalePendingOwner(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-stale-pending-owner",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.codebases[job.CodebaseID] = model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusPending,
+		ActiveJobID:     "newer-job",
+		EffectiveConfig: job.Config,
+	}
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+
+	if err := manager.updateJobRunning(job); err == nil {
+		t.Fatal("updateJobRunning accepted stale pending ownership")
+	}
+	gotJob, found := manager.GetJob(job.ID)
+	if !found || gotJob.State != model.JobStateQueued {
+		t.Fatalf("stale job after rejection = %+v found=%v, want queued", gotJob, found)
+	}
+	manager.mu.Lock()
+	gotCodebase := manager.codebases[job.CodebaseID]
+	manager.mu.Unlock()
+	if gotCodebase.Status != model.CodebaseStatusPending || gotCodebase.ActiveJobID != "newer-job" {
+		t.Fatalf("codebase after stale job = %+v, want newer pending owner", gotCodebase)
+	}
+}

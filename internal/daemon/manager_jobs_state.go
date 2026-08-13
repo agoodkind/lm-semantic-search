@@ -46,6 +46,9 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 	// journaling the running job so a crash leaves boot recovery a resumable
 	// registry state. A rebuild was already indexing.
 	if codebase, ok := manager.codebases[currentJob.CodebaseID]; ok && codebase.Status == model.CodebaseStatusPending {
+		if codebase.ActiveJobID != currentJob.ID {
+			return fmt.Errorf("start job: codebase ownership changed")
+		}
 		previousCodebase = codebase
 		transitionedCodebase = true
 		codebase.Status = model.CodebaseStatusIndexing

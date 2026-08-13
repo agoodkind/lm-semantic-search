@@ -13,7 +13,10 @@ import (
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
-const jobStartRetryDelay = time.Second
+const (
+	jobStartRetryAttempts = 3
+	jobStartRetryDelay    = time.Second
+)
 
 func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 	detachedCorr := correlation.FromContext(ctx).Child()
@@ -39,7 +42,7 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 			manager.mu.Unlock()
 			close(done)
 		}()
-		for {
+		for attempt := 1; attempt <= jobStartRetryAttempts; attempt++ {
 			// The slot is acquired inside the goroutine so callers never block on
 			// the cap; the job stays JobStateQueued until runJob calls
 			// updateJobRunning, so a queued-behind-the-cap job reports queued.
@@ -55,7 +58,7 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 				runContext := withJobCapacity(backgroundContext, capacity)
 				graphTask := manager.runJob(runContext, jobID)
 				capacity.release(backgroundContext)
-				if manager.jobIsQueued(jobID) {
+				if manager.jobIsRetryable(jobID) && attempt < jobStartRetryAttempts {
 					select {
 					case <-time.After(jobStartRetryDelay):
 						continue
@@ -63,6 +66,10 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 						manager.updateJobCancelled(backgroundContext, jobID)
 						return
 					}
+				}
+				if manager.jobIsQueued(jobID) {
+					manager.updateJobCancelled(backgroundContext, jobID)
+					return
 				}
 				manager.runGraphIndexTask(backgroundContext, graphTask)
 				return
@@ -79,6 +86,17 @@ func (manager *Manager) jobIsQueued(jobID string) bool {
 	defer manager.mu.Unlock()
 	job, found := manager.jobs[jobID]
 	return found && job.State == model.JobStateQueued
+}
+
+func (manager *Manager) jobIsRetryable(jobID string) bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	job, found := manager.jobs[jobID]
+	if !found || job.State != model.JobStateQueued {
+		return false
+	}
+	codebase, found := manager.codebases[job.CodebaseID]
+	return found && codebase.ActiveJobID == job.ID
 }
 
 // acquireJobSyncLock takes the sync lock for one job's embed and reports the
