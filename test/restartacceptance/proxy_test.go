@@ -235,6 +235,8 @@ func TestMilvusProxyUnavailableRemainsATransportOutageThroughSDKRetry(t *testing
 		t.Fatalf("create Milvus SDK client: %v", err)
 	}
 	t.Cleanup(func() { closeMilvusClient(client) })
+	// Client creation performs the Milvus Connect RPC. Activate the outage after it
+	// so this test reaches the SDK request and retry path.
 	proxy.SetUnavailable(codes.Unavailable, "acceptance Milvus outage")
 
 	_, err = client.ListCollections(ctx, milvusclient.NewListCollectionOption())

@@ -70,6 +70,17 @@ func TestRequiredDirectoryFromEnvironmentRejectsMissingRelativeAndSymlinkPaths(t
 	if got != realDirectory {
 		t.Fatalf("directory = %q, want %q", got, realDirectory)
 	}
+
+	redundantVariable := "LMS_RESTART_ACCEPTANCE_TEST_REDUNDANT"
+	redundantPath := realDirectory + string(os.PathSeparator) + "." + string(os.PathSeparator)
+	t.Setenv(redundantVariable, redundantPath)
+	got, err = requiredDirectoryFromEnvironment(redundantVariable)
+	if err != nil {
+		t.Fatalf("resolve directory with redundant segments: %v", err)
+	}
+	if got != realDirectory {
+		t.Fatalf("redundant directory = %q, want %q", got, realDirectory)
+	}
 }
 
 func TestNewRunIDUsesUTCAndEightLowercaseHexCharacters(t *testing.T) {
