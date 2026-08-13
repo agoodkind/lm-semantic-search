@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -483,6 +485,7 @@ func (manager *Manager) resolveGetIndexView(
 		ClassificationLine: classificationLine(classification),
 		ResolutionLines:    pathResolutionLines(requestedPath),
 		CoverageLine:       coveringResolutionLine(requestedPath, tracked, codebase),
+		PathErrorLine:      "",
 		DescendantsHint:    descendantsHint(requestedPath, descendants),
 		SyncNote:           "",
 	}
@@ -506,6 +509,17 @@ func (manager *Manager) resolveGetIndexView(
 	getIndex.TemplateName = templateName
 	getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, readiness, getIndex.Failure, getIndex.Quarantine, statusView)
 	return getIndex
+}
+
+func mcpMissingPathError(clientName string, requestedPath string) string {
+	if clientName != "mcp" {
+		return ""
+	}
+	_, err := filepath.EvalSymlinks(requestedPath)
+	if !errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	return err.Error()
 }
 
 func (manager *Manager) currentIndexCounts(
