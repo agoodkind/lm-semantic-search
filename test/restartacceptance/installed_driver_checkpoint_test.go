@@ -46,7 +46,7 @@ func TestCheckpointObserverDerivesFirstBuildStagingPath(t *testing.T) {
 	if snapshot.CompletedCount != 1 {
 		t.Fatalf("completed count = %d, want 1", snapshot.CompletedCount)
 	}
-	if _, found := snapshot.TrackedIDs["01.go"]; !found {
-		t.Fatal("first-build checkpoint omitted 01.go")
+	if snapshot.FileHashes["01.go"] != "hash-1" {
+		t.Fatalf("first-build checkpoint hash = %q, want hash-1", snapshot.FileHashes["01.go"])
 	}
 }

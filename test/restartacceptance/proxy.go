@@ -40,6 +40,7 @@ type embeddingProxy struct {
 	fixtureInputsForwarded int
 	gate                   chan struct{}
 	gateReached            chan struct{}
+	gateReachedCount       int
 	inputs                 []string
 }
 
@@ -77,6 +78,7 @@ func newEmbeddingProxy(listener net.Listener, backendURL string) (*embeddingProx
 				}
 				if len(inputIDs) > 0 && proxy.gateAfter > 0 && proxy.fixtureInputsForwarded >= proxy.gateAfter {
 					gate := proxy.gate
+					proxy.gateReachedCount++
 					select {
 					case proxy.gateReached <- struct{}{}:
 					default:
@@ -139,6 +141,12 @@ func (proxy *embeddingProxy) GateReached() <-chan struct{} {
 	proxy.mutex.RLock()
 	defer proxy.mutex.RUnlock()
 	return proxy.gateReached
+}
+
+func (proxy *embeddingProxy) GateReachedCount() int {
+	proxy.mutex.RLock()
+	defer proxy.mutex.RUnlock()
+	return proxy.gateReachedCount
 }
 
 func (proxy *embeddingProxy) ClearGate() {
@@ -283,6 +291,12 @@ func (proxy *milvusProxy) ClearUnavailable() {
 	proxy.mutex.Lock()
 	proxy.unavailable = nil
 	proxy.mutex.Unlock()
+}
+
+func (proxy *milvusProxy) IsUnavailable() bool {
+	proxy.mutex.RLock()
+	defer proxy.mutex.RUnlock()
+	return proxy.unavailable != nil
 }
 
 func (proxy *milvusProxy) CallCount(method string, database string, collection string) int {
