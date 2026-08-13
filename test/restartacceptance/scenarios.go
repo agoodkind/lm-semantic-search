@@ -262,7 +262,7 @@ func runScenarioB(ctx context.Context, input scenarioBInput) (scenarioBResult, e
 		cancelFailure()
 		return scenarioBResult{}, fmt.Errorf("scenario B search error code=%s, want Unavailable", status.Code(searchErr))
 	}
-	unhealthy, err := waitForIndexHealth(failureContext, input.Client, input.Path, "store_unavailable", timeouts.Failure, timeouts.Poll)
+	unhealthyMode, err := waitForDaemonHealth(failureContext, input.Client, "store_unavailable", timeouts.Failure, timeouts.Poll)
 	if err != nil {
 		cancelFailure()
 		return scenarioBResult{}, fmt.Errorf("scenario B wait for unhealthy readiness: %w", err)
@@ -321,7 +321,7 @@ func runScenarioB(ctx context.Context, input scenarioBInput) (scenarioBResult, e
 		SearchCode:      status.Code(searchErr),
 		FailureCode:     failed.GetError().GetCode(),
 		FailureElapsed:  failureElapsed,
-		UnhealthyMode:   unhealthy.GetDependencyHealth().GetMode(),
+		UnhealthyMode:   unhealthyMode,
 		DaemonPIDBefore: before.GetDaemon().GetPid(),
 		DaemonPIDAfter:  after.GetDaemon().GetPid(),
 	}
@@ -850,6 +850,26 @@ func waitForIndexHealth(ctx context.Context, client pb.SemanticSearchDaemonServi
 		select {
 		case <-deadlineContext.Done():
 			return nil, fmt.Errorf("wait for dependency mode %q: %w", mode, context.Cause(deadlineContext))
+		case <-time.After(poll):
+		}
+	}
+}
+
+func waitForDaemonHealth(ctx context.Context, client pb.SemanticSearchDaemonServiceClient, mode string, timeout time.Duration, poll time.Duration) (string, error) {
+	deadlineContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		response, err := client.GetStatus(deadlineContext, &pb.GetStatusRequest{})
+		if err == nil {
+			for _, metric := range response.GetMetrics() {
+				if metric.GetName() == "dependency_health.mode" && metric.GetStringValue() == mode {
+					return mode, nil
+				}
+			}
+		}
+		select {
+		case <-deadlineContext.Done():
+			return "", fmt.Errorf("wait for dependency mode %q: %w", mode, context.Cause(deadlineContext))
 		case <-time.After(poll):
 		}
 	}
