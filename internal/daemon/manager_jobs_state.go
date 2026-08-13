@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -37,12 +38,16 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 		return nil
 	}
 	now := clock.Now()
+	previousJob := currentJob
+	var previousCodebase model.Codebase
+	transitionedCodebase := false
 	// A first build was pending while its job sat queued; now that the job is
 	// running, the codebase is actively indexing. Persist this transition before
 	// journaling the running job so a crash leaves boot recovery a resumable
 	// registry state. A rebuild was already indexing.
 	if codebase, ok := manager.codebases[currentJob.CodebaseID]; ok && codebase.Status == model.CodebaseStatusPending {
-		previousCodebase := codebase
+		previousCodebase = codebase
+		transitionedCodebase = true
 		codebase.Status = model.CodebaseStatusIndexing
 		codebase.UpdatedAt = now
 		manager.codebases[codebase.ID] = codebase
@@ -60,7 +65,19 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 	currentJob.Progress.HeartbeatAt = now
 	currentJob.Progress.OverallPercent = 0
 	manager.jobs[currentJob.ID] = currentJob
-	_ = manager.appendJobLocked("job_running", currentJob)
+	if err := manager.appendJobLocked("job_running", currentJob); err != nil {
+		manager.jobs[currentJob.ID] = previousJob
+		if transitionedCodebase {
+			manager.codebases[previousCodebase.ID] = previousCodebase
+			if rollbackErr := manager.saveLocked(); rollbackErr != nil {
+				return errors.Join(
+					fmt.Errorf("append running job event: %w", err),
+					fmt.Errorf("restore queued codebase state: %w", rollbackErr),
+				)
+			}
+		}
+		return fmt.Errorf("append running job event: %w", err)
+	}
 	return nil
 }
 

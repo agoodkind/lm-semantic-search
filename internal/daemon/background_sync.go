@@ -582,15 +582,6 @@ func (syncer *BackgroundSync) registerConvergeJob(
 		syncer.requeuePaths(codebase.ID, relativePaths)
 		return convergeJobRegistration{}, fmt.Errorf("start converge job: codebase ownership changed")
 	}
-	if err := syncer.manager.appendJobLocked("start_converge", job); err != nil {
-		delete(syncer.manager.jobs, job.ID)
-		syncer.manager.mu.Unlock()
-		cancel()
-		syncer.requeuePaths(codebase.ID, relativePaths)
-		wrapped := fmt.Errorf("append converge job event: %w", err)
-		slog.ErrorContext(jobCtx, "append converge job event failed", "job_id", job.ID, "err", wrapped)
-		return convergeJobRegistration{}, wrapped
-	}
 	syncer.manager.cancels[job.ID] = cancel
 	// A converge does not claim codebase.ActiveJobID, so
 	// beginActiveJobCancellationLocked cannot route a waiter to it.

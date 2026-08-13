@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/clock"
@@ -165,5 +166,58 @@ func TestUpdateJobRunningDoesNotJournalRunningAfterRegistryFailure(t *testing.T)
 	}
 	if jobs[job.ID].State != model.JobStateQueued {
 		t.Fatalf("journaled state = %q, want %q", jobs[job.ID].State, model.JobStateQueued)
+	}
+}
+
+func TestUpdateJobRunningRestoresQueuedStateAfterJournalFailure(t *testing.T) {
+	manager, cfg, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-running-journal-failure",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.codebases[job.CodebaseID] = model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusPending,
+		ActiveJobID:     job.ID,
+		EffectiveConfig: job.Config,
+	}
+	manager.jobs[job.ID] = job
+	if err := manager.saveLocked(); err != nil {
+		manager.mu.Unlock()
+		t.Fatalf("saveLocked returned error: %v", err)
+	}
+	manager.mu.Unlock()
+	manager.jobJournal.close()
+	manager.jobJournal = nil
+	manager.appendJobEvent = func(string, model.JobEvent) error { return errors.New("journal unavailable") }
+
+	if err := manager.updateJobRunning(job); err == nil {
+		t.Fatal("updateJobRunning returned nil after journal failure")
+	}
+	manager.mu.Lock()
+	gotJob := manager.jobs[job.ID]
+	gotCodebase := manager.codebases[job.CodebaseID]
+	manager.mu.Unlock()
+	if gotJob.State != model.JobStateQueued {
+		t.Fatalf("in-memory job state = %q, want %q", gotJob.State, model.JobStateQueued)
+	}
+	if gotCodebase.Status != model.CodebaseStatusPending {
+		t.Fatalf("in-memory codebase status = %q, want %q", gotCodebase.Status, model.CodebaseStatusPending)
+	}
+	registry, err := store.ReadRegistry(cfg.RegistryPath)
+	if err != nil {
+		t.Fatalf("ReadRegistry returned error: %v", err)
+	}
+	if len(registry.Codebases) != 1 || registry.Codebases[0].Status != model.CodebaseStatusPending {
+		t.Fatalf("registry after journal failure = %+v, want one pending codebase", registry.Codebases)
 	}
 }

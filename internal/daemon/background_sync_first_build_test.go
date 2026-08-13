@@ -350,30 +350,6 @@ func TestRegisterConvergeJobRejectsChangedOwnership(t *testing.T) {
 	}
 }
 
-func TestRegisterConvergeJobRequeuesPathsWhenJournalStartFails(t *testing.T) {
-	manager, _, repoPath := newTestManager(t)
-	codebase := seedConvergeCodebase(t, manager, repoPath)
-	manager.jobJournal.close()
-	manager.jobJournal = nil
-	manager.appendJobEvent = func(string, model.JobEvent) error { return errors.New("journal unavailable") }
-
-	syncer := NewBackgroundSync(manager.config, manager)
-	syncer.queue = NewEventQueue(time.Hour, func(string, []string) {})
-	if _, err := syncer.registerConvergeJob(context.Background(), codebase, []string{"main.go"}); err == nil {
-		t.Fatal("registerConvergeJob returned nil after journal start failure")
-	}
-	manager.mu.Lock()
-	jobCount := len(manager.jobs)
-	cancelCount := len(manager.cancels)
-	manager.mu.Unlock()
-	if jobCount != 0 || cancelCount != 0 {
-		t.Fatalf("failed registration left jobs=%d cancels=%d, want 0 and 0", jobCount, cancelCount)
-	}
-	if got := syncer.queue.PendingCounts()[codebase.ID]; got != 1 {
-		t.Fatalf("requeued path count = %d, want 1", got)
-	}
-}
-
 func TestRegisterConvergeJobRequeuesPathsWhenJournalRunningFails(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	codebase := seedConvergeCodebase(t, manager, repoPath)
