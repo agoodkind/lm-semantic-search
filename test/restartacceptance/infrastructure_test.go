@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -311,10 +312,29 @@ func TestHarnessPassesGeneratedCredentialsOnlyThroughComposeEnvironment(t *testi
 	if err != nil {
 		t.Fatalf("read compose file: %v", err)
 	}
-	for _, value := range runner.environments[0] {
+	for _, key := range []string{minioUserEnvironment, minioPasswordEnvironment} {
+		value := runner.environments[0][key]
 		if strings.Contains(string(composeBody), value) {
 			t.Fatal("compose file contains generated credential value")
 		}
+	}
+}
+
+func TestHarnessRunsCloneServicesAsTheHarnessUser(t *testing.T) {
+	paths := pathsForRun(filepath.Join(t.TempDir(), "lms-restart-acceptance", "20260812T010203Z-abcdef01"))
+	harness := configuredTestHarness(t, paths, &recordingRunner{})
+	environment, err := harness.composeEnvironment()
+	if err != nil {
+		t.Fatalf("compose environment: %v", err)
+	}
+	wantUID := strconv.Itoa(os.Getuid())
+	if environment[hostUserEnvironment] != wantUID {
+		t.Fatalf("compose host user = %q, want %q", environment[hostUserEnvironment], wantUID)
+	}
+	compose := renderCompose(paths, "a")
+	wantUser := "user: \"${" + hostUserEnvironment + ":?required}:0\""
+	if count := strings.Count(compose, wantUser); count != 3 {
+		t.Fatalf("compose service user count = %d, want 3", count)
 	}
 }
 

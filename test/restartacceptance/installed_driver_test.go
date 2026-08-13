@@ -3,16 +3,66 @@
 package restartacceptance
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/config"
 )
 
-func TestInstalledLMSUsesShorterMetadataBoundThanScenarioFailureBound(t *testing.T) {
-	run := acceptanceRun{Paths: runPaths{}}
+func TestInstalledLMSForcesProductionMetadataTimeoutAcrossProcessBoundary(t *testing.T) {
+	configHome := t.TempDir()
+	configRoot := filepath.Join(configHome, "lm-semantic-search")
+	if err := os.MkdirAll(configRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configRoot, "config.json"),
+		[]byte(`{"milvusMetadataCallTimeoutMs":2}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS", "1")
+
+	run := acceptanceRun{Paths: pathsForRun(t.TempDir())}
 	process := installedLMSProcess(run)
-	if got := process.Environment["CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS"]; got != "10000" {
-		t.Fatalf("metadata call timeout = %q, want 10000", got)
+	probePath := filepath.Join(t.TempDir(), "metadata-timeout")
+	process.Path = os.Args[0]
+	process.Args = []string{"-test.run=^TestRestartAcceptanceConfigProbe$"}
+	process.Environment["LMS_RESTART_CONFIG_PROBE"] = probePath
+	command, err := startInstalledProcess(process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err != nil {
+		t.Fatalf("wait for config probe: %v", err)
+	}
+	body, err := os.ReadFile(probePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(body)); got != "60000" {
+		t.Fatalf("effective metadata call timeout = %q, want 60000", got)
+	}
+}
+
+func TestRestartAcceptanceConfigProbe(t *testing.T) {
+	probePath := os.Getenv("LMS_RESTART_CONFIG_PROBE")
+	if probePath == "" {
+		return
+	}
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(strconv.Itoa(cfg.MilvusMetadataCallTimeoutMS) + "\n")
+	if err := os.WriteFile(probePath, body, 0o600); err != nil {
+		t.Fatal(fmt.Errorf("write config probe: %w", err))
 	}
 }
 

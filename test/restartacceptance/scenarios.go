@@ -110,7 +110,7 @@ func runScenarioA(ctx context.Context, input scenarioAInput) (scenarioAResult, e
 	if err != nil {
 		return scenarioAResult{}, fmt.Errorf("scenario A start ingest: %w", err)
 	}
-	checkpoint, err := waitForJob(ctx, input.Client, started.GetJobId(), timeouts.Ready, timeouts.Poll, func(job *pb.Job) bool {
+	checkpoint, err := waitForJob(ctx, input.Client, started.GetJobId(), timeouts.Recovery, timeouts.Poll, func(job *pb.Job) bool {
 		return job.GetState() == "running" && job.GetProgress().GetChunksEmbedded() > 0
 	})
 	if err != nil {

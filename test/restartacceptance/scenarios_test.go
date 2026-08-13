@@ -111,6 +111,56 @@ func TestRunScenarioAResumesAfterEmbeddingOutageWithoutDuplicateWork(t *testing.
 	assertSingleScenarioRecord(t, evidencePaths.EventsJSONL, "scenario_a")
 }
 
+func TestRunScenarioAAllowsCloneStartupBeforeMidIngestCheckpoint(t *testing.T) {
+	var backendMutex sync.Mutex
+	backendIDs := make([]string, 0)
+	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		backendMutex.Lock()
+		backendIDs = append(backendIDs, request.Header.Get("X-Acceptance-Row-ID"))
+		backendMutex.Unlock()
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"data":[{"embedding":[1]}]}`))
+	}))
+	t.Cleanup(backend.Close)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := newEmbeddingProxy(listener, backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = proxy.Serve() }()
+	t.Cleanup(func() { _ = proxy.Close() })
+
+	server := newScenarioFakeServer()
+	server.embeddingURL = "http://" + listener.Addr().String()
+	server.initialCheckpointDelay = 80 * time.Millisecond
+	client := startScenarioFakeGRPC(t, server)
+	recorder, _ := scenarioTestRecorder(t)
+	timeouts := focusedScenarioTimeouts()
+	timeouts.Ready = 20 * time.Millisecond
+	timeouts.Recovery = time.Second
+
+	if _, err := runScenarioA(context.Background(), scenarioAInput{
+		Client:                client,
+		Path:                  t.TempDir(),
+		Proxy:                 proxy,
+		ExpectedUnfinishedIDs: []string{"row-2", "row-3"},
+		ObserveRows:           server.observeRows,
+		ObserveCheckpoint:     server.observeCheckpoint,
+		ObserveEmbeddingCalls: func() []string {
+			backendMutex.Lock()
+			defer backendMutex.Unlock()
+			return slices.Clone(backendIDs)
+		},
+		Recorder: recorder,
+		Timeouts: timeouts,
+	}); err != nil {
+		t.Fatalf("runScenarioA returned error after delayed checkpoint: %v", err)
+	}
+}
+
 func TestRunScenarioBReconnectsAfterMilvusOutageWithoutDaemonRestart(t *testing.T) {
 	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -456,13 +506,14 @@ func testRow(id string, splitPosition int, vectorHash string) rowSnapshotEntry {
 
 type scenarioFakeServer struct {
 	pb.UnimplementedSemanticSearchDaemonServiceServer
-	mutex         sync.Mutex
-	embeddingURL  string
-	milvusAddress string
-	jobs          []*pb.Job
-	rows          map[string]rowSnapshotEntry
-	health        string
-	startedAt     time.Time
+	mutex                  sync.Mutex
+	embeddingURL           string
+	milvusAddress          string
+	jobs                   []*pb.Job
+	rows                   map[string]rowSnapshotEntry
+	health                 string
+	startedAt              time.Time
+	initialCheckpointDelay time.Duration
 }
 
 func newScenarioFakeServer() *scenarioFakeServer {
@@ -472,12 +523,19 @@ func newScenarioFakeServer() *scenarioFakeServer {
 func (server *scenarioFakeServer) StartIndex(_ context.Context, _ *pb.StartIndexRequest) (*pb.StartIndexResponse, error) {
 	server.mutex.Lock()
 	now := time.Now()
-	job := &pb.Job{Id: "job-1", CodebaseId: "cb-1", State: "running", Progress: &pb.Progress{ChunksEmbedded: 1}, StartedAt: timestamppb.New(now), UpdatedAt: timestamppb.New(now)}
+	job := &pb.Job{Id: "job-1", CodebaseId: "cb-1", State: "running", Progress: &pb.Progress{}, StartedAt: timestamppb.New(now), UpdatedAt: timestamppb.New(now)}
 	server.jobs = append(server.jobs, job)
-	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	if server.initialCheckpointDelay == 0 {
+		job.Progress.ChunksEmbedded = 1
+		server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	}
 	result := &pb.StartIndexResponse{JobId: job.Id, CodebaseId: job.CodebaseId, State: job.State}
 	server.mutex.Unlock()
 	if server.embeddingURL != "" {
+		if server.initialCheckpointDelay > 0 {
+			go server.startEmbeddingJobAfterDelay(job)
+			return result, nil
+		}
 		response, err := postEmbedding(server.embeddingURL, "row-1")
 		if err != nil {
 			return nil, err
@@ -489,6 +547,27 @@ func (server *scenarioFakeServer) StartIndex(_ context.Context, _ *pb.StartIndex
 		go server.runMilvusJob(job)
 	}
 	return result, nil
+}
+
+func (server *scenarioFakeServer) startEmbeddingJobAfterDelay(job *pb.Job) {
+	time.Sleep(server.initialCheckpointDelay)
+	response, err := postEmbedding(server.embeddingURL, "row-1")
+	if response != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil || response == nil || response.StatusCode != http.StatusOK {
+		return
+	}
+	server.recordInitialCheckpoint(job)
+	server.runEmbeddingJob(job)
+}
+
+func (server *scenarioFakeServer) recordInitialCheckpoint(job *pb.Job) {
+	server.mutex.Lock()
+	job.Progress.ChunksEmbedded = 1
+	job.UpdatedAt = timestamppb.Now()
+	server.rows["row-1"] = testRow("row-1", 0, "hash-1")
+	server.mutex.Unlock()
 }
 
 func (server *scenarioFakeServer) runEmbeddingJob(job *pb.Job) {
