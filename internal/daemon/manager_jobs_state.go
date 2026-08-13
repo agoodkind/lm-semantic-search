@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -17,6 +18,8 @@ import (
 )
 
 type bootstrapReason string
+
+var errRetryJobStart = errors.New("retry job start persistence")
 
 const (
 	bootstrapReasonFirstIndex                 bootstrapReason = "first_index"
@@ -56,10 +59,14 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 		manager.codebases[codebase.ID] = codebase
 		if err := manager.saveLocked(); err != nil {
 			manager.codebases[codebase.ID] = previousCodebase
-			wrapped := fmt.Errorf("persist running codebase state: %w", err)
+			wrapped := errors.Join(errRetryJobStart, fmt.Errorf("persist running codebase state: %w", err))
 			slog.Error("persist running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
 			return wrapped
 		}
+	} else if err := manager.saveLocked(); err != nil {
+		wrapped := errors.Join(errRetryJobStart, fmt.Errorf("revalidate running codebase state: %w", err))
+		slog.Error("revalidate running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
+		return wrapped
 	}
 	currentJob.State = model.JobStateRunning
 	currentJob.UpdatedAt = now
@@ -70,7 +77,7 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 	manager.jobs[currentJob.ID] = currentJob
 	if err := manager.appendJobLocked("job_running", currentJob); err != nil {
 		manager.jobs[currentJob.ID] = previousJob
-		return fmt.Errorf("append running job event: %w", err)
+		return errors.Join(errRetryJobStart, fmt.Errorf("append running job event: %w", err))
 	}
 	return nil
 }

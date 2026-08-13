@@ -571,3 +571,66 @@ func TestUpdateJobRunningRejectsMissingCodebase(t *testing.T) {
 		t.Fatalf("orphaned job after rejection = %+v found=%v, want queued", gotJob, found)
 	}
 }
+
+func TestUpdateJobRunningRevalidatesIndexingRegistryBeforeJournal(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-indexing-registry-retry",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationSync),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.codebases[job.CodebaseID] = model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusIndexing,
+		ActiveJobID:     job.ID,
+		EffectiveConfig: job.Config,
+	}
+	manager.jobs[job.ID] = job
+	manager.config.RegistryPath = t.TempDir()
+	manager.mu.Unlock()
+	manager.jobJournal.close()
+	manager.jobJournal = nil
+	journalCalled := false
+	manager.appendJobEvent = func(string, model.JobEvent) error {
+		journalCalled = true
+		return nil
+	}
+
+	if err := manager.updateJobRunning(job); err == nil {
+		t.Fatal("updateJobRunning accepted an indexing registry persistence failure")
+	}
+	if journalCalled {
+		t.Fatal("updateJobRunning journaled running before revalidating the indexing registry")
+	}
+}
+
+func TestRunJobDoesNotRetryMissingCodebase(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-nonretryable-missing-codebase",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+
+	_, retryStart := manager.runJob(context.Background(), job.ID)
+	if retryStart {
+		t.Fatal("runJob classified a missing codebase as retryable persistence")
+	}
+}

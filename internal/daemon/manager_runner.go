@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -56,9 +57,9 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 					syncLockLease: syncLockLease{lock: nil, once: nil},
 				}
 				runContext := withJobCapacity(backgroundContext, capacity)
-				graphTask := manager.runJob(runContext, jobID)
+				graphTask, retryStart := manager.runJob(runContext, jobID)
 				capacity.release(backgroundContext)
-				if manager.jobIsRetryable(jobID) && attempt < jobStartRetryAttempts {
+				if retryStart && attempt < jobStartRetryAttempts {
 					select {
 					case <-time.After(jobStartRetryDelay):
 						continue
@@ -88,17 +89,6 @@ func (manager *Manager) jobIsQueued(jobID string) bool {
 	return found && job.State == model.JobStateQueued
 }
 
-func (manager *Manager) jobIsRetryable(jobID string) bool {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	job, found := manager.jobs[jobID]
-	if !found || job.State != model.JobStateQueued {
-		return false
-	}
-	codebase, found := manager.codebases[job.CodebaseID]
-	return found && codebase.ActiveJobID == job.ID
-}
-
 // acquireJobSyncLock takes the sync lock for one job's embed and reports the
 // outcome, so the caller can separate a cancelled request from a machine that
 // cannot grant the lock at all.
@@ -120,7 +110,7 @@ func (manager *Manager) acquireJobSyncLock(
 	return manager.syncLock.acquireBlocking(ctx)
 }
 
-func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTask {
+func (manager *Manager) runJob(ctx context.Context, jobID string) (*graphIndexTask, bool) {
 	ctx, done := spans.Open(ctx, "daemon.runJob")
 	defer done(nil)
 
@@ -131,12 +121,12 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 	job, found := manager.jobs[jobID]
 	manager.mu.Unlock()
 	if !found {
-		return nil
+		return nil, false
 	}
 
 	if err := manager.updateJobRunning(job); err != nil {
 		slog.ErrorContext(ctx, "start job persistence failed", "job_id", job.ID, "err", err)
-		return nil
+		return nil, errors.Is(err, errRetryJobStart)
 	}
 
 	// Hold the sync lock for the embed so every other holder of that lock file
@@ -158,22 +148,22 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 			defer lease.release(ctx)
 		case syncLockCancelled:
 			manager.updateJobCancelled(ctx, job.ID)
-			return nil
+			return nil, false
 		case syncLockFailed:
 			manager.updateJobFailed(ctx, job.ID, lockErr)
-			return nil
+			return nil, false
 		case syncLockBusy:
 			// acquireBlocking waits out ordinary contention, so it never returns
 			// busy; the exhaustive switch check still requires the case. A busy
 			// outcome carries no error of its own, so the job reports the lock as
 			// unavailable rather than embedding with no lock held.
 			manager.updateJobFailed(ctx, job.ID, errSyncLockUnavailable)
-			return nil
+			return nil, false
 		default:
 			// Any outcome this switch does not name ends the job for the same
 			// reason, which puts the safe direction on the fallback.
 			manager.updateJobFailed(ctx, job.ID, errSyncLockUnavailable)
-			return nil
+			return nil, false
 		}
 	}
 
@@ -192,26 +182,26 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 	case jobOperationSync:
 		handled, graphTask := manager.runDeltaSync(ctx, job, codeSource)
 		if handled {
-			return graphTask
+			return graphTask, false
 		}
-		return manager.runBootstrap(ctx, job, codeSource)
+		return manager.runBootstrap(ctx, job, codeSource), false
 	case jobOperationStreamingReindex:
 		handled, graphTask := manager.runDeltaSync(ctx, job, codeSource)
 		if handled {
-			return graphTask
+			return graphTask, false
 		}
-		return manager.runBootstrap(ctx, job, codeSource)
+		return manager.runBootstrap(ctx, job, codeSource), false
 	case jobOperationIndex:
 		reason := bootstrapReasonFirstIndex
 		if job.Forced {
 			reason = bootstrapReasonForcedReindex
 		}
 		manager.routeToBootstrap(ctx, job.ID, reason)
-		return manager.runBootstrap(ctx, job, codeSource)
+		return manager.runBootstrap(ctx, job, codeSource), false
 	case jobOperationConversationIngest:
 		manager.runConversationIngest(ctx, job)
 	}
-	return nil
+	return nil, false
 }
 
 // JobSuccessorID returns the id of the immediate next terminal job for job's
