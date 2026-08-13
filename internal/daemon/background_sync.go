@@ -523,10 +523,10 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 		outcome, runErr := syncer.manager.ConvergePaths(runCtx, codebaseID, relativePaths)
 		terminalCtx := context.WithoutCancel(runCtx)
 		switch {
-		case runErr != nil:
-			syncer.manager.updateDetachedJobFailed(terminalCtx, registration.job.ID, runErr)
 		case runCtx.Err() != nil:
 			syncer.manager.updateDetachedJobCancelled(terminalCtx, registration.job.ID)
+		case runErr != nil:
+			syncer.manager.updateDetachedJobFailed(terminalCtx, registration.job.ID, runErr)
 		default:
 			syncer.manager.updateDetachedJobCompleted(terminalCtx, registration.job.ID, indexer.Result{
 				IndexedFiles:      outcome.PathsConverged,

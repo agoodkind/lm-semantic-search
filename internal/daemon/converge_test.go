@@ -280,6 +280,7 @@ func TestConvergeViaWatcherTerminalStatePreservesNewerFirstBuild(t *testing.T) {
 		{name: "completed", wantState: model.JobStateCompleted},
 		{name: "failed", failSnapshot: true, wantState: model.JobStateFailed},
 		{name: "cancelled", cancel: true, wantState: model.JobStateCancelled},
+		{name: "cancelled after snapshot error", cancel: true, failSnapshot: true, wantState: model.JobStateCancelled},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

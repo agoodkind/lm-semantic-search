@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -219,5 +220,61 @@ func TestUpdateJobRunningRestoresQueuedStateAfterJournalFailure(t *testing.T) {
 	}
 	if len(registry.Codebases) != 1 || registry.Codebases[0].Status != model.CodebaseStatusPending {
 		t.Fatalf("registry after journal failure = %+v, want one pending codebase", registry.Codebases)
+	}
+}
+
+func TestRunJobKeepsFirstBuildQueuedWhenRunningStateCannotPersist(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-run-journal-failure",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.codebases[job.CodebaseID] = model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusPending,
+		ActiveJobID:     job.ID,
+		EffectiveConfig: job.Config,
+	}
+	manager.jobs[job.ID] = job
+	if err := manager.saveLocked(); err != nil {
+		manager.mu.Unlock()
+		t.Fatalf("saveLocked returned error: %v", err)
+	}
+	manager.mu.Unlock()
+	manager.jobJournal.close()
+	manager.jobJournal = nil
+	manager.appendJobEvent = func(string, model.JobEvent) error { return errors.New("journal unavailable") }
+	backendCalled := false
+	manager.runner = fakeRunner{index: func(context.Context, string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error) {
+		backendCalled = true
+		return indexer.Result{}, nil
+	}}
+
+	manager.runJob(context.Background(), job.ID)
+
+	if backendCalled {
+		t.Fatal("runJob reached the backend after running state persistence failed")
+	}
+	gotJob, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatalf("GetJob(%q) did not find queued job", job.ID)
+	}
+	if gotJob.State != model.JobStateQueued {
+		t.Fatalf("job state = %q, want %q", gotJob.State, model.JobStateQueued)
+	}
+	manager.mu.Lock()
+	gotCodebase := manager.codebases[job.CodebaseID]
+	manager.mu.Unlock()
+	if gotCodebase.Status != model.CodebaseStatusPending || gotCodebase.ActiveJobID != job.ID {
+		t.Fatalf("codebase after failed running persistence = %+v, want pending with active job %q", gotCodebase, job.ID)
 	}
 }

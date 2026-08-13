@@ -96,7 +96,7 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 	}
 
 	if err := manager.updateJobRunning(job); err != nil {
-		manager.updateJobFailed(ctx, job.ID, err)
+		slog.ErrorContext(ctx, "start job persistence failed", "job_id", job.ID, "err", err)
 		return nil
 	}
 
