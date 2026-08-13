@@ -11,6 +11,8 @@ CLI behavior lives in the current help output, starting with `lm-semantic-search
 
 [`docs/metrics.md`](docs/metrics.md) explains the historical `status --since` report.
 
+[`docs/restartacceptance.md`](docs/restartacceptance.md) explains how to run destructive restart recovery tests inside an isolated Linux virtual machine.
+
 ## Configuration
 
 The daemon reads `config.json` from `$XDG_CONFIG_HOME/lm-semantic-search/`, or from `~/.config/lm-semantic-search/` when `XDG_CONFIG_HOME` is unset.

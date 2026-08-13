@@ -43,6 +43,14 @@ func prepareAcceptanceRun(ctx context.Context, now time.Time, entropy io.Reader)
 	if err := validateOptIn(confirmation); err != nil {
 		return acceptanceRun{}, err
 	}
+	backupRoot, err := requiredDirectoryFromEnvironment(backupRootEnvironment)
+	if err != nil {
+		return acceptanceRun{}, err
+	}
+	configuredRunParent, err := requiredDirectoryFromEnvironment(runParentEnvironment)
+	if err != nil {
+		return acceptanceRun{}, err
+	}
 	if err := validateRecordedImages(ctx, execCommandRunner{}); err != nil {
 		return acceptanceRun{}, err
 	}
@@ -50,15 +58,15 @@ func prepareAcceptanceRun(ctx context.Context, now time.Time, entropy io.Reader)
 	if err != nil {
 		return acceptanceRun{}, fmt.Errorf("resolve home directory: %w", err)
 	}
-	availableBytes, err := availableDiskBytes(filepath.Dir(runParent))
+	availableBytes, err := availableDiskBytes(configuredRunParent)
 	if err != nil {
 		return acceptanceRun{}, err
 	}
 	return prepareRun(preparationInput{
 		Context:           ctx,
 		Confirmation:      confirmation,
-		BackupRoot:        backupRootFromEnvironment(),
-		RunParent:         runParent,
+		BackupRoot:        backupRoot,
+		RunParent:         configuredRunParent,
 		Home:              home,
 		ExpectedChecksums: expectedBackupChecksums,
 		AvailableBytes:    availableBytes,

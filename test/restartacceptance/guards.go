@@ -22,9 +22,8 @@ import (
 const (
 	restartAcceptanceOptIn        = "LMS_RESTART_ACCEPTANCE_CONFIRM"
 	restartAcceptanceConfirmation = "isolated-clone"
-	backupOverrideEnvironment     = "LMS_RESTART_ACCEPTANCE_BACKUP"
-	defaultBackupRoot             = "/Volumes/Chaos Storage/milvus-raw-20260811T060505-PDT"
-	runParent                     = "/Volumes/Chaos Storage/lms-restart-acceptance"
+	backupRootEnvironment         = "LMS_RESTART_ACCEPTANCE_BACKUP"
+	runParentEnvironment          = "LMS_RESTART_ACCEPTANCE_RUN_PARENT"
 	checksumManifestName          = "SHA256SUMS"
 
 	etcdClientPort      = 22379
@@ -106,12 +105,8 @@ func validateFreeSpace(available int64, sizes []int64) error {
 }
 
 func validateCaseFreeSpace(available int64, sizes []int64) error {
-	var total int64
-	for _, size := range sizes {
-		total += size
-	}
-	// The initial 125 percent gate leaves this 25 percent reserve after extraction.
-	required := (total + 3) / 4
+	// Container startup can break every clonefile extent in the writable case.
+	required := requiredRestoreBytes(sizes)
 	if available < required {
 		return fmt.Errorf("free space %d bytes is less than case reserve %d bytes", available, required)
 	}
@@ -226,9 +221,28 @@ func sha256File(path string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func backupRootFromEnvironment() string {
-	if value := os.Getenv(backupOverrideEnvironment); value != "" {
-		return value
+func requiredDirectoryFromEnvironment(name string) (string, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return "", fmt.Errorf("%s must name an existing absolute directory", name)
 	}
-	return defaultBackupRoot
+	cleanPath := filepath.Clean(value)
+	if !filepath.IsAbs(cleanPath) {
+		return "", fmt.Errorf("%s must name an absolute directory", name)
+	}
+	info, err := os.Lstat(cleanPath)
+	if err != nil {
+		return "", fmt.Errorf("inspect %s directory %q: %w", name, cleanPath, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%s must name a real directory", name)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(cleanPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s directory %q: %w", name, cleanPath, err)
+	}
+	if resolvedPath != cleanPath {
+		return "", fmt.Errorf("%s directory must not traverse a symbolic link", name)
+	}
+	return cleanPath, nil
 }

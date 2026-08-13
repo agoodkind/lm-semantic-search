@@ -38,8 +38,8 @@ Read
 Bash
 df
 cat
-/Volumes/Chaos Storage
-df -h "/Volumes/Chaos Storage" | cat
+$EXTERNAL_DRIVE
+df -h "$EXTERNAL_DRIVE" | cat
 ```
 
 The row lives at `convtool/<conversation>/<message>/<toolIndex>`.

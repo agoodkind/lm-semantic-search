@@ -21,7 +21,7 @@ import (
 func TestComposeFilePinsImagesPortsAndWritableCaseData(t *testing.T) {
 	t.Parallel()
 
-	paths := pathsForRun("/Volumes/Chaos Storage/lms-restart-acceptance/20260812T010203Z-abcdef01")
+	paths := pathsForRun(filepath.Join(t.TempDir(), "20260812T010203Z-abcdef01"))
 	content := renderCompose(paths, "g-restore")
 	for _, literal := range []string{
 		etcdImage.Tag,
@@ -580,7 +580,7 @@ func TestHarnessRechecksSpaceAndDeletesCaseAfterCleanup(t *testing.T) {
 	}
 }
 
-func TestHarnessUsesPostRestoreCopyOnWriteReserve(t *testing.T) {
+func TestHarnessRequiresFullWritableCaseReserveAfterRestore(t *testing.T) {
 	paths := pathsForRun(filepath.Join(t.TempDir(), "lms-restart-acceptance", "20260812T010203Z-abcdef01"))
 	for _, path := range []string{paths.SourceEtcd, paths.SourceMilvus, paths.SourceMinIO, paths.SourceMinIODefault} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
@@ -589,11 +589,11 @@ func TestHarnessUsesPostRestoreCopyOnWriteReserve(t *testing.T) {
 	}
 	harness := configuredTestHarness(t, paths, &recordingRunner{})
 	harness.archiveSizes = []int64{100}
-	harness.availableBytes = func(string) (int64, error) { return 25, nil }
+	harness.availableBytes = func(string) (int64, error) { return 125, nil }
 	if err := harness.runCompose(context.Background(), "a-space"); err != nil {
 		t.Fatalf("run compose with post-restore reserve: %v", err)
 	}
-	harness.availableBytes = func(string) (int64, error) { return 24, nil }
+	harness.availableBytes = func(string) (int64, error) { return 124, nil }
 	if err := harness.runCompose(context.Background(), "b-space"); err == nil {
 		t.Fatal("run compose without post-restore reserve succeeded")
 	}
@@ -649,7 +649,7 @@ func TestCollectionCensusSerializationIsDeterministic(t *testing.T) {
 func TestIsolatedEnvironmentRoutesOnlyCloneResources(t *testing.T) {
 	t.Parallel()
 
-	paths := pathsForRun("/Volumes/Chaos Storage/lms-restart-acceptance/20260812T010203Z-abcdef01")
+	paths := pathsForRun(filepath.Join(t.TempDir(), "20260812T010203Z-abcdef01"))
 	lmsEnvironment := isolatedLMSEnvironment(paths)
 	wantLMS := map[string]string{
 		"XDG_STATE_HOME":               paths.LMSState,
