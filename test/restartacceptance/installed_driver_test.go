@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +26,91 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 	"google.golang.org/grpc"
 )
+
+func TestStartCaseProxiesWarmsEmbeddingBackendBeforeScenario(t *testing.T) {
+	type readinessRequest struct {
+		path       string
+		authority  string
+		model      string
+		dimensions int32
+		input      []string
+		err        error
+	}
+	requestStarted := make(chan readinessRequest, 1)
+	releaseResponse := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
+	t.Cleanup(release)
+	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload struct {
+			Model      string   `json:"model"`
+			Input      []string `json:"input"`
+			Dimensions int32    `json:"dimensions"`
+		}
+		decodeErr := json.NewDecoder(request.Body).Decode(&payload)
+		requestStarted <- readinessRequest{
+			path:       request.URL.Path,
+			authority:  request.Header.Get("Authorization"),
+			model:      payload.Model,
+			dimensions: payload.Dimensions,
+			input:      payload.Input,
+			err:        decodeErr,
+		}
+		<-releaseResponse
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"model":"readiness-model","usage":{"prompt_tokens":1,"total_tokens":1}}`))
+	}))
+	t.Cleanup(backend.Close)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("OPENAI_BASE_URL", backend.URL+"/v1")
+	t.Setenv("EMBEDDING_MODEL", "readiness-model")
+	t.Setenv("EMBEDDING_DIMENSION", "2")
+
+	type proxyResult struct {
+		proxies caseProxies
+		err     error
+	}
+	result := make(chan proxyResult, 1)
+	go func() {
+		proxies, err := startCaseProxies(context.Background())
+		result <- proxyResult{proxies: proxies, err: err}
+	}()
+
+	select {
+	case request := <-requestStarted:
+		if request.err != nil {
+			t.Fatalf("decode embedding readiness request: %v", request.err)
+		}
+		if request.path != "/v1/embeddings" {
+			t.Fatalf("embedding readiness path = %q, want /v1/embeddings", request.path)
+		}
+		if request.authority != "Bearer test-key" {
+			t.Fatalf("embedding readiness authorization = %q, want Bearer test-key", request.authority)
+		}
+		if request.model != "readiness-model" || request.dimensions != 2 {
+			t.Fatalf("embedding readiness model = %q dimensions = %d, want readiness-model and 2", request.model, request.dimensions)
+		}
+		if !slices.Equal(request.input, []string{"restart acceptance embedding readiness"}) {
+			t.Fatalf("embedding readiness input = %v", request.input)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("embedding readiness request did not start")
+	}
+	select {
+	case returned := <-result:
+		_ = returned.proxies.close()
+		t.Fatalf("startCaseProxies returned before embedding readiness completed: %v", returned.err)
+	default:
+	}
+	release()
+	returned := <-result
+	if returned.err != nil {
+		t.Fatal(returned.err)
+	}
+	if err := returned.proxies.close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestInstalledLMSForcesProductionMetadataTimeoutAcrossProcessBoundary(t *testing.T) {
 	configHome := t.TempDir()
