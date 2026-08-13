@@ -66,17 +66,15 @@ func seedBootstrapCodebase(t *testing.T, manager *Manager, canonical string, cfg
 	t.Helper()
 
 	codebaseID := "cb-bootstrap-" + filepath.Base(filepath.Dir(canonical))
+	job := newQueuedJob(codebaseID, canonical, canonical, testClientInfo(), string(jobOperationIndex), false, cfg, emptyAdmissionBudget, clock.Now())
 	manager.mu.Lock()
 	manager.codebases[codebaseID] = model.Codebase{
 		ID:              codebaseID,
 		CanonicalPath:   canonical,
 		Status:          model.CodebaseStatusIndexing,
+		ActiveJobID:     job.ID,
 		EffectiveConfig: cfg,
 	}
-	manager.mu.Unlock()
-
-	job := newQueuedJob(codebaseID, canonical, canonical, testClientInfo(), string(jobOperationIndex), false, cfg, emptyAdmissionBudget, clock.Now())
-	manager.mu.Lock()
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
 	return codebaseID, job

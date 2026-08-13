@@ -45,20 +45,22 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 	// running, the codebase is actively indexing. Persist this transition before
 	// journaling the running job so a crash leaves boot recovery a resumable
 	// registry state. A rebuild was already indexing.
-	if codebase, ok := manager.codebases[currentJob.CodebaseID]; ok && codebase.Status == model.CodebaseStatusPending {
+	if codebase, ok := manager.codebases[currentJob.CodebaseID]; ok {
 		if codebase.ActiveJobID != currentJob.ID {
 			return fmt.Errorf("start job: codebase ownership changed")
 		}
-		previousCodebase = codebase
-		transitionedCodebase = true
-		codebase.Status = model.CodebaseStatusIndexing
-		codebase.UpdatedAt = now
-		manager.codebases[codebase.ID] = codebase
-		if err := manager.saveLocked(); err != nil {
-			manager.codebases[codebase.ID] = previousCodebase
-			wrapped := fmt.Errorf("persist running codebase state: %w", err)
-			slog.Error("persist running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
-			return wrapped
+		if codebase.Status == model.CodebaseStatusPending {
+			previousCodebase = codebase
+			transitionedCodebase = true
+			codebase.Status = model.CodebaseStatusIndexing
+			codebase.UpdatedAt = now
+			manager.codebases[codebase.ID] = codebase
+			if err := manager.saveLocked(); err != nil {
+				manager.codebases[codebase.ID] = previousCodebase
+				wrapped := fmt.Errorf("persist running codebase state: %w", err)
+				slog.Error("persist running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
+				return wrapped
+			}
 		}
 	}
 	currentJob.State = model.JobStateRunning

@@ -487,3 +487,42 @@ func TestUpdateJobRunningRejectsStalePendingOwner(t *testing.T) {
 		t.Fatalf("codebase after stale job = %+v, want newer pending owner", gotCodebase)
 	}
 }
+
+func TestUpdateJobRunningRejectsStaleIndexingOwner(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-stale-indexing-owner",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationSync),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.codebases[job.CodebaseID] = model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusIndexing,
+		ActiveJobID:     "newer-job",
+		EffectiveConfig: job.Config,
+	}
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+
+	if err := manager.updateJobRunning(job); err == nil {
+		t.Fatal("updateJobRunning accepted stale indexing ownership")
+	}
+	gotJob, found := manager.GetJob(job.ID)
+	if !found || gotJob.State != model.JobStateQueued {
+		t.Fatalf("stale job after rejection = %+v found=%v, want queued", gotJob, found)
+	}
+	manager.mu.Lock()
+	gotCodebase := manager.codebases[job.CodebaseID]
+	manager.mu.Unlock()
+	if gotCodebase.Status != model.CodebaseStatusIndexing || gotCodebase.ActiveJobID != "newer-job" {
+		t.Fatalf("codebase after stale job = %+v, want newer indexing owner", gotCodebase)
+	}
+}
