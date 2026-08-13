@@ -601,7 +601,16 @@ func (syncer *BackgroundSync) registerConvergeJob(
 	job.Progress.LastEventAt = now
 	job.Progress.HeartbeatAt = now
 	job.Progress.OverallPercent = 0
-	_ = syncer.manager.appendJobLocked("job_running", job)
+	if err := syncer.manager.appendJobLocked("job_running", job); err != nil {
+		delete(syncer.manager.jobs, job.ID)
+		delete(syncer.manager.cancels, job.ID)
+		syncer.manager.mu.Unlock()
+		cancel()
+		syncer.requeuePaths(codebase.ID, relativePaths)
+		wrapped := fmt.Errorf("append running converge job event: %w", err)
+		slog.ErrorContext(jobCtx, "append running converge job event failed", "job_id", job.ID, "err", wrapped)
+		return convergeJobRegistration{}, wrapped
+	}
 	syncer.manager.mu.Unlock()
 
 	return convergeJobRegistration{
