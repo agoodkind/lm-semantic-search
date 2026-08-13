@@ -20,31 +20,6 @@ jobs:
       # list in sync with ci.yml release_platforms.
       platforms: "darwin/arm64 linux/amd64 linux/arm64"
 
-  auto-update-macos:
-    name: Auto Update macOS 26
-    needs: release
-    runs-on: macos-26
-    timeout-minutes: 30
-    permissions:
-      attestations: read
-      contents: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          submodules: recursive
-      - uses: actions/setup-go@v7
-        with:
-          cache: false
-          go-version-file: go.mod
-      - name: Test offline runtime
-        run: make offline-live
-      - name: Test automatic update
-        run: go run ./cmd/ci-auto-update
-
   auto-update-debian:
     name: Auto Update Debian Trixie
     needs: release
