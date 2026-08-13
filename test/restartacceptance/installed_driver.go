@@ -1332,6 +1332,7 @@ func installedLMSProcess(run acceptanceRun) installedProcess {
 	environment["EMBEDDING_BATCH_SIZE"] = "1"
 	environment["CLAUDE_CONTEXT_SYNC_INTERVAL_MS"] = "1000"
 	environment["CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS"] = "1"
+	environment["CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS"] = "60000"
 	environment["CLAUDE_CONTEXT_MILVUS_COLLECTION_LOAD_TIMEOUT_MS"] = "1000"
 	environment["CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS"] = "5000"
 	environment["CLAUDE_CONTEXT_DEBUG_LISTENER"] = "false"

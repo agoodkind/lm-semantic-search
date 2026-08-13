@@ -312,7 +312,8 @@ func TestHarnessPassesGeneratedCredentialsOnlyThroughComposeEnvironment(t *testi
 	if err != nil {
 		t.Fatalf("read compose file: %v", err)
 	}
-	for _, value := range runner.environments[0] {
+	for _, key := range []string{minioUserEnvironment, minioPasswordEnvironment} {
+		value := runner.environments[0][key]
 		if strings.Contains(string(composeBody), value) {
 			t.Fatal("compose file contains generated credential value")
 		}
