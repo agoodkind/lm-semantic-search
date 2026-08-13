@@ -46,6 +46,7 @@ const (
 	fixtureQuery                         = "restart acceptance"
 	scenarioBMetadataTimeoutMilliseconds = 10000
 	embeddingReadinessTimeout            = 30 * time.Second
+	embeddingReadinessResponseLimit      = 4 << 20
 )
 
 type realAcceptanceDriver struct {
@@ -1399,6 +1400,7 @@ func verifyEmbeddingReadiness(ctx context.Context, cfg config.Config) error {
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, embeddingReadinessResponseLimit))
 		return fmt.Errorf("verify embedding readiness: endpoint returned HTTP %d", response.StatusCode)
 	}
 	var result struct {
@@ -1406,7 +1408,7 @@ func verifyEmbeddingReadiness(ctx context.Context, cfg config.Config) error {
 			Embedding []float32 `json:"embedding"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, embeddingReadinessResponseLimit)).Decode(&result); err != nil {
 		return fmt.Errorf("decode embedding readiness response: %w", err)
 	}
 	if len(result.Data) != 1 || len(result.Data[0].Embedding) == 0 {

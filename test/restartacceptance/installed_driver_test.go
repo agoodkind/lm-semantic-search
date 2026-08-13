@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -109,6 +110,41 @@ func TestStartCaseProxiesWarmsEmbeddingBackendBeforeScenario(t *testing.T) {
 	}
 	if err := returned.proxies.close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVerifyEmbeddingReadinessReusesConnectionAfterRejectedProbe(t *testing.T) {
+	var requestCount atomic.Int32
+	var connectionCount atomic.Int32
+	backend := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if requestCount.Add(1) == 1 {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = writer.Write([]byte(strings.Repeat("unavailable", 4096)))
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}]}`))
+	}))
+	backend.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connectionCount.Add(1)
+		}
+	}
+	backend.Start()
+	t.Cleanup(backend.Close)
+	cfg := config.Config{
+		OpenAIAPIKey:   "test-key",
+		OpenAIBaseURL:  backend.URL + "/v1",
+		EmbeddingModel: "readiness-model",
+	}
+	if err := verifyEmbeddingReadiness(context.Background(), cfg); err == nil {
+		t.Fatal("rejected embedding readiness probe succeeded")
+	}
+	if err := verifyEmbeddingReadiness(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := connectionCount.Load(); got != 1 {
+		t.Fatalf("embedding readiness connections = %d, want 1", got)
 	}
 }
 
