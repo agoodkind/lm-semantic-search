@@ -8,10 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -68,27 +68,116 @@ func TestComposeFilePinsImagesPortsAndWritableCaseData(t *testing.T) {
 }
 
 func TestValidateRecordedImagesRequiresExactLocalImageIDs(t *testing.T) {
-	runner := &recordingRunner{outputs: [][]byte{
-		[]byte(etcdImage.ID + "\n"),
-		[]byte(minioImage.ID + "\n"),
-		[]byte(milvusImage.ID + "\n"),
+	source := &recordingImageConfigIDSource{ids: map[string]string{
+		etcdImage.Tag:   etcdImage.ID,
+		minioImage.Tag:  minioImage.ID,
+		milvusImage.Tag: milvusImage.ID,
 	}}
-	if err := validateRecordedImages(context.Background(), runner); err != nil {
+	if err := validateRecordedImages(context.Background(), source); err != nil {
 		t.Fatalf("validate recorded images: %v", err)
 	}
-	if len(runner.calls) != 3 {
-		t.Fatalf("image inspection calls = %d, want 3", len(runner.calls))
+	if len(source.calls) != 3 {
+		t.Fatalf("image config ID calls = %d, want 3", len(source.calls))
 	}
 	for index, image := range []recordedImage{etcdImage, minioImage, milvusImage} {
-		want := []string{"docker", "image", "inspect", "--format={{.Id}}", image.Tag}
-		if !slices.Equal(runner.calls[index], want) {
-			t.Fatalf("image inspection call %d = %v, want %v", index, runner.calls[index], want)
+		if source.calls[index] != image.Tag {
+			t.Fatalf("image config ID call %d = %q, want %q", index, source.calls[index], image.Tag)
 		}
 	}
 
-	mismatch := &recordingRunner{outputs: [][]byte{[]byte("sha256:wrong\n")}}
+	mismatch := &recordingImageConfigIDSource{ids: map[string]string{
+		etcdImage.Tag:   "sha256:wrong",
+		minioImage.Tag:  minioImage.ID,
+		milvusImage.Tag: milvusImage.ID,
+	}}
 	if err := validateRecordedImages(context.Background(), mismatch); err == nil {
 		t.Fatal("mismatched local image ID was accepted")
+	}
+}
+
+type recordingImageConfigIDSource struct {
+	ids   map[string]string
+	calls []string
+}
+
+func (source *recordingImageConfigIDSource) ImageConfigID(_ context.Context, tag string) (string, error) {
+	source.calls = append(source.calls, tag)
+	return source.ids[tag], nil
+}
+
+func TestReadDockerSaveConfigIDSupportsContainerdImageStore(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	manifest := fmt.Sprintf(`[{"Config":"blobs/sha256/%s"}]`, strings.TrimPrefix(etcdImage.ID, "sha256:"))
+	if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Size: int64(len(manifest)), Mode: 0o600}); err != nil {
+		t.Fatalf("write manifest header: %v", err)
+	}
+	if _, err := writer.Write([]byte(manifest)); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+
+	configID, err := readDockerSaveConfigID(&archive)
+	if err != nil {
+		t.Fatalf("read Docker save config ID: %v", err)
+	}
+	if configID != etcdImage.ID {
+		t.Fatalf("config ID = %q, want %q", configID, etcdImage.ID)
+	}
+}
+
+func TestReadDockerSaveConfigIDSupportsLegacyImageStore(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	manifest := fmt.Sprintf(`[{"Config":"%s.json"}]`, strings.TrimPrefix(etcdImage.ID, "sha256:"))
+	if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Size: int64(len(manifest)), Mode: 0o600}); err != nil {
+		t.Fatalf("write manifest header: %v", err)
+	}
+	if _, err := writer.Write([]byte(manifest)); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+
+	configID, err := readDockerSaveConfigID(&archive)
+	if err != nil {
+		t.Fatalf("read Docker save config ID: %v", err)
+	}
+	if configID != etcdImage.ID {
+		t.Fatalf("config ID = %q, want %q", configID, etcdImage.ID)
+	}
+}
+
+func TestReadDockerSaveConfigIDDrainsArchiveAfterManifest(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	manifest := fmt.Sprintf(`[{"Config":"blobs/sha256/%s"}]`, strings.TrimPrefix(etcdImage.ID, "sha256:"))
+	if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Size: int64(len(manifest)), Mode: 0o600}); err != nil {
+		t.Fatalf("write manifest header: %v", err)
+	}
+	if _, err := writer.Write([]byte(manifest)); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	trailing := bytes.Repeat([]byte("x"), 128*1024)
+	if err := writer.WriteHeader(&tar.Header{Name: "blobs/sha256/trailing", Size: int64(len(trailing)), Mode: 0o600}); err != nil {
+		t.Fatalf("write trailing header: %v", err)
+	}
+	if _, err := writer.Write(trailing); err != nil {
+		t.Fatalf("write trailing data: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+
+	reader := bytes.NewReader(archive.Bytes())
+	if _, err := readDockerSaveConfigID(reader); err != nil {
+		t.Fatalf("read Docker save config ID: %v", err)
+	}
+	if reader.Len() != 0 {
+		t.Fatalf("Docker image archive has %d unread bytes", reader.Len())
 	}
 }
 

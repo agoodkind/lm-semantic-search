@@ -4,6 +4,7 @@ package restartacceptance
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -410,20 +412,100 @@ func renderCompose(paths runPaths, caseName string) string {
 		milvusHealthPort, caseRoot)
 }
 
-func validateRecordedImages(ctx context.Context, runner commandRunner) error {
-	if runner == nil {
-		return fmt.Errorf("recorded image validation requires a command runner")
+type imageConfigIDSource interface {
+	ImageConfigID(context.Context, string) (string, error)
+}
+
+func validateRecordedImages(ctx context.Context, source imageConfigIDSource) error {
+	if source == nil {
+		return fmt.Errorf("recorded image validation requires an image config ID source")
 	}
 	for _, image := range []recordedImage{etcdImage, minioImage, milvusImage} {
-		output, err := runner.Run(ctx, nil, "docker", "image", "inspect", "--format={{.Id}}", image.Tag)
+		actual, err := source.ImageConfigID(ctx, image.Tag)
 		if err != nil {
-			return fmt.Errorf("inspect recorded image %q: %w", image.Tag, err)
+			return fmt.Errorf("read recorded image %q config ID: %w", image.Tag, err)
 		}
-		if actual := strings.TrimSpace(string(output)); actual != image.ID {
+		if actual != image.ID {
 			return fmt.Errorf("recorded image %q has local ID %q, want %q", image.Tag, actual, image.ID)
 		}
 	}
 	return nil
+}
+
+func (execCommandRunner) ImageConfigID(ctx context.Context, tag string) (string, error) {
+	commandContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	command := exec.CommandContext(commandContext, "docker", "image", "save", tag)
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("open Docker image archive: %w", err)
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		return "", fmt.Errorf("start Docker image archive: %w", err)
+	}
+	configID, readErr := readDockerSaveConfigID(stdout)
+	if readErr != nil {
+		cancel()
+	}
+	waitErr := command.Wait()
+	if readErr != nil {
+		if waitErr != nil {
+			return "", errors.Join(readErr, fmt.Errorf("stop Docker image archive: %w", waitErr))
+		}
+		return "", readErr
+	}
+	if waitErr != nil {
+		message := strings.TrimSpace(stderr.String())
+		if message != "" {
+			return "", fmt.Errorf("save Docker image: %w; output: %s", waitErr, message)
+		}
+		return "", fmt.Errorf("save Docker image: %w", waitErr)
+	}
+	return configID, nil
+}
+
+func readDockerSaveConfigID(reader io.Reader) (string, error) {
+	archive := tar.NewReader(reader)
+	configID := ""
+	for {
+		header, err := archive.Next()
+		if errors.Is(err, io.EOF) {
+			if configID == "" {
+				return "", fmt.Errorf("Docker image archive is missing manifest.json")
+			}
+			return configID, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("read Docker image archive: %w", err)
+		}
+		if header.Name != "manifest.json" {
+			continue
+		}
+		if configID != "" {
+			return "", fmt.Errorf("Docker image archive contains duplicate manifest.json")
+		}
+		var manifest []struct {
+			Config string `json:"Config"`
+		}
+		if err := json.NewDecoder(archive).Decode(&manifest); err != nil {
+			return "", fmt.Errorf("decode Docker image manifest: %w", err)
+		}
+		if len(manifest) != 1 {
+			return "", fmt.Errorf("Docker image manifest contains %d images, want 1", len(manifest))
+		}
+		const configPrefix = "blobs/sha256/"
+		configDigest, found := strings.CutPrefix(manifest[0].Config, configPrefix)
+		if !found {
+			configDigest, found = strings.CutSuffix(manifest[0].Config, ".json")
+			found = found && filepath.Base(manifest[0].Config) == manifest[0].Config
+		}
+		if !found || len(configDigest) != sha256.Size*2 {
+			return "", fmt.Errorf("Docker image manifest has invalid config %q", manifest[0].Config)
+		}
+		configID = "sha256:" + configDigest
+	}
 }
 
 type evidenceEvent struct {
