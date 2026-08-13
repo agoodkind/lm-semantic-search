@@ -348,6 +348,7 @@ func renderGetIndexBodyForTest(requestedPath string, tracked bool, codebase *mod
 		ClassificationLine: "",
 		ResolutionLines:    nil,
 		CoverageLine:       "",
+		PathErrorLine:      "",
 		DescendantsHint:    "",
 		SyncNote:           "",
 	}

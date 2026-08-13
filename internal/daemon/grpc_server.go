@@ -453,6 +453,7 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 		activeJob.Progress.ChunksTotal = *observedRows
 	}
 	getIndexView := server.manager.resolveGetIndexView(ctx, requestedPath, found, codebasePointer(found, codebase), activeJob, health, readiness, observedRows, classification, indexedDescendants)
+	getIndexView.PathErrorLine = mcpMissingPathError(request.GetClient().GetName(), requestedPath)
 	// The daemon always answers Searchable with a definite true or false.
 	//
 	// The local variable exists so the address is taken from a plain bool. A

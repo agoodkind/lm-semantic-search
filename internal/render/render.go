@@ -157,6 +157,9 @@ func renderGetIndex(getIndex view.GetIndexView) string {
 	if getIndex.CoverageLine != "" {
 		lines = append(lines, getIndex.CoverageLine)
 	}
+	if getIndex.PathErrorLine != "" {
+		lines = append(lines, getIndex.PathErrorLine)
+	}
 	if getIndex.ClassificationLine != "" {
 		lines = append(lines, getIndex.ClassificationLine)
 	}

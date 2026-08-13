@@ -72,6 +72,51 @@ func TestGetIndexNotTrackedReturnsFriendlyStatus(t *testing.T) {
 	if !strings.Contains(response.GetDisplayText(), "is not indexed") {
 		t.Fatalf("GetIndex returned unexpected text: %q", response.GetDisplayText())
 	}
+	if strings.Contains(response.GetDisplayText(), "no such file or directory") {
+		t.Fatalf("GetIndex added a path error for an existing path: %q", response.GetDisplayText())
+	}
+}
+
+func TestGetIndexMissingPathRawErrorIsMCPOnly(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	server := NewGRPCServer(manager, nil)
+	canonicalRepoPath, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error for repository path: %v", err)
+	}
+	missingPath := filepath.Join(canonicalRepoPath, "missing")
+	_, pathErr := filepath.EvalSymlinks(missingPath)
+	if !errors.Is(pathErr, os.ErrNotExist) {
+		t.Fatalf("EvalSymlinks returned error %v, want missing-path error", pathErr)
+	}
+	wantMCPStatus := "❌ Codebase '" + missingPath +
+		"' is not indexed. Please use the index_codebase tool to index it first.\n" +
+		pathErr.Error() + "\n" +
+		"🛈 Path is not under any tracked codebase."
+
+	mcpResponse, err := server.GetIndex(context.Background(), &pb.GetIndexRequest{
+		Path:   missingPath,
+		Client: &pb.ClientInfo{Name: "mcp"},
+	})
+	if err != nil {
+		t.Fatalf("MCP GetIndex returned error: %v", err)
+	}
+	if !strings.Contains(mcpResponse.GetDisplayText(), wantMCPStatus) {
+		t.Fatalf("MCP GetIndex returned text %q, want contiguous status %q", mcpResponse.GetDisplayText(), wantMCPStatus)
+	}
+
+	otherResponse, err := server.GetIndex(context.Background(), &pb.GetIndexRequest{
+		Path:   missingPath,
+		Client: &pb.ClientInfo{Name: "test"},
+	})
+	if err != nil {
+		t.Fatalf("non-MCP GetIndex returned error: %v", err)
+	}
+	if strings.Contains(otherResponse.GetDisplayText(), "lstat "+missingPath) {
+		t.Fatalf("non-MCP GetIndex returned the raw path error: %q", otherResponse.GetDisplayText())
+	}
 }
 
 func TestStartIndexStoresFullyQualifiedEmbeddingConfig(t *testing.T) {

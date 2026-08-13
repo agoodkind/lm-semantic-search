@@ -551,6 +551,7 @@ type GetIndexView struct {
 	ClassificationLine string
 	ResolutionLines    []string
 	CoverageLine       string
+	PathErrorLine      string
 	DescendantsHint    string
 	SyncNote           string
 }
