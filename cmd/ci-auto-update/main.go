@@ -51,6 +51,7 @@ type environment struct {
 	refType    string
 	refName    string
 	token      string
+	manual     bool
 }
 
 type githubRelease struct {
@@ -179,6 +180,7 @@ func loadEnvironment(getenv func(string) string) (environment, error) {
 		refType:    strings.TrimSpace(getenv("GITHUB_REF_TYPE")),
 		refName:    strings.TrimSpace(getenv("GITHUB_REF_NAME")),
 		token:      strings.TrimSpace(getenv("GH_TOKEN")),
+		manual:     strings.TrimSpace(getenv("GITHUB_EVENT_NAME")) == "workflow_dispatch",
 	}
 	required := []struct {
 		name  string
@@ -211,6 +213,12 @@ func selectReleases(releases []githubRelease, environment environment) (releaseS
 	sort.SliceStable(eligible, func(i int, j int) bool {
 		return eligible[i].PublishedAt.After(eligible[j].PublishedAt)
 	})
+	if environment.manual {
+		if len(eligible) < 2 {
+			return releaseSelection{}, fmt.Errorf("manual run requires at least two published releases")
+		}
+		return releaseSelection{target: eligible[0], previous: eligible[1]}, nil
+	}
 	targetTag := environment.refName
 	if environment.refType != "tag" {
 		targetTag = ""
