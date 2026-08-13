@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -236,6 +237,111 @@ func TestRepairMissingCollectionsIgnoresActiveFirstBuildStaging(t *testing.T) {
 	}
 	if jobs := manager.ListJobs(""); len(jobs) != 1 || jobs[0].ID != codebase.ActiveJobID {
 		t.Fatalf("repair jobs = %v, want only active first-build job %s", jobs, codebase.ActiveJobID)
+	}
+}
+
+func TestStaleConvergeTerminalStatePreservesNewerFirstBuild(t *testing.T) {
+	testCases := []struct {
+		name      string
+		wantState model.JobState
+		finish    func(context.Context, *Manager, string)
+	}{
+		{name: "completed", wantState: model.JobStateCompleted, finish: func(ctx context.Context, manager *Manager, jobID string) {
+			manager.updateDetachedJobCompleted(ctx, jobID, indexer.Result{IndexedFiles: 1, TotalChunks: 1})
+		}},
+		{name: "failed", wantState: model.JobStateFailed, finish: func(ctx context.Context, manager *Manager, jobID string) {
+			manager.updateDetachedJobFailed(ctx, jobID, errors.New("converge failed"))
+		}},
+		{name: "cancelled", wantState: model.JobStateCancelled, finish: func(ctx context.Context, manager *Manager, jobID string) {
+			manager.updateDetachedJobCancelled(ctx, jobID)
+		}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			manager, _, repoPath := newTestManager(t)
+			staleCodebase := model.Codebase{
+				ID:              "cb-converge-stale",
+				CanonicalPath:   repoPath,
+				Status:          model.CodebaseStatusIndexed,
+				EffectiveConfig: defaultIndexConfig(),
+			}
+			manager.mu.Lock()
+			manager.codebases[staleCodebase.ID] = staleCodebase
+			manager.mu.Unlock()
+			syncer := NewBackgroundSync(manager.config, manager)
+			registration, err := syncer.registerConvergeJob(context.Background(), staleCodebase, 1)
+			if err != nil {
+				t.Fatalf("registerConvergeJob returned error: %v", err)
+			}
+			defer registration.release()
+
+			firstJob := newQueuedJob(staleCodebase.ID, repoPath, repoPath, testClientInfo(), string(jobOperationIndex), false, defaultIndexConfig(), emptyAdmissionBudget, clock.Now())
+			current := staleCodebase
+			current.Status = model.CodebaseStatusPending
+			current.ActiveJobID = firstJob.ID
+			manager.mu.Lock()
+			manager.codebases[current.ID] = current
+			manager.jobs[firstJob.ID] = firstJob
+			if err := manager.saveLocked(); err != nil {
+				manager.mu.Unlock()
+				t.Fatalf("saveLocked returned error: %v", err)
+			}
+			manager.config.RegistryPath = t.TempDir()
+			manager.mu.Unlock()
+
+			testCase.finish(context.Background(), manager, registration.job.ID)
+			manager.mu.Lock()
+			gotCodebase := manager.codebases[current.ID]
+			gotConverge := manager.jobs[registration.job.ID]
+			manager.mu.Unlock()
+			if gotCodebase.Status != current.Status || gotCodebase.ActiveJobID != current.ActiveJobID || gotCodebase.LastFailedRun != current.LastFailedRun || gotCodebase.LastSuccessfulRun != current.LastSuccessfulRun || !gotCodebase.UpdatedAt.Equal(current.UpdatedAt) {
+				t.Fatalf("codebase after converge terminal state = %+v, want unchanged %+v", gotCodebase, current)
+			}
+			if gotConverge.State != testCase.wantState {
+				t.Fatalf("converge state = %q, want %q", gotConverge.State, testCase.wantState)
+			}
+
+			backendCalled := false
+			manager.runner = fakeRunner{index: func(context.Context, string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error) {
+				backendCalled = true
+				return indexer.Result{}, nil
+			}}
+			manager.runJob(context.Background(), firstJob.ID)
+			if backendCalled {
+				t.Fatal("first build reached backend after its registry persistence failed")
+			}
+		})
+	}
+}
+
+func TestRegisterConvergeJobRejectsChangedOwnership(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	staleCodebase := model.Codebase{
+		ID:              "cb-converge-changed-owner",
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusIndexed,
+		EffectiveConfig: defaultIndexConfig(),
+	}
+	current := staleCodebase
+	current.Status = model.CodebaseStatusPending
+	current.ActiveJobID = "newer-first-build"
+	manager.mu.Lock()
+	manager.codebases[current.ID] = current
+	manager.mu.Unlock()
+
+	syncer := NewBackgroundSync(manager.config, manager)
+	if _, err := syncer.registerConvergeJob(context.Background(), staleCodebase, 1); err == nil {
+		t.Fatal("registerConvergeJob returned nil after ownership changed")
+	}
+	manager.mu.Lock()
+	gotCodebase := manager.codebases[current.ID]
+	jobCount := len(manager.jobs)
+	manager.mu.Unlock()
+	if gotCodebase.Status != current.Status || gotCodebase.ActiveJobID != current.ActiveJobID {
+		t.Fatalf("codebase after rejected converge = %+v, want unchanged %+v", gotCodebase, current)
+	}
+	if jobCount != 0 {
+		t.Fatalf("job count after rejected converge = %d, want 0", jobCount)
 	}
 }
 

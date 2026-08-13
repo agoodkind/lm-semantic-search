@@ -95,7 +95,10 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) *graphIndexTas
 		return nil
 	}
 
-	manager.updateJobRunning(job)
+	if err := manager.updateJobRunning(job); err != nil {
+		manager.updateJobFailed(ctx, job.ID, err)
+		return nil
+	}
 
 	// Hold the sync lock for the embed so every other holder of that lock file
 	// backs off while this job writes the collection. Skip it when there is no

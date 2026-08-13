@@ -73,3 +73,97 @@ func TestReconcileJournalPreservesProgress(t *testing.T) {
 		t.Fatalf("orphan ChunksEmbedded = %d, want 7 preserved", recovered.Progress.ChunksEmbedded)
 	}
 }
+
+func TestUpdateJobRunningPersistsIndexingForRestart(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-running-persistence",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.codebases[job.CodebaseID] = model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusPending,
+		ActiveJobID:     job.ID,
+		EffectiveConfig: job.Config,
+	}
+	manager.jobs[job.ID] = job
+	if err := manager.saveLocked(); err != nil {
+		manager.mu.Unlock()
+		t.Fatalf("saveLocked returned error: %v", err)
+	}
+	manager.mu.Unlock()
+
+	if err := manager.updateJobRunning(job); err != nil {
+		t.Fatalf("updateJobRunning returned error: %v", err)
+	}
+
+	registry, err := store.ReadRegistry(cfg.RegistryPath)
+	if err != nil {
+		t.Fatalf("ReadRegistry returned error: %v", err)
+	}
+	if len(registry.Codebases) != 1 {
+		t.Fatalf("registry codebases = %d, want 1", len(registry.Codebases))
+	}
+	if registry.Codebases[0].Status != model.CodebaseStatusIndexing {
+		t.Fatalf("persisted status = %q, want %q", registry.Codebases[0].Status, model.CodebaseStatusIndexing)
+	}
+}
+
+func TestUpdateJobRunningDoesNotJournalRunningAfterRegistryFailure(t *testing.T) {
+	t.Parallel()
+
+	manager, cfg, repoPath := newTestManager(t)
+	job := newQueuedJob(
+		"cb-running-registry-failure",
+		repoPath,
+		repoPath,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		defaultIndexConfig(),
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
+	manager.mu.Lock()
+	manager.codebases[job.CodebaseID] = model.Codebase{
+		ID:              job.CodebaseID,
+		CanonicalPath:   repoPath,
+		Status:          model.CodebaseStatusPending,
+		ActiveJobID:     job.ID,
+		EffectiveConfig: job.Config,
+	}
+	if err := manager.saveLocked(); err != nil {
+		manager.mu.Unlock()
+		t.Fatalf("saveLocked returned error: %v", err)
+	}
+	if err := manager.appendJobLocked("start_index", job); err != nil {
+		manager.mu.Unlock()
+		t.Fatalf("appendJobLocked returned error: %v", err)
+	}
+	manager.config.RegistryPath = t.TempDir()
+	manager.mu.Unlock()
+
+	if err := manager.updateJobRunning(job); err == nil {
+		t.Fatal("updateJobRunning returned nil error after registry failure")
+	}
+	manager.closeJobJournal()
+
+	jobs, err := store.ReadJobEvents(cfg.JobsPath)
+	if err != nil {
+		t.Fatalf("ReadJobEvents returned error: %v", err)
+	}
+	if jobs[job.ID].State != model.JobStateQueued {
+		t.Fatalf("journaled state = %q, want %q", jobs[job.ID].State, model.JobStateQueued)
+	}
+}

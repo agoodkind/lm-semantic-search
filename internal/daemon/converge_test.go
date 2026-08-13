@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -266,5 +267,98 @@ func TestCompletedWatcherConvergeKeepsDegradedDependency(t *testing.T) {
 	}
 	if !manager.DependencyHealth().Degraded() {
 		t.Fatal("completed converge cleared the degraded dependency banner")
+	}
+}
+
+func TestConvergeViaWatcherTerminalStatePreservesNewerFirstBuild(t *testing.T) {
+	testCases := []struct {
+		name         string
+		cancel       bool
+		failSnapshot bool
+		wantState    model.JobState
+	}{
+		{name: "completed", wantState: model.JobStateCompleted},
+		{name: "failed", failSnapshot: true, wantState: model.JobStateFailed},
+		{name: "cancelled", cancel: true, wantState: model.JobStateCancelled},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			manager, cfg, repoPath := newTestManager(t)
+			codebase := seedConvergeCodebase(t, manager, repoPath)
+			if testCase.failSnapshot {
+				codebase.MerkleSnapshotPath = t.TempDir()
+				manager.mu.Lock()
+				manager.codebases[codebase.ID] = codebase
+				manager.mu.Unlock()
+			}
+			if err := os.WriteFile(filepath.Join(repoPath, "raced.go"), []byte("package raced\n"), 0o644); err != nil {
+				t.Fatalf("write raced.go: %v", err)
+			}
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			manager.semantic = &fakeSemantic{reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+				close(entered)
+				<-release
+				return nil
+			}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			syncer := NewBackgroundSync(cfg, manager)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				syncer.convergeViaWatcher(ctx, codebase.ID, []string{"raced.go"})
+			}()
+			<-entered
+
+			firstJob := newQueuedJob(codebase.ID, repoPath, repoPath, testClientInfo(), string(jobOperationIndex), false, defaultIndexConfig(), emptyAdmissionBudget, codebase.UpdatedAt)
+			current := codebase
+			current.Status = model.CodebaseStatusPending
+			current.ActiveJobID = firstJob.ID
+			manager.mu.Lock()
+			manager.codebases[current.ID] = current
+			manager.jobs[firstJob.ID] = firstJob
+			if err := manager.saveLocked(); err != nil {
+				manager.mu.Unlock()
+				t.Fatalf("saveLocked returned error: %v", err)
+			}
+			manager.mu.Unlock()
+			if testCase.cancel {
+				cancel()
+			}
+			close(release)
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("watcher converge did not finish")
+			}
+
+			jobs := manager.ListJobs(codebase.ID)
+			var converge model.Job
+			for _, job := range jobs {
+				if job.Operation == "converge" {
+					converge = job
+				}
+			}
+			manager.mu.Lock()
+			gotCodebase := manager.codebases[current.ID]
+			manager.config.RegistryPath = t.TempDir()
+			manager.mu.Unlock()
+			if converge.State != testCase.wantState {
+				t.Fatalf("converge state = %q, want %q", converge.State, testCase.wantState)
+			}
+			if gotCodebase.Status != current.Status || gotCodebase.ActiveJobID != current.ActiveJobID || gotCodebase.LastSuccessfulRun != current.LastSuccessfulRun || !gotCodebase.UpdatedAt.Equal(current.UpdatedAt) {
+				t.Fatalf("codebase after watcher converge = %+v, want unchanged %+v", gotCodebase, current)
+			}
+			backendCalled := false
+			manager.runner = fakeRunner{index: func(context.Context, string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error) {
+				backendCalled = true
+				return indexer.Result{}, nil
+			}}
+			manager.runJob(context.Background(), firstJob.ID)
+			if backendCalled {
+				t.Fatal("first build reached backend after registry persistence failed")
+			}
+		})
 	}
 }

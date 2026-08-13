@@ -452,6 +452,11 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 		syncer.deferWatcherPaths(codebaseID, relativePaths)
 		return
 	}
+	if syncer.hasActiveJob(codebase) {
+		metrics.SyncSkippedInflight()
+		syncer.requeuePaths(codebaseID, relativePaths)
+		return
+	}
 
 	// Serialize converges of the same codebase so two never race on its
 	// snapshot; a concurrent one requeues rather than waits.
@@ -497,9 +502,21 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	// Both waits are behind us, so the converge is genuinely running rather than
 	// queued behind capacity. A status read reports the difference, and the
 	// start time is stamped here so a row's age measures work rather than wait.
+	codebase, found = syncer.watcherCodebase(codebaseID)
+	if !found {
+		return
+	}
+	if shouldDeferWatcherConvergeForFirstBuild(codebase) {
+		syncer.deferWatcherPaths(codebaseID, relativePaths)
+		return
+	}
 	syncer.markConvergeRunning(codebaseID)
 
-	registration := syncer.registerConvergeJob(ctx, codebase, len(relativePaths))
+	registration, err := syncer.registerConvergeJob(ctx, codebase, len(relativePaths))
+	if err != nil {
+		slog.ErrorContext(ctx, "register converge job failed", "codebase_id", codebaseID, "err", err)
+		return
+	}
 	defer registration.release()
 
 	registration.withContext(func(runCtx context.Context) {
@@ -507,11 +524,11 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 		terminalCtx := context.WithoutCancel(runCtx)
 		switch {
 		case runErr != nil:
-			syncer.manager.updateJobFailed(terminalCtx, registration.job.ID, runErr)
+			syncer.manager.updateDetachedJobFailed(terminalCtx, registration.job.ID, runErr)
 		case runCtx.Err() != nil:
-			syncer.manager.updateJobCancelled(terminalCtx, registration.job.ID)
+			syncer.manager.updateDetachedJobCancelled(terminalCtx, registration.job.ID)
 		default:
-			syncer.manager.updateJobCompleted(terminalCtx, registration.job.ID, indexer.Result{
+			syncer.manager.updateDetachedJobCompleted(terminalCtx, registration.job.ID, indexer.Result{
 				IndexedFiles:      outcome.PathsConverged,
 				TotalChunks:       0,
 				TotalBytes:        0,
@@ -536,7 +553,7 @@ func (syncer *BackgroundSync) registerConvergeJob(
 	ctx context.Context,
 	codebase model.Codebase,
 	pathCount int,
-) convergeJobRegistration {
+) (convergeJobRegistration, error) {
 	now := clock.Now()
 	job := newQueuedJob(
 		codebase.ID,
@@ -558,6 +575,12 @@ func (syncer *BackgroundSync) registerConvergeJob(
 	jobCtx, cancel := context.WithCancel(correlation.WithContext(ctx, jobCorr))
 
 	syncer.manager.mu.Lock()
+	current, found := syncer.manager.codebases[codebase.ID]
+	if !found || current.ActiveJobID != "" || current.Status != codebase.Status || current.ActiveJobID != codebase.ActiveJobID || !current.UpdatedAt.Equal(codebase.UpdatedAt) {
+		syncer.manager.mu.Unlock()
+		cancel()
+		return convergeJobRegistration{}, fmt.Errorf("start converge job: codebase ownership changed")
+	}
 	if err := syncer.manager.appendJobLocked("start_converge", job); err != nil {
 		slog.ErrorContext(jobCtx, "append converge job event failed", "job_id", job.ID, "err", err)
 	}
@@ -565,9 +588,14 @@ func (syncer *BackgroundSync) registerConvergeJob(
 	// A converge does not claim codebase.ActiveJobID, so
 	// beginActiveJobCancellationLocked cannot route a waiter to it.
 	// waitForJobDone accepts a nil channel, so manager.done needs no entry.
+	job.State = model.JobStateRunning
+	job.UpdatedAt = now
+	job.Progress.Phase = "Preparing and scanning files..."
+	job.Progress.LastEventAt = now
+	job.Progress.HeartbeatAt = now
+	job.Progress.OverallPercent = 0
+	_ = syncer.manager.appendJobLocked("job_running", job)
 	syncer.manager.mu.Unlock()
-
-	syncer.manager.updateJobRunning(job)
 
 	return convergeJobRegistration{
 		job: job,
@@ -580,7 +608,7 @@ func (syncer *BackgroundSync) registerConvergeJob(
 			delete(syncer.manager.cancels, job.ID)
 			syncer.manager.mu.Unlock()
 		},
-	}
+	}, nil
 }
 
 func (syncer *BackgroundSync) watcherCodebase(codebaseID string) (model.Codebase, bool) {

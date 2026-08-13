@@ -28,15 +28,31 @@ const (
 	bootstrapReasonDeltaCodebaseMissing       bootstrapReason = "delta_codebase_missing"
 )
 
-func (manager *Manager) updateJobRunning(job model.Job) {
+func (manager *Manager) updateJobRunning(job model.Job) error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
 	currentJob, found := manager.jobs[job.ID]
 	if !found {
-		return
+		return nil
 	}
 	now := clock.Now()
+	// A first build was pending while its job sat queued; now that the job is
+	// running, the codebase is actively indexing. Persist this transition before
+	// journaling the running job so a crash leaves boot recovery a resumable
+	// registry state. A rebuild was already indexing.
+	if codebase, ok := manager.codebases[currentJob.CodebaseID]; ok && codebase.Status == model.CodebaseStatusPending {
+		previousCodebase := codebase
+		codebase.Status = model.CodebaseStatusIndexing
+		codebase.UpdatedAt = now
+		manager.codebases[codebase.ID] = codebase
+		if err := manager.saveLocked(); err != nil {
+			manager.codebases[codebase.ID] = previousCodebase
+			wrapped := fmt.Errorf("persist running codebase state: %w", err)
+			slog.Error("persist running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
+			return wrapped
+		}
+	}
 	currentJob.State = model.JobStateRunning
 	currentJob.UpdatedAt = now
 	currentJob.Progress.Phase = "Preparing and scanning files..."
@@ -44,16 +60,8 @@ func (manager *Manager) updateJobRunning(job model.Job) {
 	currentJob.Progress.HeartbeatAt = now
 	currentJob.Progress.OverallPercent = 0
 	manager.jobs[currentJob.ID] = currentJob
-	// A first build was pending while its job sat queued; now that the job is
-	// running, the codebase is actively indexing. A rebuild was already indexing.
-	// The flip is in-memory so live status reads see it at once; the next registry
-	// save on completion persists it, and an interrupted run re-queues on resume.
-	if codebase, ok := manager.codebases[currentJob.CodebaseID]; ok && codebase.Status == model.CodebaseStatusPending {
-		codebase.Status = model.CodebaseStatusIndexing
-		codebase.UpdatedAt = now
-		manager.codebases[codebase.ID] = codebase
-	}
 	_ = manager.appendJobLocked("job_running", currentJob)
+	return nil
 }
 
 func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progress, unit string) {
@@ -381,26 +389,12 @@ func (manager *Manager) writeCompletedArtifacts(ctx context.Context, codebase mo
 func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runErr error) {
 	manager.mu.Lock()
 
-	job, found := manager.jobs[jobID]
+	job, found := manager.markJobFailedLocked(ctx, jobID, runErr)
 	if !found {
 		manager.mu.Unlock()
 		return
 	}
-	// A job already moved to Cancelled (by CancelJob or updateJobCancelled) must
-	// not be flipped to Failed by a late error from the same run. The terminal
-	// transition already drained any pending successor and cleared ActiveJobID, so
-	// re-processing here would stamp a transient failure on a codebase that may now
-	// be running that successor. Mirror the same guard in updateJobCompleted.
-	if job.State == model.JobStateCancelled {
-		manager.mu.Unlock()
-		return
-	}
-	delete(manager.conversationJobs, jobID)
-	manager.forgetJobJournalLocked(jobID)
-
-	traceID := string(correlation.FromContext(ctx).TraceID)
 	now := clock.Now()
-	metrics.JobFailed()
 	// A self-healing failure marks the job retryable. A shared-infrastructure
 	// failure (the embedding pipeline or the vector store) never changes the
 	// codebase's durable state, because it affects every codebase the same way
@@ -408,27 +402,10 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	// this codebase becomes terminal. The persisted message is the safe class
 	// message, never the wrapped cause, which stays in the log below correlated
 	// by trace_id.
-	transient := adapterr.IsTransient(runErr)
 	infra := adapterr.IsInfraFailure(runErr)
-	safeMessage := adapterr.SafeMessage(runErr)
-	errorCode := adapterr.Code(runErr)
-	job.State = model.JobStateFailed
-	job.UpdatedAt = now
-	job.CompletedAt = &now
-	job.Progress.Phase = "failed"
-	job.Progress.LastEventAt = now
-	job.Progress.HeartbeatAt = now
-	job.Error = &model.JobError{
-		Message:   safeMessage,
-		Code:      errorCode,
-		Retryable: transient,
-		TraceID:   traceID,
-		JobID:     jobID,
-	}
-	slog.ErrorContext(ctx, "job.failed", "component", "daemon", "subcomponent", "jobs", "job_id", jobID, "trace_id", traceID, "transient", transient, "err", runErr)
-	if err := manager.appendJobLocked("job_failed", job); err != nil {
-		slog.ErrorContext(ctx, "append failed job event failed", "job_id", jobID, "err", err)
-	}
+	safeMessage := job.Error.Message
+	errorCode := job.Error.Code
+	traceID := job.Error.TraceID
 
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
@@ -476,6 +453,95 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	if drained {
 		manager.runDrainedJob(ctx, codebaseID, drainedJobID)
 	}
+}
+
+func (manager *Manager) updateDetachedJobFailed(ctx context.Context, jobID string, runErr error) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	_, _ = manager.markJobFailedLocked(ctx, jobID, runErr)
+}
+
+func (manager *Manager) updateDetachedJobCompleted(ctx context.Context, jobID string, result indexer.Result) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	job, found := manager.jobs[jobID]
+	if !found || job.State == model.JobStateCancelled {
+		return
+	}
+	now := clock.Now()
+	metrics.JobCompleted()
+	job.State = model.JobStateCompleted
+	job.UpdatedAt = now
+	job.CompletedAt = &now
+	job.Progress.Phase = "completed"
+	job.Progress.OverallPercent = 100
+	job.Progress.FilesProcessed = result.IndexedFiles
+	job.Progress.FilesTotal = result.IndexedFiles
+	job.Progress.ChunksTotal = result.TotalChunks
+	job.Progress.ChunksGenerated = job.Progress.ChunksEmbedded
+	job.Progress.LastEventAt = now
+	job.Progress.HeartbeatAt = now
+	if err := manager.appendJobLocked("job_completed", job); err != nil {
+		slog.ErrorContext(ctx, "append completed job event failed", "job_id", jobID, "err", err)
+	}
+	manager.forgetJobJournalLocked(jobID)
+}
+
+func (manager *Manager) updateDetachedJobCancelled(ctx context.Context, jobID string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	job, found := manager.jobs[jobID]
+	if !found {
+		return
+	}
+	manager.forgetJobJournalLocked(jobID)
+	now := clock.Now()
+	metrics.JobCancelled()
+	job.State = model.JobStateCancelled
+	job.UpdatedAt = now
+	job.CompletedAt = &now
+	job.Progress.Phase = "cancelled"
+	job.Progress.LastEventAt = now
+	job.Progress.HeartbeatAt = now
+	if err := manager.appendJobLocked("job_cancelled", job); err != nil {
+		slog.ErrorContext(ctx, "append cancelled job event failed", "job_id", jobID, "err", err)
+	}
+}
+
+func (manager *Manager) markJobFailedLocked(ctx context.Context, jobID string, runErr error) (model.Job, bool) {
+	job, found := manager.jobs[jobID]
+	if !found || job.State == model.JobStateCancelled {
+		var emptyJob model.Job
+		return emptyJob, false
+	}
+	delete(manager.conversationJobs, jobID)
+	manager.forgetJobJournalLocked(jobID)
+
+	traceID := string(correlation.FromContext(ctx).TraceID)
+	now := clock.Now()
+	transient := adapterr.IsTransient(runErr)
+	metrics.JobFailed()
+	job.State = model.JobStateFailed
+	job.UpdatedAt = now
+	job.CompletedAt = &now
+	job.Progress.Phase = "failed"
+	job.Progress.LastEventAt = now
+	job.Progress.HeartbeatAt = now
+	job.Error = &model.JobError{
+		Message:   adapterr.SafeMessage(runErr),
+		Code:      adapterr.Code(runErr),
+		Retryable: transient,
+		TraceID:   traceID,
+		JobID:     jobID,
+	}
+	manager.jobs[jobID] = job
+	slog.ErrorContext(ctx, "job.failed", "component", "daemon", "subcomponent", "jobs", "job_id", jobID, "trace_id", traceID, "transient", transient, "err", runErr)
+	if err := manager.appendJobLocked("job_failed", job); err != nil {
+		slog.ErrorContext(ctx, "append failed job event failed", "job_id", jobID, "err", err)
+	}
+	return job, true
 }
 
 func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
