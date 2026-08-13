@@ -53,6 +53,10 @@ type realAcceptanceDriver struct {
 
 func newRealAcceptanceLifecycleOperations() (acceptanceLifecycleOperations, error) {
 	driver := &realAcceptanceDriver{}
+	configuredRunParent, err := requiredDirectoryFromEnvironment(runParentEnvironment)
+	if err != nil {
+		return acceptanceLifecycleOperations{}, err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return acceptanceLifecycleOperations{}, fmt.Errorf("resolve home directory: %w", err)
@@ -82,7 +86,7 @@ func newRealAcceptanceLifecycleOperations() (acceptanceLifecycleOperations, erro
 				before.Inventory,
 				after.Inventory,
 				driver.proxyCalls(),
-				acceptanceCollectionIdentitiesForPaths(runPathsForID(before.RunID)),
+				acceptanceCollectionIdentitiesForPaths(runPathsForID(configuredRunParent, before.RunID)),
 			)
 		},
 		Cleanup: cleanupAcceptanceRun,
@@ -92,8 +96,8 @@ func newRealAcceptanceLifecycleOperations() (acceptanceLifecycleOperations, erro
 	}, nil
 }
 
-func runPathsForID(runID string) runPaths {
-	return pathsForRun(filepath.Join(runParent, runID))
+func runPathsForID(parent string, runID string) runPaths {
+	return pathsForRun(filepath.Join(parent, runID))
 }
 
 func acceptanceCollectionIdentities(run acceptanceRun) map[collectionIdentity]struct{} {

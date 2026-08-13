@@ -30,6 +30,18 @@ func TestPrepareAcceptanceRunRejectsMissingOptInBeforeDockerProbe(t *testing.T) 
 	}
 }
 
+func TestPrepareAcceptanceRunRequiresExplicitBackupAndRunDirectoriesBeforeDockerProbe(t *testing.T) {
+	t.Setenv(restartAcceptanceOptIn, restartAcceptanceConfirmation)
+	t.Setenv(backupRootEnvironment, "")
+	t.Setenv(runParentEnvironment, "")
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := prepareAcceptanceRun(context.Background(), time.Now(), bytes.NewReader(make([]byte, 4)))
+	if err == nil || !strings.Contains(err.Error(), backupRootEnvironment) {
+		t.Fatalf("prepare error = %v, want missing %s", err, backupRootEnvironment)
+	}
+}
+
 func TestPrepareRunValidatesEveryGuardBeforeCreatingRunRoot(t *testing.T) {
 	root := t.TempDir()
 	backup := filepath.Join(root, "backup")
