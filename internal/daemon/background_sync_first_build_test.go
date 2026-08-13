@@ -350,6 +350,30 @@ func TestRegisterConvergeJobRejectsChangedOwnership(t *testing.T) {
 	}
 }
 
+func TestRegisterConvergeJobRequeuesPathsWhenJournalStartFails(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	manager.jobJournal.close()
+	manager.jobJournal = nil
+	manager.appendJobEvent = func(string, model.JobEvent) error { return errors.New("journal unavailable") }
+
+	syncer := NewBackgroundSync(manager.config, manager)
+	syncer.queue = NewEventQueue(time.Hour, func(string, []string) {})
+	if _, err := syncer.registerConvergeJob(context.Background(), codebase, []string{"main.go"}); err == nil {
+		t.Fatal("registerConvergeJob returned nil after journal start failure")
+	}
+	manager.mu.Lock()
+	jobCount := len(manager.jobs)
+	cancelCount := len(manager.cancels)
+	manager.mu.Unlock()
+	if jobCount != 0 || cancelCount != 0 {
+		t.Fatalf("failed registration left jobs=%d cancels=%d, want 0 and 0", jobCount, cancelCount)
+	}
+	if got := syncer.queue.PendingCounts()[codebase.ID]; got != 1 {
+		t.Fatalf("requeued path count = %d, want 1", got)
+	}
+}
+
 func TestDetachedJobTerminalTransitionsPreserveFirstTerminalState(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -394,6 +418,37 @@ func TestDetachedJobTerminalTransitionsPreserveFirstTerminalState(t *testing.T) 
 				}
 			})
 		}
+	}
+}
+
+func TestUpdateJobFailedPreservesExistingTerminalState(t *testing.T) {
+	terminalStates := []model.JobState{
+		model.JobStateCompleted,
+		model.JobStateFailed,
+		model.JobStateCancelled,
+	}
+	for _, initialState := range terminalStates {
+		t.Run(string(initialState), func(t *testing.T) {
+			manager, _, repoPath := newTestManager(t)
+			completedAt := clock.Now().Add(-time.Minute)
+			job := newQueuedJob("cb-terminal", repoPath, repoPath, testClientInfo(), string(jobOperationIndex), false, defaultIndexConfig(), emptyAdmissionBudget, completedAt)
+			job.State = initialState
+			job.CompletedAt = &completedAt
+			job.Progress.Phase = string(initialState)
+			manager.mu.Lock()
+			manager.jobs[job.ID] = job
+			manager.mu.Unlock()
+
+			manager.updateJobFailed(context.Background(), job.ID, errors.New("late failure"))
+
+			got, found := manager.GetJob(job.ID)
+			if !found {
+				t.Fatalf("GetJob(%q) did not find terminal job", job.ID)
+			}
+			if got.State != initialState || got.Progress.Phase != string(initialState) || got.CompletedAt == nil || !got.CompletedAt.Equal(completedAt) {
+				t.Fatalf("job after late failure = %+v, want original %s terminal state", got, initialState)
+			}
+		})
 	}
 }
 

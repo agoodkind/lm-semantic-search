@@ -516,7 +516,7 @@ func (manager *Manager) updateDetachedJobCancelled(ctx context.Context, jobID st
 
 func (manager *Manager) markJobFailedLocked(ctx context.Context, jobID string, runErr error) (model.Job, bool) {
 	job, found := manager.jobs[jobID]
-	if !found || job.State == model.JobStateCancelled {
+	if !found || isTerminalJobState(job.State) {
 		var emptyJob model.Job
 		return emptyJob, false
 	}
