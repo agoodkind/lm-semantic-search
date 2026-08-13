@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -29,6 +30,7 @@ import (
 const (
 	minioUserEnvironment     = "LMS_RESTART_MINIO_USER"
 	minioPasswordEnvironment = "LMS_RESTART_MINIO_PASSWORD"
+	hostUserEnvironment      = "LMS_RESTART_HOST_UID"
 	maximumTreeRemovalTime   = 2 * time.Minute
 )
 
@@ -352,6 +354,7 @@ func renderCompose(paths runPaths, caseName string) string {
   etcd:
     image: %s
     pull_policy: never
+    user: "${%s:?required}:0"
     command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls=http://0.0.0.0:2379 --data-dir=/etcd
     ports:
       - "127.0.0.1:%d:2379"
@@ -365,6 +368,7 @@ func renderCompose(paths runPaths, caseName string) string {
   minio:
     image: %s
     pull_policy: never
+    user: "${%s:?required}:0"
     command: minio server /minio_data --console-address :9001
     environment:
       MINIO_ROOT_USER: ${%s:?required}
@@ -383,6 +387,7 @@ func renderCompose(paths runPaths, caseName string) string {
   standalone:
     image: %s
     pull_policy: never
+    user: "${%s:?required}:0"
     command: ["milvus", "run", "standalone"]
     security_opt:
       - seccomp:unconfined
@@ -406,10 +411,11 @@ func renderCompose(paths runPaths, caseName string) string {
         condition: service_healthy
       minio:
         condition: service_healthy
-`, etcdImage.Tag, etcdClientPort, caseRoot, minioImage.Tag, minioUserEnvironment,
-		minioPasswordEnvironment, minioAPIPort, minioConsolePort, caseRoot, caseRoot,
-		milvusImage.Tag, minioUserEnvironment, minioPasswordEnvironment, milvusGRPCPort,
-		milvusHealthPort, caseRoot)
+`, etcdImage.Tag, hostUserEnvironment, etcdClientPort, caseRoot, minioImage.Tag,
+		hostUserEnvironment, minioUserEnvironment, minioPasswordEnvironment, minioAPIPort,
+		minioConsolePort, caseRoot, caseRoot, milvusImage.Tag, hostUserEnvironment,
+		minioUserEnvironment, minioPasswordEnvironment, milvusGRPCPort, milvusHealthPort,
+		caseRoot)
 }
 
 type imageConfigIDSource interface {
@@ -627,6 +633,7 @@ func (h *harness) composeEnvironment() (map[string]string, error) {
 	return map[string]string{
 		minioUserEnvironment:     h.runtimeValues.userValue,
 		minioPasswordEnvironment: h.runtimeValues.keyValue,
+		hostUserEnvironment:      strconv.Itoa(os.Getuid()),
 	}, nil
 }
 
