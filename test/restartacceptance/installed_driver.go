@@ -589,6 +589,7 @@ func (driver *realAcceptanceDriver) runInstalledScenarioG(
 		})
 	}
 	var capacityWatchStarted time.Time
+	var secondJobID string
 	_, err = runScenarioG(ctx, scenarioGInput{
 		SetLoading: func() {
 			proxies.milvus.SetLoadState(cloneMilvusDatabase, targetCollection, commonpb.LoadState_LoadStateLoading)
@@ -628,10 +629,15 @@ func (driver *realAcceptanceDriver) runInstalledScenarioG(
 			if startErr != nil {
 				return jobObservation{}, startErr
 			}
-			return jobObservation{ID: response.GetJobId(), State: "queued"}, nil
+			secondJobID = response.GetJobId()
+			return jobObservation{ID: secondJobID, State: "queued"}, nil
 		},
 		ObserveCapacityRelease: func(observeContext context.Context) (time.Duration, error) {
-			return observeCapacityReleaseEvent(observeContext, installedLMSLogPath(run.Paths), capacityWatchStarted)
+			logPath := installedLMSLogPath(run.Paths)
+			if _, observeErr := observeCapacityReleaseEvent(observeContext, logPath, capacityWatchStarted); observeErr != nil {
+				return 0, observeErr
+			}
+			return observeSecondJobStartEvent(observeContext, logPath, capacityWatchStarted, secondJobID)
 		},
 		ReleaseSecondJob: proxies.embedding.ClearGate,
 		ObserveJob:       jobObserver(runtime.client),
@@ -1159,6 +1165,62 @@ func readCapacityReleaseEvent(logPath string, notBefore time.Time) (time.Duratio
 	}
 	if err := scanner.Err(); err != nil {
 		return 0, false, fmt.Errorf("scan capacity release log: %w", err)
+	}
+	return 0, false, nil
+}
+
+func observeSecondJobStartEvent(
+	ctx context.Context,
+	logPath string,
+	notBefore time.Time,
+	jobID string,
+) (time.Duration, error) {
+	for {
+		elapsed, found, err := readSecondJobStartEvent(logPath, notBefore, jobID)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
+		if found {
+			return elapsed, nil
+		}
+		select {
+		case <-ctx.Done():
+			return 0, fmt.Errorf("observe second job start event: %w", context.Cause(ctx))
+		case <-time.After(defaultScenarioPollInterval):
+		}
+	}
+}
+
+func readSecondJobStartEvent(
+	logPath string,
+	notBefore time.Time,
+	jobID string,
+) (time.Duration, bool, error) {
+	file, err := os.Open(logPath)
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { _ = file.Close() }()
+	type jobLogEntry struct {
+		Time    time.Time `json:"time"`
+		Message string    `json:"msg"`
+		Span    string    `json:"span"`
+		JobID   string    `json:"job_id"`
+	}
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var entry jobLogEntry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+		if entry.Message != "daemon.span.started" || entry.Span != "daemon.runJob" ||
+			entry.JobID != jobID || entry.Time.Before(notBefore) {
+			continue
+		}
+		return entry.Time.Sub(notBefore), true, nil
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, false, fmt.Errorf("scan second job start log: %w", err)
 	}
 	return 0, false, nil
 }

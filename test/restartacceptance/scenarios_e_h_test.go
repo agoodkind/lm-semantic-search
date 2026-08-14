@@ -409,6 +409,26 @@ func TestReadCapacityReleaseEventUsesTheCurrentWatchdogEvent(t *testing.T) {
 	}
 }
 
+func TestReadSecondJobStartEventUsesTheExactCurrentJob(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "daemon.jsonl")
+	notBefore := time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
+	body := strings.Join([]string{
+		`{"time":"2026-08-14T11:59:59Z","msg":"daemon.span.started","span":"daemon.runJob","job_id":"second-job"}`,
+		`{"time":"2026-08-14T12:00:01Z","msg":"daemon.span.started","span":"daemon.runJob","job_id":"other-job"}`,
+		`{"time":"2026-08-14T12:00:04.5Z","msg":"daemon.span.started","span":"daemon.runJob","job_id":"second-job"}`,
+	}, "\n")
+	if err := os.WriteFile(logPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	elapsed, found, err := readSecondJobStartEvent(logPath, notBefore, "second-job")
+	if err != nil {
+		t.Fatalf("readSecondJobStartEvent: %v", err)
+	}
+	if !found || elapsed != 4500*time.Millisecond {
+		t.Fatalf("event found = %t elapsed = %s, want true and 4.5s", found, elapsed)
+	}
+}
+
 func TestStopInstalledProcessRejectsAPreexistingCrash(t *testing.T) {
 	process := exec.Command("sh", "-c", "exit 7")
 	if err := process.Start(); err != nil {
