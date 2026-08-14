@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -16,6 +18,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +28,165 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 	"google.golang.org/grpc"
 )
+
+func TestStartCaseProxiesWarmsEmbeddingBackendBeforeScenario(t *testing.T) {
+	type readinessRequest struct {
+		path       string
+		authority  string
+		model      string
+		dimensions int32
+		input      []string
+		err        error
+	}
+	requestStarted := make(chan readinessRequest, 1)
+	releaseResponse := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
+	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload struct {
+			Model      string   `json:"model"`
+			Input      []string `json:"input"`
+			Dimensions int32    `json:"dimensions"`
+		}
+		decodeErr := json.NewDecoder(request.Body).Decode(&payload)
+		requestStarted <- readinessRequest{
+			path:       request.URL.Path,
+			authority:  request.Header.Get("Authorization"),
+			model:      payload.Model,
+			dimensions: payload.Dimensions,
+			input:      payload.Input,
+			err:        decodeErr,
+		}
+		<-releaseResponse
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"model":"readiness-model","usage":{"prompt_tokens":1,"total_tokens":1}}`))
+	}))
+	t.Cleanup(backend.Close)
+	t.Cleanup(release)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("OPENAI_BASE_URL", backend.URL+"/v1")
+	t.Setenv("EMBEDDING_MODEL", "readiness-model")
+	t.Setenv("EMBEDDING_DIMENSION", "2")
+
+	type proxyResult struct {
+		proxies caseProxies
+		err     error
+	}
+	result := make(chan proxyResult, 1)
+	go func() {
+		proxies, err := startCaseProxies(context.Background())
+		result <- proxyResult{proxies: proxies, err: err}
+	}()
+
+	select {
+	case request := <-requestStarted:
+		if request.err != nil {
+			t.Fatalf("decode embedding readiness request: %v", request.err)
+		}
+		if request.path != "/v1/embeddings" {
+			t.Fatalf("embedding readiness path = %q, want /v1/embeddings", request.path)
+		}
+		if request.authority != "Bearer test-key" {
+			t.Fatalf("embedding readiness authorization = %q, want Bearer test-key", request.authority)
+		}
+		if request.model != "readiness-model" || request.dimensions != 2 {
+			t.Fatalf("embedding readiness model = %q dimensions = %d, want readiness-model and 2", request.model, request.dimensions)
+		}
+		if !slices.Equal(request.input, []string{"restart acceptance embedding readiness"}) {
+			t.Fatalf("embedding readiness input = %v", request.input)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("embedding readiness request did not start")
+	}
+	select {
+	case returned := <-result:
+		_ = returned.proxies.close()
+		t.Fatalf("startCaseProxies returned before embedding readiness completed: %v", returned.err)
+	default:
+	}
+	release()
+	returned := <-result
+	if returned.err != nil {
+		t.Fatal(returned.err)
+	}
+	if err := returned.proxies.close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifyEmbeddingReadinessReusesConnectionAfterRejectedProbe(t *testing.T) {
+	var requestCount atomic.Int32
+	var connectionCount atomic.Int32
+	backend := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if requestCount.Add(1) == 1 {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = writer.Write([]byte(strings.Repeat("unavailable", 4096)))
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}]}`))
+	}))
+	backend.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connectionCount.Add(1)
+		}
+	}
+	backend.Start()
+	t.Cleanup(backend.Close)
+	cfg := config.Config{
+		OpenAIAPIKey:   "test-key",
+		OpenAIBaseURL:  backend.URL + "/v1",
+		EmbeddingModel: "readiness-model",
+	}
+	if err := verifyEmbeddingReadiness(context.Background(), cfg); err == nil {
+		t.Fatal("rejected embedding readiness probe succeeded")
+	}
+	if err := verifyEmbeddingReadiness(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := connectionCount.Load(); got != 1 {
+		t.Fatalf("embedding readiness connections = %d, want 1", got)
+	}
+}
+
+func TestVerifyEmbeddingReadinessRejectsOversizedResponse(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}]}`))
+		_, _ = writer.Write([]byte(strings.Repeat("x", embeddingReadinessResponseLimit)))
+	}))
+	t.Cleanup(backend.Close)
+	cfg := config.Config{
+		OpenAIAPIKey:   "test-key",
+		OpenAIBaseURL:  backend.URL + "/v1",
+		EmbeddingModel: "readiness-model",
+	}
+	if err := verifyEmbeddingReadiness(context.Background(), cfg); err == nil {
+		t.Fatal("oversized embedding readiness response succeeded")
+	}
+}
+
+func TestResolveEmbeddingConfigHonorsReadinessDeadline(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	started := make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := resolveEmbeddingConfig(ctx, func() (config.Config, error) {
+		close(started)
+		<-release
+		return config.Config{}, nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("resolve embedding config error = %v, want deadline exceeded", err)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("embedding config resolver did not start")
+	}
+}
 
 func TestInstalledLMSForcesProductionMetadataTimeoutAcrossProcessBoundary(t *testing.T) {
 	configHome := t.TempDir()

@@ -4,6 +4,7 @@ package restartacceptance
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,6 +18,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +45,8 @@ const (
 	cloneMilvusAddress                   = "127.0.0.1:29530"
 	fixtureQuery                         = "restart acceptance"
 	scenarioBMetadataTimeoutMilliseconds = 10000
+	embeddingReadinessTimeout            = 30 * time.Second
+	embeddingReadinessResponseLimit      = 4 << 20
 )
 
 type realAcceptanceDriver struct {
@@ -170,7 +174,7 @@ func (driver *realAcceptanceDriver) runCase(ctx context.Context, run acceptanceR
 		if err := resetIsolatedRuntime(run.Paths); err != nil {
 			return err
 		}
-		proxies, err := startCaseProxies()
+		proxies, err := startCaseProxies(caseContext)
 		if err != nil {
 			return err
 		}
@@ -1331,13 +1335,18 @@ type caseProxies struct {
 	serveError chan error
 }
 
-func startCaseProxies() (caseProxies, error) {
-	cfg, err := config.Default()
+func startCaseProxies(ctx context.Context) (caseProxies, error) {
+	readinessContext, cancel := context.WithTimeout(ctx, embeddingReadinessTimeout)
+	defer cancel()
+	cfg, err := resolveEmbeddingConfig(readinessContext, config.Default)
 	if err != nil {
 		return caseProxies{}, fmt.Errorf("resolve installed embedding backend: %w", err)
 	}
 	if strings.TrimSpace(cfg.OpenAIBaseURL) == "" {
 		return caseProxies{}, fmt.Errorf("installed embedding backend URL is empty")
+	}
+	if err := verifyEmbeddingReadiness(readinessContext, cfg); err != nil {
+		return caseProxies{}, err
 	}
 	embeddingListener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", embeddingProxyPort))
 	if err != nil {
@@ -1363,6 +1372,81 @@ func startCaseProxies() (caseProxies, error) {
 	go func() { serveError <- embedding.Serve() }()
 	go func() { serveError <- milvus.Serve() }()
 	return caseProxies{embedding: embedding, milvus: milvus, serveError: serveError}, nil
+}
+
+func resolveEmbeddingConfig(
+	ctx context.Context,
+	resolver func() (config.Config, error),
+) (config.Config, error) {
+	result := make(chan struct {
+		config config.Config
+		err    error
+	}, 1)
+	go func() {
+		cfg, err := resolver()
+		result <- struct {
+			config config.Config
+			err    error
+		}{config: cfg, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return config.Config{}, ctx.Err()
+	case resolved := <-result:
+		return resolved.config, resolved.err
+	}
+}
+
+func verifyEmbeddingReadiness(ctx context.Context, cfg config.Config) error {
+	readinessContext, cancel := context.WithTimeout(ctx, embeddingReadinessTimeout)
+	defer cancel()
+	body, err := json.Marshal(struct {
+		Model      string   `json:"model"`
+		Input      []string `json:"input"`
+		Dimensions int32    `json:"dimensions,omitempty"`
+	}{
+		Model:      cfg.EmbeddingModel,
+		Input:      []string{"restart acceptance embedding readiness"},
+		Dimensions: cfg.EmbeddingDimension,
+	})
+	if err != nil {
+		return fmt.Errorf("encode embedding readiness request: %w", err)
+	}
+	endpoint := strings.TrimRight(cfg.OpenAIBaseURL, "/") + "/embeddings"
+	request, err := http.NewRequestWithContext(readinessContext, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create embedding readiness request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+cfg.OpenAIAPIKey)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("verify embedding readiness: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, embeddingReadinessResponseLimit))
+		return fmt.Errorf("verify embedding readiness: endpoint returned HTTP %d", response.StatusCode)
+	}
+	var result struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	payload, err := io.ReadAll(io.LimitReader(response.Body, embeddingReadinessResponseLimit+1))
+	if err != nil {
+		return fmt.Errorf("read embedding readiness response: %w", err)
+	}
+	if len(payload) > embeddingReadinessResponseLimit {
+		return fmt.Errorf("verify embedding readiness: response exceeds %d bytes", embeddingReadinessResponseLimit)
+	}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return fmt.Errorf("decode embedding readiness response: %w", err)
+	}
+	if len(result.Data) != 1 || len(result.Data[0].Embedding) == 0 {
+		return fmt.Errorf("verify embedding readiness: endpoint returned an empty vector")
+	}
+	return nil
 }
 
 func (proxies caseProxies) close() error {
