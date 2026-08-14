@@ -18,22 +18,16 @@ const restartAcceptanceCleanupTimeout = 2 * time.Minute
 var acceptanceScenarioNames = []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 
 type acceptanceLifecycleOperations struct {
-	ValidateProduction func(context.Context) error
-	Prepare            func(context.Context) (acceptanceRun, error)
-	CaptureProduction  func(context.Context, acceptanceRun) (inventoryToken, error)
-	RunCase            func(context.Context, acceptanceRun, string, inventoryToken) error
-	ConfirmProduction  func(context.Context, acceptanceRun) error
-	AuditProduction    func(context.Context, inventoryToken, inventoryToken) error
-	Cleanup            func(context.Context, acceptanceRun) error
-	Finish             func(acceptanceRun, acceptanceResult) error
+	Prepare      func(context.Context) (acceptanceRun, error)
+	RunCase      func(context.Context, acceptanceRun, string) error
+	ConfirmClone func(context.Context, acceptanceRun) error
+	Cleanup      func(context.Context, acceptanceRun) error
+	Finish       func(acceptanceRun, acceptanceResult) error
 }
 
 func executeRestartAcceptance(ctx context.Context, operations acceptanceLifecycleOperations) (runErr error) {
 	if err := validateLifecycleOperations(operations); err != nil {
 		return err
-	}
-	if err := operations.ValidateProduction(ctx); err != nil {
-		return fmt.Errorf("validate production readiness: %w", err)
 	}
 	run, err := operations.Prepare(ctx)
 	if err != nil {
@@ -56,82 +50,29 @@ func executeRestartAcceptance(ctx context.Context, operations acceptanceLifecycl
 		}
 	}()
 
-	baseline, err := operations.CaptureProduction(ctx, run)
-	if err != nil {
-		runErr = fmt.Errorf("capture baseline production inventory: %w", err)
-		return runErr
-	}
 	for _, name := range acceptanceScenarioNames {
-		caseInventory, captureErr := operations.CaptureProduction(ctx, run)
-		if captureErr != nil {
-			runErr = fmt.Errorf("refresh production inventory for scenario %s: %w", name, captureErr)
-			return runErr
-		}
-		if caseErr := operations.RunCase(ctx, run, name, caseInventory); caseErr != nil {
+		if caseErr := operations.RunCase(ctx, run, name); caseErr != nil {
 			runErr = fmt.Errorf("scenario %s: %w", name, caseErr)
 			return runErr
 		}
-		afterCase, captureErr := operations.CaptureProduction(ctx, run)
-		if captureErr != nil {
-			runErr = fmt.Errorf("capture production inventory after scenario %s: %w", name, captureErr)
-			return runErr
-		}
-		if auditErr := operations.AuditProduction(ctx, caseInventory, afterCase); auditErr != nil {
-			runErr = fmt.Errorf("audit production after scenario %s: %w", name, auditErr)
-			return runErr
-		}
 	}
-	if err := operations.ConfirmProduction(ctx, run); err != nil {
-		runErr = fmt.Errorf("production confirmation: %w", err)
-		return runErr
-	}
-	after, err := operations.CaptureProduction(ctx, run)
-	if err != nil {
-		runErr = fmt.Errorf("capture final production inventory: %w", err)
-		return runErr
-	}
-	if err := operations.AuditProduction(ctx, baseline, after); err != nil {
-		runErr = fmt.Errorf("audit production baseline: %w", err)
+	if err := operations.ConfirmClone(ctx, run); err != nil {
+		runErr = fmt.Errorf("isolated clone confirmation: %w", err)
 		return runErr
 	}
 	return nil
 }
 
 func validateLifecycleOperations(operations acceptanceLifecycleOperations) error {
-	if operations.ValidateProduction == nil || operations.Prepare == nil || operations.CaptureProduction == nil || operations.RunCase == nil ||
-		operations.ConfirmProduction == nil || operations.AuditProduction == nil ||
+	if operations.Prepare == nil || operations.RunCase == nil || operations.ConfirmClone == nil ||
 		operations.Cleanup == nil || operations.Finish == nil {
 		return fmt.Errorf("restart acceptance lifecycle operations are incomplete")
 	}
 	return nil
 }
 
-func validateRestartAcceptanceConfirmations(restartConfirmation string, productionConfirmation string) error {
-	if err := validateOptIn(restartConfirmation); err != nil {
-		return err
-	}
-	if productionConfirmation != "default" {
-		return fmt.Errorf("%s must equal %q", productionDatabaseConfirmation, "default")
-	}
-	return nil
-}
-
-func runProductionConfirmation(ctx context.Context, runner commandRunner) error {
-	if runner == nil {
-		return fmt.Errorf("production confirmation requires a command runner")
-	}
-	environment := map[string]string{productionDatabaseConfirmation: "default"}
-	arguments := []string{
-		"test",
-		"-tags=live production",
-		"-count=1",
-		"-run=^(TestValidateProductionOptIn|TestProductionResidencyConfiguration|TestProductionReadOnlySearchConfirmation)$",
-		"./test/live/",
-	}
-	if _, err := runner.Run(ctx, environment, "go", arguments...); err != nil {
-		return fmt.Errorf("run read-only live production tests: %w", err)
-	}
-	return nil
+func validateRestartAcceptanceConfirmation(restartConfirmation string) error {
+	return validateOptIn(restartConfirmation)
 }
 
 type execCommandRunner struct{}

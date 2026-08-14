@@ -7,18 +7,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,89 +29,81 @@ import (
 	"google.golang.org/grpc"
 )
 
-func TestStartCaseProxiesWarmsEmbeddingBackendBeforeScenario(t *testing.T) {
-	type readinessRequest struct {
-		path       string
-		authority  string
-		model      string
-		dimensions int32
-		input      []string
-		err        error
-	}
-	requestStarted := make(chan readinessRequest, 1)
-	releaseResponse := make(chan struct{})
-	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
-	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		var payload struct {
-			Model      string   `json:"model"`
-			Input      []string `json:"input"`
-			Dimensions int32    `json:"dimensions"`
-		}
-		decodeErr := json.NewDecoder(request.Body).Decode(&payload)
-		requestStarted <- readinessRequest{
-			path:       request.URL.Path,
-			authority:  request.Header.Get("Authorization"),
-			model:      payload.Model,
-			dimensions: payload.Dimensions,
-			input:      payload.Input,
-			err:        decodeErr,
-		}
-		<-releaseResponse
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"model":"readiness-model","usage":{"prompt_tokens":1,"total_tokens":1}}`))
-	}))
-	t.Cleanup(backend.Close)
-	t.Cleanup(release)
-	t.Setenv("OPENAI_API_KEY", "test-key")
-	t.Setenv("OPENAI_BASE_URL", backend.URL+"/v1")
-	t.Setenv("EMBEDDING_MODEL", "readiness-model")
-	t.Setenv("EMBEDDING_DIMENSION", "2")
+type shutdownAcceptanceServer struct {
+	pb.UnimplementedSemanticSearchDaemonServiceServer
+}
 
-	type proxyResult struct {
-		proxies caseProxies
-		err     error
-	}
-	result := make(chan proxyResult, 1)
-	go func() {
-		proxies, err := startCaseProxies(context.Background())
-		result <- proxyResult{proxies: proxies, err: err}
-	}()
+func (shutdownAcceptanceServer) Shutdown(context.Context, *pb.ShutdownRequest) (*pb.ShutdownResponse, error) {
+	return &pb.ShutdownResponse{}, nil
+}
 
-	select {
-	case request := <-requestStarted:
-		if request.err != nil {
-			t.Fatalf("decode embedding readiness request: %v", request.err)
-		}
-		if request.path != "/v1/embeddings" {
-			t.Fatalf("embedding readiness path = %q, want /v1/embeddings", request.path)
-		}
-		if request.authority != "Bearer test-key" {
-			t.Fatalf("embedding readiness authorization = %q, want Bearer test-key", request.authority)
-		}
-		if request.model != "readiness-model" || request.dimensions != 2 {
-			t.Fatalf("embedding readiness model = %q dimensions = %d, want readiness-model and 2", request.model, request.dimensions)
-		}
-		if !slices.Equal(request.input, []string{"restart acceptance embedding readiness"}) {
-			t.Fatalf("embedding readiness input = %v", request.input)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("embedding readiness request did not start")
+func TestStartCaseProxiesUsesOnlyLocalEmbeddingBackend(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "http://127.0.0.1:1/forbidden-host-backend")
+	proxies, err := startCaseProxies(context.Background())
+	if err != nil {
+		t.Fatalf("start isolated proxies: %v", err)
 	}
-	select {
-	case returned := <-result:
-		_ = returned.proxies.close()
-		t.Fatalf("startCaseProxies returned before embedding readiness completed: %v", returned.err)
-	default:
+	t.Cleanup(func() {
+		if closeErr := proxies.close(); closeErr != nil {
+			t.Errorf("close isolated proxies: %v", closeErr)
+		}
+	})
+	body := strings.NewReader(`{"model":"restart-acceptance","input":["same","same"],"dimensions":16}`)
+	response, err := http.Post(
+		fmt.Sprintf("http://127.0.0.1:%d/v1/embeddings", embeddingProxyPort),
+		"application/json",
+		body,
+	)
+	if err != nil {
+		t.Fatalf("request local embedding proxy: %v", err)
 	}
-	release()
-	returned := <-result
-	if returned.err != nil {
-		t.Fatal(returned.err)
+	defer func() { _ = response.Body.Close() }()
+	var decoded struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
 	}
-	if err := returned.proxies.close(); err != nil {
+	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
+		t.Fatalf("decode local embedding response: %v", err)
+	}
+	if response.StatusCode != http.StatusOK || len(decoded.Data) != 2 {
+		t.Fatalf("local embedding status = %d rows = %d", response.StatusCode, len(decoded.Data))
+	}
+	if len(decoded.Data[0].Embedding) != 16 {
+		t.Fatalf("local embedding width = %d, want 16", len(decoded.Data[0].Embedding))
+	}
+	if !slices.Equal(decoded.Data[0].Embedding, decoded.Data[1].Embedding) {
+		t.Fatal("identical local embedding inputs returned different vectors")
+	}
+}
+
+func TestStopDaemonRuntimeAllowsTheDaemonToFinishItsShutdownWindow(t *testing.T) {
+	client := startScenarioFakeGRPC(t, shutdownAcceptanceServer{})
+	process := exec.Command(os.Args[0], "-test.run=^TestRestartAcceptanceDelayedExitProbe$")
+	process.Env = append(os.Environ(), "LMS_RESTART_DELAYED_EXIT=100ms")
+	if err := process.Start(); err != nil {
 		t.Fatal(err)
 	}
+	runtime := &daemonRuntime{
+		process: process,
+		client:  client,
+		close:   io.NopCloser(strings.NewReader("")),
+	}
+	if err := stopDaemonRuntimeWithin(runtime, 5*time.Second); err != nil {
+		t.Fatalf("stop daemon within external shutdown window: %v", err)
+	}
+}
+
+func TestRestartAcceptanceDelayedExitProbe(t *testing.T) {
+	delay := os.Getenv("LMS_RESTART_DELAYED_EXIT")
+	if delay == "" {
+		return
+	}
+	duration, err := time.ParseDuration(delay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(duration)
 }
 
 func TestVerifyEmbeddingReadinessReusesConnectionAfterRejectedProbe(t *testing.T) {
@@ -133,15 +125,20 @@ func TestVerifyEmbeddingReadinessReusesConnectionAfterRejectedProbe(t *testing.T
 	}
 	backend.Start()
 	t.Cleanup(backend.Close)
-	cfg := config.Config{
-		OpenAIAPIKey:   "test-key",
-		OpenAIBaseURL:  backend.URL + "/v1",
-		EmbeddingModel: "readiness-model",
-	}
-	if err := verifyEmbeddingReadiness(context.Background(), cfg); err == nil {
+	if err := verifyEmbeddingReadiness(
+		context.Background(),
+		backend.URL+"/v1",
+		"readiness-model",
+		0,
+	); err == nil {
 		t.Fatal("rejected embedding readiness probe succeeded")
 	}
-	if err := verifyEmbeddingReadiness(context.Background(), cfg); err != nil {
+	if err := verifyEmbeddingReadiness(
+		context.Background(),
+		backend.URL+"/v1",
+		"readiness-model",
+		0,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if got := connectionCount.Load(); got != 1 {
@@ -156,38 +153,15 @@ func TestVerifyEmbeddingReadinessRejectsOversizedResponse(t *testing.T) {
 		_, _ = writer.Write([]byte(strings.Repeat("x", embeddingReadinessResponseLimit)))
 	}))
 	t.Cleanup(backend.Close)
-	cfg := config.Config{
-		OpenAIAPIKey:   "test-key",
-		OpenAIBaseURL:  backend.URL + "/v1",
-		EmbeddingModel: "readiness-model",
-	}
-	if err := verifyEmbeddingReadiness(context.Background(), cfg); err == nil {
+	if err := verifyEmbeddingReadiness(
+		context.Background(),
+		backend.URL+"/v1",
+		"readiness-model",
+		0,
+	); err == nil {
 		t.Fatal("oversized embedding readiness response succeeded")
 	}
 }
-
-func TestResolveEmbeddingConfigHonorsReadinessDeadline(t *testing.T) {
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	started := make(chan struct{})
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	_, err := resolveEmbeddingConfig(ctx, func() (config.Config, error) {
-		close(started)
-		<-release
-		return config.Config{}, nil
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("resolve embedding config error = %v, want deadline exceeded", err)
-	}
-	select {
-	case <-started:
-	default:
-		t.Fatal("embedding config resolver did not start")
-	}
-}
-
 func TestInstalledLMSForcesProductionMetadataTimeoutAcrossProcessBoundary(t *testing.T) {
 	configHome := t.TempDir()
 	configRoot := filepath.Join(configHome, "lm-semantic-search")
@@ -265,6 +239,14 @@ func TestInstalledScenarioBKeepsMetadataTimeoutBelowFailureBound(t *testing.T) {
 	}
 	if timeoutMilliseconds <= 0 || timeoutMilliseconds >= 15000 {
 		t.Fatalf("effective metadata call timeout = %dms, want between 1ms and 14999ms", timeoutMilliseconds)
+	}
+}
+
+func TestInstalledScenariosCanDisablePeriodicMaintenance(t *testing.T) {
+	run := acceptanceRun{Paths: pathsForRun(t.TempDir())}
+	process := installedLMSProcessWithoutPeriodicMaintenance(run)
+	if got := process.Environment["CLAUDE_CONTEXT_BACKGROUND_SYNC"]; got != "false" {
+		t.Fatalf("background sync = %q, want false", got)
 	}
 }
 
@@ -490,6 +472,33 @@ func TestInstalledLMSForcesProductionCollectionLoadTimeoutAcrossProcessBoundary(
 	}
 }
 
+func TestInstalledScenarioGKeepsCallerWaitBelowInternalLoadBoundAcrossProcessBoundary(t *testing.T) {
+	t.Setenv("CLAUDE_CONTEXT_MILVUS_COLLECTION_LOAD_TIMEOUT_MS", "1")
+	t.Setenv("CLAUDE_CONTEXT_MILVUS_COLLECTION_LOAD_WAIT_TIMEOUT_MS", "90000")
+	t.Setenv("CLAUDE_CONTEXT_MILVUS_COLLECTION_IDLE_TIMEOUT_MS", "1")
+
+	run := acceptanceRun{Paths: pathsForRun(t.TempDir())}
+	process := installedLMSProcessForScenarioG(run)
+	probePath := filepath.Join(t.TempDir(), "scenario-g-load-timeouts")
+	process.Path = os.Args[0]
+	process.Args = []string{"-test.run=^TestRestartAcceptanceScenarioGLoadConfigProbe$"}
+	process.Environment["LMS_RESTART_CONFIG_PROBE"] = probePath
+	command, err := startInstalledProcess(process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err != nil {
+		t.Fatalf("wait for scenario G config probe: %v", err)
+	}
+	body, err := os.ReadFile(probePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(body)); got != "12000 7000 60000" {
+		t.Fatalf("effective scenario G timeouts = %q, want internal 12000 caller 7000 idle 60000", got)
+	}
+}
+
 func TestRestartAcceptanceConfigProbe(t *testing.T) {
 	probePath := os.Getenv("LMS_RESTART_CONFIG_PROBE")
 	if probePath == "" {
@@ -517,6 +526,26 @@ func TestRestartAcceptanceCollectionLoadConfigProbe(t *testing.T) {
 	body := []byte(strconv.Itoa(cfg.MilvusCollectionLoadTimeoutMS) + "\n")
 	if err := os.WriteFile(probePath, body, 0o600); err != nil {
 		t.Fatal(fmt.Errorf("write config probe: %w", err))
+	}
+}
+
+func TestRestartAcceptanceScenarioGLoadConfigProbe(t *testing.T) {
+	probePath := os.Getenv("LMS_RESTART_CONFIG_PROBE")
+	if probePath == "" {
+		return
+	}
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(fmt.Sprintf(
+		"%d %d %d\n",
+		cfg.MilvusCollectionLoadTimeoutMS,
+		cfg.MilvusCollectionLoadWaitTimeoutMS,
+		cfg.MilvusCollectionIdleTimeoutMS,
+	))
+	if err := os.WriteFile(probePath, body, 0o600); err != nil {
+		t.Fatal(fmt.Errorf("write scenario G config probe: %w", err))
 	}
 }
 
@@ -567,5 +596,164 @@ func TestPreserveCaseDiagnosticsRejectsAnUnsafeScenarioName(t *testing.T) {
 	paths := pathsForRun(t.TempDir())
 	if err := preserveCaseDiagnostics(paths, "../escape"); err == nil {
 		t.Fatal("preserve diagnostics accepted an unsafe scenario name")
+	}
+}
+
+func TestWaitForSeededClydeSearchWaitsForFeederConvergence(t *testing.T) {
+	statusCalls := 0
+	searchCalls := 0
+	result, err := waitForSeededClydeSearch(
+		context.Background(),
+		func(context.Context) (clydeStatusObservation, error) {
+			statusCalls++
+			if statusCalls == 1 {
+				return clydeStatusObservation{
+					PID: 7, Responding: true, LastSyncUnix: 1,
+					Manifest: 1, Needed: 1, Pending: 1,
+				}, nil
+			}
+			return clydeStatusObservation{
+				PID: 8, Responding: true, LastSyncUnix: 2,
+				Manifest: 1, Embedded: 1,
+			}, nil
+		},
+		func(context.Context) (semanticSearchObservation, error) {
+			searchCalls++
+			return semanticSearchObservation{
+				Succeeded: true, Source: "semantic", Matches: 1,
+				ResultIDs: []string{"conversation:0"},
+			}, nil
+		},
+		50*time.Millisecond,
+		10*time.Millisecond,
+		time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("waitForSeededClydeSearch returned error: %v", err)
+	}
+	if statusCalls < 2 {
+		t.Fatalf("status calls = %d, want at least 2", statusCalls)
+	}
+	if searchCalls != 1 {
+		t.Fatalf("search calls = %d, want 1 after convergence", searchCalls)
+	}
+	if result.Matches != 1 {
+		t.Fatalf("matches = %d, want 1", result.Matches)
+	}
+}
+
+func TestWaitForSeededClydeSearchRetriesAfterOneBoundedSearch(t *testing.T) {
+	searchCalls := 0
+	result, err := waitForSeededClydeSearch(
+		context.Background(),
+		func(context.Context) (clydeStatusObservation, error) {
+			return clydeStatusObservation{
+				PID: 7, Responding: true, LastSyncUnix: 2,
+				Manifest: 1, Embedded: 1,
+			}, nil
+		},
+		func(searchContext context.Context) (semanticSearchObservation, error) {
+			searchCalls++
+			if searchCalls == 1 {
+				<-searchContext.Done()
+				return semanticSearchObservation{}, searchContext.Err()
+			}
+			return semanticSearchObservation{Succeeded: true, Source: "semantic", Matches: 1}, nil
+		},
+		100*time.Millisecond,
+		5*time.Millisecond,
+		time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("waitForSeededClydeSearch returned error: %v", err)
+	}
+	if searchCalls != 2 {
+		t.Fatalf("search calls = %d, want 2", searchCalls)
+	}
+	if result.Matches != 1 {
+		t.Fatalf("matches = %d, want 1", result.Matches)
+	}
+}
+
+func TestRequireClonePayloadAllowsAnEmptyUnusedMinioVolume(t *testing.T) {
+	caseRoot := t.TempDir()
+	for _, name := range []string{"milvus", "minio", "minio-default"} {
+		if err := os.MkdirAll(filepath.Join(caseRoot, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"milvus", "minio"} {
+		if err := os.WriteFile(filepath.Join(caseRoot, name, "payload"), []byte("data"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := requireClonePayload(caseRoot); err != nil {
+		t.Fatalf("requireClonePayload returned error: %v", err)
+	}
+}
+
+func TestStartScenarioGTargetJobWaitsForCallerLoad(t *testing.T) {
+	loadCount := 0
+	callerStarted := false
+	jobStarted := false
+	jobID, err := startScenarioGTargetJob(
+		context.Background(),
+		func() {
+			callerStarted = true
+			loadCount = 1
+		},
+		func() int { return loadCount },
+		func(context.Context) (string, error) {
+			if !callerStarted || loadCount == 0 {
+				t.Fatal("target job started before the public caller load")
+			}
+			jobStarted = true
+			return "target-job", nil
+		},
+		50*time.Millisecond,
+		time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("start scenario G target job: %v", err)
+	}
+	if jobID != "target-job" || !jobStarted {
+		t.Fatalf("job id = %q started = %t", jobID, jobStarted)
+	}
+}
+
+func TestPrepareScenarioGColdTargetStopsDaemonBeforeRelease(t *testing.T) {
+	events := make([]string, 0, 2)
+	err := prepareScenarioGColdTarget(
+		context.Background(),
+		&daemonRuntime{},
+		"hybrid_code_chunks_target",
+		func(*daemonRuntime) error {
+			events = append(events, "stop")
+			return nil
+		},
+		func(_ context.Context, collectionName string) error {
+			if len(events) != 1 || events[0] != "stop" {
+				t.Fatal("collection released before the daemon stopped")
+			}
+			events = append(events, "release:"+collectionName)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("prepare scenario G cold target: %v", err)
+	}
+	want := []string{"stop", "release:hybrid_code_chunks_target"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSnapshotRowCountUsesStrongRowsForDetailedCollection(t *testing.T) {
+	rows := []rowStateObservation{{Identity: "conversation-row"}}
+	if got := snapshotRowCount(0, rows, true); got != 1 {
+		t.Fatalf("detailed row count = %d, want 1", got)
+	}
+	if got := snapshotRowCount(7, nil, false); got != 7 {
+		t.Fatalf("summary row count = %d, want 7", got)
 	}
 }

@@ -3,8 +3,6 @@
 package restartacceptance
 
 import (
-	"bufio"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -13,10 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
-	"strings"
 	"time"
+
+	"goodkind.io/lm-semantic-search/test/sandboxharness"
 )
 
 const (
@@ -89,19 +87,11 @@ func validateRunRoot(parent string, root string) error {
 }
 
 func requiredRestoreBytes(sizes []int64) int64 {
-	var total int64
-	for _, size := range sizes {
-		total += size
-	}
-	return (total*5 + 3) / 4
+	return sandboxharness.RequiredBytes(sizes)
 }
 
 func validateFreeSpace(available int64, sizes []int64) error {
-	required := requiredRestoreBytes(sizes)
-	if available < required {
-		return fmt.Errorf("free space %d bytes is less than required %d bytes", available, required)
-	}
-	return nil
+	return sandboxharness.RequireFreeSpace(available, sizes)
 }
 
 func validateCaseFreeSpace(available int64, sizes []int64) error {
@@ -154,71 +144,7 @@ func validateInstalledBinaries(home string) (installedBinaries, error) {
 }
 
 func verifyChecksums(root string, expected map[string]string) error {
-	manifestPath := filepath.Join(root, checksumManifestName)
-	manifest, err := openNoFollowRegular(manifestPath)
-	if err != nil {
-		return fmt.Errorf("open checksum manifest: %w", err)
-	}
-	defer func() { _ = manifest.Close() }()
-
-	seen := make(map[string]struct{}, len(expected))
-	scanner := bufio.NewScanner(manifest)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) != 2 {
-			return fmt.Errorf("invalid checksum manifest entry %q", scanner.Text())
-		}
-		manifestHash := strings.ToLower(fields[0])
-		name := strings.TrimPrefix(fields[1], "*")
-		if filepath.IsAbs(name) || filepath.Clean(name) != name || strings.Contains(name, string(filepath.Separator)) {
-			return fmt.Errorf("checksum entry %q is not a literal file name", name)
-		}
-		expectedHash, exists := expected[name]
-		if !exists {
-			return fmt.Errorf("checksum manifest contains unexpected entry %q", name)
-		}
-		if _, duplicate := seen[name]; duplicate {
-			return fmt.Errorf("checksum manifest contains duplicate entry %q", name)
-		}
-		if manifestHash != expectedHash {
-			return fmt.Errorf("manifest checksum for %q is %s, want %s", name, manifestHash, expectedHash)
-		}
-		fileHash, err := sha256File(filepath.Join(root, name))
-		if err != nil {
-			return err
-		}
-		if fileHash != manifestHash {
-			return fmt.Errorf("checksum for %q is %s, want %s", name, fileHash, manifestHash)
-		}
-		seen[name] = struct{}{}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read checksum manifest: %w", err)
-	}
-	missing := make([]string, 0)
-	for name := range expected {
-		if _, exists := seen[name]; !exists {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) != 0 {
-		slices.Sort(missing)
-		return fmt.Errorf("checksum manifest is missing entries: %s", strings.Join(missing, ", "))
-	}
-	return nil
-}
-
-func sha256File(path string) (string, error) {
-	file, err := openNoFollowRegular(path)
-	if err != nil {
-		return "", fmt.Errorf("open checksum input %q: %w", path, err)
-	}
-	defer func() { _ = file.Close() }()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", fmt.Errorf("hash checksum input %q: %w", path, err)
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return sandboxharness.VerifyChecksums(root, checksumManifestName, expected)
 }
 
 func requiredDirectoryFromEnvironment(name string) (string, error) {

@@ -291,9 +291,6 @@ func TestHarnessPassesGeneratedCredentialsOnlyThroughComposeEnvironment(t *testi
 			t.Fatalf("create harness path %s: %v", path, err)
 		}
 	}
-	if err := os.WriteFile(paths.ProductionInventory, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write production inventory: %v", err)
-	}
 	runner := &recordingRunner{}
 	harness := configuredTestHarness(t, paths, runner)
 	harness.valueEntropy = bytes.NewReader(bytes.Repeat([]byte{0xab}, 32))
@@ -519,9 +516,6 @@ func TestHarnessCleansTaggedResourcesAfterPartialStartup(t *testing.T) {
 	if err := os.MkdirAll(paths.Artifacts, 0o755); err != nil {
 		t.Fatalf("create artifacts: %v", err)
 	}
-	if err := os.WriteFile(paths.ProductionInventory, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write production inventory: %v", err)
-	}
 	runner := &recordingRunner{failAt: 1}
 	harness := configuredTestHarness(t, paths, runner)
 	err := harness.runCompose(context.Background(), "a-restore")
@@ -534,7 +528,7 @@ func TestHarnessCleansTaggedResourcesAfterPartialStartup(t *testing.T) {
 	}
 }
 
-func TestHarnessRechecksProductionImmediatelyBeforeComposeStartup(t *testing.T) {
+func TestHarnessChecksCloneImmediatelyAfterComposeStartup(t *testing.T) {
 	paths := pathsForRun(filepath.Join(t.TempDir(), "lms-restart-acceptance", "20260812T010203Z-abcdef01"))
 	for _, path := range []string{paths.SourceEtcd, paths.SourceMilvus, paths.SourceMinIO, paths.SourceMinIODefault, paths.Artifacts} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
@@ -545,8 +539,8 @@ func TestHarnessRechecksProductionImmediatelyBeforeComposeStartup(t *testing.T) 
 	harness := configuredTestHarness(t, paths, runner)
 	readinessCalls := 0
 	harness.readiness = func(context.Context) error {
-		if len(runner.calls) != 0 {
-			t.Fatalf("readiness ran after compose command %v", runner.calls)
+		if len(runner.calls) != 1 || runner.calls[0][len(runner.calls[0])-1] != "--wait" {
+			t.Fatalf("clone readiness ran before compose startup %v", runner.calls)
 		}
 		readinessCalls++
 		return nil
@@ -569,9 +563,6 @@ func TestHarnessCleansTaggedResourcesAfterSuccessfulStartup(t *testing.T) {
 	if err := os.MkdirAll(paths.Artifacts, 0o755); err != nil {
 		t.Fatalf("create artifacts: %v", err)
 	}
-	if err := os.WriteFile(paths.ProductionInventory, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write production inventory: %v", err)
-	}
 	runner := &recordingRunner{}
 	harness := configuredTestHarness(t, paths, runner)
 	if err := harness.runCompose(context.Background(), "a-restore"); err != nil {
@@ -588,33 +579,12 @@ func TestHarnessCleansTaggedResourcesAfterSuccessfulStartup(t *testing.T) {
 	}
 }
 
-func TestHarnessRefusesStartupBeforeProductionInventoryCapture(t *testing.T) {
-	paths := pathsForRun(filepath.Join(t.TempDir(), "lms-restart-acceptance", "20260812T010203Z-abcdef01"))
-	for _, path := range []string{paths.SourceEtcd, paths.SourceMilvus, paths.SourceMinIO, paths.SourceMinIODefault} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatalf("create source %s: %v", path, err)
-		}
-	}
-	runner := &recordingRunner{}
-	harness := configuredTestHarness(t, paths, runner)
-	harness.inventory = inventoryToken{}
-	if err := harness.runCompose(context.Background(), "a-restore"); err == nil {
-		t.Fatal("compose started without production inventory")
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("commands ran without production inventory: %v", runner.calls)
-	}
-}
-
 func TestHarnessRunsScenarioBetweenStartupAndCleanup(t *testing.T) {
 	paths := pathsForRun(filepath.Join(t.TempDir(), "lms-restart-acceptance", "20260812T010203Z-abcdef01"))
 	for _, path := range []string{paths.SourceEtcd, paths.SourceMilvus, paths.SourceMinIO, paths.SourceMinIODefault, paths.Artifacts} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("create harness path %s: %v", path, err)
 		}
-	}
-	if err := os.WriteFile(paths.ProductionInventory, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write production inventory: %v", err)
 	}
 	runner := &recordingRunner{}
 	harness := configuredTestHarness(t, paths, runner)
@@ -708,31 +678,6 @@ func TestHarnessRequiresFullWritableCaseReserveAfterRestore(t *testing.T) {
 	}
 }
 
-func TestInventoryTokenRejectsStaleMismatchedAndTamperedValues(t *testing.T) {
-	now := time.Date(2026, 8, 12, 1, 7, 3, 0, time.UTC)
-	inventory := productionInventory{Databases: []string{"default"}, Collections: collectionCensus{{Database: "default", Collection: "operator"}: "hash"}}
-	token, err := newInventoryToken("20260812T010203Z-abcdef01", now.Add(-5*time.Minute), inventory)
-	if err != nil {
-		t.Fatalf("new token: %v", err)
-	}
-	if err := validateInventoryToken(token, token.RunID, now); err != nil {
-		t.Fatalf("five-minute token: %v", err)
-	}
-	stale := token
-	stale.CapturedAt = stale.CapturedAt.Add(-time.Nanosecond)
-	if err := validateInventoryToken(stale, stale.RunID, now); err == nil {
-		t.Fatal("stale token was accepted")
-	}
-	if err := validateInventoryToken(token, "20260812T010203Z-deadbeef", now); err == nil {
-		t.Fatal("mismatched token was accepted")
-	}
-	tampered := token
-	tampered.Inventory.Collections[collectionIdentity{Database: "default", Collection: "operator"}] = "changed"
-	if err := validateInventoryToken(tampered, tampered.RunID, now); err == nil {
-		t.Fatal("tampered token was accepted")
-	}
-}
-
 func TestCollectionCensusSerializationIsDeterministic(t *testing.T) {
 	first := collectionCensus{
 		{Database: "z", Collection: "second"}: "hash-b",
@@ -767,6 +712,9 @@ func TestIsolatedEnvironmentRoutesOnlyCloneResources(t *testing.T) {
 		"MILVUS_ADDRESS":               "127.0.0.1:39530",
 		"MILVUS_DATABASE":              "default",
 		"OPENAI_BASE_URL":              "http://127.0.0.1:35400",
+		"OPENAI_API_KEY":               "restart-acceptance-local",
+		"EMBEDDING_MODEL":              "restart-acceptance-local",
+		"EMBEDDING_DIMENSION":          "16",
 	}
 	if !reflect.DeepEqual(lmsEnvironment, wantLMS) {
 		t.Fatalf("LMS environment = %#v, want %#v", lmsEnvironment, wantLMS)
@@ -786,176 +734,6 @@ func TestIsolatedEnvironmentRoutesOnlyCloneResources(t *testing.T) {
 	}
 }
 
-func TestCaptureProductionInventoryWritesSeparateReadOnlyArtifact(t *testing.T) {
-	paths := pathsForRun(filepath.Join(t.TempDir(), "20260812T010203Z-abcdef01"))
-	if err := os.MkdirAll(paths.Artifacts, 0o755); err != nil {
-		t.Fatalf("create artifacts: %v", err)
-	}
-	runner := &recordingRunner{outputs: [][]byte{
-		[]byte(`{"indexes":[],"dependencyHealth":{}}`),
-		[]byte(`{"jobs":[{"id":"operator","state":"running"}],"dependencyHealth":{}}`),
-		[]byte(`{"commit":"abc"}`),
-	}}
-	binaries := installedBinaries{CLI: "/home/test/.local/bin/lm-semantic-search"}
-	runID := "20260812T010203Z-abcdef01"
-	_, err := captureProductionInventory(
-		context.Background(),
-		paths,
-		binaries,
-		runner,
-		runID,
-		time.Date(2026, 8, 12, 1, 2, 3, 0, time.UTC),
-		func(context.Context) (productionMilvusCensus, error) {
-			return productionMilvusCensus{
-				Databases:   []string{"default"},
-				Collections: collectionCensus{{Database: "default", Collection: "operator"}: "properties-loadstate-hash"},
-			}, nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("capture production inventory: %v", err)
-	}
-	wantCalls := [][]string{
-		{binaries.CLI, "--json", "codebase", "list"},
-		{binaries.CLI, "--json", "job", "list"},
-		{binaries.CLI, "--json", "daemon", "status"},
-	}
-	if !reflect.DeepEqual(runner.calls, wantCalls) {
-		t.Fatalf("inventory calls = %v, want %v", runner.calls, wantCalls)
-	}
-	body, err := os.ReadFile(paths.ProductionInventory)
-	if err != nil {
-		t.Fatalf("read production inventory: %v", err)
-	}
-	if !strings.Contains(string(body), `"commit": "abc"`) {
-		t.Fatalf("production inventory = %s", body)
-	}
-}
-
-func TestValidateProductionHealthAllowsOperatorJobsAfterInitialPreflight(t *testing.T) {
-	t.Parallel()
-
-	indexes := json.RawMessage(`{"indexes":[],"dependencyHealth":{}}`)
-	jobs := json.RawMessage(`{"jobs":[{"id":"operator","state":"running"}],"dependencyHealth":{}}`)
-	if err := validateProductionHealth(indexes, jobs); err != nil {
-		t.Fatalf("healthy production with operator activity: %v", err)
-	}
-	if err := validateProductionReadiness(indexes, jobs); err == nil {
-		t.Fatal("initial production readiness accepted an active job")
-	}
-	unknownJobs := json.RawMessage(`{"jobs":[{"id":"operator","state":"mystery"}],"dependencyHealth":{}}`)
-	if err := validateProductionHealth(indexes, unknownJobs); err == nil {
-		t.Fatal("production health accepted an unknown job state")
-	}
-}
-
-func TestValidateProductionReadinessRequiresZeroActiveJobsAndHealthyDependencies(t *testing.T) {
-	t.Parallel()
-
-	healthyIndexes := json.RawMessage(`{"indexes":[],"dependencyHealth":{}}`)
-	healthyJobs := json.RawMessage(`{"jobs":[{"id":"old","state":"completed"}],"dependencyHealth":{}}`)
-	if err := validateProductionReadiness(healthyIndexes, healthyJobs); err != nil {
-		t.Fatalf("healthy production readiness: %v", err)
-	}
-	tests := []struct {
-		name    string
-		indexes json.RawMessage
-		jobs    json.RawMessage
-	}{
-		{
-			name:    "active job",
-			indexes: healthyIndexes,
-			jobs:    json.RawMessage(`{"jobs":[{"id":"current","state":"running"}],"dependencyHealth":{}}`),
-		},
-		{
-			name:    "degraded index dependency",
-			indexes: json.RawMessage(`{"indexes":[],"dependencyHealth":{"degraded":true,"mode":"store_unavailable"}}`),
-			jobs:    healthyJobs,
-		},
-		{
-			name:    "degraded job dependency",
-			indexes: healthyIndexes,
-			jobs:    json.RawMessage(`{"jobs":[],"dependencyHealth":{"degraded":true,"mode":"embedder_unreachable"}}`),
-		},
-		{name: "missing index health", indexes: json.RawMessage(`{"indexes":[]}`), jobs: healthyJobs},
-		{name: "null job health", indexes: healthyIndexes, jobs: json.RawMessage(`{"jobs":[],"dependencyHealth":null}`)},
-		{name: "unknown index mode", indexes: json.RawMessage(`{"indexes":[],"dependencyHealth":{"mode":"ready"}}`), jobs: healthyJobs},
-		{name: "contradictory job health", indexes: healthyIndexes, jobs: json.RawMessage(`{"jobs":[],"dependencyHealth":{"degraded":false,"mode":"store_unavailable"}}`)},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			if err := validateProductionReadiness(test.indexes, test.jobs); err == nil {
-				t.Fatal("unsafe production readiness was accepted")
-			}
-		})
-	}
-}
-
-func TestAuditProductionMutationRejectsRemovedChangedAndAttributedAdditions(t *testing.T) {
-	t.Parallel()
-
-	operator := collectionIdentity{Database: "default", Collection: "operator"}
-	newCollection := collectionIdentity{Database: "default", Collection: "new"}
-	otherCollection := collectionIdentity{Database: "default", Collection: "other"}
-	before := productionInventory{Collections: collectionCensus{operator: "hash-a"}}
-	tests := []struct {
-		name  string
-		after productionInventory
-		calls []milvusProxyCall
-	}{
-		{name: "removed", after: productionInventory{Collections: collectionCensus{}}},
-		{name: "changed", after: productionInventory{Collections: collectionCensus{operator: "hash-b"}}},
-		{
-			name:  "attributed addition",
-			after: productionInventory{Collections: collectionCensus{operator: "hash-a", newCollection: "hash-c"}},
-			calls: []milvusProxyCall{{Database: "default", Collection: "new", Method: "CreateCollection"}},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			if err := auditProductionMutation(before, test.after, test.calls, nil); err == nil {
-				t.Fatal("production mutation was accepted")
-			}
-		})
-	}
-	concurrent := productionInventory{Collections: collectionCensus{operator: "hash-a", otherCollection: "hash-d"}}
-	if err := auditProductionMutation(before, concurrent, nil, nil); err != nil {
-		t.Fatalf("unattributed concurrent addition: %v", err)
-	}
-	protected := map[collectionIdentity]struct{}{otherCollection: {}}
-	if err := auditProductionMutation(before, concurrent, nil, protected); err == nil {
-		t.Fatal("precomputed acceptance collection was accepted without proxy evidence")
-	}
-}
-
-func TestAuditProductionMutationChecksSamplesOnlyWhenBothCensusesLoaded(t *testing.T) {
-	t.Parallel()
-
-	identity := collectionIdentity{Database: "default", Collection: "operator"}
-	before := productionInventory{
-		Databases:   []string{"default"},
-		Collections: collectionCensus{identity: "durable"},
-		Samples:     collectionCensus{identity: "sample-a"},
-	}
-	changed := productionInventory{
-		Databases:   []string{"default"},
-		Collections: collectionCensus{identity: "durable"},
-		Samples:     collectionCensus{identity: "sample-b"},
-	}
-	if err := auditProductionMutation(before, changed, nil, nil); err == nil {
-		t.Fatal("loaded sample mutation was accepted")
-	}
-	cold := productionInventory{
-		Databases:   []string{"default"},
-		Collections: collectionCensus{identity: "durable"},
-	}
-	if err := auditProductionMutation(before, cold, nil, nil); err != nil {
-		t.Fatalf("residency-only sample absence was rejected: %v", err)
-	}
-}
-
 type recordingRunner struct {
 	calls        [][]string
 	environments []map[string]string
@@ -969,22 +747,15 @@ func configuredTestHarness(t *testing.T, paths runPaths, runner commandRunner) *
 	if err := os.MkdirAll(paths.Cases, 0o700); err != nil {
 		t.Fatalf("create cases root: %v", err)
 	}
-	capturedAt := time.Date(2026, 8, 12, 1, 2, 3, 0, time.UTC)
 	collections := collectionCensus{{Database: "default", Collection: "operator"}: "properties-loadstate-hash"}
-	token, err := newInventoryToken(filepath.Base(paths.RunRoot), capturedAt, productionInventory{Databases: []string{"default"}, Collections: collections})
-	if err != nil {
-		t.Fatalf("create inventory token: %v", err)
-	}
 	return &harness{
 		paths:          paths,
 		composeProject: "lms-restart-abcdef01",
 		runner:         runner,
 		archiveSizes:   []int64{1},
 		availableBytes: func(string) (int64, error) { return 1 << 30, nil },
-		inventory:      token,
-		now:            func() time.Time { return capturedAt },
-		census: func(context.Context) (productionMilvusCensus, error) {
-			return productionMilvusCensus{Databases: []string{"default"}, Collections: cloneCollectionCensus(collections)}, nil
+		census: func(context.Context) (cloneMilvusCensus, error) {
+			return cloneMilvusCensus{Databases: []string{"default"}, Collections: cloneCollectionCensus(collections)}, nil
 		},
 		readiness: func(context.Context) error { return nil },
 	}
@@ -1008,4 +779,26 @@ func (runner *recordingRunner) Run(
 		return runner.outputs[len(runner.calls)-1], nil
 	}
 	return nil, nil
+}
+
+func TestRetryCloneCensusWaitsForTransientReadFailure(t *testing.T) {
+	attempts := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := retryCloneCensus(ctx, func(context.Context) (cloneMilvusCensus, error) {
+		attempts++
+		if attempts == 1 {
+			return cloneMilvusCensus{}, errors.New("query channel unavailable")
+		}
+		if attempts == 2 {
+			return cloneMilvusCensus{Databases: []string{"default"}, Collections: collectionCensus{{Collection: "live"}: "hash"}, RowCounts: collectionRowCounts{{Collection: "live"}: 1}}, nil
+		}
+		return cloneMilvusCensus{Databases: []string{"default"}, Collections: collectionCensus{{Collection: "live"}: "hash"}, RowCounts: collectionRowCounts{{Collection: "live"}: 2}}, nil
+	}, cloneMilvusCensus{Databases: []string{"default"}, Collections: collectionCensus{{Collection: "live"}: "hash"}, RowCounts: collectionRowCounts{{Collection: "live"}: 2}})
+	if err != nil {
+		t.Fatalf("retry clone census: %v", err)
+	}
+	if attempts != 3 || len(got.Databases) != 1 || got.Databases[0] != "default" {
+		t.Fatalf("attempts = %d, census = %#v", attempts, got)
+	}
 }

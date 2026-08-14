@@ -25,6 +25,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"goodkind.io/lm-semantic-search/test/sandboxharness"
 )
 
 const (
@@ -55,31 +57,30 @@ var (
 )
 
 type runPaths struct {
-	RunRoot             string
-	Restore             string
-	Source              string
-	SourceEtcd          string
-	SourceMilvus        string
-	SourceMinIO         string
-	SourceMinIODefault  string
-	Cases               string
-	LMSState            string
-	LMSContext          string
-	LMSSocket           string
-	LMSLogs             string
-	ClydeConfig         string
-	ClydeData           string
-	ClydeState          string
-	ClydeCache          string
-	ClydeRuntime        string
-	ClydeHome           string
-	ClydeConfigFile     string
-	Artifacts           string
-	EventsJSONL         string
-	ResultJSON          string
-	ResultMarkdown      string
-	ProductionInventory string
-	ComposeFile         string
+	RunRoot            string
+	Restore            string
+	Source             string
+	SourceEtcd         string
+	SourceMilvus       string
+	SourceMinIO        string
+	SourceMinIODefault string
+	Cases              string
+	LMSState           string
+	LMSContext         string
+	LMSSocket          string
+	LMSLogs            string
+	ClydeConfig        string
+	ClydeData          string
+	ClydeState         string
+	ClydeCache         string
+	ClydeRuntime       string
+	ClydeHome          string
+	ClydeConfigFile    string
+	Artifacts          string
+	EventsJSONL        string
+	ResultJSON         string
+	ResultMarkdown     string
+	ComposeFile        string
 }
 
 func pathsForRun(runRoot string) runPaths {
@@ -89,31 +90,30 @@ func pathsForRun(runRoot string) runPaths {
 	clyde := filepath.Join(runRoot, "clyde")
 	artifacts := filepath.Join(runRoot, "artifacts")
 	return runPaths{
-		RunRoot:             runRoot,
-		Restore:             restore,
-		Source:              source,
-		SourceEtcd:          filepath.Join(source, "etcd"),
-		SourceMilvus:        filepath.Join(source, "milvus"),
-		SourceMinIO:         filepath.Join(source, "minio"),
-		SourceMinIODefault:  filepath.Join(source, "minio-default"),
-		Cases:               filepath.Join(restore, "cases"),
-		LMSState:            filepath.Join(lms, "state"),
-		LMSContext:          filepath.Join(lms, "context"),
-		LMSSocket:           filepath.Join(lms, "daemon.sock"),
-		LMSLogs:             filepath.Join(lms, "logs"),
-		ClydeConfig:         filepath.Join(clyde, "config"),
-		ClydeData:           filepath.Join(clyde, "data"),
-		ClydeState:          filepath.Join(clyde, "state"),
-		ClydeCache:          filepath.Join(clyde, "cache"),
-		ClydeRuntime:        filepath.Join(clyde, "runtime"),
-		ClydeHome:           filepath.Join(clyde, "home"),
-		ClydeConfigFile:     filepath.Join(clyde, "config", "clyde", "config.toml"),
-		Artifacts:           artifacts,
-		EventsJSONL:         filepath.Join(artifacts, "events.jsonl"),
-		ResultJSON:          filepath.Join(artifacts, "result.json"),
-		ResultMarkdown:      filepath.Join(artifacts, "result.md"),
-		ProductionInventory: filepath.Join(artifacts, "production-inventory.json"),
-		ComposeFile:         filepath.Join(runRoot, "compose.yaml"),
+		RunRoot:            runRoot,
+		Restore:            restore,
+		Source:             source,
+		SourceEtcd:         filepath.Join(source, "etcd"),
+		SourceMilvus:       filepath.Join(source, "milvus"),
+		SourceMinIO:        filepath.Join(source, "minio"),
+		SourceMinIODefault: filepath.Join(source, "minio-default"),
+		Cases:              filepath.Join(restore, "cases"),
+		LMSState:           filepath.Join(lms, "state"),
+		LMSContext:         filepath.Join(lms, "context"),
+		LMSSocket:          filepath.Join(lms, "daemon.sock"),
+		LMSLogs:            filepath.Join(lms, "logs"),
+		ClydeConfig:        filepath.Join(clyde, "config"),
+		ClydeData:          filepath.Join(clyde, "data"),
+		ClydeState:         filepath.Join(clyde, "state"),
+		ClydeCache:         filepath.Join(clyde, "cache"),
+		ClydeRuntime:       filepath.Join(clyde, "runtime"),
+		ClydeHome:          filepath.Join(clyde, "home"),
+		ClydeConfigFile:    filepath.Join(clyde, "config", "clyde", "config.toml"),
+		Artifacts:          artifacts,
+		EventsJSONL:        filepath.Join(artifacts, "events.jsonl"),
+		ResultJSON:         filepath.Join(artifacts, "result.json"),
+		ResultMarkdown:     filepath.Join(artifacts, "result.md"),
+		ComposeFile:        filepath.Join(runRoot, "compose.yaml"),
 	}
 }
 
@@ -271,32 +271,7 @@ func (reader *contextReader) Read(body []byte) (int, error) {
 }
 
 func cloneWritableTree(source string, destination string) error {
-	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
-		if err == nil {
-			return fmt.Errorf("case destination %q already exists", destination)
-		}
-		return fmt.Errorf("inspect case destination: %w", err)
-	}
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(destination, relative)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("immutable source contains symlink %q", path)
-		}
-		if err := cloneFile(path, target); err != nil {
-			return fmt.Errorf("clone %q: %w", path, err)
-		}
-		return os.Chmod(target, 0o600)
-	})
+	return sandboxharness.CloneTree(source, destination)
 }
 
 func removeTree(ctx context.Context, root string) error {
@@ -580,20 +555,16 @@ type commandRunner interface {
 }
 
 type harness struct {
-	paths                runPaths
-	composeProject       string
-	runner               commandRunner
-	valueEntropy         io.Reader
-	valueMutex           sync.Mutex
-	runtimeValues        composeRuntimeValues
-	archiveSizes         []int64
-	availableBytes       func(string) (int64, error)
-	inventory            inventoryToken
-	now                  func() time.Time
-	census               collectionCensusFunc
-	proxyCalls           func() []milvusProxyCall
-	readiness            func(context.Context) error
-	protectedCollections map[collectionIdentity]struct{}
+	paths          runPaths
+	composeProject string
+	runner         commandRunner
+	valueEntropy   io.Reader
+	valueMutex     sync.Mutex
+	runtimeValues  composeRuntimeValues
+	archiveSizes   []int64
+	availableBytes func(string) (int64, error)
+	census         collectionCensusFunc
+	readiness      func(context.Context) error
 }
 
 type composeRuntimeValues struct {
@@ -649,18 +620,11 @@ func (h *harness) withCompose(
 	if !validComposeProject(h.composeProject, filepath.Base(h.paths.RunRoot)) {
 		return fmt.Errorf("compose project %q is not tagged for run %q", h.composeProject, filepath.Base(h.paths.RunRoot))
 	}
-	now := time.Now().UTC()
-	if h.now != nil {
-		now = h.now().UTC()
-	}
-	if err := validateInventoryToken(h.inventory, filepath.Base(h.paths.RunRoot), now); err != nil {
-		return err
-	}
 	if h.census == nil {
-		return fmt.Errorf("production collection census is unavailable for post-run audit")
+		return fmt.Errorf("clone collection census is unavailable")
 	}
 	if h.readiness == nil {
-		return fmt.Errorf("production readiness check is unavailable")
+		return fmt.Errorf("clone readiness check is unavailable")
 	}
 	composeEnvironment, err := h.composeEnvironment()
 	if err != nil {
@@ -696,40 +660,61 @@ func (h *harness) withCompose(
 	if err := os.WriteFile(h.paths.ComposeFile, []byte(renderCompose(h.paths, caseName)), 0o600); err != nil {
 		return fmt.Errorf("write compose file: %w", err)
 	}
-	defer func() {
-		cleanupContext, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		_, cleanupErr := h.runner.Run(cleanupContext, composeEnvironment, "docker", "compose", "-p", h.composeProject, "-f", h.paths.ComposeFile, "down", "--volumes", "--remove-orphans")
-		if cleanupErr != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("clean compose project %q: %w", h.composeProject, cleanupErr))
-		}
-		milvusSnapshot, censusErr := h.census(cleanupContext)
-		calls := []milvusProxyCall(nil)
-		if h.proxyCalls != nil {
-			calls = h.proxyCalls()
-		}
-		if censusErr == nil {
-			censusErr = auditProductionMutation(h.inventory.Inventory, productionInventory{
-				Databases:   slices.Clone(milvusSnapshot.Databases),
-				Collections: cloneCollectionCensus(milvusSnapshot.Collections),
-				Samples:     cloneCollectionCensus(milvusSnapshot.Samples),
-				RowCounts:   cloneCollectionRowCounts(milvusSnapshot.RowCounts),
-			}, calls, h.protectedCollections)
-		}
-		if censusErr != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("audit production after case: %w", censusErr))
-		}
-	}()
-	if err := h.readiness(ctx); err != nil {
-		return fmt.Errorf("recheck production readiness before clone startup: %w", err)
+	project := sandboxharness.ComposeProject{
+		Runner:         h.runner,
+		Name:           h.composeProject,
+		File:           h.paths.ComposeFile,
+		Environment:    composeEnvironment,
+		CleanupTimeout: 2 * time.Minute,
 	}
-	if _, err := h.runner.Run(ctx, composeEnvironment, "docker", "compose", "-p", h.composeProject, "-f", h.paths.ComposeFile, "up", "-d", "--wait"); err != nil {
-		return fmt.Errorf("start compose project %q: %w", h.composeProject, err)
+	return project.Run(ctx, func(composeContext context.Context) (scenarioErr error) {
+		if err := h.readiness(composeContext); err != nil {
+			return fmt.Errorf("check clone readiness after startup: %w", err)
+		}
+		baseline, err := h.census(composeContext)
+		if err != nil {
+			return fmt.Errorf("capture clone inventory before case: %w", err)
+		}
+		defer func() {
+			auditContext, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			after, censusErr := retryCloneCensus(auditContext, h.census, baseline)
+			if censusErr == nil {
+				censusErr = auditCloneMutation(baseline, after)
+			}
+			if censusErr != nil {
+				scenarioErr = errors.Join(scenarioErr, fmt.Errorf("audit clone after case: %w", censusErr))
+			}
+		}()
+		if err := scenario(composeContext); err != nil {
+			return fmt.Errorf("run restart acceptance scenario: %w", err)
+		}
+		return nil
+	})
+}
+
+func retryCloneCensus(
+	ctx context.Context,
+	census collectionCensusFunc,
+	baseline cloneMilvusCensus,
+) (cloneMilvusCensus, error) {
+	const retryDelay = 500 * time.Millisecond
+	var lastErr error
+	for {
+		result, err := census(ctx)
+		if err == nil {
+			err = auditCloneMutation(baseline, result)
+		}
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return cloneMilvusCensus{}, errors.Join(lastErr, context.Cause(ctx))
+		case <-time.After(retryDelay):
+		}
 	}
-	if err := scenario(ctx); err != nil {
-		return fmt.Errorf("run restart acceptance scenario: %w", err)
-	}
-	return nil
 }
 
 var caseNamePattern = regexp.MustCompile(`^[a-h](-[a-z0-9]+)?$`)
@@ -771,6 +756,9 @@ func isolatedLMSEnvironment(paths runPaths) map[string]string {
 		"MILVUS_ADDRESS":               fmt.Sprintf("127.0.0.1:%d", milvusProxyPort),
 		"MILVUS_DATABASE":              cloneMilvusDatabase,
 		"OPENAI_BASE_URL":              fmt.Sprintf("http://127.0.0.1:%d", embeddingProxyPort),
+		"OPENAI_API_KEY":               "restart-acceptance-local",
+		"EMBEDDING_MODEL":              cloneEmbeddingModel,
+		"EMBEDDING_DIMENSION":          strconv.Itoa(cloneEmbeddingDimension),
 	}
 }
 
@@ -786,110 +774,9 @@ func isolatedClydeEnvironment(paths runPaths) map[string]string {
 	}
 }
 
-func captureProductionInventory(
-	ctx context.Context,
-	paths runPaths,
-	binaries installedBinaries,
-	runner commandRunner,
-	runID string,
-	capturedAt time.Time,
-	census collectionCensusFunc,
-) (inventoryToken, error) {
-	if census == nil {
-		return inventoryToken{}, fmt.Errorf("production collection census is unavailable")
-	}
-	commands := [][]string{
-		{"--json", "codebase", "list"},
-		{"--json", "job", "list"},
-		{"--json", "daemon", "status"},
-	}
-	outputs := make([]json.RawMessage, len(commands))
-	for index, arguments := range commands {
-		body, err := runner.Run(ctx, nil, binaries.CLI, arguments...)
-		if err != nil {
-			return inventoryToken{}, fmt.Errorf("capture production inventory command %q: %w", strings.Join(arguments, " "), err)
-		}
-		if !json.Valid(body) {
-			return inventoryToken{}, fmt.Errorf("production inventory command %q returned invalid JSON", strings.Join(arguments, " "))
-		}
-		outputs[index] = append(json.RawMessage(nil), body...)
-	}
-	if err := validateProductionHealth(outputs[0], outputs[1]); err != nil {
-		return inventoryToken{}, err
-	}
-	milvusSnapshot, err := census(ctx)
-	if err != nil {
-		return inventoryToken{}, fmt.Errorf("capture production collection census: %w", err)
-	}
-	if len(milvusSnapshot.Databases) == 0 || len(milvusSnapshot.Collections) == 0 {
-		return inventoryToken{}, fmt.Errorf("production collection census is empty")
-	}
-	inventory := productionInventory{
-		Databases:   slices.Clone(milvusSnapshot.Databases),
-		Collections: cloneCollectionCensus(milvusSnapshot.Collections),
-		Samples:     cloneCollectionCensus(milvusSnapshot.Samples),
-		RowCounts:   cloneCollectionRowCounts(milvusSnapshot.RowCounts),
-		Codebases:   outputs[0],
-		Jobs:        outputs[1],
-		Daemon:      outputs[2],
-	}
-	token, err := newInventoryToken(runID, capturedAt, inventory)
-	if err != nil {
-		return inventoryToken{}, err
-	}
-	body, err := json.MarshalIndent(token, "", "  ")
-	if err != nil {
-		return inventoryToken{}, fmt.Errorf("encode production inventory: %w", err)
-	}
-	if err := os.WriteFile(paths.ProductionInventory, append(body, '\n'), 0o600); err != nil {
-		return inventoryToken{}, fmt.Errorf("write production inventory: %w", err)
-	}
-	return token, nil
-}
+type collectionCensusFunc func(context.Context) (cloneMilvusCensus, error)
 
-func captureProductionReadiness(
-	ctx context.Context,
-	binaries installedBinaries,
-	runner commandRunner,
-) error {
-	commands := [][]string{{"--json", "codebase", "list"}, {"--json", "job", "list"}}
-	outputs := make([]json.RawMessage, len(commands))
-	for index, arguments := range commands {
-		body, err := runner.Run(ctx, nil, binaries.CLI, arguments...)
-		if err != nil {
-			return fmt.Errorf("recheck production command %q: %w", strings.Join(arguments, " "), err)
-		}
-		if !json.Valid(body) {
-			return fmt.Errorf("production command %q returned invalid JSON", strings.Join(arguments, " "))
-		}
-		outputs[index] = append(json.RawMessage(nil), body...)
-	}
-	return validateProductionReadiness(outputs[0], outputs[1])
-}
-
-func captureProductionHealth(
-	ctx context.Context,
-	binaries installedBinaries,
-	runner commandRunner,
-) error {
-	commands := [][]string{{"--json", "codebase", "list"}, {"--json", "job", "list"}}
-	outputs := make([]json.RawMessage, len(commands))
-	for index, arguments := range commands {
-		body, err := runner.Run(ctx, nil, binaries.CLI, arguments...)
-		if err != nil {
-			return fmt.Errorf("recheck production command %q: %w", strings.Join(arguments, " "), err)
-		}
-		if !json.Valid(body) {
-			return fmt.Errorf("production command %q returned invalid JSON", strings.Join(arguments, " "))
-		}
-		outputs[index] = append(json.RawMessage(nil), body...)
-	}
-	return validateProductionHealth(outputs[0], outputs[1])
-}
-
-type collectionCensusFunc func(context.Context) (productionMilvusCensus, error)
-
-type productionMilvusCensus struct {
+type cloneMilvusCensus struct {
 	Databases   []string            `json:"databases"`
 	Collections collectionCensus    `json:"collections"`
 	Samples     collectionCensus    `json:"samples,omitempty"`
@@ -949,47 +836,6 @@ type collectionRowCountEntry struct {
 	Count      int64  `json:"count"`
 }
 
-type inventoryToken struct {
-	RunID       string              `json:"run_id"`
-	CapturedAt  time.Time           `json:"captured_at"`
-	ContentHash string              `json:"content_hash"`
-	Inventory   productionInventory `json:"inventory"`
-}
-
-func newInventoryToken(runID string, capturedAt time.Time, inventory productionInventory) (inventoryToken, error) {
-	body, err := json.Marshal(inventory)
-	if err != nil {
-		return inventoryToken{}, fmt.Errorf("hash production inventory: %w", err)
-	}
-	digest := sha256.Sum256(body)
-	return inventoryToken{
-		RunID:       runID,
-		CapturedAt:  capturedAt.UTC(),
-		ContentHash: hex.EncodeToString(digest[:]),
-		Inventory:   inventory,
-	}, nil
-}
-
-func validateInventoryToken(token inventoryToken, runID string, now time.Time) error {
-	if token.RunID != runID {
-		return fmt.Errorf("production inventory token belongs to run %q, not %q", token.RunID, runID)
-	}
-	if token.CapturedAt.IsZero() || token.CapturedAt.After(now) || now.Sub(token.CapturedAt) > 5*time.Minute {
-		return fmt.Errorf("production inventory token timestamp is invalid or stale")
-	}
-	if token.ContentHash == "" || len(token.Inventory.Databases) == 0 || len(token.Inventory.Collections) == 0 {
-		return fmt.Errorf("production inventory token content is empty")
-	}
-	expected, err := newInventoryToken(token.RunID, token.CapturedAt, token.Inventory)
-	if err != nil {
-		return err
-	}
-	if token.ContentHash != expected.ContentHash {
-		return fmt.Errorf("production inventory token content hash is invalid")
-	}
-	return nil
-}
-
 func cloneCollectionCensus(collections collectionCensus) collectionCensus {
 	result := make(collectionCensus, len(collections))
 	for identity, hash := range collections {
@@ -1006,143 +852,37 @@ func cloneCollectionRowCounts(counts collectionRowCounts) collectionRowCounts {
 	return result
 }
 
-type dependencyHealthJSON struct {
-	Degraded bool   `json:"degraded"`
-	Mode     string `json:"mode"`
-}
-
-type indexesInventoryJSON struct {
-	DependencyHealth *dependencyHealthJSON `json:"dependencyHealth"`
-}
-
-type jobsInventoryJSON struct {
-	Jobs []struct {
-		ID    string `json:"id"`
-		State string `json:"state"`
-	} `json:"jobs"`
-	DependencyHealth *dependencyHealthJSON `json:"dependencyHealth"`
-}
-
-func validateProductionReadiness(indexesBody json.RawMessage, jobsBody json.RawMessage) error {
-	if err := validateProductionHealth(indexesBody, jobsBody); err != nil {
-		return err
-	}
-	var jobs jobsInventoryJSON
-	if err := json.Unmarshal(jobsBody, &jobs); err != nil {
-		return fmt.Errorf("decode production job inventory: %w", err)
-	}
-	for _, job := range jobs.Jobs {
-		switch job.State {
-		case "completed", "failed", "cancelled":
-		case "queued", "running", "cancelling":
-			return fmt.Errorf("production job %q is active in state %q", job.ID, job.State)
-		default:
-			return fmt.Errorf("production job %q has unknown state %q", job.ID, job.State)
-		}
-	}
-	return nil
-}
-
-func validateProductionHealth(indexesBody json.RawMessage, jobsBody json.RawMessage) error {
-	var indexes indexesInventoryJSON
-	if err := json.Unmarshal(indexesBody, &indexes); err != nil {
-		return fmt.Errorf("decode production codebase inventory: %w", err)
-	}
-	if indexes.DependencyHealth == nil {
-		return fmt.Errorf("production codebase inventory is missing dependency health")
-	}
-	if indexes.DependencyHealth.Degraded || indexes.DependencyHealth.Mode != "" {
-		return fmt.Errorf("production dependencies are degraded: %s", indexes.DependencyHealth.Mode)
-	}
-	var jobs jobsInventoryJSON
-	if err := json.Unmarshal(jobsBody, &jobs); err != nil {
-		return fmt.Errorf("decode production job inventory: %w", err)
-	}
-	if jobs.DependencyHealth == nil {
-		return fmt.Errorf("production job inventory is missing dependency health")
-	}
-	if jobs.DependencyHealth.Degraded || jobs.DependencyHealth.Mode != "" {
-		return fmt.Errorf("production dependencies are degraded: %s", jobs.DependencyHealth.Mode)
-	}
-	for _, job := range jobs.Jobs {
-		switch job.State {
-		case "completed", "failed", "cancelled", "queued", "running", "cancelling":
-		default:
-			return fmt.Errorf("production job %q has unknown state %q", job.ID, job.State)
-		}
-	}
-	return nil
-}
-
-type productionInventory struct {
-	Databases   []string            `json:"databases"`
-	Collections collectionCensus    `json:"collections"`
-	Samples     collectionCensus    `json:"samples,omitempty"`
-	RowCounts   collectionRowCounts `json:"row_counts,omitempty"`
-	Codebases   json.RawMessage     `json:"codebases,omitempty"`
-	Jobs        json.RawMessage     `json:"jobs,omitempty"`
-	Daemon      json.RawMessage     `json:"daemon,omitempty"`
-}
-
-type milvusProxyCall struct {
-	Database   string `json:"database"`
-	Collection string `json:"collection"`
-	Method     string `json:"method"`
-}
-
-func auditProductionMutation(
-	before productionInventory,
-	after productionInventory,
-	calls []milvusProxyCall,
-	protectedCollections map[collectionIdentity]struct{},
-) error {
+func auditCloneMutation(before cloneMilvusCensus, after cloneMilvusCensus) error {
 	beforeDatabases := slices.Clone(before.Databases)
 	afterDatabases := slices.Clone(after.Databases)
 	slices.Sort(beforeDatabases)
 	slices.Sort(afterDatabases)
 	if !slices.Equal(beforeDatabases, afterDatabases) {
-		return fmt.Errorf("production database set changed from %v to %v", beforeDatabases, afterDatabases)
+		return fmt.Errorf("clone database set changed from %v to %v", beforeDatabases, afterDatabases)
 	}
-	for identity, beforeHash := range before.Collections {
-		afterHash, exists := after.Collections[identity]
+	for identity := range before.Collections {
+		_, exists := after.Collections[identity]
 		if !exists {
-			return fmt.Errorf("production collection %q/%q was removed", identity.Database, identity.Collection)
-		}
-		if afterHash != beforeHash {
-			return fmt.Errorf("production collection %q/%q changed", identity.Database, identity.Collection)
+			return fmt.Errorf("restored clone collection %q/%q was removed", identity.Database, identity.Collection)
 		}
 		beforeSample, sampledBefore := before.Samples[identity]
 		afterSample, sampledAfter := after.Samples[identity]
-		if beforeCount, countedBefore := before.RowCounts[identity]; countedBefore {
-			afterCount, countedAfter := after.RowCounts[identity]
-			if !countedAfter {
-				return fmt.Errorf("production collection %q/%q row count is missing", identity.Database, identity.Collection)
-			}
-			if sampledBefore && sampledAfter && afterCount < beforeCount {
-				return fmt.Errorf(
-					"production collection %q/%q row count fell from %d to %d",
-					identity.Database,
-					identity.Collection,
-					beforeCount,
-					afterCount,
-				)
-			}
-		}
 		if sampledBefore && sampledAfter && beforeSample != afterSample {
-			return fmt.Errorf("production collection %q/%q sampled rows changed", identity.Database, identity.Collection)
+			return fmt.Errorf("restored clone collection %q/%q sampled vectors changed", identity.Database, identity.Collection)
 		}
-	}
-	for identity := range after.Collections {
-		if _, exists := before.Collections[identity]; exists {
-			continue
+		beforeCount, countedBefore := before.RowCounts[identity]
+		afterCount, countedAfter := after.RowCounts[identity]
+		if countedBefore && !countedAfter {
+			return fmt.Errorf("restored clone collection %q/%q row count is missing", identity.Database, identity.Collection)
 		}
-		if _, protected := protectedCollections[identity]; protected {
-			return fmt.Errorf("acceptance collection %q/%q appeared in production", identity.Database, identity.Collection)
-		}
-		for _, call := range calls {
-			if call.Database == identity.Database && call.Collection == identity.Collection {
-				return fmt.Errorf("production collection %q/%q appeared with harness mutation %s", identity.Database, identity.Collection, call.Method)
-			}
+		if countedBefore && afterCount < beforeCount {
+			return fmt.Errorf(
+				"restored clone collection %q/%q row count fell from %d to %d",
+				identity.Database,
+				identity.Collection,
+				beforeCount,
+				afterCount,
+			)
 		}
 	}
 	return nil

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,20 +18,19 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 	"google.golang.org/protobuf/proto"
 )
 
 const (
-	productionDatabaseConfirmation = "LMS_PRODUCTION_CONFIRM_DATABASE"
-	productionCensusSampleLimit    = 64
+	cloneCensusSampleLimit = 64
 )
 
-type productionMilvusSettings struct {
-	Address  string
-	Token    string
-	Database string
+type cloneMilvusSettings struct {
+	Address     string
+	Token       string
+	Database    string
+	SkipSamples bool
 }
 
 type collectionFingerprint struct {
@@ -58,51 +56,19 @@ type sampleFingerprint struct {
 	RowSamples []rowFingerprint `json:"row_samples"`
 }
 
-func configuredProductionMilvusSettings() (productionMilvusSettings, error) {
-	database := os.Getenv(productionDatabaseConfirmation)
-	configuration, err := config.Default()
-	if err != nil {
-		return productionMilvusSettings{}, fmt.Errorf("resolve production LMS configuration: %w", err)
-	}
-	if configuration.MilvusDatabase != "" && configuration.MilvusDatabase != database {
-		return productionMilvusSettings{}, fmt.Errorf(
-			"configured production Milvus database %q does not match confirmation %q",
-			configuration.MilvusDatabase,
-			database,
-		)
-	}
-	settings := productionMilvusSettings{
-		Address:  configuration.MilvusAddress,
-		Token:    configuration.MilvusToken,
-		Database: database,
-	}
-	if err := validateProductionMilvusSettings(settings); err != nil {
-		return productionMilvusSettings{}, err
-	}
-	return settings, nil
-}
-
-func validateProductionMilvusSettings(settings productionMilvusSettings) error {
+func validateCloneMilvusSettings(settings cloneMilvusSettings) error {
 	if settings.Address == "" {
-		return fmt.Errorf("production Milvus address is empty")
+		return fmt.Errorf("clone Milvus address is empty")
 	}
-	if settings.Database != "default" {
-		return fmt.Errorf("%s must equal default", productionDatabaseConfirmation)
+	if settings.Database == "" {
+		return fmt.Errorf("clone Milvus database is empty")
 	}
 	return nil
 }
 
-func configuredProductionMilvusCensus(ctx context.Context) (productionMilvusCensus, error) {
-	settings, err := configuredProductionMilvusSettings()
-	if err != nil {
-		return productionMilvusCensus{}, err
-	}
-	return readProductionMilvusCensus(ctx, settings)
-}
-
-func readProductionMilvusCensus(ctx context.Context, settings productionMilvusSettings) (productionMilvusCensus, error) {
-	if err := validateProductionMilvusSettings(settings); err != nil {
-		return productionMilvusCensus{}, err
+func readCloneMilvusCensus(ctx context.Context, settings cloneMilvusSettings) (cloneMilvusCensus, error) {
+	if err := validateCloneMilvusSettings(settings); err != nil {
+		return cloneMilvusCensus{}, err
 	}
 	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{
 		Address:     settings.Address,
@@ -111,7 +77,7 @@ func readProductionMilvusCensus(ctx context.Context, settings productionMilvusSe
 		DialOptions: milvusgrpc.DialOptions(ctx, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
 	})
 	if err != nil {
-		return productionMilvusCensus{}, fmt.Errorf("connect production Milvus for read-only census: %w", err)
+		return cloneMilvusCensus{}, fmt.Errorf("connect clone Milvus for read-only census: %w", err)
 	}
 	defer func() {
 		closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -121,21 +87,21 @@ func readProductionMilvusCensus(ctx context.Context, settings productionMilvusSe
 
 	databases, err := client.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
 	if err != nil {
-		return productionMilvusCensus{}, fmt.Errorf("list production Milvus databases: %w", err)
+		return cloneMilvusCensus{}, fmt.Errorf("list clone Milvus databases: %w", err)
 	}
 	slices.Sort(databases)
 	collectionNames, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
 	if err != nil {
-		return productionMilvusCensus{}, fmt.Errorf("list production Milvus collections: %w", err)
+		return cloneMilvusCensus{}, fmt.Errorf("list clone Milvus collections: %w", err)
 	}
 	slices.Sort(collectionNames)
 	collections := make(collectionCensus, len(collectionNames))
 	samples := make(collectionCensus)
 	rowCounts := make(collectionRowCounts, len(collectionNames))
 	for _, collectionName := range collectionNames {
-		hash, sampleHash, rowCount, hashErr := readCollectionFingerprints(ctx, client, collectionName)
+		hash, sampleHash, rowCount, hashErr := readCollectionFingerprints(ctx, client, collectionName, settings.SkipSamples)
 		if hashErr != nil {
-			return productionMilvusCensus{}, hashErr
+			return cloneMilvusCensus{}, hashErr
 		}
 		identity := collectionIdentity{Database: settings.Database, Collection: collectionName}
 		collections[identity] = hash
@@ -144,7 +110,7 @@ func readProductionMilvusCensus(ctx context.Context, settings productionMilvusSe
 			samples[identity] = sampleHash
 		}
 	}
-	return productionMilvusCensus{
+	return cloneMilvusCensus{
 		Databases:   slices.Clone(databases),
 		Collections: collections,
 		Samples:     samples,
@@ -156,51 +122,49 @@ func readCollectionFingerprints(
 	ctx context.Context,
 	client *milvusclient.Client,
 	collectionName string,
+	skipSamples bool,
 ) (string, string, int64, error) {
 	loadState, err := client.GetLoadState(ctx, milvusclient.NewGetLoadStateOption(collectionName))
 	if err != nil {
-		return "", "", 0, fmt.Errorf("get production collection %q load state: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("get clone collection %q load state: %w", collectionName, err)
 	}
 	collection, err := client.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
 	if err != nil {
-		return "", "", 0, fmt.Errorf("describe production collection %q: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("describe clone collection %q: %w", collectionName, err)
 	}
 	if collection.Schema == nil {
-		return "", "", 0, fmt.Errorf("production collection %q has no schema", collectionName)
+		return "", "", 0, fmt.Errorf("clone collection %q has no schema", collectionName)
 	}
 	stats, err := client.GetCollectionStats(ctx, milvusclient.NewGetCollectionStatsOption(collectionName))
 	if err != nil {
-		return "", "", 0, fmt.Errorf("get production collection %q statistics: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("get clone collection %q statistics: %w", collectionName, err)
 	}
 	rowCount, err := strconv.ParseInt(stats["row_count"], 10, 64)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("parse production collection %q row count: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("parse clone collection %q row count: %w", collectionName, err)
 	}
 	strongRowCount := rowCount
-	if loadState.State == entity.LoadStateLoaded {
-		strongRowCount, err = readStrongCollectionRowCount(ctx, client, collectionName)
+	rowSamples := []rowFingerprint(nil)
+	if !skipSamples {
+		rowSamples, err = readLoadedCollectionSamples(
+			ctx,
+			client,
+			collectionName,
+			collection.Schema,
+			loadState.State,
+			strongRowCount,
+		)
 		if err != nil {
 			return "", "", 0, err
 		}
 	}
-	rowSamples, err := readLoadedCollectionSamples(
-		ctx,
-		client,
-		collectionName,
-		collection.Schema,
-		loadState.State,
-		strongRowCount,
-	)
-	if err != nil {
-		return "", "", 0, err
-	}
 	schemaBody, err := marshalStableCollectionSchema(collection.Schema.ProtoMessage())
 	if err != nil {
-		return "", "", 0, fmt.Errorf("encode production collection %q schema: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("encode clone collection %q schema: %w", collectionName, err)
 	}
 	indexNames, err := client.ListIndexes(ctx, milvusclient.NewListIndexOption(collectionName))
 	if err != nil {
-		return "", "", 0, fmt.Errorf("list production collection %q indexes: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("list clone collection %q indexes: %w", collectionName, err)
 	}
 	slices.Sort(indexNames)
 	indexes := make([]indexFingerprint, 0, len(indexNames))
@@ -210,7 +174,7 @@ func readCollectionFingerprints(
 			milvusclient.NewDescribeIndexOption(collectionName, indexName),
 		)
 		if describeErr != nil {
-			return "", "", 0, fmt.Errorf("describe production index %q on %q: %w", indexName, collectionName, describeErr)
+			return "", "", 0, fmt.Errorf("describe clone index %q on %q: %w", indexName, collectionName, describeErr)
 		}
 		indexes = append(indexes, indexFingerprint{
 			Name:       indexName,
@@ -229,7 +193,7 @@ func readCollectionFingerprints(
 	slices.Sort(fingerprint.VirtualChannels)
 	fingerprintBody, err := json.Marshal(fingerprint)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("encode production collection %q properties: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("encode clone collection %q properties: %w", collectionName, err)
 	}
 	digest := sha256.New()
 	_, _ = digest.Write(schemaBody)
@@ -240,7 +204,7 @@ func readCollectionFingerprints(
 	}
 	sampleBody, err := json.Marshal(sampleFingerprint{RowSamples: rowSamples})
 	if err != nil {
-		return "", "", 0, fmt.Errorf("encode production collection %q samples: %w", collectionName, err)
+		return "", "", 0, fmt.Errorf("encode clone collection %q samples: %w", collectionName, err)
 	}
 	sampleDigest := sha256.Sum256(sampleBody)
 	return durableHash, hex.EncodeToString(sampleDigest[:]), strongRowCount, nil
@@ -282,15 +246,15 @@ func readStrongCollectionRowCount(
 			WithConsistencyLevel(entity.ClStrong),
 	)
 	if err != nil {
-		return 0, fmt.Errorf("count production collection %q rows: %w", collectionName, err)
+		return 0, fmt.Errorf("count clone collection %q rows: %w", collectionName, err)
 	}
 	countColumn := result.GetColumn("count(*)")
 	if countColumn == nil {
-		return 0, fmt.Errorf("count production collection %q omitted count column", collectionName)
+		return 0, fmt.Errorf("count clone collection %q omitted count column", collectionName)
 	}
 	rowCount, err := countColumn.GetAsInt64(0)
 	if err != nil {
-		return 0, fmt.Errorf("read production collection %q row count: %w", collectionName, err)
+		return 0, fmt.Errorf("read clone collection %q row count: %w", collectionName, err)
 	}
 	return rowCount, nil
 }
@@ -324,43 +288,43 @@ func readLoadedCollectionSamples(
 	iterator, err := client.QueryIterator(
 		ctx,
 		milvusclient.NewQueryIteratorOption(collectionName).
-			WithBatchSize(productionCensusSampleLimit).
-			WithIteratorLimit(productionCensusSampleLimit).
+			WithBatchSize(cloneCensusSampleLimit).
+			WithIteratorLimit(cloneCensusSampleLimit).
 			WithOutputFields(outputFields...).
 			WithConsistencyLevel(entity.ClStrong),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("open production collection %q row sample: %w", collectionName, err)
+		return nil, fmt.Errorf("open clone collection %q row sample: %w", collectionName, err)
 	}
 	result, err := iterator.Next(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("query production collection %q row sample: %w", collectionName, err)
+		return nil, fmt.Errorf("query clone collection %q row sample: %w", collectionName, err)
 	}
 	identityColumn := result.GetColumn(primaryField.Name)
 	if identityColumn == nil {
-		return nil, fmt.Errorf("query production collection %q omitted primary field %q", collectionName, primaryField.Name)
+		return nil, fmt.Errorf("query clone collection %q omitted primary field %q", collectionName, primaryField.Name)
 	}
 	rows := make([]rowFingerprint, 0, result.ResultCount)
 	for rowIndex := range result.ResultCount {
 		identity, identityErr := identityColumn.Get(rowIndex)
 		if identityErr != nil {
-			return nil, fmt.Errorf("read production collection %q row identity: %w", collectionName, identityErr)
+			return nil, fmt.Errorf("read clone collection %q row identity: %w", collectionName, identityErr)
 		}
 		identityBody, marshalErr := json.Marshal(identity)
 		if marshalErr != nil {
-			return nil, fmt.Errorf("encode production collection %q row identity: %w", collectionName, marshalErr)
+			return nil, fmt.Errorf("encode clone collection %q row identity: %w", collectionName, marshalErr)
 		}
 		vectorHashes := make(map[string]string, len(vectorFields))
 		for _, vectorField := range vectorFields {
 			vectorColumn := result.GetColumn(vectorField)
 			if vectorColumn == nil {
-				return nil, fmt.Errorf("query production collection %q omitted vector field %q", collectionName, vectorField)
+				return nil, fmt.Errorf("query clone collection %q omitted vector field %q", collectionName, vectorField)
 			}
 			vectorBody, vectorErr := proto.MarshalOptions{Deterministic: true}.Marshal(
 				vectorColumn.Slice(rowIndex, rowIndex+1).FieldData(),
 			)
 			if vectorErr != nil {
-				return nil, fmt.Errorf("encode production collection %q vector field %q: %w", collectionName, vectorField, vectorErr)
+				return nil, fmt.Errorf("encode clone collection %q vector field %q: %w", collectionName, vectorField, vectorErr)
 			}
 			vectorDigest := sha256.Sum256(vectorBody)
 			vectorHashes[vectorField] = hex.EncodeToString(vectorDigest[:])
