@@ -510,6 +510,7 @@ func TestRunScenarioCKillReclaimsKernelLockAndResumesCheckpoint(t *testing.T) {
 	statePath := filepath.Join(root, "state")
 	recorder, evidencePaths := scenarioTestRecorder(t)
 	snapshots := newRecoverySnapshotSequence()
+	releasedHeldEmbedding := false
 	result, err := runScenarioC(context.Background(), scenarioCInput{
 		Process: installedProcess{
 			Path: currentTestExecutable(t),
@@ -527,11 +528,17 @@ func TestRunScenarioCKillReclaimsKernelLockAndResumesCheckpoint(t *testing.T) {
 		ExpectedUnfinishedIDs: []string{"row-2", "row-3"},
 		ObserveRows:           snapshots.observeRows,
 		ObserveCheckpoint:     snapshots.observeCheckpoint,
-		Recorder:              recorder,
-		Timeouts:              focusedScenarioTimeouts(),
+		ReleaseHeldEmbedding: func() {
+			releasedHeldEmbedding = true
+		},
+		Recorder: recorder,
+		Timeouts: focusedScenarioTimeouts(),
 	})
 	if err != nil {
 		t.Fatalf("runScenarioC returned error: %v", err)
+	}
+	if !releasedHeldEmbedding {
+		t.Fatal("scenario C restarted LMS before releasing the held embedding request")
 	}
 	if !result.LockBusyBeforeKill || !result.LockReclaimedAfterKill {
 		t.Fatalf("lock evidence = busy %v reclaimed %v", result.LockBusyBeforeKill, result.LockReclaimedAfterKill)

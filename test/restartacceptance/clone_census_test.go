@@ -20,8 +20,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-func TestReadProductionMilvusCensusIgnoresResidencyChanges(t *testing.T) {
-	server := &productionCensusMilvusServer{
+func TestReadCloneMilvusCensusIgnoresResidencyChanges(t *testing.T) {
+	server := &cloneCensusMilvusServer{
 		databases:   []string{"sandbox", "default"},
 		collections: []string{"beta", "alpha"},
 		loadStates: map[string]commonpb.LoadState{
@@ -29,7 +29,7 @@ func TestReadProductionMilvusCensusIgnoresResidencyChanges(t *testing.T) {
 			"beta":  commonpb.LoadState_LoadStateNotLoad,
 		},
 		rowCounts: map[string]int64{"alpha": 2, "beta": 1},
-		rows: map[string][]productionCensusRow{
+		rows: map[string][]cloneCensusRow{
 			"alpha": {
 				{identity: "alpha-1", vector: []float32{1, 2}},
 				{identity: "alpha-2", vector: []float32{3, 4}},
@@ -37,12 +37,12 @@ func TestReadProductionMilvusCensusIgnoresResidencyChanges(t *testing.T) {
 			"beta": {{identity: "beta-1", vector: []float32{5, 6}}},
 		},
 	}
-	address := startProductionCensusServer(t, server)
-	settings := productionMilvusSettings{Address: address, Database: "default"}
+	address := startCloneCensusServer(t, server)
+	settings := cloneMilvusSettings{Address: address, Database: "default"}
 
-	first, err := readProductionMilvusCensus(context.Background(), settings)
+	first, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
-		t.Fatalf("read production census: %v", err)
+		t.Fatalf("read clone census: %v", err)
 	}
 	if !slices.Equal(first.Databases, []string{"default", "sandbox"}) {
 		t.Fatalf("databases = %v", first.Databases)
@@ -58,9 +58,9 @@ func TestReadProductionMilvusCensusIgnoresResidencyChanges(t *testing.T) {
 	server.mutex.Lock()
 	server.loadStates["alpha"] = commonpb.LoadState_LoadStateNotLoad
 	server.mutex.Unlock()
-	second, err := readProductionMilvusCensus(context.Background(), settings)
+	second, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
-		t.Fatalf("read changed production census: %v", err)
+		t.Fatalf("read changed clone census: %v", err)
 	}
 	if second.Collections[alpha] != first.Collections[alpha] {
 		t.Fatal("load-state change altered the durable collection hash")
@@ -81,11 +81,11 @@ func TestReadProductionMilvusCensusIgnoresResidencyChanges(t *testing.T) {
 	}
 	for _, method := range methods {
 		if !slices.Contains(allowed, method) {
-			t.Fatalf("production census called mutating or unexpected method %q", method)
+			t.Fatalf("clone census called mutating or unexpected method %q", method)
 		}
 	}
 	if !slices.Contains(databases, "default") {
-		t.Fatalf("production census request databases = %v, want default", databases)
+		t.Fatalf("clone census request databases = %v, want default", databases)
 	}
 	if slices.Contains(server.queriedCollections, "beta") {
 		t.Fatalf("cold collection was queried: %v", server.queriedCollections)
@@ -147,33 +147,33 @@ func TestMarshalStableCollectionSchemaNormalizesPropertyOrder(t *testing.T) {
 	}
 }
 
-func TestReadProductionMilvusCensusHashesLoadedRowIdentityAndDenseVector(t *testing.T) {
-	server := &productionCensusMilvusServer{
+func TestReadCloneMilvusCensusHashesLoadedRowIdentityAndDenseVector(t *testing.T) {
+	server := &cloneCensusMilvusServer{
 		databases:   []string{"default"},
 		collections: []string{"alpha"},
 		loadStates: map[string]commonpb.LoadState{
 			"alpha": commonpb.LoadState_LoadStateLoaded,
 		},
 		rowCounts: map[string]int64{"alpha": 2},
-		rows: map[string][]productionCensusRow{
+		rows: map[string][]cloneCensusRow{
 			"alpha": {
 				{identity: "alpha-1", vector: []float32{1, 2}},
 				{identity: "alpha-2", vector: []float32{3, 4}},
 			},
 		},
 	}
-	address := startProductionCensusServer(t, server)
-	settings := productionMilvusSettings{Address: address, Database: "default"}
+	address := startCloneCensusServer(t, server)
+	settings := cloneMilvusSettings{Address: address, Database: "default"}
 	identity := collectionIdentity{Database: "default", Collection: "alpha"}
 
-	baseline, err := readProductionMilvusCensus(context.Background(), settings)
+	baseline, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read baseline census: %v", err)
 	}
 	server.mutex.Lock()
 	server.rows["alpha"][0].vector[0] = 9
 	server.mutex.Unlock()
-	vectorChanged, err := readProductionMilvusCensus(context.Background(), settings)
+	vectorChanged, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read vector-changed census: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestReadProductionMilvusCensusHashesLoadedRowIdentityAndDenseVector(t *test
 	server.mutex.Lock()
 	server.rows["alpha"][0].identity = "alpha-renamed"
 	server.mutex.Unlock()
-	identityChanged, err := readProductionMilvusCensus(context.Background(), settings)
+	identityChanged, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read identity-changed census: %v", err)
 	}
@@ -194,8 +194,8 @@ func TestReadProductionMilvusCensusHashesLoadedRowIdentityAndDenseVector(t *test
 
 }
 
-func TestReadProductionMilvusCensusReportsColdRowCountWithoutChangingMetadataHash(t *testing.T) {
-	server := &productionCensusMilvusServer{
+func TestReadCloneMilvusCensusReportsColdRowCountWithoutChangingMetadataHash(t *testing.T) {
+	server := &cloneCensusMilvusServer{
 		databases:   []string{"default"},
 		collections: []string{"cold"},
 		loadStates: map[string]commonpb.LoadState{
@@ -203,18 +203,18 @@ func TestReadProductionMilvusCensusReportsColdRowCountWithoutChangingMetadataHas
 		},
 		rowCounts: map[string]int64{"cold": 1},
 	}
-	address := startProductionCensusServer(t, server)
-	settings := productionMilvusSettings{Address: address, Database: "default"}
+	address := startCloneCensusServer(t, server)
+	settings := cloneMilvusSettings{Address: address, Database: "default"}
 	identity := collectionIdentity{Database: "default", Collection: "cold"}
 
-	baseline, err := readProductionMilvusCensus(context.Background(), settings)
+	baseline, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read baseline census: %v", err)
 	}
 	server.mutex.Lock()
 	server.rowCounts["cold"] = 2
 	server.mutex.Unlock()
-	changed, err := readProductionMilvusCensus(context.Background(), settings)
+	changed, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read count-changed census: %v", err)
 	}
@@ -232,33 +232,33 @@ func TestReadProductionMilvusCensusReportsColdRowCountWithoutChangingMetadataHas
 	}
 }
 
-func TestReadProductionMilvusCensusKeepsSamplesStableAcrossQueryOrder(t *testing.T) {
-	server := &productionCensusMilvusServer{
+func TestReadCloneMilvusCensusKeepsSamplesStableAcrossQueryOrder(t *testing.T) {
+	server := &cloneCensusMilvusServer{
 		databases:   []string{"default"},
 		collections: []string{"alpha"},
 		loadStates: map[string]commonpb.LoadState{
 			"alpha": commonpb.LoadState_LoadStateLoaded,
 		},
 		rowCounts: map[string]int64{"alpha": 2},
-		rows: map[string][]productionCensusRow{
+		rows: map[string][]cloneCensusRow{
 			"alpha": {
 				{identity: "alpha-1", vector: []float32{1, 2}},
 				{identity: "alpha-2", vector: []float32{3, 4}},
 			},
 		},
 	}
-	address := startProductionCensusServer(t, server)
-	settings := productionMilvusSettings{Address: address, Database: "default"}
+	address := startCloneCensusServer(t, server)
+	settings := cloneMilvusSettings{Address: address, Database: "default"}
 	identity := collectionIdentity{Database: "default", Collection: "alpha"}
 
-	baseline, err := readProductionMilvusCensus(context.Background(), settings)
+	baseline, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read baseline census: %v", err)
 	}
 	server.mutex.Lock()
 	server.reverseRows = true
 	server.mutex.Unlock()
-	reordered, err := readProductionMilvusCensus(context.Background(), settings)
+	reordered, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read reordered census: %v", err)
 	}
@@ -267,30 +267,30 @@ func TestReadProductionMilvusCensusKeepsSamplesStableAcrossQueryOrder(t *testing
 	}
 }
 
-func TestReadProductionMilvusCensusSamplesLoadedCollectionsLargerThanSampleLimit(t *testing.T) {
-	server := &productionCensusMilvusServer{
+func TestReadCloneMilvusCensusSamplesLoadedCollectionsLargerThanSampleLimit(t *testing.T) {
+	server := &cloneCensusMilvusServer{
 		databases:   []string{"default"},
 		collections: []string{"large"},
 		loadStates: map[string]commonpb.LoadState{
 			"large": commonpb.LoadState_LoadStateLoaded,
 		},
-		rowCounts: map[string]int64{"large": productionCensusSampleLimit + 1},
-		rows: map[string][]productionCensusRow{
+		rowCounts: map[string]int64{"large": cloneCensusSampleLimit + 1},
+		rows: map[string][]cloneCensusRow{
 			"large": {{identity: "large-1", vector: []float32{1, 2}}},
 		},
 	}
-	address := startProductionCensusServer(t, server)
-	settings := productionMilvusSettings{Address: address, Database: "default"}
+	address := startCloneCensusServer(t, server)
+	settings := cloneMilvusSettings{Address: address, Database: "default"}
 	identity := collectionIdentity{Database: "default", Collection: "large"}
 
-	baseline, err := readProductionMilvusCensus(context.Background(), settings)
+	baseline, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read baseline census: %v", err)
 	}
 	server.mutex.Lock()
 	server.rows["large"][0].vector[0] = 9
 	server.mutex.Unlock()
-	changed, err := readProductionMilvusCensus(context.Background(), settings)
+	changed, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read changed census: %v", err)
 	}
@@ -299,8 +299,8 @@ func TestReadProductionMilvusCensusSamplesLoadedCollectionsLargerThanSampleLimit
 	}
 }
 
-func TestReadProductionMilvusCensusDoesNotRequestSparseVectorSamples(t *testing.T) {
-	server := &productionCensusMilvusServer{
+func TestReadCloneMilvusCensusDoesNotRequestSparseVectorSamples(t *testing.T) {
+	server := &cloneCensusMilvusServer{
 		databases:          []string{"default"},
 		collections:        []string{"hybrid"},
 		rejectSparseOutput: true,
@@ -308,20 +308,20 @@ func TestReadProductionMilvusCensusDoesNotRequestSparseVectorSamples(t *testing.
 			"hybrid": commonpb.LoadState_LoadStateLoaded,
 		},
 		rowCounts: map[string]int64{"hybrid": 1},
-		rows: map[string][]productionCensusRow{
+		rows: map[string][]cloneCensusRow{
 			"hybrid": {{identity: "hybrid-1", vector: []float32{1, 2}, sparse: 3}},
 		},
 	}
-	address := startProductionCensusServer(t, server)
-	settings := productionMilvusSettings{Address: address, Database: "default"}
-	_, err := readProductionMilvusCensus(context.Background(), settings)
+	address := startCloneCensusServer(t, server)
+	settings := cloneMilvusSettings{Address: address, Database: "default"}
+	_, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read census without raw sparse vectors: %v", err)
 	}
 }
 
-func TestReadProductionMilvusCensusReportsStrongLoadedRowCountWithoutChangingSample(t *testing.T) {
-	server := &productionCensusMilvusServer{
+func TestReadCloneMilvusCensusReportsStrongLoadedRowCountWithoutChangingSample(t *testing.T) {
+	server := &cloneCensusMilvusServer{
 		databases:   []string{"default"},
 		collections: []string{"loaded"},
 		loadStates: map[string]commonpb.LoadState{
@@ -329,107 +329,34 @@ func TestReadProductionMilvusCensusReportsStrongLoadedRowCountWithoutChangingSam
 		},
 		rowCounts:     map[string]int64{"loaded": 1},
 		logicalCounts: map[string]int64{"loaded": 1},
-		rows: map[string][]productionCensusRow{
+		rows: map[string][]cloneCensusRow{
 			"loaded": {{identity: "loaded-1", vector: []float32{1, 2}}},
 		},
 	}
-	address := startProductionCensusServer(t, server)
-	settings := productionMilvusSettings{Address: address, Database: "default"}
+	address := startCloneCensusServer(t, server)
+	settings := cloneMilvusSettings{Address: address, Database: "default"}
 	identity := collectionIdentity{Database: "default", Collection: "loaded"}
 
-	baseline, err := readProductionMilvusCensus(context.Background(), settings)
+	baseline, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read baseline census: %v", err)
 	}
 	server.mutex.Lock()
-	server.logicalCounts["loaded"] = 2
+	server.rowCounts["loaded"] = 2
 	server.mutex.Unlock()
-	changed, err := readProductionMilvusCensus(context.Background(), settings)
+	changed, err := readCloneMilvusCensus(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("read logical-count-changed census: %v", err)
 	}
 	if changed.Samples[identity] != baseline.Samples[identity] {
-		t.Fatal("strong logical row-count change altered the stable row sample")
+		t.Fatal("physical row-count change altered the stable row sample")
 	}
 	if baseline.RowCounts[identity] != 1 || changed.RowCounts[identity] != 2 {
 		t.Fatalf("row counts = %d then %d, want 1 then 2", baseline.RowCounts[identity], changed.RowCounts[identity])
 	}
 }
 
-func TestAuditProductionMutationRejectsLoadedRowLoss(t *testing.T) {
-	t.Parallel()
-
-	identity := collectionIdentity{Database: "default", Collection: "operator"}
-	before := productionInventory{
-		Databases:   []string{"default"},
-		Collections: collectionCensus{identity: "metadata"},
-		Samples:     collectionCensus{identity: "sample"},
-		RowCounts:   collectionRowCounts{identity: 10},
-	}
-	appended := productionInventory{
-		Databases:   []string{"default"},
-		Collections: collectionCensus{identity: "metadata"},
-		Samples:     collectionCensus{identity: "sample"},
-		RowCounts:   collectionRowCounts{identity: 12},
-	}
-	if err := auditProductionMutation(before, appended, nil, nil); err != nil {
-		t.Fatalf("append-only production growth was rejected: %v", err)
-	}
-	shrunk := appended
-	shrunk.RowCounts = collectionRowCounts{identity: 9}
-	if err := auditProductionMutation(before, shrunk, nil, nil); err == nil {
-		t.Fatal("production row loss was accepted")
-	}
-}
-
-func TestAuditProductionMutationAllowsColdStatisticsToCompact(t *testing.T) {
-	t.Parallel()
-
-	identity := collectionIdentity{Database: "default", Collection: "operator"}
-	before := productionInventory{
-		Databases:   []string{"default"},
-		Collections: collectionCensus{identity: "metadata"},
-		RowCounts:   collectionRowCounts{identity: 1131},
-	}
-	after := productionInventory{
-		Databases:   []string{"default"},
-		Collections: collectionCensus{identity: "metadata"},
-		RowCounts:   collectionRowCounts{identity: 1017},
-	}
-
-	if err := auditProductionMutation(before, after, nil, nil); err != nil {
-		t.Fatalf("cold statistics compaction was rejected: %v", err)
-	}
-}
-
-func TestValidateProductionMilvusSettingsRequiresConfiguredDefaultDatabase(t *testing.T) {
-	tests := []productionMilvusSettings{
-		{},
-		{Address: "127.0.0.1:19530"},
-		{Address: "127.0.0.1:19530", Database: "other"},
-	}
-	for _, settings := range tests {
-		if err := validateProductionMilvusSettings(settings); err == nil {
-			t.Fatalf("unsafe settings accepted: %+v", settings)
-		}
-	}
-	if err := validateProductionMilvusSettings(productionMilvusSettings{Address: "127.0.0.1:19530", Database: "default"}); err != nil {
-		t.Fatalf("valid settings rejected: %v", err)
-	}
-}
-
-func TestAuditProductionMutationRejectsDatabaseChanges(t *testing.T) {
-	collections := collectionCensus{{Database: "default", Collection: "operator"}: "hash"}
-	before := productionInventory{Databases: []string{"default"}, Collections: collections}
-	for _, databases := range [][]string{{}, {"default", "new"}, {"renamed"}} {
-		after := productionInventory{Databases: databases, Collections: cloneCollectionCensus(collections)}
-		if err := auditProductionMutation(before, after, nil, nil); err == nil {
-			t.Fatalf("database mutation %v was accepted", databases)
-		}
-	}
-}
-
-type productionCensusMilvusServer struct {
+type cloneCensusMilvusServer struct {
 	milvuspb.UnimplementedMilvusServiceServer
 
 	mutex              sync.Mutex
@@ -438,7 +365,7 @@ type productionCensusMilvusServer struct {
 	loadStates         map[string]commonpb.LoadState
 	rowCounts          map[string]int64
 	logicalCounts      map[string]int64
-	rows               map[string][]productionCensusRow
+	rows               map[string][]cloneCensusRow
 	reverseRows        bool
 	methods            []string
 	requestDatabases   []string
@@ -446,32 +373,32 @@ type productionCensusMilvusServer struct {
 	rejectSparseOutput bool
 }
 
-type productionCensusRow struct {
+type cloneCensusRow struct {
 	identity string
 	vector   []float32
 	sparse   float32
 }
 
-func (server *productionCensusMilvusServer) record(method string) {
+func (server *cloneCensusMilvusServer) record(method string) {
 	server.mutex.Lock()
 	server.methods = append(server.methods, method)
 	server.mutex.Unlock()
 }
 
-func (server *productionCensusMilvusServer) Connect(context.Context, *milvuspb.ConnectRequest) (*milvuspb.ConnectResponse, error) {
+func (server *cloneCensusMilvusServer) Connect(context.Context, *milvuspb.ConnectRequest) (*milvuspb.ConnectResponse, error) {
 	server.record("Connect")
-	return &milvuspb.ConnectResponse{Status: productionCensusSuccess(), Identifier: 1}, nil
+	return &milvuspb.ConnectResponse{Status: cloneCensusSuccess(), Identifier: 1}, nil
 }
 
-func (server *productionCensusMilvusServer) ListDatabases(context.Context, *milvuspb.ListDatabasesRequest) (*milvuspb.ListDatabasesResponse, error) {
+func (server *cloneCensusMilvusServer) ListDatabases(context.Context, *milvuspb.ListDatabasesRequest) (*milvuspb.ListDatabasesResponse, error) {
 	server.record("ListDatabases")
 	server.mutex.Lock()
 	databases := slices.Clone(server.databases)
 	server.mutex.Unlock()
-	return &milvuspb.ListDatabasesResponse{Status: productionCensusSuccess(), DbNames: databases}, nil
+	return &milvuspb.ListDatabasesResponse{Status: cloneCensusSuccess(), DbNames: databases}, nil
 }
 
-func (server *productionCensusMilvusServer) ShowCollections(ctx context.Context, request *milvuspb.ShowCollectionsRequest) (*milvuspb.ShowCollectionsResponse, error) {
+func (server *cloneCensusMilvusServer) ShowCollections(ctx context.Context, request *milvuspb.ShowCollectionsRequest) (*milvuspb.ShowCollectionsResponse, error) {
 	server.record("ShowCollections")
 	database := request.GetDbName()
 	if database == "" {
@@ -489,18 +416,18 @@ func (server *productionCensusMilvusServer) ShowCollections(ctx context.Context,
 	server.mutex.Lock()
 	collections := slices.Clone(server.collections)
 	server.mutex.Unlock()
-	return &milvuspb.ShowCollectionsResponse{Status: productionCensusSuccess(), CollectionNames: collections}, nil
+	return &milvuspb.ShowCollectionsResponse{Status: cloneCensusSuccess(), CollectionNames: collections}, nil
 }
 
-func (server *productionCensusMilvusServer) GetLoadState(_ context.Context, request *milvuspb.GetLoadStateRequest) (*milvuspb.GetLoadStateResponse, error) {
+func (server *cloneCensusMilvusServer) GetLoadState(_ context.Context, request *milvuspb.GetLoadStateRequest) (*milvuspb.GetLoadStateResponse, error) {
 	server.record("GetLoadState")
 	server.mutex.Lock()
 	loadState := server.loadStates[request.GetCollectionName()]
 	server.mutex.Unlock()
-	return &milvuspb.GetLoadStateResponse{Status: productionCensusSuccess(), State: loadState}, nil
+	return &milvuspb.GetLoadStateResponse{Status: cloneCensusSuccess(), State: loadState}, nil
 }
 
-func (server *productionCensusMilvusServer) DescribeCollection(_ context.Context, request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
+func (server *cloneCensusMilvusServer) DescribeCollection(_ context.Context, request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
 	server.record("DescribeCollection")
 	schema := entity.NewSchema().
 		WithName(request.GetCollectionName()).
@@ -517,7 +444,7 @@ func (server *productionCensusMilvusServer) DescribeCollection(_ context.Context
 			WithName("sparse").
 			WithDataType(entity.FieldTypeSparseVector))
 	return &milvuspb.DescribeCollectionResponse{
-		Status:         productionCensusSuccess(),
+		Status:         cloneCensusSuccess(),
 		CollectionName: request.GetCollectionName(),
 		Schema:         schema.ProtoMessage(),
 		ShardsNum:      2,
@@ -528,7 +455,7 @@ func (server *productionCensusMilvusServer) DescribeCollection(_ context.Context
 	}, nil
 }
 
-func (server *productionCensusMilvusServer) GetCollectionStatistics(
+func (server *cloneCensusMilvusServer) GetCollectionStatistics(
 	_ context.Context,
 	request *milvuspb.GetCollectionStatisticsRequest,
 ) (*milvuspb.GetCollectionStatisticsResponse, error) {
@@ -537,12 +464,12 @@ func (server *productionCensusMilvusServer) GetCollectionStatistics(
 	rowCount := server.rowCounts[request.GetCollectionName()]
 	server.mutex.Unlock()
 	return &milvuspb.GetCollectionStatisticsResponse{
-		Status: productionCensusSuccess(),
+		Status: cloneCensusSuccess(),
 		Stats:  []*commonpb.KeyValuePair{{Key: "row_count", Value: strconv.FormatInt(rowCount, 10)}},
 	}, nil
 }
 
-func (server *productionCensusMilvusServer) Query(
+func (server *cloneCensusMilvusServer) Query(
 	_ context.Context,
 	request *milvuspb.QueryRequest,
 ) (*milvuspb.QueryResults, error) {
@@ -568,7 +495,7 @@ func (server *productionCensusMilvusServer) Query(
 			server.mutex.Unlock()
 		}
 		return &milvuspb.QueryResults{
-			Status: productionCensusSuccess(),
+			Status: cloneCensusSuccess(),
 			FieldsData: []*schemapb.FieldData{
 				column.NewColumnInt64("count(*)", []int64{logicalCount}).FieldData(),
 			},
@@ -590,7 +517,7 @@ func (server *productionCensusMilvusServer) Query(
 		sparseVectors = append(sparseVectors, sparseVector)
 	}
 	return &milvuspb.QueryResults{
-		Status: productionCensusSuccess(),
+		Status: cloneCensusSuccess(),
 		FieldsData: []*schemapb.FieldData{
 			column.NewColumnVarChar("id", identities).FieldData(),
 			column.NewColumnFloatVector("dense", 2, vectors).FieldData(),
@@ -599,7 +526,7 @@ func (server *productionCensusMilvusServer) Query(
 	}, nil
 }
 
-func (server *productionCensusMilvusServer) DescribeIndex(_ context.Context, request *milvuspb.DescribeIndexRequest) (*milvuspb.DescribeIndexResponse, error) {
+func (server *cloneCensusMilvusServer) DescribeIndex(_ context.Context, request *milvuspb.DescribeIndexRequest) (*milvuspb.DescribeIndexResponse, error) {
 	server.record("DescribeIndex")
 	description := &milvuspb.IndexDescription{
 		IndexName: "dense_idx",
@@ -611,12 +538,12 @@ func (server *productionCensusMilvusServer) DescribeIndex(_ context.Context, req
 		},
 	}
 	if request.GetIndexName() != "" && request.GetIndexName() != description.GetIndexName() {
-		return &milvuspb.DescribeIndexResponse{Status: productionCensusSuccess()}, nil
+		return &milvuspb.DescribeIndexResponse{Status: cloneCensusSuccess()}, nil
 	}
-	return &milvuspb.DescribeIndexResponse{Status: productionCensusSuccess(), IndexDescriptions: []*milvuspb.IndexDescription{description}}, nil
+	return &milvuspb.DescribeIndexResponse{Status: cloneCensusSuccess(), IndexDescriptions: []*milvuspb.IndexDescription{description}}, nil
 }
 
-func startProductionCensusServer(t *testing.T, server *productionCensusMilvusServer) string {
+func startCloneCensusServer(t *testing.T, server *cloneCensusMilvusServer) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -629,16 +556,16 @@ func startProductionCensusServer(t *testing.T, server *productionCensusMilvusSer
 	return listener.Addr().String()
 }
 
-func productionCensusSuccess() *commonpb.Status {
+func cloneCensusSuccess() *commonpb.Status {
 	return &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}
 }
 
-func TestProductionCensusTimeoutIsBounded(t *testing.T) {
-	settings := productionMilvusSettings{Address: "127.0.0.1:1", Database: "default"}
+func TestCloneCensusTimeoutIsBounded(t *testing.T) {
+	settings := cloneMilvusSettings{Address: "127.0.0.1:1", Database: "default"}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err := readProductionMilvusCensus(ctx, settings)
+	_, err := readCloneMilvusCensus(ctx, settings)
 	if err == nil {
 		t.Fatal("unreachable Milvus census succeeded")
 	}

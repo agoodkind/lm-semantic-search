@@ -14,10 +14,7 @@ import (
 const restartAcceptanceLifecycleTimeout = 90 * time.Minute
 
 func TestRestartAcceptance(t *testing.T) {
-	if err := validateRestartAcceptanceConfirmations(
-		os.Getenv(restartAcceptanceOptIn),
-		os.Getenv(productionDatabaseConfirmation),
-	); err != nil {
+	if err := validateRestartAcceptanceConfirmation(os.Getenv(restartAcceptanceOptIn)); err != nil {
 		t.Fatal(err)
 	}
 	operations, err := newRealAcceptanceLifecycleOperations()

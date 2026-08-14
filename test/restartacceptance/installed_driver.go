@@ -33,7 +33,6 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
-	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 	"goodkind.io/lm-semantic-search/internal/tshash"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -45,6 +44,9 @@ const (
 	cloneMilvusAddress                   = "127.0.0.1:29530"
 	fixtureQuery                         = "restart acceptance"
 	scenarioBMetadataTimeoutMilliseconds = 10000
+	scenarioGLoadTimeoutMilliseconds     = 12000
+	scenarioGCallerWaitMilliseconds      = 7000
+	scenarioGIdleTimeoutMilliseconds     = 60000
 	embeddingReadinessTimeout            = 30 * time.Second
 	embeddingReadinessResponseLimit      = 4 << 20
 )
@@ -54,49 +56,20 @@ type realAcceptanceDriver struct {
 	startScenarioBDaemon   func(context.Context, installedProcess, string) (*daemonRuntime, error)
 	openScenarioBObservers func(context.Context, *daemonRuntime, acceptanceRun, acceptanceFixture) (rowSnapshotObserver, checkpointSnapshotObserver, func(), error)
 	mutex                  sync.Mutex
-	calls                  []milvusProxyCall
 	teardownError          error
 }
 
 func newRealAcceptanceLifecycleOperations() (acceptanceLifecycleOperations, error) {
 	driver := &realAcceptanceDriver{}
-	configuredRunParent, err := requiredDirectoryFromEnvironment(runParentEnvironment)
-	if err != nil {
-		return acceptanceLifecycleOperations{}, err
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return acceptanceLifecycleOperations{}, fmt.Errorf("resolve home directory: %w", err)
-	}
-	binaries, err := validateInstalledBinaries(home)
-	if err != nil {
-		return acceptanceLifecycleOperations{}, err
-	}
 	return acceptanceLifecycleOperations{
-		ValidateProduction: func(ctx context.Context) error {
-			return captureProductionReadiness(ctx, binaries, driver.runner)
-		},
 		Prepare: func(ctx context.Context) (acceptanceRun, error) {
 			return prepareAcceptanceRun(ctx, time.Now(), rand.Reader)
 		},
-		CaptureProduction: func(ctx context.Context, run acceptanceRun) (inventoryToken, error) {
-			return captureProductionInventory(ctx, run.Paths, run.Binaries, driver.runner, run.ID, time.Now(), configuredProductionMilvusCensus)
+		RunCase: func(ctx context.Context, run acceptanceRun, name string) error {
+			return driver.runCase(ctx, run, name)
 		},
-		RunCase: func(ctx context.Context, run acceptanceRun, name string, token inventoryToken) error {
-			return driver.runCase(ctx, run, name, token)
-		},
-		ConfirmProduction: func(ctx context.Context, _ acceptanceRun) error {
-			return runProductionConfirmation(ctx, driver.runner)
-		},
-		AuditProduction: func(_ context.Context, before inventoryToken, after inventoryToken) error {
-			return auditProductionMutation(
-				before.Inventory,
-				after.Inventory,
-				driver.proxyCalls(),
-				acceptanceCollectionIdentitiesForPaths(runPathsForID(configuredRunParent, before.RunID)),
-			)
-		},
-		Cleanup: cleanupAcceptanceRun,
+		ConfirmClone: driver.confirmClone,
+		Cleanup:      cleanupAcceptanceRun,
 		Finish: func(run acceptanceRun, result acceptanceResult) error {
 			return newEvidenceRecorder(run.Paths, time.Now).Finish(result)
 		},
@@ -140,31 +113,11 @@ func cleanupAcceptanceRun(ctx context.Context, run acceptanceRun) error {
 	return cleanupErr
 }
 
-func (driver *realAcceptanceDriver) proxyCalls() []milvusProxyCall {
-	driver.mutex.Lock()
-	defer driver.mutex.Unlock()
-	return append([]milvusProxyCall(nil), driver.calls...)
-}
-
-func (driver *realAcceptanceDriver) appendProxyCalls(calls []milvusProxyCall) {
-	driver.mutex.Lock()
-	driver.calls = append(driver.calls, calls...)
-	driver.mutex.Unlock()
-}
-
-func (driver *realAcceptanceDriver) runCase(ctx context.Context, run acceptanceRun, name string, token inventoryToken) (runErr error) {
+func (driver *realAcceptanceDriver) runCase(ctx context.Context, run acceptanceRun, name string) (runErr error) {
 	defer func() {
 		runErr = errors.Join(runErr, driver.takeTeardownError())
 	}()
-	h := &harness{
-		paths: run.Paths, composeProject: run.ComposeProject, runner: driver.runner,
-		valueEntropy: rand.Reader, archiveSizes: run.ArchiveSizes, inventory: token,
-		census: configuredProductionMilvusCensus, proxyCalls: driver.proxyCalls,
-		readiness: func(readinessContext context.Context) error {
-			return captureProductionHealth(readinessContext, run.Binaries, driver.runner)
-		},
-		protectedCollections: acceptanceCollectionIdentities(run),
-	}
+	h := driver.newCloneHarness(run)
 	return h.withCompose(ctx, name, func(caseContext context.Context) (scenarioErr error) {
 		defer func() {
 			if scenarioErr != nil {
@@ -179,7 +132,6 @@ func (driver *realAcceptanceDriver) runCase(ctx context.Context, run acceptanceR
 			return err
 		}
 		defer func() {
-			driver.appendProxyCalls(proxies.milvus.Calls())
 			scenarioErr = errors.Join(scenarioErr, proxies.close())
 		}()
 		fixture, err := createAcceptanceFixture(filepath.Join(run.Paths.Cases, name, "fixture"), name)
@@ -394,7 +346,8 @@ func (driver *realAcceptanceDriver) runInstalledScenarioC(
 			fixture.root,
 			installedLMSMerklePath(run.Paths),
 		),
-		Recorder: recorder,
+		ReleaseHeldEmbedding: proxies.embedding.ClearGate,
+		Recorder:             recorder,
 	})
 	return err
 }
@@ -430,7 +383,7 @@ func (driver *realAcceptanceDriver) runInstalledScenarioE(
 	if err := writeClydeConversation(run.Paths, fixture.marker, "initial"); err != nil {
 		return err
 	}
-	lms, err := startDaemonRuntime(ctx, installedLMSProcess(run), run.Paths.LMSSocket)
+	lms, err := startDaemonRuntime(ctx, installedLMSProcessWithoutPeriodicMaintenance(run), run.Paths.LMSSocket)
 	if err != nil {
 		return err
 	}
@@ -444,9 +397,18 @@ func (driver *realAcceptanceDriver) runInstalledScenarioE(
 		return err
 	}
 	defer driver.stopInstalledProcess(clyde.process)
-	if _, err := waitForSemanticSuccess(ctx, func(searchContext context.Context) (semanticSearchObservation, error) {
-		return driver.searchClyde(searchContext, run, fixture.marker)
-	}, maximumClydeSearchRecovery, defaultScenarioPollInterval); err != nil {
+	if _, err := waitForSeededClydeSearch(
+		ctx,
+		func(statusContext context.Context) (clydeStatusObservation, error) {
+			return driver.clydeStatus(statusContext, run, clyde.process.Process.Pid)
+		},
+		func(searchContext context.Context) (semanticSearchObservation, error) {
+			return driver.searchClyde(searchContext, run, fixture.marker)
+		},
+		maximumClydeFeederRecovery,
+		defaultScenarioFailureTimeout,
+		defaultScenarioPollInterval,
+	); err != nil {
 		return fmt.Errorf("wait for initial Clyde feeder pass: %w", err)
 	}
 	_, err = runScenarioE(ctx, scenarioEInput{
@@ -462,7 +424,7 @@ func (driver *realAcceptanceDriver) runInstalledScenarioE(
 			if lms != nil {
 				return nil
 			}
-			started, startErr := startDaemonRuntime(startContext, installedLMSProcess(run), run.Paths.LMSSocket)
+			started, startErr := startDaemonRuntime(startContext, installedLMSProcessWithoutPeriodicMaintenance(run), run.Paths.LMSSocket)
 			if startErr == nil {
 				lms = started
 			}
@@ -489,7 +451,7 @@ func (driver *realAcceptanceDriver) runInstalledScenarioF(
 	fixture acceptanceFixture,
 	recorder *evidenceRecorder,
 ) error {
-	seed, err := startDaemonRuntime(ctx, installedLMSProcess(run), run.Paths.LMSSocket)
+	seed, err := startDaemonRuntime(ctx, installedLMSProcessWithoutPeriodicMaintenance(run), run.Paths.LMSSocket)
 	if err != nil {
 		return err
 	}
@@ -513,7 +475,10 @@ func (driver *realAcceptanceDriver) runInstalledScenarioF(
 			return replaceCaseEtcd(composeContext, h, caseRoot, preservedEtcd, false)
 		},
 		StartLMS: func(startContext context.Context) error {
-			started, startErr := startDaemonRuntime(startContext, installedLMSProcess(run), run.Paths.LMSSocket)
+			if startErr := startCaseCompose(startContext, h); startErr != nil {
+				return startErr
+			}
+			started, startErr := startDaemonRuntime(startContext, installedLMSProcessWithoutPeriodicMaintenance(run), run.Paths.LMSSocket)
 			if startErr == nil {
 				runtime = started
 			}
@@ -549,7 +514,7 @@ func (driver *realAcceptanceDriver) runInstalledScenarioF(
 			return fingerprintTree(root)
 		},
 		ConfigurationFingerprint: func() (string, error) {
-			return fingerprintInstalledProcess(installedLMSProcess(run)), nil
+			return fingerprintInstalledProcess(installedLMSProcessWithoutPeriodicMaintenance(run)), nil
 		},
 		Recorder: recorder,
 	})
@@ -563,20 +528,35 @@ func (driver *realAcceptanceDriver) runInstalledScenarioG(
 	fixture acceptanceFixture,
 	recorder *evidenceRecorder,
 ) error {
-	process := installedLMSProcess(run)
-	process.Environment["CLAUDE_CONTEXT_MILVUS_COLLECTION_IDLE_TIMEOUT_MS"] = "1"
-	process.Environment["CLAUDE_CONTEXT_MILVUS_COLLECTION_LOAD_TIMEOUT_MS"] = "6000"
-	process.Environment["CLAUDE_CONTEXT_MILVUS_COLLECTION_LOAD_WAIT_TIMEOUT_MS"] = "7000"
-	runtime, err := startDaemonRuntime(ctx, process, run.Paths.LMSSocket)
+	seedProcess := installedLMSProcessWithoutPeriodicMaintenance(run)
+	runtime, err := startDaemonRuntime(ctx, seedProcess, run.Paths.LMSSocket)
 	if err != nil {
 		return err
 	}
-	defer driver.stopDaemonRuntime(runtime)
+	defer func() { driver.stopDaemonRuntime(runtime) }()
 	if _, err := waitForCompletedIndex(ctx, runtime.client, fixture.root); err != nil {
 		return fmt.Errorf("seed scenario G target: %w", err)
 	}
 	targetCollection := codeCollectionName(fixture.root)
-	if err := waitForCollectionNotLoaded(ctx, targetCollection); err != nil {
+	if err := prepareScenarioGColdTarget(
+		ctx,
+		runtime,
+		targetCollection,
+		stopDaemonRuntime,
+		func(releaseContext context.Context, collectionName string) error {
+			client, clientErr := newCloneMilvusClient(releaseContext)
+			if clientErr != nil {
+				return clientErr
+			}
+			defer closeMilvusClient(client)
+			return releaseCloneCollection(releaseContext, client, collectionName)
+		},
+	); err != nil {
+		return err
+	}
+	process := installedLMSProcessForScenarioG(run)
+	runtime, err = startDaemonRuntime(ctx, process, run.Paths.LMSSocket)
+	if err != nil {
 		return err
 	}
 	editedMarker := fixture.marker + " edited target"
@@ -584,6 +564,30 @@ func (driver *realAcceptanceDriver) runInstalledScenarioG(
 		return err
 	}
 	baselineLoads := proxies.milvus.CallCount("LoadCollection", cloneMilvusDatabase, targetCollection)
+	loadCount := func() int {
+		return proxies.milvus.CallCount("LoadCollection", cloneMilvusDatabase, targetCollection) - baselineLoads
+	}
+	type searchResult struct {
+		observation semanticSearchObservation
+		err         error
+	}
+	failureReady := make(chan struct{})
+	var failureResult searchResult
+	var startFailureCaller sync.Once
+	startCaller := func() {
+		startFailureCaller.Do(func() {
+			go func() {
+				failureContext, cancel := context.WithTimeout(ctx, defaultScenarioFailureTimeout)
+				defer cancel()
+				failureResult.observation, failureResult.err = searchCodeObservation(
+					failureContext,
+					runtime.client,
+					fixture.root,
+				)
+				close(failureReady)
+			}()
+		})
+	}
 	var capacityWatchStarted time.Time
 	_, err = runScenarioG(ctx, scenarioGInput{
 		SetLoading: func() {
@@ -593,12 +597,29 @@ func (driver *realAcceptanceDriver) runInstalledScenarioG(
 			proxies.milvus.ClearLoadFault(cloneMilvusDatabase, targetCollection)
 		},
 		StartTargetJob: func(startContext context.Context) (string, error) {
-			capacityWatchStarted = time.Now()
-			response, startErr := runtime.client.SyncIndex(startContext, &pb.SyncIndexRequest{Path: fixture.root, Client: scenarioClientInfo()})
-			return response.GetJobId(), startErr
+			return startScenarioGTargetJob(
+				startContext,
+				startCaller,
+				loadCount,
+				func(jobContext context.Context) (string, error) {
+					capacityWatchStarted = time.Now()
+					response, startErr := runtime.client.SyncIndex(
+						jobContext,
+						&pb.SyncIndexRequest{Path: fixture.root, Client: scenarioClientInfo()},
+					)
+					return response.GetJobId(), startErr
+				},
+				defaultScenarioReadyTimeout,
+				defaultScenarioPollInterval,
+			)
 		},
 		ObserveFailure: func(searchContext context.Context) (semanticSearchObservation, error) {
-			return searchCodeObservation(searchContext, runtime.client, fixture.root)
+			select {
+			case <-failureReady:
+				return failureResult.observation, failureResult.err
+			case <-searchContext.Done():
+				return semanticSearchObservation{}, context.Cause(searchContext)
+			}
 		},
 		Status: daemonStatusObserver(runtime.client),
 		StartSecondJob: func(startContext context.Context) (jobObservation, error) {
@@ -618,9 +639,7 @@ func (driver *realAcceptanceDriver) runInstalledScenarioG(
 			response, startErr := runtime.client.SyncIndex(startContext, &pb.SyncIndexRequest{Path: fixture.root, Client: scenarioClientInfo()})
 			return response.GetJobId(), startErr
 		},
-		LoadCount: func() int {
-			return proxies.milvus.CallCount("LoadCollection", cloneMilvusDatabase, targetCollection) - baselineLoads
-		},
+		LoadCount: loadCount,
 		SearchEditedTarget: func(searchContext context.Context) (semanticSearchObservation, error) {
 			return searchCodeObservationForQuery(searchContext, runtime.client, fixture.root, editedMarker)
 		},
@@ -629,6 +648,37 @@ func (driver *realAcceptanceDriver) runInstalledScenarioG(
 	})
 	proxies.embedding.ClearGate()
 	return err
+}
+
+func prepareScenarioGColdTarget(
+	ctx context.Context,
+	runtime *daemonRuntime,
+	collectionName string,
+	stop func(*daemonRuntime) error,
+	release func(context.Context, string) error,
+) error {
+	if err := stop(runtime); err != nil {
+		return fmt.Errorf("stop scenario G seed daemon: %w", err)
+	}
+	if err := release(ctx, collectionName); err != nil {
+		return fmt.Errorf("release scenario G target collection: %w", err)
+	}
+	return nil
+}
+
+func startScenarioGTargetJob(
+	ctx context.Context,
+	startCaller func(),
+	loadCount func() int,
+	startJob func(context.Context) (string, error),
+	timeout time.Duration,
+	poll time.Duration,
+) (string, error) {
+	startCaller()
+	if err := waitForLoadCount(ctx, loadCount, 1, timeout, poll); err != nil {
+		return "", fmt.Errorf("wait for scenario G public caller load: %w", err)
+	}
+	return startJob(ctx)
 }
 
 func (driver *realAcceptanceDriver) runInstalledScenarioH(
@@ -641,7 +691,7 @@ func (driver *realAcceptanceDriver) runInstalledScenarioH(
 	if err := writeClydeConversation(run.Paths, fixture.marker, "initial"); err != nil {
 		return err
 	}
-	lms, err := startDaemonRuntime(ctx, installedLMSProcess(run), run.Paths.LMSSocket)
+	lms, err := startDaemonRuntime(ctx, installedLMSProcessWithoutPeriodicMaintenance(run), run.Paths.LMSSocket)
 	if err != nil {
 		return err
 	}
@@ -659,9 +709,18 @@ func (driver *realAcceptanceDriver) runInstalledScenarioH(
 		return err
 	}
 	defer closeMilvusClient(milvusClient)
-	_, err = waitForSemanticSuccess(ctx, func(searchContext context.Context) (semanticSearchObservation, error) {
-		return driver.searchClyde(searchContext, run, fixture.marker)
-	}, maximumClydeSearchRecovery, defaultScenarioPollInterval)
+	_, err = waitForSeededClydeSearch(
+		ctx,
+		func(statusContext context.Context) (clydeStatusObservation, error) {
+			return driver.clydeStatus(statusContext, run, clyde.process.Process.Pid)
+		},
+		func(searchContext context.Context) (semanticSearchObservation, error) {
+			return driver.searchClyde(searchContext, run, fixture.marker)
+		},
+		maximumClydeFeederRecovery,
+		defaultScenarioFailureTimeout,
+		defaultScenarioPollInterval,
+	)
 	if err != nil {
 		return fmt.Errorf("seed scenario H Clyde target: %w", err)
 	}
@@ -705,6 +764,45 @@ func (driver *realAcceptanceDriver) runInstalledScenarioH(
 	proxies.embedding.ClearFailure()
 	proxies.milvus.ClearUnavailable()
 	return err
+}
+
+func waitForSeededClydeSearch(
+	ctx context.Context,
+	statusObserver func(context.Context) (clydeStatusObservation, error),
+	search func(context.Context) (semanticSearchObservation, error),
+	timeout time.Duration,
+	searchAttemptTimeout time.Duration,
+	poll time.Duration,
+) (semanticSearchObservation, error) {
+	deadlineContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var lastStatus clydeStatusObservation
+	var lastErr error
+	for {
+		observation, err := statusObserver(deadlineContext)
+		lastStatus = observation
+		lastErr = err
+		if err == nil && observation.Responding && observation.PID > 0 &&
+			observation.Manifest > 0 && observation.Pending == 0 &&
+			observation.Needed == 0 && observation.Embedded == observation.Manifest {
+			boundedSearch := func(searchContext context.Context) (semanticSearchObservation, error) {
+				attemptContext, cancelAttempt := context.WithTimeout(searchContext, searchAttemptTimeout)
+				defer cancelAttempt()
+				return search(attemptContext)
+			}
+			return waitForSemanticSuccess(deadlineContext, boundedSearch, timeout, poll)
+		}
+		select {
+		case <-deadlineContext.Done():
+			return semanticSearchObservation{}, fmt.Errorf(
+				"wait for initial Clyde feeder convergence: %w; last status=%+v error=%v",
+				context.Cause(deadlineContext),
+				lastStatus,
+				lastErr,
+			)
+		case <-time.After(poll):
+		}
+	}
 }
 
 type clydeRuntime struct {
@@ -873,7 +971,7 @@ func writeClydeConversation(paths runPaths, marker string, suffix string) error 
 }
 
 func requireClonePayload(caseRoot string) error {
-	for _, name := range []string{"milvus", "minio", "minio-default"} {
+	for _, name := range []string{"milvus", "minio"} {
 		regularFiles := 0
 		err := filepath.WalkDir(filepath.Join(caseRoot, name), func(_ string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -919,7 +1017,20 @@ func replaceCaseEtcd(ctx context.Context, h *harness, caseRoot string, preserved
 			return err
 		}
 	}
+	if restore {
+		return nil
+	}
 	_, err = h.runner.Run(ctx, environment, "docker", append(composeArgs, "up", "-d", "--wait")...)
+	return err
+}
+
+func startCaseCompose(ctx context.Context, h *harness) error {
+	environment, err := h.composeEnvironment()
+	if err != nil {
+		return err
+	}
+	composeArgs := []string{"compose", "-p", h.composeProject, "-f", h.paths.ComposeFile, "up", "-d", "--wait"}
+	_, err = h.runner.Run(ctx, environment, "docker", composeArgs...)
 	return err
 }
 
@@ -1052,27 +1163,6 @@ func readCapacityReleaseEvent(logPath string, notBefore time.Time) (time.Duratio
 	return 0, false, nil
 }
 
-func waitForCollectionNotLoaded(ctx context.Context, collectionName string) error {
-	client, err := newCloneMilvusClient(ctx)
-	if err != nil {
-		return err
-	}
-	defer closeMilvusClient(client)
-	deadlineContext, cancel := context.WithTimeout(ctx, defaultScenarioReadyTimeout)
-	defer cancel()
-	for {
-		state, stateErr := client.GetLoadState(deadlineContext, milvusclient.NewGetLoadStateOption(collectionName))
-		if stateErr == nil && state.State == entity.LoadStateNotLoad {
-			return nil
-		}
-		select {
-		case <-deadlineContext.Done():
-			return fmt.Errorf("wait for %s to unload: %w", collectionName, context.Cause(deadlineContext))
-		case <-time.After(defaultScenarioPollInterval):
-		}
-	}
-}
-
 func appendFixtureChange(root string, relativePath string, marker string) error {
 	path := filepath.Join(root, relativePath)
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
@@ -1140,15 +1230,14 @@ func snapshotCloneState(
 			return stateObservation{}, fmt.Errorf("parse %s row count: %w", collectionName, parseErr)
 		}
 		var rows []rowStateObservation
-		if slices.Contains(detailedCollectionNames, collectionName) {
+		detailed := slices.Contains(detailedCollectionNames, collectionName)
+		if detailed {
 			rows, err = snapshotCollectionRows(ctx, client, collectionName)
 			if err != nil {
 				return stateObservation{}, err
 			}
-			if len(rows) != rowCount {
-				return stateObservation{}, fmt.Errorf("snapshot %s returned %d rows, want %d", collectionName, len(rows), rowCount)
-			}
 		}
+		rowCount = snapshotRowCount(rowCount, rows, detailed)
 		collections = append(collections, collectionStateObservation{Name: collectionName, RowCount: rowCount, Rows: rows})
 	}
 	checkpoints, err := snapshotCheckpointFiles(checkpointRoot)
@@ -1156,6 +1245,13 @@ func snapshotCloneState(
 		return stateObservation{}, err
 	}
 	return stateObservation{Collections: collections, Checkpoints: checkpoints}, nil
+}
+
+func snapshotRowCount(statisticsCount int, rows []rowStateObservation, detailed bool) int {
+	if detailed {
+		return len(rows)
+	}
+	return statisticsCount
 }
 
 func snapshotCollectionRows(ctx context.Context, client *milvusclient.Client, collectionName string) ([]rowStateObservation, error) {
@@ -1331,6 +1427,7 @@ func resetIsolatedRuntime(paths runPaths) error {
 
 type caseProxies struct {
 	embedding  *embeddingProxy
+	backend    *localEmbeddingBackend
 	milvus     *milvusProxy
 	serveError chan error
 }
@@ -1338,66 +1435,55 @@ type caseProxies struct {
 func startCaseProxies(ctx context.Context) (caseProxies, error) {
 	readinessContext, cancel := context.WithTimeout(ctx, embeddingReadinessTimeout)
 	defer cancel()
-	cfg, err := resolveEmbeddingConfig(readinessContext, config.Default)
+	backend, err := startLocalEmbeddingBackend()
 	if err != nil {
-		return caseProxies{}, fmt.Errorf("resolve installed embedding backend: %w", err)
-	}
-	if strings.TrimSpace(cfg.OpenAIBaseURL) == "" {
-		return caseProxies{}, fmt.Errorf("installed embedding backend URL is empty")
-	}
-	if err := verifyEmbeddingReadiness(readinessContext, cfg); err != nil {
 		return caseProxies{}, err
+	}
+	if err := verifyEmbeddingReadiness(
+		readinessContext,
+		backend.URL(),
+		cloneEmbeddingModel,
+		cloneEmbeddingDimension,
+	); err != nil {
+		return caseProxies{}, errors.Join(err, backend.Close())
 	}
 	embeddingListener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", embeddingProxyPort))
 	if err != nil {
-		return caseProxies{}, fmt.Errorf("listen embedding proxy: %w", err)
+		return caseProxies{}, errors.Join(fmt.Errorf("listen embedding proxy: %w", err), backend.Close())
 	}
-	embedding, err := newEmbeddingProxy(embeddingListener, cfg.OpenAIBaseURL)
+	embedding, err := newEmbeddingProxy(embeddingListener, backend.URL())
 	if err != nil {
 		_ = embeddingListener.Close()
-		return caseProxies{}, err
+		return caseProxies{}, errors.Join(err, backend.Close())
 	}
 	milvusListener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", milvusProxyPort))
 	if err != nil {
 		_ = embedding.Close()
-		return caseProxies{}, fmt.Errorf("listen Milvus proxy: %w", err)
+		return caseProxies{}, errors.Join(fmt.Errorf("listen Milvus proxy: %w", err), backend.Close())
 	}
 	milvus, err := newMilvusProxy(milvusListener, cloneMilvusAddress)
 	if err != nil {
 		_ = embedding.Close()
 		_ = milvusListener.Close()
-		return caseProxies{}, err
+		return caseProxies{}, errors.Join(err, backend.Close())
 	}
 	serveError := make(chan error, 2)
 	go func() { serveError <- embedding.Serve() }()
 	go func() { serveError <- milvus.Serve() }()
-	return caseProxies{embedding: embedding, milvus: milvus, serveError: serveError}, nil
+	return caseProxies{
+		embedding:  embedding,
+		backend:    backend,
+		milvus:     milvus,
+		serveError: serveError,
+	}, nil
 }
 
-func resolveEmbeddingConfig(
+func verifyEmbeddingReadiness(
 	ctx context.Context,
-	resolver func() (config.Config, error),
-) (config.Config, error) {
-	result := make(chan struct {
-		config config.Config
-		err    error
-	}, 1)
-	go func() {
-		cfg, err := resolver()
-		result <- struct {
-			config config.Config
-			err    error
-		}{config: cfg, err: err}
-	}()
-	select {
-	case <-ctx.Done():
-		return config.Config{}, ctx.Err()
-	case resolved := <-result:
-		return resolved.config, resolved.err
-	}
-}
-
-func verifyEmbeddingReadiness(ctx context.Context, cfg config.Config) error {
+	baseURL string,
+	model string,
+	dimension int32,
+) error {
 	readinessContext, cancel := context.WithTimeout(ctx, embeddingReadinessTimeout)
 	defer cancel()
 	body, err := json.Marshal(struct {
@@ -1405,19 +1491,18 @@ func verifyEmbeddingReadiness(ctx context.Context, cfg config.Config) error {
 		Input      []string `json:"input"`
 		Dimensions int32    `json:"dimensions,omitempty"`
 	}{
-		Model:      cfg.EmbeddingModel,
+		Model:      model,
 		Input:      []string{"restart acceptance embedding readiness"},
-		Dimensions: cfg.EmbeddingDimension,
+		Dimensions: dimension,
 	})
 	if err != nil {
 		return fmt.Errorf("encode embedding readiness request: %w", err)
 	}
-	endpoint := strings.TrimRight(cfg.OpenAIBaseURL, "/") + "/embeddings"
+	endpoint := strings.TrimRight(baseURL, "/") + "/embeddings"
 	request, err := http.NewRequestWithContext(readinessContext, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create embedding readiness request: %w", err)
 	}
-	request.Header.Set("Authorization", "Bearer "+cfg.OpenAIAPIKey)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -1450,7 +1535,7 @@ func verifyEmbeddingReadiness(ctx context.Context, cfg config.Config) error {
 }
 
 func (proxies caseProxies) close() error {
-	closeErr := errors.Join(proxies.embedding.Close(), proxies.milvus.Close())
+	closeErr := errors.Join(proxies.embedding.Close(), proxies.milvus.Close(), proxies.backend.Close())
 	for range 2 {
 		select {
 		case serveErr := <-proxies.serveError:
@@ -1504,12 +1589,26 @@ func installedLMSProcess(run acceptanceRun) installedProcess {
 	return installedProcess{Path: run.Binaries.Daemon, Environment: environment}
 }
 
+func installedLMSProcessWithoutPeriodicMaintenance(run acceptanceRun) installedProcess {
+	process := installedLMSProcess(run)
+	process.Environment["CLAUDE_CONTEXT_BACKGROUND_SYNC"] = "false"
+	return process
+}
+
 func installedLMSProcessForScenarioB(run acceptanceRun) installedProcess {
 	process := installedLMSProcess(run)
 	process.Environment["CLAUDE_CONTEXT_BACKGROUND_SYNC"] = "false"
 	process.Environment["CLAUDE_CONTEXT_TRIGGER_WATCHER"] = "false"
 	process.Environment["CLAUDE_CONTEXT_FILE_WATCHER"] = "false"
 	process.Environment["CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS"] = strconv.Itoa(scenarioBMetadataTimeoutMilliseconds)
+	return process
+}
+
+func installedLMSProcessForScenarioG(run acceptanceRun) installedProcess {
+	process := installedLMSProcessWithoutPeriodicMaintenance(run)
+	process.Environment["CLAUDE_CONTEXT_MILVUS_COLLECTION_IDLE_TIMEOUT_MS"] = strconv.Itoa(scenarioGIdleTimeoutMilliseconds)
+	process.Environment["CLAUDE_CONTEXT_MILVUS_COLLECTION_LOAD_TIMEOUT_MS"] = strconv.Itoa(scenarioGLoadTimeoutMilliseconds)
+	process.Environment["CLAUDE_CONTEXT_MILVUS_COLLECTION_LOAD_WAIT_TIMEOUT_MS"] = strconv.Itoa(scenarioGCallerWaitMilliseconds)
 	return process
 }
 

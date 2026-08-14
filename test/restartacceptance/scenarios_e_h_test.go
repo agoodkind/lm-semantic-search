@@ -294,12 +294,19 @@ func TestRunScenarioGPermanentLoadingReleasesCapacityAndLoadsExactlyTwice(t *tes
 	loading := false
 	loadCount := 0
 	failurePolls := 0
+	clearedBeforeRecoveryLoad := false
 	releasedSecond := false
 	secondRunningAt := time.Now().Add(15 * time.Millisecond)
+	targetRetryStarted := false
 
 	result, err := runScenarioG(context.Background(), scenarioGInput{
-		SetLoading:   func() { mutex.Lock(); loading = true; mutex.Unlock() },
-		ClearLoading: func() { mutex.Lock(); loading = false; mutex.Unlock() },
+		SetLoading: func() { mutex.Lock(); loading = true; mutex.Unlock() },
+		ClearLoading: func() {
+			mutex.Lock()
+			clearedBeforeRecoveryLoad = loadCount < 2
+			loading = false
+			mutex.Unlock()
+		},
 		StartTargetJob: func(context.Context) (string, error) {
 			mutex.Lock()
 			loadCount++
@@ -310,10 +317,13 @@ func TestRunScenarioGPermanentLoadingReleasesCapacityAndLoadsExactlyTwice(t *tes
 			mutex.Lock()
 			defer mutex.Unlock()
 			failurePolls++
-			if failurePolls == 2 {
-				loadCount++
-			}
-			if failurePolls >= 3 {
+			if failurePolls >= 2 {
+				go func() {
+					time.Sleep(5 * time.Millisecond)
+					mutex.Lock()
+					loadCount++
+					mutex.Unlock()
+				}()
 				return semanticSearchObservation{Code: collectionNotReadyCode}, nil
 			}
 			return semanticSearchObservation{}, nil
@@ -329,16 +339,22 @@ func TestRunScenarioGPermanentLoadingReleasesCapacityAndLoadsExactlyTwice(t *tes
 		},
 		ReleaseSecondJob: func() { releasedSecond = true },
 		ObserveJob: func(_ context.Context, jobID string) (jobObservation, error) {
-			if jobID == "second-job" && !releasedSecond {
-				if time.Now().Before(secondRunningAt) {
+			if jobID == "second-job" && (!releasedSecond || !targetRetryStarted) {
+				if !releasedSecond && time.Now().Before(secondRunningAt) {
 					return jobObservation{ID: jobID, State: "queued"}, nil
 				}
 				return jobObservation{ID: jobID, State: "running"}, nil
 			}
+			if jobID == "target-job" {
+				return jobObservation{ID: jobID, State: "failed", FailureCode: "internal_error"}, nil
+			}
 			return jobObservation{ID: jobID, State: "completed"}, nil
 		},
-		RestartTargetJob: func(context.Context) (string, error) { return "target-retry", nil },
-		LoadCount:        func() int { mutex.Lock(); defer mutex.Unlock(); return loadCount },
+		RestartTargetJob: func(context.Context) (string, error) {
+			targetRetryStarted = true
+			return "target-retry", nil
+		},
+		LoadCount: func() int { mutex.Lock(); defer mutex.Unlock(); return loadCount },
 		SearchEditedTarget: func(context.Context) (semanticSearchObservation, error) {
 			mutex.Lock()
 			defer mutex.Unlock()
@@ -367,6 +383,9 @@ func TestRunScenarioGPermanentLoadingReleasesCapacityAndLoadsExactlyTwice(t *tes
 	}
 	if result.SecondJobID != "second-job" || result.RecoveredMatches != 1 {
 		t.Fatalf("second job = %q recovered matches = %d", result.SecondJobID, result.RecoveredMatches)
+	}
+	if clearedBeforeRecoveryLoad {
+		t.Fatal("loading fault cleared before recovery load request")
 	}
 	assertSingleScenarioRecord(t, evidencePaths.EventsJSONL, "scenario_g")
 }
@@ -427,6 +446,9 @@ func TestRunScenarioGRejectsAThirdLoad(t *testing.T) {
 			if jobID == "second" && !releasedSecond {
 				return jobObservation{ID: jobID, State: "running"}, nil
 			}
+			if jobID == "target" {
+				return jobObservation{ID: jobID, State: "failed", FailureCode: collectionNotReadyCode}, nil
+			}
 			return jobObservation{ID: jobID, State: "completed"}, nil
 		},
 		RestartTargetJob: func(context.Context) (string, error) { return "retry", nil },
@@ -471,6 +493,9 @@ func TestRunScenarioGRejectsRecoveryWithoutEditedIdentity(t *testing.T) {
 		ObserveJob: func(_ context.Context, jobID string) (jobObservation, error) {
 			if jobID == "second" && !releasedSecond {
 				return jobObservation{ID: jobID, State: "running"}, nil
+			}
+			if jobID == "target" {
+				return jobObservation{ID: jobID, State: "failed", FailureCode: collectionNotReadyCode}, nil
 			}
 			return jobObservation{ID: jobID, State: "completed"}, nil
 		},
@@ -520,6 +545,9 @@ func TestRunScenarioGRejectsLoadDuringRecovery(t *testing.T) {
 		ObserveJob: func(_ context.Context, jobID string) (jobObservation, error) {
 			if jobID == "second" && !releasedSecond {
 				return jobObservation{ID: jobID, State: "running"}, nil
+			}
+			if jobID == "target" {
+				return jobObservation{ID: jobID, State: "failed", FailureCode: collectionNotReadyCode}, nil
 			}
 			return jobObservation{ID: jobID, State: "completed"}, nil
 		},
@@ -598,6 +626,13 @@ func TestRunScenarioHTracksActiveDependencyInBothOrdersWithoutDeletingState(t *t
 		t.Fatalf("Milvus-first codes = %+v", result.Orders[1])
 	}
 	assertSingleScenarioRecord(t, evidencePaths.EventsJSONL, "scenario_h")
+}
+
+func TestScenarioHDefaultFailureTimeoutCoversProductionMetadataCall(t *testing.T) {
+	timeouts := (scenarioHTimeouts{}).resolved()
+	if timeouts.Failure != maximumScenarioHDependencyFailure {
+		t.Fatalf("failure timeout = %s, want %s", timeouts.Failure, maximumScenarioHDependencyFailure)
+	}
 }
 
 type overlapController struct {

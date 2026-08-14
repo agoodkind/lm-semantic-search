@@ -18,10 +18,11 @@ const (
 	embedderBusyCode           = "embedder_busy"
 	milvusUnavailableCode      = "milvus_unavailable"
 
-	maximumClydeSearchRecovery = 150 * time.Second
-	maximumClydeFeederRecovery = 225 * time.Second
-	maximumEmptyEtcdBoot       = 70 * time.Second
-	maximumJobCapacityRecovery = 5 * time.Second
+	maximumClydeSearchRecovery        = 150 * time.Second
+	maximumClydeFeederRecovery        = 225 * time.Second
+	maximumEmptyEtcdBoot              = 70 * time.Second
+	maximumJobCapacityRecovery        = 5 * time.Second
+	maximumScenarioHDependencyFailure = 70 * time.Second
 )
 
 type semanticSearchObservation struct {
@@ -463,6 +464,9 @@ func runScenarioG(ctx context.Context, input scenarioGInput) (scenarioGResult, e
 	if err != nil {
 		return scenarioGResult{}, fmt.Errorf("scenario G target caller failure: %w", err)
 	}
+	if err := waitForLoadCount(ctx, input.LoadCount, 2, timeouts.Recovery, timeouts.Poll); err != nil {
+		return scenarioGResult{}, fmt.Errorf("scenario G wait for recovery load: %w", err)
+	}
 	input.ClearLoading()
 	faultActive = false
 	input.ReleaseSecondJob()
@@ -533,11 +537,6 @@ func recoverScenarioG(
 ) (string, semanticSearchObservation, error) {
 	recoveryContext, cancelRecovery := context.WithTimeout(ctx, timeouts.Recovery)
 	defer cancelRecovery()
-	if _, err := waitForObservedJob(recoveryContext, input.ObserveJob, secondJobID, timeouts.Poll, func(job jobObservation) bool {
-		return job.State == "completed"
-	}); err != nil {
-		return "", semanticSearchObservation{}, fmt.Errorf("scenario G wait for second job completion: %w", err)
-	}
 	targetJob, err := waitForObservedJob(recoveryContext, input.ObserveJob, targetJobID, timeouts.Poll, func(job jobObservation) bool {
 		return slices.Contains([]string{"completed", "failed", "canceled"}, job.State)
 	})
@@ -553,11 +552,16 @@ func recoverScenarioG(
 		if recoveredJobID == "" {
 			return "", semanticSearchObservation{}, fmt.Errorf("scenario G restarted target job returned no id")
 		}
-		if _, err := waitForObservedJob(recoveryContext, input.ObserveJob, recoveredJobID, timeouts.Poll, func(job jobObservation) bool {
-			return job.State == "completed"
-		}); err != nil {
-			return "", semanticSearchObservation{}, fmt.Errorf("scenario G wait for restarted target job completion: %w", err)
-		}
+	}
+	if _, err := waitForObservedJob(recoveryContext, input.ObserveJob, secondJobID, timeouts.Poll, func(job jobObservation) bool {
+		return job.State == "completed"
+	}); err != nil {
+		return "", semanticSearchObservation{}, fmt.Errorf("scenario G wait for second job completion: %w", err)
+	}
+	if _, err := waitForObservedJob(recoveryContext, input.ObserveJob, recoveredJobID, timeouts.Poll, func(job jobObservation) bool {
+		return job.State == "completed"
+	}); err != nil {
+		return "", semanticSearchObservation{}, fmt.Errorf("scenario G wait for recovered target job completion: %w", err)
 	}
 	recovered, err := waitForSemanticSuccess(recoveryContext, input.SearchEditedTarget, timeouts.Recovery, timeouts.Poll)
 	if err != nil {
@@ -584,7 +588,7 @@ type scenarioHTimeouts struct {
 
 func (timeouts scenarioHTimeouts) resolved() scenarioHTimeouts {
 	if timeouts.Failure <= 0 {
-		timeouts.Failure = defaultScenarioFailureTimeout
+		timeouts.Failure = maximumScenarioHDependencyFailure
 	}
 	if timeouts.Recovery <= 0 {
 		timeouts.Recovery = defaultScenarioRecoveryTimeout

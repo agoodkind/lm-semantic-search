@@ -372,6 +372,7 @@ type scenarioCInput struct {
 	ExpectedUnfinishedIDs []string
 	ObserveRows           rowSnapshotObserver
 	ObserveCheckpoint     checkpointSnapshotObserver
+	ReleaseHeldEmbedding  func()
 	Recorder              *evidenceRecorder
 	Timeouts              scenarioTimeouts
 }
@@ -457,6 +458,7 @@ func runScenarioC(ctx context.Context, input scenarioCInput) (_ scenarioCResult,
 	if !lockAvailable {
 		return scenarioCResult{}, fmt.Errorf("scenario C kernel did not reclaim sync lock after SIGKILL")
 	}
+	input.ReleaseHeldEmbedding()
 	restarted, err := startInstalledProcess(input.Process)
 	if err != nil {
 		return scenarioCResult{}, err
@@ -517,6 +519,9 @@ func validateScenarioCInput(input scenarioCInput) error {
 	}
 	if input.Process.Path == "" || input.SocketPath == "" || input.LockPath == "" {
 		return fmt.Errorf("scenario C requires an installed process, socket, and lock path")
+	}
+	if input.ReleaseHeldEmbedding == nil {
+		return fmt.Errorf("scenario C requires an embedding hold release")
 	}
 	return nil
 }

@@ -144,19 +144,13 @@ offline-live: | $(GO_MK_PREREQS)
 restart-acceptance-unit: | $(GO_MK_PREREQS)
 	go test -tags restartacceptance -count=1 ./test/restartacceptance/
 
-# restart-acceptance runs the opt-in, isolated-clone acceptance harness against
-# the production default database after both exact confirmations are provided.
+# restart-acceptance runs the opt-in acceptance harness only against the restored clone.
 restart-acceptance: | $(GO_MK_PREREQS)
 	@test "$$LMS_RESTART_ACCEPTANCE_CONFIRM" = "isolated-clone" || { \
 		echo 'restart-acceptance: LMS_RESTART_ACCEPTANCE_CONFIRM must equal "isolated-clone"' >&2; \
 		exit 1; \
 	}
-	@test "$$LMS_PRODUCTION_CONFIRM_DATABASE" = "default" || { \
-		echo 'restart-acceptance: LMS_PRODUCTION_CONFIRM_DATABASE must equal "default"' >&2; \
-		exit 1; \
-	}
 	go test -timeout=2h -tags 'restartacceptance restartacceptancelive' -count=1 -run '^TestRestartAcceptance$$' ./test/restartacceptance/
-
 # daemon-status and daemon-wait call the installed CLI; kill-orphans matches the
 # installed MCP binary by name.
 CLI_INSTALL_BIN := $(INSTALL_DIR)/$(CLI_BINARY)
