@@ -108,15 +108,20 @@ func (syncer *BackgroundSync) Start(ctx context.Context) {
 		}()
 	}
 	if syncer.cfg.BackgroundSyncEnabled {
-		go func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					slog.ErrorContext(ctx, "background sync loop panic", "loop", "runPeriodicSync", "err", recovered)
-				}
-			}()
-			syncer.runPeriodicSync(ctx)
-		}()
+		syncer.startLoop(ctx, "runPeriodicSync", syncer.runPeriodicSync)
+		syncer.startLoop(ctx, "runPeriodicMaintenance", syncer.runPeriodicMaintenance)
 	}
+}
+
+func (syncer *BackgroundSync) startLoop(ctx context.Context, name string, loop func(context.Context)) {
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(ctx, "background sync loop panic", "loop", name, "err", recovered)
+			}
+		}()
+		loop(ctx)
+	}()
 }
 
 // AddCodebase forwards a newly registered codebase to the underlying watcher so
@@ -166,33 +171,40 @@ func (syncer *BackgroundSync) IndexStopped(_ context.Context, codebaseID string)
 }
 
 func (syncer *BackgroundSync) runPeriodicSync(ctx context.Context) {
+	syncer.runPeriodicLoop(ctx, func() { syncer.runSyncAll(ctx, "interval") })
+}
+
+func (syncer *BackgroundSync) runPeriodicMaintenance(ctx context.Context) {
+	syncer.runPeriodicLoop(ctx, func() { syncer.runPeriodicMaintenanceOnce(ctx) })
+}
+
+func (syncer *BackgroundSync) runPeriodicMaintenanceOnce(ctx context.Context) {
+	syncer.ensureMmapEnabled(ctx)
+	syncer.backfillConversationColumns(ctx)
+}
+
+func (syncer *BackgroundSync) runPeriodicLoop(ctx context.Context, action func()) {
 	initialTimer := time.NewTimer(defaultInitialSyncDelay)
 	defer initialTimer.Stop()
-
-	syncInterval := time.Duration(syncer.cfg.SyncIntervalMS) * time.Millisecond
+	interval := time.Duration(syncer.cfg.SyncIntervalMS) * time.Millisecond
 	if syncer.cfg.SyncIntervalMS < minimumSyncIntervalMS {
-		syncInterval = time.Duration(minimumSyncIntervalMS) * time.Millisecond
+		interval = time.Duration(minimumSyncIntervalMS) * time.Millisecond
 	}
-	ticker := time.NewTicker(syncInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-initialTimer.C:
-			syncer.ensureMmapEnabled(ctx)
-			syncer.backfillConversationColumns(ctx)
-			syncer.runSyncAll(ctx, "startup")
+			action()
 		case <-ticker.C:
-			syncer.ensureMmapEnabled(ctx)
-			syncer.backfillConversationColumns(ctx)
-			syncer.runSyncAll(ctx, "interval")
+			action()
 		}
 	}
 }
 
-// ensureMmapEnabled drives the idempotent dense-vector mmap migration across all
+// ensureMmapEnabled drives
 // collections once per periodic tick. It is a no-op when Milvus is unavailable
 // and near-free after the first successful sweep (already-migrated collections
 // are in-memory guard hits), so it is safe to run on every tick. Running it from

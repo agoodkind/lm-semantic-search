@@ -144,6 +144,26 @@ func TestWaitForCollectionLoadHonorsCallerCancellation(t *testing.T) {
 	}
 }
 
+func TestCollectionLoadPollRecognizesElapsedBoundBeforeTimerCancellation(t *testing.T) {
+	if !collectionLoadPollBoundExpired(
+		context.Background(),
+		context.Background(),
+		0,
+	) {
+		t.Fatal("elapsed poll bound was not recognized before context cancellation became visible")
+	}
+
+	parent, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+	if collectionLoadPollBoundExpired(
+		parent,
+		context.Background(),
+		0,
+	) {
+		t.Fatal("caller cancellation was mistaken for poll-bound exhaustion")
+	}
+}
+
 // Concurrent callers for one collection share the whole load operation. The
 // leader issues the initial load and the bounded recovery, while followers
 // observe the same outcome without multiplying either request.

@@ -273,6 +273,7 @@ func pollCollectionLoad(
 ) (collectionLoadState, error) {
 	boundedCtx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
+	pollDeadline, _ := boundedCtx.Deadline()
 
 	ticker := time.NewTicker(collectionLoadPollInterval)
 	defer ticker.Stop()
@@ -281,7 +282,11 @@ func pollCollectionLoad(
 	for {
 		state, err := probe(boundedCtx)
 		if err != nil {
-			if boundedCtx.Err() != nil && ctx.Err() == nil {
+			if collectionLoadPollBoundExpired(
+				ctx,
+				boundedCtx,
+				clock.Until(pollDeadline),
+			) {
 				return last, nil
 			}
 			return last, err
@@ -304,6 +309,20 @@ func pollCollectionLoad(
 		case <-ticker.C:
 		}
 	}
+}
+
+// gRPC can report DeadlineExceeded at the poll deadline before the context
+// timer publishes Err. Comparing the same monotonic deadline keeps that race
+// on the bounded-load path while an earlier caller cancellation still wins.
+func collectionLoadPollBoundExpired(
+	callerCtx context.Context,
+	pollCtx context.Context,
+	pollTimeRemaining time.Duration,
+) bool {
+	if callerCtx.Err() != nil {
+		return false
+	}
+	return pollCtx.Err() != nil || pollTimeRemaining <= 0
 }
 
 // loadProgressField renders the reported load progress for a log field and an

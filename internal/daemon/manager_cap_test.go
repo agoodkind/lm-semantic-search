@@ -62,6 +62,17 @@ func newTestManagerWithCap(t *testing.T, maxConcurrent int) (*Manager, config.Co
 	return manager, cfg
 }
 
+func TestDefaultJobCapacityReleaseLeavesSchedulerMargin(t *testing.T) {
+	timings := defaultJobCapacityTimings()
+	if timings.ReleaseGrace >= defaultJobCapacityReacquireTimeout {
+		t.Fatalf(
+			"release grace = %s, want less than the %s capacity recovery contract",
+			timings.ReleaseGrace,
+			defaultJobCapacityReacquireTimeout,
+		)
+	}
+}
+
 // newCapTestRepo mints a fresh repo directory containing a single Go file so
 // each cap-test job converges on a distinct codebase path.
 func newCapTestRepo(t *testing.T) string {

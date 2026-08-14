@@ -25,9 +25,9 @@ const (
 	// by watching: a healthy reuse read answers in milliseconds and keeps both
 	// holds, while a read parked behind a collection load that Milvus never
 	// finishes crosses the grace and frees them for the minutes it may still
-	// take. It equals the resume bound on purpose, so a job never gives up holds
-	// for a read shorter than the time it is willing to wait to get them back.
-	defaultJobCapacityReleaseGrace = defaultJobCapacityReacquireTimeout
+	// take. The half-second margin covers timer and scheduler delay so another
+	// job can observe the released capacity within the five-second contract.
+	defaultJobCapacityReleaseGrace = 4500 * time.Millisecond
 )
 
 type jobCapacityContextKey struct{}

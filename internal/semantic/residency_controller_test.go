@@ -1593,3 +1593,153 @@ func TestResidencyNormalLeaseResetsDeadlineAcrossResidentLease(t *testing.T) {
 		t.Fatalf("idle deadline = %d, want %d after normal use", deadline, want)
 	}
 }
+
+func TestResidencyRenameUnblocksMaintenanceWaitingOnLiveName(t *testing.T) {
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		waitTimeout: time.Second,
+		loadCeiling: time.Second,
+		load: func(context.Context, string) error {
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	promotion, err := controller.Maintain(
+		context.Background(),
+		"collection",
+		"collection_stg",
+	)
+	if err != nil {
+		t.Fatalf("Maintain promotion returned error: %v", err)
+	}
+	waiterResult := make(chan error, 1)
+	go func() {
+		maintenance, maintainErr := controller.Maintain(
+			context.Background(),
+			"collection",
+		)
+		if maintenance != nil {
+			maintenance.Release()
+		}
+		waiterResult <- maintainErr
+	}()
+	controller.Rename("collection_stg", "collection")
+	promotion.Release()
+
+	select {
+	case err := <-waiterResult:
+		if err != nil {
+			t.Fatalf("waiting Maintain returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiting Maintain remained blocked after promotion")
+	}
+}
+
+func TestReconciliationDoesNotLeavePromotedLiveEntryInMaintenance(t *testing.T) {
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		waitTimeout: time.Second,
+		loadCeiling: time.Second,
+		load: func(context.Context, string) error {
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	generation := controller.beginReconciliation()
+	promotion, err := controller.Maintain(
+		context.Background(),
+		"collection",
+		"collection_stg",
+	)
+	if err != nil {
+		t.Fatalf("Maintain promotion returned error: %v", err)
+	}
+	controller.applyReconciliation(
+		context.Background(),
+		generation,
+		"collection",
+		collectionResidencyCold,
+	)
+	controller.Rename("collection_stg", "collection")
+	promotion.Release()
+
+	controller.mutex.Lock()
+	entry := controller.entries["collection"]
+	maintenance := entry.maintenance
+	controller.mutex.Unlock()
+	if maintenance {
+		t.Fatal("promoted live collection retained exclusive maintenance")
+	}
+	lease, err := controller.Acquire(context.Background(), "collection")
+	if err != nil {
+		t.Fatalf("Acquire promoted collection returned error: %v", err)
+	}
+	lease.Release()
+}
+
+func TestResidencyRenameUnblocksObservationWaitingOnLiveName(t *testing.T) {
+	controller := newCollectionResidencyController(residencyControllerConfig{
+		waitTimeout: time.Second,
+		loadCeiling: time.Second,
+		load: func(context.Context, string) error {
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		_ = controller.Close(context.Background())
+	})
+
+	promotion, err := controller.Maintain(
+		context.Background(),
+		"collection",
+		"collection_stg",
+	)
+	if err != nil {
+		t.Fatalf("Maintain promotion returned error: %v", err)
+	}
+	controller.mutex.Lock()
+	liveEntry := controller.entries["collection"]
+	controller.mutex.Unlock()
+	result := make(chan error, 1)
+	go func() {
+		_, observation, observeErr := controller.Observe(
+			context.Background(),
+			"collection",
+		)
+		if observation != nil {
+			observation.Release()
+		}
+		result <- observeErr
+	}()
+	deadline := time.After(time.Second)
+	for {
+		controller.mutex.Lock()
+		waiting := liveEntry.observations == 0 && liveEntry.maintenance
+		controller.mutex.Unlock()
+		if waiting {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("Observe did not reach live maintenance")
+		default:
+			runtime.Gosched()
+		}
+	}
+	controller.Rename("collection_stg", "collection")
+	promotion.Release()
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("waiting Observe returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiting Observe remained blocked after promotion")
+	}
+}

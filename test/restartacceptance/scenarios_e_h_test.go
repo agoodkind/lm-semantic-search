@@ -295,6 +295,7 @@ func TestRunScenarioGPermanentLoadingReleasesCapacityAndLoadsExactlyTwice(t *tes
 	loadCount := 0
 	failurePolls := 0
 	releasedSecond := false
+	secondRunningAt := time.Now().Add(15 * time.Millisecond)
 
 	result, err := runScenarioG(context.Background(), scenarioGInput{
 		SetLoading:   func() { mutex.Lock(); loading = true; mutex.Unlock() },
@@ -329,6 +330,9 @@ func TestRunScenarioGPermanentLoadingReleasesCapacityAndLoadsExactlyTwice(t *tes
 		ReleaseSecondJob: func() { releasedSecond = true },
 		ObserveJob: func(_ context.Context, jobID string) (jobObservation, error) {
 			if jobID == "second-job" && !releasedSecond {
+				if time.Now().Before(secondRunningAt) {
+					return jobObservation{ID: jobID, State: "queued"}, nil
+				}
 				return jobObservation{ID: jobID, State: "running"}, nil
 			}
 			return jobObservation{ID: jobID, State: "completed"}, nil
@@ -348,6 +352,7 @@ func TestRunScenarioGPermanentLoadingReleasesCapacityAndLoadsExactlyTwice(t *tes
 		Timeouts: scenarioGTimeouts{
 			InitialLoad: 100 * time.Millisecond,
 			Capacity:    100 * time.Millisecond,
+			Observation: 5 * time.Millisecond,
 			Failure:     200 * time.Millisecond,
 			NoThirdLoad: 10 * time.Millisecond,
 			Recovery:    100 * time.Millisecond,
