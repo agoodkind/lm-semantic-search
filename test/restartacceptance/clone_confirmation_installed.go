@@ -98,13 +98,14 @@ func (driver *realAcceptanceDriver) confirmClone(
 			return err
 		}
 		defer driver.stopInstalledProcess(clyde.process)
-		if _, err := waitForSemanticSuccess(
+		if err := waitForCloneConversationSeed(
 			caseContext,
+			func(statusContext context.Context) (clydeStatusObservation, error) {
+				return driver.clydeStatus(statusContext, run, clyde.process.Process.Pid)
+			},
 			func(searchContext context.Context) (semanticSearchObservation, error) {
 				return driver.searchClyde(searchContext, run, fixture.marker)
 			},
-			maximumClydeSearchRecovery,
-			defaultScenarioPollInterval,
 		); err != nil {
 			return fmt.Errorf("seed clone confirmation conversation collection: %w", err)
 		}
@@ -181,6 +182,22 @@ func (driver *realAcceptanceDriver) confirmClone(
 			},
 		)
 	})
+}
+
+func waitForCloneConversationSeed(
+	ctx context.Context,
+	statusObserver func(context.Context) (clydeStatusObservation, error),
+	search func(context.Context) (semanticSearchObservation, error),
+) error {
+	_, err := waitForSeededClydeSearch(
+		ctx,
+		statusObserver,
+		search,
+		maximumClydeFeederRecovery,
+		defaultScenarioFailureTimeout,
+		defaultScenarioPollInterval,
+	)
+	return err
 }
 
 func searchConversationObservation(

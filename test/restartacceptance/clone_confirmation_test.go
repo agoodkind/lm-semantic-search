@@ -142,6 +142,43 @@ func requireBoundedCloneSearch(t *testing.T, ctx context.Context) {
 	}
 }
 
+func TestWaitForCloneConversationSeedWaitsForFeederConvergence(t *testing.T) {
+	statusCalls := 0
+	searchCalls := 0
+	err := waitForCloneConversationSeed(
+		context.Background(),
+		func(context.Context) (clydeStatusObservation, error) {
+			statusCalls++
+			if statusCalls == 1 {
+				return clydeStatusObservation{
+					PID: 7, Responding: true, Manifest: 1, Needed: 1, Pending: 1,
+				}, nil
+			}
+			return clydeStatusObservation{
+				PID: 7, Responding: true, Manifest: 1, Embedded: 1,
+			}, nil
+		},
+		func(context.Context) (semanticSearchObservation, error) {
+			searchCalls++
+			if statusCalls < 2 {
+				t.Fatal("conversation search ran before feeder convergence")
+			}
+			return semanticSearchObservation{
+				Succeeded: true,
+				Source:    "semantic",
+				Matches:   1,
+				ResultIDs: []string{"conversation:0"},
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("wait for clone conversation seed: %v", err)
+	}
+	if searchCalls != 1 {
+		t.Fatalf("search calls = %d, want 1", searchCalls)
+	}
+}
+
 func TestPrepareCloneConfirmationColdTargetsStopsDaemonBeforeBothReleases(t *testing.T) {
 	events := make([]string, 0, 3)
 	err := prepareCloneConfirmationColdTargets(
