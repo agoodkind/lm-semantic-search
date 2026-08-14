@@ -451,7 +451,7 @@ func runScenarioG(ctx context.Context, input scenarioGInput) (scenarioGResult, e
 	if secondJob.ID == "" {
 		return scenarioGResult{}, fmt.Errorf("scenario G second job returned no id")
 	}
-	observationContext, cancelObservation := context.WithTimeout(ctx, timeouts.Observation)
+	observationContext, cancelObservation := context.WithTimeout(ctx, timeouts.Recovery)
 	secondJob, err = waitForObservedJob(observationContext, input.ObserveJob, secondJob.ID, timeouts.Poll, func(job jobObservation) bool {
 		return job.State == "running"
 	})
