@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -176,4 +177,74 @@ func TestRunSyncAllResumesAfterEmbedderRecovers(t *testing.T) {
 	if got := countDaemonSyncJobs(manager); got != len(repos) {
 		t.Fatalf("post-recovery sweep started %d sync jobs, want %d", got, len(repos))
 	}
+}
+
+func TestPeriodicMaintenanceCannotBlockRecoverySweep(t *testing.T) {
+	manager, repos := setupThreeChangedCodebases(t)
+	semantic := &fakeSemantic{}
+	manager.semantic = semantic
+	maintenanceStarted := make(chan struct{})
+	releaseMaintenance := make(chan struct{})
+	semantic.ensureMmap = func(context.Context) {
+		close(maintenanceStarted)
+		<-releaseMaintenance
+	}
+	syncer := NewBackgroundSync(manager.config, manager)
+	maintenanceDone := make(chan struct{})
+	go func() {
+		syncer.runPeriodicMaintenanceOnce(context.Background())
+		close(maintenanceDone)
+	}()
+	select {
+	case <-maintenanceStarted:
+	case <-time.After(time.Second):
+		t.Fatal("mmap maintenance did not start")
+	}
+	syncer.runSyncAll(context.Background(), "test")
+	if got := countDaemonSyncJobs(manager); got == 0 {
+		t.Fatal("recovery did not start while mmap maintenance blocked")
+	}
+	close(releaseMaintenance)
+	select {
+	case <-maintenanceDone:
+	case <-time.After(time.Second):
+		t.Fatal("maintenance did not finish")
+	}
+	drainToIndexed(t, manager, repos)
+}
+
+func TestPeriodicMaintenanceDoesNotLetMmapBlockConversationBackfill(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	semantic := &fakeSemantic{}
+	manager.semantic = semantic
+	mmapStarted := make(chan struct{})
+	releaseMmap := make(chan struct{})
+	backfillStarted := make(chan struct{})
+	semantic.ensureMmap = func(context.Context) {
+		close(mmapStarted)
+		<-releaseMmap
+	}
+	semantic.backfillCollections = func(context.Context) {
+		close(backfillStarted)
+	}
+	syncer := NewBackgroundSync(manager.config, manager)
+	mmapDone := make(chan struct{})
+	go func() {
+		syncer.ensureMmapEnabled(context.Background())
+		close(mmapDone)
+	}()
+	<-mmapStarted
+	backfillDone := make(chan struct{})
+	go func() {
+		syncer.backfillConversationColumns(context.Background())
+		close(backfillDone)
+	}()
+	select {
+	case <-backfillStarted:
+	case <-time.After(time.Second):
+		t.Fatal("conversation backfill waited for blocked mmap maintenance")
+	}
+	<-backfillDone
+	close(releaseMmap)
+	<-mmapDone
 }

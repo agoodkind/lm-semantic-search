@@ -44,6 +44,8 @@ type fakeSemantic struct {
 	// than assuming the debounce holds.
 	probe                 func(ctx context.Context) error
 	probeCount            atomic.Int64
+	ensureMmap            func(context.Context)
+	backfillCollections   func(context.Context)
 	reindex               func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
 	reindexWithReuse      func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
 	stageReindexWithReuse func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
@@ -533,9 +535,17 @@ func (f *fakeSemantic) CopyChunks(ctx context.Context, codebasePath string, src 
 
 func (f *fakeSemantic) PruneToCurrent(context.Context, string, []string) error { return nil }
 
-func (f *fakeSemantic) EnsureMmapEnabledAllCollections(context.Context) {}
+func (f *fakeSemantic) EnsureMmapEnabledAllCollections(ctx context.Context) {
+	if f.ensureMmap != nil {
+		f.ensureMmap(ctx)
+	}
+}
 
-func (f *fakeSemantic) BackfillConversationCollectionsOnce(context.Context) {}
+func (f *fakeSemantic) BackfillConversationCollectionsOnce(ctx context.Context) {
+	if f.backfillCollections != nil {
+		f.backfillCollections(ctx)
+	}
+}
 
 func (f *fakeSemantic) Drop(_ context.Context, codebasePath string) error {
 	f.mu.Lock()

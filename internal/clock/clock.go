@@ -7,3 +7,9 @@ import "time"
 func Now() time.Time {
 	return time.Now().UTC()
 }
+
+// Until returns the duration until deadline while preserving its monotonic
+// clock reading.
+func Until(deadline time.Time) time.Duration {
+	return time.Until(deadline)
+}
