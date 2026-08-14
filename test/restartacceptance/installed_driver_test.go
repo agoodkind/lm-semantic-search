@@ -149,6 +149,23 @@ func TestVerifyEmbeddingReadinessReusesConnectionAfterRejectedProbe(t *testing.T
 	}
 }
 
+func TestVerifyEmbeddingReadinessRejectsOversizedResponse(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}]}`))
+		_, _ = writer.Write([]byte(strings.Repeat("x", embeddingReadinessResponseLimit)))
+	}))
+	t.Cleanup(backend.Close)
+	cfg := config.Config{
+		OpenAIAPIKey:   "test-key",
+		OpenAIBaseURL:  backend.URL + "/v1",
+		EmbeddingModel: "readiness-model",
+	}
+	if err := verifyEmbeddingReadiness(context.Background(), cfg); err == nil {
+		t.Fatal("oversized embedding readiness response succeeded")
+	}
+}
+
 func TestResolveEmbeddingConfigHonorsReadinessDeadline(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })

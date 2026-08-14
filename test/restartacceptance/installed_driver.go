@@ -1433,7 +1433,14 @@ func verifyEmbeddingReadiness(ctx context.Context, cfg config.Config) error {
 			Embedding []float32 `json:"embedding"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, embeddingReadinessResponseLimit)).Decode(&result); err != nil {
+	payload, err := io.ReadAll(io.LimitReader(response.Body, embeddingReadinessResponseLimit+1))
+	if err != nil {
+		return fmt.Errorf("read embedding readiness response: %w", err)
+	}
+	if len(payload) > embeddingReadinessResponseLimit {
+		return fmt.Errorf("verify embedding readiness: response exceeds %d bytes", embeddingReadinessResponseLimit)
+	}
+	if err := json.Unmarshal(payload, &result); err != nil {
 		return fmt.Errorf("decode embedding readiness response: %w", err)
 	}
 	if len(result.Data) != 1 || len(result.Data[0].Embedding) == 0 {
