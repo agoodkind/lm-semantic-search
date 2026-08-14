@@ -8,11 +8,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -26,6 +28,14 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 	"google.golang.org/grpc"
 )
+
+type shutdownAcceptanceServer struct {
+	pb.UnimplementedSemanticSearchDaemonServiceServer
+}
+
+func (shutdownAcceptanceServer) Shutdown(context.Context, *pb.ShutdownRequest) (*pb.ShutdownResponse, error) {
+	return &pb.ShutdownResponse{}, nil
+}
 
 func TestStartCaseProxiesUsesOnlyLocalEmbeddingBackend(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "http://127.0.0.1:1/forbidden-host-backend")
@@ -65,6 +75,35 @@ func TestStartCaseProxiesUsesOnlyLocalEmbeddingBackend(t *testing.T) {
 	if !slices.Equal(decoded.Data[0].Embedding, decoded.Data[1].Embedding) {
 		t.Fatal("identical local embedding inputs returned different vectors")
 	}
+}
+
+func TestStopDaemonRuntimeAllowsTheDaemonToFinishItsShutdownWindow(t *testing.T) {
+	client := startScenarioFakeGRPC(t, shutdownAcceptanceServer{})
+	process := exec.Command(os.Args[0], "-test.run=^TestRestartAcceptanceDelayedExitProbe$")
+	process.Env = append(os.Environ(), "LMS_RESTART_DELAYED_EXIT=100ms")
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &daemonRuntime{
+		process: process,
+		client:  client,
+		close:   io.NopCloser(strings.NewReader("")),
+	}
+	if err := stopDaemonRuntimeWithin(runtime, 5*time.Second); err != nil {
+		t.Fatalf("stop daemon within external shutdown window: %v", err)
+	}
+}
+
+func TestRestartAcceptanceDelayedExitProbe(t *testing.T) {
+	delay := os.Getenv("LMS_RESTART_DELAYED_EXIT")
+	if delay == "" {
+		return
+	}
+	duration, err := time.ParseDuration(delay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(duration)
 }
 
 func TestVerifyEmbeddingReadinessReusesConnectionAfterRejectedProbe(t *testing.T) {

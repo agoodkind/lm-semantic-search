@@ -49,6 +49,7 @@ const (
 	scenarioGIdleTimeoutMilliseconds     = 60000
 	embeddingReadinessTimeout            = 30 * time.Second
 	embeddingReadinessResponseLimit      = 4 << 20
+	daemonProcessExitTimeout             = 30 * time.Second
 )
 
 type realAcceptanceDriver struct {
@@ -1403,10 +1404,14 @@ func checkpointObserverForSocket(socket string, path string, merkleRoot string) 
 }
 
 func stopDaemonRuntime(runtime *daemonRuntime) error {
+	return stopDaemonRuntimeWithin(runtime, daemonProcessExitTimeout)
+}
+
+func stopDaemonRuntimeWithin(runtime *daemonRuntime, timeout time.Duration) error {
 	if runtime == nil {
 		return nil
 	}
-	stopContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	stopContext, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := runtime.stop(stopContext); err != nil {
 		killErr := runtime.kill()
