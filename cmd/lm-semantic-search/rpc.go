@@ -21,6 +21,18 @@ type protoMessage = proto.Message
 
 type rpcCall func(context.Context, pb.SemanticSearchDaemonServiceClient) (protoMessage, error)
 
+// resolveClientInfo builds the caller metadata every daemon RPC carries. It
+// owns the log line and the wrapping for that failure, so each command can
+// surface the error with a bare return instead of repeating both.
+func resolveClientInfo() (*pb.ClientInfo, error) {
+	clientInfo, err := response.CurrentClientInfo()
+	if err != nil {
+		slog.Error("resolve client info failed", "err", err)
+		return nil, fmt.Errorf("resolve client info: %w", err)
+	}
+	return clientInfo, nil
+}
+
 // callDaemon dials the daemon, runs one RPC, and returns the raw proto reply.
 // It is the shared seam under callAndPrint and the interactive list view, so the
 // TUI can fetch records without the print step double-emitting output.

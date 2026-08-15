@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -71,9 +72,9 @@ func newCodebaseStatusCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase status /abs/path/to/repo",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := response.CurrentClientInfo()
+			clientInfo, err := resolveClientInfo()
 			if err != nil {
-				return fmt.Errorf("resolve client info: %w", err)
+				return err
 			}
 			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
 				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: args[0], Client: clientInfo})
@@ -105,9 +106,9 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase index /abs/path/to/repo --splitter ast",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := response.CurrentClientInfo()
+			clientInfo, err := resolveClientInfo()
 			if err != nil {
-				return fmt.Errorf("resolve client info: %w", err)
+				return err
 			}
 			cliOpts := options.cliOptions()
 			if waitTimeout > 0 && cliOpts.outputMode != response.ModeHuman {
@@ -168,9 +169,9 @@ func newCodebaseSyncCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase sync /abs/path/to/repo",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := response.CurrentClientInfo()
+			clientInfo, err := resolveClientInfo()
 			if err != nil {
-				return fmt.Errorf("resolve client info: %w", err)
+				return err
 			}
 			cliOpts := options.cliOptions()
 			if waitTimeout > 0 && cliOpts.outputMode != response.ModeHuman {
@@ -229,12 +230,15 @@ func newCodebaseWaitCmd(options *rootOptions) *cobra.Command {
 			}
 			result, err := wait.ForIndexStatus(cmd.Context(), cliOpts.socketPath, args[0], waitTimeout)
 			if err != nil {
+				// The last status the daemon answered still tells the operator how
+				// far the build got, so print it before surfacing the failure.
 				if result != nil {
 					if printErr := printResponse(cliOpts, result); printErr != nil {
 						return printErr
 					}
 				}
-				return err
+				slog.ErrorContext(cmd.Context(), "wait for indexing failed", "path", args[0], "err", err)
+				return fmt.Errorf("wait for indexing: %w", err)
 			}
 			return printResponse(cliOpts, result)
 		},
@@ -263,9 +267,9 @@ func newCodebaseSearchCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase search /abs/path/to/repo splitter --limit 5",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := response.CurrentClientInfo()
+			clientInfo, err := resolveClientInfo()
 			if err != nil {
-				return fmt.Errorf("resolve client info: %w", err)
+				return err
 			}
 			searchLimit, err := safeSearchLimit(limit)
 			if err != nil {
@@ -302,9 +306,9 @@ func newCodebaseClearCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search codebase clear /abs/path/to/repo",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := response.CurrentClientInfo()
+			clientInfo, err := resolveClientInfo()
 			if err != nil {
-				return fmt.Errorf("resolve client info: %w", err)
+				return err
 			}
 			return callAndPrint(options.cliOptions(), func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
 				return client.ClearIndex(ctx, &pb.ClearIndexRequest{Path: args[0], Client: clientInfo})

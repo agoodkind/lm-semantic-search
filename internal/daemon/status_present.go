@@ -177,6 +177,7 @@ func resolveQuarantineSurface(codebase model.Codebase) view.QuarantineSurface {
 // incremental, ready, and waiting.
 func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display displayStatus, waitLabel string) (view.StatusView, string) {
 	statusView := blankStatusView(filepath.Base(codebase.CanonicalPath), formatStampWithRelative(codebase.UpdatedAt))
+	statusView.Path = codebase.CanonicalPath
 	switch display {
 	case displayDiscovered:
 		// A discovered worktree is registered and watched but not yet built. The
@@ -272,6 +273,7 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 func blankStatusView(name string, updatedAt string) view.StatusView {
 	return view.StatusView{
 		Name:              name,
+		Path:              "",
 		HasStats:          false,
 		Files:             0,
 		Chunks:            0,
