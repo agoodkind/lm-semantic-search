@@ -198,7 +198,11 @@ func renderGetIndexBody(getIndex view.GetIndexView) string {
 
 func renderStatusBody(statusView view.StatusView, templateName string) string {
 	block := strings.Join(BreakdownLines(statusView.Breakdown), "\n")
-	return renderStatusTemplate(templateName, statusTemplateData{StatusView: statusView, BreakdownBlock: block})
+	return renderStatusTemplate(templateName, statusTemplateData{
+		StatusView:     statusView,
+		BreakdownBlock: block,
+		QuotedPath:     shellQuote(statusView.Path),
+	})
 }
 
 func renderListIndexes(views []view.CodebaseRowView) string {

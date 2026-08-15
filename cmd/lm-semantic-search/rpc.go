@@ -21,21 +21,16 @@ type protoMessage = proto.Message
 
 type rpcCall func(context.Context, pb.SemanticSearchDaemonServiceClient) (protoMessage, error)
 
-func currentClientInfo() (*pb.ClientInfo, error) {
-	pid := os.Getpid()
-	if pid < 0 || pid > math.MaxInt32 {
-		return nil, fmt.Errorf("process id %d does not fit in int32", pid)
-	}
-	workingDir, err := os.Getwd()
+// resolveClientInfo builds the caller metadata every daemon RPC carries. It
+// owns the log line and the wrapping for that failure, so each command can
+// surface the error with a bare return instead of repeating both.
+func resolveClientInfo() (*pb.ClientInfo, error) {
+	clientInfo, err := response.CurrentClientInfo()
 	if err != nil {
-		slog.Error("resolve working directory failed", "err", err)
-		return nil, fmt.Errorf("resolve working directory: %w", err)
+		slog.Error("resolve client info failed", "err", err)
+		return nil, fmt.Errorf("resolve client info: %w", err)
 	}
-	return &pb.ClientInfo{
-		Name:      "cli",
-		Pid:       int32(pid),
-		CallerCwd: workingDir,
-	}, nil
+	return clientInfo, nil
 }
 
 // callDaemon dials the daemon, runs one RPC, and returns the raw proto reply.

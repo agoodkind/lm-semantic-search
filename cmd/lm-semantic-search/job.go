@@ -82,7 +82,7 @@ func newJobCancelCmd(options *rootOptions) *cobra.Command {
 			"  lm-semantic-search job cancel job_123",
 		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientInfo, err := currentClientInfo()
+			clientInfo, err := resolveClientInfo()
 			if err != nil {
 				return err
 			}
