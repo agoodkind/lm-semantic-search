@@ -7,6 +7,7 @@ import (
 	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -60,6 +61,36 @@ func TestForIndexStatusWithClientPollsUntilSearchable(t *testing.T) {
 	}
 	if client.getIndexCalls != 3 {
 		t.Fatalf("GetIndex calls = %d, want 3", client.getIndexCalls)
+	}
+}
+
+func TestForIndexStatusWithClientPollsDiscoveredUntilSearchable(t *testing.T) {
+	originalInterval := watchPollInterval
+	watchPollInterval = time.Millisecond
+	t.Cleanup(func() { watchPollInterval = originalInterval })
+
+	client := &mockDaemonClient{
+		responses: []*pb.GetIndexResponse{
+			{
+				Codebase:   &pb.Codebase{Status: string(model.CodebaseStatusDiscovered)},
+				Searchable: proto.Bool(false),
+			},
+			{Searchable: proto.Bool(true)},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := forIndexStatusWithClient(ctx, client, "/repo", &pb.ClientInfo{Name: "test"})
+	if err != nil {
+		t.Fatalf("forIndexStatusWithClient returned error: %v", err)
+	}
+	if !result.GetSearchable() {
+		t.Fatal("forIndexStatusWithClient did not return searchable result")
+	}
+	if client.getIndexCalls != 2 {
+		t.Fatalf("GetIndex calls = %d, want 2", client.getIndexCalls)
 	}
 }
 
