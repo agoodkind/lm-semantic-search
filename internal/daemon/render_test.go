@@ -1437,6 +1437,33 @@ func TestStatusFooterRendersAcrossCodebaseTemplates(t *testing.T) {
 	}
 }
 
+// TestNotReadyStatusOffersAShellSafeWaitCommand proves the two not-ready
+// layouts hand the operator a wait command they can paste verbatim. The path
+// carries a space and an apostrophe, so an unquoted or half-quoted path would
+// run as several arguments and index the wrong directory.
+func TestNotReadyStatusOffersAShellSafeWaitCommand(t *testing.T) {
+	t.Parallel()
+	const awkwardPath = "/Users/agoodkind/My Sites/alex's repo"
+	const wantCommand = `lm-semantic-search codebase wait '/Users/agoodkind/My Sites/alex'"'"'s repo'`
+
+	for _, templateName := range []string{"pending.md.tmpl", "loading.md.tmpl"} {
+		t.Run(templateName, func(t *testing.T) {
+			t.Parallel()
+			out := render.GetIndex(view.GetIndexView{
+				Tracked:      true,
+				TemplateName: templateName,
+				Status:       view.StatusView{Name: "repo", Path: awkwardPath},
+			})
+			if !strings.Contains(out, wantCommand) {
+				t.Fatalf("%s missing shell-safe wait command %q:\n%s", templateName, wantCommand, out)
+			}
+			if !strings.Contains(out, "wait_for_indexing") {
+				t.Fatalf("%s missing the MCP tool alternative:\n%s", templateName, out)
+			}
+		})
+	}
+}
+
 // TestRenderClearIndexHasNoRemainLine proves the clear output is just the
 // success line, with no trailing "other ... remain" count.
 func TestRenderClearIndexHasNoRemainLine(t *testing.T) {

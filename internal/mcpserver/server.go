@@ -23,6 +23,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/orphanguard"
 	"goodkind.io/lm-semantic-search/internal/response"
+	"goodkind.io/lm-semantic-search/internal/wait"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -60,6 +61,7 @@ func Run(ctx context.Context) error {
 	registerIndexTool(mcpServer, cfg.SocketPath, outputMode)
 	registerClearTool(mcpServer, cfg.SocketPath, outputMode)
 	registerStatusTool(mcpServer, cfg.SocketPath, outputMode)
+	registerWaitForIndexingTool(mcpServer, cfg.SocketPath, outputMode)
 	registerListIndexesTool(mcpServer, cfg.SocketPath, outputMode)
 	registerListJobsTool(mcpServer, cfg.SocketPath, outputMode)
 	registerGetJobTool(mcpServer, cfg.SocketPath, outputMode)
@@ -203,6 +205,42 @@ func registerStatusTool(mcpServer *server.MCPServer, socketPath string, outputMo
 			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
 				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: absolutePath, Client: mcpClientInfo()})
 			})
+		}),
+	)
+}
+
+func registerWaitForIndexingTool(mcpServer *server.MCPServer, socketPath string, outputMode response.Mode) {
+	mcpServer.AddTool(
+		mcp.NewTool(
+			"wait_for_indexing",
+			mcp.WithDescription("Wait for a codebase to become searchable through the daemon"),
+			mcp.WithString("absolutePath", mcp.Required(), mcp.Description("absolute path to the codebase directory")),
+			mcp.WithNumber("wait_timeout_seconds", mcp.Description("max seconds to wait; on timeout the tool returns the current progress (default 300)")),
+		),
+		wrapTool("wait_for_indexing", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			absolutePath, errResult, ok := requireNonEmptyArg(req, "absolutePath")
+			if !ok {
+				return errResult, nil
+			}
+			timeoutSeconds := req.GetInt("wait_timeout_seconds", defaultIndexWaitSeconds)
+			if timeoutSeconds <= 0 {
+				timeoutSeconds = defaultIndexWaitSeconds
+			}
+			timeout := time.Duration(timeoutSeconds) * time.Second
+			result, waitErr := wait.ForIndexStatusWithClientInfo(ctx, socketPath, absolutePath, timeout, mcpClientInfo())
+			// A timeout or an interrupt still carries the last status the daemon
+			// answered, and that progress is the useful reply, so it renders like
+			// any other status. Only a wait that produced no status at all is
+			// reported as a tool error.
+			if result == nil {
+				message := "wait for indexing returned no status"
+				if waitErr != nil {
+					message = "wait for indexing: " + waitErr.Error()
+				}
+				slog.ErrorContext(ctx, "wait for indexing returned no status", "path", absolutePath, "err", waitErr)
+				return toolErrorResult(message), nil
+			}
+			return renderToolResponse(outputMode, result)
 		}),
 	)
 }
