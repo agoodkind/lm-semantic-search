@@ -14,6 +14,7 @@ import (
 
 	daemonclient "goodkind.io/lm-semantic-search/client"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/response"
 )
 
@@ -41,8 +42,8 @@ var ErrWaitCancelled = errors.New("wait cancelled")
 // operation is read-only and never calls StartIndex.
 //
 // Terminal nonready means the daemon answered a definite not-searchable
-// verdict with no active indexing job and collection_readiness outside the
-// in-progress states (building, loading).
+// verdict outside the discovered, pending, indexing, building, and loading
+// states, with no active indexing job.
 func ForIndexStatus(ctx context.Context, socketPath string, path string, timeout time.Duration) (*pb.GetIndexResponse, error) {
 	clientInfo, err := response.CurrentClientInfo()
 	if err != nil {
@@ -140,6 +141,12 @@ func indexStatusIsFinal(current *pb.GetIndexResponse) bool {
 		return true
 	}
 	if current.Searchable == nil {
+		return false
+	}
+	codebaseStatus := model.CodebaseStatus(current.GetCodebase().GetStatus())
+	if codebaseStatus == model.CodebaseStatusDiscovered ||
+		codebaseStatus == model.CodebaseStatusPending ||
+		codebaseStatus == model.CodebaseStatusIndexing {
 		return false
 	}
 	readiness := current.GetCollectionReadiness()
