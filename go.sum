@@ -465,8 +465,8 @@ github.com/mdlayher/socket v0.5.1 h1:VZaqt6RkGkt2OE9l3GcC6nZkqD3xKeQLyfleW/uBcos
 github.com/mdlayher/socket v0.5.1/go.mod h1:TjPLHI1UgwEv5J1B5q0zTZq12A/6H7nKmtTanQE37IQ=
 github.com/mediocregopher/radix/v3 v3.4.2/go.mod h1:8FL3F6UQRXHXIBSPUs5h0RybMF8i4n7wVopoX3x7Bv8=
 github.com/microcosm-cc/bluemonday v1.0.2/go.mod h1:iVP4YcDBq+n/5fb23BhYFvIMq/leAFZyRl6bYmGDlGc=
-github.com/milvus-io/milvus-proto/go-api/v2 v2.6.22 h1:CgX0hk+8ayjAqZYPlOBL/S8IDoTunKReM7Attsr70BY=
-github.com/milvus-io/milvus-proto/go-api/v2 v2.6.22/go.mod h1:/6UT4zZl6awVeXLeE7UGDWZvXj3IWkRsh3mqsn0DiAs=
+github.com/milvus-io/milvus-proto/go-api/v2 v2.6.23 h1:o+Bgz6W3C4R7ih3FTIWefkDFGVZi/SwtAtHY1Z177Kk=
+github.com/milvus-io/milvus-proto/go-api/v2 v2.6.23/go.mod h1:/6UT4zZl6awVeXLeE7UGDWZvXj3IWkRsh3mqsn0DiAs=
 github.com/milvus-io/milvus/client/v2 v2.6.5 h1:aVbw/1+buWbevsdjeI8ttSXxhmZQqMwcz1n0eW3CVzc=
 github.com/milvus-io/milvus/client/v2 v2.6.5/go.mod h1:n8Z5fOqsWwwnIb90VWvvw9IGCT4ZOy++mLc3LaU7Iss=
 github.com/milvus-io/milvus/pkg/v2 v2.6.7-0.20251201120310-af64f2acba38 h1:75pdNz8Ln9jdBxlkUQRJu+P8tz4q+G48XAybS3O30FQ=
