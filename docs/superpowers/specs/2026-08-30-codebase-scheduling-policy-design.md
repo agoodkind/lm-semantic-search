@@ -43,6 +43,7 @@ cutoff.
 - Priority for search requests or code-graph queries.
 - Priority controls for conversation document codebases. Their jobs remain
   normal priority and still participate in global admission.
+- A new MCP sync tool. Sync overrides use the CLI and existing gRPC method.
 - Wayland, X11, or desktop-session helper processes.
 
 ## Scheduling policy
@@ -96,9 +97,9 @@ fields and only those fields on active, paused, or queued work. For example,
 `codebase priority` does not reset stored quiet settings or an unrelated
 one-run quiet override on the active job.
 
-The MCP index and sync tools expose the same optional run overrides. A protocol
-update method backs both stored-policy commands so command-line and future
-clients share one mutation path.
+The MCP `index_codebase` tool exposes the same optional index overrides. This
+work adds no MCP sync tool. A protocol update method backs both stored-policy
+commands so command-line and future clients share one mutation path.
 
 ## Scheduler
 
@@ -147,6 +148,11 @@ released as resumable work. If that write fails, the job ends with
 its lease. It never reports paused state that restart recovery cannot prove.
 Resume similarly records and flushes the running transition before the worker
 writes again.
+
+If the resume transition cannot reach durable storage, the job ends failed with
+`resume_journal_failed`. It releases the newly reserved slot and sync-lock lease,
+cleans staging through the terminal failure path, and does not retry or write
+another file.
 
 The scheduler reevaluates admission after a job arrives, finishes, pauses,
 resumes, changes policy, or receives a new platform-activity sample.
@@ -239,10 +245,11 @@ An older daemon can read a registry containing the new JSON fields because it
 ignores unknown fields. A rollback can drop those fields on its next full
 registry rewrite. Release notes must identify that reverse-compatibility limit.
 
-An older daemon does not understand a latest journal state of paused. A
+An older daemon does not understand a latest journal state of paused. A manual
 downgrade must first let every paused job resume and finish, or cancel it, so
-each job's latest event is a state the older daemon understands. The updater or
-operator check refuses downgrade while any paused job remains active.
+each job's latest event is a state the older daemon understands. The automatic
+updater only moves forward, so this work adds no downgrade mechanism. Release
+notes must state the manual drain requirement.
 
 ## Operator visibility
 
@@ -276,6 +283,8 @@ prove:
 - stalled-read yield and reacquisition use scheduler order without duplicate
   release;
 - a pause-journal failure terminates honestly before resumable release;
+- a resume-journal failure terminates and releases reacquired capacity before
+  any further write;
 - an automatically discovered codebase still persists policy on its first
   explicit index;
 - a legacy codebase treats index flags as one-run overrides;
@@ -283,7 +292,7 @@ prove:
 - watcher and periodic work cannot bypass the scheduler;
 - cancellation works while paused;
 - restart recovery preserves a one-run effective policy;
-- downgrade is rejected while a paused latest journal state exists.
+- completion or cancellation leaves no paused latest journal state.
 
 Protocol and command tests prove initial persistence, existing-codebase
 overrides, explicit policy mutation, validation, and consistent human and JSON
