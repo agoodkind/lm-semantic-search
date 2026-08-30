@@ -14,7 +14,7 @@ policy resolved from that stored policy and any one-run override.
 
 The daemon admits every indexing source through one scheduler. High-priority
 work can pause normal- and low-priority work. Normal work can pause low-priority
-work. Low-priority work runs only after all normal- and high-priority work ends.
+work. Free slots go to waiting high, then normal, then low work.
 
 Quiet work requires five minutes without user input. The quiet decision never
 uses graphics processor load, power draw, or ordinary thermal movement because
@@ -125,14 +125,15 @@ cannot overtake it.
 
 Admission follows these rules:
 
-1. High jobs use available slots first.
-2. A waiting high job revokes only enough lower-priority leases to obtain one
+1. Each free slot goes to the highest-priority waiting job.
+2. A waiting high job revokes only enough lower-priority leases to obtain a
    slot.
-3. Normal jobs run when no high job needs their capacity.
-4. A waiting normal job revokes only enough low-priority leases to obtain one
+3. A waiting normal job revokes only enough low-priority leases to obtain a
    slot.
-5. Low jobs run only when no normal or high job waits or runs. Spare slots stay
-   unused while higher-priority work remains active.
+4. A low job may use spare capacity after every waiting high and normal job has
+   a slot.
+5. Running lower-priority jobs continue beside higher-priority jobs until a
+   waiting higher-priority job needs their capacity.
 6. Equal-priority jobs never preempt each other.
 
 Revocation is cooperative. The worker finishes its current file, records
@@ -266,7 +267,7 @@ as far as each contract permits.
 Scheduler tests use temporary codebases and controlled file boundaries to
 prove:
 
-- low waits while any normal or high job waits or runs;
+- every free slot goes to waiting high, then normal, then low work;
 - high and normal arrivals pause only enough lower jobs;
 - the current file finishes before pause;
 - pause releases capacity and resume continues the same job;
