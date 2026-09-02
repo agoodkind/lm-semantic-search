@@ -9,10 +9,12 @@ cache race found during review.
 | Field | Value |
 | --- | --- |
 | Date | 2026-09-02 06:44:42 PDT |
+| PR 262 cleanup date | 2026-09-02 07:02:04 PDT |
 | Branch | `codex/lms-650-resolve-reuse-dimension` |
 | Live base | `ac2b5814fc92fe66885aedc8d92697f8879effbd` |
 | Initial fix | `c8f978b640005c2d9eaee8b9366aa7e432ba8708` |
 | Race fix | `b474aacf94ea536bb912c29ecce67e1e553df98f` |
+| PR 262 cleanup | `3c619e3d8eb71162760da457bf6dec2e0c2a7670` |
 | Class | Source schema validation, transport budgeting, and lifecycle cache correctness |
 | Reviewer tier | Strongest-model whole-branch adversarial review |
 | Verdict | MERGE-READY |
@@ -150,6 +152,27 @@ git merge-tree --write-tree origin/main HEAD
 No open blocker, should-fix, or nit remains. The stale-cache blocker is retained
 above as addressed catch history.
 
+## PR 262 test-cleanup re-review
+
+The range
+`00dc3cc193723dc3e6ca67d954c9eeeb1d279d35..3c619e3d8eb71162760da457bf6dec2e0c2a7670`
+adds one test-only line. The timeout path now closes `releaseDescribe` before
+`t.Fatal`, so a fake gRPC handler cannot remain blocked while cleanup waits for
+the server to stop. The normal test path and all production code are unchanged.
+
+| Review comment | Disposition | Evidence |
+| --- | --- | --- |
+| Release the blocked Describe on timeout | Valid and fixed | The added close occurs only on timeout and precedes `t.Fatal`; the normal path still closes the channel once after invalidation. |
+| Guard nil `peerInfo.String()` | Invalid | Pinned gRPC v1.83.2 defines nil-safe `(*peer.Peer).String` and returns `Peer<nil>`. |
+
+`git diff --check` and `git verify-commit 3c619e3...` passed. The raw commit
+contains `gpgsig` and the Codex trailer. The five focused schema and cache tests,
+including eight-reader repeated invalidation, passed under `-race` in 24.088
+seconds. The one-line cleanup changes no assertion, cache ordering, schema read,
+Milvus call, or production behavior.
+
+No open finding remains from PR 262.
+
 ## Deliberately skipped
 
 This review did not deploy the fix or restart the installed daemon. The
@@ -179,5 +202,7 @@ depends on unverified deployment behavior.
 ## Ledger row
 
 `2026-09-02 | codex/lms-650-resolve-reuse-dimension | source dimension and cache generation | strongest-model adversarial | MERGE-READY | B/SF/N 1/0/0 addressed | escapes 0 | stale cache race caught and fixed by b474aac`
+
+`2026-09-02 | codex/lms-650-resolve-reuse-dimension | PR 262 test cleanup | strongest-model adversarial | MERGE-READY | B/SF/N 0/0/0 | escapes 0 | timeout cleanup fixed, nil-peer claim rejected`
 
 MERGE-READY
