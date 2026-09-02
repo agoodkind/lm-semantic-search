@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"github.com/milvus-io/milvus/client/v2/column"
+	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
@@ -576,7 +577,14 @@ func (service *Service) loadReuseVectorCandidates(
 	candidates reuseVectorCandidateByID,
 	reuse map[string][]float32,
 ) error {
-	batches, err := packReuseVectorCandidates(candidates, int(service.cfg.EmbeddingDimension))
+	if len(candidates) == 0 {
+		return nil
+	}
+	dimension, err := service.resolveReuseVectorDimension(ctx, collectionName)
+	if err != nil {
+		return err
+	}
+	batches, err := packReuseVectorCandidates(candidates, dimension)
 	if err != nil {
 		return err
 	}
@@ -605,7 +613,7 @@ func (service *Service) loadReuseVectorCandidates(
 			resultSet,
 			ids,
 			candidates,
-			int(service.cfg.EmbeddingDimension),
+			dimension,
 		)
 		if readErr != nil {
 			return readErr
@@ -613,6 +621,167 @@ func (service *Service) loadReuseVectorCandidates(
 		maps.Copy(reuse, batchReuse)
 	}
 	return nil
+}
+
+func (service *Service) resolveReuseVectorDimension(
+	ctx context.Context,
+	collectionName string,
+) (int, error) {
+	dimension, generation, found, err := service.loadReuseVectorDimensionCache(collectionName)
+	if err != nil {
+		return 0, err
+	}
+	if found {
+		return dimension, nil
+	}
+
+	collection, err := service.milvus.DescribeCollection(
+		ctx,
+		milvusclient.NewDescribeCollectionOption(collectionName),
+	)
+	if err != nil {
+		peerInfo, _ := peer.FromContext(ctx)
+		slog.ErrorContext(
+			ctx,
+			"describe collection for reuse vector dimension failed",
+			"collection", collectionName,
+			"peer", peerInfo.String(),
+			"err", err,
+		)
+		return 0, fmt.Errorf(
+			"describe collection %s for reuse vector dimension: %w",
+			collectionName,
+			err,
+		)
+	}
+	if collection == nil || collection.Schema == nil {
+		return 0, fmt.Errorf("reuse source collection %s is missing schema", collectionName)
+	}
+	schemaDimension, err := reuseVectorDimensionFromSchema(
+		collectionName,
+		collection.Schema,
+	)
+	if err != nil {
+		return 0, err
+	}
+	configuredDimension := int64(service.cfg.EmbeddingDimension)
+	if configuredDimension < 0 {
+		return 0, fmt.Errorf(
+			"configured reuse vector dimension must not be negative: %d",
+			configuredDimension,
+		)
+	}
+	if configuredDimension > 0 && configuredDimension != schemaDimension {
+		return 0, fmt.Errorf(
+			"reuse source dimension %d in %s does not match configured dimension %d",
+			schemaDimension,
+			collectionName,
+			configuredDimension,
+		)
+	}
+	dimension = int(schemaDimension)
+	if int64(dimension) != schemaDimension {
+		return 0, fmt.Errorf(
+			"reuse vector dimension in %s exceeds local integer range: %d",
+			collectionName,
+			schemaDimension,
+		)
+	}
+	service.storeReuseVectorDimensionIfCurrent(collectionName, generation, dimension)
+	return dimension, nil
+}
+
+func (service *Service) loadReuseVectorDimensionCache(
+	collectionName string,
+) (int, uint64, bool, error) {
+	service.reuseVectorDimensionMutex.Lock()
+	defer service.reuseVectorDimensionMutex.Unlock()
+	if service.reuseVectorDimensionGeneration == nil {
+		service.reuseVectorDimensionGeneration = make(map[string]uint64)
+	}
+	generation := service.reuseVectorDimensionGeneration[collectionName]
+	cached, found := service.reuseVectorDimensions.Load(collectionName)
+	if !found {
+		return 0, generation, false, nil
+	}
+	dimension, ok := cached.(int)
+	if !ok || dimension <= 0 {
+		cacheErr := fmt.Errorf(
+			"cached reuse vector dimension for %s has unexpected value %v",
+			collectionName,
+			cached,
+		)
+		slog.Error(
+			"reuse vector dimension cache is invalid",
+			"collection", collectionName,
+			"err", cacheErr,
+		)
+		return 0, generation, false, cacheErr
+	}
+	return dimension, generation, true, nil
+}
+
+func (service *Service) storeReuseVectorDimensionIfCurrent(
+	collectionName string,
+	generation uint64,
+	dimension int,
+) {
+	service.reuseVectorDimensionMutex.Lock()
+	defer service.reuseVectorDimensionMutex.Unlock()
+	if service.reuseVectorDimensionGeneration[collectionName] != generation {
+		return
+	}
+	service.reuseVectorDimensions.Store(collectionName, dimension)
+}
+
+func reuseVectorDimensionFromSchema(
+	collectionName string,
+	schema *entity.Schema,
+) (int64, error) {
+	var vectorField *entity.Field
+	for _, field := range schema.Fields {
+		if field.Name == denseVectorFieldName {
+			vectorField = field
+			break
+		}
+	}
+	if vectorField == nil {
+		return 0, fmt.Errorf(
+			"reuse source collection %s is missing vector field %s",
+			collectionName,
+			denseVectorFieldName,
+		)
+	}
+	if vectorField.DataType != entity.FieldTypeFloatVector {
+		return 0, fmt.Errorf(
+			"reuse source field %s in %s must be a float vector, got %s",
+			denseVectorFieldName,
+			collectionName,
+			vectorField.DataType.Name(),
+		)
+	}
+	dimension, err := vectorField.GetDim()
+	if err != nil {
+		wrappedErr := fmt.Errorf(
+			"read reuse vector dimension from %s: %w",
+			collectionName,
+			err,
+		)
+		slog.Error(
+			"read reuse vector dimension from schema failed",
+			"collection", collectionName,
+			"err", wrappedErr,
+		)
+		return 0, wrappedErr
+	}
+	if dimension <= 0 {
+		return 0, fmt.Errorf(
+			"reuse vector dimension in %s must be positive: %d",
+			collectionName,
+			dimension,
+		)
+	}
+	return dimension, nil
 }
 
 func (service *Service) readReuseVectorBatch(

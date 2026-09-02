@@ -95,20 +95,23 @@ func (service *Service) EmbeddingProviderName() model.EmbeddingProvider {
 
 // Service owns the embedding provider and Milvus client for semantic search.
 type Service struct {
-	cfg                     config.Config
-	embedder                embedding.Provider
-	milvus                  *milvusclient.Client
-	insertRows              insertRowsFunc
-	available               atomic.Bool
-	reconnectCancel         context.CancelFunc
-	reconnectDone           chan struct{}
-	reconciliationMutex     sync.Mutex
-	reconciliationCancel    context.CancelFunc
-	reconciliationWork      sync.WaitGroup
-	closeOnce               sync.Once
-	reuseCatalogReady       sync.Map
-	reuseCatalogMutex       sync.Mutex
-	reuseCatalogAppendMutex sync.Mutex
+	cfg                            config.Config
+	embedder                       embedding.Provider
+	milvus                         *milvusclient.Client
+	insertRows                     insertRowsFunc
+	available                      atomic.Bool
+	reconnectCancel                context.CancelFunc
+	reconnectDone                  chan struct{}
+	reconciliationMutex            sync.Mutex
+	reconciliationCancel           context.CancelFunc
+	reconciliationWork             sync.WaitGroup
+	closeOnce                      sync.Once
+	reuseCatalogReady              sync.Map
+	reuseCatalogMutex              sync.Mutex
+	reuseCatalogAppendMutex        sync.Mutex
+	reuseVectorDimensions          sync.Map
+	reuseVectorDimensionMutex      sync.Mutex
+	reuseVectorDimensionGeneration map[string]uint64
 	// collectionLoads collapses concurrent initial load, wait, and recovery work
 	// for the same collection name into one shared flight.
 	collectionLoads collectionLoadCoordinator
@@ -139,20 +142,23 @@ type Service struct {
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
 		service := &Service{
-			cfg:                     cfg,
-			embedder:                nil,
-			milvus:                  nil,
-			insertRows:              nil,
-			available:               atomic.Bool{},
-			reconnectCancel:         nil,
-			reconnectDone:           nil,
-			reconciliationMutex:     sync.Mutex{},
-			reconciliationCancel:    nil,
-			reconciliationWork:      sync.WaitGroup{},
-			closeOnce:               sync.Once{},
-			reuseCatalogReady:       sync.Map{},
-			reuseCatalogMutex:       sync.Mutex{},
-			reuseCatalogAppendMutex: sync.Mutex{},
+			cfg:                            cfg,
+			embedder:                       nil,
+			milvus:                         nil,
+			insertRows:                     nil,
+			available:                      atomic.Bool{},
+			reconnectCancel:                nil,
+			reconnectDone:                  nil,
+			reconciliationMutex:            sync.Mutex{},
+			reconciliationCancel:           nil,
+			reconciliationWork:             sync.WaitGroup{},
+			closeOnce:                      sync.Once{},
+			reuseCatalogReady:              sync.Map{},
+			reuseCatalogMutex:              sync.Mutex{},
+			reuseCatalogAppendMutex:        sync.Mutex{},
+			reuseVectorDimensions:          sync.Map{},
+			reuseVectorDimensionMutex:      sync.Mutex{},
+			reuseVectorDimensionGeneration: make(map[string]uint64),
 			collectionLoads: collectionLoadCoordinator{
 				mutex:   sync.Mutex{},
 				flights: nil,
@@ -178,20 +184,23 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	}
 
 	service := &Service{
-		cfg:                     cfg,
-		embedder:                embedder,
-		milvus:                  nil,
-		insertRows:              nil,
-		available:               atomic.Bool{},
-		reconnectCancel:         nil,
-		reconnectDone:           nil,
-		reconciliationMutex:     sync.Mutex{},
-		reconciliationCancel:    nil,
-		reconciliationWork:      sync.WaitGroup{},
-		closeOnce:               sync.Once{},
-		reuseCatalogReady:       sync.Map{},
-		reuseCatalogMutex:       sync.Mutex{},
-		reuseCatalogAppendMutex: sync.Mutex{},
+		cfg:                            cfg,
+		embedder:                       embedder,
+		milvus:                         nil,
+		insertRows:                     nil,
+		available:                      atomic.Bool{},
+		reconnectCancel:                nil,
+		reconnectDone:                  nil,
+		reconciliationMutex:            sync.Mutex{},
+		reconciliationCancel:           nil,
+		reconciliationWork:             sync.WaitGroup{},
+		closeOnce:                      sync.Once{},
+		reuseCatalogReady:              sync.Map{},
+		reuseCatalogMutex:              sync.Mutex{},
+		reuseCatalogAppendMutex:        sync.Mutex{},
+		reuseVectorDimensions:          sync.Map{},
+		reuseVectorDimensionMutex:      sync.Mutex{},
+		reuseVectorDimensionGeneration: make(map[string]uint64),
 		collectionLoads: collectionLoadCoordinator{
 			mutex:   sync.Mutex{},
 			flights: nil,
@@ -355,6 +364,13 @@ func (service *Service) invalidateCollectionCaches(collectionName string) {
 	service.ensuredConvColumns.Delete(collectionName)
 	service.ensuredSplitPartColumns.Delete(collectionName)
 	service.ensuredReuseIdentityColumns.Delete(collectionName)
+	service.reuseVectorDimensionMutex.Lock()
+	if service.reuseVectorDimensionGeneration == nil {
+		service.reuseVectorDimensionGeneration = make(map[string]uint64)
+	}
+	service.reuseVectorDimensionGeneration[collectionName]++
+	service.reuseVectorDimensions.Delete(collectionName)
+	service.reuseVectorDimensionMutex.Unlock()
 	service.invalidateMmapPolicy(collectionName)
 	service.ensuredBackfill.Delete(collectionName)
 }
