@@ -608,6 +608,36 @@ func TestConvergePathsStopsBetweenPathsOnCancel(t *testing.T) {
 	}
 }
 
+func TestConvergePathsStopsBetweenPathsOnCancelWithoutProgress(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var reindexCalls atomic.Int32
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			reindexCalls.Add(1)
+			cancel()
+			return nil
+		},
+	}
+	for _, name := range []string{"first.go", "second.go"} {
+		if err := os.WriteFile(filepath.Join(repoPath, name), []byte("package cancel\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	_, err := manager.ConvergePaths(ctx, codebase.ID, []string{"first.go", "second.go"}, nil)
+	if err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+	if reindexCalls.Load() != 1 {
+		t.Fatalf("Reindex calls = %d, want 1 after cancellation", reindexCalls.Load())
+	}
+}
+
 func TestConvergeViaWatcherRegistersRunningJob(t *testing.T) {
 	t.Parallel()
 

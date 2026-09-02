@@ -27,7 +27,6 @@ func TestResolveLiveConfigMakesEveryLaterDefaultUseSandboxDatabase(t *testing.T)
 		databaseName,
 		harnessID,
 		0,
-		false,
 	)
 
 	for childIndex := range 3 {

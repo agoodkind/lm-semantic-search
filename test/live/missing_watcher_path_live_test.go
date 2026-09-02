@@ -4,17 +4,31 @@ package live
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/grpcutil"
+	"goodkind.io/lm-semantic-search/internal/semantic"
+	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
+	"google.golang.org/grpc"
 )
 
-const watcherJobTimeout = 30 * time.Second
+const (
+	sandboxDaemonBinary = "lm-semantic-search-daemon"
+	watcherJobTimeout   = 30 * time.Second
+)
 
 type watcherIndexSnapshot struct {
 	codebaseID      string
@@ -26,11 +40,16 @@ type watcherIndexSnapshot struct {
 	vectorChecksums []string
 }
 
+type watcherProgressUpdate struct {
+	state      string
+	processed  int32
+	filesTotal int32
+}
+
 func TestWatcherRetainsRemovedPathAtPublicBoundary(t *testing.T) {
-	harness := newWatcherHarness(t)
+	harness := newSandboxWatcherHarness(t)
 	root := t.TempDir()
-	indexedPath := filepath.Join(root, "main.go")
-	if err := os.WriteFile(indexedPath, []byte("package watcherfixture\n\nfunc Existing() string { return \"indexed\" }\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package watcherfixture\n\nfunc Existing() string { return \"indexed\" }\n"), 0o600); err != nil {
 		t.Fatalf("write indexed source: %v", err)
 	}
 
@@ -40,42 +59,284 @@ func TestWatcherRetainsRemovedPathAtPublicBoundary(t *testing.T) {
 	if before.rowCount == 0 {
 		t.Fatal("initial codebase index wrote no rows")
 	}
-	watcherJobs := publicWatcherJobIDs(t, harness)
 
 	for attempt := 1; attempt <= 2; attempt++ {
-		job, duplicateNonFinalProcessed := triggerRemovedPathConverge(
-			t,
-			harness,
-			root,
-			watcherJobs,
-			attempt,
-		)
+		knownJobs := publicWatcherJobIDs(t, harness)
+		job := triggerRemovedPathConverge(t, harness, root, knownJobs, attempt)
 		requirePublicCompleted(t, job, fmt.Sprintf("watcher converge %d", attempt))
 		assertWatcherConvergeResult(t, job)
 		assertNoSemanticRemovalTrace(t, job)
 		assertWatcherIndexSnapshot(t, harness, root, before)
-		watcherJobs[job.GetId()] = struct{}{}
-		t.Logf(
-			"watcher converge %d job=%s duplicate_non_final_processed=%t",
-			attempt,
-			job.GetId(),
-			duplicateNonFinalProcessed,
-		)
 	}
+}
+
+func TestWatcherProgressRejectsDuplicateRunningOneOfOne(t *testing.T) {
+	first := watcherProgressUpdate{state: "running", processed: 1, filesTotal: 1}
+	second := watcherProgressUpdate{state: "running", processed: 1, filesTotal: 1}
+	if !duplicateNonFinalWatcherProgress(first, second) {
+		t.Fatal("duplicate running 1 of 1 watcher progress was not detected")
+	}
+}
+
+func newSandboxWatcherHarness(t *testing.T) *harness {
+	t.Helper()
+	defaultConfig, err := config.Default()
+	if err != nil {
+		t.Fatalf("resolve live configuration: %v", err)
+	}
+	milvusAddress := strings.TrimSpace(defaultConfig.MilvusAddress)
+	if milvusAddress == "" {
+		t.Skip("BLOCKED: MILVUS_ADDRESS is empty; the sandbox watcher acceptance needs local Milvus")
+	}
+
+	callRecorder := &milvusCallRecorder{}
+	operatorContext := context.WithValue(context.Background(), milvusgrpc.CallObserverContextKey{}, milvusgrpc.CallObserver(callRecorder.observe))
+	dialContext, cancelDial := context.WithTimeout(operatorContext, 5*time.Second)
+	operatorMilvus, err := milvusclient.New(dialContext, &milvusclient.ClientConfig{
+		Address:     milvusAddress,
+		APIKey:      defaultConfig.MilvusToken,
+		DialOptions: milvusgrpc.DialOptions(operatorContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
+	})
+	cancelDial()
+	if err != nil {
+		t.Skipf("BLOCKED: Milvus is unreachable at %s: %v", milvusAddress, err)
+	}
+	beforeDatabases, err := listMilvusDatabases(operatorMilvus)
+	if err != nil {
+		closeMilvusClient(operatorMilvus)
+		t.Fatalf("list operator Milvus databases: %v", err)
+	}
+	operatorBefore, err := readMilvusInventory(operatorMilvus)
+	if err != nil {
+		closeMilvusClient(operatorMilvus)
+		t.Fatalf("read operator Milvus inventory: %v", err)
+	}
+
+	databaseName := liveDatabasePrefix + randomID()
+	if slices.Contains(beforeDatabases, databaseName) {
+		closeMilvusClient(operatorMilvus)
+		t.Fatalf("temporary Milvus database %q already exists", databaseName)
+	}
+	createContext, cancelCreate := context.WithTimeout(operatorContext, 15*time.Second)
+	if err := operatorMilvus.CreateDatabase(createContext, milvusclient.NewCreateDatabaseOption(databaseName)); err != nil {
+		cancelCreate()
+		closeMilvusClient(operatorMilvus)
+		t.Fatalf("create temporary Milvus database %s: %v", databaseName, err)
+	}
+	cancelCreate()
+
+	sandboxContext := context.WithValue(context.Background(), milvusgrpc.CallObserverContextKey{}, milvusgrpc.CallObserver(callRecorder.observe))
+	dialContext, cancelDial = context.WithTimeout(sandboxContext, 5*time.Second)
+	sandboxMilvus, err := milvusclient.New(dialContext, &milvusclient.ClientConfig{
+		Address:     milvusAddress,
+		APIKey:      defaultConfig.MilvusToken,
+		DBName:      databaseName,
+		DialOptions: milvusgrpc.DialOptions(sandboxContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
+	})
+	cancelDial()
+	if err != nil {
+		dropOwnedDatabase(operatorMilvus, databaseName)
+		closeMilvusClient(operatorMilvus)
+		t.Fatalf("connect temporary Milvus database %s: %v", databaseName, err)
+	}
+	sandboxBefore, err := readMilvusInventory(sandboxMilvus)
+	if err != nil || len(sandboxBefore) != 0 {
+		closeMilvusClient(sandboxMilvus)
+		dropOwnedDatabase(operatorMilvus, databaseName)
+		closeMilvusClient(operatorMilvus)
+		if err != nil {
+			t.Fatalf("read temporary Milvus inventory: %v", err)
+		}
+		t.Fatalf("temporary Milvus database %q started nonempty: %v", databaseName, sandboxBefore)
+	}
+
+	harness := &harness{
+		t:               t,
+		config:          config.Config{},
+		operatorMilvus:  operatorMilvus,
+		milvus:          sandboxMilvus,
+		databaseName:    databaseName,
+		beforeDatabases: beforeDatabases,
+		operatorBefore:  operatorBefore,
+		sandboxBefore:   sandboxBefore,
+		temporaryNames:  make(map[string]struct{}),
+		callRecorder:    callRecorder,
+		milvusContext:   sandboxContext,
+	}
+	sandboxRoot, err := os.MkdirTemp("/tmp", "lms-watcher-sandbox-")
+	if err != nil {
+		closeMilvusClient(sandboxMilvus)
+		dropOwnedDatabase(operatorMilvus, databaseName)
+		closeMilvusClient(operatorMilvus)
+		t.Fatalf("create short sandbox root: %v", err)
+	}
+	t.Cleanup(func() {
+		if removeErr := os.RemoveAll(sandboxRoot); removeErr != nil {
+			t.Errorf("remove owned sandbox root: %v", removeErr)
+		}
+	})
+	harness.trackTemporaryCollection(semantic.ReuseCatalogCollectionName(config.Config{
+		StateRoot:          filepath.Join(sandboxRoot, "state"),
+		EmbeddingDimension: fakeEmbeddingDimension,
+	}))
+	embedder := newFakeEmbeddingServer(t, nil)
+	process := startSandboxDaemon(t, sandboxRoot, databaseName, defaultConfig, embedder.URL)
+	t.Cleanup(func() {
+		if harness.conn != nil {
+			_ = harness.conn.Close()
+		}
+		stopSandboxDaemon(t, process)
+		for _, cleanupErr := range harness.cleanupMilvus() {
+			t.Error(cleanupErr)
+		}
+	})
+
+	connection, client := waitForSandboxDaemon(t, filepath.Join(sandboxRoot, "daemon.sock"), process)
+	harness.conn = connection
+	harness.client = client
+	return harness
+}
+
+func dropOwnedDatabase(client *milvusclient.Client, databaseName string) {
+	cleanupContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_ = client.DropDatabase(cleanupContext, milvusclient.NewDropDatabaseOption(databaseName))
+}
+
+func startSandboxDaemon(t *testing.T, sandboxRoot string, databaseName string, defaultConfig config.Config, embedderURL string) *exec.Cmd {
+	t.Helper()
+	command := exec.Command(builtSandboxDaemonPath(t), "sandbox", "--root", sandboxRoot)
+	command.Env = sandboxDaemonEnvironment(sandboxRoot, databaseName, defaultConfig, embedderURL)
+	output := &bytes.Buffer{}
+	command.Stdout = output
+	command.Stderr = output
+	if err := command.Start(); err != nil {
+		t.Fatalf("start built sandbox daemon: %v", err)
+	}
+	return command
+}
+
+func builtSandboxDaemonPath(t *testing.T) string {
+	t.Helper()
+	_, sourcePath, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve sandbox acceptance source path")
+	}
+	path := filepath.Join(filepath.Dir(sourcePath), "..", "..", "dist", sandboxDaemonBinary)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("built sandbox daemon %s is unavailable; run make build first: %v", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("built sandbox daemon %s is not a regular file", path)
+	}
+	return path
+}
+
+func sandboxDaemonEnvironment(sandboxRoot string, databaseName string, defaultConfig config.Config, embedderURL string) []string {
+	values := make(map[string]string)
+	for _, item := range os.Environ() {
+		name, value, found := strings.Cut(item, "=")
+		if found {
+			values[name] = value
+		}
+	}
+	for name, value := range map[string]string{
+		"CLAUDE_CONTEXTD_STATE_ROOT":               filepath.Join(sandboxRoot, "state"),
+		"CLAUDE_CONTEXTD_CONFIG_ROOT":              filepath.Join(sandboxRoot, "config"),
+		"CLAUDE_CONTEXTD_CONTEXT_ROOT":             filepath.Join(sandboxRoot, "context"),
+		"CLAUDE_CONTEXTD_SOCKET_PATH":              filepath.Join(sandboxRoot, "daemon.sock"),
+		"CLAUDE_CONTEXTD_LOG_PATH":                 filepath.Join(sandboxRoot, "logs", "daemon.log"),
+		"CLAUDE_CONTEXTD_MODEL_CACHE_ROOT":         filepath.Join(sandboxRoot, "models"),
+		"CLAUDE_CONTEXT_PROFILE":                   config.ProfileStandard,
+		"CLAUDE_CONTEXT_DEBUG_LISTENER":            "false",
+		"CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR":         "127.0.0.1:0",
+		"CLAUDE_CONTEXT_BACKGROUND_SYNC":           "false",
+		"CLAUDE_CONTEXT_TRIGGER_WATCHER":           "false",
+		"CLAUDE_CONTEXT_FILE_WATCHER":              "true",
+		"CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS": "1",
+		"MILVUS_ADDRESS":                           defaultConfig.MilvusAddress,
+		"MILVUS_TOKEN":                             defaultConfig.MilvusToken,
+		"MILVUS_DATABASE":                          databaseName,
+		"EMBEDDING_PROVIDER":                       "OpenAI",
+		"EMBEDDING_MODEL":                          "sandbox-watcher-" + databaseName,
+		"EMBEDDING_DIMENSION":                      fmt.Sprintf("%d", fakeEmbeddingDimension),
+		"EMBEDDING_BATCH_SIZE":                     "8",
+		"OPENAI_BASE_URL":                          embedderURL,
+		"OPENAI_API_KEY":                           "sandbox-watcher-local", //gitleaks:allow // not a secret: the local fake accepts any non-empty key
+	} {
+		values[name] = value
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	result := make([]string, 0, len(names))
+	for _, name := range names {
+		result = append(result, name+"="+values[name])
+	}
+	return result
+}
+
+func waitForSandboxDaemon(t *testing.T, socketPath string, process *exec.Cmd) (*grpc.ClientConn, pb.SemanticSearchDaemonServiceClient) {
+	t.Helper()
+	deadline := time.Now().Add(watcherJobTimeout)
+	var lastError error
+	for time.Now().Before(deadline) {
+		connection, client, err := grpcutil.DialDaemon(correlatedContext(), socketPath)
+		if err == nil {
+			_, err = client.ListIndexes(correlatedContext(), &pb.ListIndexesRequest{})
+			if err == nil {
+				return connection, client
+			}
+			_ = connection.Close()
+		}
+		lastError = err
+		time.Sleep(jobPollInterval)
+	}
+	t.Fatalf("built sandbox daemon did not serve %s: %v\n%s", socketPath, lastError, sandboxProcessOutput(process))
+	return nil, nil
+}
+
+func stopSandboxDaemon(t *testing.T, process *exec.Cmd) {
+	t.Helper()
+	if process.ProcessState != nil {
+		return
+	}
+	if err := process.Process.Signal(os.Interrupt); err != nil {
+		t.Errorf("interrupt sandbox daemon: %v", err)
+		return
+	}
+	done := make(chan error, 1)
+	go func() { done <- process.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("wait for sandbox daemon: %v\n%s", err, sandboxProcessOutput(process))
+		}
+	case <-time.After(15 * time.Second):
+		if err := process.Process.Kill(); err != nil {
+			t.Errorf("kill stalled sandbox daemon: %v", err)
+		}
+		if err := <-done; err != nil {
+			t.Errorf("wait for killed sandbox daemon: %v\n%s", err, sandboxProcessOutput(process))
+		}
+	}
+}
+
+func sandboxProcessOutput(process *exec.Cmd) string {
+	if output, ok := process.Stdout.(*bytes.Buffer); ok {
+		return output.String()
+	}
+	return "sandbox process output unavailable"
 }
 
 func startPublicCodebaseIndex(t *testing.T, harness *harness, root string) *pb.Job {
 	t.Helper()
-	response, err := harness.client.StartIndex(
-		correlatedContext(),
-		&pb.StartIndexRequest{
-			Path: root,
-			Splitter: &pb.SplitterConfig{
-				Type: "ast",
-			},
-			Client: &pb.ClientInfo{Name: "missing-watcher-live-harness"},
-		},
-	)
+	response, err := harness.client.StartIndex(correlatedContext(), &pb.StartIndexRequest{
+		Path: root, Splitter: &pb.SplitterConfig{Type: "ast"}, Client: &pb.ClientInfo{Name: "missing-watcher-live-harness"},
+	})
 	if err != nil {
 		t.Fatalf("start codebase index: %v", err)
 	}
@@ -85,13 +346,7 @@ func startPublicCodebaseIndex(t *testing.T, harness *harness, root string) *pb.J
 	return waitForCodebasePublicJob(t, harness, response.GetJobId())
 }
 
-func triggerRemovedPathConverge(
-	t *testing.T,
-	harness *harness,
-	root string,
-	knownJobs map[string]struct{},
-	attempt int,
-) (*pb.Job, bool) {
+func triggerRemovedPathConverge(t *testing.T, harness *harness, root string, knownJobs map[string]struct{}, attempt int) *pb.Job {
 	t.Helper()
 	path := filepath.Join(root, fmt.Sprintf("removed-%d.go", attempt))
 	startedAt := time.Now()
@@ -111,10 +366,7 @@ func waitForCodebasePublicJob(t *testing.T, harness *harness, jobID string) *pb.
 	t.Helper()
 	deadline := time.Now().Add(watcherJobTimeout)
 	for time.Now().Before(deadline) {
-		response, err := harness.client.GetJob(
-			correlatedContext(),
-			&pb.GetJobRequest{JobId: jobID},
-		)
+		response, err := harness.client.GetJob(correlatedContext(), &pb.GetJobRequest{JobId: jobID})
 		if err != nil {
 			t.Fatalf("get public job %s: %v", jobID, err)
 		}
@@ -131,24 +383,16 @@ func waitForCodebasePublicJob(t *testing.T, harness *harness, jobID string) *pb.
 	return nil
 }
 
-func waitForNewWatcherJob(
-	t *testing.T,
-	harness *harness,
-	knownJobs map[string]struct{},
-) (*pb.Job, bool) {
+func waitForNewWatcherJob(t *testing.T, harness *harness, knownJobs map[string]struct{}) *pb.Job {
 	t.Helper()
 	deadline := time.Now().Add(watcherJobTimeout)
 	watcherJobID := ""
-	var lastUpdatedAt time.Time
-	var lastProcessed int32
-	observedVersion := false
-	duplicateNonFinalProcessed := false
+	var previous watcherProgressUpdate
+	var previousUpdatedAt time.Time
+	havePrevious := false
 	for time.Now().Before(deadline) {
 		if watcherJobID == "" {
-			response, err := harness.client.ListJobs(
-				correlatedContext(),
-				&pb.ListJobsRequest{},
-			)
+			response, err := harness.client.ListJobs(correlatedContext(), &pb.ListJobsRequest{})
 			if err != nil {
 				t.Fatalf("list public watcher jobs: %v", err)
 			}
@@ -156,18 +400,14 @@ func waitForNewWatcherJob(
 				if _, known := knownJobs[job.GetId()]; known {
 					continue
 				}
-				if job.GetOperation() == "converge" &&
-					job.GetClient().GetName() == "daemon-watcher" {
+				if job.GetOperation() == "converge" && job.GetClient().GetName() == "daemon-watcher" {
 					watcherJobID = job.GetId()
 					break
 				}
 			}
 		}
 		if watcherJobID != "" {
-			response, err := harness.client.GetJob(
-				correlatedContext(),
-				&pb.GetJobRequest{JobId: watcherJobID},
-			)
+			response, err := harness.client.GetJob(correlatedContext(), &pb.GetJobRequest{JobId: watcherJobID})
 			if err != nil {
 				t.Fatalf("get watcher job %s: %v", watcherJobID, err)
 			}
@@ -176,25 +416,27 @@ func waitForNewWatcherJob(
 				t.Fatalf("get watcher job %s returned no job", watcherJobID)
 			}
 			updatedAt := job.GetUpdatedAt().AsTime()
-			processed := job.GetProgress().GetFilesProcessed()
-			if observedVersion && !updatedAt.Equal(lastUpdatedAt) &&
-				processed == lastProcessed && processed > 0 &&
-				processed < job.GetProgress().GetFilesTotal() {
-				duplicateNonFinalProcessed = true
+			current := watcherProgressUpdate{state: job.GetState(), processed: job.GetProgress().GetFilesProcessed(), filesTotal: job.GetProgress().GetFilesTotal()}
+			if havePrevious && !updatedAt.Equal(previousUpdatedAt) && duplicateNonFinalWatcherProgress(previous, current) {
+				t.Fatalf("watcher job repeated non-final progress: previous=%+v current=%+v", previous, current)
 			}
-			if !updatedAt.Equal(lastUpdatedAt) {
-				lastUpdatedAt = updatedAt
-				lastProcessed = processed
-				observedVersion = true
+			if !updatedAt.Equal(previousUpdatedAt) {
+				previous = current
+				previousUpdatedAt = updatedAt
+				havePrevious = true
 			}
 			if publicJobTerminal(job) {
-				return job, duplicateNonFinalProcessed
+				return job
 			}
 		}
 		time.Sleep(jobPollInterval)
 	}
 	t.Fatal("watcher converge job did not finish within the public timeout")
-	return nil, false
+	return nil
+}
+
+func duplicateNonFinalWatcherProgress(previous watcherProgressUpdate, current watcherProgressUpdate) bool {
+	return previous.state == "running" && current.state == "running" && previous.processed == current.processed
 }
 
 func publicWatcherJobIDs(t *testing.T, harness *harness) map[string]struct{} {
@@ -234,22 +476,24 @@ func assertWatcherConvergeResult(t *testing.T, job *pb.Job) {
 		t.Fatalf("watcher progress unit = %q, want path", progress.GetUnit())
 	}
 	if progress.GetFilesTotal() != 1 || progress.GetFilesProcessed() != 1 {
-		t.Fatalf(
-			"watcher progress = %d of %d, want 1 of 1 path",
-			progress.GetFilesProcessed(),
-			progress.GetFilesTotal(),
-		)
+		t.Fatalf("watcher progress = %d of %d, want 1 of 1 path", progress.GetFilesProcessed(), progress.GetFilesTotal())
 	}
-	if progress.GetChunksEmbedded() != 0 {
-		t.Fatalf("watcher embedded chunks = %d, want 0", progress.GetChunksEmbedded())
+	filesEmbedded := outcomeRowCount(progress.GetBreakdown().GetFileRows(), pb.OutcomeKind_OUTCOME_KIND_EMBEDDED)
+	if filesEmbedded != 0 || progress.GetChunksEmbedded() != 0 {
+		t.Fatalf("watcher embedded files/chunks = %d/%d, want 0/0", filesEmbedded, progress.GetChunksEmbedded())
 	}
 	if !progress.GetHeartbeatAt().AsTime().After(job.GetStartedAt().AsTime()) {
-		t.Fatalf(
-			"watcher heartbeat = %s, want after start %s",
-			progress.GetHeartbeatAt().AsTime(),
-			job.GetStartedAt().AsTime(),
-		)
+		t.Fatalf("watcher heartbeat = %s, want after start %s", progress.GetHeartbeatAt().AsTime(), job.GetStartedAt().AsTime())
 	}
+}
+
+func outcomeRowCount(rows []*pb.OutcomeRow, kind pb.OutcomeKind) int32 {
+	for _, row := range rows {
+		if row.GetKind() == kind {
+			return row.GetCount()
+		}
+	}
+	return 0
 }
 
 func assertNoSemanticRemovalTrace(t *testing.T, job *pb.Job) {
@@ -264,16 +508,9 @@ func assertNoSemanticRemovalTrace(t *testing.T, job *pb.Job) {
 	}
 }
 
-func captureWatcherIndexSnapshot(
-	t *testing.T,
-	harness *harness,
-	root string,
-) watcherIndexSnapshot {
+func captureWatcherIndexSnapshot(t *testing.T, harness *harness, root string) watcherIndexSnapshot {
 	t.Helper()
-	response, err := harness.client.GetIndex(
-		correlatedContext(),
-		&pb.GetIndexRequest{Path: root},
-	)
+	response, err := harness.client.GetIndex(correlatedContext(), &pb.GetIndexRequest{Path: root})
 	if err != nil {
 		t.Fatalf("get public codebase index: %v", err)
 	}
@@ -300,23 +537,10 @@ func captureWatcherIndexSnapshot(
 	}
 	slices.Sort(checksums)
 	harness.trackCollectionFamily(codebase.GetCollectionName())
-	return watcherIndexSnapshot{
-		codebaseID:      codebase.GetId(),
-		collectionName:  codebase.GetCollectionName(),
-		checkpointPath:  checkpointPath,
-		checkpointBytes: checkpointBytes,
-		checkpointInfo:  checkpointInfo,
-		rowCount:        len(rows),
-		vectorChecksums: checksums,
-	}
+	return watcherIndexSnapshot{codebaseID: codebase.GetId(), collectionName: codebase.GetCollectionName(), checkpointPath: checkpointPath, checkpointBytes: checkpointBytes, checkpointInfo: checkpointInfo, rowCount: len(rows), vectorChecksums: checksums}
 }
 
-func assertWatcherIndexSnapshot(
-	t *testing.T,
-	harness *harness,
-	root string,
-	before watcherIndexSnapshot,
-) {
+func assertWatcherIndexSnapshot(t *testing.T, harness *harness, root string, before watcherIndexSnapshot) {
 	t.Helper()
 	after := captureWatcherIndexSnapshot(t, harness, root)
 	if after.codebaseID != before.codebaseID || after.collectionName != before.collectionName {
@@ -335,10 +559,6 @@ func assertWatcherIndexSnapshot(
 		t.Fatalf("collection rows changed: before=%d after=%d", before.rowCount, after.rowCount)
 	}
 	if !slices.Equal(after.vectorChecksums, before.vectorChecksums) {
-		t.Fatalf(
-			"collection vector SHA-256 values changed: before=%v after=%v",
-			before.vectorChecksums,
-			after.vectorChecksums,
-		)
+		t.Fatalf("collection vector SHA-256 values changed: before=%v after=%v", before.vectorChecksums, after.vectorChecksums)
 	}
 }

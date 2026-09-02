@@ -111,7 +111,7 @@ func TestConcurrentColdSearchesShareOneLoadAndLastUseUnloads(t *testing.T) {
 
 func TestActiveSearchPreventsIdleUnload(t *testing.T) {
 	gate := &embedGate{arrived: make(chan int), release: make(chan struct{})}
-	harness := newHarnessWithOptions(t, gate, residencyLiveIdleTimeout, true, false)
+	harness := newHarnessWithOptions(t, gate, residencyLiveIdleTimeout, true)
 	t.Cleanup(func() {
 		select {
 		case gate.release <- struct{}{}:
@@ -177,7 +177,7 @@ func TestActiveSearchPreventsIdleUnload(t *testing.T) {
 }
 
 func TestPinnedStagingStaysLoadedThroughPublicIndex(t *testing.T) {
-	harness := newHarnessWithOptions(t, nil, residencyLiveIdleTimeout, true, false)
+	harness := newHarnessWithOptions(t, nil, residencyLiveIdleTimeout, true)
 	_, collectionName, jobID := startResidencyCodebaseFiles(
 		t,
 		harness,
@@ -282,7 +282,7 @@ func collectionCallTrace(calls []milvusCall, collectionName string) string {
 
 func TestActiveMutationPreventsIdleUnloadAndUnpinnedStagingPreservesRows(t *testing.T) {
 	gate := &embedGate{arrived: make(chan int), release: make(chan struct{})}
-	harness := newHarnessWithOptions(t, gate, residencyLiveIdleTimeout, true, false)
+	harness := newHarnessWithOptions(t, gate, residencyLiveIdleTimeout, true)
 	t.Cleanup(func() {
 		select {
 		case gate.release <- struct{}{}:
