@@ -1136,6 +1136,7 @@ func TestReuseSourceDimensionInvalidationRejectsInFlightCacheStore(t *testing.T)
 	select {
 	case <-describeStarted:
 	case <-time.After(time.Second):
+		close(releaseDescribe)
 		t.Fatal("timed out waiting for DescribeCollection")
 	}
 	service.invalidateCollectionCaches("reuse_source")
