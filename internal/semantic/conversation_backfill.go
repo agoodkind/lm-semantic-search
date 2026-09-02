@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"google.golang.org/grpc/peer"
 )
 
 // conversationBackfillBatchSize bounds how many rows are read and upserted per
@@ -26,6 +27,7 @@ const conversationBackfillBatchSize = 500
 // the conversation_id column instead. Idempotent: re-running upserts the same
 // values. Returns the number of rows rewritten.
 func (service *Service) BackfillConversationScalarColumns(ctx context.Context, collectionName string) (int, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
 		return 0, ErrUnavailable
 	}
@@ -44,7 +46,7 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 		WithBatchSize(conversationBackfillBatchSize).
 		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName, splitPartFieldName))
 	if err != nil {
-		slog.ErrorContext(ctx, "open conversation backfill iterator failed", "collection", collectionName, "err", err)
+		slog.ErrorContext(ctx, "open conversation backfill iterator failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return 0, fmt.Errorf("open backfill iterator for %s: %w", collectionName, err)
 	}
 	total := 0
@@ -54,7 +56,7 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 			break
 		}
 		if nextErr != nil {
-			slog.ErrorContext(ctx, "conversation backfill iterator next failed", "collection", collectionName, "rows_done", total, "err", nextErr)
+			slog.ErrorContext(ctx, "conversation backfill iterator next failed", "collection", collectionName, "rows_done", total, "peer", peerInfo.String(), "err", nextErr)
 			return total, fmt.Errorf("iterate %s for backfill: %w", collectionName, nextErr)
 		}
 		ids, chunks, vectors, buildErr := readBackfillRows(resultSet)
@@ -69,7 +71,7 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 		}
 		total += len(ids)
 	}
-	slog.InfoContext(ctx, "semantic.conversation_scalar_backfill_complete", "collection", collectionName, "rows", total)
+	slog.InfoContext(ctx, "semantic.conversation_scalar_backfill_complete", "collection", collectionName, "rows", total, "peer", peerInfo.String())
 	return total, nil
 }
 
@@ -145,9 +147,10 @@ func (service *Service) BackfillConversationCollectionsOnce(ctx context.Context)
 // provider is null. A fully-backfilled collection returns false, so the sweep
 // skips re-upserting every row on a later process.
 func (service *Service) conversationCollectionNeedsBackfill(ctx context.Context, collectionName string) (bool, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	collection, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
 	if err != nil {
-		slog.ErrorContext(ctx, "describe conversation collection for backfill check failed", "collection", collectionName, "err", err)
+		slog.ErrorContext(ctx, "describe conversation collection for backfill check failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return false, fmt.Errorf("describe %s for backfill check: %w", collectionName, err)
 	}
 	hasProvider := false
@@ -172,7 +175,7 @@ func (service *Service) conversationCollectionNeedsBackfill(ctx context.Context,
 		WithFilter(providerFieldName+" is null").
 		WithOutputFields(idFieldName))
 	if err != nil {
-		slog.ErrorContext(ctx, "open null-provider probe failed", "collection", collectionName, "err", err)
+		slog.ErrorContext(ctx, "open null-provider probe failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return false, fmt.Errorf("open null-provider probe for %s: %w", collectionName, err)
 	}
 	resultSet, nextErr := iterator.Next(ctx)
@@ -180,7 +183,7 @@ func (service *Service) conversationCollectionNeedsBackfill(ctx context.Context,
 		return false, nil
 	}
 	if nextErr != nil {
-		slog.ErrorContext(ctx, "null-provider probe failed", "collection", collectionName, "err", nextErr)
+		slog.ErrorContext(ctx, "null-provider probe failed", "collection", collectionName, "peer", peerInfo.String(), "err", nextErr)
 		return false, fmt.Errorf("probe null provider in %s: %w", collectionName, nextErr)
 	}
 	return resultSet.ResultCount > 0, nil
@@ -428,6 +431,7 @@ func partitionConversationEnrichment(ids []string, chunks []model.StoredChunk, v
 // counts the would-change and orphan rows and writes nothing. Returns
 // (changed, orphan).
 func (service *Service) BackfillConversationEnrichment(ctx context.Context, collectionName string, enrichment ConversationEnrichment, dryRun bool) (int, int, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
 		return 0, 0, ErrUnavailable
 	}
@@ -447,7 +451,7 @@ func (service *Service) BackfillConversationEnrichment(ctx context.Context, coll
 		WithFilter(workspaceRootFieldName+` == "" or `+archivedFieldName+` is null`).
 		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName, workspaceRootFieldName, splitPartFieldName))
 	if err != nil {
-		slog.ErrorContext(ctx, "open conversation workspace backfill iterator failed", "collection", collectionName, "err", err)
+		slog.ErrorContext(ctx, "open conversation workspace backfill iterator failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return 0, 0, fmt.Errorf("open workspace backfill iterator for %s: %w", collectionName, err)
 	}
 	changed := 0
@@ -458,7 +462,7 @@ func (service *Service) BackfillConversationEnrichment(ctx context.Context, coll
 			break
 		}
 		if nextErr != nil {
-			slog.ErrorContext(ctx, "conversation workspace backfill iterator next failed", "collection", collectionName, "changed", changed, "err", nextErr)
+			slog.ErrorContext(ctx, "conversation workspace backfill iterator next failed", "collection", collectionName, "changed", changed, "peer", peerInfo.String(), "err", nextErr)
 			return changed, orphan, fmt.Errorf("iterate %s for workspace backfill: %w", collectionName, nextErr)
 		}
 		ids, chunks, vectors, buildErr := readBackfillRows(resultSet)
@@ -475,6 +479,6 @@ func (service *Service) BackfillConversationEnrichment(ctx context.Context, coll
 			return changed, orphan, err
 		}
 	}
-	slog.InfoContext(ctx, "semantic.conversation_workspace_backfill_complete", "collection", collectionName, "changed", changed, "orphan", orphan, "dry_run", dryRun)
+	slog.InfoContext(ctx, "semantic.conversation_workspace_backfill_complete", "collection", collectionName, "changed", changed, "orphan", orphan, "dry_run", dryRun, "peer", peerInfo.String())
 	return changed, orphan, nil
 }

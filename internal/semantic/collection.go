@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"google.golang.org/grpc/peer"
 )
 
 // Conversation collections carry their filterable attributes as native scalar
@@ -400,9 +401,10 @@ func (service *Service) ensureSplitPartColumnOnce(
 // on-add backfill trigger. Every added column is nullable, which AddCollectionField
 // requires for a collection that already holds rows.
 func (service *Service) addMissingConversationScalarColumns(ctx context.Context, collectionName string) ([]string, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	collection, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
 	if err != nil {
-		slog.ErrorContext(ctx, "describe conversation collection for scalar migration failed", "collection", collectionName, "err", err)
+		slog.ErrorContext(ctx, "describe conversation collection for scalar migration failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return nil, fmt.Errorf("describe conversation collection %s: %w", collectionName, err)
 	}
 	existing := make(map[string]struct{})
@@ -417,7 +419,7 @@ func (service *Service) addMissingConversationScalarColumns(ctx context.Context,
 			continue
 		}
 		if err := service.milvus.AddCollectionField(ctx, milvusclient.NewAddCollectionFieldOption(collectionName, field)); err != nil {
-			slog.ErrorContext(ctx, "add conversation scalar column failed", "collection", collectionName, "field", field.Name, "err", err)
+			slog.ErrorContext(ctx, "add conversation scalar column failed", "collection", collectionName, "field", field.Name, "peer", peerInfo.String(), "err", err)
 			return added, fmt.Errorf("add scalar column %s to %s: %w", field.Name, collectionName, err)
 		}
 		service.invalidateMmapPolicy(collectionName)

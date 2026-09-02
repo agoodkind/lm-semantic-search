@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/metrics"
+	"google.golang.org/grpc/peer"
 )
 
 const (
@@ -310,6 +311,7 @@ func (service *Service) waitForCreatedMmapTargets(
 	collectionName string,
 	mode mmapMigrationMode,
 ) (mmapInspection, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	pollCtx, cancel := context.WithTimeout(ctx, service.callTimeouts().Metadata)
 	defer cancel()
 	for {
@@ -329,7 +331,7 @@ func (service *Service) waitForCreatedMmapTargets(
 				collectionName,
 				pollCtx.Err(),
 			)
-			slog.ErrorContext(ctx, "wait for required mmap indexes failed", "err", err)
+			slog.ErrorContext(ctx, "wait for required mmap indexes failed", "peer", peerInfo.String(), "err", err)
 			return mmapInspection{}, err
 		case <-time.After(indexVisibilityPollInterval):
 		}
@@ -494,6 +496,7 @@ func (service *Service) migrateMmapUnderMaintenance(
 	collectionName string,
 	mode mmapMigrationMode,
 ) (mmapOutcome, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	var inspection mmapInspection
 	var err error
 
@@ -559,6 +562,7 @@ func (service *Service) migrateMmapUnderMaintenance(
 		"collection", collectionName,
 		"policy_version", mmapPolicyVersion,
 		"was_loaded", priorReady,
+		"peer", peerInfo.String(),
 	)
 	return mmapOutcomeMigrated, nil
 }

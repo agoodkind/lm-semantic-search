@@ -13,6 +13,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
+	"google.golang.org/grpc/peer"
 )
 
 // PinStaging protects a staging collection throughout one daemon build.
@@ -20,9 +21,10 @@ func (service *Service) PinStaging(
 	ctx context.Context,
 	codebasePath string,
 ) (CollectionPin, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	if err := ctx.Err(); err != nil {
 		wrappedErr := fmt.Errorf("pin staging collection: %w", err)
-		slog.WarnContext(ctx, "pin staging collection cancelled", "error", wrappedErr)
+		slog.WarnContext(ctx, "pin staging collection cancelled", "peer", peerInfo.String(), "error", wrappedErr)
 		return nil, wrappedErr
 	}
 	if !service.Available() {
@@ -606,20 +608,21 @@ func collectEmptyRefusedChunks(chunks []model.StoredChunk, embedded chunkBatchEm
 // semantic.embed_batch_started carries the input and estimated-token counts
 // under the same span id, which is what turns duration_ms into a rate.
 func (service *Service) embedMissedTexts(ctx context.Context, missTexts []string, reusedCount int) (result embedding.BatchResult, err error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	ctx, done := spans.Open(ctx, "semantic.embedBatch")
 	defer done(&err)
-	slog.InfoContext(ctx, "semantic.embed_batch_started", "inputs", len(missTexts), "estimated_tokens", estimatedBatchTokenCount(missTexts), "reused", reusedCount)
+	slog.InfoContext(ctx, "semantic.embed_batch_started", "inputs", len(missTexts), "estimated_tokens", estimatedBatchTokenCount(missTexts), "reused", reusedCount, "peer", peerInfo.String())
 
 	result, err = service.embedder.EmbedBatch(ctx, missTexts)
 	if err != nil {
 		// EmbedBatch already returns a typed adapterr error; %w keeps that class
 		// visible to errors.As so the index and search paths classify an embedding
 		// failure the same way.
-		slog.ErrorContext(ctx, "embed batch failed", "err", err)
+		slog.ErrorContext(ctx, "embed batch failed", "peer", peerInfo.String(), "err", err)
 		return embedding.BatchResult{}, fmt.Errorf("embed chunk batch: %w", err)
 	}
 	if len(result.Vectors) != len(missTexts) {
-		slog.ErrorContext(ctx, "embedding batch returned unexpected vector count", "want", len(missTexts), "got", len(result.Vectors), "err", errors.New("vector count mismatch"))
+		slog.ErrorContext(ctx, "embedding batch returned unexpected vector count", "want", len(missTexts), "got", len(result.Vectors), "peer", peerInfo.String(), "err", errors.New("vector count mismatch"))
 		return embedding.BatchResult{}, fmt.Errorf("embedding batch returned %d vectors for %d chunks", len(result.Vectors), len(missTexts))
 	}
 	return result, nil

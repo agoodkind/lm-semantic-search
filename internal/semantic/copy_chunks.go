@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"google.golang.org/grpc/peer"
 )
 
 // CopyChunks rewrites the relativePath column on every existing chunk row
@@ -30,6 +31,7 @@ import (
 // the collection is hybrid, is re-derived by the BM25 function from the
 // preserved content so no embedding API call is issued.
 func (service *Service) CopyChunks(ctx context.Context, codebasePath string, srcRelativePath string, dstRelativePath string) (int, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
 		return 0, ErrUnavailable
 	}
@@ -101,7 +103,7 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 	if err := runCopyChunkMutations(mutations); err != nil {
 		return 0, err
 	}
-	slog.InfoContext(ctx, "semantic.copy_chunks", "collection", collectionName, "src", srcRelativePath, "dst", dstRelativePath, "rows", len(rewritten))
+	slog.InfoContext(ctx, "semantic.copy_chunks", "collection", collectionName, "src", srcRelativePath, "dst", dstRelativePath, "rows", len(rewritten), "peer", peerInfo.String())
 	return len(rewritten), nil
 }
 
@@ -217,6 +219,7 @@ func (service *Service) fetchChunksForPath(
 	collectionName string,
 	relativePath string,
 ) (copiedRows, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return noCopiedRows(), err
 	}
@@ -235,7 +238,7 @@ func (service *Service) fetchChunksForPath(
 	queryOption := milvusclient.NewQueryOption(collectionName).WithFilter(expression).WithOutputFields(outputFields...)
 	resultSet, err := service.milvus.Query(ctx, queryOption)
 	if err != nil {
-		slog.ErrorContext(ctx, "query chunks for copy failed", "collection", collectionName, "path", relativePath, "err", err)
+		slog.ErrorContext(ctx, "query chunks for copy failed", "collection", collectionName, "path", relativePath, "peer", peerInfo.String(), "err", err)
 		return noCopiedRows(), fmt.Errorf(
 			"query chunks for %s in %s: %w",
 			relativePath,

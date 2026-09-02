@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/model"
+	"google.golang.org/grpc/peer"
 )
 
 // SearchConversationCollectionCapped returns a semantic conversation search
@@ -20,6 +21,7 @@ import (
 // natively in Milvus by the filter expression, so the per-page reduction applies
 // only the cap and the score floor.
 func (service *Service) SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, perConversationLimit int32, minScore float64, filter ConversationFilter) ([]model.StoredChunk, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
 		return nil, ErrUnavailable
 	}
@@ -58,7 +60,7 @@ func (service *Service) SearchConversationCollectionCapped(ctx context.Context, 
 	}
 	queryVector, err := service.embedder.Embed(ctx, service.queryTextForEmbedding(query))
 	if err != nil {
-		slog.ErrorContext(ctx, "embed query failed", "err", err)
+		slog.ErrorContext(ctx, "embed query failed", "peer", peerInfo.String(), "err", err)
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 

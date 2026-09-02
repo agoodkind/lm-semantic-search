@@ -12,6 +12,7 @@ import (
 	internalclock "goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
+	"google.golang.org/grpc/peer"
 )
 
 const (
@@ -169,6 +170,7 @@ func (service *Service) AcquireCollection(
 	ctx context.Context,
 	collectionName string,
 ) (CollectionLease, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	lease, err := service.residency.Acquire(ctx, collectionName)
 	if errors.Is(err, ErrCollectionLoadWaitTimeout) {
 		wrappedErr := fmt.Errorf(
@@ -176,7 +178,7 @@ func (service *Service) AcquireCollection(
 			collectionName,
 			ErrCollectionNotReady,
 		)
-		slog.WarnContext(ctx, "collection load wait expired", "err", wrappedErr)
+		slog.WarnContext(ctx, "collection load wait expired", "peer", peerInfo.String(), "err", wrappedErr)
 		return nil, wrappedErr
 	}
 	return lease, err
