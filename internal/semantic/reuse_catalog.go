@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
+	"google.golang.org/grpc/peer"
 )
 
 const (
@@ -253,6 +254,7 @@ func (service *Service) getReuseCatalogModelKeys(
 	embeddingModel string,
 	consistency entity.ConsistencyLevel,
 ) (reuseCatalogEntries, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	entries := make(reuseCatalogEntries, len(storageKeys))
 	if len(storageKeys) == 0 {
 		return entries, nil
@@ -277,6 +279,7 @@ func (service *Service) getReuseCatalogModelKeys(
 			ctx,
 			"get content vector reuse catalog failed",
 			"collection", collectionName,
+			"peer", peerInfo.String(),
 			"err", err,
 		)
 		return nil, fmt.Errorf("get content vector reuse catalog: %w", err)
@@ -313,6 +316,7 @@ func (service *Service) queryReuseCatalogKeys(
 	dimension int,
 	consistency entity.ConsistencyLevel,
 ) (reuseCatalogEntries, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	entries := make(reuseCatalogEntries, len(storageKeys))
 	if len(storageKeys) == 0 {
 		return entries, nil
@@ -330,6 +334,7 @@ func (service *Service) queryReuseCatalogKeys(
 			ctx,
 			"query content vector reuse catalog failed",
 			"collection", collectionName,
+			"peer", peerInfo.String(),
 			"err", err,
 		)
 		return nil, fmt.Errorf("query content vector reuse catalog: %w", err)
@@ -387,6 +392,7 @@ func (service *Service) loadReuseCatalogRowKeys(
 	rowKeys []string,
 	dimension int,
 ) (map[string]struct{}, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	existing := make(map[string]struct{}, len(rowKeys))
 	resultSet, err := service.milvus.Get(
 		ctx,
@@ -397,7 +403,7 @@ func (service *Service) loadReuseCatalogRowKeys(
 	)
 	if err != nil {
 		wrappedErr := fmt.Errorf("query content vector catalog row keys: %w", err)
-		slog.ErrorContext(ctx, "query content vector catalog row keys failed", "err", wrappedErr)
+		slog.ErrorContext(ctx, "query content vector catalog row keys failed", "peer", peerInfo.String(), "err", wrappedErr)
 		if storeUnavailable(err) {
 			return nil, adapterr.NewMilvusUnavailable(wrappedErr)
 		}

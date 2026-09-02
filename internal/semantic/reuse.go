@@ -11,6 +11,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/spans"
+	"google.golang.org/grpc/peer"
 )
 
 // reuseVectorBatchSize bounds one QueryIterator page when streaming a reuse
@@ -39,6 +40,7 @@ func contentVectorKey(content string) string {
 // to indexes built with the current embedding model, so a reused vector is
 // valid for the parent's model.
 func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	reuse := make(map[string][]float32)
 	if !service.Available() || len(collectionNames) == 0 {
 		return reuse, nil
@@ -48,7 +50,7 @@ func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []
 			return nil, err
 		}
 	}
-	slog.InfoContext(ctx, "semantic.reuse_vectors_loaded", "collections", len(collectionNames), "chunks", len(reuse))
+	slog.InfoContext(ctx, "semantic.reuse_vectors_loaded", "collections", len(collectionNames), "chunks", len(reuse), "peer", peerInfo.String())
 	return reuse, nil
 }
 
@@ -60,6 +62,7 @@ func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []
 // chunks' stored vectors instead of re-embedding the whole conversation. A
 // missing collection or an empty prefix returns an empty map.
 func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	reuse := make(map[string][]float32)
 	if !service.Available() || collectionName == "" || relativePathPrefix == "" {
 		return reuse, nil
@@ -72,6 +75,7 @@ func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectio
 		"collection", collectionName,
 		"prefix", relativePathPrefix,
 		"chunks", len(reuse),
+		"peer", peerInfo.String(),
 	)
 	return reuse, nil
 }
@@ -82,6 +86,7 @@ func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectio
 // path delete runs, so unchanged chunks inside the same file skip embedding
 // without reading prefix neighbors such as foo.go.backup.
 func (service *Service) LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	reuse := make(map[string][]float32)
 	if !service.Available() || collectionName == "" || relativePath == "" {
 		return reuse, nil
@@ -94,6 +99,7 @@ func (service *Service) LoadReuseVectorsForPath(ctx context.Context, collectionN
 		"collection", collectionName,
 		"path", relativePath,
 		"chunks", len(reuse),
+		"peer", peerInfo.String(),
 	)
 	return reuse, nil
 }

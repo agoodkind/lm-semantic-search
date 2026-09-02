@@ -12,6 +12,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"google.golang.org/grpc/peer"
 )
 
 // StoredMessageState is the stored text and role for one delivered conversation
@@ -43,6 +44,7 @@ type storedMessageAssembly struct {
 // LoadConversationMessageState reads rows for one conversation prefix and
 // returns both assembled per-message state and row-granular reuse vectors.
 func (service *Service) LoadConversationMessageState(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]StoredMessageState, map[string][]float32, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	state := make(map[int32]StoredMessageState)
 	reuse := make(map[string][]float32)
 	if !service.Available() || collectionName == "" || conversationPrefix == "" {
@@ -73,7 +75,7 @@ func (service *Service) LoadConversationMessageState(ctx context.Context, collec
 		WithFilter(conversationStateFilterExpression(conversationPrefix)).
 		WithOutputFields(relativePathFieldName, messageIndexFieldName, roleFieldName, contentFieldName, denseVectorFieldName, splitPartFieldName))
 	if err != nil {
-		slog.ErrorContext(ctx, "open conversation state query iterator failed", "collection", collectionName, "err", err)
+		slog.ErrorContext(ctx, "open conversation state query iterator failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return nil, nil, fmt.Errorf("open conversation state iterator for %s: %w", collectionName, err)
 	}
 
@@ -87,6 +89,7 @@ func (service *Service) LoadConversationMessageState(ctx context.Context, collec
 		"prefix", conversationPrefix,
 		"messages", len(state),
 		"chunks", len(reuse),
+		"peer", peerInfo.String(),
 	)
 	return state, reuse, nil
 }

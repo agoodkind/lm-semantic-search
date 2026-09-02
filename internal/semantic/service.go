@@ -22,6 +22,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/lm-semantic-search/internal/tshash"
+	"google.golang.org/grpc/peer"
 )
 
 // Milvus field names match the upstream TS schema at
@@ -533,6 +534,7 @@ func (service *Service) queryTextForEmbedding(query string) string {
 }
 
 func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, filterExpr string) ([]model.StoredChunk, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
 		return nil, err
@@ -543,7 +545,7 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 
 	queryVector, err := service.embedder.Embed(ctx, service.queryTextForEmbedding(query))
 	if err != nil {
-		slog.ErrorContext(ctx, "embed query failed", "err", err)
+		slog.ErrorContext(ctx, "embed query failed", "peer", peerInfo.String(), "err", err)
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
@@ -669,22 +671,23 @@ func (service *Service) Count(ctx context.Context, codebasePath string) (int32, 
 }
 
 func (service *Service) collectionRowCount(ctx context.Context, collectionName string) (int32, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	resultSet, err := service.milvus.Query(ctx, milvusclient.NewQueryOption(collectionName).
 		WithOutputFields(countOutputField).
 		WithConsistencyLevel(entity.ClStrong))
 	if err != nil {
-		slog.ErrorContext(ctx, "count collection rows failed", "collection", collectionName, "err", err)
+		slog.ErrorContext(ctx, "count collection rows failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return 0, fmt.Errorf("count collection %s: %w", collectionName, err)
 	}
 
 	countColumn := resultSet.GetColumn(countOutputField)
 	if countColumn == nil {
-		slog.ErrorContext(ctx, "count query missing count column", "collection", collectionName, "err", errors.New("missing count(*) column"))
+		slog.ErrorContext(ctx, "count query missing count column", "collection", collectionName, "peer", peerInfo.String(), "err", errors.New("missing count(*) column"))
 		return 0, errors.New("milvus count query missing count(*) column")
 	}
 	total, err := countColumn.GetAsInt64(0)
 	if err != nil {
-		slog.ErrorContext(ctx, "read count column failed", "collection", collectionName, "err", err)
+		slog.ErrorContext(ctx, "read count column failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return 0, fmt.Errorf("read count(*) column for %s: %w", collectionName, err)
 	}
 	return safeInt32FromInt64(total), nil

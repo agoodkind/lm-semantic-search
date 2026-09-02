@@ -6,16 +6,23 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"math"
+	"slices"
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
+	"google.golang.org/grpc/peer"
 )
 
 const (
-	reuseLookupBatchSize       = 256
-	reuseLookupMaxEscapedBytes = 256 * 1024
+	reuseLookupBatchSize        = 256
+	reuseLookupMaxEscapedBytes  = 256 * 1024
+	reuseVectorFetchBudgetBytes = 64 * 1024 * 1024
+	reuseVectorRowFramingBytes  = 256
+	reuseVectorFloatBytes       = 4
 )
 
 func contentHash(content string) string {
@@ -298,11 +305,11 @@ func (service *Service) loadCollectionReuseFromSource(
 	}
 
 	legacyContents := missingReuseContents(contentsByStorageKey, reuse)
-	for _, batch := range reuseLookupBatches(legacyContents) {
-		if err := service.loadLegacyReuseBatch(
+	for _, content := range legacyContents {
+		if err := service.loadLegacyReuseContent(
 			ctx,
 			collectionName,
-			batch,
+			content,
 			reuse,
 		); err != nil {
 			return err
@@ -318,13 +325,16 @@ func (service *Service) loadStoredHashReuseBatch(
 	contentsByHash map[string]string,
 	reuse map[string][]float32,
 ) error {
-	return service.loadCollectionReuseBatch(
+	candidates, err := service.discoverStoredHashReuseCandidates(
 		ctx,
 		collectionName,
 		inStringClause(contentHashFieldName, contentHashes),
 		contentsByHash,
-		reuse,
 	)
+	if err != nil {
+		return err
+	}
+	return service.loadReuseVectorCandidates(ctx, collectionName, candidates, reuse)
 }
 
 func reuseLookupBatches(values []string) [][]string {
@@ -346,48 +356,183 @@ func reuseLookupBatches(values []string) [][]string {
 	return batches
 }
 
-func (service *Service) loadLegacyReuseBatch(
-	ctx context.Context,
-	collectionName string,
-	contents []string,
-	reuse map[string][]float32,
-) error {
-	contentsByHash := make(map[string]string, len(contents))
-	for _, content := range contents {
-		contentsByHash[contentVectorKey(content)] = content
-	}
-	return service.loadCollectionReuseBatch(
-		ctx,
-		collectionName,
-		contentHashFieldName+" is null and ("+
-			inStringClause(contentFieldName, contents)+")",
-		contentsByHash,
-		reuse,
-	)
+type reuseVectorCandidate struct {
+	id              string
+	expectedContent string
 }
 
-func (service *Service) loadCollectionReuseBatch(
+type reuseVectorCandidateByID map[string]reuseVectorCandidate
+
+func estimatedReuseVectorRowBytes(dimension int) (int64, error) {
+	if dimension <= 0 {
+		return 0, fmt.Errorf("reuse vector dimension must be positive: %d", dimension)
+	}
+	rowBytes := int64(0)
+	for _, fieldBytes := range []int64{
+		idFieldMaxLength,
+		contentFieldMaxLength,
+		embeddingModelFieldMaxLength,
+		reuseVectorRowFramingBytes,
+	} {
+		if rowBytes > math.MaxInt64-fieldBytes {
+			return 0, errors.New("reuse vector row byte estimate overflow")
+		}
+		rowBytes += fieldBytes
+	}
+	dimensionBytes := int64(dimension)
+	if dimensionBytes > (math.MaxInt64-rowBytes)/reuseVectorFloatBytes {
+		return 0, errors.New("reuse vector row byte estimate overflow")
+	}
+	rowBytes += dimensionBytes * reuseVectorFloatBytes
+	return rowBytes, nil
+}
+
+func packReuseVectorCandidates(
+	candidates reuseVectorCandidateByID,
+	dimension int,
+) ([][]string, error) {
+	rowBytes, err := estimatedReuseVectorRowBytes(dimension)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(candidates))
+	for id := range candidates {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return packReuseVectorCandidateIDs(ids, rowBytes, reuseVectorFetchBudgetBytes)
+}
+
+func packReuseVectorCandidateIDs(
+	ids []string,
+	rowBytes int64,
+	budgetBytes int64,
+) ([][]string, error) {
+	if rowBytes <= 0 {
+		return nil, fmt.Errorf("reuse vector row byte estimate must be positive: %d", rowBytes)
+	}
+	if budgetBytes <= 0 {
+		return nil, fmt.Errorf("reuse vector fetch budget must be positive: %d", budgetBytes)
+	}
+	if rowBytes > budgetBytes {
+		return nil, fmt.Errorf(
+			"estimated reuse vector row size %d exceeds fetch budget %d",
+			rowBytes,
+			budgetBytes,
+		)
+	}
+	batches := make([][]string, 0)
+	batch := make([]string, 0)
+	batchBytes := int64(0)
+	for _, id := range ids {
+		if batchBytes > budgetBytes-rowBytes {
+			batches = append(batches, batch)
+			batch = make([]string, 0)
+			batchBytes = 0
+		}
+		batch = append(batch, id)
+		batchBytes += rowBytes
+	}
+	if len(batch) > 0 {
+		batches = append(batches, batch)
+	}
+	return batches, nil
+}
+
+func (service *Service) discoverStoredHashReuseCandidates(
 	ctx context.Context,
 	collectionName string,
 	filter string,
 	contentsByHash map[string]string,
+) (reuseVectorCandidateByID, error) {
+	iterator, err := service.milvus.QueryIterator(
+		ctx,
+		milvusclient.NewQueryIteratorOption(collectionName).
+			WithBatchSize(reuseVectorBatchSize).
+			WithFilter(filter).
+			WithOutputFields(idFieldName, contentHashFieldName, embeddingModelFieldName),
+	)
+	if err != nil {
+		peerInfo, _ := peer.FromContext(ctx)
+		slog.ErrorContext(
+			ctx,
+			"open stored reuse candidate iterator failed",
+			"collection", collectionName,
+			"peer", peerInfo.String(),
+			"err", err,
+		)
+		return nil, fmt.Errorf("open stored reuse candidate iterator for %s: %w", collectionName, err)
+	}
+	candidates := make(reuseVectorCandidateByID)
+	selectedHashes := make(map[string]struct{}, len(contentsByHash))
+	for {
+		resultSet, nextErr := iterator.Next(ctx)
+		if errors.Is(nextErr, io.EOF) {
+			return candidates, nil
+		}
+		if nextErr != nil {
+			return nil, fmt.Errorf("iterate stored reuse candidates for %s: %w", collectionName, nextErr)
+		}
+		idColumn := resultSet.GetColumn(idFieldName)
+		contentHashColumn := resultSet.GetColumn(contentHashFieldName)
+		embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
+		if idColumn == nil || contentHashColumn == nil {
+			return nil, ErrSearchResultIncomplete
+		}
+		for rowIndex := range resultSet.ResultCount {
+			id, idErr := idColumn.GetAsString(rowIndex)
+			if idErr != nil {
+				return nil, fmt.Errorf("read reuse candidate ID at %d: %w", rowIndex, idErr)
+			}
+			contentHash, contentHashErr := contentHashColumn.GetAsString(rowIndex)
+			if contentHashErr != nil {
+				return nil, fmt.Errorf("read reuse content hash at %d: %w", rowIndex, contentHashErr)
+			}
+			expectedContent, wanted := contentsByHash[contentHash]
+			if !wanted {
+				continue
+			}
+			if _, selected := selectedHashes[contentHash]; selected {
+				continue
+			}
+			embeddingModel, modelErr := nullableStringAt(embeddingModelColumn, rowIndex)
+			if modelErr != nil {
+				return nil, fmt.Errorf("read reuse embedding model at %d: %w", rowIndex, modelErr)
+			}
+			if !embeddingModelsCompatible(embeddingModel, service.cfg.EmbeddingModel) {
+				continue
+			}
+			candidates[id] = reuseVectorCandidate{
+				id:              id,
+				expectedContent: expectedContent,
+			}
+			selectedHashes[contentHash] = struct{}{}
+		}
+	}
+}
+
+func (service *Service) loadLegacyReuseContent(
+	ctx context.Context,
+	collectionName string,
+	content string,
 	reuse map[string][]float32,
 ) error {
 	iterator, err := service.milvus.QueryIterator(
 		ctx,
 		milvusclient.NewQueryIteratorOption(collectionName).
 			WithBatchSize(reuseVectorBatchSize).
-			WithFilter(filter).
-			WithOutputFields(contentFieldName, embeddingModelFieldName, denseVectorFieldName),
+			WithFilter(contentHashFieldName+" is null and "+
+				contentFieldName+" == \""+escapeMilvusString(content)+"\"").
+			WithOutputFields(idFieldName, embeddingModelFieldName),
 	)
 	if err != nil {
 		slog.ErrorContext(
 			ctx,
-			"open content reuse iterator failed",
+			"open legacy reuse candidate iterator failed",
 			"collection", collectionName,
 			"err", err,
 		)
-		return fmt.Errorf("open content reuse iterator for %s: %w", collectionName, err)
+		return fmt.Errorf("open legacy reuse candidate iterator for %s: %w", collectionName, err)
 	}
 	for {
 		resultSet, nextErr := iterator.Next(ctx)
@@ -395,38 +540,153 @@ func (service *Service) loadCollectionReuseBatch(
 			return nil
 		}
 		if nextErr != nil {
-			return fmt.Errorf("iterate content reuse for %s: %w", collectionName, nextErr)
+			return fmt.Errorf("iterate legacy reuse candidates for %s: %w", collectionName, nextErr)
 		}
-		contentColumn := resultSet.GetColumn(contentFieldName)
+		idColumn := resultSet.GetColumn(idFieldName)
 		embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
-		vectorColumn := resultSet.GetColumn(denseVectorFieldName)
-		if contentColumn == nil || vectorColumn == nil {
+		if idColumn == nil {
 			return ErrSearchResultIncomplete
 		}
 		for rowIndex := range resultSet.ResultCount {
-			content, contentErr := contentColumn.GetAsString(rowIndex)
-			if contentErr != nil {
-				return fmt.Errorf("read reuse content at %d: %w", rowIndex, contentErr)
-			}
-			contentHash := contentVectorKey(content)
-			wantedContent, found := contentsByHash[contentHash]
-			if !found || wantedContent != content {
-				continue
+			id, idErr := idColumn.GetAsString(rowIndex)
+			if idErr != nil {
+				return fmt.Errorf("read legacy reuse candidate ID at %d: %w", rowIndex, idErr)
 			}
 			embeddingModel, modelErr := nullableStringAt(embeddingModelColumn, rowIndex)
 			if modelErr != nil {
-				return fmt.Errorf("read reuse embedding model at %d: %w", rowIndex, modelErr)
+				return fmt.Errorf("read legacy reuse embedding model at %d: %w", rowIndex, modelErr)
 			}
 			if !embeddingModelsCompatible(embeddingModel, service.cfg.EmbeddingModel) {
 				continue
 			}
-			vector, vectorErr := vectorAt(vectorColumn, rowIndex)
-			if vectorErr != nil {
-				return vectorErr
-			}
-			reuse[contentHash] = vector
+			candidate := reuseVectorCandidate{id: id, expectedContent: content}
+			return service.loadReuseVectorCandidates(
+				ctx,
+				collectionName,
+				reuseVectorCandidateByID{id: candidate},
+				reuse,
+			)
 		}
 	}
+}
+
+func (service *Service) loadReuseVectorCandidates(
+	ctx context.Context,
+	collectionName string,
+	candidates reuseVectorCandidateByID,
+	reuse map[string][]float32,
+) error {
+	batches, err := packReuseVectorCandidates(candidates, int(service.cfg.EmbeddingDimension))
+	if err != nil {
+		return err
+	}
+	for _, ids := range batches {
+		resultSet, getErr := service.milvus.Get(
+			ctx,
+			milvusclient.NewQueryOption(collectionName).
+				WithIDs(column.NewColumnVarChar(idFieldName, slices.Clone(ids))).
+				WithOutputFields(
+					idFieldName,
+					contentFieldName,
+					embeddingModelFieldName,
+					denseVectorFieldName,
+				),
+		)
+		if getErr != nil {
+			slog.ErrorContext(
+				ctx,
+				"get selected reuse vectors failed",
+				"collection", collectionName,
+				"err", getErr,
+			)
+			return fmt.Errorf("get selected reuse vectors for %s: %w", collectionName, getErr)
+		}
+		batchReuse, readErr := service.readReuseVectorBatch(
+			resultSet,
+			ids,
+			candidates,
+			int(service.cfg.EmbeddingDimension),
+		)
+		if readErr != nil {
+			return readErr
+		}
+		maps.Copy(reuse, batchReuse)
+	}
+	return nil
+}
+
+func (service *Service) readReuseVectorBatch(
+	resultSet milvusclient.ResultSet,
+	requestedIDs []string,
+	candidates reuseVectorCandidateByID,
+	dimension int,
+) (map[string][]float32, error) {
+	idColumn := resultSet.GetColumn(idFieldName)
+	contentColumn := resultSet.GetColumn(contentFieldName)
+	embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
+	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
+	if idColumn == nil || contentColumn == nil || embeddingModelColumn == nil || vectorColumn == nil {
+		return nil, ErrSearchResultIncomplete
+	}
+	requested := make(map[string]reuseVectorCandidate, len(requestedIDs))
+	for _, id := range requestedIDs {
+		candidate, found := candidates[id]
+		if !found {
+			return nil, fmt.Errorf("selected reuse vector ID %q has no candidate", id)
+		}
+		requested[id] = candidate
+	}
+	seen := make(map[string]struct{}, resultSet.ResultCount)
+	batchReuse := make(map[string][]float32, resultSet.ResultCount)
+	for rowIndex := range resultSet.ResultCount {
+		id, idErr := idColumn.GetAsString(rowIndex)
+		if idErr != nil {
+			wrappedErr := fmt.Errorf("read selected reuse ID at %d: %w", rowIndex, idErr)
+			slog.Error("read selected reuse ID failed", "row_index", rowIndex, "err", wrappedErr)
+			return nil, wrappedErr
+		}
+		candidate, found := requested[id]
+		if !found {
+			return nil, fmt.Errorf("selected reuse response returned unknown ID %q", id)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("selected reuse response returned duplicate ID %q", id)
+		}
+		seen[id] = struct{}{}
+		content, contentErr := contentColumn.GetAsString(rowIndex)
+		if contentErr != nil {
+			return nil, fmt.Errorf("read selected reuse content at %d: %w", rowIndex, contentErr)
+		}
+		if content != candidate.expectedContent {
+			return nil, fmt.Errorf("selected reuse content mismatch for ID %q", id)
+		}
+		embeddingModel, modelErr := nullableStringAt(embeddingModelColumn, rowIndex)
+		if modelErr != nil {
+			return nil, fmt.Errorf("read selected reuse embedding model at %d: %w", rowIndex, modelErr)
+		}
+		if !embeddingModelsCompatible(embeddingModel, service.cfg.EmbeddingModel) {
+			return nil, fmt.Errorf("selected reuse embedding model mismatch for ID %q", id)
+		}
+		vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+		if vectorErr != nil {
+			return nil, vectorErr
+		}
+		if len(vector) != dimension {
+			return nil, fmt.Errorf(
+				"selected reuse vector dimension for ID %q is %d, want %d",
+				id,
+				len(vector),
+				dimension,
+			)
+		}
+		batchReuse[contentVectorKey(content)] = vector
+	}
+	for _, id := range requestedIDs {
+		if _, found := seen[id]; !found {
+			return nil, fmt.Errorf("selected reuse response omitted requested ID %q", id)
+		}
+	}
+	return batchReuse, nil
 }
 
 func nullableStringAt(field column.Column, rowIndex int) (string, error) {

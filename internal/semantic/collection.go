@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"google.golang.org/grpc/peer"
 )
 
 // Conversation collections carry their filterable attributes as native scalar
@@ -36,6 +37,8 @@ const (
 	conversationProviderMaxLength  = 32
 	conversationWorkspaceMaxLength = 1024
 	conversationLoadRulesMaxLength = 256
+	idFieldMaxLength               = 512
+	contentFieldMaxLength          = 65_535
 	embeddingModelFieldMaxLength   = 65535
 )
 
@@ -147,8 +150,8 @@ func (service *Service) createCollection(
 	dimension int,
 ) (CollectionLease, error) {
 	schema := entity.NewSchema().
-		WithField(entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(512).WithIsPrimaryKey(true)).
-		WithField(entity.NewField().WithName(contentFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535).WithEnableAnalyzer(true).WithEnableMatch(true)).
+		WithField(entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(idFieldMaxLength).WithIsPrimaryKey(true)).
+		WithField(entity.NewField().WithName(contentFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(contentFieldMaxLength).WithEnableAnalyzer(true).WithEnableMatch(true)).
 		WithField(entity.NewField().WithName(relativePathFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(1024)).
 		WithField(entity.NewField().WithName(startLineFieldName).WithDataType(entity.FieldTypeInt64)).
 		WithField(entity.NewField().WithName(endLineFieldName).WithDataType(entity.FieldTypeInt64)).
@@ -398,9 +401,10 @@ func (service *Service) ensureSplitPartColumnOnce(
 // on-add backfill trigger. Every added column is nullable, which AddCollectionField
 // requires for a collection that already holds rows.
 func (service *Service) addMissingConversationScalarColumns(ctx context.Context, collectionName string) ([]string, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	collection, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
 	if err != nil {
-		slog.ErrorContext(ctx, "describe conversation collection for scalar migration failed", "collection", collectionName, "err", err)
+		slog.ErrorContext(ctx, "describe conversation collection for scalar migration failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return nil, fmt.Errorf("describe conversation collection %s: %w", collectionName, err)
 	}
 	existing := make(map[string]struct{})
@@ -415,7 +419,7 @@ func (service *Service) addMissingConversationScalarColumns(ctx context.Context,
 			continue
 		}
 		if err := service.milvus.AddCollectionField(ctx, milvusclient.NewAddCollectionFieldOption(collectionName, field)); err != nil {
-			slog.ErrorContext(ctx, "add conversation scalar column failed", "collection", collectionName, "field", field.Name, "err", err)
+			slog.ErrorContext(ctx, "add conversation scalar column failed", "collection", collectionName, "field", field.Name, "peer", peerInfo.String(), "err", err)
 			return added, fmt.Errorf("add scalar column %s to %s: %w", field.Name, collectionName, err)
 		}
 		service.invalidateMmapPolicy(collectionName)

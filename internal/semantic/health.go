@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"google.golang.org/grpc/peer"
 )
 
 // CollectionState is the observed residency of one semantic collection.
@@ -66,13 +67,14 @@ func (service *Service) ProbeHealth(ctx context.Context) error {
 // readiness as unknown; the global store banner is left to ProbeHealth. A service
 // not configured for or not connected to Milvus reports (false, false, nil).
 func (service *Service) CollectionState(ctx context.Context, codebasePath string) (bool, bool, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	if service == nil || !service.Available() || service.milvus == nil {
 		return false, false, nil
 	}
 	collectionName := service.CollectionName(codebasePath)
 	has, err := service.hasCollection(ctx, collectionName, "check collection "+collectionName)
 	if err != nil {
-		slog.ErrorContext(ctx, "check collection state failed", "collection", collectionName, "err", err)
+		slog.ErrorContext(ctx, "check collection state failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return false, false, adapterr.NewMilvusUnavailable(err)
 	}
 	if !has {

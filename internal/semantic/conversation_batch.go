@@ -12,6 +12,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"google.golang.org/grpc/peer"
 )
 
 // ConversationStoredRows is one conversation's stored rows as read from the live
@@ -44,6 +45,7 @@ const conversationBatchIDFilterSize = conversationFilterIDBatchSize
 // Each query matches both current conversation scalars and historical family
 // paths, so rows written before the scalar columns remain visible.
 func (service *Service) LoadConversationDerivedBatch(ctx context.Context, collectionName string, conversationIDs []string) (ConversationBatchState, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	state := ConversationBatchState{Rows: map[string]ConversationStoredRows{}, Reuse: map[string][]float32{}}
 	uniqueIDs := dedupeConversationIDs(conversationIDs)
 	if !service.Available() || collectionName == "" || len(uniqueIDs) == 0 {
@@ -85,6 +87,7 @@ func (service *Service) LoadConversationDerivedBatch(ctx context.Context, collec
 		"conversations", len(uniqueIDs),
 		"resolved", len(state.Rows),
 		"chunks", len(state.Reuse),
+		"peer", peerInfo.String(),
 	)
 	return state, nil
 }
