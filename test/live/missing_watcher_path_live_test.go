@@ -78,6 +78,14 @@ func TestWatcherProgressRejectsDuplicateRunningOneOfOne(t *testing.T) {
 	}
 }
 
+func TestWatcherProgressAllowsTotalChange(t *testing.T) {
+	first := watcherProgressUpdate{state: "running", processed: 0, filesTotal: 0}
+	second := watcherProgressUpdate{state: "running", processed: 0, filesTotal: 1}
+	if duplicateNonFinalWatcherProgress(first, second) {
+		t.Fatal("watcher progress treated a changed total as a duplicate")
+	}
+}
+
 func newSandboxWatcherHarness(t *testing.T) *harness {
 	t.Helper()
 	defaultConfig, err := config.Default()
@@ -163,6 +171,11 @@ func newSandboxWatcherHarness(t *testing.T) *harness {
 		callRecorder:    callRecorder,
 		milvusContext:   sandboxContext,
 	}
+	t.Cleanup(func() {
+		for _, cleanupErr := range harness.cleanupMilvus() {
+			t.Error(cleanupErr)
+		}
+	})
 	sandboxRoot, err := os.MkdirTemp("/tmp", "lms-watcher-sandbox-")
 	if err != nil {
 		closeMilvusClient(sandboxMilvus)
@@ -186,9 +199,6 @@ func newSandboxWatcherHarness(t *testing.T) *harness {
 			_ = harness.conn.Close()
 		}
 		stopSandboxDaemon(t, process)
-		for _, cleanupErr := range harness.cleanupMilvus() {
-			t.Error(cleanupErr)
-		}
 	})
 
 	connection, client := waitForSandboxDaemon(t, filepath.Join(sandboxRoot, "daemon.sock"), process)
@@ -318,9 +328,15 @@ func stopSandboxDaemon(t *testing.T, process *exec.Cmd) {
 	case <-time.After(15 * time.Second):
 		if err := process.Process.Kill(); err != nil {
 			t.Errorf("kill stalled sandbox daemon: %v", err)
+			return
 		}
-		if err := <-done; err != nil {
-			t.Errorf("wait for killed sandbox daemon: %v\n%s", err, sandboxProcessOutput(process))
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("wait for killed sandbox daemon: %v\n%s", err, sandboxProcessOutput(process))
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("wait for killed sandbox daemon timed out\n%s", sandboxProcessOutput(process))
 		}
 	}
 }
@@ -436,7 +452,7 @@ func waitForNewWatcherJob(t *testing.T, harness *harness, knownJobs map[string]s
 }
 
 func duplicateNonFinalWatcherProgress(previous watcherProgressUpdate, current watcherProgressUpdate) bool {
-	return previous.state == "running" && current.state == "running" && previous.processed == current.processed
+	return previous.state == "running" && current.state == "running" && previous.processed == current.processed && previous.filesTotal == current.filesTotal
 }
 
 func publicWatcherJobIDs(t *testing.T, harness *harness) map[string]struct{} {

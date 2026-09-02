@@ -190,6 +190,21 @@ func (manager *Manager) updateDetachedJobProgress(jobID string, progress indexer
 	manager.journalJobProgressLocked(job)
 }
 
+func (manager *Manager) updateDetachedJobHeartbeat(jobID string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	job, found := manager.jobs[jobID]
+	if !found {
+		return
+	}
+	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStateCancelling {
+		return
+	}
+	job.Progress.HeartbeatAt = clock.Now()
+	manager.jobs[jobID] = job
+}
+
 // updateJobChunkProgress advances the chunk counters, the current item's embed
 // batch denominator, and the heartbeat during a single item's embed loop. It is
 // called once per embed batch, so a long item (a large conversation with many

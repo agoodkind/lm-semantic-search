@@ -540,7 +540,12 @@ func (syncer *BackgroundSync) runDetachedWatcherConverge(
 	registration convergeJobRegistration,
 ) {
 	registration.withContext(func(runCtx context.Context) {
+		lastReportedPaths := int32(-1)
 		outcome, runErr := syncer.manager.ConvergePaths(runCtx, codebaseID, relativePaths, func(progress ConvergeOutcome) {
+			if progress.PathsProcessed == lastReportedPaths {
+				syncer.manager.updateDetachedJobHeartbeat(registration.job.ID)
+				return
+			}
 			percent := 100.0
 			if progress.PathsGiven > 0 {
 				percent = float64(progress.PathsProcessed) / float64(progress.PathsGiven) * 100
@@ -561,6 +566,7 @@ func (syncer *BackgroundSync) runDetachedWatcherConverge(
 				ChunksDropped:          0,
 				ReuseVectorsLoaded:     0,
 			}, "path")
+			lastReportedPaths = progress.PathsProcessed
 		})
 		terminalCtx := context.WithoutCancel(runCtx)
 		switch {

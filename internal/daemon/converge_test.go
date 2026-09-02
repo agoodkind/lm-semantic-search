@@ -34,6 +34,20 @@ func seedConvergeCodebase(t *testing.T, manager *Manager, repoPath string) model
 	return codebase
 }
 
+func writeConvergePresentFileInfo(t *testing.T, repoPath string, relativePath string) os.FileInfo {
+	t.Helper()
+
+	absolutePath := filepath.Join(repoPath, relativePath)
+	if err := os.WriteFile(absolutePath, []byte("package present\n"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", relativePath, err)
+	}
+	info, err := os.Lstat(absolutePath)
+	if err != nil {
+		t.Fatalf("Lstat %s: %v", relativePath, err)
+	}
+	return info
+}
+
 // TestConvergePathsReportsWhatItConverged proves the caller learns how many of
 // the paths it handed over actually reached the index. A job built around this
 // call reports that count as its scope, so a wrong count is a wrong status.
@@ -149,9 +163,16 @@ func TestConvergePathsRateLimitsProgress(t *testing.T) {
 		relativePaths = append(relativePaths, fmt.Sprintf("missing/%05d.go", i))
 	}
 	updates := make([]ConvergeOutcome, 0)
-	outcome, err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths, func(progress ConvergeOutcome) {
-		updates = append(updates, progress)
-	})
+	outcome, err := manager.convergePathsWithLstatAndNow(
+		context.Background(),
+		codebase.ID,
+		relativePaths,
+		func(progress ConvergeOutcome) {
+			updates = append(updates, progress)
+		},
+		os.Lstat,
+		func() time.Time { return time.Unix(1, 0) },
+	)
 	if err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
@@ -179,7 +200,7 @@ func TestConvergePathsRateLimitsProgress(t *testing.T) {
 	}
 }
 
-func TestConvergePathsDoesNotRepeatProgressAfterSlowPresentPath(t *testing.T) {
+func TestConvergePathsReportsHeartbeatDuringSlowPresentPath(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	codebase := seedConvergeCodebase(t, manager, repoPath)
 
@@ -222,11 +243,12 @@ func TestConvergePathsDoesNotRepeatProgressAfterSlowPresentPath(t *testing.T) {
 	if reindexCalls.Load() != pathCount {
 		t.Fatalf("Reindex calls = %d, want %d", reindexCalls.Load(), pathCount)
 	}
-	for updateIndex := 1; updateIndex < len(updates); updateIndex++ {
-		previous := updates[updateIndex-1].PathsProcessed
-		current := updates[updateIndex].PathsProcessed
-		if current <= previous {
-			t.Fatalf("progress repeated after slow present path: %d then %d", previous, current)
+	if len(updates) != 2 {
+		t.Fatalf("progress updates = %d, want classification progress and one heartbeat", len(updates))
+	}
+	for _, update := range updates {
+		if update.PathsProcessed != pathCount {
+			t.Fatalf("PathsProcessed = %d, want %d", update.PathsProcessed, pathCount)
 		}
 	}
 }
@@ -265,10 +287,11 @@ func TestConvergePathsRetainsPathRemovedAfterClassification(t *testing.T) {
 	}
 
 	lstatCalls := 0
+	presentInfo := writeConvergePresentFileInfo(t, repoPath, "disappeared.go")
 	outcome, err := manager.convergePathsWithLstat(context.Background(), codebase.ID, []string{"disappeared.go"}, nil, func(string) (os.FileInfo, error) {
 		lstatCalls++
 		if lstatCalls == 1 {
-			return nil, nil
+			return presentInfo, nil
 		}
 		return nil, os.ErrNotExist
 	})
@@ -535,10 +558,11 @@ func TestConvergePathsPropagatesPostclassificationLstatError(t *testing.T) {
 	}
 
 	lstatCalls := 0
+	presentInfo := writeConvergePresentFileInfo(t, repoPath, "f000.go")
 	_, err = manager.convergePathsWithLstat(context.Background(), codebase.ID, []string{"f000.go"}, nil, func(string) (os.FileInfo, error) {
 		lstatCalls++
 		if lstatCalls == 1 {
-			return nil, nil
+			return presentInfo, nil
 		}
 		return nil, os.ErrPermission
 	})
@@ -563,6 +587,66 @@ func TestConvergePathsPropagatesPostclassificationLstatError(t *testing.T) {
 	}
 }
 
+func TestConvergePathsPersistsSuccessfulPathBeforeLaterError(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	writeConvergePresentFileInfo(t, repoPath, "first.go")
+	writeConvergePresentFileInfo(t, repoPath, "second.go")
+
+	manager.runner = fakeRunner{
+		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
+			if relativePath == "second.go" {
+				return indexer.OneFileResult{}, os.ErrPermission
+			}
+			return indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:      "package first\n",
+					RelativePath: relativePath,
+					StartLine:    1,
+					EndLine:      1,
+				}},
+				FileHash: "hash-first",
+			}, nil
+		},
+	}
+	var reindexCalls atomic.Int32
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			reindexCalls.Add(1)
+			return nil
+		},
+	}
+
+	outcome, err := manager.ConvergePaths(
+		context.Background(),
+		codebase.ID,
+		[]string{"first.go", "second.go"},
+		nil,
+	)
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v, want permission error", err)
+	}
+	if outcome.PathsConverged != 1 {
+		t.Fatalf("PathsConverged = %d, want 1", outcome.PathsConverged)
+	}
+	if got := reindexCalls.Load(); got != 1 {
+		t.Fatalf("Reindex calls = %d, want 1", got)
+	}
+
+	checkpoint, readErr := merkle.ReadSnapshot(manager.snapshotPathForCodebase(codebase))
+	if readErr != nil {
+		t.Fatalf("ReadSnapshot after later error: %v", readErr)
+	}
+	if checkpoint.Files["first.go"] != "hash-first" {
+		t.Fatalf("first.go hash = %q, want %q", checkpoint.Files["first.go"], "hash-first")
+	}
+	if checkpoint.HasFile("second.go") {
+		t.Fatal("checkpoint recorded second.go after its error")
+	}
+}
+
 func TestConvergePathsPropagatesIndexOneError(t *testing.T) {
 	t.Parallel()
 
@@ -580,10 +664,11 @@ func TestConvergePathsPropagatesIndexOneError(t *testing.T) {
 	}
 
 	lstatCalls := 0
+	presentInfo := writeConvergePresentFileInfo(t, repoPath, "unreadable.go")
 	_, err := manager.convergePathsWithLstat(context.Background(), codebase.ID, []string{"unreadable.go"}, nil, func(string) (os.FileInfo, error) {
 		lstatCalls++
 		if lstatCalls == 1 {
-			return nil, nil
+			return presentInfo, nil
 		}
 		return nil, os.ErrNotExist
 	})
@@ -871,6 +956,88 @@ func TestCompletedWatcherConvergeKeepsDegradedDependency(t *testing.T) {
 	manager.mu.Unlock()
 	if updatedCodebase.LiveFileTotal != codebase.LiveFileTotal || updatedCodebase.LiveChunkTotal != codebase.LiveChunkTotal {
 		t.Fatalf("live totals = %d files, %d chunks; want %d files, %d chunks", updatedCodebase.LiveFileTotal, updatedCodebase.LiveChunkTotal, codebase.LiveFileTotal, codebase.LiveChunkTotal)
+	}
+}
+
+func TestConvergeViaWatcherHeartbeatsSlowPresentPathWithoutDuplicateProgressJournal(t *testing.T) {
+	manager, cfg, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+
+	const pathCount = 256
+	paths := make([]string, 0, pathCount)
+	for index := 0; index < pathCount; index++ {
+		relativePath := fmt.Sprintf("present/%03d.go", index)
+		absolutePath := filepath.Join(repoPath, relativePath)
+		if err := os.MkdirAll(filepath.Dir(absolutePath), 0o700); err != nil {
+			t.Fatalf("create source directory: %v", err)
+		}
+		if err := os.WriteFile(absolutePath, []byte("package present\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", relativePath, err)
+		}
+		paths = append(paths, relativePath)
+	}
+	manager.runner = fakeRunner{
+		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
+			return indexer.OneFileResult{
+				Chunks: []model.StoredChunk{{
+					Content:      "package present\n",
+					RelativePath: relativePath,
+					StartLine:    1,
+					EndLine:      1,
+				}},
+				FileHash: "hash-" + relativePath,
+			}, nil
+		},
+	}
+
+	var reindexCalls atomic.Int32
+	var progressUpdatedAt time.Time
+	var progressHeartbeatAt time.Time
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			call := reindexCalls.Add(1)
+			jobs := manager.ListJobs(codebase.ID)
+			if len(jobs) != 1 {
+				t.Fatalf("ListJobs returned %d jobs during converge, want 1", len(jobs))
+			}
+			job := jobs[0]
+			switch call {
+			case 1:
+				if job.Progress.FilesProcessed != pathCount {
+					t.Fatalf("classification progress = %d, want %d", job.Progress.FilesProcessed, pathCount)
+				}
+				progressUpdatedAt = job.UpdatedAt
+				progressHeartbeatAt = job.Progress.HeartbeatAt
+				time.Sleep(1100 * time.Millisecond)
+			case 2:
+				if !job.UpdatedAt.Equal(progressUpdatedAt) {
+					t.Fatalf("UpdatedAt changed from %s to %s for heartbeat-only update", progressUpdatedAt, job.UpdatedAt)
+				}
+				if !job.Progress.HeartbeatAt.After(progressHeartbeatAt) {
+					t.Fatalf("HeartbeatAt = %s, want after %s", job.Progress.HeartbeatAt, progressHeartbeatAt)
+				}
+			}
+			return nil
+		},
+	}
+
+	syncer := NewBackgroundSync(cfg, manager)
+	syncer.convergeViaWatcher(context.Background(), codebase.ID, paths)
+	if got := reindexCalls.Load(); got != pathCount {
+		t.Fatalf("Reindex calls = %d, want %d", got, pathCount)
+	}
+	jobs := manager.ListJobs(codebase.ID)
+	if len(jobs) != 1 || jobs[0].State != model.JobStateCompleted {
+		t.Fatalf("completed watcher jobs = %+v, want one completed job", jobs)
+	}
+
+	manager.closeJobJournal()
+	journal, err := os.ReadFile(cfg.JobsPath)
+	if err != nil {
+		t.Fatalf("ReadFile jobs journal: %v", err)
+	}
+	if got := bytes.Count(journal, []byte(`"event":"job_progress"`)); got != 1 {
+		t.Fatalf("job_progress events = %d, want 1 despite the heartbeat", got)
 	}
 }
 

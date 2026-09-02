@@ -106,7 +106,7 @@ func (manager *Manager) convergePathsWithLstatAndNow(ctx context.Context, codeba
 	lastProgressAt := now()
 	lastReportedPaths := int32(0)
 	reportedProgress := false
-	reportProgress := func(final bool) bool {
+	reportProgress := func(final bool, allowHeartbeat bool) bool {
 		if ctx.Err() != nil && !final {
 			return false
 		}
@@ -117,7 +117,7 @@ func (manager *Manager) convergePathsWithLstatAndNow(ctx context.Context, codeba
 		if !final && pathsSinceReport < convergeProgressPathInterval && now().Sub(lastProgressAt) < convergeProgressTimeInterval {
 			return true
 		}
-		if reportedProgress && pathsSinceReport == 0 {
+		if reportedProgress && pathsSinceReport == 0 && !allowHeartbeat {
 			return true
 		}
 		progress(outcome)
@@ -126,10 +126,10 @@ func (manager *Manager) convergePathsWithLstatAndNow(ctx context.Context, codeba
 		reportedProgress = true
 		return true
 	}
-	defer reportProgress(true)
+	defer reportProgress(true, false)
 	classifiedPaths, classifyErr := classifyConvergePathsWithProgress(ctx, codebase.CanonicalPath, relativePaths, lstat, func(classified int32) error {
 		outcome.PathsProcessed = classified
-		if reportProgress(false) {
+		if reportProgress(false, false) {
 			return nil
 		}
 		return ctx.Err()
@@ -148,16 +148,18 @@ func (manager *Manager) convergePathsWithLstatAndNow(ctx context.Context, codeba
 		&outcome,
 		reportProgress,
 	)
+	if changed {
+		if writeErr := merkle.WriteSnapshot(snapshotPath, snapshot); writeErr != nil {
+			slog.ErrorContext(ctx, "converge.snapshot_write_failed", "component", "daemon", "subcomponent", "converge", "path", snapshotPath, "err", writeErr)
+			wrappedWriteErr := fmt.Errorf("write converge snapshot %s: %w", snapshotPath, writeErr)
+			if convergeErr != nil {
+				return outcome, errors.Join(convergeErr, wrappedWriteErr)
+			}
+			return outcome, wrappedWriteErr
+		}
+	}
 	if convergeErr != nil {
 		return outcome, convergeErr
-	}
-
-	if !changed {
-		return outcome, nil
-	}
-	if writeErr := merkle.WriteSnapshot(snapshotPath, snapshot); writeErr != nil {
-		slog.ErrorContext(ctx, "converge.snapshot_write_failed", "component", "daemon", "subcomponent", "converge", "path", snapshotPath, "err", writeErr)
-		return outcome, fmt.Errorf("write converge snapshot %s: %w", snapshotPath, writeErr)
 	}
 	return outcome, nil
 }
@@ -170,7 +172,7 @@ func (manager *Manager) convergeClassifiedPaths(
 	admission *admissionState,
 	lstat convergeLstatFunc,
 	outcome *ConvergeOutcome,
-	reportProgress func(bool) bool,
+	reportProgress func(bool, bool) bool,
 ) (bool, error) {
 	changed := false
 	for _, classifiedPath := range classifiedPaths {
@@ -178,7 +180,7 @@ func (manager *Manager) convergeClassifiedPaths(
 		// written below covers exactly the paths that reached the index. The
 		// paths not reached become drift, which the periodic sync repairs.
 		if ctx.Err() != nil || classifiedPath.Missing {
-			if !reportProgress(false) {
+			if !reportProgress(false, false) {
 				break
 			}
 			continue
@@ -192,13 +194,13 @@ func (manager *Manager) convergeClassifiedPaths(
 			lstat,
 		)
 		if err != nil {
-			return false, err
+			return changed, err
 		}
 		if converged {
 			changed = true
 			outcome.PathsConverged++
 		}
-		if !reportProgress(false) {
+		if !reportProgress(false, true) {
 			break
 		}
 	}
