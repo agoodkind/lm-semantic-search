@@ -239,7 +239,7 @@ func TestConvergePathsRoutesUpsertThroughAdmission(t *testing.T) {
 	manager.codebases[codebase.ID] = codebase
 	manager.mu.Unlock()
 
-	_, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"main.go"})
+	_, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"main.go"}, nil)
 	if err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}

@@ -231,7 +231,7 @@ func TestConvergePathsKeepsEmptyCodebaseQuietAboutItsAbsentCheckpoint(t *testing
 	codebase, snapshotPath := indexEmptyCodebase(t, manager)
 
 	logs := captureLogs(t)
-	if _, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"new.go"}); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"new.go"}, nil); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 

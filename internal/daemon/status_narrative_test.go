@@ -62,13 +62,13 @@ func TestResolveStatusNarrativeQuarantinedFormatsCounts(t *testing.T) {
 	t.Parallel()
 	quarantine := view.QuarantineSurface{
 		HasQuarantine:      true,
-		Reason:             quarantineReasonWatcherLargeDelete,
+		Reason:             quarantineReasonFullScanLargeDelete,
 		FirstObservedLabel: "4:52 PM PDT",
 		LastObservedLabel:  "4:53 PM PDT",
 		ObservationCount:   1,
 		MissingCount:       400,
 		TotalCount:         4292,
-		Trigger:            quarantineTriggerWatcher,
+		Trigger:            quarantineTriggerFullScan,
 	}
 	statusView := view.StatusView{HasStats: true, Files: 58, Chunks: 600}
 	out := narrativeText(resolveStatusNarrative(displayQuarantined, "/repo", status.CollectionNotApplicable, view.FailureSurface{}, quarantine, statusView))

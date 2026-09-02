@@ -27,19 +27,33 @@ import (
 // dependency-health gate in updateJobCompleted.
 type ConvergeOutcome struct {
 	PathsGiven     int32
+	PathsProcessed int32
 	PathsConverged int32
 }
 
+type ConvergeProgressFunc func(ConvergeOutcome)
+
+type classifiedConvergePath struct {
+	RelativePath string
+	Missing      bool
+}
+
+type convergeLstatFunc func(string) (os.FileInfo, error)
+
 // ConvergePaths makes the index match disk for each relative path in a
 // codebase. It reads each path at call time: a path present on disk is
-// upserted, a path absent is deleted, and a path whose content hash already
+// upserted, a path absent is retained, and a path whose content hash already
 // matches the snapshot is skipped. Reading disk per path means a delete that
-// lands before the task runs is handled as a removal rather than an error.
+// lands before the task runs leaves the checkpoint and semantic rows unchanged.
 //
 // Callers must serialize ConvergePaths against full syncs of the same
 // codebase; the background sync coordinator does this through its single
 // in-flight guard.
-func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, relativePaths []string) (outcome ConvergeOutcome, err error) {
+func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, relativePaths []string, progress ConvergeProgressFunc) (outcome ConvergeOutcome, err error) {
+	return manager.convergePathsWithLstat(ctx, codebaseID, relativePaths, progress, os.Lstat)
+}
+
+func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID string, relativePaths []string, progress ConvergeProgressFunc, lstat convergeLstatFunc) (outcome ConvergeOutcome, err error) {
 	ctx, done := spans.Open(ctx, "daemon.convergePaths")
 	defer done(&err)
 
@@ -77,40 +91,33 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 	// fast path is lost. Processing present files first lets the
 	// destination match the source's inode while it still lives in the
 	// snapshot.
-	orderedPaths := orderPathsByPresence(codebase.CanonicalPath, relativePaths)
-	outcome.PathsGiven = safeInt32(len(orderedPaths))
-	if signal, suspicious := assessWatcherDeleteWave(codebase, snapshot, codebase.CanonicalPath, orderedPaths); suspicious {
-		observations := manager.quarantineCodebase(ctx, codebaseID, signal)
-		slog.WarnContext(
-			ctx,
-			"converge.quarantined_large_delete",
-			"component",
-			"daemon",
-			"subcomponent",
-			"converge",
-			"codebase_id",
-			codebaseID,
-			"missing_count",
-			signal.missingCount,
-			"total_count",
-			signal.totalCount,
-			"observations",
-			observations,
-		)
-		return outcome, nil
+	outcome.PathsGiven = safeInt32(len(relativePaths))
+	classifiedPaths, classifyErr := classifyConvergePaths(ctx, codebase.CanonicalPath, relativePaths, lstat)
+	if classifyErr != nil {
+		return outcome, classifyErr
 	}
 
 	changed := false
-	for _, relativePath := range orderedPaths {
+	for _, classifiedPath := range classifiedPaths {
 		// A cancel stops the walk here rather than mid-path, so the snapshot
 		// written below covers exactly the paths that reached the index. The
 		// paths not reached become drift, which the periodic sync repairs.
 		if ctx.Err() != nil {
 			break
 		}
-		if converged := manager.convergeOnePath(ctx, codebase, relativePath, &snapshot, admission); converged {
+		outcome.PathsProcessed++
+		if classifiedPath.Missing {
+			if progress != nil {
+				progress(outcome)
+			}
+			continue
+		}
+		if converged := manager.convergeOnePath(ctx, codebase, classifiedPath.RelativePath, &snapshot, admission); converged {
 			changed = true
 			outcome.PathsConverged++
+		}
+		if progress != nil {
+			progress(outcome)
 		}
 	}
 
@@ -132,13 +139,12 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 //
 //  1. The indexability resolver gates a present path first; a tracked
 //     path that has become excluded, out of scope, or oversize is removed.
-//  2. A missing file is removed.
-//  3. A file whose (device, inode) matches a different path already in
+//  2. A file whose (device, inode) matches a different path already in
 //     the snapshot with the same content hash is treated as a rename or
 //     hardlink: CopyChunks rewrites the Milvus key, skipping a re-embed.
-//  4. A file whose snapshot entry matches its current content hash is a
+//  3. A file whose snapshot entry matches its current content hash is a
 //     no-op (but the inode sidecar is refreshed when newer).
-//  5. Any remaining mismatch is an upsert (Reindex with the new chunks).
+//  4. Any remaining mismatch is an upsert (Reindex with the new chunks).
 //
 // InodeTrackingDisabled on the codebase short-circuits steps 3 and the
 // inode-stamp branch so unstable-inode filesystems still converge
@@ -149,7 +155,9 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 
 	// A path present on disk runs the indexability gate first: a tracked path
 	// that has become excluded, out of scope, or oversize is removed. A stat
-	// miss falls through to the IndexOne path below, which reports the removal.
+	// miss can occur when the file disappears after classification; IndexOne
+	// reports that removal, and this method retains its semantic rows and
+	// checkpoint entry.
 	// os.Lstat does not follow symlinks, so a symlink is seen as non-regular and
 	// rejected by the resolver's ReasonNotRegular gate rather than indexed as its
 	// target.
@@ -164,18 +172,7 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 		return false
 	}
 	if fileResult.Removed {
-		if rmErr := manager.semantic.Reindex(ctx, root, nil, semantic.RemovePaths([]string{relativePath}), nil, nil, semantic.StoreColumnSetCode); rmErr != nil {
-			manager.logConvergeReindexErr(ctx, relativePath, "remove", rmErr)
-			return false
-		}
-		if !snapshot.HasFile(relativePath) {
-			return false
-		}
-		delete(snapshot.Files, relativePath)
-		snapshot.ForgetInode(relativePath)
-		metrics.ConvergeRemove()
-		slog.InfoContext(ctx, "converge.remove", "component", "daemon", "subcomponent", "converge", "path", relativePath)
-		return true
+		return false
 	}
 	if fileResult.Skipped {
 		return false
@@ -303,21 +300,31 @@ func pickRenameSource(candidates []string, fileHashes map[string]string, freshHa
 	return ""
 }
 
-// orderPathsByPresence sorts relativePaths so files that currently exist
-// on disk come before files that have been removed. A stable secondary
-// alphabetical order keeps the iteration deterministic when several
-// files share the same presence bucket.
-func orderPathsByPresence(root string, relativePaths []string) []string {
-	ordered := append([]string{}, relativePaths...)
-	sort.SliceStable(ordered, func(first int, second int) bool {
-		firstExists := fileExists(filepath.Join(root, ordered[first]))
-		secondExists := fileExists(filepath.Join(root, ordered[second]))
-		if firstExists != secondExists {
-			return firstExists
+// classifyConvergePaths reports which watcher paths are absent before semantic
+// work begins. Present paths stay first so rename detection can reuse the
+// source inode before an absent path is considered.
+func classifyConvergePaths(ctx context.Context, root string, relativePaths []string, lstat convergeLstatFunc) ([]classifiedConvergePath, error) {
+	classifiedPaths := make([]classifiedConvergePath, 0, len(relativePaths))
+	for _, relativePath := range relativePaths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		return ordered[first] < ordered[second]
+		_, err := lstat(filepath.Join(root, relativePath))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("classify converge path %q: %w", relativePath, err)
+		}
+		classifiedPaths = append(classifiedPaths, classifiedConvergePath{
+			RelativePath: relativePath,
+			Missing:      errors.Is(err, os.ErrNotExist),
+		})
+	}
+	sort.SliceStable(classifiedPaths, func(first int, second int) bool {
+		if classifiedPaths[first].Missing != classifiedPaths[second].Missing {
+			return !classifiedPaths[first].Missing
+		}
+		return classifiedPaths[first].RelativePath < classifiedPaths[second].RelativePath
 	})
-	return ordered
+	return classifiedPaths, nil
 }
 
 func fileExists(absolutePath string) bool {

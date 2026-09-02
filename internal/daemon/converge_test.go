@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/indexer"
+	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -49,7 +51,7 @@ func TestConvergePathsReportsWhatItConverged(t *testing.T) {
 		t.Fatalf("write the present file: %v", err)
 	}
 
-	outcome, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"present.go", "absent.go"})
+	outcome, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"present.go", "absent.go"}, nil)
 	if err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
@@ -98,7 +100,7 @@ func TestConvergePathsRetains18227MissingPaths(t *testing.T) {
 		relativePaths = append(relativePaths, fmt.Sprintf("missing/%05d.go", i))
 	}
 
-	outcome, err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths)
+	outcome, err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths, nil)
 	if err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
@@ -134,6 +136,137 @@ func TestConvergePathsRetains18227MissingPaths(t *testing.T) {
 	}
 }
 
+func TestConvergePathsRetainsPathRemovedAfterClassification(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	snapshot := merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        map[string]string{"disappeared.go": "hash-disappeared"},
+	}
+	checkpointPath := manager.snapshotPathForCodebase(codebase)
+	if err := merkle.WriteSnapshot(checkpointPath, snapshot); err != nil {
+		t.Fatalf("WriteSnapshot: %v", err)
+	}
+	checkpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint: %v", err)
+	}
+
+	var indexOneCalls atomic.Int32
+	manager.runner = fakeRunner{
+		indexOne: func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error) {
+			indexOneCalls.Add(1)
+			return indexer.OneFileResult{Removed: true}, nil
+		},
+	}
+	var reindexCalls atomic.Int32
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			reindexCalls.Add(1)
+			return nil
+		},
+	}
+
+	outcome, err := manager.convergePathsWithLstat(context.Background(), codebase.ID, []string{"disappeared.go"}, nil, func(string) (os.FileInfo, error) {
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("convergePathsWithLstat: %v", err)
+	}
+	if outcome.PathsProcessed != 1 || outcome.PathsConverged != 0 {
+		t.Fatalf("outcome = %+v, want one retained path", outcome)
+	}
+	if got := indexOneCalls.Load(); got != 1 {
+		t.Fatalf("IndexOne calls = %d, want 1 after present classification", got)
+	}
+	if got := reindexCalls.Load(); got != 0 {
+		t.Fatalf("Reindex calls = %d, want 0 after late disappearance", got)
+	}
+	afterBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint after converge: %v", err)
+	}
+	if !bytes.Equal(afterBytes, checkpointBytes) {
+		t.Fatal("checkpoint changed after a late disappearance")
+	}
+}
+
+func TestClassifyConvergePathsRejectsNonAbsenceError(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	writeSyntheticSnapshot(t, manager, codebase, 1)
+	checkpointPath := manager.snapshotPathForCodebase(codebase)
+	checkpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint: %v", err)
+	}
+
+	var indexOneCalls atomic.Int32
+	manager.runner = fakeRunner{
+		indexOne: func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error) {
+			indexOneCalls.Add(1)
+			return indexer.OneFileResult{}, nil
+		},
+	}
+	var reindexCalls atomic.Int32
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			reindexCalls.Add(1)
+			return nil
+		},
+	}
+
+	_, err = manager.convergePathsWithLstat(context.Background(), codebase.ID, []string{"unreadable.go"}, nil, func(string) (os.FileInfo, error) {
+		return nil, os.ErrPermission
+	})
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v, want permission error", err)
+	}
+	if got := indexOneCalls.Load(); got != 0 {
+		t.Fatalf("IndexOne calls = %d, want 0 before classification failure", got)
+	}
+	if got := reindexCalls.Load(); got != 0 {
+		t.Fatalf("Reindex calls = %d, want 0 before classification failure", got)
+	}
+	afterBytes, readErr := os.ReadFile(checkpointPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile checkpoint after classification failure: %v", readErr)
+	}
+	if !bytes.Equal(afterBytes, checkpointBytes) {
+		t.Fatal("checkpoint changed after classification failure")
+	}
+}
+
+func TestClassifyConvergePathsStopsOnCancellation(t *testing.T) {
+	t.Parallel()
+
+	const pathCount = 18_227
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	paths := make([]string, pathCount)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("missing/%05d.go", i)
+	}
+	statCalls := 0
+	_, err := classifyConvergePaths(ctx, t.TempDir(), paths, func(string) (os.FileInfo, error) {
+		statCalls++
+		if statCalls == 100 {
+			cancel()
+		}
+		return nil, os.ErrNotExist
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context cancellation", err)
+	}
+	if statCalls >= pathCount {
+		t.Fatalf("Lstat calls = %d, want cancellation before %d paths", statCalls, pathCount)
+	}
+}
+
 // TestConvergePathsStopsBetweenPathsOnCancel proves a cancelled converge stops
 // rather than finishing its list. The paths it did not reach keep their previous
 // index entries, which the periodic sync repairs on its next pass.
@@ -161,7 +294,7 @@ func TestConvergePathsStopsBetweenPathsOnCancel(t *testing.T) {
 		}
 	}
 
-	outcome, err := manager.ConvergePaths(ctx, codebase.ID, names)
+	outcome, err := manager.ConvergePaths(ctx, codebase.ID, names, nil)
 	if err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}

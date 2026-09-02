@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -302,7 +303,7 @@ func TestWatcherUntrackedChurnDoesNotQuarantineRealSemanticService(t *testing.T)
 	for index := 0; index < 120; index++ {
 		batch = append(batch, fmt.Sprintf("f%03d.go", index))
 	}
-	if _, err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), seeded.ID, batch, nil); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 
@@ -326,11 +327,7 @@ func TestWatcherUntrackedChurnDoesNotQuarantineRealSemanticService(t *testing.T)
 	}
 }
 
-// TestWatcherTrackedMassDeleteQuarantinesRealSemanticService is the regression
-// guard for the watcher path: a genuine mass-delete of tracked files driven
-// through converge still quarantines and still serves the last known-good index
-// without dropping rows.
-func TestWatcherTrackedMassDeleteQuarantinesRealSemanticService(t *testing.T) {
+func TestWatcherTrackedMissingPathsRetainRealSemanticService(t *testing.T) {
 	requireRealStack(t)
 
 	embedServer := newTestEmbeddingServer(t)
@@ -347,12 +344,17 @@ func TestWatcherTrackedMassDeleteQuarantinesRealSemanticService(t *testing.T) {
 	}
 
 	removeLargeDeleteFixturePrefix(t, repoPath, 110)
+	checkpointPath := manager.snapshotPathForCodebase(seeded)
+	checkpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint: %v", err)
+	}
 
-	batch := make([]string, 0, 120)
-	for index := 0; index < 120; index++ {
+	batch := make([]string, 0, 110)
+	for index := 0; index < 110; index++ {
 		batch = append(batch, fmt.Sprintf("f%03d.go", index))
 	}
-	if _, err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), seeded.ID, batch, nil); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 
@@ -360,11 +362,11 @@ func TestWatcherTrackedMassDeleteQuarantinesRealSemanticService(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
-	if codebase.Status != model.CodebaseStatusQuarantined {
-		t.Fatalf("status = %q, want quarantined for a genuine tracked mass-delete", codebase.Status)
+	if codebase.Status != model.CodebaseStatusIndexed {
+		t.Fatalf("status = %q, want indexed after tracked missing paths", codebase.Status)
 	}
-	if codebase.Quarantine == nil || codebase.Quarantine.LastMissingCount != 110 || codebase.Quarantine.LastTotalCount != 120 {
-		t.Fatalf("quarantine = %+v, want 110 of 120", codebase.Quarantine)
+	if codebase.Quarantine != nil {
+		t.Fatalf("quarantine = %+v, want nil", codebase.Quarantine)
 	}
 
 	afterCount, err := service.Count(context.Background(), seeded.CanonicalPath)
@@ -372,7 +374,14 @@ func TestWatcherTrackedMassDeleteQuarantinesRealSemanticService(t *testing.T) {
 		t.Fatalf("Count(after) returned error: %v", err)
 	}
 	if afterCount != beforeCount {
-		t.Fatalf("Count(after) = %d, want unchanged %d while quarantined", afterCount, beforeCount)
+		t.Fatalf("Count(after) = %d, want unchanged %d", afterCount, beforeCount)
+	}
+	afterCheckpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint after converge: %v", err)
+	}
+	if !bytes.Equal(afterCheckpointBytes, checkpointBytes) {
+		t.Fatal("checkpoint changed after tracked missing paths")
 	}
 }
 
@@ -403,7 +412,7 @@ func TestWatcherUntrackedChurnStaysIndexedGRPCE2ERealSemanticService(t *testing.
 	for index := 0; index < 120; index++ {
 		batch = append(batch, fmt.Sprintf("f%03d.go", index))
 	}
-	if _, err := manager.ConvergePaths(context.Background(), seeded.ID, batch); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), seeded.ID, batch, nil); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 

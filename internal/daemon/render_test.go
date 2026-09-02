@@ -692,11 +692,11 @@ func TestRenderGetIndexBodyQuarantinedPreservesSearchabilityMessage(t *testing.T
 		Status:            model.CodebaseStatusQuarantined,
 		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 58, TotalChunks: 600, CompletedAt: renderTestTime},
 		Quarantine: &model.QuarantineState{
-			Reason:           quarantineReasonWatcherLargeDelete,
+			Reason:           quarantineReasonFullScanLargeDelete,
 			FirstObservedAt:  renderTestTime,
 			LastObservedAt:   renderTestTime,
 			ObservationCount: 1,
-			LastTrigger:      quarantineTriggerWatcher,
+			LastTrigger:      quarantineTriggerFullScan,
 			LastMissingCount: 400,
 			LastTotalCount:   4292,
 		},
