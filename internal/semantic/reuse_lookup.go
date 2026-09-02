@@ -681,6 +681,11 @@ func (service *Service) readReuseVectorBatch(
 		}
 		batchReuse[contentVectorKey(content)] = vector
 	}
+	for _, id := range requestedIDs {
+		if _, found := seen[id]; !found {
+			return nil, fmt.Errorf("selected reuse response omitted requested ID %q", id)
+		}
+	}
 	return batchReuse, nil
 }
 

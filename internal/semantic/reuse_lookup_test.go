@@ -806,6 +806,38 @@ func TestReuseReadErrorHasNoSideEffects(t *testing.T) {
 	}
 }
 
+func TestReuseMissingSelectedIDHasNoSideEffects(t *testing.T) {
+	content := "missing selected ID content"
+	row := reuseLookupRow{
+		id:             "selected",
+		content:        content,
+		contentHash:    ptr(contentHash(content)),
+		embeddingModel: ptr("current-model"),
+	}
+	service, server, embedder := newPublicReuseLookupTestService(t, []reuseLookupRow{row})
+	server.getResponse = func(outputFields []string, _ []reuseLookupRow) *milvuspb.QueryResults {
+		return reuseLookupQueryResults(outputFields, nil)
+	}
+
+	reuse, err := service.LoadReuseVectorsForContents(
+		context.Background(),
+		"reuse_source",
+		[]model.StoredChunk{{Content: content}},
+	)
+	if err == nil || !strings.Contains(err.Error(), `omitted requested ID "selected"`) {
+		t.Fatalf("LoadReuseVectorsForContents error = %v, want omitted selected ID", err)
+	}
+	if reuse != nil {
+		t.Fatalf("reuse = %v, want nil on authoritative read error", reuse)
+	}
+	if embedder.callCount() != 0 {
+		t.Fatalf("embedding calls = %d, want 0", embedder.callCount())
+	}
+	if server.mutationCallCount() != 0 {
+		t.Fatalf("Milvus mutation calls = %d, want 0", server.mutationCallCount())
+	}
+}
+
 func TestReuseScalarCandidateDiscoveryNeverRequestsVectors(t *testing.T) {
 	rows := make([]reuseLookupRow, 0, 16384)
 	for index := range 16384 {
