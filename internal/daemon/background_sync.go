@@ -532,7 +532,19 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	defer registration.release()
 
 	registration.withContext(func(runCtx context.Context) {
-		outcome, runErr := syncer.manager.ConvergePaths(runCtx, codebaseID, relativePaths, nil)
+		outcome, runErr := syncer.manager.ConvergePaths(runCtx, codebaseID, relativePaths, func(progress ConvergeOutcome) {
+			percent := 100.0
+			if progress.PathsGiven > 0 {
+				percent = float64(progress.PathsProcessed) / float64(progress.PathsGiven) * 100
+			}
+			syncer.manager.updateDetachedJobProgress(registration.job.ID, indexer.Progress{
+				Phase:          "Converging changed paths...",
+				OverallPercent: percent,
+				FilesTotal:     progress.PathsGiven,
+				FilesProcessed: progress.PathsProcessed,
+				FilesEmbedded:  0,
+			}, "path")
+		})
 		terminalCtx := context.WithoutCancel(runCtx)
 		switch {
 		case runCtx.Err() != nil:

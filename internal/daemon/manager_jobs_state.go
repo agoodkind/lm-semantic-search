@@ -150,6 +150,46 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	}
 }
 
+func (manager *Manager) updateDetachedJobProgress(jobID string, progress indexer.Progress, unit string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	job, found := manager.jobs[jobID]
+	if !found {
+		return
+	}
+	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStateCancelling {
+		return
+	}
+
+	now := clock.Now()
+	if job.State == model.JobStateQueued {
+		job.State = model.JobStateRunning
+	}
+	job.UpdatedAt = now
+	job.Progress.Phase = progress.Phase
+	job.Progress.OverallPercent = progress.OverallPercent
+	if unit != "" {
+		job.Progress.Unit = unit
+	}
+	job.Progress.FilesTotal = progress.FilesTotal
+	job.Progress.FilesProcessed = progress.FilesProcessed
+	job.Progress.FilesEmbedded = progress.FilesEmbedded
+	job.Progress.FilesSkippedOversize = progress.FilesSkippedOversize
+	job.Progress.FilesSkippedUnreadable = progress.FilesSkippedUnreadable
+	job.Progress.FilesPending = progress.FilesPending
+	job.Progress.ChunksProcessed = progress.ChunksProcessed
+	job.Progress.ChunksReused = progress.ChunksReused
+	job.Progress.ChunksEmbedded = progress.ChunksEmbedded
+	job.Progress.ChunksGenerated = progress.ChunksGenerated
+	job.Progress.ChunksDropped = progress.ChunksDropped
+	job.Progress.ReuseVectorsLoaded = progress.ReuseVectorsLoaded
+	job.Progress.LastEventAt = now
+	job.Progress.HeartbeatAt = now
+	manager.jobs[jobID] = job
+	manager.journalJobProgressLocked(job)
+}
+
 // updateJobChunkProgress advances the chunk counters, the current item's embed
 // batch denominator, and the heartbeat during a single item's embed loop. It is
 // called once per embed batch, so a long item (a large conversation with many

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
@@ -15,6 +16,9 @@ import (
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
+
+const convergeProgressPathInterval int32 = 256
+const convergeProgressTimeInterval = time.Second
 
 // ConvergeOutcome reports what one ConvergePaths call handled, so a caller can
 // state the size of the work rather than guess it. PathsConverged counts the
@@ -96,6 +100,30 @@ func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID s
 	if classifyErr != nil {
 		return outcome, classifyErr
 	}
+	lastProgressAt := time.Now()
+	lastReportedPaths := int32(0)
+	reportedProgress := false
+	reportProgress := func(final bool) bool {
+		if progress == nil {
+			return true
+		}
+		if ctx.Err() != nil && !final {
+			return false
+		}
+		pathsSinceReport := outcome.PathsProcessed - lastReportedPaths
+		if !final && pathsSinceReport < convergeProgressPathInterval && time.Since(lastProgressAt) < convergeProgressTimeInterval {
+			return true
+		}
+		if final && reportedProgress && pathsSinceReport == 0 {
+			return true
+		}
+		progress(outcome)
+		lastProgressAt = time.Now()
+		lastReportedPaths = outcome.PathsProcessed
+		reportedProgress = true
+		return true
+	}
+	defer reportProgress(true)
 
 	changed := false
 	for _, classifiedPath := range classifiedPaths {
@@ -107,8 +135,8 @@ func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID s
 		}
 		outcome.PathsProcessed++
 		if classifiedPath.Missing {
-			if progress != nil {
-				progress(outcome)
+			if !reportProgress(false) {
+				break
 			}
 			continue
 		}
@@ -120,8 +148,8 @@ func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID s
 			changed = true
 			outcome.PathsConverged++
 		}
-		if progress != nil {
-			progress(outcome)
+		if !reportProgress(false) {
+			break
 		}
 	}
 

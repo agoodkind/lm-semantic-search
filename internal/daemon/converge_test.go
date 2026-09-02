@@ -136,6 +136,49 @@ func TestConvergePathsRetains18227MissingPaths(t *testing.T) {
 	}
 }
 
+func TestConvergePathsRateLimitsProgress(t *testing.T) {
+	t.Parallel()
+
+	const missingPathCount = 18_227
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	manager.semantic = &fakeSemantic{}
+
+	relativePaths := make([]string, 0, missingPathCount)
+	for i := 0; i < missingPathCount; i++ {
+		relativePaths = append(relativePaths, fmt.Sprintf("missing/%05d.go", i))
+	}
+	updates := make([]ConvergeOutcome, 0)
+	outcome, err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths, func(progress ConvergeOutcome) {
+		updates = append(updates, progress)
+	})
+	if err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+	if outcome.PathsProcessed != missingPathCount {
+		t.Fatalf("PathsProcessed = %d, want %d", outcome.PathsProcessed, missingPathCount)
+	}
+	if len(updates) == 0 {
+		t.Fatal("ConvergePaths did not report progress")
+	}
+	if len(updates) > 73 {
+		t.Fatalf("progress updates = %d, want at most 73", len(updates))
+	}
+	processed := int32(0)
+	for _, update := range updates {
+		if update.PathsGiven != missingPathCount {
+			t.Fatalf("PathsGiven = %d, want %d", update.PathsGiven, missingPathCount)
+		}
+		if update.PathsProcessed <= processed {
+			t.Fatalf("progress did not increase: %d then %d", processed, update.PathsProcessed)
+		}
+		processed = update.PathsProcessed
+	}
+	if processed != missingPathCount {
+		t.Fatalf("final progress = %d, want %d", processed, missingPathCount)
+	}
+}
+
 func TestConvergePathsRetainsPathRemovedAfterClassification(t *testing.T) {
 	t.Parallel()
 
@@ -580,6 +623,106 @@ func TestCompletedWatcherConvergeKeepsDegradedDependency(t *testing.T) {
 	manager.mu.Unlock()
 	if updatedCodebase.LiveFileTotal != codebase.LiveFileTotal || updatedCodebase.LiveChunkTotal != codebase.LiveChunkTotal {
 		t.Fatalf("live totals = %d files, %d chunks; want %d files, %d chunks", updatedCodebase.LiveFileTotal, updatedCodebase.LiveChunkTotal, codebase.LiveFileTotal, codebase.LiveChunkTotal)
+	}
+}
+
+func TestConvergeViaWatcherCompletesRetainedMissingProgress(t *testing.T) {
+	t.Parallel()
+
+	const missingPathCount = 18_227
+	manager, cfg, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	codebase.LiveFileTotal = 91
+	codebase.LiveChunkTotal = 92
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
+	writeSyntheticSnapshot(t, manager, codebase, 1)
+	checkpointPath := manager.snapshotPathForCodebase(codebase)
+	checkpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint: %v", err)
+	}
+	checkpointInfo, err := os.Stat(checkpointPath)
+	if err != nil {
+		t.Fatalf("Stat checkpoint: %v", err)
+	}
+
+	var indexOneCalls atomic.Int32
+	manager.runner = fakeRunner{
+		indexOne: func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error) {
+			indexOneCalls.Add(1)
+			return indexer.OneFileResult{}, nil
+		},
+	}
+	var reindexCalls atomic.Int32
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			reindexCalls.Add(1)
+			return nil
+		},
+	}
+
+	relativePaths := make([]string, 0, missingPathCount)
+	for i := 0; i < missingPathCount; i++ {
+		relativePaths = append(relativePaths, fmt.Sprintf("missing/%05d.go", i))
+	}
+	syncer := NewBackgroundSync(cfg, manager)
+	syncer.convergeViaWatcher(context.Background(), codebase.ID, relativePaths)
+	manager.closeJobJournal()
+	journal, err := os.ReadFile(cfg.JobsPath)
+	if err != nil {
+		t.Fatalf("ReadFile jobs journal: %v", err)
+	}
+	if !bytes.Contains(journal, []byte(`"event":"job_progress"`)) {
+		t.Fatal("watcher converge did not journal detached progress")
+	}
+
+	jobs := manager.ListJobs(codebase.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("ListJobs returned %d jobs, want 1 completed converge", len(jobs))
+	}
+	job := jobs[0]
+	if job.State != model.JobStateCompleted {
+		t.Fatalf("State = %q, want %q", job.State, model.JobStateCompleted)
+	}
+	if job.Progress.Unit != "path" {
+		t.Fatalf("Unit = %q, want %q", job.Progress.Unit, "path")
+	}
+	if job.Progress.FilesTotal != missingPathCount || job.Progress.FilesProcessed != missingPathCount {
+		t.Fatalf("progress = %d of %d, want %d of %d", job.Progress.FilesProcessed, job.Progress.FilesTotal, missingPathCount, missingPathCount)
+	}
+	if job.Progress.FilesEmbedded != 0 {
+		t.Fatalf("FilesEmbedded = %d, want 0", job.Progress.FilesEmbedded)
+	}
+	if !job.Progress.HeartbeatAt.After(job.StartedAt) {
+		t.Fatalf("HeartbeatAt = %s, want after StartedAt %s", job.Progress.HeartbeatAt, job.StartedAt)
+	}
+	if got := indexOneCalls.Load(); got != 0 {
+		t.Fatalf("IndexOne calls = %d, want 0 for missing watcher paths", got)
+	}
+	if got := reindexCalls.Load(); got != 0 {
+		t.Fatalf("Reindex calls = %d, want 0 for missing watcher paths", got)
+	}
+	manager.mu.Lock()
+	updatedCodebase := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if updatedCodebase.LiveFileTotal != codebase.LiveFileTotal || updatedCodebase.LiveChunkTotal != codebase.LiveChunkTotal {
+		t.Fatalf("live totals = %d files, %d chunks; want %d files, %d chunks", updatedCodebase.LiveFileTotal, updatedCodebase.LiveChunkTotal, codebase.LiveFileTotal, codebase.LiveChunkTotal)
+	}
+	afterBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint after converge: %v", err)
+	}
+	if !bytes.Equal(afterBytes, checkpointBytes) {
+		t.Fatal("checkpoint content changed after missing watcher paths")
+	}
+	afterInfo, err := os.Stat(checkpointPath)
+	if err != nil {
+		t.Fatalf("Stat checkpoint after converge: %v", err)
+	}
+	if !os.SameFile(checkpointInfo, afterInfo) {
+		t.Fatal("missing watcher paths replaced the checkpoint atomically")
 	}
 }
 
