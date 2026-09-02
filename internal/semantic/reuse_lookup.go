@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
+	"google.golang.org/grpc/peer"
 )
 
 const (
@@ -452,10 +453,12 @@ func (service *Service) discoverStoredHashReuseCandidates(
 			WithOutputFields(idFieldName, contentHashFieldName, embeddingModelFieldName),
 	)
 	if err != nil {
+		peerInfo, _ := peer.FromContext(ctx)
 		slog.ErrorContext(
 			ctx,
 			"open stored reuse candidate iterator failed",
 			"collection", collectionName,
+			"peer", peerInfo.String(),
 			"err", err,
 		)
 		return nil, fmt.Errorf("open stored reuse candidate iterator for %s: %w", collectionName, err)
