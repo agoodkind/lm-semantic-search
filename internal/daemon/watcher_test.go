@@ -203,7 +203,7 @@ func TestWatcherDispatchSkipsDefaultSubmodule(t *testing.T) {
 // TestWatcherDispatchFiltersDeletedGitPath confirms a delete/rename event, where
 // os.Lstat fails because the file is gone, still routes through the resolver: a
 // deleted .git path is dropped (no git lock-file churn on removal) while a
-// deleted real source file still enqueues so converge can remove it.
+// deleted real source file still enqueues so converge can classify and retain it.
 func TestWatcherDispatchFiltersDeletedGitPath(t *testing.T) {
 	manager, _, _ := newTestManager(t)
 
@@ -254,7 +254,7 @@ func TestWatcherDispatchFiltersDeletedGitPath(t *testing.T) {
 		}
 	}
 	if !foundGone {
-		t.Fatalf("dispatch dropped a deleted real file that should enqueue for removal: %v", paths)
+		t.Fatalf("dispatch dropped a deleted real file that should enqueue for retained-path converge: %v", paths)
 	}
 }
 

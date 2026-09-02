@@ -179,6 +179,58 @@ func TestConvergePathsRateLimitsProgress(t *testing.T) {
 	}
 }
 
+func TestConvergePathsDoesNotRepeatProgressAfterSlowPresentPath(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+
+	const pathCount = 256
+	paths := make([]string, 0, pathCount)
+	for index := 0; index < pathCount; index++ {
+		relativePath := fmt.Sprintf("present/%03d.go", index)
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repoPath, relativePath)), 0o700); err != nil {
+			t.Fatalf("create source directory: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repoPath, relativePath), []byte("package present\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", relativePath, err)
+		}
+		paths = append(paths, relativePath)
+	}
+
+	currentTime := time.Unix(1, 0)
+	var reindexCalls atomic.Int32
+	manager.semantic = &fakeSemantic{reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+		if reindexCalls.Add(1) == 1 {
+			currentTime = currentTime.Add(1100 * time.Millisecond)
+		}
+		return nil
+	}}
+	updates := make([]ConvergeOutcome, 0)
+	outcome, err := manager.convergePathsWithLstatAndNow(
+		context.Background(),
+		codebase.ID,
+		paths,
+		func(progress ConvergeOutcome) { updates = append(updates, progress) },
+		os.Lstat,
+		func() time.Time { return currentTime },
+	)
+	if err != nil {
+		t.Fatalf("convergePathsWithLstatAndNow returned error: %v", err)
+	}
+	if outcome.PathsProcessed != pathCount {
+		t.Fatalf("PathsProcessed = %d, want %d", outcome.PathsProcessed, pathCount)
+	}
+	if reindexCalls.Load() != pathCount {
+		t.Fatalf("Reindex calls = %d, want %d", reindexCalls.Load(), pathCount)
+	}
+	for updateIndex := 1; updateIndex < len(updates); updateIndex++ {
+		previous := updates[updateIndex-1].PathsProcessed
+		current := updates[updateIndex].PathsProcessed
+		if current <= previous {
+			t.Fatalf("progress repeated after slow present path: %d then %d", previous, current)
+		}
+	}
+}
+
 func TestConvergePathsRetainsPathRemovedAfterClassification(t *testing.T) {
 	t.Parallel()
 

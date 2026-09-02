@@ -117,7 +117,7 @@ func (manager *Manager) convergePathsWithLstatAndNow(ctx context.Context, codeba
 		if !final && pathsSinceReport < convergeProgressPathInterval && now().Sub(lastProgressAt) < convergeProgressTimeInterval {
 			return true
 		}
-		if final && reportedProgress && pathsSinceReport == 0 {
+		if reportedProgress && pathsSinceReport == 0 {
 			return true
 		}
 		progress(outcome)
