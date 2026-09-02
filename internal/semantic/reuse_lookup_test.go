@@ -110,25 +110,35 @@ func (server *reuseLookupServer) matchingRows(filter string, ids []string) []reu
 			rows = append(rows, row)
 		}
 	}
-	if len(ids) > 0 {
-		return rows
-	}
-	if strings.Contains(filter, contentHashFieldName+" is null") {
+	if len(ids) == 0 && strings.Contains(filter, contentHashFieldName+" is null") {
 		contents := reuseLookupFilterValues(filter, contentFieldName)
+		rows = rows[:0]
 		for _, row := range server.rows {
 			if row.contentHash == nil && slices.Contains(contents, row.content) {
 				rows = append(rows, row)
 			}
 		}
-		return rows
 	}
-	hashes := reuseLookupFilterValues(filter, contentHashFieldName)
-	for _, row := range server.rows {
-		if row.contentHash != nil && slices.Contains(hashes, *row.contentHash) {
-			rows = append(rows, row)
+	if len(ids) == 0 && !strings.Contains(filter, contentHashFieldName+" is null") {
+		hashes := reuseLookupFilterValues(filter, contentHashFieldName)
+		rows = rows[:0]
+		for _, row := range server.rows {
+			if row.contentHash != nil && slices.Contains(hashes, *row.contentHash) {
+				rows = append(rows, row)
+			}
 		}
 	}
-	return rows
+	minimumID, hasMinimumID := reuseLookupFilterGreaterThan(filter, idFieldName)
+	if !hasMinimumID {
+		return rows
+	}
+	filteredRows := rows[:0]
+	for _, row := range rows {
+		if row.id > minimumID {
+			filteredRows = append(filteredRows, row)
+		}
+	}
+	return filteredRows
 }
 
 func (server *reuseLookupServer) snapshot() ([]recordedReuseRequest, []commonpb.ConsistencyLevel) {
@@ -142,23 +152,92 @@ func reuseLookupRequestIDs(filter string) []string {
 }
 
 func reuseLookupFilterValues(filter string, fieldName string) []string {
-	start := strings.Index(filter, fieldName+" in [")
+	prefix := fieldName + " in ["
+	start := strings.Index(filter, prefix)
+	isList := true
+	if start < 0 {
+		prefix = fieldName + " == "
+		start = strings.Index(filter, prefix)
+		isList = false
+	}
 	if start < 0 {
 		return nil
 	}
-	start += len(fieldName + " in [")
-	end := strings.Index(filter[start:], "]")
-	if end < 0 {
-		return nil
-	}
+	start += len(prefix)
 	var ids []string
-	for _, quotedID := range strings.Split(filter[start:start+end], ",") {
-		id, err := strconv.Unquote(strings.TrimSpace(quotedID))
-		if err == nil {
-			ids = append(ids, id)
+	for index := start; index < len(filter); {
+		for index < len(filter) && filter[index] == ' ' {
+			index++
+		}
+		if index >= len(filter) || filter[index] == ']' {
+			return ids
+		}
+		if filter[index] != '"' {
+			return nil
+		}
+		valueStart := index
+		index++
+		for index < len(filter) {
+			if filter[index] == '\\' {
+				index += 2
+				continue
+			}
+			if filter[index] == '"' {
+				break
+			}
+			index++
+		}
+		if index >= len(filter) {
+			return nil
+		}
+		value, err := strconv.Unquote(filter[valueStart : index+1])
+		if err != nil {
+			return nil
+		}
+		ids = append(ids, value)
+		if !isList {
+			return ids
+		}
+		index++
+		for index < len(filter) && filter[index] == ' ' {
+			index++
+		}
+		if index < len(filter) && filter[index] == ',' {
+			index++
 		}
 	}
 	return ids
+}
+
+func reuseLookupFilterGreaterThan(filter string, fieldName string) (string, bool) {
+	prefix := fieldName + " > "
+	start := strings.LastIndex(filter, prefix)
+	if start < 0 {
+		return "", false
+	}
+	start += len(prefix)
+	if start >= len(filter) || filter[start] != '"' {
+		return "", false
+	}
+	end := start + 1
+	for end < len(filter) {
+		if filter[end] == '\\' {
+			end += 2
+			continue
+		}
+		if filter[end] == '"' {
+			break
+		}
+		end++
+	}
+	if end >= len(filter) {
+		return "", false
+	}
+	value, err := strconv.Unquote(filter[start : end+1])
+	if err != nil {
+		return "", false
+	}
+	return value, true
 }
 
 func reuseLookupQueryResults(outputFields []string, rows []reuseLookupRow) *milvuspb.QueryResults {
@@ -182,6 +261,7 @@ func reuseLookupQueryResults(outputFields []string, rows []reuseLookupRow) *milv
 			valid := make([]bool, 0, len(rows))
 			for _, row := range rows {
 				if row.contentHash == nil {
+					hashes = append(hashes, "")
 					valid = append(valid, false)
 					continue
 				}
@@ -196,6 +276,7 @@ func reuseLookupQueryResults(outputFields []string, rows []reuseLookupRow) *milv
 			valid := make([]bool, 0, len(rows))
 			for _, row := range rows {
 				if row.embeddingModel == nil {
+					models = append(models, "")
 					valid = append(valid, false)
 					continue
 				}
@@ -337,11 +418,14 @@ func TestReuseModernCandidateDiscoverySelectsOneCompatibleID(t *testing.T) {
 
 func TestReuseLegacyCandidateDiscoveryQueriesOneContentAtATime(t *testing.T) {
 	service, server := newReuseLookupTestService(t, []reuseLookupRow{
-		{id: "legacy-first", content: "legacy first"},
+		{id: "legacy-first", content: "legacy first, [second]"},
 		{id: "legacy-second", content: "legacy second"},
 	})
 
-	_ = loadReuseLookupRows(t, service, []string{"legacy first", "legacy second"})
+	reuse := loadReuseLookupRows(t, service, []string{"legacy first, [second]", "legacy second"})
+	if len(reuse) != 2 {
+		t.Fatalf("reuse vector count = %d, want 2", len(reuse))
+	}
 
 	requests, _ := server.snapshot()
 	legacyFilters := make([]string, 0)
