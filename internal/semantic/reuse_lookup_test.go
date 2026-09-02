@@ -32,6 +32,7 @@ type recordedReuseRequest struct {
 type reuseLookupRow struct {
 	id             string
 	content        string
+	contentHash    *string
 	embeddingModel *string
 }
 
@@ -64,6 +65,7 @@ func (server *reuseLookupServer) DescribeCollection(
 		Schema: &schemapb.CollectionSchema{Fields: []*schemapb.FieldSchema{
 			{Name: idFieldName, DataType: schemapb.DataType_VarChar, IsPrimaryKey: true},
 			{Name: contentFieldName, DataType: schemapb.DataType_VarChar},
+			{Name: contentHashFieldName, DataType: schemapb.DataType_VarChar, Nullable: true},
 			{Name: embeddingModelFieldName, DataType: schemapb.DataType_VarChar, Nullable: true},
 			{
 				Name:     denseVectorFieldName,
@@ -89,22 +91,40 @@ func (server *reuseLookupServer) Query(
 		IDs:          ids,
 	})
 	server.consistencies = append(server.consistencies, request.GetConsistencyLevel())
-	rows := server.matchingRows(ids)
+	rows := server.matchingRows(request.GetExpr(), ids)
 	server.mutex.Unlock()
 
 	if slices.Contains(request.GetOutputFields(), denseVectorFieldName) && len(ids) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "scalar candidate discovery requested vector")
 	}
+	if slices.Contains(request.GetOutputFields(), denseVectorFieldName) && len(ids) > 1 {
+		return nil, status.Error(codes.InvalidArgument, "vector read requested multiple candidate IDs")
+	}
 	return reuseLookupQueryResults(request.GetOutputFields(), rows), nil
 }
 
-func (server *reuseLookupServer) matchingRows(ids []string) []reuseLookupRow {
-	if len(ids) == 0 {
-		return slices.Clone(server.rows)
-	}
-	rows := make([]reuseLookupRow, 0, len(ids))
+func (server *reuseLookupServer) matchingRows(filter string, ids []string) []reuseLookupRow {
+	rows := make([]reuseLookupRow, 0, len(server.rows))
 	for _, row := range server.rows {
 		if slices.Contains(ids, row.id) {
+			rows = append(rows, row)
+		}
+	}
+	if len(ids) > 0 {
+		return rows
+	}
+	if strings.Contains(filter, contentHashFieldName+" is null") {
+		contents := reuseLookupFilterValues(filter, contentFieldName)
+		for _, row := range server.rows {
+			if row.contentHash == nil && slices.Contains(contents, row.content) {
+				rows = append(rows, row)
+			}
+		}
+		return rows
+	}
+	hashes := reuseLookupFilterValues(filter, contentHashFieldName)
+	for _, row := range server.rows {
+		if row.contentHash != nil && slices.Contains(hashes, *row.contentHash) {
 			rows = append(rows, row)
 		}
 	}
@@ -118,11 +138,15 @@ func (server *reuseLookupServer) snapshot() ([]recordedReuseRequest, []commonpb.
 }
 
 func reuseLookupRequestIDs(filter string) []string {
-	start := strings.Index(filter, idFieldName+" in [")
+	return reuseLookupFilterValues(filter, idFieldName)
+}
+
+func reuseLookupFilterValues(filter string, fieldName string) []string {
+	start := strings.Index(filter, fieldName+" in [")
 	if start < 0 {
 		return nil
 	}
-	start += len(idFieldName + " in [")
+	start += len(fieldName + " in [")
 	end := strings.Index(filter[start:], "]")
 	if end < 0 {
 		return nil
@@ -153,6 +177,20 @@ func reuseLookupQueryResults(outputFields []string, rows []reuseLookupRow) *milv
 				contents = append(contents, row.content)
 			}
 			fields = append(fields, column.NewColumnVarChar(contentFieldName, contents).FieldData())
+		case contentHashFieldName:
+			hashes := make([]string, 0, len(rows))
+			valid := make([]bool, 0, len(rows))
+			for _, row := range rows {
+				if row.contentHash == nil {
+					valid = append(valid, false)
+					continue
+				}
+				hashes = append(hashes, *row.contentHash)
+				valid = append(valid, true)
+			}
+			field := column.NewColumnVarChar(contentHashFieldName, hashes).FieldData()
+			field.ValidData = valid
+			fields = append(fields, field)
 		case embeddingModelFieldName:
 			models := make([]string, 0, len(rows))
 			valid := make([]bool, 0, len(rows))
@@ -259,27 +297,41 @@ func TestReuseScalarCandidateDiscoveryNeverRequestsVectors(t *testing.T) {
 }
 
 func TestReuseModernCandidateDiscoverySelectsOneCompatibleID(t *testing.T) {
-	equalModel := "current-model"
-	unequalModel := "different-model"
-	service, server := newReuseLookupTestService(t, []reuseLookupRow{
-		{id: "null", content: "modern content"},
-		{id: "empty", content: "modern content", embeddingModel: ptr("")},
-		{id: "equal", content: "modern content", embeddingModel: &equalModel},
-		{id: "unequal", content: "modern content", embeddingModel: &unequalModel},
-	})
+	for _, testCase := range []struct {
+		name           string
+		embeddingModel *string
+		wantReuse      bool
+	}{
+		{name: "null", wantReuse: true},
+		{name: "empty", embeddingModel: ptr(""), wantReuse: true},
+		{name: "equal", embeddingModel: ptr("current-model"), wantReuse: true},
+		{name: "unequal", embeddingModel: ptr("different-model"), wantReuse: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			content := "modern " + testCase.name
+			service, server := newReuseLookupTestService(t, []reuseLookupRow{{
+				id:             testCase.name,
+				content:        content,
+				contentHash:    ptr(contentHash(content)),
+				embeddingModel: testCase.embeddingModel,
+			}})
 
-	reuse := loadReuseLookupRows(t, service, []string{"modern content"})
-
-	if len(reuse) != 1 {
-		t.Fatalf("reuse vector count = %d, want 1", len(reuse))
-	}
-	requests, _ := server.snapshot()
-	ids := reuseLookupGetIDs(requests)
-	if len(ids) != 1 {
-		t.Fatalf("vector Get ids = %v, want one compatible candidate", ids)
-	}
-	if ids[0] == "unequal" {
-		t.Fatalf("vector Get ids = %v, included known unequal model", ids)
+			reuse := loadReuseLookupRows(t, service, []string{content})
+			if testCase.wantReuse && len(reuse) != 1 {
+				t.Fatalf("reuse vector count = %d, want 1", len(reuse))
+			}
+			if !testCase.wantReuse && len(reuse) != 0 {
+				t.Fatalf("reuse vector count = %d, want 0", len(reuse))
+			}
+			requests, _ := server.snapshot()
+			ids := reuseLookupGetIDs(requests)
+			if testCase.wantReuse && !slices.Equal(ids, []string{testCase.name}) {
+				t.Fatalf("vector Get ids = %v, want %q", ids, testCase.name)
+			}
+			if !testCase.wantReuse && len(ids) != 0 {
+				t.Fatalf("vector Get ids = %v, want none", ids)
+			}
+		})
 	}
 }
 
@@ -313,6 +365,7 @@ func TestReuseCandidateDiscoveryRejectsKnownUnequalModel(t *testing.T) {
 	service, server := newReuseLookupTestService(t, []reuseLookupRow{{
 		id:             "unequal",
 		content:        "known unequal content",
+		contentHash:    ptr(contentHash("known unequal content")),
 		embeddingModel: &unequalModel,
 	}})
 
