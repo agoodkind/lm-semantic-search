@@ -531,6 +531,14 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	}
 	defer registration.release()
 
+	syncer.runDetachedWatcherConverge(codebaseID, relativePaths, registration)
+}
+
+func (syncer *BackgroundSync) runDetachedWatcherConverge(
+	codebaseID string,
+	relativePaths []string,
+	registration convergeJobRegistration,
+) {
 	registration.withContext(func(runCtx context.Context) {
 		outcome, runErr := syncer.manager.ConvergePaths(runCtx, codebaseID, relativePaths, func(progress ConvergeOutcome) {
 			percent := 100.0
@@ -538,11 +546,20 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 				percent = float64(progress.PathsProcessed) / float64(progress.PathsGiven) * 100
 			}
 			syncer.manager.updateDetachedJobProgress(registration.job.ID, indexer.Progress{
-				Phase:          "Converging changed paths...",
-				OverallPercent: percent,
-				FilesTotal:     progress.PathsGiven,
-				FilesProcessed: progress.PathsProcessed,
-				FilesEmbedded:  0,
+				Phase:                  "Converging changed paths...",
+				OverallPercent:         percent,
+				FilesTotal:             progress.PathsGiven,
+				FilesProcessed:         progress.PathsProcessed,
+				FilesEmbedded:          0,
+				FilesSkippedOversize:   0,
+				FilesSkippedUnreadable: 0,
+				FilesPending:           0,
+				ChunksProcessed:        0,
+				ChunksReused:           0,
+				ChunksEmbedded:         0,
+				ChunksGenerated:        0,
+				ChunksDropped:          0,
+				ReuseVectorsLoaded:     0,
 			}, "path")
 		})
 		terminalCtx := context.WithoutCancel(runCtx)

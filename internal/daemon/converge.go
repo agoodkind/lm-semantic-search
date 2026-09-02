@@ -17,8 +17,10 @@ import (
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
-const convergeProgressPathInterval int32 = 256
-const convergeProgressTimeInterval = time.Second
+const (
+	convergeProgressPathInterval int32 = 256
+	convergeProgressTimeInterval       = time.Second
+)
 
 // ConvergeOutcome reports what one ConvergePaths call handled, so a caller can
 // state the size of the work rather than guess it. PathsConverged counts the
@@ -35,6 +37,7 @@ type ConvergeOutcome struct {
 	PathsConverged int32
 }
 
+// ConvergeProgressFunc receives a bounded progress update for one converge.
 type ConvergeProgressFunc func(ConvergeOutcome)
 
 type classifiedConvergePath struct {
@@ -135,31 +138,18 @@ func (manager *Manager) convergePathsWithLstatAndNow(ctx context.Context, codeba
 		return outcome, classifyErr
 	}
 
-	changed := false
-	for _, classifiedPath := range classifiedPaths {
-		// A cancel stops the walk here rather than mid-path, so the snapshot
-		// written below covers exactly the paths that reached the index. The
-		// paths not reached become drift, which the periodic sync repairs.
-		if ctx.Err() != nil {
-			break
-		}
-		if classifiedPath.Missing {
-			if !reportProgress(false) {
-				break
-			}
-			continue
-		}
-		converged, convergeErr := manager.convergeOnePath(ctx, codebase, classifiedPath.RelativePath, &snapshot, admission, lstat)
-		if convergeErr != nil {
-			return outcome, convergeErr
-		}
-		if converged {
-			changed = true
-			outcome.PathsConverged++
-		}
-		if !reportProgress(false) {
-			break
-		}
+	changed, convergeErr := manager.convergeClassifiedPaths(
+		ctx,
+		codebase,
+		classifiedPaths,
+		&snapshot,
+		admission,
+		lstat,
+		&outcome,
+		reportProgress,
+	)
+	if convergeErr != nil {
+		return outcome, convergeErr
 	}
 
 	if !changed {
@@ -170,6 +160,49 @@ func (manager *Manager) convergePathsWithLstatAndNow(ctx context.Context, codeba
 		return outcome, fmt.Errorf("write converge snapshot %s: %w", snapshotPath, writeErr)
 	}
 	return outcome, nil
+}
+
+func (manager *Manager) convergeClassifiedPaths(
+	ctx context.Context,
+	codebase model.Codebase,
+	classifiedPaths []classifiedConvergePath,
+	snapshot *merkle.Snapshot,
+	admission *admissionState,
+	lstat convergeLstatFunc,
+	outcome *ConvergeOutcome,
+	reportProgress func(bool) bool,
+) (bool, error) {
+	changed := false
+	for _, classifiedPath := range classifiedPaths {
+		// A cancel stops the walk here rather than mid-path, so the snapshot
+		// written below covers exactly the paths that reached the index. The
+		// paths not reached become drift, which the periodic sync repairs.
+		if ctx.Err() != nil || classifiedPath.Missing {
+			if !reportProgress(false) {
+				break
+			}
+			continue
+		}
+		converged, err := manager.convergeOnePath(
+			ctx,
+			codebase,
+			classifiedPath.RelativePath,
+			snapshot,
+			admission,
+			lstat,
+		)
+		if err != nil {
+			return false, err
+		}
+		if converged {
+			changed = true
+			outcome.PathsConverged++
+		}
+		if !reportProgress(false) {
+			break
+		}
+	}
+	return changed, nil
 }
 
 // convergeOnePath converges a single path against the snapshot and
@@ -342,21 +375,17 @@ func pickRenameSource(candidates []string, fileHashes map[string]string, freshHa
 	return ""
 }
 
-// classifyConvergePaths reports which watcher paths are absent before semantic
-// work begins. Present paths stay first so rename detection can reuse the
-// source inode before an absent path is considered.
-func classifyConvergePaths(ctx context.Context, root string, relativePaths []string, lstat convergeLstatFunc) ([]classifiedConvergePath, error) {
-	return classifyConvergePathsWithProgress(ctx, root, relativePaths, lstat, nil)
-}
-
 func classifyConvergePathsWithProgress(ctx context.Context, root string, relativePaths []string, lstat convergeLstatFunc, progress func(int32) error) ([]classifiedConvergePath, error) {
 	classifiedPaths := make([]classifiedConvergePath, 0, len(relativePaths))
 	for _, relativePath := range relativePaths {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			cause := context.Cause(ctx)
+			slog.WarnContext(ctx, "converge.classify_cancelled", "component", "daemon", "subcomponent", "converge", "err", cause)
+			return nil, fmt.Errorf("classify converge paths: %w", cause)
 		}
 		_, err := lstat(filepath.Join(root, relativePath))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.ErrorContext(ctx, "converge.classify_failed", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", err)
 			return nil, fmt.Errorf("classify converge path %q: %w", relativePath, err)
 		}
 		classifiedPaths = append(classifiedPaths, classifiedConvergePath{

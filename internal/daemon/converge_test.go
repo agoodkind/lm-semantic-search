@@ -554,13 +554,13 @@ func TestClassifyConvergePathsStopsOnCancellation(t *testing.T) {
 		paths[i] = fmt.Sprintf("missing/%05d.go", i)
 	}
 	statCalls := 0
-	_, err := classifyConvergePaths(ctx, t.TempDir(), paths, func(string) (os.FileInfo, error) {
+	_, err := classifyConvergePathsWithProgress(ctx, t.TempDir(), paths, func(string) (os.FileInfo, error) {
 		statCalls++
 		if statCalls == 100 {
 			cancel()
 		}
 		return nil, os.ErrNotExist
-	})
+	}, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context cancellation", err)
 	}
