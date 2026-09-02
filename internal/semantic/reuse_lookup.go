@@ -627,15 +627,11 @@ func (service *Service) resolveReuseVectorDimension(
 	ctx context.Context,
 	collectionName string,
 ) (int, error) {
-	if cached, found := service.reuseVectorDimensions.Load(collectionName); found {
-		dimension, ok := cached.(int)
-		if !ok || dimension <= 0 {
-			return 0, fmt.Errorf(
-				"cached reuse vector dimension for %s has unexpected value %v",
-				collectionName,
-				cached,
-			)
-		}
+	dimension, generation, found, err := service.loadReuseVectorDimensionCache(collectionName)
+	if err != nil {
+		return 0, err
+	}
+	if found {
 		return dimension, nil
 	}
 
@@ -683,7 +679,7 @@ func (service *Service) resolveReuseVectorDimension(
 			configuredDimension,
 		)
 	}
-	dimension := int(schemaDimension)
+	dimension = int(schemaDimension)
 	if int64(dimension) != schemaDimension {
 		return 0, fmt.Errorf(
 			"reuse vector dimension in %s exceeds local integer range: %d",
@@ -691,8 +687,51 @@ func (service *Service) resolveReuseVectorDimension(
 			schemaDimension,
 		)
 	}
-	service.reuseVectorDimensions.Store(collectionName, dimension)
+	service.storeReuseVectorDimensionIfCurrent(collectionName, generation, dimension)
 	return dimension, nil
+}
+
+func (service *Service) loadReuseVectorDimensionCache(
+	collectionName string,
+) (int, uint64, bool, error) {
+	service.reuseVectorDimensionMutex.Lock()
+	defer service.reuseVectorDimensionMutex.Unlock()
+	if service.reuseVectorDimensionGeneration == nil {
+		service.reuseVectorDimensionGeneration = make(map[string]uint64)
+	}
+	generation := service.reuseVectorDimensionGeneration[collectionName]
+	cached, found := service.reuseVectorDimensions.Load(collectionName)
+	if !found {
+		return 0, generation, false, nil
+	}
+	dimension, ok := cached.(int)
+	if !ok || dimension <= 0 {
+		cacheErr := fmt.Errorf(
+			"cached reuse vector dimension for %s has unexpected value %v",
+			collectionName,
+			cached,
+		)
+		slog.Error(
+			"reuse vector dimension cache is invalid",
+			"collection", collectionName,
+			"err", cacheErr,
+		)
+		return 0, generation, false, cacheErr
+	}
+	return dimension, generation, true, nil
+}
+
+func (service *Service) storeReuseVectorDimensionIfCurrent(
+	collectionName string,
+	generation uint64,
+	dimension int,
+) {
+	service.reuseVectorDimensionMutex.Lock()
+	defer service.reuseVectorDimensionMutex.Unlock()
+	if service.reuseVectorDimensionGeneration[collectionName] != generation {
+		return
+	}
+	service.reuseVectorDimensions.Store(collectionName, dimension)
 }
 
 func reuseVectorDimensionFromSchema(

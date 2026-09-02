@@ -1094,6 +1094,169 @@ func TestReuseSourceDimensionCacheInvalidatesWithCollectionCaches(t *testing.T) 
 	}
 }
 
+func TestReuseSourceDimensionInvalidationRejectsInFlightCacheStore(t *testing.T) {
+	const oldDimension = 1536
+	service, server := newReuseLookupTestService(t, nil)
+	service.cfg.EmbeddingDimension = 0
+	var schemaDimension atomic.Int64
+	schemaDimension.Store(oldDimension)
+	describeStarted := make(chan struct{})
+	releaseDescribe := make(chan struct{})
+	var describeNumber atomic.Int32
+	server.describeResponse = func(
+		request *milvuspb.DescribeCollectionRequest,
+	) (*milvuspb.DescribeCollectionResponse, error) {
+		capturedDimension := schemaDimension.Load()
+		if describeNumber.Add(1) == 1 {
+			close(describeStarted)
+			<-releaseDescribe
+		}
+		return reuseLookupDescribeResponse(request, &schemapb.FieldSchema{
+			Name:     denseVectorFieldName,
+			DataType: schemapb.DataType_FloatVector,
+			TypeParams: []*commonpb.KeyValuePair{{
+				Key:   "dim",
+				Value: strconv.FormatInt(capturedDimension, 10),
+			}},
+		}), nil
+	}
+	type resolveResult struct {
+		dimension int
+		err       error
+	}
+	resultChannel := make(chan resolveResult, 1)
+	go func() {
+		dimension, err := service.resolveReuseVectorDimension(
+			context.Background(),
+			"reuse_source",
+		)
+		resultChannel <- resolveResult{dimension: dimension, err: err}
+	}()
+
+	select {
+	case <-describeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for DescribeCollection")
+	}
+	service.invalidateCollectionCaches("reuse_source")
+	schemaDimension.Store(reuseLookupTestDimension)
+	close(releaseDescribe)
+
+	firstResult := <-resultChannel
+	if firstResult.err != nil {
+		t.Fatalf("resolve in-flight source dimension: %v", firstResult.err)
+	}
+	if firstResult.dimension != oldDimension {
+		t.Fatalf("in-flight dimension = %d, want %d", firstResult.dimension, oldDimension)
+	}
+	currentDimension, err := service.resolveReuseVectorDimension(
+		context.Background(),
+		"reuse_source",
+	)
+	if err != nil {
+		t.Fatalf("resolve replacement source dimension: %v", err)
+	}
+	if currentDimension != reuseLookupTestDimension {
+		t.Fatalf(
+			"replacement dimension = %d, want %d",
+			currentDimension,
+			reuseLookupTestDimension,
+		)
+	}
+	if server.describeCallCount() != 2 {
+		t.Fatalf("DescribeCollection calls = %d, want 2", server.describeCallCount())
+	}
+}
+
+func TestReuseSourceDimensionRepeatedInvalidationRejectsConcurrentStores(t *testing.T) {
+	const (
+		oldDimension      = 1536
+		readerCount       = 8
+		invalidationCount = 5
+	)
+	service, server := newReuseLookupTestService(t, nil)
+	service.cfg.EmbeddingDimension = 0
+	var schemaDimension atomic.Int64
+	schemaDimension.Store(oldDimension)
+	allDescribesStarted := make(chan struct{})
+	releaseDescribes := make(chan struct{})
+	var startedCount atomic.Int32
+	server.describeResponse = func(
+		request *milvuspb.DescribeCollectionRequest,
+	) (*milvuspb.DescribeCollectionResponse, error) {
+		capturedDimension := schemaDimension.Load()
+		if startedCount.Add(1) == readerCount {
+			close(allDescribesStarted)
+		}
+		<-releaseDescribes
+		return reuseLookupDescribeResponse(request, &schemapb.FieldSchema{
+			Name:     denseVectorFieldName,
+			DataType: schemapb.DataType_FloatVector,
+			TypeParams: []*commonpb.KeyValuePair{{
+				Key:   "dim",
+				Value: strconv.FormatInt(capturedDimension, 10),
+			}},
+		}), nil
+	}
+	type resolveResult struct {
+		dimension int
+		err       error
+	}
+	resultChannel := make(chan resolveResult, readerCount)
+	for range readerCount {
+		go func() {
+			dimension, err := service.resolveReuseVectorDimension(
+				context.Background(),
+				"reuse_source",
+			)
+			resultChannel <- resolveResult{dimension: dimension, err: err}
+		}()
+	}
+
+	select {
+	case <-allDescribesStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for concurrent DescribeCollection calls")
+	}
+	for range invalidationCount {
+		service.invalidateCollectionCaches("reuse_source")
+	}
+	schemaDimension.Store(reuseLookupTestDimension)
+	close(releaseDescribes)
+
+	for range readerCount {
+		result := <-resultChannel
+		if result.err != nil {
+			t.Fatalf("resolve concurrent source dimension: %v", result.err)
+		}
+		if result.dimension != oldDimension {
+			t.Fatalf("in-flight dimension = %d, want %d", result.dimension, oldDimension)
+		}
+	}
+	currentDimension, err := service.resolveReuseVectorDimension(
+		context.Background(),
+		"reuse_source",
+	)
+	if err != nil {
+		t.Fatalf("resolve replacement source dimension: %v", err)
+	}
+	if currentDimension != reuseLookupTestDimension {
+		t.Fatalf(
+			"replacement dimension = %d, want %d",
+			currentDimension,
+			reuseLookupTestDimension,
+		)
+	}
+	wantDescribeCalls := int32(readerCount + 1)
+	if server.describeCallCount() != wantDescribeCalls {
+		t.Fatalf(
+			"DescribeCollection calls = %d, want %d",
+			server.describeCallCount(),
+			wantDescribeCalls,
+		)
+	}
+}
+
 func TestReuseSourceDimensionCacheStoresOnlySuccessfulResults(t *testing.T) {
 	service, server := newReuseLookupTestService(t, nil)
 	service.cfg.EmbeddingDimension = 0
