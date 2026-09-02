@@ -58,6 +58,10 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 }
 
 func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID string, relativePaths []string, progress ConvergeProgressFunc, lstat convergeLstatFunc) (outcome ConvergeOutcome, err error) {
+	return manager.convergePathsWithLstatAndNow(ctx, codebaseID, relativePaths, progress, lstat, time.Now)
+}
+
+func (manager *Manager) convergePathsWithLstatAndNow(ctx context.Context, codebaseID string, relativePaths []string, progress ConvergeProgressFunc, lstat convergeLstatFunc, now func() time.Time) (outcome ConvergeOutcome, err error) {
 	ctx, done := spans.Open(ctx, "daemon.convergePaths")
 	defer done(&err)
 
@@ -96,11 +100,7 @@ func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID s
 	// destination match the source's inode while it still lives in the
 	// snapshot.
 	outcome.PathsGiven = safeInt32(len(relativePaths))
-	classifiedPaths, classifyErr := classifyConvergePaths(ctx, codebase.CanonicalPath, relativePaths, lstat)
-	if classifyErr != nil {
-		return outcome, classifyErr
-	}
-	lastProgressAt := time.Now()
+	lastProgressAt := now()
 	lastReportedPaths := int32(0)
 	reportedProgress := false
 	reportProgress := func(final bool) bool {
@@ -111,19 +111,29 @@ func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID s
 			return false
 		}
 		pathsSinceReport := outcome.PathsProcessed - lastReportedPaths
-		if !final && pathsSinceReport < convergeProgressPathInterval && time.Since(lastProgressAt) < convergeProgressTimeInterval {
+		if !final && pathsSinceReport < convergeProgressPathInterval && now().Sub(lastProgressAt) < convergeProgressTimeInterval {
 			return true
 		}
 		if final && reportedProgress && pathsSinceReport == 0 {
 			return true
 		}
 		progress(outcome)
-		lastProgressAt = time.Now()
+		lastProgressAt = now()
 		lastReportedPaths = outcome.PathsProcessed
 		reportedProgress = true
 		return true
 	}
 	defer reportProgress(true)
+	classifiedPaths, classifyErr := classifyConvergePathsWithProgress(ctx, codebase.CanonicalPath, relativePaths, lstat, func(classified int32) error {
+		outcome.PathsProcessed = classified
+		if reportProgress(false) {
+			return nil
+		}
+		return ctx.Err()
+	})
+	if classifyErr != nil {
+		return outcome, classifyErr
+	}
 
 	changed := false
 	for _, classifiedPath := range classifiedPaths {
@@ -133,7 +143,6 @@ func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID s
 		if ctx.Err() != nil {
 			break
 		}
-		outcome.PathsProcessed++
 		if classifiedPath.Missing {
 			if !reportProgress(false) {
 				break
@@ -337,6 +346,10 @@ func pickRenameSource(candidates []string, fileHashes map[string]string, freshHa
 // work begins. Present paths stay first so rename detection can reuse the
 // source inode before an absent path is considered.
 func classifyConvergePaths(ctx context.Context, root string, relativePaths []string, lstat convergeLstatFunc) ([]classifiedConvergePath, error) {
+	return classifyConvergePathsWithProgress(ctx, root, relativePaths, lstat, nil)
+}
+
+func classifyConvergePathsWithProgress(ctx context.Context, root string, relativePaths []string, lstat convergeLstatFunc, progress func(int32) error) ([]classifiedConvergePath, error) {
 	classifiedPaths := make([]classifiedConvergePath, 0, len(relativePaths))
 	for _, relativePath := range relativePaths {
 		if err := ctx.Err(); err != nil {
@@ -350,6 +363,11 @@ func classifyConvergePaths(ctx context.Context, root string, relativePaths []str
 			RelativePath: relativePath,
 			Missing:      errors.Is(err, os.ErrNotExist),
 		})
+		if progress != nil {
+			if progressErr := progress(safeInt32(len(classifiedPaths))); progressErr != nil {
+				return nil, progressErr
+			}
+		}
 	}
 	sort.SliceStable(classifiedPaths, func(first int, second int) bool {
 		if classifiedPaths[first].Missing != classifiedPaths[second].Missing {

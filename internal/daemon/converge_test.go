@@ -289,6 +289,172 @@ func TestClassifyConvergePathsRejectsNonAbsenceError(t *testing.T) {
 	}
 }
 
+func TestConvergePathsReportsSlowClassificationProgress(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	manager.semantic = &fakeSemantic{}
+
+	currentTime := time.Unix(1, 0)
+	statCalls := 0
+	updates := make([]ConvergeOutcome, 0)
+	outcome, err := manager.convergePathsWithLstatAndNow(
+		context.Background(),
+		codebase.ID,
+		[]string{"first.go", "second.go", "third.go"},
+		func(progress ConvergeOutcome) {
+			updates = append(updates, progress)
+		},
+		func(string) (os.FileInfo, error) {
+			statCalls++
+			if statCalls == 1 {
+				currentTime = currentTime.Add(convergeProgressTimeInterval)
+			}
+			return nil, os.ErrNotExist
+		},
+		func() time.Time {
+			return currentTime
+		},
+	)
+	if err != nil {
+		t.Fatalf("convergePathsWithLstatAndNow returned error: %v", err)
+	}
+	if outcome.PathsProcessed != 3 {
+		t.Fatalf("PathsProcessed = %d, want 3", outcome.PathsProcessed)
+	}
+	if len(updates) != 2 {
+		t.Fatalf("progress updates = %d, want 2", len(updates))
+	}
+	if updates[0].PathsProcessed != 1 {
+		t.Fatalf("slow classification progress = %d, want 1", updates[0].PathsProcessed)
+	}
+	if updates[1].PathsProcessed != 3 {
+		t.Fatalf("final classification progress = %d, want 3", updates[1].PathsProcessed)
+	}
+}
+
+func TestConvergePathsReportsFinalProgressAfterClassificationError(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	writeSyntheticSnapshot(t, manager, codebase, 1)
+	checkpointPath := manager.snapshotPathForCodebase(codebase)
+	checkpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint: %v", err)
+	}
+	checkpointInfo, err := os.Stat(checkpointPath)
+	if err != nil {
+		t.Fatalf("Stat checkpoint: %v", err)
+	}
+
+	var reindexCalls atomic.Int32
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			reindexCalls.Add(1)
+			return nil
+		},
+	}
+	updates := make([]ConvergeOutcome, 0)
+	statCalls := 0
+	outcome, err := manager.convergePathsWithLstat(context.Background(), codebase.ID, []string{"first.go", "second.go", "denied.go"}, func(progress ConvergeOutcome) {
+		updates = append(updates, progress)
+	}, func(string) (os.FileInfo, error) {
+		statCalls++
+		if statCalls == 3 {
+			return nil, os.ErrPermission
+		}
+		return nil, os.ErrNotExist
+	})
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v, want permission error", err)
+	}
+	if outcome.PathsProcessed != 2 {
+		t.Fatalf("PathsProcessed = %d, want 2", outcome.PathsProcessed)
+	}
+	if len(updates) != 1 || updates[0].PathsProcessed != 2 {
+		t.Fatalf("final progress = %+v, want one update for 2 paths", updates)
+	}
+	if got := reindexCalls.Load(); got != 0 {
+		t.Fatalf("Reindex calls = %d, want 0 after classification failure", got)
+	}
+	afterBytes, readErr := os.ReadFile(checkpointPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile checkpoint after classification failure: %v", readErr)
+	}
+	if !bytes.Equal(afterBytes, checkpointBytes) {
+		t.Fatal("checkpoint changed after classification failure")
+	}
+	afterInfo, statErr := os.Stat(checkpointPath)
+	if statErr != nil {
+		t.Fatalf("Stat checkpoint after classification failure: %v", statErr)
+	}
+	if !os.SameFile(checkpointInfo, afterInfo) {
+		t.Fatal("classification failure replaced the checkpoint atomically")
+	}
+}
+
+func TestConvergePathsReportsFinalProgressAfterClassificationCancellation(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	writeSyntheticSnapshot(t, manager, codebase, 1)
+	checkpointPath := manager.snapshotPathForCodebase(codebase)
+	checkpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint: %v", err)
+	}
+	checkpointInfo, err := os.Stat(checkpointPath)
+	if err != nil {
+		t.Fatalf("Stat checkpoint: %v", err)
+	}
+
+	var reindexCalls atomic.Int32
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			reindexCalls.Add(1)
+			return nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := make([]ConvergeOutcome, 0)
+	statCalls := 0
+	outcome, err := manager.convergePathsWithLstat(ctx, codebase.ID, []string{"first.go", "second.go", "third.go"}, func(progress ConvergeOutcome) {
+		updates = append(updates, progress)
+	}, func(string) (os.FileInfo, error) {
+		statCalls++
+		if statCalls == 2 {
+			cancel()
+		}
+		return nil, os.ErrNotExist
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context cancellation", err)
+	}
+	if outcome.PathsProcessed != 2 {
+		t.Fatalf("PathsProcessed = %d, want 2", outcome.PathsProcessed)
+	}
+	if len(updates) != 1 || updates[0].PathsProcessed != 2 {
+		t.Fatalf("final progress = %+v, want one update for 2 paths", updates)
+	}
+	if got := reindexCalls.Load(); got != 0 {
+		t.Fatalf("Reindex calls = %d, want 0 after classification cancellation", got)
+	}
+	afterBytes, readErr := os.ReadFile(checkpointPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile checkpoint after classification cancellation: %v", readErr)
+	}
+	if !bytes.Equal(afterBytes, checkpointBytes) {
+		t.Fatal("checkpoint changed after classification cancellation")
+	}
+	afterInfo, statErr := os.Stat(checkpointPath)
+	if statErr != nil {
+		t.Fatalf("Stat checkpoint after classification cancellation: %v", statErr)
+	}
+	if !os.SameFile(checkpointInfo, afterInfo) {
+		t.Fatal("classification cancellation replaced the checkpoint atomically")
+	}
+}
+
 func TestConvergePathsPropagatesPostclassificationLstatError(t *testing.T) {
 	t.Parallel()
 
