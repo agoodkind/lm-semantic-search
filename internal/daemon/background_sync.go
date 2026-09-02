@@ -531,8 +531,43 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	}
 	defer registration.release()
 
+	syncer.runDetachedWatcherConverge(codebaseID, relativePaths, registration)
+}
+
+func (syncer *BackgroundSync) runDetachedWatcherConverge(
+	codebaseID string,
+	relativePaths []string,
+	registration convergeJobRegistration,
+) {
 	registration.withContext(func(runCtx context.Context) {
-		outcome, runErr := syncer.manager.ConvergePaths(runCtx, codebaseID, relativePaths)
+		lastReportedPaths := int32(-1)
+		outcome, runErr := syncer.manager.ConvergePaths(runCtx, codebaseID, relativePaths, func(progress ConvergeOutcome) {
+			if progress.PathsProcessed == lastReportedPaths {
+				syncer.manager.updateDetachedJobHeartbeat(registration.job.ID)
+				return
+			}
+			percent := 100.0
+			if progress.PathsGiven > 0 {
+				percent = float64(progress.PathsProcessed) / float64(progress.PathsGiven) * 100
+			}
+			syncer.manager.updateDetachedJobProgress(registration.job.ID, indexer.Progress{
+				Phase:                  "Converging changed paths...",
+				OverallPercent:         percent,
+				FilesTotal:             progress.PathsGiven,
+				FilesProcessed:         progress.PathsProcessed,
+				FilesEmbedded:          0,
+				FilesSkippedOversize:   0,
+				FilesSkippedUnreadable: 0,
+				FilesPending:           0,
+				ChunksProcessed:        0,
+				ChunksReused:           0,
+				ChunksEmbedded:         0,
+				ChunksGenerated:        0,
+				ChunksDropped:          0,
+				ReuseVectorsLoaded:     0,
+			}, "path")
+			lastReportedPaths = progress.PathsProcessed
+		})
 		terminalCtx := context.WithoutCancel(runCtx)
 		switch {
 		case runCtx.Err() != nil:
@@ -541,7 +576,7 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 			syncer.manager.updateDetachedJobFailed(terminalCtx, registration.job.ID, runErr)
 		default:
 			syncer.manager.updateDetachedJobCompleted(terminalCtx, registration.job.ID, indexer.Result{
-				IndexedFiles:      outcome.PathsConverged,
+				IndexedFiles:      outcome.PathsProcessed,
 				TotalChunks:       0,
 				TotalBytes:        0,
 				Chunks:            nil,

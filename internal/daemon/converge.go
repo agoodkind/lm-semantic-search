@@ -8,12 +8,18 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/spans"
+)
+
+const (
+	convergeProgressPathInterval int32 = 256
+	convergeProgressTimeInterval       = time.Second
 )
 
 // ConvergeOutcome reports what one ConvergePaths call handled, so a caller can
@@ -27,19 +33,38 @@ import (
 // dependency-health gate in updateJobCompleted.
 type ConvergeOutcome struct {
 	PathsGiven     int32
+	PathsProcessed int32
 	PathsConverged int32
 }
 
+// ConvergeProgressFunc receives a bounded progress update for one converge.
+type ConvergeProgressFunc func(ConvergeOutcome)
+
+type classifiedConvergePath struct {
+	RelativePath string
+	Missing      bool
+}
+
+type convergeLstatFunc func(string) (os.FileInfo, error)
+
 // ConvergePaths makes the index match disk for each relative path in a
 // codebase. It reads each path at call time: a path present on disk is
-// upserted, a path absent is deleted, and a path whose content hash already
+// upserted, a path absent is retained, and a path whose content hash already
 // matches the snapshot is skipped. Reading disk per path means a delete that
-// lands before the task runs is handled as a removal rather than an error.
+// lands before the task runs leaves the checkpoint and semantic rows unchanged.
 //
 // Callers must serialize ConvergePaths against full syncs of the same
 // codebase; the background sync coordinator does this through its single
 // in-flight guard.
-func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, relativePaths []string) (outcome ConvergeOutcome, err error) {
+func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, relativePaths []string, progress ConvergeProgressFunc) (outcome ConvergeOutcome, err error) {
+	return manager.convergePathsWithLstat(ctx, codebaseID, relativePaths, progress, os.Lstat)
+}
+
+func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID string, relativePaths []string, progress ConvergeProgressFunc, lstat convergeLstatFunc) (outcome ConvergeOutcome, err error) {
+	return manager.convergePathsWithLstatAndNow(ctx, codebaseID, relativePaths, progress, lstat, time.Now)
+}
+
+func (manager *Manager) convergePathsWithLstatAndNow(ctx context.Context, codebaseID string, relativePaths []string, progress ConvergeProgressFunc, lstat convergeLstatFunc, now func() time.Time) (outcome ConvergeOutcome, err error) {
 	ctx, done := spans.Open(ctx, "daemon.convergePaths")
 	defer done(&err)
 
@@ -77,108 +102,157 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 	// fast path is lost. Processing present files first lets the
 	// destination match the source's inode while it still lives in the
 	// snapshot.
-	orderedPaths := orderPathsByPresence(codebase.CanonicalPath, relativePaths)
-	outcome.PathsGiven = safeInt32(len(orderedPaths))
-	if signal, suspicious := assessWatcherDeleteWave(codebase, snapshot, codebase.CanonicalPath, orderedPaths); suspicious {
-		observations := manager.quarantineCodebase(ctx, codebaseID, signal)
-		slog.WarnContext(
-			ctx,
-			"converge.quarantined_large_delete",
-			"component",
-			"daemon",
-			"subcomponent",
-			"converge",
-			"codebase_id",
-			codebaseID,
-			"missing_count",
-			signal.missingCount,
-			"total_count",
-			signal.totalCount,
-			"observations",
-			observations,
-		)
-		return outcome, nil
+	outcome.PathsGiven = safeInt32(len(relativePaths))
+	lastProgressAt := now()
+	lastReportedPaths := int32(0)
+	reportedProgress := false
+	reportProgress := func(final bool, allowHeartbeat bool) bool {
+		if ctx.Err() != nil && !final {
+			return false
+		}
+		if progress == nil {
+			return true
+		}
+		pathsSinceReport := outcome.PathsProcessed - lastReportedPaths
+		if !final && pathsSinceReport < convergeProgressPathInterval && now().Sub(lastProgressAt) < convergeProgressTimeInterval {
+			return true
+		}
+		if reportedProgress && pathsSinceReport == 0 && !allowHeartbeat {
+			return true
+		}
+		progress(outcome)
+		lastProgressAt = now()
+		lastReportedPaths = outcome.PathsProcessed
+		reportedProgress = true
+		return true
+	}
+	defer reportProgress(true, false)
+	classifiedPaths, classifyErr := classifyConvergePathsWithProgress(ctx, codebase.CanonicalPath, relativePaths, lstat, func(classified int32) error {
+		outcome.PathsProcessed = classified
+		if reportProgress(false, false) {
+			return nil
+		}
+		return ctx.Err()
+	})
+	if classifyErr != nil {
+		return outcome, classifyErr
 	}
 
-	changed := false
-	for _, relativePath := range orderedPaths {
-		// A cancel stops the walk here rather than mid-path, so the snapshot
-		// written below covers exactly the paths that reached the index. The
-		// paths not reached become drift, which the periodic sync repairs.
-		if ctx.Err() != nil {
-			break
-		}
-		if converged := manager.convergeOnePath(ctx, codebase, relativePath, &snapshot, admission); converged {
-			changed = true
-			outcome.PathsConverged++
+	changed, convergeErr := manager.convergeClassifiedPaths(
+		ctx,
+		codebase,
+		classifiedPaths,
+		&snapshot,
+		admission,
+		lstat,
+		&outcome,
+		reportProgress,
+	)
+	if changed {
+		if writeErr := merkle.WriteSnapshot(snapshotPath, snapshot); writeErr != nil {
+			slog.ErrorContext(ctx, "converge.snapshot_write_failed", "component", "daemon", "subcomponent", "converge", "path", snapshotPath, "err", writeErr)
+			wrappedWriteErr := fmt.Errorf("write converge snapshot %s: %w", snapshotPath, writeErr)
+			if convergeErr != nil {
+				return outcome, errors.Join(convergeErr, wrappedWriteErr)
+			}
+			return outcome, wrappedWriteErr
 		}
 	}
-
-	if !changed {
-		return outcome, nil
-	}
-	if writeErr := merkle.WriteSnapshot(snapshotPath, snapshot); writeErr != nil {
-		slog.ErrorContext(ctx, "converge.snapshot_write_failed", "component", "daemon", "subcomponent", "converge", "path", snapshotPath, "err", writeErr)
-		return outcome, fmt.Errorf("write converge snapshot %s: %w", snapshotPath, writeErr)
+	if convergeErr != nil {
+		return outcome, convergeErr
 	}
 	return outcome, nil
 }
 
+func (manager *Manager) convergeClassifiedPaths(
+	ctx context.Context,
+	codebase model.Codebase,
+	classifiedPaths []classifiedConvergePath,
+	snapshot *merkle.Snapshot,
+	admission *admissionState,
+	lstat convergeLstatFunc,
+	outcome *ConvergeOutcome,
+	reportProgress func(bool, bool) bool,
+) (bool, error) {
+	changed := false
+	for _, classifiedPath := range classifiedPaths {
+		// A cancel stops the walk here rather than mid-path, so the snapshot
+		// written below covers exactly the paths that reached the index. The
+		// paths not reached become drift, which the periodic sync repairs.
+		if ctx.Err() != nil || classifiedPath.Missing {
+			if !reportProgress(false, false) {
+				break
+			}
+			continue
+		}
+		converged, err := manager.convergeOnePath(
+			ctx,
+			codebase,
+			classifiedPath.RelativePath,
+			snapshot,
+			admission,
+			lstat,
+		)
+		if err != nil {
+			return changed, err
+		}
+		if converged {
+			changed = true
+			outcome.PathsConverged++
+		}
+		if !reportProgress(false, true) {
+			break
+		}
+	}
+	return changed, nil
+}
+
 // convergeOnePath converges a single path against the snapshot and
-// returns true when the snapshot was mutated. Errors are logged and
-// swallowed so one bad path does not abort the batch.
+// returns true when the snapshot was mutated. Non-absence filesystem and
+// indexing errors stop the batch before it reports a successful completion.
 //
 // The decision routine:
 //
 //  1. The indexability resolver gates a present path first; a tracked
 //     path that has become excluded, out of scope, or oversize is removed.
-//  2. A missing file is removed.
-//  3. A file whose (device, inode) matches a different path already in
+//  2. A file whose (device, inode) matches a different path already in
 //     the snapshot with the same content hash is treated as a rename or
 //     hardlink: CopyChunks rewrites the Milvus key, skipping a re-embed.
-//  4. A file whose snapshot entry matches its current content hash is a
+//  3. A file whose snapshot entry matches its current content hash is a
 //     no-op (but the inode sidecar is refreshed when newer).
-//  5. Any remaining mismatch is an upsert (Reindex with the new chunks).
+//  4. Any remaining mismatch is an upsert (Reindex with the new chunks).
 //
 // InodeTrackingDisabled on the codebase short-circuits steps 3 and the
 // inode-stamp branch so unstable-inode filesystems still converge
 // correctly using path + content-hash identity.
-func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Codebase, relativePath string, snapshot *merkle.Snapshot, admission *admissionState) bool {
+func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Codebase, relativePath string, snapshot *merkle.Snapshot, admission *admissionState, lstat convergeLstatFunc) (bool, error) {
 	root := codebase.CanonicalPath
 	cfg := codebase.EffectiveConfig
 
 	// A path present on disk runs the indexability gate first: a tracked path
 	// that has become excluded, out of scope, or oversize is removed. A stat
-	// miss falls through to the IndexOne path below, which reports the removal.
+	// miss can occur when the file disappears after classification; IndexOne
+	// reports that removal, and this method retains its semantic rows and
+	// checkpoint entry.
 	// os.Lstat does not follow symlinks, so a symlink is seen as non-regular and
 	// rejected by the resolver's ReasonNotRegular gate rather than indexed as its
 	// target.
-	if info, statErr := os.Lstat(filepath.Join(root, relativePath)); statErr == nil {
+	if info, statErr := lstat(filepath.Join(root, relativePath)); statErr == nil {
 		if decision := manager.indexability.Decide(ctx, codebase.ID, root, relativePath, info); !decision.Indexed {
-			return manager.convergeRemoveExcluded(ctx, root, relativePath, string(decision.Reason), snapshot)
+			return manager.convergeRemoveExcluded(ctx, root, relativePath, string(decision.Reason), snapshot), nil
 		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return false, fmt.Errorf("lstat converge path %q: %w", relativePath, statErr)
 	}
 	fileResult, indexErr := manager.runner.IndexOne(ctx, manager.indexability, codebase.ID, root, relativePath, cfg)
 	if indexErr != nil {
-		slog.ErrorContext(ctx, "converge.index_failed", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", indexErr)
-		return false
+		return false, fmt.Errorf("index converge path %q: %w", relativePath, indexErr)
 	}
 	if fileResult.Removed {
-		if rmErr := manager.semantic.Reindex(ctx, root, nil, semantic.RemovePaths([]string{relativePath}), nil, nil, semantic.StoreColumnSetCode); rmErr != nil {
-			manager.logConvergeReindexErr(ctx, relativePath, "remove", rmErr)
-			return false
-		}
-		if !snapshot.HasFile(relativePath) {
-			return false
-		}
-		delete(snapshot.Files, relativePath)
-		snapshot.ForgetInode(relativePath)
-		metrics.ConvergeRemove()
-		slog.InfoContext(ctx, "converge.remove", "component", "daemon", "subcomponent", "converge", "path", relativePath)
-		return true
+		return false, nil
 	}
 	if fileResult.Skipped {
-		return false
+		return false, nil
 	}
 
 	currentInode := stampInodeForPath(ctx, codebase, root, relativePath)
@@ -187,28 +261,28 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 		// Same content; sidecar stamp only.
 		if shouldUpdateInodeStamp(snapshot, relativePath, currentInode) {
 			snapshot.RecordInode(relativePath, currentInode)
-			return true
+			return true, nil
 		}
-		return false
+		return false, nil
 	}
 
 	if !previouslyTracked && manager.tryRenameCopy(ctx, root, relativePath, currentInode, fileResult.FileHash, snapshot) {
-		return true
+		return true, nil
 	}
 
 	if admissionErr := admission.Admit(fileResult.Chunks); admissionErr != nil {
 		slog.WarnContext(ctx, "converge.admission_halt", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", admissionErr)
-		return false
+		return false, nil
 	}
 	if upErr := manager.semantic.Reindex(ctx, root, fileResult.Chunks, semantic.RemovePaths([]string{relativePath}), nil, nil, semantic.StoreColumnSetCode); upErr != nil {
 		manager.logConvergeReindexErr(ctx, relativePath, "upsert", upErr)
-		return false
+		return false, nil
 	}
 	snapshot.Files[relativePath] = fileResult.FileHash
 	snapshot.RecordInode(relativePath, currentInode)
 	metrics.ConvergeUpsert()
 	slog.InfoContext(ctx, "converge.upsert", "component", "daemon", "subcomponent", "converge", "path", relativePath, "chunks", len(fileResult.Chunks))
-	return true
+	return true, nil
 }
 
 // convergeRemoveExcluded removes a path the indexability resolver declined and
@@ -303,21 +377,36 @@ func pickRenameSource(candidates []string, fileHashes map[string]string, freshHa
 	return ""
 }
 
-// orderPathsByPresence sorts relativePaths so files that currently exist
-// on disk come before files that have been removed. A stable secondary
-// alphabetical order keeps the iteration deterministic when several
-// files share the same presence bucket.
-func orderPathsByPresence(root string, relativePaths []string) []string {
-	ordered := append([]string{}, relativePaths...)
-	sort.SliceStable(ordered, func(first int, second int) bool {
-		firstExists := fileExists(filepath.Join(root, ordered[first]))
-		secondExists := fileExists(filepath.Join(root, ordered[second]))
-		if firstExists != secondExists {
-			return firstExists
+func classifyConvergePathsWithProgress(ctx context.Context, root string, relativePaths []string, lstat convergeLstatFunc, progress func(int32) error) ([]classifiedConvergePath, error) {
+	classifiedPaths := make([]classifiedConvergePath, 0, len(relativePaths))
+	for _, relativePath := range relativePaths {
+		if err := ctx.Err(); err != nil {
+			cause := context.Cause(ctx)
+			slog.WarnContext(ctx, "converge.classify_cancelled", "component", "daemon", "subcomponent", "converge", "err", cause)
+			return nil, fmt.Errorf("classify converge paths: %w", cause)
 		}
-		return ordered[first] < ordered[second]
+		_, err := lstat(filepath.Join(root, relativePath))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.ErrorContext(ctx, "converge.classify_failed", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", err)
+			return nil, fmt.Errorf("classify converge path %q: %w", relativePath, err)
+		}
+		classifiedPaths = append(classifiedPaths, classifiedConvergePath{
+			RelativePath: relativePath,
+			Missing:      errors.Is(err, os.ErrNotExist),
+		})
+		if progress != nil {
+			if progressErr := progress(safeInt32(len(classifiedPaths))); progressErr != nil {
+				return nil, progressErr
+			}
+		}
+	}
+	sort.SliceStable(classifiedPaths, func(first int, second int) bool {
+		if classifiedPaths[first].Missing != classifiedPaths[second].Missing {
+			return !classifiedPaths[first].Missing
+		}
+		return classifiedPaths[first].RelativePath < classifiedPaths[second].RelativePath
 	})
-	return ordered
+	return classifiedPaths, nil
 }
 
 func fileExists(absolutePath string) bool {

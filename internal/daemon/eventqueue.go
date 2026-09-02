@@ -9,8 +9,9 @@ import (
 // batches of changed relative paths. A burst of events for one path collapses
 // to a single entry, and the recorded op does not matter because the converge
 // task reads disk when it runs: a path present at that moment is upserted and
-// a path absent is deleted. The queue therefore tracks only the set of paths
-// that changed, and delete-supersedes-reindex falls out of reading disk late.
+// a path absent is retained without semantic or checkpoint mutation. The queue
+// therefore tracks only the set of paths that changed, without recording an
+// operation to replay.
 type EventQueue struct {
 	debounce time.Duration
 	drain    func(codebaseID string, relativePaths []string)

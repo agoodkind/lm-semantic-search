@@ -759,7 +759,7 @@ func TestConvergeCopyChunksFiresOnRename(t *testing.T) {
 	}
 
 	before := metrics.Read().ConvergeCopyChunksTotal
-	if _, err := manager.ConvergePaths(context.Background(), codebaseID, []string{"src.go", "dst.go"}); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), codebaseID, []string{"src.go", "dst.go"}, nil); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 

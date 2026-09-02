@@ -130,9 +130,9 @@ func TestDoctorDisplayTextIncludesQuarantinedSection(t *testing.T) {
 		CanonicalPath: repoPath,
 		Status:        model.CodebaseStatusQuarantined,
 		Quarantine: &model.QuarantineState{
-			Reason:           quarantineReasonWatcherLargeDelete,
+			Reason:           quarantineReasonFullScanLargeDelete,
 			ObservationCount: 1,
-			LastTrigger:      quarantineTriggerWatcher,
+			LastTrigger:      quarantineTriggerFullScan,
 			LastMissingCount: 400,
 			LastTotalCount:   4292,
 		},

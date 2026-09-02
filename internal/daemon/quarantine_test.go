@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
@@ -54,7 +55,7 @@ func TestConvergePathsRootMissingMarksMissingAndSkipsDelete(t *testing.T) {
 	if err := os.RemoveAll(repoPath); err != nil {
 		t.Fatalf("RemoveAll returned error: %v", err)
 	}
-	if _, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"f000.go"}); err != nil {
+	if _, err := manager.ConvergePaths(context.Background(), codebase.ID, []string{"f000.go"}, nil); err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
 
@@ -80,7 +81,7 @@ func TestConvergePathsRootMissingMarksMissingAndSkipsDelete(t *testing.T) {
 	}
 }
 
-func TestConvergePathsLargeWatcherDeleteQuarantines(t *testing.T) {
+func TestConvergePathsLargeWatcher(t *testing.T) {
 	t.Parallel()
 
 	manager, _, repoPath := newTestManager(t)
@@ -95,7 +96,19 @@ func TestConvergePathsLargeWatcherDeleteQuarantines(t *testing.T) {
 	manager.codebases[codebase.ID] = codebase
 	manager.mu.Unlock()
 	writeSyntheticSnapshot(t, manager, codebase, 120)
+	checkpointPath := manager.snapshotPathForCodebase(codebase)
+	checkpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint: %v", err)
+	}
 
+	var indexOneCalls atomic.Int32
+	manager.runner = fakeRunner{
+		indexOne: func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error) {
+			indexOneCalls.Add(1)
+			return indexer.OneFileResult{Removed: true}, nil
+		},
+	}
 	var reindexCalls atomic.Int32
 	manager.semantic = &fakeSemantic{
 		reindex: func(_ context.Context, _ string, _ []model.StoredChunk, _ []string) error {
@@ -108,8 +121,18 @@ func TestConvergePathsLargeWatcherDeleteQuarantines(t *testing.T) {
 	for i := 0; i < 110; i++ {
 		relativePaths = append(relativePaths, fmt.Sprintf("f%03d.go", i))
 	}
-	if _, err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths); err != nil {
+	outcome, err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths, nil)
+	if err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+	if outcome.PathsGiven != 110 {
+		t.Fatalf("PathsGiven = %d, want 110", outcome.PathsGiven)
+	}
+	if outcome.PathsProcessed != 110 {
+		t.Fatalf("PathsProcessed = %d, want 110", outcome.PathsProcessed)
+	}
+	if outcome.PathsConverged != 0 {
+		t.Fatalf("PathsConverged = %d, want 0", outcome.PathsConverged)
 	}
 
 	manager.mu.Lock()
@@ -118,25 +141,25 @@ func TestConvergePathsLargeWatcherDeleteQuarantines(t *testing.T) {
 	if !found {
 		t.Fatalf("tracked codebase %s disappeared", codebase.ID)
 	}
-	if readCodebase.Status != model.CodebaseStatusQuarantined {
-		t.Fatalf("status = %q, want quarantined", readCodebase.Status)
+	if readCodebase.Status != model.CodebaseStatusIndexed {
+		t.Fatalf("status = %q, want indexed", readCodebase.Status)
 	}
-	if readCodebase.Quarantine == nil {
-		t.Fatal("Quarantine = nil, want recorded quarantine state")
+	if readCodebase.Quarantine != nil {
+		t.Fatalf("Quarantine = %+v, want nil", readCodebase.Quarantine)
 	}
-	if readCodebase.Quarantine.LastMissingCount != 110 || readCodebase.Quarantine.LastTotalCount != 120 {
-		t.Fatalf("quarantine counts = %+v, want 110 of 120", readCodebase.Quarantine)
+	if got := indexOneCalls.Load(); got != 0 {
+		t.Fatalf("IndexOne calls = %d, want 0 for missing watcher paths", got)
 	}
 	if got := reindexCalls.Load(); got != 0 {
-		t.Fatalf("reindex calls = %d, want 0 while the watcher delete wave is quarantined", got)
+		t.Fatalf("reindex calls = %d, want 0 for missing watcher paths", got)
 	}
 
-	snapshot, err := merkle.ReadSnapshot(manager.snapshotPathForCodebase(codebase))
+	afterBytes, err := os.ReadFile(checkpointPath)
 	if err != nil {
-		t.Fatalf("ReadSnapshot returned error: %v", err)
+		t.Fatalf("ReadFile checkpoint after converge: %v", err)
 	}
-	if len(snapshot.Files) != 120 {
-		t.Fatalf("snapshot files = %d, want 120 unchanged entries while quarantined", len(snapshot.Files))
+	if string(afterBytes) != string(checkpointBytes) {
+		t.Fatal("checkpoint content changed after missing watcher paths")
 	}
 }
 
@@ -229,9 +252,9 @@ func TestHandleQuarantinedCodebaseClearsOnEmptyDiff(t *testing.T) {
 	codebase.EffectiveConfig = indexConfig
 	codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1}
 	codebase.Quarantine = &model.QuarantineState{
-		Reason:           quarantineReasonWatcherLargeDelete,
+		Reason:           quarantineReasonFullScanLargeDelete,
 		ObservationCount: 1,
-		LastTrigger:      quarantineTriggerWatcher,
+		LastTrigger:      quarantineTriggerFullScan,
 		LastMissingCount: 110,
 		LastTotalCount:   120,
 	}
@@ -356,168 +379,6 @@ func TestAssessDeltaDeleteWaveIgnoresPhysicallyPresentRemovedPaths(t *testing.T)
 	}
 }
 
-// TestAssessWatcherDeleteWaveClydeDesktopScenario reproduces the exact failure
-// that motivated this fix: a healthy repo whose 151 tracked files are all
-// present, while a flood of untracked .git churn paths are absent. The raw
-// batch carries 1,671 absent untracked paths, which the old code counted
-// against the 151 tracked total to produce the impossible "1,671 of 151" and a
-// false quarantine.
-func TestAssessWatcherDeleteWaveClydeDesktopScenario(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-
-	const trackedCount = 151
-	files := make(map[string]string, trackedCount)
-	trackedPaths := make([]string, 0, trackedCount)
-	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
-		t.Fatalf("MkdirAll returned error: %v", err)
-	}
-	for i := 0; i < trackedCount; i++ {
-		rel := fmt.Sprintf("src/f%03d.go", i)
-		files[rel] = fmt.Sprintf("hash-%03d", i)
-		trackedPaths = append(trackedPaths, rel)
-		if err := os.WriteFile(filepath.Join(root, rel), []byte("package main\n"), 0o644); err != nil {
-			t.Fatalf("WriteFile(%s) returned error: %v", rel, err)
-		}
-	}
-	snapshot := merkle.Snapshot{Files: files}
-
-	batch := append([]string{}, trackedPaths...)
-	for i := 0; i < 1671; i++ {
-		batch = append(batch, fmt.Sprintf(".git/objects/%02x/%04x.pack", i%256, i))
-	}
-
-	codebase := model.Codebase{
-		Kind:              model.CodebaseKindCode,
-		Status:            model.CodebaseStatusIndexed,
-		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: trackedCount, TotalChunks: trackedCount},
-		LiveFileTotal:     trackedCount,
-	}
-
-	signal, suspicious := assessWatcherDeleteWave(codebase, snapshot, root, batch)
-	if suspicious {
-		t.Fatalf("assessWatcherDeleteWave quarantined a healthy repo: signal = %+v; untracked churn must not count toward the tracked-file total", signal)
-	}
-	if signal.missingCount > signal.totalCount {
-		t.Fatalf("missingCount %d exceeds totalCount %d; the numerator must never exceed the tracked denominator", signal.missingCount, signal.totalCount)
-	}
-}
-
-// TestAssessWatcherDeleteWaveCountsTrackedOnlyInMixedBatch confirms a genuine
-// tracked mass-delete still quarantines while untracked churn in the same batch
-// is excluded from the count.
-func TestAssessWatcherDeleteWaveCountsTrackedOnlyInMixedBatch(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-
-	const trackedCount = 120
-	files := make(map[string]string, trackedCount)
-	for i := 0; i < trackedCount; i++ {
-		files[fmt.Sprintf("f%03d.go", i)] = fmt.Sprintf("hash-%03d", i)
-	}
-	for i := 110; i < trackedCount; i++ {
-		rel := fmt.Sprintf("f%03d.go", i)
-		if err := os.WriteFile(filepath.Join(root, rel), []byte("package main\n"), 0o644); err != nil {
-			t.Fatalf("WriteFile(%s) returned error: %v", rel, err)
-		}
-	}
-	snapshot := merkle.Snapshot{Files: files}
-
-	batch := make([]string, 0, trackedCount+2000)
-	for i := 0; i < trackedCount; i++ {
-		batch = append(batch, fmt.Sprintf("f%03d.go", i))
-	}
-	for i := 0; i < 2000; i++ {
-		batch = append(batch, fmt.Sprintf("node_modules/pkg/%04d.js", i))
-	}
-
-	codebase := model.Codebase{
-		Kind:              model.CodebaseKindCode,
-		Status:            model.CodebaseStatusIndexed,
-		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: trackedCount, TotalChunks: trackedCount},
-		LiveFileTotal:     trackedCount,
-	}
-
-	signal, suspicious := assessWatcherDeleteWave(codebase, snapshot, root, batch)
-	if !suspicious {
-		t.Fatal("assessWatcherDeleteWave returned suspicious=false, want true for 110 genuine tracked deletes")
-	}
-	if signal.missingCount != 110 || signal.totalCount != 120 {
-		t.Fatalf("signal = %+v, want 110 of 120 with the untracked node_modules churn excluded", signal)
-	}
-	if signal.reason != quarantineReasonWatcherLargeDelete {
-		t.Fatalf("reason = %q, want the watcher large-delete reason", signal.reason)
-	}
-}
-
-// TestAssessWatcherDeleteWaveEmptySnapshotDefersToFullScan confirms that with
-// no tracked baseline in memory the watcher prefilter does not quarantine and
-// instead leaves the decision to the authoritative full scan.
-func TestAssessWatcherDeleteWaveEmptySnapshotDefersToFullScan(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	snapshot := merkle.Snapshot{Files: map[string]string{}}
-	batch := make([]string, 0, 1600)
-	for i := 0; i < 1600; i++ {
-		batch = append(batch, fmt.Sprintf("f%04d.go", i))
-	}
-	codebase := model.Codebase{
-		Kind:              model.CodebaseKindCode,
-		Status:            model.CodebaseStatusIndexed,
-		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 151, TotalChunks: 151},
-		LiveFileTotal:     151,
-	}
-	if _, suspicious := assessWatcherDeleteWave(codebase, snapshot, root, batch); suspicious {
-		t.Fatal("assessWatcherDeleteWave quarantined on an empty in-memory snapshot; the prefilter must defer to the full scan")
-	}
-}
-
-// TestAssessWatcherDeleteWaveVCSOperationPausesBelowRatio confirms that a large
-// tracked removal that is below the normal ratio still pauses (quarantines)
-// when a git operation is mid-flight, so index rows are not deleted for files
-// that a rebase or checkout will restore.
-func TestAssessWatcherDeleteWaveVCSOperationPausesBelowRatio(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-
-	const trackedCount = 500
-	files := make(map[string]string, trackedCount)
-	for i := 0; i < trackedCount; i++ {
-		files[fmt.Sprintf("f%04d.go", i)] = fmt.Sprintf("hash-%04d", i)
-	}
-	snapshot := merkle.Snapshot{Files: files}
-
-	batch := make([]string, 0, 120)
-	for i := 0; i < 120; i++ {
-		batch = append(batch, fmt.Sprintf("f%04d.go", i))
-	}
-
-	codebase := model.Codebase{
-		Kind:              model.CodebaseKindCode,
-		Status:            model.CodebaseStatusIndexed,
-		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: trackedCount, TotalChunks: trackedCount},
-		LiveFileTotal:     trackedCount,
-	}
-
-	if _, suspicious := assessWatcherDeleteWave(codebase, snapshot, root, batch); suspicious {
-		t.Fatal("precondition failed: 120 of 500 should not trip the normal ratio rule")
-	}
-
-	if err := os.MkdirAll(filepath.Join(root, ".git", "rebase-merge"), 0o755); err != nil {
-		t.Fatalf("MkdirAll returned error: %v", err)
-	}
-	signal, suspicious := assessWatcherDeleteWave(codebase, snapshot, root, batch)
-	if !suspicious {
-		t.Fatal("assessWatcherDeleteWave returned suspicious=false during a rebase; a large removal mid-git-operation must pause")
-	}
-	if signal.reason != quarantineReasonVCSTransient {
-		t.Fatalf("reason = %q, want the VCS-transient reason", signal.reason)
-	}
-	if signal.missingCount != 120 || signal.totalCount != 500 {
-		t.Fatalf("signal = %+v, want 120 of 500", signal)
-	}
-}
-
 // TestHandleQuarantinedCodebaseHoldsDuringVCSOperation confirms the
 // confirmation gate never clears a quarantine or advances toward destructive
 // sync while a git operation is in progress, even when the on-disk tree looks
@@ -533,9 +394,9 @@ func TestHandleQuarantinedCodebaseHoldsDuringVCSOperation(t *testing.T) {
 	codebase.EffectiveConfig = indexConfig
 	codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1}
 	codebase.Quarantine = &model.QuarantineState{
-		Reason:           quarantineReasonWatcherLargeDelete,
+		Reason:           quarantineReasonFullScanLargeDelete,
 		ObservationCount: 1,
-		LastTrigger:      quarantineTriggerWatcher,
+		LastTrigger:      quarantineTriggerFullScan,
 		LastMissingCount: 110,
 		LastTotalCount:   120,
 	}
