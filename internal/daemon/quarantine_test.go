@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
@@ -80,7 +81,7 @@ func TestConvergePathsRootMissingMarksMissingAndSkipsDelete(t *testing.T) {
 	}
 }
 
-func TestConvergePathsLargeWatcherDeleteQuarantines(t *testing.T) {
+func TestConvergePathsLargeWatcher(t *testing.T) {
 	t.Parallel()
 
 	manager, _, repoPath := newTestManager(t)
@@ -95,7 +96,19 @@ func TestConvergePathsLargeWatcherDeleteQuarantines(t *testing.T) {
 	manager.codebases[codebase.ID] = codebase
 	manager.mu.Unlock()
 	writeSyntheticSnapshot(t, manager, codebase, 120)
+	checkpointPath := manager.snapshotPathForCodebase(codebase)
+	checkpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint: %v", err)
+	}
 
+	var indexOneCalls atomic.Int32
+	manager.runner = fakeRunner{
+		indexOne: func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error) {
+			indexOneCalls.Add(1)
+			return indexer.OneFileResult{Removed: true}, nil
+		},
+	}
 	var reindexCalls atomic.Int32
 	manager.semantic = &fakeSemantic{
 		reindex: func(_ context.Context, _ string, _ []model.StoredChunk, _ []string) error {
@@ -108,8 +121,18 @@ func TestConvergePathsLargeWatcherDeleteQuarantines(t *testing.T) {
 	for i := 0; i < 110; i++ {
 		relativePaths = append(relativePaths, fmt.Sprintf("f%03d.go", i))
 	}
-	if _, err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths); err != nil {
+	outcome, err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths)
+	if err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+	if outcome.PathsGiven != 110 {
+		t.Fatalf("PathsGiven = %d, want 110", outcome.PathsGiven)
+	}
+	if outcome.PathsProcessed != 110 {
+		t.Fatalf("PathsProcessed = %d, want 110", outcome.PathsProcessed)
+	}
+	if outcome.PathsConverged != 0 {
+		t.Fatalf("PathsConverged = %d, want 0", outcome.PathsConverged)
 	}
 
 	manager.mu.Lock()
@@ -118,25 +141,25 @@ func TestConvergePathsLargeWatcherDeleteQuarantines(t *testing.T) {
 	if !found {
 		t.Fatalf("tracked codebase %s disappeared", codebase.ID)
 	}
-	if readCodebase.Status != model.CodebaseStatusQuarantined {
-		t.Fatalf("status = %q, want quarantined", readCodebase.Status)
+	if readCodebase.Status != model.CodebaseStatusIndexed {
+		t.Fatalf("status = %q, want indexed", readCodebase.Status)
 	}
-	if readCodebase.Quarantine == nil {
-		t.Fatal("Quarantine = nil, want recorded quarantine state")
+	if readCodebase.Quarantine != nil {
+		t.Fatalf("Quarantine = %+v, want nil", readCodebase.Quarantine)
 	}
-	if readCodebase.Quarantine.LastMissingCount != 110 || readCodebase.Quarantine.LastTotalCount != 120 {
-		t.Fatalf("quarantine counts = %+v, want 110 of 120", readCodebase.Quarantine)
+	if got := indexOneCalls.Load(); got != 0 {
+		t.Fatalf("IndexOne calls = %d, want 0 for missing watcher paths", got)
 	}
 	if got := reindexCalls.Load(); got != 0 {
-		t.Fatalf("reindex calls = %d, want 0 while the watcher delete wave is quarantined", got)
+		t.Fatalf("reindex calls = %d, want 0 for missing watcher paths", got)
 	}
 
-	snapshot, err := merkle.ReadSnapshot(manager.snapshotPathForCodebase(codebase))
+	afterBytes, err := os.ReadFile(checkpointPath)
 	if err != nil {
-		t.Fatalf("ReadSnapshot returned error: %v", err)
+		t.Fatalf("ReadFile checkpoint after converge: %v", err)
 	}
-	if len(snapshot.Files) != 120 {
-		t.Fatalf("snapshot files = %d, want 120 unchanged entries while quarantined", len(snapshot.Files))
+	if string(afterBytes) != string(checkpointBytes) {
+		t.Fatal("checkpoint content changed after missing watcher paths")
 	}
 }
 

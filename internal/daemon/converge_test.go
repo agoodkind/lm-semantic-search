@@ -1,9 +1,12 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,6 +58,79 @@ func TestConvergePathsReportsWhatItConverged(t *testing.T) {
 	}
 	if outcome.PathsConverged != 1 {
 		t.Fatalf("PathsConverged = %d, want 1; only present.go exists on disk", outcome.PathsConverged)
+	}
+}
+
+func TestConvergePathsRetains18227MissingPaths(t *testing.T) {
+	t.Parallel()
+
+	const missingPathCount = 18_227
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	writeSyntheticSnapshot(t, manager, codebase, 1)
+	checkpointPath := manager.snapshotPathForCodebase(codebase)
+	checkpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint: %v", err)
+	}
+	checkpointInfo, err := os.Stat(checkpointPath)
+	if err != nil {
+		t.Fatalf("Stat checkpoint: %v", err)
+	}
+
+	var indexOneCalls atomic.Int32
+	manager.runner = fakeRunner{
+		indexOne: func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error) {
+			indexOneCalls.Add(1)
+			return indexer.OneFileResult{Removed: true}, nil
+		},
+	}
+	var reindexCalls atomic.Int32
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			reindexCalls.Add(1)
+			return nil
+		},
+	}
+
+	relativePaths := make([]string, 0, missingPathCount)
+	for i := 0; i < missingPathCount; i++ {
+		relativePaths = append(relativePaths, fmt.Sprintf("missing/%05d.go", i))
+	}
+
+	outcome, err := manager.ConvergePaths(context.Background(), codebase.ID, relativePaths)
+	if err != nil {
+		t.Fatalf("ConvergePaths returned error: %v", err)
+	}
+	if outcome.PathsGiven != missingPathCount {
+		t.Fatalf("PathsGiven = %d, want %d", outcome.PathsGiven, missingPathCount)
+	}
+	if outcome.PathsProcessed != missingPathCount {
+		t.Fatalf("PathsProcessed = %d, want %d", outcome.PathsProcessed, missingPathCount)
+	}
+	if outcome.PathsConverged != 0 {
+		t.Fatalf("PathsConverged = %d, want 0", outcome.PathsConverged)
+	}
+	if got := indexOneCalls.Load(); got != 0 {
+		t.Fatalf("IndexOne calls = %d, want 0 for missing watcher paths", got)
+	}
+	if got := reindexCalls.Load(); got != 0 {
+		t.Fatalf("Reindex calls = %d, want 0 for missing watcher paths", got)
+	}
+
+	afterBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint after converge: %v", err)
+	}
+	if !bytes.Equal(afterBytes, checkpointBytes) {
+		t.Fatal("checkpoint content changed after missing watcher paths")
+	}
+	afterInfo, err := os.Stat(checkpointPath)
+	if err != nil {
+		t.Fatalf("Stat checkpoint after converge: %v", err)
+	}
+	if !os.SameFile(checkpointInfo, afterInfo) {
+		t.Fatal("missing watcher paths replaced the checkpoint atomically")
 	}
 }
 
