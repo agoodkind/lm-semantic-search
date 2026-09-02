@@ -108,6 +108,7 @@ type harness struct {
 	callRecorder      *milvusCallRecorder
 	embeddingRecorder *embeddingCallRecorder
 	milvusContext     context.Context
+	stopBackground    context.CancelFunc
 }
 
 type milvusInventory map[string]map[string]string
@@ -262,7 +263,7 @@ func newHarness(t *testing.T) *harness {
 
 func newResidencyHarness(t *testing.T, idleTimeout time.Duration) *harness {
 	t.Helper()
-	return newHarnessWithOptions(t, nil, idleTimeout, true)
+	return newHarnessWithOptions(t, nil, idleTimeout, true, false)
 }
 
 // newHarnessWithGate builds the isolated daemon like newHarness but installs an
@@ -270,7 +271,12 @@ func newResidencyHarness(t *testing.T, idleTimeout time.Duration) *harness {
 // between batches. A nil gate is the normal, ungated path.
 func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 	t.Helper()
-	return newHarnessWithOptions(t, gate, 0, false)
+	return newHarnessWithOptions(t, gate, 0, false, false)
+}
+
+func newWatcherHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessWithOptions(t, nil, 0, false, true)
 }
 
 func newHarnessWithOptions(
@@ -278,6 +284,7 @@ func newHarnessWithOptions(
 	gate *embedGate,
 	idleTimeout time.Duration,
 	requireMilvus bool,
+	enableFileWatcher bool,
 ) *harness {
 	t.Helper()
 
@@ -322,12 +329,16 @@ func newHarnessWithOptions(
 		manager         *daemon.Manager
 		conn            *grpc.ClientConn
 		sandboxMilvus   *milvusclient.Client
+		stopBackground  context.CancelFunc
 		setupComplete   bool
 		stopServer      func()
 	)
 	t.Cleanup(func() {
 		if setupComplete {
 			return
+		}
+		if stopBackground != nil {
+			stopBackground()
 		}
 		cleanupPartialHarness(
 			t,
@@ -423,6 +434,7 @@ func newHarnessWithOptions(
 		databaseName,
 		harnessID,
 		idleTimeout,
+		enableFileWatcher,
 	)
 	for _, dir := range sandbox.Directories(cfg) {
 		if err := store.EnsureDir(dir); err != nil {
@@ -436,6 +448,11 @@ func newHarnessWithOptions(
 	manager, err = daemon.NewManager(sandboxContext, cfg)
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
+	}
+	runtimeContext, cancelBackground := context.WithCancel(sandboxContext)
+	stopBackground = cancelBackground
+	if enableFileWatcher {
+		daemon.NewBackgroundSync(cfg, manager).Start(runtimeContext)
 	}
 
 	stopServer = startInProcessServer(t, manager, socketPath)
@@ -482,6 +499,7 @@ func newHarnessWithOptions(
 		callRecorder:      callRecorder,
 		embeddingRecorder: embeddingRecorder,
 		milvusContext:     sandboxContext,
+		stopBackground:    cancelBackground,
 	}
 	h.trackCollectionFamily(codebase.CollectionName)
 	h.trackTemporaryCollection(h.reuseCatalogName)
@@ -552,6 +570,9 @@ func cleanupPartialHarness(
 // teardown drops every tracked collection and the unique temporary database.
 // It then verifies the operator database and database list are unchanged.
 func (h *harness) teardown(stopServer func()) {
+	if h.stopBackground != nil {
+		h.stopBackground()
+	}
 	if err := h.conn.Close(); err != nil {
 		h.t.Errorf("close gRPC connection returned error: %v", err)
 	}
@@ -978,6 +999,7 @@ func resolveLiveConfig(
 	databaseName string,
 	harnessID string,
 	idleTimeout time.Duration,
+	enableFileWatcher bool,
 ) config.Config {
 	t.Helper()
 
@@ -1001,10 +1023,11 @@ func resolveLiveConfig(
 		// The sandbox default sits under a temp root long enough to overflow
 		// the platform's socket path limit.
 		{name: "CLAUDE_CONTEXTD_SOCKET_PATH", value: socketPath},
-		// Background work is off so a scenario observes only what it asked for.
+		// Periodic and trigger work are off so a scenario observes only what it
+		// asked for. The watcher harness enables only the file watcher.
 		{name: "CLAUDE_CONTEXT_BACKGROUND_SYNC", value: "false"},
 		{name: "CLAUDE_CONTEXT_TRIGGER_WATCHER", value: "false"},
-		{name: "CLAUDE_CONTEXT_FILE_WATCHER", value: "false"},
+		{name: "CLAUDE_CONTEXT_FILE_WATCHER", value: strconv.FormatBool(enableFileWatcher)},
 		{name: "CLAUDE_CONTEXT_DEBUG_LISTENER", value: "false"},
 		{name: "CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", value: "0"},
 		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: "1"},
