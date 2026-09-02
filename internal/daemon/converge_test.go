@@ -169,8 +169,13 @@ func TestConvergePathsRetainsPathRemovedAfterClassification(t *testing.T) {
 		},
 	}
 
+	lstatCalls := 0
 	outcome, err := manager.convergePathsWithLstat(context.Background(), codebase.ID, []string{"disappeared.go"}, nil, func(string) (os.FileInfo, error) {
-		return nil, nil
+		lstatCalls++
+		if lstatCalls == 1 {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
 	})
 	if err != nil {
 		t.Fatalf("convergePathsWithLstat: %v", err)
@@ -238,6 +243,94 @@ func TestClassifyConvergePathsRejectsNonAbsenceError(t *testing.T) {
 	}
 	if !bytes.Equal(afterBytes, checkpointBytes) {
 		t.Fatal("checkpoint changed after classification failure")
+	}
+}
+
+func TestConvergePathsPropagatesPostclassificationLstatError(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	writeSyntheticSnapshot(t, manager, codebase, 1)
+	checkpointPath := manager.snapshotPathForCodebase(codebase)
+	checkpointBytes, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatalf("ReadFile checkpoint: %v", err)
+	}
+
+	var indexOneCalls atomic.Int32
+	manager.runner = fakeRunner{
+		indexOne: func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error) {
+			indexOneCalls.Add(1)
+			return indexer.OneFileResult{}, nil
+		},
+	}
+	var reindexCalls atomic.Int32
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			reindexCalls.Add(1)
+			return nil
+		},
+	}
+
+	lstatCalls := 0
+	_, err = manager.convergePathsWithLstat(context.Background(), codebase.ID, []string{"f000.go"}, nil, func(string) (os.FileInfo, error) {
+		lstatCalls++
+		if lstatCalls == 1 {
+			return nil, nil
+		}
+		return nil, os.ErrPermission
+	})
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v, want permission error", err)
+	}
+	if lstatCalls != 2 {
+		t.Fatalf("Lstat calls = %d, want 2 for post-classification failure", lstatCalls)
+	}
+	if got := indexOneCalls.Load(); got != 0 {
+		t.Fatalf("IndexOne calls = %d, want 0 after post-classification stat failure", got)
+	}
+	if got := reindexCalls.Load(); got != 0 {
+		t.Fatalf("Reindex calls = %d, want 0 after post-classification stat failure", got)
+	}
+	afterBytes, readErr := os.ReadFile(checkpointPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile checkpoint after post-classification failure: %v", readErr)
+	}
+	if !bytes.Equal(afterBytes, checkpointBytes) {
+		t.Fatal("checkpoint changed after post-classification failure")
+	}
+}
+
+func TestConvergePathsPropagatesIndexOneError(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	codebase := seedConvergeCodebase(t, manager, repoPath)
+	manager.semantic = &fakeSemantic{
+		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
+			return nil
+		},
+	}
+	manager.runner = fakeRunner{
+		indexOne: func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error) {
+			return indexer.OneFileResult{}, os.ErrPermission
+		},
+	}
+
+	lstatCalls := 0
+	_, err := manager.convergePathsWithLstat(context.Background(), codebase.ID, []string{"unreadable.go"}, nil, func(string) (os.FileInfo, error) {
+		lstatCalls++
+		if lstatCalls == 1 {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
+	})
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v, want permission error", err)
+	}
+	if lstatCalls != 2 {
+		t.Fatalf("Lstat calls = %d, want 2 for post-classification index failure", lstatCalls)
 	}
 }
 
@@ -447,6 +540,11 @@ func TestCompletedWatcherConvergeKeepsDegradedDependency(t *testing.T) {
 
 	manager, cfg, repoPath := newTestManager(t)
 	codebase := seedConvergeCodebase(t, manager, repoPath)
+	codebase.LiveFileTotal = 91
+	codebase.LiveChunkTotal = 92
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.mu.Unlock()
 	manager.semantic = &fakeSemantic{
 		reindex: func(context.Context, string, []model.StoredChunk, []string) error {
 			return nil
@@ -476,6 +574,12 @@ func TestCompletedWatcherConvergeKeepsDegradedDependency(t *testing.T) {
 	}
 	if !manager.DependencyHealth().Degraded() {
 		t.Fatal("completed converge cleared the degraded dependency banner")
+	}
+	manager.mu.Lock()
+	updatedCodebase := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if updatedCodebase.LiveFileTotal != codebase.LiveFileTotal || updatedCodebase.LiveChunkTotal != codebase.LiveChunkTotal {
+		t.Fatalf("live totals = %d files, %d chunks; want %d files, %d chunks", updatedCodebase.LiveFileTotal, updatedCodebase.LiveChunkTotal, codebase.LiveFileTotal, codebase.LiveChunkTotal)
 	}
 }
 

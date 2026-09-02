@@ -112,7 +112,11 @@ func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID s
 			}
 			continue
 		}
-		if converged := manager.convergeOnePath(ctx, codebase, classifiedPath.RelativePath, &snapshot, admission); converged {
+		converged, convergeErr := manager.convergeOnePath(ctx, codebase, classifiedPath.RelativePath, &snapshot, admission, lstat)
+		if convergeErr != nil {
+			return outcome, convergeErr
+		}
+		if converged {
 			changed = true
 			outcome.PathsConverged++
 		}
@@ -132,8 +136,8 @@ func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID s
 }
 
 // convergeOnePath converges a single path against the snapshot and
-// returns true when the snapshot was mutated. Errors are logged and
-// swallowed so one bad path does not abort the batch.
+// returns true when the snapshot was mutated. Non-absence filesystem and
+// indexing errors stop the batch before it reports a successful completion.
 //
 // The decision routine:
 //
@@ -149,7 +153,7 @@ func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID s
 // InodeTrackingDisabled on the codebase short-circuits steps 3 and the
 // inode-stamp branch so unstable-inode filesystems still converge
 // correctly using path + content-hash identity.
-func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Codebase, relativePath string, snapshot *merkle.Snapshot, admission *admissionState) bool {
+func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Codebase, relativePath string, snapshot *merkle.Snapshot, admission *admissionState, lstat convergeLstatFunc) (bool, error) {
 	root := codebase.CanonicalPath
 	cfg := codebase.EffectiveConfig
 
@@ -161,21 +165,22 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 	// os.Lstat does not follow symlinks, so a symlink is seen as non-regular and
 	// rejected by the resolver's ReasonNotRegular gate rather than indexed as its
 	// target.
-	if info, statErr := os.Lstat(filepath.Join(root, relativePath)); statErr == nil {
+	if info, statErr := lstat(filepath.Join(root, relativePath)); statErr == nil {
 		if decision := manager.indexability.Decide(ctx, codebase.ID, root, relativePath, info); !decision.Indexed {
-			return manager.convergeRemoveExcluded(ctx, root, relativePath, string(decision.Reason), snapshot)
+			return manager.convergeRemoveExcluded(ctx, root, relativePath, string(decision.Reason), snapshot), nil
 		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return false, fmt.Errorf("lstat converge path %q: %w", relativePath, statErr)
 	}
 	fileResult, indexErr := manager.runner.IndexOne(ctx, manager.indexability, codebase.ID, root, relativePath, cfg)
 	if indexErr != nil {
-		slog.ErrorContext(ctx, "converge.index_failed", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", indexErr)
-		return false
+		return false, fmt.Errorf("index converge path %q: %w", relativePath, indexErr)
 	}
 	if fileResult.Removed {
-		return false
+		return false, nil
 	}
 	if fileResult.Skipped {
-		return false
+		return false, nil
 	}
 
 	currentInode := stampInodeForPath(ctx, codebase, root, relativePath)
@@ -184,28 +189,28 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 		// Same content; sidecar stamp only.
 		if shouldUpdateInodeStamp(snapshot, relativePath, currentInode) {
 			snapshot.RecordInode(relativePath, currentInode)
-			return true
+			return true, nil
 		}
-		return false
+		return false, nil
 	}
 
 	if !previouslyTracked && manager.tryRenameCopy(ctx, root, relativePath, currentInode, fileResult.FileHash, snapshot) {
-		return true
+		return true, nil
 	}
 
 	if admissionErr := admission.Admit(fileResult.Chunks); admissionErr != nil {
 		slog.WarnContext(ctx, "converge.admission_halt", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", admissionErr)
-		return false
+		return false, nil
 	}
 	if upErr := manager.semantic.Reindex(ctx, root, fileResult.Chunks, semantic.RemovePaths([]string{relativePath}), nil, nil, semantic.StoreColumnSetCode); upErr != nil {
 		manager.logConvergeReindexErr(ctx, relativePath, "upsert", upErr)
-		return false
+		return false, nil
 	}
 	snapshot.Files[relativePath] = fileResult.FileHash
 	snapshot.RecordInode(relativePath, currentInode)
 	metrics.ConvergeUpsert()
 	slog.InfoContext(ctx, "converge.upsert", "component", "daemon", "subcomponent", "converge", "path", relativePath, "chunks", len(fileResult.Chunks))
-	return true
+	return true, nil
 }
 
 // convergeRemoveExcluded removes a path the indexability resolver declined and
