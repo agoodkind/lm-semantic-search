@@ -156,6 +156,190 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 	}
 }
 
+func TestDuplicateLegacyCorpusReuseImmutabilitySmoke(t *testing.T) {
+	const (
+		duplicateRowCount = 16384
+		vectorDimension   = 4096
+	)
+
+	harness := newHarness(t)
+	embeddingRecorder := &embeddingCallRecorder{}
+	embedServer := newFakeEmbeddingServerWithRecorder(
+		t,
+		nil,
+		vectorDimension,
+		embeddingRecorder,
+	)
+	lookupConfig := harness.childConfig()
+	lookupConfig.OpenAIBaseURL = embedServer.URL
+	lookupConfig.EmbeddingDimension = vectorDimension
+	service, err := semantic.NewService(harness.milvusContext, lookupConfig)
+	if err != nil {
+		t.Fatalf("open 4096-dimension semantic service: %v", err)
+	}
+	t.Cleanup(func() { _ = service.Close(context.Background()) })
+
+	sourcePath := filepath.Join(harness.stateRoot, "duplicate-legacy-"+randomID())
+	collectionName := service.CollectionName(sourcePath)
+	catalogName := semantic.ReuseCatalogCollectionName(lookupConfig)
+	harness.trackCollectionFamily(collectionName)
+	harness.trackTemporaryCollection(catalogName)
+	schemaSeedContent := "duplicate legacy schema seed"
+	if err := service.StageReindex(
+		context.Background(),
+		sourcePath,
+		[]model.StoredChunk{{Content: schemaSeedContent, RelativePath: "seed.txt"}},
+		semantic.Removal{},
+		nil,
+		map[string][]float32{},
+		semantic.StoreColumnSetCode,
+	); err != nil {
+		t.Fatalf("stage duplicate legacy source: %v", err)
+	}
+	if err := service.PromoteStaging(context.Background(), sourcePath); err != nil {
+		t.Fatalf("promote duplicate legacy source: %v", err)
+	}
+
+	duplicateContent := "duplicate legacy transport sentinel"
+	firstControlContent := "unique legacy control one"
+	secondControlContent := "unique legacy control two"
+	duplicateVector := markedVector(vectorDimension, 1, 2)
+	firstControlVector := markedVector(vectorDimension, 3, 4)
+	secondControlVector := markedVector(vectorDimension, 5, 6)
+	fixtureRows := makeDuplicateLegacyRows(
+		duplicateRowCount,
+		duplicateContent,
+		duplicateVector,
+		[]legacyReuseFixtureRow{
+			{
+				id:            "legacy-control-one-" + randomID(),
+				content:       firstControlContent,
+				relativePath:  "legacy/control/one",
+				startLine:     1,
+				endLine:       2,
+				fileExtension: "txt",
+				metadata:      `{"control":1}`,
+				vector:        firstControlVector,
+			},
+			{
+				id:            "legacy-control-two-" + randomID(),
+				content:       secondControlContent,
+				relativePath:  "legacy/control/two",
+				startLine:     3,
+				endLine:       4,
+				fileExtension: "md",
+				metadata:      `{"control":2}`,
+				vector:        secondControlVector,
+			},
+		},
+	)
+	insertLegacyRows(t, harness, collectionName, fixtureRows)
+
+	fixtureIDs := make([]string, 0, len(fixtureRows))
+	for _, row := range fixtureRows {
+		fixtureIDs = append(fixtureIDs, row.id)
+	}
+	rowCountBefore := collectionRowCount(t, harness, collectionName)
+	wantRowCount := int64(len(fixtureIDs) + 1)
+	if rowCountBefore != wantRowCount {
+		t.Fatalf("source row count before lookup = %d, want %d", rowCountBefore, wantRowCount)
+	}
+	rowsBefore := snapshotsForIDs(t, harness, collectionName, fixtureIDs)
+	rowsBefore = append(
+		rowsBefore,
+		snapshotsForContent(t, harness, collectionName, schemaSeedContent)...,
+	)
+	slices.SortFunc(rowsBefore, compareStoredRowSnapshots)
+	if len(rowsBefore) != int(wantRowCount) {
+		t.Fatalf("source snapshots before lookup = %d, want %d", len(rowsBefore), wantRowCount)
+	}
+	catalogBefore := reuseCatalogSnapshots(t, harness, catalogName)
+	embeddingCallsBefore := len(embeddingRecorder.snapshot())
+	harness.callRecorder.reset()
+
+	requestedContents := []string{
+		duplicateContent,
+		firstControlContent,
+		secondControlContent,
+	}
+	requestedChunks := make([]model.StoredChunk, 0, len(requestedContents))
+	for _, content := range requestedContents {
+		requestedChunks = append(requestedChunks, model.StoredChunk{Content: content})
+	}
+	expectedVectors := map[string][]float32{
+		duplicateContent:     duplicateVector,
+		firstControlContent:  firstControlVector,
+		secondControlContent: secondControlVector,
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		reuse, loadErr := service.LoadReuseVectorsForContents(
+			context.Background(),
+			collectionName,
+			requestedChunks,
+		)
+		if loadErr != nil {
+			t.Fatalf("load duplicate legacy reuse attempt %d: %v", attempt, loadErr)
+		}
+		if len(reuse) != len(requestedContents) {
+			t.Fatalf(
+				"reuse vectors on attempt %d = %d, want %d",
+				attempt,
+				len(reuse),
+				len(requestedContents),
+			)
+		}
+		for content, expectedVector := range expectedVectors {
+			actualVector, found := reuse[semantic.ContentVectorKey(content)]
+			if !found {
+				t.Fatalf("reuse attempt %d omitted %q", attempt, content)
+			}
+			if !slices.Equal(actualVector, expectedVector) {
+				t.Fatalf(
+					"reuse attempt %d vector for %q has SHA-256 %s, want %s",
+					attempt,
+					content,
+					checksumVector(entity.FloatVector(actualVector)),
+					checksumVector(entity.FloatVector(expectedVector)),
+				)
+			}
+		}
+	}
+
+	rowCountAfter := collectionRowCount(t, harness, collectionName)
+	rowsAfter := snapshotsForIDs(t, harness, collectionName, fixtureIDs)
+	rowsAfter = append(
+		rowsAfter,
+		snapshotsForContent(t, harness, collectionName, schemaSeedContent)...,
+	)
+	slices.SortFunc(rowsAfter, compareStoredRowSnapshots)
+	catalogAfter := reuseCatalogSnapshots(t, harness, catalogName)
+	if rowCountAfter != rowCountBefore {
+		t.Fatalf("source row count changed: before=%d after=%d", rowCountBefore, rowCountAfter)
+	}
+	if !slices.Equal(rowsAfter, rowsBefore) {
+		t.Fatal("source scalar fields or vector SHA-256 hashes changed during reuse lookup")
+	}
+	if !slices.Equal(catalogAfter, catalogBefore) {
+		t.Fatalf("reuse catalog changed: before=%+v after=%+v", catalogBefore, catalogAfter)
+	}
+	if embeddingCallsAfter := len(embeddingRecorder.snapshot()); embeddingCallsAfter != embeddingCallsBefore {
+		t.Fatalf(
+			"embedding calls changed during lookup: before=%d after=%d",
+			embeddingCallsBefore,
+			embeddingCallsAfter,
+		)
+	}
+	assertNoMilvusWrites(t, harness.callRecorder.snapshot())
+	t.Logf(
+		"duplicate_rows=%d vector_dimension=%d source_rows=%d catalog_rows=%d duplicate_vector_sha256=%s",
+		duplicateRowCount,
+		vectorDimension,
+		rowCountAfter,
+		len(catalogAfter),
+		checksumVector(entity.FloatVector(duplicateVector)),
+	)
+}
+
 func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	harness := newHarness(t)
 	seed := harness.upsert(
@@ -608,6 +792,112 @@ func TestUnknownConfiguredDimensionScopesCatalogByReturnedVectorWidth(t *testing
 	}
 }
 
+type legacyReuseFixtureRow struct {
+	id            string
+	content       string
+	relativePath  string
+	startLine     int64
+	endLine       int64
+	fileExtension string
+	metadata      string
+	vector        []float32
+}
+
+func markedVector(dimension int, first float32, last float32) []float32 {
+	vector := make([]float32, dimension)
+	vector[0] = first
+	vector[len(vector)-1] = last
+	return vector
+}
+
+func makeDuplicateLegacyRows(
+	duplicateCount int,
+	content string,
+	vector []float32,
+	controls []legacyReuseFixtureRow,
+) []legacyReuseFixtureRow {
+	rows := make([]legacyReuseFixtureRow, 0, duplicateCount+len(controls))
+	for index := range duplicateCount {
+		rows = append(rows, legacyReuseFixtureRow{
+			id:            fmt.Sprintf("legacy-duplicate-%05d", index),
+			content:       content,
+			relativePath:  fmt.Sprintf("legacy/duplicate/%05d", index),
+			startLine:     int64(index),
+			endLine:       int64(index + 1),
+			fileExtension: "txt",
+			metadata:      fmt.Sprintf(`{"duplicate":%d}`, index),
+			vector:        vector,
+		})
+	}
+	return append(rows, controls...)
+}
+
+func insertLegacyRows(
+	t *testing.T,
+	harness *harness,
+	collectionName string,
+	rows []legacyReuseFixtureRow,
+) {
+	t.Helper()
+	const insertBatchSize = 128
+	for batchStart := 0; batchStart < len(rows); batchStart += insertBatchSize {
+		batchEnd := min(batchStart+insertBatchSize, len(rows))
+		batch := rows[batchStart:batchEnd]
+		ids := make([]string, 0, len(batch))
+		contents := make([]string, 0, len(batch))
+		relativePaths := make([]string, 0, len(batch))
+		startLines := make([]int64, 0, len(batch))
+		endLines := make([]int64, 0, len(batch))
+		fileExtensions := make([]string, 0, len(batch))
+		metadata := make([]string, 0, len(batch))
+		vectors := make([][]float32, 0, len(batch))
+		for _, row := range batch {
+			ids = append(ids, row.id)
+			contents = append(contents, row.content)
+			relativePaths = append(relativePaths, row.relativePath)
+			startLines = append(startLines, row.startLine)
+			endLines = append(endLines, row.endLine)
+			fileExtensions = append(fileExtensions, row.fileExtension)
+			metadata = append(metadata, row.metadata)
+			vectors = append(vectors, row.vector)
+		}
+		result, err := harness.milvus.Insert(
+			context.Background(),
+			milvusclient.NewColumnBasedInsertOption(collectionName).
+				WithVarcharColumn("id", ids).
+				WithVarcharColumn("content", contents).
+				WithVarcharColumn("relativePath", relativePaths).
+				WithInt64Column("startLine", startLines).
+				WithInt64Column("endLine", endLines).
+				WithVarcharColumn("fileExtension", fileExtensions).
+				WithVarcharColumn("metadata", metadata).
+				WithFloatVectorColumn("vector", len(batch[0].vector), vectors),
+		)
+		if err != nil {
+			t.Fatalf("insert legacy rows %d:%d: %v", batchStart, batchEnd, err)
+		}
+		if result.InsertCount != int64(len(batch)) {
+			t.Fatalf(
+				"insert legacy rows %d:%d count = %d, want %d",
+				batchStart,
+				batchEnd,
+				result.InsertCount,
+				len(batch),
+			)
+		}
+	}
+	flushTask, err := harness.milvus.Flush(
+		context.Background(),
+		milvusclient.NewFlushOption(collectionName),
+	)
+	if err != nil {
+		t.Fatalf("flush duplicate legacy rows: %v", err)
+	}
+	if err := flushTask.Await(context.Background()); err != nil {
+		t.Fatalf("await duplicate legacy row flush: %v", err)
+	}
+}
+
 func insertLegacyRow(
 	t *testing.T,
 	harness *harness,
@@ -660,6 +950,58 @@ type storedRowSnapshot struct {
 	embeddingModel      string
 	embeddingModelKnown bool
 	vectorChecksum      string
+}
+
+func compareStoredRowSnapshots(left storedRowSnapshot, right storedRowSnapshot) int {
+	return strings.Compare(left.id, right.id)
+}
+
+func collectionRowCount(t *testing.T, harness *harness, collectionName string) int64 {
+	t.Helper()
+	result, err := harness.milvus.Query(
+		context.Background(),
+		milvusclient.NewQueryOption(collectionName).
+			WithOutputFields(countOutputField).
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		t.Fatalf("count rows in %s: %v", collectionName, err)
+	}
+	countColumn := result.GetColumn(countOutputField)
+	if countColumn == nil {
+		t.Fatalf("row count query for %s returned no count column", collectionName)
+	}
+	count, err := countColumn.GetAsInt64(0)
+	if err != nil {
+		t.Fatalf("read row count for %s: %v", collectionName, err)
+	}
+	return count
+}
+
+func snapshotsForIDs(
+	t *testing.T,
+	harness *harness,
+	collectionName string,
+	ids []string,
+) []storedRowSnapshot {
+	t.Helper()
+	const snapshotBatchSize = 64
+	rows := make([]storedRowSnapshot, 0, len(ids))
+	for batchStart := 0; batchStart < len(ids); batchStart += snapshotBatchSize {
+		batchEnd := min(batchStart+snapshotBatchSize, len(ids))
+		quotedIDs := make([]string, 0, batchEnd-batchStart)
+		for _, id := range ids[batchStart:batchEnd] {
+			quotedIDs = append(quotedIDs, `"`+strings.ReplaceAll(id, `"`, `\"`)+`"`)
+		}
+		rows = append(rows, queryRowSnapshots(
+			t,
+			harness,
+			collectionName,
+			"id in ["+strings.Join(quotedIDs, ",")+"]",
+		)...)
+	}
+	slices.SortFunc(rows, compareStoredRowSnapshots)
+	return rows
 }
 
 func snapshotRow(
@@ -794,10 +1136,94 @@ func queryRowSnapshots(
 			vectorChecksum:      checksumVector(vector),
 		})
 	}
-	slices.SortFunc(rows, func(left storedRowSnapshot, right storedRowSnapshot) int {
-		return strings.Compare(left.id, right.id)
+	slices.SortFunc(rows, compareStoredRowSnapshots)
+	return rows
+}
+
+type reuseCatalogSnapshot struct {
+	catalogKey          string
+	contentHash         string
+	embeddingModel      string
+	embeddingModelKnown bool
+	vectorChecksum      string
+}
+
+func reuseCatalogSnapshots(
+	t *testing.T,
+	harness *harness,
+	collectionName string,
+) []reuseCatalogSnapshot {
+	t.Helper()
+	result, err := harness.milvus.Query(
+		context.Background(),
+		milvusclient.NewQueryOption(collectionName).
+			WithFilter(`catalogKey != ""`).
+			WithOutputFields("catalogKey", "contentHash", "embeddingModel", "vector").
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		t.Fatalf("snapshot reuse catalog %s: %v", collectionName, err)
+	}
+	catalogKeyColumn := result.GetColumn("catalogKey")
+	contentHashColumn := result.GetColumn("contentHash")
+	embeddingModelColumn := result.GetColumn("embeddingModel")
+	vectorColumn := result.GetColumn("vector")
+	if catalogKeyColumn == nil || contentHashColumn == nil || vectorColumn == nil {
+		t.Fatal("reuse catalog snapshot query omitted a required column")
+	}
+	rows := make([]reuseCatalogSnapshot, 0, result.ResultCount)
+	for rowIndex := range result.ResultCount {
+		catalogKey, catalogKeyErr := catalogKeyColumn.GetAsString(rowIndex)
+		if catalogKeyErr != nil {
+			t.Fatalf("read reuse catalog key at %d: %v", rowIndex, catalogKeyErr)
+		}
+		contentHash, contentHashErr := contentHashColumn.GetAsString(rowIndex)
+		if contentHashErr != nil {
+			t.Fatalf("read reuse catalog hash at %d: %v", rowIndex, contentHashErr)
+		}
+		embeddingModel, embeddingModelKnown := nullableSnapshotString(
+			t,
+			embeddingModelColumn,
+			rowIndex,
+		)
+		vectorValue, vectorErr := vectorColumn.Get(rowIndex)
+		if vectorErr != nil {
+			t.Fatalf("read reuse catalog vector at %d: %v", rowIndex, vectorErr)
+		}
+		vector, ok := vectorValue.(entity.FloatVector)
+		if !ok {
+			t.Fatalf("reuse catalog vector at %d has type %T", rowIndex, vectorValue)
+		}
+		rows = append(rows, reuseCatalogSnapshot{
+			catalogKey:          catalogKey,
+			contentHash:         contentHash,
+			embeddingModel:      embeddingModel,
+			embeddingModelKnown: embeddingModelKnown,
+			vectorChecksum:      checksumVector(vector),
+		})
+	}
+	slices.SortFunc(rows, func(left reuseCatalogSnapshot, right reuseCatalogSnapshot) int {
+		return strings.Compare(left.catalogKey, right.catalogKey)
 	})
 	return rows
+}
+
+func assertNoMilvusWrites(t *testing.T, calls []milvusCall) {
+	t.Helper()
+	for _, call := range calls {
+		if !protectedMilvusCall(call.method) {
+			continue
+		}
+		if call.method == "LoadCollection" || call.method == "ReleaseCollection" {
+			continue
+		}
+		t.Fatalf(
+			"reuse lookup issued Milvus write %s against %v from %s",
+			call.method,
+			call.collectionNames,
+			call.caller,
+		)
+	}
 }
 
 func nullableSnapshotString(
