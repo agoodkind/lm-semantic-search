@@ -8,7 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
@@ -16,6 +18,8 @@ import (
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -47,6 +51,39 @@ type reuseLookupServer struct {
 	queryErr      error
 	getErr        error
 	getResponse   func([]string, []reuseLookupRow) *milvuspb.QueryResults
+	mutationCalls atomic.Int32
+}
+
+type reuseLookupCountingEmbedder struct {
+	calls atomic.Int32
+}
+
+func (embedder *reuseLookupCountingEmbedder) Embed(
+	context.Context,
+	string,
+) ([]float32, error) {
+	embedder.calls.Add(1)
+	return make([]float32, reuseLookupTestDimension), nil
+}
+
+func (embedder *reuseLookupCountingEmbedder) EmbedBatch(
+	context.Context,
+	[]string,
+) (embedding.BatchResult, error) {
+	embedder.calls.Add(1)
+	return embedding.BatchResult{}, nil
+}
+
+func (*reuseLookupCountingEmbedder) ProviderName() model.EmbeddingProvider {
+	return "reuse-lookup-counting"
+}
+
+func (*reuseLookupCountingEmbedder) Health(context.Context) error {
+	return nil
+}
+
+func (embedder *reuseLookupCountingEmbedder) callCount() int32 {
+	return embedder.calls.Load()
 }
 
 func (server *reuseLookupServer) Connect(
@@ -63,6 +100,14 @@ func (server *reuseLookupServer) DescribeCollection(
 	_ context.Context,
 	request *milvuspb.DescribeCollectionRequest,
 ) (*milvuspb.DescribeCollectionResponse, error) {
+	if strings.HasPrefix(request.GetCollectionName(), reuseCatalogCollectionPrefix) {
+		return &milvuspb.DescribeCollectionResponse{
+			Status: &commonpb.Status{
+				ErrorCode: commonpb.ErrorCode_CollectionNotExists,
+				Reason:    "collection not found",
+			},
+		}, nil
+	}
 	return &milvuspb.DescribeCollectionResponse{
 		Status:         reuseLookupSuccessStatus(),
 		CollectionName: request.GetCollectionName(),
@@ -81,6 +126,44 @@ func (server *reuseLookupServer) DescribeCollection(
 			},
 		}},
 	}, nil
+}
+
+func (*reuseLookupServer) HasCollection(
+	_ context.Context,
+	request *milvuspb.HasCollectionRequest,
+) (*milvuspb.BoolResponse, error) {
+	return &milvuspb.BoolResponse{
+		Status: reuseLookupSuccessStatus(),
+		Value:  !strings.HasPrefix(request.GetCollectionName(), reuseCatalogCollectionPrefix),
+	}, nil
+}
+
+func (server *reuseLookupServer) Insert(
+	context.Context,
+	*milvuspb.InsertRequest,
+) (*milvuspb.MutationResult, error) {
+	server.mutationCalls.Add(1)
+	return &milvuspb.MutationResult{Status: reuseLookupSuccessStatus()}, nil
+}
+
+func (server *reuseLookupServer) Delete(
+	context.Context,
+	*milvuspb.DeleteRequest,
+) (*milvuspb.MutationResult, error) {
+	server.mutationCalls.Add(1)
+	return &milvuspb.MutationResult{Status: reuseLookupSuccessStatus()}, nil
+}
+
+func (server *reuseLookupServer) Upsert(
+	context.Context,
+	*milvuspb.UpsertRequest,
+) (*milvuspb.MutationResult, error) {
+	server.mutationCalls.Add(1)
+	return &milvuspb.MutationResult{Status: reuseLookupSuccessStatus()}, nil
+}
+
+func (server *reuseLookupServer) mutationCallCount() int32 {
+	return server.mutationCalls.Load()
 }
 
 func (server *reuseLookupServer) Query(
@@ -360,6 +443,37 @@ func newReuseLookupTestService(t *testing.T, rows []reuseLookupRow) (*Service, *
 	}, server
 }
 
+func newPublicReuseLookupTestService(
+	t *testing.T,
+	rows []reuseLookupRow,
+) (*Service, *reuseLookupServer, *reuseLookupCountingEmbedder) {
+	t.Helper()
+	service, server := newReuseLookupTestService(t, rows)
+	embedder := &reuseLookupCountingEmbedder{}
+	service.embedder = embedder
+	service.available.Store(true)
+	reuseIdentity := &reuseIdentityMigration{}
+	reuseIdentity.once.Do(func() {})
+	service.ensuredReuseIdentityColumns.Store("reuse_source", reuseIdentity)
+	service.residency = newCollectionResidencyController(residencyControllerConfig{
+		waitTimeout: time.Second,
+		idleTimeout: time.Minute,
+		loadCeiling: time.Second,
+		load: func(context.Context, string) error {
+			return nil
+		},
+		unload: func(context.Context, string) error {
+			return nil
+		},
+	})
+	t.Cleanup(func() {
+		if err := service.residency.Close(context.Background()); err != nil {
+			t.Errorf("close reuse lookup residency controller: %v", err)
+		}
+	})
+	return service, server, embedder
+}
+
 func loadReuseLookupRows(t *testing.T, service *Service, contents []string) map[string][]float32 {
 	t.Helper()
 	contentsByHash := make(map[string]string, len(contents))
@@ -633,6 +747,60 @@ func TestReuseSelectedRowValidation(t *testing.T) {
 			}
 			if len(reuse) != 0 {
 				t.Fatalf("reuse vectors = %d, want none after validation failure", len(reuse))
+			}
+		})
+	}
+}
+
+func TestReuseReadErrorHasNoSideEffects(t *testing.T) {
+	content := "error boundary content"
+	row := reuseLookupRow{
+		id:             "selected",
+		content:        content,
+		contentHash:    ptr(contentHash(content)),
+		embeddingModel: ptr("current-model"),
+	}
+	tests := []struct {
+		name      string
+		configure func(*reuseLookupServer)
+		wantText  string
+	}{
+		{
+			name: "scalar Query",
+			configure: func(server *reuseLookupServer) {
+				server.queryErr = status.Error(codes.Unavailable, "authoritative query failure")
+			},
+			wantText: "authoritative query failure",
+		},
+		{
+			name: "selected Get",
+			configure: func(server *reuseLookupServer) {
+				server.getErr = status.Error(codes.Unavailable, "authoritative get failure")
+			},
+			wantText: "authoritative get failure",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, server, embedder := newPublicReuseLookupTestService(t, []reuseLookupRow{row})
+			testCase.configure(server)
+
+			reuse, err := service.LoadReuseVectorsForContents(
+				context.Background(),
+				"reuse_source",
+				[]model.StoredChunk{{Content: content}},
+			)
+			if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), testCase.wantText) {
+				t.Fatalf("LoadReuseVectorsForContents error = %v, want unavailable %q", err, testCase.wantText)
+			}
+			if reuse != nil {
+				t.Fatalf("reuse = %v, want nil on authoritative read error", reuse)
+			}
+			if embedder.callCount() != 0 {
+				t.Fatalf("embedding calls = %d, want 0", embedder.callCount())
+			}
+			if server.mutationCallCount() != 0 {
+				t.Fatalf("Milvus mutation calls = %d, want 0", server.mutationCallCount())
 			}
 		})
 	}
