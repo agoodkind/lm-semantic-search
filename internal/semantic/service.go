@@ -109,6 +109,7 @@ type Service struct {
 	reuseCatalogReady       sync.Map
 	reuseCatalogMutex       sync.Mutex
 	reuseCatalogAppendMutex sync.Mutex
+	reuseVectorDimensions   sync.Map
 	// collectionLoads collapses concurrent initial load, wait, and recovery work
 	// for the same collection name into one shared flight.
 	collectionLoads collectionLoadCoordinator
@@ -153,6 +154,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			reuseCatalogReady:       sync.Map{},
 			reuseCatalogMutex:       sync.Mutex{},
 			reuseCatalogAppendMutex: sync.Mutex{},
+			reuseVectorDimensions:   sync.Map{},
 			collectionLoads: collectionLoadCoordinator{
 				mutex:   sync.Mutex{},
 				flights: nil,
@@ -192,6 +194,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		reuseCatalogReady:       sync.Map{},
 		reuseCatalogMutex:       sync.Mutex{},
 		reuseCatalogAppendMutex: sync.Mutex{},
+		reuseVectorDimensions:   sync.Map{},
 		collectionLoads: collectionLoadCoordinator{
 			mutex:   sync.Mutex{},
 			flights: nil,
@@ -355,6 +358,7 @@ func (service *Service) invalidateCollectionCaches(collectionName string) {
 	service.ensuredConvColumns.Delete(collectionName)
 	service.ensuredSplitPartColumns.Delete(collectionName)
 	service.ensuredReuseIdentityColumns.Delete(collectionName)
+	service.reuseVectorDimensions.Delete(collectionName)
 	service.invalidateMmapPolicy(collectionName)
 	service.ensuredBackfill.Delete(collectionName)
 }

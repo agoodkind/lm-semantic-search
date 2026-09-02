@@ -44,14 +44,18 @@ type reuseLookupRow struct {
 type reuseLookupServer struct {
 	milvuspb.UnimplementedMilvusServiceServer
 
-	mutex         sync.Mutex
-	rows          []reuseLookupRow
-	requests      []recordedReuseRequest
-	consistencies []commonpb.ConsistencyLevel
-	queryErr      error
-	getErr        error
-	getResponse   func([]string, []reuseLookupRow) *milvuspb.QueryResults
-	mutationCalls atomic.Int32
+	mutex                sync.Mutex
+	rows                 []reuseLookupRow
+	requests             []recordedReuseRequest
+	consistencies        []commonpb.ConsistencyLevel
+	queryErr             error
+	getErr               error
+	getResponse          func([]string, []reuseLookupRow) *milvuspb.QueryResults
+	describeResponse     func(*milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error)
+	describeCalls        atomic.Int32
+	catalogDescribeCalls atomic.Int32
+	mutationCalls        atomic.Int32
+	schemaMutationCalls  atomic.Int32
 }
 
 type reuseLookupCountingEmbedder struct {
@@ -101,12 +105,17 @@ func (server *reuseLookupServer) DescribeCollection(
 	request *milvuspb.DescribeCollectionRequest,
 ) (*milvuspb.DescribeCollectionResponse, error) {
 	if strings.HasPrefix(request.GetCollectionName(), reuseCatalogCollectionPrefix) {
+		server.catalogDescribeCalls.Add(1)
 		return &milvuspb.DescribeCollectionResponse{
 			Status: &commonpb.Status{
 				ErrorCode: commonpb.ErrorCode_CollectionNotExists,
 				Reason:    "collection not found",
 			},
 		}, nil
+	}
+	server.describeCalls.Add(1)
+	if server.describeResponse != nil {
+		return server.describeResponse(request)
 	}
 	return &milvuspb.DescribeCollectionResponse{
 		Status:         reuseLookupSuccessStatus(),
@@ -164,6 +173,50 @@ func (server *reuseLookupServer) Upsert(
 
 func (server *reuseLookupServer) mutationCallCount() int32 {
 	return server.mutationCalls.Load()
+}
+
+func (server *reuseLookupServer) describeCallCount() int32 {
+	return server.describeCalls.Load()
+}
+
+func (server *reuseLookupServer) catalogDescribeCallCount() int32 {
+	return server.catalogDescribeCalls.Load()
+}
+
+func (server *reuseLookupServer) schemaMutationCallCount() int32 {
+	return server.schemaMutationCalls.Load()
+}
+
+func (server *reuseLookupServer) CreateCollection(
+	context.Context,
+	*milvuspb.CreateCollectionRequest,
+) (*commonpb.Status, error) {
+	server.schemaMutationCalls.Add(1)
+	return reuseLookupSuccessStatus(), nil
+}
+
+func (server *reuseLookupServer) DropCollection(
+	context.Context,
+	*milvuspb.DropCollectionRequest,
+) (*commonpb.Status, error) {
+	server.schemaMutationCalls.Add(1)
+	return reuseLookupSuccessStatus(), nil
+}
+
+func (server *reuseLookupServer) AddCollectionField(
+	context.Context,
+	*milvuspb.AddCollectionFieldRequest,
+) (*commonpb.Status, error) {
+	server.schemaMutationCalls.Add(1)
+	return reuseLookupSuccessStatus(), nil
+}
+
+func (server *reuseLookupServer) CreateIndex(
+	context.Context,
+	*milvuspb.CreateIndexRequest,
+) (*commonpb.Status, error) {
+	server.schemaMutationCalls.Add(1)
+	return reuseLookupSuccessStatus(), nil
 }
 
 func (server *reuseLookupServer) Query(
@@ -407,6 +460,17 @@ func reuseLookupQueryResults(outputFields []string, rows []reuseLookupRow) *milv
 
 func reuseLookupSuccessStatus() *commonpb.Status {
 	return &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}
+}
+
+func reuseLookupDescribeResponse(
+	request *milvuspb.DescribeCollectionRequest,
+	fields ...*schemapb.FieldSchema,
+) *milvuspb.DescribeCollectionResponse {
+	return &milvuspb.DescribeCollectionResponse{
+		Status:         reuseLookupSuccessStatus(),
+		CollectionName: request.GetCollectionName(),
+		Schema:         &schemapb.CollectionSchema{Fields: fields},
+	}
 }
 
 func newReuseLookupTestService(t *testing.T, rows []reuseLookupRow) (*Service, *reuseLookupServer) {
@@ -806,6 +870,288 @@ func TestReuseReadErrorHasNoSideEffects(t *testing.T) {
 	}
 }
 
+func TestLoadReuseVectorsForContentsUsesSourceSchemaDimension(t *testing.T) {
+	content := "schema dimension reuse content"
+	vector := make([]float32, reuseLookupTestDimension)
+	vector[0] = 1.25
+	vector[len(vector)-1] = -2.5
+	service, server, embedder := newPublicReuseLookupTestService(t, []reuseLookupRow{{
+		id:             "selected",
+		content:        content,
+		contentHash:    ptr(contentHash(content)),
+		embeddingModel: ptr("current-model"),
+		vector:         vector,
+	}})
+	service.cfg.EmbeddingDimension = 0
+
+	reuse, err := service.LoadReuseVectorsForContents(
+		context.Background(),
+		"reuse_source",
+		[]model.StoredChunk{{Content: content}},
+	)
+	if err != nil {
+		t.Fatalf("LoadReuseVectorsForContents: %v", err)
+	}
+	if !slices.Equal(reuse[contentVectorKey(content)], vector) {
+		t.Fatal("reused vector does not match selected source vector")
+	}
+	requests, _ := server.snapshot()
+	if ids := reuseLookupGetIDs(requests); !slices.Equal(ids, []string{"selected"}) {
+		t.Fatalf("selected vector Get IDs = %v, want selected", ids)
+	}
+	requestCounts := map[string]int{"scalar": 0, "selected": 0}
+	for _, request := range requests {
+		if len(request.IDs) == 0 {
+			requestCounts["scalar"]++
+			continue
+		}
+		requestCounts["selected"]++
+	}
+	if requestCounts["scalar"] == 0 || requestCounts["selected"] != 1 {
+		t.Fatalf("reuse requests = %v, want scalar discovery and one selected Get", requestCounts)
+	}
+	if embedder.callCount() != 0 {
+		t.Fatalf("embedding calls = %d, want 0", embedder.callCount())
+	}
+	if server.mutationCallCount() != 0 {
+		t.Fatalf("Milvus mutation calls = %d, want 0", server.mutationCallCount())
+	}
+	if server.schemaMutationCallCount() != 0 {
+		t.Fatalf("Milvus schema mutation calls = %d, want 0", server.schemaMutationCallCount())
+	}
+	if server.catalogDescribeCallCount() != 0 {
+		t.Fatalf("reuse catalog DescribeCollection calls = %d, want 0", server.catalogDescribeCallCount())
+	}
+}
+
+func TestReuseSourceDimensionErrorsAreAuthoritative(t *testing.T) {
+	content := "schema validation content"
+	row := reuseLookupRow{
+		id:             "selected",
+		content:        content,
+		contentHash:    ptr(contentHash(content)),
+		embeddingModel: ptr("current-model"),
+		vector:         make([]float32, reuseLookupTestDimension),
+	}
+	tests := []struct {
+		name                string
+		configuredDimension int32
+		describe            func(*milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error)
+		wantText            string
+	}{
+		{
+			name: "DescribeCollection error",
+			describe: func(*milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
+				return nil, status.Error(codes.Unavailable, "describe unavailable")
+			},
+			wantText: "describe unavailable",
+		},
+		{
+			name: "missing dense field",
+			describe: func(request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
+				return reuseLookupDescribeResponse(request), nil
+			},
+			wantText: "missing vector field",
+		},
+		{
+			name: "wrong field type",
+			describe: func(request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
+				return reuseLookupDescribeResponse(request, &schemapb.FieldSchema{
+					Name:     denseVectorFieldName,
+					DataType: schemapb.DataType_VarChar,
+				}), nil
+			},
+			wantText: "must be a float vector",
+		},
+		{
+			name: "missing dimension",
+			describe: func(request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
+				return reuseLookupDescribeResponse(request, &schemapb.FieldSchema{
+					Name:     denseVectorFieldName,
+					DataType: schemapb.DataType_FloatVector,
+				}), nil
+			},
+			wantText: "no dim",
+		},
+		{
+			name: "malformed dimension",
+			describe: func(request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
+				return reuseLookupDescribeResponse(request, &schemapb.FieldSchema{
+					Name:       denseVectorFieldName,
+					DataType:   schemapb.DataType_FloatVector,
+					TypeParams: []*commonpb.KeyValuePair{{Key: "dim", Value: "invalid"}},
+				}), nil
+			},
+			wantText: "bad format dim",
+		},
+		{
+			name: "zero dimension",
+			describe: func(request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
+				return reuseLookupDescribeResponse(request, &schemapb.FieldSchema{
+					Name:       denseVectorFieldName,
+					DataType:   schemapb.DataType_FloatVector,
+					TypeParams: []*commonpb.KeyValuePair{{Key: "dim", Value: "0"}},
+				}), nil
+			},
+			wantText: "must be positive: 0",
+		},
+		{
+			name: "negative dimension",
+			describe: func(request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
+				return reuseLookupDescribeResponse(request, &schemapb.FieldSchema{
+					Name:       denseVectorFieldName,
+					DataType:   schemapb.DataType_FloatVector,
+					TypeParams: []*commonpb.KeyValuePair{{Key: "dim", Value: "-1"}},
+				}), nil
+			},
+			wantText: "must be positive: -1",
+		},
+		{
+			name:                "configured dimension mismatch",
+			configuredDimension: 1536,
+			describe: func(request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
+				return reuseLookupDescribeResponse(request, &schemapb.FieldSchema{
+					Name:       denseVectorFieldName,
+					DataType:   schemapb.DataType_FloatVector,
+					TypeParams: []*commonpb.KeyValuePair{{Key: "dim", Value: strconv.Itoa(reuseLookupTestDimension)}},
+				}), nil
+			},
+			wantText: "does not match configured dimension 1536",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, server, embedder := newPublicReuseLookupTestService(t, []reuseLookupRow{row})
+			service.cfg.EmbeddingDimension = testCase.configuredDimension
+			server.describeResponse = testCase.describe
+			candidates := reuseVectorCandidateByID{
+				row.id: {id: row.id, expectedContent: row.content},
+			}
+
+			reuse := make(map[string][]float32)
+			err := service.loadReuseVectorCandidates(
+				context.Background(),
+				"reuse_source",
+				candidates,
+				reuse,
+			)
+			if err == nil || !strings.Contains(err.Error(), testCase.wantText) {
+				t.Fatalf("loadReuseVectorCandidates error = %v, want %q", err, testCase.wantText)
+			}
+			if len(reuse) != 0 {
+				t.Fatalf("reuse vectors = %d, want 0", len(reuse))
+			}
+			if ids := reuseLookupGetIDsFromServer(server); len(ids) != 0 {
+				t.Fatalf("selected vector Get IDs = %v, want none", ids)
+			}
+			if embedder.callCount() != 0 {
+				t.Fatalf("embedding calls = %d, want 0", embedder.callCount())
+			}
+			if server.mutationCallCount() != 0 || server.schemaMutationCallCount() != 0 {
+				t.Fatalf(
+					"Milvus mutation calls = %d data and %d schema, want 0",
+					server.mutationCallCount(),
+					server.schemaMutationCallCount(),
+				)
+			}
+		})
+	}
+}
+
+func TestReuseSourceDimensionCacheInvalidatesWithCollectionCaches(t *testing.T) {
+	service, server := newReuseLookupTestService(t, nil)
+	service.cfg.EmbeddingDimension = 0
+
+	for range 2 {
+		dimension, err := service.resolveReuseVectorDimension(
+			context.Background(),
+			"reuse_source",
+		)
+		if err != nil {
+			t.Fatalf("resolve cached dimension: %v", err)
+		}
+		if dimension != reuseLookupTestDimension {
+			t.Fatalf("resolved dimension = %d, want %d", dimension, reuseLookupTestDimension)
+		}
+	}
+	if server.describeCallCount() != 1 {
+		t.Fatalf("DescribeCollection calls = %d, want 1", server.describeCallCount())
+	}
+
+	service.invalidateCollectionCaches("reuse_source")
+	dimension, err := service.resolveReuseVectorDimension(
+		context.Background(),
+		"reuse_source",
+	)
+	if err != nil {
+		t.Fatalf("resolve dimension after cache invalidation: %v", err)
+	}
+	if dimension != reuseLookupTestDimension {
+		t.Fatalf("resolved dimension = %d, want %d", dimension, reuseLookupTestDimension)
+	}
+	if server.describeCallCount() != 2 {
+		t.Fatalf("DescribeCollection calls = %d, want 2", server.describeCallCount())
+	}
+}
+
+func TestReuseSourceDimensionCacheStoresOnlySuccessfulResults(t *testing.T) {
+	service, server := newReuseLookupTestService(t, nil)
+	service.cfg.EmbeddingDimension = 0
+	server.describeResponse = func(
+		request *milvuspb.DescribeCollectionRequest,
+	) (*milvuspb.DescribeCollectionResponse, error) {
+		return reuseLookupDescribeResponse(request, &schemapb.FieldSchema{
+			Name:       denseVectorFieldName,
+			DataType:   schemapb.DataType_FloatVector,
+			TypeParams: []*commonpb.KeyValuePair{{Key: "dim", Value: "0"}},
+		}), nil
+	}
+
+	if _, err := service.resolveReuseVectorDimension(
+		context.Background(),
+		"reuse_source",
+	); err == nil {
+		t.Fatal("resolve zero source dimension succeeded, want error")
+	}
+	server.describeResponse = nil
+	dimension, err := service.resolveReuseVectorDimension(
+		context.Background(),
+		"reuse_source",
+	)
+	if err != nil {
+		t.Fatalf("resolve source dimension after correction: %v", err)
+	}
+	if dimension != reuseLookupTestDimension {
+		t.Fatalf("resolved dimension = %d, want %d", dimension, reuseLookupTestDimension)
+	}
+	if server.describeCallCount() != 2 {
+		t.Fatalf("DescribeCollection calls = %d, want 2", server.describeCallCount())
+	}
+}
+
+func TestEmptyReuseCandidatesSkipSourceSchema(t *testing.T) {
+	service, server := newReuseLookupTestService(t, nil)
+	service.cfg.EmbeddingDimension = 0
+	server.describeResponse = func(
+		*milvuspb.DescribeCollectionRequest,
+	) (*milvuspb.DescribeCollectionResponse, error) {
+		return nil, status.Error(codes.Internal, "unexpected DescribeCollection")
+	}
+
+	err := service.loadReuseVectorCandidates(
+		context.Background(),
+		"reuse_source",
+		reuseVectorCandidateByID{},
+		make(map[string][]float32),
+	)
+	if err != nil {
+		t.Fatalf("load empty candidates: %v", err)
+	}
+	if server.describeCallCount() != 0 {
+		t.Fatalf("DescribeCollection calls = %d, want 0", server.describeCallCount())
+	}
+}
+
 func TestReuseMissingSelectedIDHasNoSideEffects(t *testing.T) {
 	content := "missing selected ID content"
 	row := reuseLookupRow{
@@ -953,6 +1299,11 @@ func reuseLookupGetIDs(requests []recordedReuseRequest) []string {
 		}
 	}
 	return ids
+}
+
+func reuseLookupGetIDsFromServer(server *reuseLookupServer) []string {
+	requests, _ := server.snapshot()
+	return reuseLookupGetIDs(requests)
 }
 
 func ptr(value string) *string {
