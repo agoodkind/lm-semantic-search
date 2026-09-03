@@ -253,6 +253,9 @@ func (manager *Manager) resumableCheckpointKind(ctx context.Context, codebase mo
 }
 
 func (manager *Manager) startStagingResume(ctx context.Context, plan resumePlan, client model.ClientInfo) error {
+	manager.policyMutationMutex.Lock()
+	defer manager.policyMutationMutex.Unlock()
+
 	indexConfig := manager.enrichIndexConfig(plan.config)
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 
@@ -318,6 +321,9 @@ func (manager *Manager) startStagingResume(ctx context.Context, plan resumePlan,
 // embedded and the re-queued build restarts cleanly. Clearing the index is the
 // only way to stop the retry.
 func (manager *Manager) parkUnresumableForRetry(ctx context.Context, codebaseID string) {
+	manager.policyMutationMutex.Lock()
+	defer manager.policyMutationMutex.Unlock()
+
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 

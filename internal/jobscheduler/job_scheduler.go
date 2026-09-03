@@ -50,6 +50,17 @@ type Entry struct {
 	generation     uint64
 }
 
+// PolicyUpdateReceipt records whether a queued policy update was staged before
+// registration so rollback can restore the prior scheduler state atomically.
+type PolicyUpdateReceipt struct {
+	jobID             string
+	staged            bool
+	hadPreviousStaged bool
+	previousStaged    model.SchedulingPolicyPatch
+	entryGeneration   uint64
+	policyGeneration  uint64
+}
+
 // Snapshot reports capacity use by scheduling priority.
 type Snapshot struct {
 	Capacity int
@@ -62,20 +73,23 @@ type Snapshot struct {
 
 // Scheduler admits jobs and requests cooperative priority pauses.
 type Scheduler struct {
-	mutex            sync.Mutex
-	capacity         int
-	entries          map[string]*Entry
-	pauseGenerations map[string]uint64
-	pauseClaims      map[string]uint64
-	retryWaiting     map[string]bool
-	retryTimer       *time.Timer
-	yields           uint64
-	changed          chan struct{}
-	activitySource   platformactivity.Source
-	activity         platformactivity.Snapshot
-	activityCancel   context.CancelFunc
-	activityDone     chan struct{}
-	closeOnce        sync.Once
+	mutex                         sync.Mutex
+	capacity                      int
+	entries                       map[string]*Entry
+	registrationPolicies          map[string]model.SchedulingPolicyPatch
+	registrationPolicyGenerations map[string]uint64
+	pauseGenerations              map[string]uint64
+	nextEntryGeneration           uint64
+	pauseClaims                   map[string]uint64
+	retryWaiting                  map[string]bool
+	retryTimer                    *time.Timer
+	yields                        uint64
+	changed                       chan struct{}
+	activitySource                platformactivity.Source
+	activity                      platformactivity.Snapshot
+	activityCancel                context.CancelFunc
+	activityDone                  chan struct{}
+	closeOnce                     sync.Once
 }
 
 // Lease owns one scheduler entry across running, paused, and waiting states.
@@ -100,16 +114,18 @@ func New(
 	activitySource platformactivity.Source,
 ) *Scheduler {
 	scheduler := &Scheduler{
-		mutex:            sync.Mutex{},
-		capacity:         capacity,
-		entries:          map[string]*Entry{},
-		pauseGenerations: map[string]uint64{},
-		pauseClaims:      map[string]uint64{},
-		retryWaiting:     map[string]bool{},
-		retryTimer:       nil,
-		yields:           0,
-		changed:          make(chan struct{}),
-		activitySource:   activitySource,
+		mutex:                sync.Mutex{},
+		capacity:             capacity,
+		entries:              map[string]*Entry{},
+		registrationPolicies: map[string]model.SchedulingPolicyPatch{},
+		pauseGenerations:     map[string]uint64{},
+		nextEntryGeneration:  0,
+		pauseClaims:          map[string]uint64{},
+		retryWaiting:         map[string]bool{},
+		retryTimer:           nil,
+		yields:               0,
+		changed:              make(chan struct{}),
+		activitySource:       activitySource,
 		activity: platformactivity.Snapshot{
 			InputAvailable:   false,
 			InputIdleFor:     0,
@@ -222,12 +238,16 @@ func (scheduler *Scheduler) Acquire(
 	entry Entry,
 ) (*Lease, error) {
 	if err := ctx.Err(); err != nil {
+		if entry.JobID != "" {
+			scheduler.DiscardStagedPolicyUpdate(entry.JobID)
+		}
 		return nil, fmt.Errorf("acquire scheduler lease: %w", err)
 	}
 	if entry.JobID == "" {
 		return nil, fmt.Errorf("scheduler job id is required")
 	}
 	if err := model.ValidateSchedulingPolicy(entry.Policy); err != nil {
+		scheduler.DiscardStagedPolicyUpdate(entry.JobID)
 		slog.Warn("validate scheduler policy failed", "job_id", entry.JobID, "err", err)
 		return nil, fmt.Errorf("validate scheduler policy: %w", err)
 	}
@@ -236,6 +256,23 @@ func (scheduler *Scheduler) Acquire(
 	if _, found := scheduler.entries[entry.JobID]; found {
 		scheduler.mutex.Unlock()
 		return nil, fmt.Errorf("scheduler job %s already exists", entry.JobID)
+	}
+	if registrationPolicy, found := scheduler.registrationPolicies[entry.JobID]; found {
+		policy, err := model.ApplySchedulingPolicyPatch(
+			entry.Policy,
+			registrationPolicy,
+		)
+		if err != nil {
+			delete(scheduler.registrationPolicies, entry.JobID)
+			delete(scheduler.registrationPolicyGenerations, entry.JobID)
+			scheduler.mutex.Unlock()
+			wrappedErr := fmt.Errorf("apply scheduler registration policy: %w", err)
+			slog.Warn("apply scheduler registration policy failed", "job_id", entry.JobID, "err", wrappedErr)
+			return nil, wrappedErr
+		}
+		entry.Policy = policy
+		delete(scheduler.registrationPolicies, entry.JobID)
+		delete(scheduler.registrationPolicyGenerations, entry.JobID)
 	}
 	scheduler.nextEntryGeneration++
 	entry.generation = scheduler.nextEntryGeneration
@@ -253,6 +290,115 @@ func (scheduler *Scheduler) Acquire(
 	return &Lease{scheduler: scheduler, jobID: entry.JobID, generation: entry.generation}, nil
 }
 
+// StagePolicyUpdate applies a policy to a registered entry or stores it for an
+// in-flight queued job whose Acquire call has not registered yet.
+func (scheduler *Scheduler) StagePolicyUpdate(
+	jobID string,
+	patch model.SchedulingPolicyPatch,
+) (PolicyUpdateReceipt, error) {
+	var emptyReceipt PolicyUpdateReceipt
+	if jobID == "" {
+		return emptyReceipt, fmt.Errorf("scheduler job id is required")
+	}
+	if _, err := model.ApplySchedulingPolicyPatch(
+		model.DefaultSchedulingPolicy(),
+		patch,
+	); err != nil {
+		wrappedErr := fmt.Errorf("validate staged scheduler policy: %w", err)
+		slog.Warn("validate staged scheduler policy failed", "job_id", jobID, "err", wrappedErr)
+		return emptyReceipt, wrappedErr
+	}
+
+	scheduler.mutex.Lock()
+	defer scheduler.mutex.Unlock()
+	entry, found := scheduler.entries[jobID]
+	if !found {
+		current, hadPrevious := scheduler.registrationPolicies[jobID]
+		scheduler.registrationPolicies[jobID] = mergeSchedulingPolicyPatch(
+			current,
+			patch,
+		)
+		scheduler.registrationPolicyGenerations[jobID]++
+		return PolicyUpdateReceipt{
+			jobID:             jobID,
+			staged:            true,
+			hadPreviousStaged: hadPrevious,
+			previousStaged:    current,
+			entryGeneration:   0,
+			policyGeneration:  scheduler.registrationPolicyGenerations[jobID],
+		}, nil
+	}
+	if err := scheduler.updatePolicyLocked(entry, patch); err != nil {
+		return emptyReceipt, err
+	}
+	return PolicyUpdateReceipt{
+		jobID:             jobID,
+		staged:            false,
+		hadPreviousStaged: false,
+		previousStaged: model.SchedulingPolicyPatch{
+			Priority:         nil,
+			Quiet:            nil,
+			IdleAfterSeconds: nil,
+		},
+		entryGeneration:  entry.generation,
+		policyGeneration: entry.policyGeneration,
+	}, nil
+}
+
+// RollbackPolicyUpdate restores a staged or registered queued-job policy.
+func (scheduler *Scheduler) RollbackPolicyUpdate(
+	receipt PolicyUpdateReceipt,
+	previousPolicy model.SchedulingPolicy,
+) error {
+	if receipt.jobID == "" {
+		return fmt.Errorf("scheduler policy update receipt is missing a job id")
+	}
+	if err := model.ValidateSchedulingPolicy(previousPolicy); err != nil {
+		wrappedErr := fmt.Errorf("validate scheduler rollback policy: %w", err)
+		slog.Warn("validate scheduler rollback policy failed", "job_id", receipt.jobID, "err", wrappedErr)
+		return wrappedErr
+	}
+
+	scheduler.mutex.Lock()
+	defer scheduler.mutex.Unlock()
+	if entry, found := scheduler.entries[receipt.jobID]; found {
+		if receipt.entryGeneration != entry.generation || receipt.policyGeneration != entry.policyGeneration {
+			return nil
+		}
+		entry.Policy = previousPolicy
+		entry.policyGeneration++
+		scheduler.rebalanceLocked()
+		scheduler.notifyLocked()
+		return nil
+	}
+	if !receipt.staged {
+		return fmt.Errorf("scheduler job %s is missing", receipt.jobID)
+	}
+	if receipt.hadPreviousStaged {
+		if scheduler.registrationPolicyGenerations[receipt.jobID] != receipt.policyGeneration {
+			return nil
+		}
+		scheduler.registrationPolicies[receipt.jobID] = receipt.previousStaged
+		scheduler.registrationPolicyGenerations[receipt.jobID]++
+		return nil
+	}
+	if scheduler.registrationPolicyGenerations[receipt.jobID] != receipt.policyGeneration {
+		return nil
+	}
+	delete(scheduler.registrationPolicies, receipt.jobID)
+	delete(scheduler.registrationPolicyGenerations, receipt.jobID)
+	return nil
+}
+
+// DiscardStagedPolicyUpdate removes a policy for a job cancelled before
+// scheduler registration.
+func (scheduler *Scheduler) DiscardStagedPolicyUpdate(jobID string) {
+	scheduler.mutex.Lock()
+	defer scheduler.mutex.Unlock()
+	delete(scheduler.registrationPolicies, jobID)
+	delete(scheduler.registrationPolicyGenerations, jobID)
+}
+
 // UpdatePolicy applies supplied fields and immediately recomputes admission.
 func (scheduler *Scheduler) UpdatePolicy(
 	jobID string,
@@ -265,9 +411,16 @@ func (scheduler *Scheduler) UpdatePolicy(
 	if !found {
 		return fmt.Errorf("scheduler job %s is missing", jobID)
 	}
+	return scheduler.updatePolicyLocked(entry, patch)
+}
+
+func (scheduler *Scheduler) updatePolicyLocked(
+	entry *Entry,
+	patch model.SchedulingPolicyPatch,
+) error {
 	policy, err := model.ApplySchedulingPolicyPatch(entry.Policy, patch)
 	if err != nil {
-		slog.Warn("update scheduler policy failed", "job_id", jobID, "err", err)
+		slog.Warn("update scheduler policy failed", "job_id", entry.JobID, "err", err)
 		return fmt.Errorf("update scheduler policy: %w", err)
 	}
 	entry.Policy = policy
@@ -275,6 +428,23 @@ func (scheduler *Scheduler) UpdatePolicy(
 	scheduler.rebalanceLocked()
 	scheduler.notifyLocked()
 	return nil
+}
+
+func mergeSchedulingPolicyPatch(
+	existing model.SchedulingPolicyPatch,
+	incoming model.SchedulingPolicyPatch,
+) model.SchedulingPolicyPatch {
+	merged := existing
+	if incoming.Priority != nil {
+		merged.Priority = incoming.Priority
+	}
+	if incoming.Quiet != nil {
+		merged.Quiet = incoming.Quiet
+	}
+	if incoming.IdleAfterSeconds != nil {
+		merged.IdleAfterSeconds = incoming.IdleAfterSeconds
+	}
+	return merged
 }
 
 // Snapshot returns a consistent copy of scheduler counts.
@@ -546,6 +716,7 @@ func (scheduler *Scheduler) cancelWaitLocked(
 ) {
 	if remove {
 		delete(scheduler.entries, entry.JobID)
+		delete(scheduler.registrationPolicies, entry.JobID)
 		delete(scheduler.pauseClaims, entry.JobID)
 		delete(scheduler.pauseGenerations, entry.JobID)
 		delete(scheduler.retryWaiting, entry.JobID)

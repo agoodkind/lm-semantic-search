@@ -17,6 +17,7 @@ func (manager *Manager) CancelJob(ctx context.Context, jobID string) (model.Job,
 	}
 	if isTerminalJobState(job.State) {
 		manager.mu.Unlock()
+		manager.jobScheduler.DiscardStagedPolicyUpdate(jobID)
 		return job, nil
 	}
 	cancel := manager.cancels[jobID]
@@ -45,6 +46,7 @@ func (manager *Manager) CancelJob(ctx context.Context, jobID string) (model.Job,
 	}
 
 	followup := manager.updateJobCancelledWithPolicy(ctx, jobID)
+	manager.jobScheduler.DiscardStagedPolicyUpdate(jobID)
 	updated, found := manager.GetJob(jobID)
 	manager.policyMutationMutex.Unlock()
 	if !found {

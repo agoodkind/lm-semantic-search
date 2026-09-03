@@ -77,6 +77,8 @@ type Manager struct {
 	// concurrent construction, never contaminate or race each other.
 	conversationChunkByteBudget int
 	mu                          sync.Mutex
+	policyMutationMutex         sync.Mutex
+	policyMutationBlocked       bool
 	transitionMutex             sync.Mutex
 	codebases                   map[string]model.Codebase
 	jobs                        map[string]model.Job
@@ -220,6 +222,8 @@ func newManagerWithDependencies(
 		config:                      cfg,
 		conversationChunkByteBudget: conversationChunkMaxBytes,
 		mu:                          sync.Mutex{},
+		policyMutationMutex:         sync.Mutex{},
+		policyMutationBlocked:       false,
 		transitionMutex:             sync.Mutex{},
 		codebases:                   map[string]model.Codebase{},
 		jobs:                        map[string]model.Job{},
@@ -532,30 +536,65 @@ func (manager *Manager) startIndexWithRecovery(ctx context.Context, requestedPat
 		return emptyJob, emptyCodebase, false, "", err
 	}
 
-	// Merge-up: a nested path already covered by an indexed parent does not get
-	// its own redundant index. Resolve to the covering parent and sync it so the
-	// requested subtree is current, rather than building a second overlapping
-	// collection over the shared files. A git worktree root is exempt: it shares
-	// the parent's repo group but holds a different branch, so it stays its own
-	// codebase rather than merging into a sibling worktree.
-	if ancestor, found := manager.mergeUpTarget(canonicalPath); found && !manager.isWorktreeBoundary(canonicalPath, ancestor) {
-		return manager.redirectIndexToAncestor(ctx, requestedPath, ancestor, client, policyIntent.Patch)
-	}
-
 	indexConfig = manager.enrichIndexConfig(indexConfig)
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 
-	if dedupedJob, dedupedCodebase, deduped := manager.dedupAgainstActiveJob(canonicalPath, indexConfig); deduped {
-		resolvedCodebase, resolveErr := manager.resolveAndPersistIndexPolicy(dedupedCodebase.ID, policyIntent)
-		if resolveErr != nil {
-			return emptyJob, emptyCodebase, false, "", resolveErr
+	manager.policyMutationMutex.Lock()
+	policyLocked := true
+	defer func() {
+		if policyLocked {
+			manager.policyMutationMutex.Unlock()
 		}
-		return dedupedJob, resolvedCodebase, true, "", nil
-	}
+	}()
 
-	if force {
-		if err := manager.cancelActiveJobForPath(ctx, canonicalPath); err != nil {
-			return emptyJob, emptyCodebase, false, "", err
+	for {
+		// Merge-up and dedup are re-evaluated after a force-cancellation wait,
+		// because another serialized admission may have completed while the policy
+		// lock was released for the worker's terminal transition.
+		if ancestor, found := manager.mergeUpTarget(canonicalPath); found &&
+			!manager.isWorktreeBoundary(canonicalPath, ancestor) {
+			job, codebase, redirectErr := manager.redirectIndexToAncestor(
+				ctx,
+				requestedPath,
+				ancestor,
+				client,
+				policyIntent,
+			)
+			return job, codebase, false, "", redirectErr
+		}
+		if dedupedJob, dedupedCodebase, deduped := manager.dedupAgainstActiveJob(
+			canonicalPath,
+			indexConfig,
+		); deduped {
+			resolvedCodebase, resolveErr := manager.resolveAndPersistIndexPolicy(
+				dedupedCodebase.ID,
+				policyIntent,
+			)
+			if resolveErr != nil {
+				return emptyJob, emptyCodebase, false, "", resolveErr
+			}
+			manager.queueDeduplicatedPolicyOverride(
+				dedupedJob,
+				requestedPath,
+				canonicalPath,
+				client,
+				indexConfig,
+				force,
+				policyIntent.Patch,
+			)
+			return dedupedJob, resolvedCodebase, true, "", nil
+		}
+		if !force || !manager.hasActiveJobForExactPath(canonicalPath) {
+			break
+		}
+
+		manager.policyMutationMutex.Unlock()
+		policyLocked = false
+		cancelErr := manager.cancelActiveJobForPath(ctx, canonicalPath)
+		manager.policyMutationMutex.Lock()
+		policyLocked = true
+		if cancelErr != nil {
+			return emptyJob, emptyCodebase, false, "", cancelErr
 		}
 	}
 
@@ -580,6 +619,13 @@ func (manager *Manager) startIndexWithRecovery(ctx context.Context, requestedPat
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)
 	return job, codebase, false, overlapsCodebaseID, nil
+}
+
+func (manager *Manager) hasActiveJobForExactPath(canonicalPath string) bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	codebase, found := manager.findCodebaseByExactRoot(canonicalPath)
+	return found && manager.activeJobSnapshotLocked(codebase) != nil
 }
 
 // commitStartIndexLocked acquires the registry lock, runs the decision
@@ -690,6 +736,12 @@ func (manager *Manager) SyncIndex(ctx context.Context, requestedPath string, cli
 
 // SyncIndexWithPolicy starts a sync with a per-run scheduling-policy patch.
 func (manager *Manager) SyncIndexWithPolicy(ctx context.Context, requestedPath string, client model.ClientInfo, policyPatch model.SchedulingPolicyPatch) (model.Job, model.Codebase, bool, error) {
+	manager.policyMutationMutex.Lock()
+	defer manager.policyMutationMutex.Unlock()
+	return manager.syncIndexWithPolicy(ctx, requestedPath, client, policyPatch)
+}
+
+func (manager *Manager) syncIndexWithPolicy(ctx context.Context, requestedPath string, client model.ClientInfo, policyPatch model.SchedulingPolicyPatch) (model.Job, model.Codebase, bool, error) {
 	canonicalPath, err := manager.resolveCanonicalPath(requestedPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)
@@ -771,81 +823,6 @@ func (manager *Manager) SyncIndexWithPolicy(ctx context.Context, requestedPath s
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)
 	return job, updatedCodebase, false, nil
-}
-
-// ClearIndex removes a tracked codebase from daemon state.
-func (manager *Manager) ClearIndex(ctx context.Context, requestedPath string, client model.ClientInfo) (model.Codebase, error) {
-	_ = client
-
-	canonicalPath, err := manager.resolveCanonicalPath(requestedPath)
-	if err != nil {
-		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)
-		return model.Codebase{}, fmt.Errorf("canonicalize path %s: %w", requestedPath, err)
-	}
-
-	manager.mu.Lock()
-	matches := manager.findCodebasesByCoverage(canonicalPath)
-	if len(matches) == 0 {
-		manager.mu.Unlock()
-		return model.Codebase{}, errors.New("codebase not tracked: " + requestedPath)
-	}
-	codebase := matches[0]
-	// Drop any coalesced pending work before cancelling the active job, so the
-	// cancel's terminal transition does not drain a successor into a codebase this
-	// call is about to remove.
-	delete(manager.pendingConversationJobs, codebase.ID)
-	delete(manager.pendingCodeJobs, codebase.ID)
-	manager.mu.Unlock()
-	jobDone, cancel, cancelErr := manager.beginActiveJobCancellation(codebase)
-	if cancelErr != nil {
-		return model.Codebase{}, cancelErr
-	}
-
-	if cancel != nil {
-		cancel()
-	}
-	if err := waitForJobDone(ctx, jobDone); err != nil {
-		return model.Codebase{}, err
-	}
-
-	if err := store.RemoveFile(manager.chunkPath(codebase.ID)); err != nil {
-		return model.Codebase{}, fmt.Errorf("remove chunk cache for %s: %w", codebase.ID, err)
-	}
-	if err := store.RemoveFile(manager.merklePath(codebase.ID)); err != nil {
-		return model.Codebase{}, fmt.Errorf("remove Merkle snapshot for %s: %w", codebase.ID, err)
-	}
-	if err := manager.clearGraphCache(ctx, codebase.ID); err != nil {
-		return model.Codebase{}, fmt.Errorf("remove graph cache for %s: %w", codebase.ID, err)
-	}
-	if err := store.RemoveFile(manager.stagingMerklePath(codebase.ID)); err != nil {
-		return model.Codebase{}, fmt.Errorf("remove staging Merkle snapshot for %s: %w", codebase.ID, err)
-	}
-	if manager.semantic != nil {
-		if err := manager.semantic.Drop(ctx, codebase.CanonicalPath); err != nil && !errors.Is(err, semantic.ErrUnavailable) {
-			return model.Codebase{}, fmt.Errorf("drop semantic index for %s: %w", codebase.CanonicalPath, err)
-		}
-		if err := manager.semantic.DropStaging(ctx, codebase.CanonicalPath); err != nil && !errors.Is(err, semantic.ErrUnavailable) {
-			return model.Codebase{}, fmt.Errorf("drop semantic staging for %s: %w", codebase.CanonicalPath, err)
-		}
-	}
-
-	manager.mu.Lock()
-
-	clearedCodebase := codebase
-	current, found := manager.codebases[codebase.ID]
-	if !found {
-		manager.mu.Unlock()
-		manager.notifyCodebaseRemoved(ctx, codebase.ID)
-		return clearedCodebase, nil
-	}
-	delete(manager.codebases, current.ID)
-	if err := manager.saveLocked(); err != nil {
-		manager.mu.Unlock()
-		return model.Codebase{}, err
-	}
-	manager.mu.Unlock()
-	manager.notifyCodebaseRemoved(ctx, current.ID)
-	return current, nil
 }
 
 // Codebase lifecycle hook plumbing lives in manager_lifecycle.go.
