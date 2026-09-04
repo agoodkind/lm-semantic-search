@@ -279,6 +279,46 @@ func TestClearIndexCancelsActiveJob(t *testing.T) {
 	}
 }
 
+func TestCancelActiveJobWithoutHandleFinalizesJob(t *testing.T) {
+	t.Parallel()
+
+	manager, _, repoPath := newTestManager(t)
+	canonicalPath, err := canonicalizePath(repoPath)
+	if err != nil {
+		t.Fatalf("canonicalizePath: %v", err)
+	}
+	codebase := newCodebaseRecord(canonicalPath)
+	job := model.Job{
+		ID:            "job_handleless",
+		CodebaseID:    codebase.ID,
+		CanonicalPath: canonicalPath,
+		State:         model.JobStateRunning,
+	}
+	codebase.ActiveJobID = job.ID
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.jobs[job.ID] = job
+	manager.mu.Unlock()
+
+	if err := manager.cancelActiveJobForPath(context.Background(), canonicalPath); err != nil {
+		t.Fatalf("cancelActiveJobForPath: %v", err)
+	}
+
+	cancelled, found := manager.GetJob(job.ID)
+	if !found {
+		t.Fatal("cancelled handleless job is missing")
+	}
+	if cancelled.State != model.JobStateCancelled {
+		t.Fatalf("job state = %q, want cancelled", cancelled.State)
+	}
+	manager.mu.Lock()
+	updatedCodebase := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+	if updatedCodebase.ActiveJobID != "" {
+		t.Fatalf("ActiveJobID = %q, want empty", updatedCodebase.ActiveJobID)
+	}
+}
+
 // TestStartIndexRecordsForceFlagOnJob proves the job records whether the caller
 // passed force=true, so a trigger-aware heading can distinguish a forced reindex
 // from a first build or a changed-files sync.

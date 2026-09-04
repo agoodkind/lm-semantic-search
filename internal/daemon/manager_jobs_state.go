@@ -180,6 +180,8 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 }
 
 func (manager *Manager) updateDetachedJobProgress(jobID string, progress indexer.Progress, unit string) {
+	manager.transitionMutex.Lock()
+	defer manager.transitionMutex.Unlock()
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -629,6 +631,7 @@ func (manager *Manager) updateDetachedJobCompleted(ctx context.Context, jobID st
 	manager.mu.Lock()
 	manager.forgetJobJournalLocked(jobID)
 	manager.mu.Unlock()
+	manager.finishDetachedCodebase(ctx, job)
 }
 
 func (manager *Manager) updateDetachedJobCancelled(ctx context.Context, jobID string) {
@@ -756,11 +759,11 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
 		manager.mu.Unlock()
-		return
+		return emptyCancellationFollowup()
 	}
 	if codebase.ActiveJobID != jobID {
 		manager.mu.Unlock()
-		return
+		return emptyCancellationFollowup()
 	}
 	// A cancellation is not a failure: leave the codebase at its last-good state
 	// so a status check reflects the current usable state, not a stale failure.
@@ -778,9 +781,23 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
 	codebaseID := codebase.ID
 	manager.mu.Unlock()
-	manager.notifyIndexStopped(ctx, codebaseID)
-	if drained {
-		manager.runDrainedJob(ctx, codebaseID, drainedJobID)
+	return cancellationFollowup{
+		codebaseID:   codebaseID,
+		drainedJobID: drainedJobID,
+		drained:      drained,
+	}
+}
+
+func (manager *Manager) runCancellationFollowup(
+	ctx context.Context,
+	followup cancellationFollowup,
+) {
+	if followup.codebaseID == "" {
+		return
+	}
+	manager.notifyIndexStopped(ctx, followup.codebaseID)
+	if followup.drained {
+		manager.runDrainedJob(ctx, followup.codebaseID, followup.drainedJobID)
 	}
 }
 

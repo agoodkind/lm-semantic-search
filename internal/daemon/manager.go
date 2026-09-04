@@ -539,7 +539,6 @@ func (manager *Manager) startIndexWithRecovery(ctx context.Context, requestedPat
 
 	indexConfig = manager.enrichIndexConfig(indexConfig)
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
-
 	manager.policyMutationMutex.Lock()
 	policyLocked := true
 	defer func() {
@@ -599,8 +598,10 @@ func (manager *Manager) startIndexWithRecovery(ctx context.Context, requestedPat
 		}
 	}
 
+	// The force-cancellation loop releases the policy lock so the prior worker
+	// can reach its terminal transition. Re-probe after that loop because the
+	// collection can change while the lock is released.
 	evidence := manager.probeCollectionEvidence(ctx, canonicalPath, "StartIndex")
-
 	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(ctx, canonicalPath, requestedPath, client, indexConfig, force, evidence.presence, budget, policyIntent, recoveredPlan)
 	if err != nil || deduped {
 		return job, codebase, deduped, overlapsCodebaseID, err
@@ -620,6 +621,36 @@ func (manager *Manager) startIndexWithRecovery(ctx context.Context, requestedPat
 	ctx = spans.Attach(ctx, correlation.IdentityAttribute{Key: "job_id", Value: job.ID}, correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID})
 	manager.runJobAsync(ctx, job.ID)
 	return job, codebase, false, overlapsCodebaseID, nil
+}
+
+func (manager *Manager) queueDeduplicatedPolicyOverride(
+	activeJob model.Job,
+	requestedPath string,
+	canonicalPath string,
+	client model.ClientInfo,
+	indexConfig model.IndexConfig,
+	force bool,
+	policyPatch model.SchedulingPolicyPatch,
+) {
+	if policyPatch.Priority == nil && policyPatch.Quiet == nil &&
+		policyPatch.IdleAfterSeconds == nil {
+		return
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	codebase, found := manager.codebases[activeJob.CodebaseID]
+	if !found || codebase.ActiveJobID != activeJob.ID {
+		return
+	}
+	manager.mergePendingCodeRequestLocked(codebase.ID, pendingCodeRequest{
+		requestedPath: requestedPath,
+		canonicalPath: canonicalPath,
+		client:        client,
+		indexConfig:   indexConfig,
+		force:         force,
+		policyPatch:   policyPatch,
+	})
 }
 
 func (manager *Manager) hasActiveJobForExactPath(canonicalPath string) bool {
@@ -788,6 +819,17 @@ func (manager *Manager) syncIndexWithPolicy(ctx context.Context, requestedPath s
 		return emptyJob, emptyCodebase, false, err
 	}
 	if resolution == activeJobDedup {
+		if policyPatch.Priority != nil || policyPatch.Quiet != nil ||
+			policyPatch.IdleAfterSeconds != nil {
+			manager.mergePendingCodeRequestLocked(codebase.ID, pendingCodeRequest{
+				requestedPath: requestedPath,
+				canonicalPath: canonicalPath,
+				client:        client,
+				indexConfig:   indexConfig,
+				force:         false,
+				policyPatch:   policyPatch,
+			})
+		}
 		manager.mu.Unlock()
 		return activeJob, codebase, true, nil
 	}
