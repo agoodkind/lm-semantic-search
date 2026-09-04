@@ -238,6 +238,11 @@ func appendJobEvent(path string, event model.JobEvent, sync bool) error {
 		slog.Error("close jobs journal failed", "path", path, "err", err)
 		return fmt.Errorf("close jobs journal %s: %w", path, err)
 	}
+	if sync {
+		if err := syncFileDirectory(filepath.Dir(path), "jobs journal"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
