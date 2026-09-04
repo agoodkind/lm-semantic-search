@@ -180,6 +180,8 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 }
 
 func (manager *Manager) updateDetachedJobProgress(jobID string, progress indexer.Progress, unit string) {
+	manager.transitionMutex.Lock()
+	defer manager.transitionMutex.Unlock()
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -414,7 +416,7 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 	if !found || job.State == model.JobStateCancelled {
 		manager.mu.Unlock()
 		manager.transitionMutex.Unlock()
-		return
+		return emptyCancellationFollowup()
 	}
 	if job.State == model.JobStateCancelling {
 		manager.mu.Unlock()
@@ -443,7 +445,7 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 	if !found {
 		manager.mu.Unlock()
 		manager.transitionMutex.Unlock()
-		return
+		return emptyCancellationFollowup()
 	}
 	delete(manager.failedBuildRetries, codebase.ID)
 	codebase.Status = model.CodebaseStatusIndexed
@@ -467,9 +469,18 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
 	manager.writeCompletedArtifacts(ctx, codebase, result, jobID)
-	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after completed job failed", "job_id", jobID, "err", err)
+	registryErr := manager.saveLocked()
+	if registryErr != nil {
+		slog.ErrorContext(ctx, "write registry after completed job failed", "job_id", jobID, "err", registryErr)
 	}
+	manager.mu.Unlock()
+	if registryErr == nil {
+		jobEvent := model.JobEvent{Event: "job_completed", OccurredAt: clock.Now(), Job: job}
+		if journalErr := manager.writeJobTransition(jobEvent); journalErr != nil {
+			slog.ErrorContext(ctx, "append completed job event failed", "job_id", jobID, "err", journalErr)
+		}
+	}
+	manager.mu.Lock()
 	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above, so a raced
 	// transition that did not own the slot never drains a duplicate.
 	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
@@ -479,6 +490,7 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 	if drained {
 		manager.runDrainedJob(ctx, codebase.ID, drainedJobID)
 	}
+	return emptyCancellationFollowup()
 }
 
 // writeCompletedArtifacts persists the chunk cache and Merkle snapshot for a
@@ -571,9 +583,18 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	}
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
-	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after failed job failed", "job_id", jobID, "err", err)
+	registryErr := manager.saveLocked()
+	if registryErr != nil {
+		slog.ErrorContext(ctx, "write registry after failed job failed", "job_id", jobID, "err", registryErr)
 	}
+	manager.mu.Unlock()
+	if registryErr == nil {
+		jobEvent := model.JobEvent{Event: "job_failed", OccurredAt: clock.Now(), Job: job}
+		if journalErr := manager.writeJobTransition(jobEvent); journalErr != nil {
+			slog.ErrorContext(ctx, "append failed job event failed", "job_id", jobID, "err", journalErr)
+		}
+	}
+	manager.mu.Lock()
 	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above.
 	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
 	codebaseID := codebase.ID
@@ -629,6 +650,7 @@ func (manager *Manager) updateDetachedJobCompleted(ctx context.Context, jobID st
 	manager.mu.Lock()
 	manager.forgetJobJournalLocked(jobID)
 	manager.mu.Unlock()
+	manager.finishDetachedCodebase(ctx, job)
 }
 
 func (manager *Manager) updateDetachedJobCancelled(ctx context.Context, jobID string) {
@@ -756,11 +778,11 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
 		manager.mu.Unlock()
-		return
+		return emptyCancellationFollowup()
 	}
 	if codebase.ActiveJobID != jobID {
 		manager.mu.Unlock()
-		return
+		return emptyCancellationFollowup()
 	}
 	// A cancellation is not a failure: leave the codebase at its last-good state
 	// so a status check reflects the current usable state, not a stale failure.
@@ -778,9 +800,23 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
 	codebaseID := codebase.ID
 	manager.mu.Unlock()
-	manager.notifyIndexStopped(ctx, codebaseID)
-	if drained {
-		manager.runDrainedJob(ctx, codebaseID, drainedJobID)
+	return cancellationFollowup{
+		codebaseID:   codebaseID,
+		drainedJobID: drainedJobID,
+		drained:      drained,
+	}
+}
+
+func (manager *Manager) runCancellationFollowup(
+	ctx context.Context,
+	followup cancellationFollowup,
+) {
+	if followup.codebaseID == "" {
+		return
+	}
+	manager.notifyIndexStopped(ctx, followup.codebaseID)
+	if followup.drained {
+		manager.runDrainedJob(ctx, followup.codebaseID, followup.drainedJobID)
 	}
 }
 
