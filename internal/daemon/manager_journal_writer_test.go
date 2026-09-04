@@ -70,7 +70,7 @@ func TestJobJournalWriterPreservesEventOrder(t *testing.T) {
 		}
 		return store.AppendJobEvent(path, event)
 	}
-	writer := newJobJournalWriter(journalPath, appendJobEvent, 1)
+	writer := newJobJournalWriter(journalPath, appendJobEvent, store.AppendJobEventSync, 1)
 	t.Cleanup(writer.close)
 
 	job := model.Job{ID: "job-ordered", State: model.JobStateQueued}

@@ -322,11 +322,15 @@ func startStallRelease(
 		defer close(watchdog.finished)
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				failure := fmt.Errorf("indexing capacity watchdog panic: %v", recovered)
 				slog.ErrorContext(ctx, "indexing capacity watchdog panic",
 					"component", "daemon",
 					"subcomponent", "capacity",
-					"err", fmt.Errorf("panic: %v", recovered),
+					"err", failure,
 				)
+				watchdog.err = failure
+				capacity.release(context.WithoutCancel(ctx))
+				capacity.manager.failScheduledJob(context.WithoutCancel(ctx), capacity.jobID, failure)
 			}
 		}()
 		graceTimer := time.NewTimer(grace)

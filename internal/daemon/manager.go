@@ -321,6 +321,7 @@ func newManagerWithDependencies(
 		func(path string, event model.JobEvent) error {
 			return manager.appendJobEvent(path, event)
 		},
+		store.AppendJobEventSync,
 		jobJournalQueueCapacity,
 	)
 	manager.appendJobTransition = manager.jobJournal.enqueueAndSync
@@ -661,6 +662,9 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 		// onto the depth-1 pending slot and returns the active job as deduplicated, so
 		// the caller treats it as success rather than a conflict. The slot drains into
 		// a fresh sync when the active job reaches a terminal state.
+		if err := manager.persistResolvedIndexPolicyLocked(originalCodebase, resolvedCodebase); err != nil {
+			return emptyJob, emptyCodebase, false, "", err
+		}
 		manager.mergePendingCodeRequestLocked(decision.codebase.ID, pendingCodeRequest{
 			requestedPath: requestedPath,
 			canonicalPath: canonicalPath,

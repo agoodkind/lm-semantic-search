@@ -45,6 +45,7 @@ type jobJournalWriter struct {
 func newJobJournalWriter(
 	path string,
 	appendJobEvent appendJobEventFunc,
+	appendJobEventSync appendJobEventFunc,
 	queueCapacity int,
 	testCompactionThresholdBytes ...int64,
 ) *jobJournalWriter {
