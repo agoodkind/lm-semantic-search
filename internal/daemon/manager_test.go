@@ -21,6 +21,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 	render "goodkind.io/lm-semantic-search/internal/render"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
@@ -316,6 +317,59 @@ func TestCancelActiveJobWithoutHandleFinalizesJob(t *testing.T) {
 	manager.mu.Unlock()
 	if updatedCodebase.ActiveJobID != "" {
 		t.Fatalf("ActiveJobID = %q, want empty", updatedCodebase.ActiveJobID)
+	}
+}
+
+func TestForceStartIndexUsesCollectionEvidenceAfterCancellation(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	configuration := manager.enrichIndexConfig(defaultIndexConfig())
+	configuration.IgnoreDigest = digestIndexConfig(configuration)
+	collectionMissing := atomic.Bool{}
+	observedMissingCollection := atomic.Bool{}
+	manager.semantic = &fakeSemantic{
+		collectionName: func(string) string { return "force-reprobe-collection" },
+		inspectCollection: func(context.Context, string) (semantic.CollectionFacts, error) {
+			if collectionMissing.Load() {
+				observedMissingCollection.Store(true)
+				return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
+			}
+			return semantic.CollectionFacts{Exists: true, Rows: 1, RowsKnown: true}, nil
+		},
+	}
+	manager.runner = fakeRunner{indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
+		return indexer.OneFileResult{Chunks: []model.StoredChunk{{Content: "package main\n", RelativePath: relativePath, StartLine: 1, EndLine: 1, Language: "go", FileExtension: ".go"}}, FileHash: hashText("package main\n")}, nil
+	}}
+	canonicalPath, err := manager.resolveCanonicalPath(repoPath)
+	if err != nil {
+		t.Fatalf("resolveCanonicalPath: %v", err)
+	}
+	codebase := newCodebaseRecord(canonicalPath)
+	codebase.Status = model.CodebaseStatusIndexed
+	codebase.EffectiveConfig = configuration
+	codebase.CollectionName = "force-reprobe-collection"
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
+	active := model.Job{ID: "job-force-reprobe-active", CodebaseID: codebase.ID, CanonicalPath: canonicalPath, State: model.JobStateRunning, Config: configuration}
+	codebase.ActiveJobID = active.ID
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	manager.jobs[active.ID] = active
+	manager.mu.Unlock()
+	manager.appendJobTransition = func(event model.JobEvent) error {
+		if event.Event == "job_cancelled" {
+			collectionMissing.Store(true)
+		}
+		return nil
+	}
+
+	job, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
+	if err != nil {
+		t.Fatalf("StartIndex(force=true): %v", err)
+	}
+	if job.ID == "" {
+		t.Fatal("StartIndex(force=true) returned no job")
+	}
+	if !observedMissingCollection.Load() {
+		t.Fatal("StartIndex did not re-probe collection state after force cancellation")
 	}
 }
 
