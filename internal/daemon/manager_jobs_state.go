@@ -402,6 +402,11 @@ func bootstrapRouteCaller() string {
 	return function.Name()
 }
 
+func (manager *Manager) unlockJobTransition() {
+	manager.mu.Unlock()
+	manager.transitionMutex.Unlock()
+}
+
 func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, result indexer.Result) {
 	manager.policyMutationMutex.Lock()
 	followup := manager.updateJobCompletedWithPolicy(ctx, jobID, result)
@@ -414,13 +419,11 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 	manager.mu.Lock()
 	job, found := manager.jobs[jobID]
 	if !found || job.State == model.JobStateCancelled {
-		manager.mu.Unlock()
-		manager.transitionMutex.Unlock()
+		manager.unlockJobTransition()
 		return emptyCancellationFollowup()
 	}
 	if job.State == model.JobStateCancelling {
-		manager.mu.Unlock()
-		manager.transitionMutex.Unlock()
+		manager.unlockJobTransition()
 		return manager.updateJobCancelledWithPolicy(ctx, jobID)
 	}
 	now := clock.Now()
@@ -443,8 +446,7 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 	manager.forgetJobJournalLocked(jobID)
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
-		manager.mu.Unlock()
-		manager.transitionMutex.Unlock()
+		manager.unlockJobTransition()
 		return emptyCancellationFollowup()
 	}
 	delete(manager.failedBuildRetries, codebase.ID)
@@ -484,8 +486,7 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above, so a raced
 	// transition that did not own the slot never drains a duplicate.
 	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
-	manager.mu.Unlock()
-	manager.transitionMutex.Unlock()
+	manager.unlockJobTransition()
 	manager.notifyIndexReady(ctx, codebase)
 	if drained {
 		manager.runDrainedJob(ctx, codebase.ID, drainedJobID)
@@ -519,8 +520,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	manager.mu.Lock()
 	job, found := manager.jobs[jobID]
 	if !found || isTerminalJobState(job.State) {
-		manager.mu.Unlock()
-		manager.transitionMutex.Unlock()
+		manager.unlockJobTransition()
 		return
 	}
 	traceID := string(correlation.FromContext(ctx).TraceID)
@@ -549,8 +549,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	errorCode := job.Error.Code
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
-		manager.mu.Unlock()
-		manager.transitionMutex.Unlock()
+		manager.unlockJobTransition()
 		return
 	}
 	// Clear ActiveJobID only when it still points at this job, so a raced or
@@ -598,8 +597,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above.
 	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
 	codebaseID := codebase.ID
-	manager.mu.Unlock()
-	manager.transitionMutex.Unlock()
+	manager.unlockJobTransition()
 	manager.notifyIndexStopped(ctx, codebaseID)
 	if drained {
 		manager.runDrainedJob(ctx, codebaseID, drainedJobID)
