@@ -32,6 +32,9 @@ const (
 )
 
 func (manager *Manager) updateJobRunning(job model.Job) error {
+	manager.policyMutationMutex.Lock()
+	defer manager.policyMutationMutex.Unlock()
+
 	manager.transitionMutex.Lock()
 	defer manager.transitionMutex.Unlock()
 	manager.mu.Lock()
@@ -398,6 +401,13 @@ func bootstrapRouteCaller() string {
 }
 
 func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, result indexer.Result) {
+	manager.policyMutationMutex.Lock()
+	followup := manager.updateJobCompletedWithPolicy(ctx, jobID, result)
+	manager.policyMutationMutex.Unlock()
+	manager.runCancellationFollowup(ctx, followup)
+}
+
+func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID string, result indexer.Result) cancellationFollowup {
 	manager.transitionMutex.Lock()
 	manager.mu.Lock()
 	job, found := manager.jobs[jobID]
@@ -409,8 +419,7 @@ func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, re
 	if job.State == model.JobStateCancelling {
 		manager.mu.Unlock()
 		manager.transitionMutex.Unlock()
-		manager.updateJobCancelled(ctx, jobID)
-		return
+		return manager.updateJobCancelledWithPolicy(ctx, jobID)
 	}
 	now := clock.Now()
 	job.State = model.JobStateCompleted
@@ -491,6 +500,9 @@ func (manager *Manager) writeCompletedArtifacts(ctx context.Context, codebase mo
 }
 
 func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runErr error) {
+	manager.policyMutationMutex.Lock()
+	defer manager.policyMutationMutex.Unlock()
+
 	manager.transitionMutex.Lock()
 	manager.mu.Lock()
 	job, found := manager.jobs[jobID]
@@ -620,36 +632,6 @@ func (manager *Manager) updateDetachedJobCompleted(ctx context.Context, jobID st
 }
 
 func (manager *Manager) updateDetachedJobCancelled(ctx context.Context, jobID string) {
-	_, transitioned, journalErr := manager.serializeJobTransition(
-		jobID,
-		"job_cancelled",
-		func(job *model.Job) bool {
-			if isTerminalJobState(job.State) {
-				return false
-			}
-			now := clock.Now()
-			job.State = model.JobStateCancelled
-			job.UpdatedAt = now
-			job.CompletedAt = &now
-			job.Progress.Phase = "cancelled"
-			job.Progress.LastEventAt = now
-			job.Progress.HeartbeatAt = now
-			return true
-		},
-	)
-	if !transitioned {
-		return
-	}
-	metrics.JobCancelled()
-	if journalErr != nil {
-		slog.ErrorContext(ctx, "append cancelled job event failed", "job_id", jobID, "err", journalErr)
-	}
-	manager.mu.Lock()
-	manager.forgetJobJournalLocked(jobID)
-	manager.mu.Unlock()
-}
-
-func (manager *Manager) updateJobCancelled(ctx context.Context, jobID string) {
 	job, transitioned, journalErr := manager.serializeJobTransition(
 		jobID,
 		"job_cancelled",
