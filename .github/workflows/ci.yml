@@ -24,3 +24,4 @@ jobs:
       # binary, so the offline profile cannot compile on Intel macOS. Keep this
       # list in sync with release.yml platforms.
       release_platforms: "darwin/arm64 linux/amd64 linux/arm64"
+      cgo: true
