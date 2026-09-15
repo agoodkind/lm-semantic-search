@@ -91,7 +91,10 @@ func run(executable string, arguments []string) error {
 	slog.Debug("execute real signer", "signer", signer, "argument_count", len(rewritten))
 	// #nosec G702 -- realSigner is an absolute executable path checked against
 	// the wrapper before syscall.Exec replaces this process.
-	return wrapError("execute real signer", syscall.Exec(realSigner, argv, os.Environ()))
+	if execErr := syscall.Exec(realSigner, argv, os.Environ()); execErr != nil {
+		return wrapError("execute real signer", execErr)
+	}
+	return nil
 }
 
 func resolveRealSigner(signer signerTool, wrapperExecutable string) (string, error) {
