@@ -25,11 +25,15 @@ const defaultDeferredBuildDelay = 3 * time.Second
 // resolveWorktreeIndex implements worktree-bounded resolution as a read that
 // discovers but never embeds. When canonicalPath lives inside a worktree whose
 // root is not yet tracked, and at least one sibling worktree of the same
-// repository is already indexed, the daemon registers the worktree as a
+// repository holds embedded content, the daemon registers the worktree as a
 // discovered codebase, starts watching it, and schedules a reuse-seeded build in
-// the background; the read itself launches no embed job. The returned bool is
-// false when canonicalPath is not such a worktree, leaving the caller's normal
-// coverage resolution untouched.
+// the background; the read itself launches no embed job. When no sibling holds
+// content yet but one is running its first build, the worktree is registered
+// the same way and its build is held, so it does not embed what that sibling is
+// about to hold: startDeferredBuild skips a held worktree, and
+// startHeldSiblingWorktreeBuilds schedules it again when that build ends. The
+// returned bool is false when canonicalPath is not such a worktree,
+// leaving the caller's normal coverage resolution untouched.
 func (manager *Manager) resolveWorktreeIndex(ctx context.Context, canonicalPath string) (model.Codebase, bool) {
 	var empty model.Codebase
 	info, isWorktree := gitworktree.Resolve(canonicalPath)
@@ -45,8 +49,12 @@ func (manager *Manager) resolveWorktreeIndex(ctx context.Context, canonicalPath 
 		return empty, false
 	}
 	hasIndexedSibling := manager.hasIndexedSiblingWorktreeLocked(info.WorktreeRoot, info.CommonDir)
-	manager.mu.Unlock()
+	siblingFirstBuildRunning := false
 	if !hasIndexedSibling {
+		siblingFirstBuildRunning = manager.siblingFirstBuildInProgressLocked(info.WorktreeRoot, info.CommonDir)
+	}
+	manager.mu.Unlock()
+	if !hasIndexedSibling && !siblingFirstBuildRunning {
 		return empty, false
 	}
 
@@ -149,8 +157,15 @@ func (manager *Manager) scheduleDeferredBuild(ctx context.Context, canonicalPath
 // startDeferredBuild starts the reuse-seeded bootstrap for a discovered worktree.
 // It is the body scheduleDeferredBuild fires on its timer, split out so a test
 // can drive it synchronously. Shared index admission deduplicates, so calling
-// it for a worktree that already has an in-flight job is a no-op.
+// it for a worktree that already has an in-flight job is a no-op. It starts
+// nothing while the worktree waits for a sibling's first build, which is checked
+// here rather than when the timer was set so the periodic sweep's backstop call
+// honors it too.
 func (manager *Manager) startDeferredBuild(ctx context.Context, canonicalPath string) {
+	if manager.waitsForSiblingFirstBuild(canonicalPath) {
+		slog.InfoContext(ctx, "deferred worktree build held for sibling first build", "path", canonicalPath)
+		return
+	}
 	if _, _, _, _, err := manager.startIndexWithIntent(ctx, canonicalPath, worktreeDeferredBuildClient, emptyAutoIndexConfig(), false, emptyAdmissionBudget, indexPolicyIntent{
 		Patch:      model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil},
 		Initialize: false,
@@ -196,6 +211,91 @@ func (manager *Manager) hasIndexedSiblingWorktreeLocked(worktreeRoot string, com
 		}
 	}
 	return false
+}
+
+// siblingFirstBuildInProgressLocked reports whether any worktree of the same
+// repo group (other than worktreeRoot) is running a build while it holds no
+// embedded content yet, which is a first build whose vectors a worktree at the
+// same commit would otherwise embed a second time. Caller must hold manager.mu.
+func (manager *Manager) siblingFirstBuildInProgressLocked(worktreeRoot string, commonDir string) bool {
+	if commonDir == "" {
+		return false
+	}
+	siblings := make(map[string]struct{})
+	for _, root := range gitworktree.SiblingWorktreeRoots(commonDir) {
+		if root != worktreeRoot {
+			siblings[root] = struct{}{}
+		}
+	}
+	for _, codebase := range manager.codebases {
+		if _, ok := siblings[codebase.CanonicalPath]; !ok {
+			continue
+		}
+		if codebase.ActiveJobID != "" && !ownsLiveCollection(codebase) {
+			return true
+		}
+	}
+	return false
+}
+
+// waitsForSiblingFirstBuild reports whether the worktree at canonicalPath must
+// hold its build: no sibling holds embedded content to reuse yet, and one is
+// running the first build that will produce it.
+func (manager *Manager) waitsForSiblingFirstBuild(canonicalPath string) bool {
+	info, ok := gitworktree.Resolve(canonicalPath)
+	if !ok {
+		return false
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.hasIndexedSiblingWorktreeLocked(info.WorktreeRoot, info.CommonDir) {
+		return false
+	}
+	return manager.siblingFirstBuildInProgressLocked(info.WorktreeRoot, info.CommonDir)
+}
+
+// startHeldSiblingWorktreeBuilds schedules the deferred build of every
+// discovered sibling worktree of a codebase whose job just ended. A worktree
+// held behind that codebase's first build would otherwise wait for the periodic
+// sweep. It runs on success, failure, and cancellation alike: after a success
+// the worktree reuses the new content, and after a failure or cancellation it
+// builds without reuse rather than staying stranded. startDeferredBuild
+// re-checks the hold when its timer fires, and admission deduplicates, so
+// scheduling a worktree that is not held, or one already building, is a no-op.
+func (manager *Manager) startHeldSiblingWorktreeBuilds(ctx context.Context, codebaseID string) {
+	manager.mu.Lock()
+	ended, found := manager.codebases[codebaseID]
+	manager.mu.Unlock()
+	if !found || ended.Kind == model.CodebaseKindDocument {
+		return
+	}
+	info, ok := gitworktree.Resolve(ended.CanonicalPath)
+	if !ok || info.CommonDir == "" {
+		return
+	}
+	siblings := make(map[string]struct{})
+	for _, root := range gitworktree.SiblingWorktreeRoots(info.CommonDir) {
+		if root != info.WorktreeRoot {
+			siblings[root] = struct{}{}
+		}
+	}
+
+	manager.mu.Lock()
+	held := make([]string, 0)
+	for _, codebase := range manager.codebases {
+		if _, ok := siblings[codebase.CanonicalPath]; !ok {
+			continue
+		}
+		if codebase.Status == model.CodebaseStatusDiscovered && codebase.ActiveJobID == "" {
+			held = append(held, codebase.CanonicalPath)
+		}
+	}
+	manager.mu.Unlock()
+
+	for _, canonicalPath := range held {
+		slog.InfoContext(ctx, "sibling build ended; scheduling held worktree build", "codebase_id", codebaseID, "path", canonicalPath)
+		manager.scheduleDeferredBuild(ctx, canonicalPath)
+	}
 }
 
 // worktreeSiblingReuseCollections returns the collection names of indexed
