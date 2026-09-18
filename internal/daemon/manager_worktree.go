@@ -291,9 +291,12 @@ func (manager *Manager) startHeldSiblingWorktreeBuilds(ctx context.Context, code
 		}
 	}
 	manager.mu.Unlock()
+	if len(held) == 0 {
+		return
+	}
 
+	slog.InfoContext(ctx, "sibling build ended; scheduling discovered worktree builds", "codebase_id", codebaseID, "paths", held)
 	for _, canonicalPath := range held {
-		slog.InfoContext(ctx, "sibling build ended; scheduling held worktree build", "codebase_id", codebaseID, "path", canonicalPath)
 		manager.scheduleDeferredBuild(ctx, canonicalPath)
 	}
 }
