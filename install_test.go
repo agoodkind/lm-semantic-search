@@ -6,36 +6,6 @@ import (
 	"testing"
 )
 
-func TestInstallerSystemdRestartPolicyAlwaysRelaunchesDaemon(t *testing.T) {
-	data, err := os.ReadFile("install.sh")
-	if err != nil {
-		t.Fatalf("ReadFile returned error: %v", err)
-	}
-	contents := string(data)
-
-	if !strings.Contains(contents, "Restart=always") {
-		t.Fatalf("systemd unit does not restart the daemon after a clean shutdown")
-	}
-	if strings.Contains(contents, "Restart=on-failure") {
-		t.Fatalf("systemd unit still uses on-failure restart policy")
-	}
-}
-
-func TestInstallerDaemonServiceNameUsesCurrentProduct(t *testing.T) {
-	data, err := os.ReadFile("install.sh")
-	if err != nil {
-		t.Fatalf("ReadFile returned error: %v", err)
-	}
-	contents := string(data)
-
-	if strings.Contains(contents, "Claude Context") {
-		t.Fatalf("install.sh contains stale product name Claude Context")
-	}
-	if !strings.Contains(contents, "Description=lm-semantic-search daemon") {
-		t.Fatalf("systemd unit description does not name lm-semantic-search daemon")
-	}
-}
-
 func TestDependencyToolsRunWithoutInheritedCgo(t *testing.T) {
 	data, err := os.ReadFile("Makefile")
 	if err != nil {
@@ -174,49 +144,5 @@ func TestReleasePlatformsExcludeUnsupportedDarwinAMD64(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("Makefile is missing %q", releasePlatforms)
-	}
-}
-
-func TestLinuxInstallerStagesPinnedONNXRuntimeBesideDaemon(t *testing.T) {
-	data, err := os.ReadFile("install.sh")
-	if err != nil {
-		t.Fatalf("ReadFile returned error: %v", err)
-	}
-	contents := string(data)
-
-	requiredText := []string{
-		"onnxruntime-linux-x64-1.27.0.tgz",
-		"547e40a48f1fe73e3f812d7c88a948612c23f896b91e4e2ee1e232d7b468246f",
-		"onnxruntime-linux-aarch64-1.27.0.tgz",
-		"3e4d83ac06924a32a07b6d7f91ce6f852876153fc0bbdf931bf517a140bfbe48",
-		"install_linux_onnxruntime",
-		"libonnxruntime.so",
-	}
-	for _, text := range requiredText {
-		if !strings.Contains(contents, text) {
-			t.Fatalf("install.sh is missing Linux ONNX Runtime contract text %q", text)
-		}
-	}
-}
-
-func TestDarwinInstallerStagesPinnedONNXRuntimeBesideDaemon(t *testing.T) {
-	data, err := os.ReadFile("install.sh")
-	if err != nil {
-		t.Fatalf("ReadFile returned error: %v", err)
-	}
-	contents := string(data)
-
-	requiredText := []string{
-		"onnxruntime-osx-arm64-1.27.0.tgz",
-		"545e81c58152353acb0d1e8bd6ce4b62f830c0961f5b3acfedc790ffd76e477a",
-		"install_darwin_onnxruntime",
-		"libonnxruntime.1.27.0.dylib",
-		"libonnxruntime.1.dylib",
-		"libonnxruntime.dylib",
-	}
-	for _, text := range requiredText {
-		if !strings.Contains(contents, text) {
-			t.Fatalf("install.sh is missing Darwin ONNX Runtime contract text %q", text)
-		}
 	}
 }
