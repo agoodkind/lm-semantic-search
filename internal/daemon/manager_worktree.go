@@ -168,9 +168,11 @@ func (manager *Manager) worktreeReuseForecast(codebase model.Codebase) int32 {
 }
 
 // hasIndexedSiblingWorktreeLocked reports whether any worktree of the same repo
-// group (other than worktreeRoot) is already a tracked, indexed codebase, which
-// is the condition that turns a worktree into "a worktree of an indexed repo"
-// for the auto-create trigger. Caller must hold manager.mu.
+// group (other than worktreeRoot) is a tracked codebase holding embedded
+// content, which is the condition that turns a worktree into "a worktree of an
+// indexed repo" for the auto-create trigger. A sibling whose last run indexed no
+// file does not count, because it has no vectors for the worktree to reuse.
+// Caller must hold manager.mu.
 func (manager *Manager) hasIndexedSiblingWorktreeLocked(worktreeRoot string, commonDir string) bool {
 	if commonDir == "" {
 		return false
@@ -189,7 +191,7 @@ func (manager *Manager) hasIndexedSiblingWorktreeLocked(worktreeRoot string, com
 		if _, ok := siblings[codebase.CanonicalPath]; !ok {
 			continue
 		}
-		if codebase.Status == model.CodebaseStatusIndexed || codebase.LastSuccessfulRun != nil {
+		if ownsLiveCollection(codebase) {
 			return true
 		}
 	}
@@ -232,11 +234,13 @@ func (manager *Manager) worktreeSiblingReuseCollections(canonicalPath string, in
 			continue
 		}
 		// Reuse keys on durable facts, not the transient ActiveJobID: a sibling
-		// that is currently indexed or has at least one past successful run has a
-		// usable collection. An in-flight sync does not drop the live collection,
-		// and reuse is content-hash keyed, so reading a mid-sync sibling is safe.
-		// This mirrors the auto-create trigger's eligibility so the two agree.
-		if codebase.Status != model.CodebaseStatusIndexed && codebase.LastSuccessfulRun == nil {
+		// whose last completed run indexed files, or an adopted sibling, owns a
+		// live collection. A run that indexed no file created no collection, so it
+		// has nothing to reuse. An in-flight sync does not drop the live
+		// collection, and reuse is content-hash keyed, so reading a mid-sync
+		// sibling is safe. This mirrors the auto-create trigger's eligibility so
+		// the two agree.
+		if !ownsLiveCollection(codebase) {
 			continue
 		}
 		if !reuseModelMatches(codebase.EffectiveConfig, indexConfig) {
