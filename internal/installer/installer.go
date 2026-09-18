@@ -37,6 +37,13 @@ const (
 	systemdRestartSec  = "2"
 )
 
+type operatingSystem string
+
+const (
+	operatingSystemDarwin operatingSystem = "darwin"
+	operatingSystemLinux  operatingSystem = "linux"
+)
+
 // Options configures one install run.
 type Options struct {
 	BinDir         string
@@ -202,8 +209,8 @@ func installService(daemonPath string, stdout io.Writer) error {
 		return fmt.Errorf("resolve home dir: %w", err)
 	}
 	environment := []selfupdate.EnvironmentPair{{Name: "HOME", Value: home}}
-	switch runtime.GOOS {
-	case "darwin":
+	switch operatingSystem(runtime.GOOS) {
+	case operatingSystemDarwin:
 		err = selfupdate.InstallLaunchdService(selfupdate.LaunchdServiceOptions{
 			Label:       launchdLabel,
 			ProgramPath: daemonPath,
@@ -214,7 +221,7 @@ func installService(daemonPath string, stdout io.Writer) error {
 			KeepAlive:   true,
 			Stdout:      stdout,
 		})
-	case "linux":
+	case operatingSystemLinux:
 		err = selfupdate.InstallSystemdUserService(selfupdate.SystemdUserServiceOptions{
 			Unit:          systemdUnit,
 			ProgramPath:   daemonPath,

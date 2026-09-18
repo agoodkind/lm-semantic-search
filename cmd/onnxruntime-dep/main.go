@@ -40,11 +40,6 @@ const (
 
 type architecture string
 
-const (
-	architectureAMD64 architecture = "amd64"
-	architectureARM64 architecture = "arm64"
-)
-
 type buildTarget struct {
 	goos   operatingSystem
 	goarch architecture
@@ -399,7 +394,7 @@ func (installer dependencyInstaller) install(
 		string(installer.target.goarch),
 	)
 	if err != nil {
-		return err
+		return wrapError("resolve ONNX Runtime archive", err)
 	}
 	return installer.installSharedArchive(ctx, temporaryDirectory, archive)
 }
@@ -412,7 +407,7 @@ func (installer dependencyInstaller) installSharedArchive(
 	slog.DebugContext(ctx, "install ONNX Runtime shared archive", "goos", installer.target.goos)
 	names, err := onnxruntimedist.LibraryNamesFor(string(installer.target.goos))
 	if err != nil {
-		return err
+		return wrapError("resolve ONNX Runtime library names", err)
 	}
 	archiveDirectory, err := onnxruntimedist.FetchArchive(
 		ctx,
@@ -421,14 +416,14 @@ func (installer dependencyInstaller) installSharedArchive(
 		temporaryDirectory,
 	)
 	if err != nil {
-		return err
+		return wrapError("fetch ONNX Runtime archive", err)
 	}
 	if err := onnxruntimedist.InstallLibrary(
 		archiveDirectory,
 		names,
 		filepath.Join(installer.prefix, "lib"),
 	); err != nil {
-		return err
+		return wrapError("install ONNX Runtime library", err)
 	}
 
 	if err := copyHeaderFiles(

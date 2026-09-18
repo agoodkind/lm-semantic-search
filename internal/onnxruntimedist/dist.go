@@ -236,6 +236,7 @@ func copyFileReplacing(sourcePath string, destinationPath string) error {
 }
 
 func symlinkReplacing(target string, linkPath string) error {
+	slog.Debug("replace dependency symlink", "target", target, "path", linkPath)
 	temporaryLinkPath := linkPath + ".tmp"
 	if err := os.Remove(temporaryLinkPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return wrapError("remove stale temporary symlink", err)
