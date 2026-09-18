@@ -702,9 +702,8 @@ func goSafe(ctx context.Context, panicMessage string, run func()) {
 	}()
 }
 
-// gitRun runs the real git binary in directory. It ignores the global and system
-// git configuration, so a signing requirement or a hook installed on the host
-// cannot change what the fixture repository records.
+// gitRun runs the real git binary in directory. The author and committer are
+// set here so a host with no git identity can still commit the fixture.
 func gitRun(t *testing.T, directory string, arguments ...string) {
 	t.Helper()
 
@@ -715,8 +714,6 @@ func gitRun(t *testing.T, directory string, arguments ...string) {
 	)
 	command.Env = append(
 		os.Environ(),
-		"GIT_CONFIG_GLOBAL="+os.DevNull,
-		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_AUTHOR_NAME=offline-live",
 		"GIT_AUTHOR_EMAIL=offline-live@example.invalid",
 		"GIT_COMMITTER_NAME=offline-live",
