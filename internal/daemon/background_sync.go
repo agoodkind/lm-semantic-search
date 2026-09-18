@@ -461,15 +461,7 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 		syncer.deferWatcherPaths(codebaseID, relativePaths)
 		return
 	}
-	// A last run that indexed no file created no collection, so a per-path
-	// converge would drop every path as collection_missing. A sync routes the
-	// missing collection to a full build of the whole tree, and it deduplicates,
-	// so repeated watcher batches start that build once.
-	if ranWithoutCreatingACollection(codebase.LastSuccessfulRun) {
-		_, _, _, err := syncer.manager.SyncIndex(ctx, codebase.CanonicalPath, model.ClientInfo{Name: "daemon-watcher", PID: 0})
-		if err != nil && !syncConflictError(err) {
-			slog.ErrorContext(ctx, "start build after empty run failed", "codebase_id", codebaseID, "path", codebase.CanonicalPath, "err", err)
-		}
+	if syncer.manager.startBuildAfterEmptyRun(ctx, codebase) {
 		return
 	}
 	if syncer.hasActiveJob(codebase) {
