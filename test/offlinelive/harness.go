@@ -12,9 +12,11 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +67,19 @@ type harness struct {
 	fixturePath string
 }
 
+// harnessOptions turns on daemon behavior the default harness leaves off.
+// Background sync stays off in every configuration, so the periodic sweep can
+// never be what starts a build a test is waiting for.
+type harnessOptions struct {
+	fileWatcher bool
+}
+
 func newHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessWith(t, harnessOptions{fileWatcher: false})
+}
+
+func newHarnessWith(t *testing.T, options harnessOptions) *harness {
 	t.Helper()
 	slog.Debug("offline live harness setup started")
 
@@ -81,14 +95,22 @@ func newHarness(t *testing.T) *harness {
 	})
 
 	socketPath := filepath.Join(socketDirectory, "daemon.sock")
-	offlineConfig := resolveOfflineConfig(t, stateRoot, socketPath)
+	offlineConfig := resolveOfflineConfig(t, stateRoot, socketPath, options)
 	prepareState(t, offlineConfig)
 
 	manager, err := daemon.NewManager(context.Background(), offlineConfig)
 	if err != nil {
 		t.Fatalf("create offline daemon manager: %v", err)
 	}
-	stopServer := startInProcessServer(t, manager, offlineConfig.SocketPath)
+	// The daemon binary starts background sync the same way. With every loop
+	// disabled in the configuration, Start launches nothing.
+	backgroundContext, stopBackground := context.WithCancel(context.Background())
+	daemon.NewBackgroundSync(offlineConfig, manager).Start(backgroundContext)
+	stopListener := startInProcessServer(t, manager, offlineConfig.SocketPath)
+	stopServer := func() {
+		stopBackground()
+		stopListener()
+	}
 
 	connection, client, err := grpcutil.DialDaemon(
 		context.Background(),
@@ -125,6 +147,7 @@ func resolveOfflineConfig(
 	t *testing.T,
 	stateRoot string,
 	socketPath string,
+	options harnessOptions,
 ) config.Config {
 	t.Helper()
 
@@ -139,7 +162,7 @@ func resolveOfflineConfig(
 		{name: "EMBEDDING_BATCH_SIZE", value: "8"},
 		{name: "CLAUDE_CONTEXT_BACKGROUND_SYNC", value: "false"},
 		{name: "CLAUDE_CONTEXT_TRIGGER_WATCHER", value: "false"},
-		{name: "CLAUDE_CONTEXT_FILE_WATCHER", value: "false"},
+		{name: "CLAUDE_CONTEXT_FILE_WATCHER", value: strconv.FormatBool(options.fileWatcher)},
 		{name: "CLAUDE_CONTEXT_DEBUG_LISTENER", value: "false"},
 		{name: "CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", value: "0"},
 		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: "1"},
@@ -677,6 +700,32 @@ func goSafe(ctx context.Context, panicMessage string, run func()) {
 		}()
 		run()
 	}()
+}
+
+// gitRun runs the real git binary in directory. It ignores the global and system
+// git configuration, so a signing requirement or a hook installed on the host
+// cannot change what the fixture repository records.
+func gitRun(t *testing.T, directory string, arguments ...string) {
+	t.Helper()
+
+	command := exec.CommandContext(
+		context.Background(),
+		"git",
+		append([]string{"-C", directory}, arguments...)...,
+	)
+	command.Env = append(
+		os.Environ(),
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=offline-live",
+		"GIT_AUTHOR_EMAIL=offline-live@example.invalid",
+		"GIT_COMMITTER_NAME=offline-live",
+		"GIT_COMMITTER_EMAIL=offline-live@example.invalid",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s in %s: %v\n%s", strings.Join(arguments, " "), directory, err, output)
+	}
 }
 
 func correlatedContext() context.Context {
