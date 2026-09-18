@@ -106,7 +106,7 @@ curl -fsSL https://raw.githubusercontent.com/agoodkind/lm-semantic-search/main/i
 
 The script installs the `lm-semantic-search` CLI and then runs `lm-semantic-search install`, which needs no Go toolchain. That command installs the daemon, the MCP adapter, and the CLI from one release into `$XDG_BIN_HOME` or `~/.local/bin`. It places ONNX Runtime beside the daemon, links `lms` to `lm-semantic-search`, and installs the daemon as a launchd or systemd user service. Pass `--no-service` to skip the service and `--bin-dir` to choose another directory.
 
-The install stops before downloading anything when a file named `lms` that is not a symlink already exists in the install directory. Remove that file or choose another `--bin-dir`.
+When a file named `lms` that is not a symlink already exists in the install directory, `lm-semantic-search install` stops before it downloads the daemon or the MCP adapter, and it leaves that file unchanged. `install.sh` has already installed the CLI at that point. Remove the `lms` file or choose another `--bin-dir`.
 
 To upgrade to the latest release, run the `install.sh` command again. `lm-semantic-search install` without `--version` reinstalls the release that the CLI itself came from.
 
