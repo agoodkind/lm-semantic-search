@@ -4,7 +4,17 @@ import (
 	"strings"
 
 	"golang.org/x/mod/semver"
+	"goodkind.io/gklog/version"
 )
+
+// RunningReleaseTag returns the running binary's release tag, and false for a
+// dev or locally built binary, which has no release to match.
+func RunningReleaseTag() (string, bool) {
+	if isLocalBuild(version.Version, version.Dirty == "true") {
+		return "", false
+	}
+	return strings.TrimSpace(version.Version), true
+}
 
 // isLocalBuild reports whether a binary did not come from a release artifact.
 func isLocalBuild(version string, dirty bool) bool {

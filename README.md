@@ -108,7 +108,7 @@ The script installs the `lm-semantic-search` CLI and then runs `lm-semantic-sear
 
 The install stops before downloading anything when a file named `lms` that is not a symlink already exists in the install directory. Remove that file or choose another `--bin-dir`.
 
-Run `lm-semantic-search install` again to reinstall the latest release in place.
+To upgrade to the latest release, run the `install.sh` command again. `lm-semantic-search install` without `--version` reinstalls the release that the CLI itself came from.
 
 From source, build and install the daemon, CLI, and MCP adapter:
 
