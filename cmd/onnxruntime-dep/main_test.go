@@ -14,71 +14,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/onnxruntimedist"
 )
-
-func TestLinuxArchivesUsePinnedOfficialReleases(t *testing.T) {
-	testCases := []struct {
-		architecture architecture
-		archiveName  string
-		url          string
-		sha256       string
-	}{
-		{
-			architecture: architectureAMD64,
-			archiveName:  "onnxruntime-linux-x64-1.27.0",
-			url: "https://github.com/microsoft/onnxruntime/releases/download/" +
-				"v1.27.0/onnxruntime-linux-x64-1.27.0.tgz",
-			sha256: "547e40a48f1fe73e3f812d7c88a948612c23f896b91e4e2ee1e232d7b468246f",
-		},
-		{
-			architecture: architectureARM64,
-			archiveName:  "onnxruntime-linux-aarch64-1.27.0",
-			url: "https://github.com/microsoft/onnxruntime/releases/download/" +
-				"v1.27.0/onnxruntime-linux-aarch64-1.27.0.tgz",
-			sha256: "3e4d83ac06924a32a07b6d7f91ce6f852876153fc0bbdf931bf517a140bfbe48",
-		},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(string(testCase.architecture), func(t *testing.T) {
-			archive, ok := linuxArchives[testCase.architecture]
-			if !ok {
-				t.Fatalf("linuxArchives[%q] is missing", testCase.architecture)
-			}
-			if archive.archiveName != testCase.archiveName {
-				t.Fatalf("archive name = %q, want %q", archive.archiveName, testCase.archiveName)
-			}
-			if archive.url != testCase.url {
-				t.Fatalf("archive URL = %q, want %q", archive.url, testCase.url)
-			}
-			if archive.sha256 != testCase.sha256 {
-				t.Fatalf("archive SHA-256 = %q, want %q", archive.sha256, testCase.sha256)
-			}
-		})
-	}
-}
-
-func TestDarwinArchivesUsePinnedOfficialRelease(t *testing.T) {
-	archive, ok := darwinArchives[architectureARM64]
-	if !ok {
-		t.Fatalf("darwinArchives[%q] is missing", architectureARM64)
-	}
-	if archive.archiveName != "onnxruntime-osx-arm64-1.27.0" {
-		t.Fatalf("archive name = %q", archive.archiveName)
-	}
-	const expectedURL = "https://github.com/microsoft/onnxruntime/releases/download/" +
-		"v1.27.0/onnxruntime-osx-arm64-1.27.0.tgz"
-	if archive.url != expectedURL {
-		t.Fatalf("archive URL = %q, want %q", archive.url, expectedURL)
-	}
-	const expectedSHA256 = "545e81c58152353acb0d1e8bd6ce4b62f830c0961f5b3acfedc790ffd76e477a"
-	if archive.sha256 != expectedSHA256 {
-		t.Fatalf("archive SHA-256 = %q, want %q", archive.sha256, expectedSHA256)
-	}
-	if _, found := darwinArchives[architectureAMD64]; found {
-		t.Fatal("darwinArchives unexpectedly supports amd64")
-	}
-}
 
 func TestInstallDarwinSharedArchiveStagesDynamicLibraryAndHeaders(t *testing.T) {
 	const archiveName = "onnxruntime-osx-arm64-1.27.0"
@@ -108,23 +46,23 @@ func TestInstallDarwinSharedArchiveStagesDynamicLibraryAndHeaders(t *testing.T) 
 	if err := installer.preparePrefix(); err != nil {
 		t.Fatalf("preparePrefix() error = %v", err)
 	}
-	archive := darwinArchive{
-		archiveName: archiveName,
-		url:         server.URL,
-		sha256:      hex.EncodeToString(archiveDigest[:]),
+	archive := onnxruntimedist.Archive{
+		Name:   archiveName,
+		URL:    server.URL,
+		SHA256: hex.EncodeToString(archiveDigest[:]),
 	}
-	if err := installer.installDarwinSharedArchive(
+	if err := installer.installSharedArchive(
 		context.Background(),
 		t.TempDir(),
 		archive,
 	); err != nil {
-		t.Fatalf("installDarwinSharedArchive() error = %v", err)
+		t.Fatalf("installSharedArchive() error = %v", err)
 	}
 
 	versionedLibrary := filepath.Join(
 		prefix,
 		"lib",
-		"libonnxruntime."+onnxRuntimeVersion+".dylib",
+		"libonnxruntime."+onnxruntimedist.Version+".dylib",
 	)
 	libraryContents, err := os.ReadFile(versionedLibrary)
 	if err != nil {
@@ -162,7 +100,7 @@ func TestInstallDarwinSharedArchiveStagesDynamicLibraryAndHeaders(t *testing.T) 
 	debugSymbolsPath := filepath.Join(
 		prefix,
 		"lib",
-		"libonnxruntime."+onnxRuntimeVersion+".dylib.dSYM",
+		"libonnxruntime."+onnxruntimedist.Version+".dylib.dSYM",
 	)
 	if _, err := os.Stat(debugSymbolsPath); !os.IsNotExist(err) {
 		t.Fatalf("debug symbols were staged at %s", debugSymbolsPath)
@@ -197,23 +135,23 @@ func TestInstallLinuxSharedArchiveStagesDynamicLibraryAndHeaders(t *testing.T) {
 	if err := installer.preparePrefix(); err != nil {
 		t.Fatalf("preparePrefix() error = %v", err)
 	}
-	archive := linuxArchive{
-		archiveName: archiveName,
-		url:         server.URL,
-		sha256:      hex.EncodeToString(archiveDigest[:]),
+	archive := onnxruntimedist.Archive{
+		Name:   archiveName,
+		URL:    server.URL,
+		SHA256: hex.EncodeToString(archiveDigest[:]),
 	}
-	if err := installer.installLinuxSharedArchive(
+	if err := installer.installSharedArchive(
 		context.Background(),
 		t.TempDir(),
 		archive,
 	); err != nil {
-		t.Fatalf("installLinuxSharedArchive() error = %v", err)
+		t.Fatalf("installSharedArchive() error = %v", err)
 	}
 
 	versionedLibrary := filepath.Join(
 		prefix,
 		"lib",
-		"libonnxruntime.so."+onnxRuntimeVersion,
+		"libonnxruntime.so."+onnxruntimedist.Version,
 	)
 	libraryContents, err := os.ReadFile(versionedLibrary)
 	if err != nil {
@@ -320,7 +258,7 @@ func TestIsCachedRejectsLegacySentinel(t *testing.T) {
 	stageDependencyCache(
 		t,
 		installer,
-		onnxRuntimeVersion,
+		onnxruntimedist.Version,
 		"Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -lonnxruntime\n",
 	)
 
@@ -434,8 +372,8 @@ func makeLinuxArchive(t *testing.T, archiveName string) []byte {
 	gzipWriter := gzip.NewWriter(&compressed)
 	tarWriter := tar.NewWriter(gzipWriter)
 	entries := map[string]string{
-		archiveName + "/lib/libonnxruntime.so." + onnxRuntimeVersion: "shared-library",
-		archiveName + "/include/onnxruntime_c_api.h":                 "header",
+		archiveName + "/lib/libonnxruntime.so." + onnxruntimedist.Version: "shared-library",
+		archiveName + "/include/onnxruntime_c_api.h":                      "header",
 	}
 	for name, contents := range entries {
 		header := &tar.Header{
@@ -466,8 +404,8 @@ func makeDarwinArchive(t *testing.T, archiveName string) []byte {
 	gzipWriter := gzip.NewWriter(&compressed)
 	tarWriter := tar.NewWriter(gzipWriter)
 	entries := map[string]string{
-		archiveName + "/lib/libonnxruntime." + onnxRuntimeVersion + ".dylib": "shared-library",
-		archiveName + "/lib/libonnxruntime." + onnxRuntimeVersion +
+		archiveName + "/lib/libonnxruntime." + onnxruntimedist.Version + ".dylib": "shared-library",
+		archiveName + "/lib/libonnxruntime." + onnxruntimedist.Version +
 			".dylib.dSYM/Contents/Info.plist": "debug-symbols",
 		archiveName + "/include/onnxruntime_c_api.h": "header",
 	}
@@ -491,112 +429,4 @@ func makeDarwinArchive(t *testing.T, archiveName string) []byte {
 		t.Fatalf("close gzip writer: %v", err)
 	}
 	return compressed.Bytes()
-}
-
-func TestSafeArchivePathRejectsTraversal(t *testing.T) {
-	root := t.TempDir()
-	rejected := []string{
-		"../escape",
-		"../../escape",
-		"lib/../../escape",
-		"/etc/passwd",
-	}
-	for _, entry := range rejected {
-		if _, err := safeArchivePath(root, entry); err == nil {
-			t.Fatalf("safeArchivePath(%q) = nil error, want rejection", entry)
-		}
-	}
-
-	accepted := filepath.Join("lib", "libonnxruntime.1.27.0.dylib")
-	resolved, err := safeArchivePath(root, accepted)
-	if err != nil {
-		t.Fatalf("safeArchivePath(%q) returned error: %v", accepted, err)
-	}
-	want := filepath.Join(root, accepted)
-	if resolved != want {
-		t.Fatalf("safeArchivePath(%q) = %q, want %q", accepted, resolved, want)
-	}
-}
-
-func TestExtractTarGzipRejectsSymlinkedParentEscape(t *testing.T) {
-	// Plant a symlink inside the destination that points outside it, then
-	// extract an archive that writes a file through that symlinked directory.
-	// The entry name "linkdir/payload" is a perfectly local path, so a lexical
-	// check would allow it; the real-path parent check must resolve linkdir to
-	// its true location outside the root and refuse the write.
-	outside := t.TempDir()
-	destination := t.TempDir()
-	if err := os.Symlink(outside, filepath.Join(destination, "linkdir")); err != nil {
-		t.Fatalf("plant symlinked parent: %v", err)
-	}
-
-	var compressed bytes.Buffer
-	gzipWriter := gzip.NewWriter(&compressed)
-	tarWriter := tar.NewWriter(gzipWriter)
-	body := []byte("payload")
-	header := &tar.Header{
-		Name:     "linkdir/payload",
-		Typeflag: tar.TypeReg,
-		Mode:     defaultFileMode,
-		Size:     int64(len(body)),
-	}
-	if err := tarWriter.WriteHeader(header); err != nil {
-		t.Fatalf("WriteHeader returned error: %v", err)
-	}
-	if _, err := tarWriter.Write(body); err != nil {
-		t.Fatalf("Write returned error: %v", err)
-	}
-	if err := tarWriter.Close(); err != nil {
-		t.Fatalf("tar Close returned error: %v", err)
-	}
-	if err := gzipWriter.Close(); err != nil {
-		t.Fatalf("gzip Close returned error: %v", err)
-	}
-
-	archivePath := filepath.Join(t.TempDir(), "escape.tgz")
-	if err := os.WriteFile(archivePath, compressed.Bytes(), defaultFileMode); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
-	}
-
-	if err := extractTarGzip(archivePath, destination); err == nil {
-		t.Fatal("extractTarGzip wrote through a symlinked parent, want rejection")
-	}
-	if _, err := os.Lstat(filepath.Join(outside, "payload")); !os.IsNotExist(err) {
-		t.Fatalf("payload escaped into the outside directory: %v", err)
-	}
-}
-
-func TestExtractTarGzipRejectsEscapingSymlink(t *testing.T) {
-	var compressed bytes.Buffer
-	gzipWriter := gzip.NewWriter(&compressed)
-	tarWriter := tar.NewWriter(gzipWriter)
-	header := &tar.Header{
-		Name:     "onnxruntime/lib/evil",
-		Linkname: "../../../../../../tmp/escape",
-		Typeflag: tar.TypeSymlink,
-		Mode:     defaultFileMode,
-	}
-	if err := tarWriter.WriteHeader(header); err != nil {
-		t.Fatalf("WriteHeader returned error: %v", err)
-	}
-	if err := tarWriter.Close(); err != nil {
-		t.Fatalf("tar Close returned error: %v", err)
-	}
-	if err := gzipWriter.Close(); err != nil {
-		t.Fatalf("gzip Close returned error: %v", err)
-	}
-
-	archiveDirectory := t.TempDir()
-	archivePath := filepath.Join(archiveDirectory, "malicious.tgz")
-	if err := os.WriteFile(archivePath, compressed.Bytes(), defaultFileMode); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
-	}
-
-	destination := t.TempDir()
-	if err := extractTarGzip(archivePath, destination); err == nil {
-		t.Fatal("extractTarGzip accepted an escaping symlink, want rejection")
-	}
-	if _, err := os.Lstat(filepath.Join(destination, "lib", "evil")); !os.IsNotExist(err) {
-		t.Fatalf("escaping symlink was created despite rejection: %v", err)
-	}
 }
