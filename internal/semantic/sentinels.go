@@ -26,6 +26,18 @@ var ErrCollectionNotReady error = newSentinel(
 	"retry in a few seconds; the background collection load continues",
 )
 
+// ErrCollectionLoadDeferred reports that the daemon refused to start a
+// collection load because Milvus recently ran out of memory loading one, and
+// new loads are paused for a bounded interval. It shares the not-ready class so
+// every caller that already retries on ErrCollectionNotReady treats it the same
+// way, while its own code and hint say why the load did not start.
+var ErrCollectionLoadDeferred error = newSentinel(
+	adapterr.ClassCollectionNotReady,
+	"semantic collection load is paused after Milvus ran out of memory",
+	"collection_load_deferred",
+	"retry later; new collection loads resume once the pause elapses",
+)
+
 // ErrSearchResultIncomplete reports that Milvus returned a result set without the requested fields.
 var ErrSearchResultIncomplete error = newSentinel(
 	adapterr.ClassSearchResultIncomplete,

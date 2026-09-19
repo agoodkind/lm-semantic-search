@@ -93,15 +93,3 @@ func (limiter *collectionLoadLimiter) releaseFunc() func() {
 		})
 	}
 }
-
-// collectionLoadSlots returns the daemon-wide limiter, built on first use from
-// the configured cap. It is lazy rather than set in NewService so a Service
-// assembled without NewService still loads under the cap.
-func (service *Service) collectionLoadSlots() *collectionLoadLimiter {
-	service.collectionLoadLimitOnce.Do(func() {
-		service.collectionLoadLimit = newCollectionLoadLimiter(
-			service.cfg.MilvusMaxConcurrentCollectionLoads,
-		)
-	})
-	return service.collectionLoadLimit
-}

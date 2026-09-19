@@ -235,8 +235,8 @@ func waitForCollectionLoad(
 	}
 
 	stuck := fmt.Errorf(
-		"collection %s did not become queryable within %s after a re-issued load (load progress %s): %w",
-		collectionName, waited, loadProgressField(state), ErrCollectionNotReady,
+		"collection %s did not become queryable within %s after a re-issued load (load progress %s): %w: %w",
+		collectionName, waited, loadProgressField(state), errCollectionLoadUnrecovered, ErrCollectionNotReady,
 	)
 	slog.ErrorContext(ctx, "semantic.collection_load_unrecovered",
 		"component", "semantic",
