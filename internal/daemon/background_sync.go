@@ -367,17 +367,7 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 			continue
 		}
 
-		_, _, _, err = syncer.manager.SyncIndex(
-			iterCtx,
-			codebase.CanonicalPath,
-			model.ClientInfo{Name: "daemon-sync", PID: 0},
-		)
-		if err != nil {
-			if syncConflictError(err) {
-				continue
-			}
-			slog.ErrorContext(iterCtx, "start sync job failed", "path", codebase.CanonicalPath, "err", err)
-		}
+		syncer.startSweepSync(iterCtx, codebase)
 	}
 }
 
@@ -466,7 +456,7 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 		syncer.requeuePaths(codebaseID, relativePaths)
 		return
 	}
-	if syncer.manager.startBuildAfterEmptyRun(ctx, codebase) {
+	if syncer.startBuildAfterEmptyRun(ctx, codebase, relativePaths) {
 		return
 	}
 

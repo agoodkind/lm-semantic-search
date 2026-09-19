@@ -72,6 +72,33 @@ func TestFilesWrittenDuringBuildAfterEmptyRunAreIndexed(t *testing.T) {
 	})
 }
 
+// TestFilesInEmptyWorktreeWaitForSiblingFirstBuild proves the watcher does not
+// start a build for files arriving in a worktree whose last build indexed
+// nothing while a sibling's first build is running. It keeps the paths and
+// builds them from the sibling's vectors once that first build completes.
+func TestFilesInEmptyWorktreeWaitForSiblingFirstBuild(t *testing.T) {
+	harness := newHarnessWith(t, harnessOptions{
+		fileWatcher:            true,
+		backgroundSync:         false,
+		maxConcurrentIndexJobs: restartedConcurrentIndexJobs,
+		resumeOnBoot:           false,
+	})
+
+	repository := newEmptyRepository(t)
+	gitRun(t, repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "--message", "start empty")
+	worktree := addNestedWorktree(t, repository)
+	emptyRun := harness.waitForJob(harness.startIndexAt(worktree))
+	requireCompleted(t, emptyRun)
+	if processed := emptyRun.GetProgress().GetFilesProcessed(); processed != 0 {
+		t.Fatalf("empty worktree run processed %d files, want 0", processed)
+	}
+
+	writeGeneratedSources(t, repository, heldParentFileCount)
+	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, func() {
+		writeGeneratedSources(t, worktree, heldParentFileCount)
+	})
+}
+
 // newEmptyIndexedDirectory creates an empty directory, indexes it, and returns
 // its resolved path once that build has completed with no file.
 func (harness *harness) newEmptyIndexedDirectory() string {

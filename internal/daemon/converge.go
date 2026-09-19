@@ -60,28 +60,6 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 	return manager.convergePathsWithLstat(ctx, codebaseID, relativePaths, progress, os.Lstat)
 }
 
-// startBuildAfterEmptyRun starts a sync in place of a watcher converge for a
-// codebase whose last completed run indexed no file, and reports whether it did.
-// That run created no collection, so a per-path converge would drop every path
-// as collection_missing. A sync routes the missing collection to a full build of
-// the whole tree. The caller checks for an active job first, so a batch that
-// arrives while that build runs is requeued rather than folded into a build
-// whose walk may already have passed its paths.
-func (manager *Manager) startBuildAfterEmptyRun(ctx context.Context, codebase model.Codebase) bool {
-	if !ranWithoutCreatingACollection(codebase.LastSuccessfulRun) {
-		return false
-	}
-	job, _, deduplicated, err := manager.SyncIndex(ctx, codebase.CanonicalPath, model.ClientInfo{Name: "daemon-watcher", PID: 0})
-	if err != nil {
-		if !syncConflictError(err) {
-			slog.ErrorContext(ctx, "start build after empty run failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
-		}
-		return true
-	}
-	slog.InfoContext(ctx, "watcher started build after empty run", "codebase_id", codebase.ID, "job_id", job.ID, "deduplicated", deduplicated)
-	return true
-}
-
 func (manager *Manager) convergePathsWithLstat(ctx context.Context, codebaseID string, relativePaths []string, progress ConvergeProgressFunc, lstat convergeLstatFunc) (outcome ConvergeOutcome, err error) {
 	return manager.convergePathsWithLstatAndNow(ctx, codebaseID, relativePaths, progress, lstat, time.Now)
 }

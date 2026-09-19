@@ -43,7 +43,7 @@ func TestRestartedInterruptedWorktreeWaitsForSiblingFirstBuild(t *testing.T) {
 	harness.startIndexAt(worktree)
 	harness.restart(restartedHeldOptions())
 
-	harness.requireWorktreeBuildWaitsForSibling(repository, worktree)
+	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, nil)
 }
 
 // TestRestartedFailedWorktreeRetryWaitsForSiblingFirstBuild proves the failed
@@ -67,7 +67,7 @@ func TestRestartedFailedWorktreeRetryWaitsForSiblingFirstBuild(t *testing.T) {
 	setDirectoryMode(t, worktree, readableDirectoryMode)
 	harness.restart(restartedHeldOptions())
 
-	harness.requireWorktreeBuildWaitsForSibling(repository, worktree)
+	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, nil)
 }
 
 // TestCrashResumedWorktreeWaitsForSiblingFirstBuild proves boot resume does not
@@ -95,7 +95,7 @@ func TestCrashResumedWorktreeWaitsForSiblingFirstBuild(t *testing.T) {
 
 	harness.start(options, false)
 	t.Cleanup(harness.teardown)
-	harness.requireWorktreeBuildWaitsForSibling(repository, worktree)
+	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, nil)
 }
 
 // waitForBuildUnderway waits until the build of path has checkpointed files.
@@ -118,20 +118,24 @@ func restartedHeldOptions() harnessOptions {
 	}
 }
 
-// requireWorktreeBuildWaitsForSibling starts the sibling's first build on the
-// restarted daemon and asserts the worktree starts no build through the first
+// requireWorktreeBuildWaitsForSibling starts the sibling's first build and
+// asserts the worktree starts no build for a window covering the first
 // background sweep while it runs, then builds from the sibling's vectors once it
-// completes.
-func (harness *harness) requireWorktreeBuildWaitsForSibling(repository string, worktree string) {
+// completes. afterSiblingStarts, when set, runs once the sibling's build has
+// started.
+func (harness *harness) requireWorktreeBuildWaitsForSibling(repository string, worktree string, afterSiblingStarts func()) {
 	harness.t.Helper()
 
 	registered, found := harness.codebaseAt(worktree)
 	if !found {
-		harness.t.Fatalf("worktree %s is not registered after the restart", worktree)
+		harness.t.Fatalf("worktree %s is not registered", worktree)
 	}
 	earlierJobs := harness.jobIDsFor(registered.GetId())
 
 	parentJobID := harness.startIndexAt(repository)
+	if afterSiblingStarts != nil {
+		afterSiblingStarts()
+	}
 	deadline := time.Now().Add(firstSweepSettle)
 	for time.Now().Before(deadline) {
 		if job := harness.indexStatusAt(worktree).GetActiveJob(); job != nil {
