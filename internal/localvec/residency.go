@@ -13,6 +13,12 @@ func (store *Store) PrepareCollection(context.Context, string) error {
 	return nil
 }
 
+// SetMaintenance is a no-op because the local backend has no collection loads
+// to pause; the daemon's own maintenance gates cover its sweeps and writes.
+func (store *Store) SetMaintenance(bool) {
+	_ = store
+}
+
 // PinStaging satisfies the shared staging lifecycle without external residency.
 func (store *Store) PinStaging(
 	ctx context.Context,

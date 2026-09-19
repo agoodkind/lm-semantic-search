@@ -38,6 +38,14 @@ service SemanticSearchDaemonService {
   rpc SearchWithinConversation(SearchWithinConversationRequest) returns (SearchWithinConversationResponse);
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  // SetMaintenanceMode turns maintenance mode on or off in the running daemon.
+  // While it is on the daemon starts no background sweep, repair pass,
+  // automatic rebuild, or collection load, refuses index and conversation
+  // writes, and fails searches fast with a maintenance status, so an operator
+  // can back up or restore Milvus with no daemon traffic against it. The mode
+  // is persisted in the daemon state root, so a daemon restart mid-maintenance
+  // comes back still paused.
+  rpc SetMaintenanceMode(SetMaintenanceModeRequest) returns (SetMaintenanceModeResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
@@ -501,6 +509,10 @@ message GetIndexResponse {
   // "absent", "idle", "building", "loading", "ready", or "unknown". Status
   // observations never load an idle collection. Search loads it on demand.
   string collection_readiness = 8;
+  // maintenance reports whether the daemon is in maintenance mode. While it is
+  // on, searchable is false because search_code fails fast rather than loading
+  // the collection.
+  MaintenanceStatus maintenance = 9;
 }
 
 // PathClassification reports how the daemon sees one queried path with
@@ -841,6 +853,32 @@ message ShutdownResponse {
   bool accepted = 1;
 }
 
+// MaintenanceStatus is the daemon's maintenance mode. since is when the
+// current mode began and reason is the operator's note, both empty while off.
+// Timestamps are UTC on the wire.
+message MaintenanceStatus {
+  bool enabled = 1;
+  string reason = 2;
+  google.protobuf.Timestamp since = 3;
+}
+
+message SetMaintenanceModeRequest {
+  bool enabled = 1;
+  // reason is the operator's note, shown on every status surface while
+  // maintenance is on. Ignored when enabled is false.
+  string reason = 2;
+  ClientInfo client = 3;
+}
+
+message SetMaintenanceModeResponse {
+  MaintenanceStatus maintenance = 1;
+  // active_jobs counts the jobs still running when the mode changed. Turning
+  // maintenance on stops new work only; a job already embedding keeps going
+  // until it ends or the operator cancels it.
+  int32 active_jobs = 2;
+  string display_text = 3;
+}
+
 // Metric is one named observation. name is a string value rather than a
 // protobuf field name, so protojson casing never touches it and a counter reads
 // identically on the terminal, in piped text, in JSON, and in the
@@ -907,4 +945,5 @@ message GetStatusResponse {
   repeated ActivityRow activity = 4;
   string display_text = 5;
   ActivitySourceStatus activity_source = 6;
+  MaintenanceStatus maintenance = 7;
 }

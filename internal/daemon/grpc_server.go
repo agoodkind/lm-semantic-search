@@ -50,40 +50,6 @@ func toDependencyHealth(health dependencyHealth) *pb.DependencyHealth {
 	return result
 }
 
-// appendCorrelationRef prefixes one compact diagnostics line to a display
-// text so every successful response starts with a greppable correlation
-// header. Extras are key/value pairs for ids the trace context does not
-// already carry, such as codebase_id and job_id.
-func appendCorrelationRef(displayText string, ctx context.Context, extras ...string) string {
-	corr := correlation.FromContext(ctx)
-	line := correlation.HeaderLine(corr, extras...)
-	if line == "" {
-		return displayText
-	}
-	if strings.TrimSpace(displayText) == "" {
-		return line
-	}
-	return line + "\n" + displayText
-}
-
-// envelopeText composes the human-facing display text for a read surface as the
-// shared envelope: the dependency-health banner (only when a shared dependency is
-// degraded), then the correlation header, then the body, joined with single
-// newlines. It is the one place the banner is prepended, so every surface shows
-// exactly one banner and the body renderers never carry it. The caller passes the
-// health snapshot it already read so the banner and the body agree.
-func (server *GRPCServer) envelopeText(ctx context.Context, health dependencyHealth, body string, extras ...string) string {
-	withHeader := appendCorrelationRef(body, ctx, extras...)
-	banner := render.HealthBanner(resolveBannerView(health, server.manager.config))
-	if banner == "" {
-		return withHeader
-	}
-	if strings.TrimSpace(withHeader) == "" {
-		return banner
-	}
-	return banner + "\n" + withHeader
-}
-
 // jobIDOf returns the id of job or "" when job is nil, so callers can fold
 // optional job ids into appendCorrelationRef without nil checks.
 func jobIDOf(job *model.Job) string {
@@ -228,6 +194,9 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 	if pathErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
 	}
+	if refusal := server.refuseDuringMaintenance(ctx); refusal != nil {
+		return nil, refusal
+	}
 	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndexWithPolicy(ctx, requestedPath, pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce(), pbconv.FromStartIndexBudget(request), policyPatch)
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
@@ -278,6 +247,9 @@ func (server *GRPCServer) ClearIndex(ctx context.Context, request *pb.ClearIndex
 	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
 	if pathErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+	}
+	if refusal := server.refuseDuringMaintenance(ctx); refusal != nil {
+		return nil, refusal
 	}
 	codebase, callErr := server.manager.ClearIndex(ctx, requestedPath, pbClient(request.GetClient()))
 	if callErr != nil {
@@ -340,6 +312,9 @@ func (server *GRPCServer) SyncIndex(ctx context.Context, request *pb.SyncIndexRe
 	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
 	if pathErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
+	}
+	if refusal := server.refuseDuringMaintenance(ctx); refusal != nil {
+		return nil, refusal
 	}
 	job, codebase, deduplicated, callErr := server.manager.SyncIndexWithPolicy(ctx, requestedPath, pbClient(request.GetClient()), policyPatch)
 	if callErr != nil {
@@ -469,13 +444,15 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	// new(expr) form compiles under this module's go directive, but it reads as
 	// an error to anyone who knows the older builtin, and it needs the newer
 	// language version to build at all.
-	searchable := computeSearchable(searchableEligible, health.Mode, readiness)
+	maintenance := server.manager.Maintenance()
+	searchable := computeSearchable(searchableEligible, health.Mode, readiness, maintenance.Enabled)
 	response := &pb.GetIndexResponse{
 		Tracked:             found,
 		Classification:      pbconv.ToPathClassification(classification),
 		DependencyHealth:    toDependencyHealth(health),
 		Searchable:          &searchable,
 		CollectionReadiness: string(readiness),
+		Maintenance:         toMaintenanceStatus(maintenance),
 		DisplayText:         server.envelopeText(ctx, health, render.GetIndex(getIndexView), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
 	}
 	if found {
@@ -700,6 +677,9 @@ func (server *GRPCServer) DeleteConversation(ctx context.Context, request *pb.De
 	}
 	if argErr := requireNonEmpty(ctx, request.GetConversationId(), "conversation_id", false); argErr != nil {
 		return nil, argErr
+	}
+	if refusal := server.refuseDuringMaintenance(ctx); refusal != nil {
+		return nil, refusal
 	}
 	job, callErr := server.manager.deleteConversation(
 		ctx,

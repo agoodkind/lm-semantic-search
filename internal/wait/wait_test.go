@@ -348,6 +348,10 @@ func (client *mockDaemonClient) GetStatus(context.Context, *pb.GetStatusRequest,
 	return nil, errors.New("not implemented")
 }
 
+func (client *mockDaemonClient) SetMaintenanceMode(context.Context, *pb.SetMaintenanceModeRequest, ...grpc.CallOption) (*pb.SetMaintenanceModeResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (client *mockDaemonClient) Shutdown(context.Context, *pb.ShutdownRequest, ...grpc.CallOption) (*pb.ShutdownResponse, error) {
 	return nil, errors.New("not implemented")
 }

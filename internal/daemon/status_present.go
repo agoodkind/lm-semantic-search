@@ -64,6 +64,7 @@ func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, depende
 		Collection:              readiness,
 		Search:                  status.SearchNone,
 		SearchableEligible:      false,
+		Maintenance:             false,
 	}).Display
 }
 
@@ -72,9 +73,10 @@ func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, depende
 // classification with the dependency health inline at the RPC boundary. It is the
 // searchable-bit mirror of computeDisplayStatus: searchableEligible is the
 // per-path indexed precondition and pipelineDegraded carries whether the shared
-// backend is degraded, and status.ResolveSearchable owns the fold so the wire
-// `searchable` field and the displayed status cannot diverge.
-func computeSearchable(searchableEligible bool, dependency dependencyMode, readiness status.CollectionReadiness) bool {
+// backend is degraded, maintenance carries the operator's maintenance mode, and
+// status.ResolveSearchable owns the fold so the wire `searchable` field and the
+// displayed status cannot diverge.
+func computeSearchable(searchableEligible bool, dependency dependencyMode, readiness status.CollectionReadiness, maintenance bool) bool {
 	return status.Resolve(status.Inputs{
 		Status:                  "",
 		HasActiveJob:            false,
@@ -86,6 +88,7 @@ func computeSearchable(searchableEligible bool, dependency dependencyMode, readi
 		Collection:              readiness,
 		Search:                  status.SearchNone,
 		SearchableEligible:      searchableEligible,
+		Maintenance:             maintenance,
 	}).Searchable
 }
 

@@ -1,12 +1,20 @@
 package semantic
 
-import "sync"
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+)
 
 // collectionLoadGates holds the daemon-wide checks every collection load
-// passes through before it reaches Milvus: the concurrency limiter and the
-// memory-exhaustion backoff. Both are built on first use from the service
-// config, so a Service assembled without NewService still loads under them.
+// passes through before it reaches Milvus: the operator's maintenance mode,
+// the concurrency limiter, and the memory-exhaustion backoff. The limiter and
+// backoff are built on first use from the service config, so a Service
+// assembled without NewService still loads under them.
 type collectionLoadGates struct {
+	maintenance atomic.Bool
 	limitOnce   sync.Once
 	limit       *collectionLoadLimiter
 	backoffOnce sync.Once
@@ -15,11 +23,36 @@ type collectionLoadGates struct {
 
 func newCollectionLoadGates() collectionLoadGates {
 	return collectionLoadGates{
+		maintenance: atomic.Bool{},
 		limitOnce:   sync.Once{},
 		limit:       nil,
 		backoffOnce: sync.Once{},
 		backoff:     nil,
 	}
+}
+
+// SetMaintenance turns the maintenance gate on or off. While it is on every
+// new collection load is refused with ErrMaintenance before any request
+// reaches Milvus; loads already in flight finish on their own, and loaded
+// collections keep serving the callers that already hold them.
+func (service *Service) SetMaintenance(enabled bool) {
+	service.loadGates.maintenance.Store(enabled)
+}
+
+// refuseLoadDuringMaintenance returns the maintenance refusal for
+// collectionName while the gate is on, and nil otherwise.
+func (service *Service) refuseLoadDuringMaintenance(ctx context.Context, collectionName string) error {
+	if !service.loadGates.maintenance.Load() {
+		return nil
+	}
+	err := fmt.Errorf("load of collection %s refused: %w", collectionName, ErrMaintenance)
+	slog.WarnContext(ctx, "semantic.collection_load_refused_maintenance",
+		"component", "semantic",
+		"subcomponent", "load",
+		"collection", collectionName,
+		"err", err,
+	)
+	return err
 }
 
 // collectionLoadSlots returns the daemon-wide limiter, built on first use from
