@@ -231,7 +231,7 @@ func (manager *Manager) siblingFirstBuildInProgressLocked(worktreeRoot string, c
 		if _, ok := siblings[codebase.CanonicalPath]; !ok {
 			continue
 		}
-		if codebase.ActiveJobID != "" && !ownsLiveCollection(codebase) {
+		if manager.activeJobSnapshotLocked(codebase) != nil && !ownsLiveCollection(codebase) {
 			return true
 		}
 	}
@@ -286,7 +286,7 @@ func (manager *Manager) startHeldSiblingWorktreeBuilds(ctx context.Context, code
 		if _, ok := siblings[codebase.CanonicalPath]; !ok {
 			continue
 		}
-		if codebase.Status == model.CodebaseStatusDiscovered && codebase.ActiveJobID == "" {
+		if codebase.Status == model.CodebaseStatusDiscovered && manager.activeJobSnapshotLocked(codebase) == nil {
 			held = append(held, codebase.CanonicalPath)
 		}
 	}
