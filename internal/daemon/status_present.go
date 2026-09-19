@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/gitworktree"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/pbconv"
 	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/status"
 	"goodkind.io/lm-semantic-search/internal/view"
@@ -140,59 +140,6 @@ func resolveSchedulingView(
 		string(state),
 		view.SchedulingReason(reason),
 	)
-}
-
-// resolveCodebaseFailure reduces a codebase's raw failure record into the
-// render-facing failure view, the codebase-side mirror of resolveJobSurface. It
-// is the only reader of codebase.LastFailedRun outside the lifecycle logic, kept
-// here at the boundary rather than in the render layer the guard test holds free
-// of raw failure reads.
-func resolveCodebaseFailure(codebase model.Codebase) view.FailureSurface {
-	if codebase.LastFailedRun == nil {
-		return emptyFailureSurface()
-	}
-	return view.FailureSurface{
-		HasFailure:    true,
-		Message:       codebase.LastFailedRun.Message,
-		FailedAtLabel: formatBoundaryTime(codebase.LastFailedRun.FailedAt),
-		JobID:         codebase.LastFailedRun.JobID,
-		TraceID:       codebase.LastFailedRun.TraceID,
-	}
-}
-
-func emptyFailureSurface() view.FailureSurface {
-	return view.FailureSurface{
-		HasFailure:    false,
-		Message:       "",
-		FailedAtLabel: "",
-		JobID:         "",
-		TraceID:       "",
-	}
-}
-
-func resolveQuarantineSurface(codebase model.Codebase) view.QuarantineSurface {
-	if codebase.Quarantine == nil {
-		return view.QuarantineSurface{
-			HasQuarantine:      false,
-			Reason:             "",
-			FirstObservedLabel: "",
-			LastObservedLabel:  "",
-			ObservationCount:   0,
-			MissingCount:       0,
-			TotalCount:         0,
-			Trigger:            "",
-		}
-	}
-	return view.QuarantineSurface{
-		HasQuarantine:      true,
-		Reason:             codebase.Quarantine.Reason,
-		FirstObservedLabel: formatBoundaryTime(codebase.Quarantine.FirstObservedAt),
-		LastObservedLabel:  formatBoundaryTime(codebase.Quarantine.LastObservedAt),
-		ObservationCount:   codebase.Quarantine.ObservationCount,
-		MissingCount:       codebase.Quarantine.LastMissingCount,
-		TotalCount:         codebase.Quarantine.LastTotalCount,
-		Trigger:            codebase.Quarantine.LastTrigger,
-	}
 }
 
 // resolveStatusView builds the template view for an active or ready codebase.
@@ -495,7 +442,6 @@ func jobScopeKnown(progress model.Progress) bool {
 
 // resolveGetIndexView assembles the full codebase status response view.
 func (manager *Manager) resolveGetIndexView(
-	ctx context.Context,
 	requestedPath string,
 	tracked bool,
 	codebase *model.Codebase,
@@ -507,24 +453,12 @@ func (manager *Manager) resolveGetIndexView(
 	descendants []model.Codebase,
 ) view.GetIndexView {
 	getIndex := view.GetIndexView{
-		Tracked:       tracked,
-		RequestedPath: requestedPath,
-		CanonicalPath: "",
-		Display:       "",
-		TemplateName:  "",
-		Status:        blankStatusView("", ""),
-		Failure:       emptyFailureSurface(),
-		Quarantine: view.QuarantineSurface{
-			HasQuarantine:      false,
-			Reason:             "",
-			FirstObservedLabel: "",
-			LastObservedLabel:  "",
-			ObservationCount:   0,
-			MissingCount:       0,
-			TotalCount:         0,
-			Trigger:            "",
-		},
-		Narrative:          view.StatusNarrative{Lines: nil},
+		Tracked:            tracked,
+		RequestedPath:      requestedPath,
+		CanonicalPath:      "",
+		Display:            "",
+		Raw:                blankRawStatus(),
+		Status:             blankStatusView("", ""),
 		WaitLabel:          "",
 		ClassificationLine: classificationLine(classification),
 		ResolutionLines:    pathResolutionLines(requestedPath),
@@ -539,20 +473,87 @@ func (manager *Manager) resolveGetIndexView(
 	getIndex.CanonicalPath = codebase.CanonicalPath
 	display := computeDisplayStatus(*codebase, activeJob, health.Mode, readiness)
 	getIndex.Display = view.Display(display)
-	getIndex.Failure = resolveCodebaseFailure(*codebase)
-	getIndex.Quarantine = resolveQuarantineSurface(*codebase)
-	statusView, templateName := resolveStatusView(*codebase, activeJob, display, health.Mode)
-	if display == displayIndexed {
-		statusView.CurrentIndex = manager.currentIndexCounts(ctx, *codebase, observedRows)
-	}
-	if display == displayDiscovered {
-		statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
-	}
-	resolveGraphStatusFields(&statusView, *codebase, manager.graphIndexing(codebase.ID))
-	getIndex.Status = statusView
-	getIndex.TemplateName = templateName
-	getIndex.Narrative = resolveStatusNarrative(display, codebase.CanonicalPath, readiness, getIndex.Failure, getIndex.Quarantine, statusView)
+	getIndex.Raw = resolveRawStatus(*codebase, activeJob, readiness, observedRows)
+	getIndex.Status.Scheduling = resolveSchedulingView(codebase.SchedulingPolicy, "", "")
 	return getIndex
+}
+
+// blankRawStatus returns a fully zeroed raw status, so each caller sets only the
+// groups whose source exists.
+func blankRawStatus() view.RawStatus {
+	return view.RawStatus{
+		CodebaseID:       "",
+		StoredStatus:     "",
+		Collection:       "",
+		CollectionRows:   nil,
+		HasJob:           false,
+		JobID:            "",
+		Operation:        "",
+		JobState:         "",
+		Trigger:          "",
+		Phase:            "",
+		FilesProcessed:   0,
+		FilesTotal:       0,
+		ChunksEmbedded:   0,
+		ChunksReused:     0,
+		OverallPercent:   0,
+		LastEventAt:      "",
+		HasLastRun:       false,
+		LastRunFiles:     0,
+		LastRunChunks:    0,
+		LastRunCompleted: "",
+		HasFailure:       false,
+		FailureMessage:   "",
+		FailureJobID:     "",
+		FailureTraceID:   "",
+		FailureFailedAt:  "",
+		GraphState:       "",
+		GraphUpdatedAt:   "",
+	}
+}
+
+// resolveRawStatus copies the literal stored values for the human status body:
+// the registry status, the collection probe result, the live job, the last
+// completed run, the last failure, and the graph state. It maps none of them to
+// a display word.
+func resolveRawStatus(codebase model.Codebase, activeJob *model.Job, readiness status.CollectionReadiness, observedRows *int32) view.RawStatus {
+	raw := blankRawStatus()
+	raw.CodebaseID = codebase.ID
+	raw.StoredStatus = string(codebase.Status)
+	raw.Collection = string(readiness)
+	raw.CollectionRows = observedRows
+	raw.GraphState = string(codebase.GraphState)
+	raw.GraphUpdatedAt = formatStampWithRelative(codebase.GraphUpdatedAt)
+	if activeJob != nil {
+		progress := activeJob.Progress
+		raw.HasJob = true
+		raw.JobID = activeJob.ID
+		raw.Operation = activeJob.Operation
+		raw.JobState = string(activeJob.State)
+		// The trigger token comes from the one converter every other surface uses.
+		raw.Trigger = pbconv.ToJob(*activeJob).GetTrigger()
+		raw.Phase = progress.Phase
+		raw.FilesProcessed = progress.FilesProcessed
+		raw.FilesTotal = progress.FilesTotal
+		raw.ChunksEmbedded = progress.ChunksEmbedded
+		raw.ChunksReused = progress.ChunksReused
+		raw.OverallPercent = progress.OverallPercent
+		raw.LastEventAt = formatStampWithRelative(progress.LastEventAt)
+	}
+	if run := codebase.LastSuccessfulRun; run != nil {
+		raw.HasLastRun = true
+		raw.LastRunFiles = run.IndexedFiles
+		raw.LastRunChunks = run.TotalChunks
+		raw.LastRunCompleted = formatStampWithRelative(run.CompletedAt)
+	}
+	if failure := codebase.LastFailedRun; failure != nil {
+		raw.HasFailure = true
+		raw.FailureMessage = failure.Message
+		raw.FailureJobID = failure.JobID
+		raw.FailureTraceID = failure.TraceID
+		raw.FailureFailedAt = formatStampWithRelative(failure.FailedAt)
+	}
+	return raw
 }
 
 func mcpMissingPathError(clientName string, requestedPath string) string {
@@ -564,35 +565,6 @@ func mcpMissingPathError(clientName string, requestedPath string) string {
 		return ""
 	}
 	return err.Error()
-}
-
-func (manager *Manager) currentIndexCounts(
-	ctx context.Context,
-	codebase model.Codebase,
-	observedRows *int32,
-) view.CurrentIndexCounts {
-	if ranWithoutCreatingACollection(codebase.LastSuccessfulRun) {
-		indexedFiles := int32(0)
-		totalChunks := int32(0)
-		return view.CurrentIndexCounts{
-			IndexedFiles: &indexedFiles,
-			TotalChunks:  &totalChunks,
-		}
-	}
-
-	counts := view.CurrentIndexCounts{
-		IndexedFiles: nil,
-		TotalChunks:  nil,
-	}
-	checkpoint := manager.loadLiveCheckpoint(ctx, codebase, codebase.EffectiveConfig.IgnoreDigest)
-	if checkpoint.usable() {
-		indexedFiles := safeInt32(len(checkpoint.snapshot.Files))
-		counts.IndexedFiles = &indexedFiles
-	}
-	if ownsLiveCollection(codebase) && observedRows != nil {
-		counts.TotalChunks = observedRows
-	}
-	return counts
 }
 
 func resolveGraphStatusFields(statusView *view.StatusView, codebase model.Codebase, graphBuilding bool) {
@@ -616,16 +588,6 @@ func resolveGraphStatusFields(statusView *view.StatusView, codebase model.Codeba
 		return
 	}
 	statusView.GraphNotBuilt = true
-}
-
-// reuseForecastLine renders the discovered-worktree reuse forecast, or empty
-// when the worktree has no eligible sibling to reuse from. The count is a sibling
-// collection count, computed without a vector-store call.
-func reuseForecastLine(siblingCount int32) string {
-	if siblingCount <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("♻️ reuses embeddings from %d indexed sibling %s", siblingCount, plural("worktree", int(siblingCount)))
 }
 
 // descendantsHint replaces the bare not-indexed message for a path that already

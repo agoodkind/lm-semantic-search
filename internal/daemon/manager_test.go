@@ -20,10 +20,8 @@ import (
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
-	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
-	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 type fakeRunner struct {
@@ -976,75 +974,6 @@ func TestRunDeltaSyncConvergesDeletedFileToRemoval(t *testing.T) {
 		if _, present := snapshot.Files[name]; !present {
 			t.Fatalf("snapshot dropped %s; a removal must not affect other files; have %v", name, snapshot.Files)
 		}
-	}
-}
-
-// TestRenderHistoricalFailureIncludesCorrelationIds proves a failed-run
-// status line carries the trace_id and job_id so the operator can resolve it
-// against the daemon's structured logs.
-func TestRenderHistoricalFailureIncludesCorrelationIds(t *testing.T) {
-	t.Parallel()
-
-	codebase := model.Codebase{
-		CanonicalPath: "/repo",
-		LastFailedRun: &model.IndexRunFailure{
-			Message:                 "boom",
-			LastAttemptedPercentage: 42,
-			FailedAt:                time.Now(),
-			TraceID:                 "trace-abc",
-			JobID:                   "job-xyz",
-		},
-	}
-	failure := resolveCodebaseFailure(codebase)
-	out := render.GetIndex(view.GetIndexView{
-		Tracked:       true,
-		RequestedPath: codebase.CanonicalPath,
-		CanonicalPath: codebase.CanonicalPath,
-		Display:       view.Display(displayFailed),
-		Failure:       failure,
-		Narrative:     resolveStatusNarrative(displayFailed, codebase.CanonicalPath, collectionNotApplicable, failure, view.QuarantineSurface{}, view.StatusView{}),
-	})
-	if !strings.Contains(out, "trace_id=trace-abc") {
-		t.Fatalf("render output missing trace_id; got %q", out)
-	}
-	// The diagnostics line leads with the failed job and folds the trace into
-	// parentheses, so it reads as the past failure's reference rather than a
-	// second request-trace line.
-	if !strings.Contains(out, "Failed job job-xyz") {
-		t.Fatalf("render output missing failed-job reference; got %q", out)
-	}
-}
-
-func TestRenderStaleStatusIncludesRepairReason(t *testing.T) {
-	t.Parallel()
-
-	codebase := model.Codebase{
-		CanonicalPath: "/repo",
-		LastFailedRun: &model.IndexRunFailure{
-			Message:                 "Milvus collection missing; automatic rebuild could not start: boom",
-			LastAttemptedPercentage: 0,
-			FailedAt:                time.Now(),
-			TraceID:                 "trace-abc",
-			JobID:                   "job-xyz",
-		},
-	}
-	failure := resolveCodebaseFailure(codebase)
-	out := render.GetIndex(view.GetIndexView{
-		Tracked:       true,
-		RequestedPath: codebase.CanonicalPath,
-		CanonicalPath: codebase.CanonicalPath,
-		Display:       view.Display(displayStale),
-		Failure:       failure,
-		Narrative:     resolveStatusNarrative(displayStale, codebase.CanonicalPath, collectionNotApplicable, failure, view.QuarantineSurface{}, view.StatusView{}),
-	})
-	if !strings.Contains(out, "is stale") {
-		t.Fatalf("render output missing stale marker; got %q", out)
-	}
-	if !strings.Contains(out, "automatic rebuild could not start") {
-		t.Fatalf("render output missing repair detail; got %q", out)
-	}
-	if !strings.Contains(out, "trace_id=trace-abc") {
-		t.Fatalf("render output missing trace_id; got %q", out)
 	}
 }
 
