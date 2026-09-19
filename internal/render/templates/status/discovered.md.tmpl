@@ -3,5 +3,9 @@
 {{- if .ReuseForecastLine }}
 {{ .ReuseForecastLine }}
 {{- end }}
+{{- if .HeldForSiblingBuild }}
+💡 builds when that index finishes
+{{- else }}
 💡 builds shortly, or run index_codebase
+{{- end }}
 {{ template "statusFooter" . }}

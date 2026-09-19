@@ -462,10 +462,15 @@ type StatusView struct {
 	Breakdown OutcomeBreakdown
 	// ReuseForecastLine is the pre-rendered reuse forecast for a discovered
 	// (not-yet-built) worktree, for example "reuses embeddings from 1 indexed
-	// sibling worktree". Empty for every other state. It is built from git
-	// topology and the registry with no vector-store call, so the status read that
-	// produces it stays cheap.
-	ReuseForecastLine            string
+	// sibling worktree", or the wait line when HeldForSiblingBuild is set. Empty
+	// for every other state. It is built from git topology and the registry with
+	// no vector-store call, so the status read that produces it stays cheap.
+	ReuseForecastLine string
+	// HeldForSiblingBuild means a discovered worktree's build waits for a sibling
+	// worktree's first index to finish. The template then neither promises that
+	// it builds shortly nor suggests index_codebase, which would embed the content
+	// that index is about to hold.
+	HeldForSiblingBuild          bool
 	RawStatus                    string
 	CurrentIndex                 CurrentIndexCounts
 	Files                        int32

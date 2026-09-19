@@ -311,22 +311,23 @@ func resolveIndexedStatusView(
 // timestamp set, so each caller fills the subset its template reads.
 func blankStatusView(name string, updatedAt string) view.StatusView {
 	return view.StatusView{
-		Name:              name,
-		Path:              "",
-		HasStats:          false,
-		Files:             0,
-		Chunks:            0,
-		SkippedLine:       "",
-		PrepareLabel:      "",
-		WaitLabel:         "",
-		Percent:           0,
-		Heading:           "",
-		FilesInCodebase:   0,
-		FilesChanged:      0,
-		FilesUnchanged:    0,
-		Breakdown:         view.ZeroBreakdown(),
-		ReuseForecastLine: "",
-		RawStatus:         "",
+		Name:                name,
+		Path:                "",
+		HasStats:            false,
+		Files:               0,
+		Chunks:              0,
+		SkippedLine:         "",
+		PrepareLabel:        "",
+		WaitLabel:           "",
+		Percent:             0,
+		Heading:             "",
+		FilesInCodebase:     0,
+		FilesChanged:        0,
+		FilesUnchanged:      0,
+		Breakdown:           view.ZeroBreakdown(),
+		ReuseForecastLine:   "",
+		HeldForSiblingBuild: false,
+		RawStatus:           "",
 		CurrentIndex: view.CurrentIndexCounts{
 			IndexedFiles: nil,
 			TotalChunks:  nil,
@@ -546,7 +547,12 @@ func (manager *Manager) resolveGetIndexView(
 		statusView.CurrentIndex = manager.currentIndexCounts(ctx, *codebase, observedRows)
 	}
 	if display == displayDiscovered {
-		statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
+		if manager.waitsForSiblingFirstBuild(codebase.CanonicalPath) {
+			statusView.ReuseForecastLine = heldForSiblingForecastLine
+			statusView.HeldForSiblingBuild = true
+		} else {
+			statusView.ReuseForecastLine = reuseForecastLine(manager.worktreeReuseForecast(*codebase))
+		}
 	}
 	resolveGraphStatusFields(&statusView, *codebase, manager.graphIndexing(codebase.ID))
 	getIndex.Status = statusView
@@ -627,6 +633,11 @@ func reuseForecastLine(siblingCount int32) string {
 	}
 	return fmt.Sprintf("♻️ reuses embeddings from %d indexed sibling %s", siblingCount, plural("worktree", int(siblingCount)))
 }
+
+// heldForSiblingForecastLine replaces the reuse forecast for a discovered
+// worktree whose build waits for a sibling's first index. It promises no reuse,
+// because a sibling build that fails or is cancelled leaves nothing to reuse.
+const heldForSiblingForecastLine = "⏳ waits for its sibling worktree's first index to finish"
 
 // descendantsHint replaces the bare not-indexed message for a path that already
 // has indexed sub-folders. It names the sub-folders, totals their indexed files,

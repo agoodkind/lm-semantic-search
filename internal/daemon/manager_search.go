@@ -30,13 +30,18 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 	// A worktree the daemon just discovered on this read has no collection yet,
 	// so there is nothing to search and serving the parent's collection would
 	// return wrong-branch content. Return the discovered note with no results; the
-	// deferred build (already scheduled by GetIndex) makes it searchable shortly.
+	// deferred build (already scheduled by GetIndex) makes it searchable shortly,
+	// unless it waits for a sibling's first index, which the note then names.
 	if codebase.Status == model.CodebaseStatusDiscovered {
+		stateNote := heldForSiblingSearchNote
+		if !manager.waitsForSiblingFirstBuild(codebase.CanonicalPath) {
+			stateNote = discoveredSearchNote(manager.worktreeReuseForecast(codebase))
+		}
 		return SearchOutcome{
 			Codebase:  codebase,
 			ActiveJob: activeJob,
 			Results:   []model.StoredChunk{},
-			StateNote: discoveredSearchNote(manager.worktreeReuseForecast(codebase)),
+			StateNote: stateNote,
 		}, nil
 	}
 	stateNote := ""
@@ -139,6 +144,12 @@ func discoveredSearchNote(siblingCount int32) string {
 	}
 	return note + ". Search again shortly."
 }
+
+// heldForSiblingSearchNote is the discovered note for a worktree whose build
+// waits for a sibling's first index, so it names that wait instead of claiming
+// the build is starting. It promises no reuse, because a sibling build that
+// fails or is cancelled leaves nothing to reuse.
+const heldForSiblingSearchNote = "🔎 This worktree was just discovered and is not indexed yet; it builds after its sibling worktree's first index finishes. Search again after that."
 
 func quarantinedSearchNote(quarantine *model.QuarantineState) string {
 	if quarantine == nil {

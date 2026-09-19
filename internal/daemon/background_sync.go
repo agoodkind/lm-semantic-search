@@ -466,6 +466,9 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 		syncer.requeuePaths(codebaseID, relativePaths)
 		return
 	}
+	if syncer.manager.startBuildAfterEmptyRun(ctx, codebase) {
+		return
+	}
 
 	// Serialize converges of the same codebase so two never race on its
 	// snapshot; a concurrent one requeues rather than waits.
