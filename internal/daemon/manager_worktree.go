@@ -226,24 +226,23 @@ func (manager *Manager) startAutomaticIndex(
 // its own: the periodic sweep's sync of changed files and the build that
 // follows an empty run, and their release. A worktree whose last run indexed no
 // file has no content of its own, so it waits for a sibling's first build the
-// same way, and it reports held without syncing. The sync covers the whole
-// tree, so the changes that prompted it are picked up when it runs later.
-func (manager *Manager) startAutomaticSync(ctx context.Context, codebase model.Codebase, client model.ClientInfo) bool {
+// same way, and it is recorded as held without syncing. The sync covers the
+// whole tree, so the changes that prompted it are picked up when it runs later.
+func (manager *Manager) startAutomaticSync(ctx context.Context, codebase model.Codebase, client model.ClientInfo) {
 	if manager.waitsForSiblingFirstBuild(codebase.CanonicalPath) {
 		slog.InfoContext(ctx, "automatic sync held for sibling first build", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "client", client.Name)
 		manager.noteHeldWorktreeBuild(codebase.ID)
-		return true
+		return
 	}
 	job, _, deduplicated, err := manager.SyncIndex(ctx, codebase.CanonicalPath, client)
 	if err != nil {
 		if !syncConflictError(err) {
 			slog.ErrorContext(ctx, "start sync job failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "client", client.Name, "err", err)
 		}
-		return false
+		return
 	}
 	manager.clearHeldWorktreeBuild(codebase.ID)
 	slog.DebugContext(ctx, "automatic sync started", "codebase_id", codebase.ID, "job_id", job.ID, "client", client.Name, "deduplicated", deduplicated)
-	return false
 }
 
 // noteHeldWorktreeBuildAt records the codebase rooted at canonicalPath as held,
