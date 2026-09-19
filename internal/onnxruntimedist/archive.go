@@ -1,4 +1,4 @@
-package main
+package onnxruntimedist
 
 import (
 	"archive/tar"

@@ -185,6 +185,9 @@ func rawStatusLines(getIndex view.GetIndexView) []string {
 	if raw.CollectionRows != nil {
 		statusLine += fmt.Sprintf(" collection_rows=%d", *raw.CollectionRows)
 	}
+	if raw.HeldForSiblingBuild {
+		statusLine += " held_for_sibling_build=true"
+	}
 	lines = append(lines, statusLine)
 	if raw.HasJob {
 		lines = append(lines,

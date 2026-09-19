@@ -48,7 +48,7 @@ GOLANGCI_LINT_RUN_FLAGS = $(GOLANGCI_LINT_FLAGS) --allow-parallel-runners --time
 # resolution into CC/CXX for the dep recipe.
 GO_MK_CGO_DEPS := cbm onnxruntime tokenizers
 GO_MK_CGO_CACHE_VERSIONS := onnxruntime=1.27.0 tokenizers=1.27.0
-GO_MK_CGO_CACHE_INPUTS := cmd/onnxruntime-dep cmd/tokenizers-dep
+GO_MK_CGO_CACHE_INPUTS := cmd/onnxruntime-dep internal/onnxruntimedist cmd/tokenizers-dep
 export CGO_LDFLAGS_ALLOW := -Wl,-rpath,@loader_path
 ifeq ($(shell uname),Darwin)
 GO_MK_INSTALL_POST_CMD = \
@@ -126,7 +126,7 @@ build install release: | daemon-entitlements-signer
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: daemon-entitlements-signer go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live offline-live service-activity-live restart-acceptance-unit restart-acceptance proto
+.PHONY: daemon-entitlements-signer go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live offline-live install-live service-activity-live restart-acceptance-unit restart-acceptance proto
 
 # live runs the opt-in conversation-marker validation suite against a real local
 # Milvus, fully isolated from the operator's daemon (build tag `live`). It reuses
@@ -140,6 +140,13 @@ live: | $(GO_MK_PREREQS)
 # an isolated in-process daemon, embedded vector store, and embedded ONNX model.
 offline-live: | $(GO_MK_PREREQS)
 	go test -tags offlinelive -count=1 ./test/offlinelive/
+
+# install-live builds the CLI and runs its install command against the latest
+# GitHub release and the pinned ONNX Runtime archive. It writes only into test
+# temporary directories and always passes --no-service, so the operator's
+# installed binaries and daemon service stay untouched. It needs network access.
+install-live: | $(GO_MK_PREREQS)
+	go test -tags installlive -count=1 ./test/installlive/
 
 # service-activity-live reads the default installed daemon only. It never starts
 # a replacement process or writes operator indexing state.

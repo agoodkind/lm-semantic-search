@@ -3,8 +3,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,26 +14,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"goodkind.io/lm-semantic-search/internal/onnxruntimedist"
 )
 
 const (
-	onnxRuntimeVersion              = "1.27.0"
 	cacheFormatRevision             = 3
-	darwinARM64ArchiveName          = "onnxruntime-osx-arm64-1.27.0"
-	darwinARM64ArchiveURL           = "https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-osx-arm64-1.27.0.tgz"
-	darwinARM64ArchiveSHA256        = "545e81c58152353acb0d1e8bd6ce4b62f830c0961f5b3acfedc790ffd76e477a"
-	darwinLibraryName               = "libonnxruntime.dylib"
-	darwinLibrarySONAME             = "libonnxruntime.1.dylib"
-	darwinVersionedLibraryName      = "libonnxruntime.1.27.0.dylib"
-	linuxAMD64ArchiveName           = "onnxruntime-linux-x64-1.27.0"
-	linuxAMD64ArchiveURL            = "https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-x64-1.27.0.tgz"
-	linuxAMD64ArchiveSHA256         = "547e40a48f1fe73e3f812d7c88a948612c23f896b91e4e2ee1e232d7b468246f"
-	linuxARM64ArchiveName           = "onnxruntime-linux-aarch64-1.27.0"
-	linuxARM64ArchiveURL            = "https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-aarch64-1.27.0.tgz"
-	linuxARM64ArchiveSHA256         = "3e4d83ac06924a32a07b6d7f91ce6f852876153fc0bbdf931bf517a140bfbe48"
-	linuxLibraryName                = "libonnxruntime.so"
-	linuxLibrarySONAME              = "libonnxruntime.so.1"
-	linuxVersionedLibraryName       = "libonnxruntime.so.1.27.0"
 	rejectedDarwinCoreML            = "-framework CoreML"
 	rejectedDarwinStaticCXX         = "-lc++"
 	rejectedDarwinStaticDescription = "Description: statically linked ONNX Runtime"
@@ -45,7 +29,6 @@ const (
 	toolLogPrefix                   = "setup-cgo-onnxruntime"
 	defaultFileMode                 = 0o644
 	defaultDirectoryMode            = 0o755
-	maxExtractedFileSize            = 2 << 30
 )
 
 type operatingSystem string
@@ -57,47 +40,9 @@ const (
 
 type architecture string
 
-const (
-	architectureAMD64 architecture = "amd64"
-	architectureARM64 architecture = "arm64"
-)
-
 type buildTarget struct {
 	goos   operatingSystem
 	goarch architecture
-}
-
-type darwinArchive struct {
-	archiveName string
-	url         string
-	sha256      string
-}
-
-type linuxArchive struct {
-	archiveName string
-	url         string
-	sha256      string
-}
-
-var darwinArchives = map[architecture]darwinArchive{
-	architectureARM64: {
-		archiveName: darwinARM64ArchiveName,
-		url:         darwinARM64ArchiveURL,
-		sha256:      darwinARM64ArchiveSHA256,
-	},
-}
-
-var linuxArchives = map[architecture]linuxArchive{
-	architectureAMD64: {
-		archiveName: linuxAMD64ArchiveName,
-		url:         linuxAMD64ArchiveURL,
-		sha256:      linuxAMD64ArchiveSHA256,
-	},
-	architectureARM64: {
-		archiveName: linuxARM64ArchiveName,
-		url:         linuxARM64ArchiveURL,
-		sha256:      linuxARM64ArchiveSHA256,
-	},
 }
 
 type dependencyInstaller struct {
@@ -153,7 +98,7 @@ func run(ctx context.Context) error {
 		fmt.Printf(
 			"%s: using cached ONNX Runtime %s for %s/%s\n",
 			toolLogPrefix,
-			onnxRuntimeVersion,
+			onnxruntimedist.Version,
 			target.goos,
 			target.goarch,
 		)
@@ -185,7 +130,7 @@ func run(ctx context.Context) error {
 	fmt.Printf(
 		"%s: installed ONNX Runtime %s for %s/%s\n",
 		toolLogPrefix,
-		onnxRuntimeVersion,
+		onnxruntimedist.Version,
 		target.goos,
 		target.goarch,
 	)
@@ -193,7 +138,7 @@ func run(ctx context.Context) error {
 }
 
 func dependencyCacheSentinel() string {
-	return fmt.Sprintf("%s+%d", onnxRuntimeVersion, cacheFormatRevision)
+	return fmt.Sprintf("%s+%d", onnxruntimedist.Version, cacheFormatRevision)
 }
 
 func wrapError(operation string, err error) error {
@@ -349,21 +294,18 @@ func (installer dependencyInstaller) isCached() (bool, error) {
 }
 
 func (installer dependencyInstaller) cachedLibraryPaths() []string {
-	switch installer.target.goos {
-	case operatingSystemDarwin:
-		return []string{
-			filepath.Join(installer.prefix, "lib", darwinVersionedLibraryName),
-			filepath.Join(installer.prefix, "lib", darwinLibrarySONAME),
-			filepath.Join(installer.prefix, "lib", darwinLibraryName),
-		}
-	case operatingSystemLinux:
-		return []string{
-			filepath.Join(installer.prefix, "lib", linuxVersionedLibraryName),
-			filepath.Join(installer.prefix, "lib", linuxLibrarySONAME),
-			filepath.Join(installer.prefix, "lib", linuxLibraryName),
-		}
-	default:
+	names, err := onnxruntimedist.LibraryNamesFor(string(installer.target.goos))
+	if err != nil {
 		return nil
+	}
+	return installer.libraryPaths(names)
+}
+
+func (installer dependencyInstaller) libraryPaths(names onnxruntimedist.LibraryNames) []string {
+	return []string{
+		filepath.Join(installer.prefix, "lib", names.Versioned),
+		filepath.Join(installer.prefix, "lib", names.SONAME),
+		filepath.Join(installer.prefix, "lib", names.Unversioned),
 	}
 }
 
@@ -394,13 +336,14 @@ func (installer dependencyInstaller) preparePrefix() error {
 
 	filesToRemove := []string{
 		filepath.Join(installer.prefix, "lib", "libonnxruntime.a"),
-		filepath.Join(installer.prefix, "lib", darwinVersionedLibraryName),
-		filepath.Join(installer.prefix, "lib", darwinLibrarySONAME),
-		filepath.Join(installer.prefix, "lib", darwinLibraryName),
-		filepath.Join(installer.prefix, "lib", linuxVersionedLibraryName),
-		filepath.Join(installer.prefix, "lib", linuxLibrarySONAME),
-		filepath.Join(installer.prefix, "lib", linuxLibraryName),
 		installer.pkgConfigFile(),
+	}
+	for _, goos := range []operatingSystem{operatingSystemDarwin, operatingSystemLinux} {
+		names, err := onnxruntimedist.LibraryNamesFor(string(goos))
+		if err != nil {
+			return wrapError("resolve library names", err)
+		}
+		filesToRemove = append(filesToRemove, installer.libraryPaths(names)...)
 	}
 	for _, path := range filesToRemove {
 		if err := removeFileIfPresent(path); err != nil {
@@ -446,225 +389,53 @@ func (installer dependencyInstaller) install(
 	ctx context.Context,
 	temporaryDirectory string,
 ) error {
-	switch installer.target.goos {
-	case operatingSystemDarwin:
-		archive, ok := darwinArchives[installer.target.goarch]
-		if !ok {
-			return fmt.Errorf(
-				"unsupported Darwin GOARCH %s",
-				installer.target.goarch,
-			)
-		}
-		return installer.installDarwinSharedArchive(ctx, temporaryDirectory, archive)
-	case operatingSystemLinux:
-		archive, ok := linuxArchives[installer.target.goarch]
-		if !ok {
-			return fmt.Errorf(
-				"unsupported Linux GOARCH %s",
-				installer.target.goarch,
-			)
-		}
-		return installer.installLinuxSharedArchive(ctx, temporaryDirectory, archive)
-	default:
-		return fmt.Errorf("unsupported GOOS %s", installer.target.goos)
+	archive, err := onnxruntimedist.ArchiveFor(
+		string(installer.target.goos),
+		string(installer.target.goarch),
+	)
+	if err != nil {
+		return wrapError("resolve ONNX Runtime archive", err)
 	}
+	return installer.installSharedArchive(ctx, temporaryDirectory, archive)
 }
 
-func (installer dependencyInstaller) installDarwinSharedArchive(
+func (installer dependencyInstaller) installSharedArchive(
 	ctx context.Context,
 	temporaryDirectory string,
-	archive darwinArchive,
+	archive onnxruntimedist.Archive,
 ) error {
-	slog.DebugContext(ctx, "install Darwin ONNX Runtime shared archive")
-	archivePath := filepath.Join(temporaryDirectory, "onnxruntime.tgz")
-	if err := installer.downloadAndVerify(
+	slog.DebugContext(ctx, "install ONNX Runtime shared archive", "goos", installer.target.goos)
+	names, err := onnxruntimedist.LibraryNamesFor(string(installer.target.goos))
+	if err != nil {
+		return wrapError("resolve ONNX Runtime library names", err)
+	}
+	archiveDirectory, err := onnxruntimedist.FetchArchive(
 		ctx,
-		archive.url,
-		archive.sha256,
-		archivePath,
-	); err != nil {
-		return err
+		installer.httpClient,
+		archive,
+		temporaryDirectory,
+	)
+	if err != nil {
+		return wrapError("fetch ONNX Runtime archive", err)
 	}
-
-	extractedDirectory := filepath.Join(temporaryDirectory, "onnxruntime")
-	if err := extractTarGzip(archivePath, extractedDirectory); err != nil {
-		return wrapError("extract Darwin archive", err)
-	}
-
-	archiveDirectory := filepath.Join(extractedDirectory, archive.archiveName)
-	sourceLibraryPath := filepath.Join(
+	if err := onnxruntimedist.InstallLibrary(
 		archiveDirectory,
-		"lib",
-		darwinVersionedLibraryName,
-	)
-	destinationLibraryPath := filepath.Join(
-		installer.prefix,
-		"lib",
-		darwinVersionedLibraryName,
-	)
-	if err := copyFile(sourceLibraryPath, destinationLibraryPath); err != nil {
-		return wrapError("copy Darwin shared library", err)
-	}
-	for _, linkName := range []string{darwinLibrarySONAME, darwinLibraryName} {
-		linkPath := filepath.Join(installer.prefix, "lib", linkName)
-		if err := os.Symlink(darwinVersionedLibraryName, linkPath); err != nil {
-			return wrapError("create Darwin shared library symlink", err)
-		}
+		names,
+		filepath.Join(installer.prefix, "lib"),
+	); err != nil {
+		return wrapError("install ONNX Runtime library", err)
 	}
 
 	if err := copyHeaderFiles(
 		filepath.Join(archiveDirectory, "include"),
 		filepath.Join(installer.prefix, "include"),
 	); err != nil {
-		return wrapError("copy Darwin headers", err)
+		return wrapError("copy headers", err)
 	}
-	return installer.writeDarwinPkgConfig()
-}
-
-func (installer dependencyInstaller) installLinuxSharedArchive(
-	ctx context.Context,
-	temporaryDirectory string,
-	archive linuxArchive,
-) error {
-	slog.DebugContext(ctx, "install Linux ONNX Runtime shared archive")
-	archivePath := filepath.Join(temporaryDirectory, "onnxruntime.tgz")
-	if err := installer.downloadAndVerify(
-		ctx,
-		archive.url,
-		archive.sha256,
-		archivePath,
-	); err != nil {
-		return err
-	}
-
-	extractedDirectory := filepath.Join(temporaryDirectory, "onnxruntime")
-	if err := extractTarGzip(archivePath, extractedDirectory); err != nil {
-		return wrapError("extract Linux archive", err)
-	}
-
-	archiveDirectory := filepath.Join(extractedDirectory, archive.archiveName)
-	sourceLibraryPath := filepath.Join(
-		archiveDirectory,
-		"lib",
-		linuxVersionedLibraryName,
-	)
-	destinationLibraryPath := filepath.Join(
-		installer.prefix,
-		"lib",
-		linuxVersionedLibraryName,
-	)
-	if err := copyFile(sourceLibraryPath, destinationLibraryPath); err != nil {
-		return wrapError("copy Linux shared library", err)
-	}
-	for _, linkName := range []string{linuxLibrarySONAME, linuxLibraryName} {
-		linkPath := filepath.Join(installer.prefix, "lib", linkName)
-		if err := os.Symlink(linuxVersionedLibraryName, linkPath); err != nil {
-			return wrapError("create Linux shared library symlink", err)
-		}
-	}
-
-	if err := copyHeaderFiles(
-		filepath.Join(archiveDirectory, "include"),
-		filepath.Join(installer.prefix, "include"),
-	); err != nil {
-		return wrapError("copy Linux headers", err)
+	if installer.target.goos == operatingSystemDarwin {
+		return installer.writeDarwinPkgConfig()
 	}
 	return installer.writeLinuxPkgConfig()
-}
-
-func (installer dependencyInstaller) downloadAndVerify(
-	ctx context.Context,
-	url string,
-	expectedSHA256 string,
-	destinationPath string,
-) error {
-	slog.DebugContext(ctx, "download ONNX Runtime dependency", "url", url)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return wrapError("create download request", err)
-	}
-	response, err := installer.httpClient.Do(request)
-	if err != nil {
-		return wrapError("download "+url, err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode < http.StatusOK ||
-		response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("download %s: HTTP status %s", url, response.Status)
-	}
-
-	destination, err := os.Create(destinationPath)
-	if err != nil {
-		return wrapError("create download destination", err)
-	}
-	_, copyErr := io.Copy(destination, response.Body)
-	closeErr := destination.Close()
-	if copyErr != nil {
-		return wrapError("write download", copyErr)
-	}
-	if closeErr != nil {
-		return wrapError("close download", closeErr)
-	}
-
-	if err := verifySHA256(destinationPath, expectedSHA256); err != nil {
-		return err
-	}
-	return nil
-}
-
-func verifySHA256(path string, expected string) error {
-	slog.Debug("verify dependency archive checksum", "path", path)
-	file, err := os.Open(path)
-	if err != nil {
-		return wrapError("open "+path+" for checksum", err)
-	}
-	hash := sha256.New()
-	_, copyErr := io.Copy(hash, file)
-	closeErr := file.Close()
-	if copyErr != nil {
-		return wrapError("hash "+path, copyErr)
-	}
-	if closeErr != nil {
-		return wrapError("close "+path+" after checksum", closeErr)
-	}
-
-	actual := hex.EncodeToString(hash.Sum(nil))
-	if actual != expected {
-		return fmt.Errorf(
-			"checksum mismatch for %s: got %s, want %s",
-			path,
-			actual,
-			expected,
-		)
-	}
-	return nil
-}
-
-func safeArchivePath(rootDirectory string, entryName string) (string, error) {
-	localName := filepath.FromSlash(entryName)
-	// [filepath.IsLocal] rejects absolute, empty, and parent-escaping names using
-	// lexical analysis. The real-path check in the extractor then rejects a name
-	// whose parent directory resolves through a symlink to outside the root.
-	if !filepath.IsLocal(localName) {
-		return "", fmt.Errorf("unsafe archive path %q", entryName)
-	}
-	return filepath.Join(rootDirectory, filepath.Clean(localName)), nil
-}
-
-// pathWithinRoot reports whether candidatePath resolves inside rootDirectory. It
-// is written as a boolean guard on the cleaned candidate so a caller can place
-// it directly in front of a filesystem operation. That inline prefix check is
-// the barrier static analysis recognizes against archive path traversal and
-// symlink escape, and it holds even when a crafted entry or target resolves back
-// out through the destination directory.
-func pathWithinRoot(rootDirectory string, candidatePath string) bool {
-	cleanRoot := filepath.Clean(rootDirectory)
-	cleanCandidate := filepath.Clean(candidatePath)
-	if cleanCandidate == cleanRoot {
-		return true
-	}
-	return strings.HasPrefix(cleanCandidate, cleanRoot+string(filepath.Separator))
 }
 
 func copyHeaderFiles(sourceDirectory string, destinationDirectory string) error {
@@ -744,7 +515,7 @@ Description: dynamically linked ONNX Runtime
 Version: %s
 Cflags: -I${includedir}
 Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -lonnxruntime -ltokenizers
-`, installer.prefix, onnxRuntimeVersion)
+`, installer.prefix, onnxruntimedist.Version)
 	if err := os.WriteFile(
 		installer.pkgConfigFile(),
 		[]byte(contents),
@@ -775,7 +546,7 @@ Description: dynamically linked ONNX Runtime
 Version: %s
 Cflags: -I${includedir}
 Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -lonnxruntime -ltokenizers -lstdc++ -ldl -lpthread -lm
-`, installer.prefix, onnxRuntimeVersion)
+`, installer.prefix, onnxruntimedist.Version)
 	if err := os.WriteFile(
 		installer.pkgConfigFile(),
 		[]byte(contents),
