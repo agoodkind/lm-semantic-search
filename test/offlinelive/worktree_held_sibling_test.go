@@ -5,6 +5,7 @@ package offlinelive
 import (
 	"strings"
 	"testing"
+	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -14,6 +15,10 @@ const (
 	// heldParentFileCount makes the sibling's first build long enough that the
 	// worktree read and a cancel request both land while it is still running.
 	heldParentFileCount = 150
+
+	// heldPastDiscoveryTimer outlasts the daemon's few-second deferred-build
+	// delay, so the timer set when the worktree was discovered has fired.
+	heldPastDiscoveryTimer = 6 * time.Second
 
 	discoveredStatus = "discovered"
 
@@ -63,6 +68,9 @@ func TestWorktreeBuildsAfterSiblingFirstBuildIsCancelled(t *testing.T) {
 
 	parentJobID := harness.startIndexAt(repository)
 	held := harness.requireHeldWorktree(worktree)
+	// Cancel only after the discovery timer has fired and left the worktree
+	// held, so the build that follows can only come from the cancellation.
+	harness.requireNoJobsFor(held.GetId(), heldPastDiscoveryTimer)
 
 	if _, err := harness.client.CancelJob(
 		correlatedContext(),
@@ -128,6 +136,19 @@ func (harness *harness) requireHeldWorktree(worktree string) *pb.Codebase {
 		harness.t.Fatalf("held worktree has %d jobs, want 0", len(jobs))
 	}
 	return codebase
+}
+
+// requireNoJobsFor asserts a codebase starts no job for the whole duration.
+func (harness *harness) requireNoJobsFor(codebaseID string, duration time.Duration) {
+	harness.t.Helper()
+
+	deadline := time.Now().Add(duration)
+	for time.Now().Before(deadline) {
+		if jobs := harness.jobsFor(codebaseID); len(jobs) != 0 {
+			harness.t.Fatalf("held worktree started job %s while its sibling's first build runs", jobs[0].GetId())
+		}
+		time.Sleep(pollInterval)
+	}
 }
 
 // newCommittedRepositoryWithWorktree creates a repository holding fileCount
