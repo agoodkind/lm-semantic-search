@@ -147,8 +147,9 @@ func discoveredSearchNote(siblingCount int32) string {
 
 // heldForSiblingSearchNote is the discovered note for a worktree whose build
 // waits for a sibling's first index, so it names that wait instead of claiming
-// the build is starting.
-const heldForSiblingSearchNote = "🔎 This worktree was just discovered and is not indexed yet; it builds after its sibling worktree's first index finishes, then reuses those embeddings. Search again after that."
+// the build is starting. It promises no reuse, because a sibling build that
+// fails or is cancelled leaves nothing to reuse.
+const heldForSiblingSearchNote = "🔎 This worktree was just discovered and is not indexed yet; it builds after its sibling worktree's first index finishes. Search again after that."
 
 func quarantinedSearchNote(quarantine *model.QuarantineState) string {
 	if quarantine == nil {

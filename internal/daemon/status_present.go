@@ -635,9 +635,9 @@ func reuseForecastLine(siblingCount int32) string {
 }
 
 // heldForSiblingForecastLine replaces the reuse forecast for a discovered
-// worktree whose build waits for a sibling's first index, which is the content
-// it will reuse once that index finishes.
-const heldForSiblingForecastLine = "⏳ waits for its sibling worktree's first index to finish, then reuses its embeddings"
+// worktree whose build waits for a sibling's first index. It promises no reuse,
+// because a sibling build that fails or is cancelled leaves nothing to reuse.
+const heldForSiblingForecastLine = "⏳ waits for its sibling worktree's first index to finish"
 
 // descendantsHint replaces the bare not-indexed message for a path that already
 // has indexed sub-folders. It names the sub-folders, totals their indexed files,
