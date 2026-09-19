@@ -21,6 +21,10 @@ const (
 	// first background sweep, so the sweep has run its repair and retry passes.
 	firstSweepSettle = 10 * time.Second
 
+	// crashAfterFiles is how many files each build checkpoints before the
+	// daemon is killed.
+	crashAfterFiles = 10
+
 	unreadableDirectoryMode = 0o000
 	readableDirectoryMode   = 0o755
 )
@@ -66,11 +70,51 @@ func TestRestartedFailedWorktreeRetryWaitsForSiblingFirstBuild(t *testing.T) {
 	harness.requireWorktreeBuildWaitsForSibling(repository, worktree)
 }
 
+// TestCrashResumedWorktreeWaitsForSiblingFirstBuild proves boot resume does not
+// resume a worktree's interrupted build while its sibling's first build, which
+// boot resume also restarted, is running. The worktree builds from the sibling's
+// vectors once that first build completes.
+func TestCrashResumedWorktreeWaitsForSiblingFirstBuild(t *testing.T) {
+	harness := newUnstartedHarness(t)
+	repository, worktree := newCommittedRepositoryWithWorktree(t, heldParentFileCount)
+	options := harnessOptions{
+		fileWatcher:            false,
+		backgroundSync:         false,
+		maxConcurrentIndexJobs: restartedConcurrentIndexJobs,
+		resumeOnBoot:           true,
+	}
+
+	// Both first builds checkpoint some files, then the daemon dies without
+	// shutting down, which leaves both resumable from their checkpoints.
+	crash := harness.startCrashableDaemon(options)
+	harness.startIndexAt(repository)
+	harness.startIndexAt(worktree)
+	harness.waitForBuildUnderway(repository)
+	harness.waitForBuildUnderway(worktree)
+	crash()
+
+	harness.start(options, false)
+	t.Cleanup(harness.teardown)
+	harness.requireWorktreeBuildWaitsForSibling(repository, worktree)
+}
+
+// waitForBuildUnderway waits until the build of path has checkpointed files.
+func (harness *harness) waitForBuildUnderway(path string) {
+	harness.t.Helper()
+
+	harness.waitForStatusWithin(path, jobPollTimeout, "build did not get under way", func(status *pb.GetIndexResponse) bool {
+		job := status.GetActiveJob()
+		return job.GetState() == string(model.JobStateRunning) &&
+			job.GetProgress().GetFilesProcessed() >= crashAfterFiles
+	})
+}
+
 func restartedHeldOptions() harnessOptions {
 	return harnessOptions{
 		fileWatcher:            false,
 		backgroundSync:         true,
 		maxConcurrentIndexJobs: restartedConcurrentIndexJobs,
+		resumeOnBoot:           false,
 	}
 }
 
@@ -90,7 +134,7 @@ func (harness *harness) requireWorktreeBuildWaitsForSibling(repository string, w
 	parentJobID := harness.startIndexAt(repository)
 	deadline := time.Now().Add(firstSweepSettle)
 	for time.Now().Before(deadline) {
-		if job, started := harness.newJobFor(registered.GetId(), earlierJobs); started {
+		if job := harness.indexStatusAt(worktree).GetActiveJob(); job != nil {
 			harness.t.Fatalf(
 				"worktree build %s started by %q while its sibling's first build runs",
 				job.GetId(),

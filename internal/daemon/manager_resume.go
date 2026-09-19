@@ -145,6 +145,13 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	}
 	slog.InfoContext(ctx, "resuming orphaned indexing jobs", "count", len(resumable), "paths", paths)
 	for _, plan := range resumable {
+		// Plans run in queue order, so a sibling's first build resumed earlier in
+		// this loop already holds a worktree whose own build comes later.
+		if manager.waitsForSiblingFirstBuild(plan.canonicalPath) {
+			manager.logResumeHeld(ctx, plan.codebaseID, plan.canonicalPath)
+			manager.parkUnresumableForRetry(ctx, plan.codebaseID)
+			continue
+		}
 		client := model.ClientInfo{Name: "daemon-resume", PID: 0}
 		var err error
 		switch {
@@ -317,6 +324,10 @@ func (manager *Manager) startStagingResume(ctx context.Context, plan resumePlan,
 // checkpoints after each file, so a missing checkpoint means almost nothing was
 // embedded and the re-queued build restarts cleanly. Clearing the index is the
 // only way to stop the retry.
+//
+// A worktree held behind a sibling's first build is parked the same way. Its
+// checkpoint stays on disk, so the build startHeldSiblingWorktreeBuilds starts
+// once that sibling's build ends resumes from it.
 func (manager *Manager) parkUnresumableForRetry(ctx context.Context, codebaseID string) {
 	manager.policyMutationMutex.Lock()
 	defer manager.policyMutationMutex.Unlock()
@@ -352,6 +363,13 @@ func (manager *Manager) logResumeSkipped(ctx context.Context, codebaseID string,
 // whole codebase on boot. Re-run index_codebase to finish it.
 func (manager *Manager) logResumeUnresumable(ctx context.Context, codebaseID string, path string) {
 	slog.InfoContext(ctx, "skipping unresumable interrupted index; re-run index_codebase to finish", "codebase_id", codebaseID, "path", path, "reason", "no_checkpoint")
+}
+
+// logResumeHeld records that boot resume parked a worktree behind a sibling's
+// first build instead of resuming it. It exists as a method so the per-codebase
+// line is not emitted lexically inside the ResumeOrphanedJobs loop.
+func (manager *Manager) logResumeHeld(ctx context.Context, codebaseID string, path string) {
+	slog.InfoContext(ctx, "holding orphaned indexing job resume for sibling first build", "codebase_id", codebaseID, "path", path)
 }
 
 // logResumeLaunched records that boot resume re-queued one codebase. It
