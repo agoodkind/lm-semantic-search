@@ -27,6 +27,10 @@ const (
 
 	// lateFileCount is how many files land while that build is running.
 	lateFileCount = 3
+
+	// repeatedSweepIntervalMS makes the background sweep run several times while
+	// a sibling's first build is running.
+	repeatedSweepIntervalMS = 2000
 )
 
 // TestFilesAfterEmptyBuildStartFullBuild proves files written into a directory
@@ -34,7 +38,7 @@ const (
 // collection, so the watcher has nothing to converge individual paths into and
 // has to start a full build instead.
 func TestFilesAfterEmptyBuildStartFullBuild(t *testing.T) {
-	harness := newHarnessWith(t, harnessOptions{fileWatcher: true})
+	harness := newHarnessWith(t, harnessOptions{fileWatcher: true, backgroundSync: false, maxConcurrentIndexJobs: 0})
 	directory := harness.newEmptyIndexedDirectory()
 
 	writeGeneratedSources(t, directory, smallRepositoryFileCount)
@@ -49,7 +53,7 @@ func TestFilesAfterEmptyBuildStartFullBuild(t *testing.T) {
 // already walked the tree, so they are indexed only if the watcher keeps their
 // paths for a converge once the build ends.
 func TestFilesWrittenDuringBuildAfterEmptyRunAreIndexed(t *testing.T) {
-	harness := newHarnessWith(t, harnessOptions{fileWatcher: true})
+	harness := newHarnessWith(t, harnessOptions{fileWatcher: true, backgroundSync: false, maxConcurrentIndexJobs: 0})
 	directory := harness.newEmptyIndexedDirectory()
 
 	writeGeneratedSources(t, directory, firstCheckoutFileCount)
@@ -69,6 +73,57 @@ func TestFilesWrittenDuringBuildAfterEmptyRunAreIndexed(t *testing.T) {
 	wantLine := fmt.Sprintf("current_index.indexed_files: %d", firstCheckoutFileCount+lateFileCount)
 	harness.waitForStatus(directory, "files written during the build were not indexed after it", func(status *pb.GetIndexResponse) bool {
 		return status.GetActiveJob() == nil && strings.Contains(status.GetDisplayText(), wantLine)
+	})
+}
+
+// TestFilesInEmptyWorktreeWaitForSiblingFirstBuild proves the watcher does not
+// start a build for files arriving in a worktree whose last build indexed
+// nothing while a sibling's first build is running. It keeps the paths and
+// builds them from the sibling's vectors once that first build completes.
+func TestFilesInEmptyWorktreeWaitForSiblingFirstBuild(t *testing.T) {
+	harness := newHarnessWith(t, harnessOptions{
+		fileWatcher:            true,
+		backgroundSync:         false,
+		maxConcurrentIndexJobs: restartedConcurrentIndexJobs,
+		resumeOnBoot:           false,
+		syncIntervalMS:         0,
+	})
+	harness.requireEmptyWorktreeFilesWaitForSibling()
+}
+
+// TestSweepOfEmptyWorktreeWaitsForSiblingFirstBuild proves the periodic sweep
+// does not sync a worktree whose last build indexed nothing while a sibling's
+// first build is running, even though the worktree's files changed. It builds
+// them from the sibling's vectors once that first build completes.
+func TestSweepOfEmptyWorktreeWaitsForSiblingFirstBuild(t *testing.T) {
+	harness := newHarnessWith(t, harnessOptions{
+		fileWatcher:            false,
+		backgroundSync:         true,
+		maxConcurrentIndexJobs: restartedConcurrentIndexJobs,
+		resumeOnBoot:           false,
+		syncIntervalMS:         repeatedSweepIntervalMS,
+	})
+	harness.requireEmptyWorktreeFilesWaitForSibling()
+}
+
+// requireEmptyWorktreeFilesWaitForSibling indexes an empty worktree, starts its
+// sibling's first build, writes the same files into the worktree, and asserts
+// the worktree builds them only after that first build, from its vectors.
+func (harness *harness) requireEmptyWorktreeFilesWaitForSibling() {
+	harness.t.Helper()
+
+	repository := newEmptyRepository(harness.t)
+	gitRun(harness.t, repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "--message", "start empty")
+	worktree := addNestedWorktree(harness.t, repository)
+	emptyRun := harness.waitForJob(harness.startIndexAt(worktree))
+	requireCompleted(harness.t, emptyRun)
+	if processed := emptyRun.GetProgress().GetFilesProcessed(); processed != 0 {
+		harness.t.Fatalf("empty worktree run processed %d files, want 0", processed)
+	}
+
+	writeGeneratedSources(harness.t, repository, heldParentFileCount)
+	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, func() {
+		writeGeneratedSources(harness.t, worktree, heldParentFileCount)
 	})
 }
 

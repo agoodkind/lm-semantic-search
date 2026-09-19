@@ -145,22 +145,34 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	}
 	slog.InfoContext(ctx, "resuming orphaned indexing jobs", "count", len(resumable), "paths", paths)
 	for _, plan := range resumable {
-		client := model.ClientInfo{Name: "daemon-resume", PID: 0}
-		var err error
-		switch {
-		case plan.checkpoint == resumeCheckpointStaging:
-			err = manager.startStagingResume(ctx, plan, client)
-		case plan.converge:
-			err = manager.resumeConverge(ctx, plan, client)
-		default:
-			err = manager.startRecoveredIndex(ctx, plan, client)
-		}
-		if err != nil {
-			slog.ErrorContext(ctx, "resume orphaned job failed", "codebase_id", plan.codebaseID, "path", plan.canonicalPath, "err", err)
-			continue
-		}
-		manager.recordResumeLaunched(ctx, plan)
+		manager.launchResumePlan(ctx, plan)
 	}
+}
+
+// launchResumePlan resumes one interrupted build. Plans run in queue order, so
+// a sibling's first build resumed earlier in the same pass already holds a
+// worktree whose own build comes later; that worktree is parked instead.
+func (manager *Manager) launchResumePlan(ctx context.Context, plan resumePlan) {
+	if manager.holdForSiblingFirstBuild(plan.canonicalPath) {
+		manager.logResumeHeld(ctx, plan.codebaseID, plan.canonicalPath)
+		manager.parkUnresumableForRetry(ctx, plan.codebaseID)
+		return
+	}
+	client := model.ClientInfo{Name: "daemon-resume", PID: 0}
+	var err error
+	switch {
+	case plan.checkpoint == resumeCheckpointStaging:
+		err = manager.startStagingResume(ctx, plan, client)
+	case plan.converge:
+		err = manager.resumeConverge(ctx, plan, client)
+	default:
+		err = manager.startRecoveredIndex(ctx, plan, client)
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "resume orphaned job failed", "codebase_id", plan.codebaseID, "path", plan.canonicalPath, "err", err)
+		return
+	}
+	manager.recordResumeLaunched(ctx, plan)
 }
 
 func (manager *Manager) recordResumeLaunched(ctx context.Context, plan resumePlan) {
@@ -317,6 +329,10 @@ func (manager *Manager) startStagingResume(ctx context.Context, plan resumePlan,
 // checkpoints after each file, so a missing checkpoint means almost nothing was
 // embedded and the re-queued build restarts cleanly. Clearing the index is the
 // only way to stop the retry.
+//
+// A worktree held behind a sibling's first build is parked the same way. Its
+// checkpoint stays on disk, so the build startHeldSiblingWorktreeBuilds starts
+// once that sibling's build ends resumes from it.
 func (manager *Manager) parkUnresumableForRetry(ctx context.Context, codebaseID string) {
 	manager.policyMutationMutex.Lock()
 	defer manager.policyMutationMutex.Unlock()
@@ -352,6 +368,13 @@ func (manager *Manager) logResumeSkipped(ctx context.Context, codebaseID string,
 // whole codebase on boot. Re-run index_codebase to finish it.
 func (manager *Manager) logResumeUnresumable(ctx context.Context, codebaseID string, path string) {
 	slog.InfoContext(ctx, "skipping unresumable interrupted index; re-run index_codebase to finish", "codebase_id", codebaseID, "path", path, "reason", "no_checkpoint")
+}
+
+// logResumeHeld records that boot resume parked a worktree behind a sibling's
+// first build instead of resuming it. It exists as a method so the per-codebase
+// line is not emitted lexically inside the ResumeOrphanedJobs loop.
+func (manager *Manager) logResumeHeld(ctx context.Context, codebaseID string, path string) {
+	slog.InfoContext(ctx, "holding orphaned indexing job resume for sibling first build", "codebase_id", codebaseID, "path", path)
 }
 
 // logResumeLaunched records that boot resume re-queued one codebase. It

@@ -98,6 +98,10 @@ type Manager struct {
 	done                    map[string]chan struct{}
 	// failedBuildRetries caps automatic retries for terminal failed builds per daemon lifetime; not persisted, guarded by mu.
 	failedBuildRetries map[string]int
+	// heldWorktreeBuilds records the codebases whose automatic build was held
+	// behind a sibling worktree's first build, so the release starts only those;
+	// not persisted, guarded by mu.
+	heldWorktreeBuilds map[string]struct{}
 	// lastJobJournalAt throttles periodic job-progress journaling; not persisted, guarded by mu.
 	lastJobJournalAt    map[string]time.Time
 	appendJobEvent      appendJobEventFunc
@@ -235,6 +239,7 @@ func newManagerWithDependencies(
 		cancels:                     map[string]context.CancelFunc{},
 		done:                        map[string]chan struct{}{},
 		failedBuildRetries:          map[string]int{},
+		heldWorktreeBuilds:          map[string]struct{}{},
 		lastJobJournalAt:            map[string]time.Time{},
 		appendJobEvent:              store.AppendJobEvent,
 		appendJobTransition:         nil,
