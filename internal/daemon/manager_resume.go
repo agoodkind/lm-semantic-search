@@ -156,6 +156,7 @@ func (manager *Manager) launchResumePlan(ctx context.Context, plan resumePlan) {
 	if manager.waitsForSiblingFirstBuild(plan.canonicalPath) {
 		manager.logResumeHeld(ctx, plan.codebaseID, plan.canonicalPath)
 		manager.parkUnresumableForRetry(ctx, plan.codebaseID)
+		manager.noteHeldWorktreeBuild(plan.codebaseID)
 		return
 	}
 	client := model.ClientInfo{Name: "daemon-resume", PID: 0}

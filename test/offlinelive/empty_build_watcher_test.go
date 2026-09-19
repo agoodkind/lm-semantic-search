@@ -27,6 +27,10 @@ const (
 
 	// lateFileCount is how many files land while that build is running.
 	lateFileCount = 3
+
+	// repeatedSweepIntervalMS makes the background sweep run several times while
+	// a sibling's first build is running.
+	repeatedSweepIntervalMS = 2000
 )
 
 // TestFilesAfterEmptyBuildStartFullBuild proves files written into a directory
@@ -82,20 +86,44 @@ func TestFilesInEmptyWorktreeWaitForSiblingFirstBuild(t *testing.T) {
 		backgroundSync:         false,
 		maxConcurrentIndexJobs: restartedConcurrentIndexJobs,
 		resumeOnBoot:           false,
+		syncIntervalMS:         0,
 	})
+	harness.requireEmptyWorktreeFilesWaitForSibling()
+}
 
-	repository := newEmptyRepository(t)
-	gitRun(t, repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "--message", "start empty")
-	worktree := addNestedWorktree(t, repository)
+// TestSweepOfEmptyWorktreeWaitsForSiblingFirstBuild proves the periodic sweep
+// does not sync a worktree whose last build indexed nothing while a sibling's
+// first build is running, even though the worktree's files changed. It builds
+// them from the sibling's vectors once that first build completes.
+func TestSweepOfEmptyWorktreeWaitsForSiblingFirstBuild(t *testing.T) {
+	harness := newHarnessWith(t, harnessOptions{
+		fileWatcher:            false,
+		backgroundSync:         true,
+		maxConcurrentIndexJobs: restartedConcurrentIndexJobs,
+		resumeOnBoot:           false,
+		syncIntervalMS:         repeatedSweepIntervalMS,
+	})
+	harness.requireEmptyWorktreeFilesWaitForSibling()
+}
+
+// requireEmptyWorktreeFilesWaitForSibling indexes an empty worktree, starts its
+// sibling's first build, writes the same files into the worktree, and asserts
+// the worktree builds them only after that first build, from its vectors.
+func (harness *harness) requireEmptyWorktreeFilesWaitForSibling() {
+	harness.t.Helper()
+
+	repository := newEmptyRepository(harness.t)
+	gitRun(harness.t, repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "--message", "start empty")
+	worktree := addNestedWorktree(harness.t, repository)
 	emptyRun := harness.waitForJob(harness.startIndexAt(worktree))
-	requireCompleted(t, emptyRun)
+	requireCompleted(harness.t, emptyRun)
 	if processed := emptyRun.GetProgress().GetFilesProcessed(); processed != 0 {
-		t.Fatalf("empty worktree run processed %d files, want 0", processed)
+		harness.t.Fatalf("empty worktree run processed %d files, want 0", processed)
 	}
 
-	writeGeneratedSources(t, repository, heldParentFileCount)
+	writeGeneratedSources(harness.t, repository, heldParentFileCount)
 	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, func() {
-		writeGeneratedSources(t, worktree, heldParentFileCount)
+		writeGeneratedSources(harness.t, worktree, heldParentFileCount)
 	})
 }
 

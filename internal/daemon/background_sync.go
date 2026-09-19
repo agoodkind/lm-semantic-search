@@ -456,7 +456,7 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 		syncer.requeuePaths(codebaseID, relativePaths)
 		return
 	}
-	if syncer.startBuildAfterEmptyRun(ctx, codebase, relativePaths) {
+	if syncer.startBuildAfterEmptyRun(ctx, codebase) {
 		return
 	}
 

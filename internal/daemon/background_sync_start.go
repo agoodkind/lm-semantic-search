@@ -2,32 +2,16 @@ package daemon
 
 import (
 	"context"
-	"log/slog"
 
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // startSweepSync starts the periodic sweep's sync of an indexed codebase whose
-// files changed. It starts nothing while the codebase is a worktree that waits
-// for a sibling's first build, which only happens when its last run indexed no
-// file. The change stays on disk, so the next sweep sees it again.
+// files changed. A worktree that waits for a sibling's first build is held
+// instead, which only happens when its last run indexed no file; the release
+// syncs it when that first build ends.
 func (syncer *BackgroundSync) startSweepSync(ctx context.Context, codebase model.Codebase) {
-	if syncer.manager.waitsForSiblingFirstBuild(codebase.CanonicalPath) {
-		slog.InfoContext(ctx, "sweep sync held for sibling first build", "codebase_id", codebase.ID, "path", codebase.CanonicalPath)
-		return
-	}
-	job, _, deduplicated, err := syncer.manager.SyncIndex(
-		ctx,
-		codebase.CanonicalPath,
-		model.ClientInfo{Name: "daemon-sync", PID: 0},
-	)
-	if err != nil {
-		if !syncConflictError(err) {
-			slog.ErrorContext(ctx, "start sync job failed", "path", codebase.CanonicalPath, "err", err)
-		}
-		return
-	}
-	slog.DebugContext(ctx, "sweep started sync", "codebase_id", codebase.ID, "job_id", job.ID, "deduplicated", deduplicated)
+	syncer.manager.startAutomaticSync(ctx, codebase, model.ClientInfo{Name: "daemon-sync", PID: 0})
 }
 
 // startBuildAfterEmptyRun starts a sync in place of a watcher converge for a
@@ -37,23 +21,13 @@ func (syncer *BackgroundSync) startSweepSync(ctx context.Context, codebase model
 // collection to a full build of the whole tree. The caller checks for an active
 // job first, so a batch that arrives while that build runs is requeued rather
 // than folded into a build whose walk may already have passed its paths. A
-// worktree that waits for a sibling's first build requeues the batch the same
-// way, so the build starts once that first build has content to reuse.
-func (syncer *BackgroundSync) startBuildAfterEmptyRun(ctx context.Context, codebase model.Codebase, relativePaths []string) bool {
+// worktree that waits for a sibling's first build is held rather than
+// requeued: the sync the release starts walks the whole tree, so it covers
+// this batch's paths without the watcher retrying them on every debounce.
+func (syncer *BackgroundSync) startBuildAfterEmptyRun(ctx context.Context, codebase model.Codebase) bool {
 	if !ranWithoutCreatingACollection(codebase.LastSuccessfulRun) {
 		return false
 	}
-	if syncer.manager.waitsForSiblingFirstBuild(codebase.CanonicalPath) {
-		syncer.requeuePaths(codebase.ID, relativePaths)
-		return true
-	}
-	job, _, deduplicated, err := syncer.manager.SyncIndex(ctx, codebase.CanonicalPath, model.ClientInfo{Name: "daemon-watcher", PID: 0})
-	if err != nil {
-		if !syncConflictError(err) {
-			slog.ErrorContext(ctx, "start build after empty run failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
-		}
-		return true
-	}
-	slog.InfoContext(ctx, "watcher started build after empty run", "codebase_id", codebase.ID, "job_id", job.ID, "deduplicated", deduplicated)
+	syncer.manager.startAutomaticSync(ctx, codebase, model.ClientInfo{Name: "daemon-watcher", PID: 0})
 	return true
 }

@@ -97,6 +97,59 @@ func TestWorktreeBuildsAfterSiblingFirstBuildIsCancelled(t *testing.T) {
 	}
 }
 
+// TestSiblingBuildEndDoesNotStartUnheldWorktree proves a sibling's build ending
+// starts only worktree builds that a hold stopped. A worktree whose own first
+// build an operator cancelled was never held, so neither the sibling's first
+// build completing nor a later routine sync of the sibling starts it.
+func TestSiblingBuildEndDoesNotStartUnheldWorktree(t *testing.T) {
+	harness := newHarness(t)
+	repository, worktree := newCommittedRepositoryWithWorktree(t, heldParentFileCount)
+
+	worktreeJobID := harness.startIndexAt(worktree)
+	if _, err := harness.client.CancelJob(
+		correlatedContext(),
+		&pb.CancelJobRequest{JobId: worktreeJobID, Client: harnessClientInfo()},
+	); err != nil {
+		t.Fatalf("cancel worktree first build %s: %v", worktreeJobID, err)
+	}
+	if cancelled := harness.waitForJob(worktreeJobID); cancelled.GetState() != string(model.JobStateCancelled) {
+		t.Fatalf("worktree first build ended %q, want %q", cancelled.GetState(), model.JobStateCancelled)
+	}
+	registered, found := harness.codebaseAt(worktree)
+	if !found {
+		t.Fatalf("worktree %s is not registered", worktree)
+	}
+	earlierJobs := harness.jobIDsFor(registered.GetId())
+
+	requireCompleted(t, harness.waitForJob(harness.startIndexAt(repository)))
+	harness.requireNoNewJobFor(registered.GetId(), earlierJobs, heldPastDiscoveryTimer)
+
+	writeGeneratedSourceRange(t, repository, heldParentFileCount, 1)
+	syncResponse, err := harness.client.SyncIndex(
+		correlatedContext(),
+		&pb.SyncIndexRequest{Path: repository, Client: harnessClientInfo()},
+	)
+	if err != nil {
+		t.Fatalf("sync sibling: %v", err)
+	}
+	requireCompleted(t, harness.waitForJob(syncResponse.GetJobId()))
+	harness.requireNoNewJobFor(registered.GetId(), earlierJobs, heldPastDiscoveryTimer)
+}
+
+// requireNoNewJobFor asserts a codebase starts no job beyond earlierJobs for
+// the whole duration.
+func (harness *harness) requireNoNewJobFor(codebaseID string, earlierJobs map[string]struct{}, duration time.Duration) {
+	harness.t.Helper()
+
+	deadline := time.Now().Add(duration)
+	for time.Now().Before(deadline) {
+		if job, started := harness.newJobFor(codebaseID, earlierJobs); started {
+			harness.t.Fatalf("worktree job %s started by %q, but no hold stopped its build", job.GetId(), job.GetClient().GetName())
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
 // requireHeldWorktree reads the worktree while its sibling's first build runs
 // and asserts the daemon registered it without starting a job and told the
 // reader it is waiting, on both the status and the search surface.
