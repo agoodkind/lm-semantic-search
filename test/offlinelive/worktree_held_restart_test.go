@@ -98,6 +98,33 @@ func TestCrashResumedWorktreeWaitsForSiblingFirstBuild(t *testing.T) {
 	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, nil)
 }
 
+// TestCrashLeavesDiscoveredWorktreeReleased proves a worktree discovered and
+// held before a crash still builds once its sibling's resumed first build
+// completes, with no background sweep to start it.
+func TestCrashLeavesDiscoveredWorktreeReleased(t *testing.T) {
+	harness := newUnstartedHarness(t)
+	repository, worktree := newCommittedRepositoryWithWorktree(t, heldParentFileCount)
+	options := harnessOptions{
+		fileWatcher:            false,
+		backgroundSync:         false,
+		maxConcurrentIndexJobs: 0,
+		resumeOnBoot:           true,
+		syncIntervalMS:         0,
+	}
+
+	crash := harness.startCrashableDaemon(options)
+	harness.startIndexAt(repository)
+	if status := harness.indexStatusAt(worktree); status.GetCodebase().GetStatus() != discoveredStatus {
+		t.Fatalf("worktree read during its sibling's first build has status %q, want %q", status.GetCodebase().GetStatus(), discoveredStatus)
+	}
+	harness.waitForBuildUnderway(repository)
+	crash()
+
+	harness.start(options, false)
+	t.Cleanup(harness.teardown)
+	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, nil)
+}
+
 // waitForBuildUnderway waits until the build of path has checkpointed files.
 func (harness *harness) waitForBuildUnderway(path string) {
 	harness.t.Helper()

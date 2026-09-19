@@ -360,11 +360,12 @@ func (manager *Manager) waitsForSiblingFirstBuild(canonicalPath string) bool {
 }
 
 // startHeldSiblingWorktreeBuilds schedules a build for every sibling worktree
-// of a codebase whose job just ended that an automatic path held, and only
-// those: a discovered worktree, an interrupted build the repair pass or boot
-// resume would restart, a failed build the retry would rerun, or an empty
-// worktree the sweep or the watcher would sync. Such a worktree would otherwise
-// wait for the periodic sweep. It runs on success, failure, and cancellation
+// of a codebase whose job just ended that an automatic path held, plus any
+// discovered sibling without a live job, and no other. A held build is a
+// discovered worktree, an interrupted build the repair pass or boot resume
+// would restart, a failed build the retry would rerun, or an empty worktree the
+// sweep or the watcher would sync. Such a worktree would otherwise wait for the
+// periodic sweep. It runs on success, failure, and cancellation
 // alike: after a success the worktree reuses the new content, and after a
 // failure or cancellation it builds without reuse rather than staying
 // stranded. A released codebase leaves the held set; startReleasedBuild
@@ -395,7 +396,12 @@ func (manager *Manager) startHeldSiblingWorktreeBuilds(ctx context.Context, code
 		if _, ok := siblings[codebase.CanonicalPath]; !ok {
 			continue
 		}
-		if _, wasHeld := manager.heldWorktreeBuilds[codebase.ID]; !wasHeld {
+		// A discovered worktree is released by status as well as by the set. Only
+		// the daemon leaves a codebase discovered, and always to build it later, so
+		// this covers one held before a restart emptied the set.
+		_, wasHeld := manager.heldWorktreeBuilds[codebase.ID]
+		discoveredIdle := codebase.Status == model.CodebaseStatusDiscovered && manager.activeJobSnapshotLocked(codebase) == nil
+		if !wasHeld && !discoveredIdle {
 			continue
 		}
 		delete(manager.heldWorktreeBuilds, codebase.ID)
