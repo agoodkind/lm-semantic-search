@@ -65,25 +65,36 @@ type harness struct {
 	connection  *grpc.ClientConn
 	client      pb.SemanticSearchDaemonServiceClient
 	fixturePath string
+	stateRoot   string
+	socketPath  string
+	stopServer  func()
 }
 
 // harnessOptions turns on daemon behavior the default harness leaves off.
-// Background sync stays off in every configuration, so the periodic sweep can
-// never be what starts a build a test is waiting for.
 type harnessOptions struct {
 	fileWatcher bool
+	// backgroundSync starts the periodic sweep. Its first pass runs a few
+	// seconds after the daemon starts and the next one only after the default
+	// interval, which is longer than any test, so a test sees exactly one pass.
+	backgroundSync bool
+	// maxConcurrentIndexJobs lets builds run side by side. Zero keeps the
+	// harness default of one.
+	maxConcurrentIndexJobs int
 }
+
+// harnessShutdownTimeout bounds how long a restart waits for the old daemon's
+// jobs to stop.
+const harnessShutdownTimeout = 30 * time.Second
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	return newHarnessWith(t, harnessOptions{fileWatcher: false})
+	return newHarnessWith(t, harnessOptions{fileWatcher: false, backgroundSync: false, maxConcurrentIndexJobs: 0})
 }
 
 func newHarnessWith(t *testing.T, options harnessOptions) *harness {
 	t.Helper()
 	slog.Debug("offline live harness setup started")
 
-	stateRoot := t.TempDir()
 	socketDirectory, err := os.MkdirTemp("/tmp", "lms-offline-live-")
 	if err != nil {
 		t.Fatalf("create short socket directory: %v", err)
@@ -94,19 +105,36 @@ func newHarnessWith(t *testing.T, options harnessOptions) *harness {
 		}
 	})
 
-	socketPath := filepath.Join(socketDirectory, "daemon.sock")
-	offlineConfig := resolveOfflineConfig(t, stateRoot, socketPath, options)
-	prepareState(t, offlineConfig)
+	offlineHarness := &harness{
+		t:           t,
+		fixturePath: fixtureDirectory(t),
+		stateRoot:   t.TempDir(),
+		socketPath:  filepath.Join(socketDirectory, "daemon.sock"),
+	}
+	offlineHarness.start(options, true)
+	t.Cleanup(offlineHarness.teardown)
+	return offlineHarness
+}
+
+// start runs a daemon over the harness state root the way the daemon binary
+// does. A fresh harness starts from an empty registry; a restart keeps the
+// state the previous daemon persisted.
+func (harness *harness) start(options harnessOptions, freshState bool) {
+	harness.t.Helper()
+
+	offlineConfig := resolveOfflineConfig(harness.t, harness.stateRoot, harness.socketPath, options)
+	if freshState {
+		prepareState(harness.t, offlineConfig)
+	}
 
 	manager, err := daemon.NewManager(context.Background(), offlineConfig)
 	if err != nil {
-		t.Fatalf("create offline daemon manager: %v", err)
+		harness.t.Fatalf("create offline daemon manager: %v", err)
 	}
-	// The daemon binary starts background sync the same way. With every loop
-	// disabled in the configuration, Start launches nothing.
 	backgroundContext, stopBackground := context.WithCancel(context.Background())
+	manager.ResumeOrphanedJobs(backgroundContext)
 	daemon.NewBackgroundSync(offlineConfig, manager).Start(backgroundContext)
-	stopListener := startInProcessServer(t, manager, offlineConfig.SocketPath)
+	stopListener := startInProcessServer(harness.t, manager, offlineConfig.SocketPath)
 	stopServer := func() {
 		stopBackground()
 		stopListener()
@@ -119,28 +147,39 @@ func newHarnessWith(t *testing.T, options harnessOptions) *harness {
 	if err != nil {
 		stopServer()
 		manager.CloseGraphEngines()
-		t.Fatalf("dial isolated daemon: %v", err)
+		harness.t.Fatalf("dial isolated daemon: %v", err)
 	}
 
-	offlineHarness := &harness{
-		t:           t,
-		config:      offlineConfig,
-		manager:     manager,
-		connection:  connection,
-		client:      client,
-		fixturePath: fixtureDirectory(t),
-	}
-	t.Cleanup(func() {
-		offlineHarness.teardown(stopServer)
-	})
+	harness.config = offlineConfig
+	harness.manager = manager
+	harness.connection = connection
+	harness.client = client
+	harness.stopServer = stopServer
 	slog.Debug(
 		"offline live harness setup completed",
 		"state_root",
-		stateRoot,
+		harness.stateRoot,
 		"socket_path",
 		offlineConfig.SocketPath,
 	)
-	return offlineHarness
+}
+
+// restart shuts the daemon down the way the daemon binary does on exit, which
+// cancels its running jobs, and starts a new one with options over the same
+// state root.
+func (harness *harness) restart(options harnessOptions) {
+	harness.t.Helper()
+
+	if err := harness.connection.Close(); err != nil {
+		harness.t.Fatalf("close isolated daemon connection: %v", err)
+	}
+	harness.stopServer()
+	closeContext, cancel := context.WithTimeout(context.Background(), harnessShutdownTimeout)
+	defer cancel()
+	if err := harness.manager.Close(closeContext); err != nil {
+		harness.t.Fatalf("close offline daemon manager: %v", err)
+	}
+	harness.start(options, false)
 }
 
 func resolveOfflineConfig(
@@ -160,12 +199,12 @@ func resolveOfflineConfig(
 	}{
 		{name: "CLAUDE_CONTEXTD_SOCKET_PATH", value: socketPath},
 		{name: "EMBEDDING_BATCH_SIZE", value: "8"},
-		{name: "CLAUDE_CONTEXT_BACKGROUND_SYNC", value: "false"},
+		{name: "CLAUDE_CONTEXT_BACKGROUND_SYNC", value: strconv.FormatBool(options.backgroundSync)},
 		{name: "CLAUDE_CONTEXT_TRIGGER_WATCHER", value: "false"},
 		{name: "CLAUDE_CONTEXT_FILE_WATCHER", value: strconv.FormatBool(options.fileWatcher)},
 		{name: "CLAUDE_CONTEXT_DEBUG_LISTENER", value: "false"},
 		{name: "CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", value: "0"},
-		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: "1"},
+		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: strconv.Itoa(max(options.maxConcurrentIndexJobs, 1))},
 		{name: "CLAUDE_CONTEXT_RESUME_ON_BOOT", value: "false"},
 	}
 	for _, setting := range suiteSettings {
@@ -282,7 +321,7 @@ func requireOfflineConfig(t *testing.T, daemonConfig config.Config) {
 	}
 }
 
-func (harness *harness) teardown(stopServer func()) {
+func (harness *harness) teardown() {
 	slog.Debug(
 		"offline live harness teardown started",
 		"state_root",
@@ -291,7 +330,7 @@ func (harness *harness) teardown(stopServer func()) {
 	if err := harness.connection.Close(); err != nil {
 		harness.t.Errorf("close isolated daemon connection: %v", err)
 	}
-	stopServer()
+	harness.stopServer()
 	harness.manager.CloseGraphEngines()
 	slog.Debug(
 		"offline live harness teardown completed",

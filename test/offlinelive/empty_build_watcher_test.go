@@ -34,7 +34,7 @@ const (
 // collection, so the watcher has nothing to converge individual paths into and
 // has to start a full build instead.
 func TestFilesAfterEmptyBuildStartFullBuild(t *testing.T) {
-	harness := newHarnessWith(t, harnessOptions{fileWatcher: true})
+	harness := newHarnessWith(t, harnessOptions{fileWatcher: true, backgroundSync: false, maxConcurrentIndexJobs: 0})
 	directory := harness.newEmptyIndexedDirectory()
 
 	writeGeneratedSources(t, directory, smallRepositoryFileCount)
@@ -49,7 +49,7 @@ func TestFilesAfterEmptyBuildStartFullBuild(t *testing.T) {
 // already walked the tree, so they are indexed only if the watcher keeps their
 // paths for a converge once the build ends.
 func TestFilesWrittenDuringBuildAfterEmptyRunAreIndexed(t *testing.T) {
-	harness := newHarnessWith(t, harnessOptions{fileWatcher: true})
+	harness := newHarnessWith(t, harnessOptions{fileWatcher: true, backgroundSync: false, maxConcurrentIndexJobs: 0})
 	directory := harness.newEmptyIndexedDirectory()
 
 	writeGeneratedSources(t, directory, firstCheckoutFileCount)
