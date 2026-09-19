@@ -725,6 +725,15 @@ func gitRun(t *testing.T, directory string, arguments ...string) {
 	}
 }
 
+// gitCommitAll commits every file in directory without signing, so a host that
+// signs its own commits through an agent can still build the fixture.
+func gitCommitAll(t *testing.T, directory string, message string) {
+	t.Helper()
+
+	gitRun(t, directory, "add", "--all")
+	gitRun(t, directory, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", message)
+}
+
 func correlatedContext() context.Context {
 	return grpcutil.WithCorrelation(context.Background())
 }

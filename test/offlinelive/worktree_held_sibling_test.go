@@ -158,8 +158,7 @@ func newCommittedRepositoryWithWorktree(t *testing.T, fileCount int) (string, st
 
 	repository := newEmptyRepository(t)
 	writeGeneratedSources(t, repository, fileCount)
-	gitRun(t, repository, "add", "--all")
-	gitRun(t, repository, "commit", "--quiet", "--message", "add sources")
+	gitCommitAll(t, repository, "add sources")
 	return repository, addNestedWorktree(t, repository)
 }
 

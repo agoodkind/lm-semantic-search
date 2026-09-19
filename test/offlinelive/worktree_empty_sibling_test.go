@@ -40,8 +40,7 @@ func TestWorktreeOfEmptyIndexWaitsForEmbeddedSibling(t *testing.T) {
 	}
 
 	writeGeneratedSources(t, repository, smallRepositoryFileCount)
-	gitRun(t, repository, "add", "--all")
-	gitRun(t, repository, "commit", "--quiet", "--message", "add sources")
+	gitCommitAll(t, repository, "add sources")
 	worktree := addNestedWorktree(t, repository)
 
 	status := harness.indexStatusAt(worktree)
