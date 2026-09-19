@@ -25,19 +25,26 @@ func (manager *Manager) retryFailedBuild(ctx context.Context, codebase model.Cod
 	}
 	manager.mu.Unlock()
 
-	startedJob, startedCodebase, deduplicated, _, err := manager.StartIndex(
+	started, err := manager.startAutomaticIndex(
 		ctx,
 		codebase.CanonicalPath,
 		model.ClientInfo{Name: "daemon-failed-retry", PID: 0},
 		codebase.EffectiveConfig,
-		false,
-		emptyAdmissionBudget,
+		indexPolicyIntent{
+			Patch:      model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil},
+			Initialize: true,
+		},
 	)
 	if err != nil {
 		slog.WarnContext(ctx, "failed build retry could not start", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
 		return
 	}
-	if deduplicated {
+	if started.held {
+		// The retry waits for a sibling worktree's first build, which starts it
+		// again when it ends, so the held call does not consume an attempt.
+		return
+	}
+	if started.deduplicated {
 		// A retry for this codebase is already in flight (a concurrent sweep, or a
 		// redirect to a covering parent), so this call did not start a new build
 		// and must not consume an attempt.
@@ -50,5 +57,5 @@ func (manager *Manager) retryFailedBuild(ctx context.Context, codebase model.Cod
 	manager.failedBuildRetries[codebase.ID]++
 	attemptCount := manager.failedBuildRetries[codebase.ID]
 	manager.mu.Unlock()
-	slog.InfoContext(ctx, "retrying failed codebase build", "codebase_id", startedCodebase.ID, "path", codebase.CanonicalPath, "job_id", startedJob.ID, "attempt", attemptCount, "max_attempts", maxFailedBuildRetries)
+	slog.InfoContext(ctx, "retrying failed codebase build", "codebase_id", started.codebase.ID, "path", codebase.CanonicalPath, "job_id", started.job.ID, "attempt", attemptCount, "max_attempts", maxFailedBuildRetries)
 }

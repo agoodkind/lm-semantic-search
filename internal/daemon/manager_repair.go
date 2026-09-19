@@ -38,13 +38,15 @@ func (manager *Manager) RepairMissingCollections(ctx context.Context) {
 
 	queuedPaths := make([]string, 0, len(plans))
 	for _, plan := range plans {
-		_, _, _, _, err := manager.StartIndex(
+		started, err := manager.startAutomaticIndex(
 			ctx,
 			plan.canonicalPath,
 			model.ClientInfo{Name: "daemon-repair", PID: 0},
 			plan.config,
-			false,
-			emptyAdmissionBudget,
+			indexPolicyIntent{
+				Patch:      model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil},
+				Initialize: true,
+			},
 		)
 		if err != nil {
 			manager.noteAutomaticRepairStartFailure(ctx, plan.codebaseID, err)
@@ -58,6 +60,9 @@ func (manager *Manager) RepairMissingCollections(ctx context.Context) {
 				"err",
 				err,
 			)
+			continue
+		}
+		if started.held {
 			continue
 		}
 		queuedPaths = append(queuedPaths, plan.canonicalPath)
