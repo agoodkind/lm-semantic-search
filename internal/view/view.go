@@ -16,6 +16,16 @@ type JobSurface struct {
 	Scheduling        SchedulingView
 }
 
+// MaintenanceView is the resolved operator maintenance mode for the banner and
+// the mode-change acknowledgement. SinceLabel is already formatted for a
+// person; ActiveJobs is how many jobs were still running when the mode changed.
+type MaintenanceView struct {
+	Enabled    bool
+	Reason     string
+	SinceLabel string
+	ActiveJobs int
+}
+
 // FailureSurface is the resolved failure detail for a codebase.
 type FailureSurface struct {
 	HasFailure    bool

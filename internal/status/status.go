@@ -151,6 +151,11 @@ type Inputs struct {
 	// search could serve it when the backend is up. It is the per-path precondition
 	// the searchable fold combines with the dependency health.
 	SearchableEligible bool
+	// Maintenance reports that the operator put the daemon in maintenance mode.
+	// It is a fact about the whole daemon, not a dependency fault, so it flips
+	// searchable false without raising the dependency banner or changing the
+	// display: search_code refuses every request while it is on.
+	Maintenance bool
 }
 
 // Surface is the fully resolved view model. Every field is decided here so the
@@ -241,13 +246,14 @@ func ResolveDisplay(in Inputs) Display {
 }
 
 // ResolveSearchable reports whether a path can serve a search right now. A path
-// is searchable only when it is in-scope indexed (SearchableEligible) AND the
+// is searchable only when it is in-scope indexed (SearchableEligible), the
 // shared backend is not degraded, so a store or embedder outage flips it false
-// even while the on-disk classification stays indexed. This is the single place
-// the searchable fold lives, so the wire `searchable` field and the display
-// status both derive from one resolution and cannot disagree.
+// even while the on-disk classification stays indexed, and the daemon is not in
+// maintenance mode. This is the single place the searchable fold lives, so the
+// wire `searchable` field and the display status both derive from one
+// resolution and cannot disagree.
 func ResolveSearchable(in Inputs) bool {
-	return in.SearchableEligible && !in.Dependency.Degraded() && !in.Collection.blocksSearch()
+	return in.SearchableEligible && !in.Dependency.Degraded() && !in.Collection.blocksSearch() && !in.Maintenance
 }
 
 // Resolve turns the normalized inputs into the fully resolved surface.

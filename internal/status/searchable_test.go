@@ -1,6 +1,10 @@
 package status
 
-import "testing"
+import (
+	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/model"
+)
 
 // ResolveSearchable is the single fold for "can this path serve a search now":
 // it is true only when the path is in-scope indexed and the shared backend is
@@ -30,6 +34,25 @@ func TestResolveSearchable(t *testing.T) {
 		if got := Resolve(in).Searchable; got != testCase.want {
 			t.Fatalf("%s: Resolve().Searchable = %v, want %v", testCase.name, got, testCase.want)
 		}
+	}
+}
+
+// Maintenance mode flips searchable false for an otherwise searchable path
+// without raising the dependency banner or changing the display: the daemon is
+// healthy, the operator has paused it.
+func TestResolveSearchableMaintenance(t *testing.T) {
+	t.Parallel()
+
+	in := Inputs{Status: model.CodebaseStatusIndexed, SearchableEligible: true, Dependency: Healthy, Collection: CollectionReady, Maintenance: true}
+	surface := Resolve(in)
+	if surface.Searchable {
+		t.Fatal("Searchable = true during maintenance, want false")
+	}
+	if surface.BannerPresent {
+		t.Fatal("maintenance raised the dependency banner")
+	}
+	if surface.Display != DisplayIndexed {
+		t.Fatalf("Display = %q during maintenance, want %q", surface.Display, DisplayIndexed)
 	}
 }
 

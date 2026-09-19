@@ -178,6 +178,9 @@ type Manager struct {
 	// through it instead of calling the resolver's invalidate directly, so
 	// invalidation has exactly one home.
 	observer *ignoreObserver
+	// maintenance is the operator's maintenance mode, persisted beside the
+	// registry and mirrored onto the semantic backend's load gate. Guarded by mu.
+	maintenance model.MaintenanceState
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -273,6 +276,7 @@ func newManagerWithDependencies(
 		bootSelfCheckDelay:          defaultBootSelfCheckDelay,
 		indexability:                nil,
 		observer:                    nil,
+		maintenance:                 model.MaintenanceState{Enabled: false, Reason: "", Since: time.Time{}},
 	}
 	// Drop this manager's conversation chunk byte budget from the varchar-safe
 	// default (set in the literal above) to the embedding token budget when

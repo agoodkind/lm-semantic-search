@@ -204,6 +204,11 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 		)
 		return bootSelfCheckSkipped, nil
 	}
+	// The check's query would load a cold collection, which is exactly what a
+	// daemon restarted mid-restore must not do.
+	if manager.skipForMaintenance(ctx, "boot-selfcheck") {
+		return bootSelfCheckSkipped, nil
+	}
 	if !manager.semantic.Available() {
 		manager.noteDependencyFailure(semantic.ErrUnavailable)
 		slog.ErrorContext(

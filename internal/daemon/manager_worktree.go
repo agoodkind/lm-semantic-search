@@ -187,6 +187,9 @@ type automaticStart struct {
 	// held reports that nothing started because the codebase waits for a
 	// sibling worktree's first build.
 	held bool
+	// paused reports that nothing started because the daemon is in
+	// maintenance mode. The sweep after the mode ends starts it again.
+	paused bool
 }
 
 // startAutomaticIndex is the one entry for the index starts the daemon makes on
@@ -209,16 +212,19 @@ func (manager *Manager) startAutomaticIndex(
 ) (automaticStart, error) {
 	var noJob model.Job
 	var noCodebase model.Codebase
+	if manager.skipForMaintenance(ctx, "automatic-index:"+client.Name) {
+		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: false, paused: true}, nil
+	}
 	if manager.holdForSiblingFirstBuild(canonicalPath) {
 		slog.InfoContext(ctx, "automatic build held for sibling first build", "path", canonicalPath, "client", client.Name)
-		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: true}, nil
+		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: true, paused: false}, nil
 	}
 	job, codebase, deduplicated, _, err := manager.startIndexWithIntent(ctx, canonicalPath, client, indexConfig, false, emptyAdmissionBudget, policyIntent)
 	if err != nil {
-		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: false}, err
+		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: false, paused: false}, err
 	}
 	manager.clearHeldWorktreeBuild(codebase.ID)
-	return automaticStart{job: job, codebase: codebase, deduplicated: deduplicated, held: false}, nil
+	return automaticStart{job: job, codebase: codebase, deduplicated: deduplicated, held: false, paused: false}, nil
 }
 
 // startAutomaticSync is startAutomaticIndex for the syncs the daemon starts on
@@ -228,6 +234,9 @@ func (manager *Manager) startAutomaticIndex(
 // same way, and it is recorded as held without syncing. The sync covers the
 // whole tree, so the changes that prompted it are picked up when it runs later.
 func (manager *Manager) startAutomaticSync(ctx context.Context, codebase model.Codebase, client model.ClientInfo) {
+	if manager.skipForMaintenance(ctx, "automatic-sync:"+client.Name) {
+		return
+	}
 	if manager.holdForSiblingFirstBuild(codebase.CanonicalPath) {
 		slog.InfoContext(ctx, "automatic sync held for sibling first build", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "client", client.Name)
 		return

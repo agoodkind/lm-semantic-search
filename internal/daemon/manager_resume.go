@@ -113,7 +113,10 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	}
 	manager.mu.Unlock()
 
-	if !manager.config.ResumeIndexingOnBoot {
+	// A daemon restarted during maintenance leaves its interrupted builds where
+	// they are; the repair pass resumes them on the first sweep after the mode
+	// ends, exactly as it does when resume-on-boot is off.
+	if !manager.config.ResumeIndexingOnBoot || manager.skipForMaintenance(ctx, "resume-orphaned-jobs") {
 		for _, plan := range plans {
 			manager.logResumeSkipped(ctx, plan.codebaseID, plan.canonicalPath)
 		}

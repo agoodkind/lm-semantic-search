@@ -46,6 +46,8 @@ type StatusSnapshot struct {
 	// dropped, so the reply over-reports work for one poll rather than showing an
 	// occupied slot no row accounts for.
 	Watcher []WatcherActivity
+	// Maintenance is the operator's maintenance mode at the same instant.
+	Maintenance model.MaintenanceState
 }
 
 // StatusSnapshot reads every fact a status reply needs. The watcher activity is
@@ -83,13 +85,14 @@ func (manager *Manager) StatusSnapshot() StatusSnapshot {
 	watcher = watcherActivityWithoutRegisteredConverges(watcher, activeJobs)
 
 	return StatusSnapshot{
-		StartedAt:  manager.startedAt,
-		Scheduler:  schedulerSnapshot,
-		Health:     health,
-		ActiveJobs: activeJobs,
-		Pending:    manager.pendingWorkLocked(),
-		Codebases:  manager.codebaseViewsLocked(),
-		Watcher:    watcher,
+		StartedAt:   manager.startedAt,
+		Scheduler:   schedulerSnapshot,
+		Health:      health,
+		ActiveJobs:  activeJobs,
+		Pending:     manager.pendingWorkLocked(),
+		Codebases:   manager.codebaseViewsLocked(),
+		Watcher:     watcher,
+		Maintenance: manager.maintenance,
 	}
 }
 

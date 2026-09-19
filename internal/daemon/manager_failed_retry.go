@@ -39,9 +39,10 @@ func (manager *Manager) retryFailedBuild(ctx context.Context, codebase model.Cod
 		slog.WarnContext(ctx, "failed build retry could not start", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
 		return
 	}
-	if started.held {
-		// The retry waits for a sibling worktree's first build, which starts it
-		// again when it ends, so the held call does not consume an attempt.
+	if started.held || started.paused {
+		// The retry waits for a sibling worktree's first build or for maintenance
+		// mode to end, and a later sweep starts it again, so neither consumes an
+		// attempt.
 		return
 	}
 	if started.deduplicated {
