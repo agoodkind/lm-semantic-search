@@ -74,8 +74,7 @@ type harness struct {
 type harnessOptions struct {
 	fileWatcher bool
 	// backgroundSync starts the periodic sweep. Its first pass runs a few
-	// seconds after the daemon starts and the next one only after the default
-	// interval, which is longer than any test, so a test sees exactly one pass.
+	// seconds after the daemon starts and the next one after syncIntervalMS.
 	backgroundSync bool
 	// maxConcurrentIndexJobs lets builds run side by side. Zero keeps the
 	// harness default of one.
@@ -83,6 +82,10 @@ type harnessOptions struct {
 	// resumeOnBoot resumes builds a previous daemon left mid-flight, as the
 	// installed daemon does by default.
 	resumeOnBoot bool
+	// syncIntervalMS repeats the background sweep at this interval after its
+	// first pass. Zero keeps the default, which no test outlasts, so the test
+	// sees exactly one pass.
+	syncIntervalMS int
 }
 
 // harnessShutdownTimeout bounds how long a restart waits for the old daemon's
@@ -217,6 +220,12 @@ func resolveOfflineConfig(
 		{name: "CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", value: "0"},
 		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: strconv.Itoa(max(options.maxConcurrentIndexJobs, 1))},
 		{name: "CLAUDE_CONTEXT_RESUME_ON_BOOT", value: strconv.FormatBool(options.resumeOnBoot)},
+	}
+	if options.syncIntervalMS > 0 {
+		suiteSettings = append(suiteSettings, struct {
+			name  string
+			value string
+		}{name: "CLAUDE_CONTEXT_SYNC_INTERVAL_MS", value: strconv.Itoa(options.syncIntervalMS)})
 	}
 	for _, setting := range suiteSettings {
 		t.Setenv(setting.name, setting.value)
