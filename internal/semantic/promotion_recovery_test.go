@@ -46,6 +46,14 @@ type promotionRecoveryServer struct {
 	loadCollectionCalls   int
 	renameCollectionCalls int
 	describeCalls         map[string]int
+	// holdLoads parks every LoadCollection until resumeLoads closes, and the
+	// in-flight counters record how many were parked at once, which is what a
+	// concurrency cap test observes.
+	holdLoads         bool
+	resumeLoads       chan struct{}
+	loadArrived       chan string
+	loadsInFlight     int
+	loadsInFlightPeak int
 }
 
 var (
@@ -84,6 +92,11 @@ func resetPromotionRecoveryServer() *promotionRecoveryServer {
 	server.loadCollectionCalls = 0
 	server.renameCollectionCalls = 0
 	server.describeCalls = make(map[string]int)
+	server.holdLoads = false
+	server.resumeLoads = nil
+	server.loadArrived = nil
+	server.loadsInFlight = 0
+	server.loadsInFlightPeak = 0
 	return server
 }
 
@@ -121,13 +134,71 @@ func (server *promotionRecoveryServer) GetLoadState(
 }
 
 func (server *promotionRecoveryServer) LoadCollection(
-	context.Context,
-	*milvuspb.LoadCollectionRequest,
+	ctx context.Context,
+	request *milvuspb.LoadCollectionRequest,
 ) (*commonpb.Status, error) {
 	server.mutex.Lock()
 	server.loadCollectionCalls++
+	holdLoads := server.holdLoads
+	resumeLoads := server.resumeLoads
+	loadArrived := server.loadArrived
+	if holdLoads {
+		server.loadsInFlight++
+		if server.loadsInFlight > server.loadsInFlightPeak {
+			server.loadsInFlightPeak = server.loadsInFlight
+		}
+	}
 	server.mutex.Unlock()
-	return promotionSuccessStatus(), nil
+	if !holdLoads {
+		return promotionSuccessStatus(), nil
+	}
+	loadArrived <- request.GetCollectionName()
+	defer func() {
+		server.mutex.Lock()
+		server.loadsInFlight--
+		server.mutex.Unlock()
+	}()
+	select {
+	case <-resumeLoads:
+		return promotionSuccessStatus(), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// holdLoadCollections parks every LoadCollection until the returned resume
+// function runs. Arrivals are reported on the returned channel, which is
+// buffered for capacity collections so the fake never blocks on the test.
+func (server *promotionRecoveryServer) holdLoadCollections(capacity int) (<-chan string, func()) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	server.holdLoads = true
+	server.resumeLoads = make(chan struct{})
+	server.loadArrived = make(chan string, capacity)
+	resume := server.resumeLoads
+	var once sync.Once
+	return server.loadArrived, func() {
+		once.Do(func() {
+			close(resume)
+		})
+	}
+}
+
+func (server *promotionRecoveryServer) loadsInFlightNow() (int, int) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	return server.loadsInFlight, server.loadsInFlightPeak
+}
+
+func (server *promotionRecoveryServer) setLoadStates(state commonpb.LoadState, names ...string) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	if server.loadStates == nil {
+		server.loadStates = make(map[string]commonpb.LoadState, len(names))
+	}
+	for _, name := range names {
+		server.loadStates[name] = state
+	}
 }
 
 func (server *promotionRecoveryServer) Query(

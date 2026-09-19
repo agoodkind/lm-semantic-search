@@ -562,7 +562,9 @@ func classifyPrepareCollectionError(collectionName string, err error) error {
 // load that is still running; sharedCollectionLoadCeiling is what ends that load
 // once no caller remains. A caller's earlier deadline still ends its own wait
 // first. A collection that never finishes loading fails as not-ready instead of
-// multiplying work across callers.
+// multiplying work across callers. Across different collections the transition
+// itself takes a slot from the daemon-wide limiter, so a burst of cold
+// collections loads a few at a time rather than all at once.
 func (service *Service) loadCollection(ctx context.Context, collectionName string) error {
 	return service.collectionLoads.Do(
 		ctx,
@@ -574,10 +576,20 @@ func (service *Service) loadCollection(ctx context.Context, collectionName strin
 	)
 }
 
+// loadCollectionTransition is the one place a LoadCollection request leaves
+// this process, whichever path asked for it, so it is where the daemon-wide cap
+// on concurrent loads applies. The slot covers the request, the load-state
+// polls, and the single recovery request, since a collection that is still
+// materializing on the query node holds memory for all of them.
 func (service *Service) loadCollectionTransition(
 	ctx context.Context,
 	collectionName string,
 ) error {
+	releaseSlot, err := service.collectionLoadSlots().acquire(ctx, collectionName)
+	if err != nil {
+		return err
+	}
+	defer releaseSlot()
 	if _, err := service.milvus.LoadCollection(
 		ctx,
 		milvusclient.NewLoadCollectionOption(collectionName),
