@@ -189,9 +189,11 @@ type automaticStart struct {
 	held bool
 }
 
-// startAutomaticIndex is the one entry for every build the daemon starts on its
-// own: the deferred worktree build, the repair pass's resume of an interrupted
-// build, and the failed build retry. It starts nothing while the codebase at
+// startAutomaticIndex is the one entry for the index starts the daemon makes on
+// its own: the deferred worktree build, the repair pass's resume of an
+// interrupted build, and the failed build retry. Boot resume and the automatic
+// syncs start work through their own paths and read waitsForSiblingFirstBuild
+// directly. It starts nothing while the codebase at
 // canonicalPath is a worktree that waits for a sibling's first build, so none of
 // those paths embeds what that build is about to hold. The hold is read when
 // the build would start, not when it was scheduled. startHeldSiblingWorktreeBuilds
