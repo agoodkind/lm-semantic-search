@@ -20,6 +20,14 @@ import (
 // wedging the run until the package-wide test timeout.
 const probeStartTimeout = 10 * time.Second
 
+// resetProbeClock clears the last dependency probe time so the next read
+// probes the backends again instead of reusing a cached result.
+func resetProbeClock(manager *Manager) {
+	manager.mu.Lock()
+	manager.lastDepProbeAt = time.Time{}
+	manager.mu.Unlock()
+}
+
 // readinessSurface is one RPC that answers whether the daemon can serve. Each
 // must reflect the current state of the shared dependencies on its own, without
 // depending on some other caller having run first.

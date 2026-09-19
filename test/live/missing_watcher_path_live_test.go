@@ -47,7 +47,7 @@ type watcherProgressUpdate struct {
 }
 
 func TestWatcherRetainsRemovedPathAtPublicBoundary(t *testing.T) {
-	harness := newSandboxWatcherHarness(t)
+	harness, _ := newSandboxWatcherHarness(t, nil)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package watcherfixture\n\nfunc Existing() string { return \"indexed\" }\n"), 0o600); err != nil {
 		t.Fatalf("write indexed source: %v", err)
@@ -86,7 +86,10 @@ func TestWatcherProgressAllowsTotalChange(t *testing.T) {
 	}
 }
 
-func newSandboxWatcherHarness(t *testing.T) *harness {
+// newSandboxWatcherHarness starts the built sandbox daemon against a throwaway
+// Milvus database and returns the harness and the daemon socket path. A non-nil
+// gate holds every embed request until the test releases it.
+func newSandboxWatcherHarness(t *testing.T, gate *embedGate) (*harness, string) {
 	t.Helper()
 	defaultConfig, err := config.Default()
 	if err != nil {
@@ -192,7 +195,7 @@ func newSandboxWatcherHarness(t *testing.T) *harness {
 		StateRoot:          filepath.Join(sandboxRoot, "state"),
 		EmbeddingDimension: fakeEmbeddingDimension,
 	}))
-	embedder := newFakeEmbeddingServer(t, nil)
+	embedder := newFakeEmbeddingServer(t, gate)
 	process := startSandboxDaemon(t, sandboxRoot, databaseName, defaultConfig, embedder.URL)
 	t.Cleanup(func() {
 		if harness.conn != nil {
@@ -201,10 +204,11 @@ func newSandboxWatcherHarness(t *testing.T) *harness {
 		stopSandboxDaemon(t, process)
 	})
 
-	connection, client := waitForSandboxDaemon(t, filepath.Join(sandboxRoot, "daemon.sock"), process)
+	socketPath := filepath.Join(sandboxRoot, "daemon.sock")
+	connection, client := waitForSandboxDaemon(t, socketPath, process)
 	harness.conn = connection
 	harness.client = client
-	return harness
+	return harness, socketPath
 }
 
 func dropOwnedDatabase(client *milvusclient.Client, databaseName string) {

@@ -13,7 +13,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
 	render "goodkind.io/lm-semantic-search/internal/render"
-	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 // A healthy record renders no banner; each degraded mode renders its own variant
@@ -104,24 +103,6 @@ func TestListJobsPauseFailureShowsPauseRecoveryGuidance(t *testing.T) {
 	}
 }
 
-// The waiting body names the embedder for the embedder modes and the vector store
-// for the store mode, leaving the specific cause to the banner.
-func TestRenderWaitingNamesDependency(t *testing.T) {
-	t.Parallel()
-	codebase := &model.Codebase{CanonicalPath: "/Users/agoodkind/Sites/swift-makefile"}
-
-	embedderView, embedderTemplate := resolveStatusView(*codebase, nil, displayWaiting, dependencyEmbedderUnreachable)
-	embedderOut := render.GetIndex(view.GetIndexView{Tracked: true, TemplateName: embedderTemplate, Status: embedderView})
-	if !strings.Contains(embedderOut, "⏳ Waiting for the embedding server") {
-		t.Fatalf("embedder waiting body wrong:\n%s", embedderOut)
-	}
-	storeView, storeTemplate := resolveStatusView(*codebase, nil, displayWaiting, dependencyStoreUnavailable)
-	storeOut := render.GetIndex(view.GetIndexView{Tracked: true, TemplateName: storeTemplate, Status: storeView})
-	if !strings.Contains(storeOut, "⏳ Waiting for the vector store") {
-		t.Fatalf("store waiting body wrong:\n%s", storeOut)
-	}
-}
-
 // The job view suppresses the Error line when the banner is showing and the job
 // stopped on that retryable cause, and shows it otherwise.
 func TestRenderGetJobNoEchoWhenDegraded(t *testing.T) {
@@ -148,8 +129,8 @@ func TestRenderGetJobNoEchoWhenDegraded(t *testing.T) {
 	}
 }
 
-// During a degraded pipeline, GetIndex shows exactly one banner, the waiting
-// body, and one correlation header, with no blank lines from the envelope.
+// During a degraded pipeline, GetIndex shows exactly one banner and one
+// correlation header, with no blank lines from the envelope.
 func TestGetIndexDegradedEnvelope(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	// The active health probe runs on this indexed path, so the fake must report
@@ -179,9 +160,6 @@ func TestGetIndexDegradedEnvelope(t *testing.T) {
 	}
 	if !strings.Contains(text, "Embedding server unreachable") {
 		t.Fatalf("missing unreachable banner:\n%s", text)
-	}
-	if !strings.Contains(text, "⏳ Waiting for the embedding server") {
-		t.Fatalf("codebase should read waiting, got:\n%s", text)
 	}
 	if strings.Count(text, "🔎 trace_id=") != 1 {
 		t.Fatalf("want exactly one correlation header, got:\n%s", text)

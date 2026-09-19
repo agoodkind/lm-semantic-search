@@ -38,15 +38,6 @@ type QuarantineSurface struct {
 	Trigger            string
 }
 
-// StatusNarrative is the boundary-owned, display-ready body for a non-template
-// codebase status (failed, missing, stale, quarantined). The daemon boundary
-// builds each line so the render layer only joins them; render never synthesizes
-// status prose from a raw record. The state itself is carried by
-// GetIndexView.Display, so the narrative holds only the pre-rendered lines.
-type StatusNarrative struct {
-	Lines []string
-}
-
 // RunMode names what kind of pass a job is making.
 type RunMode string
 
@@ -545,17 +536,57 @@ type ConversationResultView struct {
 	Content        string
 }
 
+// RawStatus holds the literal stored values the human codebase status prints.
+// Each field is copied from the registry record, the live job, or the collection
+// probe without mapping it to a display word. Times are pre-formatted in the
+// host's zone.
+type RawStatus struct {
+	CodebaseID   string
+	StoredStatus string
+	Collection   string
+	// CollectionRows is the row count the collection probe observed, nil when
+	// the probe did not count rows.
+	CollectionRows *int32
+	// HeldForSiblingBuild reports that a discovered worktree's build waits for a
+	// sibling worktree's first index to finish.
+	HeldForSiblingBuild bool
+
+	HasJob         bool
+	JobID          string
+	Operation      string
+	JobState       string
+	Trigger        string
+	Phase          string
+	FilesProcessed int32
+	FilesTotal     int32
+	ChunksEmbedded int32
+	ChunksReused   int32
+	OverallPercent float64
+	LastEventAt    string
+
+	HasLastRun       bool
+	LastRunFiles     int32
+	LastRunChunks    int32
+	LastRunCompleted string
+
+	HasFailure      bool
+	FailureMessage  string
+	FailureJobID    string
+	FailureTraceID  string
+	FailureFailedAt string
+
+	GraphState     string
+	GraphUpdatedAt string
+}
+
 // GetIndexView is the resolved codebase status response.
 type GetIndexView struct {
 	Tracked            bool
 	RequestedPath      string
 	CanonicalPath      string
 	Display            Display
-	TemplateName       string
+	Raw                RawStatus
 	Status             StatusView
-	Failure            FailureSurface
-	Quarantine         QuarantineSurface
-	Narrative          StatusNarrative
 	WaitLabel          string
 	ClassificationLine string
 	ResolutionLines    []string

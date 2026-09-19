@@ -14,13 +14,7 @@ const (
 	searchIndexingTip    = "💡 **Tip**: This codebase is still being indexed. More results may become available as indexing progresses."
 )
 
-const (
-	displayFailed      view.Display = "failed"
-	displayMissing     view.Display = "missing"
-	displayQuarantined view.Display = "quarantined"
-	displayStale       view.Display = "stale"
-	displayDiscovered  view.Display = "discovered"
-)
+const displayDiscovered view.Display = "discovered"
 
 // StartIndex formats the start-index acknowledgment.
 func StartIndex(startIndex view.StartIndexView) string {
@@ -175,29 +169,49 @@ func renderGetIndexBody(getIndex view.GetIndexView) string {
 	if !getIndex.Tracked {
 		return fmt.Sprintf("❌ Codebase '%s' is not indexed. Please use the index_codebase tool to index it first.", getIndex.RequestedPath)
 	}
-	// The display status is the single source of truth; the renderers below only
-	// fill in detail for the bucket it picks. A live background sync over an
-	// already-indexed codebase keeps the searchable ready view with a sync note
-	// rather than a busy takeover. Under a hard dependency outage an incomplete
-	// codebase folds to "waiting"; the banner above carries the cause, so the
-	// waiting view names none.
-	switch getIndex.Display {
-	case displayFailed, displayMissing, displayQuarantined, displayStale:
-		// These non-template states carry no prose in render: the daemon boundary
-		// builds the display-ready body in resolveStatusNarrative and render only
-		// joins the lines. The status chokepoint keeps prose behind the view wall.
-		if len(getIndex.Narrative.Lines) == 0 {
-			// A non-template state must always arrive with a narrative. An empty one
-			// means a caller skipped resolveStatusNarrative; surface the status word
-			// and path so the gap is visible rather than rendering a blank body.
-			body := fmt.Sprintf("Codebase '%s' status: %s", getIndex.CanonicalPath, getIndex.Display)
-			return insertSchedulingPolicy(body, "🗓️ Stored policy: ", getIndex.Status.Scheduling)
-		}
-		body := strings.Join(getIndex.Narrative.Lines, "\n")
-		return insertSchedulingPolicy(body, "🗓️ Stored policy: ", getIndex.Status.Scheduling)
-	default:
-		return renderStatusBody(getIndex.Status, getIndex.TemplateName)
+	// A tracked codebase prints the literal stored values rather than a mapped
+	// display word, so two mapping layers cannot disagree in front of the reader.
+	return strings.Join(rawStatusLines(getIndex), "\n")
+}
+
+// rawStatusLines prints each stored value as key=value. A group is omitted when
+// its source is absent, for example no active job or no completed run.
+func rawStatusLines(getIndex view.GetIndexView) []string {
+	raw := getIndex.Raw
+	lines := []string{
+		fmt.Sprintf("codebase_id=%s path=%s", raw.CodebaseID, getIndex.CanonicalPath),
 	}
+	statusLine := fmt.Sprintf("status=%s collection=%s", raw.StoredStatus, raw.Collection)
+	if raw.CollectionRows != nil {
+		statusLine += fmt.Sprintf(" collection_rows=%d", *raw.CollectionRows)
+	}
+	if raw.HeldForSiblingBuild {
+		statusLine += " held_for_sibling_build=true"
+	}
+	lines = append(lines, statusLine)
+	if raw.HasJob {
+		lines = append(lines,
+			fmt.Sprintf("job_id=%s operation=%s state=%s trigger=%s phase=%q",
+				raw.JobID, raw.Operation, raw.JobState, raw.Trigger, raw.Phase),
+			fmt.Sprintf("files_processed=%d files_total=%d chunks_embedded=%d chunks_reused=%d overall_percent=%.2f last_event_at=%s",
+				raw.FilesProcessed, raw.FilesTotal, raw.ChunksEmbedded, raw.ChunksReused, raw.OverallPercent, raw.LastEventAt),
+		)
+	}
+	if raw.HasLastRun {
+		lines = append(lines, fmt.Sprintf("last_run indexed_files=%d total_chunks=%d completed_at=%s",
+			raw.LastRunFiles, raw.LastRunChunks, raw.LastRunCompleted))
+	}
+	if raw.HasFailure {
+		lines = append(lines, fmt.Sprintf("last_failure message=%q job_id=%s trace_id=%s failed_at=%s",
+			raw.FailureMessage, raw.FailureJobID, raw.FailureTraceID, raw.FailureFailedAt))
+	}
+	if raw.GraphState != "" || raw.GraphUpdatedAt != "" {
+		lines = append(lines, fmt.Sprintf("graph_state=%s graph_updated_at=%s", raw.GraphState, raw.GraphUpdatedAt))
+	}
+	if policy := SchedulingPolicy(getIndex.Status.Scheduling); policy != "" {
+		lines = append(lines, "policy "+policy)
+	}
+	return lines
 }
 
 func renderStatusBody(statusView view.StatusView, templateName string) string {
@@ -448,13 +462,6 @@ func renderJobListEntry(entry view.JobEntryView) []string {
 		lines = append(lines, "  Error: "+entry.Surface.ErrorLine)
 	}
 	return lines
-}
-
-// FormatCount exposes the thousands-grouping formatter to the daemon boundary,
-// which builds display-ready status narrative lines carrying pre-resolved
-// counts. The value arrives already resolved; only digit grouping happens here.
-func FormatCount(value int32) string {
-	return formatCountString(value)
 }
 
 // formatCountString is the render-side alias for thousands formatting; the
