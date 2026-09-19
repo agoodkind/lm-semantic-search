@@ -63,6 +63,11 @@ func (server *GRPCServer) UpsertConversationDocumentsStream(stream pb.SemanticSe
 			if argErr := requireNonEmpty(ctx, collectionID, "collection_id", false); argErr != nil {
 				return argErr
 			}
+			// Refuse at the header, before any document is accumulated, so a
+			// stream sent during maintenance is turned away without buffering.
+			if refusal := server.refuseDuringMaintenance(ctx); refusal != nil {
+				return refusal
+			}
 		case *pb.UpsertConversationDocumentsChunk_Documents:
 			if !headerSeen {
 				return status.Error(adapterr.Respond(ctx, adapterr.NewMissingArgument("header")))

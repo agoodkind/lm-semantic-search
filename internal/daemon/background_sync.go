@@ -177,11 +177,6 @@ func (syncer *BackgroundSync) runPeriodicMaintenance(ctx context.Context) {
 	syncer.runPeriodicLoop(ctx, func() { syncer.runPeriodicMaintenanceOnce(ctx) })
 }
 
-func (syncer *BackgroundSync) runPeriodicMaintenanceOnce(ctx context.Context) {
-	syncer.ensureMmapEnabled(ctx)
-	syncer.backfillConversationColumns(ctx)
-}
-
 func (syncer *BackgroundSync) runPeriodicLoop(ctx context.Context, action func()) {
 	initialTimer := time.NewTimer(defaultInitialSyncDelay)
 	defer initialTimer.Stop()
@@ -301,6 +296,9 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 	// after which the next sweep resumes. This only reads the shared health owner;
 	// it adds no probe and no second source of truth.
 	if syncer.manager.DependencyHealth().Mode == dependencyEmbedderUnreachable {
+		return
+	}
+	if syncer.manager.skipForMaintenance(ctx, "sync-"+source) {
 		return
 	}
 
@@ -445,6 +443,9 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 
 	codebase, found := syncer.watcherCodebase(codebaseID)
 	if !found {
+		return
+	}
+	if syncer.manager.skipForMaintenance(ctx, "watcher-converge") {
 		return
 	}
 	if shouldDeferWatcherConvergeForFirstBuild(codebase) {

@@ -28,6 +28,9 @@ type missingCollectionRepair struct {
 // stale failure, so the registry is the single source of truth every reader
 // agrees with. Read paths stay side-effect free; this pass owns the mutation.
 func (manager *Manager) RepairMissingCollections(ctx context.Context) {
+	if manager.skipForMaintenance(ctx, "repair-missing-collections") {
+		return
+	}
 	plans, cleanups, err := manager.planMissingCollectionRepairs(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "repair missing collections failed", "err", err)
@@ -62,7 +65,7 @@ func (manager *Manager) RepairMissingCollections(ctx context.Context) {
 			)
 			continue
 		}
-		if started.held {
+		if started.held || started.paused {
 			continue
 		}
 		queuedPaths = append(queuedPaths, plan.canonicalPath)

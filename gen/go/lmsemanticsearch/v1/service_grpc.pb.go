@@ -41,6 +41,7 @@ const (
 	SemanticSearchDaemonService_SearchWithinConversation_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchWithinConversation"
 	SemanticSearchDaemonService_Doctor_FullMethodName                            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Doctor"
 	SemanticSearchDaemonService_GetStatus_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetStatus"
+	SemanticSearchDaemonService_SetMaintenanceMode_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SetMaintenanceMode"
 	SemanticSearchDaemonService_Shutdown_FullMethodName                          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Shutdown"
 )
 
@@ -79,6 +80,14 @@ type SemanticSearchDaemonServiceClient interface {
 	SearchWithinConversation(ctx context.Context, in *SearchWithinConversationRequest, opts ...grpc.CallOption) (*SearchWithinConversationResponse, error)
 	Doctor(ctx context.Context, in *DoctorRequest, opts ...grpc.CallOption) (*DoctorResponse, error)
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
+	// SetMaintenanceMode turns maintenance mode on or off in the running daemon.
+	// While it is on the daemon starts no background sweep, repair pass,
+	// automatic rebuild, or collection load, refuses index and conversation
+	// writes, and fails searches fast with a maintenance status, so an operator
+	// can back up or restore Milvus with no daemon traffic against it. The mode
+	// is persisted in the daemon state root, so a daemon restart mid-maintenance
+	// comes back still paused.
+	SetMaintenanceMode(ctx context.Context, in *SetMaintenanceModeRequest, opts ...grpc.CallOption) (*SetMaintenanceModeResponse, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 }
 
@@ -325,6 +334,16 @@ func (c *semanticSearchDaemonServiceClient) GetStatus(ctx context.Context, in *G
 	return out, nil
 }
 
+func (c *semanticSearchDaemonServiceClient) SetMaintenanceMode(ctx context.Context, in *SetMaintenanceModeRequest, opts ...grpc.CallOption) (*SetMaintenanceModeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetMaintenanceModeResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_SetMaintenanceMode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *semanticSearchDaemonServiceClient) Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ShutdownResponse)
@@ -370,6 +389,14 @@ type SemanticSearchDaemonServiceServer interface {
 	SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
+	// SetMaintenanceMode turns maintenance mode on or off in the running daemon.
+	// While it is on the daemon starts no background sweep, repair pass,
+	// automatic rebuild, or collection load, refuses index and conversation
+	// writes, and fails searches fast with a maintenance status, so an operator
+	// can back up or restore Milvus with no daemon traffic against it. The mode
+	// is persisted in the daemon state root, so a daemon restart mid-maintenance
+	// comes back still paused.
+	SetMaintenanceMode(context.Context, *SetMaintenanceModeRequest) (*SetMaintenanceModeResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
 
@@ -445,6 +472,9 @@ func (UnimplementedSemanticSearchDaemonServiceServer) Doctor(context.Context, *D
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStatus not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) SetMaintenanceMode(context.Context, *SetMaintenanceModeRequest) (*SetMaintenanceModeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetMaintenanceMode not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
@@ -836,6 +866,24 @@ func _SemanticSearchDaemonService_GetStatus_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SemanticSearchDaemonService_SetMaintenanceMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetMaintenanceModeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).SetMaintenanceMode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_SetMaintenanceMode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).SetMaintenanceMode(ctx, req.(*SetMaintenanceModeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SemanticSearchDaemonService_Shutdown_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ShutdownRequest)
 	if err := dec(in); err != nil {
@@ -936,6 +984,10 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetStatus",
 			Handler:    _SemanticSearchDaemonService_GetStatus_Handler,
+		},
+		{
+			MethodName: "SetMaintenanceMode",
+			Handler:    _SemanticSearchDaemonService_SetMaintenanceMode_Handler,
 		},
 		{
 			MethodName: "Shutdown",

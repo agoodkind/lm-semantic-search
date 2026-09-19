@@ -105,6 +105,13 @@ type semanticIdentity interface {
 	EmbeddingProviderName() model.EmbeddingProvider
 }
 
+// semanticMaintenanceGate is how the manager tells a backend that the operator
+// put the daemon in maintenance mode, so the backend refuses to start any new
+// collection load until the mode is turned off.
+type semanticMaintenanceGate interface {
+	SetMaintenance(enabled bool)
+}
+
 // semanticIndex is the full embedding-and-vector-store surface the manager
 // depends on. It exists so tests can substitute a fake for the Milvus-backed
 // [semantic.Service]; the concrete service satisfies it. The method set is
@@ -116,5 +123,6 @@ type semanticIndex interface {
 	semanticWriter
 	semanticDropper
 	semanticMaintainer
+	semanticMaintenanceGate
 	semanticIdentity
 }

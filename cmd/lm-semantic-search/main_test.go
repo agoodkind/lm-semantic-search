@@ -61,6 +61,8 @@ func TestRootRegistersGroupedCommands(t *testing.T) {
 		{"daemon", "status"},
 		{"daemon", "stop"},
 		{"daemon", "doctor"},
+		{"daemon", "maintenance", "on"},
+		{"daemon", "maintenance", "off"},
 		{"update", "check"},
 		{"update", "apply"},
 		{"update", "status"},

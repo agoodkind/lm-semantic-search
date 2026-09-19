@@ -104,7 +104,14 @@ type fakeSemantic struct {
 	// Reindex and StageReindex so a test can drive reuse-vs-embed progress
 	// reporting, including a conversation ingest's batch progress.
 	reindexEmit func(progress func(semantic.Progress))
-	mu          sync.Mutex
+	// maintenanceGate records the last SetMaintenance value the manager passed,
+	// so a test can prove the operator's mode reached the backend.
+	maintenanceGate atomic.Bool
+	mu              sync.Mutex
+}
+
+func (f *fakeSemantic) SetMaintenance(enabled bool) {
+	f.maintenanceGate.Store(enabled)
 }
 
 type reindexCall struct {

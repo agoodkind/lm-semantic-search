@@ -49,6 +49,9 @@ func (server *GRPCServer) BackfillConversationScalars(stream pb.SemanticSearchDa
 			if argErr := requireNonEmpty(ctx, collectionID, "collection_id", false); argErr != nil {
 				return argErr
 			}
+			if refusal := server.refuseDuringMaintenance(ctx); refusal != nil {
+				return refusal
+			}
 		case *pb.BackfillConversationScalarsChunk_Entries:
 			if !headerSeen {
 				return status.Error(adapterr.Respond(ctx, adapterr.NewMissingArgument("header")))
