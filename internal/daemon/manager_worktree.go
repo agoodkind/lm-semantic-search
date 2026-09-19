@@ -204,13 +204,15 @@ func (manager *Manager) startAutomaticIndex(
 	indexConfig model.IndexConfig,
 	policyIntent indexPolicyIntent,
 ) (automaticStart, error) {
+	var noJob model.Job
+	var noCodebase model.Codebase
 	if manager.waitsForSiblingFirstBuild(canonicalPath) {
 		slog.InfoContext(ctx, "automatic build held for sibling first build", "path", canonicalPath, "client", client.Name)
-		return automaticStart{job: model.Job{}, codebase: model.Codebase{}, deduplicated: false, held: true}, nil
+		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: true}, nil
 	}
 	job, codebase, deduplicated, _, err := manager.startIndexWithIntent(ctx, canonicalPath, client, indexConfig, false, emptyAdmissionBudget, policyIntent)
 	if err != nil {
-		return automaticStart{job: model.Job{}, codebase: model.Codebase{}, deduplicated: false, held: false}, err
+		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: false}, err
 	}
 	return automaticStart{job: job, codebase: codebase, deduplicated: deduplicated, held: false}, nil
 }
