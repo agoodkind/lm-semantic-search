@@ -80,6 +80,9 @@ type harnessOptions struct {
 	// maxConcurrentIndexJobs lets builds run side by side. Zero keeps the
 	// harness default of one.
 	maxConcurrentIndexJobs int
+	// resumeOnBoot resumes builds a previous daemon left mid-flight, as the
+	// installed daemon does by default.
+	resumeOnBoot bool
 }
 
 // harnessShutdownTimeout bounds how long a restart waits for the old daemon's
@@ -88,10 +91,21 @@ const harnessShutdownTimeout = 30 * time.Second
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	return newHarnessWith(t, harnessOptions{fileWatcher: false, backgroundSync: false, maxConcurrentIndexJobs: 0})
+	return newHarnessWith(t, harnessOptions{fileWatcher: false, backgroundSync: false, maxConcurrentIndexJobs: 0, resumeOnBoot: false})
 }
 
 func newHarnessWith(t *testing.T, options harnessOptions) *harness {
+	t.Helper()
+
+	offlineHarness := newUnstartedHarness(t)
+	offlineHarness.start(options, true)
+	t.Cleanup(offlineHarness.teardown)
+	return offlineHarness
+}
+
+// newUnstartedHarness allocates the state root and socket a daemon runs over
+// without starting one.
+func newUnstartedHarness(t *testing.T) *harness {
 	t.Helper()
 	slog.Debug("offline live harness setup started")
 
@@ -105,15 +119,12 @@ func newHarnessWith(t *testing.T, options harnessOptions) *harness {
 		}
 	})
 
-	offlineHarness := &harness{
+	return &harness{
 		t:           t,
 		fixturePath: fixtureDirectory(t),
 		stateRoot:   t.TempDir(),
 		socketPath:  filepath.Join(socketDirectory, "daemon.sock"),
 	}
-	offlineHarness.start(options, true)
-	t.Cleanup(offlineHarness.teardown)
-	return offlineHarness
 }
 
 // start runs a daemon over the harness state root the way the daemon binary
@@ -205,7 +216,7 @@ func resolveOfflineConfig(
 		{name: "CLAUDE_CONTEXT_DEBUG_LISTENER", value: "false"},
 		{name: "CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", value: "0"},
 		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: strconv.Itoa(max(options.maxConcurrentIndexJobs, 1))},
-		{name: "CLAUDE_CONTEXT_RESUME_ON_BOOT", value: "false"},
+		{name: "CLAUDE_CONTEXT_RESUME_ON_BOOT", value: strconv.FormatBool(options.resumeOnBoot)},
 	}
 	for _, setting := range suiteSettings {
 		t.Setenv(setting.name, setting.value)
