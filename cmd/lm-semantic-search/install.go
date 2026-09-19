@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"goodkind.io/lm-semantic-search/internal/installer"
+	"goodkind.io/lm-semantic-search/internal/updateopts"
 )
 
 func newInstallCmd() *cobra.Command {
@@ -31,6 +32,13 @@ func newInstallCmd() *cobra.Command {
 				}
 				binDir = filepath.Dir(executablePath)
 			}
+			// A release CLI installs its own release, so the daemon it installs
+			// matches the ONNX Runtime pin compiled into this binary.
+			if releaseVersion == "" {
+				if runningTag, isRelease := updateopts.RunningReleaseTag(); isRelease {
+					releaseVersion = runningTag
+				}
+			}
 			if err := installer.Run(commandContext(cmd), installer.Options{
 				BinDir:         binDir,
 				Version:        releaseVersion,
@@ -46,6 +54,6 @@ func newInstallCmd() *cobra.Command {
 	install.Flags().StringVar(&binDir, "bin-dir", "", "install dir (default: the directory of this executable)")
 	install.Flags().BoolVar(&noService, "no-service", false, "skip launchd/systemd user service setup")
 	install.Flags().BoolVar(&noService, "bin-only", false, "alias for --no-service")
-	install.Flags().StringVar(&releaseVersion, "version", "", "exact release tag to install (default: latest release)")
+	install.Flags().StringVar(&releaseVersion, "version", "", "exact release tag to install (default: this CLI's release, or the latest release for a dev build)")
 	return install
 }

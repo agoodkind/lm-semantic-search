@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"goodkind.io/go-makefile/selfupdate"
+	"goodkind.io/lm-semantic-search/internal/installer"
 )
 
 const (
@@ -74,7 +75,6 @@ type childProcess struct {
 
 type updateCheck struct {
 	environment environment
-	repository  string
 	testRoot    string
 	testHome    string
 	installDir  string
@@ -113,11 +113,6 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer, stde
 	if err != nil {
 		return err
 	}
-	repository, err := os.Getwd()
-	if err != nil {
-		slog.ErrorContext(ctx, "ci.auto_update.repository_resolve_failed", "err", err)
-		return fmt.Errorf("resolve repository root: %w", err)
-	}
 	testRoot, err := os.MkdirTemp(testRootParent, testRootPattern)
 	if err != nil {
 		slog.ErrorContext(ctx, "ci.auto_update.root_create_failed", "err", err)
@@ -126,7 +121,6 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer, stde
 	slog.InfoContext(ctx, "ci.auto_update.started", "repository", environment.repository)
 	check := &updateCheck{
 		environment: environment,
-		repository:  repository,
 		testRoot:    testRoot,
 		testHome:    filepath.Join(testRoot, "home"),
 		installDir:  filepath.Join(testRoot, "bin"),
@@ -314,26 +308,35 @@ func (check *updateCheck) prepareDirectories() error {
 	return nil
 }
 
+// installOldRelease installs the previous release in process rather than
+// through install.sh, because a release that predates the install subcommand
+// cannot run the current install.sh. selfupdate always verifies attestations,
+// so this path checks as much as install.sh --require-attestation did.
 func (check *updateCheck) installOldRelease(ctx context.Context, release githubRelease) error {
-	installerPath := filepath.Join(check.repository, "install.sh")
-	command := exec.CommandContext(ctx, installerPath,
-		"--bin-dir", check.installDir,
-		"--no-service",
-		"--version", release.TagName,
-		"--require-attestation",
-	)
-	command.Env = replaceEnvironment(os.Environ(), map[string]string{
+	// The installer resolves its download cache from HOME and the XDG
+	// variables of this process, so point them at the test root for the install.
+	restoreEnvironment, err := overrideProcessEnvironment(map[string]string{
 		"HOME":            check.testHome,
 		"XDG_CACHE_HOME":  check.cacheRoot,
 		"XDG_CONFIG_HOME": check.configRoot,
 		"XDG_RUNTIME_DIR": check.runtimeRoot,
 		"XDG_STATE_HOME":  check.stateRoot,
 	})
-	command.Stdout = check.stdout
-	command.Stderr = check.stderr
-	if err := command.Run(); err != nil {
-		slog.WarnContext(ctx, "ci.auto_update.old_release_install_failed", "tag", release.TagName, "err", err)
-		return fmt.Errorf("install old release %s: %w", release.TagName, err)
+	if err != nil {
+		return err
+	}
+	installErr := installer.Run(ctx, installer.Options{
+		BinDir:         check.installDir,
+		Version:        release.TagName,
+		InstallService: false,
+		Stdout:         check.stdout,
+	})
+	if restoreErr := restoreEnvironment(); restoreErr != nil && installErr == nil {
+		installErr = restoreErr
+	}
+	if installErr != nil {
+		slog.WarnContext(ctx, "ci.auto_update.old_release_install_failed", "tag", release.TagName, "err", installErr)
+		return fmt.Errorf("install old release %s: %w", release.TagName, installErr)
 	}
 	for _, binary := range releaseBinaries {
 		destination := filepath.Join(check.installDir, binary)
@@ -639,6 +642,42 @@ func removeTestRoot(path string) error {
 		return fmt.Errorf("remove test root %s: %w", cleaned, err)
 	}
 	return nil
+}
+
+// overrideProcessEnvironment sets each variable in overrides on this process
+// and returns a function that restores every previous value or unset state.
+func overrideProcessEnvironment(overrides map[string]string) (func() error, error) {
+	type previousValue struct {
+		value string
+		set   bool
+	}
+	previousValues := make(map[string]previousValue, len(overrides))
+	restore := func() error {
+		var restoreErrors []error
+		for name, previous := range previousValues {
+			if previous.set {
+				restoreErrors = append(restoreErrors, os.Setenv(name, previous.value))
+				continue
+			}
+			restoreErrors = append(restoreErrors, os.Unsetenv(name))
+		}
+		err := errors.Join(restoreErrors...)
+		if err != nil {
+			slog.Warn("ci.auto_update.environment_restore_failed", "err", err)
+			return fmt.Errorf("restore process environment: %w", err)
+		}
+		return nil
+	}
+	for name, value := range overrides {
+		previous, set := os.LookupEnv(name)
+		previousValues[name] = previousValue{value: previous, set: set}
+		if err := os.Setenv(name, value); err != nil {
+			slog.Warn("ci.auto_update.environment_override_failed", "name", name, "err", err)
+			_ = restore()
+			return nil, fmt.Errorf("set %s: %w", name, err)
+		}
+	}
+	return restore, nil
 }
 
 func replaceEnvironment(current []string, replacements map[string]string) []string {
