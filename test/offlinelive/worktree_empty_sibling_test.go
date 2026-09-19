@@ -105,8 +105,15 @@ func addNestedWorktree(t *testing.T, repository string) string {
 // content to produce its own chunk.
 func writeGeneratedSources(t *testing.T, directory string, count int) {
 	t.Helper()
+	writeGeneratedSourceRange(t, directory, 0, count)
+}
 
-	for index := range count {
+// writeGeneratedSourceRange writes the generated sources numbered first through
+// first+count-1, so a later call adds files without rewriting earlier ones.
+func writeGeneratedSourceRange(t *testing.T, directory string, first int, count int) {
+	t.Helper()
+
+	for index := first; index < first+count; index++ {
 		path := filepath.Join(directory, fmt.Sprintf("unit%04d.go", index))
 		content := fmt.Sprintf(
 			"package pkg\n\n// Unit%04d returns the running total of %d readings.\nfunc Unit%04d(readings []int) int {\n\ttotal := %d\n\tfor _, reading := range readings {\n\t\ttotal += reading * %d\n\t}\n\treturn total\n}\n",

@@ -461,12 +461,12 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 		syncer.deferWatcherPaths(codebaseID, relativePaths)
 		return
 	}
-	if syncer.manager.startBuildAfterEmptyRun(ctx, codebase) {
-		return
-	}
 	if syncer.hasActiveJob(codebase) {
 		metrics.SyncSkippedInflight()
 		syncer.requeuePaths(codebaseID, relativePaths)
+		return
+	}
+	if syncer.manager.startBuildAfterEmptyRun(ctx, codebase) {
 		return
 	}
 

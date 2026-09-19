@@ -64,8 +64,9 @@ func (manager *Manager) ConvergePaths(ctx context.Context, codebaseID string, re
 // codebase whose last completed run indexed no file, and reports whether it did.
 // That run created no collection, so a per-path converge would drop every path
 // as collection_missing. A sync routes the missing collection to a full build of
-// the whole tree, and it deduplicates, so repeated watcher batches start that
-// build once.
+// the whole tree. The caller checks for an active job first, so a batch that
+// arrives while that build runs is requeued rather than folded into a build
+// whose walk may already have passed its paths.
 func (manager *Manager) startBuildAfterEmptyRun(ctx context.Context, codebase model.Codebase) bool {
 	if !ranWithoutCreatingACollection(codebase.LastSuccessfulRun) {
 		return false
