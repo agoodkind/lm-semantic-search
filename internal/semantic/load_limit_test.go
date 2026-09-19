@@ -13,6 +13,20 @@ import (
 
 const loadCapSettle = 100 * time.Millisecond
 
+// newLoadPathTestService builds a service against the fake Milvus with the
+// asynchronous residency reconciliation stopped. The reconciliation can list
+// the fake's collections after a test registers them and mark a loaded one
+// ready without a load, which would let an acquire skip the load path these
+// tests exist to exercise.
+func newLoadPathTestService(t *testing.T, server *promotionRecoveryServer) *Service {
+	t.Helper()
+	service := newPromotionTestService(t, server)
+	if err := service.stopResidencyReconciliation(context.Background()); err != nil {
+		t.Fatalf("stop residency reconciliation: %v", err)
+	}
+	return service
+}
+
 // After a Milvus restore the daemon asked for over a hundred collection loads
 // within minutes and Milvus ran out of memory. Loads of different collections
 // must therefore share a daemon-wide cap: with five cold collections acquired at
@@ -24,7 +38,7 @@ func TestConcurrentLoadsOfDifferentCollectionsAreCapped(t *testing.T) {
 		collectionCount = 5
 	)
 	server := resetPromotionRecoveryServer()
-	service := newPromotionTestService(t, server)
+	service := newLoadPathTestService(t, server)
 	service.cfg.MilvusMaxConcurrentCollectionLoads = loadCap
 
 	names := make([]string, 0, collectionCount)
@@ -87,7 +101,7 @@ func TestConcurrentLoadsOfDifferentCollectionsAreCapped(t *testing.T) {
 // issued to Milvus while the slot is held.
 func TestCallerWaitingBehindLoadCapHonorsItsOwnDeadline(t *testing.T) {
 	server := resetPromotionRecoveryServer()
-	service := newPromotionTestService(t, server)
+	service := newLoadPathTestService(t, server)
 	service.cfg.MilvusMaxConcurrentCollectionLoads = 1
 
 	const (

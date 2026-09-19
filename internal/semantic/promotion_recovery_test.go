@@ -54,6 +54,9 @@ type promotionRecoveryServer struct {
 	loadArrived       chan string
 	loadsInFlight     int
 	loadsInFlightPeak int
+	// loadFailure, when set, is the status every LoadCollection answers with,
+	// the way a proxy that refuses a load for memory answers.
+	loadFailure *commonpb.Status
 }
 
 var (
@@ -97,6 +100,7 @@ func resetPromotionRecoveryServer() *promotionRecoveryServer {
 	server.loadArrived = nil
 	server.loadsInFlight = 0
 	server.loadsInFlightPeak = 0
+	server.loadFailure = nil
 	return server
 }
 
@@ -133,15 +137,33 @@ func (server *promotionRecoveryServer) GetLoadState(
 	}, nil
 }
 
+// GetLoadingProgress answers the progress read the client issues for a
+// collection whose load state is Loading. The fake reports a fixed half-way
+// figure, which is what a load stuck on a query node reports.
+func (server *promotionRecoveryServer) GetLoadingProgress(
+	context.Context,
+	*milvuspb.GetLoadingProgressRequest,
+) (*milvuspb.GetLoadingProgressResponse, error) {
+	return &milvuspb.GetLoadingProgressResponse{
+		Status:   promotionSuccessStatus(),
+		Progress: 50,
+	}, nil
+}
+
 func (server *promotionRecoveryServer) LoadCollection(
 	ctx context.Context,
 	request *milvuspb.LoadCollectionRequest,
 ) (*commonpb.Status, error) {
 	server.mutex.Lock()
 	server.loadCollectionCalls++
+	loadFailure := server.loadFailure
 	holdLoads := server.holdLoads
 	resumeLoads := server.resumeLoads
 	loadArrived := server.loadArrived
+	if loadFailure != nil {
+		server.mutex.Unlock()
+		return loadFailure, nil
+	}
 	if holdLoads {
 		server.loadsInFlight++
 		if server.loadsInFlight > server.loadsInFlightPeak {
@@ -182,6 +204,14 @@ func (server *promotionRecoveryServer) holdLoadCollections(capacity int) (<-chan
 			close(resume)
 		})
 	}
+}
+
+// setLoadFailure makes every LoadCollection answer with status until it is
+// cleared with nil.
+func (server *promotionRecoveryServer) setLoadFailure(status *commonpb.Status) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+	server.loadFailure = status
 }
 
 func (server *promotionRecoveryServer) loadsInFlightNow() (int, int) {
