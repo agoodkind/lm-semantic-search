@@ -27,7 +27,8 @@ const (
 	milvusReadyPoll    = 2 * time.Second
 	loadStatePoll      = 25 * time.Millisecond
 	loadStateWait      = 2 * time.Minute
-	storeCallStackSkip = 2
+	flushRateLimitWait = 11 * time.Second
+	flushRateLimitRetries = 12
 )
 
 // milvusCall is one unary request the daemon's own client sent to Milvus,
@@ -190,14 +191,23 @@ func seedCollection(t *testing.T, client *milvusclient.Client, spec seedSpec) {
 	t.Logf("seeded %s: %d rows x dim %d (%d MiB raw) in %s", spec.name, spec.rows, spec.dimension, spec.bytes()>>20, time.Since(started).Round(time.Second))
 }
 
+// flushCollection flushes one collection. Milvus rate-limits flush requests
+// to one every ten seconds by default, so a flush that lands inside that
+// window waits it out and retries rather than failing the seed.
 func flushCollection(t *testing.T, ctx context.Context, client *milvusclient.Client, name string) {
 	t.Helper()
-	flushTask, err := client.Flush(ctx, milvusclient.NewFlushOption(name))
-	if err != nil {
-		t.Fatalf("flush %s: %v", name, err)
-	}
-	if err := flushTask.Await(ctx); err != nil {
-		t.Fatalf("await flush of %s: %v", name, err)
+	for attempt := 1; ; attempt++ {
+		flushTask, err := client.Flush(ctx, milvusclient.NewFlushOption(name))
+		if err == nil {
+			if awaitErr := flushTask.Await(ctx); awaitErr != nil {
+				t.Fatalf("await flush of %s: %v", name, awaitErr)
+			}
+			return
+		}
+		if !strings.Contains(err.Error(), "rate limit exceeded") || attempt >= flushRateLimitRetries {
+			t.Fatalf("flush %s (attempt %d): %v", name, attempt, err)
+		}
+		time.Sleep(flushRateLimitWait)
 	}
 }
 
