@@ -153,10 +153,9 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 // a sibling's first build resumed earlier in the same pass already holds a
 // worktree whose own build comes later; that worktree is parked instead.
 func (manager *Manager) launchResumePlan(ctx context.Context, plan resumePlan) {
-	if manager.waitsForSiblingFirstBuild(plan.canonicalPath) {
+	if manager.holdForSiblingFirstBuild(plan.canonicalPath) {
 		manager.logResumeHeld(ctx, plan.codebaseID, plan.canonicalPath)
 		manager.parkUnresumableForRetry(ctx, plan.codebaseID)
-		manager.noteHeldWorktreeBuild(plan.codebaseID)
 		return
 	}
 	client := model.ClientInfo{Name: "daemon-resume", PID: 0}

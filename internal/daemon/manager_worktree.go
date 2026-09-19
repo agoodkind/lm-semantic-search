@@ -209,9 +209,8 @@ func (manager *Manager) startAutomaticIndex(
 ) (automaticStart, error) {
 	var noJob model.Job
 	var noCodebase model.Codebase
-	if manager.waitsForSiblingFirstBuild(canonicalPath) {
+	if manager.holdForSiblingFirstBuild(canonicalPath) {
 		slog.InfoContext(ctx, "automatic build held for sibling first build", "path", canonicalPath, "client", client.Name)
-		manager.noteHeldWorktreeBuildAt(canonicalPath)
 		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: true}, nil
 	}
 	job, codebase, deduplicated, _, err := manager.startIndexWithIntent(ctx, canonicalPath, client, indexConfig, false, emptyAdmissionBudget, policyIntent)
@@ -229,9 +228,8 @@ func (manager *Manager) startAutomaticIndex(
 // same way, and it is recorded as held without syncing. The sync covers the
 // whole tree, so the changes that prompted it are picked up when it runs later.
 func (manager *Manager) startAutomaticSync(ctx context.Context, codebase model.Codebase, client model.ClientInfo) {
-	if manager.waitsForSiblingFirstBuild(codebase.CanonicalPath) {
+	if manager.holdForSiblingFirstBuild(codebase.CanonicalPath) {
 		slog.InfoContext(ctx, "automatic sync held for sibling first build", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "client", client.Name)
-		manager.noteHeldWorktreeBuild(codebase.ID)
 		return
 	}
 	job, _, deduplicated, err := manager.SyncIndex(ctx, codebase.CanonicalPath, client)
@@ -245,22 +243,17 @@ func (manager *Manager) startAutomaticSync(ctx context.Context, codebase model.C
 	slog.DebugContext(ctx, "automatic sync started", "codebase_id", codebase.ID, "job_id", job.ID, "client", client.Name, "deduplicated", deduplicated)
 }
 
-// noteHeldWorktreeBuildAt records the codebase rooted at canonicalPath as held,
-// when one is registered there.
-func (manager *Manager) noteHeldWorktreeBuildAt(canonicalPath string) {
-	manager.mu.Lock()
-	codebase, found := manager.findCodebaseByExactRoot(canonicalPath)
-	manager.mu.Unlock()
-	if found {
-		manager.noteHeldWorktreeBuild(codebase.ID)
-	}
-}
-
 // noteHeldWorktreeBuild records that an automatic path held a codebase's build,
 // so startHeldSiblingWorktreeBuilds starts it when the sibling's build ends.
 func (manager *Manager) noteHeldWorktreeBuild(codebaseID string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	manager.noteHeldWorktreeBuildLocked(codebaseID)
+}
+
+// noteHeldWorktreeBuildLocked is noteHeldWorktreeBuild for a caller that holds
+// manager.mu.
+func (manager *Manager) noteHeldWorktreeBuildLocked(codebaseID string) {
 	if manager.heldWorktreeBuilds == nil {
 		manager.heldWorktreeBuilds = map[string]struct{}{}
 	}
@@ -350,13 +343,44 @@ func (manager *Manager) waitsForSiblingFirstBuild(canonicalPath string) bool {
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if own, found := manager.findCodebaseByExactRoot(canonicalPath); found && ownsLiveCollection(own) {
+	_, held := manager.siblingFirstBuildHoldLocked(canonicalPath, info)
+	return held
+}
+
+// holdForSiblingFirstBuild is waitsForSiblingFirstBuild for an automatic path
+// about to start a build: when the hold applies it also records the codebase
+// as held, in the same critical section, so a release that scans the held set
+// in between cannot miss it.
+func (manager *Manager) holdForSiblingFirstBuild(canonicalPath string) bool {
+	info, ok := gitworktree.Resolve(canonicalPath)
+	if !ok {
 		return false
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	ownID, held := manager.siblingFirstBuildHoldLocked(canonicalPath, info)
+	if held && ownID != "" {
+		manager.noteHeldWorktreeBuildLocked(ownID)
+	}
+	return held
+}
+
+// siblingFirstBuildHoldLocked evaluates the hold for the worktree at
+// canonicalPath and returns the id of the codebase registered there, or empty
+// when there is none. Caller must hold manager.mu.
+func (manager *Manager) siblingFirstBuildHoldLocked(canonicalPath string, info gitworktree.Info) (string, bool) {
+	ownID := ""
+	own, found := manager.findCodebaseByExactRoot(canonicalPath)
+	if found {
+		if ownsLiveCollection(own) {
+			return own.ID, false
+		}
+		ownID = own.ID
 	}
 	if manager.hasIndexedSiblingWorktreeLocked(info.WorktreeRoot, info.CommonDir) {
-		return false
+		return ownID, false
 	}
-	return manager.siblingFirstBuildInProgressLocked(info.WorktreeRoot, info.CommonDir)
+	return ownID, manager.siblingFirstBuildInProgressLocked(info.WorktreeRoot, info.CommonDir)
 }
 
 // startHeldSiblingWorktreeBuilds schedules a build for every sibling worktree
@@ -431,7 +455,10 @@ func (manager *Manager) startHeldSiblingWorktreeBuilds(ctx context.Context, code
 // failed attempt is spent on the outage.
 func (manager *Manager) startReleasedBuild(ctx context.Context, codebaseID string) {
 	if manager.DependencyHealth().Mode == dependencyEmbedderUnreachable {
+		// The release already took the codebase out of the held set, so record it
+		// again for the next sibling build to end, in case no sweep runs.
 		slog.InfoContext(ctx, "held worktree build left to the sweep while the embedder is unreachable", "codebase_id", codebaseID)
+		manager.noteHeldWorktreeBuild(codebaseID)
 		return
 	}
 	manager.mu.Lock()
