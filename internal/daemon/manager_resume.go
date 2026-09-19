@@ -145,29 +145,34 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	}
 	slog.InfoContext(ctx, "resuming orphaned indexing jobs", "count", len(resumable), "paths", paths)
 	for _, plan := range resumable {
-		// Plans run in queue order, so a sibling's first build resumed earlier in
-		// this loop already holds a worktree whose own build comes later.
-		if manager.waitsForSiblingFirstBuild(plan.canonicalPath) {
-			manager.logResumeHeld(ctx, plan.codebaseID, plan.canonicalPath)
-			manager.parkUnresumableForRetry(ctx, plan.codebaseID)
-			continue
-		}
-		client := model.ClientInfo{Name: "daemon-resume", PID: 0}
-		var err error
-		switch {
-		case plan.checkpoint == resumeCheckpointStaging:
-			err = manager.startStagingResume(ctx, plan, client)
-		case plan.converge:
-			err = manager.resumeConverge(ctx, plan, client)
-		default:
-			err = manager.startRecoveredIndex(ctx, plan, client)
-		}
-		if err != nil {
-			slog.ErrorContext(ctx, "resume orphaned job failed", "codebase_id", plan.codebaseID, "path", plan.canonicalPath, "err", err)
-			continue
-		}
-		manager.recordResumeLaunched(ctx, plan)
+		manager.launchResumePlan(ctx, plan)
 	}
+}
+
+// launchResumePlan resumes one interrupted build. Plans run in queue order, so
+// a sibling's first build resumed earlier in the same pass already holds a
+// worktree whose own build comes later; that worktree is parked instead.
+func (manager *Manager) launchResumePlan(ctx context.Context, plan resumePlan) {
+	if manager.waitsForSiblingFirstBuild(plan.canonicalPath) {
+		manager.logResumeHeld(ctx, plan.codebaseID, plan.canonicalPath)
+		manager.parkUnresumableForRetry(ctx, plan.codebaseID)
+		return
+	}
+	client := model.ClientInfo{Name: "daemon-resume", PID: 0}
+	var err error
+	switch {
+	case plan.checkpoint == resumeCheckpointStaging:
+		err = manager.startStagingResume(ctx, plan, client)
+	case plan.converge:
+		err = manager.resumeConverge(ctx, plan, client)
+	default:
+		err = manager.startRecoveredIndex(ctx, plan, client)
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "resume orphaned job failed", "codebase_id", plan.codebaseID, "path", plan.canonicalPath, "err", err)
+		return
+	}
+	manager.recordResumeLaunched(ctx, plan)
 }
 
 func (manager *Manager) recordResumeLaunched(ctx context.Context, plan resumePlan) {

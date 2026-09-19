@@ -16,14 +16,18 @@ func (syncer *BackgroundSync) startSweepSync(ctx context.Context, codebase model
 		slog.InfoContext(ctx, "sweep sync held for sibling first build", "codebase_id", codebase.ID, "path", codebase.CanonicalPath)
 		return
 	}
-	_, _, _, err := syncer.manager.SyncIndex(
+	job, _, deduplicated, err := syncer.manager.SyncIndex(
 		ctx,
 		codebase.CanonicalPath,
 		model.ClientInfo{Name: "daemon-sync", PID: 0},
 	)
-	if err != nil && !syncConflictError(err) {
-		slog.ErrorContext(ctx, "start sync job failed", "path", codebase.CanonicalPath, "err", err)
+	if err != nil {
+		if !syncConflictError(err) {
+			slog.ErrorContext(ctx, "start sync job failed", "path", codebase.CanonicalPath, "err", err)
+		}
+		return
 	}
+	slog.DebugContext(ctx, "sweep started sync", "codebase_id", codebase.ID, "job_id", job.ID, "deduplicated", deduplicated)
 }
 
 // startBuildAfterEmptyRun starts a sync in place of a watcher converge for a
