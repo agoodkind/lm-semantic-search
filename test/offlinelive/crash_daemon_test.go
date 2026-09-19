@@ -3,9 +3,11 @@
 package offlinelive
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -26,6 +28,10 @@ const (
 	crashDaemonEnv = "LMS_OFFLINE_LIVE_CRASH_DAEMON"
 
 	crashDaemonReadyTimeout = 30 * time.Second
+
+	crashDaemonParentPollInterval = 500 * time.Millisecond
+
+	crashDaemonLogLineBytes = 1 << 20
 )
 
 func TestMain(m *testing.M) {
@@ -39,6 +45,7 @@ func TestMain(m *testing.M) {
 // the environment until the process is killed.
 func runCrashDaemon() int {
 	ctx := context.Background()
+	exitWhenOrphaned(os.Getppid())
 	daemonConfig, err := config.Default()
 	if err != nil {
 		slog.Error("crash daemon config failed", "err", err)
@@ -73,6 +80,22 @@ func runCrashDaemon() int {
 	return 0
 }
 
+// exitWhenOrphaned ends the process once its parent changes, the way the MCP
+// adapter's orphan guard does. A test binary that dies without running its
+// cleanups, for example on a -timeout panic, would otherwise leave the daemon
+// running and indexing after the test is gone.
+func exitWhenOrphaned(parentPID int) {
+	go func() {
+		for {
+			time.Sleep(crashDaemonParentPollInterval)
+			if os.Getppid() != parentPID {
+				slog.Error("crash daemon parent exited; stopping", "parent_pid", parentPID)
+				os.Exit(1)
+			}
+		}
+	}()
+}
+
 // startCrashableDaemon runs a daemon with options over the harness state root in
 // a child process and connects the harness client to it. crash kills that
 // process without letting it shut down, so every build it was running is left
@@ -85,9 +108,27 @@ func (harness *harness) startCrashableDaemon(options harnessOptions) (crash func
 
 	command := exec.CommandContext(context.Background(), os.Args[0])
 	command.Env = append(os.Environ(), crashDaemonEnv+"=1")
+	stderr, err := command.StderrPipe()
+	if err != nil {
+		harness.t.Fatalf("pipe crashable daemon stderr: %v", err)
+	}
 	if err := command.Start(); err != nil {
 		harness.t.Fatalf("start crashable daemon: %v", err)
 	}
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		scanner := bufio.NewScanner(stderr)
+		scanner.Buffer(make([]byte, 0, crashDaemonLogLineBytes), crashDaemonLogLineBytes)
+		for scanner.Scan() {
+			harness.t.Log("crash daemon: " + scanner.Text())
+		}
+		// A line past the buffer stops the scanner; draining the rest keeps the
+		// daemon from blocking on a full pipe.
+		if _, drainErr := io.Copy(io.Discard, stderr); drainErr != nil {
+			harness.t.Logf("drain crash daemon stderr: %v", drainErr)
+		}
+	}()
 	killed := false
 	kill := func() {
 		if killed {
@@ -97,7 +138,9 @@ func (harness *harness) startCrashableDaemon(options harnessOptions) (crash func
 		if err := command.Process.Kill(); err != nil {
 			harness.t.Errorf("kill crashable daemon: %v", err)
 		}
-		// The kill makes Wait report the signal, which is the expected exit.
+		// Wait may run only after the stderr reader has drained the pipe, and
+		// the kill makes Wait report the signal, which is the expected exit.
+		<-stderrDone
 		_ = command.Wait()
 	}
 	harness.t.Cleanup(kill)
