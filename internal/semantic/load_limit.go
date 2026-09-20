@@ -94,9 +94,9 @@ func (limiter *collectionLoadLimiter) releaseFunc() func() {
 	}
 }
 
-// collectionLoadSlots returns the daemon-wide limiter, built on first use from
-// the configured cap. It is lazy rather than set in NewService so a Service
-// assembled without NewService still loads under the cap.
+// collectionLoadSlots caps loads for every Service, including one assembled
+// without NewService. The first call builds the limiter from the configured
+// cap. NewService sets no limiter of its own.
 func (service *Service) collectionLoadSlots() *collectionLoadLimiter {
 	service.collectionLoadLimitOnce.Do(func() {
 		service.collectionLoadLimit = newCollectionLoadLimiter(

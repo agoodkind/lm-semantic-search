@@ -43,12 +43,12 @@ const (
 	defaultMilvusCollectionLoadWaitTimeoutMS = 15000
 	defaultMilvusCollectionIdleTimeoutMS     = 900000
 	// defaultMilvusMaxConcurrentCollectionLoads caps how many distinct
-	// collections the daemon asks Milvus to load at once. Two is deliberately
-	// small: after a restore the daemon issued loads for over a hundred
-	// collections within minutes and Milvus ran out of memory, and the size of
-	// any one collection is unknown before it loads, so the cap bounds the burst
-	// to two collections' worth of segments while still letting one interactive
-	// search load proceed beside one background load.
+	// collections the daemon asks Milvus to load at once. After a restore the
+	// daemon issued loads for over a hundred collections within minutes and
+	// Milvus ran out of memory. The daemon reads a collection's size only after
+	// the load, which rules out budgeting the burst by size. Two bounds the
+	// burst to two collections' worth of segments. Two also leaves room for one
+	// interactive search load beside one background load.
 	defaultMilvusMaxConcurrentCollectionLoads = 2
 	nvEmbedCodeQueryPrefix                    = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
 	// EmbedModelInputTokenLimit is the embedding model's hard per-input token

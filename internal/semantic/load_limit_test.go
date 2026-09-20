@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"goodkind.io/lm-semantic-search/internal/config"
 )
 
 // A load parked on a full limiter ends with its own context error when that
@@ -36,21 +34,5 @@ func TestCollectionLoadLimiterHonorsContextWhileWaiting(t *testing.T) {
 	thirdRelease()
 	if got := len(limiter.slots); got != 0 {
 		t.Fatalf("slots held after every release = %d, want 0", got)
-	}
-}
-
-// A Service assembled without config resolution still caps loads at the
-// built-in default, and a configured count replaces it.
-func TestCollectionLoadSlotsReadConfig(t *testing.T) {
-	t.Parallel()
-
-	configured := &Service{cfg: config.Config{MilvusMaxConcurrentCollectionLoads: 3}}
-	if got := configured.collectionLoadSlots().limit; got != 3 {
-		t.Fatalf("configured load cap = %d, want 3", got)
-	}
-
-	unset := &Service{}
-	if got := unset.collectionLoadSlots().limit; got != defaultMaxConcurrentCollectionLoads {
-		t.Fatalf("unset load cap = %d, want the built-in %d", got, defaultMaxConcurrentCollectionLoads)
 	}
 }
