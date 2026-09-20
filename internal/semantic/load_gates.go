@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 )
 
-// collectionLoadGates holds the daemon-wide checks every collection load
-// passes through before it reaches Milvus: the operator's maintenance mode,
+// collectionLoadGates owns the daemon-wide checks that run before a
+// collection load sends its request to Milvus: the operator's maintenance mode,
 // the concurrency limiter, and the memory-exhaustion backoff. The limiter and
 // backoff are built on first use from the service config, so a Service
 // assembled without NewService still loads under them.

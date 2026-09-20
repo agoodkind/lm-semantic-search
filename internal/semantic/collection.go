@@ -582,9 +582,10 @@ func (service *Service) loadCollection(ctx context.Context, collectionName strin
 // memory-exhaustion backoff all apply. The slot covers the request, the
 // load-state polls, and the single recovery request, since a collection that is
 // still materializing on the query node holds memory for all of them. The
-// maintenance gate and the backoff are checked before queueing for a slot, so a
-// refused load fails fast, and again after taking one, so a load that queued
-// before either began does not slip through.
+// maintenance gate and the backoff are checked before queueing for a slot,
+// which fails a refused load fast. Both are checked again after taking one,
+// which stops a load that acquired a slot before either began from bypassing
+// them.
 func (service *Service) loadCollectionTransition(
 	ctx context.Context,
 	collectionName string,

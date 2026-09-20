@@ -169,7 +169,7 @@ func startThrowawayStackWithMilvusConfig(t *testing.T, memLimit string, userConf
 }
 
 // containerMemory reads the Milvus container's current memory use and limit
-// from docker stats, so a test can log what the store was holding.
+// from docker stats. A test logs that figure beside its own assertions.
 func containerMemory(t *testing.T, stack throwawayStack) string {
 	t.Helper()
 	output, err := exec.Command("docker", "stats", "--no-stream", "--format", "{{.MemUsage}}", stack.project+"-milvus").CombinedOutput()

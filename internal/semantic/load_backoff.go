@@ -38,9 +38,9 @@ var errCollectionLoadUnrecovered = errors.New("collection load did not recover a
 // "memory limit exceeded" is ErrServiceMemoryLimitExceeded (code 3, legacy
 // ErrorCode_InsufficientMemoryToLoad and ErrorCode_MemoryQuotaExhausted) and
 // "service resource insufficient" is ErrServiceResourceInsufficient (code 12).
-// merr's wrapFields appends "[key=value]" fields, which is where the query
-// node's "resourceType=Memory" field lands, and "OOM if load" is the query node
-// segment loader's own message. Text is matched rather than the typed sentinel
+// merr's wrapFields appends "[key=value]" fields, including the query node's
+// "resourceType=Memory" field. "OOM if load" is the query node segment
+// loader's own message. Text is matched rather than the typed sentinel
 // because importing merr breaks the gate's govulncheck, as store_errors.go
 // records for the not-loaded message.
 var milvusMemoryExhaustionMessages = []string{
@@ -82,11 +82,12 @@ func collectionLoadMemorySignal(err error) bool {
 	return errors.Is(err, errCollectionLoadUnrecovered) || milvusMemoryExhaustion(err)
 }
 
-// collectionLoadBackoff pauses new collection loads for a bounded, growing
-// interval after Milvus reports memory exhaustion, so the daemon stops asking a
-// store that has just run out of memory to load more. Loads already in flight
-// finish on their own. The pause grows on every further signal up to
-// collectionLoadBackoffMax and resets once any load succeeds.
+// collectionLoadBackoff pauses new collection loads after Milvus reports
+// memory exhaustion. Milvus reports no free-memory figure the daemon could
+// consult, and a refused load costs Milvus the segments it already read, so
+// the only safe reaction is to stop asking for a bounded interval. Loads
+// already in flight finish on their own. The pause grows on every further
+// signal up to collectionLoadBackoffMax and resets once any load succeeds.
 type collectionLoadBackoff struct {
 	now      func() time.Time
 	mutex    sync.Mutex
