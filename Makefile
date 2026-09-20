@@ -143,10 +143,10 @@ offline-live: | $(GO_MK_PREREQS)
 
 # milvus-integration runs the opt-in suite that proves the daemon's collection
 # load controls against a real Milvus. Each test starts its own throwaway
-# Milvus stack in Docker (unique compose project, containers, volumes, and
-# loopback ports), so it needs docker and the cached etcd, MinIO, and Milvus
-# images, and never touches the operator's stack. The suite skips unless
-# LMS_MILVUS_INTEGRATION is set, which this target does.
+# Milvus stack in Docker, with a unique compose project, containers, volumes,
+# and loopback ports. The suite requires docker and the cached etcd, MinIO, and
+# Milvus images. No test addresses the operator's stack. The suite skips unless
+# LMS_MILVUS_INTEGRATION is set; this target sets it.
 milvus-integration: | $(GO_MK_PREREQS)
 	LMS_MILVUS_INTEGRATION=1 go test -tags milvusintegration -count=1 -timeout 60m ./test/milvusintegration/
 

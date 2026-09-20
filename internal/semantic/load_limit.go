@@ -9,10 +9,11 @@ import (
 	"goodkind.io/lm-semantic-search/internal/clock"
 )
 
-// defaultMaxConcurrentCollectionLoads is the daemon-wide load cap for a Service
-// whose config carries no usable count, the same fallback config resolves to.
-// It exists here so a Service built without config resolution (tests build
-// them that way) still caps loads instead of running unbounded.
+// defaultMaxConcurrentCollectionLoads is the daemon-wide load cap a Service
+// applies when its config contains no usable count. Config resolution returns
+// the same value as its own fallback. Tests build a Service without config
+// resolution, and that Service caps loads at this value rather than running
+// unbounded.
 const defaultMaxConcurrentCollectionLoads = 2
 
 // collectionLoadLimiter caps how many distinct collections are in the load
@@ -35,13 +36,13 @@ func newCollectionLoadLimiter(limit int) *collectionLoadLimiter {
 	return &collectionLoadLimiter{limit: limit, slots: make(chan struct{}, limit)}
 }
 
-// acquire takes one load slot, waiting while every slot is held, and returns
-// the release that frees it. The wait ends with ctx: for a residency load that
-// is the detached load context the ceiling cancels, and for a coordinator load
-// it is the ceiling-bounded flight context, so a load queued behind the cap for
-// longer than its own ceiling fails as not-ready instead of waiting forever.
-// The caller that asked for the load is never parked here; it waits on the
-// flight under its own context and deadline.
+// acquire takes one load slot, waits while every slot is held, and returns the
+// release that frees it. A load queued behind the cap for longer than its own
+// ceiling fails as not-ready rather than waiting forever. The wait ends when
+// ctx ends. A residency load passes the detached load context, which the
+// ceiling cancels. A coordinator load passes the ceiling-bounded flight
+// context. The caller that asked for the load waits on the flight under its own
+// context and deadline, never on this slot.
 func (limiter *collectionLoadLimiter) acquire(
 	ctx context.Context,
 	collectionName string,

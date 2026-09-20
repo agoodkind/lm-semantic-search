@@ -749,12 +749,12 @@ func resolveMilvusCollectionResidencyTimeouts(fileConfig persistedConfig) (int, 
 	return loadWaitTimeoutMS, idleTimeoutMS
 }
 
-// resolveMilvusMaxConcurrentCollectionLoads applies the env override over the
-// config value and keeps the default for anything that is not a positive count.
-// Zero from either source reads as omitted. A negative or unparsable value
-// warns and names the knob, because an operator who mistypes the count would
-// otherwise see the default silently stay in place, and a cap below one would
-// block every load forever.
+// resolveMilvusMaxConcurrentCollectionLoads returns the configured cap and
+// prefers the environment variable over the file value. Zero from either source
+// reads as omitted and returns the default. A negative or unparsable value
+// returns the default and logs a warning naming the config field and the
+// environment variable. The warning tells an operator who mistyped the count
+// that the default is in force. A cap below one would block every load.
 func resolveMilvusMaxConcurrentCollectionLoads(fileValue int) int {
 	const (
 		configField         = "milvusMaxConcurrentCollectionLoads"
