@@ -351,7 +351,10 @@ func (service *Service) collectionLoadBound() time.Duration {
 // bound, then awaitCollectionLoaded's worst case of two polls and one recovery
 // request, each under the configured load bound. Stating the sum once here
 // keeps the guarantee readable, and keeps it correct if any one of those bounds
-// changes later.
+// changes later. The wait for a daemon-wide load slot also runs under this
+// ceiling, so a load queued behind the cap for the whole ceiling fails as
+// not-ready and a later caller starts it afresh, rather than the queue growing
+// without bound.
 func (service *Service) sharedCollectionLoadCeiling() time.Duration {
 	return service.callTimeouts().Metadata + 3*service.collectionLoadBound()
 }

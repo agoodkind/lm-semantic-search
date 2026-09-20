@@ -115,7 +115,12 @@ type Service struct {
 	// collectionLoads collapses concurrent initial load, wait, and recovery work
 	// for the same collection name into one shared flight.
 	collectionLoads collectionLoadCoordinator
-	residency       *collectionResidencyController
+	// collectionLoadLimit caps how many distinct collections are in the load
+	// transition at once, across both the coordinator and the residency paths.
+	// collectionLoadSlots builds it on first use from the configured cap.
+	collectionLoadLimit     *collectionLoadLimiter
+	collectionLoadLimitOnce sync.Once
+	residency               *collectionResidencyController
 	// ensuredConvColumns maps a conversation collection name to its
 	// *conversationScalarMigration, gating the one-time scalar-column migration to
 	// once per collection per process. See ensureConversationScalarColumnsOnce.
@@ -163,6 +168,8 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 				mutex:   sync.Mutex{},
 				flights: nil,
 			},
+			collectionLoadLimit:         nil,
+			collectionLoadLimitOnce:     sync.Once{},
 			residency:                   nil,
 			ensuredConvColumns:          sync.Map{},
 			ensuredSplitPartColumns:     sync.Map{},
@@ -205,6 +212,8 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			mutex:   sync.Mutex{},
 			flights: nil,
 		},
+		collectionLoadLimit:         nil,
+		collectionLoadLimitOnce:     sync.Once{},
 		residency:                   nil,
 		ensuredConvColumns:          sync.Map{},
 		ensuredSplitPartColumns:     sync.Map{},
