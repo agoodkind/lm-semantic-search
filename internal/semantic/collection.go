@@ -578,18 +578,39 @@ func (service *Service) loadCollection(ctx context.Context, collectionName strin
 
 // loadCollectionTransition is the one place a LoadCollection request leaves
 // this process, whichever path asked for it, so it is where the daemon-wide cap
-// on concurrent loads applies. The slot covers the request, the load-state
-// polls, and the single recovery request, since a collection that is still
-// materializing on the query node holds memory for all of them.
+// on concurrent loads and the memory-exhaustion backoff both apply. The slot
+// covers the request, the load-state polls, and the single recovery request,
+// since a collection that is still materializing on the query node holds memory
+// for all of them. The backoff is checked before queueing for a slot, so a
+// paused load fails fast, and again after taking one, so a load that queued
+// before the pause began does not slip through it.
 func (service *Service) loadCollectionTransition(
 	ctx context.Context,
 	collectionName string,
 ) error {
+	backoff := service.loadBackoff()
+	if err := backoff.admit(ctx, collectionName); err != nil {
+		return err
+	}
 	releaseSlot, err := service.collectionLoadSlots().acquire(ctx, collectionName)
 	if err != nil {
 		return err
 	}
 	defer releaseSlot()
+	if err := backoff.admit(ctx, collectionName); err != nil {
+		return err
+	}
+	err = service.requestCollectionLoad(ctx, collectionName)
+	backoff.noteLoadOutcome(ctx, collectionName, err)
+	return err
+}
+
+// requestCollectionLoad issues the load and waits for the collection to become
+// queryable under the configured bounds.
+func (service *Service) requestCollectionLoad(
+	ctx context.Context,
+	collectionName string,
+) error {
 	if _, err := service.milvus.LoadCollection(
 		ctx,
 		milvusclient.NewLoadCollectionOption(collectionName),

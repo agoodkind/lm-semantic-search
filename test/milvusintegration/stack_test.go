@@ -51,6 +51,9 @@ type throwawayStack struct {
 	healthPort int
 	minioPort  int
 	memLimit   string
+	// userConfigMount is the compose volume line that mounts a Milvus
+	// user.yaml over the image defaults, or empty when the test keeps them.
+	userConfigMount string
 }
 
 func (stack throwawayStack) milvusAddress() string {
@@ -89,18 +92,36 @@ func freePort(t *testing.T) int {
 // memLimit caps the Milvus container, for example "4g".
 func startThrowawayStack(t *testing.T, memLimit string) throwawayStack {
 	t.Helper()
+	return startThrowawayStackWithMilvusConfig(t, memLimit, "")
+}
+
+// startThrowawayStackWithMilvusConfig is startThrowawayStack with a Milvus
+// user.yaml mounted over the image defaults, the same way the operator's
+// docker-compose.yml mounts its own configs/user.yaml. An empty userConfig
+// keeps the image defaults.
+func startThrowawayStackWithMilvusConfig(t *testing.T, memLimit string, userConfig string) throwawayStack {
+	t.Helper()
 	idBytes := make([]byte, 4)
 	if _, randErr := rand.Read(idBytes); randErr != nil {
 		t.Fatalf("random project id: %v", randErr)
 	}
 	stack := throwawayStack{
-		project:    throwawayPrefix + hex.EncodeToString(idBytes),
-		grpcPort:   freePort(t),
-		healthPort: freePort(t),
-		minioPort:  freePort(t),
-		memLimit:   memLimit,
+		project:         throwawayPrefix + hex.EncodeToString(idBytes),
+		grpcPort:        freePort(t),
+		healthPort:      freePort(t),
+		minioPort:       freePort(t),
+		memLimit:        memLimit,
+		userConfigMount: "",
 	}
-	composePath := filepath.Join(t.TempDir(), "docker-compose.yml")
+	composeDir := t.TempDir()
+	if userConfig != "" {
+		userConfigPath := filepath.Join(composeDir, "user.yaml")
+		if writeErr := os.WriteFile(userConfigPath, []byte(userConfig), fileMode); writeErr != nil {
+			t.Fatalf("write Milvus user.yaml: %v", writeErr)
+		}
+		stack.userConfigMount = "      - " + userConfigPath + ":/milvus/configs/user.yaml:ro\n"
+	}
+	composePath := filepath.Join(composeDir, "docker-compose.yml")
 	if writeErr := os.WriteFile(composePath, []byte(composeFile(stack)), fileMode); writeErr != nil {
 		t.Fatalf("write compose file: %v", writeErr)
 	}
@@ -147,6 +168,18 @@ func startThrowawayStack(t *testing.T, memLimit string) throwawayStack {
 	return stack
 }
 
+// containerMemory reads the Milvus container's current memory use and limit
+// from docker stats, so a test can log what the store was holding.
+func containerMemory(t *testing.T, stack throwawayStack) string {
+	t.Helper()
+	output, err := exec.Command("docker", "stats", "--no-stream", "--format", "{{.MemUsage}}", stack.project+"-milvus").CombinedOutput()
+	if err != nil {
+		t.Logf("docker stats for %s-milvus: %v\n%s", stack.project, err, output)
+		return "unknown"
+	}
+	return strings.TrimSpace(string(output))
+}
+
 // assertNoLeftovers fails when any container, volume, or network of the
 // project outlived the teardown.
 func assertNoLeftovers(t *testing.T, project string) {
@@ -184,7 +217,8 @@ func assertLiveStackUntouched(t *testing.T) {
 }
 
 // composeFile mirrors the operator's docker-compose.yml with unique names,
-// loopback published ports, no restart policy, and a memory cap on Milvus.
+// loopback published ports, no restart policy, a memory cap on Milvus, and the
+// optional user.yaml mount.
 func composeFile(stack throwawayStack) string {
 	return fmt.Sprintf(`services:
   etcd:
@@ -233,7 +267,7 @@ func composeFile(stack throwawayStack) string {
       MINIO_ADDRESS: minio:9000
     volumes:
       - milvus:/var/lib/milvus
-    healthcheck:
+%[10]s    healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
       interval: 5s
       start_period: 120s
@@ -252,5 +286,5 @@ volumes:
   etcd:
   minio:
   milvus:
-`, stack.project, etcdImage, minioImage, milvusImage, minioRootUser, stack.grpcPort, stack.healthPort, stack.minioPort, stack.memLimit)
+`, stack.project, etcdImage, minioImage, milvusImage, minioRootUser, stack.grpcPort, stack.healthPort, stack.minioPort, stack.memLimit, stack.userConfigMount)
 }

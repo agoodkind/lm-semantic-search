@@ -94,15 +94,3 @@ func (limiter *collectionLoadLimiter) releaseFunc() func() {
 		})
 	}
 }
-
-// collectionLoadSlots caps loads for every Service, including one assembled
-// without NewService. The first call builds the limiter from the configured
-// cap. NewService sets no limiter of its own.
-func (service *Service) collectionLoadSlots() *collectionLoadLimiter {
-	service.collectionLoadLimitOnce.Do(func() {
-		service.collectionLoadLimit = newCollectionLoadLimiter(
-			service.cfg.MilvusMaxConcurrentCollectionLoads,
-		)
-	})
-	return service.collectionLoadLimit
-}
