@@ -18,16 +18,17 @@ import (
 // Metric groups. They order the human surfaces and nothing else; a consumer
 // selects by name, which is unique across every group.
 const (
-	statusGroupDaemon     = "daemon"
-	statusGroupDependency = "dependency_health"
-	statusGroupJobs       = "jobs"
-	statusGroupScheduler  = "scheduler"
-	statusGroupEmbed      = "embed"
-	statusGroupConverge   = "converge"
-	statusGroupMilvus     = "milvus"
-	statusGroupRuntime    = "runtime"
-	statusGroupCodebases  = "codebases"
-	statusGroupActivity   = "activity"
+	statusGroupDaemon      = "daemon"
+	statusGroupMaintenance = "maintenance"
+	statusGroupDependency  = "dependency_health"
+	statusGroupJobs        = "jobs"
+	statusGroupScheduler   = "scheduler"
+	statusGroupEmbed       = "embed"
+	statusGroupConverge    = "converge"
+	statusGroupMilvus      = "milvus"
+	statusGroupRuntime     = "runtime"
+	statusGroupCodebases   = "codebases"
+	statusGroupActivity    = "activity"
 )
 
 // Units, each named for what its counter's increment call site actually counts.
@@ -155,6 +156,12 @@ func buildStatusMetrics(daemon *StatusSnapshot, snapshot metrics.Snapshot, now t
 	if daemon != nil {
 		list = append(list, intMetric(statusGroupDaemon, "uptime_s",
 			int64(now.Sub(daemon.StartedAt)/time.Second), unitSeconds))
+
+		list = append(list,
+			boolMetric(statusGroupMaintenance, "maintenance.enabled", daemon.Maintenance.Enabled),
+			stringMetric(statusGroupMaintenance, "maintenance.reason", daemon.Maintenance.Reason),
+			timeMetric(statusGroupMaintenance, "maintenance.since", daemon.Maintenance.Since),
+		)
 
 		list = append(list,
 			boolMetric(statusGroupDependency, "dependency_health.degraded", daemon.Health.Degraded()),

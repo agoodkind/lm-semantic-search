@@ -38,6 +38,15 @@ var ErrCollectionLoadDeferred error = newSentinel(
 	"retry later; new collection loads resume once the pause elapses",
 )
 
+// ErrMaintenance reports that the daemon refused to load a collection because
+// an operator put it in maintenance mode.
+var ErrMaintenance error = newSentinel(
+	adapterr.ClassMaintenance,
+	"semantic collection loads are paused for maintenance",
+	"maintenance",
+	"retry after the operator turns maintenance mode off",
+)
+
 // ErrSearchResultIncomplete reports that Milvus returned a result set without the requested fields.
 var ErrSearchResultIncomplete error = newSentinel(
 	adapterr.ClassSearchResultIncomplete,

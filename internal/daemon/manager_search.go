@@ -14,9 +14,9 @@ import (
 
 // SearchCode performs a semantic search over indexed chunk content.
 func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, query string, limit int32, extensionFilter []string) (SearchOutcome, error) {
-	normalizedExtensions, err := semantic.ValidateExtensionFilter(extensionFilter)
+	normalizedExtensions, err := manager.searchPreconditions(extensionFilter)
 	if err != nil {
-		return SearchOutcome{}, adapterr.NewInvalidPath(err.Error(), err)
+		return SearchOutcome{}, err
 	}
 
 	codebase, activeJob, found, _, err := manager.GetIndex(ctx, requestedPath)
@@ -132,6 +132,21 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		slog.ErrorContext(ctx, "semantic search failed", "codebase_path", codebase.CanonicalPath, "err", semanticErr)
 		return SearchOutcome{}, fmt.Errorf("semantic search for %s: %w", codebase.CanonicalPath, semanticErr)
 	}
+}
+
+// searchPreconditions checks what a search needs before it resolves a path:
+// a usable extension filter, and a daemon that is not in maintenance mode. The
+// maintenance refusal comes before any store call, so a search during a store
+// restore neither probes nor loads a collection.
+func (manager *Manager) searchPreconditions(extensionFilter []string) ([]string, error) {
+	normalizedExtensions, err := semantic.ValidateExtensionFilter(extensionFilter)
+	if err != nil {
+		return nil, adapterr.NewInvalidPath(err.Error(), err)
+	}
+	if refusal := manager.maintenanceRefusal(); refusal != nil {
+		return nil, refusal
+	}
+	return normalizedExtensions, nil
 }
 
 // discoveredSearchNote is the read-only note a search returns for a worktree the

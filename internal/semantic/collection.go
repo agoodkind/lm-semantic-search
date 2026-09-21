@@ -577,19 +577,21 @@ func (service *Service) loadCollection(ctx context.Context, collectionName strin
 }
 
 // loadCollectionTransition is the one place a LoadCollection request leaves
-// this process, whichever path asked for it, so it is where the daemon-wide cap
-// on concurrent loads and the memory-exhaustion backoff both apply. The slot
-// covers the request, the load-state polls, and the single recovery request,
-// since a collection that is still materializing on the query node holds memory
-// for all of them. The backoff is checked before queueing for a slot, so a
-// paused load fails fast, and again after taking one, so a load that queued
-// before the pause began does not slip through it.
+// this process, whichever path asked for it, so it is where the operator's
+// maintenance mode, the daemon-wide cap on concurrent loads, and the
+// memory-exhaustion backoff all apply. The slot covers the request, the
+// load-state polls, and the single recovery request, since a collection that is
+// still materializing on the query node holds memory for all of them. The
+// maintenance gate and the backoff are checked before queueing for a slot,
+// which fails a refused load fast. Both are checked again after taking one,
+// which stops a load that acquired a slot before either began from bypassing
+// them.
 func (service *Service) loadCollectionTransition(
 	ctx context.Context,
 	collectionName string,
 ) error {
 	backoff := service.loadBackoff()
-	if err := backoff.admit(ctx, collectionName); err != nil {
+	if err := service.admitCollectionLoad(ctx, collectionName, backoff); err != nil {
 		return err
 	}
 	releaseSlot, err := service.collectionLoadSlots().acquire(ctx, collectionName)
@@ -597,12 +599,25 @@ func (service *Service) loadCollectionTransition(
 		return err
 	}
 	defer releaseSlot()
-	if err := backoff.admit(ctx, collectionName); err != nil {
+	if err := service.admitCollectionLoad(ctx, collectionName, backoff); err != nil {
 		return err
 	}
 	err = service.requestCollectionLoad(ctx, collectionName)
 	backoff.noteLoadOutcome(ctx, collectionName, err)
 	return err
+}
+
+// admitCollectionLoad applies the gates that refuse a load outright: the
+// operator's maintenance mode first, then the memory-exhaustion backoff.
+func (service *Service) admitCollectionLoad(
+	ctx context.Context,
+	collectionName string,
+	backoff *collectionLoadBackoff,
+) error {
+	if err := service.refuseLoadDuringMaintenance(ctx, collectionName); err != nil {
+		return err
+	}
+	return backoff.admit(ctx, collectionName)
 }
 
 // requestCollectionLoad issues the load and waits for the collection to become

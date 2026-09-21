@@ -256,6 +256,9 @@ func (manager *Manager) DeleteConversation(ctx context.Context, collectionID str
 
 // SearchConversations searches a registered virtual conversation collection.
 func (manager *Manager) SearchConversations(ctx context.Context, collectionID string, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
+	if refusal := manager.maintenanceRefusal(); refusal != nil {
+		return nil, refusal
+	}
 	trimmedCollectionID := strings.TrimSpace(collectionID)
 
 	manager.mu.Lock()
@@ -276,6 +279,9 @@ func (manager *Manager) SearchWithinConversation(ctx context.Context, collection
 	trimmedConversationID := strings.TrimSpace(conversationID)
 	if trimmedConversationID == "" {
 		return nil, "", errors.New("conversation id is required")
+	}
+	if refusal := manager.maintenanceRefusal(); refusal != nil {
+		return nil, "", refusal
 	}
 	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
 	if err != nil {

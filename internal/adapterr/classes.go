@@ -84,6 +84,12 @@ const (
 	// track.
 	ClassJobNotFound Class = "job_not_found"
 
+	// ClassMaintenance reports a request the daemon refused because an
+	// operator put it in maintenance mode, for example to back up or restore
+	// the vector store. The daemon is healthy; it is deliberately not touching
+	// the store until the operator turns the mode off.
+	ClassMaintenance Class = "maintenance"
+
 	// ClassInternal is the catch-all class for unknown errors. The
 	// message is sanitized at the boundary; the operator finds the
 	// real cause in the daemon log by grepping trace_id.
@@ -100,7 +106,7 @@ func CodeFor(class Class) codes.Code {
 	switch class {
 	case ClassNotIndexed, ClassJobNotFound, ClassUnknownCodebaseID:
 		return codes.NotFound
-	case ClassCollectionMissing, ClassCollectionNotReady, ClassConflictingJob:
+	case ClassCollectionMissing, ClassCollectionNotReady, ClassConflictingJob, ClassMaintenance:
 		return codes.FailedPrecondition
 	case ClassMilvusUnavailable, ClassEmbedderUnreachable:
 		return codes.Unavailable
@@ -251,6 +257,24 @@ func NewIndexDataLost(path string, cause error) *AdapterError {
 		Code:          "collection_missing",
 		Hint:          "wait for background repair or re-run index_codebase to rebuild it",
 		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
+// NewMaintenance reports a request refused because the daemon is in
+// maintenance mode. reason is the operator's note, so the caller sees why the
+// daemon is paused rather than only that it is.
+func NewMaintenance(reason string) *AdapterError {
+	message := "daemon is in maintenance mode"
+	if reason != "" {
+		message += " (" + reason + ")"
+	}
+	return &AdapterError{
+		Class:         ClassMaintenance,
+		Message:       message,
+		Code:          "maintenance",
+		Hint:          "retry after the operator turns maintenance mode off with lm-semantic-search daemon maintenance off",
+		Cause:         nil,
 		SafeForClient: true,
 	}
 }

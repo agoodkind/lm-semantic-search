@@ -61,6 +61,7 @@ func (server *GRPCServer) GetStatus(ctx context.Context, request *pb.GetStatusRe
 			InputReason:      pbconv.SchedulingReasonToProto(daemon.Scheduler.Activity.InputReason),
 			ThermalReason:    pbconv.SchedulingReasonToProto(daemon.Scheduler.Activity.ThermalReason),
 		},
+		Maintenance: toMaintenanceStatus(daemon.Maintenance),
 		DisplayText: "",
 	}
 	response.DisplayText = server.envelopeText(ctx, daemon.Health, render.StatusMetrics(response))

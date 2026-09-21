@@ -60,5 +60,7 @@ func (manager *Manager) load(ctx context.Context) error {
 	manager.policyMutationMutex.Lock()
 	manager.reconcileJournalOnStartLocked()
 	manager.policyMutationMutex.Unlock()
-	return nil
+	// The backend is already attached when load runs, so a persisted
+	// maintenance mode closes its load gate before any boot-time work starts.
+	return manager.loadMaintenance(ctx)
 }

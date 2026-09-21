@@ -63,7 +63,7 @@ func TestDaemonGroupHelpListsSubcommands(t *testing.T) {
 		t.Fatalf("daemon help: %v", err)
 	}
 	out := stdout.String()
-	for _, name := range []string{"status", "stop", "doctor"} {
+	for _, name := range []string{"status", "stop", "doctor", "maintenance"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("daemon help missing subcommand %q:\n%s", name, out)
 		}
