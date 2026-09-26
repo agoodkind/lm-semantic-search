@@ -17,7 +17,7 @@ Remove the conversation-specific LMS protocol and obsolete engine conversion cod
 
 ## Pull request boundaries
 
-Implement Task 1 in a Clyde compatibility pull request. Merge and deploy that Clyde change before removing the LMS protocol. Implement Tasks 2 through 4 in one LMS retirement pull request with generated code, replacement tests, and documentation. Pin the candidate LMS removal commit in Clyde and pass its `GOWORK=off` gates before deploying LMS. Keep this removal separate from LMS-18 so generic search can pass live parity while the old RPCs still exist.
+Implement Task 1 in a Clyde compatibility pull request. Prepare the LMS removal commit in a separate retirement pull request so Clyde can pin and verify it. Merge and deploy the Clyde change before merging and deploying LMS removal. Implement Tasks 2 through 4 in that LMS pull request with generated code, replacement tests, and documentation. Keep this removal separate from LMS-18 so generic search can pass live parity while the old RPCs still exist.
 
 ## Tasks
 
