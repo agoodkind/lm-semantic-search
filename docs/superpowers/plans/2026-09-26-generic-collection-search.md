@@ -17,6 +17,10 @@ Complete LMS-18. A client searches a registered document collection with typed f
 - Keep the old search RPCs until CLYDE-643 passes.
 - Apply the daemon's existing maintenance refusal to generic search before collection load or query execution. Preserve the old search handlers' maintenance error when they delegate.
 
+## Pull request boundary
+
+Implement LMS-18 Tasks 1 through 3 in one pull request. The new RPC, expression compiler, public tests, live parity battery, generated proto code, and documentation must pass together before merge. LMS-18 depends on LMS-15; it does not require LMS-16 or LMS-17. Integrate against the latest `service.proto` before merging. Implement Task 4 as the separate protocol retirement pull request after both Clyde cutovers.
+
 ## Tasks
 
 ### 1. Add generic search and item-state RPCs

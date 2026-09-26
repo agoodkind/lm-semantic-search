@@ -15,6 +15,10 @@ Remove the conversation-specific LMS protocol and obsolete engine conversion cod
 - Preserve the ability to search old rows with null `conversationId`, `workspaceRoot`, or `archived` fields. Preserve the accepted conversation schema on registered codebase records. Keep only the compatibility reader or schema migration code required by those records and rows.
 - Regenerate protobuf code with `make proto`. Do not edit generated Go files manually or reuse retired RPC method identifiers for different behavior.
 
+## Pull request boundaries
+
+Implement Task 1 in a Clyde compatibility pull request. Merge and deploy that Clyde change before removing the LMS protocol. Implement Tasks 2 through 4 in one LMS retirement pull request with generated code, replacement tests, and documentation. Pin the candidate LMS removal commit in Clyde and pass its `GOWORK=off` gates before deploying LMS. Keep this removal separate from LMS-18 so generic search can pass live parity while the old RPCs still exist.
+
 ## Tasks
 
 ### 1. Remove Clyde's remaining old wire calls

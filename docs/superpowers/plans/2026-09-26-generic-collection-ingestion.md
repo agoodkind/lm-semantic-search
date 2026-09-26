@@ -17,6 +17,10 @@ Complete LMS-15, LMS-16, and LMS-17. A client registers a document collection, s
 - Default reconcile mode to retain. Require an explicit full manifest for authoritative mode. Keep old RPCs available through both Clyde cutovers.
 - Apply the daemon's existing maintenance refusal to generic backfill and delete before loading a collection or queuing a job. Preserve the old handlers' maintenance error when they delegate.
 
+## Pull request boundaries
+
+Implement LMS-15, LMS-16, and LMS-17 as separate pull requests in that order. Each pull request includes its proto source, regenerated Go code, implementation, and public-boundary tests. Keep the ingest parity test and its documentation with LMS-16. Keep backfill and delete parity coverage with LMS-17. Each merged unit must compile and serve its complete RPCs while the old conversation RPCs remain available. Run the corresponding deployed parity gate before Clyde uses that unit.
+
 ## Tasks
 
 ### 1. Register declared schemas (LMS-15)
