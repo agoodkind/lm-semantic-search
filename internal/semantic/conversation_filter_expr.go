@@ -1,28 +1,29 @@
 package semantic
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
-
-	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // conversationFilterIDBatchSize bounds how many conversation ids go into one
-// Milvus `in [...]` membership clause, so a very large explicit conversation
-// scope never overflows the expression-size limit. Larger scopes are split
-// across several searches whose results are merged by score.
+// Milvus `in [...]` membership clause on the stored-row load path. A larger id
+// set there runs one query per batch. Search does not batch: it binds its whole
+// conversation scope through conversationIDsTemplateParam.
 const conversationFilterIDBatchSize = 256
 
-// conversationSearchWindowMax bounds the paged cap-fill to the Milvus
-// single-search ceiling, where offset + limit must stay under 16384.
-// Conversation limits never approach this, so the bound is reached only when a
-// corpus cannot supply enough per-conversation-distinct matches, in which case
-// the honest partial result is returned.
-const conversationSearchWindowMax = 16384
+// conversationRankingDepth is the number of candidates one conversation search
+// ranks: the topK of each hybrid leg, the fused hybrid limit, and the dense
+// topK. It is the Milvus single-search ceiling. It never depends on the
+// requested limit, the per-conversation cap, or the score floor. Every request
+// for one query and filter therefore ranks the same candidate list.
+const conversationRankingDepth = 16384
 
-type conversationSearchFunc func(ctx context.Context, collectionName string, query string, limit int32, expr string) ([]model.StoredChunk, error)
+// conversationIDsTemplateParam is the Milvus expression template parameter
+// that binds the conversation id scope. A template parameter sends the ids as
+// one typed array instead of expression text, and any scope size runs as one
+// search.
+const conversationIDsTemplateParam = "conversation_ids"
 
 // ConversationFilter carries the native-filterable attributes of a conversation
 // search. The daemon maps its request filter onto this, and buildExpr renders a
@@ -49,16 +50,18 @@ type ConversationFilter struct {
 }
 
 // HasConversationScope reports whether the filter restricts retrieval to a
-// specific set of conversation ids, which the caller uses to decide whether a
-// large id set needs batching across several searches.
+// specific set of conversation ids. The search then binds the ids through
+// conversationIDsTemplateParam.
 func (filter ConversationFilter) HasConversationScope() bool {
 	return len(filter.ConversationIDs) > 0
 }
 
 // buildExpr renders the Milvus boolean expression for every native dimension,
 // ANDing whichever clauses are present. An empty result searches the whole
-// collection. Role values are lowercased to match the lowercased role column,
-// so role filtering is case-insensitive across providers.
+// collection. Role values are lowercased to match the lowercased role column.
+// Role filtering is therefore case-insensitive across providers. The
+// conversation id scope renders as the conversationIDsTemplateParam
+// placeholder, and the search supplies the ids as that template parameter.
 func (filter ConversationFilter) buildExpr() string {
 	clauses := make([]string, 0, 10)
 	if clause := inStringClause(providerFieldName, filter.Providers); clause != "" {
@@ -70,8 +73,8 @@ func (filter ConversationFilter) buildExpr() string {
 	if clause := inStringClause(roleFieldName, lowercaseAll(filter.Roles)); clause != "" {
 		clauses = append(clauses, clause)
 	}
-	if clause := inStringClause(conversationIDFieldName, filter.ConversationIDs); clause != "" {
-		clauses = append(clauses, clause)
+	if filter.HasConversationScope() {
+		clauses = append(clauses, conversationIDFieldName+" in {"+conversationIDsTemplateParam+"}")
 	}
 	if filter.ParentConversationID != "" {
 		clauses = append(clauses, fmt.Sprintf(`%s == "%s"`, parentConversationIDFieldName, escapeMilvusString(filter.ParentConversationID)))
@@ -119,39 +122,6 @@ func lowercaseAll(values []string) []string {
 	return lowered
 }
 
-// searchConversationBatched runs the native-filtered vector search. When the
-// explicit conversation scope is larger than one membership clause can hold, it
-// splits the ids across several searches and merges the hits by score, so a
-// large scope never overflows the Milvus expression-size limit. The common case
-// (no or small scope) is a single search.
-func (service *Service) searchConversationBatched(ctx context.Context, collectionName string, query string, limit int32, filter ConversationFilter) ([]model.StoredChunk, error) {
-	return searchConversationBatchedWith(ctx, collectionName, query, limit, filter, conversationFilterIDBatchSize, service.searchCollection)
-}
-
-func searchConversationBatchedWith(ctx context.Context, collectionName string, query string, limit int32, filter ConversationFilter, batchSize int, search conversationSearchFunc) ([]model.StoredChunk, error) {
-	batches := batchConversationIDs(filter.ConversationIDs, batchSize)
-	if len(batches) <= 1 {
-		return search(ctx, collectionName, query, limit, filter.buildExpr())
-	}
-	merged := make([]model.StoredChunk, 0, len(batches)*int(maxInt32(limit, 10)))
-	for _, batch := range batches {
-		batchFilter := filter
-		batchFilter.ConversationIDs = batch
-		chunks, err := search(ctx, collectionName, query, limit, batchFilter.buildExpr())
-		if err != nil {
-			return nil, err
-		}
-		merged = append(merged, chunks...)
-	}
-	sort.SliceStable(merged, func(first int, second int) bool {
-		return merged[first].Score > merged[second].Score
-	})
-	if limit > 0 && len(merged) > int(limit) {
-		merged = merged[:limit]
-	}
-	return merged, nil
-}
-
 // batchConversationIDs splits ids into chunks of at most size, returning a
 // single empty batch when ids is empty so callers run exactly one unscoped
 // search.
@@ -170,90 +140,66 @@ func batchConversationIDs(ids []string, size int) [][]string {
 	return batches
 }
 
-// conversationPageSearch fetches one ranked page of at most pageLimit rows
-// starting at offset, in descending score order. fillCappedConversationSearchWith
-// drives it until the per-conversation cap yields the requested limit.
-type conversationPageSearch func(ctx context.Context, offset int, pageLimit int) ([]model.StoredChunk, error)
+// rankedCandidate is one row of a conversation search's fused ranking. It
+// stores only the row identity, the cap group, and the score. The search reads
+// content for the selected candidates afterward.
+type rankedCandidate struct {
+	PrimaryKey     string
+	RelativePath   string
+	ConversationID string
+	// ConversationIDKnown is false when the row's conversationId column is
+	// null. Every such row shares one per-conversation cap group.
+	ConversationIDKnown bool
+	Score               float64
+}
 
-// fillCappedConversationSearch pages the ranked search by offset, reusing one
-// precomputed query vector across pages, and reduces each accumulated window
-// until the per-conversation cap yields limit survivors. The common case fills
-// on the first page and runs exactly one search.
-func (service *Service) fillCappedConversationSearch(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, filterExpr string, limit int32, perConversationLimit int32, minScore float64) ([]model.StoredChunk, error) {
-	return fillCappedConversationSearchWith(ctx, limit, perConversationLimit, minScore, func(ctx context.Context, offset int, pageLimit int) ([]model.StoredChunk, error) {
-		return service.searchCollectionWithVector(ctx, collectionName, queryVector, rawQuery, pageLimit, offset, filterExpr)
+// sortRankedCandidates orders candidates by descending score, then ascending
+// relativePath, then ascending primary key. The order is total. One query
+// therefore ranks its candidates the same way on every call.
+func sortRankedCandidates(candidates []rankedCandidate) {
+	sort.Slice(candidates, func(first int, second int) bool {
+		left := candidates[first]
+		right := candidates[second]
+		if left.Score != right.Score {
+			return left.Score > right.Score
+		}
+		if left.RelativePath != right.RelativePath {
+			return left.RelativePath < right.RelativePath
+		}
+		return left.PrimaryKey < right.PrimaryKey
 	})
 }
 
-// fillCappedConversationSearchWith pages pageSearch by offset and reduces each
-// accumulated window with capConversationChunks until limit survivors are
-// collected, the score frontier drops below minScore, the search is exhausted
-// (an empty or short page), or the 16384 window is reached. It returns the honest
-// partial result when the corpus cannot supply enough per-conversation-distinct
-// matches.
-func fillCappedConversationSearchWith(ctx context.Context, limit int32, perConversationLimit int32, minScore float64, pageSearch conversationPageSearch) ([]model.StoredChunk, error) {
-	pageSize := int(limit)
-	if pageSize <= 0 {
-		pageSize = 10
-	}
-	buffer := make([]model.StoredChunk, 0, pageSize*2)
-	survivors := make([]model.StoredChunk, 0, pageSize)
-	for offset := 0; offset < conversationSearchWindowMax; offset += pageSize {
-		pageLimit := pageSize
-		if offset+pageLimit > conversationSearchWindowMax {
-			pageLimit = conversationSearchWindowMax - offset
-		}
-		if pageLimit <= 0 {
-			break
-		}
-		page, err := pageSearch(ctx, offset, pageLimit)
-		if err != nil {
-			return nil, err
-		}
-		if len(page) == 0 {
-			break
-		}
-		buffer = append(buffer, page...)
-		survivors = capConversationChunks(buffer, perConversationLimit, minScore, limit)
-		if len(survivors) >= int(limit) {
-			break
-		}
-		// Results descend by score, so once a page ends below the floor no later
-		// page can clear it.
-		if minScore > 0 && page[len(page)-1].Score < minScore {
-			break
-		}
-		// A short page means the ranked results are exhausted.
-		if len(page) < pageLimit {
-			break
-		}
-	}
-	return survivors, nil
-}
-
-// capConversationChunks keeps score-ordered chunks above minScore, at most
-// perConversationLimit per conversation, up to limit total. It is the store-up
-// reduction: every scope dimension is already enforced natively by the Milvus
-// filter expression, so only the cap and the score floor apply here. It mirrors
-// the daemon's applyConversationSearchFilter, which still reduces the literal
-// cache fallback where there is no native pushdown.
-func capConversationChunks(chunks []model.StoredChunk, perConversationLimit int32, minScore float64, limit int32) []model.StoredChunk {
-	kept := make([]model.StoredChunk, 0, len(chunks))
+// selectRankedCandidates walks sorted candidates once. It drops a candidate
+// scoring below minScore, keeps at most perConversationLimit candidates per
+// conversation, and stops at limit. A zero perConversationLimit is uncapped,
+// and a zero minScore is no floor. The walk never looks ahead. The result for
+// a smaller limit is therefore a prefix of the result for a larger one.
+func selectRankedCandidates(candidates []rankedCandidate, perConversationLimit int32, minScore float64, limit int32) []rankedCandidate {
+	kept := make([]rankedCandidate, 0, min(len(candidates), int(max(limit, 0))))
 	perConversation := make(map[string]int32)
-	for _, chunk := range chunks {
-		if minScore > 0 && chunk.Score < minScore {
-			continue
-		}
-		if perConversationLimit > 0 {
-			if perConversation[chunk.ConversationID] >= perConversationLimit {
-				continue
-			}
-			perConversation[chunk.ConversationID]++
-		}
-		kept = append(kept, chunk)
+	nullConversation := int32(0)
+	for _, candidate := range candidates {
 		if limit > 0 && len(kept) >= int(limit) {
 			break
 		}
+		if minScore > 0 && candidate.Score < minScore {
+			continue
+		}
+		if perConversationLimit > 0 {
+			if !candidate.ConversationIDKnown {
+				if nullConversation >= perConversationLimit {
+					continue
+				}
+				nullConversation++
+			} else {
+				if perConversation[candidate.ConversationID] >= perConversationLimit {
+					continue
+				}
+				perConversation[candidate.ConversationID]++
+			}
+		}
+		kept = append(kept, candidate)
 	}
 	return kept
 }

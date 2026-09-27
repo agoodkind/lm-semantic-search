@@ -1,183 +1,116 @@
 package semantic
 
 import (
-	"context"
+	"fmt"
+	"reflect"
 	"testing"
-
-	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-func rankedChunk(conversationID string, score float64) model.StoredChunk {
-	return model.StoredChunk{ConversationID: conversationID, Score: score}
+func candidate(primaryKey string, relativePath string, conversationID string, score float64) rankedCandidate {
+	return rankedCandidate{
+		PrimaryKey:          primaryKey,
+		RelativePath:        relativePath,
+		ConversationID:      conversationID,
+		ConversationIDKnown: conversationID != "",
+		Score:               score,
+	}
 }
 
-// pagerOver returns a conversationPageSearch that serves ranked in score order,
-// slicing it by offset and pageLimit, and counts the calls it receives.
-func pagerOver(ranked []model.StoredChunk, calls *int) conversationPageSearch {
-	return func(_ context.Context, offset int, pageLimit int) ([]model.StoredChunk, error) {
-		*calls++
-		if offset >= len(ranked) {
-			return nil, nil
+func candidateKeys(candidates []rankedCandidate) []string {
+	keys := make([]string, 0, len(candidates))
+	for _, ranked := range candidates {
+		keys = append(keys, ranked.PrimaryKey)
+	}
+	return keys
+}
+
+// TestSortRankedCandidatesBreaksTiesByPathThenKey proves the ranking order is
+// total: descending score, then ascending relativePath, then ascending primary
+// key, whatever order the store returned the rows in.
+func TestSortRankedCandidatesBreaksTiesByPathThenKey(t *testing.T) {
+	t.Parallel()
+
+	candidates := []rankedCandidate{
+		candidate("k4", "conv/b/0", "b", 0.5),
+		candidate("k2", "conv/a/1", "a", 0.9),
+		candidate("k3", "conv/a/1", "a", 0.9),
+		candidate("k1", "conv/a/0", "a", 0.9),
+		candidate("k5", "conv/c/0", "c", 0.7),
+	}
+	sortRankedCandidates(candidates)
+	want := []string{"k1", "k2", "k3", "k5", "k4"}
+	if got := candidateKeys(candidates); !reflect.DeepEqual(got, want) {
+		t.Fatalf("sorted keys = %v, want %v", got, want)
+	}
+}
+
+// TestSelectRankedCandidatesFillsPastAnOverfilledTop proves the walk fills the
+// limit when the top ranks belong to one conversation, keeping at most the cap
+// from it and filling the rest from lower ranks.
+func TestSelectRankedCandidatesFillsPastAnOverfilledTop(t *testing.T) {
+	t.Parallel()
+
+	candidates := make([]rankedCandidate, 0, 40)
+	for index := range 30 {
+		candidates = append(candidates, candidate(fmt.Sprintf("dense-%02d", index), fmt.Sprintf("conv/dense/%02d", index), "dense", 1.0))
+	}
+	for index := range 10 {
+		conversationID := fmt.Sprintf("other-%02d", index)
+		candidates = append(candidates, candidate(conversationID, "conv/"+conversationID+"/0", conversationID, 0.5-float64(index)/100))
+	}
+	sortRankedCandidates(candidates)
+	selected := selectRankedCandidates(candidates, 2, 0, 10)
+	if len(selected) != 10 {
+		t.Fatalf("selected %d candidates, want 10", len(selected))
+	}
+	dense := 0
+	for _, ranked := range selected {
+		if ranked.ConversationID == "dense" {
+			dense++
 		}
-		end := offset + pageLimit
-		if end > len(ranked) {
-			end = len(ranked)
-		}
-		return append([]model.StoredChunk(nil), ranked[offset:end]...), nil
+	}
+	if dense != 2 {
+		t.Fatalf("selected %d dense candidates, want the cap of 2", dense)
 	}
 }
 
-func conversationCounts(chunks []model.StoredChunk) map[string]int {
-	counts := make(map[string]int)
-	for _, chunk := range chunks {
-		counts[chunk.ConversationID]++
-	}
-	return counts
-}
-
-// TestFillCappedConversationSearchFillsAcrossPages proves the worked example: a
-// query whose top results are dominated by three conversations still returns the
-// full limit under a per-conversation cap by paging until the cap is satisfied.
-func TestFillCappedConversationSearchFillsAcrossPages(t *testing.T) {
+// TestSelectRankedCandidatesSmallerLimitIsPrefix proves a smaller limit selects
+// a prefix of a larger limit's selection under the same cap and floor.
+func TestSelectRankedCandidatesSmallerLimitIsPrefix(t *testing.T) {
 	t.Parallel()
 
-	order := []string{
-		"A", "A", "B", "A", "B", "C", "A", "B", "A", "C",
-		"B", "A", "C", "B", "A", "C", "B", "A", "C", "B",
-		"D", "C", "B", "E", "C", "F", "G", "C", "H", "I",
+	candidates := []rankedCandidate{
+		candidate("k1", "conv/a/0", "a", 0.9),
+		candidate("k2", "conv/a/1", "a", 0.8),
+		candidate("k3", "conv/a/2", "a", 0.7),
+		candidate("k4", "conv/b/0", "b", 0.6),
+		candidate("k5", "conv/c/0", "c", 0.5),
+		candidate("k6", "conv/b/1", "b", 0.4),
 	}
-	ranked := make([]model.StoredChunk, len(order))
-	for index, conversationID := range order {
-		ranked[index] = rankedChunk(conversationID, float64(len(order)-index))
-	}
-
-	calls := 0
-	survivors, err := fillCappedConversationSearchWith(context.Background(), 10, 2, 0, pagerOver(ranked, &calls))
-	if err != nil {
-		t.Fatalf("fill returned error: %v", err)
-	}
-	if len(survivors) != 10 {
-		t.Fatalf("survivors = %d, want 10 (the cap must page to fill the limit)", len(survivors))
-	}
-	for conversationID, count := range conversationCounts(survivors) {
-		if count > 2 {
-			t.Fatalf("conversation %q kept %d hits, want at most 2", conversationID, count)
+	sortRankedCandidates(candidates)
+	larger := candidateKeys(selectRankedCandidates(candidates, 2, 0.45, 5))
+	for limit := int32(1); limit <= 5; limit++ {
+		smaller := candidateKeys(selectRankedCandidates(candidates, 2, 0.45, limit))
+		if len(smaller) > len(larger) || !reflect.DeepEqual(smaller, larger[:len(smaller)]) {
+			t.Fatalf("limit %d selected %v, want a prefix of %v", limit, smaller, larger)
 		}
 	}
-	if calls != 3 {
-		t.Fatalf("page searches = %d, want 3 (page 10 each over a 30-row window)", calls)
+	if want := []string{"k1", "k2", "k4", "k5"}; !reflect.DeepEqual(larger, want) {
+		t.Fatalf("selected %v, want %v (cap 2 drops k3, floor 0.45 drops k6)", larger, want)
 	}
 }
 
-// TestFillCappedConversationSearchReturnsPartialOnExhaustion proves the fill
-// returns the honest smaller count when the corpus cannot supply limit
-// per-conversation-distinct matches, and stops at the short page.
-func TestFillCappedConversationSearchReturnsPartialOnExhaustion(t *testing.T) {
+// TestSelectRankedCandidatesGroupsNullConversationIDs proves rows with a null
+// conversationId share one cap group.
+func TestSelectRankedCandidatesGroupsNullConversationIDs(t *testing.T) {
 	t.Parallel()
 
-	ranked := []model.StoredChunk{
-		rankedChunk("A", 0.9),
-		rankedChunk("A", 0.8),
-		rankedChunk("A", 0.7),
-		rankedChunk("B", 0.6),
-		rankedChunk("B", 0.5),
+	candidates := []rankedCandidate{
+		candidate("k1", "conv/x/0", "", 0.9),
+		candidate("k2", "conv/y/0", "", 0.8),
+		candidate("k3", "conv/a/0", "a", 0.7),
 	}
-	calls := 0
-	survivors, err := fillCappedConversationSearchWith(context.Background(), 10, 2, 0, pagerOver(ranked, &calls))
-	if err != nil {
-		t.Fatalf("fill returned error: %v", err)
-	}
-	if len(survivors) != 4 {
-		t.Fatalf("survivors = %d, want 4 (A and B capped at 2 each, no more rows)", len(survivors))
-	}
-	if calls != 1 {
-		t.Fatalf("page searches = %d, want 1 (a short page ends the fill)", calls)
-	}
-}
-
-// TestFillCappedConversationSearchMinScoreEarlyStop proves a page whose frontier
-// falls below the score floor ends the fill, since later pages rank lower.
-func TestFillCappedConversationSearchMinScoreEarlyStop(t *testing.T) {
-	t.Parallel()
-
-	ranked := []model.StoredChunk{
-		rankedChunk("A", 0.9),
-		rankedChunk("B", 0.8),
-		rankedChunk("C", 0.7),
-		rankedChunk("D", 0.6),
-		rankedChunk("E", 0.5),
-		rankedChunk("F", 0.45),
-		rankedChunk("G", 0.4),
-		rankedChunk("H", 0.35),
-		rankedChunk("I", 0.3),
-		rankedChunk("J", 0.25),
-	}
-	calls := 0
-	survivors, err := fillCappedConversationSearchWith(context.Background(), 10, 0, 0.5, pagerOver(ranked, &calls))
-	if err != nil {
-		t.Fatalf("fill returned error: %v", err)
-	}
-	if len(survivors) != 5 {
-		t.Fatalf("survivors = %d, want 5 (only scores >= 0.5 clear the floor)", len(survivors))
-	}
-	if calls != 1 {
-		t.Fatalf("page searches = %d, want 1 (the floor frontier ends the fill)", calls)
-	}
-}
-
-// TestFillCappedConversationSearchSinglePageWhenCapLoose proves the common case
-// runs exactly one search when the cap does not bind.
-func TestFillCappedConversationSearchSinglePageWhenCapLoose(t *testing.T) {
-	t.Parallel()
-
-	ranked := []model.StoredChunk{
-		rankedChunk("A", 0.9),
-		rankedChunk("B", 0.8),
-		rankedChunk("C", 0.7),
-		rankedChunk("D", 0.6),
-		rankedChunk("E", 0.5),
-	}
-	calls := 0
-	survivors, err := fillCappedConversationSearchWith(context.Background(), 5, 2, 0, pagerOver(ranked, &calls))
-	if err != nil {
-		t.Fatalf("fill returned error: %v", err)
-	}
-	if len(survivors) != 5 {
-		t.Fatalf("survivors = %d, want 5", len(survivors))
-	}
-	if calls != 1 {
-		t.Fatalf("page searches = %d, want 1 (one embed, one page in the common case)", calls)
-	}
-}
-
-// TestCapConversationChunks proves the reduction keeps the highest-ranked hits
-// per conversation, floors by minScore, and truncates to limit.
-func TestCapConversationChunks(t *testing.T) {
-	t.Parallel()
-
-	chunks := []model.StoredChunk{
-		rankedChunk("a", 0.9),
-		rankedChunk("a", 0.8),
-		rankedChunk("a", 0.7),
-		rankedChunk("b", 0.6),
-		rankedChunk("c", 0.2),
-	}
-
-	capped := capConversationChunks(chunks, 1, 0, 0)
-	if len(capped) != 3 {
-		t.Fatalf("per-conversation cap kept %d, want 3 (one per conversation)", len(capped))
-	}
-	if capped[0].ConversationID != "a" || capped[0].Score != 0.9 {
-		t.Fatalf("cap kept %+v first, want a's top-ranked hit", capped[0])
-	}
-
-	floored := capConversationChunks(chunks, 0, 0.5, 0)
-	if len(floored) != 4 {
-		t.Fatalf("min-score floor kept %d, want 4 (0.2 dropped)", len(floored))
-	}
-
-	limited := capConversationChunks(chunks, 0, 0, 2)
-	if len(limited) != 2 {
-		t.Fatalf("limit kept %d, want 2", len(limited))
+	if got, want := candidateKeys(selectRankedCandidates(candidates, 1, 0, 10)), []string{"k1", "k3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("selected %v, want %v", got, want)
 	}
 }
