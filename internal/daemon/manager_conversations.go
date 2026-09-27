@@ -242,7 +242,11 @@ func (manager *Manager) DeleteConversation(ctx context.Context, collectionID str
 	return manager.deleteConversation(ctx, collectionID, conversationID, model.ClientInfo{Name: "", PID: 0})
 }
 
-// SearchConversations searches a registered virtual conversation collection.
+// SearchConversations searches a registered virtual conversation collection
+// through the generic collection search. It converts the conversation filter
+// to the typed filter tree, and a per-conversation limit becomes a per-group
+// cap on conversationId. An unregistered collection returns no results and
+// registers nothing.
 func (manager *Manager) SearchConversations(ctx context.Context, collectionID string, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
 	if refusal := manager.maintenanceRefusal(); refusal != nil {
 		return nil, refusal
@@ -255,14 +259,21 @@ func (manager *Manager) SearchConversations(ctx context.Context, collectionID st
 	if !found {
 		return nil, nil
 	}
-	return manager.searchConversationCollectionFiltered(ctx, codebase, query, limit, filter, perConversationLimit)
+	hits, err := manager.searchRegisteredCollection(ctx, trimmedCollectionID, codebase, filter.collectionSearchRequest(trimmedCollectionID, query, limit, perConversationLimit))
+	if err != nil {
+		return nil, err
+	}
+	return collectionHitChunks(hits), nil
 }
 
 // SearchWithinConversation retrieves one conversation's matching rows plus the
-// content fingerprint the engine has embedded for it. An empty fingerprint
-// means the conversation is not indexed; a fingerprint differing from the
-// conversation's current one means the index trails the transcript. Either way
-// the caller decides whether to refresh newer content.
+// content fingerprint the engine has embedded for it. It registers the
+// collection first, scopes the generic collection search to the one
+// conversation id, and reads the fingerprint through
+// [Manager.CollectionItemState]. An empty fingerprint means the conversation
+// is not indexed; a fingerprint differing from the conversation's current one
+// means the index trails the transcript. Either way the caller decides whether
+// to refresh newer content.
 func (manager *Manager) SearchWithinConversation(ctx context.Context, collectionID string, conversationID string, query string, limit int32, filter conversationSearchFilter) ([]model.StoredChunk, string, error) {
 	trimmedConversationID := strings.TrimSpace(conversationID)
 	if trimmedConversationID == "" {
@@ -275,12 +286,28 @@ func (manager *Manager) SearchWithinConversation(ctx context.Context, collection
 	if err != nil {
 		return nil, "", err
 	}
+	trimmedCollectionID := strings.TrimSpace(collectionID)
 	filter.ConversationIDs = []string{trimmedConversationID}
-	chunks, err := manager.searchConversationCollectionFiltered(ctx, codebase, query, limit, filter, 0)
+	hits, err := manager.searchRegisteredCollection(ctx, trimmedCollectionID, codebase, filter.collectionSearchRequest(trimmedCollectionID, query, limit, 0))
 	if err != nil {
 		return nil, "", err
 	}
-	return chunks, manager.conversationIndexedFingerprint(ctx, codebase, trimmedConversationID), nil
+	fingerprint, err := manager.CollectionItemState(ctx, trimmedCollectionID, trimmedConversationID)
+	if err != nil {
+		return nil, "", err
+	}
+	return collectionHitChunks(hits), fingerprint, nil
+}
+
+// collectionHitChunks returns the stored chunk of every hit, in order. The
+// conversation RPCs build their response fields from the chunk's decoded
+// metadata.
+func collectionHitChunks(hits []semantic.CollectionHit) []model.StoredChunk {
+	chunks := make([]model.StoredChunk, 0, len(hits))
+	for _, hit := range hits {
+		chunks = append(chunks, hit.Chunk)
+	}
+	return chunks
 }
 
 // backfillConversationScalars fills workspaceRoot and archived on the rows of a
@@ -300,57 +327,6 @@ func (manager *Manager) backfillConversationScalars(ctx context.Context, collect
 		Conversation: true,
 		DryRun:       dryRun,
 	})
-}
-
-// conversationIndexedFingerprint reads the checkpointed content fingerprint
-// for one conversation from the collection's merkle snapshot. Empty when the
-// engine has never embedded the conversation.
-func (manager *Manager) conversationIndexedFingerprint(ctx context.Context, codebase model.Codebase, conversationID string) string {
-	checkpoint := manager.loadLiveCheckpoint(ctx, codebase, codebase.EffectiveConfig.IgnoreDigest)
-	return checkpoint.snapshot.Files[conversationID]
-}
-
-// searchConversationCollectionFiltered is the one retrieval path under both
-// conversation search RPCs. Every scope dimension is pushed into Milvus as a
-// native scalar-column expression and the engine returns the result already
-// reduced to the requested limit: it pages the ranked search by offset so the
-// per-conversation cap and min_score fill the limit deterministically instead
-// of starving it, reusing one query embedding across pages.
-func (manager *Manager) searchConversationCollectionFiltered(ctx context.Context, codebase model.Codebase, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) ([]model.StoredChunk, error) {
-	if limit <= 0 {
-		limit = 10
-	}
-
-	if manager.semantic == nil || !manager.semantic.Available() {
-		manager.noteDependencyFailure(semantic.ErrUnavailable)
-		return nil, semantic.ErrUnavailable
-	}
-	if prepareErr := manager.semantic.PrepareCollection(ctx, codebase.CollectionName); prepareErr != nil {
-		manager.noteDependencyFailure(prepareErr)
-		return nil, fmt.Errorf(
-			"prepare conversation collection %s: %w",
-			codebase.CollectionName,
-			prepareErr,
-		)
-	}
-	lease, leaseErr := manager.semantic.AcquireCollection(ctx, codebase.CollectionName)
-	if leaseErr != nil {
-		manager.noteDependencyFailure(leaseErr)
-		return nil, fmt.Errorf(
-			"acquire conversation collection %s: %w",
-			codebase.CollectionName,
-			leaseErr,
-		)
-	}
-	defer lease.Release()
-	chunks, err := manager.semantic.SearchConversationCollectionCapped(ctx, codebase.CollectionName, query, limit, perConversationLimit, filter.MinScore, filter.toSemanticFilter())
-	if err != nil {
-		manager.noteDependencyFailure(err)
-		slog.ErrorContext(ctx, "search conversation collection failed", "collection", codebase.CollectionName, "err", err)
-		return nil, fmt.Errorf("search conversation collection %s: %w", codebase.CollectionName, err)
-	}
-	manager.noteDependencyHealthy()
-	return chunks, nil
 }
 
 // deleteConversation queues the removal of one conversation's rows through the

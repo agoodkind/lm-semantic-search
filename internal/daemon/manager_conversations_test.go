@@ -22,19 +22,30 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func TestConversationFingerprintReportsMissingCheckpointAfterSuccessfulRun(t *testing.T) {
-	manager, _, repoPath := newTestManager(t)
-	codebase := newCodebaseRecord(repoPath)
-	codebase.LastSuccessfulRun = &model.IndexRunSummary{
+func TestCollectionItemStateReportsMissingCheckpointAfterSuccessfulRun(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	codebase, err := manager.RegisterConversationCollection(context.Background(), "thread-lost-checkpoint")
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	manager.mu.Lock()
+	record := manager.codebases[codebase.ID]
+	record.LastSuccessfulRun = &model.IndexRunSummary{
 		IndexedFiles: 1,
 		TotalChunks:  1,
 		Status:       "completed",
 		CompletedAt:  time.Now(),
 	}
+	manager.codebases[codebase.ID] = record
+	manager.mu.Unlock()
 
 	logs := captureLogs(t)
 
-	if fingerprint := manager.conversationIndexedFingerprint(context.Background(), codebase, "conversation-1"); fingerprint != "" {
+	fingerprint, err := manager.CollectionItemState(context.Background(), "thread-lost-checkpoint", "conversation-1")
+	if err != nil {
+		t.Fatalf("CollectionItemState returned error: %v", err)
+	}
+	if fingerprint != "" {
 		t.Fatalf("fingerprint = %q, want empty for the absent checkpoint", fingerprint)
 	}
 	if len(logs.linesContaining("level=ERROR", "read Merkle snapshot failed", manager.merklePath(codebase.ID))) == 0 {

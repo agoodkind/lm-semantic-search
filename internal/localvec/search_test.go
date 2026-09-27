@@ -111,26 +111,115 @@ func TestConversationSearchAppliesFiltersScoreAndPerConversationLimit(
 		UntilUnix:        104,
 		MessageIndexFrom: 1,
 	}
-	results, err := store.SearchConversationCollectionCapped(
-		context.Background(),
-		store.CollectionName(codebasePath),
-		"query",
-		10,
-		1,
-		0.5,
-		filter,
-	)
+	results, err := store.SearchCollection(context.Background(), semantic.CollectionSearch{
+		CollectionName: store.CollectionName(codebasePath),
+		Query:          "query",
+		Limit:          10,
+		MinScore:       0.5,
+		Filter:         filter.CollectionFilter(),
+		GroupBy:        "conversationId",
+		PerGroupLimit:  1,
+		Declaration:    semantic.ConversationDeclaration(),
+	})
 	if err != nil {
-		t.Fatalf("SearchConversationCollectionCapped returned error: %v", err)
+		t.Fatalf("SearchCollection returned error: %v", err)
 	}
-	gotContents := make([]string, 0, len(results))
-	for _, result := range results {
-		gotContents = append(gotContents, result.Content)
+	if got, want := hitContents(results), []string{"a best", "b kept"}; !slices.Equal(got, want) {
+		t.Fatalf("conversation contents = %v, want %v", got, want)
 	}
-	wantContents := []string{"a best", "b kept"}
-	if !slices.Equal(gotContents, wantContents) {
-		t.Fatalf("conversation contents = %v, want %v", gotContents, wantContents)
+}
+
+// TestCollectionSearchEvaluatesNestedFilterTree proves the local store keeps a
+// row only when the whole tree is true. An any node keeps either branch. A not
+// node rejects its child's matches. A leaf on a column the row format lacks is
+// unknown, which a not node keeps unknown. Every hit decodes the declared
+// scalar cells from the row.
+func TestCollectionSearchEvaluatesNestedFilterTree(t *testing.T) {
+	t.Parallel()
+
+	const codebasePath = "chat:///local-tree"
+	provider := &fakeEmbeddingProvider{
+		vectors: map[string][]float32{
+			"first":  {1, 0},
+			"second": {0.9, 0.1},
+			"third":  {0.8, 0.2},
+			"query":  {1, 0},
+		},
 	}
+	store, err := newStoreWithProvider(config.Config{StateRoot: t.TempDir()}, provider)
+	if err != nil {
+		t.Fatalf("newStoreWithProvider returned error: %v", err)
+	}
+	stageAndPromote(t, store, codebasePath, []model.StoredChunk{
+		conversationChunk("first", "claude:a", "User", 0, 100),
+		conversationChunk("second", "codex:b", "assistant", 1, 200),
+		conversationChunk("third", "claude:c", "assistant", 2, 300),
+	}, semantic.ConversationColumns())
+
+	declaration := semantic.ConversationDeclaration()
+	declaration.Scalars = append(declaration.Scalars, model.ScalarColumn{Name: "priority", Type: model.ScalarTypeInt64, Nullable: true, MaxLength: 0})
+	lower := int64(250)
+	search := func(filter semantic.CollectionFilter) []semantic.CollectionHit {
+		t.Helper()
+		hits, searchErr := store.SearchCollection(context.Background(), semantic.CollectionSearch{
+			CollectionName: store.CollectionName(codebasePath),
+			Query:          "query",
+			Limit:          10,
+			MinScore:       0,
+			Filter:         &filter,
+			GroupBy:        "",
+			PerGroupLimit:  0,
+			Declaration:    declaration,
+		})
+		if searchErr != nil {
+			t.Fatalf("SearchCollection returned error: %v", searchErr)
+		}
+		return hits
+	}
+
+	either := semantic.AnyOf(
+		semantic.ColumnEquals("role", semantic.StringScalar("user")),
+		semantic.ColumnRange("timestampUnix", &lower, nil),
+	)
+	if got, want := hitContents(search(either)), []string{"first", "third"}; !slices.Equal(got, want) {
+		t.Fatalf("any node contents = %v, want %v", got, want)
+	}
+	notClaude := semantic.Negate(semantic.ColumnIn("provider", semantic.StringValues([]string{"claude"})))
+	if got, want := hitContents(search(notClaude)), []string{"second"}; !slices.Equal(got, want) {
+		t.Fatalf("not node contents = %v, want %v", got, want)
+	}
+	unknownPriority := semantic.Negate(semantic.ColumnEquals("priority", semantic.Int64Scalar(1)))
+	if got := hitContents(search(unknownPriority)); len(got) != 0 {
+		t.Fatalf("not over an absent column kept %v, want none", got)
+	}
+	if got, want := hitContents(search(semantic.ColumnIsNull("priority"))), []string{"first", "second", "third"}; !slices.Equal(got, want) {
+		t.Fatalf("is_null on an absent column kept %v, want every row", got)
+	}
+
+	hits := search(semantic.ColumnEquals("conversationId", semantic.StringScalar("claude:a")))
+	if len(hits) != 1 {
+		t.Fatalf("equality kept %d hits, want 1", len(hits))
+	}
+	role, _ := hits[0].Scalar("role")
+	if role != semantic.ValueCell("role", semantic.StringScalar("user")) {
+		t.Fatalf("role cell = %+v, want the lowercased stored role", role)
+	}
+	providerCell, _ := hits[0].Scalar("provider")
+	if providerCell != semantic.ValueCell("provider", semantic.StringScalar("claude")) {
+		t.Fatalf("provider cell = %+v, want claude", providerCell)
+	}
+	priority, _ := hits[0].Scalar("priority")
+	if priority != semantic.AbsentCell("priority") {
+		t.Fatalf("priority cell = %+v, want absent", priority)
+	}
+}
+
+func hitContents(hits []semantic.CollectionHit) []string {
+	contents := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		contents = append(contents, hit.Chunk.Content)
+	}
+	return contents
 }
 
 func TestConversationPartIndexRejectsNegativeMessageIndex(t *testing.T) {

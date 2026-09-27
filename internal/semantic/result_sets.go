@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
@@ -105,6 +106,62 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 		})
 	}
 	return chunks, nil
+}
+
+// scalarCellsAt decodes one row's cell for every declared scalar column. A
+// column missing from the result set is absent. A null value is null.
+func scalarCellsAt(resultSet milvusclient.ResultSet, scalarColumns []model.ScalarColumn, rowIndex int) ([]ScalarCell, error) {
+	cells := make([]ScalarCell, 0, len(scalarColumns))
+	for _, declared := range scalarColumns {
+		cell, err := scalarCellAt(resultSet.GetColumn(declared.Name), declared, rowIndex)
+		if err != nil {
+			return nil, err
+		}
+		cells = append(cells, cell)
+	}
+	return cells, nil
+}
+
+func scalarCellAt(valueColumn column.Column, declared model.ScalarColumn, rowIndex int) (ScalarCell, error) {
+	if valueColumn == nil {
+		return AbsentCell(declared.Name), nil
+	}
+	absent := AbsentCell(declared.Name)
+	isNull, err := valueColumn.IsNull(rowIndex)
+	if err != nil {
+		return absent, scalarReadError(declared, rowIndex, "null state", err)
+	}
+	if isNull {
+		return NullCell(declared.Name), nil
+	}
+	switch declared.Type {
+	case model.ScalarTypeString:
+		value, valueErr := valueColumn.GetAsString(rowIndex)
+		if valueErr != nil {
+			return absent, scalarReadError(declared, rowIndex, "string value", valueErr)
+		}
+		return ValueCell(declared.Name, StringScalar(value)), nil
+	case model.ScalarTypeBool:
+		value, valueErr := valueColumn.GetAsBool(rowIndex)
+		if valueErr != nil {
+			return absent, scalarReadError(declared, rowIndex, "bool value", valueErr)
+		}
+		return ValueCell(declared.Name, BoolScalar(value)), nil
+	case model.ScalarTypeInt64:
+		value, valueErr := valueColumn.GetAsInt64(rowIndex)
+		if valueErr != nil {
+			return absent, scalarReadError(declared, rowIndex, "int64 value", valueErr)
+		}
+		return ValueCell(declared.Name, Int64Scalar(value)), nil
+	default:
+		return absent, scalarReadError(declared, rowIndex, "value", fmt.Errorf("unsupported declared type %q", declared.Type))
+	}
+}
+
+// scalarReadError logs and wraps a failed read of one declared scalar cell.
+func scalarReadError(declared model.ScalarColumn, rowIndex int, part string, err error) error {
+	slog.Error("read declared scalar column failed", "column", declared.Name, "index", rowIndex, "part", part, "err", err)
+	return fmt.Errorf("read %s of scalar column %s at %d: %w", part, declared.Name, rowIndex, err)
 }
 
 // generateID matches the TS chunk-ID format at packages/core/src/context.ts:1067

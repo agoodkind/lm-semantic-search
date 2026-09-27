@@ -15,7 +15,9 @@ type semanticReader interface {
 	CollectionName(codebasePath string) string
 	ConversationCollectionName(collectionID string) string
 	Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error)
-	SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, perConversationLimit int32, minScore float64, filter semantic.ConversationFilter) ([]model.StoredChunk, error)
+	// SearchCollection runs a validated typed search of a document collection
+	// and returns hits already reduced to the limit, group cap, and score floor.
+	SearchCollection(ctx context.Context, search semantic.CollectionSearch) ([]semantic.CollectionHit, error)
 	Count(ctx context.Context, codebasePath string) (int32, error)
 	semanticCollectionInspector
 	HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error)
