@@ -113,8 +113,12 @@ func (delivery collectionItemDelivery) backfillFamilies(itemID string) []string 
 		if !conversationTextIsStorable(row.Text) {
 			continue
 		}
-		if delivery.projectConversation && strings.HasPrefix(row.RowKey, conversationRelativePathPrefix(itemID)) {
-			continue
+		if delivery.projectConversation {
+			isToolFamily := strings.HasPrefix(row.RowKey, conversationToolRelativePathPrefix(itemID))
+			isThinkingFamily := strings.HasPrefix(row.RowKey, conversationThinkingRelativePathPrefix(itemID))
+			if !isToolFamily && !isThinkingFamily {
+				continue
+			}
 		}
 		families = append(families, row.RowKey)
 	}
@@ -141,9 +145,9 @@ func (delivery collectionItemDelivery) rowFamilies(ctx context.Context, itemID s
 	return families, nil
 }
 
-// rowChunks splits one client row's text at the chunk byte budget with the
-// row's continuation prefix, through the appendContinuedStorableField split
-// that conversation tool call rows also use.
+// rowChunks calls appendContinuedStorableField to split one client row's text
+// at the chunk byte budget and add the row's continuation prefix.
+// Conversation tool-call rows use the same splitter.
 func (delivery collectionItemDelivery) rowChunks(row collectionRow) []model.StoredChunk {
 	return appendContinuedStorableField(
 		nil,

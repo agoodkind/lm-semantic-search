@@ -120,7 +120,11 @@ func TestGenericCollectionIngestParity(t *testing.T) {
 	requireCompleted(t, h.upsertGeneric(genericCollectionID, withLaterMessage, secondFingerprint, genericRetain, true, false), "generic backfill over a blank text row")
 	h.requireParity(registration, "backfill over a blank text row")
 	if count := h.countRowsWithPrefix(blankTextPath); count != 1 || strings.TrimSpace(h.contentForRelativePath(blankTextPath)) != "" {
-		t.Fatalf("backfill over a blank text row left %d rows at %s; backfill should leave only the blank row", count, blankTextPath)
+		rowNoun := "rows"
+		if count == 1 {
+			rowNoun = "row"
+		}
+		t.Fatalf("Backfill over a blank text row left %d %s at %s. The expected state contains only the blank row.", count, rowNoun, blankTextPath)
 	}
 
 	changed := map[string][]*pb.ConversationDocument{first: appendMessage(convs[first], first), second: convs[second]}

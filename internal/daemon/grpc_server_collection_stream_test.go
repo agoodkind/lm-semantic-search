@@ -194,7 +194,7 @@ func (daemon *offlineCollectionDaemon) storeBlankTextRow(collectionID string, co
 }
 
 // conversationRowScalars returns the scalar values of one generic row of the
-// parity transcripts, which are claude conversations in /work with the
+// parity transcripts, which are Claude conversations in /work with the
 // rules-v1 load rules.
 func conversationRowScalars(messageIndex int64, role string, timestamp int64) []*pb.CollectionScalarValue {
 	return []*pb.CollectionScalarValue{
@@ -600,7 +600,7 @@ func TestUpsertCollectionItemsContinuationPrefix(t *testing.T) {
 
 // TestUpsertCollectionItemsDerivedFingerprintCoversContinuationPrefix upserts
 // one row three times without a manifest frame. The engine derives each
-// fingerprint from the row. A continuation prefix on the unchanged row gives
+// fingerprint from the row. Changing only the continuation prefix gives
 // the item a new fingerprint in the checkpoint. The same row without the prefix
 // restores the first fingerprint.
 func TestUpsertCollectionItemsDerivedFingerprintCoversContinuationPrefix(t *testing.T) {
@@ -837,8 +837,8 @@ func TestUpsertCollectionItemsStreamAcceptsLargeStream(t *testing.T) {
 // TestCollectionAndConversationStreamsStoreEqualRows submits the same
 // transcript through the conversation stream and the generic stream into two
 // collections with the conversation declaration. Both collections must store
-// byte-identical rows and equal checkpoints after every step. Each subtest runs
-// its own daemon and fails on its own.
+// byte-identical rows and equal checkpoints after every step. Each subtest
+// creates an independent daemon. A failure in one subtest does not affect the other.
 func TestCollectionAndConversationStreamsStoreEqualRows(t *testing.T) {
 	t.Parallel()
 	t.Run("ingest", testConversationIngestParity)
@@ -901,7 +901,7 @@ func testConversationIngestParity(t *testing.T) {
 	namedTool := "convtool/" + conversationID + "/1/1"
 	namelessTool := "convtool/" + conversationID + "/1/2"
 	if paths := distinctRowPaths(conversationRows); len(paths) < 5 || !slices.Contains(paths, "conv/"+conversationID+"/1/1") || !slices.Contains(paths, "convthink/"+conversationID+"/1") || !slices.Contains(paths, "convtool/"+conversationID+"/1/0") || !slices.Contains(paths, namedTool+"/1") || !slices.Contains(paths, namelessTool+"/1") {
-		t.Fatalf("conversation stream stored rows %v, want a split message text, a tool row, two split tool rows, and a thinking row", paths)
+		t.Fatalf("The conversation stream stored rows %v. The expected rows include a split message, one tool row, two split tool rows, and one thinking row.", paths)
 	}
 	if got := len(storedPartContent(conversationRows, namedTool+"/0")); got != budget-len("Write")-1 {
 		t.Fatalf("named tool row first part has %d bytes, want the budget less the name line, %d", got, budget-len("Write")-1)
@@ -913,7 +913,7 @@ func testConversationIngestParity(t *testing.T) {
 		t.Fatalf("nameless tool row first part has %d bytes, want the full budget, %d", got, budget)
 	}
 	if assembleParts(conversationRows, namelessTool+"/") != namelessToolText {
-		t.Fatal("nameless tool row parts do not reassemble its text, so a part stores a prefix")
+		t.Fatal("The nameless tool parts do not reassemble the original text.")
 	}
 	if needed := daemon.syncItems("conv-parity-generic", manifest); len(needed) != 0 {
 		t.Fatalf("generic needed after ingest = %v, want none", needed)
@@ -984,10 +984,10 @@ func testConversationBackfillParity(t *testing.T) {
 		}
 		messageRows++
 		if strings.TrimSpace(row.Content) != "" {
-			t.Fatalf("backfill stored message 2 text %q, want only the blank row", row.Content)
+			t.Fatalf("Backfill stored message 2 text %q, but the expected state contains only the blank row", row.Content)
 		}
 	}
 	if messageRows != 1 {
-		t.Fatalf("message 2 has %d stored rows after the backfill, want the one blank row", messageRows)
+		t.Fatalf("Message 2 has %d stored rows after the backfill, but the expected state contains one blank row", messageRows)
 	}
 }

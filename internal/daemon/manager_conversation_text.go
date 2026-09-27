@@ -30,11 +30,12 @@ func splitConversationText(text string, chunkByteBudget ...int) []string {
 
 // appendContinuedStorableField adds the rows of one field through
 // appendStorableConversationField and starts every part after the first with
-// continuationPrefix and a newline. A non-empty prefix shorter than the budget
-// lowers the budget by its length plus one, and the field splits at that
-// lowered budget. An empty prefix changes nothing. A conversation tool call row
-// splits with its trimmed tool name as the prefix, and a client row of a
-// document collection splits with the prefix its client sends.
+// continuationPrefix and a newline. A non-empty prefix reduces the budget by
+// its length plus one only when that leaves a positive budget, and the field
+// splits at that lowered budget. An empty prefix changes nothing. A
+// conversation tool call row splits with its trimmed tool name as the prefix,
+// and a client row of a document collection splits with the prefix its client
+// sends.
 func appendContinuedStorableField(
 	chunks []model.StoredChunk,
 	content string,
