@@ -685,6 +685,45 @@ func TestUpsertCollectionItemsRejectsInvalidRows(t *testing.T) {
 	}
 }
 
+// TestUpsertCollectionItemsRejectsLongContinuationPrefix sends a row with a
+// continuation prefix one byte over the 1024-byte limit. The stream fails with
+// InvalidArgument, the error message includes the limit, and the stream stores
+// no row and queues no job. The same row with a prefix of exactly 1024 bytes
+// then completes an ingest.
+func TestUpsertCollectionItemsRejectsLongContinuationPrefix(t *testing.T) {
+	t.Parallel()
+	daemon := newOfflineCollectionDaemon(t)
+	registered, err := daemon.registerCollection("docs-long-prefix", "docId", documentScalars())
+	if err != nil {
+		t.Fatalf("RegisterCollection returned error: %v", err)
+	}
+	header := collectionHeader("docs-long-prefix", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false)
+	manifest := map[string]string{"doc-a": "fp-a1"}
+	row := documentRow("doc-a/0", "doc-a", "row with a long continuation prefix", 1)
+
+	row.ContinuationPrefix = strings.Repeat("p", 1025)
+	_, err = daemon.sendCollectionStream(collectionFrames(header, []*pb.CollectionRow{row}, manifest))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("row with a 1025-byte continuation prefix returned %v, want InvalidArgument", err)
+	}
+	if message := status.Convert(err).Message(); !strings.Contains(message, "1024 bytes") {
+		t.Fatalf("the error message %q does not include the 1024-byte limit", message)
+	}
+	if rows := daemon.localRows(registered.GetCollectionName()); len(rows) != 0 {
+		t.Fatalf("rejected stream stored %d rows, want 0", len(rows))
+	}
+	jobs, err := daemon.client.ListJobs(grpcutil.WithCorrelation(context.Background()), &pb.ListJobsRequest{CodebaseId: registered.GetCodebaseId()})
+	if err != nil || len(jobs.GetJobs()) != 0 {
+		t.Fatalf("rejected stream queued jobs = %d (err %v), want none", len(jobs.GetJobs()), err)
+	}
+
+	row.ContinuationPrefix = strings.Repeat("p", 1024)
+	daemon.upsertItems(header, []*pb.CollectionRow{row}, manifest)
+	if got := rowPaths(daemon.localRows(registered.GetCollectionName())); !slices.Equal(got, []string{"doc-a/0"}) {
+		t.Fatalf("rows after an upsert with a 1024-byte continuation prefix = %v, want [doc-a/0]", got)
+	}
+}
+
 // TestUpsertCollectionItemsStreamOrderAndLimits breaks the frame order and the
 // per-frame row bound. Each stream fails with InvalidArgument and stores
 // nothing.

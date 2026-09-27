@@ -20,6 +20,12 @@ import (
 // column accepts 1024 bytes, and the key leaves room for a split part suffix.
 const maxCollectionRowKeyBytes = 1000
 
+// maxCollectionContinuationPrefixBytes bounds a client row's continuation
+// prefix. The split starts every part after the first with the prefix and a
+// newline, and a prefix of at least the split budget less one would make each
+// such part larger than the budget.
+const maxCollectionContinuationPrefixBytes = 1024
+
 // collectionScalarInput is one scalar value a client row sets. Value.Null
 // marks a value the wire left unset.
 type collectionScalarInput struct {
@@ -161,9 +167,9 @@ func (manager *Manager) recordCollectionDeclarations() {
 
 // validateCollectionRows checks every client row against declaration and
 // returns the validated rows. It rejects a duplicate row key, an empty or
-// oversized row key or item id, an undeclared, duplicated, mistyped, oversized,
-// or missing column value, and an item id column value that differs from the
-// row's item_id.
+// oversized row key or item id, an oversized continuation prefix, an
+// undeclared, duplicated, mistyped, oversized, or missing column value, and an
+// item id column value that differs from the row's item_id.
 func validateCollectionRows(declaration model.CollectionDeclaration, inputs []collectionRowInput) ([]collectionRow, error) {
 	columns := make(map[string]model.ScalarColumn, len(declaration.Scalars))
 	for _, column := range declaration.Scalars {
@@ -205,6 +211,9 @@ func validateCollectionRow(declaration model.CollectionDeclaration, columns map[
 	itemColumn := columns[declaration.ItemIDColumn]
 	if len(itemID) > int(itemColumn.MaxLength) || !utf8.ValidString(itemID) {
 		return collectionRow{}, adapterr.NewInvalidColumnValue(itemColumn.Name, fmt.Sprintf("row %q item_id must be valid UTF-8 of at most %d bytes", input.RowKey, itemColumn.MaxLength))
+	}
+	if len(input.ContinuationPrefix) > maxCollectionContinuationPrefixBytes {
+		return collectionRow{}, adapterr.NewInvalidArgument(fmt.Sprintf("row %q continuation_prefix must be at most %d bytes", input.RowKey, maxCollectionContinuationPrefixBytes))
 	}
 	scalars := make(map[string]model.ScalarValue, len(columns))
 	for _, scalar := range input.Scalars {
