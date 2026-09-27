@@ -125,8 +125,9 @@ func capRanking(full []*pb.ConversationSearchResult, perConversationLimit int, l
 }
 
 // TestConversationSearchCapFillsPastAnOverfilledTop proves the
-// per-conversation cap fills the limit when the top ranks belong to one
-// conversation. Thirty dense rows equal to the query rank first, and a limit
+// per-conversation cap returns the requested number of rows when the top ranks
+// belong to one conversation. Thirty dense rows equal to the query rank first,
+// and a limit
 // of ten with a cap of two returns ten rows: two dense rows and the eight best
 // other rows of the full ranking, in ranking order.
 func TestConversationSearchCapFillsPastAnOverfilledTop(t *testing.T) {
@@ -171,8 +172,8 @@ func TestConversationSearchRankingIsStable(t *testing.T) {
 
 // insertNullIdentityRows writes rows with every conversation scalar column
 // null, the shape of a row written before those columns existed. The metadata
-// JSON of each row records its conversation id, and its content equals the
-// query.
+// JSON of each row records the conversation id, and each row's content equals
+// the query.
 func (h *harness) insertNullIdentityRows(conversationIDs []string, rowsPerConversation int) {
 	h.t.Helper()
 	count := len(conversationIDs) * rowsPerConversation

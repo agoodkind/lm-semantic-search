@@ -167,7 +167,8 @@ func (service *Service) resolveLegacyConversationIDs(ctx context.Context, collec
 
 // rankedCandidatesFromResultSets decodes the ranking rows. A null
 // conversationId column sets ConversationIDNull and leaves ConversationID
-// empty.
+// empty. A result without a score for every row returns
+// ErrSearchResultIncomplete.
 func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, resultSets []milvusclient.ResultSet) ([]rankedCandidate, error) {
 	if len(resultSets) == 0 || resultSets[0].ResultCount == 0 {
 		return []rankedCandidate{}, nil
@@ -175,7 +176,7 @@ func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, 
 	resultSet := resultSets[0]
 	relativePathColumn := resultSet.GetColumn(relativePathFieldName)
 	conversationIDColumn := resultSet.GetColumn(conversationIDFieldName)
-	if resultSet.IDs == nil || relativePathColumn == nil || conversationIDColumn == nil {
+	if resultSet.IDs == nil || relativePathColumn == nil || conversationIDColumn == nil || len(resultSet.Scores) < resultSet.ResultCount {
 		return nil, ErrSearchResultIncomplete
 	}
 	candidates := make([]rankedCandidate, 0, resultSet.ResultCount)
@@ -192,16 +193,12 @@ func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, 
 		if err != nil {
 			return nil, rankingReadError(ctx, collectionName, conversationIDFieldName, index, err)
 		}
-		score := 0.0
-		if index < len(resultSet.Scores) {
-			score = float64(resultSet.Scores[index])
-		}
 		candidates = append(candidates, rankedCandidate{
 			PrimaryKey:         primaryKey,
 			RelativePath:       relativePath,
 			ConversationID:     conversationID,
 			ConversationIDNull: !known,
-			Score:              score,
+			Score:              float64(resultSet.Scores[index]),
 		})
 	}
 	return candidates, nil

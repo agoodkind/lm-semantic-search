@@ -1,9 +1,14 @@
 package semantic
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
+
+	"github.com/milvus-io/milvus/client/v2/column"
+	"github.com/milvus-io/milvus/client/v2/milvusclient"
 )
 
 func candidate(primaryKey string, relativePath string, conversationID string, score float64) rankedCandidate {
@@ -115,5 +120,25 @@ func TestSelectRankedCandidatesCapsEachConversationID(t *testing.T) {
 	}
 	if got, want := candidateKeys(selectRankedCandidates(candidates, 1, 0, 10)), []string{"k1", "k2", "k4"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected %v, want %v", got, want)
+	}
+}
+
+// TestRankedCandidatesRejectMissingScores proves a ranking result with fewer
+// scores than rows fails instead of ranking the unscored rows at zero.
+func TestRankedCandidatesRejectMissingScores(t *testing.T) {
+	t.Parallel()
+
+	resultSet := milvusclient.ResultSet{
+		ResultCount: 2,
+		IDs:         column.NewColumnVarChar(idFieldName, []string{"k1", "k2"}),
+		Fields: milvusclient.DataSet{
+			column.NewColumnVarChar(relativePathFieldName, []string{"conv/a/0", "conv/a/1"}),
+			column.NewColumnVarChar(conversationIDFieldName, []string{"a", "a"}),
+		},
+		Scores: []float32{0.9},
+	}
+	_, err := rankedCandidatesFromResultSets(context.Background(), "conv_chunks_test", []milvusclient.ResultSet{resultSet})
+	if !errors.Is(err, ErrSearchResultIncomplete) {
+		t.Fatalf("rankedCandidatesFromResultSets error = %v, want ErrSearchResultIncomplete", err)
 	}
 }
