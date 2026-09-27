@@ -205,8 +205,8 @@ func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, 
 			score = float64(resultSet.Scores[index])
 		}
 		candidates = append(candidates, rankedCandidate{
-			PrimaryKey:          primaryKey,
-			RelativePath:        relativePath,
+			PrimaryKey:         primaryKey,
+			RelativePath:       relativePath,
 			ConversationID:     conversationID,
 			ConversationIDNull: !known,
 			Score:              score,
