@@ -339,6 +339,28 @@ func NewInvalidColumnDeclaration(column string, message string) *ColumnError {
 	}
 }
 
+// NewInvalidColumnValue reports a row value for column that the collection
+// declaration rejects. message states the violation.
+func NewInvalidColumnValue(column string, message string) *ColumnError {
+	return &ColumnError{
+		Column:  column,
+		adapter: NewInvalidArgument(message),
+	}
+}
+
+// NewCollectionNotRegistered reports an item operation against a document
+// collection id that has no registry record.
+func NewCollectionNotRegistered(collectionID string) *AdapterError {
+	return &AdapterError{
+		Class:         ClassNotIndexed,
+		Message:       "collection " + quote(collectionID) + " is not registered",
+		Code:          "not_indexed",
+		Hint:          "register the collection with RegisterCollection first",
+		Cause:         nil,
+		SafeForClient: true,
+	}
+}
+
 // NewInvalidPath reports a path argument that fails validation.
 func NewInvalidPath(message string, cause error) *AdapterError {
 	return &AdapterError{

@@ -31,7 +31,7 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 	if !service.Available() {
 		return 0, ErrUnavailable
 	}
-	if !isConversationCollection(collectionName) {
+	if !service.isConversationCollection(collectionName) {
 		return 0, fmt.Errorf("backfill: %s is not a conversation collection", collectionName)
 	}
 	if err := service.PrepareCollection(ctx, collectionName); err != nil {
@@ -97,7 +97,7 @@ func (service *Service) BackfillConversationCollectionsOnce(ctx context.Context)
 	swept := 0
 	totalRows := 0
 	for _, collectionName := range collections {
-		if !isConversationCollection(collectionName) {
+		if !service.isConversationCollection(collectionName) {
 			continue
 		}
 		if _, done := service.ensuredBackfill.Load(collectionName); done {
@@ -270,6 +270,7 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 			SplitPart:            splitPart,
 			SplitPartRecorded:    splitPartRecorded,
 			LoadRules:            backfillString(loadRulesColumn, rowIndex),
+			Scalars:              nil,
 			Score:                0,
 		})
 	}
@@ -435,7 +436,7 @@ func (service *Service) BackfillConversationEnrichment(ctx context.Context, coll
 	if !service.Available() {
 		return 0, 0, ErrUnavailable
 	}
-	if !isConversationCollection(collectionName) {
+	if !service.isConversationCollection(collectionName) {
 		return 0, 0, fmt.Errorf("workspace backfill: %s is not a conversation collection", collectionName)
 	}
 	if err := service.PrepareCollection(ctx, collectionName); err != nil {

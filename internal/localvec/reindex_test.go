@@ -130,7 +130,7 @@ func TestStageReindexSplitsOversizedChunkIntoDistinctRows(t *testing.T) {
 	// Repeated content makes the full-budget pieces byte-identical, so the store
 	// must give each a distinct primary key or the rows would collide.
 	content := strings.Repeat("x", byteBudget*2+5)
-	stageAndPromote(t, store, codebasePath, []model.StoredChunk{{Content: content, RelativePath: "big.go"}}, semantic.StoreColumnSetCode)
+	stageAndPromote(t, store, codebasePath, []model.StoredChunk{{Content: content, RelativePath: "big.go"}}, semantic.CodeColumns())
 
 	assertRowsCoverContentWithDistinctIDs(t, store, codebasePath, content, provider.embedded)
 }
@@ -151,7 +151,7 @@ func TestReindexReportsDroppedChunks(t *testing.T) {
 		store,
 		codebasePath,
 		[]model.StoredChunk{{Content: "seed", RelativePath: "seed.go"}},
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 	provider.batches = nil
 
@@ -168,7 +168,7 @@ func TestReindexReportsDroppedChunks(t *testing.T) {
 			reports = append(reports, progress)
 		},
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 	if err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
@@ -218,7 +218,7 @@ func TestStageReindexReportsProgressWhenEveryChunkDropped(t *testing.T) {
 			reports = append(reports, progress)
 		},
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 	if err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
@@ -254,7 +254,7 @@ func TestReindexPrefixDeleteRemovesEverySplitPiece(t *testing.T) {
 	// One oversized message splits into many pieces that all share its relativePath
 	// prefix, so a message delete-by-prefix must remove every piece.
 	content := strings.Repeat("z", byteBudget*2+5)
-	stageAndPromote(t, store, codebasePath, []model.StoredChunk{{Content: content, RelativePath: "conv/c/msg"}}, semantic.StoreColumnSetCode)
+	stageAndPromote(t, store, codebasePath, []model.StoredChunk{{Content: content, RelativePath: "conv/c/msg"}}, semantic.CodeColumns())
 
 	before, err := store.Count(context.Background(), codebasePath)
 	if err != nil {
@@ -271,7 +271,7 @@ func TestReindexPrefixDeleteRemovesEverySplitPiece(t *testing.T) {
 		semantic.Removal{Prefixes: []string{"conv/c/"}},
 		nil,
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestReindexSplitsOversizedChunkIntoDistinctRows(t *testing.T) {
 	}
 
 	// A first small index creates the live collection Reindex requires.
-	stageAndPromote(t, store, codebasePath, []model.StoredChunk{{Content: "seed", RelativePath: "seed.go"}}, semantic.StoreColumnSetCode)
+	stageAndPromote(t, store, codebasePath, []model.StoredChunk{{Content: "seed", RelativePath: "seed.go"}}, semantic.CodeColumns())
 	provider.embedded = nil
 
 	byteBudget := config.EmbedChunkByteBudget(0)
@@ -308,7 +308,7 @@ func TestReindexSplitsOversizedChunkIntoDistinctRows(t *testing.T) {
 		semantic.Removal{},
 		nil,
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestReindexMissingCollectionSkipsEmbedding(t *testing.T) {
 		semantic.Removal{},
 		nil,
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 	if !errors.Is(err, semantic.ErrCollectionMissing) {
 		t.Fatalf("Reindex error = %v, want ErrCollectionMissing", err)
@@ -397,7 +397,7 @@ func TestSplitRowsRoundTripAndCopyWithDistinctIdentities(t *testing.T) {
 			SplitPart:    513,
 		},
 	}
-	stageAndPromote(t, store, codebasePath, chunks, semantic.StoreColumnSetCode)
+	stageAndPromote(t, store, codebasePath, chunks, semantic.CodeColumns())
 
 	copied, err := store.CopyChunks(
 		context.Background(),
@@ -464,7 +464,7 @@ func TestReindexDeletesPathsAndPrefixesBeforeAppending(t *testing.T) {
 		{Content: "prefix two", RelativePath: "conv/a/two"},
 		{Content: "untouched", RelativePath: "keep.go"},
 	}
-	stageAndPromote(t, store, codebasePath, initial, semantic.StoreColumnSetCode)
+	stageAndPromote(t, store, codebasePath, initial, semantic.CodeColumns())
 
 	removal := semantic.Removal{
 		Paths:    []string{"exact.go"},
@@ -480,7 +480,7 @@ func TestReindexDeletesPathsAndPrefixesBeforeAppending(t *testing.T) {
 		removal,
 		nil,
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
 	}

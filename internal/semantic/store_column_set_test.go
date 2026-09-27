@@ -14,20 +14,20 @@ import (
 func TestStoreColumnSetRoutesWithoutNamePrefix(t *testing.T) {
 	t.Parallel()
 
-	if StoreColumnSetCode.ConversationScalars() {
+	if CodeColumns().ConversationScalars() {
 		t.Fatal("StoreColumnSetCode.ConversationScalars() = true, want false")
 	}
-	if !StoreColumnSetConversation.ConversationScalars() {
+	if !ConversationColumns().ConversationScalars() {
 		t.Fatal("StoreColumnSetConversation.ConversationScalars() = false, want true")
 	}
 
-	codeColumns := newConversationScalarColumns(StoreColumnSetCode.ConversationScalars(), 1)
+	codeColumns := newConversationScalarColumns(CodeColumns().ConversationScalars(), 1)
 	codeColumns.append(model.StoredChunk{ConversationID: "claude:one"})
 	if codeColumns.conversationIDs != nil {
 		t.Fatalf("code column set wrote conversation scalars = %v, want none", codeColumns.conversationIDs)
 	}
 
-	conversationColumns := newConversationScalarColumns(StoreColumnSetConversation.ConversationScalars(), 1)
+	conversationColumns := newConversationScalarColumns(ConversationColumns().ConversationScalars(), 1)
 	conversationColumns.append(model.StoredChunk{ConversationID: "claude:one"})
 	if len(conversationColumns.conversationIDs) != 1 {
 		t.Fatalf("conversation column set conversationIDs = %v, want one entry", conversationColumns.conversationIDs)
@@ -37,14 +37,34 @@ func TestStoreColumnSetRoutesWithoutNamePrefix(t *testing.T) {
 // TestStoreColumnSetForCollectionClassifiesByName proves the fallback classifier
 // (used only by the in-place row rewrite that has no item source) maps a
 // conversation collection to the conversation column set and any other name to
-// the code column set.
+// the code column set. A document collection with a recorded generic
+// declaration shares the conversation name prefix and still classifies as a
+// non-conversation collection, including its staging twin.
 func TestStoreColumnSetForCollectionClassifiesByName(t *testing.T) {
 	t.Parallel()
 
-	if got := storeColumnSetForCollection(conversationCollectionPrefix + "abc"); got != StoreColumnSetConversation {
-		t.Fatalf("storeColumnSetForCollection(conversation) = %v, want StoreColumnSetConversation", got)
+	service := &Service{}
+	conversationName := conversationCollectionPrefix + "abc"
+	if got := service.storeColumnSetForCollection(conversationName); !got.ConversationScalars() {
+		t.Fatalf("storeColumnSetForCollection(conversation) = %+v, want conversation columns", got)
 	}
-	if got := storeColumnSetForCollection("code_chunks_abc"); got != StoreColumnSetCode {
-		t.Fatalf("storeColumnSetForCollection(code) = %v, want StoreColumnSetCode", got)
+	if got := service.storeColumnSetForCollection("code_chunks_abc"); got.ConversationScalars() {
+		t.Fatalf("storeColumnSetForCollection(code) = %+v, want code columns", got)
+	}
+
+	genericName := conversationCollectionPrefix + "generic"
+	service.RecordCollectionDeclaration(genericName, model.CollectionDeclaration{
+		ItemIDColumn: "itemId",
+		Scalars:      []model.ScalarColumn{{Name: "itemId", Type: model.ScalarTypeString, Nullable: false, MaxLength: 64}},
+	})
+	if service.isConversationCollection(genericName) {
+		t.Fatal("isConversationCollection(generic) = true, want false")
+	}
+	if service.isConversationCollection(stagingCollectionName(genericName)) {
+		t.Fatal("isConversationCollection(generic staging) = true, want false")
+	}
+	service.RecordCollectionDeclaration(genericName, ConversationDeclaration())
+	if !service.isConversationCollection(genericName) {
+		t.Fatal("isConversationCollection after recording the conversation declaration = false, want true")
 	}
 }

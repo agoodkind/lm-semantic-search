@@ -174,5 +174,6 @@ func estimatedInsertRowBytes(
 			int64Bytes +
 			int64Bytes
 	}
+	rowBytes += declaredScalarRowBytes(columnSet.DeclaredScalars(), chunk)
 	return rowBytes
 }

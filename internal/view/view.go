@@ -638,15 +638,17 @@ type MutationAckView struct {
 
 // MutationAckView kinds.
 const (
-	AckClear                = "clear"
-	AckCancel               = "cancel"
-	AckSync                 = "sync"
-	AckUpdatePolicy         = "update_policy"
-	AckRegisterConversation = "register_conversation"
-	AckRegisterCollection   = "register_collection"
-	AckUpsertConversation   = "upsert_conversation"
-	AckDeleteConversation   = "delete_conversation"
-	AckManifest             = "manifest"
+	AckClear                 = "clear"
+	AckCancel                = "cancel"
+	AckSync                  = "sync"
+	AckUpdatePolicy          = "update_policy"
+	AckRegisterConversation  = "register_conversation"
+	AckRegisterCollection    = "register_collection"
+	AckUpsertConversation    = "upsert_conversation"
+	AckDeleteConversation    = "delete_conversation"
+	AckManifest              = "manifest"
+	AckUpsertCollectionItems = "upsert_collection_items"
+	AckCollectionManifest    = "collection_manifest"
 )
 
 // DoctorView is the doctor response view.

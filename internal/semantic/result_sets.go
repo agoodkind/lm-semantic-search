@@ -100,6 +100,7 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			SplitPart:            splitPartValue,
 			SplitPartRecorded:    splitPartRecorded,
 			LoadRules:            loadRulesValue,
+			Scalars:              nil,
 			Score:                score,
 		})
 	}

@@ -48,7 +48,7 @@ func TestSearchAppliesExtensionAndRelativePathPrefixFilters(t *testing.T) {
 			FileExtension: ".go",
 		},
 	}
-	stageAndPromote(t, store, codebasePath, chunks, semantic.StoreColumnSetCode)
+	stageAndPromote(t, store, codebasePath, chunks, semantic.CodeColumns())
 
 	results, err := store.Search(
 		context.Background(),
@@ -101,7 +101,7 @@ func TestConversationSearchAppliesFiltersScoreAndPerConversationLimit(
 		store,
 		codebasePath,
 		chunks,
-		semantic.StoreColumnSetConversation,
+		semantic.ConversationColumns(),
 	)
 
 	filter := semantic.ConversationFilter{
@@ -307,7 +307,7 @@ func stageAndPromoteWithReuse(
 		semantic.Removal{},
 		nil,
 		reuse,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
 	}

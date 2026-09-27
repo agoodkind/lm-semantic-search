@@ -27,6 +27,7 @@ func newConversationStoredChunk(document model.ConversationDocument, conversatio
 		SplitPart:            0,
 		SplitPartRecorded:    true,
 		LoadRules:            document.LoadRules,
+		Scalars:              nil,
 		Score:                0,
 	}
 }

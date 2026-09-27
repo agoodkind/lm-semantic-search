@@ -192,7 +192,7 @@ func TestDuplicateLegacyCorpusReuseImmutabilitySmoke(t *testing.T) {
 		semantic.Removal{},
 		nil,
 		map[string][]float32{},
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("stage duplicate legacy source: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 		semantic.Removal{},
 		nil,
 		map[string][]float32{},
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("stage model B row: %v", err)
 	}
@@ -701,7 +701,7 @@ func TestUnknownConfiguredDimensionScopesCatalogByReturnedVectorWidth(t *testing
 		semantic.Removal{},
 		nil,
 		map[string][]float32{},
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("stage initial dimension row: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestUnknownConfiguredDimensionScopesCatalogByReturnedVectorWidth(t *testing
 		semantic.Removal{},
 		func(progress semantic.Progress) { targetProgress = progress },
 		map[string][]float32{},
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("stage target dimension row: %v", err)
 	}

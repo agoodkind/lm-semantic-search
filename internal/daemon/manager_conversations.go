@@ -43,16 +43,18 @@ const (
 	conversationJobKindDelete conversationJobKind = "delete"
 )
 
-// conversationJobPayload carries the work for one conversation job. An upsert
-// holds the full manifest (every conversation id with its content fingerprint)
-// and the documents clyde delivered for the changed ids; the shared routine
-// diffs the manifest against the stored checkpoint and embeds only the changed
-// conversations. A delete holds one conversation id to drop.
+// conversationJobPayload is the work of one document collection job. An upsert
+// lists the full manifest (every item id with its content fingerprint) and the
+// content delivered for the changed ids: conversation documents from the
+// conversation RPC, or validated client rows from the generic RPC. The shared
+// routine diffs the manifest against the stored checkpoint and embeds only the
+// changed items. A delete lists one conversation id to drop.
 type conversationJobPayload struct {
 	Kind           conversationJobKind
 	CollectionName string
 	Manifest       map[string]string
 	Documents      []model.ConversationDocument
+	Rows           []collectionRow
 	ConversationID string
 	// Absence is the upsert's caller-declared policy for a conversation the
 	// manifest omits. It is meaningful only for an upsert; a delete sets it
@@ -81,7 +83,13 @@ func (manager *Manager) SyncConversationManifest(ctx context.Context, collection
 	if err != nil {
 		return nil, err
 	}
+	return manager.syncCollectionManifest(ctx, codebase, manifest), nil
+}
 
+// syncCollectionManifest diffs a document collection's manifest against its
+// stored checkpoint and returns the new and changed item ids, capped per ingest
+// by capNeededConversations with the collection's rotation cursor.
+func (manager *Manager) syncCollectionManifest(ctx context.Context, codebase model.Codebase, manifest map[string]string) []string {
 	configDigest := codebase.EffectiveConfig.IgnoreDigest
 	seed := manager.loadLiveCheckpoint(ctx, codebase, configDigest).snapshot
 	current := merkle.Snapshot{ConfigDigest: configDigest, Files: manifest, Inodes: nil}
@@ -94,7 +102,7 @@ func (manager *Manager) SyncConversationManifest(ctx context.Context, collection
 		manager.conversationSyncCursors[codebase.ID] = nextCursor
 	}
 	manager.mu.Unlock()
-	return needed, nil
+	return needed
 }
 
 // One shared cursor tracks pre-sort rotation order across modified overflow and
@@ -162,9 +170,10 @@ func firstN(values []string, limit int) []string {
 	return values[:limit]
 }
 
-// upsertConversationDocuments queues an asynchronous ingest. When manifest is
-// nil it is derived from the delivered documents, so a caller that hands over a
-// complete set need not compute fingerprints itself.
+// upsertConversationDocuments queues an asynchronous ingest through the
+// generic document collection path. When manifest is nil it is derived from
+// the delivered documents with fingerprintConversationDocuments. A caller that
+// hands over a complete set then need not compute fingerprints itself.
 func (manager *Manager) upsertConversationDocuments(ctx context.Context, collectionID string, documents []model.ConversationDocument, manifest map[string]string, client model.ClientInfo, absence absencePolicy, backfill bool, force bool) (model.Job, error) {
 	for _, document := range documents {
 		if strings.TrimSpace(document.ConversationID) == "" {
@@ -186,15 +195,41 @@ func (manager *Manager) upsertConversationDocuments(ctx context.Context, collect
 	if err != nil {
 		return model.Job{}, err
 	}
+	return manager.queueCollectionUpsert(ctx, codebase, client, collectionUpsert{
+		Manifest:  manifest,
+		Documents: documents,
+		Rows:      nil,
+		Absence:   absence,
+		Backfill:  backfill,
+		Force:     force,
+	})
+}
+
+// collectionUpsert is one delivery into a document collection: the manifest
+// and either conversation documents or validated client rows.
+type collectionUpsert struct {
+	Manifest  map[string]string
+	Documents []model.ConversationDocument
+	Rows      []collectionRow
+	Absence   absencePolicy
+	Backfill  bool
+	Force     bool
+}
+
+// queueCollectionUpsert queues the asynchronous ingest of one delivery into a
+// registered document collection. Both the conversation RPC and the generic
+// item RPC queue their upserts here.
+func (manager *Manager) queueCollectionUpsert(ctx context.Context, codebase model.Codebase, client model.ClientInfo, upsert collectionUpsert) (model.Job, error) {
 	payload := conversationJobPayload{
 		Kind:           conversationJobKindUpsert,
 		CollectionName: codebase.CollectionName,
-		Manifest:       manifest,
-		Documents:      documents,
+		Manifest:       upsert.Manifest,
+		Documents:      upsert.Documents,
+		Rows:           upsert.Rows,
 		ConversationID: "",
-		Absence:        absence,
-		Backfill:       backfill,
-		Force:          force,
+		Absence:        upsert.Absence,
+		Backfill:       upsert.Backfill,
+		Force:          upsert.Force,
 	}
 	return manager.queueConversationJob(ctx, codebase, client, payload)
 }
@@ -326,6 +361,7 @@ func (manager *Manager) deleteConversation(ctx context.Context, collectionID str
 		CollectionName: codebase.CollectionName,
 		Manifest:       nil,
 		Documents:      nil,
+		Rows:           nil,
 		ConversationID: trimmedConversationID,
 		// A delete removes exactly one conversation and never runs the
 		// manifest-absence branch, so Absence is unused here; set it explicitly to
@@ -412,9 +448,10 @@ func (manager *Manager) activeConversationJobLocked(codebase model.Codebase) (mo
 	}
 }
 
-// runConversationIngest runs one conversation job. An upsert flows through the
-// same delta-then-bootstrap routine code uses, with a conversation source
-// feeding the manifest and documents; a delete drops one conversation's rows.
+// runConversationIngest runs one document collection job. An upsert runs the
+// same delta-then-bootstrap routine code uses, with the collection item source
+// that documentItemSource builds from the saved declaration. A delete drops one
+// conversation's rows.
 func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job) {
 	payload, found := manager.conversationJobPayload(job.ID)
 	if !found {
@@ -438,7 +475,7 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	case conversationJobKindDelete:
 		manager.runConversationDelete(ctx, job, payload)
 	case conversationJobKindUpsert:
-		source := newConversationItemSource(payload.CollectionName, payload.Manifest, payload.Documents, manager.semantic, payload.Absence, payload.Backfill, payload.Force, manager.conversationChunkByteBudget)
+		source := manager.documentItemSource(job.CodebaseID, payload)
 		// The second return is the code path's graph-index task; a conversation
 		// collection never produces one, so there is nothing to discard here.
 		if handled, _ := manager.runDeltaSync(ctx, job, source); handled {

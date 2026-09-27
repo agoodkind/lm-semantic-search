@@ -297,6 +297,17 @@ type CollectionDeclaration struct {
 	Scalars      []ScalarColumn `json:"scalars"`
 }
 
+// ScalarValue is one typed value of a declared scalar column. Type selects the
+// field that stores the value. Null marks a null value of a nullable column, and
+// the value fields then stay zero.
+type ScalarValue struct {
+	Type   ScalarType `json:"type"`
+	Null   bool       `json:"null,omitempty"`
+	String string     `json:"string,omitempty"`
+	Bool   bool       `json:"bool,omitempty"`
+	Int64  int64      `json:"int64,omitempty"`
+}
+
 // QuarantineState records why destructive sync is paused for a codebase and
 // what corroborating observations the daemon has seen so far.
 type QuarantineState struct {
@@ -385,6 +396,11 @@ type StoredChunk struct {
 	// rebuild the same message sequence. Empty for code chunks and for rows
 	// written before the tag existed.
 	LoadRules string `json:"load_rules,omitempty"`
+	// Scalars maps each declared scalar column name to the row's value in a
+	// generic document collection. It is nil for code rows and for rows of a
+	// collection with the conversation declaration, which store their scalars in
+	// the conversation fields above.
+	Scalars map[string]ScalarValue `json:"scalars,omitempty"`
 	// Score is the vector similarity for a semantic search. Zero on chunks that
 	// did not come from a search.
 	Score float64 `json:"score,omitempty"`

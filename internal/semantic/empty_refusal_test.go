@@ -81,7 +81,7 @@ func TestInsertChunksBatchedNeverCountsAnEmptyRefusalAsADrop(t *testing.T) {
 		"test",
 		func(progress Progress) { reports = append(reports, progress) },
 		nil,
-		StoreColumnSetConversation,
+		ConversationColumns(),
 	)
 	if err != nil {
 		t.Fatalf("insertChunksBatched returned error: %v", err)

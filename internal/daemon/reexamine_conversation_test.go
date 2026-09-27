@@ -188,11 +188,12 @@ func TestCodeItemSourceForcedWorkSetNil(t *testing.T) {
 // TestItemSourceColumnSet proves each source names its own store column family,
 // so the store write is told the row shape rather than inferring it.
 func TestItemSourceColumnSet(t *testing.T) {
-	if got := (codeItemSource{}).columnSet(); got != semantic.StoreColumnSetCode {
-		t.Fatalf("code columnSet = %v, want StoreColumnSetCode", got)
+	if got := (codeItemSource{}).columnSet(); got.ConversationScalars() || got.DeclaredScalars() != nil {
+		t.Fatalf("code columnSet = %+v, want code columns", got)
 	}
-	if got := (conversationItemSource{}).columnSet(); got != semantic.StoreColumnSetConversation {
-		t.Fatalf("conversation columnSet = %v, want StoreColumnSetConversation", got)
+	conversation := newConversationItemSource("conv_chunks_x", nil, nil, nil, absenceRetain, false, false)
+	if got := conversation.columnSet(); !got.ConversationScalars() {
+		t.Fatalf("conversation columnSet = %+v, want conversation columns", got)
 	}
 }
 
@@ -207,10 +208,10 @@ func TestItemSourceCapabilities(t *testing.T) {
 	if !(codeItemSource{}).tracksByteTotals() {
 		t.Fatal("code tracksByteTotals = false, want true")
 	}
-	if (conversationItemSource{}).producesGraph() {
+	if (collectionItemSource{}).producesGraph() {
 		t.Fatal("conversation producesGraph = true, want false")
 	}
-	if (conversationItemSource{}).tracksByteTotals() {
+	if (collectionItemSource{}).tracksByteTotals() {
 		t.Fatal("conversation tracksByteTotals = true, want false")
 	}
 }
