@@ -139,7 +139,8 @@ func (daemon *offlineCollectionDaemon) upsertConversation(collectionID string, d
 }
 
 // requireEqualConversationRows requires byte-identical stored rows and equal
-// checkpoints. One collection is registered by the conversation RPC. The other
+// checkpoints. Each compared metadata line stores the row's content, scalar
+// fields, and vector. One collection is registered by the conversation RPC. The other
 // collection is registered by the generic RPC with the conversation declaration.
 // It returns the stored rows.
 func (daemon *offlineCollectionDaemon) requireEqualConversationRows(step string, conversation *pb.RegisterConversationCollectionResponse, generic *pb.RegisterCollectionResponse) []storedLocalRow {
@@ -282,6 +283,15 @@ func rowPaths(rows []storedLocalRow) []string {
 		paths = append(paths, row.RelativePath)
 	}
 	return paths
+}
+
+// storedRowLines returns the persisted JSON line of every row, in row order.
+func storedRowLines(rows []storedLocalRow) []string {
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		lines = append(lines, row.Line)
+	}
+	return lines
 }
 
 func distinctRowPaths(rows []storedLocalRow) []string {
@@ -599,10 +609,13 @@ func TestUpsertCollectionItemsContinuationPrefix(t *testing.T) {
 }
 
 // TestUpsertCollectionItemsDerivedFingerprintCoversContinuationPrefix upserts
-// one row three times without a manifest frame. The engine derives each
-// fingerprint from the row. Changing only the continuation prefix gives
-// the item a new fingerprint in the checkpoint. The same row without the prefix
-// restores the first fingerprint.
+// one row longer than the split budget without a manifest frame. The engine
+// derives each fingerprint from the row. A new continuation prefix on the same
+// row gives the item a new fingerprint in the checkpoint. A retain upsert with
+// the prefix keeps the stored row family, and the stored parts stay unchanged.
+// A force_reexamine upsert with the prefix stores parts after the first that
+// start with the prefix line. The same row without the prefix restores the
+// first fingerprint.
 func TestUpsertCollectionItemsDerivedFingerprintCoversContinuationPrefix(t *testing.T) {
 	t.Parallel()
 	daemon := newOfflineCollectionDaemon(t)
@@ -610,18 +623,64 @@ func TestUpsertCollectionItemsDerivedFingerprintCoversContinuationPrefix(t *test
 	if err != nil {
 		t.Fatalf("RegisterCollection returned error: %v", err)
 	}
-	header := collectionHeader("docs-derived", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false)
-	plain := documentRow("a/0", "doc-a", "derived fingerprint body", 1)
-	prefixed := documentRow("a/0", "doc-a", "derived fingerprint body", 1)
-	prefixed.ContinuationPrefix = "Section A"
+	unspecified := pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED
+	header := collectionHeader("docs-derived", unspecified, false, false)
+	budget := daemon.manager.conversationChunkByteBudget
+	const prefix = "Section A"
+	text := strings.TrimSpace(strings.Repeat("derived fingerprint sentence. ", 2*budget/30+1))
+	plain := documentRow("a/0", "doc-a", text, 1)
+	prefixed := documentRow("a/0", "doc-a", text, 1)
+	prefixed.ContinuationPrefix = prefix
 
 	daemon.upsertItems(header, []*pb.CollectionRow{plain}, nil)
 	withoutPrefix := daemon.checkpointFiles(registered.GetCodebaseId())["doc-a"]
+	plainRows := daemon.localRows(registered.GetCollectionName())
+	if paths := distinctRowPaths(plainRows); !slices.Contains(paths, "a/0/1") {
+		t.Fatalf("stored row paths = %v, want a split row with part a/0/1", paths)
+	}
+	if assembleParts(plainRows, "a/0/") != text {
+		t.Fatal("stored parts of the row without a prefix do not reassemble its text")
+	}
+
 	daemon.upsertItems(header, []*pb.CollectionRow{prefixed}, nil)
 	withPrefix := daemon.checkpointFiles(registered.GetCodebaseId())["doc-a"]
 	if withoutPrefix == "" || withPrefix == withoutPrefix {
 		t.Fatalf("derived fingerprint with a continuation prefix = %q, and without one = %q; the prefix should change the fingerprint", withPrefix, withoutPrefix)
 	}
+	retainedRows := daemon.localRows(registered.GetCollectionName())
+	if !slices.Equal(storedRowLines(retainedRows), storedRowLines(plainRows)) {
+		t.Fatalf("stored rows after a retain upsert with only a new prefix = %v, want the stored rows %v unchanged", rowPaths(retainedRows), rowPaths(plainRows))
+	}
+
+	daemon.upsertItems(collectionHeader("docs-derived", unspecified, false, true), []*pb.CollectionRow{prefixed}, nil)
+	forcedRows := daemon.localRows(registered.GetCollectionName())
+	firstPart := storedPartContent(forcedRows, "a/0/0")
+	if len(firstPart) != budget-len(prefix)-1 {
+		t.Fatalf("forced first part has %d bytes, want the budget less the prefix line, %d", len(firstPart), budget-len(prefix)-1)
+	}
+	var rebuilt strings.Builder
+	rebuilt.WriteString(firstPart)
+	for part := 1; ; part++ {
+		content := storedPartContent(forcedRows, "a/0/"+strconv.Itoa(part))
+		if content == "" {
+			if part == 1 {
+				t.Fatalf("forced rows %v store no part after the first", rowPaths(forcedRows))
+			}
+			break
+		}
+		remainder, found := strings.CutPrefix(content, prefix+"\n")
+		if !found {
+			t.Fatalf("forced part %d starts with %.20q, want the prefix line", part, content)
+		}
+		rebuilt.WriteString(remainder)
+	}
+	if rebuilt.String() != text {
+		t.Fatal("forced parts, without their prefix lines, do not reassemble the row text")
+	}
+	if forced := daemon.checkpointFiles(registered.GetCodebaseId())["doc-a"]; forced != withPrefix {
+		t.Fatalf("derived fingerprint after the forced upsert = %q, want %q", forced, withPrefix)
+	}
+
 	daemon.upsertItems(header, []*pb.CollectionRow{plain}, nil)
 	if restored := daemon.checkpointFiles(registered.GetCodebaseId())["doc-a"]; restored != withoutPrefix {
 		t.Fatalf("derived fingerprint after the prefix is removed = %q, want the first fingerprint %q", restored, withoutPrefix)
