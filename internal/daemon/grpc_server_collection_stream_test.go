@@ -695,12 +695,45 @@ func TestUpsertCollectionItemsStreamOrderAndLimits(t *testing.T) {
 	}
 }
 
-// TestUpsertCollectionItemsStreamAcceptsLargeStream sends 20 rows frames of
-// 3.5 MB of text each, 70 MB of row text in one stream. The conversation stream
-// sets no total bound on a stream, and neither does the generic stream: the
-// stream queues a job, and the job completes. The rows belong to an item with
-// an unchanged fingerprint. The job embeds nothing, and the collection keeps
-// only the item's first row.
+// TestUpsertCollectionItemsStreamRejectsStreamOverByteLimit sends 16 MiB row
+// frames until the stream exceeds the 512 MiB row byte limit. The stream fails
+// with InvalidArgument, the error message includes the limit, and the stream
+// stores no row and queues no job. The test does not run in parallel with
+// other tests, because the daemon buffers about 512 MiB before it rejects the
+// stream.
+func TestUpsertCollectionItemsStreamRejectsStreamOverByteLimit(t *testing.T) {
+	daemon := newOfflineCollectionDaemon(t)
+	registered, err := daemon.registerCollection("docs-over-limit", "docId", documentScalars())
+	if err != nil {
+		t.Fatalf("RegisterCollection returned error: %v", err)
+	}
+	frameText := strings.Repeat("b", 16<<20)
+	frames := []*pb.UpsertCollectionItemsStreamRequest{{Chunk: &pb.UpsertCollectionItemsStreamRequest_Header{Header: collectionHeader("docs-over-limit", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false)}}}
+	for index := range maxCollectionStreamBytes/len(frameText) + 1 {
+		row := documentRow("big/"+strconv.Itoa(index), "doc-a", frameText, 1)
+		frames = append(frames, &pb.UpsertCollectionItemsStreamRequest{Chunk: &pb.UpsertCollectionItemsStreamRequest_Rows{Rows: &pb.UpsertCollectionItemsRows{Rows: []*pb.CollectionRow{row}}}})
+	}
+	_, err = daemon.sendCollectionStream(frames)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("stream over the row byte limit returned %v, want InvalidArgument", status.Code(err))
+	}
+	if message := status.Convert(err).Message(); !strings.Contains(message, "512 MiB") {
+		t.Fatal("the error message of a stream over the row byte limit does not include the 512 MiB limit")
+	}
+	if rows := daemon.localRows(registered.GetCollectionName()); len(rows) != 0 {
+		t.Fatalf("rejected stream stored %d rows, want 0", len(rows))
+	}
+	jobs, err := daemon.client.ListJobs(grpcutil.WithCorrelation(context.Background()), &pb.ListJobsRequest{CodebaseId: registered.GetCodebaseId()})
+	if err != nil || len(jobs.GetJobs()) != 0 {
+		t.Fatalf("rejected stream queued jobs = %d (err %v), want none", len(jobs.GetJobs()), err)
+	}
+}
+
+// TestUpsertCollectionItemsStreamAcceptsLargeStream sends 20 row frames of
+// 3.5 MB of text each, 70 MB of row text in one stream, below the 512 MiB row
+// byte limit. The stream queues a job, and the job completes. The rows belong
+// to an item with an unchanged fingerprint. The job embeds nothing, and the
+// collection keeps only the item's first row.
 func TestUpsertCollectionItemsStreamAcceptsLargeStream(t *testing.T) {
 	t.Parallel()
 	daemon := newOfflineCollectionDaemon(t)
