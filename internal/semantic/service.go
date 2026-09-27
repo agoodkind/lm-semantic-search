@@ -579,15 +579,13 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
-	return service.searchCollectionWithVector(ctx, collectionName, queryVector, query, int(limit), 0, filterExpr)
+	return service.searchCollectionWithVector(ctx, collectionName, queryVector, query, int(limit), filterExpr)
 }
 
-// searchCollectionWithVector runs one search at the given offset using a
-// precomputed dense query vector, so a paged caller embeds the query exactly
-// once and reuses the vector across pages. rawQuery feeds the BM25 sparse leg,
-// which is lexical and never embeds. The caller confirms the collection exists;
-// offset zero is an ordinary first-page search.
-func (service *Service) searchCollectionWithVector(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, limit int, offset int, filterExpr string) ([]model.StoredChunk, error) {
+// searchCollectionWithVector runs one code search with a precomputed dense
+// query vector. rawQuery feeds the BM25 sparse leg, which is lexical and never
+// embeds. The caller confirms the collection exists.
+func (service *Service) searchCollectionWithVector(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, limit int, filterExpr string) ([]model.StoredChunk, error) {
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return nil, err
 	}
@@ -627,9 +625,6 @@ func (service *Service) searchCollectionWithVector(ctx context.Context, collecti
 			denseRequest,
 			sparseRequest,
 		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...)
-		if offset > 0 {
-			hybridOption = hybridOption.WithOffset(offset)
-		}
 		resultSets, err := service.milvus.HybridSearch(ctx, hybridOption)
 		if err != nil {
 			return nil, searchErr(ctx, "hybrid search", collectionName, err)
@@ -644,9 +639,6 @@ func (service *Service) searchCollectionWithVector(ctx context.Context, collecti
 	).WithANNSField(denseVectorFieldName).WithOutputFields(outputFields...)
 	if filterExpr != "" {
 		searchOption = searchOption.WithFilter(filterExpr)
-	}
-	if offset > 0 {
-		searchOption = searchOption.WithOffset(offset)
 	}
 
 	resultSets, err := service.milvus.Search(ctx, searchOption)
