@@ -2,7 +2,6 @@ package localvec
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -305,116 +304,6 @@ func finalizeConversationBatchRows(
 		}
 	}
 	return rows
-}
-
-// DeleteConversation removes one conversation from a collection.
-func (store *Store) DeleteConversation(
-	ctx context.Context,
-	collectionName string,
-	conversationID string,
-) error {
-	if err := operationContextError(ctx, "delete local conversation"); err != nil {
-		return err
-	}
-	trimmedCollectionName := strings.TrimSpace(collectionName)
-	if trimmedCollectionName == "" {
-		return errors.New("conversation collection name is required")
-	}
-	trimmedConversationID := strings.TrimSpace(conversationID)
-	if trimmedConversationID == "" {
-		return errors.New("conversation id is required")
-	}
-	prefixes := []string{
-		"conv/" + trimmedConversationID + "/",
-		"convtool/" + trimmedConversationID + "/",
-		"convthink/" + trimmedConversationID + "/",
-	}
-	stored, err := store.collectionForName(trimmedCollectionName, false)
-	if err != nil {
-		return err
-	}
-	return stored.rewrite(false, func(rows []row) ([]row, error) {
-		kept := make([]row, 0, len(rows))
-		for _, candidate := range rows {
-			if matchesAnyPrefix(candidate.RelativePath, prefixes) {
-				continue
-			}
-			kept = append(kept, candidate)
-		}
-		return kept, nil
-	})
-}
-
-// BackfillConversationEnrichment updates stored conversation enrichment.
-func (store *Store) BackfillConversationEnrichment(
-	ctx context.Context,
-	collectionName string,
-	enrichment semantic.ConversationEnrichment,
-	dryRun bool,
-) (int, int, error) {
-	if err := operationContextError(ctx, "backfill local conversation enrichment"); err != nil {
-		return 0, 0, err
-	}
-	if !strings.HasPrefix(collectionName, "conv_chunks_") {
-		return 0, 0, fmt.Errorf(
-			"workspace backfill: %s is not a conversation collection",
-			collectionName,
-		)
-	}
-	stored, err := store.collectionForName(collectionName, false)
-	if err != nil {
-		return 0, 0, err
-	}
-	if dryRun {
-		rows, exists, snapshotErr := stored.snapshot()
-		if snapshotErr != nil {
-			return 0, 0, snapshotErr
-		}
-		if !exists {
-			return 0, 0, semantic.ErrCollectionMissing
-		}
-		changed, orphan := countConversationEnrichment(rows, enrichment)
-		return changed, orphan, nil
-	}
-
-	changed := 0
-	orphan := 0
-	err = stored.rewrite(true, func(rows []row) ([]row, error) {
-		for index := range rows {
-			if rows[index].WorkspaceRoot != "" {
-				continue
-			}
-			value, found := enrichment[rows[index].ConversationID]
-			if !found {
-				orphan++
-				continue
-			}
-			rows[index].WorkspaceRoot = value.WorkspaceRoot
-			rows[index].Archived = value.Archived
-			changed++
-		}
-		return rows, nil
-	})
-	return changed, orphan, err
-}
-
-func countConversationEnrichment(
-	rows []row,
-	enrichment semantic.ConversationEnrichment,
-) (int, int) {
-	changed := 0
-	orphan := 0
-	for _, candidate := range rows {
-		if candidate.WorkspaceRoot != "" {
-			continue
-		}
-		if _, found := enrichment[candidate.ConversationID]; found {
-			changed++
-		} else {
-			orphan++
-		}
-	}
-	return changed, orphan
 }
 
 func isDerivedConversationPath(relativePath string) bool {

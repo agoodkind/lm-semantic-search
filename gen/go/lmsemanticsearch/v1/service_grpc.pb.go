@@ -36,6 +36,8 @@ const (
 	SemanticSearchDaemonService_RegisterCollection_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterCollection"
 	SemanticSearchDaemonService_SyncCollectionManifest_FullMethodName            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncCollectionManifest"
 	SemanticSearchDaemonService_UpsertCollectionItemsStream_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertCollectionItemsStream"
+	SemanticSearchDaemonService_BackfillCollectionScalars_FullMethodName         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/BackfillCollectionScalars"
+	SemanticSearchDaemonService_DeleteCollectionItem_FullMethodName              = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteCollectionItem"
 	SemanticSearchDaemonService_SyncConversationManifest_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncConversationManifest"
 	SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocumentsStream"
 	SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/BackfillConversationScalars"
@@ -83,6 +85,18 @@ type SemanticSearchDaemonServiceClient interface {
 	// manifest chunk. The engine validates every row against the saved
 	// declaration and queues an async ingest job.
 	UpsertCollectionItemsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse], error)
+	// BackfillCollectionScalars is the client-streaming scalar backfill of a
+	// registered document collection. The client sends one header chunk, then
+	// items chunks. The engine writes each item's values only into the header's
+	// columns that are null or an empty string on the item's rows, keeps every
+	// other column and each row's vector, and returns row counts. The collection
+	// must be registered.
+	BackfillCollectionScalars(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BackfillCollectionScalarsStreamRequest, BackfillCollectionScalarsResponse], error)
+	// DeleteCollectionItem queues a job that removes one item's rows from a
+	// registered document collection by the declared item id column. The job
+	// leaves the collection's checkpoint unchanged, and a later manifest sync
+	// converges it.
+	DeleteCollectionItem(ctx context.Context, in *DeleteCollectionItemRequest, opts ...grpc.CallOption) (*DeleteCollectionItemResponse, error)
 	SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error)
 	// UpsertConversationDocumentsStream is the client-streaming conversation
 	// upsert. clyde sends one header chunk, then document chunks, then one manifest
@@ -93,7 +107,9 @@ type SemanticSearchDaemonServiceClient interface {
 	// BackfillConversationScalars is the client-streaming conversation scalar
 	// backfill. clyde sends one header chunk, then enrichment entry chunks, so the
 	// conversation id to workspace root map is not bounded by the gRPC max message
-	// size. The engine writes only empty scalar columns and returns row counts.
+	// size. The engine runs the BackfillCollectionScalars backfill on
+	// workspaceRoot and archived. It writes an entry's values only where those
+	// columns are null or empty and returns row counts.
 	BackfillConversationScalars(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse], error)
 	DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
@@ -301,6 +317,29 @@ func (c *semanticSearchDaemonServiceClient) UpsertCollectionItemsStream(ctx cont
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type SemanticSearchDaemonService_UpsertCollectionItemsStreamClient = grpc.ClientStreamingClient[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse]
 
+func (c *semanticSearchDaemonServiceClient) BackfillCollectionScalars(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BackfillCollectionScalarsStreamRequest, BackfillCollectionScalarsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[2], SemanticSearchDaemonService_BackfillCollectionScalars_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[BackfillCollectionScalarsStreamRequest, BackfillCollectionScalarsResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_BackfillCollectionScalarsClient = grpc.ClientStreamingClient[BackfillCollectionScalarsStreamRequest, BackfillCollectionScalarsResponse]
+
+func (c *semanticSearchDaemonServiceClient) DeleteCollectionItem(ctx context.Context, in *DeleteCollectionItemRequest, opts ...grpc.CallOption) (*DeleteCollectionItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteCollectionItemResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_DeleteCollectionItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *semanticSearchDaemonServiceClient) SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SyncConversationManifestResponse)
@@ -313,7 +352,7 @@ func (c *semanticSearchDaemonServiceClient) SyncConversationManifest(ctx context
 
 func (c *semanticSearchDaemonServiceClient) UpsertConversationDocumentsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[2], SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[3], SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +365,7 @@ type SemanticSearchDaemonService_UpsertConversationDocumentsStreamClient = grpc.
 
 func (c *semanticSearchDaemonServiceClient) BackfillConversationScalars(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[3], SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[4], SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -442,6 +481,18 @@ type SemanticSearchDaemonServiceServer interface {
 	// manifest chunk. The engine validates every row against the saved
 	// declaration and queues an async ingest job.
 	UpsertCollectionItemsStream(grpc.ClientStreamingServer[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse]) error
+	// BackfillCollectionScalars is the client-streaming scalar backfill of a
+	// registered document collection. The client sends one header chunk, then
+	// items chunks. The engine writes each item's values only into the header's
+	// columns that are null or an empty string on the item's rows, keeps every
+	// other column and each row's vector, and returns row counts. The collection
+	// must be registered.
+	BackfillCollectionScalars(grpc.ClientStreamingServer[BackfillCollectionScalarsStreamRequest, BackfillCollectionScalarsResponse]) error
+	// DeleteCollectionItem queues a job that removes one item's rows from a
+	// registered document collection by the declared item id column. The job
+	// leaves the collection's checkpoint unchanged, and a later manifest sync
+	// converges it.
+	DeleteCollectionItem(context.Context, *DeleteCollectionItemRequest) (*DeleteCollectionItemResponse, error)
 	SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error)
 	// UpsertConversationDocumentsStream is the client-streaming conversation
 	// upsert. clyde sends one header chunk, then document chunks, then one manifest
@@ -452,7 +503,9 @@ type SemanticSearchDaemonServiceServer interface {
 	// BackfillConversationScalars is the client-streaming conversation scalar
 	// backfill. clyde sends one header chunk, then enrichment entry chunks, so the
 	// conversation id to workspace root map is not bounded by the gRPC max message
-	// size. The engine writes only empty scalar columns and returns row counts.
+	// size. The engine runs the BackfillCollectionScalars backfill on
+	// workspaceRoot and archived. It writes an entry's values only where those
+	// columns are null or empty and returns row counts.
 	BackfillConversationScalars(grpc.ClientStreamingServer[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]) error
 	DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
@@ -527,6 +580,12 @@ func (UnimplementedSemanticSearchDaemonServiceServer) SyncCollectionManifest(con
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) UpsertCollectionItemsStream(grpc.ClientStreamingServer[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse]) error {
 	return status.Error(codes.Unimplemented, "method UpsertCollectionItemsStream not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) BackfillCollectionScalars(grpc.ClientStreamingServer[BackfillCollectionScalarsStreamRequest, BackfillCollectionScalarsResponse]) error {
+	return status.Error(codes.Unimplemented, "method BackfillCollectionScalars not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) DeleteCollectionItem(context.Context, *DeleteCollectionItemRequest) (*DeleteCollectionItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteCollectionItem not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SyncConversationManifest not implemented")
@@ -866,6 +925,31 @@ func _SemanticSearchDaemonService_UpsertCollectionItemsStream_Handler(srv interf
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type SemanticSearchDaemonService_UpsertCollectionItemsStreamServer = grpc.ClientStreamingServer[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse]
 
+func _SemanticSearchDaemonService_BackfillCollectionScalars_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SemanticSearchDaemonServiceServer).BackfillCollectionScalars(&grpc.GenericServerStream[BackfillCollectionScalarsStreamRequest, BackfillCollectionScalarsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_BackfillCollectionScalarsServer = grpc.ClientStreamingServer[BackfillCollectionScalarsStreamRequest, BackfillCollectionScalarsResponse]
+
+func _SemanticSearchDaemonService_DeleteCollectionItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteCollectionItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).DeleteCollectionItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_DeleteCollectionItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).DeleteCollectionItem(ctx, req.(*DeleteCollectionItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SemanticSearchDaemonService_SyncConversationManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SyncConversationManifestRequest)
 	if err := dec(in); err != nil {
@@ -1092,6 +1176,10 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _SemanticSearchDaemonService_SyncCollectionManifest_Handler,
 		},
 		{
+			MethodName: "DeleteCollectionItem",
+			Handler:    _SemanticSearchDaemonService_DeleteCollectionItem_Handler,
+		},
+		{
 			MethodName: "SyncConversationManifest",
 			Handler:    _SemanticSearchDaemonService_SyncConversationManifest_Handler,
 		},
@@ -1133,6 +1221,11 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "UpsertCollectionItemsStream",
 			Handler:       _SemanticSearchDaemonService_UpsertCollectionItemsStream_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "BackfillCollectionScalars",
+			Handler:       _SemanticSearchDaemonService_BackfillCollectionScalars_Handler,
 			ClientStreams: true,
 		},
 		{

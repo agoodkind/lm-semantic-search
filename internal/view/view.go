@@ -619,7 +619,8 @@ type StartIndexView struct {
 }
 
 // MutationAckView covers clear, cancel, sync, collection, and conversation acks. Exactly
-// one Kind renders per call.
+// one Kind renders per call. ConversationID stores the conversation id of a
+// conversation delete ack and the item id of a collection item delete ack.
 type MutationAckView struct {
 	Kind            string
 	Path            string
@@ -649,6 +650,7 @@ const (
 	AckManifest              = "manifest"
 	AckUpsertCollectionItems = "upsert_collection_items"
 	AckCollectionManifest    = "collection_manifest"
+	AckDeleteCollectionItem  = "delete_collection_item"
 )
 
 // DoctorView is the doctor response view.

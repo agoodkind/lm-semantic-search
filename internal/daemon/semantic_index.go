@@ -81,8 +81,13 @@ type semanticWriter interface {
 	Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error
 	StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error
 	PromoteStaging(ctx context.Context, codebasePath string) error
-	DeleteConversation(ctx context.Context, collectionName string, conversationID string) error
-	BackfillConversationEnrichment(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
+	// DeleteItemRows deletes the rows removal selects from a document
+	// collection. A missing collection deletes nothing.
+	DeleteItemRows(ctx context.Context, collectionName string, removal semantic.Removal) error
+	// BackfillCollectionScalars fills the backfill columns that are null or an
+	// empty string on the rows of streamed items and returns the changed and
+	// orphan row counts.
+	BackfillCollectionScalars(ctx context.Context, collectionName string, backfill semantic.ScalarBackfill) (int, int, error)
 	CopyChunks(ctx context.Context, codebasePath string, srcRelativePath string, dstRelativePath string) (int, error)
 	PruneToCurrent(ctx context.Context, codebasePath string, currentRelativePaths []string) error
 }

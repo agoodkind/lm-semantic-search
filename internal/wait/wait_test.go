@@ -332,6 +332,14 @@ func (client *mockDaemonClient) UpsertCollectionItemsStream(context.Context, ...
 	return nil, errors.New("not implemented")
 }
 
+func (client *mockDaemonClient) BackfillCollectionScalars(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[pb.BackfillCollectionScalarsStreamRequest, pb.BackfillCollectionScalarsResponse], error) {
+	return nil, errors.New("not implemented")
+}
+
+func (client *mockDaemonClient) DeleteCollectionItem(context.Context, *pb.DeleteCollectionItemRequest, ...grpc.CallOption) (*pb.DeleteCollectionItemResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (client *mockDaemonClient) UpsertConversationDocumentsStream(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[pb.UpsertConversationDocumentsChunk, pb.UpsertConversationDocumentsResponse], error) {
 	return nil, errors.New("not implemented")
 }

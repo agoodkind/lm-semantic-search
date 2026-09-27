@@ -91,6 +91,39 @@ func newDeclaredColumn(
 	return built, nil
 }
 
+// declaredScalarValueAt reads the value of one declared column at a row of a
+// query result, with its null state.
+func declaredScalarValueAt(valueColumn column.Column, declaration model.ScalarColumn, rowIndex int) (model.ScalarValue, error) {
+	value := model.ScalarValue{Type: declaration.Type, Null: false, String: "", Bool: false, Int64: 0}
+	if valueColumn == nil {
+		return value, ErrSearchResultIncomplete
+	}
+	isNull, err := valueColumn.IsNull(rowIndex)
+	if err != nil {
+		slog.Error("read declared column null state failed", "column", declaration.Name, "index", rowIndex, "err", err)
+		return value, fmt.Errorf("read null state of %s at %d: %w", declaration.Name, rowIndex, err)
+	}
+	if isNull {
+		value.Null = true
+		return value, nil
+	}
+	switch declaration.Type {
+	case model.ScalarTypeString:
+		value.String, err = valueColumn.GetAsString(rowIndex)
+	case model.ScalarTypeBool:
+		value.Bool, err = valueColumn.GetAsBool(rowIndex)
+	case model.ScalarTypeInt64:
+		value.Int64, err = valueColumn.GetAsInt64(rowIndex)
+	default:
+		err = fmt.Errorf("unsupported declared column type %q", declaration.Type)
+	}
+	if err != nil {
+		slog.Error("read declared column value failed", "column", declaration.Name, "index", rowIndex, "err", err)
+		return value, fmt.Errorf("read %s at %d: %w", declaration.Name, rowIndex, err)
+	}
+	return value, nil
+}
+
 // declaredScalarRowBytes estimates the raw bytes the declared scalar values of
 // one row add to an insert request, plus a small per-column framing allowance.
 func declaredScalarRowBytes(declared []model.ScalarColumn, chunk model.StoredChunk) int {

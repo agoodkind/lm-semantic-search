@@ -156,6 +156,13 @@ func renderMutationAck(ack view.MutationAckView) string {
 		)
 	case view.AckCollectionManifest:
 		return fmt.Sprintf("Document collection '%s' needs %d of %d %s.", ack.CollectionID, ack.NeededCount, ack.TotalCount, plural("item", ack.TotalCount))
+	case view.AckDeleteCollectionItem:
+		return fmt.Sprintf(
+			"Started document delete job %s for item '%s' in collection '%s'.",
+			ack.JobID,
+			ack.ConversationID,
+			ack.CollectionID,
+		)
 	default:
 		return ""
 	}

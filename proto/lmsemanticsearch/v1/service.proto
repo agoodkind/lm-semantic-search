@@ -38,6 +38,18 @@ service SemanticSearchDaemonService {
   // manifest chunk. The engine validates every row against the saved
   // declaration and queues an async ingest job.
   rpc UpsertCollectionItemsStream(stream UpsertCollectionItemsStreamRequest) returns (UpsertCollectionItemsStreamResponse);
+  // BackfillCollectionScalars is the client-streaming scalar backfill of a
+  // registered document collection. The client sends one header chunk, then
+  // items chunks. The engine writes each item's values only into the header's
+  // columns that are null or an empty string on the item's rows, keeps every
+  // other column and each row's vector, and returns row counts. The collection
+  // must be registered.
+  rpc BackfillCollectionScalars(stream BackfillCollectionScalarsStreamRequest) returns (BackfillCollectionScalarsResponse);
+  // DeleteCollectionItem queues a job that removes one item's rows from a
+  // registered document collection by the declared item id column. The job
+  // leaves the collection's checkpoint unchanged, and a later manifest sync
+  // converges it.
+  rpc DeleteCollectionItem(DeleteCollectionItemRequest) returns (DeleteCollectionItemResponse);
   rpc SyncConversationManifest(SyncConversationManifestRequest) returns (SyncConversationManifestResponse);
   // UpsertConversationDocumentsStream is the client-streaming conversation
   // upsert. clyde sends one header chunk, then document chunks, then one manifest
@@ -48,7 +60,9 @@ service SemanticSearchDaemonService {
   // BackfillConversationScalars is the client-streaming conversation scalar
   // backfill. clyde sends one header chunk, then enrichment entry chunks, so the
   // conversation id to workspace root map is not bounded by the gRPC max message
-  // size. The engine writes only empty scalar columns and returns row counts.
+  // size. The engine runs the BackfillCollectionScalars backfill on
+  // workspaceRoot and archived. It writes an entry's values only where those
+  // columns are null or empty and returns row counts.
   rpc BackfillConversationScalars(stream BackfillConversationScalarsChunk) returns (BackfillConversationScalarsResponse);
   rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
@@ -759,6 +773,60 @@ message UpsertCollectionItemsStreamRequest {
 }
 
 message UpsertCollectionItemsStreamResponse {
+  string job_id = 1;
+  string display_text = 2;
+}
+
+// BackfillCollectionScalarsHeader opens a streamed scalar backfill. columns
+// lists the declared scalar columns the backfill fills and must not name the
+// item id column. A row needs the backfill when one of these columns is null,
+// or an empty string, on the row.
+message BackfillCollectionScalarsHeader {
+  string collection_id = 1;
+  bool dry_run = 2;
+  ClientInfo client = 3;
+  repeated string columns = 4;
+}
+
+// BackfillCollectionItem sets one value for every header column of one item.
+// Each value must match the declared column type and must not be null.
+message BackfillCollectionItem {
+  string item_id = 1;
+  repeated CollectionScalarValue scalars = 2;
+}
+
+// BackfillCollectionScalarsItems is one batch of items in a streamed scalar
+// backfill.
+message BackfillCollectionScalarsItems {
+  repeated BackfillCollectionItem items = 1;
+}
+
+// BackfillCollectionScalarsStreamRequest is one frame of a streamed scalar
+// backfill: exactly one header first, then zero or more items chunks.
+message BackfillCollectionScalarsStreamRequest {
+  oneof chunk {
+    BackfillCollectionScalarsHeader header = 1;
+    BackfillCollectionScalarsItems items = 2;
+  }
+}
+
+// BackfillCollectionScalarsResponse counts the rows that need the backfill.
+// changed counts the rows of streamed items. orphan counts the rows of items
+// the stream omits, which the backfill leaves unchanged. A dry run returns the
+// same counts and writes nothing.
+message BackfillCollectionScalarsResponse {
+  int64 changed = 1;
+  int64 orphan = 2;
+  string display_text = 3;
+}
+
+message DeleteCollectionItemRequest {
+  string collection_id = 1;
+  string item_id = 2;
+  ClientInfo client = 3;
+}
+
+message DeleteCollectionItemResponse {
   string job_id = 1;
   string display_text = 2;
 }
