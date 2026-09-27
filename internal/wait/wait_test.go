@@ -316,6 +316,10 @@ func (client *mockDaemonClient) RegisterConversationCollection(context.Context, 
 	return nil, errors.New("not implemented")
 }
 
+func (client *mockDaemonClient) RegisterCollection(context.Context, *pb.RegisterCollectionRequest, ...grpc.CallOption) (*pb.RegisterCollectionResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (client *mockDaemonClient) SyncConversationManifest(context.Context, *pb.SyncConversationManifestRequest, ...grpc.CallOption) (*pb.SyncConversationManifestResponse, error) {
 	return nil, errors.New("not implemented")
 }

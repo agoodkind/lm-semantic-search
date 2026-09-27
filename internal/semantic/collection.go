@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc/peer"
 )
 
@@ -97,17 +99,144 @@ func isStagingCollection(collectionName string) bool {
 // so the same definitions serve both a freshly created collection and an
 // AddCollectionField migration onto a collection with existing rows.
 func conversationScalarFields() []*entity.Field {
-	return []*entity.Field{
-		entity.NewField().WithName(conversationIDFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(conversationIDFieldMaxLength).WithNullable(true),
-		entity.NewField().WithName(parentConversationIDFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(conversationIDFieldMaxLength).WithNullable(true),
-		entity.NewField().WithName(roleFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(conversationRoleFieldMaxLength).WithNullable(true),
-		entity.NewField().WithName(providerFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(conversationProviderMaxLength).WithNullable(true),
-		entity.NewField().WithName(workspaceRootFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(conversationWorkspaceMaxLength).WithNullable(true),
-		entity.NewField().WithName(archivedFieldName).WithDataType(entity.FieldTypeBool).WithNullable(true),
-		entity.NewField().WithName(timestampUnixFieldName).WithDataType(entity.FieldTypeInt64).WithNullable(true),
-		entity.NewField().WithName(messageIndexFieldName).WithDataType(entity.FieldTypeInt64).WithNullable(true),
-		entity.NewField().WithName(loadRulesFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(conversationLoadRulesMaxLength).WithNullable(true),
+	return scalarFields(ConversationDeclaration().Scalars)
+}
+
+// scalarFields builds the Milvus field definitions for declared scalar columns,
+// in declaration order.
+func scalarFields(columns []model.ScalarColumn) []*entity.Field {
+	fields := make([]*entity.Field, 0, len(columns))
+	for _, column := range columns {
+		fields = append(fields, scalarField(column))
 	}
+	return fields
+}
+
+// scalarField builds the Milvus field definition for one declared scalar
+// column. A string column becomes a VarChar with the declared maximum length.
+func scalarField(column model.ScalarColumn) *entity.Field {
+	field := entity.NewField().WithName(column.Name)
+	switch column.Type {
+	case model.ScalarTypeString:
+		field = field.WithDataType(entity.FieldTypeVarChar).WithMaxLength(int64(column.MaxLength))
+	case model.ScalarTypeBool:
+		field = field.WithDataType(entity.FieldTypeBool)
+	case model.ScalarTypeInt64:
+		field = field.WithDataType(entity.FieldTypeInt64)
+	default:
+		field = field.WithDataType(entity.FieldTypeNone)
+	}
+	return field.WithNullable(column.Nullable)
+}
+
+// BuiltinColumnNames returns the columns the built-in collection schema
+// defines. A collection declaration may not declare any of them as a scalar
+// column, and a stored schema lists them outside its declared scalars.
+func BuiltinColumnNames() []string {
+	return []string{
+		idFieldName,
+		contentFieldName,
+		relativePathFieldName,
+		startLineFieldName,
+		endLineFieldName,
+		fileExtensionFieldName,
+		metadataFieldName,
+		contentHashFieldName,
+		embeddingModelFieldName,
+		splitPartFieldName,
+		denseVectorFieldName,
+		sparseVectorFieldName,
+	}
+}
+
+// declarationForNewCollection returns the scalar columns createCollection
+// adds to a collection it creates. A conversation collection receives the
+// conversation declaration. Every other collection receives no declared
+// scalars.
+func declarationForNewCollection(collectionName string) []model.ScalarColumn {
+	if isConversationCollection(collectionName) {
+		return ConversationDeclaration().Scalars
+	}
+	return nil
+}
+
+// DescribeScalarColumns reports the declared scalar columns of a stored
+// collection: every schema field outside [BuiltinColumnNames]. exists is false
+// when the collection is absent. A field type outside the declarable scalar
+// types reports its Milvus type name, which no declaration matches.
+func (service *Service) DescribeScalarColumns(
+	ctx context.Context,
+	collectionName string,
+) ([]model.ScalarColumn, bool, error) {
+	if !service.Available() {
+		return nil, false, ErrUnavailable
+	}
+	peerInfo, _ := peer.FromContext(ctx)
+	hasCollection, err := service.hasCollection(
+		ctx,
+		collectionName,
+		"check Milvus collection "+collectionName,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	if !hasCollection {
+		return nil, false, nil
+	}
+	collection, err := service.milvus.DescribeCollection(
+		ctx,
+		milvusclient.NewDescribeCollectionOption(collectionName),
+	)
+	if err != nil {
+		slog.ErrorContext(ctx, "describe collection for declared scalars failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
+		return nil, false, wrapStoreError(ctx, err, "describe Milvus collection "+collectionName)
+	}
+	builtin := make(map[string]struct{})
+	for _, name := range BuiltinColumnNames() {
+		builtin[name] = struct{}{}
+	}
+	columns := make([]model.ScalarColumn, 0)
+	if collection.Schema == nil {
+		return columns, true, nil
+	}
+	for _, field := range collection.Schema.Fields {
+		if _, isBuiltin := builtin[field.Name]; isBuiltin {
+			continue
+		}
+		column, err := storedScalarColumn(ctx, collectionName, field)
+		if err != nil {
+			return nil, false, err
+		}
+		columns = append(columns, column)
+	}
+	return columns, true, nil
+}
+
+// storedScalarColumn converts one stored Milvus field into the declaration
+// shape a registration compares against.
+func storedScalarColumn(ctx context.Context, collectionName string, field *entity.Field) (model.ScalarColumn, error) {
+	column := model.ScalarColumn{
+		Name:      field.Name,
+		Type:      model.ScalarType("milvus:" + field.DataType.Name()),
+		Nullable:  field.Nullable,
+		MaxLength: 0,
+	}
+	if field.DataType == entity.FieldTypeBool {
+		column.Type = model.ScalarTypeBool
+	}
+	if field.DataType == entity.FieldTypeInt64 {
+		column.Type = model.ScalarTypeInt64
+	}
+	if field.DataType == entity.FieldTypeVarChar {
+		column.Type = model.ScalarTypeString
+		maxLength, err := strconv.ParseInt(field.TypeParams[entity.TypeParamMaxLength], 10, 32)
+		if err != nil {
+			slog.ErrorContext(ctx, "parse stored field max length failed", "collection", collectionName, "field", field.Name, "err", err)
+			return column, fmt.Errorf("parse max length of field %s in collection %s: %w", field.Name, collectionName, err)
+		}
+		column.MaxLength = int32(maxLength)
+	}
+	return column, nil
 }
 
 func splitPartField() *entity.Field {
@@ -148,6 +277,7 @@ func (service *Service) createCollection(
 	ctx context.Context,
 	collectionName string,
 	dimension int,
+	declaredScalars []model.ScalarColumn,
 ) (CollectionLease, error) {
 	schema := entity.NewSchema().
 		WithField(entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(idFieldMaxLength).WithIsPrimaryKey(true)).
@@ -162,10 +292,8 @@ func (service *Service) createCollection(
 		WithField(splitPartField()).
 		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)))
 
-	if isConversationCollection(collectionName) {
-		for _, field := range conversationScalarFields() {
-			schema = schema.WithField(field)
-		}
+	for _, field := range scalarFields(declaredScalars) {
+		schema = schema.WithField(field)
 	}
 
 	// Milvus 2.6 rejects mmap.enabled on AUTOINDEX creation. The policy is applied

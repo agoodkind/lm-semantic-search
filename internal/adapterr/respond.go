@@ -50,7 +50,9 @@ func Respond(ctx context.Context, err error) (codes.Code, string) {
 }
 
 // RespondGRPC returns the same safe status as [Respond] with a machine-readable
-// ErrorInfo reason for callers that must route on the stable adapter code.
+// ErrorInfo reason for callers that must route on the stable adapter code. A
+// [ColumnError] also sets the ErrorInfo metadata key [ErrorInfoColumnKey] to
+// its column.
 func RespondGRPC(ctx context.Context, err error) *grpcError {
 	if err == nil {
 		return nil
@@ -63,10 +65,16 @@ func RespondGRPC(ctx context.Context, err error) *grpcError {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		reason = "deadline_exceeded"
 	}
+	var metadata map[string]string
+	var columnErr *ColumnError
+	if errors.As(err, &columnErr) {
+		metadata = map[string]string{ErrorInfoColumnKey: columnErr.Column}
+	}
 	base := status.New(code, message)
 	withDetails, detailErr := base.WithDetails(&errdetails.ErrorInfo{
-		Reason: reason,
-		Domain: errorInfoDomain,
+		Reason:   reason,
+		Domain:   errorInfoDomain,
+		Metadata: metadata,
 	})
 	if detailErr != nil {
 		slog.ErrorContext(ctx, "adapter.error_detail.failed", "reason", reason, "err", detailErr)
@@ -173,7 +181,7 @@ func IsTransient(err error) bool {
 	case ClassNotIndexed, ClassUnknownCodebaseID, ClassCollectionMissing,
 		ClassCollectionNotReady, ClassSearchResultIncomplete, ClassEmbedderRejected,
 		ClassInvalidPath, ClassInvalidArgument, ClassConflictingJob, ClassJobNotFound,
-		ClassIndexBudgetExceeded, ClassMaintenance, ClassInternal:
+		ClassIndexBudgetExceeded, ClassMaintenance, ClassCollectionSchemaMismatch, ClassInternal:
 		return false
 	default:
 		return false

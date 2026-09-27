@@ -392,7 +392,12 @@ func (service *Service) writeEmbeddedChunkBatch(
 	}
 	dimension := len(vectors[0])
 	if !result.collectionReady {
-		lease, err := service.createCollection(ctx, collectionName, dimension)
+		lease, err := service.createCollection(
+			ctx,
+			collectionName,
+			dimension,
+			declarationForNewCollection(collectionName),
+		)
 		if err != nil {
 			return result, err
 		}

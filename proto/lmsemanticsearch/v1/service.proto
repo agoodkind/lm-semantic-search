@@ -21,6 +21,13 @@ service SemanticSearchDaemonService {
   rpc SearchCode(SearchCodeRequest) returns (SearchCodeResponse);
   rpc GraphTool(GraphToolRequest) returns (GraphToolResponse);
   rpc RegisterConversationCollection(RegisterConversationCollectionRequest) returns (RegisterConversationCollectionResponse);
+  // RegisterCollection records a document collection with its declared scalar
+  // columns. Registering an existing collection again succeeds only when the
+  // declaration matches the saved one and the stored collection schema; a
+  // conflict fails with ErrorInfo reason collection_schema_mismatch and the
+  // conflicting column in metadata key "column". The engine never rebuilds or
+  // drops an existing collection to satisfy a conflicting declaration.
+  rpc RegisterCollection(RegisterCollectionRequest) returns (RegisterCollectionResponse);
   rpc SyncConversationManifest(SyncConversationManifestRequest) returns (SyncConversationManifestResponse);
   // UpsertConversationDocumentsStream is the client-streaming conversation
   // upsert. clyde sends one header chunk, then document chunks, then one manifest
@@ -607,6 +614,47 @@ message RegisterConversationCollectionResponse {
   string codebase_id = 1;
   string collection_name = 2;
   string display_text = 3;
+}
+
+// ScalarColumnType is the closed set of scalar column types a document
+// collection can declare. UNSPECIFIED is rejected.
+enum ScalarColumnType {
+  SCALAR_COLUMN_TYPE_UNSPECIFIED = 0;
+  SCALAR_COLUMN_TYPE_STRING = 1;
+  SCALAR_COLUMN_TYPE_BOOL = 2;
+  SCALAR_COLUMN_TYPE_INT64 = 3;
+}
+
+// ScalarColumnDeclaration declares one scalar column of a document collection.
+// column must be a letter or underscore followed by letters, digits, or
+// underscores, and must not name a built-in schema column. max_length is the
+// maximum string length. A string column requires it, and every other type
+// rejects it.
+message ScalarColumnDeclaration {
+  string column = 1;
+  ScalarColumnType type = 2;
+  bool nullable = 3;
+  int32 max_length = 4;
+}
+
+// RegisterCollectionRequest registers a document collection. item_id_column
+// must name a declared string column. Item operations select an item's rows by
+// the client item id stored in that column.
+message RegisterCollectionRequest {
+  string collection_id = 1;
+  string item_id_column = 2;
+  repeated ScalarColumnDeclaration scalars = 3;
+  ClientInfo client = 4;
+}
+
+// RegisterCollectionResponse returns the registered collection and its saved
+// declaration.
+message RegisterCollectionResponse {
+  string codebase_id = 1;
+  string collection_name = 2;
+  string item_id_column = 3;
+  repeated ScalarColumnDeclaration scalars = 4;
+  string display_text = 5;
 }
 
 // ConversationFingerprint is one conversation id paired with a content

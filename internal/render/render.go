@@ -122,6 +122,13 @@ func renderMutationAck(ack view.MutationAckView) string {
 			ack.CodebaseID,
 			ack.CollectionName,
 		)
+	case view.AckRegisterCollection:
+		return fmt.Sprintf(
+			"Registered document collection '%s' as codebase %s using collection '%s'.",
+			ack.CollectionID,
+			ack.CodebaseID,
+			ack.CollectionName,
+		)
 	case view.AckUpsertConversation:
 		return fmt.Sprintf(
 			"Started conversation ingest job %s for collection '%s' with %d %s.",

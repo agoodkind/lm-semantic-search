@@ -249,6 +249,28 @@ func (store *Store) InspectCollection(
 	return semantic.CollectionFacts{Exists: true, Rows: count, RowsKnown: true}, nil
 }
 
+// DescribeScalarColumns reports the declared scalar columns of a stored local
+// collection. exists is false when the collection is absent. The local row
+// format stores the conversation scalar fields on every row, so an existing
+// local collection reports the conversation declaration.
+func (store *Store) DescribeScalarColumns(
+	_ context.Context,
+	collectionName string,
+) ([]model.ScalarColumn, bool, error) {
+	stored, err := store.collectionForName(collectionName, false)
+	if err != nil {
+		return nil, false, err
+	}
+	_, exists, err := stored.rowCount()
+	if err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	return semantic.ConversationDeclaration().Scalars, true, nil
+}
+
 // HasCollectionForPath reports whether a codebase has a stored collection.
 func (store *Store) HasCollectionForPath(
 	ctx context.Context,

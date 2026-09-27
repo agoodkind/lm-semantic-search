@@ -55,6 +55,7 @@ type fakeSemantic struct {
 	collectionName        func(codebasePath string) string
 	conversationName      func(collectionID string) string
 	inspectCollection     func(context.Context, string) (semantic.CollectionFacts, error)
+	describeScalars       func(context.Context, string) ([]model.ScalarColumn, bool, error)
 	listCollections       func(context.Context) ([]string, error)
 	hasCollectionForPath  func(context.Context, string) (bool, error)
 	collectionState       func(context.Context, string) (bool, bool, error)
@@ -160,6 +161,13 @@ func (f *fakeSemantic) ConversationCollectionName(collectionID string) string {
 		return f.conversationName(collectionID)
 	}
 	return "conv_chunks_" + tshash.PathPrefix(collectionID)
+}
+
+func (f *fakeSemantic) DescribeScalarColumns(ctx context.Context, collectionName string) ([]model.ScalarColumn, bool, error) {
+	if f.describeScalars != nil {
+		return f.describeScalars(ctx, collectionName)
+	}
+	return nil, false, nil
 }
 
 func (f *fakeSemantic) HasStaging(ctx context.Context, codebasePath string) (bool, error) {

@@ -90,6 +90,12 @@ const (
 	// the store until the operator turns the mode off.
 	ClassMaintenance Class = "maintenance"
 
+	// ClassCollectionSchemaMismatch reports a collection registration that
+	// declares scalar columns in conflict with the saved declaration or with the
+	// stored collection schema. The daemon keeps the existing collection and
+	// refuses the conflicting declaration.
+	ClassCollectionSchemaMismatch Class = "collection_schema_mismatch"
+
 	// ClassInternal is the catch-all class for unknown errors. The
 	// message is sanitized at the boundary; the operator finds the
 	// real cause in the daemon log by grepping trace_id.
@@ -106,7 +112,8 @@ func CodeFor(class Class) codes.Code {
 	switch class {
 	case ClassNotIndexed, ClassJobNotFound, ClassUnknownCodebaseID:
 		return codes.NotFound
-	case ClassCollectionMissing, ClassCollectionNotReady, ClassConflictingJob, ClassMaintenance:
+	case ClassCollectionMissing, ClassCollectionNotReady, ClassConflictingJob, ClassMaintenance,
+		ClassCollectionSchemaMismatch:
 		return codes.FailedPrecondition
 	case ClassMilvusUnavailable, ClassEmbedderUnreachable:
 		return codes.Unavailable
@@ -276,6 +283,59 @@ func NewMaintenance(reason string) *AdapterError {
 		Hint:          "retry after the operator turns maintenance mode off with lm-semantic-search daemon maintenance off",
 		Cause:         nil,
 		SafeForClient: true,
+	}
+}
+
+// CodeCollectionSchemaMismatch is the stable ErrorInfo reason for a collection
+// registration that conflicts with the saved or stored schema.
+const CodeCollectionSchemaMismatch = "collection_schema_mismatch"
+
+// ErrorInfoColumnKey is the ErrorInfo metadata key for the column a
+// [ColumnError] rejects.
+const ErrorInfoColumnKey = "column"
+
+// ColumnError is an [AdapterError] about one declared or stored collection
+// column. The gRPC boundary copies Column into the ErrorInfo metadata under
+// [ErrorInfoColumnKey]. The error unwraps to its [AdapterError], and every
+// classification helper treats it as that error's class.
+type ColumnError struct {
+	// Column is the column the error rejects.
+	Column  string
+	adapter *AdapterError
+}
+
+// Error renders the wrapped adapter error.
+func (e *ColumnError) Error() string {
+	return e.adapter.Error()
+}
+
+// Unwrap exposes the wrapped [AdapterError] for [errors.As] and [errors.Is].
+func (e *ColumnError) Unwrap() error {
+	return e.adapter
+}
+
+// NewCollectionSchemaMismatch reports a registration that conflicts with the
+// saved declaration or stored schema at column. detail states the conflict.
+func NewCollectionSchemaMismatch(collectionID string, column string, detail string) *ColumnError {
+	return &ColumnError{
+		Column: column,
+		adapter: &AdapterError{
+			Class:         ClassCollectionSchemaMismatch,
+			Message:       "collection " + quote(collectionID) + " column " + quote(column) + ": " + detail,
+			Code:          CodeCollectionSchemaMismatch,
+			Hint:          "register the collection with its existing declaration, or register the new schema under a different collection id",
+			Cause:         nil,
+			SafeForClient: true,
+		},
+	}
+}
+
+// NewInvalidColumnDeclaration reports a collection declaration that declares
+// column invalidly. message states the violation.
+func NewInvalidColumnDeclaration(column string, message string) *ColumnError {
+	return &ColumnError{
+		Column:  column,
+		adapter: NewInvalidArgument(message),
 	}
 }
 

@@ -25,6 +25,37 @@ type conversationScalarColumns struct {
 	loadRules             []string
 }
 
+// ConversationDeclaration returns the scalar declaration of every conversation
+// collection. conversationId stores the item id. Every column is nullable, so
+// the same declaration defines a freshly created collection and the
+// AddCollectionField migration onto a collection with existing rows. The
+// column order and string maximum lengths define the stored Milvus schema.
+func ConversationDeclaration() model.CollectionDeclaration {
+	return model.CollectionDeclaration{
+		ItemIDColumn: conversationIDFieldName,
+		Scalars: []model.ScalarColumn{
+			nullableStringColumn(conversationIDFieldName, conversationIDFieldMaxLength),
+			nullableStringColumn(parentConversationIDFieldName, conversationIDFieldMaxLength),
+			nullableStringColumn(roleFieldName, conversationRoleFieldMaxLength),
+			nullableStringColumn(providerFieldName, conversationProviderMaxLength),
+			nullableStringColumn(workspaceRootFieldName, conversationWorkspaceMaxLength),
+			{Name: archivedFieldName, Type: model.ScalarTypeBool, Nullable: true, MaxLength: 0},
+			{Name: timestampUnixFieldName, Type: model.ScalarTypeInt64, Nullable: true, MaxLength: 0},
+			{Name: messageIndexFieldName, Type: model.ScalarTypeInt64, Nullable: true, MaxLength: 0},
+			nullableStringColumn(loadRulesFieldName, conversationLoadRulesMaxLength),
+		},
+	}
+}
+
+func nullableStringColumn(name string, maxLength int32) model.ScalarColumn {
+	return model.ScalarColumn{
+		Name:      name,
+		Type:      model.ScalarTypeString,
+		Nullable:  true,
+		MaxLength: maxLength,
+	}
+}
+
 func newConversationScalarColumns(enabled bool, capacity int) conversationScalarColumns {
 	if !enabled {
 		return conversationScalarColumns{
