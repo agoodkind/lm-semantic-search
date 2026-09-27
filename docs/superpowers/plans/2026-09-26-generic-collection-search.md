@@ -8,18 +8,21 @@ Complete LMS-18. A client searches a registered document collection with typed f
 
 `proto/lmsemanticsearch/v1/service.proto` declares `SearchConversations` and `SearchWithinConversation`. `pbConversationSearchFilter` in `internal/daemon/grpc_server.go` decodes the wire filter; `internal/daemon/conversation_search_filter.go` converts the manager filter for semantic storage. `internal/semantic/conversation_filter_expr.go` builds Milvus expressions and pages ranked results for smaller ID sets. `internal/semantic/conversation_search.go` embeds queries and batches searches when a filter contains more than 256 conversation IDs. `internal/daemon/manager_conversations.go` reads the indexed fingerprint from the Merkle checkpoint. Older rows can have null workspace and archived scalars.
 
+Both paths return different results for different page sizes. `fillCappedConversationSearchWith` pages the hybrid search by offset, but each hybrid leg retrieves only `max(limit, 10)` rows. A page after the first reranks only those rows and comes back short, which ends the fill early. A live harness query for 10 hits over 30 matching rows with a per-conversation cap of 2 returns 2 hits. The batched path sorts hits from separately fused searches by score, and RRF scores from separate searches are not comparable.
+
 ## Constraints
 
 - LMS-15 registration is required. LMS-16 and LMS-17 can proceed independently.
 - Clyde constructs conversation filters before it calls a retrieval provider. LMS compiles a typed filter tree into its Milvus expression. The generic request never accepts a raw Milvus expression.
-- Validate every filter and group column against the saved declaration. Reject unknown columns, incorrect value types, excessive tree depth, and oversized membership sets before query execution.
-- Preserve query embedding, collection leases, ID batching, deterministic ordering, score-floor behavior, and `loadRules` on hits. The old RPC uses paged cap fill for smaller ID sets and batched limited searches followed by cap reduction for more than 256 IDs; preserve both paths until the old RPC retires.
+- Validate every filter and group column against the saved declaration. Reject unknown columns, incorrect value types, excessive tree depth, and oversized membership sets before query execution. Size the membership limit for Clyde's full allowed conversation set.
+- Preserve query embedding, collection leases, score-floor behavior, and `loadRules` on hits.
+- Make search deterministic. Each query computes one ranking at a fixed fusion depth that does not depend on the limit or group cap. Equal scores order by `relativePath`, then primary key. One walk over that ranking applies the score floor, the group cap, and the limit. A smaller limit returns a prefix of a larger limit's results. No search merges separately fused results.
 - Keep the old search RPCs until CLYDE-643 passes.
 - Apply the daemon's existing maintenance refusal to generic search before collection load or query execution. Preserve the old search handlers' maintenance error when they delegate.
 
 ## Pull request boundary
 
-Implement LMS-18 Tasks 1 through 3 in one pull request. The new RPC, expression compiler, public tests, live parity battery, generated proto code, and documentation must pass together before merge. LMS-18 depends on LMS-15; it does not require LMS-16 or LMS-17. Integrate against the latest `service.proto` before merging. Implement Task 4 as the separate protocol retirement pull request after both Clyde cutovers.
+Implement the Task 2 single-ranking change for the existing conversation search RPCs as its own pull request first, with its regression and stability tests. Implement the rest of LMS-18 Tasks 1 through 3 in one pull request on top of it. The new RPC, expression compiler, public tests, live parity battery, generated proto code, and documentation must pass together before merge. LMS-18 depends on LMS-15; it does not require LMS-16 or LMS-17. Integrate against the latest `service.proto` before merging. Implement Task 4 as the separate protocol retirement pull request after both Clyde cutovers.
 
 ## Tasks
 
@@ -54,7 +57,7 @@ Verification:
 - Run: `make proto && go test ./internal/daemon`
 - Expect: invalid filters fail before expression execution; both old search RPCs return the same results.
 
-### 2. Generalize expression compilation and ranked cap fill
+### 2. Generalize expression compilation and rank once per query
 
 Files:
 
@@ -70,21 +73,23 @@ Files:
 
 Behavior:
 
-- Compile only validated declared columns into Milvus syntax. Escape literal values with the existing rules. Apply the same typed predicates in the local vector store. For more than 256 item IDs, both old and generic RPCs use the existing per-batch limited search, ordered merge, and cap reduction during this cutover. Test that path separately from paged cap fill.
-- Generalize `fillCappedConversationSearchWith` for the generic paged path: embed the query once, request ranked pages, apply the group cap and score floor at the existing stage, preserve tie order, and stop at the existing 16384-row window. Read group identity from its scalar column.
+- Compile only validated declared columns into Milvus syntax. Escape literal values with the existing rules. Apply the same typed predicates in the local vector store. Send a large membership set in one search through Milvus expression template parameters. Old and generic RPCs never batch a membership set into separate searches.
+- Replace offset paging with one ranking per query. Embed the query once. Run both hybrid legs at one fixed depth, starting at the 16,384-row Milvus ceiling. Request only the primary key, `relativePath`, the group column, and the score for the ranking. Sort, then walk the ranking once for the score floor and the group cap. Read group identity from its scalar column.
+- Query content and output scalars by primary key for the selected rows only, and return them in ranking order.
 - Request every declared native scalar from Milvus and decode it through a typed hit representation that distinguishes absent, null, and concrete values. Return stored `relativePath` as `row_key`. Keep old JSON-metadata decoding for legacy identity and old response fields.
 
 Steps:
 
 1. Extract the generic expression builder from `buildExpr` and keep `buildExpr` as a conversation adapter.
-2. Parameterize the cap-fill reducer by group column. Keep the existing pagination and score comparisons for the paged path. Retain the old batched path for more than 256 conversation IDs and test its ordered merge separately.
-3. Implement matching filter and grouping behavior in `internal/localvec`.
-4. Test through the public gRPC boundary with a corpus where the first ranked page contains too many hits from one group and a later page must fill the result limit.
+2. Build the single ranking and walk for the existing conversation search first. Remove offset paging and the batched merge. Confirm that Milvus 2.6.18 accepts a membership set of 20,000 IDs through template parameters. Measure ranking latency at the fixed depth on the live harness.
+3. Parameterize the walk by group column for the generic RPC.
+4. Implement matching filter, ordering, and grouping behavior in `internal/localvec`.
+5. Test through the public gRPC boundary with a corpus where the rows ranked first contain too many hits from one group. Test that repeated queries return the same order and that a smaller limit returns a prefix of a larger one. Test one search over a large membership set.
 
 Verification:
 
 - Run: `go test ./internal/semantic ./internal/localvec ./internal/daemon`
-- Expect: old and generic RPCs return equal shared fields, order, and scores. Direct store reads confirm row keys and native scalar values because the old response does not expose them.
+- Expect: a capped search fills its limit whenever enough rows qualify within the ranking depth. Old and generic RPCs return equal shared fields, order, and scores. Direct store reads confirm row keys and native scalar values because the old response does not expose them.
 
 ### 3. Prove live parity and release the search surface
 
@@ -95,7 +100,7 @@ Files:
 
 Behavior:
 
-- A read-only live battery calls both RPCs on the same isolated harness collection. Queries cover provider, role, time, message index, parent, workspace, archived, large conversation-ID sets, group caps, score floor, and within-conversation fingerprints. Compare shared wire fields, ordered scores, and fingerprints; inspect stored rows separately for row-key and native-scalar parity. Do not print transcript content.
+- A read-only live battery calls both RPCs on the same isolated harness collection. Queries cover provider, role, time, message index, parent, workspace, archived, large conversation-ID sets, group caps, score floor, and within-conversation fingerprints. Repeat each query and compare limits of 5 and 10 to confirm the same order and a shared prefix. Compare shared wire fields, ordered scores, and fingerprints; inspect stored rows separately for row-key and native-scalar parity. Do not print transcript content.
 - Clyde continues calling the old RPCs during this LMS release.
 
 Steps:
