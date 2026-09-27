@@ -598,6 +598,36 @@ func TestUpsertCollectionItemsContinuationPrefix(t *testing.T) {
 	}
 }
 
+// TestUpsertCollectionItemsDerivedFingerprintCoversContinuationPrefix upserts
+// one row three times without a manifest frame. The engine derives each
+// fingerprint from the row. A continuation prefix on the unchanged row gives
+// the item a new fingerprint in the checkpoint. The same row without the prefix
+// restores the first fingerprint.
+func TestUpsertCollectionItemsDerivedFingerprintCoversContinuationPrefix(t *testing.T) {
+	t.Parallel()
+	daemon := newOfflineCollectionDaemon(t)
+	registered, err := daemon.registerCollection("docs-derived", "docId", documentScalars())
+	if err != nil {
+		t.Fatalf("RegisterCollection returned error: %v", err)
+	}
+	header := collectionHeader("docs-derived", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false)
+	plain := documentRow("a/0", "doc-a", "derived fingerprint body", 1)
+	prefixed := documentRow("a/0", "doc-a", "derived fingerprint body", 1)
+	prefixed.ContinuationPrefix = "Section A"
+
+	daemon.upsertItems(header, []*pb.CollectionRow{plain}, nil)
+	withoutPrefix := daemon.checkpointFiles(registered.GetCodebaseId())["doc-a"]
+	daemon.upsertItems(header, []*pb.CollectionRow{prefixed}, nil)
+	withPrefix := daemon.checkpointFiles(registered.GetCodebaseId())["doc-a"]
+	if withoutPrefix == "" || withPrefix == withoutPrefix {
+		t.Fatalf("derived fingerprint with a continuation prefix = %q, and without one = %q; the prefix should change the fingerprint", withPrefix, withoutPrefix)
+	}
+	daemon.upsertItems(header, []*pb.CollectionRow{plain}, nil)
+	if restored := daemon.checkpointFiles(registered.GetCodebaseId())["doc-a"]; restored != withoutPrefix {
+		t.Fatalf("derived fingerprint after the prefix is removed = %q, want the first fingerprint %q", restored, withoutPrefix)
+	}
+}
+
 // TestUpsertCollectionItemsRejectsInvalidRows sends rows that break the saved
 // declaration. Each stream fails with InvalidArgument, reports the rejected
 // column in ErrorInfo when there is one, and queues no job. An unregistered

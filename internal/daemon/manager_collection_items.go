@@ -309,7 +309,7 @@ func conversationRowKeyMatches(rowKey string, conversationID string, messageInde
 }
 
 // manifestFromRows fingerprints each delivered item from its rows: every row
-// key, text, and scalar value in row key and column order.
+// key, text, continuation prefix, and scalar value in row key and column order.
 func manifestFromRows(rows []collectionRow) map[string]string {
 	byItem := make(map[string][]collectionRow)
 	for _, row := range rows {
@@ -333,6 +333,16 @@ func fingerprintCollectionRows(rows []collectionRow) string {
 		hasher.Write([]byte{0})
 		hasher.Write([]byte(row.Text))
 		hasher.Write([]byte{0})
+		// An empty prefix adds nothing, and a row without a prefix keeps the
+		// fingerprint it had before the prefix field existed. The prefix section
+		// opens with the prefix length, a digit, and a declared column name never
+		// starts with a digit.
+		if row.ContinuationPrefix != "" {
+			hasher.Write([]byte(strconv.Itoa(len(row.ContinuationPrefix))))
+			hasher.Write([]byte{0})
+			hasher.Write([]byte(row.ContinuationPrefix))
+			hasher.Write([]byte{0})
+		}
 		columns := make([]string, 0, len(row.Scalars))
 		for column := range row.Scalars {
 			columns = append(columns, column)
