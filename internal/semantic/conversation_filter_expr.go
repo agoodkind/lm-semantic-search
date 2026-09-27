@@ -54,7 +54,7 @@ func (filter ConversationFilter) HasConversationScope() bool {
 // buildExpr renders the Milvus boolean expression for every native dimension,
 // ANDing whichever clauses are present. An empty result searches the whole
 // collection. Role values are lowercased to match the lowercased role column.
-// Role filtering is therefore case-insensitive across providers. The
+// Role filtering is case-insensitive across providers. The
 // conversation id scope renders as the conversationIDsTemplateParam
 // placeholder, and the search supplies the ids as that template parameter.
 func (filter ConversationFilter) buildExpr() string {

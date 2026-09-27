@@ -128,10 +128,9 @@ func capRanking(full []*pb.ConversationSearchResult, perConversationLimit int, l
 
 // TestConversationSearchCapFillsPastAnOverfilledTop proves the
 // per-conversation cap returns the requested number of rows when the top ranks
-// belong to one conversation. Thirty dense rows equal to the query rank first,
-// and a limit
-// of ten with a cap of two returns ten rows: two dense rows and the eight best
-// other rows of the full ranking, in ranking order.
+// belong to one conversation. Thirty dense rows equal to the query rank first.
+// A limit of ten with a cap of two returns ten rows: two dense rows and the
+// eight best other rows of the full ranking, in ranking order.
 func TestConversationSearchCapFillsPastAnOverfilledTop(t *testing.T) {
 	h, full := newRankingHarness(t)
 	denseInTop := 0

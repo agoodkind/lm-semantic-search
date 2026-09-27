@@ -152,8 +152,9 @@ func TestApplyLegacyConversationIDsDropsDeletedRows(t *testing.T) {
 	}
 }
 
-// TestRankedCandidatesRejectMissingScores proves a ranking result with fewer
-// scores than rows fails instead of ranking the unscored rows at zero.
+// TestRankedCandidatesRejectMissingScores proves rankedCandidatesFromResultSets
+// returns ErrSearchResultIncomplete when the result set has fewer scores than
+// rows.
 func TestRankedCandidatesRejectMissingScores(t *testing.T) {
 	t.Parallel()
 
