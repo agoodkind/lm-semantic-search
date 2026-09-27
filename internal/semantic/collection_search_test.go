@@ -1,6 +1,8 @@
 package semantic
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -27,9 +29,57 @@ func candidateKeys(candidates []rankedCandidate) []string {
 	return keys
 }
 
+// TestRankedCandidatesRejectMissingScores proves rankedCandidatesFromResultSets
+// returns ErrSearchResultIncomplete when the result set has fewer scores than
+// rows.
+func TestRankedCandidatesRejectMissingScores(t *testing.T) {
+	t.Parallel()
+
+	resultSet := milvusclient.ResultSet{
+		ResultCount: 2,
+		IDs:         column.NewColumnVarChar(idFieldName, []string{"k1", "k2"}),
+		Fields: milvusclient.DataSet{
+			column.NewColumnVarChar(relativePathFieldName, []string{"conv/a/0", "conv/a/1"}),
+		},
+		Scores: []float32{0.9},
+	}
+	groupColumn := model.ScalarColumn{Name: conversationIDFieldName, Type: model.ScalarTypeString, Nullable: true, MaxLength: 256}
+	_, err := rankedCandidatesFromResultSets(context.Background(), "conv_chunks_test", []milvusclient.ResultSet{resultSet}, groupColumn, false)
+	if !errors.Is(err, ErrSearchResultIncomplete) {
+		t.Fatalf("rankedCandidatesFromResultSets error = %v, want ErrSearchResultIncomplete", err)
+	}
+}
+
+// TestApplyLegacyConversationGroupsDropsDeletedRows proves a null-group row
+// deleted after the ranking search leaves the candidates before the cap
+// applies. The deleted row takes no empty-id cap slot from a surviving row.
+func TestApplyLegacyConversationGroupsDropsDeletedRows(t *testing.T) {
+	t.Parallel()
+
+	nullGroup := func(primaryKey string, relativePath string, score float64) rankedCandidate {
+		return rankedCandidate{PrimaryKey: primaryKey, RelativePath: relativePath, Group: AbsentCell(conversationIDFieldName), Score: score}
+	}
+	resolved := applyLegacyConversationGroups(
+		[]rankedCandidate{
+			nullGroup("gone", "conv/legacy-a/0", 0.9),
+			nullGroup("kept", "conv/legacy-b/0", 0.8),
+			candidate("current", "conv/c/0", "c", 0.7),
+			nullGroup("unnamed", "conv/legacy-c/0", 0.6),
+		},
+		conversationIDFieldName,
+		map[string]string{"kept": "legacy-b", "unnamed": ""},
+	)
+	if got, want := candidateKeys(resolved), []string{"kept", "current", "unnamed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolved keys = %v, want %v", got, want)
+	}
+	if got, want := candidateKeys(selectRankedCandidates(resolved, 1, 0, 10)), []string{"kept", "current", "unnamed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("capped keys = %v, want %v", got, want)
+	}
+}
+
 // TestSortRankedCandidatesBreaksTiesByPathThenKey proves the ranking order is
 // total: descending score, then ascending relativePath, then ascending primary
-// key, whatever order the store returned the rows in.
+// key.
 func TestSortRankedCandidatesBreaksTiesByPathThenKey(t *testing.T) {
 	t.Parallel()
 

@@ -135,16 +135,11 @@ func groupColumnFor(search CollectionSearch) (model.ScalarColumn, bool) {
 }
 
 // SearchCollection runs a typed search and returns at most Limit hits, at most
-// PerGroupLimit per GroupBy value, none scoring below MinScore. It embeds the
-// query once and runs one ranking search at CollectionRankingDepth that
-// returns each row's primary key, relativePath, group column, and score. The
-// compiled filter restricts that ranking natively, and every membership set
-// binds as a template parameter. The search sorts the ranking by descending
-// score, then relativePath, then primary key, and walks it once to apply the
-// score floor, the group cap, and the limit. It then reads content and every
-// declared scalar column for the selected rows only and returns them in the
-// walked order. One query and filter therefore always return the same rows in
-// the same order, and a smaller limit returns a prefix of a larger one.
+// PerGroupLimit per GroupBy value, none scoring below MinScore. On an unchanged
+// collection, repeating the same query with the same filter returns the same
+// rows in the same order, and a smaller limit returns a prefix of a larger
+// one. The filter restricts one fixed-depth ranking natively, and every
+// membership set binds as one template parameter.
 func (service *Service) SearchCollection(ctx context.Context, search CollectionSearch) ([]CollectionHit, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
@@ -190,7 +185,8 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 		return nil, err
 	}
 	if grouped && IsConversationDeclaration(search.Declaration) && groupColumn.Name == search.Declaration.ItemIDColumn {
-		if err := service.resolveLegacyConversationGroups(ctx, collectionName, groupColumn.Name, candidates); err != nil {
+		candidates, err = service.resolveLegacyConversationGroups(ctx, collectionName, groupColumn.Name, candidates)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -204,8 +200,7 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 }
 
 // rankedCandidate is one row of a collection search's fused ranking. It
-// stores only the row identity, the group column cell, and the score. The
-// search reads content for the selected candidates afterward.
+// stores only the row identity, the group column cell, and the score.
 type rankedCandidate struct {
 	PrimaryKey   string
 	RelativePath string
@@ -214,8 +209,7 @@ type rankedCandidate struct {
 }
 
 // sortRankedCandidates orders candidates by descending score, then ascending
-// relativePath, then ascending primary key. The order is total. One query
-// therefore ranks its candidates the same way on every call.
+// relativePath, then ascending primary key. The order is total.
 func sortRankedCandidates(candidates []rankedCandidate) {
 	sort.Slice(candidates, func(first int, second int) bool {
 		left := candidates[first]
@@ -233,8 +227,8 @@ func sortRankedCandidates(candidates []rankedCandidate) {
 // selectRankedCandidates walks sorted candidates once. It drops a candidate
 // scoring below minScore, keeps at most perGroupLimit candidates per group
 // key, and stops at limit. A zero perGroupLimit is uncapped, and a zero
-// minScore is no floor. The walk never looks ahead. The result for a smaller
-// limit is therefore a prefix of the result for a larger one.
+// minScore is no floor. A smaller limit returns a prefix of a larger limit's
+// result, which search paging relies on.
 func selectRankedCandidates(candidates []rankedCandidate, perGroupLimit int32, minScore float64, limit int32) []rankedCandidate {
 	kept := make([]rankedCandidate, 0, min(len(candidates), int(max(limit, 0))))
 	perGroup := make(map[string]int32)
@@ -260,9 +254,7 @@ func selectRankedCandidates(candidates []rankedCandidate, perGroupLimit int32, m
 // rankCollectionCandidates runs the one ranking search of a collection search.
 // A hybrid collection runs both legs at CollectionRankingDepth and fuses them
 // with the RRF reranker into at most CollectionRankingDepth rows. A dense
-// collection runs one search at the same depth. Both request only relativePath
-// and the group column, and Milvus returns the primary key and score with
-// every row.
+// collection runs one search at the same depth.
 func (service *Service) rankCollectionCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled compiledFilter, groupColumn model.ScalarColumn, grouped bool) ([]rankedCandidate, error) {
 	outputFields := []string{relativePathFieldName}
 	if grouped {
@@ -333,14 +325,15 @@ func bindAnnTemplateParam(request *milvusclient.AnnRequest, param filterTemplate
 }
 
 // rankedCandidatesFromResultSets decodes the ranking rows and each row's group
-// column cell.
+// column cell. A result without a score for every row returns
+// ErrSearchResultIncomplete.
 func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, resultSets []milvusclient.ResultSet, groupColumn model.ScalarColumn, grouped bool) ([]rankedCandidate, error) {
 	if len(resultSets) == 0 || resultSets[0].ResultCount == 0 {
 		return []rankedCandidate{}, nil
 	}
 	resultSet := resultSets[0]
 	relativePathColumn := resultSet.GetColumn(relativePathFieldName)
-	if resultSet.IDs == nil || relativePathColumn == nil {
+	if resultSet.IDs == nil || relativePathColumn == nil || len(resultSet.Scores) < resultSet.ResultCount {
 		return nil, ErrSearchResultIncomplete
 	}
 	candidates := make([]rankedCandidate, 0, resultSet.ResultCount)
@@ -360,11 +353,7 @@ func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, 
 				return nil, err
 			}
 		}
-		score := 0.0
-		if index < len(resultSet.Scores) {
-			score = float64(resultSet.Scores[index])
-		}
-		candidates = append(candidates, rankedCandidate{PrimaryKey: primaryKey, RelativePath: relativePath, Group: group, Score: score})
+		candidates = append(candidates, rankedCandidate{PrimaryKey: primaryKey, RelativePath: relativePath, Group: group, Score: float64(resultSet.Scores[index])})
 	}
 	return candidates, nil
 }
@@ -374,13 +363,13 @@ func rankingReadError(ctx context.Context, collectionName string, field string, 
 	return fmt.Errorf("read ranking %s at %d from %s: %w", field, index, collectionName, err)
 }
 
-// resolveLegacyConversationGroups sets the group of every candidate with a
-// null conversationId column when a conversation collection is capped per
-// conversation. It reads those rows' metadata JSON by primary key and uses its
-// conversation_id, the identity the per-conversation cap used before the
-// scalar columns existed. A row with no conversation_id in its metadata groups
-// under the empty conversation id.
-func (service *Service) resolveLegacyConversationGroups(ctx context.Context, collectionName string, groupColumnName string, candidates []rankedCandidate) error {
+// resolveLegacyConversationGroups sets the group of each candidate with a null
+// conversationId column. It queries those rows by primary key and reads
+// conversation_id from each row's metadata JSON. Rows written before the
+// conversationId column existed store their identity only there. A row without
+// a metadata conversation_id groups under the empty conversation id. The
+// returned candidates omit a legacy row deleted after the ranking search.
+func (service *Service) resolveLegacyConversationGroups(ctx context.Context, collectionName string, groupColumnName string, candidates []rankedCandidate) ([]rankedCandidate, error) {
 	legacyKeys := make([]string, 0)
 	for _, candidate := range candidates {
 		if candidate.Group.State != ScalarCellValue {
@@ -388,43 +377,54 @@ func (service *Service) resolveLegacyConversationGroups(ctx context.Context, col
 		}
 	}
 	if len(legacyKeys) == 0 {
-		return nil
+		return candidates, nil
 	}
 	resultSet, err := service.milvus.Query(ctx, milvusclient.NewQueryOption(collectionName).
 		WithIDs(column.NewColumnVarChar(idFieldName, legacyKeys)).
 		WithOutputFields(idFieldName, metadataFieldName))
 	if err != nil {
-		return searchErr(ctx, "load legacy conversation identity", collectionName, err)
+		return nil, searchErr(ctx, "load legacy conversation identity", collectionName, err)
 	}
 	idColumn := resultSet.GetColumn(idFieldName)
 	metadataColumn := resultSet.GetColumn(metadataFieldName)
 	if resultSet.ResultCount > 0 && (idColumn == nil || metadataColumn == nil) {
-		return ErrSearchResultIncomplete
+		return nil, ErrSearchResultIncomplete
 	}
 	legacyIDs := make(map[string]string, resultSet.ResultCount)
 	for index := range resultSet.ResultCount {
 		primaryKey, idErr := idColumn.GetAsString(index)
 		if idErr != nil {
-			return rankingReadError(ctx, collectionName, idFieldName, index, idErr)
+			return nil, rankingReadError(ctx, collectionName, idFieldName, index, idErr)
 		}
 		metadata, metadataErr := metadataColumn.GetAsString(index)
 		if metadataErr != nil {
-			return rankingReadError(ctx, collectionName, metadataFieldName, index, metadataErr)
+			return nil, rankingReadError(ctx, collectionName, metadataFieldName, index, metadataErr)
 		}
 		legacyIDs[primaryKey] = decodeMetadata(metadata).ConversationID
 	}
-	for index := range candidates {
-		if candidates[index].Group.State != ScalarCellValue {
-			candidates[index].Group = ValueCell(groupColumnName, StringScalar(legacyIDs[candidates[index].PrimaryKey]))
-		}
-	}
-	return nil
+	return applyLegacyConversationGroups(candidates, groupColumnName, legacyIDs), nil
 }
 
-// loadRankedHits reads the content, output columns, and declared scalar
-// columns of the selected rows by primary key and returns them in the selected
-// order with their ranking scores. A selected row that no longer exists is
-// skipped.
+// applyLegacyConversationGroups sets each null-group candidate's group from
+// legacyIDs and drops a null-group candidate that legacyIDs does not contain.
+func applyLegacyConversationGroups(candidates []rankedCandidate, groupColumnName string, legacyIDs map[string]string) []rankedCandidate {
+	resolved := make([]rankedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Group.State != ScalarCellValue {
+			conversationID, found := legacyIDs[candidate.PrimaryKey]
+			if !found {
+				continue
+			}
+			candidate.Group = ValueCell(groupColumnName, StringScalar(conversationID))
+		}
+		resolved = append(resolved, candidate)
+	}
+	return resolved
+}
+
+// loadRankedHits queries content, output columns, and declared scalar columns
+// for the selected rows by primary key and returns them in selection order. A
+// row deleted after the ranking search is skipped.
 func (service *Service) loadRankedHits(ctx context.Context, collectionName string, selected []rankedCandidate, scalarColumns []model.ScalarColumn) ([]CollectionHit, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	if len(selected) == 0 {
