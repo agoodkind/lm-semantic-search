@@ -256,8 +256,14 @@ func pbCollectionManifest(fingerprints []*pb.CollectionItemFingerprint) (map[str
 // pbCollectionRow converts one wire row. An unset scalar value converts to a
 // null value.
 func pbCollectionRow(row *pb.CollectionRow) collectionRowInput {
-	scalars := make([]collectionScalarInput, 0, len(row.GetScalars()))
-	for _, scalar := range row.GetScalars() {
+	return collectionRowInput{RowKey: row.GetRowKey(), ItemID: row.GetItemId(), Text: row.GetText(), Scalars: pbCollectionScalars(row.GetScalars())}
+}
+
+// pbCollectionScalars converts wire scalar values. An unset value converts to a
+// null value.
+func pbCollectionScalars(wireScalars []*pb.CollectionScalarValue) []collectionScalarInput {
+	scalars := make([]collectionScalarInput, 0, len(wireScalars))
+	for _, scalar := range wireScalars {
 		value := model.ScalarValue{Type: "", Null: false, String: "", Bool: false, Int64: 0}
 		switch typed := scalar.GetValue().(type) {
 		case *pb.CollectionScalarValue_StringValue:
@@ -274,7 +280,7 @@ func pbCollectionRow(row *pb.CollectionRow) collectionRowInput {
 		}
 		scalars = append(scalars, collectionScalarInput{Column: scalar.GetColumn(), Value: value})
 	}
-	return collectionRowInput{RowKey: row.GetRowKey(), ItemID: row.GetItemId(), Text: row.GetText(), Scalars: scalars}
+	return scalars
 }
 
 // collectionRowInputBytes counts the bytes one row adds to the stream bound.

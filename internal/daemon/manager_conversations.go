@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -48,14 +49,16 @@ const (
 // content delivered for the changed ids: conversation documents from the
 // conversation RPC, or validated client rows from the generic RPC. The shared
 // routine diffs the manifest against the stored checkpoint and embeds only the
-// changed items. A delete lists one conversation id to drop.
+// changed items. A delete removes the rows of the one item in ItemID: a
+// conversation id from the conversation RPC, or a client item id from the
+// generic RPC.
 type conversationJobPayload struct {
 	Kind           conversationJobKind
 	CollectionName string
 	Manifest       map[string]string
 	Documents      []model.ConversationDocument
 	Rows           []collectionRow
-	ConversationID string
+	ItemID         string
 	// Absence is the upsert's caller-declared policy for a conversation the
 	// manifest omits. It is meaningful only for an upsert; a delete sets it
 	// explicitly to absenceRetain (also the zero value) but never consults it.
@@ -226,7 +229,7 @@ func (manager *Manager) queueCollectionUpsert(ctx context.Context, codebase mode
 		Manifest:       upsert.Manifest,
 		Documents:      upsert.Documents,
 		Rows:           upsert.Rows,
-		ConversationID: "",
+		ItemID:         "",
 		Absence:        upsert.Absence,
 		Backfill:       upsert.Backfill,
 		Force:          upsert.Force,
@@ -280,20 +283,23 @@ func (manager *Manager) SearchWithinConversation(ctx context.Context, collection
 	return chunks, manager.conversationIndexedFingerprint(ctx, codebase, trimmedConversationID), nil
 }
 
-func (manager *Manager) backfillConversationScalars(ctx context.Context, collectionID string, enrichment semantic.ConversationEnrichment, dryRun bool) (changed int, orphan int, err error) {
+// backfillConversationScalars fills workspaceRoot and archived on the rows of a
+// conversation collection through the generic scalar backfill. values maps a
+// conversation id to its workspaceRoot and archived values. The collection
+// resolves the way every conversation RPC resolves it.
+func (manager *Manager) backfillConversationScalars(ctx context.Context, collectionID string, values map[string]map[string]model.ScalarValue, dryRun bool) (int, int, error) {
 	codebase, err := manager.resolveConversationCollection(ctx, collectionID)
 	if err != nil {
 		return 0, 0, err
 	}
-	if manager.semantic == nil {
-		return 0, 0, semantic.ErrUnavailable
-	}
-	changed, orphan, err = manager.semantic.BackfillConversationEnrichment(ctx, codebase.CollectionName, enrichment, dryRun)
-	if err != nil {
-		slog.ErrorContext(ctx, "backfill conversation scalars failed", "collection_id", collectionID, "collection", codebase.CollectionName, "changed", changed, "orphan", orphan, "err", err)
-		return changed, orphan, fmt.Errorf("backfill conversation scalars for %s: %w", collectionID, err)
-	}
-	return changed, orphan, nil
+	declaration := semantic.ConversationDeclaration()
+	return manager.runScalarBackfill(ctx, codebase, semantic.ScalarBackfill{
+		ItemColumn:   declaration.ItemIDColumn,
+		Columns:      declaredColumnsNamed(declaration, semantic.ConversationWorkspaceRootColumn, semantic.ConversationArchivedColumn),
+		Values:       values,
+		Conversation: true,
+		DryRun:       dryRun,
+	})
 }
 
 // conversationIndexedFingerprint reads the checkpointed content fingerprint
@@ -347,6 +353,9 @@ func (manager *Manager) searchConversationCollectionFiltered(ctx context.Context
 	return chunks, nil
 }
 
+// deleteConversation queues the removal of one conversation's rows through the
+// generic item delete. The collection resolves the way every conversation RPC
+// resolves it.
 func (manager *Manager) deleteConversation(ctx context.Context, collectionID string, conversationID string, client model.ClientInfo) (model.Job, error) {
 	trimmedConversationID := strings.TrimSpace(conversationID)
 	if trimmedConversationID == "" {
@@ -356,22 +365,7 @@ func (manager *Manager) deleteConversation(ctx context.Context, collectionID str
 	if err != nil {
 		return model.Job{}, err
 	}
-	payload := conversationJobPayload{
-		Kind:           conversationJobKindDelete,
-		CollectionName: codebase.CollectionName,
-		Manifest:       nil,
-		Documents:      nil,
-		Rows:           nil,
-		ConversationID: trimmedConversationID,
-		// A delete removes exactly one conversation and never runs the
-		// manifest-absence branch, so Absence is unused here; set it explicitly to
-		// absenceRetain (also the zero value) to satisfy exhaustruct.
-		Absence: absenceRetain,
-		// A delete never backfills or force-rebuilds documents; it carries none.
-		Backfill: false,
-		Force:    false,
-	}
-	return manager.queueConversationJob(ctx, codebase, client, payload)
+	return manager.queueItemDelete(ctx, codebase, trimmedConversationID, client)
 }
 
 func (manager *Manager) queueConversationJob(ctx context.Context, codebase model.Codebase, client model.ClientInfo, payload conversationJobPayload) (model.Job, error) {
@@ -408,7 +402,7 @@ func (manager *Manager) queueConversationJob(ctx context.Context, codebase model
 			return activeJob, nil
 		}
 		manager.mu.Unlock()
-		return emptyJob, fmt.Errorf("conflicting active job %s for conversation collection %s", activeJob.ID, current.CanonicalPath)
+		return emptyJob, adapterr.NewActiveJobConflict(activeJob.ID, fmt.Sprintf("conflicting active job %s for conversation collection %s", activeJob.ID, current.CanonicalPath))
 	}
 
 	job, err := manager.enqueueConversationJobLocked(current, client, payload)
@@ -451,7 +445,7 @@ func (manager *Manager) activeConversationJobLocked(codebase model.Codebase) (mo
 // runConversationIngest runs one document collection job. An upsert runs the
 // same delta-then-bootstrap routine code uses, with the collection item source
 // that documentItemSource builds from the saved declaration. A delete drops one
-// conversation's rows.
+// item's rows.
 func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job) {
 	payload, found := manager.conversationJobPayload(job.ID)
 	if !found {
@@ -487,9 +481,11 @@ func (manager *Manager) runConversationIngest(ctx context.Context, job model.Job
 	}
 }
 
-// runConversationDelete drops one conversation's rows from the live collection,
-// then marks the job complete. It does not touch the merkle checkpoint: a later
-// manifest sync that omits the id converges the same removal idempotently.
+// runConversationDelete drops one item's rows from the live collection, then
+// marks the job complete. The saved declaration selects the rows: its item id
+// column, plus the legacy conversation path prefixes for the conversation
+// declaration. The delete leaves the merkle checkpoint unchanged. A later
+// manifest sync that omits the id converges the checkpoint.
 func (manager *Manager) runConversationDelete(ctx context.Context, job model.Job, payload conversationJobPayload) {
 	select {
 	case <-ctx.Done():
@@ -502,7 +498,8 @@ func (manager *Manager) runConversationDelete(ctx context.Context, job model.Job
 		manager.updateJobFailed(ctx, job.ID, semantic.ErrUnavailable)
 		return
 	}
-	if err := manager.semantic.DeleteConversation(ctx, payload.CollectionName, payload.ConversationID); err != nil {
+	removal := manager.itemSelector(job.CodebaseID).removal([]string{payload.ItemID})
+	if err := manager.semantic.DeleteItemRows(ctx, payload.CollectionName, removal); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 			manager.updateJobCancelled(ctx, job.ID)
 			return

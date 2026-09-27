@@ -50,8 +50,7 @@ type fakeSemantic struct {
 	reindexWithReuse      func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
 	stageReindexWithReuse func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
 	copyChunks            func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
-	deleteConversation    func(ctx context.Context, collectionName string, conversationID string) error
-	backfillConversations func(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error)
+	deleteItemRows        func(ctx context.Context, collectionName string, removal semantic.Removal) error
 	collectionName        func(codebasePath string) string
 	conversationName      func(collectionID string) string
 	inspectCollection     func(context.Context, string) (semantic.CollectionFacts, error)
@@ -536,17 +535,15 @@ func copyRemoval(removal semantic.Removal) semantic.Removal {
 	}
 }
 
-func (f *fakeSemantic) DeleteConversation(ctx context.Context, collectionName string, conversationID string) error {
-	if f.deleteConversation != nil {
-		return f.deleteConversation(ctx, collectionName, conversationID)
+func (f *fakeSemantic) DeleteItemRows(ctx context.Context, collectionName string, removal semantic.Removal) error {
+	if f.deleteItemRows != nil {
+		return f.deleteItemRows(ctx, collectionName, removal)
 	}
 	return nil
 }
 
-func (f *fakeSemantic) BackfillConversationEnrichment(ctx context.Context, collectionName string, enrichment semantic.ConversationEnrichment, dryRun bool) (int, int, error) {
-	if f.backfillConversations != nil {
-		return f.backfillConversations(ctx, collectionName, enrichment, dryRun)
-	}
+// BackfillCollectionScalars reports no rows that need a backfill.
+func (f *fakeSemantic) BackfillCollectionScalars(context.Context, string, semantic.ScalarBackfill) (int, int, error) {
 	return 0, 0, nil
 }
 
@@ -1126,7 +1123,7 @@ func TestMergePendingConversationPayloadORsBackfillAndForce(t *testing.T) {
 			CollectionName: "conv_chunks_merge",
 			Manifest:       map[string]string{"conv-a": "fp"},
 			Documents:      []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}},
-			ConversationID: "",
+			ItemID:         "",
 			Absence:        absenceRetain,
 			Backfill:       backfill,
 			Force:          force,

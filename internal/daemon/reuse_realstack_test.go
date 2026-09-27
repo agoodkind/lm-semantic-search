@@ -546,32 +546,35 @@ func newRealSemanticManager(t *testing.T, openAIBaseURL string) (*Manager, strin
 func newTestEmbeddingServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
-	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		var payload struct {
-			Input []string `json:"input"`
-		}
-		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		type responseRow struct {
-			Embedding []float64 `json:"embedding"`
-		}
-		type responseBody struct {
-			Data []responseRow `json:"data"`
-		}
-		rows := make([]responseRow, 0, len(payload.Input))
-		for _, text := range payload.Input {
-			rows = append(rows, responseRow{Embedding: deterministicTestVector(text)})
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(writer).Encode(responseBody{Data: rows}); err != nil {
-			http.Error(writer, err.Error(), http.StatusInternalServerError)
-		}
-	})
-	server := httptest.NewServer(handler)
+	server := httptest.NewServer(http.HandlerFunc(testEmbeddingHandler))
 	t.Cleanup(server.Close)
 	return server
+}
+
+// testEmbeddingHandler answers an embeddings request with one
+// deterministicTestVector per input.
+func testEmbeddingHandler(writer http.ResponseWriter, request *http.Request) {
+	var payload struct {
+		Input []string `json:"input"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	type responseRow struct {
+		Embedding []float64 `json:"embedding"`
+	}
+	type responseBody struct {
+		Data []responseRow `json:"data"`
+	}
+	rows := make([]responseRow, 0, len(payload.Input))
+	for _, text := range payload.Input {
+		rows = append(rows, responseRow{Embedding: deterministicTestVector(text)})
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(writer).Encode(responseBody{Data: rows}); err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func deterministicTestVector(text string) []float64 {

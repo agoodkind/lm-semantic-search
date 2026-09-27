@@ -687,6 +687,9 @@ func embedUnquotableFigureClause(subject string, figure EmbedFigure) string {
 		", which is not a possible size"
 }
 
+// conflictingJobHint is the recovery step of every conflicting-job refusal.
+const conflictingJobHint = "wait for the existing job to complete or cancel it before retrying"
+
 // NewConflictingJob reports a duplicate indexing request the daemon
 // rejects in favor of an in-flight job.
 func NewConflictingJob(message string, cause error) *AdapterError {
@@ -694,9 +697,54 @@ func NewConflictingJob(message string, cause error) *AdapterError {
 		Class:         ClassConflictingJob,
 		Message:       message,
 		Code:          "conflicting_job",
-		Hint:          "wait for the existing job to complete or cancel it before retrying",
+		Hint:          conflictingJobHint,
 		Cause:         cause,
 		SafeForClient: true,
+	}
+}
+
+// CodeActiveJobConflict is the stable ErrorInfo reason for a request that a
+// queued or running job of the same collection refuses.
+const CodeActiveJobConflict = "active_job_conflict"
+
+// ErrorInfoActiveJobIDKey is the ErrorInfo metadata key for the id of the job
+// that refuses the request of an [ActiveJobConflictError].
+const ErrorInfoActiveJobIDKey = "active_job_id"
+
+// ActiveJobConflictError is an [AdapterError] of class [ClassConflictingJob]
+// for a request that a queued or running job refuses. The gRPC boundary copies
+// ActiveJobID into the ErrorInfo metadata under [ErrorInfoActiveJobIDKey]. The
+// error unwraps to its [AdapterError], and every classification helper treats
+// it as that error's class.
+type ActiveJobConflictError struct {
+	// ActiveJobID is the id of the job that refuses the request.
+	ActiveJobID string
+	adapter     *AdapterError
+}
+
+// Error renders the wrapped adapter error.
+func (e *ActiveJobConflictError) Error() string {
+	return e.adapter.Error()
+}
+
+// Unwrap exposes the wrapped [AdapterError] for [errors.As] and [errors.Is].
+func (e *ActiveJobConflictError) Unwrap() error {
+	return e.adapter
+}
+
+// NewActiveJobConflict reports a request that the queued or running job
+// activeJobID refuses. message states the conflict.
+func NewActiveJobConflict(activeJobID string, message string) *ActiveJobConflictError {
+	return &ActiveJobConflictError{
+		ActiveJobID: activeJobID,
+		adapter: &AdapterError{
+			Class:         ClassConflictingJob,
+			Message:       message,
+			Code:          CodeActiveJobConflict,
+			Hint:          conflictingJobHint,
+			Cause:         nil,
+			SafeForClient: true,
+		},
 	}
 }
 

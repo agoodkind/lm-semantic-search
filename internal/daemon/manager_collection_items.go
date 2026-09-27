@@ -210,7 +210,7 @@ func validateCollectionRow(declaration model.CollectionDeclaration, columns map[
 		if _, duplicate := scalars[scalar.Column]; duplicate {
 			return collectionRow{}, adapterr.NewInvalidColumnValue(scalar.Column, fmt.Sprintf("row %q sets column %q more than once", input.RowKey, scalar.Column))
 		}
-		if err := validateCollectionScalar(input.RowKey, columns, scalar); err != nil {
+		if err := validateCollectionScalar(fmt.Sprintf("row %q", input.RowKey), columns, scalar); err != nil {
 			return collectionRow{}, err
 		}
 		if scalar.Column == itemColumn.Name && (scalar.Value.Null || scalar.Value.String != itemID) {
@@ -228,22 +228,25 @@ func validateCollectionRow(declaration model.CollectionDeclaration, columns map[
 	return collectionRow{RowKey: input.RowKey, ItemID: itemID, Text: input.Text, Scalars: scalars}, nil
 }
 
-func validateCollectionScalar(rowKey string, columns map[string]model.ScalarColumn, scalar collectionScalarInput) error {
+// validateCollectionScalar checks one scalar value against the declared
+// columns. subject identifies the row or item that sets the value in an error
+// message, for example `row "doc-a/title"`.
+func validateCollectionScalar(subject string, columns map[string]model.ScalarColumn, scalar collectionScalarInput) error {
 	column, declared := columns[scalar.Column]
 	if !declared {
-		return adapterr.NewInvalidColumnValue(scalar.Column, fmt.Sprintf("row %q sets undeclared column %q", rowKey, scalar.Column))
+		return adapterr.NewInvalidColumnValue(scalar.Column, fmt.Sprintf("%s sets undeclared column %q", subject, scalar.Column))
 	}
 	if scalar.Value.Null {
 		if !column.Nullable {
-			return adapterr.NewInvalidColumnValue(column.Name, fmt.Sprintf("row %q sets column %q to null, which is not nullable", rowKey, column.Name))
+			return adapterr.NewInvalidColumnValue(column.Name, fmt.Sprintf("%s sets column %q to null, which is not nullable", subject, column.Name))
 		}
 		return nil
 	}
 	if scalar.Value.Type != column.Type {
-		return adapterr.NewInvalidColumnValue(column.Name, fmt.Sprintf("row %q sets %s column %q to a %s value", rowKey, column.Type, column.Name, scalar.Value.Type))
+		return adapterr.NewInvalidColumnValue(column.Name, fmt.Sprintf("%s sets %s column %q to a %s value", subject, column.Type, column.Name, scalar.Value.Type))
 	}
 	if column.Type == model.ScalarTypeString && (len(scalar.Value.String) > int(column.MaxLength) || !utf8.ValidString(scalar.Value.String)) {
-		return adapterr.NewInvalidColumnValue(column.Name, fmt.Sprintf("row %q column %q must be valid UTF-8 of at most %d bytes", rowKey, column.Name, column.MaxLength))
+		return adapterr.NewInvalidColumnValue(column.Name, fmt.Sprintf("%s column %q must be valid UTF-8 of at most %d bytes", subject, column.Name, column.MaxLength))
 	}
 	return nil
 }

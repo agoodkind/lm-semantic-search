@@ -308,6 +308,16 @@ type collectionItemSelector struct {
 	legacyConversation bool
 }
 
+// newCollectionItemSelector returns the stored-row selector of a saved
+// declaration. Only the conversation declaration adds the legacy conversation
+// path prefixes.
+func newCollectionItemSelector(declaration model.CollectionDeclaration) collectionItemSelector {
+	return collectionItemSelector{
+		itemColumn:         declaration.ItemIDColumn,
+		legacyConversation: semantic.IsConversationDeclaration(declaration),
+	}
+}
+
 func (selector collectionItemSelector) removal(itemIDs []string) semantic.Removal {
 	var prefixes []string
 	if selector.legacyConversation {
@@ -405,7 +415,7 @@ func newDocumentItemSource(collectionName string, declaration model.CollectionDe
 		manifest:       delivery.manifest,
 		delivery:       newCollectionItemDelivery(delivery.documents, delivery.rows, conversation, delivery.chunkByteBudget),
 		stored:         stored,
-		selector:       collectionItemSelector{itemColumn: declaration.ItemIDColumn, legacyConversation: conversation},
+		selector:       newCollectionItemSelector(declaration),
 		columns:        semantic.ColumnsForDeclaration(declaration),
 		absence:        delivery.absence,
 		backfill:       delivery.backfill,

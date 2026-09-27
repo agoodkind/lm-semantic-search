@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strconv"
@@ -886,7 +887,7 @@ func TestCancelledConversationDeleteReportsCancelledWhenSemanticUnavailable(t *t
 	job := stageConversationJob(t, manager, codebase, conversationJobPayload{
 		Kind:           conversationJobKindDelete,
 		CollectionName: codebase.CollectionName,
-		ConversationID: "conv-cancel-delete",
+		ItemID:         "conv-cancel-delete",
 	})
 
 	cancelledContext, cancel := context.WithCancel(ctx)
@@ -894,7 +895,7 @@ func TestCancelledConversationDeleteReportsCancelledWhenSemanticUnavailable(t *t
 	manager.runConversationDelete(cancelledContext, job, conversationJobPayload{
 		Kind:           conversationJobKindDelete,
 		CollectionName: codebase.CollectionName,
-		ConversationID: "conv-cancel-delete",
+		ItemID:         "conv-cancel-delete",
 	})
 
 	assertConversationJobCancelled(t, manager, job.ID)
@@ -1453,10 +1454,14 @@ func TestConversationRPCsQueueJournaledJobs(t *testing.T) {
 			}
 			return nil
 		},
-		deleteConversation: func(ctx context.Context, collectionName string, conversationID string) error {
+		deleteItemRows: func(ctx context.Context, collectionName string, removal semantic.Removal) error {
 			_ = ctx
 			_ = collectionName
-			deletedConversation <- conversationID
+			wantPrefixes := []string{"conv/conv-rpc/", "convtool/conv-rpc/", "convthink/conv-rpc/"}
+			if removal.ItemColumn != semantic.ConversationIDColumn || !slices.Equal(removal.Prefixes, wantPrefixes) {
+				return fmt.Errorf("delete removal = %+v, want the conversationId column and the conv-rpc path prefixes", removal)
+			}
+			deletedConversation <- strings.Join(removal.ItemIDs, ",")
 			return nil
 		},
 	}

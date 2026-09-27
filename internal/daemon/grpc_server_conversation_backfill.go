@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -16,9 +15,9 @@ import (
 
 // BackfillConversationScalars is the client-streaming form of the conversation
 // scalar backfill. clyde sends one header chunk, then entry chunks carrying the
-// conversation id to workspace root map. The handler accumulates the enrichment
-// map, runs the synchronous vector-preserving semantic backfill, and replies once
-// through SendAndClose.
+// conversation id to workspace root map. The handler accumulates the entries as
+// workspaceRoot and archived values per conversation, runs the generic
+// vector-preserving scalar backfill, and replies once through SendAndClose.
 func (server *GRPCServer) BackfillConversationScalars(stream pb.SemanticSearchDaemonService_BackfillConversationScalarsServer) (err error) {
 	ctx, done := beginRPC(stream.Context(), "BackfillConversationScalars")
 	defer done(&err)
@@ -27,7 +26,7 @@ func (server *GRPCServer) BackfillConversationScalars(stream pb.SemanticSearchDa
 	dryRun := false
 	client := model.ClientInfo{Name: "", PID: 0}
 	headerSeen := false
-	enrichment := make(semantic.ConversationEnrichment)
+	values := make(map[string]map[string]model.ScalarValue)
 	for {
 		chunk, recvErr := stream.Recv()
 		if errors.Is(recvErr, io.EOF) {
@@ -56,7 +55,7 @@ func (server *GRPCServer) BackfillConversationScalars(stream pb.SemanticSearchDa
 			if !headerSeen {
 				return status.Error(adapterr.Respond(ctx, adapterr.NewMissingArgument("header")))
 			}
-			addConversationScalarEntries(enrichment, payload.Entries.GetEntries())
+			addConversationScalarEntries(values, payload.Entries.GetEntries())
 		default:
 		}
 	}
@@ -64,7 +63,7 @@ func (server *GRPCServer) BackfillConversationScalars(stream pb.SemanticSearchDa
 		return status.Error(adapterr.Respond(ctx, adapterr.NewMissingArgument("header")))
 	}
 
-	changed, orphan, callErr := server.manager.backfillConversationScalars(ctx, collectionID, enrichment, dryRun)
+	changed, orphan, callErr := server.manager.backfillConversationScalars(ctx, collectionID, values, dryRun)
 	if callErr != nil {
 		return status.Error(adapterr.Respond(ctx, classifyManagerError(collectionID, callErr)))
 	}
@@ -76,7 +75,7 @@ func (server *GRPCServer) BackfillConversationScalars(stream pb.SemanticSearchDa
 		DisplayText: server.envelopeText(
 			ctx,
 			health,
-			backfillConversationScalarsDisplayText(collectionID, changed, orphan, dryRun),
+			backfillScalarsDisplayText("conversation", collectionID, changed, orphan, dryRun),
 			"codebase_id",
 			collectionID,
 		),
@@ -88,7 +87,10 @@ func (server *GRPCServer) BackfillConversationScalars(stream pb.SemanticSearchDa
 	return nil
 }
 
-func addConversationScalarEntries(enrichment semantic.ConversationEnrichment, entries []*pb.BackfillConversationScalarEntry) {
+// addConversationScalarEntries records each entry's workspaceRoot and archived
+// values under its trimmed conversation id. An entry without a conversation id
+// is skipped, and a later entry for the same id replaces an earlier one.
+func addConversationScalarEntries(values map[string]map[string]model.ScalarValue, entries []*pb.BackfillConversationScalarEntry) {
 	for _, entry := range entries {
 		if entry == nil {
 			continue
@@ -97,25 +99,9 @@ func addConversationScalarEntries(enrichment semantic.ConversationEnrichment, en
 		if conversationID == "" {
 			continue
 		}
-		enrichment[conversationID] = semantic.ConversationEnrichmentValue{
-			WorkspaceRoot: entry.GetWorkspaceRoot(),
-			Archived:      entry.GetArchived(),
+		values[conversationID] = map[string]model.ScalarValue{
+			semantic.ConversationWorkspaceRootColumn: {Type: model.ScalarTypeString, Null: false, String: entry.GetWorkspaceRoot(), Bool: false, Int64: 0},
+			semantic.ConversationArchivedColumn:      {Type: model.ScalarTypeBool, Null: false, String: "", Bool: entry.GetArchived(), Int64: 0},
 		}
 	}
-}
-
-func backfillConversationScalarsDisplayText(collectionID string, changed int, orphan int, dryRun bool) string {
-	prefix := "Backfilled"
-	if dryRun {
-		prefix = "Dry run counted"
-	}
-	return fmt.Sprintf(
-		"%s conversation scalars for collection '%s': %d %s changed, %d orphan %s.",
-		prefix,
-		collectionID,
-		changed,
-		plural("row", changed),
-		orphan,
-		plural("row", orphan),
-	)
 }

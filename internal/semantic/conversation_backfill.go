@@ -66,7 +66,7 @@ func (service *Service) BackfillConversationScalarColumns(ctx context.Context, c
 		if len(ids) == 0 {
 			continue
 		}
-		if err := service.upsertConversationColumns(ctx, collectionName, ids, chunks, vectors, conversationUpsertOptions{WriteWorkspaceRoot: false, WriteArchived: false}); err != nil {
+		if err := service.upsertConversationColumns(ctx, collectionName, ids, chunks, vectors); err != nil {
 			return total, err
 		}
 		total += len(ids)
@@ -203,7 +203,6 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 	fileExtensionColumn := resultSet.GetColumn(fileExtensionFieldName)
 	metadataColumn := resultSet.GetColumn(metadataFieldName)
 	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
-	workspaceRootColumn := resultSet.GetColumn(workspaceRootFieldName)
 	loadRulesColumn := resultSet.GetColumn(loadRulesFieldName)
 	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
 	if idColumn == nil || contentColumn == nil || relativePathColumn == nil || vectorColumn == nil {
@@ -265,7 +264,7 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 			MessageIndex:         metadata.messageIndex(),
 			Role:                 metadata.Role,
 			TimestampUnix:        metadata.timestampUnix(),
-			WorkspaceRoot:        backfillString(workspaceRootColumn, rowIndex),
+			WorkspaceRoot:        "",
 			Archived:             false,
 			SplitPart:            splitPart,
 			SplitPartRecorded:    splitPartRecorded,
@@ -299,14 +298,12 @@ func backfillString(col column.Column, rowIndex int) string {
 	return value
 }
 
-// upsertConversationColumns overwrites each row in place: it keeps the existing
-// primary key, content, path, and dense vector, and writes the native scalar
-// columns derived from the chunk. Upsert matches by primary key, so no row is
-// duplicated and no vector is regenerated. opts gates the enrichment-sourced
-// columns: workspaceRoot is written only when opts.WriteWorkspaceRoot is true
-// (the caller populated chunk.WorkspaceRoot from a clyde enrichment); otherwise
-// it is omitted so the nullable column keeps its existing value.
-func (service *Service) upsertConversationColumns(ctx context.Context, collectionName string, ids []string, chunks []model.StoredChunk, vectors [][]float32, opts conversationUpsertOptions) error {
+// upsertConversationColumns overwrites each row in place. It keeps the existing
+// primary key, content, path, and dense vector, and it writes the native scalar
+// columns derived from the chunk. The upsert matches rows by primary key. It
+// duplicates no row and regenerates no vector. The metadata JSON stores neither
+// workspaceRoot nor archived, and the upsert omits both columns.
+func (service *Service) upsertConversationColumns(ctx context.Context, collectionName string, ids []string, chunks []model.StoredChunk, vectors [][]float32) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -355,12 +352,10 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 		return fmt.Errorf("build split part backfill column for %s: %w", collectionName, columnErr)
 	}
 
-	// workspaceRoot is written only when opts.WriteWorkspaceRoot is set. The
-	// metadata-only sweep cannot source it (it is not carried in the stored
-	// metadata JSON), so it leaves the nullable column out of the upsert to
-	// preserve the row's existing value (NULL on old rows), and workspace
-	// filtering falls back to the conversation_id column. The enrichment-driven
-	// backfill sets the flag after populating chunk.WorkspaceRoot from clyde.
+	// The metadata-only sweep has no source for workspaceRoot or archived. The
+	// upsert leaves both nullable columns out, and workspace filtering uses the
+	// conversation_id column instead. BackfillCollectionScalars fills both
+	// columns from client values.
 	option := milvusclient.NewColumnBasedInsertOption(collectionName).
 		WithVarcharColumn(idFieldName, ids).
 		WithVarcharColumn(contentFieldName, contents).
@@ -377,109 +372,10 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 		WithVarcharColumn(providerFieldName, scalars.providers).
 		WithInt64Column(timestampUnixFieldName, scalars.timestamps).
 		WithInt64Column(messageIndexFieldName, scalars.messageIndexes)
-	if opts.WriteWorkspaceRoot {
-		option = option.WithVarcharColumn(workspaceRootFieldName, scalars.workspaceRoots)
-	}
-	if opts.WriteArchived {
-		option = option.WithBoolColumn(archivedFieldName, scalars.archiveds)
-	}
 
 	if _, err := service.milvus.Upsert(ctx, option); err != nil {
 		slog.ErrorContext(ctx, "conversation backfill upsert failed", "collection", collectionName, "rows", len(ids), "err", err)
 		return fmt.Errorf("upsert backfill batch into %s: %w", collectionName, err)
 	}
 	return nil
-}
-
-// partitionConversationEnrichment splits one backfill page into the rows whose
-// conversation clyde still knows and the orphans whose conversation is absent
-// from the enrichment (its artifact is gone). For a known conversation it sets
-// chunk.Archived from the enrichment and fills chunk.WorkspaceRoot from the
-// enrichment only when the row's own workspace is empty, so a row that already
-// carries a workspace keeps it. The chunks slice is mutated in place for the
-// resolvable rows; orphans are left untouched.
-func partitionConversationEnrichment(ids []string, chunks []model.StoredChunk, vectors [][]float32, enrichment ConversationEnrichment) ([]string, []model.StoredChunk, [][]float32, int) {
-	fillIDs := make([]string, 0, len(ids))
-	fillChunks := make([]model.StoredChunk, 0, len(chunks))
-	fillVectors := make([][]float32, 0, len(vectors))
-	orphan := 0
-	for index := range ids {
-		value, ok := enrichment[chunks[index].ConversationID]
-		if !ok {
-			orphan++
-			continue
-		}
-		if chunks[index].WorkspaceRoot == "" {
-			chunks[index].WorkspaceRoot = value.WorkspaceRoot
-		}
-		chunks[index].Archived = value.Archived
-		fillIDs = append(fillIDs, ids[index])
-		fillChunks = append(fillChunks, chunks[index])
-		fillVectors = append(fillVectors, vectors[index])
-	}
-	return fillIDs, fillChunks, fillVectors, orphan
-}
-
-// BackfillConversationEnrichment writes the clyde-supplied enrichment columns
-// (workspaceRoot and archived) onto the rows missing either, from an enrichment
-// keyed by conversation id, preserving each row's dense vector so nothing is
-// re-embedded. It iterates only the rows whose workspaceRoot is empty or whose
-// archived is still null (WithFilter), so it touches a row only while it needs
-// enrichment, never a fully-populated row. It reads each row's existing
-// workspaceRoot so filling archived on a row that already has a workspace keeps
-// that workspace. A row whose conversation id is absent from the enrichment is
-// an orphan (its artifact is gone) and is left untouched. When dryRun is true it
-// counts the would-change and orphan rows and writes nothing. Returns
-// (changed, orphan).
-func (service *Service) BackfillConversationEnrichment(ctx context.Context, collectionName string, enrichment ConversationEnrichment, dryRun bool) (int, int, error) {
-	peerInfo, _ := peer.FromContext(ctx)
-	if !service.Available() {
-		return 0, 0, ErrUnavailable
-	}
-	if !service.isConversationCollection(collectionName) {
-		return 0, 0, fmt.Errorf("workspace backfill: %s is not a conversation collection", collectionName)
-	}
-	if err := service.PrepareCollection(ctx, collectionName); err != nil {
-		return 0, 0, err
-	}
-	lease, err := service.AcquireCollection(ctx, collectionName)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer lease.Release()
-	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
-		WithBatchSize(conversationBackfillBatchSize).
-		WithFilter(workspaceRootFieldName+` == "" or `+archivedFieldName+` is null`).
-		WithOutputFields(idFieldName, contentFieldName, relativePathFieldName, startLineFieldName, endLineFieldName, fileExtensionFieldName, metadataFieldName, denseVectorFieldName, workspaceRootFieldName, splitPartFieldName))
-	if err != nil {
-		slog.ErrorContext(ctx, "open conversation workspace backfill iterator failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
-		return 0, 0, fmt.Errorf("open workspace backfill iterator for %s: %w", collectionName, err)
-	}
-	changed := 0
-	orphan := 0
-	for {
-		resultSet, nextErr := iterator.Next(ctx)
-		if errors.Is(nextErr, io.EOF) {
-			break
-		}
-		if nextErr != nil {
-			slog.ErrorContext(ctx, "conversation workspace backfill iterator next failed", "collection", collectionName, "changed", changed, "peer", peerInfo.String(), "err", nextErr)
-			return changed, orphan, fmt.Errorf("iterate %s for workspace backfill: %w", collectionName, nextErr)
-		}
-		ids, chunks, vectors, buildErr := readBackfillRows(resultSet)
-		if buildErr != nil {
-			return changed, orphan, buildErr
-		}
-		fillIDs, fillChunks, fillVectors, pageOrphans := partitionConversationEnrichment(ids, chunks, vectors, enrichment)
-		orphan += pageOrphans
-		changed += len(fillIDs)
-		if dryRun || len(fillIDs) == 0 {
-			continue
-		}
-		if err := service.upsertConversationColumns(ctx, collectionName, fillIDs, fillChunks, fillVectors, conversationUpsertOptions{WriteWorkspaceRoot: true, WriteArchived: true}); err != nil {
-			return changed, orphan, err
-		}
-	}
-	slog.InfoContext(ctx, "semantic.conversation_workspace_backfill_complete", "collection", collectionName, "changed", changed, "orphan", orphan, "dry_run", dryRun, "peer", peerInfo.String())
-	return changed, orphan, nil
 }

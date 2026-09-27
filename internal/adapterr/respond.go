@@ -52,7 +52,8 @@ func Respond(ctx context.Context, err error) (codes.Code, string) {
 // RespondGRPC returns the same safe status as [Respond] with a machine-readable
 // ErrorInfo reason for callers that must route on the stable adapter code. A
 // [ColumnError] also sets the ErrorInfo metadata key [ErrorInfoColumnKey] to
-// its column.
+// its column, and an [ActiveJobConflictError] sets the metadata key
+// [ErrorInfoActiveJobIDKey] to the id of the job that refuses the request.
 func RespondGRPC(ctx context.Context, err error) *grpcError {
 	if err == nil {
 		return nil
@@ -65,22 +66,36 @@ func RespondGRPC(ctx context.Context, err error) *grpcError {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		reason = "deadline_exceeded"
 	}
-	var metadata map[string]string
-	var columnErr *ColumnError
-	if errors.As(err, &columnErr) {
-		metadata = map[string]string{ErrorInfoColumnKey: columnErr.Column}
-	}
 	base := status.New(code, message)
 	withDetails, detailErr := base.WithDetails(&errdetails.ErrorInfo{
 		Reason:   reason,
 		Domain:   errorInfoDomain,
-		Metadata: metadata,
+		Metadata: errorInfoMetadata(err),
 	})
 	if detailErr != nil {
 		slog.ErrorContext(ctx, "adapter.error_detail.failed", "reason", reason, "err", detailErr)
 		return &grpcError{response: base}
 	}
 	return &grpcError{response: withDetails}
+}
+
+// errorInfoMetadata returns the ErrorInfo metadata of err: the column of a
+// [ColumnError] and the active job id of an [ActiveJobConflictError]. It
+// returns nil for an error with neither.
+func errorInfoMetadata(err error) map[string]string {
+	var metadata map[string]string
+	var columnErr *ColumnError
+	if errors.As(err, &columnErr) {
+		metadata = map[string]string{ErrorInfoColumnKey: columnErr.Column}
+	}
+	var activeJobErr *ActiveJobConflictError
+	if errors.As(err, &activeJobErr) {
+		if metadata == nil {
+			metadata = make(map[string]string, 1)
+		}
+		metadata[ErrorInfoActiveJobIDKey] = activeJobErr.ActiveJobID
+	}
+	return metadata
 }
 
 func respondContextError(
