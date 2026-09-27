@@ -62,10 +62,15 @@ type parityRow struct {
 // TestGenericCollectionIngestParity submits the same synthetic transcript
 // through the conversation RPCs and the generic item RPCs into two isolated
 // collections with the conversation declaration in a real temporary Milvus
-// database. After each step (first ingest, append, backfill, force, and an
-// authoritative removal) both collections store equal row keys, content, scalar
-// values, vectors, and checkpoint fingerprints, and both manifest RPCs return
-// the same needed set. A provider that disagrees with the item id is rejected.
+// database. After each step (first ingest, a backfill over a blank stored text
+// row, append, backfill, force, and an authoritative removal) both collections
+// store equal row keys, content, scalar values, vectors, and checkpoint
+// fingerprints, and both manifest RPCs return the same needed set. The
+// transcript includes a tool call longer than twice the split budget. A
+// backfill that delivers text for a message stored only as a blank row selects
+// the conversation in neither collection, because a conversation backfill
+// checks only tool call and thinking families. A provider that disagrees with
+// the item id is rejected.
 func TestGenericCollectionIngestParity(t *testing.T) {
 	h := newHarness(t)
 	genericCollectionID := "live-generic-" + randomID()
@@ -99,6 +104,19 @@ func TestGenericCollectionIngestParity(t *testing.T) {
 		t.Fatal("the long tool call stored no second part")
 	}
 	h.requireManifestParity(genericCollectionID, parityManifest(convs), nil)
+
+	blankRowID := "blank-text-" + randomID()
+	blankTextPath := convBasePrefix(second) + "2"
+	h.insertBlankTextRow(h.collectionName, blankRowID, blankTextPath)
+	h.insertBlankTextRow(registration.GetCollectionName(), blankRowID, blankTextPath)
+	withLaterMessage := map[string][]*pb.ConversationDocument{second: parityWithLaterMessage(convs[second], second)}
+	secondFingerprint := map[string]string{second: fingerprint(convs[second])}
+	requireCompleted(t, h.upsertWithManifest(withLaterMessage, secondFingerprint, retain, true, false), "conversation backfill over a blank text row")
+	requireCompleted(t, h.upsertGeneric(genericCollectionID, withLaterMessage, secondFingerprint, genericRetain, true, false), "generic backfill over a blank text row")
+	h.requireParity(registration, "backfill over a blank text row")
+	if count := h.countRowsWithPrefix(blankTextPath); count != 1 || strings.TrimSpace(h.contentForRelativePath(blankTextPath)) != "" {
+		t.Fatalf("backfill over a blank text row left %d rows at %s, want only the blank row", count, blankTextPath)
+	}
 
 	changed := map[string][]*pb.ConversationDocument{first: appendMessage(convs[first], first), second: convs[second]}
 	changedManifest := parityManifest(changed)
@@ -342,6 +360,51 @@ func parityWithExtraTool(documents []*pb.ConversationDocument, conversationID st
 		extended = append(extended, copied)
 	}
 	return extended
+}
+
+// parityWithLaterMessage returns a copy of documents with one more user
+// message at index 2. The test stores a blank text row for that message before
+// it delivers the message.
+func parityWithLaterMessage(documents []*pb.ConversationDocument, conversationID string) []*pb.ConversationDocument {
+	return append(slices.Clone(documents), &pb.ConversationDocument{
+		ConversationId: conversationID, ParentConversationId: documents[0].GetParentConversationId(), MessageIndex: 2, Role: "user", TimestampUnix: 1712346002,
+		Text: "a message an older pipeline stored blank in " + conversationID, WorkspaceRoot: "/work/parity", LoadRules: "rules-v1",
+	})
+}
+
+// insertBlankTextRow writes one message text row with a single space as its
+// content straight into a collection, with no conversationId value. An older
+// pipeline wrote such a row for message text it did not keep, and current
+// ingest never writes one.
+func (h *harness) insertBlankTextRow(collectionName string, rowID string, relativePath string) {
+	h.t.Helper()
+	vector := make([]float32, fakeEmbeddingDimension)
+	vector[0] = 1
+	result, err := h.milvus.Insert(
+		context.Background(),
+		milvusclient.NewColumnBasedInsertOption(collectionName).
+			WithVarcharColumn("id", []string{rowID}).
+			WithVarcharColumn("content", []string{" "}).
+			WithVarcharColumn(relativePathField, []string{relativePath}).
+			WithInt64Column("startLine", []int64{0}).
+			WithInt64Column("endLine", []int64{0}).
+			WithVarcharColumn("fileExtension", []string{""}).
+			WithVarcharColumn("metadata", []string{"{}"}).
+			WithFloatVectorColumn("vector", len(vector), [][]float32{vector}),
+	)
+	if err != nil {
+		h.t.Fatalf("insert blank text row into %s: %v", collectionName, err)
+	}
+	if result.InsertCount != 1 {
+		h.t.Fatalf("insert blank text row into %s count = %d, want 1", collectionName, result.InsertCount)
+	}
+	flushTask, err := h.milvus.Flush(context.Background(), milvusclient.NewFlushOption(collectionName))
+	if err != nil {
+		h.t.Fatalf("flush blank text row in %s: %v", collectionName, err)
+	}
+	if err := flushTask.Await(context.Background()); err != nil {
+		h.t.Fatalf("await blank text row flush in %s: %v", collectionName, err)
+	}
 }
 
 func parityManifest(convs map[string][]*pb.ConversationDocument) map[string]string {

@@ -18,6 +18,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -104,6 +105,102 @@ func (daemon *offlineCollectionDaemon) upsertItems(header *pb.UpsertCollectionIt
 	job := waitForRPCJobTerminal(daemon.t, daemon.client, response.GetJobId())
 	if job.GetState() != string(model.JobStateCompleted) {
 		daemon.t.Fatalf("collection ingest job state = %q, want completed: %+v", job.GetState(), job.GetError())
+	}
+}
+
+// upsertConversation streams documents and a manifest through the conversation
+// upsert RPC and waits for the ingest job to complete.
+func (daemon *offlineCollectionDaemon) upsertConversation(collectionID string, documents []*pb.ConversationDocument, manifest map[string]string, backfill bool) {
+	daemon.t.Helper()
+	stream, err := daemon.client.UpsertConversationDocumentsStream(grpcutil.WithCorrelation(context.Background()))
+	if err != nil {
+		daemon.t.Fatalf("open UpsertConversationDocumentsStream returned error: %v", err)
+	}
+	fingerprints := make([]*pb.ConversationFingerprint, 0, len(manifest))
+	for conversationID, fingerprint := range manifest {
+		fingerprints = append(fingerprints, &pb.ConversationFingerprint{ConversationId: conversationID, Fingerprint: fingerprint})
+	}
+	for _, chunk := range []*pb.UpsertConversationDocumentsChunk{
+		{Chunk: &pb.UpsertConversationDocumentsChunk_Header{Header: &pb.UpsertConversationDocumentsHeader{CollectionId: collectionID, BackfillDelivered: backfill}}},
+		{Chunk: &pb.UpsertConversationDocumentsChunk_Documents{Documents: &pb.UpsertConversationDocumentsDocuments{Documents: documents}}},
+		{Chunk: &pb.UpsertConversationDocumentsChunk_Manifest{Manifest: &pb.UpsertConversationDocumentsManifest{Manifest: fingerprints}}},
+	} {
+		if err := stream.Send(chunk); err != nil {
+			daemon.t.Fatalf("send conversation chunk returned error: %v", err)
+		}
+	}
+	response, err := stream.CloseAndRecv()
+	if err != nil {
+		daemon.t.Fatalf("conversation CloseAndRecv returned error: %v", err)
+	}
+	if job := waitForRPCJobTerminal(daemon.t, daemon.client, response.GetJobId()); job.GetState() != string(model.JobStateCompleted) {
+		daemon.t.Fatalf("conversation ingest job state = %q, want completed: %+v", job.GetState(), job.GetError())
+	}
+}
+
+// requireEqualConversationRows requires byte-identical stored rows and equal
+// checkpoints in a collection registered through the conversation RPC and a
+// collection registered through the generic RPC with the conversation
+// declaration. It returns the stored rows.
+func (daemon *offlineCollectionDaemon) requireEqualConversationRows(step string, conversation *pb.RegisterConversationCollectionResponse, generic *pb.RegisterCollectionResponse) []storedLocalRow {
+	daemon.t.Helper()
+	conversationRows := daemon.localRows(conversation.GetCollectionName())
+	genericRows := daemon.localRows(generic.GetCollectionName())
+	if len(conversationRows) != len(genericRows) {
+		daemon.t.Fatalf("%s: row paths differ: conversation %v, generic %v", step, rowPaths(conversationRows), rowPaths(genericRows))
+	}
+	for index := range conversationRows {
+		if conversationRows[index].Line != genericRows[index].Line {
+			daemon.t.Fatalf("%s: stored row %s differs between the conversation and generic streams", step, conversationRows[index].RelativePath)
+		}
+	}
+	if !reflect.DeepEqual(daemon.checkpointFiles(conversation.GetCodebaseId()), daemon.checkpointFiles(generic.GetCodebaseId())) {
+		daemon.t.Fatalf("%s: checkpoints differ between the conversation and generic streams", step)
+	}
+	return conversationRows
+}
+
+// storeBlankTextRow writes one message text row with a single space as its
+// content straight into a collection's store. An older pipeline wrote such a
+// row for message text it did not keep, and current ingest never writes one.
+func (daemon *offlineCollectionDaemon) storeBlankTextRow(collectionID string, conversationID string, messageIndex int32) {
+	daemon.t.Helper()
+	blank := model.StoredChunk{
+		Content:              " ",
+		RelativePath:         "conv/" + conversationID + "/" + strconv.Itoa(int(messageIndex)),
+		StartLine:            0,
+		EndLine:              0,
+		Language:             "",
+		FileExtension:        "",
+		ConversationID:       conversationID,
+		ParentConversationID: "",
+		MessageIndex:         messageIndex,
+		Role:                 "user",
+		TimestampUnix:        0,
+		WorkspaceRoot:        "",
+		Archived:             false,
+		SplitPart:            0,
+		SplitPartRecorded:    true,
+		LoadRules:            "",
+		Scalars:              nil,
+		Score:                0,
+	}
+	// The embedder skips blank content. The reuse map supplies the row's vector.
+	reuse := map[string][]float32{semantic.ContentVectorKey(blank.Content): {1, 0, 0}}
+	err := daemon.manager.semantic.Reindex(context.Background(), conversationCanonicalPath(collectionID), []model.StoredChunk{blank}, semantic.RemovePaths(nil), nil, reuse, semantic.ConversationColumns())
+	if err != nil {
+		daemon.t.Fatalf("store blank text row in %s: %v", collectionID, err)
+	}
+}
+
+// conversationRowScalars returns the scalar values of one generic row of the
+// parity transcripts, which are claude conversations in /work with the
+// rules-v1 load rules.
+func conversationRowScalars(messageIndex int64, role string, timestamp int64) []*pb.CollectionScalarValue {
+	return []*pb.CollectionScalarValue{
+		stringScalar("role", role), int64Scalar("messageIndex", messageIndex), int64Scalar("timestampUnix", timestamp),
+		stringScalar("workspaceRoot", "/work"), stringScalar("loadRules", "rules-v1"), stringScalar("provider", "claude"),
+		stringScalar("parentConversationId", ""), boolScalar("archived", false),
 	}
 }
 
@@ -562,15 +659,23 @@ func TestUpsertCollectionItemsStreamAcceptsLargeStream(t *testing.T) {
 	}
 }
 
-// TestCollectionAndConversationStreamsStoreEqualRows submits one transcript
-// through the conversation stream and the same rows through the generic stream
-// into two collections with the conversation declaration. Both collections
-// store byte-identical rows and equal checkpoints. One tool call row is longer
-// than the split budget. Each part of that row after the first starts with the
-// tool name line. The generic manifest then needs nothing. A provider that
-// disagrees with the item id is rejected, and so is a row key outside the
-// conversation row key layout.
+// TestCollectionAndConversationStreamsStoreEqualRows submits the same
+// transcript through the conversation stream and the generic stream into two
+// collections with the conversation declaration. Both collections must store
+// byte-identical rows and equal checkpoints after every step. Each subtest runs
+// its own daemon and fails on its own.
 func TestCollectionAndConversationStreamsStoreEqualRows(t *testing.T) {
+	t.Parallel()
+	t.Run("ingest", testConversationIngestParity)
+	t.Run("backfill over a blank stored text row", testConversationBackfillParity)
+}
+
+// testConversationIngestParity ingests one transcript. One tool call row is
+// longer than the split budget. Each part of that row after the first starts
+// with the tool name line. The generic manifest then needs nothing. A provider
+// that disagrees with the item id is rejected, and so is a row key outside the
+// conversation row key layout.
+func testConversationIngestParity(t *testing.T) {
 	t.Parallel()
 	daemon := newOfflineCollectionDaemon(t)
 	conversation, err := daemon.registerConversationCollection("conv-parity-old")
@@ -594,45 +699,18 @@ func TestCollectionAndConversationStreamsStoreEqualRows(t *testing.T) {
 		},
 	}
 	manifest := map[string]string{conversationID: "fp-parity"}
-	stream, err := daemon.client.UpsertConversationDocumentsStream(grpcutil.WithCorrelation(context.Background()))
-	if err != nil {
-		t.Fatalf("open UpsertConversationDocumentsStream returned error: %v", err)
-	}
-	for _, chunk := range []*pb.UpsertConversationDocumentsChunk{
-		{Chunk: &pb.UpsertConversationDocumentsChunk_Header{Header: &pb.UpsertConversationDocumentsHeader{CollectionId: "conv-parity-old"}}},
-		{Chunk: &pb.UpsertConversationDocumentsChunk_Documents{Documents: &pb.UpsertConversationDocumentsDocuments{Documents: documents}}},
-		{Chunk: &pb.UpsertConversationDocumentsChunk_Manifest{Manifest: &pb.UpsertConversationDocumentsManifest{Manifest: []*pb.ConversationFingerprint{{ConversationId: conversationID, Fingerprint: "fp-parity"}}}}},
-	} {
-		if err := stream.Send(chunk); err != nil {
-			t.Fatalf("send conversation chunk returned error: %v", err)
-		}
-	}
-	response, err := stream.CloseAndRecv()
-	if err != nil {
-		t.Fatalf("conversation CloseAndRecv returned error: %v", err)
-	}
-	if job := waitForRPCJobTerminal(t, daemon.client, response.GetJobId()); job.GetState() != string(model.JobStateCompleted) {
-		t.Fatalf("conversation ingest state = %q", job.GetState())
-	}
+	daemon.upsertConversation("conv-parity-old", documents, manifest, false)
 
-	conversationScalars := func(messageIndex int64, role string, timestamp int64) []*pb.CollectionScalarValue {
-		return []*pb.CollectionScalarValue{
-			stringScalar("role", role), int64Scalar("messageIndex", messageIndex), int64Scalar("timestampUnix", timestamp),
-			stringScalar("workspaceRoot", "/work"), stringScalar("loadRules", "rules-v1"), stringScalar("provider", "claude"),
-			stringScalar("parentConversationId", ""), boolScalar("archived", false),
-		}
-	}
 	rows := []*pb.CollectionRow{
-		{RowKey: "conv/" + conversationID + "/0", ItemId: conversationID, Text: "how do generic rows match", Scalars: conversationScalars(0, "user", 1712345678)},
-		{RowKey: "conv/" + conversationID + "/1", ItemId: conversationID, Text: longText, Scalars: conversationScalars(1, "assistant", 1712345679)},
-		{RowKey: "convtool/" + conversationID + "/1/0", ItemId: conversationID, Text: "Read\nfile.go", Scalars: conversationScalars(1, "assistant", 1712345679)},
-		{RowKey: "convtool/" + conversationID + "/1/1", ItemId: conversationID, Text: "Write\n" + longToolDisplay, Scalars: conversationScalars(1, "assistant", 1712345679)},
-		{RowKey: "convthink/" + conversationID + "/1", ItemId: conversationID, Text: "private reasoning", Scalars: conversationScalars(1, "assistant", 1712345679)},
+		{RowKey: "conv/" + conversationID + "/0", ItemId: conversationID, Text: "how do generic rows match", Scalars: conversationRowScalars(0, "user", 1712345678)},
+		{RowKey: "conv/" + conversationID + "/1", ItemId: conversationID, Text: longText, Scalars: conversationRowScalars(1, "assistant", 1712345679)},
+		{RowKey: "convtool/" + conversationID + "/1/0", ItemId: conversationID, Text: "Read\nfile.go", Scalars: conversationRowScalars(1, "assistant", 1712345679)},
+		{RowKey: "convtool/" + conversationID + "/1/1", ItemId: conversationID, Text: "Write\n" + longToolDisplay, Scalars: conversationRowScalars(1, "assistant", 1712345679)},
+		{RowKey: "convthink/" + conversationID + "/1", ItemId: conversationID, Text: "private reasoning", Scalars: conversationRowScalars(1, "assistant", 1712345679)},
 	}
 	daemon.upsertItems(collectionHeader("conv-parity-generic", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false), rows, manifest)
 
-	conversationRows := daemon.localRows(conversation.GetCollectionName())
-	genericRows := daemon.localRows(generic.GetCollectionName())
+	conversationRows := daemon.requireEqualConversationRows("ingest", conversation, generic)
 	longToolPart := "convtool/" + conversationID + "/1/1/1"
 	if paths := distinctRowPaths(conversationRows); len(paths) < 5 || !slices.Contains(paths, "conv/"+conversationID+"/1/1") || !slices.Contains(paths, "convthink/"+conversationID+"/1") || !slices.Contains(paths, "convtool/"+conversationID+"/1/0") || !slices.Contains(paths, longToolPart) {
 		t.Fatalf("conversation stream stored rows %v, want a split message text, a tool row, a split tool row, and a thinking row", paths)
@@ -641,17 +719,6 @@ func TestCollectionAndConversationStreamsStoreEqualRows(t *testing.T) {
 		if row.RelativePath == longToolPart && row.SplitPart == 0 && !strings.HasPrefix(row.Content, "Write\n") {
 			t.Fatalf("tool row part %s starts with %.20q, want the tool name line", longToolPart, row.Content)
 		}
-	}
-	if len(conversationRows) != len(genericRows) {
-		t.Fatalf("row paths differ: conversation %v, generic %v", rowPaths(conversationRows), rowPaths(genericRows))
-	}
-	for index := range conversationRows {
-		if conversationRows[index].Line != genericRows[index].Line {
-			t.Fatalf("stored row %s differs between the conversation and generic streams", conversationRows[index].RelativePath)
-		}
-	}
-	if !reflect.DeepEqual(daemon.checkpointFiles(conversation.GetCodebaseId()), daemon.checkpointFiles(generic.GetCodebaseId())) {
-		t.Fatal("checkpoints differ between the conversation and generic streams")
 	}
 	if needed := daemon.syncItems("conv-parity-generic", manifest); len(needed) != 0 {
 		t.Fatalf("generic needed after ingest = %v, want none", needed)
@@ -666,5 +733,66 @@ func TestCollectionAndConversationStreamsStoreEqualRows(t *testing.T) {
 		if _, err := daemon.sendCollectionStream(collectionFrames(collectionHeader("conv-parity-generic", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false), misplaced, manifest)); status.Code(err) != codes.InvalidArgument {
 			t.Fatalf("row key %q in a conversation collection returned %v, want InvalidArgument", rowKey, err)
 		}
+	}
+}
+
+// testConversationBackfillParity ingests one transcript, then stores a blank
+// text row for message 2 in both collections. A backfill then delivers text for
+// message 2 under the unchanged fingerprint. A conversation backfill checks
+// only tool call and thinking families, and every one of them is present.
+// Neither stream selects the conversation: both collections keep the blank row
+// as the only row of message 2 and stay byte-identical.
+func testConversationBackfillParity(t *testing.T) {
+	t.Parallel()
+	daemon := newOfflineCollectionDaemon(t)
+	conversation, err := daemon.registerConversationCollection("conv-backfill-old")
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+	generic, err := daemon.registerCollection("conv-backfill-generic", "conversationId", conversationScalarsPB())
+	if err != nil {
+		t.Fatalf("RegisterCollection returned error: %v", err)
+	}
+	conversationID := "claude:backfill-1"
+	documents := []*pb.ConversationDocument{
+		{ConversationId: conversationID, MessageIndex: 0, Role: "user", TimestampUnix: 1712345678, Text: "which rows does a backfill check", WorkspaceRoot: "/work", LoadRules: "rules-v1"},
+		{
+			ConversationId: conversationID, MessageIndex: 1, Role: "assistant", TimestampUnix: 1712345679, Text: "tool call and thinking rows", WorkspaceRoot: "/work", LoadRules: "rules-v1",
+			Tools: []*pb.ConversationToolCall{{Name: "Read", Display: "file.go", LangHint: "go"}}, Thinking: "private reasoning",
+		},
+	}
+	rows := []*pb.CollectionRow{
+		{RowKey: "conv/" + conversationID + "/0", ItemId: conversationID, Text: "which rows does a backfill check", Scalars: conversationRowScalars(0, "user", 1712345678)},
+		{RowKey: "conv/" + conversationID + "/1", ItemId: conversationID, Text: "tool call and thinking rows", Scalars: conversationRowScalars(1, "assistant", 1712345679)},
+		{RowKey: "convtool/" + conversationID + "/1/0", ItemId: conversationID, Text: "Read\nfile.go", Scalars: conversationRowScalars(1, "assistant", 1712345679)},
+		{RowKey: "convthink/" + conversationID + "/1", ItemId: conversationID, Text: "private reasoning", Scalars: conversationRowScalars(1, "assistant", 1712345679)},
+	}
+	manifest := map[string]string{conversationID: "fp-backfill"}
+	unspecified := pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED
+	daemon.upsertConversation("conv-backfill-old", documents, manifest, false)
+	daemon.upsertItems(collectionHeader("conv-backfill-generic", unspecified, false, false), rows, manifest)
+	daemon.requireEqualConversationRows("ingest", conversation, generic)
+
+	daemon.storeBlankTextRow("conv-backfill-old", conversationID, 2)
+	daemon.storeBlankTextRow("conv-backfill-generic", conversationID, 2)
+	laterText := "message text an older pipeline stored blank"
+	withText := append(slices.Clone(documents), &pb.ConversationDocument{ConversationId: conversationID, MessageIndex: 2, Role: "user", TimestampUnix: 1712345680, Text: laterText, WorkspaceRoot: "/work", LoadRules: "rules-v1"})
+	withTextRows := append(slices.Clone(rows), &pb.CollectionRow{RowKey: "conv/" + conversationID + "/2", ItemId: conversationID, Text: laterText, Scalars: conversationRowScalars(2, "user", 1712345680)})
+	daemon.upsertConversation("conv-backfill-old", withText, manifest, true)
+	daemon.upsertItems(collectionHeader("conv-backfill-generic", unspecified, true, false), withTextRows, manifest)
+
+	stored := daemon.requireEqualConversationRows("backfill", conversation, generic)
+	messageRows := 0
+	for _, row := range stored {
+		if row.RelativePath != "conv/"+conversationID+"/2" {
+			continue
+		}
+		messageRows++
+		if strings.TrimSpace(row.Content) != "" {
+			t.Fatalf("backfill stored message 2 text %q, want only the blank row", row.Content)
+		}
+	}
+	if messageRows != 1 {
+		t.Fatalf("message 2 has %d stored rows after the backfill, want the one blank row", messageRows)
 	}
 }

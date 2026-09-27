@@ -89,8 +89,10 @@ func (delivery collectionItemDelivery) delivered(itemID string) bool {
 
 // backfillFamilies returns the family keys a backfill checks for one delivered
 // item without generating chunks. A conversation item checks its tool call and
-// thinking families only, from document metadata. A client item checks every
-// row with storable text.
+// thinking families only. Conversation documents list them from document
+// metadata. In a collection with the conversation declaration, client rows
+// list every convtool/ and convthink/ row with storable text. Every other
+// client item checks every row with storable text.
 func (delivery collectionItemDelivery) backfillFamilies(itemID string) []string {
 	if documents, found := delivery.documents[itemID]; found {
 		families := make([]string, 0)
@@ -106,9 +108,13 @@ func (delivery collectionItemDelivery) backfillFamilies(itemID string) []string 
 	}
 	families := make([]string, 0, len(delivery.rows[itemID]))
 	for _, row := range delivery.rows[itemID] {
-		if conversationTextIsStorable(row.Text) {
-			families = append(families, row.RowKey)
+		if !conversationTextIsStorable(row.Text) {
+			continue
 		}
+		if delivery.projectConversation && strings.HasPrefix(row.RowKey, conversationRelativePathPrefix(itemID)) {
+			continue
+		}
+		families = append(families, row.RowKey)
 	}
 	return families
 }
@@ -361,8 +367,9 @@ type collectionItemSource struct {
 	columns        semantic.StoreColumnSet
 	// absence is the caller-declared policy for an item the manifest omits.
 	absence absencePolicy
-	// backfill forces delivered items with an absent row family into the
-	// changed set and prunes items with every family present.
+	// backfill forces delivered items with an absent backfill family (see
+	// backfillFamilies) into the changed set and prunes items with every such
+	// family present.
 	backfill bool
 	// force replaces every delivered item's rows with reuse disabled. When both
 	// flags are set, force wins.

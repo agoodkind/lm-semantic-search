@@ -42,7 +42,7 @@ A delivered item embeds only its absent row families. A row family is one client
 
 A conversation collection reads stored rows through the conversation batch read. That read matches a message text family by message index and selects rows written before the `conversationId` column existed by their `conv/`, `convtool/`, and `convthink/` path prefixes. A generic collection reads stored rows by its declared item id column.
 
-Two header flags change the delta. `backfill_delivered` forces each delivered item with an absent family into the job even when its fingerprint is unchanged, judged from stored rows without generating chunks. For a conversation, backfill checks only tool call and thinking families. `force_reexamine` replaces every delivered item's rows with vector reuse disabled. When both flags are set, force wins.
+Two header flags change the delta. `backfill_delivered` forces each delivered item with an absent family into the job even when its fingerprint is unchanged, judged from stored rows without generating chunks. For a conversation, backfill checks only tool call and thinking families, whether conversation documents or rows of a collection with the conversation declaration deliver it. A backfill does not select a conversation for an absent or blank stored message text row. `force_reexamine` replaces every delivered item's rows with vector reuse disabled. When both flags are set, force wins.
 
 The delta uses the generic per-item override fields on `indexer.OneFileResult` (`internal/indexer/indexer.go`), which `handleChangedFile` (`internal/daemon/manager_delta.go`) applies. A fully unchanged delivery advances the checkpoint with zero Milvus writes.
 
