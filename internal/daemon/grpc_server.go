@@ -671,7 +671,10 @@ func (server *GRPCServer) SyncConversationManifest(ctx context.Context, request 
 	}, nil
 }
 
-// DeleteConversation reserves the conversation deletion RPC surface.
+// DeleteConversation queues the removal of one conversation's rows through the
+// generic item delete. A refused delete returns an ErrorInfo reason. A delete
+// that an active job refuses also returns that job's id in the ErrorInfo
+// metadata.
 func (server *GRPCServer) DeleteConversation(ctx context.Context, request *pb.DeleteConversationRequest) (resp *pb.DeleteConversationResponse, err error) {
 	ctx, done := beginRPC(ctx, "DeleteConversation")
 	defer done(&err)
@@ -691,7 +694,7 @@ func (server *GRPCServer) DeleteConversation(ctx context.Context, request *pb.De
 		pbClient(request.GetClient()),
 	)
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
+		return nil, adapterr.RespondGRPC(ctx, classifyManagerError(request.GetCollectionId(), callErr))
 	}
 	ack := view.MutationAckView{
 		Kind:            view.AckDeleteConversation,

@@ -6,17 +6,22 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -54,6 +59,16 @@ func (daemon *offlineCollectionDaemon) localRowsFile(collectionName string) []by
 // conversation upsert RPC and waits for the ingest job to complete.
 func (daemon *offlineCollectionDaemon) ingestDocuments(collectionID string, documents []*pb.ConversationDocument) {
 	daemon.t.Helper()
+	jobID := daemon.startDocumentsIngest(collectionID, documents)
+	if job := waitForRPCJobTerminal(daemon.t, daemon.client, jobID); job.GetState() != string(model.JobStateCompleted) {
+		daemon.t.Fatalf("conversation ingest state = %q: %+v", job.GetState(), job.GetError())
+	}
+}
+
+// startDocumentsIngest streams conversation documents and their manifest
+// through the conversation upsert RPC and returns the queued ingest job id.
+func (daemon *offlineCollectionDaemon) startDocumentsIngest(collectionID string, documents []*pb.ConversationDocument) string {
+	daemon.t.Helper()
 	manifest := make(map[string]string)
 	for _, document := range documents {
 		manifest[document.GetConversationId()] = "fingerprint-" + document.GetConversationId()
@@ -79,9 +94,7 @@ func (daemon *offlineCollectionDaemon) ingestDocuments(collectionID string, docu
 	if err != nil {
 		daemon.t.Fatalf("conversation CloseAndRecv returned error: %v", err)
 	}
-	if job := waitForRPCJobTerminal(daemon.t, daemon.client, response.GetJobId()); job.GetState() != string(model.JobStateCompleted) {
-		daemon.t.Fatalf("conversation ingest state = %q: %+v", job.GetState(), job.GetError())
-	}
+	return response.GetJobId()
 }
 
 // backfillConversation sends one old conversation scalar backfill stream.
@@ -690,4 +703,104 @@ func TestCollectionMaintenanceRefusesDuringMaintenance(t *testing.T) {
 	if len(jobsAfter.GetJobs()) != len(jobsBefore.GetJobs()) {
 		t.Fatalf("refused requests queued %d jobs", len(jobsAfter.GetJobs())-len(jobsBefore.GetJobs()))
 	}
+}
+
+// embeddingGate blocks every embeddings request of a local test embedder while
+// the gate is armed, until open runs.
+type embeddingGate struct {
+	armed    atomic.Bool
+	released chan struct{}
+	once     sync.Once
+}
+
+func (gate *embeddingGate) open() {
+	gate.once.Do(func() { close(gate.released) })
+}
+
+// newGatedEmbeddingServer starts a local embedding server that answers like
+// newTestEmbeddingServer. While gate is armed, it blocks each embeddings request
+// until the gate opens.
+func newGatedEmbeddingServer(t *testing.T, gate *embeddingGate) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if gate.armed.Load() && strings.HasSuffix(request.URL.Path, "/embeddings") {
+			<-gate.released
+		}
+		testEmbeddingHandler(writer, request)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// requireActiveJobConflict requires err to be the refusal of an active job:
+// FailedPrecondition with ErrorInfo reason active_job_conflict and the active
+// job id in ErrorInfo metadata key active_job_id.
+func requireActiveJobConflict(t *testing.T, label string, err error, activeJobID string) {
+	t.Helper()
+	grpcStatus, ok := status.FromError(err)
+	if !ok || grpcStatus.Code() != codes.FailedPrecondition {
+		t.Fatalf("%s returned %v, want FailedPrecondition", label, err)
+	}
+	var errorInfo *errdetails.ErrorInfo
+	for _, detail := range grpcStatus.Details() {
+		if info, isErrorInfo := detail.(*errdetails.ErrorInfo); isErrorInfo {
+			errorInfo = info
+		}
+	}
+	if errorInfo == nil {
+		t.Fatalf("%s status %v has no ErrorInfo detail", label, err)
+	}
+	if errorInfo.GetReason() != "active_job_conflict" {
+		t.Fatalf("%s ErrorInfo reason = %q, want active_job_conflict", label, errorInfo.GetReason())
+	}
+	if got := errorInfo.GetMetadata()["active_job_id"]; got != activeJobID {
+		t.Fatalf("%s ErrorInfo active_job_id = %q, want %q (metadata %v)", label, got, activeJobID, errorInfo.GetMetadata())
+	}
+	if !strings.Contains(grpcStatus.Message(), "conflicting active job "+activeJobID) {
+		t.Fatalf("%s message = %q, want the conflicting active job text", label, grpcStatus.Message())
+	}
+}
+
+// TestDeleteRefusalReportsActiveJobConflict blocks the test embedder while an
+// ingest job of each collection is queued or running. A delete through either
+// delete RPC then fails with FailedPrecondition, ErrorInfo reason
+// active_job_conflict, and the ingest job id in ErrorInfo metadata key
+// active_job_id. After the ingest jobs complete, both deletes succeed.
+func TestDeleteRefusalReportsActiveJobConflict(t *testing.T) {
+	t.Parallel()
+	gate := &embeddingGate{armed: atomic.Bool{}, released: make(chan struct{}), once: sync.Once{}}
+	embedServer := newGatedEmbeddingServer(t, gate)
+	daemon := newOfflineCollectionDaemonWithEmbedder(t, embedServer.URL)
+	t.Cleanup(gate.open)
+	if _, err := daemon.registerCollection("docs-conflict-delete", "docId", documentScalars()); err != nil {
+		t.Fatalf("RegisterCollection returned error: %v", err)
+	}
+	if _, err := daemon.registerConversationCollection("conv-conflict-delete"); err != nil {
+		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+	}
+
+	gate.armed.Store(true)
+	genericIngest, err := daemon.sendCollectionStream(collectionFrames(
+		collectionHeader("docs-conflict-delete", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false),
+		[]*pb.CollectionRow{documentRow("a/0", "doc-a", "alpha zero", 1)},
+		map[string]string{"doc-a": "fp-a"},
+	))
+	if err != nil {
+		t.Fatalf("UpsertCollectionItemsStream returned error: %v", err)
+	}
+	conversationIngestJobID := daemon.startDocumentsIngest("conv-conflict-delete", maintenanceDocuments("claude:conflict-a", ""))
+
+	_, err = daemon.client.DeleteCollectionItem(grpcutil.WithCorrelation(context.Background()), &pb.DeleteCollectionItemRequest{CollectionId: "docs-conflict-delete", ItemId: "doc-a"})
+	requireActiveJobConflict(t, "DeleteCollectionItem", err, genericIngest.GetJobId())
+	_, err = daemon.client.DeleteConversation(grpcutil.WithCorrelation(context.Background()), &pb.DeleteConversationRequest{CollectionId: "conv-conflict-delete", ConversationId: "claude:conflict-a"})
+	requireActiveJobConflict(t, "DeleteConversation", err, conversationIngestJobID)
+
+	gate.open()
+	for _, jobID := range []string{genericIngest.GetJobId(), conversationIngestJobID} {
+		if job := waitForRPCJobTerminal(t, daemon.client, jobID); job.GetState() != string(model.JobStateCompleted) {
+			t.Fatalf("ingest job %s state = %q: %+v", jobID, job.GetState(), job.GetError())
+		}
+	}
+	daemon.deleteItem("docs-conflict-delete", "doc-a")
+	daemon.deleteConversation("conv-conflict-delete", "claude:conflict-a")
 }

@@ -95,7 +95,9 @@ type SemanticSearchDaemonServiceClient interface {
 	// DeleteCollectionItem queues a job that removes one item's rows from a
 	// registered document collection by the declared item id column. The job
 	// leaves the collection's checkpoint unchanged, and a later manifest sync
-	// converges it.
+	// converges it. While another job of the collection is queued or running, the
+	// delete fails with FailedPrecondition, ErrorInfo reason active_job_conflict,
+	// and that job's id in ErrorInfo metadata key active_job_id.
 	DeleteCollectionItem(ctx context.Context, in *DeleteCollectionItemRequest, opts ...grpc.CallOption) (*DeleteCollectionItemResponse, error)
 	SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error)
 	// UpsertConversationDocumentsStream is the client-streaming conversation
@@ -111,6 +113,9 @@ type SemanticSearchDaemonServiceClient interface {
 	// workspaceRoot and archived. It writes an entry's values only where those
 	// columns are null or empty and returns row counts.
 	BackfillConversationScalars(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse], error)
+	// DeleteConversation queues the DeleteCollectionItem job for one
+	// conversation id. While another job of the collection is queued or running,
+	// it fails the way DeleteCollectionItem does.
 	DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
 	SearchWithinConversation(ctx context.Context, in *SearchWithinConversationRequest, opts ...grpc.CallOption) (*SearchWithinConversationResponse, error)
@@ -491,7 +496,9 @@ type SemanticSearchDaemonServiceServer interface {
 	// DeleteCollectionItem queues a job that removes one item's rows from a
 	// registered document collection by the declared item id column. The job
 	// leaves the collection's checkpoint unchanged, and a later manifest sync
-	// converges it.
+	// converges it. While another job of the collection is queued or running, the
+	// delete fails with FailedPrecondition, ErrorInfo reason active_job_conflict,
+	// and that job's id in ErrorInfo metadata key active_job_id.
 	DeleteCollectionItem(context.Context, *DeleteCollectionItemRequest) (*DeleteCollectionItemResponse, error)
 	SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error)
 	// UpsertConversationDocumentsStream is the client-streaming conversation
@@ -507,6 +514,9 @@ type SemanticSearchDaemonServiceServer interface {
 	// workspaceRoot and archived. It writes an entry's values only where those
 	// columns are null or empty and returns row counts.
 	BackfillConversationScalars(grpc.ClientStreamingServer[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]) error
+	// DeleteConversation queues the DeleteCollectionItem job for one
+	// conversation id. While another job of the collection is queued or running,
+	// it fails the way DeleteCollectionItem does.
 	DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
 	SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error)

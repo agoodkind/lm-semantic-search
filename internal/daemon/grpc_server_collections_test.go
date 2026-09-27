@@ -42,7 +42,13 @@ type offlineCollectionDaemon struct {
 
 func newOfflineCollectionDaemon(t *testing.T) *offlineCollectionDaemon {
 	t.Helper()
-	embedServer := newTestEmbeddingServer(t)
+	return newOfflineCollectionDaemonWithEmbedder(t, newTestEmbeddingServer(t).URL)
+}
+
+// newOfflineCollectionDaemonWithEmbedder starts an offline collection daemon
+// that embeds through the OpenAI-compatible endpoint at embeddingURL.
+func newOfflineCollectionDaemonWithEmbedder(t *testing.T, embeddingURL string) *offlineCollectionDaemon {
+	t.Helper()
 	stateRoot := t.TempDir()
 	socketDirectory, err := os.MkdirTemp("", "lms-coll-")
 	if err != nil {
@@ -70,7 +76,7 @@ func newOfflineCollectionDaemon(t *testing.T) *offlineCollectionDaemon {
 		EmbeddingBatchTokenBudget: 1000,
 		EmbeddingDimension:        3,
 		OpenAIAPIKey:              "test-key",
-		OpenAIBaseURL:             embedServer.URL,
+		OpenAIBaseURL:             embeddingURL,
 		MaxConcurrentIndexJobs:    1,
 	}
 	for _, directory := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot} {

@@ -28,7 +28,7 @@ A collection registered with the conversation declaration stores generic rows in
 
 The engine rejects a listed column that is undeclared, listed twice, the item id column, or a bool or int64 column that is not nullable. It rejects an item value that is undeclared, mistyped, oversized, null, set twice, or absent for a listed column. A rejected column appears in the `ErrorInfo` metadata key `column`. In a collection with the conversation declaration, the engine derives `provider` from the item id and `messageIndex` from the row key, and it rejects both as listed columns.
 
-`DeleteCollectionItem` queues a job that removes one item's rows by the declared item id column. The job leaves the Merkle checkpoint unchanged, and a later manifest sync converges it.
+`DeleteCollectionItem` queues a job that removes one item's rows by the declared item id column. The job leaves the Merkle checkpoint unchanged, and a later manifest sync converges it. While another job of the collection is queued or running, a delete fails with `FailedPrecondition` and `ErrorInfo` reason `active_job_conflict`, and the metadata key `active_job_id` stores that job's id. `TestDeleteRefusalReportsActiveJobConflict` pins this refusal on both delete RPCs.
 
 In a collection with the conversation declaration, both operations also select rows without a `conversationId` value by their `conv/`, `convtool/`, and `convthink/` path prefixes. Rows written before the column existed have that shape.
 

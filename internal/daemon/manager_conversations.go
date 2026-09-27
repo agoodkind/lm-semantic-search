@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -401,7 +402,7 @@ func (manager *Manager) queueConversationJob(ctx context.Context, codebase model
 			return activeJob, nil
 		}
 		manager.mu.Unlock()
-		return emptyJob, fmt.Errorf("conflicting active job %s for conversation collection %s", activeJob.ID, current.CanonicalPath)
+		return emptyJob, adapterr.NewActiveJobConflict(activeJob.ID, fmt.Sprintf("conflicting active job %s for conversation collection %s", activeJob.ID, current.CanonicalPath))
 	}
 
 	job, err := manager.enqueueConversationJobLocked(current, client, payload)
