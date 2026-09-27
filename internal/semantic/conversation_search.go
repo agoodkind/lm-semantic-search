@@ -16,8 +16,9 @@ import (
 
 // SearchConversationCollectionCapped returns at most limit rows, with at most
 // perConversationLimit rows per conversation and no row below minScore. On an
-// unchanged collection, one query and filter return the same rows in the same
-// order, and a smaller limit returns a prefix of a larger one. The filter restricts one
+// unchanged collection, repeating the same query with the same filter returns
+// the same rows in the same order, and a smaller limit returns a prefix of a
+// larger one. The filter restricts one
 // fixed-depth ranking natively, and a conversation id scope of any size binds
 // as one template parameter.
 func (service *Service) SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, perConversationLimit int32, minScore float64, filter ConversationFilter) ([]model.StoredChunk, error) {
