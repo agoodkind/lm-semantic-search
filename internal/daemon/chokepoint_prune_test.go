@@ -12,14 +12,14 @@ import (
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
-// indexOneSpySource wraps a conversationItemSource and counts indexOne calls so a
+// indexOneSpySource wraps a collectionItemSource and counts indexOne calls so a
 // test can prove chunk regeneration runs only for the pruned work set. It embeds
 // the real source by value, sharing its single-flight batch pointer, so the cheap
 // classifier and the per-item loop behave exactly as in production. A pointer
 // receiver on indexOne and a pointer itemSource keep the call log shared across
 // the value copies the delta routine makes of deltaState.
 type indexOneSpySource struct {
-	conversationItemSource
+	collectionItemSource
 	mu    sync.Mutex
 	calls []string
 }
@@ -28,7 +28,7 @@ func (source *indexOneSpySource) indexOne(ctx context.Context, itemID string) (i
 	source.mu.Lock()
 	source.calls = append(source.calls, itemID)
 	source.mu.Unlock()
-	return source.conversationItemSource.indexOne(ctx, itemID)
+	return source.collectionItemSource.indexOne(ctx, itemID)
 }
 
 func (source *indexOneSpySource) indexOneCalls() []string {
@@ -150,7 +150,7 @@ func TestForcedWorkSetPrunesNoOpsBeforeDenominatorAndRegen(t *testing.T) {
 	manager.mu.Unlock()
 
 	base := newConversationItemSource(collectionName, manifest, docs, fake, absenceRetain, true, false)
-	spy := &indexOneSpySource{conversationItemSource: base}
+	spy := &indexOneSpySource{collectionItemSource: base}
 
 	plan := manager.planSyncDiff(context.Background(), job, codebaseID, spy)
 	if plan.handled || plan.fallback {

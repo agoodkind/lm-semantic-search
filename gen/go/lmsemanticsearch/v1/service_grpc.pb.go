@@ -34,6 +34,8 @@ const (
 	SemanticSearchDaemonService_GraphTool_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GraphTool"
 	SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterConversationCollection"
 	SemanticSearchDaemonService_RegisterCollection_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterCollection"
+	SemanticSearchDaemonService_SyncCollectionManifest_FullMethodName            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncCollectionManifest"
+	SemanticSearchDaemonService_UpsertCollectionItemsStream_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertCollectionItemsStream"
 	SemanticSearchDaemonService_SyncConversationManifest_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncConversationManifest"
 	SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocumentsStream"
 	SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/BackfillConversationScalars"
@@ -71,6 +73,16 @@ type SemanticSearchDaemonServiceClient interface {
 	// conflicting column in metadata key "column". The engine never rebuilds or
 	// drops an existing collection to satisfy a conflicting declaration.
 	RegisterCollection(ctx context.Context, in *RegisterCollectionRequest, opts ...grpc.CallOption) (*RegisterCollectionResponse, error)
+	// SyncCollectionManifest compares item fingerprints with the collection's
+	// stored checkpoint and returns the item ids the engine needs, capped per
+	// ingest in the same order as SyncConversationManifest. The collection must
+	// be registered.
+	SyncCollectionManifest(ctx context.Context, in *SyncCollectionManifestRequest, opts ...grpc.CallOption) (*SyncCollectionManifestResponse, error)
+	// UpsertCollectionItemsStream is the client-streaming generic item upsert.
+	// The client sends one header chunk, then row chunks, then at most one
+	// manifest chunk. The engine validates every row against the saved
+	// declaration and queues an async ingest job.
+	UpsertCollectionItemsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse], error)
 	SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error)
 	// UpsertConversationDocumentsStream is the client-streaming conversation
 	// upsert. clyde sends one header chunk, then document chunks, then one manifest
@@ -266,6 +278,29 @@ func (c *semanticSearchDaemonServiceClient) RegisterCollection(ctx context.Conte
 	return out, nil
 }
 
+func (c *semanticSearchDaemonServiceClient) SyncCollectionManifest(ctx context.Context, in *SyncCollectionManifestRequest, opts ...grpc.CallOption) (*SyncCollectionManifestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncCollectionManifestResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_SyncCollectionManifest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *semanticSearchDaemonServiceClient) UpsertCollectionItemsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[1], SemanticSearchDaemonService_UpsertCollectionItemsStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_UpsertCollectionItemsStreamClient = grpc.ClientStreamingClient[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse]
+
 func (c *semanticSearchDaemonServiceClient) SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SyncConversationManifestResponse)
@@ -278,7 +313,7 @@ func (c *semanticSearchDaemonServiceClient) SyncConversationManifest(ctx context
 
 func (c *semanticSearchDaemonServiceClient) UpsertConversationDocumentsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[1], SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[2], SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +326,7 @@ type SemanticSearchDaemonService_UpsertConversationDocumentsStreamClient = grpc.
 
 func (c *semanticSearchDaemonServiceClient) BackfillConversationScalars(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[2], SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[3], SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -397,6 +432,16 @@ type SemanticSearchDaemonServiceServer interface {
 	// conflicting column in metadata key "column". The engine never rebuilds or
 	// drops an existing collection to satisfy a conflicting declaration.
 	RegisterCollection(context.Context, *RegisterCollectionRequest) (*RegisterCollectionResponse, error)
+	// SyncCollectionManifest compares item fingerprints with the collection's
+	// stored checkpoint and returns the item ids the engine needs, capped per
+	// ingest in the same order as SyncConversationManifest. The collection must
+	// be registered.
+	SyncCollectionManifest(context.Context, *SyncCollectionManifestRequest) (*SyncCollectionManifestResponse, error)
+	// UpsertCollectionItemsStream is the client-streaming generic item upsert.
+	// The client sends one header chunk, then row chunks, then at most one
+	// manifest chunk. The engine validates every row against the saved
+	// declaration and queues an async ingest job.
+	UpsertCollectionItemsStream(grpc.ClientStreamingServer[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse]) error
 	SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error)
 	// UpsertConversationDocumentsStream is the client-streaming conversation
 	// upsert. clyde sends one header chunk, then document chunks, then one manifest
@@ -476,6 +521,12 @@ func (UnimplementedSemanticSearchDaemonServiceServer) RegisterConversationCollec
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) RegisterCollection(context.Context, *RegisterCollectionRequest) (*RegisterCollectionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterCollection not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) SyncCollectionManifest(context.Context, *SyncCollectionManifestRequest) (*SyncCollectionManifestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SyncCollectionManifest not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) UpsertCollectionItemsStream(grpc.ClientStreamingServer[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse]) error {
+	return status.Error(codes.Unimplemented, "method UpsertCollectionItemsStream not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SyncConversationManifest not implemented")
@@ -790,6 +841,31 @@ func _SemanticSearchDaemonService_RegisterCollection_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SemanticSearchDaemonService_SyncCollectionManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncCollectionManifestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).SyncCollectionManifest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_SyncCollectionManifest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).SyncCollectionManifest(ctx, req.(*SyncCollectionManifestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SemanticSearchDaemonService_UpsertCollectionItemsStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SemanticSearchDaemonServiceServer).UpsertCollectionItemsStream(&grpc.GenericServerStream[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_UpsertCollectionItemsStreamServer = grpc.ClientStreamingServer[UpsertCollectionItemsStreamRequest, UpsertCollectionItemsStreamResponse]
+
 func _SemanticSearchDaemonService_SyncConversationManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SyncConversationManifestRequest)
 	if err := dec(in); err != nil {
@@ -1012,6 +1088,10 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _SemanticSearchDaemonService_RegisterCollection_Handler,
 		},
 		{
+			MethodName: "SyncCollectionManifest",
+			Handler:    _SemanticSearchDaemonService_SyncCollectionManifest_Handler,
+		},
+		{
 			MethodName: "SyncConversationManifest",
 			Handler:    _SemanticSearchDaemonService_SyncConversationManifest_Handler,
 		},
@@ -1049,6 +1129,11 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "WatchJobs",
 			Handler:       _SemanticSearchDaemonService_WatchJobs_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "UpsertCollectionItemsStream",
+			Handler:       _SemanticSearchDaemonService_UpsertCollectionItemsStream_Handler,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "UpsertConversationDocumentsStream",

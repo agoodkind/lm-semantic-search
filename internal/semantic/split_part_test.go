@@ -61,7 +61,7 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 		collectionName,
 		input,
 		[][]float32{{1}, {2}},
-		StoreColumnSetCode,
+		CodeColumns(),
 	)
 	if err != nil {
 		t.Fatalf("insertBatch returned error: %v", err)
@@ -234,7 +234,7 @@ func TestInsertBatchRejectsPartialInsertCount(t *testing.T) {
 		collectionName,
 		chunks,
 		[][]float32{{1}, {2}},
-		StoreColumnSetCode,
+		CodeColumns(),
 	)
 	if err == nil {
 		t.Fatal("insertBatch returned nil for a partial insert count")

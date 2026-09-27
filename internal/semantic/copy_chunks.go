@@ -80,7 +80,7 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 				destinationIDs,
 				source.vectors,
 				splitPartsRecorded,
-				storeColumnSetForCollection(collectionName),
+				service.storeColumnSetForCollection(collectionName),
 			)
 		},
 		persistDestination: func() error {
@@ -368,6 +368,7 @@ func copiedRowAt(
 			SplitPart:            splitPartValue,
 			SplitPartRecorded:    splitPartRecorded,
 			LoadRules:            "",
+			Scalars:              nil,
 			Score:                0,
 		},
 		id:                idValue,

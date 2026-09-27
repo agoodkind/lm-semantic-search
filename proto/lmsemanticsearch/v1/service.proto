@@ -28,6 +28,16 @@ service SemanticSearchDaemonService {
   // conflicting column in metadata key "column". The engine never rebuilds or
   // drops an existing collection to satisfy a conflicting declaration.
   rpc RegisterCollection(RegisterCollectionRequest) returns (RegisterCollectionResponse);
+  // SyncCollectionManifest compares item fingerprints with the collection's
+  // stored checkpoint and returns the item ids the engine needs, capped per
+  // ingest in the same order as SyncConversationManifest. The collection must
+  // be registered.
+  rpc SyncCollectionManifest(SyncCollectionManifestRequest) returns (SyncCollectionManifestResponse);
+  // UpsertCollectionItemsStream is the client-streaming generic item upsert.
+  // The client sends one header chunk, then row chunks, then at most one
+  // manifest chunk. The engine validates every row against the saved
+  // declaration and queues an async ingest job.
+  rpc UpsertCollectionItemsStream(stream UpsertCollectionItemsStreamRequest) returns (UpsertCollectionItemsStreamResponse);
   rpc SyncConversationManifest(SyncConversationManifestRequest) returns (SyncConversationManifestResponse);
   // UpsertConversationDocumentsStream is the client-streaming conversation
   // upsert. clyde sends one header chunk, then document chunks, then one manifest
@@ -655,6 +665,102 @@ message RegisterCollectionResponse {
   string item_id_column = 3;
   repeated ScalarColumnDeclaration scalars = 4;
   string display_text = 5;
+}
+
+// CollectionItemFingerprint is one item id paired with a content fingerprint
+// that changes whenever the item's rows change. The client computes it; the
+// engine compares it with the stored checkpoint.
+message CollectionItemFingerprint {
+  string item_id = 1;
+  string fingerprint = 2;
+}
+
+message SyncCollectionManifestRequest {
+  string collection_id = 1;
+  // manifest lists every current item with its content fingerprint.
+  repeated CollectionItemFingerprint manifest = 2;
+  ClientInfo client = 3;
+}
+
+message SyncCollectionManifestResponse {
+  // needed_item_ids lists the items new or changed since the last ingest. The
+  // client sends rows for only these.
+  repeated string needed_item_ids = 1;
+  string display_text = 2;
+}
+
+// CollectionReconcileMode declares how the engine treats an item the upsert
+// manifest omits. RETAIN keeps it and its rows. AUTHORITATIVE deletes it and
+// requires an explicit manifest chunk. UNSPECIFIED is treated as RETAIN.
+enum CollectionReconcileMode {
+  COLLECTION_RECONCILE_MODE_UNSPECIFIED = 0;
+  COLLECTION_RECONCILE_MODE_RETAIN = 1;
+  COLLECTION_RECONCILE_MODE_AUTHORITATIVE = 2;
+}
+
+// CollectionScalarValue is one typed value of a declared scalar column. The
+// value case must match the declared column type. An unset value is null, which
+// only a nullable column accepts.
+message CollectionScalarValue {
+  string column = 1;
+  oneof value {
+    string string_value = 2;
+    bool bool_value = 3;
+    int64 int64_value = 4;
+  }
+}
+
+// CollectionRow is one client row. row_key is the row's stable identity within
+// the collection and is stored as the row's relative path; text longer than the
+// engine's split size is stored as parts keyed row_key/0, row_key/1, and so on.
+// item_id identifies the item that owns the row. The engine stores item_id in
+// the declared item id column, and a scalar value for that column must equal it.
+message CollectionRow {
+  string row_key = 1;
+  string item_id = 2;
+  string text = 3;
+  repeated CollectionScalarValue scalars = 4;
+}
+
+// UpsertCollectionItemsHeader opens a streamed item upsert.
+message UpsertCollectionItemsHeader {
+  string collection_id = 1;
+  ClientInfo client = 2;
+  CollectionReconcileMode reconcile_mode = 3;
+  // backfill_delivered embeds absent rows of each delivered item and skips an
+  // item when all of its rows are present, even when fingerprints match.
+  bool backfill_delivered = 4;
+  // force_reexamine replaces every delivered item's rows with vector reuse
+  // disabled. When both flags are set force wins.
+  bool force_reexamine = 5;
+}
+
+// UpsertCollectionItemsRows is one bounded batch of rows in a streamed upsert.
+message UpsertCollectionItemsRows {
+  repeated CollectionRow rows = 1;
+}
+
+// UpsertCollectionItemsManifest lists the full current item set with
+// fingerprints. Without it the engine fingerprints each delivered item from
+// its rows, which RETAIN allows and AUTHORITATIVE rejects.
+message UpsertCollectionItemsManifest {
+  repeated CollectionItemFingerprint manifest = 1;
+}
+
+// UpsertCollectionItemsStreamRequest is one frame of a streamed item upsert: exactly
+// one header first, then zero or more rows chunks, then at most one manifest
+// chunk last.
+message UpsertCollectionItemsStreamRequest {
+  oneof chunk {
+    UpsertCollectionItemsHeader header = 1;
+    UpsertCollectionItemsRows rows = 2;
+    UpsertCollectionItemsManifest manifest = 3;
+  }
+}
+
+message UpsertCollectionItemsStreamResponse {
+  string job_id = 1;
+  string display_text = 2;
 }
 
 // ConversationFingerprint is one conversation id paired with a content

@@ -324,6 +324,14 @@ func (client *mockDaemonClient) SyncConversationManifest(context.Context, *pb.Sy
 	return nil, errors.New("not implemented")
 }
 
+func (client *mockDaemonClient) SyncCollectionManifest(context.Context, *pb.SyncCollectionManifestRequest, ...grpc.CallOption) (*pb.SyncCollectionManifestResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (client *mockDaemonClient) UpsertCollectionItemsStream(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[pb.UpsertCollectionItemsStreamRequest, pb.UpsertCollectionItemsStreamResponse], error) {
+	return nil, errors.New("not implemented")
+}
+
 func (client *mockDaemonClient) UpsertConversationDocumentsStream(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[pb.UpsertConversationDocumentsChunk, pb.UpsertConversationDocumentsResponse], error) {
 	return nil, errors.New("not implemented")
 }

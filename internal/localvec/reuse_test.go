@@ -36,7 +36,7 @@ func TestLoadReuseVectorsForContentsUsesCandidateIndexNotRowScan(t *testing.T) {
 			{Content: "first", RelativePath: "first.go"},
 			{Content: "second", RelativePath: "second.go"},
 		},
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 
 	stored, err := store.collectionForName(store.CollectionName(codebasePath), false)
@@ -142,7 +142,7 @@ func TestLoadReuseVectorsForContentsRebuildsIndexAfterMutationAndReload(t *testi
 		store,
 		codebasePath,
 		[]model.StoredChunk{{Content: "first", RelativePath: "first.go"}},
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 	if err := store.Reindex(
 		context.Background(),
@@ -151,7 +151,7 @@ func TestLoadReuseVectorsForContentsRebuildsIndexAfterMutationAndReload(t *testi
 		semantic.Removal{},
 		nil,
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestLocalReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 			RelativePath: fmt.Sprintf("control-%02d.txt", sampleIndex),
 		})
 	}
-	stageAndPromote(t, store, codebasePath, chunks, semantic.StoreColumnSetCode)
+	stageAndPromote(t, store, codebasePath, chunks, semantic.CodeColumns())
 	if _, err := store.embedder.EmbedBatch(
 		context.Background(),
 		[]string{"harmless local reuse warmup"},

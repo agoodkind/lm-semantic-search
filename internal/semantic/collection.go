@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,9 +20,11 @@ import (
 // Conversation collections carry their filterable attributes as native scalar
 // columns so Milvus can pre-filter a search by them, rather than the engine
 // over-fetching and post-filtering the JSON metadata column. These columns
-// exist only on conversation collections (conv_chunks_*), which are owned
-// solely by this daemon, so they never reach the TS-adapter-owned code
-// collections. The values are still mirrored into the metadata JSON for
+// exist only on conversation collections. Conversation collections and generic
+// document collections share the conv_chunks_ name prefix, and only this
+// daemon writes them. The TS-adapter-owned code collections never declare
+// these columns, and a generic document collection declares its own scalar
+// columns instead. The values are still mirrored into the metadata JSON for
 // backward compatibility with rows written before the columns existed.
 const (
 	conversationCollectionPrefix   = "conv_chunks_"
@@ -44,45 +47,140 @@ const (
 	embeddingModelFieldMaxLength   = 65535
 )
 
-// isConversationCollection reports whether a collection name addresses a
-// conversation document collection (including its staging twin), which is the
-// only kind that carries the conversation scalar columns.
-func isConversationCollection(collectionName string) bool {
+// hasConversationCollectionPrefix reports whether a collection name uses the
+// document collection prefix, including its staging twin. Conversation
+// collections and generic document collections share this prefix. A Service
+// decides whether a name stores conversation rows in
+// [Service.isConversationCollection].
+func hasConversationCollectionPrefix(collectionName string) bool {
 	return strings.HasPrefix(collectionName, conversationCollectionPrefix)
 }
 
-// StoreColumnSet names the scalar column family a store write populates. The
-// ingest caller (the item source) passes it into the write path so insertBatch
-// never re-derives the row shape from the collection name string. A conversation
-// write carries the conversation scalar columns; a code write carries only the
-// base columns.
-type StoreColumnSet int
+// isConversationCollection reports whether a collection stores conversation
+// rows with the conversation scalar columns. A name with the document
+// collection prefix stores conversation rows unless the manager recorded a
+// generic declaration for it through [Service.RecordCollectionDeclaration].
+// The name-based conversation schema migration, the conversation backfills,
+// and the search output column choice use this check. None of them adds
+// conversation columns to a generic collection.
+func (service *Service) isConversationCollection(collectionName string) bool {
+	if !hasConversationCollectionPrefix(collectionName) {
+		return false
+	}
+	_, declared := service.declaredCollections.Load(liveCollectionName(collectionName))
+	return !declared
+}
+
+// liveCollectionName strips the staging and promotion recovery suffixes. A
+// staging or recovery twin then resolves to the live collection it replaces.
+func liveCollectionName(collectionName string) string {
+	trimmed := strings.TrimSuffix(collectionName, stagingCollectionSuffix)
+	return strings.TrimSuffix(trimmed, recoveryCollectionSuffix)
+}
+
+// RecordCollectionDeclaration records the saved declaration of a document
+// collection. The conversation declaration clears any recorded generic
+// declaration. The conversation schema migrations then apply to the
+// collection. Any other declaration marks the collection as generic. The
+// conversation migrations and backfills then skip it.
+func (service *Service) RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration) {
+	name := liveCollectionName(collectionName)
+	if IsConversationDeclaration(declaration) {
+		service.declaredCollections.Delete(name)
+		return
+	}
+	service.declaredCollections.Store(name, struct{}{})
+}
+
+// IsConversationDeclaration reports whether declaration equals
+// [ConversationDeclaration] column for column. Only that declaration stores
+// rows in the conversation schema.
+func IsConversationDeclaration(declaration model.CollectionDeclaration) bool {
+	conversation := ConversationDeclaration()
+	return declaration.ItemIDColumn == conversation.ItemIDColumn &&
+		slices.Equal(declaration.Scalars, conversation.Scalars)
+}
+
+type storeColumnKind int
 
 const (
-	// StoreColumnSetCode writes only the base chunk columns.
-	StoreColumnSetCode StoreColumnSet = iota
-	// StoreColumnSetConversation additionally writes the conversation scalar
-	// columns (conversationId, provider, role, workspace, timestamps, and the
-	// message lineage fields).
-	StoreColumnSetConversation
+	storeColumnKindCode storeColumnKind = iota
+	storeColumnKindConversation
+	storeColumnKindDeclared
 )
 
+// StoreColumnSet is the set of scalar columns a store write populates and a
+// created collection declares. The ingest caller (the item source) passes it
+// into the write path. insertBatch never derives the row shape from the
+// collection name. A code write sends only the base columns. A conversation
+// write also sends the conversation scalar columns from the conversation
+// fields of each chunk. A declared write also sends each declared column from
+// [model.StoredChunk.Scalars].
+type StoreColumnSet struct {
+	kind    storeColumnKind
+	scalars []model.ScalarColumn
+}
+
+// CodeColumns returns the column set of a code collection.
+func CodeColumns() StoreColumnSet {
+	return StoreColumnSet{kind: storeColumnKindCode, scalars: nil}
+}
+
+// ConversationColumns returns the column set of a conversation collection.
+func ConversationColumns() StoreColumnSet {
+	return StoreColumnSet{kind: storeColumnKindConversation, scalars: nil}
+}
+
+// ColumnsForDeclaration returns the column set of a document collection with
+// the given saved declaration. The conversation declaration returns
+// [ConversationColumns]. Its rows keep the conversation schema byte for byte.
+func ColumnsForDeclaration(declaration model.CollectionDeclaration) StoreColumnSet {
+	if IsConversationDeclaration(declaration) {
+		return ConversationColumns()
+	}
+	return StoreColumnSet{kind: storeColumnKindDeclared, scalars: slices.Clone(declaration.Scalars)}
+}
+
 // ConversationScalars reports whether this column set writes the conversation
-// scalar columns. It replaces the collection-name prefix check inside the store
-// write, so the row shape is a caller decision rather than a string inference.
+// scalar columns. The caller chooses the row shape. The store write never
+// infers it from the collection name.
 func (columnSet StoreColumnSet) ConversationScalars() bool {
-	return columnSet == StoreColumnSetConversation
+	return columnSet.kind == storeColumnKindConversation
+}
+
+// DeclaredScalars returns the declared columns a declared write sends. It is
+// nil for the code and conversation column sets.
+func (columnSet StoreColumnSet) DeclaredScalars() []model.ScalarColumn {
+	if columnSet.kind != storeColumnKindDeclared {
+		return nil
+	}
+	return columnSet.scalars
+}
+
+// creationScalars returns the scalar columns createCollection adds to a
+// collection it creates for this column set.
+func (columnSet StoreColumnSet) creationScalars() []model.ScalarColumn {
+	switch columnSet.kind {
+	case storeColumnKindConversation:
+		return ConversationDeclaration().Scalars
+	case storeColumnKindDeclared:
+		return columnSet.scalars
+	case storeColumnKindCode:
+		return nil
+	default:
+		return nil
+	}
 }
 
 // storeColumnSetForCollection classifies a collection by name for the callers
 // that rewrite rows in place and have no item source to ask (CopyChunks copies
 // existing rows within one known collection). The source-driven ingest path
 // passes its StoreColumnSet directly instead of calling this.
-func storeColumnSetForCollection(collectionName string) StoreColumnSet {
-	if isConversationCollection(collectionName) {
-		return StoreColumnSetConversation
+func (service *Service) storeColumnSetForCollection(collectionName string) StoreColumnSet {
+	if service.isConversationCollection(collectionName) {
+		return ConversationColumns()
 	}
-	return StoreColumnSetCode
+	return CodeColumns()
 }
 
 // isStagingCollection reports whether a collection name is a transient rebuild
@@ -147,17 +245,6 @@ func BuiltinColumnNames() []string {
 		denseVectorFieldName,
 		sparseVectorFieldName,
 	}
-}
-
-// declarationForNewCollection returns the scalar columns createCollection
-// adds to a collection it creates. A conversation collection receives the
-// conversation declaration. Every other collection receives no declared
-// scalars.
-func declarationForNewCollection(collectionName string) []model.ScalarColumn {
-	if isConversationCollection(collectionName) {
-		return ConversationDeclaration().Scalars
-	}
-	return nil
 }
 
 // DescribeScalarColumns reports the declared scalar columns of a stored
@@ -557,7 +644,7 @@ func (service *Service) addMissingConversationScalarColumns(ctx context.Context,
 }
 
 func (service *Service) ensureConversationScalarColumns(ctx context.Context, collectionName string) error {
-	if !isConversationCollection(collectionName) {
+	if !service.isConversationCollection(collectionName) {
 		return nil
 	}
 	hasCollection, err := service.hasCollection(
@@ -615,7 +702,7 @@ type conversationScalarMigration struct {
 // and the rest wait and observe its result. A migration error is not retained as
 // a success, so a transient failure can be retried on the next call.
 func (service *Service) ensureConversationScalarColumnsOnce(ctx context.Context, collectionName string) error {
-	if !isConversationCollection(collectionName) {
+	if !service.isConversationCollection(collectionName) {
 		return nil
 	}
 	loaded, _ := service.ensuredConvColumns.LoadOrStore(collectionName, &conversationScalarMigration{once: sync.Once{}, err: nil})

@@ -106,7 +106,7 @@ func TestStoreRoundTripSearchDeletePruneAndReuse(t *testing.T) {
 		semantic.Removal{},
 		nil,
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestStoreRoundTripSearchDeletePruneAndReuse(t *testing.T) {
 		semantic.RemovePaths([]string{"second.go"}),
 		nil,
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("Reindex delete returned error: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestStoreRecoversInterruptedPromotion(t *testing.T) {
 					RelativePath:  "old.go",
 					FileExtension: ".go",
 				}},
-				semantic.StoreColumnSetCode,
+				semantic.CodeColumns(),
 			)
 			if err := store.StageReindex(
 				context.Background(),
@@ -252,7 +252,7 @@ func TestStoreRecoversInterruptedPromotion(t *testing.T) {
 				semantic.Removal{},
 				nil,
 				nil,
-				semantic.StoreColumnSetCode,
+				semantic.CodeColumns(),
 			); err != nil {
 				t.Fatalf("StageReindex returned error: %v", err)
 			}

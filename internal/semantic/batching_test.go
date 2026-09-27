@@ -2,6 +2,7 @@ package semantic
 
 import (
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -209,7 +210,7 @@ func TestReuseAwareEmbeddingAndInsertPackingUseIndependentBudgets(t *testing.T) 
 		chunks,
 		len(vector),
 		insertByteCeiling,
-		StoreColumnSetCode,
+		CodeColumns(),
 		"model-a",
 	)
 	assertGroupsCoverChunksInOrder(t, insertGroups, chunks)
@@ -222,7 +223,7 @@ func TestReuseAwareEmbeddingAndInsertPackingUseIndependentBudgets(t *testing.T) 
 			estimatedBytes += estimatedInsertRowBytes(
 				chunk,
 				len(vector),
-				StoreColumnSetCode,
+				CodeColumns(),
 				"model-a",
 			)
 		}
@@ -279,12 +280,12 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 		{
 			name:      "code columns",
 			chunks:    chunks,
-			columnSet: StoreColumnSetCode,
+			columnSet: CodeColumns(),
 		},
 		{
 			name:      "conversation columns",
 			chunks:    conversationChunks,
-			columnSet: StoreColumnSetConversation,
+			columnSet: ConversationColumns(),
 		},
 	}
 	for _, test := range tests {
@@ -469,7 +470,7 @@ func assertGroupsCoverChunksInOrder(t *testing.T, groups [][]model.StoredChunk, 
 		t.Fatalf("groups hold %d chunks, want %d", len(flattened), len(chunks))
 	}
 	for index := range chunks {
-		if flattened[index] != chunks[index] {
+		if !reflect.DeepEqual(flattened[index], chunks[index]) {
 			t.Fatalf("chunk %d is out of order", index)
 		}
 	}

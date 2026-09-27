@@ -109,6 +109,10 @@ func (service *Service) insertBatchWithIDs(
 	if err != nil {
 		return err
 	}
+	declaredColumns, err := declaredScalarInsertColumns(collectionName, columnSet.DeclaredScalars(), chunks)
+	if err != nil {
+		return err
+	}
 	insertOption := buildInsertOption(
 		collectionName,
 		ids,
@@ -117,6 +121,7 @@ func (service *Service) insertBatchWithIDs(
 		splitPartColumn,
 		embeddingModelColumn,
 		conversationCollection,
+		declaredColumns,
 	)
 
 	insertResult, err := service.executeInsert(ctx, insertOption)
@@ -154,6 +159,7 @@ func buildInsertOption(
 	splitPartColumn column.Column,
 	embeddingModelColumn column.Column,
 	conversationCollection bool,
+	declaredColumns []column.Column,
 ) milvusclient.InsertOption {
 	insertOption := milvusclient.NewColumnBasedInsertOption(collectionName).
 		WithVarcharColumn(idFieldName, ids).
@@ -177,6 +183,9 @@ func buildInsertOption(
 			WithInt64Column(timestampUnixFieldName, columns.scalars.timestamps).
 			WithInt64Column(messageIndexFieldName, columns.scalars.messageIndexes).
 			WithVarcharColumn(loadRulesFieldName, columns.scalars.loadRules)
+	}
+	if len(declaredColumns) > 0 {
+		insertOption = insertOption.WithColumns(declaredColumns...)
 	}
 	return insertOption
 }

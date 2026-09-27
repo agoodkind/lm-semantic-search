@@ -115,6 +115,15 @@ func (f *fakeSemantic) SetMaintenance(enabled bool) {
 	f.maintenanceGate.Store(enabled)
 }
 
+// RecordCollectionDeclaration accepts the manager's declaration record. The
+// fake has no schema migrations for the record to steer.
+func (f *fakeSemantic) RecordCollectionDeclaration(string, model.CollectionDeclaration) {}
+
+// LoadCollectionItemBatch reports no stored rows for a generic collection.
+func (f *fakeSemantic) LoadCollectionItemBatch(context.Context, string, string, []string) (semantic.CollectionItemBatchState, error) {
+	return semantic.CollectionItemBatchState{Rows: map[string]semantic.CollectionItemRows{}, Reuse: map[string][]float32{}}, nil
+}
+
 type reindexCall struct {
 	CodebasePath string
 	Chunks       int

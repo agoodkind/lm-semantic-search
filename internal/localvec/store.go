@@ -41,6 +41,9 @@ type Store struct {
 	mutex       sync.RWMutex
 	collections map[string]*collection
 	available   bool
+	// declaredScalars maps a generic document collection name to the scalar
+	// columns of its saved declaration. See RecordCollectionDeclaration.
+	declaredScalars sync.Map
 }
 
 type collectionLease struct{}
@@ -95,12 +98,13 @@ func newStoreWithProvider(
 		return nil, fmt.Errorf("create local vector store directory %s: %w", root, err)
 	}
 	store := &Store{
-		cfg:         cfg,
-		root:        root,
-		embedder:    provider,
-		mutex:       sync.RWMutex{},
-		collections: make(map[string]*collection),
-		available:   true,
+		cfg:             cfg,
+		root:            root,
+		embedder:        provider,
+		mutex:           sync.RWMutex{},
+		collections:     make(map[string]*collection),
+		available:       true,
+		declaredScalars: sync.Map{},
 	}
 	if err := store.recoverCollectionBackups(); err != nil {
 		return nil, err
@@ -251,8 +255,10 @@ func (store *Store) InspectCollection(
 
 // DescribeScalarColumns reports the declared scalar columns of a stored local
 // collection. exists is false when the collection is absent. The local row
-// format stores the conversation scalar fields on every row, so an existing
-// local collection reports the conversation declaration.
+// format has no schema. A collection with a recorded generic declaration
+// reports the columns of that declaration. Every other existing local
+// collection reports the conversation declaration, because the local row
+// format stores the conversation scalar fields on every conversation row.
 func (store *Store) DescribeScalarColumns(
 	_ context.Context,
 	collectionName string,
@@ -267,6 +273,9 @@ func (store *Store) DescribeScalarColumns(
 	}
 	if !exists {
 		return nil, false, nil
+	}
+	if declared, found := store.recordedScalars(collectionName); found {
+		return declared, true, nil
 	}
 	return semantic.ConversationDeclaration().Scalars, true, nil
 }

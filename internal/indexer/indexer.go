@@ -280,6 +280,7 @@ func (runner *Runner) processFile(ctx context.Context, resolver *indexability.Re
 			SplitPart:            0,
 			SplitPartRecorded:    true,
 			LoadRules:            "",
+			Scalars:              nil,
 			Score:                0,
 		})
 	}

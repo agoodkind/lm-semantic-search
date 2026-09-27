@@ -62,6 +62,17 @@ type semanticReuseLoader interface {
 	// conversations in one Milvus query per id batch, replacing the
 	// per-conversation message-state iterator in the examination path.
 	LoadConversationDerivedBatch(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error)
+	// LoadCollectionItemBatch reads the stored rows of a batch of items from a
+	// generic document collection, selected by the declared item id column.
+	LoadCollectionItemBatch(ctx context.Context, collectionName string, itemColumn string, itemIDs []string) (semantic.CollectionItemBatchState, error)
+}
+
+// semanticDeclarationRecorder is how the manager tells a backend the saved
+// declaration of a document collection. A backend uses it to keep the
+// conversation schema migrations off generic collections, which share the
+// conversation collection name prefix.
+type semanticDeclarationRecorder interface {
+	RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration)
 }
 
 // semanticWriter is the slice that mutates the live or staging collection.
@@ -128,4 +139,5 @@ type semanticIndex interface {
 	semanticMaintainer
 	semanticMaintenanceGate
 	semanticIdentity
+	semanticDeclarationRecorder
 }

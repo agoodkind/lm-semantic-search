@@ -2230,7 +2230,7 @@ func TestHandleChangedFileHonorsOneFileResultOverrides(t *testing.T) {
 				FileHash:     "fp-reuse",
 				ReuseVectors: map[string][]float32{"override-hash": {2, 3}},
 			},
-			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/conv-reuse/"}),
+			fallbackRemoval: semantic.Removal{Prefixes: []string{"conv/conv-reuse/"}},
 			reuse: itemReuseSource{
 				CollectionName: "conv_chunks_test",
 				RelativePath:   "conv/conv-reuse/",
@@ -2275,7 +2275,7 @@ func TestHandleChangedFileHonorsOneFileResultOverrides(t *testing.T) {
 				RemovalPaths:    []string{"conv/conv-remove/legacy"},
 				RemovalPrefixes: []string{"conv/conv-remove/messages/"},
 			},
-			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/fallback/"}),
+			fallbackRemoval: semantic.Removal{Prefixes: []string{"conv/fallback/"}},
 		})
 		result := emptyOverrideResult()
 
@@ -2313,7 +2313,7 @@ func TestHandleChangedFileHonorsOneFileResultOverrides(t *testing.T) {
 				RemovalPaths:    nil,
 				RemovalPrefixes: nil,
 			},
-			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/conv-empty-removal/"}),
+			fallbackRemoval: semantic.Removal{Prefixes: []string{"conv/conv-empty-removal/"}},
 		})
 		result := emptyOverrideResult()
 
@@ -2354,7 +2354,7 @@ func TestHandleChangedFileHonorsOneFileResultOverrides(t *testing.T) {
 				FileHash:     "fp-empty-reuse",
 				ReuseVectors: map[string][]float32{},
 			},
-			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/conv-empty-reuse/"}),
+			fallbackRemoval: semantic.Removal{Prefixes: []string{"conv/conv-empty-reuse/"}},
 			reuse: itemReuseSource{
 				CollectionName: "conv_chunks_test",
 				RelativePath:   "conv/conv-empty-reuse/",
@@ -2388,7 +2388,7 @@ func TestHandleChangedFileHonorsOneFileResultOverrides(t *testing.T) {
 				RemovalPaths:    nil,
 				RemovalPrefixes: nil,
 			},
-			fallbackRemoval: semantic.RemovePrefixes([]string{"conv/conv-zero/"}),
+			fallbackRemoval: semantic.Removal{Prefixes: []string{"conv/conv-zero/"}},
 		})
 		result := emptyOverrideResult()
 
@@ -2550,7 +2550,7 @@ func (source oneFileResultOverrideSource) forcedWorkSet(context.Context) ([]stri
 }
 
 func (source oneFileResultOverrideSource) columnSet() semantic.StoreColumnSet {
-	return semantic.StoreColumnSetConversation
+	return semantic.ConversationColumns()
 }
 
 func (source oneFileResultOverrideSource) indexOne(context.Context, string) (indexer.OneFileResult, error) {

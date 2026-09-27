@@ -764,12 +764,22 @@ func removeRows(rows []row, removal semantic.Removal) ([]row, bool) {
 	for _, relativePath := range removal.Paths {
 		paths[relativePath] = struct{}{}
 	}
+	itemIDs := make(map[string]struct{}, len(removal.ItemIDs))
+	for _, itemID := range removal.ItemIDs {
+		itemIDs[itemID] = struct{}{}
+	}
 	kept := make([]row, 0, len(rows))
 	removed := false
 	for _, stored := range rows {
 		if _, found := paths[stored.RelativePath]; found {
 			removed = true
 			continue
+		}
+		if itemValue, present := stored.itemID(removal.ItemColumn); present {
+			if _, found := itemIDs[itemValue]; found {
+				removed = true
+				continue
+			}
 		}
 		if matchesAnyPrefix(stored.RelativePath, removal.Prefixes) {
 			removed = true

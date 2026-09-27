@@ -25,6 +25,25 @@ type conversationScalarColumns struct {
 	loadRules             []string
 }
 
+// Column names of [ConversationDeclaration].
+const (
+	ConversationIDColumn            = conversationIDFieldName
+	ConversationParentColumn        = parentConversationIDFieldName
+	ConversationRoleColumn          = roleFieldName
+	ConversationProviderColumn      = providerFieldName
+	ConversationWorkspaceRootColumn = workspaceRootFieldName
+	ConversationArchivedColumn      = archivedFieldName
+	ConversationTimestampColumn     = timestampUnixFieldName
+	ConversationMessageIndexColumn  = messageIndexFieldName
+	ConversationLoadRulesColumn     = loadRulesFieldName
+)
+
+// ProviderFromConversationID returns the provider a conversation collection
+// stores for a conversation id: the prefix before the first colon, or empty.
+func ProviderFromConversationID(conversationID string) string {
+	return providerFromConversationID(conversationID)
+}
+
 // ConversationDeclaration returns the scalar declaration of every conversation
 // collection. conversationId stores the item id. Every column is nullable, so
 // the same declaration defines a freshly created collection and the

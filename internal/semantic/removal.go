@@ -14,26 +14,33 @@ import (
 // file uses because all its chunks share one relativePath. Prefixes match every
 // row whose relativePath begins with the prefix, which a conversation uses
 // because its messages span many relativePaths under one conv/<id>/ prefix.
+//
+// ItemColumn and ItemIDs select rows by a declared item id scalar column. A
+// document collection removes an item's rows by the item id stored in that
+// column, and a conversation collection adds its legacy relativePath prefixes
+// for rows written before the conversationId column existed.
 type Removal struct {
-	Paths    []string
-	Prefixes []string
+	Paths      []string
+	Prefixes   []string
+	ItemColumn string
+	ItemIDs    []string
 }
 
 // Empty reports whether the removal would delete nothing.
 func (removal Removal) Empty() bool {
-	return len(removal.Paths) == 0 && len(removal.Prefixes) == 0
+	return len(removal.Paths) == 0 && len(removal.Prefixes) == 0 && len(removal.ItemIDs) == 0
+}
+
+// RemoveItems builds a removal that drops every row with an itemColumn value in
+// itemIDs, plus every row under legacyPrefixes.
+func RemoveItems(itemColumn string, itemIDs []string, legacyPrefixes []string) Removal {
+	return Removal{Paths: nil, Prefixes: legacyPrefixes, ItemColumn: itemColumn, ItemIDs: itemIDs}
 }
 
 // RemovePaths builds a removal that drops rows by exact relativePath, the code
 // file shape.
 func RemovePaths(paths []string) Removal {
-	return Removal{Paths: paths, Prefixes: nil}
-}
-
-// RemovePrefixes builds a removal that drops rows by relativePath prefix, the
-// conversation shape.
-func RemovePrefixes(prefixes []string) Removal {
-	return Removal{Paths: nil, Prefixes: prefixes}
+	return Removal{Paths: paths, Prefixes: nil, ItemColumn: "", ItemIDs: nil}
 }
 
 // deleteByRemoval drops an item's prior rows by exact relativePath, by
@@ -56,6 +63,13 @@ func (service *Service) deleteByRemoval(ctx context.Context, collectionName stri
 			collectionName,
 			removal.Paths,
 		)
+		if err != nil {
+			return err
+		}
+	}
+	var itemRowsRemoved int64
+	if len(removal.ItemIDs) > 0 {
+		itemRowsRemoved, err = service.deleteByItemIDs(ctx, collectionName, removal.ItemColumn, removal.ItemIDs)
 		if err != nil {
 			return err
 		}
@@ -84,10 +98,40 @@ func (service *Service) deleteByRemoval(ctx context.Context, collectionName stri
 		pathRowsRemoved,
 		"prefix_rows_removed",
 		prefixRowsRemoved,
+		"item_rows_removed",
+		itemRowsRemoved,
 		"rows_removed",
-		pathRowsRemoved+prefixRowsRemoved,
+		pathRowsRemoved+prefixRowsRemoved+itemRowsRemoved,
 	)
 	return nil
+}
+
+// deleteByItemIDs removes every row with an itemColumn value in itemIDs.
+func (service *Service) deleteByItemIDs(
+	ctx context.Context,
+	collectionName string,
+	itemColumn string,
+	itemIDs []string,
+) (int64, error) {
+	if itemColumn == "" {
+		return 0, fmt.Errorf("delete items from %s: item column is required", collectionName)
+	}
+	var removed int64
+	for _, idBatch := range batchConversationIDs(itemIDs, conversationFilterIDBatchSize) {
+		result, err := service.milvus.Delete(
+			ctx,
+			milvusclient.NewDeleteOption(collectionName).WithExpr(inStringClause(itemColumn, idBatch)),
+		)
+		if err != nil {
+			return removed, wrapStoreError(
+				ctx,
+				err,
+				"delete from "+collectionName+" by item id column "+itemColumn,
+			)
+		}
+		removed += result.DeleteCount
+	}
+	return removed, nil
 }
 
 // deleteByRelativePathPrefix removes every row whose relativePath begins with

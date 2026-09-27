@@ -396,7 +396,7 @@ func (service *Service) writeEmbeddedChunkBatch(
 			ctx,
 			collectionName,
 			dimension,
-			declarationForNewCollection(collectionName),
+			columnSet.creationScalars(),
 		)
 		if err != nil {
 			return result, err

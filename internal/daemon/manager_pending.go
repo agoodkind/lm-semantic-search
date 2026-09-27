@@ -75,8 +75,10 @@ func (manager *Manager) activeJobLocked(codebase model.Codebase, indexConfig mod
 }
 
 // mergePendingConversationPayloadLocked folds an incoming upsert payload into the
-// codebase's single depth-1 pending slot. Documents and Manifest union by
-// conversation id with the newer submission winning per id; Backfill and Force
+// codebase's single depth-1 pending slot. Delivered content and Manifest union by
+// item id with the newer submission winning per id. An item the incoming payload
+// delivers as documents or rows replaces the pending documents and rows of that
+// item. Backfill and Force
 // each OR (sticky true) so a coalesced backfill keeps its backfill intent and a
 // coalesced force stays a force; Absence takes the most conservative (retain) of
 // the two so a coalesced retain upsert never inherits a delete-on-absence policy
@@ -96,7 +98,9 @@ func (manager *Manager) mergePendingConversationPayloadLocked(codebaseID string,
 	// maps.Copy applies latest-writer-wins per conversation id: the incoming
 	// fingerprint replaces the pending one, and pending-only ids are kept.
 	maps.Copy(merged.Manifest, incoming.Manifest)
-	merged.Documents = unionConversationDocuments(merged.Documents, incoming.Documents)
+	incomingItems := deliveredItemIDs(incoming)
+	merged.Documents = unionConversationDocuments(merged.Documents, incoming.Documents, incomingItems)
+	merged.Rows = unionCollectionRows(merged.Rows, incoming.Rows, incomingItems)
 	merged.Backfill = merged.Backfill || incoming.Backfill
 	merged.Force = merged.Force || incoming.Force
 	merged.Absence = mostConservativeAbsence(merged.Absence, incoming.Absence)
@@ -114,25 +118,51 @@ func clonePendingConversationPayload(payload conversationJobPayload) conversatio
 	if payload.Documents != nil {
 		cloned.Documents = append([]model.ConversationDocument(nil), payload.Documents...)
 	}
+	if payload.Rows != nil {
+		cloned.Rows = append([]collectionRow(nil), payload.Rows...)
+	}
 	return cloned
 }
 
-// unionConversationDocuments merges two delivered document sets by conversation
-// id: the incoming set replaces the existing set for any conversation id it
-// carries, and documents for conversations only the existing set carried are
-// kept. Order is deterministic: kept existing documents first, then the incoming
-// documents.
-func unionConversationDocuments(existing []model.ConversationDocument, incoming []model.ConversationDocument) []model.ConversationDocument {
-	incomingIDs := make(map[string]struct{}, len(incoming))
-	for _, document := range incoming {
-		incomingIDs[document.ConversationID] = struct{}{}
+// deliveredItemIDs returns the item ids a payload delivers as documents or
+// rows.
+func deliveredItemIDs(payload conversationJobPayload) map[string]struct{} {
+	itemIDs := make(map[string]struct{}, len(payload.Documents)+len(payload.Rows))
+	for _, document := range payload.Documents {
+		itemIDs[document.ConversationID] = struct{}{}
 	}
+	for _, row := range payload.Rows {
+		itemIDs[row.ItemID] = struct{}{}
+	}
+	return itemIDs
+}
+
+// unionConversationDocuments merges two delivered document sets by conversation
+// id: the incoming delivery replaces the existing documents for every item id in
+// incomingIDs, and documents for conversations only the existing set delivered
+// are kept. Order is deterministic: kept existing documents first, then the
+// incoming documents.
+func unionConversationDocuments(existing []model.ConversationDocument, incoming []model.ConversationDocument, incomingIDs map[string]struct{}) []model.ConversationDocument {
 	merged := make([]model.ConversationDocument, 0, len(existing)+len(incoming))
 	for _, document := range existing {
 		if _, replaced := incomingIDs[document.ConversationID]; replaced {
 			continue
 		}
 		merged = append(merged, document)
+	}
+	merged = append(merged, incoming...)
+	return merged
+}
+
+// unionCollectionRows merges two delivered row sets by item id with the same
+// replacement rule as unionConversationDocuments.
+func unionCollectionRows(existing []collectionRow, incoming []collectionRow, incomingIDs map[string]struct{}) []collectionRow {
+	merged := make([]collectionRow, 0, len(existing)+len(incoming))
+	for _, row := range existing {
+		if _, replaced := incomingIDs[row.ItemID]; replaced {
+			continue
+		}
+		merged = append(merged, row)
 	}
 	merged = append(merged, incoming...)
 	return merged

@@ -178,7 +178,7 @@ func TestReindexLogsRemovedRowCountsAfterEveryDeleteSucceeds(t *testing.T) {
 		removal,
 		nil,
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 	if err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
@@ -229,10 +229,10 @@ func TestReindexDoesNotLogRemovalSuccessWhenSecondPrefixDeleteFails(t *testing.T
 		context.Background(),
 		t.TempDir(),
 		nil,
-		semantic.RemovePrefixes([]string{"conv/one/", "conv/two/"}),
+		semantic.Removal{Prefixes: []string{"conv/one/", "conv/two/"}},
 		nil,
 		nil,
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 	if err == nil {
 		t.Fatal("Reindex returned nil error for the configured second prefix-delete failure")

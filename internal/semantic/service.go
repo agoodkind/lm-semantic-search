@@ -140,6 +140,9 @@ type Service struct {
 	// scalar-column backfilled, so the daemon's periodic backfill sweep runs the
 	// metadata-only backfill at most once per collection per process.
 	ensuredBackfill sync.Map
+	// declaredCollections records the live names of document collections with a
+	// generic saved declaration. See isConversationCollection.
+	declaredCollections sync.Map
 }
 
 // NewService constructs the semantic search runtime.
@@ -177,6 +180,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			mmapPolicyGeneration:        make(map[string]uint64),
 			mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
 			ensuredBackfill:             sync.Map{},
+			declaredCollections:         sync.Map{},
 		}
 		service.initializeResidencyController()
 		return service, nil
@@ -220,6 +224,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		mmapPolicyGeneration:        make(map[string]uint64),
 		mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
 		ensuredBackfill:             sync.Map{},
+		declaredCollections:         sync.Map{},
 	}
 	service.initializeResidencyController()
 
@@ -437,7 +442,10 @@ func (service *Service) Reindex(ctx context.Context, codebasePath string, addedO
 	if !hasCollection {
 		return ErrCollectionMissing
 	}
-	if len(addedOrModifiedChunks) > 0 {
+	// An item removal filters on a scalar column. The conversation scalar
+	// migration adds that column to a legacy collection. An item removal
+	// prepares the collection before its delete.
+	if len(addedOrModifiedChunks) > 0 || len(removal.ItemIDs) > 0 {
 		if err := service.PrepareCollection(ctx, collectionName); err != nil {
 			return err
 		}
@@ -597,7 +605,7 @@ func (service *Service) searchCollectionWithVector(ctx context.Context, collecti
 		metadataFieldName,
 		splitPartFieldName,
 	}
-	if isConversationCollection(collectionName) {
+	if service.isConversationCollection(collectionName) {
 		// Conversation collections carry workspaceRoot as a native scalar column.
 		// Request it so a workspace_roots post-filter on the daemon side sees the
 		// real value rather than the empty default; code collections have no such

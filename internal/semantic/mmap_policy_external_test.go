@@ -807,7 +807,7 @@ func TestCreatedCollectionWaitsForIndexesAndLoadsAfterPolicy(t *testing.T) {
 		map[string][]float32{
 			semantic.ContentVectorKey("package created"): {1, 0, 0},
 		},
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 	if err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
@@ -881,7 +881,7 @@ func TestCreatedCollectionFailsWithoutLoadWhenRequiredIndexStaysInvisible(t *tes
 		map[string][]float32{
 			semantic.ContentVectorKey("package invisible"): {1, 0, 0},
 		},
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 	if err == nil {
 		t.Fatal("StageReindex returned nil while contentHash index stayed invisible")
@@ -982,7 +982,7 @@ func stageMmapTestChunk(
 		map[string][]float32{
 			semantic.ContentVectorKey(content): {1, 0, 0},
 		},
-		semantic.StoreColumnSetCode,
+		semantic.CodeColumns(),
 	)
 }
 

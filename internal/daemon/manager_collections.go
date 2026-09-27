@@ -126,13 +126,22 @@ func (manager *Manager) RegisterConversationCollection(ctx context.Context, coll
 // [Manager.RegisterConversationCollection] only when no record exists. Every
 // conversation manifest, ingest, search, backfill, and delete request resolves
 // its collection here, and an existing record returns without a stored schema
-// read, matching the request cost before registration validated schemas.
+// read, matching the request cost before registration validated schemas. A
+// record with a generic saved declaration fails with a schema mismatch.
 func (manager *Manager) resolveConversationCollection(ctx context.Context, collectionID string) (model.Codebase, error) {
 	trimmedCollectionID := strings.TrimSpace(collectionID)
 	manager.mu.Lock()
 	codebase, found := manager.findConversationCollectionLocked(trimmedCollectionID)
 	manager.mu.Unlock()
 	if found && trimmedCollectionID != "" {
+		declaration := savedCollectionDeclaration(codebase)
+		if !semantic.IsConversationDeclaration(declaration) {
+			return model.Codebase{}, adapterr.NewCollectionSchemaMismatch(
+				trimmedCollectionID,
+				declaration.ItemIDColumn,
+				"the collection has a generic declaration, and the conversation RPCs accept only the conversation declaration",
+			)
+		}
 		return codebase, nil
 	}
 	return manager.RegisterConversationCollection(ctx, trimmedCollectionID)
@@ -222,6 +231,7 @@ func (manager *Manager) saveCollectionDeclarationLocked(
 	// Every persisted codebase record write sends one observer signal. For a
 	// document collection the signal deletes nothing.
 	manager.observer.Invalidate(codebaseID)
+	manager.semantic.RecordCollectionDeclaration(current.CollectionName, declaration)
 	return current, nil
 }
 
@@ -253,6 +263,7 @@ func (manager *Manager) createDocumentCollectionLocked(
 	// Every persisted codebase record write sends one observer signal. For a
 	// document collection the signal deletes nothing.
 	manager.observer.Invalidate(codebase.ID)
+	manager.semantic.RecordCollectionDeclaration(collectionName, declaration)
 	return codebase, nil
 }
 
