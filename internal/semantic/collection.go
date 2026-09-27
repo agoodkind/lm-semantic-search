@@ -95,9 +95,10 @@ func (service *Service) RecordCollectionDeclaration(collectionName string, decla
 // IsConversationDeclaration reports whether declaration has the item id column
 // and the scalar columns of [ConversationDeclaration] in any order: the same
 // column names, types, nullability, and string lengths. Only that declaration
-// stores rows in the conversation schema. Registration compares declarations
-// without regard to column order, and a saved declaration keeps the order its
-// registration sent.
+// stores rows in the conversation schema.
+// Registration compares declarations without regard to column order.
+// A saved declaration preserves the column order supplied during the
+// registration that saved it.
 func IsConversationDeclaration(declaration model.CollectionDeclaration) bool {
 	conversation := ConversationDeclaration()
 	return declaration.ItemIDColumn == conversation.ItemIDColumn &&
