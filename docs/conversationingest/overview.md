@@ -12,7 +12,7 @@ The Merkle checkpoint stays at item granularity: one entry per item id with the 
 
 ## Generic item rows
 
-A generic upsert stream sends one header frame first, then rows frames, then at most one manifest frame last. The engine rejects a frame out of that order, a rows frame with more than 1024 rows, and a stream with more than 64 MiB of row bytes. Each row sets a `row_key`, an `item_id`, text, and typed scalar values for declared columns. An unset scalar value is null.
+A generic upsert stream sends one header frame first, then rows frames, then at most one manifest frame last. The engine rejects a frame out of that order and a rows frame with more than 1024 rows. The gRPC message size limit bounds each frame. Like the conversation stream, a generic stream has no bound on its total row bytes. Each row sets a `row_key`, an `item_id`, text, and typed scalar values for declared columns. An unset scalar value is null.
 
 The engine validates every row against the collection's saved declaration before it queues a job. It rejects an undeclared column, a column set twice, a value of another type, a null or missing value for a column that is not nullable, a string longer than the declared maximum, a duplicate row key, and an item id column value that differs from `item_id`. A rejected column appears in the `ErrorInfo` metadata key `column`. The engine stores `item_id` in the declared item id column.
 

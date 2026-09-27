@@ -486,8 +486,8 @@ func TestUpsertCollectionItemsRejectsInvalidRows(t *testing.T) {
 }
 
 // TestUpsertCollectionItemsStreamOrderAndLimits breaks the frame order and the
-// per-frame and per-stream bounds. Each stream fails with InvalidArgument and
-// stores nothing.
+// per-frame row bound. Each stream fails with InvalidArgument and stores
+// nothing.
 func TestUpsertCollectionItemsStreamOrderAndLimits(t *testing.T) {
 	t.Parallel()
 	daemon := newOfflineCollectionDaemon(t)
@@ -506,11 +506,6 @@ func TestUpsertCollectionItemsStreamOrderAndLimits(t *testing.T) {
 	for index := range maxCollectionRowsPerFrame + 1 {
 		tooManyRows = append(tooManyRows, documentRow("k/"+strconv.Itoa(index), "doc-a", "t", 1))
 	}
-	oversizedText := strings.Repeat("b", 3_500_000)
-	oversizedStream := []*pb.UpsertCollectionItemsStreamRequest{header}
-	for index := range maxCollectionStreamBytes/len(oversizedText) + 1 {
-		oversizedStream = append(oversizedStream, rowsFrame(documentRow("big/"+strconv.Itoa(index), "doc-a", oversizedText, 1)))
-	}
 
 	cases := map[string][]*pb.UpsertCollectionItemsStreamRequest{
 		"rows before header":       {rowsFrame(oneRow), header},
@@ -518,7 +513,6 @@ func TestUpsertCollectionItemsStreamOrderAndLimits(t *testing.T) {
 		"rows after manifest":      {header, manifestFrame, rowsFrame(oneRow)},
 		"duplicate manifest":       {header, rowsFrame(oneRow), manifestFrame, manifestFrame},
 		"too many rows in a frame": {header, rowsFrame(tooManyRows...)},
-		"stream over the byte cap": oversizedStream,
 		"no header":                nil,
 	}
 	for name, frames := range cases {
@@ -528,6 +522,43 @@ func TestUpsertCollectionItemsStreamOrderAndLimits(t *testing.T) {
 	}
 	if rows := daemon.localRows(registered.GetCollectionName()); len(rows) != 0 {
 		t.Fatalf("rejected streams stored %d rows, want 0", len(rows))
+	}
+}
+
+// TestUpsertCollectionItemsStreamAcceptsLargeStream sends 20 rows frames of
+// 3.5 MB of text each, 70 MB of row text in one stream. The conversation stream
+// sets no total bound on a stream, and neither does the generic stream: the
+// stream queues a job, and the job completes. The rows belong to an item with
+// an unchanged fingerprint. The job embeds nothing, and the collection keeps
+// only the item's first row.
+func TestUpsertCollectionItemsStreamAcceptsLargeStream(t *testing.T) {
+	t.Parallel()
+	daemon := newOfflineCollectionDaemon(t)
+	registered, err := daemon.registerCollection("docs-large", "docId", documentScalars())
+	if err != nil {
+		t.Fatalf("RegisterCollection returned error: %v", err)
+	}
+	unspecified := pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED
+	manifest := map[string]string{"doc-a": "fp-a1"}
+	daemon.upsertItems(collectionHeader("docs-large", unspecified, false, false), []*pb.CollectionRow{documentRow("a/0", "doc-a", "alpha", 1)}, manifest)
+
+	const largeFrameCount = 20
+	largeText := strings.Repeat("b", 3_500_000)
+	frames := []*pb.UpsertCollectionItemsStreamRequest{{Chunk: &pb.UpsertCollectionItemsStreamRequest_Header{Header: collectionHeader("docs-large", unspecified, false, false)}}}
+	for index := range largeFrameCount {
+		row := documentRow("big/"+strconv.Itoa(index), "doc-a", largeText, 1)
+		frames = append(frames, &pb.UpsertCollectionItemsStreamRequest{Chunk: &pb.UpsertCollectionItemsStreamRequest_Rows{Rows: &pb.UpsertCollectionItemsRows{Rows: []*pb.CollectionRow{row}}}})
+	}
+	frames = append(frames, &pb.UpsertCollectionItemsStreamRequest{Chunk: &pb.UpsertCollectionItemsStreamRequest_Manifest{Manifest: &pb.UpsertCollectionItemsManifest{Manifest: collectionFingerprints(manifest)}}})
+	response, err := daemon.sendCollectionStream(frames)
+	if err != nil {
+		t.Fatalf("UpsertCollectionItemsStream with %d bytes of row text returned error: %v", largeFrameCount*len(largeText), err)
+	}
+	if job := waitForRPCJobTerminal(t, daemon.client, response.GetJobId()); job.GetState() != string(model.JobStateCompleted) {
+		t.Fatalf("large stream job state = %q, want completed: %+v", job.GetState(), job.GetError())
+	}
+	if got := rowPaths(daemon.localRows(registered.GetCollectionName())); !slices.Equal(got, []string{"a/0"}) {
+		t.Fatalf("rows after a large delivery with an unchanged fingerprint = %v, want [a/0]", got)
 	}
 }
 
