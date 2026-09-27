@@ -115,8 +115,8 @@ func (delivery collectionItemDelivery) backfillFamilies(itemID string) []string 
 
 // rowFamilies generates the stored chunks of one delivered item grouped by
 // family, in delivery order. Conversation documents generate chunks through
-// conversationDocumentsToStoredChunks. Client rows split their text at the
-// chunk byte budget.
+// conversationDocumentsToStoredChunks. Client rows generate chunks through
+// rowChunks.
 func (delivery collectionItemDelivery) rowFamilies(ctx context.Context, itemID string) ([]collectionRowFamily, error) {
 	if documents, found := delivery.documents[itemID]; found {
 		chunks, err := conversationDocumentsToStoredChunks(ctx, documents, delivery.chunkByteBudget)
@@ -128,21 +128,36 @@ func (delivery collectionItemDelivery) rowFamilies(ctx context.Context, itemID s
 	rows := delivery.rows[itemID]
 	families := make([]collectionRowFamily, 0, len(rows))
 	for _, row := range rows {
-		chunks := appendStorableConversationField(
-			nil,
-			row.Text,
-			delivery.chunkByteBudget,
-			func(piece string, partIndex int, multipart bool) model.StoredChunk {
-				relativePath := row.RowKey
-				if multipart {
-					relativePath = fmt.Sprintf("%s/%d", row.RowKey, partIndex)
-				}
-				return newCollectionRowChunk(row, relativePath, piece, delivery.projectConversation)
-			},
-		)
-		families = append(families, collectionRowFamily{Key: row.RowKey, Chunks: chunks})
+		families = append(families, collectionRowFamily{Key: row.RowKey, Chunks: delivery.rowChunks(row)})
 	}
 	return families, nil
+}
+
+// rowChunks splits one client row's text at the chunk byte budget. In a
+// collection with the conversation declaration, rowChunks reads the first line
+// of a convtool/ row as the tool name and splits the row the way
+// conversationDocumentsToStoredChunks splits a tool call with that name: the
+// budget leaves room for the name, and every part after the first starts with
+// the name and a newline.
+func (delivery collectionItemDelivery) rowChunks(row collectionRow) []model.StoredChunk {
+	budget := delivery.chunkByteBudget
+	toolName := ""
+	if delivery.projectConversation && strings.HasPrefix(row.RowKey, conversationToolRelativePathPrefix(row.ItemID)) {
+		toolName = conversationToolRowName(row.Text)
+		budget = conversationToolSplitBudget(budget, toolName)
+	}
+	return appendStorableConversationField(
+		nil,
+		row.Text,
+		budget,
+		func(piece string, partIndex int, multipart bool) model.StoredChunk {
+			relativePath := row.RowKey
+			if multipart {
+				relativePath = fmt.Sprintf("%s/%d", row.RowKey, partIndex)
+			}
+			return newCollectionRowChunk(row, relativePath, namedToolPiece(toolName, piece, partIndex), delivery.projectConversation)
+		},
+	)
 }
 
 // groupConversationChunkFamilies groups one conversation's chunks by message

@@ -534,9 +534,11 @@ func TestUpsertCollectionItemsStreamOrderAndLimits(t *testing.T) {
 // TestCollectionAndConversationStreamsStoreEqualRows submits one transcript
 // through the conversation stream and the same rows through the generic stream
 // into two collections with the conversation declaration. Both collections
-// store byte-identical rows and equal checkpoints. The generic manifest then
-// needs nothing. A provider that disagrees with the item id is rejected, and so
-// is a row key outside the conversation row key layout.
+// store byte-identical rows and equal checkpoints. One tool call row is longer
+// than the split budget. Each part of that row after the first starts with the
+// tool name line. The generic manifest then needs nothing. A provider that
+// disagrees with the item id is rejected, and so is a row key outside the
+// conversation row key layout.
 func TestCollectionAndConversationStreamsStoreEqualRows(t *testing.T) {
 	t.Parallel()
 	daemon := newOfflineCollectionDaemon(t)
@@ -550,11 +552,14 @@ func TestCollectionAndConversationStreamsStoreEqualRows(t *testing.T) {
 	}
 	conversationID := "claude:parity-1"
 	longText := strings.Repeat("assistant answer sentence. ", 3000)
+	// The tool display spans about two split budgets. The tool row then stores
+	// three parts.
+	longToolDisplay := strings.TrimSpace(strings.Repeat("write the parity fixture line. ", 2*daemon.manager.conversationChunkByteBudget/31+1))
 	documents := []*pb.ConversationDocument{
 		{ConversationId: conversationID, MessageIndex: 0, Role: "user", TimestampUnix: 1712345678, Text: "how do generic rows match", WorkspaceRoot: "/work", LoadRules: "rules-v1"},
 		{
 			ConversationId: conversationID, MessageIndex: 1, Role: "assistant", TimestampUnix: 1712345679, Text: longText, WorkspaceRoot: "/work", LoadRules: "rules-v1",
-			Tools: []*pb.ConversationToolCall{{Name: "Read", Display: "file.go", LangHint: "go"}}, Thinking: "private reasoning",
+			Tools: []*pb.ConversationToolCall{{Name: "Read", Display: "file.go", LangHint: "go"}, {Name: "Write", Display: longToolDisplay, LangHint: "text"}}, Thinking: "private reasoning",
 		},
 	}
 	manifest := map[string]string{conversationID: "fp-parity"}
@@ -590,14 +595,21 @@ func TestCollectionAndConversationStreamsStoreEqualRows(t *testing.T) {
 		{RowKey: "conv/" + conversationID + "/0", ItemId: conversationID, Text: "how do generic rows match", Scalars: conversationScalars(0, "user", 1712345678)},
 		{RowKey: "conv/" + conversationID + "/1", ItemId: conversationID, Text: longText, Scalars: conversationScalars(1, "assistant", 1712345679)},
 		{RowKey: "convtool/" + conversationID + "/1/0", ItemId: conversationID, Text: "Read\nfile.go", Scalars: conversationScalars(1, "assistant", 1712345679)},
+		{RowKey: "convtool/" + conversationID + "/1/1", ItemId: conversationID, Text: "Write\n" + longToolDisplay, Scalars: conversationScalars(1, "assistant", 1712345679)},
 		{RowKey: "convthink/" + conversationID + "/1", ItemId: conversationID, Text: "private reasoning", Scalars: conversationScalars(1, "assistant", 1712345679)},
 	}
 	daemon.upsertItems(collectionHeader("conv-parity-generic", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false), rows, manifest)
 
 	conversationRows := daemon.localRows(conversation.GetCollectionName())
 	genericRows := daemon.localRows(generic.GetCollectionName())
-	if paths := distinctRowPaths(conversationRows); len(paths) < 5 || !slices.Contains(paths, "conv/"+conversationID+"/1/1") || !slices.Contains(paths, "convthink/"+conversationID+"/1") || !slices.Contains(paths, "convtool/"+conversationID+"/1/0") {
-		t.Fatalf("conversation stream stored rows %v, want a split message text, a tool row, and a thinking row", paths)
+	longToolPart := "convtool/" + conversationID + "/1/1/1"
+	if paths := distinctRowPaths(conversationRows); len(paths) < 5 || !slices.Contains(paths, "conv/"+conversationID+"/1/1") || !slices.Contains(paths, "convthink/"+conversationID+"/1") || !slices.Contains(paths, "convtool/"+conversationID+"/1/0") || !slices.Contains(paths, longToolPart) {
+		t.Fatalf("conversation stream stored rows %v, want a split message text, a tool row, a split tool row, and a thinking row", paths)
+	}
+	for _, row := range conversationRows {
+		if row.RelativePath == longToolPart && row.SplitPart == 0 && !strings.HasPrefix(row.Content, "Write\n") {
+			t.Fatalf("tool row part %s starts with %.20q, want the tool name line", longToolPart, row.Content)
+		}
 	}
 	if len(conversationRows) != len(genericRows) {
 		t.Fatalf("row paths differ: conversation %v, generic %v", rowPaths(conversationRows), rowPaths(genericRows))

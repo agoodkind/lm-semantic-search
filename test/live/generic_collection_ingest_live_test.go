@@ -28,6 +28,11 @@ import (
 // long assistant message then stores several parts.
 const parityLongTextBytes = 70_000
 
+// parityLongToolBytes exceeds twice the 60000-byte conversation split budget.
+// The long tool call then stores three parts, and each part after the first
+// starts with the tool name line.
+const parityLongToolBytes = 130_000
+
 // parityScalarColumns are the conversation scalar columns a parity row compares.
 var parityScalarColumns = []string{
 	semantic.ConversationIDColumn,
@@ -90,6 +95,9 @@ func TestGenericCollectionIngestParity(t *testing.T) {
 	requireCompleted(t, h.upsert(convs, retain, false, false), "conversation ingest")
 	requireCompleted(t, h.upsertGeneric(genericCollectionID, convs, parityManifest(convs), genericRetain, false, false), "generic ingest")
 	h.requireParity(registration, "first ingest")
+	if h.countRowsWithPrefix(convToolPrefix(first)+"1/1/1") == 0 {
+		t.Fatal("the long tool call stored no second part")
+	}
 	h.requireManifestParity(genericCollectionID, parityManifest(convs), nil)
 
 	changed := map[string][]*pb.ConversationDocument{first: appendMessage(convs[first], first), second: convs[second]}
@@ -108,7 +116,7 @@ func TestGenericCollectionIngestParity(t *testing.T) {
 	requireCompleted(t, h.upsertWithManifest(backfilled, unchangedFingerprint, retain, true, false), "conversation backfill")
 	requireCompleted(t, h.upsertGeneric(genericCollectionID, backfilled, unchangedFingerprint, genericRetain, true, false), "generic backfill")
 	h.requireParity(registration, "backfill")
-	if h.countRowsWithPrefix(convToolPrefix(first)+"1/1") == 0 {
+	if h.countRowsWithPrefix(convToolPrefix(first)+"1/2") == 0 {
 		t.Fatal("backfill stored no row for the added tool call")
 	}
 
@@ -289,7 +297,8 @@ func parityDeclarationPB() []*pb.ScalarColumnDeclaration {
 }
 
 // parityTranscript is a two-message synthetic transcript. The assistant turn
-// has text longer than the split budget, one tool call, and thinking text.
+// has text longer than the split budget, a short tool call, a tool call longer
+// than twice the split budget, and thinking text.
 func parityTranscript(conversationID string, parentID string) []*pb.ConversationDocument {
 	return []*pb.ConversationDocument{
 		{
@@ -298,9 +307,12 @@ func parityTranscript(conversationID string, parentID string) []*pb.Conversation
 		},
 		{
 			ConversationId: conversationID, ParentConversationId: parentID, MessageIndex: 1, Role: "assistant", TimestampUnix: 1712346001,
-			Text:          strings.Repeat("The design note describes one ingestion step. ", parityLongTextBytes/47+1),
-			Thinking:      "reading the notes file for " + conversationID + " before the summary",
-			Tools:         []*pb.ConversationToolCall{{Name: "Read", Display: "/work/parity/notes.md", LangHint: "markdown"}},
+			Text:     strings.Repeat("The design note describes one ingestion step. ", parityLongTextBytes/47+1),
+			Thinking: "reading the notes file for " + conversationID + " before the summary",
+			Tools: []*pb.ConversationToolCall{
+				{Name: "Read", Display: "/work/parity/notes.md", LangHint: "markdown"},
+				{Name: "Write", Display: strings.TrimSpace(strings.Repeat("write the parity notes line. ", parityLongToolBytes/29+1)), LangHint: "markdown"},
+			},
 			WorkspaceRoot: "/work/parity", LoadRules: "rules-v1",
 		},
 	}

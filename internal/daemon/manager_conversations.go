@@ -645,15 +645,10 @@ var conversationDocumentsToStoredChunks = func(_ context.Context, documents []mo
 		)
 		for toolIndex, toolCall := range document.Tools {
 			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
-			toolBudget := budget
-			toolName := strings.TrimSpace(toolCall.Name)
-			if toolName != "" && toolBudget > len(toolName)+1 {
-				toolBudget -= len(toolName) + 1
-			}
 			chunks = appendStorableConversationField(
 				chunks,
 				conversationToolContent(toolCall),
-				toolBudget,
+				conversationToolSplitBudget(budget, toolCall.Name),
 				func(piece string, partIndex int, multipart bool) model.StoredChunk {
 					relativePath := toolBasePath
 					if multipart {
