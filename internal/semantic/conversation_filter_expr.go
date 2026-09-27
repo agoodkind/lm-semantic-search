@@ -147,10 +147,11 @@ type rankedCandidate struct {
 	PrimaryKey     string
 	RelativePath   string
 	ConversationID string
-	// ConversationIDKnown is false when the row's conversationId column is
-	// null. Every such row shares one per-conversation cap group.
-	ConversationIDKnown bool
-	Score               float64
+	// ConversationIDNull is true when the row's conversationId column is null.
+	// The search then sets ConversationID from the row's metadata JSON before
+	// the walk applies the per-conversation cap.
+	ConversationIDNull bool
+	Score              float64
 }
 
 // sortRankedCandidates orders candidates by descending score, then ascending
@@ -178,7 +179,6 @@ func sortRankedCandidates(candidates []rankedCandidate) {
 func selectRankedCandidates(candidates []rankedCandidate, perConversationLimit int32, minScore float64, limit int32) []rankedCandidate {
 	kept := make([]rankedCandidate, 0, min(len(candidates), int(max(limit, 0))))
 	perConversation := make(map[string]int32)
-	nullConversation := int32(0)
 	for _, candidate := range candidates {
 		if limit > 0 && len(kept) >= int(limit) {
 			break
@@ -187,17 +187,10 @@ func selectRankedCandidates(candidates []rankedCandidate, perConversationLimit i
 			continue
 		}
 		if perConversationLimit > 0 {
-			if !candidate.ConversationIDKnown {
-				if nullConversation >= perConversationLimit {
-					continue
-				}
-				nullConversation++
-			} else {
-				if perConversation[candidate.ConversationID] >= perConversationLimit {
-					continue
-				}
-				perConversation[candidate.ConversationID]++
+			if perConversation[candidate.ConversationID] >= perConversationLimit {
+				continue
 			}
+			perConversation[candidate.ConversationID]++
 		}
 		kept = append(kept, candidate)
 	}

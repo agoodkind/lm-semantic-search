@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/client/v2/column"
+	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 )
 
@@ -163,6 +165,96 @@ func TestConversationSearchRankingIsStable(t *testing.T) {
 	uncappedPrefix := rankingKeys(h.rankingSearch(rankingLimit, 0, nil))
 	if !slices.Equal(uncappedPrefix, rankingKeys(full)[:rankingLimit]) {
 		t.Fatalf("uncapped limit %d rows %v are not a prefix of the full ranking", rankingLimit, uncappedPrefix)
+	}
+}
+
+// insertNullIdentityRows writes rows with every conversation scalar column
+// null, the shape of a row written before those columns existed. The metadata
+// JSON of each row records its conversation id, and its content equals the
+// query.
+func (h *harness) insertNullIdentityRows(conversationIDs []string, rowsPerConversation int) {
+	h.t.Helper()
+	count := len(conversationIDs) * rowsPerConversation
+	ids := make([]string, 0, count)
+	contents := make([]string, 0, count)
+	paths := make([]string, 0, count)
+	metadata := make([]string, 0, count)
+	vectors := make([][]float32, 0, count)
+	for _, conversationID := range conversationIDs {
+		for messageIndex := range rowsPerConversation {
+			ids = append(ids, fmt.Sprintf("legacy_%s_%d", strings.ReplaceAll(conversationID, ":", "_"), messageIndex))
+			contents = append(contents, rankingQuery)
+			paths = append(paths, fmt.Sprintf("conv/%s/%d", conversationID, messageIndex))
+			metadata = append(metadata, fmt.Sprintf(`{"conversation_id":%q,"message_index":%d,"role":"user","timestamp_unix":1}`, conversationID, messageIndex))
+			vector := make([]float32, 0, fakeEmbeddingDimension)
+			for _, value := range deterministicVector(rankingQuery, fakeEmbeddingDimension) {
+				vector = append(vector, float32(value))
+			}
+			vectors = append(vectors, vector)
+		}
+	}
+	allNull := make([]bool, count)
+	nullColumns := make([]column.Column, 0, 12)
+	for _, name := range []string{"conversationId", "parentConversationId", "role", "provider", "workspaceRoot", "loadRules", "contentHash", "embeddingModel"} {
+		nullColumn, err := column.NewNullableColumnVarChar(name, make([]string, count), allNull, column.WithSparseNullableMode[string](true))
+		if err != nil {
+			h.t.Fatalf("build null column %s: %v", name, err)
+		}
+		nullColumns = append(nullColumns, nullColumn)
+	}
+	for _, name := range []string{"timestampUnix", "messageIndex", "splitPart"} {
+		nullColumn, err := column.NewNullableColumnInt64(name, make([]int64, count), allNull, column.WithSparseNullableMode[int64](true))
+		if err != nil {
+			h.t.Fatalf("build null column %s: %v", name, err)
+		}
+		nullColumns = append(nullColumns, nullColumn)
+	}
+	archivedColumn, err := column.NewNullableColumnBool("archived", make([]bool, count), allNull, column.WithSparseNullableMode[bool](true))
+	if err != nil {
+		h.t.Fatalf("build null archived column: %v", err)
+	}
+	nullColumns = append(nullColumns, archivedColumn)
+	insertOption := milvusclient.NewColumnBasedInsertOption(h.collectionName).
+		WithVarcharColumn("id", ids).
+		WithVarcharColumn("content", contents).
+		WithVarcharColumn(relativePathField, paths).
+		WithInt64Column("startLine", make([]int64, count)).
+		WithInt64Column("endLine", make([]int64, count)).
+		WithVarcharColumn("fileExtension", make([]string, count)).
+		WithVarcharColumn("metadata", metadata).
+		WithFloatVectorColumn("vector", fakeEmbeddingDimension, vectors).
+		WithColumns(nullColumns...)
+	if _, err := h.milvus.Insert(correlatedContext(), insertOption); err != nil {
+		h.t.Fatalf("insert null identity rows into %s: %v", h.collectionName, err)
+	}
+}
+
+// TestConversationSearchCapsNullIdentityRowsByMetadata proves the
+// per-conversation cap groups a row with a null conversationId column by the
+// conversation id in its metadata JSON. Three legacy conversations with three
+// rows each rank first, and a cap of two keeps two rows from each of them.
+func TestConversationSearchCapsNullIdentityRowsByMetadata(t *testing.T) {
+	h, _ := newRankingHarness(t)
+	legacyConversations := []string{"claude:legacy-a", "claude:legacy-b", "claude:legacy-c"}
+	h.insertNullIdentityRows(legacyConversations, 3)
+	deadline := time.Now().Add(rankingVisibilityTimeout)
+	full := h.rankingSearch(rankingFullLimit, 0, nil)
+	for len(full) < rankingStoredRows+9 && time.Now().Before(deadline) {
+		time.Sleep(rankingVisibilityPoll)
+		full = h.rankingSearch(rankingFullLimit, 0, nil)
+	}
+	if len(full) != rankingStoredRows+9 {
+		t.Fatalf("full ranking has %d rows, want %d", len(full), rankingStoredRows+9)
+	}
+	capped := h.rankingSearch(rankingFullLimit, rankingCap, nil)
+	perConversation := map[string]int{}
+	for _, result := range capped {
+		perConversation[result.GetConversationId()]++
+	}
+	for _, conversationID := range legacyConversations {
+		if perConversation[conversationID] != rankingCap {
+			t.Fatalf("legacy conversation %s kept %d rows, want the cap %d (per conversation counts %v)", conversationID, perConversation[conversationID], rankingCap, perConversation)
+		}
 	}
 }
 

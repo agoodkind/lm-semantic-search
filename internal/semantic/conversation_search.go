@@ -66,6 +66,11 @@ func (service *Service) SearchConversationCollectionCapped(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
+	if perConversationLimit > 0 {
+		if err := service.resolveLegacyConversationIDs(ctx, trimmedCollectionName, candidates); err != nil {
+			return nil, err
+		}
+	}
 	sortRankedCandidates(candidates)
 	selected := selectRankedCandidates(candidates, perConversationLimit, minScore, limit)
 	return service.loadRankedChunks(ctx, trimmedCollectionName, selected)
@@ -122,8 +127,55 @@ func (service *Service) rankConversationCandidates(ctx context.Context, collecti
 	return rankedCandidatesFromResultSets(ctx, collectionName, resultSets)
 }
 
+// resolveLegacyConversationIDs sets the cap group of every candidate with a
+// null conversationId column. It reads those rows' metadata JSON by primary
+// key and uses its conversation_id, the identity the per-conversation cap used
+// before the ranking search existed. A row with no conversation_id in its
+// metadata keeps the empty conversation id.
+func (service *Service) resolveLegacyConversationIDs(ctx context.Context, collectionName string, candidates []rankedCandidate) error {
+	legacyKeys := make([]string, 0)
+	for _, candidate := range candidates {
+		if candidate.ConversationIDNull {
+			legacyKeys = append(legacyKeys, candidate.PrimaryKey)
+		}
+	}
+	if len(legacyKeys) == 0 {
+		return nil
+	}
+	resultSet, err := service.milvus.Query(ctx, milvusclient.NewQueryOption(collectionName).
+		WithIDs(column.NewColumnVarChar(idFieldName, legacyKeys)).
+		WithOutputFields(idFieldName, metadataFieldName))
+	if err != nil {
+		return searchErr(ctx, "load legacy conversation identity", collectionName, err)
+	}
+	idColumn := resultSet.GetColumn(idFieldName)
+	metadataColumn := resultSet.GetColumn(metadataFieldName)
+	if resultSet.ResultCount > 0 && (idColumn == nil || metadataColumn == nil) {
+		return ErrSearchResultIncomplete
+	}
+	legacyIDs := make(map[string]string, resultSet.ResultCount)
+	for index := range resultSet.ResultCount {
+		primaryKey, idErr := idColumn.GetAsString(index)
+		if idErr != nil {
+			return rankingReadError(ctx, collectionName, idFieldName, index, idErr)
+		}
+		metadata, metadataErr := metadataColumn.GetAsString(index)
+		if metadataErr != nil {
+			return rankingReadError(ctx, collectionName, metadataFieldName, index, metadataErr)
+		}
+		legacyIDs[primaryKey] = decodeMetadata(metadata).ConversationID
+	}
+	for index := range candidates {
+		if candidates[index].ConversationIDNull {
+			candidates[index].ConversationID = legacyIDs[candidates[index].PrimaryKey]
+		}
+	}
+	return nil
+}
+
 // rankedCandidatesFromResultSets decodes the ranking rows. A null
-// conversationId decodes as an unknown conversation.
+// conversationId decodes as the empty conversation id with ConversationIDNull
+// set.
 func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, resultSets []milvusclient.ResultSet) ([]rankedCandidate, error) {
 	if len(resultSets) == 0 || resultSets[0].ResultCount == 0 {
 		return []rankedCandidate{}, nil
@@ -155,9 +207,9 @@ func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, 
 		candidates = append(candidates, rankedCandidate{
 			PrimaryKey:          primaryKey,
 			RelativePath:        relativePath,
-			ConversationID:      conversationID,
-			ConversationIDKnown: known,
-			Score:               score,
+			ConversationID:     conversationID,
+			ConversationIDNull: !known,
+			Score:              score,
 		})
 	}
 	return candidates, nil

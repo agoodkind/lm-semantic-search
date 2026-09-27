@@ -8,11 +8,11 @@ import (
 
 func candidate(primaryKey string, relativePath string, conversationID string, score float64) rankedCandidate {
 	return rankedCandidate{
-		PrimaryKey:          primaryKey,
-		RelativePath:        relativePath,
-		ConversationID:      conversationID,
-		ConversationIDKnown: conversationID != "",
-		Score:               score,
+		PrimaryKey:         primaryKey,
+		RelativePath:       relativePath,
+		ConversationID:     conversationID,
+		ConversationIDNull: false,
+		Score:              score,
 	}
 }
 
@@ -100,17 +100,20 @@ func TestSelectRankedCandidatesSmallerLimitIsPrefix(t *testing.T) {
 	}
 }
 
-// TestSelectRankedCandidatesGroupsNullConversationIDs proves rows with a null
-// conversationId share one cap group.
-func TestSelectRankedCandidatesGroupsNullConversationIDs(t *testing.T) {
+// TestSelectRankedCandidatesCapsEachConversationID proves the cap counts each
+// conversation id separately, including the empty id of a row with no
+// conversation identity.
+func TestSelectRankedCandidatesCapsEachConversationID(t *testing.T) {
 	t.Parallel()
 
 	candidates := []rankedCandidate{
-		candidate("k1", "conv/x/0", "", 0.9),
-		candidate("k2", "conv/y/0", "", 0.8),
-		candidate("k3", "conv/a/0", "a", 0.7),
+		candidate("k1", "conv/x/0", "x", 0.9),
+		candidate("k2", "conv/y/0", "y", 0.8),
+		candidate("k3", "conv/x/1", "x", 0.7),
+		candidate("k4", "code/a", "", 0.6),
+		candidate("k5", "code/b", "", 0.5),
 	}
-	if got, want := candidateKeys(selectRankedCandidates(candidates, 1, 0, 10)), []string{"k1", "k3"}; !reflect.DeepEqual(got, want) {
+	if got, want := candidateKeys(selectRankedCandidates(candidates, 1, 0, 10)), []string{"k1", "k2", "k4"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected %v, want %v", got, want)
 	}
 }
