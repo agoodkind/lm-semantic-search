@@ -35,7 +35,8 @@ func rankingOtherConversationID(index int) string {
 
 // rankingCorpus has one dense conversation with thirty messages equal to the
 // query and twenty other one-message conversations. The dense conversation
-// fills the first ranks, which forces the per-conversation cap to skip rows.
+// contributes more top-ranked rows than the per-conversation cap permits. The
+// cap skips the excess dense rows and selects lower-ranked rows.
 func rankingCorpus() map[string][]*pb.ConversationDocument {
 	conversations := map[string][]*pb.ConversationDocument{}
 	for messageIndex := range rankingDenseMessages {
@@ -106,8 +107,9 @@ func rankingKeys(results []*pb.ConversationSearchResult) []string {
 	return keys
 }
 
-// capRanking is the reference cap walk. The assertions compare the engine's
-// capped results with it.
+// capRanking computes the expected result keys after applying the
+// per-conversation cap. The assertions compare the engine's capped result keys
+// with the keys returned by capRanking.
 func capRanking(full []*pb.ConversationSearchResult, perConversationLimit int, limit int) []string {
 	kept := make([]string, 0, limit)
 	perConversation := map[string]int{}
