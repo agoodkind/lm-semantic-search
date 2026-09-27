@@ -71,63 +71,13 @@ type conversationJobPayload struct {
 	Force bool
 }
 
-// RegisterConversationCollection records a virtual document collection that is
-// addressed by logical collection id rather than a filesystem directory.
-func (manager *Manager) RegisterConversationCollection(ctx context.Context, collectionID string) (model.Codebase, error) {
-	manager.policyMutationMutex.Lock()
-	defer manager.policyMutationMutex.Unlock()
-
-	trimmedCollectionID := strings.TrimSpace(collectionID)
-	if trimmedCollectionID == "" {
-		return model.Codebase{}, errors.New("collection id is required")
-	}
-	canonicalPath := conversationCanonicalPath(trimmedCollectionID)
-
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-
-	if codebase, found := manager.findConversationCollectionLocked(trimmedCollectionID); found {
-		return codebase, nil
-	}
-
-	collectionName := ""
-	if manager.semantic != nil {
-		collectionName = manager.semantic.ConversationCollectionName(trimmedCollectionID)
-	}
-	if collectionName == "" {
-		return model.Codebase{}, errors.New("conversation collection name is unavailable")
-	}
-
-	codebase := newCodebaseRecord(canonicalPath)
-	codebase.Kind = model.CodebaseKindDocument
-	codebase.Status = model.CodebaseStatusIndexed
-	codebase.EffectiveConfig = manager.enrichIndexConfig(emptyAutoIndexConfig())
-	codebase.EffectiveConfig.IgnoreDigest = digestIndexConfig(codebase.EffectiveConfig)
-	codebase.CollectionName = collectionName
-	codebase.UpdatedAt = clock.Now()
-	manager.codebases[codebase.ID] = codebase
-	if err := manager.saveLocked(); err != nil {
-		// Roll the in-memory record back when the registry write fails, mirroring
-		// the adopt and worktree paths, so a failed persist does not leave a
-		// codebase that later lookups treat as registered until restart.
-		delete(manager.codebases, codebase.ID)
-		slog.ErrorContext(ctx, "persist conversation collection registration failed", "collection_id", trimmedCollectionID, "err", err)
-		return model.Codebase{}, fmt.Errorf("persist conversation collection %s: %w", trimmedCollectionID, err)
-	}
-	// A persisted codebase record pairs with one observer signal so no saveLocked
-	// path silently skips invalidation; for a document collection it is a no-op
-	// delete, which keeps the invariant uniform across every record write.
-	manager.observer.Invalidate(codebase.ID)
-	return codebase, nil
-}
-
 // SyncConversationManifest diffs clyde's full conversation manifest against the
 // stored checkpoint and returns the ids the engine needs: the conversations new
 // or changed since the last successful ingest. clyde then sends documents for
 // only those ids. The engine owns drift, so clyde keeps no change-tracking
 // state and a slow first embed runs exactly once.
 func (manager *Manager) SyncConversationManifest(ctx context.Context, collectionID string, manifest map[string]string) ([]string, error) {
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	codebase, err := manager.resolveConversationCollection(ctx, collectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +182,7 @@ func (manager *Manager) upsertConversationDocuments(ctx context.Context, collect
 		}
 		manifest = manifestFromDocuments(documents)
 	}
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	codebase, err := manager.resolveConversationCollection(ctx, collectionID)
 	if err != nil {
 		return model.Job{}, err
 	}
@@ -283,7 +233,7 @@ func (manager *Manager) SearchWithinConversation(ctx context.Context, collection
 	if refusal := manager.maintenanceRefusal(); refusal != nil {
 		return nil, "", refusal
 	}
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	codebase, err := manager.resolveConversationCollection(ctx, collectionID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -296,7 +246,7 @@ func (manager *Manager) SearchWithinConversation(ctx context.Context, collection
 }
 
 func (manager *Manager) backfillConversationScalars(ctx context.Context, collectionID string, enrichment semantic.ConversationEnrichment, dryRun bool) (changed int, orphan int, err error) {
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	codebase, err := manager.resolveConversationCollection(ctx, collectionID)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -367,7 +317,7 @@ func (manager *Manager) deleteConversation(ctx context.Context, collectionID str
 	if trimmedConversationID == "" {
 		return model.Job{}, errors.New("conversation id is required")
 	}
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	codebase, err := manager.resolveConversationCollection(ctx, collectionID)
 	if err != nil {
 		return model.Job{}, err
 	}

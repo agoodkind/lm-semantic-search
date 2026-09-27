@@ -33,6 +33,7 @@ const (
 	SemanticSearchDaemonService_SearchCode_FullMethodName                        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCode"
 	SemanticSearchDaemonService_GraphTool_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GraphTool"
 	SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterConversationCollection"
+	SemanticSearchDaemonService_RegisterCollection_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterCollection"
 	SemanticSearchDaemonService_SyncConversationManifest_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncConversationManifest"
 	SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocumentsStream"
 	SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/BackfillConversationScalars"
@@ -63,6 +64,13 @@ type SemanticSearchDaemonServiceClient interface {
 	SearchCode(ctx context.Context, in *SearchCodeRequest, opts ...grpc.CallOption) (*SearchCodeResponse, error)
 	GraphTool(ctx context.Context, in *GraphToolRequest, opts ...grpc.CallOption) (*GraphToolResponse, error)
 	RegisterConversationCollection(ctx context.Context, in *RegisterConversationCollectionRequest, opts ...grpc.CallOption) (*RegisterConversationCollectionResponse, error)
+	// RegisterCollection records a document collection with its declared scalar
+	// columns. Registering an existing collection again succeeds only when the
+	// declaration matches the saved one and the stored collection schema; a
+	// conflict fails with ErrorInfo reason collection_schema_mismatch and the
+	// conflicting column in metadata key "column". The engine never rebuilds or
+	// drops an existing collection to satisfy a conflicting declaration.
+	RegisterCollection(ctx context.Context, in *RegisterCollectionRequest, opts ...grpc.CallOption) (*RegisterCollectionResponse, error)
 	SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error)
 	// UpsertConversationDocumentsStream is the client-streaming conversation
 	// upsert. clyde sends one header chunk, then document chunks, then one manifest
@@ -248,6 +256,16 @@ func (c *semanticSearchDaemonServiceClient) RegisterConversationCollection(ctx c
 	return out, nil
 }
 
+func (c *semanticSearchDaemonServiceClient) RegisterCollection(ctx context.Context, in *RegisterCollectionRequest, opts ...grpc.CallOption) (*RegisterCollectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterCollectionResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_RegisterCollection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *semanticSearchDaemonServiceClient) SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SyncConversationManifestResponse)
@@ -372,6 +390,13 @@ type SemanticSearchDaemonServiceServer interface {
 	SearchCode(context.Context, *SearchCodeRequest) (*SearchCodeResponse, error)
 	GraphTool(context.Context, *GraphToolRequest) (*GraphToolResponse, error)
 	RegisterConversationCollection(context.Context, *RegisterConversationCollectionRequest) (*RegisterConversationCollectionResponse, error)
+	// RegisterCollection records a document collection with its declared scalar
+	// columns. Registering an existing collection again succeeds only when the
+	// declaration matches the saved one and the stored collection schema; a
+	// conflict fails with ErrorInfo reason collection_schema_mismatch and the
+	// conflicting column in metadata key "column". The engine never rebuilds or
+	// drops an existing collection to satisfy a conflicting declaration.
+	RegisterCollection(context.Context, *RegisterCollectionRequest) (*RegisterCollectionResponse, error)
 	SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error)
 	// UpsertConversationDocumentsStream is the client-streaming conversation
 	// upsert. clyde sends one header chunk, then document chunks, then one manifest
@@ -448,6 +473,9 @@ func (UnimplementedSemanticSearchDaemonServiceServer) GraphTool(context.Context,
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) RegisterConversationCollection(context.Context, *RegisterConversationCollectionRequest) (*RegisterConversationCollectionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterConversationCollection not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) RegisterCollection(context.Context, *RegisterCollectionRequest) (*RegisterCollectionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterCollection not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SyncConversationManifest not implemented")
@@ -744,6 +772,24 @@ func _SemanticSearchDaemonService_RegisterConversationCollection_Handler(srv int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SemanticSearchDaemonService_RegisterCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterCollectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).RegisterCollection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_RegisterCollection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).RegisterCollection(ctx, req.(*RegisterCollectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SemanticSearchDaemonService_SyncConversationManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SyncConversationManifestRequest)
 	if err := dec(in); err != nil {
@@ -960,6 +1006,10 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RegisterConversationCollection",
 			Handler:    _SemanticSearchDaemonService_RegisterConversationCollection_Handler,
+		},
+		{
+			MethodName: "RegisterCollection",
+			Handler:    _SemanticSearchDaemonService_RegisterCollection_Handler,
 		},
 		{
 			MethodName: "SyncConversationManifest",

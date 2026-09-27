@@ -618,7 +618,7 @@ type StartIndexView struct {
 	MergeNote          string
 }
 
-// MutationAckView covers clear, cancel, sync, and conversation acks. Exactly
+// MutationAckView covers clear, cancel, sync, collection, and conversation acks. Exactly
 // one Kind renders per call.
 type MutationAckView struct {
 	Kind            string
@@ -643,6 +643,7 @@ const (
 	AckSync                 = "sync"
 	AckUpdatePolicy         = "update_policy"
 	AckRegisterConversation = "register_conversation"
+	AckRegisterCollection   = "register_collection"
 	AckUpsertConversation   = "upsert_conversation"
 	AckDeleteConversation   = "delete_conversation"
 	AckManifest             = "manifest"

@@ -30,6 +30,9 @@ type semanticResidencyReader interface {
 type semanticCollectionInspector interface {
 	ListCollections(ctx context.Context) ([]string, error)
 	InspectCollection(ctx context.Context, collectionName string) (semantic.CollectionFacts, error)
+	// DescribeScalarColumns reports the declared scalar columns of a stored
+	// collection. exists is false when the collection is absent.
+	DescribeScalarColumns(ctx context.Context, collectionName string) (columns []model.ScalarColumn, exists bool, err error)
 }
 
 // semanticHealthReader probes whether search can serve a query, both globally

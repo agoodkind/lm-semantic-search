@@ -588,7 +588,10 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	return response, nil
 }
 
-// RegisterConversationCollection reserves the conversation collection RPC surface.
+// RegisterConversationCollection registers a conversation collection through
+// the generic collection registration with the conversation declaration. A
+// conflict with the saved or stored schema fails with ErrorInfo reason
+// collection_schema_mismatch and the conflicting column in the metadata.
 func (server *GRPCServer) RegisterConversationCollection(ctx context.Context, request *pb.RegisterConversationCollectionRequest) (resp *pb.RegisterConversationCollectionResponse, err error) {
 	ctx, done := beginRPC(ctx, "RegisterConversationCollection")
 	defer done(&err)
@@ -597,7 +600,7 @@ func (server *GRPCServer) RegisterConversationCollection(ctx context.Context, re
 	}
 	codebase, callErr := server.manager.RegisterConversationCollection(ctx, request.GetCollectionId())
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, callErr))
+		return nil, adapterr.RespondGRPC(ctx, callErr)
 	}
 	ack := view.MutationAckView{
 		Kind:            view.AckRegisterConversation,

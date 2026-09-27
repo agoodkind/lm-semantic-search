@@ -947,7 +947,7 @@ func TestCreateCollectionUsesExclusiveMaintenance(t *testing.T) {
 	createContext, cancelCreate := context.WithCancel(context.Background())
 	createResult := make(chan error, 1)
 	go func() {
-		lease, createErr := service.createCollection(createContext, collectionName, 3)
+		lease, createErr := service.createCollection(createContext, collectionName, 3, nil)
 		if lease != nil {
 			lease.Release()
 		}

@@ -108,6 +108,7 @@ type harness struct {
 	callRecorder      *milvusCallRecorder
 	embeddingRecorder *embeddingCallRecorder
 	milvusContext     context.Context
+	stopServer        func()
 }
 
 type milvusInventory map[string]map[string]string
@@ -482,12 +483,45 @@ func newHarnessWithOptions(
 		callRecorder:      callRecorder,
 		embeddingRecorder: embeddingRecorder,
 		milvusContext:     sandboxContext,
+		stopServer:        stopServer,
 	}
 	h.trackCollectionFamily(codebase.CollectionName)
 	h.trackTemporaryCollection(h.reuseCatalogName)
-	t.Cleanup(func() { h.teardown(stopServer) })
+	t.Cleanup(func() { h.teardown(h.stopServer) })
 	setupComplete = true
 	return h
+}
+
+// restart stops the in-process daemon, runs between while no daemon owns the
+// state root, and starts a new daemon over the same state root, temporary
+// Milvus database, and socket.
+func (h *harness) restart(between func()) {
+	h.t.Helper()
+	if err := h.conn.Close(); err != nil {
+		h.t.Fatalf("close gRPC connection before restart returned error: %v", err)
+	}
+	h.stopServer()
+	closeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	closeErr := h.manager.Close(closeCtx)
+	cancel()
+	if closeErr != nil {
+		h.t.Fatalf("close manager before restart returned error: %v", closeErr)
+	}
+	if between != nil {
+		between()
+	}
+	manager, err := daemon.NewManager(h.milvusContext, h.config)
+	if err != nil {
+		h.t.Fatalf("NewManager on restart returned error: %v", err)
+	}
+	h.manager = manager
+	h.stopServer = startInProcessServer(h.t, manager, h.config.SocketPath)
+	conn, client, err := grpcutil.DialDaemon(context.Background(), h.config.SocketPath)
+	if err != nil {
+		h.t.Fatalf("DialDaemon on restart returned error: %v", err)
+	}
+	h.conn = conn
+	h.client = client
 }
 
 func (h *harness) childConfig() config.Config {

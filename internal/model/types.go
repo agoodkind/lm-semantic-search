@@ -259,9 +259,42 @@ type Codebase struct {
 	// is a linked git worktree, else empty. It lets the daemon recognize a
 	// removed worktree (git deleted its admin entry) after the directory is gone
 	// and auto-clean the disposable index.
-	WorktreeCommonDir     string    `json:"worktree_common_dir,omitempty"`
-	InodeTrackingDisabled bool      `json:"inode_tracking_disabled,omitempty"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	WorktreeCommonDir     string `json:"worktree_common_dir,omitempty"`
+	InodeTrackingDisabled bool   `json:"inode_tracking_disabled,omitempty"`
+	// Declaration is the scalar schema a document collection registered. It is
+	// nil for code codebases and for document records written before
+	// registration saved a declaration.
+	Declaration *CollectionDeclaration `json:"declaration,omitempty"`
+	UpdatedAt   time.Time              `json:"updated_at"`
+}
+
+// ScalarType is the closed set of scalar column types a document collection
+// can declare.
+type ScalarType string
+
+const (
+	// ScalarTypeString is a variable-length string column with a maximum length.
+	ScalarTypeString ScalarType = "string"
+	// ScalarTypeBool is a boolean column.
+	ScalarTypeBool ScalarType = "bool"
+	// ScalarTypeInt64 is a 64-bit signed integer column.
+	ScalarTypeInt64 ScalarType = "int64"
+)
+
+// ScalarColumn declares one scalar column of a document collection. MaxLength
+// applies only to a string column and is zero for every other type.
+type ScalarColumn struct {
+	Name      string     `json:"name"`
+	Type      ScalarType `json:"type"`
+	Nullable  bool       `json:"nullable"`
+	MaxLength int32      `json:"max_length,omitempty"`
+}
+
+// CollectionDeclaration is the scalar schema of a document collection. The
+// declared string column ItemIDColumn stores the client item id.
+type CollectionDeclaration struct {
+	ItemIDColumn string         `json:"item_id_column"`
+	Scalars      []ScalarColumn `json:"scalars"`
 }
 
 // QuarantineState records why destructive sync is paused for a codebase and

@@ -429,6 +429,7 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 		Quarantine:                  nil,
 		WorktreeCommonDir:           "",
 		InodeTrackingDisabled:       false,
+		Declaration:                 nil,
 		UpdatedAt:                   clock.Now(),
 	}
 }
