@@ -28,9 +28,8 @@ import (
 // long assistant message then stores several parts.
 const parityLongTextBytes = 70_000
 
-// parityLongToolBytes exceeds twice the 60000-byte conversation split budget.
-// The long tool call then stores three parts, and each part after the first
-// starts with the tool name line.
+// parityLongToolBytes exceeds twice the conversation split budget. Each long
+// tool call then stores at least three parts.
 const parityLongToolBytes = 130_000
 
 // parityScalarColumns are the conversation scalar columns a parity row compares.
@@ -66,11 +65,13 @@ type parityRow struct {
 // row, append, backfill, force, and an authoritative removal) both collections
 // store equal row keys, content, scalar values, vectors, and checkpoint
 // fingerprints, and both manifest RPCs return the same needed set. The
-// transcript includes a tool call longer than twice the split budget. A
-// backfill that delivers text for a message stored only as a blank row selects
-// the conversation in neither collection, because a conversation backfill
-// checks only tool call and thinking families. A provider that disagrees with
-// the item id is rejected.
+// transcript includes a named and a nameless tool call longer than twice the
+// split budget. The generic rows send the trimmed tool name as the continuation
+// prefix, and an empty prefix for the nameless tool call. A backfill that
+// delivers text for a message stored only as a blank row selects the
+// conversation in neither collection, because a conversation backfill checks
+// only tool call and thinking families. A provider that disagrees with the item
+// id is rejected.
 func TestGenericCollectionIngestParity(t *testing.T) {
 	h := newHarness(t)
 	genericCollectionID := "live-generic-" + randomID()
@@ -103,6 +104,9 @@ func TestGenericCollectionIngestParity(t *testing.T) {
 	if h.countRowsWithPrefix(convToolPrefix(first)+"1/1/1") == 0 {
 		t.Fatal("the long tool call stored no second part")
 	}
+	if h.countRowsWithPrefix(convToolPrefix(first)+"1/2/1") == 0 {
+		t.Fatal("the nameless long tool call stored no second part")
+	}
 	h.requireManifestParity(genericCollectionID, parityManifest(convs), nil)
 
 	blankRowID := "blank-text-" + randomID()
@@ -134,7 +138,7 @@ func TestGenericCollectionIngestParity(t *testing.T) {
 	requireCompleted(t, h.upsertWithManifest(backfilled, unchangedFingerprint, retain, true, false), "conversation backfill")
 	requireCompleted(t, h.upsertGeneric(genericCollectionID, backfilled, unchangedFingerprint, genericRetain, true, false), "generic backfill")
 	h.requireParity(registration, "backfill")
-	if h.countRowsWithPrefix(convToolPrefix(first)+"1/2") == 0 {
+	if h.countRowsWithPrefix(convToolPrefix(first)+"1/3") == 0 {
 		t.Fatal("backfill stored no row for the added tool call")
 	}
 
@@ -315,8 +319,9 @@ func parityDeclarationPB() []*pb.ScalarColumnDeclaration {
 }
 
 // parityTranscript is a two-message synthetic transcript. The assistant turn
-// has text longer than the split budget, a short tool call, a tool call longer
-// than twice the split budget, and thinking text.
+// has text longer than the split budget, a short tool call, a named and a
+// nameless tool call longer than twice the split budget, and thinking text.
+// The first line of the nameless tool call is a display line.
 func parityTranscript(conversationID string, parentID string) []*pb.ConversationDocument {
 	return []*pb.ConversationDocument{
 		{
@@ -330,6 +335,7 @@ func parityTranscript(conversationID string, parentID string) []*pb.Conversation
 			Tools: []*pb.ConversationToolCall{
 				{Name: "Read", Display: "/work/parity/notes.md", LangHint: "markdown"},
 				{Name: "Write", Display: strings.TrimSpace(strings.Repeat("write the parity notes line. ", parityLongToolBytes/29+1)), LangHint: "markdown"},
+				{Name: "", Display: "untitled parity notes\n" + strings.TrimSpace(strings.Repeat("nameless parity output line. ", parityLongToolBytes/29+1)), LangHint: "markdown"},
 			},
 			WorkspaceRoot: "/work/parity", LoadRules: "rules-v1",
 		},
@@ -418,7 +424,9 @@ func parityManifest(convs map[string][]*pb.ConversationDocument) map[string]stri
 // parityRows derives the generic rows the conversation stream stores for the
 // fixture: one text row per message, one row per tool call, and one thinking
 // row per message with thinking. The fixture's tool calls are not shell
-// commands. Each tool row is the tool name and display text.
+// commands. Each tool row is the tool name line, when the tool call has a name,
+// and the display text. Each tool row sends the trimmed tool name as its
+// continuation prefix, which is empty for a nameless tool call.
 func parityRows(convs map[string][]*pb.ConversationDocument) []*pb.CollectionRow {
 	rows := make([]*pb.CollectionRow, 0)
 	for _, conversationID := range sortedKeys(convs) {
@@ -426,7 +434,18 @@ func parityRows(convs map[string][]*pb.ConversationDocument) []*pb.CollectionRow
 			scalars := parityRowScalars(document)
 			rows = append(rows, &pb.CollectionRow{RowKey: fmt.Sprintf("conv/%s/%d", conversationID, document.GetMessageIndex()), ItemId: conversationID, Text: document.GetText(), Scalars: scalars})
 			for toolIndex, tool := range document.GetTools() {
-				rows = append(rows, &pb.CollectionRow{RowKey: fmt.Sprintf("convtool/%s/%d/%d", conversationID, document.GetMessageIndex(), toolIndex), ItemId: conversationID, Text: tool.GetName() + "\n" + tool.GetDisplay(), Scalars: scalars})
+				toolName := strings.TrimSpace(tool.GetName())
+				toolText := tool.GetDisplay()
+				if toolName != "" {
+					toolText = toolName + "\n" + tool.GetDisplay()
+				}
+				rows = append(rows, &pb.CollectionRow{
+					RowKey:             fmt.Sprintf("convtool/%s/%d/%d", conversationID, document.GetMessageIndex(), toolIndex),
+					ItemId:             conversationID,
+					Text:               toolText,
+					Scalars:            scalars,
+					ContinuationPrefix: toolName,
+				})
 			}
 			if document.GetThinking() != "" {
 				rows = append(rows, &pb.CollectionRow{RowKey: fmt.Sprintf("convthink/%s/%d", conversationID, document.GetMessageIndex()), ItemId: conversationID, Text: document.GetThinking(), Scalars: scalars})

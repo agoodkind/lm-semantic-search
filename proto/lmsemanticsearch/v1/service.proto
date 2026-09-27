@@ -751,6 +751,11 @@ message CollectionRow {
   string item_id = 2;
   string text = 3;
   repeated CollectionScalarValue scalars = 4;
+  // continuation_prefix starts every stored part after the first with the
+  // prefix and a newline. A non-empty prefix shorter than the split size
+  // lowers the split size by the prefix length plus one, and the engine splits
+  // the text at that lowered size. An empty prefix changes nothing.
+  string continuation_prefix = 5;
 }
 
 // UpsertCollectionItemsHeader opens a streamed item upsert.

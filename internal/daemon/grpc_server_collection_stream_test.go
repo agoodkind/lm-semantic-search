@@ -317,6 +317,26 @@ func assembleParts(rows []storedLocalRow, prefix string) string {
 	return assembled.String()
 }
 
+// storedPartContent concatenates the content of every row stored at exactly
+// relativePath in split position order. The local store splits one part again
+// at the embedding budget and keeps the part path on each piece.
+func storedPartContent(rows []storedLocalRow, relativePath string) string {
+	pieces := make([]storedLocalRow, 0)
+	for _, row := range rows {
+		if row.RelativePath == relativePath {
+			pieces = append(pieces, row)
+		}
+	}
+	sort.Slice(pieces, func(first int, second int) bool {
+		return pieces[first].SplitPart < pieces[second].SplitPart
+	})
+	var content strings.Builder
+	for _, piece := range pieces {
+		content.WriteString(piece.Content)
+	}
+	return content.String()
+}
+
 func rowByPath(t *testing.T, rows []storedLocalRow, relativePath string) storedLocalRow {
 	t.Helper()
 	for _, row := range rows {
@@ -525,6 +545,59 @@ func TestUpsertCollectionItemsBackfillAndForce(t *testing.T) {
 	}
 }
 
+// TestUpsertCollectionItemsContinuationPrefix upserts two rows longer than the
+// split budget into a collection with a generic declaration. The row with a
+// continuation prefix splits at the budget less the prefix length plus one,
+// and every part after the first starts with the prefix and a newline. The row
+// without a prefix splits at the full budget and stores its text unchanged.
+func TestUpsertCollectionItemsContinuationPrefix(t *testing.T) {
+	t.Parallel()
+	daemon := newOfflineCollectionDaemon(t)
+	registered, err := daemon.registerCollection("docs-prefix", "docId", documentScalars())
+	if err != nil {
+		t.Fatalf("RegisterCollection returned error: %v", err)
+	}
+	budget := daemon.manager.conversationChunkByteBudget
+	const prefix = "Section A"
+	text := strings.TrimSpace(strings.Repeat("prefixed body sentence. ", 2*budget/24+1))
+	prefixed := documentRow("doc-a/prefixed", "doc-a", text, 1)
+	prefixed.ContinuationPrefix = prefix
+	plain := documentRow("doc-a/plain", "doc-a", text, 2)
+	daemon.upsertItems(
+		collectionHeader("docs-prefix", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false),
+		[]*pb.CollectionRow{prefixed, plain},
+		map[string]string{"doc-a": "fp-a1"},
+	)
+
+	rows := daemon.localRows(registered.GetCollectionName())
+	if got := len(storedPartContent(rows, "doc-a/plain/0")); got != budget {
+		t.Fatalf("row without a prefix stores a first part of %d bytes, want the full budget, %d", got, budget)
+	}
+	if assembleParts(rows, "doc-a/plain/") != text {
+		t.Fatal("row without a prefix does not reassemble its text")
+	}
+	firstPart := storedPartContent(rows, "doc-a/prefixed/0")
+	if len(firstPart) != budget-len(prefix)-1 {
+		t.Fatalf("row with a prefix stores a first part of %d bytes, want %d", len(firstPart), budget-len(prefix)-1)
+	}
+	var rebuilt strings.Builder
+	rebuilt.WriteString(firstPart)
+	for part := 1; ; part++ {
+		content := storedPartContent(rows, "doc-a/prefixed/"+strconv.Itoa(part))
+		if content == "" {
+			break
+		}
+		remainder, found := strings.CutPrefix(content, prefix+"\n")
+		if !found {
+			t.Fatalf("part %d of the row with a prefix starts with %.20q, want the prefix line", part, content)
+		}
+		rebuilt.WriteString(remainder)
+	}
+	if rebuilt.String() != text {
+		t.Fatal("parts of the row with a prefix, without their prefix lines, do not reassemble its text")
+	}
+}
+
 // TestUpsertCollectionItemsRejectsInvalidRows sends rows that break the saved
 // declaration. Each stream fails with InvalidArgument, reports the rejected
 // column in ErrorInfo when there is one, and queues no job. An unregistered
@@ -670,11 +743,14 @@ func TestCollectionAndConversationStreamsStoreEqualRows(t *testing.T) {
 	t.Run("backfill over a blank stored text row", testConversationBackfillParity)
 }
 
-// testConversationIngestParity ingests one transcript. One tool call row is
-// longer than the split budget. Each part of that row after the first starts
-// with the tool name line. The generic manifest then needs nothing. A provider
-// that disagrees with the item id is rejected, and so is a row key outside the
-// conversation row key layout.
+// testConversationIngestParity ingests one transcript with two tool call rows
+// longer than the split budget. The generic client sends the trimmed tool name
+// as the continuation prefix of the named tool row. That row splits at the
+// budget less the name length plus one, and each part after the first starts
+// with the name line. The nameless tool row has no prefix. It splits at the
+// full budget and stores its text unchanged. The generic manifest then needs
+// nothing. A provider that disagrees with the item id is rejected, and so is a
+// row key outside the conversation row key layout.
 func testConversationIngestParity(t *testing.T) {
 	t.Parallel()
 	daemon := newOfflineCollectionDaemon(t)
@@ -688,14 +764,22 @@ func testConversationIngestParity(t *testing.T) {
 	}
 	conversationID := "claude:parity-1"
 	longText := strings.Repeat("assistant answer sentence. ", 3000)
-	// The tool display spans about two split budgets. The tool row then stores
-	// three parts.
-	longToolDisplay := strings.TrimSpace(strings.Repeat("write the parity fixture line. ", 2*daemon.manager.conversationChunkByteBudget/31+1))
+	budget := daemon.manager.conversationChunkByteBudget
+	// Each long tool display spans about two split budgets. Each long tool row
+	// then stores three parts. The nameless tool call has no name line, and the
+	// first line of its row is a display line.
+	longToolDisplay := strings.TrimSpace(strings.Repeat("write the parity fixture line. ", 2*budget/31+1))
+	namelessToolText := "untitled tool notes\n" + strings.TrimSpace(strings.Repeat("nameless tool output line. ", 2*budget/27+1))
 	documents := []*pb.ConversationDocument{
 		{ConversationId: conversationID, MessageIndex: 0, Role: "user", TimestampUnix: 1712345678, Text: "how do generic rows match", WorkspaceRoot: "/work", LoadRules: "rules-v1"},
 		{
 			ConversationId: conversationID, MessageIndex: 1, Role: "assistant", TimestampUnix: 1712345679, Text: longText, WorkspaceRoot: "/work", LoadRules: "rules-v1",
-			Tools: []*pb.ConversationToolCall{{Name: "Read", Display: "file.go", LangHint: "go"}, {Name: "Write", Display: longToolDisplay, LangHint: "text"}}, Thinking: "private reasoning",
+			Tools: []*pb.ConversationToolCall{
+				{Name: "Read", Display: "file.go", LangHint: "go"},
+				{Name: "Write", Display: longToolDisplay, LangHint: "text"},
+				{Name: "", Display: namelessToolText, LangHint: "text"},
+			},
+			Thinking: "private reasoning",
 		},
 	}
 	manifest := map[string]string{conversationID: "fp-parity"}
@@ -705,20 +789,29 @@ func testConversationIngestParity(t *testing.T) {
 		{RowKey: "conv/" + conversationID + "/0", ItemId: conversationID, Text: "how do generic rows match", Scalars: conversationRowScalars(0, "user", 1712345678)},
 		{RowKey: "conv/" + conversationID + "/1", ItemId: conversationID, Text: longText, Scalars: conversationRowScalars(1, "assistant", 1712345679)},
 		{RowKey: "convtool/" + conversationID + "/1/0", ItemId: conversationID, Text: "Read\nfile.go", Scalars: conversationRowScalars(1, "assistant", 1712345679)},
-		{RowKey: "convtool/" + conversationID + "/1/1", ItemId: conversationID, Text: "Write\n" + longToolDisplay, Scalars: conversationRowScalars(1, "assistant", 1712345679)},
+		{RowKey: "convtool/" + conversationID + "/1/1", ItemId: conversationID, Text: "Write\n" + longToolDisplay, Scalars: conversationRowScalars(1, "assistant", 1712345679), ContinuationPrefix: "Write"},
+		{RowKey: "convtool/" + conversationID + "/1/2", ItemId: conversationID, Text: namelessToolText, Scalars: conversationRowScalars(1, "assistant", 1712345679)},
 		{RowKey: "convthink/" + conversationID + "/1", ItemId: conversationID, Text: "private reasoning", Scalars: conversationRowScalars(1, "assistant", 1712345679)},
 	}
 	daemon.upsertItems(collectionHeader("conv-parity-generic", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false), rows, manifest)
 
 	conversationRows := daemon.requireEqualConversationRows("ingest", conversation, generic)
-	longToolPart := "convtool/" + conversationID + "/1/1/1"
-	if paths := distinctRowPaths(conversationRows); len(paths) < 5 || !slices.Contains(paths, "conv/"+conversationID+"/1/1") || !slices.Contains(paths, "convthink/"+conversationID+"/1") || !slices.Contains(paths, "convtool/"+conversationID+"/1/0") || !slices.Contains(paths, longToolPart) {
-		t.Fatalf("conversation stream stored rows %v, want a split message text, a tool row, a split tool row, and a thinking row", paths)
+	namedTool := "convtool/" + conversationID + "/1/1"
+	namelessTool := "convtool/" + conversationID + "/1/2"
+	if paths := distinctRowPaths(conversationRows); len(paths) < 5 || !slices.Contains(paths, "conv/"+conversationID+"/1/1") || !slices.Contains(paths, "convthink/"+conversationID+"/1") || !slices.Contains(paths, "convtool/"+conversationID+"/1/0") || !slices.Contains(paths, namedTool+"/1") || !slices.Contains(paths, namelessTool+"/1") {
+		t.Fatalf("conversation stream stored rows %v, want a split message text, a tool row, two split tool rows, and a thinking row", paths)
 	}
-	for _, row := range conversationRows {
-		if row.RelativePath == longToolPart && row.SplitPart == 0 && !strings.HasPrefix(row.Content, "Write\n") {
-			t.Fatalf("tool row part %s starts with %.20q, want the tool name line", longToolPart, row.Content)
-		}
+	if got := len(storedPartContent(conversationRows, namedTool+"/0")); got != budget-len("Write")-1 {
+		t.Fatalf("named tool row first part has %d bytes, want the budget less the name line, %d", got, budget-len("Write")-1)
+	}
+	if content := storedPartContent(conversationRows, namedTool+"/1"); !strings.HasPrefix(content, "Write\n") {
+		t.Fatalf("named tool row part 1 starts with %.20q, want the tool name line", content)
+	}
+	if got := len(storedPartContent(conversationRows, namelessTool+"/0")); got != budget {
+		t.Fatalf("nameless tool row first part has %d bytes, want the full budget, %d", got, budget)
+	}
+	if assembleParts(conversationRows, namelessTool+"/") != namelessToolText {
+		t.Fatal("nameless tool row parts do not reassemble its text, so a part stores a prefix")
 	}
 	if needed := daemon.syncItems("conv-parity-generic", manifest); len(needed) != 0 {
 		t.Fatalf("generic needed after ingest = %v, want none", needed)

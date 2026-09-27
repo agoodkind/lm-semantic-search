@@ -645,10 +645,11 @@ var conversationDocumentsToStoredChunks = func(_ context.Context, documents []mo
 		)
 		for toolIndex, toolCall := range document.Tools {
 			toolBasePath := conversationToolCallPath(conversationID, document.MessageIndex, toolIndex)
-			chunks = appendStorableConversationField(
+			chunks = appendContinuedStorableField(
 				chunks,
 				conversationToolContent(toolCall),
-				conversationToolSplitBudget(budget, toolCall.Name),
+				budget,
+				strings.TrimSpace(toolCall.Name),
 				func(piece string, partIndex int, multipart bool) model.StoredChunk {
 					relativePath := toolBasePath
 					if multipart {
@@ -659,7 +660,7 @@ var conversationDocumentsToStoredChunks = func(_ context.Context, documents []mo
 						conversationID,
 						parentConversationID,
 						relativePath,
-						namedToolPiece(toolCall.Name, piece, partIndex),
+						piece,
 						"",
 						0,
 						0,
@@ -677,17 +678,6 @@ var conversationDocumentsToStoredChunks = func(_ context.Context, documents []mo
 		)...)
 	}
 	return chunks, nil
-}
-
-func namedToolPiece(name string, piece string, partIndex int) string {
-	if partIndex == 0 {
-		return piece
-	}
-	trimmedName := strings.TrimSpace(name)
-	if trimmedName == "" {
-		return piece
-	}
-	return trimmedName + "\n" + piece
 }
 
 func (manager *Manager) findConversationCollectionLocked(collectionID string) (model.Codebase, bool) {

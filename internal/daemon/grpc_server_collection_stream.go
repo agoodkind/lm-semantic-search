@@ -246,7 +246,7 @@ func pbCollectionManifest(fingerprints []*pb.CollectionItemFingerprint) (map[str
 // pbCollectionRow converts one wire row. An unset scalar value converts to a
 // null value.
 func pbCollectionRow(row *pb.CollectionRow) collectionRowInput {
-	return collectionRowInput{RowKey: row.GetRowKey(), ItemID: row.GetItemId(), Text: row.GetText(), Scalars: pbCollectionScalars(row.GetScalars())}
+	return collectionRowInput{RowKey: row.GetRowKey(), ItemID: row.GetItemId(), Text: row.GetText(), Scalars: pbCollectionScalars(row.GetScalars()), ContinuationPrefix: row.GetContinuationPrefix()}
 }
 
 // pbCollectionScalars converts wire scalar values. An unset value converts to a

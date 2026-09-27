@@ -17,12 +17,14 @@ import (
 
 // collectionRow is one validated client row of a document collection. RowKey
 // is stored as the row's relativePath. Scalars includes the item id column,
-// which validation sets from ItemID.
+// which validation sets from ItemID. ContinuationPrefix starts every stored
+// part after the first of a split row.
 type collectionRow struct {
-	RowKey  string
-	ItemID  string
-	Text    string
-	Scalars map[string]model.ScalarValue
+	RowKey             string
+	ItemID             string
+	Text               string
+	Scalars            map[string]model.ScalarValue
+	ContinuationPrefix string
 }
 
 // collectionRowFamily is the stored rows one delivered row produces. Key is
@@ -139,29 +141,21 @@ func (delivery collectionItemDelivery) rowFamilies(ctx context.Context, itemID s
 	return families, nil
 }
 
-// rowChunks splits one client row's text at the chunk byte budget. In a
-// collection with the conversation declaration, rowChunks reads the first line
-// of a convtool/ row as the tool name and splits the row the way
-// conversationDocumentsToStoredChunks splits a tool call with that name: the
-// budget leaves room for the name, and every part after the first starts with
-// the name and a newline.
+// rowChunks splits one client row's text at the chunk byte budget with the
+// row's continuation prefix, through the appendContinuedStorableField split
+// that conversation tool call rows also use.
 func (delivery collectionItemDelivery) rowChunks(row collectionRow) []model.StoredChunk {
-	budget := delivery.chunkByteBudget
-	toolName := ""
-	if delivery.projectConversation && strings.HasPrefix(row.RowKey, conversationToolRelativePathPrefix(row.ItemID)) {
-		toolName = conversationToolRowName(row.Text)
-		budget = conversationToolSplitBudget(budget, toolName)
-	}
-	return appendStorableConversationField(
+	return appendContinuedStorableField(
 		nil,
 		row.Text,
-		budget,
+		delivery.chunkByteBudget,
+		row.ContinuationPrefix,
 		func(piece string, partIndex int, multipart bool) model.StoredChunk {
 			relativePath := row.RowKey
 			if multipart {
 				relativePath = fmt.Sprintf("%s/%d", row.RowKey, partIndex)
 			}
-			return newCollectionRowChunk(row, relativePath, namedToolPiece(toolName, piece, partIndex), delivery.projectConversation)
+			return newCollectionRowChunk(row, relativePath, piece, delivery.projectConversation)
 		},
 	)
 }

@@ -30,10 +30,11 @@ type collectionScalarInput struct {
 // collectionRowInput is one client row before validation against the saved
 // declaration.
 type collectionRowInput struct {
-	RowKey  string
-	ItemID  string
-	Text    string
-	Scalars []collectionScalarInput
+	RowKey             string
+	ItemID             string
+	Text               string
+	Scalars            []collectionScalarInput
+	ContinuationPrefix string
 }
 
 // collectionItemsRequest is one generic item upsert. Manifest is nil when the
@@ -225,7 +226,7 @@ func validateCollectionRow(declaration model.CollectionDeclaration, columns map[
 			return collectionRow{}, adapterr.NewInvalidColumnValue(column.Name, fmt.Sprintf("row %q has no value for column %q, which is not nullable", input.RowKey, column.Name))
 		}
 	}
-	return collectionRow{RowKey: input.RowKey, ItemID: itemID, Text: input.Text, Scalars: scalars}, nil
+	return collectionRow{RowKey: input.RowKey, ItemID: itemID, Text: input.Text, Scalars: scalars, ContinuationPrefix: input.ContinuationPrefix}, nil
 }
 
 // validateCollectionScalar checks one scalar value against the declared

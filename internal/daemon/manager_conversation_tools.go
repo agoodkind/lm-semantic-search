@@ -67,27 +67,6 @@ func conversationToolContent(toolCall model.ConversationToolCall) string {
 	return strings.Join(tokens, "\n")
 }
 
-// conversationToolRowName returns the tool name of a tool call row: the
-// trimmed first line of its text. conversationToolContent writes the trimmed
-// tool name as the first line of the row. A tool call without a name has no
-// name line, and its first line is a display token instead.
-func conversationToolRowName(text string) string {
-	firstLine, _, _ := strings.Cut(text, "\n")
-	return strings.TrimSpace(firstLine)
-}
-
-// conversationToolSplitBudget returns the split budget of one tool call row.
-// namedToolPiece starts every part after the first with the tool name and a
-// newline. The budget leaves room for that prefix when the name is set and
-// shorter than the budget.
-func conversationToolSplitBudget(budget int, toolName string) int {
-	trimmedName := strings.TrimSpace(toolName)
-	if trimmedName == "" || budget <= len(trimmedName)+1 {
-		return budget
-	}
-	return budget - (len(trimmedName) + 1)
-}
-
 // appendConversationShellTokens parses a shell command with gksyntax shelldecomp
 // and appends its program names and read/write file targets as searchable tokens.
 // A command shelldecomp cannot parse (opaque) falls back to the raw command text,
