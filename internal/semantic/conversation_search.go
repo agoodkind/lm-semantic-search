@@ -14,18 +14,12 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
-// SearchConversationCollectionCapped returns a semantic conversation search
-// already reduced to at most limit rows, with at most perConversationLimit rows
-// per conversation and a minScore floor. It embeds the query once and runs one
-// ranking search at conversationRankingDepth that returns only each row's
-// primary key, relativePath, conversationId, and score. The filter expression
-// restricts that ranking natively, and a conversation id scope of any size
-// binds as one template parameter. The search sorts the ranking by descending
-// score, then relativePath, then primary key, and walks it once to apply the
-// score floor, the per-conversation cap, and the limit. It then reads content
-// and output columns for the selected rows only and returns them in the walked
-// order. One query and filter therefore always return the same rows in the
-// same order, and a smaller limit returns a prefix of a larger one.
+// SearchConversationCollectionCapped returns at most limit rows, with at most
+// perConversationLimit rows per conversation and no row below minScore. One
+// query and filter always return the same rows in the same order, and a
+// smaller limit returns a prefix of a larger one. The filter restricts one
+// fixed-depth ranking natively, and a conversation id scope of any size binds
+// as one template parameter.
 func (service *Service) SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, perConversationLimit int32, minScore float64, filter ConversationFilter) ([]model.StoredChunk, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
@@ -79,9 +73,7 @@ func (service *Service) SearchConversationCollectionCapped(ctx context.Context, 
 // rankConversationCandidates runs the one ranking search of a conversation
 // search. A hybrid collection runs both legs at conversationRankingDepth and
 // fuses them with the RRF reranker into at most conversationRankingDepth rows.
-// A dense collection runs one search at the same depth. Both request only
-// relativePath and conversationId, and Milvus returns the primary key and score
-// with every row.
+// A dense collection runs one search at the same depth.
 func (service *Service) rankConversationCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, filter ConversationFilter) ([]rankedCandidate, error) {
 	expression := filter.buildExpr()
 	outputFields := []string{relativePathFieldName, conversationIDFieldName}
@@ -127,11 +119,11 @@ func (service *Service) rankConversationCandidates(ctx context.Context, collecti
 	return rankedCandidatesFromResultSets(ctx, collectionName, resultSets)
 }
 
-// resolveLegacyConversationIDs sets the cap group of every candidate with a
-// null conversationId column. It reads those rows' metadata JSON by primary
-// key and uses its conversation_id, the identity the per-conversation cap used
-// before the ranking search existed. A row with no conversation_id in its
-// metadata keeps the empty conversation id.
+// resolveLegacyConversationIDs sets ConversationID on each candidate with a
+// null conversationId column. It queries those rows by primary key and reads
+// conversation_id from each row's metadata JSON. Rows written before the
+// conversationId column existed store their identity only there. A row
+// without a metadata conversation_id keeps the empty string.
 func (service *Service) resolveLegacyConversationIDs(ctx context.Context, collectionName string, candidates []rankedCandidate) error {
 	legacyKeys := make([]string, 0)
 	for _, candidate := range candidates {
@@ -174,8 +166,8 @@ func (service *Service) resolveLegacyConversationIDs(ctx context.Context, collec
 }
 
 // rankedCandidatesFromResultSets decodes the ranking rows. A null
-// conversationId decodes as the empty conversation id with ConversationIDNull
-// set.
+// conversationId column sets ConversationIDNull and leaves ConversationID
+// empty.
 func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, resultSets []milvusclient.ResultSet) ([]rankedCandidate, error) {
 	if len(resultSets) == 0 || resultSets[0].ResultCount == 0 {
 		return []rankedCandidate{}, nil
@@ -220,9 +212,9 @@ func rankingReadError(ctx context.Context, collectionName string, field string, 
 	return fmt.Errorf("read ranking %s at %d from %s: %w", field, index, collectionName, err)
 }
 
-// loadRankedChunks reads the content and output columns of the selected rows
-// by primary key and returns them in the selected order with their ranking
-// scores. A selected row that no longer exists is skipped.
+// loadRankedChunks queries content and output columns for the selected rows by
+// primary key and returns them in selection order. A row deleted after the
+// ranking search is skipped.
 func (service *Service) loadRankedChunks(ctx context.Context, collectionName string, selected []rankedCandidate) ([]model.StoredChunk, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	if len(selected) == 0 {

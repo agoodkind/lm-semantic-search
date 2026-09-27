@@ -26,7 +26,7 @@ func candidateKeys(candidates []rankedCandidate) []string {
 
 // TestSortRankedCandidatesBreaksTiesByPathThenKey proves the ranking order is
 // total: descending score, then ascending relativePath, then ascending primary
-// key, whatever order the store returned the rows in.
+// key.
 func TestSortRankedCandidatesBreaksTiesByPathThenKey(t *testing.T) {
 	t.Parallel()
 

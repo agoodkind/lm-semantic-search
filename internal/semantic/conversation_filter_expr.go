@@ -8,21 +8,17 @@ import (
 
 // conversationFilterIDBatchSize bounds how many conversation ids go into one
 // Milvus `in [...]` membership clause on the stored-row load path. A larger id
-// set there runs one query per batch. Search does not batch: it binds its whole
-// conversation scope through conversationIDsTemplateParam.
+// set on that path runs one query per batch. The search path does not batch.
 const conversationFilterIDBatchSize = 256
 
-// conversationRankingDepth is the number of candidates one conversation search
-// ranks: the topK of each hybrid leg, the fused hybrid limit, and the dense
-// topK. It is the Milvus single-search ceiling. It never depends on the
-// requested limit, the per-conversation cap, or the score floor. Every request
-// for one query and filter therefore ranks the same candidate list.
+// conversationRankingDepth is the Milvus topK ceiling. Both hybrid legs, the
+// fused hybrid limit, and the dense search rank this many candidates, which
+// keeps the ranking independent of the requested limit and cap.
 const conversationRankingDepth = 16384
 
 // conversationIDsTemplateParam is the Milvus expression template parameter
-// that binds the conversation id scope. A template parameter sends the ids as
-// one typed array instead of expression text, and any scope size runs as one
-// search.
+// that binds the conversation id scope as a typed array. The array avoids the
+// expression-text size limit.
 const conversationIDsTemplateParam = "conversation_ids"
 
 // ConversationFilter carries the native-filterable attributes of a conversation
@@ -50,8 +46,7 @@ type ConversationFilter struct {
 }
 
 // HasConversationScope reports whether the filter restricts retrieval to a
-// specific set of conversation ids. The search then binds the ids through
-// conversationIDsTemplateParam.
+// specific set of conversation ids.
 func (filter ConversationFilter) HasConversationScope() bool {
 	return len(filter.ConversationIDs) > 0
 }
@@ -141,22 +136,20 @@ func batchConversationIDs(ids []string, size int) [][]string {
 }
 
 // rankedCandidate is one row of a conversation search's fused ranking. It
-// stores only the row identity, the cap group, and the score. The search reads
-// content for the selected candidates afterward.
+// stores only the row identity, the cap group, and the score.
 type rankedCandidate struct {
 	PrimaryKey     string
 	RelativePath   string
 	ConversationID string
-	// ConversationIDNull is true when the row's conversationId column is null.
-	// The search then sets ConversationID from the row's metadata JSON before
-	// the walk applies the per-conversation cap.
+	// ConversationIDNull is true when the stored conversationId column is null.
+	// ConversationID must be resolved from the row's metadata JSON before the
+	// per-conversation cap applies.
 	ConversationIDNull bool
 	Score              float64
 }
 
 // sortRankedCandidates orders candidates by descending score, then ascending
-// relativePath, then ascending primary key. The order is total. One query
-// therefore ranks its candidates the same way on every call.
+// relativePath, then ascending primary key. The order is total.
 func sortRankedCandidates(candidates []rankedCandidate) {
 	sort.Slice(candidates, func(first int, second int) bool {
 		left := candidates[first]
@@ -174,8 +167,8 @@ func sortRankedCandidates(candidates []rankedCandidate) {
 // selectRankedCandidates walks sorted candidates once. It drops a candidate
 // scoring below minScore, keeps at most perConversationLimit candidates per
 // conversation, and stops at limit. A zero perConversationLimit is uncapped,
-// and a zero minScore is no floor. The walk never looks ahead. The result for
-// a smaller limit is therefore a prefix of the result for a larger one.
+// and a zero minScore is no floor. A smaller limit returns a prefix of a
+// larger limit's result, which search paging relies on.
 func selectRankedCandidates(candidates []rankedCandidate, perConversationLimit int32, minScore float64, limit int32) []rankedCandidate {
 	kept := make([]rankedCandidate, 0, min(len(candidates), int(max(limit, 0))))
 	perConversation := make(map[string]int32)
