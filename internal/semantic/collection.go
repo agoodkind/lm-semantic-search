@@ -92,13 +92,25 @@ func (service *Service) RecordCollectionDeclaration(collectionName string, decla
 	service.declaredCollections.Store(name, struct{}{})
 }
 
-// IsConversationDeclaration reports whether declaration equals
-// [ConversationDeclaration] column for column. Only that declaration stores
-// rows in the conversation schema.
+// IsConversationDeclaration reports whether declaration has the item id column
+// and the scalar columns of [ConversationDeclaration] in any order: the same
+// column names, types, nullability, and string lengths. Only that declaration
+// stores rows in the conversation schema. Registration compares declarations
+// without regard to column order, and a saved declaration keeps the order its
+// registration sent.
 func IsConversationDeclaration(declaration model.CollectionDeclaration) bool {
 	conversation := ConversationDeclaration()
 	return declaration.ItemIDColumn == conversation.ItemIDColumn &&
-		slices.Equal(declaration.Scalars, conversation.Scalars)
+		slices.Equal(scalarColumnsByName(declaration.Scalars), scalarColumnsByName(conversation.Scalars))
+}
+
+// scalarColumnsByName returns a copy of columns sorted by column name.
+func scalarColumnsByName(columns []model.ScalarColumn) []model.ScalarColumn {
+	sorted := slices.Clone(columns)
+	slices.SortFunc(sorted, func(left model.ScalarColumn, right model.ScalarColumn) int {
+		return strings.Compare(left.Name, right.Name)
+	})
+	return sorted
 }
 
 type storeColumnKind int

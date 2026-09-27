@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -476,6 +477,52 @@ func TestConversationRegistrationRPCsResolveOneRecord(t *testing.T) {
 	}
 	if !bytes.Equal(readFileBytes(t, checkpointPath), checkpoint) {
 		t.Fatal("Merkle checkpoint changed across registrations")
+	}
+}
+
+// TestRegisterCollectionReorderedConversationDeclaration registers the
+// conversation declaration with its columns in reverse order. Registration
+// compares declarations without regard to column order, and the conversation
+// declaration check does too. The collection keeps conversation behavior: a
+// generic row stores the conversation fields and no generic scalars, and after
+// a restart the conversation manifest RPC accepts the collection.
+func TestRegisterCollectionReorderedConversationDeclaration(t *testing.T) {
+	t.Parallel()
+	daemon := newOfflineCollectionDaemon(t)
+
+	reordered := conversationScalarsPB()
+	slices.Reverse(reordered)
+	registered, err := daemon.registerCollection("conv-reordered", "conversationId", reordered)
+	if err != nil {
+		t.Fatalf("RegisterCollection with the reordered conversation declaration returned error: %v", err)
+	}
+	conversationID := "claude:reordered-1"
+	row := &pb.CollectionRow{
+		RowKey:  "conv/" + conversationID + "/0",
+		ItemId:  conversationID,
+		Text:    "a message stored under a reordered declaration",
+		Scalars: []*pb.CollectionScalarValue{stringScalar("role", "user"), int64Scalar("messageIndex", 0)},
+	}
+	daemon.upsertItems(
+		collectionHeader("conv-reordered", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false),
+		[]*pb.CollectionRow{row},
+		map[string]string{conversationID: "fp-reordered"},
+	)
+	stored := rowByPath(t, daemon.localRows(registered.GetCollectionName()), row.GetRowKey())
+	if stored.ConversationID != conversationID || stored.Role != "user" || stored.Scalars != nil {
+		t.Fatalf("stored row has conversationId %q, role %q, and scalars %v, want the conversation fields and no generic scalars", stored.ConversationID, stored.Role, stored.Scalars)
+	}
+
+	daemon.restart(nil)
+	response, err := daemon.client.SyncConversationManifest(grpcutil.WithCorrelation(context.Background()), &pb.SyncConversationManifestRequest{
+		CollectionId: "conv-reordered",
+		Manifest:     []*pb.ConversationFingerprint{{ConversationId: conversationID, Fingerprint: "fp-reordered"}},
+	})
+	if err != nil {
+		t.Fatalf("SyncConversationManifest after a reordered registration returned error: %v", err)
+	}
+	if needed := response.GetNeededConversationIds(); len(needed) != 0 {
+		t.Fatalf("needed after ingest = %v, want none", needed)
 	}
 }
 
