@@ -62,7 +62,8 @@ func (service *Service) SearchConversationCollectionCapped(ctx context.Context, 
 		return nil, err
 	}
 	if perConversationLimit > 0 {
-		if err := service.resolveLegacyConversationIDs(ctx, trimmedCollectionName, candidates); err != nil {
+		candidates, err = service.resolveLegacyConversationIDs(ctx, trimmedCollectionName, candidates)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -124,8 +125,10 @@ func (service *Service) rankConversationCandidates(ctx context.Context, collecti
 // null conversationId column. It queries those rows by primary key and reads
 // conversation_id from each row's metadata JSON. Rows written before the
 // conversationId column existed store their identity only there. A row
-// without a metadata conversation_id keeps the empty string.
-func (service *Service) resolveLegacyConversationIDs(ctx context.Context, collectionName string, candidates []rankedCandidate) error {
+// without a metadata conversation_id keeps the empty string. The returned
+// candidates omit a legacy row deleted after the ranking search. A deleted row
+// never takes a per-conversation cap slot.
+func (service *Service) resolveLegacyConversationIDs(ctx context.Context, collectionName string, candidates []rankedCandidate) ([]rankedCandidate, error) {
 	legacyKeys := make([]string, 0)
 	for _, candidate := range candidates {
 		if candidate.ConversationIDNull {
@@ -133,37 +136,50 @@ func (service *Service) resolveLegacyConversationIDs(ctx context.Context, collec
 		}
 	}
 	if len(legacyKeys) == 0 {
-		return nil
+		return candidates, nil
 	}
 	resultSet, err := service.milvus.Query(ctx, milvusclient.NewQueryOption(collectionName).
 		WithIDs(column.NewColumnVarChar(idFieldName, legacyKeys)).
 		WithOutputFields(idFieldName, metadataFieldName))
 	if err != nil {
-		return searchErr(ctx, "load legacy conversation identity", collectionName, err)
+		return nil, searchErr(ctx, "load legacy conversation identity", collectionName, err)
 	}
 	idColumn := resultSet.GetColumn(idFieldName)
 	metadataColumn := resultSet.GetColumn(metadataFieldName)
 	if resultSet.ResultCount > 0 && (idColumn == nil || metadataColumn == nil) {
-		return ErrSearchResultIncomplete
+		return nil, ErrSearchResultIncomplete
 	}
 	legacyIDs := make(map[string]string, resultSet.ResultCount)
 	for index := range resultSet.ResultCount {
 		primaryKey, idErr := idColumn.GetAsString(index)
 		if idErr != nil {
-			return rankingReadError(ctx, collectionName, idFieldName, index, idErr)
+			return nil, rankingReadError(ctx, collectionName, idFieldName, index, idErr)
 		}
 		metadata, metadataErr := metadataColumn.GetAsString(index)
 		if metadataErr != nil {
-			return rankingReadError(ctx, collectionName, metadataFieldName, index, metadataErr)
+			return nil, rankingReadError(ctx, collectionName, metadataFieldName, index, metadataErr)
 		}
 		legacyIDs[primaryKey] = decodeMetadata(metadata).ConversationID
 	}
-	for index := range candidates {
-		if candidates[index].ConversationIDNull {
-			candidates[index].ConversationID = legacyIDs[candidates[index].PrimaryKey]
+	return applyLegacyConversationIDs(candidates, legacyIDs), nil
+}
+
+// applyLegacyConversationIDs sets each null-identity candidate's
+// ConversationID from legacyIDs and drops a null-identity candidate that
+// legacyIDs does not contain.
+func applyLegacyConversationIDs(candidates []rankedCandidate, legacyIDs map[string]string) []rankedCandidate {
+	resolved := make([]rankedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.ConversationIDNull {
+			conversationID, found := legacyIDs[candidate.PrimaryKey]
+			if !found {
+				continue
+			}
+			candidate.ConversationID = conversationID
 		}
+		resolved = append(resolved, candidate)
 	}
-	return nil
+	return resolved
 }
 
 // rankedCandidatesFromResultSets decodes the ranking rows. A null

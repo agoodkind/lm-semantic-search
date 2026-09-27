@@ -123,6 +123,35 @@ func TestSelectRankedCandidatesCapsEachConversationID(t *testing.T) {
 	}
 }
 
+// TestApplyLegacyConversationIDsDropsDeletedRows proves a null-identity row
+// deleted after the ranking search leaves the candidates before the cap
+// applies. The deleted row takes no empty-id cap slot from a surviving row.
+func TestApplyLegacyConversationIDsDropsDeletedRows(t *testing.T) {
+	t.Parallel()
+
+	deleted := candidate("gone", "conv/legacy-a/0", "", 0.9)
+	deleted.ConversationIDNull = true
+	surviving := candidate("kept", "conv/legacy-b/0", "", 0.8)
+	surviving.ConversationIDNull = true
+	current := candidate("current", "conv/c/0", "c", 0.7)
+	unnamed := candidate("unnamed", "conv/legacy-c/0", "", 0.6)
+	unnamed.ConversationIDNull = true
+
+	resolved := applyLegacyConversationIDs(
+		[]rankedCandidate{deleted, surviving, current, unnamed},
+		map[string]string{"kept": "legacy-b", "unnamed": ""},
+	)
+	if got, want := candidateKeys(resolved), []string{"kept", "current", "unnamed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolved keys = %v, want %v", got, want)
+	}
+	if resolved[0].ConversationID != "legacy-b" {
+		t.Fatalf("resolved conversation id = %q, want legacy-b", resolved[0].ConversationID)
+	}
+	if got, want := candidateKeys(selectRankedCandidates(resolved, 1, 0, 10)), []string{"kept", "current", "unnamed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("capped keys = %v, want %v", got, want)
+	}
+}
+
 // TestRankedCandidatesRejectMissingScores proves a ranking result with fewer
 // scores than rows fails instead of ranking the unscored rows at zero.
 func TestRankedCandidatesRejectMissingScores(t *testing.T) {
