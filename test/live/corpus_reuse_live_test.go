@@ -371,20 +371,21 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 		t.Fatalf("open search service: %v", err)
 	}
 	t.Cleanup(func() { _ = searchService.Close(context.Background()) })
-	searchResults, err := searchService.SearchConversationCollectionCapped(
-		context.Background(),
-		harness.collectionName,
-		"untagged legacy search probe",
-		10,
-		10,
-		-1,
-		semantic.ConversationFilter{},
-	)
+	searchResults, err := searchService.SearchCollection(context.Background(), semantic.CollectionSearch{
+		CollectionName: harness.collectionName,
+		Query:          "untagged legacy search probe",
+		Limit:          10,
+		MinScore:       -1,
+		Filter:         nil,
+		GroupBy:        "conversationId",
+		PerGroupLimit:  10,
+		Declaration:    semantic.ConversationDeclaration(),
+	})
 	if err != nil {
 		t.Fatalf("search collection containing untagged row: %v", err)
 	}
-	if !slices.ContainsFunc(searchResults, func(chunk model.StoredChunk) bool {
-		return chunk.Content == legacyContent
+	if !slices.ContainsFunc(searchResults, func(hit semantic.CollectionHit) bool {
+		return hit.Chunk.Content == legacyContent
 	}) {
 		t.Fatalf("search results omitted untagged content: %+v", searchResults)
 	}

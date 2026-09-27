@@ -44,6 +44,8 @@ const (
 	SemanticSearchDaemonService_DeleteConversation_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteConversation"
 	SemanticSearchDaemonService_SearchConversations_FullMethodName               = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchConversations"
 	SemanticSearchDaemonService_SearchWithinConversation_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchWithinConversation"
+	SemanticSearchDaemonService_SearchCollection_FullMethodName                  = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCollection"
+	SemanticSearchDaemonService_GetCollectionItemState_FullMethodName            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetCollectionItemState"
 	SemanticSearchDaemonService_Doctor_FullMethodName                            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Doctor"
 	SemanticSearchDaemonService_GetStatus_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetStatus"
 	SemanticSearchDaemonService_SetMaintenanceMode_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SetMaintenanceMode"
@@ -119,6 +121,17 @@ type SemanticSearchDaemonServiceClient interface {
 	DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
 	SearchWithinConversation(ctx context.Context, in *SearchWithinConversationRequest, opts ...grpc.CallOption) (*SearchWithinConversationResponse, error)
+	// SearchCollection searches a registered document collection with a typed
+	// filter tree over its declared scalar columns, an optional per-group cap, and
+	// a score floor. The daemon validates every filter and group column against
+	// the saved declaration before it runs the query, and it never accepts a raw
+	// vector store expression. An invalid filter fails with InvalidArgument and
+	// the rejected column in ErrorInfo metadata key "column".
+	SearchCollection(ctx context.Context, in *SearchCollectionRequest, opts ...grpc.CallOption) (*SearchCollectionResponse, error)
+	// GetCollectionItemState returns the content fingerprint the daemon has
+	// indexed for one item of a registered collection. An unknown item or an
+	// unregistered collection returns an empty fingerprint.
+	GetCollectionItemState(ctx context.Context, in *GetCollectionItemStateRequest, opts ...grpc.CallOption) (*GetCollectionItemStateResponse, error)
 	Doctor(ctx context.Context, in *DoctorRequest, opts ...grpc.CallOption) (*DoctorResponse, error)
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
 	// SetMaintenanceMode turns maintenance mode on or off in the running daemon.
@@ -411,6 +424,26 @@ func (c *semanticSearchDaemonServiceClient) SearchWithinConversation(ctx context
 	return out, nil
 }
 
+func (c *semanticSearchDaemonServiceClient) SearchCollection(ctx context.Context, in *SearchCollectionRequest, opts ...grpc.CallOption) (*SearchCollectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchCollectionResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_SearchCollection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *semanticSearchDaemonServiceClient) GetCollectionItemState(ctx context.Context, in *GetCollectionItemStateRequest, opts ...grpc.CallOption) (*GetCollectionItemStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCollectionItemStateResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_GetCollectionItemState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *semanticSearchDaemonServiceClient) Doctor(ctx context.Context, in *DoctorRequest, opts ...grpc.CallOption) (*DoctorResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DoctorResponse)
@@ -520,6 +553,17 @@ type SemanticSearchDaemonServiceServer interface {
 	DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
 	SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error)
+	// SearchCollection searches a registered document collection with a typed
+	// filter tree over its declared scalar columns, an optional per-group cap, and
+	// a score floor. The daemon validates every filter and group column against
+	// the saved declaration before it runs the query, and it never accepts a raw
+	// vector store expression. An invalid filter fails with InvalidArgument and
+	// the rejected column in ErrorInfo metadata key "column".
+	SearchCollection(context.Context, *SearchCollectionRequest) (*SearchCollectionResponse, error)
+	// GetCollectionItemState returns the content fingerprint the daemon has
+	// indexed for one item of a registered collection. An unknown item or an
+	// unregistered collection returns an empty fingerprint.
+	GetCollectionItemState(context.Context, *GetCollectionItemStateRequest) (*GetCollectionItemStateResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
 	// SetMaintenanceMode turns maintenance mode on or off in the running daemon.
@@ -614,6 +658,12 @@ func (UnimplementedSemanticSearchDaemonServiceServer) SearchConversations(contex
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchWithinConversation not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) SearchCollection(context.Context, *SearchCollectionRequest) (*SearchCollectionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchCollection not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) GetCollectionItemState(context.Context, *GetCollectionItemStateRequest) (*GetCollectionItemStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCollectionItemState not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Doctor not implemented")
@@ -1046,6 +1096,42 @@ func _SemanticSearchDaemonService_SearchWithinConversation_Handler(srv interface
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SemanticSearchDaemonService_SearchCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchCollectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).SearchCollection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_SearchCollection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).SearchCollection(ctx, req.(*SearchCollectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SemanticSearchDaemonService_GetCollectionItemState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCollectionItemStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).GetCollectionItemState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_GetCollectionItemState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).GetCollectionItemState(ctx, req.(*GetCollectionItemStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SemanticSearchDaemonService_Doctor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DoctorRequest)
 	if err := dec(in); err != nil {
@@ -1204,6 +1290,14 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SearchWithinConversation",
 			Handler:    _SemanticSearchDaemonService_SearchWithinConversation_Handler,
+		},
+		{
+			MethodName: "SearchCollection",
+			Handler:    _SemanticSearchDaemonService_SearchCollection_Handler,
+		},
+		{
+			MethodName: "GetCollectionItemState",
+			Handler:    _SemanticSearchDaemonService_GetCollectionItemState_Handler,
 		},
 		{
 			MethodName: "Doctor",

@@ -4,6 +4,7 @@ package lmsemanticsearch.v1;
 
 option go_package = "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1;lmsemanticsearchv1";
 
+import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
 service SemanticSearchDaemonService {
@@ -72,6 +73,17 @@ service SemanticSearchDaemonService {
   rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
   rpc SearchWithinConversation(SearchWithinConversationRequest) returns (SearchWithinConversationResponse);
+  // SearchCollection searches a registered document collection with a typed
+  // filter tree over its declared scalar columns, an optional per-group cap, and
+  // a score floor. The daemon validates every filter and group column against
+  // the saved declaration before it runs the query, and it never accepts a raw
+  // vector store expression. An invalid filter fails with InvalidArgument and
+  // the rejected column in ErrorInfo metadata key "column".
+  rpc SearchCollection(SearchCollectionRequest) returns (SearchCollectionResponse);
+  // GetCollectionItemState returns the content fingerprint the daemon has
+  // indexed for one item of a registered collection. An unknown item or an
+  // unregistered collection returns an empty fingerprint.
+  rpc GetCollectionItemState(GetCollectionItemStateRequest) returns (GetCollectionItemStateResponse);
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
   // SetMaintenanceMode turns maintenance mode on or off in the running daemon.
@@ -1058,6 +1070,130 @@ message SearchWithinConversationResponse {
   string indexed_fingerprint = 2;
   string display_text = 3;
   DependencyHealth dependency_health = 4;
+}
+
+// CollectionFilterValue is one typed literal in a collection filter. Its type
+// must match the declared type of the column it tests.
+message CollectionFilterValue {
+  oneof value {
+    string string_value = 1;
+    bool bool_value = 2;
+    int64 int64_value = 3;
+  }
+}
+
+// CollectionFilterGroup lists the child nodes of an all_of or any_of node. A
+// group must have at least one child.
+message CollectionFilterGroup {
+  repeated CollectionFilter filters = 1;
+}
+
+// CollectionFilterEquals keeps a row when the column value equals value.
+message CollectionFilterEquals {
+  string column = 1;
+  CollectionFilterValue value = 2;
+}
+
+// CollectionFilterIn keeps a row when the column value equals one of values.
+// values must be non-empty.
+message CollectionFilterIn {
+  string column = 1;
+  repeated CollectionFilterValue values = 2;
+}
+
+// CollectionFilterRange keeps a row when the value of an int64 column lies in
+// the half-open range [lower, upper). Time columns store Unix seconds as int64.
+// At least one bound must be set.
+message CollectionFilterRange {
+  string column = 1;
+  optional int64 lower = 2;
+  optional int64 upper = 3;
+}
+
+// CollectionFilterColumn is the column that an is_null or is_present test
+// checks.
+message CollectionFilterColumn {
+  string column = 1;
+}
+
+// CollectionFilter is one node of a typed filter tree. all_of, any_of, and
+// negate combine child nodes; the other members are leaf predicates. A leaf
+// comparison on a null value never matches, and negating it does not match
+// either, so is_null and is_present are the only tests that select null
+// values.
+message CollectionFilter {
+  oneof node {
+    CollectionFilterGroup all_of = 1;
+    CollectionFilterGroup any_of = 2;
+    CollectionFilter negate = 3;
+    CollectionFilterEquals equals = 4;
+    CollectionFilterIn in_set = 5;
+    CollectionFilterRange range = 6;
+    CollectionFilterColumn is_null = 7;
+    CollectionFilterColumn is_present = 8;
+  }
+}
+
+// SearchCollectionRequest searches one registered collection. limit defaults to
+// 10 when zero or negative. filter is optional, and an absent filter matches
+// every row. group_by must be a declared column. per_group_limit caps the hits
+// that share one value of the group_by column, and rows with a null or absent
+// group value share one group. In a conversation collection grouped by
+// conversationId, a row with a null conversationId instead groups by the
+// conversation id in its legacy metadata. per_group_limit requires group_by.
+// min_score drops hits scoring below the floor, and zero means no floor. One
+// query and request always return the same rows in the same order, ranked by
+// descending score, then ascending row_key, then ascending stored primary
+// key. A smaller limit returns a prefix of a larger one.
+message SearchCollectionRequest {
+  string collection_id = 1;
+  string query = 2;
+  int32 limit = 3;
+  double min_score = 4;
+  CollectionFilter filter = 5;
+  string group_by = 6;
+  int32 per_group_limit = 7;
+}
+
+// CollectionHitScalar is one declared scalar column value on a search hit. An
+// unset value means the stored row has no such column. null_value means the
+// stored row has the column and its value is null.
+message CollectionHitScalar {
+  string column = 1;
+  oneof value {
+    string string_value = 2;
+    bool bool_value = 3;
+    int64 int64_value = 4;
+    google.protobuf.NullValue null_value = 5;
+  }
+}
+
+// CollectionSearchHit is one ranked search hit. row_key is the logical row key
+// the client stored. scalars lists every declared scalar column in
+// declaration order.
+message CollectionSearchHit {
+  string row_key = 1;
+  string content = 2;
+  double score = 3;
+  repeated CollectionHitScalar scalars = 4;
+}
+
+message SearchCollectionResponse {
+  repeated CollectionSearchHit hits = 1;
+  string display_text = 2;
+  DependencyHealth dependency_health = 3;
+}
+
+message GetCollectionItemStateRequest {
+  string collection_id = 1;
+  string item_id = 2;
+}
+
+// GetCollectionItemStateResponse returns the content fingerprint from the
+// collection's Merkle checkpoint. Empty means the item is not indexed.
+message GetCollectionItemStateResponse {
+  string indexed_fingerprint = 1;
+  string display_text = 2;
 }
 
 message Diagnostic {

@@ -348,7 +348,16 @@ func NewInvalidColumnValue(column string, message string) *ColumnError {
 	}
 }
 
-// NewCollectionNotRegistered reports an item operation against a document
+// NewInvalidFilterColumn reports a search filter or group column that the
+// collection declaration rejects. message states the violation.
+func NewInvalidFilterColumn(column string, message string) *ColumnError {
+	return &ColumnError{
+		Column:  column,
+		adapter: NewInvalidArgument(message),
+	}
+}
+
+// NewCollectionNotRegistered reports an operation against a document
 // collection id that has no registry record.
 func NewCollectionNotRegistered(collectionID string) *AdapterError {
 	return &AdapterError{

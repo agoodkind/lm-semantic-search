@@ -3,9 +3,31 @@ package semantic
 import (
 	"reflect"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-func TestConversationFilterBuildExpr(t *testing.T) {
+// conversationCompiled compiles the conversation filter through the
+// conversation adapter and the generic expression compiler.
+func conversationCompiled(t *testing.T, filter ConversationFilter) compiledFilter {
+	t.Helper()
+	compiled, err := compileCollectionFilterExpr(filter.CollectionFilter())
+	if err != nil {
+		t.Fatalf("compile conversation filter: %v", err)
+	}
+	return compiled
+}
+
+func conversationExpr(t *testing.T, filter ConversationFilter) string {
+	t.Helper()
+	return conversationCompiled(t, filter).Expression
+}
+
+func stringParam(name string, values ...string) filterTemplateParam {
+	return filterTemplateParam{Name: name, Type: model.ScalarTypeString, Strings: values, Bools: nil, Int64s: nil}
+}
+
+func TestConversationFilterCompilesExpr(t *testing.T) {
 	t.Parallel()
 
 	filter := ConversationFilter{
@@ -20,14 +42,23 @@ func TestConversationFilterBuildExpr(t *testing.T) {
 		MessageIndexUntil:    9,
 	}
 
-	got := filter.buildExpr()
-	want := `provider in ["claude", "codex"] and workspaceRoot in ["/work/alpha"] and role in ["assistant", "user"] and conversationId in {conversation_ids} and parentConversationId == "claude:root" and timestampUnix >= 100 and timestampUnix < 200 and messageIndex >= 2 and messageIndex < 9`
-	if got != want {
-		t.Fatalf("buildExpr() = %q, want %q", got, want)
+	got := conversationCompiled(t, filter)
+	want := `provider in {p0} and workspaceRoot in {p1} and role in {p2} and conversationId in {p3} and parentConversationId == "claude:root" and timestampUnix >= 100 and timestampUnix < 200 and messageIndex >= 2 and messageIndex < 9`
+	if got.Expression != want {
+		t.Fatalf("expression = %q, want %q", got.Expression, want)
+	}
+	wantParams := []filterTemplateParam{
+		stringParam("p0", "claude", "codex"),
+		stringParam("p1", "/work/alpha"),
+		stringParam("p2", "assistant", "user"),
+		stringParam("p3", "claude:thread-a", "codex:thread-b"),
+	}
+	if !reflect.DeepEqual(got.Params, wantParams) {
+		t.Fatalf("params = %#v, want %#v", got.Params, wantParams)
 	}
 }
 
-func TestConversationFilterBuildExprEscapesStrings(t *testing.T) {
+func TestConversationFilterCompilesExprEscapesStrings(t *testing.T) {
 	t.Parallel()
 
 	filter := ConversationFilter{
@@ -36,14 +67,18 @@ func TestConversationFilterBuildExprEscapesStrings(t *testing.T) {
 		ParentConversationID: `parent"root`,
 	}
 
-	got := filter.buildExpr()
-	want := `provider in ["cla\"ude"] and conversationId in {conversation_ids} and parentConversationId == "parent\"root"`
-	if got != want {
-		t.Fatalf("buildExpr() = %q, want %q", got, want)
+	got := conversationCompiled(t, filter)
+	want := `provider in {p0} and conversationId in {p1} and parentConversationId == "parent\"root"`
+	if got.Expression != want {
+		t.Fatalf("expression = %q, want %q", got.Expression, want)
+	}
+	wantParams := []filterTemplateParam{stringParam("p0", `cla"ude`), stringParam("p1", `thread\one`)}
+	if !reflect.DeepEqual(got.Params, wantParams) {
+		t.Fatalf("params = %#v, want %#v (template values are sent unescaped)", got.Params, wantParams)
 	}
 }
 
-func TestConversationFilterBuildExprArchived(t *testing.T) {
+func TestConversationFilterCompilesExprArchived(t *testing.T) {
 	t.Parallel()
 
 	archivedFalse := false
@@ -63,9 +98,9 @@ func TestConversationFilterBuildExprArchived(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := ConversationFilter{Archived: test.archived}.buildExpr()
+			got := conversationExpr(t, ConversationFilter{Archived: test.archived})
 			if got != test.want {
-				t.Fatalf("buildExpr() = %q, want %q", got, test.want)
+				t.Fatalf("expression = %q, want %q", got, test.want)
 			}
 		})
 	}

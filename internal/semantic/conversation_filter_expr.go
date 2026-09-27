@@ -1,32 +1,28 @@
 package semantic
 
 import (
-	"fmt"
-	"sort"
 	"strings"
 )
 
 // conversationFilterIDBatchSize bounds how many conversation ids go into one
 // Milvus `in [...]` membership clause on the stored-row load path. A larger id
-// set on that path runs one query per batch. The search path does not batch.
+// set there runs one query per batch. Search does not batch: it binds every
+// membership set as one expression template parameter.
 const conversationFilterIDBatchSize = 256
 
-// conversationRankingDepth is the Milvus topK ceiling. Both hybrid legs, the
-// fused hybrid limit, and the dense search rank this many candidates, which
-// keeps the ranking independent of the requested limit and cap.
-const conversationRankingDepth = 16384
+// conversationFilterDimensionCount is the number of conversation filter
+// dimensions CollectionFilter can convert: providers, workspace roots, roles,
+// conversation ids, parent, both timestamp bounds, both message index bounds,
+// and archived.
+const conversationFilterDimensionCount = 10
 
-// conversationIDsTemplateParam is the Milvus expression template parameter
-// that binds the conversation id scope as a typed array. The array avoids the
-// expression-text size limit.
-const conversationIDsTemplateParam = "conversation_ids"
-
-// ConversationFilter carries the native-filterable attributes of a conversation
-// search. The daemon maps its request filter onto this, and buildExpr renders a
-// Milvus boolean expression over the conversation scalar columns so the vector
-// search pre-filters by every dimension before ranking, instead of the engine
-// over-fetching and post-filtering. min_score is intentionally absent: it is the
-// retrieval score, not stored data, so the caller applies it as a post-filter.
+// ConversationFilter is the native-filterable attributes of a conversation
+// search. The daemon maps its request filter onto this, and CollectionFilter
+// converts it to the typed filter tree over the conversation scalar columns.
+// The vector search pre-filters by every dimension before ranking, instead of
+// the engine over-fetching and post-filtering. min_score is intentionally
+// absent. It is the retrieval score, not stored data, and the search applies it
+// after ranking.
 type ConversationFilter struct {
 	Providers            []string
 	WorkspaceRoots       []string
@@ -37,59 +33,72 @@ type ConversationFilter struct {
 	UntilUnix            int64
 	MessageIndexFrom     int32
 	MessageIndexUntil    int32
-	// Archived, when non-nil, keeps only rows whose archived column equals the
-	// pointed-to value. It filters on the nullable archived scalar, so a row
-	// whose archived is still NULL (an old row not yet reached by the enrichment
-	// backfill) is excluded by either value; callers should send it only once
-	// the backfill has populated archived across the corpus.
+	// Archived, when non-nil, keeps only rows with an archived column equal to
+	// the pointed-to value. It filters on the nullable archived scalar. A row
+	// with a NULL archived value (an old row the enrichment backfill has not
+	// updated) is excluded by either value. Callers should send it only once the
+	// backfill has populated archived across the corpus.
 	Archived *bool
 }
 
 // HasConversationScope reports whether the filter restricts retrieval to a
-// specific set of conversation ids.
+// specific set of conversation ids, which the caller uses to decide whether a
+// large id set needs batching across several searches.
 func (filter ConversationFilter) HasConversationScope() bool {
 	return len(filter.ConversationIDs) > 0
 }
 
-// buildExpr renders the Milvus boolean expression for every native dimension,
-// ANDing whichever clauses are present. An empty result searches the whole
-// collection. Role values are lowercased to match the lowercased role column.
-// Role filtering is case-insensitive across providers. The
-// conversation id scope renders as the conversationIDsTemplateParam
-// placeholder, and the search supplies the ids as that template parameter.
-func (filter ConversationFilter) buildExpr() string {
-	clauses := make([]string, 0, 10)
-	if clause := inStringClause(providerFieldName, filter.Providers); clause != "" {
-		clauses = append(clauses, clause)
+// CollectionFilter converts the conversation filter to the typed filter tree
+// over the conversation scalar columns. It returns nil when no dimension is
+// set, which searches the whole collection. Every set dimension becomes one
+// child of a top-level all node in a fixed order: providers, workspace roots,
+// roles, conversation ids, parent, timestamp bounds, message index bounds, and
+// archived. Role values are lowercased to match the lowercased role column, so
+// role filtering is case-insensitive across providers. From bounds are
+// inclusive and until bounds are exclusive. An archived value compares the
+// nullable archived column, which excludes a row with a null archived value
+// for either value.
+func (filter ConversationFilter) CollectionFilter() *CollectionFilter {
+	children := make([]CollectionFilter, 0, conversationFilterDimensionCount)
+	if len(filter.Providers) > 0 {
+		children = append(children, ColumnIn(providerFieldName, StringValues(filter.Providers)))
 	}
-	if clause := inStringClause(workspaceRootFieldName, filter.WorkspaceRoots); clause != "" {
-		clauses = append(clauses, clause)
+	if len(filter.WorkspaceRoots) > 0 {
+		children = append(children, ColumnIn(workspaceRootFieldName, StringValues(filter.WorkspaceRoots)))
 	}
-	if clause := inStringClause(roleFieldName, lowercaseAll(filter.Roles)); clause != "" {
-		clauses = append(clauses, clause)
+	if len(filter.Roles) > 0 {
+		children = append(children, ColumnIn(roleFieldName, StringValues(lowercaseAll(filter.Roles))))
 	}
-	if filter.HasConversationScope() {
-		clauses = append(clauses, conversationIDFieldName+" in {"+conversationIDsTemplateParam+"}")
+	if len(filter.ConversationIDs) > 0 {
+		children = append(children, ColumnIn(conversationIDFieldName, StringValues(filter.ConversationIDs)))
 	}
 	if filter.ParentConversationID != "" {
-		clauses = append(clauses, fmt.Sprintf(`%s == "%s"`, parentConversationIDFieldName, escapeMilvusString(filter.ParentConversationID)))
+		children = append(children, ColumnEquals(parentConversationIDFieldName, StringScalar(filter.ParentConversationID)))
 	}
 	if filter.FromUnix > 0 {
-		clauses = append(clauses, fmt.Sprintf("%s >= %d", timestampUnixFieldName, filter.FromUnix))
+		lower := filter.FromUnix
+		children = append(children, ColumnRange(timestampUnixFieldName, &lower, nil))
 	}
 	if filter.UntilUnix > 0 {
-		clauses = append(clauses, fmt.Sprintf("%s < %d", timestampUnixFieldName, filter.UntilUnix))
+		upper := filter.UntilUnix
+		children = append(children, ColumnRange(timestampUnixFieldName, nil, &upper))
 	}
 	if filter.MessageIndexFrom > 0 {
-		clauses = append(clauses, fmt.Sprintf("%s >= %d", messageIndexFieldName, filter.MessageIndexFrom))
+		lower := int64(filter.MessageIndexFrom)
+		children = append(children, ColumnRange(messageIndexFieldName, &lower, nil))
 	}
 	if filter.MessageIndexUntil > 0 {
-		clauses = append(clauses, fmt.Sprintf("%s < %d", messageIndexFieldName, filter.MessageIndexUntil))
+		upper := int64(filter.MessageIndexUntil)
+		children = append(children, ColumnRange(messageIndexFieldName, nil, &upper))
 	}
 	if filter.Archived != nil {
-		clauses = append(clauses, fmt.Sprintf("%s == %t", archivedFieldName, *filter.Archived))
+		children = append(children, ColumnEquals(archivedFieldName, BoolScalar(*filter.Archived)))
 	}
-	return strings.Join(clauses, " and ")
+	if len(children) == 0 {
+		return nil
+	}
+	tree := AllOf(children...)
+	return &tree
 }
 
 // inStringClause renders a Milvus `field in ["a", "b"]` membership clause, each
@@ -133,59 +142,4 @@ func batchConversationIDs(ids []string, size int) [][]string {
 		batches = append(batches, ids[start:end])
 	}
 	return batches
-}
-
-// rankedCandidate is one row of a conversation search's fused ranking. It
-// stores only the row identity, the cap group, and the score.
-type rankedCandidate struct {
-	PrimaryKey     string
-	RelativePath   string
-	ConversationID string
-	// ConversationIDNull is true when the stored conversationId column is null.
-	// ConversationID must be resolved from the row's metadata JSON before the
-	// per-conversation cap applies.
-	ConversationIDNull bool
-	Score              float64
-}
-
-// sortRankedCandidates orders candidates by descending score, then ascending
-// relativePath, then ascending primary key. The order is total.
-func sortRankedCandidates(candidates []rankedCandidate) {
-	sort.Slice(candidates, func(first int, second int) bool {
-		left := candidates[first]
-		right := candidates[second]
-		if left.Score != right.Score {
-			return left.Score > right.Score
-		}
-		if left.RelativePath != right.RelativePath {
-			return left.RelativePath < right.RelativePath
-		}
-		return left.PrimaryKey < right.PrimaryKey
-	})
-}
-
-// selectRankedCandidates walks sorted candidates once. It drops a candidate
-// scoring below minScore, keeps at most perConversationLimit candidates per
-// conversation, and stops at limit. A zero perConversationLimit is uncapped,
-// and a zero minScore is no floor. A smaller limit returns a prefix of a
-// larger limit's result, which search paging relies on.
-func selectRankedCandidates(candidates []rankedCandidate, perConversationLimit int32, minScore float64, limit int32) []rankedCandidate {
-	kept := make([]rankedCandidate, 0, min(len(candidates), int(max(limit, 0))))
-	perConversation := make(map[string]int32)
-	for _, candidate := range candidates {
-		if limit > 0 && len(kept) >= int(limit) {
-			break
-		}
-		if minScore > 0 && candidate.Score < minScore {
-			continue
-		}
-		if perConversationLimit > 0 {
-			if perConversation[candidate.ConversationID] >= perConversationLimit {
-				continue
-			}
-			perConversation[candidate.ConversationID]++
-		}
-		kept = append(kept, candidate)
-	}
-	return kept
 }

@@ -360,6 +360,14 @@ func (client *mockDaemonClient) SearchWithinConversation(context.Context, *pb.Se
 	return nil, errors.New("not implemented")
 }
 
+func (client *mockDaemonClient) SearchCollection(context.Context, *pb.SearchCollectionRequest, ...grpc.CallOption) (*pb.SearchCollectionResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (client *mockDaemonClient) GetCollectionItemState(context.Context, *pb.GetCollectionItemStateRequest, ...grpc.CallOption) (*pb.GetCollectionItemStateResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (client *mockDaemonClient) Doctor(context.Context, *pb.DoctorRequest, ...grpc.CallOption) (*pb.DoctorResponse, error) {
 	return nil, errors.New("not implemented")
 }

@@ -233,14 +233,42 @@ func (lease fakeCollectionLease) ReleaseContext(context.Context) {
 	lease.Release()
 }
 
-func (f *fakeSemantic) SearchConversationCollectionCapped(ctx context.Context, collectionName string, query string, limit int32, _ int32, _ float64, filter semantic.ConversationFilter) ([]model.StoredChunk, error) {
+func (f *fakeSemantic) SearchCollection(ctx context.Context, search semantic.CollectionSearch) ([]semantic.CollectionHit, error) {
 	f.mu.Lock()
-	f.conversationSearchScopes = append(f.conversationSearchScopes, append([]string(nil), filter.ConversationIDs...))
+	f.conversationSearchScopes = append(f.conversationSearchScopes, itemIDScope(search.Filter, search.Declaration.ItemIDColumn))
 	f.mu.Unlock()
-	if f.conversationSearch != nil {
-		return f.conversationSearch(ctx, collectionName, query, limit)
+	if f.conversationSearch == nil {
+		return nil, nil
 	}
-	return nil, nil
+	chunks, err := f.conversationSearch(ctx, search.CollectionName, search.Query, search.Limit)
+	if err != nil {
+		return nil, err
+	}
+	hits := make([]semantic.CollectionHit, 0, len(chunks))
+	for _, chunk := range chunks {
+		hits = append(hits, semantic.CollectionHit{Chunk: chunk, Scalars: nil})
+	}
+	return hits, nil
+}
+
+// itemIDScope returns the values of the item id membership child of a root all
+// node, which is where the conversation adapter puts an explicit conversation
+// scope. It returns nil when the filter has no such child.
+func itemIDScope(filter *semantic.CollectionFilter, itemIDColumn string) []string {
+	if filter == nil || filter.Kind != semantic.CollectionFilterAll {
+		return nil
+	}
+	for _, child := range filter.Children {
+		if child.Kind != semantic.CollectionFilterIn || child.Column != itemIDColumn {
+			continue
+		}
+		scope := make([]string, 0, len(child.Values))
+		for _, value := range child.Values {
+			scope = append(scope, value.String)
+		}
+		return scope
+	}
+	return nil
 }
 
 func (f *fakeSemantic) Count(ctx context.Context, codebasePath string) (int32, error) {

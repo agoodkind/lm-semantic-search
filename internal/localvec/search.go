@@ -38,7 +38,7 @@ func (store *Store) Search(
 ) ([]model.StoredChunk, error) {
 	extensions := normalizeExtensions(extensionFilter)
 	prefix := normalizeSearchPrefix(relativePathPrefix)
-	return store.searchRows(
+	scored, err := store.searchRows(
 		ctx,
 		store.CollectionName(codebasePath),
 		query,
@@ -58,58 +58,28 @@ func (store *Store) Search(
 			)
 		},
 	)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]model.StoredChunk, 0, len(scored))
+	for _, candidate := range scored {
+		results = append(results, candidate.stored.chunk(candidate.score))
+	}
+	return results, nil
 }
 
-// SearchConversationCollectionCapped searches a conversation collection with
-// per-conversation limits.
-func (store *Store) SearchConversationCollectionCapped(
-	ctx context.Context,
-	collectionName string,
-	query string,
-	limit int32,
-	perConversationLimit int32,
-	minScore float64,
-	filter semantic.ConversationFilter,
-) ([]model.StoredChunk, error) {
-	return store.searchRows(
-		ctx,
-		collectionName,
-		query,
-		limit,
-		func(scored []scoredRow, resultLimit int) []scoredRow {
-			perConversation := make(map[string]int32)
-			return limitScoredRows(
-				scored,
-				resultLimit,
-				func(candidate scoredRow) bool {
-					if !matchesConversationFilter(candidate.stored, filter) {
-						return false
-					}
-					if minScore > 0 && candidate.score < minScore {
-						return false
-					}
-					if perConversationLimit <= 0 {
-						return true
-					}
-					conversationID := candidate.stored.ConversationID
-					if perConversation[conversationID] >= perConversationLimit {
-						return false
-					}
-					perConversation[conversationID]++
-					return true
-				},
-			)
-		},
-	)
-}
-
+// searchRows embeds the query, scores the collection's rows, sorts them with
+// sortScoredRows, and returns the rows filter keeps. Above
+// exactSearchThreshold rows it grows the HNSW candidate count with the limit
+// until filter keeps enough rows. Code search uses it. Collection search ranks
+// a fixed candidate set instead (see Store.SearchCollection).
 func (store *Store) searchRows(
 	ctx context.Context,
 	collectionName string,
 	query string,
 	limit int32,
 	filter scoredRowFilter,
-) ([]model.StoredChunk, error) {
+) ([]scoredRow, error) {
 	if err := operationContextError(ctx, "search local vectors"); err != nil {
 		return nil, err
 	}
@@ -124,6 +94,46 @@ func (store *Store) searchRows(
 	if !exists {
 		return nil, semantic.ErrCollectionMissing
 	}
+	normalizedQuery, err := store.embedQuery(ctx, collectionName, query)
+	if err != nil {
+		return nil, err
+	}
+
+	resultLimit := effectiveLimit(limit)
+	var scored []scoredRow
+	if collectionSize <= exactSearchThreshold {
+		rows, _, snapshotErr := stored.snapshot()
+		if snapshotErr != nil {
+			return nil, snapshotErr
+		}
+		scored, err = scoreExactRows(ctx, collectionName, rows, normalizedQuery)
+	} else {
+		scored, err = scoreApproximateRowsAdaptive(
+			stored,
+			normalizedQuery,
+			collectionSize,
+			resultLimit,
+			filter,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if collectionSize <= exactSearchThreshold {
+		sortScoredRows(scored)
+		scored = filter(scored, resultLimit)
+	}
+	return scored, nil
+}
+
+// embedQuery embeds query with the configured query instruction prefix and
+// normalizes the vector for cosine scoring.
+func (store *Store) embedQuery(
+	ctx context.Context,
+	collectionName string,
+	query string,
+) ([]float32, error) {
 	provider, err := store.embeddingProvider()
 	if err != nil {
 		return nil, err
@@ -153,37 +163,7 @@ func (store *Store) searchRows(
 		)
 		return nil, fmt.Errorf("normalize local vector query: %w", err)
 	}
-
-	resultLimit := effectiveLimit(limit)
-	var scored []scoredRow
-	if collectionSize <= exactSearchThreshold {
-		rows, _, snapshotErr := stored.snapshot()
-		if snapshotErr != nil {
-			return nil, snapshotErr
-		}
-		scored, err = scoreExactRows(ctx, collectionName, rows, normalizedQuery)
-	} else {
-		scored, err = scoreApproximateRowsAdaptive(
-			stored,
-			normalizedQuery,
-			collectionSize,
-			resultLimit,
-			filter,
-		)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if collectionSize <= exactSearchThreshold {
-		sortScoredRows(scored)
-		scored = filter(scored, resultLimit)
-	}
-	results := make([]model.StoredChunk, 0, len(scored))
-	for _, candidate := range scored {
-		results = append(results, candidate.stored.chunk(candidate.score))
-	}
-	return results, nil
+	return normalizedQuery, nil
 }
 
 func scoreApproximateRowsAdaptive(
@@ -286,12 +266,18 @@ func scoreApproximateRows(
 	return scored, nil
 }
 
+// sortScoredRows orders rows by descending score, then ascending relativePath,
+// then ascending row id, the same total order the Milvus collection search
+// applies to its ranking.
 func sortScoredRows(scored []scoredRow) {
 	sort.SliceStable(scored, func(left int, right int) bool {
-		if scored[left].score == scored[right].score {
-			return scored[left].stored.ID < scored[right].stored.ID
+		if scored[left].score != scored[right].score {
+			return scored[left].score > scored[right].score
 		}
-		return scored[left].score > scored[right].score
+		if scored[left].stored.RelativePath != scored[right].stored.RelativePath {
+			return scored[left].stored.RelativePath < scored[right].stored.RelativePath
+		}
+		return scored[left].stored.ID < scored[right].stored.ID
 	})
 }
 
@@ -334,57 +320,6 @@ func matchesSearchPrefix(relativePath string, prefix string) bool {
 		return true
 	}
 	return relativePath == prefix || strings.HasPrefix(relativePath, prefix+"/")
-}
-
-func matchesConversationFilter(stored row, filter semantic.ConversationFilter) bool {
-	if !containsString(filter.Providers, conversationProvider(stored.ConversationID), false) {
-		return false
-	}
-	if !containsString(filter.WorkspaceRoots, stored.WorkspaceRoot, false) {
-		return false
-	}
-	if !containsString(filter.Roles, stored.Role, true) {
-		return false
-	}
-	if !containsString(filter.ConversationIDs, stored.ConversationID, false) {
-		return false
-	}
-	if filter.ParentConversationID != "" &&
-		stored.ParentConversationID != filter.ParentConversationID {
-		return false
-	}
-	if filter.FromUnix > 0 && stored.TimestampUnix < filter.FromUnix {
-		return false
-	}
-	if filter.UntilUnix > 0 && stored.TimestampUnix >= filter.UntilUnix {
-		return false
-	}
-	if filter.MessageIndexFrom > 0 && stored.MessageIndex < filter.MessageIndexFrom {
-		return false
-	}
-	if filter.MessageIndexUntil > 0 &&
-		stored.MessageIndex >= filter.MessageIndexUntil {
-		return false
-	}
-	if filter.Archived != nil && stored.Archived != *filter.Archived {
-		return false
-	}
-	return true
-}
-
-func containsString(values []string, candidate string, caseInsensitive bool) bool {
-	if len(values) == 0 {
-		return true
-	}
-	for _, value := range values {
-		if caseInsensitive && strings.EqualFold(value, candidate) {
-			return true
-		}
-		if !caseInsensitive && value == candidate {
-			return true
-		}
-	}
-	return false
 }
 
 func conversationProvider(conversationID string) string {
