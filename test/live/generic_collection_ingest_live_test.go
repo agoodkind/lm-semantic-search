@@ -64,7 +64,8 @@ type parityRow struct {
 // database. After each step (first ingest, a backfill over a blank stored text
 // row, append, backfill, force, and an authoritative removal) both collections
 // store equal row keys, content, scalar values, vectors, and checkpoint
-// fingerprints, and both manifest RPCs return the same needed set. The
+// fingerprints. The manifest RPCs return the same needed set after the first
+// ingest and for the changed manifest before the append. The
 // transcript includes a named and a nameless tool call longer than twice the
 // split budget. The generic rows send the trimmed tool name as the continuation
 // prefix, and an empty prefix for the nameless tool call. A backfill that
@@ -119,7 +120,7 @@ func TestGenericCollectionIngestParity(t *testing.T) {
 	requireCompleted(t, h.upsertGeneric(genericCollectionID, withLaterMessage, secondFingerprint, genericRetain, true, false), "generic backfill over a blank text row")
 	h.requireParity(registration, "backfill over a blank text row")
 	if count := h.countRowsWithPrefix(blankTextPath); count != 1 || strings.TrimSpace(h.contentForRelativePath(blankTextPath)) != "" {
-		t.Fatalf("backfill over a blank text row left %d rows at %s, want only the blank row", count, blankTextPath)
+		t.Fatalf("backfill over a blank text row left %d rows at %s; backfill should leave only the blank row", count, blankTextPath)
 	}
 
 	changed := map[string][]*pb.ConversationDocument{first: appendMessage(convs[first], first), second: convs[second]}

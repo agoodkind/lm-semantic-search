@@ -935,8 +935,8 @@ func testConversationIngestParity(t *testing.T) {
 // text row for message 2 in both collections. A backfill then delivers text for
 // message 2 under the unchanged fingerprint. A conversation backfill checks
 // only tool call and thinking families, and every one of them is present.
-// Neither stream selects the conversation: both collections keep the blank row
-// as the only row of message 2 and stay byte-identical.
+// Both backfills retain the blank message row as the only row for message 2.
+// The test compares stored row lines and checkpoints.
 func testConversationBackfillParity(t *testing.T) {
 	t.Parallel()
 	daemon := newOfflineCollectionDaemon(t)
