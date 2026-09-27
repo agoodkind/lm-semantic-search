@@ -68,9 +68,11 @@ func (store *Store) Search(
 	return results, nil
 }
 
-// searchRows embeds the query, scores the collection's rows, sorts them by
-// descending score with ties ordered by row id, and returns the rows filter
-// keeps.
+// searchRows embeds the query, scores the collection's rows, sorts them with
+// sortScoredRows, and returns the rows filter keeps. Above
+// exactSearchThreshold rows it grows the HNSW candidate count with the limit
+// until filter keeps enough rows. Code search uses it. Collection search ranks
+// a fixed candidate set instead (see Store.SearchCollection).
 func (store *Store) searchRows(
 	ctx context.Context,
 	collectionName string,
@@ -92,6 +94,46 @@ func (store *Store) searchRows(
 	if !exists {
 		return nil, semantic.ErrCollectionMissing
 	}
+	normalizedQuery, err := store.embedQuery(ctx, collectionName, query)
+	if err != nil {
+		return nil, err
+	}
+
+	resultLimit := effectiveLimit(limit)
+	var scored []scoredRow
+	if collectionSize <= exactSearchThreshold {
+		rows, _, snapshotErr := stored.snapshot()
+		if snapshotErr != nil {
+			return nil, snapshotErr
+		}
+		scored, err = scoreExactRows(ctx, collectionName, rows, normalizedQuery)
+	} else {
+		scored, err = scoreApproximateRowsAdaptive(
+			stored,
+			normalizedQuery,
+			collectionSize,
+			resultLimit,
+			filter,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if collectionSize <= exactSearchThreshold {
+		sortScoredRows(scored)
+		scored = filter(scored, resultLimit)
+	}
+	return scored, nil
+}
+
+// embedQuery embeds query with the configured query instruction prefix and
+// normalizes the vector for cosine scoring.
+func (store *Store) embedQuery(
+	ctx context.Context,
+	collectionName string,
+	query string,
+) ([]float32, error) {
 	provider, err := store.embeddingProvider()
 	if err != nil {
 		return nil, err
@@ -121,33 +163,7 @@ func (store *Store) searchRows(
 		)
 		return nil, fmt.Errorf("normalize local vector query: %w", err)
 	}
-
-	resultLimit := effectiveLimit(limit)
-	var scored []scoredRow
-	if collectionSize <= exactSearchThreshold {
-		rows, _, snapshotErr := stored.snapshot()
-		if snapshotErr != nil {
-			return nil, snapshotErr
-		}
-		scored, err = scoreExactRows(ctx, collectionName, rows, normalizedQuery)
-	} else {
-		scored, err = scoreApproximateRowsAdaptive(
-			stored,
-			normalizedQuery,
-			collectionSize,
-			resultLimit,
-			filter,
-		)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if collectionSize <= exactSearchThreshold {
-		sortScoredRows(scored)
-		scored = filter(scored, resultLimit)
-	}
-	return scored, nil
+	return normalizedQuery, nil
 }
 
 func scoreApproximateRowsAdaptive(

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/config"
@@ -290,6 +291,116 @@ func TestSearchAboveExactThresholdAdaptivelyOverfetchesAfterFiltering(t *testing
 	}
 	if len(results) != 1 || results[0].Content != "kept" {
 		t.Fatalf("Search results = %+v, want kept", results)
+	}
+}
+
+const (
+	tiedDenseConversation = "claude:dense"
+	tiedFarConversation   = "claude:far"
+	tiedDenseRows         = 300
+	tiedFarRows           = 3
+)
+
+// tiedConversationFixture builds total conversation rows. The dense
+// conversation has tiedDenseRows rows with the query vector, so they tie at
+// the top score. The far conversation has tiedFarRows rows with the opposite
+// vector, so they score lowest. Every other row is its own conversation at a
+// distinct angle between them.
+func tiedConversationFixture(total int) ([]model.StoredChunk, map[string][]float32) {
+	const firstOtherAngle = 0.01
+	chunks := make([]model.StoredChunk, 0, total)
+	reuse := make(map[string][]float32, total)
+	add := func(content string, conversationID string, messageIndex int, vector []float32) {
+		chunks = append(chunks, model.StoredChunk{
+			Content:        content,
+			RelativePath:   fmt.Sprintf("conv/%s/%d", conversationID, messageIndex),
+			ConversationID: conversationID,
+			MessageIndex:   int32(messageIndex),
+			Role:           "user",
+		})
+		reuse[semantic.ContentVectorKey(content)] = vector
+	}
+	for messageIndex := range tiedDenseRows {
+		add(fmt.Sprintf("dense-%04d", messageIndex), tiedDenseConversation, messageIndex, []float32{1, 0})
+	}
+	for messageIndex := range tiedFarRows {
+		add(fmt.Sprintf("far-%d", messageIndex), tiedFarConversation, messageIndex, []float32{-1, 0})
+	}
+	otherCount := total - tiedDenseRows - tiedFarRows
+	for index := range otherCount {
+		fraction := float64(index) / float64(max(otherCount-1, 1))
+		angle := firstOtherAngle + (math.Pi-2*firstOtherAngle)*fraction
+		add(fmt.Sprintf("other-%05d", index), fmt.Sprintf("claude:other-%05d", index), 0, vectorAtAngle(angle))
+	}
+	return chunks, reuse
+}
+
+// TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold proves collection
+// search ranks a fixed candidate set above the 4,096-row exact threshold of
+// code search, both below and above semantic.CollectionRankingDepth rows. The
+// dense conversation's rows tie at the top score, and a cap of two per
+// conversation keeps two of them. Every smaller limit returns a prefix of limit
+// 20, repeated searches return the same rows, and a search scoped to the far
+// conversation finds its rows although they score lowest.
+func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
+	t.Parallel()
+
+	for _, total := range []int{exactSearchThreshold + 104, semantic.CollectionRankingDepth + 616} {
+		t.Run(fmt.Sprintf("%d rows", total), func(t *testing.T) {
+			t.Parallel()
+
+			codebasePath := fmt.Sprintf("chat:///local-prefix-%d", total)
+			store := newSearchTestStore(t)
+			chunks, reuse := tiedConversationFixture(total)
+			stageAndPromoteWithReuse(t, store, codebasePath, chunks, reuse)
+			search := func(limit int32, filter *semantic.CollectionFilter) []string {
+				t.Helper()
+				hits, err := store.SearchCollection(context.Background(), semantic.CollectionSearch{
+					CollectionName: store.CollectionName(codebasePath),
+					Query:          "query",
+					Limit:          limit,
+					MinScore:       0,
+					Filter:         filter,
+					GroupBy:        "conversationId",
+					PerGroupLimit:  2,
+					Declaration:    semantic.ConversationDeclaration(),
+				})
+				if err != nil {
+					t.Fatalf("SearchCollection returned error: %v", err)
+				}
+				paths := make([]string, 0, len(hits))
+				for _, hit := range hits {
+					paths = append(paths, hit.Chunk.RelativePath)
+				}
+				return paths
+			}
+
+			larger := search(20, nil)
+			if len(larger) != 20 {
+				t.Fatalf("limit 20 returned %d rows, want 20", len(larger))
+			}
+			for _, path := range larger[:2] {
+				if !strings.HasPrefix(path, "conv/"+tiedDenseConversation+"/") {
+					t.Fatalf("top rows %v, want two dense rows first", larger[:2])
+				}
+			}
+			for _, limit := range []int32{1, 2, 3, 5, 10} {
+				if smaller := search(limit, nil); !slices.Equal(smaller, larger[:len(smaller)]) || len(smaller) != int(limit) {
+					t.Fatalf("limit %d rows %v are not the first %d rows of %v", limit, smaller, limit, larger)
+				}
+			}
+			for range 3 {
+				if again := search(20, nil); !slices.Equal(again, larger) {
+					t.Fatalf("repeated search rows %v, want %v", again, larger)
+				}
+			}
+
+			scope := semantic.ColumnIn("conversationId", semantic.StringValues([]string{tiedFarConversation}))
+			far := search(10, &scope)
+			if len(far) != 2 || !strings.HasPrefix(far[0], "conv/"+tiedFarConversation+"/") {
+				t.Fatalf("scoped search rows %v, want the two far rows the cap keeps", far)
+			}
+		})
 	}
 }
 

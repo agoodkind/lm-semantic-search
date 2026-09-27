@@ -20,12 +20,13 @@ import (
 // caller sets no positive limit.
 const defaultCollectionSearchLimit = 10
 
-// collectionRankingDepth is the number of candidates one collection search
+// CollectionRankingDepth is the number of candidates one collection search
 // ranks: the topK of each hybrid leg, the fused hybrid limit, and the dense
 // topK. It is the Milvus single-search ceiling. It never depends on the
 // requested limit, the group cap, or the score floor. Every request for one
-// query and filter therefore ranks the same candidate list.
-const collectionRankingDepth = 16384
+// query and filter therefore ranks the same candidate list. The offline store
+// ranks at the same depth.
+const CollectionRankingDepth = 16384
 
 // nullGroupKey is the group key of every hit with a null or absent group
 // column value. Those hits share one group.
@@ -135,7 +136,7 @@ func groupColumnFor(search CollectionSearch) (model.ScalarColumn, bool) {
 
 // SearchCollection runs a typed search and returns at most Limit hits, at most
 // PerGroupLimit per GroupBy value, none scoring below MinScore. It embeds the
-// query once and runs one ranking search at collectionRankingDepth that
+// query once and runs one ranking search at CollectionRankingDepth that
 // returns each row's primary key, relativePath, group column, and score. The
 // compiled filter restricts that ranking natively, and every membership set
 // binds as a template parameter. The search sorts the ranking by descending
@@ -257,8 +258,8 @@ func selectRankedCandidates(candidates []rankedCandidate, perGroupLimit int32, m
 }
 
 // rankCollectionCandidates runs the one ranking search of a collection search.
-// A hybrid collection runs both legs at collectionRankingDepth and fuses them
-// with the RRF reranker into at most collectionRankingDepth rows. A dense
+// A hybrid collection runs both legs at CollectionRankingDepth and fuses them
+// with the RRF reranker into at most CollectionRankingDepth rows. A dense
 // collection runs one search at the same depth. Both request only relativePath
 // and the group column, and Milvus returns the primary key and score with
 // every row.
@@ -268,8 +269,8 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 		outputFields = append(outputFields, groupColumn.Name)
 	}
 	if service.cfg.HybridMode {
-		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, collectionRankingDepth, entity.FloatVector(queryVector))
-		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, collectionRankingDepth, entity.Text(rawQuery))
+		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, CollectionRankingDepth, entity.FloatVector(queryVector))
+		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, CollectionRankingDepth, entity.Text(rawQuery))
 		if compiled.Expression != "" {
 			denseRequest = denseRequest.WithFilter(compiled.Expression)
 			sparseRequest = sparseRequest.WithFilter(compiled.Expression)
@@ -280,7 +281,7 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 		}
 		hybridOption := milvusclient.NewHybridSearchOption(
 			collectionName,
-			collectionRankingDepth,
+			CollectionRankingDepth,
 			denseRequest,
 			sparseRequest,
 		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...)
@@ -293,7 +294,7 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 
 	searchOption := milvusclient.NewSearchOption(
 		collectionName,
-		collectionRankingDepth,
+		CollectionRankingDepth,
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	).WithANNSField(denseVectorFieldName).WithOutputFields(outputFields...)
 	if compiled.Expression != "" {
