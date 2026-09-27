@@ -4593,13 +4593,18 @@ func (*CollectionScalarValue_Int64Value) isCollectionScalarValue_Value() {}
 // item_id identifies the item that owns the row. The engine stores item_id in
 // the declared item id column, and a scalar value for that column must equal it.
 type CollectionRow struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	RowKey        string                   `protobuf:"bytes,1,opt,name=row_key,json=rowKey,proto3" json:"row_key,omitempty"`
-	ItemId        string                   `protobuf:"bytes,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
-	Text          string                   `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
-	Scalars       []*CollectionScalarValue `protobuf:"bytes,4,rep,name=scalars,proto3" json:"scalars,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState   `protogen:"open.v1"`
+	RowKey  string                   `protobuf:"bytes,1,opt,name=row_key,json=rowKey,proto3" json:"row_key,omitempty"`
+	ItemId  string                   `protobuf:"bytes,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	Text    string                   `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
+	Scalars []*CollectionScalarValue `protobuf:"bytes,4,rep,name=scalars,proto3" json:"scalars,omitempty"`
+	// continuation_prefix starts every stored part after the first with the
+	// prefix and a newline. A non-empty prefix shorter than the split size
+	// lowers the split size by the prefix length plus one, and the engine splits
+	// the text at that lowered size. An empty prefix changes nothing.
+	ContinuationPrefix string `protobuf:"bytes,5,opt,name=continuation_prefix,json=continuationPrefix,proto3" json:"continuation_prefix,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *CollectionRow) Reset() {
@@ -4658,6 +4663,13 @@ func (x *CollectionRow) GetScalars() []*CollectionScalarValue {
 		return x.Scalars
 	}
 	return nil
+}
+
+func (x *CollectionRow) GetContinuationPrefix() string {
+	if x != nil {
+		return x.ContinuationPrefix
+	}
+	return ""
 }
 
 // UpsertCollectionItemsHeader opens a streamed item upsert.
@@ -9077,12 +9089,13 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"bool_value\x18\x03 \x01(\bH\x00R\tboolValue\x12!\n" +
 	"\vint64_value\x18\x04 \x01(\x03H\x00R\n" +
 	"int64ValueB\a\n" +
-	"\x05value\"\x9b\x01\n" +
+	"\x05value\"\xcc\x01\n" +
 	"\rCollectionRow\x12\x17\n" +
 	"\arow_key\x18\x01 \x01(\tR\x06rowKey\x12\x17\n" +
 	"\aitem_id\x18\x02 \x01(\tR\x06itemId\x12\x12\n" +
 	"\x04text\x18\x03 \x01(\tR\x04text\x12D\n" +
-	"\ascalars\x18\x04 \x03(\v2*.lmsemanticsearch.v1.CollectionScalarValueR\ascalars\"\xa8\x02\n" +
+	"\ascalars\x18\x04 \x03(\v2*.lmsemanticsearch.v1.CollectionScalarValueR\ascalars\x12/\n" +
+	"\x13continuation_prefix\x18\x05 \x01(\tR\x12continuationPrefix\"\xa8\x02\n" +
 	"\x1bUpsertCollectionItemsHeader\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x127\n" +
 	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\x12S\n" +

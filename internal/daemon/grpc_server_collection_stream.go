@@ -20,8 +20,11 @@ const (
 	// maxCollectionRowsPerFrame bounds the rows one rows chunk may send.
 	maxCollectionRowsPerFrame = 1024
 	// maxCollectionStreamBytes bounds the row bytes one item upsert stream may
-	// send: row keys, item ids, text, scalar column names, and string values.
-	maxCollectionStreamBytes = 64 << 20
+	// buffer before the handler queues its job: row keys, item ids, text,
+	// continuation prefixes, scalar column names, and string values. The bound is
+	// about twelve times the largest conversation of the operator's local
+	// corpus, 43 MB.
+	maxCollectionStreamBytes = 512 << 20
 )
 
 // SyncCollectionManifest diffs a registered document collection's item
@@ -80,9 +83,11 @@ type collectionStreamState struct {
 }
 
 // UpsertCollectionItemsStream is the client-streaming generic item upsert. The
-// handler validates the frame order and the per-frame and per-stream bounds
-// while it accumulates rows. It then validates every row against the saved
-// declaration, queues one async ingest job, and replies once with the job id.
+// handler validates the frame order, the per-frame row bound, and the
+// per-stream row byte bound while it accumulates rows, and the gRPC receive
+// limit bounds the size of each frame. It then validates every row against the
+// saved declaration, queues one async ingest job, and replies once with the job
+// id.
 func (server *GRPCServer) UpsertCollectionItemsStream(stream pb.SemanticSearchDaemonService_UpsertCollectionItemsStreamServer) (err error) {
 	ctx, done := beginRPC(stream.Context(), "UpsertCollectionItemsStream")
 	defer done(&err)
@@ -178,7 +183,7 @@ func (server *GRPCServer) acceptCollectionFrame(ctx context.Context, state *coll
 			input := pbCollectionRow(row)
 			state.streamBytes += collectionRowInputBytes(input)
 			if state.streamBytes > maxCollectionStreamBytes {
-				return adapterr.RespondGRPC(ctx, adapterr.NewInvalidArgument(fmt.Sprintf("collection upsert stream exceeds %d row bytes; split the upsert into several streams", maxCollectionStreamBytes)))
+				return adapterr.RespondGRPC(ctx, adapterr.NewInvalidArgument(fmt.Sprintf("collection upsert stream exceeds the limit of %d MiB of row bytes; split the upsert into several streams", maxCollectionStreamBytes>>20)))
 			}
 			state.request.Rows = append(state.request.Rows, input)
 		}
@@ -256,7 +261,16 @@ func pbCollectionManifest(fingerprints []*pb.CollectionItemFingerprint) (map[str
 // pbCollectionRow converts one wire row. An unset scalar value converts to a
 // null value.
 func pbCollectionRow(row *pb.CollectionRow) collectionRowInput {
-	return collectionRowInput{RowKey: row.GetRowKey(), ItemID: row.GetItemId(), Text: row.GetText(), Scalars: pbCollectionScalars(row.GetScalars())}
+	return collectionRowInput{RowKey: row.GetRowKey(), ItemID: row.GetItemId(), Text: row.GetText(), Scalars: pbCollectionScalars(row.GetScalars()), ContinuationPrefix: row.GetContinuationPrefix()}
+}
+
+// collectionRowInputBytes counts the bytes one row adds to the stream bound.
+func collectionRowInputBytes(input collectionRowInput) int {
+	total := len(input.RowKey) + len(input.ItemID) + len(input.Text) + len(input.ContinuationPrefix)
+	for _, scalar := range input.Scalars {
+		total += len(scalar.Column) + len(scalar.Value.String)
+	}
+	return total
 }
 
 // pbCollectionScalars converts wire scalar values. An unset value converts to a
@@ -281,13 +295,4 @@ func pbCollectionScalars(wireScalars []*pb.CollectionScalarValue) []collectionSc
 		scalars = append(scalars, collectionScalarInput{Column: scalar.GetColumn(), Value: value})
 	}
 	return scalars
-}
-
-// collectionRowInputBytes counts the bytes one row adds to the stream bound.
-func collectionRowInputBytes(input collectionRowInput) int {
-	total := len(input.RowKey) + len(input.ItemID) + len(input.Text)
-	for _, scalar := range input.Scalars {
-		total += len(scalar.Column) + len(scalar.Value.String)
-	}
-	return total
 }

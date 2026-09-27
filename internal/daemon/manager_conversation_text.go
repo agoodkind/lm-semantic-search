@@ -3,6 +3,8 @@ package daemon
 import (
 	"fmt"
 	"unicode/utf8"
+
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // This file owns where a conversation message's text rows live and how a long
@@ -24,6 +26,37 @@ func conversationRelativePathPrefix(conversationID string) string {
 
 func splitConversationText(text string, chunkByteBudget ...int) []string {
 	return splitTextByBytes(text, resolveConversationChunkBudget(chunkByteBudget))
+}
+
+// appendContinuedStorableField adds the rows of one field through
+// appendStorableConversationField and starts every part after the first with
+// continuationPrefix and a newline. A non-empty prefix reduces the budget by
+// its length plus one only when that leaves a positive budget, and the field
+// splits at that lowered budget. An empty prefix changes nothing. A
+// conversation tool call row splits with its trimmed tool name as the prefix,
+// and a client row of a document collection splits with the prefix its client
+// sends.
+func appendContinuedStorableField(
+	chunks []model.StoredChunk,
+	content string,
+	budget int,
+	continuationPrefix string,
+	buildChunk func(piece string, partIndex int, multipart bool) model.StoredChunk,
+) []model.StoredChunk {
+	if continuationPrefix != "" && budget > len(continuationPrefix)+1 {
+		budget -= len(continuationPrefix) + 1
+	}
+	return appendStorableConversationField(
+		chunks,
+		content,
+		budget,
+		func(piece string, partIndex int, multipart bool) model.StoredChunk {
+			if partIndex > 0 && continuationPrefix != "" {
+				piece = continuationPrefix + "\n" + piece
+			}
+			return buildChunk(piece, partIndex, multipart)
+		},
+	)
 }
 
 // splitTextByBytes cuts text into UTF-8-aligned pieces of at most maxBytes each.

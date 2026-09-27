@@ -28,6 +28,10 @@ import (
 // long assistant message then stores several parts.
 const parityLongTextBytes = 70_000
 
+// parityLongToolBytes exceeds twice the conversation split budget. Each long
+// tool call then stores at least three parts.
+const parityLongToolBytes = 130_000
+
 // parityScalarColumns are the conversation scalar columns a parity row compares.
 var parityScalarColumns = []string{
 	semantic.ConversationIDColumn,
@@ -57,10 +61,18 @@ type parityRow struct {
 // TestGenericCollectionIngestParity submits the same synthetic transcript
 // through the conversation RPCs and the generic item RPCs into two isolated
 // collections with the conversation declaration in a real temporary Milvus
-// database. After each step (first ingest, append, backfill, force, and an
-// authoritative removal) both collections store equal row keys, content, scalar
-// values, vectors, and checkpoint fingerprints, and both manifest RPCs return
-// the same needed set. A provider that disagrees with the item id is rejected.
+// database. After each step (first ingest, a backfill over a blank stored text
+// row, append, backfill, force, and an authoritative removal) both collections
+// store equal row keys, content, scalar values, vectors, and checkpoint
+// fingerprints. The manifest RPCs return the same needed set after the first
+// ingest and for the changed manifest before the append. The
+// transcript includes a named and a nameless tool call longer than twice the
+// split budget. The generic rows send the trimmed tool name as the continuation
+// prefix, and an empty prefix for the nameless tool call. A backfill that
+// delivers text for a message stored only as a blank row selects the
+// conversation in neither collection, because a conversation backfill checks
+// only tool call and thinking families. A provider that disagrees with the item
+// id is rejected.
 func TestGenericCollectionIngestParity(t *testing.T) {
 	h := newHarness(t)
 	genericCollectionID := "live-generic-" + randomID()
@@ -90,7 +102,30 @@ func TestGenericCollectionIngestParity(t *testing.T) {
 	requireCompleted(t, h.upsert(convs, retain, false, false), "conversation ingest")
 	requireCompleted(t, h.upsertGeneric(genericCollectionID, convs, parityManifest(convs), genericRetain, false, false), "generic ingest")
 	h.requireParity(registration, "first ingest")
+	if h.countRowsWithPrefix(convToolPrefix(first)+"1/1/1") == 0 {
+		t.Fatal("the long tool call stored no second part")
+	}
+	if h.countRowsWithPrefix(convToolPrefix(first)+"1/2/1") == 0 {
+		t.Fatal("the nameless long tool call stored no second part")
+	}
 	h.requireManifestParity(genericCollectionID, parityManifest(convs), nil)
+
+	blankRowID := "blank-text-" + randomID()
+	blankTextPath := convBasePrefix(second) + "2"
+	h.insertBlankTextRow(h.collectionName, blankRowID, blankTextPath)
+	h.insertBlankTextRow(registration.GetCollectionName(), blankRowID, blankTextPath)
+	withLaterMessage := map[string][]*pb.ConversationDocument{second: parityWithLaterMessage(convs[second], second)}
+	secondFingerprint := map[string]string{second: fingerprint(convs[second])}
+	requireCompleted(t, h.upsertWithManifest(withLaterMessage, secondFingerprint, retain, true, false), "conversation backfill over a blank text row")
+	requireCompleted(t, h.upsertGeneric(genericCollectionID, withLaterMessage, secondFingerprint, genericRetain, true, false), "generic backfill over a blank text row")
+	h.requireParity(registration, "backfill over a blank text row")
+	if count := h.countRowsWithPrefix(blankTextPath); count != 1 || strings.TrimSpace(h.contentForRelativePath(blankTextPath)) != "" {
+		rowNoun := "rows"
+		if count == 1 {
+			rowNoun = "row"
+		}
+		t.Fatalf("Backfill over a blank text row left %d %s at %s. The expected state contains only the blank row.", count, rowNoun, blankTextPath)
+	}
 
 	changed := map[string][]*pb.ConversationDocument{first: appendMessage(convs[first], first), second: convs[second]}
 	changedManifest := parityManifest(changed)
@@ -108,7 +143,7 @@ func TestGenericCollectionIngestParity(t *testing.T) {
 	requireCompleted(t, h.upsertWithManifest(backfilled, unchangedFingerprint, retain, true, false), "conversation backfill")
 	requireCompleted(t, h.upsertGeneric(genericCollectionID, backfilled, unchangedFingerprint, genericRetain, true, false), "generic backfill")
 	h.requireParity(registration, "backfill")
-	if h.countRowsWithPrefix(convToolPrefix(first)+"1/1") == 0 {
+	if h.countRowsWithPrefix(convToolPrefix(first)+"1/3") == 0 {
 		t.Fatal("backfill stored no row for the added tool call")
 	}
 
@@ -289,7 +324,9 @@ func parityDeclarationPB() []*pb.ScalarColumnDeclaration {
 }
 
 // parityTranscript is a two-message synthetic transcript. The assistant turn
-// has text longer than the split budget, one tool call, and thinking text.
+// has text longer than the split budget, a short tool call, a named and a
+// nameless tool call longer than twice the split budget, and thinking text.
+// The first line of the nameless tool call is a display line.
 func parityTranscript(conversationID string, parentID string) []*pb.ConversationDocument {
 	return []*pb.ConversationDocument{
 		{
@@ -298,9 +335,13 @@ func parityTranscript(conversationID string, parentID string) []*pb.Conversation
 		},
 		{
 			ConversationId: conversationID, ParentConversationId: parentID, MessageIndex: 1, Role: "assistant", TimestampUnix: 1712346001,
-			Text:          strings.Repeat("The design note describes one ingestion step. ", parityLongTextBytes/47+1),
-			Thinking:      "reading the notes file for " + conversationID + " before the summary",
-			Tools:         []*pb.ConversationToolCall{{Name: "Read", Display: "/work/parity/notes.md", LangHint: "markdown"}},
+			Text:     strings.Repeat("The design note describes one ingestion step. ", parityLongTextBytes/47+1),
+			Thinking: "reading the notes file for " + conversationID + " before the summary",
+			Tools: []*pb.ConversationToolCall{
+				{Name: "Read", Display: "/work/parity/notes.md", LangHint: "markdown"},
+				{Name: "Write", Display: strings.TrimSpace(strings.Repeat("write the parity notes line. ", parityLongToolBytes/29+1)), LangHint: "markdown"},
+				{Name: "", Display: "untitled parity notes\n" + strings.TrimSpace(strings.Repeat("nameless parity output line. ", parityLongToolBytes/29+1)), LangHint: "markdown"},
+			},
 			WorkspaceRoot: "/work/parity", LoadRules: "rules-v1",
 		},
 	}
@@ -332,6 +373,51 @@ func parityWithExtraTool(documents []*pb.ConversationDocument, conversationID st
 	return extended
 }
 
+// parityWithLaterMessage returns a copy of documents with one more user
+// message at index 2. The test stores a blank text row for that message before
+// it delivers the message.
+func parityWithLaterMessage(documents []*pb.ConversationDocument, conversationID string) []*pb.ConversationDocument {
+	return append(slices.Clone(documents), &pb.ConversationDocument{
+		ConversationId: conversationID, ParentConversationId: documents[0].GetParentConversationId(), MessageIndex: 2, Role: "user", TimestampUnix: 1712346002,
+		Text: "a message an older pipeline stored blank in " + conversationID, WorkspaceRoot: "/work/parity", LoadRules: "rules-v1",
+	})
+}
+
+// insertBlankTextRow writes one message text row with a single space as its
+// content straight into a collection, with no conversationId value. An older
+// pipeline wrote such a row for message text it did not keep, and current
+// ingest never writes one.
+func (h *harness) insertBlankTextRow(collectionName string, rowID string, relativePath string) {
+	h.t.Helper()
+	vector := make([]float32, fakeEmbeddingDimension)
+	vector[0] = 1
+	result, err := h.milvus.Insert(
+		context.Background(),
+		milvusclient.NewColumnBasedInsertOption(collectionName).
+			WithVarcharColumn("id", []string{rowID}).
+			WithVarcharColumn("content", []string{" "}).
+			WithVarcharColumn(relativePathField, []string{relativePath}).
+			WithInt64Column("startLine", []int64{0}).
+			WithInt64Column("endLine", []int64{0}).
+			WithVarcharColumn("fileExtension", []string{""}).
+			WithVarcharColumn("metadata", []string{"{}"}).
+			WithFloatVectorColumn("vector", len(vector), [][]float32{vector}),
+	)
+	if err != nil {
+		h.t.Fatalf("insert blank text row into %s: %v", collectionName, err)
+	}
+	if result.InsertCount != 1 {
+		h.t.Fatalf("insert blank text row into %s count = %d, want 1", collectionName, result.InsertCount)
+	}
+	flushTask, err := h.milvus.Flush(context.Background(), milvusclient.NewFlushOption(collectionName))
+	if err != nil {
+		h.t.Fatalf("flush blank text row in %s: %v", collectionName, err)
+	}
+	if err := flushTask.Await(context.Background()); err != nil {
+		h.t.Fatalf("await blank text row flush in %s: %v", collectionName, err)
+	}
+}
+
 func parityManifest(convs map[string][]*pb.ConversationDocument) map[string]string {
 	manifest := make(map[string]string, len(convs))
 	for conversationID, documents := range convs {
@@ -343,7 +429,9 @@ func parityManifest(convs map[string][]*pb.ConversationDocument) map[string]stri
 // parityRows derives the generic rows the conversation stream stores for the
 // fixture: one text row per message, one row per tool call, and one thinking
 // row per message with thinking. The fixture's tool calls are not shell
-// commands. Each tool row is the tool name and display text.
+// commands. Each tool row is the tool name line, when the tool call has a name,
+// and the display text. Each tool row sends the trimmed tool name as its
+// continuation prefix, which is empty for a nameless tool call.
 func parityRows(convs map[string][]*pb.ConversationDocument) []*pb.CollectionRow {
 	rows := make([]*pb.CollectionRow, 0)
 	for _, conversationID := range sortedKeys(convs) {
@@ -351,7 +439,18 @@ func parityRows(convs map[string][]*pb.ConversationDocument) []*pb.CollectionRow
 			scalars := parityRowScalars(document)
 			rows = append(rows, &pb.CollectionRow{RowKey: fmt.Sprintf("conv/%s/%d", conversationID, document.GetMessageIndex()), ItemId: conversationID, Text: document.GetText(), Scalars: scalars})
 			for toolIndex, tool := range document.GetTools() {
-				rows = append(rows, &pb.CollectionRow{RowKey: fmt.Sprintf("convtool/%s/%d/%d", conversationID, document.GetMessageIndex(), toolIndex), ItemId: conversationID, Text: tool.GetName() + "\n" + tool.GetDisplay(), Scalars: scalars})
+				toolName := strings.TrimSpace(tool.GetName())
+				toolText := tool.GetDisplay()
+				if toolName != "" {
+					toolText = toolName + "\n" + tool.GetDisplay()
+				}
+				rows = append(rows, &pb.CollectionRow{
+					RowKey:             fmt.Sprintf("convtool/%s/%d/%d", conversationID, document.GetMessageIndex(), toolIndex),
+					ItemId:             conversationID,
+					Text:               toolText,
+					Scalars:            scalars,
+					ContinuationPrefix: toolName,
+				})
 			}
 			if document.GetThinking() != "" {
 				rows = append(rows, &pb.CollectionRow{RowKey: fmt.Sprintf("convthink/%s/%d", conversationID, document.GetMessageIndex()), ItemId: conversationID, Text: document.GetThinking(), Scalars: scalars})

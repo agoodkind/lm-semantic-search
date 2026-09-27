@@ -17,12 +17,14 @@ import (
 
 // collectionRow is one validated client row of a document collection. RowKey
 // is stored as the row's relativePath. Scalars includes the item id column,
-// which validation sets from ItemID.
+// which validation sets from ItemID. ContinuationPrefix starts every stored
+// part after the first of a split row.
 type collectionRow struct {
-	RowKey  string
-	ItemID  string
-	Text    string
-	Scalars map[string]model.ScalarValue
+	RowKey             string
+	ItemID             string
+	Text               string
+	Scalars            map[string]model.ScalarValue
+	ContinuationPrefix string
 }
 
 // collectionRowFamily is the stored rows one delivered row produces. Key is
@@ -89,8 +91,10 @@ func (delivery collectionItemDelivery) delivered(itemID string) bool {
 
 // backfillFamilies returns the family keys a backfill checks for one delivered
 // item without generating chunks. A conversation item checks its tool call and
-// thinking families only, from document metadata. A client item checks every
-// row with storable text.
+// thinking families only. Conversation documents list them from document
+// metadata. In a collection with the conversation declaration, client rows
+// list every convtool/ and convthink/ row with storable text. Every other
+// client item checks every row with storable text.
 func (delivery collectionItemDelivery) backfillFamilies(itemID string) []string {
 	if documents, found := delivery.documents[itemID]; found {
 		families := make([]string, 0)
@@ -106,17 +110,25 @@ func (delivery collectionItemDelivery) backfillFamilies(itemID string) []string 
 	}
 	families := make([]string, 0, len(delivery.rows[itemID]))
 	for _, row := range delivery.rows[itemID] {
-		if conversationTextIsStorable(row.Text) {
-			families = append(families, row.RowKey)
+		if !conversationTextIsStorable(row.Text) {
+			continue
 		}
+		if delivery.projectConversation {
+			isToolFamily := strings.HasPrefix(row.RowKey, conversationToolRelativePathPrefix(itemID))
+			isThinkingFamily := strings.HasPrefix(row.RowKey, conversationThinkingRelativePathPrefix(itemID))
+			if !isToolFamily && !isThinkingFamily {
+				continue
+			}
+		}
+		families = append(families, row.RowKey)
 	}
 	return families
 }
 
 // rowFamilies generates the stored chunks of one delivered item grouped by
 // family, in delivery order. Conversation documents generate chunks through
-// conversationDocumentsToStoredChunks. Client rows split their text at the
-// chunk byte budget.
+// conversationDocumentsToStoredChunks. Client rows generate chunks through
+// rowChunks.
 func (delivery collectionItemDelivery) rowFamilies(ctx context.Context, itemID string) ([]collectionRowFamily, error) {
 	if documents, found := delivery.documents[itemID]; found {
 		chunks, err := conversationDocumentsToStoredChunks(ctx, documents, delivery.chunkByteBudget)
@@ -128,21 +140,28 @@ func (delivery collectionItemDelivery) rowFamilies(ctx context.Context, itemID s
 	rows := delivery.rows[itemID]
 	families := make([]collectionRowFamily, 0, len(rows))
 	for _, row := range rows {
-		chunks := appendStorableConversationField(
-			nil,
-			row.Text,
-			delivery.chunkByteBudget,
-			func(piece string, partIndex int, multipart bool) model.StoredChunk {
-				relativePath := row.RowKey
-				if multipart {
-					relativePath = fmt.Sprintf("%s/%d", row.RowKey, partIndex)
-				}
-				return newCollectionRowChunk(row, relativePath, piece, delivery.projectConversation)
-			},
-		)
-		families = append(families, collectionRowFamily{Key: row.RowKey, Chunks: chunks})
+		families = append(families, collectionRowFamily{Key: row.RowKey, Chunks: delivery.rowChunks(row)})
 	}
 	return families, nil
+}
+
+// rowChunks calls appendContinuedStorableField to split one client row's text
+// at the chunk byte budget and add the row's continuation prefix.
+// Conversation tool-call rows use the same splitter.
+func (delivery collectionItemDelivery) rowChunks(row collectionRow) []model.StoredChunk {
+	return appendContinuedStorableField(
+		nil,
+		row.Text,
+		delivery.chunkByteBudget,
+		row.ContinuationPrefix,
+		func(piece string, partIndex int, multipart bool) model.StoredChunk {
+			relativePath := row.RowKey
+			if multipart {
+				relativePath = fmt.Sprintf("%s/%d", row.RowKey, partIndex)
+			}
+			return newCollectionRowChunk(row, relativePath, piece, delivery.projectConversation)
+		},
+	)
 }
 
 // groupConversationChunkFamilies groups one conversation's chunks by message
@@ -346,8 +365,9 @@ type collectionItemSource struct {
 	columns        semantic.StoreColumnSet
 	// absence is the caller-declared policy for an item the manifest omits.
 	absence absencePolicy
-	// backfill forces delivered items with an absent row family into the
-	// changed set and prunes items with every family present.
+	// backfill forces delivered items with an absent backfill family (see
+	// backfillFamilies) into the changed set and prunes items with every such
+	// family present.
 	backfill bool
 	// force replaces every delivered item's rows with reuse disabled. When both
 	// flags are set, force wins.
