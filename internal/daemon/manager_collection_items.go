@@ -344,8 +344,8 @@ func fingerprintCollectionRows(rows []collectionRow) string {
 		hasher.Write([]byte{0})
 		// An empty prefix adds nothing, and a row without a prefix keeps the
 		// fingerprint it had before the prefix field existed. The prefix section
-		// opens with the prefix length, a digit, and a declared column name never
-		// starts with a digit.
+		// starts with its decimal byte length and a separator. The encoding
+		// assumes that declared column names do not start with a digit.
 		if row.ContinuationPrefix != "" {
 			hasher.Write([]byte(strconv.Itoa(len(row.ContinuationPrefix))))
 			hasher.Write([]byte{0})

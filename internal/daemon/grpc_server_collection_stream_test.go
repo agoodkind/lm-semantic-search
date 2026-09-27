@@ -108,7 +108,7 @@ func (daemon *offlineCollectionDaemon) upsertItems(header *pb.UpsertCollectionIt
 	}
 }
 
-// upsertConversation streams documents and a manifest through the conversation
+// upsertConversation sends documents and a manifest with the conversation
 // upsert RPC and waits for the ingest job to complete.
 func (daemon *offlineCollectionDaemon) upsertConversation(collectionID string, documents []*pb.ConversationDocument, manifest map[string]string, backfill bool) {
 	daemon.t.Helper()
@@ -139,9 +139,9 @@ func (daemon *offlineCollectionDaemon) upsertConversation(collectionID string, d
 }
 
 // requireEqualConversationRows requires byte-identical stored rows and equal
-// checkpoints in a collection registered through the conversation RPC and a
-// collection registered through the generic RPC with the conversation
-// declaration. It returns the stored rows.
+// checkpoints. One collection is registered by the conversation RPC. The other
+// collection is registered by the generic RPC with the conversation declaration.
+// It returns the stored rows.
 func (daemon *offlineCollectionDaemon) requireEqualConversationRows(step string, conversation *pb.RegisterConversationCollectionResponse, generic *pb.RegisterCollectionResponse) []storedLocalRow {
 	daemon.t.Helper()
 	conversationRows := daemon.localRows(conversation.GetCollectionName())
@@ -688,8 +688,8 @@ func TestUpsertCollectionItemsRejectsInvalidRows(t *testing.T) {
 // TestUpsertCollectionItemsRejectsLongContinuationPrefix sends a row with a
 // continuation prefix one byte over the 1024-byte limit. The stream fails with
 // InvalidArgument, the error message includes the limit, and the stream stores
-// no row and queues no job. The same row with a prefix of exactly 1024 bytes
-// then completes an ingest.
+// no row and queues no job. The test accepts a row with a prefix of exactly
+// 1024 bytes and waits for the ingest job to complete.
 func TestUpsertCollectionItemsRejectsLongContinuationPrefix(t *testing.T) {
 	t.Parallel()
 	daemon := newOfflineCollectionDaemon(t)
