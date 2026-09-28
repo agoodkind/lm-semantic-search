@@ -1,5 +1,7 @@
 # Generic collection search implementation plan
 
+This plan records the earlier RPC and fixed-depth design. The [shared search library design](../specs/2026-09-27-shared-search-library-design.md) and [implementation plan](2026-09-27-shared-search-library.md) supersede its future cutover and retirement steps. Keep the existing RPC and collections until the new library passes its acceptance gates.
+
 ## Goal
 
 Complete LMS-18. A client searches a registered document collection with typed filters, group caps, and a score floor, then reads one item's indexed fingerprint. Existing conversation RPCs use the generic search implementation and return the same results.
