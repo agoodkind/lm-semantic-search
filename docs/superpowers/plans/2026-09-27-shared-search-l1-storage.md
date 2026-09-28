@@ -6,7 +6,7 @@ Implement the [library storage contract](../specs/2026-09-27-shared-search-libra
 
 ## Current behavior
 
-[Vector reuse](../../../internal/semantic/reuse_catalog.go) identifies reusable content. [Staging](../../../internal/semantic/staging.go) writes a vector for each source row. The [live harness](../../../test/live/harness.go) skips unavailable Milvus and uses synthetic embeddings; its helpers cannot establish this lane's acceptance.
+Vector reuse identifies reusable content. Staging writes a vector for each source row. The current live harness skips unavailable Milvus and uses synthetic embeddings; its helpers cannot establish this lane's acceptance.
 
 ## Constraints
 

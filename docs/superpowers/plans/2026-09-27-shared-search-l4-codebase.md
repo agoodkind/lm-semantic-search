@@ -6,7 +6,7 @@ Use the [shared library](../specs/2026-09-27-shared-search-library-design.md) fo
 
 ## Current behavior
 
-[Delta indexing](../../../internal/daemon/manager_delta.go) processes changed files. [Semantic staging](../../../internal/semantic/staging.go) writes source rows. [Search](../../../internal/daemon/manager_search.go) calls the existing semantic service. The [offline acceptance suite](../../../test/offlinelive/) runs an embedded vector store and real ONNX model.
+Delta indexing processes changed files. Semantic staging writes source rows. Codebase search calls the existing semantic service. The offline acceptance suite runs an embedded vector store and real ONNX model.
 
 ## Constraints
 

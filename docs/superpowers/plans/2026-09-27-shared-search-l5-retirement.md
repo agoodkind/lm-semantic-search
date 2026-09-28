@@ -6,7 +6,7 @@ Remove conversation-specific LMS protocol and implementation after Clyde imports
 
 ## Current behavior
 
-[Service protocol](../../../proto/lmsemanticsearch/v1/service.proto) declares conversation RPCs. [gRPC registration](../../../internal/daemon/grpc_server.go), [conversation manager](../../../internal/daemon/manager_conversations.go), and [semantic conversation modules](../../../internal/semantic/conversation_batch.go) implement the old LMS path. Existing collections and checkpoints still exist.
+The service protocol declares conversation RPCs. The gRPC server, conversation manager, and semantic modules implement the old LMS service path. Existing collections and checkpoints still exist.
 
 ## Constraints
 

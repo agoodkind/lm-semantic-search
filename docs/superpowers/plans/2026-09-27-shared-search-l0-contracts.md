@@ -6,7 +6,7 @@ Export the [library contract](../specs/2026-09-27-shared-search-library-design.m
 
 ## Current behavior
 
-The [embedding provider](../../../internal/embedding/embedding.go) is internal. [Oversize splitting](../../../internal/semantic/split_retry.go) belongs to the existing semantic pipeline. The [Makefile](../../../Makefile) prepares generated grammars, a pinned gksyntax workspace, and native CGO dependencies through `GO_MK_PREREQS`. Its `live` target permits tests to skip when Milvus is unavailable. The [live harness](../../../test/live/harness.go) uses a synthetic embedding server.
+The production embedding provider and oversize splitter are internal. `GO_MK_PREREQS` prepares generated grammars, the pinned gksyntax workspace, and native CGO dependencies. The current `live` target permits tests to skip when Milvus is unavailable. Its harness uses a synthetic embedding server.
 
 ## Constraints
 

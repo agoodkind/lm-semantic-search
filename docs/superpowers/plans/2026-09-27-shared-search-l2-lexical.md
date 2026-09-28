@@ -6,7 +6,7 @@ Implement the [design's lexical contract](../specs/2026-09-27-shared-search-libr
 
 ## Current behavior
 
-[Collection search](../../../internal/semantic/collection_search.go) uses Milvus hybrid ranking over stored rows. The new shared vector pool stores one vector per distinct embedding identity, while lexical corpus statistics must count source occurrences.
+Current collection search uses Milvus hybrid ranking over stored rows. The new shared vector pool stores one vector per distinct embedding identity. Lexical corpus statistics count source occurrences.
 
 ## Constraints
 

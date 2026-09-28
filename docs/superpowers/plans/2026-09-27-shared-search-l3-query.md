@@ -12,7 +12,7 @@ Implement complete dense and hybrid search through the [public library contract]
 
 - A query reads committed occurrences and effective metadata from one SQLite snapshot. Copy the selected IDs, rank configuration, requested term statistics, metadata, and blob references into a temporary query database, then release the read transaction.
 - All selected vector identities remain pinned and immutable until cursor expiry. A missing or changed selected vector is an error.
-- Dense uses exact COSINE scores over the selected IDs. Hybrid adds occurrence-weighted BM25 and RRF. `Config.SearchMode` selects the mode.
+- Dense uses exact COSINE scores over the selected IDs. Hybrid combines dense ranks with occurrence-weighted BM25 ranks using RRF. `Config.SearchMode` selects the mode.
 - Resource exhaustion, deadline expiry, backend cardinality mismatch, and expired cursors return typed errors without a successful partial page.
 
 ## Tasks
