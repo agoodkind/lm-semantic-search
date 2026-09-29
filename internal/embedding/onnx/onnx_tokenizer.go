@@ -1,4 +1,4 @@
-package embedding
+package onnx
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/daulet/tokenizers"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
+	"goodkind.io/lm-semantic-search/internal/embedding"
 )
 
 // onnxMaximumInputBytesPerToken caps the input the tokenizer is asked to measure,
@@ -119,7 +120,7 @@ func (tokenizer *genericTokenizer) maximumInputBytes() int {
 // caller can reject an input before taking the runtime lock and without
 // allocating an encoding it would discard.
 func (tokenizer *genericTokenizer) classifyInput(text string) onnxInputRejection {
-	if hasNothingToEmbed(text) {
+	if embedding.HasNothingToEmbed(text) {
 		return onnxInputEmpty
 	}
 	if strings.ContainsRune(text, 0) {
@@ -222,6 +223,18 @@ func rejectedEncodedONNXInput(
 		tokenCount:    tokenCount,
 		rejection:     rejection,
 	}
+}
+
+// count returns the full token count of text with the model's special tokens.
+// It applies neither the byte ceiling nor the token limit. The caller rejects a
+// NUL byte first.
+func (tokenizer *genericTokenizer) count(text string) (int, error) {
+	encoding, err := tokenizer.tokenizer.EncodeWithOptionsErr(text, true)
+	if err != nil {
+		slog.Error("count ONNX input tokens failed", "input_bytes", len(text), "err", err)
+		return 0, fmt.Errorf("count ONNX input tokens: %w", err)
+	}
+	return len(encoding.IDs), nil
 }
 
 func (tokenizer *genericTokenizer) Close() error {

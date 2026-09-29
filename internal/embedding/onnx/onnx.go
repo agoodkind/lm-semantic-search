@@ -1,4 +1,6 @@
-package embedding
+// Package onnx runs an offline embedding model in process through ONNX Runtime.
+// It is the only embedding package that links native code.
+package onnx
 
 /*
 #cgo darwin LDFLAGS: -Wl,-rpath,@loader_path
@@ -16,12 +18,13 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"unsafe"
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
-	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
@@ -52,17 +55,85 @@ type inProcessONNXRuntime struct {
 	mutex     sync.Mutex
 }
 
-func newONNXProvider(
+// NewProvider constructs the in-process ONNX provider for one offline model
+// preset. It downloads and checksum-verifies missing artifacts under
+// modelCacheRoot. Providers for the same model file share one native session
+// for the process lifetime.
+func NewProvider(
 	ctx context.Context,
-	cfg config.Config,
-) (Provider, error) {
-	preset, err := offlinemodel.Resolve(cfg.OfflineEmbeddingModel)
+	modelName string,
+	modelCacheRoot string,
+) (embedding.Provider, error) {
+	runtime, err := loadONNXRuntime(ctx, modelName, modelCacheRoot)
+	if err != nil {
+		return nil, err
+	}
+	return &onnxProvider{runtime: runtime}, nil
+}
+
+// TokenCounter measures inputs with the tokenizer of one offline model preset.
+// It shares the cached runtime with [NewProvider] for the same model.
+type TokenCounter struct {
+	runtime *inProcessONNXRuntime
+}
+
+// NewTokenCounter returns the token counter for one offline model preset.
+func NewTokenCounter(
+	ctx context.Context,
+	modelName string,
+	modelCacheRoot string,
+) (*TokenCounter, error) {
+	runtime, err := loadONNXRuntime(ctx, modelName, modelCacheRoot)
+	if err != nil {
+		return nil, err
+	}
+	return &TokenCounter{runtime: runtime}, nil
+}
+
+// CountTokens returns the token count the provider measures for text,
+// including the special tokens the model adds. It counts text of any length.
+// Text with a NUL byte returns an error, because the tokenizer binding reads
+// only the bytes before the NUL.
+func (counter *TokenCounter) CountTokens(ctx context.Context, text string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		slog.WarnContext(ctx, "ONNX token count cancelled before start", "err", err)
+		return 0, fmt.Errorf("count ONNX tokens: %w", err)
+	}
+	if strings.ContainsRune(text, 0) {
+		err := errors.New("input contains a NUL byte, which the tokenizer cannot read past")
+		slog.WarnContext(ctx, "ONNX token count refused input", "input_bytes", len(text), "err", err)
+		return 0, fmt.Errorf("count ONNX tokens: %w", err)
+	}
+	counter.runtime.mutex.Lock()
+	defer counter.runtime.mutex.Unlock()
+	return counter.runtime.tokenizer.count(text)
+}
+
+// MaxTokens returns the model's maximum token count for one input.
+func (counter *TokenCounter) MaxTokens() int {
+	return int(counter.runtime.preset.MaximumTokens)
+}
+
+// MaxInputBytes returns the byte ceiling the provider applies to one input
+// before tokenizing it.
+func (counter *TokenCounter) MaxInputBytes() int {
+	return counter.runtime.tokenizer.maximumInputBytes()
+}
+
+// loadONNXRuntime returns the cached runtime for one offline model preset, or
+// initializes and caches it.
+func loadONNXRuntime(
+	ctx context.Context,
+	modelName string,
+	modelCacheRoot string,
+) (*inProcessONNXRuntime, error) {
+	preset, err := offlinemodel.Resolve(modelName)
 	if err != nil {
 		slog.ErrorContext(
 			ctx,
 			"resolve offline embedding model failed",
 			"model",
-			cfg.OfflineEmbeddingModel,
+			modelName,
 			"err",
 			err,
 		)
@@ -71,7 +142,7 @@ func newONNXProvider(
 	files, err := ensureModelFiles(
 		ctx,
 		http.DefaultClient,
-		cfg.ModelCacheRoot,
+		modelCacheRoot,
 		preset,
 	)
 	if err != nil {
@@ -81,14 +152,14 @@ func newONNXProvider(
 	onnxRuntimesMutex.Lock()
 	defer onnxRuntimesMutex.Unlock()
 	if runtime, found := onnxRuntimes[files.modelPath]; found {
-		return &onnxProvider{runtime: runtime}, nil
+		return runtime, nil
 	}
 	runtime, err := initializeONNXRuntime(files, preset)
 	if err != nil {
 		return nil, err
 	}
 	onnxRuntimes[files.modelPath] = runtime
-	return &onnxProvider{runtime: runtime}, nil
+	return runtime, nil
 }
 
 func initializeONNXRuntime(
@@ -245,14 +316,14 @@ func (provider *onnxProvider) clientRejection(
 func (provider *onnxProvider) skippedInput(
 	index int,
 	outcome onnxEmbedOutcome,
-) SkippedInput {
+) embedding.SkippedInput {
 	reportedTokens := adapterr.UnreportedFigure()
 	maximumTokens := adapterr.UnreportedFigure()
 	if outcome.rejection == onnxInputOverTokenLimit {
 		reportedTokens = adapterr.ReportedFigure(outcome.tokenCount)
 		maximumTokens = adapterr.ReportedFigure(int(provider.runtime.preset.MaximumTokens))
 	}
-	return SkippedInput{
+	return embedding.SkippedInput{
 		Index:          index,
 		Reason:         adapterr.EmbedRejectionReason(outcome.rejection),
 		ReportedTokens: reportedTokens,
@@ -406,9 +477,9 @@ func failedONNXEmbedOutcome() onnxEmbedOutcome {
 func (provider *onnxProvider) EmbedBatch(
 	ctx context.Context,
 	texts []string,
-) (result BatchResult, err error) {
+) (result embedding.BatchResult, err error) {
 	if len(texts) == 0 {
-		return BatchResult{Vectors: nil, Skipped: nil}, nil
+		return embedding.BatchResult{Vectors: nil, Skipped: nil}, nil
 	}
 
 	start := clock.Now()
@@ -423,12 +494,12 @@ func (provider *onnxProvider) EmbedBatch(
 	// honor the same promise: a returned vector always covers the whole input, and
 	// the caller's split-and-retry loop divides anything that does not fit.
 	vectors := make([][]float32, len(texts))
-	var skipped []SkippedInput
+	var skipped []embedding.SkippedInput
 	refusedEmpty := 0
 	for index, text := range texts {
 		outcome, embedErr := provider.embedOne(ctx, text)
 		if embedErr != nil {
-			return BatchResult{}, embedErr
+			return embedding.BatchResult{}, embedErr
 		}
 		if outcome.rejection != onnxInputAccepted {
 			if outcome.rejection == onnxInputEmpty {
@@ -442,7 +513,7 @@ func (provider *onnxProvider) EmbedBatch(
 	if refusedEmpty > 0 {
 		metrics.EmbedInputsRefusedEmpty(refusedEmpty)
 	}
-	return BatchResult{Vectors: vectors, Skipped: skipped}, nil
+	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
 }
 
 func poolAndNormalize(
