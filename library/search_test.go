@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"math"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1085,6 +1087,118 @@ func TestSearchRemovesStaleQueryDatabases(t *testing.T) {
 	}
 	if _, err := os.Stat(recent); err != nil {
 		t.Fatalf("recent query database after Search: %v, want it kept", err)
+	}
+}
+
+// verifiedCounter reads the verified_vectors attribute of every "library
+// search phases" debug record that Search writes after page one.
+type verifiedCounter struct {
+	mutex  sync.Mutex
+	counts []int64
+}
+
+// Enabled accepts every level, including the debug level of the phase record.
+func (counter *verifiedCounter) Enabled(context.Context, slog.Level) bool { return true }
+
+// Handle stores the verified_vectors count of a phase record.
+func (counter *verifiedCounter) Handle(_ context.Context, record slog.Record) error {
+	if record.Message != "library search phases" {
+		return nil
+	}
+	record.Attrs(func(attribute slog.Attr) bool {
+		if attribute.Key == "verified_vectors" {
+			counter.mutex.Lock()
+			counter.counts = append(counter.counts, attribute.Value.Int64())
+			counter.mutex.Unlock()
+		}
+		return true
+	})
+	return nil
+}
+
+// WithAttrs returns the same counter.
+func (counter *verifiedCounter) WithAttrs([]slog.Attr) slog.Handler { return counter }
+
+// WithGroup returns the same counter.
+func (counter *verifiedCounter) WithGroup(string) slog.Handler { return counter }
+
+// last returns the count of the latest phase record.
+func (counter *verifiedCounter) last(t *testing.T) int64 {
+	t.Helper()
+	counter.mutex.Lock()
+	defer counter.mutex.Unlock()
+	if len(counter.counts) == 0 {
+		t.Fatal("Search wrote no library search phases record")
+	}
+	return counter.counts[len(counter.counts)-1]
+}
+
+// TestSearchVerifiesEachVectorOncePerCatalogGeneration searches twice at one
+// catalog visibility revision, rewrites one vector in the pool with another
+// digest and checksum, searches again at that revision, publishes a new
+// generation, and searches once more. VerifyStrong runs for every eligible
+// vector on the first search and for none on the second and third. The
+// rewritten vector fails the first search after the new generation.
+func TestSearchVerifiesEachVectorOncePerCatalogGeneration(t *testing.T) {
+	fixture := newSearchFixture(t, nil)
+	counter := &verifiedCounter{mutex: sync.Mutex{}, counts: nil}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(counter))
+	defer slog.SetDefault(previous)
+	request := library.SearchRequest{Namespace: "chat", Query: "reload the proxy configuration file", PageSize: 5}
+	distinct := map[string]bool{}
+	for _, vectorID := range fixture.catalogVectorIDs(t, "chat") {
+		distinct[vectorID] = true
+	}
+
+	if _, err := fixture.library.Search(fixture.ctx, request); err != nil {
+		t.Fatalf("first Search: %v", err)
+	}
+	if got := counter.last(t); got != int64(len(distinct)) {
+		t.Fatalf("first Search verified %d vectors, want all %d eligible vectors", got, len(distinct))
+	}
+	if _, err := fixture.library.Search(fixture.ctx, request); err != nil {
+		t.Fatalf("second Search: %v", err)
+	}
+	if got := counter.last(t); got != 0 {
+		t.Fatalf("second Search at the same revision verified %d vectors, want 0", got)
+	}
+
+	// The embedded ScoreExact checks the stored checksum against the values
+	// and does not read the identity digest. Only VerifyStrong detects a
+	// changed digest line.
+	rewritten := fixture.catalogVectorIDs(t, "chat")[library.OccurrenceID{Namespace: "chat", OwnerID: "conv-a", RowKey: "m000"}]
+	var digest string
+	if err := openCatalogReadOnly(t, fixture.descriptor).QueryRowContext(fixture.ctx,
+		`SELECT identity_digest FROM vectors WHERE vector_id = ?`, rewritten).Scan(&digest); err != nil {
+		t.Fatalf("read identity digest of %s: %v", rewritten, err)
+	}
+	vectorPath := fixture.vectorFile(t)
+	content, err := os.ReadFile(vectorPath)
+	if err != nil {
+		t.Fatalf("read vector file: %v", err)
+	}
+	changed := strings.Replace(string(content), digest, strings.Repeat("0", len(digest)), 1)
+	if changed == string(content) {
+		t.Fatalf("vector file %s does not contain digest %s", vectorPath, digest)
+	}
+	if err := os.WriteFile(vectorPath, []byte(changed), 0o600); err != nil {
+		t.Fatalf("write vector file: %v", err)
+	}
+	if _, err := fixture.library.Search(fixture.ctx, request); err != nil {
+		t.Fatalf("Search at the same revision after the rewrite: %v", err)
+	}
+	if got := counter.last(t); got != 0 {
+		t.Fatalf("Search at the same revision after the rewrite verified %d vectors, want 0", got)
+	}
+
+	fixture.replaceOwner(t, "chat", "conv-new", []library.Occurrence{{
+		RowKey: "new", SortKey: "s00", SourceText: "new generation", SearchText: "new generation",
+		EmbeddingInput: "a new generation of the catalog", Scalars: nil,
+	}}, 1)
+	page, err := fixture.library.Search(fixture.ctx, request)
+	if !errors.Is(err, library.ErrVectorCorrupt) || len(page.Hits) != 0 {
+		t.Fatalf("Search after a new generation = %d hits, %v; want no page and ErrVectorCorrupt", len(page.Hits), err)
 	}
 }
 

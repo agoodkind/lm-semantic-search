@@ -41,14 +41,25 @@ type scoreBlock struct {
 	err        error
 	verifyTime time.Duration
 	scoreTime  time.Duration
+	// verified is the count of identities that VerifyStrong checked for this
+	// block; identities verified earlier at the same revision are skipped.
+	verified int
 }
 
 // scoreDense verifies and scores every distinct eligible vector in the query
 // database. It reads QueryWorkers blocks of QueryBlockSize identities at a
 // time in vector ID order, runs VerifyStrong and then ScoreExact for each
 // block concurrently, and saves each block's scores. Any block failure fails
-// the search. The last check requires a score for every vector.
-func (library *Library) scoreDense(ctx context.Context, query *queryDatabase, queryVector []float32, phases *searchPhases) error {
+// the search. The last check requires a score for every vector. revision is
+// the catalog visibility revision of the snapshot, which keys the
+// verification cache.
+func (library *Library) scoreDense(
+	ctx context.Context,
+	query *queryDatabase,
+	queryVector []float32,
+	revision int64,
+	phases *searchPhases,
+) error {
 	after := ""
 	blockSize := library.config.QueryBlockSize
 	for {
@@ -59,11 +70,12 @@ func (library *Library) scoreDense(ctx context.Context, query *queryDatabase, qu
 		if len(blocks) == 0 {
 			break
 		}
-		if err := library.runScoreBlocks(ctx, queryVector, blocks); err != nil {
+		if err := library.runScoreBlocks(ctx, queryVector, revision, blocks); err != nil {
 			return err
 		}
 		for _, block := range blocks {
 			phases.verify += block.verifyTime
+			phases.verified += block.verified
 			phases.score += block.scoreTime
 		}
 		if err := saveScores(ctx, query, blocks); err != nil {
@@ -122,7 +134,7 @@ func readScoreBlocks(
 // runScoreBlocks scores every block on its own goroutine and records each
 // block's scores in the block. The first failure cancels the other blocks,
 // and runScoreBlocks returns that failure.
-func (library *Library) runScoreBlocks(ctx context.Context, queryVector []float32, blocks []*scoreBlock) error {
+func (library *Library) runScoreBlocks(ctx context.Context, queryVector []float32, revision int64, blocks []*scoreBlock) error {
 	blockContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var group sync.WaitGroup
@@ -130,7 +142,7 @@ func (library *Library) runScoreBlocks(ctx context.Context, queryVector []float3
 	var failed sync.Once
 	for _, block := range blocks {
 		group.Go(func() {
-			block.scores, block.err = library.scoreBlock(blockContext, queryVector, block)
+			block.scores, block.err = library.scoreBlock(blockContext, queryVector, revision, block)
 			if block.err != nil {
 				failed.Do(func() {
 					failure = block.err
@@ -144,16 +156,22 @@ func (library *Library) runScoreBlocks(ctx context.Context, queryVector []float3
 }
 
 // scoreBlock verifies the identity digest and checksum of each vector of block
-// with a strong read and then asks for one exact score per ID. It records the
+// with a strong read, except the identities that an earlier search verified
+// at revision, and then asks for one exact score per ID. It records the
 // duration of each call in block. It rejects a result with a missing, extra,
 // reordered, duplicate, or nonfinite score.
-func (library *Library) scoreBlock(ctx context.Context, queryVector []float32, block *scoreBlock) ([]VectorScore, error) {
+func (library *Library) scoreBlock(ctx context.Context, queryVector []float32, revision int64, block *scoreBlock) ([]VectorScore, error) {
 	identities := block.identities
 	started := clock.Now()
-	if err := library.config.Vectors.VerifyStrong(ctx, identities); err != nil {
-		slog.ErrorContext(ctx, "verify eligible vectors failed", "vectors", len(identities), "err", err)
-		return nil, fmt.Errorf("verify %d eligible vectors: %w", len(identities), err)
+	pending := library.verified.unverified(revision, identities)
+	if len(pending) > 0 {
+		if err := library.config.Vectors.VerifyStrong(ctx, pending); err != nil {
+			slog.ErrorContext(ctx, "verify eligible vectors failed", "vectors", len(pending), "err", err)
+			return nil, fmt.Errorf("verify %d eligible vectors: %w", len(pending), err)
+		}
+		library.verified.record(revision, pending)
 	}
+	block.verified = len(pending)
 	verified := clock.Now()
 	block.verifyTime = verified.Sub(started)
 	ids := make([]string, 0, len(identities))

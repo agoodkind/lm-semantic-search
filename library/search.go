@@ -132,7 +132,9 @@ func (library *Library) search(ctx context.Context, request SearchRequest) (Sear
 // and score sum the VerifyStrong and ScoreExact durations of every block,
 // which run concurrently inside dense. writeWait is the time until the
 // snapshot write transaction starts, which includes waiting for another
-// SQLite writer; write is the rest of that transaction.
+// SQLite writer; write is the rest of that transaction. verified counts the
+// vector identities that VerifyStrong checked; identities that an earlier
+// search verified at the same visibility revision are not counted.
 type searchPhases struct {
 	plan      time.Duration
 	read      time.Duration
@@ -145,6 +147,7 @@ type searchPhases struct {
 	writeWait time.Duration
 	write     time.Duration
 	hits      time.Duration
+	verified  int
 }
 
 // log writes the phase durations in milliseconds at debug level.
@@ -165,6 +168,7 @@ func (phases *searchPhases) log(ctx context.Context, namespace string) {
 		"write_wait_ms", milliseconds(phases.writeWait),
 		"write_ms", milliseconds(phases.write),
 		"hits_ms", milliseconds(phases.hits),
+		"verified_vectors", phases.verified,
 	)
 }
 
@@ -250,7 +254,7 @@ func (library *Library) searchFirstPage(ctx context.Context, plan searchPlan, ph
 		return SearchPage{}, err
 	}
 	started = phases.mark(&phases.embed, started)
-	if err := library.scoreDense(ctx, query, queryVector, phases); err != nil {
+	if err := library.scoreDense(ctx, query, queryVector, revisions.Visibility, phases); err != nil {
 		return SearchPage{}, err
 	}
 	started = phases.mark(&phases.dense, started)
