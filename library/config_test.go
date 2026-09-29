@@ -2,6 +2,7 @@ package library_test
 
 import (
 	"errors"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,16 +31,18 @@ func TestConfigValidateAcceptsZeroBudgetsAndExplicitZeroBM25B(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
 		bm25B    *float64
+		bm25K1   float64
 		analyzer string
 	}{
-		{name: "default b", bm25B: nil, analyzer: ""},
-		{name: "explicit zero b", bm25B: &zero, analyzer: ""},
-		{name: "explicit one b", bm25B: &one, analyzer: ""},
-		{name: "standard analyzer", bm25B: nil, analyzer: library.StandardAnalyzer},
+		{name: "default b", bm25B: nil, bm25K1: 0, analyzer: ""},
+		{name: "explicit zero b", bm25B: &zero, bm25K1: 0, analyzer: ""},
+		{name: "explicit one b", bm25B: &one, bm25K1: 0, analyzer: ""},
+		{name: "standard analyzer", bm25B: nil, bm25K1: 0, analyzer: library.StandardAnalyzer},
+		{name: "maximum k1", bm25B: nil, bm25K1: 1e6, analyzer: ""},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			config := library.Config{Store: validDescriptor(t), BM25B: testCase.bm25B, AnalyzerIdentity: testCase.analyzer}
+			config := library.Config{Store: validDescriptor(t), BM25B: testCase.bm25B, BM25K1: testCase.bm25K1, AnalyzerIdentity: testCase.analyzer}
 			if err := config.Validate(); err != nil {
 				t.Fatalf("Validate() = %v, want nil", err)
 			}
@@ -88,6 +91,10 @@ func TestConfigValidateRejectsNegativeBudgetsAndInvalidRanking(t *testing.T) {
 		{name: "negative page limit", mutate: func(c *library.Config) { c.MaxPageSize = -1 }, want: "MaxPageSize is -1"},
 		{name: "unknown search mode", mutate: func(c *library.Config) { c.SearchMode = 9 }, want: "SearchMode 9"},
 		{name: "negative k1", mutate: func(c *library.Config) { c.BM25K1 = -1 }, want: "BM25K1"},
+		{name: "k1 zero as float32", mutate: func(c *library.Config) { c.BM25K1 = 1e-50 }, want: "BM25K1"},
+		{name: "k1 infinite as float32", mutate: func(c *library.Config) { c.BM25K1 = 1e39 }, want: "BM25K1"},
+		{name: "k1 finite float32 overflow", mutate: func(c *library.Config) { c.BM25K1 = 3e38 }, want: "BM25K1"},
+		{name: "k1 just above the maximum", mutate: func(c *library.Config) { c.BM25K1 = math.Nextafter(1e6, 2e6) }, want: "BM25K1"},
 		{name: "negative b", mutate: func(c *library.Config) { c.BM25B = &negativeB }, want: "BM25B"},
 		{name: "b over one", mutate: func(c *library.Config) { c.BM25B = &overOneB }, want: "BM25B"},
 		{name: "negative rrf k", mutate: func(c *library.Config) { c.RRFK = -60 }, want: "RRFK"},

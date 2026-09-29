@@ -28,6 +28,12 @@ const (
 	defaultSearchMode        = Hybrid
 )
 
+// maxBM25K1 is the largest accepted BM25 k1. One term then contributes at most
+// about 7.6e14 to a float32 score: a query weight is at most 2^24 times
+// ln(1 + 2*2^63 + 1), and a document factor is at most k1+1. A float32 score
+// stays finite for any realistic query length.
+const maxBM25K1 = 1e6
+
 // scalarColumnNamePattern accepts a column name that starts with a letter or an
 // underscore and continues with letters, digits, or underscores, up to 64
 // bytes.
@@ -139,8 +145,15 @@ func validateRanking(config Config) error {
 	default:
 		return invalidRequest(fmt.Sprintf("config SearchMode %d is neither Dense nor Hybrid", config.SearchMode))
 	}
-	if math.IsNaN(config.BM25K1) || math.IsInf(config.BM25K1, 0) || config.BM25K1 < 0 {
-		return invalidRequest(fmt.Sprintf("config BM25K1 %v must be finite and positive", config.BM25K1))
+	// BM25 runs in float32. A nonzero k1 must stay positive after the float32
+	// conversion and must not exceed maxBM25K1. Zero selects the default.
+	k1 := float32(config.BM25K1)
+	if math.IsNaN(config.BM25K1) || config.BM25K1 < 0 || config.BM25K1 > maxBM25K1 || (config.BM25K1 != 0 && k1 == 0) {
+		return invalidRequest(fmt.Sprintf(
+			"config BM25K1 %v must be positive as a float32 and at most %v",
+			config.BM25K1,
+			maxBM25K1,
+		))
 	}
 	if config.BM25B != nil {
 		bm25B := *config.BM25B
