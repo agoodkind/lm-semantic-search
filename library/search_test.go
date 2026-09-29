@@ -853,14 +853,76 @@ func corruptOneVector(t *testing.T, fixture *searchFixture) {
 	}
 }
 
-// The catalog schema at this commit has no lexical tables. Hybrid search
-// returns a typed error until the lexical integration creates them.
-func TestSearchHybridRequiresTheLexicalIndex(t *testing.T) {
-	fixture := newSearchFixture(t, func(config *library.Config) { config.SearchMode = library.Hybrid })
-	page, err := fixture.library.Search(fixture.ctx, library.SearchRequest{Namespace: "chat", Query: "alpha", PageSize: 10})
-	if !errors.Is(err, library.ErrInvalidRequest) || len(page.Hits) != 0 {
-		t.Fatalf("Hybrid Search without lexical tables = %d hits, %v; want no page and ErrInvalidRequest", len(page.Hits), err)
+// hybridRRFK is the default reciprocal rank fusion constant.
+const hybridRRFK = 60
+
+// hybridOracle ranks the fixture's own records for request with reciprocal
+// rank fusion. Dense ranks come from exact store scores. lexicalOrder lists
+// the occurrences with a lexical match in lexical rank order.
+func (fixture *searchFixture) hybridOracle(
+	t *testing.T,
+	request library.SearchRequest,
+	lexicalOrder []library.OccurrenceID,
+) []library.SearchHit {
+	t.Helper()
+	dense := fixture.oracle(t, library.SearchRequest{Namespace: request.Namespace, Query: request.Query})
+	slices.SortFunc(dense, func(left library.SearchHit, right library.SearchHit) int {
+		if left.Score != right.Score {
+			return cmp.Compare(right.Score, left.Score)
+		}
+		return cmp.Or(strings.Compare(left.ID.OwnerID, right.ID.OwnerID), strings.Compare(left.ID.RowKey, right.ID.RowKey))
+	})
+	lexicalRank := map[library.OccurrenceID]int{}
+	for index, id := range lexicalOrder {
+		lexicalRank[id] = index + 1
 	}
+	fused := make([]oracleHit, 0, len(dense))
+	for index, hit := range dense {
+		score := 1.0 / float64(hybridRRFK+index+1)
+		if rank, matched := lexicalRank[hit.ID]; matched {
+			score += 1.0 / float64(hybridRRFK+rank)
+		}
+		fused = append(fused, oracleHit{record: fixture.records[hit.ID], score: score, group: ""})
+	}
+	slices.SortFunc(fused, compareOracleHits)
+	return applyGroupQuota(fused, request)
+}
+
+func TestSearchHybridFusesDenseAndLexicalRanks(t *testing.T) {
+	fixture := newSearchFixture(t, func(config *library.Config) { config.SearchMode = library.Hybrid })
+	var rows []library.Occurrence
+	var short, long []library.OccurrenceID
+	for index := range 5 {
+		text := "zzqx"
+		if index >= 3 {
+			text = "zzqx alpha beta gamma delta epsilon"
+		}
+		rowKey := fmt.Sprintf("lex%d", index)
+		rows = append(rows, library.Occurrence{
+			RowKey: rowKey, SortKey: fmt.Sprintf("s%02d", index), SourceText: text, SearchText: text,
+			EmbeddingInput: searchTopics[index], Scalars: nil,
+		})
+		id := library.OccurrenceID{Namespace: "chat", OwnerID: "conv-lex", RowKey: rowKey}
+		if index < 3 {
+			short = append(short, id)
+		} else {
+			long = append(long, id)
+		}
+	}
+	fixture.replaceOwner(t, "chat", "conv-lex", rows, 1)
+
+	// Equal short texts tie on BM25 and rank by occurrence ID. The long texts
+	// have the same term frequency and a longer document, so they score lower.
+	matched := library.SearchRequest{Namespace: "chat", Query: "zzqx"}
+	want := fixture.hybridOracle(t, matched, append(slices.Clone(short), long...))
+	for _, pageSize := range []int{1, 10, 100} {
+		assertHitsEqual(t, fmt.Sprintf("hybrid zzqx at page size %d", pageSize), pageAll(t, fixture.library, matched, pageSize), want)
+	}
+
+	// A query with no analyzed terms ranks by the dense term alone.
+	unanalyzed := library.SearchRequest{Namespace: "chat", Query: "!!! ???"}
+	want = fixture.hybridOracle(t, unanalyzed, nil)
+	assertHitsEqual(t, "hybrid without analyzed terms", pageAll(t, fixture.library, unanalyzed, 10), want)
 }
 
 func TestSearchRejectsInvalidRequestsBeforeScoring(t *testing.T) {

@@ -31,9 +31,6 @@ func (library *Library) copyLexical(
 	namespace string,
 	text string,
 ) (lexicalLeg, error) {
-	if err := requireLexicalIndex(ctx, tx); err != nil {
-		return lexicalLeg{}, err
-	}
 	terms := analyzeLexical(text).terms
 	generation, corpus, frequencies, err := readLexicalCorpus(ctx, tx, namespace, terms)
 	if err != nil {
@@ -54,23 +51,6 @@ func (library *Library) copyLexical(
 		}
 	}
 	return leg, nil
-}
-
-// requireLexicalIndex returns an error that wraps [ErrInvalidRequest] when the
-// catalog schema has no lexical tables. The catalog schema at this commit does
-// not create them; the IC-6 lexical integration adds them to every catalog.
-func requireLexicalIndex(ctx context.Context, tx *sql.Tx) error {
-	var present bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lexical_stats')`,
-	).Scan(&present); err != nil {
-		slog.ErrorContext(ctx, "read catalog schema failed", "err", err)
-		return fmt.Errorf("read catalog schema: %w", err)
-	}
-	if !present {
-		return invalidRequest("hybrid search needs the lexical index, and this catalog has no lexical tables; use SearchMode Dense")
-	}
-	return nil
 }
 
 func copyTermPostings(ctx context.Context, tx *sql.Tx, query *queryDatabase, namespace string, termHash uint32) (err error) {
