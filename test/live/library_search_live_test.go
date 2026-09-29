@@ -23,6 +23,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
+	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/library"
 )
@@ -625,6 +626,7 @@ func TestLibrarySearchCompletePagesMatchTheExhaustiveOracle(t *testing.T) {
 		}
 	}
 	stopWatch()
+	store.checkHybrid(t, metrics)
 	store.measureVectorReads(t, metrics)
 
 	store.checkCursorReplayAndWrites(t)
@@ -633,6 +635,225 @@ func TestLibrarySearchCompletePagesMatchTheExhaustiveOracle(t *testing.T) {
 	store.checkVectorLoss(t)
 	finishSearchLiveMetrics(t, metrics)
 	t.Logf("embedding window end %s", time.Now().UTC().Format(time.RFC3339))
+}
+
+const (
+	// searchLiveBM25Collection is the oracle collection with one row per
+	// occurrence. A BM25 function fills its sparse field from its text field.
+	searchLiveBM25Collection = "search_bm25_oracle"
+	searchLiveBM25IDField    = "id"
+	searchLiveBM25TextField  = "text"
+	searchLiveBM25Sparse     = "sparse"
+	searchLiveBM25TextLength = 1024
+	// searchLiveHybridQuery avoids the words that every input contains. Its
+	// lexical matches stay below the 16,384 result limit of one Milvus search.
+	searchLiveHybridQuery = "restack fusion quota"
+	// searchLiveRRFK is the default reciprocal rank fusion constant.
+	searchLiveRRFK = 60
+)
+
+// bm25OracleScores inserts the SearchText of every record into a BM25
+// collection, one row per occurrence, and returns the Milvus 2.6.18 BM25
+// score of every occurrence that matches query. Milvus counts one document
+// per row, and each occurrence is one row in the corpus statistics.
+func (store *searchLiveStore) bm25OracleScores(t *testing.T, query string) map[library.OccurrenceID]float32 {
+	t.Helper()
+	client := store.testbed.milvus
+	schema := entity.NewSchema().
+		WithField(entity.NewField().WithName(searchLiveBM25IDField).WithDataType(entity.FieldTypeInt64).WithIsPrimaryKey(true)).
+		WithField(entity.NewField().WithName(searchLiveBM25TextField).WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(searchLiveBM25TextLength).WithEnableAnalyzer(true)).
+		WithField(entity.NewField().WithName(searchLiveBM25Sparse).WithDataType(entity.FieldTypeSparseVector)).
+		WithFunction(entity.NewFunction().WithName("text_bm25").WithType(entity.FunctionTypeBM25).
+			WithInputFields(searchLiveBM25TextField).WithOutputFields(searchLiveBM25Sparse))
+	indexParams := map[string]string{
+		index.IndexTypeKey:    string(index.SparseInverted),
+		index.MetricTypeKey:   string(entity.BM25),
+		"bm25_k1":             "1.2",
+		"bm25_b":              "0.75",
+		"inverted_index_algo": "TAAT_NAIVE",
+	}
+	if err := client.CreateCollection(store.ctx, milvusclient.NewCreateCollectionOption(searchLiveBM25Collection, schema).
+		WithIndexOptions(milvusclient.NewCreateIndexOption(searchLiveBM25Collection, searchLiveBM25Sparse,
+			index.NewGenericIndex(searchLiveBM25Sparse, indexParams)).WithIndexName(searchLiveBM25Sparse))); err != nil {
+		t.Fatalf("create BM25 oracle collection: %v", err)
+	}
+	ids := slices.SortedFunc(searchLiveKeys(store.records), func(left library.OccurrenceID, right library.OccurrenceID) int {
+		return cmp.Or(strings.Compare(left.OwnerID, right.OwnerID), strings.Compare(left.RowKey, right.RowKey))
+	})
+	rowIDs := make([]int64, len(ids))
+	texts := make([]string, len(ids))
+	for index, id := range ids {
+		rowIDs[index] = int64(index)
+		texts[index] = store.records[id].SearchText
+	}
+	if _, err := client.Insert(store.ctx, milvusclient.NewColumnBasedInsertOption(searchLiveBM25Collection).
+		WithInt64Column(searchLiveBM25IDField, rowIDs).WithVarcharColumn(searchLiveBM25TextField, texts)); err != nil {
+		t.Fatalf("insert BM25 oracle rows: %v", err)
+	}
+	store.awaitBM25Index(t, len(ids))
+	results, err := client.Search(store.ctx, milvusclient.NewSearchOption(searchLiveBM25Collection, searchLivePriorDepth,
+		[]entity.Vector{entity.Text(query)}).WithANNSField(searchLiveBM25Sparse).WithConsistencyLevel(entity.ClStrong))
+	if err != nil || len(results) != 1 {
+		t.Fatalf("BM25 oracle search: %d result sets, %v", len(results), err)
+	}
+	if results[0].ResultCount >= searchLivePriorDepth {
+		t.Fatalf("BM25 oracle search returned %d rows, at the search limit; the oracle cannot list every match", results[0].ResultCount)
+	}
+	scores := make(map[library.OccurrenceID]float32, results[0].ResultCount)
+	for position := range results[0].ResultCount {
+		rowID, err := results[0].IDs.GetAsInt64(position)
+		if err != nil {
+			t.Fatalf("decode BM25 oracle row: %v", err)
+		}
+		scores[ids[rowID]] = results[0].Scores[position]
+	}
+	return scores
+}
+
+// awaitBM25Index flushes the oracle collection, waits until its BM25 index
+// covers every row, and loads it.
+func (store *searchLiveStore) awaitBM25Index(t *testing.T, rows int) {
+	t.Helper()
+	client := store.testbed.milvus
+	flush, err := client.Flush(store.ctx, milvusclient.NewFlushOption(searchLiveBM25Collection))
+	if err != nil {
+		t.Fatalf("flush BM25 oracle collection: %v", err)
+	}
+	if err := flush.Await(store.ctx); err != nil {
+		t.Fatalf("await BM25 oracle flush: %v", err)
+	}
+	for {
+		description, err := client.DescribeIndex(store.ctx, milvusclient.NewDescribeIndexOption(searchLiveBM25Collection, searchLiveBM25Sparse))
+		if err != nil {
+			t.Fatalf("describe BM25 oracle index: %v", err)
+		}
+		if description.IndexedRows >= int64(rows) && description.PendingIndexRows == 0 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	load, err := client.LoadCollection(store.ctx, milvusclient.NewLoadCollectionOption(searchLiveBM25Collection))
+	if err != nil {
+		t.Fatalf("load BM25 oracle collection: %v", err)
+	}
+	if err := load.Await(store.ctx); err != nil {
+		t.Fatalf("await BM25 oracle load: %v", err)
+	}
+}
+
+// hybridOracle ranks the eligible records of request with reciprocal rank
+// fusion of the dense rank and the BM25 rank. Both ranks count only eligible
+// occurrences and break score ties by occurrence ID.
+func (store *searchLiveStore) hybridOracle(t *testing.T, request library.SearchRequest, bm25 map[library.OccurrenceID]float32) []library.SearchHit {
+	t.Helper()
+	vectorIDs := store.catalogVectorIDs(t)
+	distinct := map[string]bool{}
+	for _, id := range vectorIDs {
+		distinct[id] = true
+	}
+	dense := store.oracleScores(t, store.deterministicQueryVector(t, request.Query), slices.Sorted(searchLiveKeys(distinct)))
+	var eligible []library.OccurrenceID
+	for id, row := range store.records {
+		if request.Filter == nil || searchLiveEvaluate(*request.Filter, row.Scalars) == searchLiveTrue {
+			eligible = append(eligible, id)
+		}
+	}
+	byID := func(left library.OccurrenceID, right library.OccurrenceID) int {
+		return cmp.Or(strings.Compare(left.OwnerID, right.OwnerID), strings.Compare(left.RowKey, right.RowKey))
+	}
+	denseOrder := slices.Clone(eligible)
+	slices.SortFunc(denseOrder, func(left library.OccurrenceID, right library.OccurrenceID) int {
+		leftScore, rightScore := dense[vectorIDs[left]], dense[vectorIDs[right]]
+		if leftScore != rightScore {
+			return cmp.Compare(rightScore, leftScore)
+		}
+		return byID(left, right)
+	})
+	var lexicalOrder []library.OccurrenceID
+	for _, id := range eligible {
+		if _, matched := bm25[id]; matched {
+			lexicalOrder = append(lexicalOrder, id)
+		}
+	}
+	slices.SortFunc(lexicalOrder, func(left library.OccurrenceID, right library.OccurrenceID) int {
+		if bm25[left] != bm25[right] {
+			return cmp.Compare(bm25[right], bm25[left])
+		}
+		return byID(left, right)
+	})
+	fused := make(map[library.OccurrenceID]float64, len(eligible))
+	for rank, id := range denseOrder {
+		fused[id] = 1.0 / float64(searchLiveRRFK+rank+1)
+	}
+	for rank, id := range lexicalOrder {
+		fused[id] += 1.0 / float64(searchLiveRRFK+rank+1)
+	}
+	slices.SortFunc(eligible, func(left library.OccurrenceID, right library.OccurrenceID) int {
+		if fused[left] != fused[right] {
+			return cmp.Compare(fused[right], fused[left])
+		}
+		return cmp.Or(strings.Compare(store.records[left].SortKey, store.records[right].SortKey), byID(left, right))
+	})
+	hits := make([]library.SearchHit, 0, len(eligible))
+	perGroup := map[string]int{}
+	for _, id := range eligible {
+		if request.MinScore > 0 && fused[id] < request.MinScore {
+			break
+		}
+		row := store.records[id]
+		if request.GroupBy != "" {
+			key := searchLiveGroupKey(row.Scalars, request.GroupBy)
+			if perGroup[key] == request.PerGroupLimit {
+				continue
+			}
+			perGroup[key]++
+		}
+		scalars := row.Scalars
+		if scalars == nil {
+			scalars = map[string]library.ScalarValue{}
+		}
+		hits = append(hits, library.SearchHit{ID: id, SourceText: row.SourceText, Scalars: scalars, Score: fused[id]})
+	}
+	return hits
+}
+
+// checkHybrid opens a Hybrid library over the same catalog and pool and pages
+// unfiltered, filtered, grouped, and MinScore requests against the RRF oracle
+// with Milvus BM25 scores.
+func (store *searchLiveStore) checkHybrid(t *testing.T, metrics *searchLiveMetrics) {
+	t.Helper()
+	bm25 := store.bm25OracleScores(t, searchLiveHybridQuery)
+	t.Logf("BM25 oracle: %d of %d occurrences match %q", len(bm25), len(store.records), searchLiveHybridQuery)
+	hybrid := store.open(t, func(config *library.Config) { config.SearchMode = library.Hybrid })
+	requests := map[string]library.SearchRequest{
+		"hybrid unfiltered": {Namespace: "search", Query: searchLiveHybridQuery},
+		"hybrid filtered": {Namespace: "search", Query: searchLiveHybridQuery, Filter: &library.Filter{
+			Op: library.Range, Column: "group", Lower: int64Scalar(3), Upper: int64Scalar(9),
+		}},
+		"hybrid grouped": {Namespace: "search", Query: searchLiveHybridQuery, GroupBy: "owner", PerGroupLimit: 3},
+	}
+	unfloored := store.hybridOracle(t, requests["hybrid unfiltered"], bm25)
+	floorIndex := len(unfloored) / 2
+	for floorIndex+1 < len(unfloored) && unfloored[floorIndex].Score == unfloored[floorIndex+1].Score {
+		floorIndex++
+	}
+	if floorIndex+1 >= len(unfloored) {
+		t.Fatalf("hybrid oracle has no score gap after position %d of %d", len(unfloored)/2, len(unfloored))
+	}
+	requests["hybrid MinScore"] = library.SearchRequest{
+		Namespace: "search", Query: searchLiveHybridQuery,
+		MinScore: (unfloored[floorIndex].Score + unfloored[floorIndex+1].Score) / 2,
+	}
+	for _, name := range slices.Sorted(searchLiveKeys(requests)) {
+		request := requests[name]
+		want := store.hybridOracle(t, request, bm25)
+		for _, pageSize := range []int{10, 100} {
+			got := store.pageAll(t, hybrid, request, pageSize, metrics, name)
+			searchLiveAssertHits(t, fmt.Sprintf("%s at page size %d", name, pageSize), got, want)
+			t.Logf("%s at page size %d: %d hits equal the oracle hit for hit", name, pageSize, len(got))
+		}
+	}
 }
 
 // searchLiveRequests are an unfiltered request, a filtered request that
@@ -1015,6 +1236,42 @@ func searchLivePhaseSummary(records []map[string]float64) string {
 	return strings.Join(parts, "; ")
 }
 
+const (
+	// searchLiveLargeGenerationRows is the row count of one publication in the
+	// lock test. Every row reuses an input that the test already embedded.
+	searchLiveLargeGenerationRows = 600
+	// searchLiveStageRows is the row count of one Stage batch, below the
+	// default MaxBatchRows.
+	searchLiveStageRows = 200
+)
+
+// publishLargeGeneration replaces owner-publish with searchLiveLargeGenerationRows
+// rows in Stage batches and one CommitGeneration. CommitGeneration writes every
+// row, scalar, and lexical change in one SQLite write transaction.
+func publishLargeGeneration(ctx context.Context, searcher *library.Library, order uint64) error {
+	rows := make([]library.Occurrence, 0, searchLiveLargeGenerationRows)
+	for index := range searchLiveLargeGenerationRows {
+		rows = append(rows, searchLiveRow(index, false))
+	}
+	key := library.GenerationKey{
+		Namespace: "search", OwnerID: "owner-publish", GenerationOrder: order, IdempotencyToken: fmt.Sprintf("publish-%d", order),
+	}
+	for start := 0; start < len(rows); start += searchLiveStageRows {
+		batch := library.StageBatch{Key: key, Mode: library.Replace, Rows: rows[start:min(start+searchLiveStageRows, len(rows))]}
+		if err := searcher.Stage(ctx, batch); err != nil {
+			return fmt.Errorf("stage rows from %d: %w", start, err)
+		}
+	}
+	seal, err := library.SealRows(rows)
+	if err != nil {
+		return fmt.Errorf("seal rows: %w", err)
+	}
+	if _, err := searcher.CommitGeneration(ctx, key, seal); err != nil {
+		return fmt.Errorf("commit generation: %w", err)
+	}
+	return nil
+}
+
 // TestLibrarySearchDoesNotWaitForTheWriterLock measures page one latency with
 // no writer, while the test process has acquired the kernel writer lock at
 // LockPath, and while publications run. A publication that waits for the
@@ -1087,10 +1344,8 @@ func TestLibrarySearchDoesNotWaitForTheWriterLock(t *testing.T) {
 				return
 			default:
 			}
-			if _, err := store.library.Apply(ctx, library.Batch{
-				Namespace: "search", OwnerID: "owner-publish", GenerationOrder: order, IdempotencyToken: fmt.Sprintf("publish-%d", order),
-				Mode: library.Replace, Rows: []library.Occurrence{searchLiveRow(int(order%600), false)},
-			}); err != nil {
+			if err := publishLargeGeneration(ctx, store.library, order); err != nil {
+				t.Logf("large publication %d failed: %v", order, err)
 				publications <- -1
 				return
 			}
@@ -1101,6 +1356,8 @@ func TestLibrarySearchDoesNotWaitForTheWriterLock(t *testing.T) {
 	close(stop)
 	if count := <-publications; count < 1 {
 		t.Fatalf("the concurrent publication loop committed %d publications", count)
+	} else {
+		t.Logf("the concurrent publication loop committed %d generations of %d rows", count, searchLiveLargeGenerationRows)
 	}
 	t.Logf("page one phases with no writer: %s", baseline)
 	t.Logf("page one phases with the writer lock acquired: %s", locked)
