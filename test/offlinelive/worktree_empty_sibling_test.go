@@ -113,7 +113,7 @@ func writeGeneratedSourceRange(t *testing.T, directory string, first int, count 
 	t.Helper()
 
 	for index := first; index < first+count; index++ {
-		path := filepath.Join(directory, fmt.Sprintf("unit%04d.go", index))
+		path := filepath.Join(directory, generatedSourceName(index))
 		content := fmt.Sprintf(
 			"package pkg\n\n// Unit%04d returns the running total of %d readings.\nfunc Unit%04d(readings []int) int {\n\ttotal := %d\n\tfor _, reading := range readings {\n\t\ttotal += reading * %d\n\t}\n\treturn total\n}\n",
 			index, index, index, index, index+1,
@@ -122,6 +122,12 @@ func writeGeneratedSourceRange(t *testing.T, directory string, first int, count 
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
+}
+
+// generatedSourceName is the file name writeGeneratedSourceRange uses for the
+// source numbered index.
+func generatedSourceName(index int) string {
+	return fmt.Sprintf("unit%04d.go", index)
 }
 
 func (harness *harness) startIndexAt(path string) string {

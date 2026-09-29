@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -70,10 +69,42 @@ func TestFilesWrittenDuringBuildAfterEmptyRunAreIndexed(t *testing.T) {
 			status.GetCodebase().GetLastSuccessfulRun().GetIndexedFiles() >= firstCheckoutFileCount
 	})
 
-	wantLine := fmt.Sprintf("current_index.indexed_files: %d", firstCheckoutFileCount+lateFileCount)
-	harness.waitForStatus(directory, "files written during the build were not indexed after it", func(status *pb.GetIndexResponse) bool {
-		return status.GetActiveJob() == nil && strings.Contains(status.GetDisplayText(), wantLine)
+	for index := firstCheckoutFileCount; index < firstCheckoutFileCount+lateFileCount; index++ {
+		harness.waitForFileSearchable(directory, index)
+	}
+	// The converge that stored those files persists the registry when it ends,
+	// and teardown removes the state directory without waiting for it.
+	harness.waitForStatus(directory, "the converge of the files written during the build did not finish", func(status *pb.GetIndexResponse) bool {
+		return status.GetActiveJob() == nil && status.GetCodebase().GetStatus() == indexedStatus
 	})
+}
+
+// waitForFileSearchable polls a search scoped to the generated source numbered
+// index until it returns a chunk of that file, failing after
+// filesAfterEmptyBuildTimeout. The daemon filters a file-scoped search to rows
+// of that file before ranking. A result with the file's path is a stored row.
+func (harness *harness) waitForFileSearchable(directory string, index int) {
+	harness.t.Helper()
+
+	relativePath := generatedSourceName(index)
+	query := fmt.Sprintf("Unit%04d returns the running total of %d readings", index, index)
+	waitContext, cancel := context.WithTimeout(context.Background(), filesAfterEmptyBuildTimeout)
+	defer cancel()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		search := harness.searchAt(filepath.Join(directory, relativePath), query)
+		for _, result := range search.GetResults() {
+			if result.GetRelativePath() == relativePath {
+				return
+			}
+		}
+		select {
+		case <-waitContext.Done():
+			harness.t.Fatalf("file %s written during the build was not searchable within %s:\n%s", relativePath, filesAfterEmptyBuildTimeout, search.GetDisplayText())
+		case <-ticker.C:
+		}
+	}
 }
 
 // TestFilesInEmptyWorktreeWaitForSiblingFirstBuild proves the watcher does not

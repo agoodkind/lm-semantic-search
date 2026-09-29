@@ -22,8 +22,12 @@ const (
 
 	discoveredStatus = "discovered"
 
-	// waitingForSiblingText is the phrase both the status and the search note use
-	// for a worktree held behind its sibling's first build.
+	// heldForSiblingStatusField is the literal status field for a worktree held
+	// behind its sibling's first build.
+	heldForSiblingStatusField = "held_for_sibling_build=true"
+
+	// waitingForSiblingText is the phrase the search note uses for a worktree held
+	// behind its sibling's first build.
 	waitingForSiblingText = "sibling worktree's first index"
 
 	// buildStartingText is the discovered search note's claim that the build is
@@ -151,8 +155,8 @@ func (harness *harness) requireNoNewJobFor(codebaseID string, earlierJobs map[st
 }
 
 // requireHeldWorktree reads the worktree while its sibling's first build runs
-// and asserts the daemon registered it without starting a job and told the
-// reader it is waiting, on both the status and the search surface.
+// and asserts the daemon registered it without starting a job, reports the hold
+// in the status fields, and tells the reader it is waiting in the search note.
 func (harness *harness) requireHeldWorktree(worktree string) *pb.Codebase {
 	harness.t.Helper()
 
@@ -172,8 +176,8 @@ func (harness *harness) requireHeldWorktree(worktree string) *pb.Codebase {
 	if codebase.GetActiveJobId() != "" || status.GetActiveJob() != nil {
 		harness.t.Fatalf("held worktree has active job %q, want none", codebase.GetActiveJobId())
 	}
-	if !strings.Contains(status.GetDisplayText(), waitingForSiblingText) {
-		harness.t.Fatalf("held worktree status does not say it is waiting for its sibling:\n%s", status.GetDisplayText())
+	if !strings.Contains(status.GetDisplayText(), heldForSiblingStatusField) {
+		harness.t.Fatalf("held worktree status does not report %s:\n%s", heldForSiblingStatusField, status.GetDisplayText())
 	}
 
 	search := harness.searchAt(worktree, fixtureQuery)
