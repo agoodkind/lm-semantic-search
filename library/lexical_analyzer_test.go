@@ -62,9 +62,47 @@ func TestValidateLexicalAnalyzer(t *testing.T) {
 	if err := validateLexicalAnalyzer("milvus-english-v1"); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("validateLexicalAnalyzer(other identity) = %v, want ErrInvalidRequest", err)
 	}
-	for _, tables := range []string{"16.0.0", "18.0.0", ""} {
+	for _, tables := range []string{"15.0.0", "17.0.0", ""} {
 		if err := validateLexicalAnalyzerTables(StandardAnalyzer, tables); !errors.Is(err, ErrInvalidRequest) {
 			t.Fatalf("validateLexicalAnalyzerTables(unicode %q) = %v, want ErrInvalidRequest", tables, err)
 		}
+	}
+}
+
+// The expected classes and lowercase forms come from the Unicode 16.0.0
+// UnicodeData.txt and DerivedCoreProperties.txt entries of each character.
+// The results must not depend on the Go unicode tables of the toolchain, which
+// are 15.0.0 in Go 1.26 and 17.0.0 in Go 1.27.
+func TestLexicalCharacterTablesFollowUnicode16(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name         string
+		character    rune
+		alphanumeric bool
+		lowercase    string
+	}{
+		{name: "U+0660 Arabic-Indic digit zero, Nd", character: 0x0660, alphanumeric: true, lowercase: "٠"},
+		{name: "U+0130 dotted capital letter", character: 0x0130, alphanumeric: true, lowercase: "i̇"},
+		{name: "U+1E030 Cyrillic modifier small a, Unicode 15.0", character: 0x1E030, alphanumeric: true, lowercase: "\U0001E030"},
+		{name: "U+1C89 Cyrillic capital TJE, Unicode 16.0", character: 0x1C89, alphanumeric: true, lowercase: "ᲊ"},
+		{name: "U+A7CB Latin capital rams horn, Unicode 16.0", character: 0xA7CB, alphanumeric: true, lowercase: "ɤ"},
+		{name: "U+10D50 Garay capital A, Unicode 16.0", character: 0x10D50, alphanumeric: true, lowercase: "\U00010D70"},
+		{name: "U+10940 Sidetic, Unicode 17.0", character: 0x10940, alphanumeric: false, lowercase: "\U00010940"},
+		{name: "U+11F5A Kawi sign nukta, Mn", character: 0x11F5A, alphanumeric: false, lowercase: "\U00011F5A"},
+		{name: "U+0301 combining acute, Mn", character: 0x0301, alphanumeric: false, lowercase: "́"},
+		{name: "U+3000 ideographic space", character: 0x3000, alphanumeric: false, lowercase: "　"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isLexicalTokenCharacter(testCase.character); got != testCase.alphanumeric {
+				t.Fatalf("isLexicalTokenCharacter(U+%04X) = %v, want %v", testCase.character, got, testCase.alphanumeric)
+			}
+			if got := lowercaseLexicalCharacter(testCase.character); got != testCase.lowercase {
+				t.Fatalf("lowercaseLexicalCharacter(U+%04X) = %q, want %q", testCase.character, got, testCase.lowercase)
+			}
+		})
+	}
+	if lexicalUnicodeTablesVersion != lexicalAnalyzerUnicodeVersion {
+		t.Fatalf("generated tables are Unicode %s, the analyzer requires %s", lexicalUnicodeTablesVersion, lexicalAnalyzerUnicodeVersion)
 	}
 }

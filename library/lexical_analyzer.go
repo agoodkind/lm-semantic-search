@@ -1,5 +1,7 @@
 package library
 
+//go:generate go run ./internal/lexicalunicodegen -output lexical_unicode_tables.go
+
 import (
 	"fmt"
 	"hash/crc32"
@@ -18,12 +20,10 @@ const (
 	// function can represent. It counts a token by adding 1 to a float32, and
 	// the float32 sum stops growing at 2^24.
 	lexicalMaxTermFrequency = 1 << 24
-	// dottedCapitalI lowercases to two characters under Rust char::to_lowercase
-	// and to one character under [unicode.ToLower].
-	dottedCapitalI = 'İ'
-	// dottedCapitalILower is the Rust char::to_lowercase expansion of
-	// dottedCapitalI.
-	dottedCapitalILower = "i̇"
+	// lexicalAnalyzerUnicodeVersion is the Unicode version of the Rust 1.89
+	// character tables in the Milvus 2.6.18 tantivy build. The exhaustive
+	// RunAnalyzer parity test verifies the generated tables against Milvus.
+	lexicalAnalyzerUnicodeVersion = "16.0.0"
 )
 
 // lexicalTerm is one distinct term hash of an analyzed text and the number of
@@ -39,6 +39,13 @@ type lexicalTerm struct {
 type lexicalDocument struct {
 	terms  []lexicalTerm
 	length uint64
+}
+
+// lexicalLowercaseMapping is one character and its Rust char::to_lowercase
+// result.
+type lexicalLowercaseMapping struct {
+	from rune
+	to   string
 }
 
 // analyzeLexical analyzes text with [StandardAnalyzer] and merges tokens that
@@ -105,87 +112,37 @@ func forEachLexicalToken(text string, emit func(string)) {
 }
 
 // isLexicalTokenCharacter reports whether Rust 1.89 char::is_alphanumeric
-// accepts character: the Alphabetic derived property or a general category of
-// Nd, Nl, or No. Alphabetic is Lu, Ll, Lt, Lm, Lo, Nl, and Other_Alphabetic.
-// Rust 1.89 uses Unicode 16.0.0 tables. It rejects every character in
-// unicode17Alphanumerics.
+// accepts character. It reads the generated Unicode 16.0.0 table
+// lexicalAlphanumeric and none of the Go unicode tables of the build
+// toolchain.
 func isLexicalTokenCharacter(character rune) bool {
 	if character < utf8.RuneSelf {
 		return 'a' <= character && character <= 'z' ||
 			'A' <= character && character <= 'Z' ||
 			'0' <= character && character <= '9'
 	}
-	if unicode.Is(unicode17Alphanumerics, character) {
-		return false
-	}
-	return unicode.IsLetter(character) ||
-		unicode.IsNumber(character) ||
-		unicode.Is(unicode.Other_Alphabetic, character)
+	return unicode.Is(lexicalAlphanumeric, character)
 }
 
-// lexicalUnicodeVersion is the Go unicode table version that
-// unicode17Alphanumerics corrects.
-const lexicalUnicodeVersion = "17.0.0"
-
-// unicode17Alphanumerics lists every character that Unicode 17.0.0 first
-// assigns and that the Go unicode 17.0.0 tables classify as a letter, a number, or
-// Other_Alphabetic. The Milvus 2.6.18 analyzer treats each of them as a
-// separator. The list equals both the Unicode 17.0.0 DerivedAge assignments
-// with those properties and the 4,672 differences that an exhaustive
-// RunAnalyzer scan of every scalar value reported against Milvus 2.6.18.
-var unicode17Alphanumerics = &unicode.RangeTable{
-	R16: []unicode.Range16{
-		{Lo: 0x088F, Hi: 0x088F, Stride: 1},
-		{Lo: 0x0C5C, Hi: 0x0C5C, Stride: 1},
-		{Lo: 0x0CDC, Hi: 0x0CDC, Stride: 1},
-		{Lo: 0xA7CE, Hi: 0xA7CF, Stride: 1},
-		{Lo: 0xA7D2, Hi: 0xA7D2, Stride: 1},
-		{Lo: 0xA7D4, Hi: 0xA7D4, Stride: 1},
-		{Lo: 0xA7F1, Hi: 0xA7F1, Stride: 1},
-	},
-	R32: []unicode.Range32{
-		{Lo: 0x10940, Hi: 0x10959, Stride: 1},
-		{Lo: 0x10EC5, Hi: 0x10EC7, Stride: 1},
-		{Lo: 0x10EFA, Hi: 0x10EFB, Stride: 1},
-		{Lo: 0x11B60, Hi: 0x11B67, Stride: 1},
-		{Lo: 0x11DB0, Hi: 0x11DDB, Stride: 1},
-		{Lo: 0x11DE0, Hi: 0x11DE9, Stride: 1},
-		{Lo: 0x16EA0, Hi: 0x16EB8, Stride: 1},
-		{Lo: 0x16EBB, Hi: 0x16ED3, Stride: 1},
-		{Lo: 0x16FF2, Hi: 0x16FF6, Stride: 1},
-		{Lo: 0x187F8, Hi: 0x187FF, Stride: 1},
-		{Lo: 0x18D09, Hi: 0x18D1E, Stride: 1},
-		{Lo: 0x18D80, Hi: 0x18DF2, Stride: 1},
-		{Lo: 0x1E6C0, Hi: 0x1E6DE, Stride: 1},
-		{Lo: 0x1E6E0, Hi: 0x1E6F5, Stride: 1},
-		{Lo: 0x1E6FE, Hi: 0x1E6FF, Stride: 1},
-		{Lo: 0x2B73A, Hi: 0x2B73F, Stride: 1},
-		{Lo: 0x2CEA2, Hi: 0x2CEAD, Stride: 1},
-		{Lo: 0x323B0, Hi: 0x33479, Stride: 1},
-	},
-	LatinOffset: 0,
-}
-
-// validateLexicalAnalyzer reports whether the running binary reproduces
-// [StandardAnalyzer] for identity. The correction table matches one version of
-// the Go unicode tables. Another version classifies a different set of
-// characters, and this function then returns an error that wraps
-// [ErrInvalidRequest].
+// validateLexicalAnalyzer reports whether this build reproduces
+// [StandardAnalyzer] for identity. It returns an error that wraps
+// [ErrInvalidRequest] for another identity or for generated character tables
+// of another Unicode version.
 func validateLexicalAnalyzer(identity string) error {
-	return validateLexicalAnalyzerTables(identity, unicode.Version)
+	return validateLexicalAnalyzerTables(identity, lexicalUnicodeTablesVersion)
 }
 
-// validateLexicalAnalyzerTables checks identity and the Go unicode table
-// version tables against the ones [StandardAnalyzer] was verified with.
+// validateLexicalAnalyzerTables checks identity and the Unicode version of the
+// character tables against the ones [StandardAnalyzer] requires.
 func validateLexicalAnalyzerTables(identity string, tables string) error {
 	if identity != StandardAnalyzer {
 		return invalidRequest(fmt.Sprintf("analyzer identity %q is not %q", identity, StandardAnalyzer))
 	}
-	if tables != lexicalUnicodeVersion {
+	if tables != lexicalAnalyzerUnicodeVersion {
 		return invalidRequest(fmt.Sprintf(
-			"analyzer %s was verified with Go unicode tables %s, and this binary uses %s",
+			"analyzer %s requires Unicode %s character tables, and this build has %s",
 			StandardAnalyzer,
-			lexicalUnicodeVersion,
+			lexicalAnalyzerUnicodeVersion,
 			tables,
 		))
 	}
@@ -194,8 +151,8 @@ func validateLexicalAnalyzerTables(identity string, tables string) error {
 
 // lowercaseLexicalToken applies tantivy LowerCaser. An ASCII token is
 // lowercased byte by byte. Every character of any other token is replaced by
-// its Rust char::to_lowercase mapping. Over every token character, that
-// mapping equals [unicode.ToLower] except for dottedCapitalI.
+// its Rust char::to_lowercase result from the generated Unicode 16.0.0 table
+// lexicalLowercase.
 func lowercaseLexicalToken(token string) string {
 	ascii := true
 	for index := range len(token) {
@@ -210,13 +167,21 @@ func lowercaseLexicalToken(token string) string {
 	var lowered strings.Builder
 	lowered.Grow(len(token))
 	for _, character := range token {
-		if character == dottedCapitalI {
-			lowered.WriteString(dottedCapitalILower)
-			continue
-		}
-		lowered.WriteRune(unicode.ToLower(character))
+		lowered.WriteString(lowercaseLexicalCharacter(character))
 	}
 	return lowered.String()
+}
+
+// lowercaseLexicalCharacter returns the Rust char::to_lowercase result of one
+// character.
+func lowercaseLexicalCharacter(character rune) string {
+	index, found := slices.BinarySearchFunc(lexicalLowercase, character, func(mapping lexicalLowercaseMapping, target rune) int {
+		return int(mapping.from - target)
+	})
+	if found {
+		return lexicalLowercase[index].to
+	}
+	return string(character)
 }
 
 // lexicalTermHash returns the Milvus BM25 function hash of token: CRC-32 IEEE
