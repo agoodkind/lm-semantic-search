@@ -26,6 +26,14 @@ RELEASE_BINS := $(INSTALL_BINS)
 # release workflow inputs (release_platforms / platforms) exclude it from the
 # matrix.
 RELEASE_PLATFORMS ?= darwin/arm64 linux/amd64 linux/arm64
+# The daemon starts its automatic update scheduler only in a build compiled
+# with the lmsrelease tag. make install at a release tag stamps the same version
+# string as the release, and such a build must never replace itself. The
+# release workflow's compile job runs make release with RELEASE_STAGE=compile,
+# and go-mk passes the inherited GOFLAGS to go build.
+ifeq ($(RELEASE_STAGE),compile)
+export GOFLAGS := $(strip $(GOFLAGS) -tags=lmsrelease)
+endif
 # go-makefile resolves codesign and quill through PATH. These generated command
 # adapters add the daemon entitlement without applying it to either client.
 # The release package job runs quill on Linux, so this path must not depend on
@@ -156,6 +164,16 @@ milvus-integration: | $(GO_MK_PREREQS)
 # installed binaries and daemon service stay untouched. It needs network access.
 install-live: | $(GO_MK_PREREQS)
 	go test -tags installlive -count=1 ./test/installlive/
+
+# update-live builds the daemon with and without the release build tag, runs
+# both builds as installed daemons and the tagged build as a sandbox against
+# local release API servers, and checks that only the installed tagged daemon
+# asks for releases. It writes only into test
+# temporary directories and waits for the scheduler's first check, which takes
+# about a minute. The CI workflow runs it on every push.
+.PHONY: update-live
+update-live: | $(GO_MK_PREREQS)
+	go test -tags updatelive -count=1 -timeout 10m ./test/updatelive/
 
 # service-activity-live reads the default installed daemon only. It never starts
 # a replacement process or writes operator indexing state.

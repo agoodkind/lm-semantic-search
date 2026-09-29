@@ -17,7 +17,8 @@ var (
 	runScheduledApplyFunc = runScheduledApply
 )
 
-// RunApplyScheduler runs the daemon-owned multi-binary update loop.
+// RunApplyScheduler runs the daemon-owned multi-binary update loop. The daemon
+// starts it only when AutomaticUpdatesEnabled reports true.
 func RunApplyScheduler(ctx context.Context, overrides Overrides, stopForRelaunch func()) {
 	log := overrides.Log
 	if log == nil {
@@ -75,30 +76,11 @@ func nextUpdateDelay(overrides Overrides) time.Duration {
 }
 
 func runScheduledApply(ctx context.Context, overrides Overrides, log *slog.Logger) (bool, error) {
-	option, err := CheckOptions(overrides)
-	if err != nil {
-		log.WarnContext(ctx, "scheduled update options failed", "err", err)
-		return false, err
-	}
-	option.Log = log.With(slog.String("component", "update"))
-	if versionSkipsScheduledApply(option.Config.CurrentVersion) {
-		_, checkErr := selfupdate.Check(ctx, option)
-		if checkErr != nil {
-			log.WarnContext(ctx, "scheduled update fallback check failed", "err", checkErr)
-			return false, fmt.Errorf("scheduled update fallback check: %w", checkErr)
-		}
-		return false, nil
-	}
-
-	overrides.Log = option.Log
+	overrides.Log = log.With(slog.String("component", "update"))
 	result, err := ApplyAll(ctx, overrides)
 	if err != nil {
 		log.WarnContext(ctx, "scheduled update apply failed", "err", err)
 		return false, fmt.Errorf("scheduled update apply: %w", err)
 	}
 	return result.Applied, nil
-}
-
-func versionSkipsScheduledApply(currentVersion string) bool {
-	return currentVersion == "" || currentVersion == "dev" || currentVersion == "unknown"
 }

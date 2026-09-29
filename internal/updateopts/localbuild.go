@@ -7,8 +7,9 @@ import (
 	"goodkind.io/gklog/version"
 )
 
-// RunningReleaseTag returns the running binary's release tag, and false for a
-// dev or locally built binary, which has no release to match.
+// RunningReleaseTag returns the running binary's release tag, and false when
+// the version stamp marks a dev or locally built binary, which has no release
+// to match.
 func RunningReleaseTag() (string, bool) {
 	if isLocalBuild(version.Version, version.Dirty == "true") {
 		return "", false
@@ -16,7 +17,16 @@ func RunningReleaseTag() (string, bool) {
 	return strings.TrimSpace(version.Version), true
 }
 
-// isLocalBuild reports whether a binary did not come from a release artifact.
+// AutomaticUpdatesEnabled reports whether the daemon may run the scheduled
+// update check and apply. It requires the release pipeline's build tag, because
+// make install at a release tag stamps the same version string as the release.
+func AutomaticUpdatesEnabled() bool {
+	return builtAsReleaseArtifact() && !isLocalBuild(version.Version, version.Dirty == "true")
+}
+
+// isLocalBuild reports whether a version stamp marks a dev or locally built
+// binary. A clean build at a release tag passes this check, so callers that
+// must exclude every local build also check builtAsReleaseArtifact.
 func isLocalBuild(version string, dirty bool) bool {
 	if dirty {
 		return true

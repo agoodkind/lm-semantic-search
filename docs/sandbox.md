@@ -42,6 +42,8 @@ The one path that points outside the root is the model cache. A downloaded embed
 
 It is one process. It starts no child, writes no pid file, and cannot be detached. Ending the command ends the daemon.
 
+It never checks for or installs updates. The sandbox does not start the update scheduler. The installed daemon's scheduler replaces the binaries in its own directory, and a sandbox started from the install directory would replace the production binaries.
+
 It stops on Ctrl-C, on `kill`, and when its terminal closes. It also stops if whatever launched it dies without signalling it, which is what otherwise leaves a daemon serving with nobody left to stop it.
 
 ## Changing settings
