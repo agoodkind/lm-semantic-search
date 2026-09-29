@@ -252,7 +252,8 @@ gksyntax-grammars:
 		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
 		exit 1; \
 	fi
-	@ts_bin="$$(command -v tree-sitter 2>/dev/null || true)"; \
+	@set -e; \
+	ts_bin="$$(command -v tree-sitter 2>/dev/null || true)"; \
 	if [ -z "$$ts_bin" ]; then \
 		"$(GKS_DIR)/scripts/install-tree-sitter.sh" "$(TREE_SITTER_LOCAL_DIR)"; \
 		ts_bin="$(TREE_SITTER_LOCAL_DIR)/tree-sitter"; \
