@@ -43,6 +43,9 @@ type Library struct {
 	catalogUUID string
 	closeOnce   sync.Once
 	closeErr    error
+	// verified records the vector identities that search verified at one
+	// visibility revision.
+	verified verifiedVectors
 }
 
 // Open validates config, opens or creates the SQLite catalog in WAL mode, and
