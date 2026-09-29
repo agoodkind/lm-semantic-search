@@ -30,8 +30,9 @@ type lexicalContentDelta struct {
 // occurrence change of each content to the corpus size, the token total, and
 // the document frequency of that content's terms, and advances the namespace
 // statistics generation by 1. A content with a net change of zero changes no
-// document frequency. Content that no occurrence references after the change
-// is deleted.
+// document frequency, and a publication in which every content nets to zero
+// leaves the statistics and their generation unchanged. Content that no
+// occurrence references after the change is deleted.
 func publishLexical(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -82,7 +83,12 @@ func publishLexical(
 	}
 
 	var sizeDelta, tokenDelta int64
+	changed := false
 	for _, content := range sortedLexicalDeltas(deltas) {
+		if content.delta == 0 {
+			continue
+		}
+		changed = true
 		var documentLength int64
 		if err := tx.QueryRowContext(ctx,
 			`SELECT document_length FROM lexical_content WHERE search_hash = ?`,
@@ -100,6 +106,9 @@ func publishLexical(
 				return err
 			}
 		}
+	}
+	if !changed {
+		return nil
 	}
 	return updateLexicalStats(ctx, tx, namespace, sizeDelta, tokenDelta)
 }

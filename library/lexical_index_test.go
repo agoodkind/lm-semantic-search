@@ -316,3 +316,27 @@ func TestAccumulateLexicalScoresFromStoredPostings(t *testing.T) {
 		}
 	}
 }
+
+func TestPublishLexicalKeepsGenerationWhenEveryContentNetsToZero(t *testing.T) {
+	t.Parallel()
+	database := openLexicalTestCatalog(t)
+	rows := []lexicalTestRow{
+		{namespace: "code", ownerID: "file-a", rowKey: "1", text: "alpha beta"},
+		{namespace: "code", ownerID: "file-a", rowKey: "2", text: "gamma"},
+	}
+	if err := publishLexicalTest(t, database, "code", rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishLexicalTest(t, database, "code", rows, rows); err != nil {
+		t.Fatal(err)
+	}
+	assertLexicalStatistics(t, database, "code", rows, 1)
+	renamed := []lexicalTestRow{
+		{namespace: "code", ownerID: "file-a", rowKey: "1", text: "alpha beta"},
+		{namespace: "code", ownerID: "file-a", rowKey: "3", text: "gamma"},
+	}
+	if err := publishLexicalTest(t, database, "code", renamed, rows); err != nil {
+		t.Fatal(err)
+	}
+	assertLexicalStatistics(t, database, "code", renamed, 1)
+}

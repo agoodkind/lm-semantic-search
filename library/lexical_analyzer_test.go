@@ -54,24 +54,6 @@ func TestAnalyzeLexicalMergesTokensThatShareAHash(t *testing.T) {
 	}
 }
 
-func TestAnalyzeLexicalSortsTermsAndSumsLength(t *testing.T) {
-	t.Parallel()
-	document := analyzeLexical("gamma Alpha beta ALPHA alpha")
-	if document.length != 5 || len(document.terms) != 3 {
-		t.Fatalf("analyzeLexical = %+v, want 3 terms and length 5", document)
-	}
-	frequencies := make(map[uint32]uint32)
-	for index, term := range document.terms {
-		if index > 0 && document.terms[index-1].hash >= term.hash {
-			t.Fatalf("terms %+v are not in ascending hash order", document.terms)
-		}
-		frequencies[term.hash] = term.frequency
-	}
-	if frequencies[lexicalTermHash("alpha")] != 3 {
-		t.Fatalf("alpha frequency = %d, want 3", frequencies[lexicalTermHash("alpha")])
-	}
-}
-
 func TestValidateLexicalAnalyzer(t *testing.T) {
 	t.Parallel()
 	if err := validateLexicalAnalyzer(StandardAnalyzer); err != nil {

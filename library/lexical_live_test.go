@@ -82,6 +82,15 @@ func openLexicalLiveMilvus(t *testing.T, ctx context.Context) lexicalLiveMilvus 
 		t.Fatalf("create Milvus database %s: %v", database, err)
 	}
 	t.Logf("created Milvus database %s at %s", database, time.Now().UTC().Format(time.RFC3339))
+	// Cleanups run in reverse order: the collection cleanup registered below
+	// runs first, then this database drop, then the admin close.
+	t.Cleanup(func() {
+		if err := admin.DropDatabase(context.WithoutCancel(ctx), milvusclient.NewDropDatabaseOption(database)); err != nil {
+			t.Errorf("drop Milvus database %s: %v", database, err)
+			return
+		}
+		t.Logf("dropped Milvus database %s at %s", database, time.Now().UTC().Format(time.RFC3339))
+	})
 
 	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{
 		Address: cfg.MilvusAddress,
@@ -105,11 +114,6 @@ func openLexicalLiveMilvus(t *testing.T, ctx context.Context) lexicalLiveMilvus 
 		if err := client.Close(cleanupContext); err != nil {
 			t.Errorf("close Milvus client for %s: %v", database, err)
 		}
-		if err := admin.DropDatabase(cleanupContext, milvusclient.NewDropDatabaseOption(database)); err != nil {
-			t.Errorf("drop Milvus database %s: %v", database, err)
-			return
-		}
-		t.Logf("dropped Milvus database %s at %s", database, time.Now().UTC().Format(time.RFC3339))
 	})
 	return lexicalLiveMilvus{client: client, database: database}
 }
@@ -331,6 +335,10 @@ func lexicalParityTexts() []string {
 		"x86_64 v2.6.18 0xFFFF 3.14159 1e-9 foo_bar foo-bar foo.bar",
 		strings.Repeat("a", 99) + "Z " + strings.Repeat("a", 100) + "Z " + strings.Repeat("a", 101) + "Z",
 		strings.Repeat("é", 49) + "X " + strings.Repeat("é", 50) + "X " + strings.Repeat("é", 51) + "X",
+		// Byte 100 falls inside the 34th three-byte character of each token, so
+		// the hash covers a partial UTF-8 sequence. The tokens differ only after
+		// byte 100.
+		strings.Repeat("中", 40) + " " + strings.Repeat("中", 39) + "文" + " " + strings.Repeat("क", 60),
 		"emoji 👍🏽 flags 🇺🇸 zwj 👨‍👩‍👧 math 𝐀𝐁𝐂 𝟙𝟚 ancient 𐌰𐌱",
 		"tabs\tand\nnewlines\r\nand\u00a0nbsp\u2028line\u3000ideographic",
 		"before\x00after nul",
