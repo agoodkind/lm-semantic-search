@@ -82,5 +82,15 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      # The registry pins each offline model's revision and SHA-256 digests, so
+      # a change to either selects a new cache entry. The daemon hashes every
+      # cached artifact before use and downloads a replacement on a mismatch.
+      - name: Restore offline embedding model cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/offline-model-cache
+          key: offline-model-${{ runner.os }}-${{ hashFiles('internal/offlinemodel/registry.go') }}
       - name: Test offline runtime
+        env:
+          CLAUDE_CONTEXTD_MODEL_CACHE_ROOT: ${{ runner.temp }}/offline-model-cache
         run: make offline-live
