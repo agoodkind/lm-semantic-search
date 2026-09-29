@@ -62,4 +62,9 @@ func TestValidateLexicalAnalyzer(t *testing.T) {
 	if err := validateLexicalAnalyzer("milvus-english-v1"); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("validateLexicalAnalyzer(other identity) = %v, want ErrInvalidRequest", err)
 	}
+	for _, tables := range []string{"16.0.0", "18.0.0", ""} {
+		if err := validateLexicalAnalyzerTables(StandardAnalyzer, tables); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("validateLexicalAnalyzerTables(unicode %q) = %v, want ErrInvalidRequest", tables, err)
+		}
+	}
 }

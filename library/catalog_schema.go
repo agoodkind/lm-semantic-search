@@ -9,8 +9,14 @@ import (
 )
 
 // catalogSchemaVersion is the schema version that this build creates and
-// reads. A catalog saved with another version fails to open.
-const catalogSchemaVersion = 1
+// reads. Version 2 adds the lexical index tables. createCatalogSchema upgrades
+// a version 1 catalog without occurrences, and a catalog saved with any other
+// version fails to open.
+const catalogSchemaVersion = 2
+
+// lexicalSchemaFromVersion is the saved schema version that the lexical index
+// tables upgrade.
+const lexicalSchemaFromVersion = 1
 
 // Keys of the store_identity table.
 const (
@@ -186,11 +192,17 @@ var catalogSchemaStatements = []string{
 	`CREATE INDEX IF NOT EXISTS search_results_source_blob_id ON search_results (source_blob_id)`,
 }
 
-// createCatalogSchema creates every table and index and records the schema
-// version. A catalog with a different saved version returns an error that
-// wraps [ErrStoreMismatch].
+// createCatalogSchema creates every table and index, including the lexical
+// index tables, and records the schema version. A version 1 catalog without
+// occurrences is upgraded to the current version. A version 1 catalog with
+// occurrences returns an error that wraps [ErrStoreMismatch], because version
+// 1 saves no SearchText to build the lexical index from. Any other saved
+// version returns an error that wraps [ErrStoreMismatch].
 func createCatalogSchema(ctx context.Context, tx *sql.Tx) error {
-	for _, statement := range catalogSchemaStatements {
+	statements := make([]string, 0, len(catalogSchemaStatements)+len(lexicalSchemaStatements))
+	statements = append(statements, catalogSchemaStatements...)
+	statements = append(statements, lexicalSchemaStatements...)
+	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			slog.ErrorContext(ctx, "create catalog schema failed", "err", err)
 			return fmt.Errorf("create catalog schema: %w", err)
@@ -201,15 +213,39 @@ func createCatalogSchema(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	want := strconv.Itoa(catalogSchemaVersion)
-	if !found {
+	switch {
+	case !found:
 		return writeIdentityValue(ctx, tx, identityKeySchemaVersion, want)
-	}
-	if saved != want {
+	case saved == want:
+		return nil
+	case saved == strconv.Itoa(lexicalSchemaFromVersion):
+		return upgradeToLexicalSchema(ctx, tx, want)
+	default:
 		err := fmt.Errorf("%w: catalog schema version %s, this build reads %s", ErrStoreMismatch, saved, want)
 		slog.ErrorContext(ctx, "catalog schema version mismatch", "err", err)
 		return err
 	}
-	return nil
+}
+
+// upgradeToLexicalSchema records the current schema version for a version 1
+// catalog without occurrences, after createCatalogSchema created the empty
+// lexical tables. It refuses a catalog with occurrences.
+func upgradeToLexicalSchema(ctx context.Context, tx *sql.Tx, want string) error {
+	var occurrences int64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM occurrences`).Scan(&occurrences); err != nil {
+		slog.ErrorContext(ctx, "count occurrences for the schema upgrade failed", "err", err)
+		return fmt.Errorf("count occurrences for the schema upgrade: %w", err)
+	}
+	if occurrences > 0 {
+		err := fmt.Errorf(
+			"%w: catalog schema version %d has %d occurrences and saves no SearchText to build the lexical index; rebuild the catalog",
+			ErrStoreMismatch, lexicalSchemaFromVersion, occurrences,
+		)
+		slog.ErrorContext(ctx, "catalog schema upgrade refused", "err", err)
+		return err
+	}
+	slog.InfoContext(ctx, "catalog schema upgraded", "from", lexicalSchemaFromVersion, "to", want)
+	return writeIdentityValue(ctx, tx, identityKeySchemaVersion, want)
 }
 
 // readIdentityValue returns the store_identity value for key and whether the

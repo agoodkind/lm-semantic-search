@@ -128,7 +128,7 @@ func isLexicalTokenCharacter(character rune) bool {
 const lexicalUnicodeVersion = "17.0.0"
 
 // unicode17Alphanumerics lists every character that Unicode 17.0.0 first
-// assigns and that Go 1.26 classifies as a letter, a number, or
+// assigns and that the Go unicode 17.0.0 tables classify as a letter, a number, or
 // Other_Alphabetic. The Milvus 2.6.18 analyzer treats each of them as a
 // separator. The list equals both the Unicode 17.0.0 DerivedAge assignments
 // with those properties and the 4,672 differences that an exhaustive
@@ -172,15 +172,21 @@ var unicode17Alphanumerics = &unicode.RangeTable{
 // characters, and this function then returns an error that wraps
 // [ErrInvalidRequest].
 func validateLexicalAnalyzer(identity string) error {
+	return validateLexicalAnalyzerTables(identity, unicode.Version)
+}
+
+// validateLexicalAnalyzerTables checks identity and the Go unicode table
+// version tables against the ones [StandardAnalyzer] was verified with.
+func validateLexicalAnalyzerTables(identity string, tables string) error {
 	if identity != StandardAnalyzer {
 		return invalidRequest(fmt.Sprintf("analyzer identity %q is not %q", identity, StandardAnalyzer))
 	}
-	if unicode.Version != lexicalUnicodeVersion {
+	if tables != lexicalUnicodeVersion {
 		return invalidRequest(fmt.Sprintf(
 			"analyzer %s was verified with Go unicode tables %s, and this binary uses %s",
 			StandardAnalyzer,
 			lexicalUnicodeVersion,
-			unicode.Version,
+			tables,
 		))
 	}
 	return nil

@@ -1,10 +1,12 @@
 package library
 
-// lexicalSchemaStatements create the lexical tables and their indexes. The
-// catalog migration runs them in order inside its schema transaction.
+// lexicalSchemaStatements create the lexical tables and their indexes.
+// createCatalogSchema runs them after the catalog statements inside its schema
+// transaction.
 //
 // lexical_content and lexical_terms store the analyzed form of one distinct
-// SearchText once per analyzer identity. lexical_occurrences maps each
+// SearchText once, keyed by its search hash, with the analyzer identity that
+// produced it. A catalog uses one analyzer identity. lexical_occurrences maps each
 // committed occurrence to its content. lexical_stats and lexical_df store the
 // occurrence-weighted corpus statistics of each namespace: an occurrence adds 1
 // to the corpus size, its document length to the token total, and 1 to the

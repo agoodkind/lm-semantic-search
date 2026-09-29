@@ -48,11 +48,16 @@ type Library struct {
 // Open validates config, opens or creates the SQLite catalog in WAL mode, and
 // binds the catalog UUID to the vector pool before any write. A catalog saved
 // under another descriptor, schema version, or analyzer, and a pool bound to
-// another catalog, return an error that wraps [ErrStoreMismatch]. Open then
-// replays every vector write that an interrupted process left in the outbox.
+// another catalog, return an error that wraps [ErrStoreMismatch]. A binary
+// with Go unicode tables other than the ones [StandardAnalyzer] was verified
+// against returns an error that wraps [ErrInvalidRequest]. Open then replays
+// every vector write that an interrupted process left in the outbox.
 func Open(ctx context.Context, config Config) (*Library, error) {
 	resolved, err := config.resolved()
 	if err != nil {
+		return nil, err
+	}
+	if err := validateLexicalAnalyzer(resolved.AnalyzerIdentity); err != nil {
 		return nil, err
 	}
 	if resolved.Vectors == nil || resolved.Embedder == nil {
