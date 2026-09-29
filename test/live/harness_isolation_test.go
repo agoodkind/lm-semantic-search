@@ -353,10 +353,10 @@ func TestMilvusIsolationRejectsAbsentDatabaseAndRenameDestination(t *testing.T) 
 }
 
 
-// TestOperatorStateAuditAllowsDatabasesOfOtherProcesses proves a database that
-// another process creates or drops during a test is logged as a concurrent
-// change and is not a violation.
-func TestOperatorStateAuditAllowsDatabasesOfOtherProcesses(t *testing.T) {
+// TestOperatorStateAuditAllowsDatabasesOutsideTheHarness proves a database
+// outside the harness database name that appears or disappears during a test
+// is logged as a change and is not a violation.
+func TestOperatorStateAuditAllowsDatabasesOutsideTheHarness(t *testing.T) {
 	baseline := milvusInventory{"operator_collection": {"load_state": "3"}}
 	audit := auditOperatorState(
 		"live_sandbox",
@@ -368,7 +368,7 @@ func TestOperatorStateAuditAllowsDatabasesOfOtherProcesses(t *testing.T) {
 		nil,
 	)
 	if len(audit.violations) != 0 {
-		t.Fatalf("violations = %v, want none for databases of other processes", audit.violations)
+		t.Fatalf("violations = %v, want none for databases outside the harness", audit.violations)
 	}
 	want := []string{"added clyde_live_created", "added lms_lib_live_other", "removed clyde_live_dropped"}
 	if !slices.Equal(audit.concurrentDatabases, want) {

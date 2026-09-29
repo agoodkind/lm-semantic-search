@@ -123,8 +123,8 @@ type milvusInventory map[string]map[string]string
 type operatorStateAudit struct {
 	violations          []string
 	concurrentAdditions []string
-	// concurrentDatabases lists databases outside the harness database name
-	// that another process created or dropped during the test.
+	// concurrentDatabases lists the databases outside the harness database name
+	// that appeared in or disappeared from the database list during the test.
 	concurrentDatabases []string
 }
 
@@ -777,7 +777,7 @@ func (h *harness) cleanupMilvus() []error {
 		h.t.Logf("Concurrent operator additions: %v", audit.concurrentAdditions)
 	}
 	if len(audit.concurrentDatabases) > 0 {
-		h.t.Logf("Concurrent database changes by other processes: %v", audit.concurrentDatabases)
+		h.t.Logf("Database changes outside the harness database: %v", audit.concurrentDatabases)
 	}
 	for _, violation := range audit.violations {
 		cleanupErrors = append(cleanupErrors, fmt.Errorf("%s", violation))
@@ -854,9 +854,10 @@ func auditOperatorState(
 // auditDatabaseInventory compares the database lists before and after one
 // test. After teardown, a database name that starts with databaseName is a
 // violation: the harness left its own database behind. Any other added or
-// removed database belongs to another process and is returned as a concurrent
-// change. The Milvus call recorder rejects a CreateDatabase or DropDatabase
-// that the harness sends for any other database.
+// removed database is returned as a change outside the harness database. The
+// audit does not identify what made that change. The Milvus call recorder
+// separately rejects a CreateDatabase or DropDatabase that the harness sends
+// for any other database.
 func auditDatabaseInventory(
 	databaseName string,
 	beforeDatabases []string,
