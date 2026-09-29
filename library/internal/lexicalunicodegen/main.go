@@ -344,7 +344,10 @@ func render(tables characterTables) ([]byte, error) {
 		if index%mappingsPerLine == 0 {
 			source.WriteString("\t")
 		}
-		fmt.Fprintf(&source, "{from: 0x%04X, to: %q},", mapping.from, string(mapping.to))
+		// %+q escapes every non-ASCII character. Plain %q leaves a character
+		// unescaped when the toolchain's strconv.IsPrint accepts it, and those
+		// tables differ between Go releases.
+		fmt.Fprintf(&source, "{from: 0x%04X, to: %+q},", mapping.from, string(mapping.to))
 		if index%mappingsPerLine == mappingsPerLine-1 || index == len(tables.lowercase)-1 {
 			source.WriteString("\n")
 			continue
