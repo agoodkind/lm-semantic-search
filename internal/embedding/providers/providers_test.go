@@ -125,7 +125,11 @@ func productionShapedHome(t *testing.T, baseURL string, apiKey string, extraConf
 // the configured endpoint with the configured model, the API key as a bearer
 // credential, and the dimension only when one is configured, and a busy
 // endpoint gets 4 attempts with backoffs of 200, 400, and 800 ms. These are
-// the values of the daemon adapter on origin/main before providers.New.
+// the values of the daemon adapter on origin/main before providers.New. The
+// local endpoint answers every request with HTTP 429. The test checks which
+// adapter providers.New selects and the requests and retries that adapter
+// sends; it does not test embedding results, which the live suites test
+// against the real endpoint.
 func TestNewBuildsTheHostedProviderForTheProductionConfig(t *testing.T) {
 	for _, testCase := range []struct {
 		name          string
