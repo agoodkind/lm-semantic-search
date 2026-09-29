@@ -1,7 +1,9 @@
 //go:build installlive || updatelive
 
 // Package operatorstate fails a live test run that adds, removes, or changes a
-// file in the state roots of an installed LMS daemon.
+// file that the install and update code writes in the state roots of an
+// installed LMS daemon. A running LMS daemon writes other files there, such as
+// logs, and the guard ignores those.
 package operatorstate
 
 import (
@@ -23,37 +25,51 @@ var stateDirectories = []string{
 	".local/state/lm-semantic-search-daemon",
 }
 
+// guardedPaths are the files and directories, relative to a state root, that
+// lm-semantic-search install and update apply write: the update state, the
+// update lock, the interrupted-install commit marker, the release download
+// cache, and the offline embedding model cache.
+var guardedPaths = []string{
+	"update-state.json",
+	"update.lock",
+	"update-install-committed",
+	"update-cache",
+	"embedding-models",
+}
+
 type stateFile struct {
 	size    int64
 	modTime time.Time
 }
 
-// snapshot records every file under the operator state roots, with its size
-// and modification time. A missing root records no file.
+// snapshot records every file under the guarded paths of the operator state
+// roots, with its size and modification time. A missing path records no file.
 func snapshot() (map[string]stateFile, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home: %w", err)
 	}
 	files := map[string]stateFile{}
-	for _, relative := range stateDirectories {
-		root := filepath.Join(home, relative)
-		walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-			if errors.Is(err, fs.ErrNotExist) {
+	for _, stateDirectory := range stateDirectories {
+		for _, guardedPath := range guardedPaths {
+			root := filepath.Join(home, stateDirectory, guardedPath)
+			walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				info, err := entry.Info()
+				if err != nil {
+					return err
+				}
+				files[path] = stateFile{size: info.Size(), modTime: info.ModTime()}
 				return nil
+			})
+			if walkErr != nil {
+				return nil, fmt.Errorf("walk %s: %w", root, walkErr)
 			}
-			if err != nil {
-				return err
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			files[path] = stateFile{size: info.Size(), modTime: info.ModTime()}
-			return nil
-		})
-		if walkErr != nil {
-			return nil, fmt.Errorf("walk %s: %w", root, walkErr)
 		}
 	}
 	return files, nil
