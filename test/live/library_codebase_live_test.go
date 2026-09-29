@@ -452,3 +452,90 @@ func TestLibraryCodebaseKeepsOldGenerationUntilCommit(t *testing.T) {
 	}
 	t.Logf("cancelled after %d staged rows; the resumed sync committed %d occurrences", staged, len(after["large.go"]))
 }
+
+// codebaseSearchLimit is larger than every occurrence count of the search
+// test codebase, so one page returns the complete ranking.
+const codebaseSearchLimit = 100
+
+// TestLibraryCodebaseSearchReturnsCompleteLibraryPages indexes a codebase into
+// the library store and searches it through the SearchCode RPC. A page larger
+// than the codebase returns every indexed file in descending score order, each
+// hit is an excerpt of its file, the extension filter keeps only the matching
+// files, and a search of a subdirectory keeps only its files. SearchCode drops
+// a hit that overlaps more than half of an earlier hit of the same file
+// (semantic.DeduplicateChunks). A file can return fewer hits than it has
+// occurrences.
+func TestLibraryCodebaseSearchReturnsCompleteLibraryPages(t *testing.T) {
+	codebaseDaemon := newLibraryCodebaseDaemon(t)
+	t.Logf("embedding window start %s", time.Now().UTC().Format(time.RFC3339))
+	defer func() { t.Logf("embedding window end %s", time.Now().UTC().Format(time.RFC3339)) }()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o700); err != nil {
+		t.Fatalf("create sub directory: %v", err)
+	}
+	files := map[string]string{
+		"alpha.go":     goFile(goFunction("Alpha", "alphamarker"), goFunction("AlphaTwo", "alphatwomarker")),
+		"sub/bravo.go": goFile(goFunction("Bravo", "bravomarker")),
+		"notes.md":     "# Notes\n\nThe alphamarker notes describe the fixture.\n",
+	}
+	for name, content := range files {
+		writeCodebaseFile(t, root, name, content)
+	}
+	codebaseDaemon.index(t, root)
+	owners := codebaseDaemon.readCodebaseOwners(t)
+	counts := map[string]int{}
+	for name := range files {
+		if len(owners[name]) == 0 {
+			t.Fatalf("%s has no published occurrence", name)
+		}
+		counts[name] = len(owners[name])
+	}
+
+	search := func(path string, extensions []string) []*pb.SearchResult {
+		t.Helper()
+		response, err := codebaseDaemon.client.SearchCode(context.Background(), &pb.SearchCodeRequest{
+			Path:            path,
+			Query:           "alphamarker",
+			Limit:           codebaseSearchLimit,
+			ExtensionFilter: extensions,
+			Client:          &pb.ClientInfo{Name: "library-codebase-live"},
+		})
+		if err != nil {
+			t.Fatalf("search %s %v: %v", path, extensions, err)
+		}
+		results := response.GetResults()
+		for index, result := range results {
+			content, known := files[result.GetRelativePath()]
+			if !known || !strings.Contains(content, result.GetContent()) {
+				t.Fatalf("search %s %v hit %d from %q is not an excerpt of an indexed file", path, extensions, index, result.GetRelativePath())
+			}
+			if index > 0 && result.GetScore() > results[index-1].GetScore() {
+				t.Fatalf("search %s %v hit %d scores %v above hit %d at %v", path, extensions, index, result.GetScore(), index-1, results[index-1].GetScore())
+			}
+		}
+		return results
+	}
+	requireFiles := func(label string, results []*pb.SearchResult, want ...string) {
+		t.Helper()
+		paths := map[string]int{}
+		for _, result := range results {
+			paths[result.GetRelativePath()]++
+		}
+		limit := 0
+		for _, name := range want {
+			limit += counts[name]
+		}
+		if len(paths) != len(want) || len(results) > limit {
+			t.Fatalf("%s returned %d hits from %v, want hits from exactly %v and at most %d", label, len(results), paths, want, limit)
+		}
+		for _, name := range want {
+			if paths[name] == 0 {
+				t.Fatalf("%s returned no hit from %s: %v", label, name, paths)
+			}
+		}
+	}
+
+	requireFiles("search of the root", search(root, nil), "alpha.go", "notes.md", "sub/bravo.go")
+	requireFiles("extension filter .go", search(root, []string{".go"}), "alpha.go", "sub/bravo.go")
+	requireFiles("search of sub", search(filepath.Join(root, "sub"), nil), "sub/bravo.go")
+}

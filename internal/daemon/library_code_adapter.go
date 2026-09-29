@@ -12,15 +12,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/library"
-	"goodkind.io/lm-semantic-search/library/embedding"
-	"goodkind.io/lm-semantic-search/library/milvus"
 )
 
 const (
@@ -75,7 +72,9 @@ type libraryCodeIndex struct {
 	semanticIndex
 	store         *library.Library
 	vectorClient  *milvusclient.Client
+	tokenizer     library.Tokenizer
 	maxTokens     int
+	maxBytes      int
 	maxBatchRows  int
 	maxBatchBytes int64
 	// codeNamespaces maps each collection name that the wrapped index returned
@@ -86,44 +85,18 @@ type libraryCodeIndex struct {
 }
 
 // newLibraryCodeIndex opens the codebase catalog and vector pool for cfg and
-// wraps inner. The offline profile is not supported yet.
+// wraps inner. The standard profile uses a Milvus pool and the
+// OpenAI-compatible embedder; the offline profile uses a library/embedded pool,
+// the ONNX embedder, and its exact tokenizer.
 func newLibraryCodeIndex(ctx context.Context, cfg config.Config, inner semanticIndex) (*libraryCodeIndex, error) {
-	if cfg.EmbeddingProvider == config.EmbeddingProviderONNX {
-		err := errors.New("the library codebase store does not support the offline profile")
-		slog.ErrorContext(ctx, "open library codebase store failed", "err", err)
-		return nil, err
-	}
 	if cfg.EmbeddingDimension <= 0 {
 		err := errors.New("the library codebase store requires EMBEDDING_DIMENSION")
 		slog.ErrorContext(ctx, "open library codebase store failed", "err", err)
 		return nil, err
 	}
-	embedder, err := embedding.NewOpenAI(ctx, embedding.OpenAIConfig{
-		BaseURL:        cfg.OpenAIBaseURL,
-		APIKey:         cfg.OpenAIAPIKey,
-		Model:          cfg.EmbeddingModel,
-		Dimension:      int(cfg.EmbeddingDimension),
-		RequestTimeout: time.Duration(cfg.EmbeddingRequestTimeoutMS) * time.Millisecond,
-		MaxAttempts:    0,
-		BackoffBase:    0,
-	})
+	backends, err := newLibraryCodeBackends(ctx, cfg)
 	if err != nil {
-		slog.ErrorContext(ctx, "create library codebase embedder failed", "err", err)
-		return nil, fmt.Errorf("create library codebase embedder: %w", err)
-	}
-	vectorClient, err := milvusclient.New(ctx, &milvusclient.ClientConfig{
-		Address: cfg.MilvusAddress,
-		APIKey:  cfg.MilvusToken,
-		DBName:  cfg.MilvusDatabase,
-	})
-	if err != nil {
-		slog.ErrorContext(ctx, "connect library codebase vector pool failed", "err", err)
-		return nil, fmt.Errorf("connect library codebase vector pool: %w", err)
-	}
-	vectors, err := milvus.New(vectorClient, milvus.Config{Database: milvusDatabaseName(cfg), Collection: libraryCodeCollection})
-	if err != nil {
-		slog.ErrorContext(ctx, "create library codebase vector adapter failed", "err", err)
-		return nil, errors.Join(fmt.Errorf("create library codebase vector adapter: %w", err), closeLibraryVectorClient(ctx, vectorClient))
+		return nil, err
 	}
 	batchRows := max(cfg.EmbeddingBatchSize, 1)
 	directory := filepath.Join(cfg.StateRoot, libraryCodeDirectory)
@@ -137,25 +110,37 @@ func newLibraryCodeIndex(ctx context.Context, cfg config.Config, inner semanticI
 			Dimension:         int(cfg.EmbeddingDimension),
 			Normalization:     libraryCodeNormalization,
 		},
-		Vectors:       vectors,
-		Embedder:      embedder,
-		MaxBatchRows:  batchRows,
-		MaxBatchBytes: libraryCodeMaxBatchBytes,
+		Vectors:                backends.vectors,
+		Embedder:               backends.embedder,
+		MaxBatchRows:           batchRows,
+		MaxBatchBytes:          libraryCodeMaxBatchBytes,
+		QueryInstructionPrefix: cfg.QueryInstructionPrefix,
+		SearchMode:             librarySearchMode(cfg),
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "open library codebase catalog failed", "path", directory, "err", err)
-		return nil, errors.Join(fmt.Errorf("open library codebase catalog: %w", err), closeLibraryVectorClient(ctx, vectorClient))
+		return nil, errors.Join(fmt.Errorf("open library codebase catalog: %w", err), closeLibraryVectorClient(ctx, backends.vectorClient))
 	}
 	return &libraryCodeIndex{
 		semanticIndex:  inner,
 		store:          opened,
-		vectorClient:   vectorClient,
-		maxTokens:      libraryCodeMaxTokens(cfg),
+		vectorClient:   backends.vectorClient,
+		tokenizer:      backends.tokenizer,
+		maxTokens:      backends.maxTokens,
+		maxBytes:       backends.maxBytes,
 		maxBatchRows:   batchRows,
 		maxBatchBytes:  libraryCodeMaxBatchBytes,
 		codeNamespaces: sync.Map{},
 		registered:     sync.Map{},
 	}, nil
+}
+
+// librarySearchMode maps the daemon hybrid setting to the library search mode.
+func librarySearchMode(cfg config.Config) library.SearchMode {
+	if cfg.HybridMode {
+		return library.Hybrid
+	}
+	return library.Dense
 }
 
 func milvusDatabaseName(cfg config.Config) string {
@@ -185,7 +170,12 @@ func wrapDelegated(ctx context.Context, operation string, err error) error {
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
+// closeLibraryVectorClient closes client and returns nil for a nil client,
+// which the offline profile has.
 func closeLibraryVectorClient(ctx context.Context, client *milvusclient.Client) error {
+	if client == nil {
+		return nil
+	}
 	if err := client.Close(ctx); err != nil {
 		slog.ErrorContext(ctx, "close library codebase vector client failed", "err", err)
 		return fmt.Errorf("close library codebase vector client: %w", err)
@@ -472,8 +462,8 @@ func (index *libraryCodeIndex) codeOccurrences(ctx context.Context, chunks []mod
 			Text:           content,
 			DocumentPrefix: "",
 			MaxTokens:      index.maxTokens,
-			MaxBytes:       0,
-			Tokenizer:      nil,
+			MaxBytes:       index.maxBytes,
+			Tokenizer:      index.tokenizer,
 		})
 		if err != nil {
 			slog.ErrorContext(ctx, "prepare code chunk failed", "path", chunk.RelativePath, "start_line", chunk.StartLine, "err", err)
