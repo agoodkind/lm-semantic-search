@@ -53,7 +53,7 @@ func newUpdateCheckCmd() *cobra.Command {
 		Short: "Check the latest release",
 		Args:  requireNoArgs("update check"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			option, err := updateopts.CheckOptions(defaultUpdateOverrides(false))
+			option, err := updateopts.NetworkCheckOptions(commandContext(cmd), defaultUpdateOverrides(false))
 			if err != nil {
 				slog.Error("build update check options failed", "err", err)
 				return fmt.Errorf("build update check options: %w", err)

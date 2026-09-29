@@ -61,11 +61,13 @@ func runScheduledApplyIteration(ctx context.Context, overrides Overrides, log *s
 }
 
 func nextUpdateDelay(overrides Overrides) time.Duration {
-	option, err := CheckOptions(overrides)
+	// StatePath resolves no GitHub credentials, and this runs on every
+	// scheduler iteration.
+	statePath, err := StatePath(overrides)
 	if err != nil {
 		return updateInitialDelay
 	}
-	state, err := selfupdate.LoadState(option.StatePath)
+	state, err := selfupdate.LoadState(statePath)
 	if err == nil && !state.NextCheckAt.IsZero() {
 		delay := state.NextCheckAt.Sub(clock.Now())
 		if delay > 0 {

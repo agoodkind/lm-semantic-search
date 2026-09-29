@@ -116,6 +116,17 @@ func CheckOptions(overrides Overrides) (selfupdate.Options, error) {
 	return selfupdate.Options{}, fmt.Errorf("daemon update options unavailable")
 }
 
+// NetworkCheckOptions returns CheckOptions with the resolved GitHub token set,
+// for a check that queries the release API.
+func NetworkCheckOptions(ctx context.Context, overrides Overrides) (selfupdate.Options, error) {
+	option, err := CheckOptions(overrides)
+	if err != nil {
+		return selfupdate.Options{}, err
+	}
+	option.Config.AuthToken = resolveGitHubToken(ctx, overrides.Log)
+	return option, nil
+}
+
 // StatePath returns the shared update state path.
 func StatePath(overrides Overrides) (string, error) {
 	stateRoot, err := resolveStateRoot(overrides)
@@ -133,6 +144,10 @@ func ApplyAll(ctx context.Context, overrides Overrides) (ApplyAllResult, error) 
 	options, err := Options(overrides)
 	if err != nil {
 		return ApplyAllResult{}, err
+	}
+	authToken := resolveGitHubToken(ctx, overrides.Log)
+	for index := range options {
+		options[index].Config.AuthToken = authToken
 	}
 	result := ApplyAllResult{
 		Results:            make([]BinaryApplyResult, 0, len(options)),
