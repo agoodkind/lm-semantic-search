@@ -25,3 +25,33 @@ jobs:
       # list in sync with release.yml platforms.
       release_platforms: "darwin/arm64 linux/amd64 linux/arm64"
       cgo: true
+
+  # update-live runs a release-tagged daemon and an untagged daemon against a
+  # local release API server. It fails when the untagged daemon sends an update
+  # request or the release-tagged daemon sends none.
+  update-live:
+    name: Update Live
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Install system dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            libpcre2-dev \
+            pkg-config \
+            zlib1g-dev
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test update scheduler build gate
+        run: make update-live

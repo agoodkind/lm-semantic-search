@@ -297,6 +297,10 @@ func startLogRetentionSweep(ctx context.Context, cfg config.Config) {
 }
 
 func startUpdateScheduler(ctx context.Context, cfg config.Config, shutdownCh chan<- struct{}) {
+	if !updateopts.AutomaticUpdatesEnabled() {
+		slog.InfoContext(ctx, "update scheduler disabled; binary is not a release artifact", "version", version.Version)
+		return
+	}
 	executablePath, err := os.Executable()
 	if err != nil {
 		slog.WarnContext(ctx, "update scheduler disabled; executable path unavailable", "err", err)
