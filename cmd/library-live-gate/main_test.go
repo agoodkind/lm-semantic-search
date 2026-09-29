@@ -36,6 +36,17 @@ func TestGateSubSkip(t *testing.T) {
 	t.Run("skipped child", func(t *testing.T) { t.Skip("child skip on purpose") })
 }
 `,
+	"slow_test.go": `package gatefixture
+
+import (
+	"testing"
+	"time"
+)
+
+func TestGateSlowFinishes(t *testing.T) {}
+
+func TestGateSlowSleeps(t *testing.T) { time.Sleep(time.Minute) }
+`,
 	"tagged_test.go": `//go:build gatetag
 
 package gatefixture
@@ -82,7 +93,23 @@ func TestGateExitStatusAndDiagnostics(t *testing.T) {
 			name:       "all selected tests pass",
 			arguments:  []string{"-run", "^TestGatePass", "./"},
 			wantStatus: exitPassed,
-			wantStderr: []string{"PASS: 3 selected, 3 passed"},
+			wantStderr: []string{"go test -json -count=1 -timeout 30m0s", "PASS: 3 selected, 3 passed"},
+		},
+		{
+			name:       "go test times out",
+			arguments:  []string{"-timeout", "2s", "-run", "^TestGateSlow", "./"},
+			wantStatus: 1,
+			wantStderr: []string{
+				"go test -json -count=1 -timeout 2s",
+				"go test timed out (panic: test timed out after 2s",
+				"unfinished tests: TestGateSlowSleeps",
+			},
+		},
+		{
+			name:       "non-positive timeout",
+			arguments:  []string{"-timeout", "0s", "-run", "^TestGatePass", "./"},
+			wantStatus: exitUsage,
+			wantStderr: []string{"usage: library-live-gate [-timeout DURATION]"},
 		},
 		{
 			name:       "a selected test fails",
@@ -124,7 +151,7 @@ func TestGateExitStatusAndDiagnostics(t *testing.T) {
 			name:       "tagged test with its tag",
 			arguments:  []string{"-tags", "gatetag", "-run", "^TestGateTagged$", "./"},
 			wantStatus: exitPassed,
-			wantStderr: []string{"go test -json -count=1 -tags gatetag", "PASS: 1 selected, 1 passed"},
+			wantStderr: []string{"go test -json -count=1 -timeout 30m0s -tags gatetag", "PASS: 1 selected, 1 passed"},
 		},
 		{
 			name:       "missing pattern",

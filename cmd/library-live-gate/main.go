@@ -1,13 +1,13 @@
 // Command library-live-gate runs one shared search library lane suite and
 // fails unless every selected test ran and passed. It runs
-// "go test -json -count=1 -tags TAGS -run PATTERN PACKAGE", decodes the test
-// events, and rejects a failing command, zero selected tests, any skipped
-// test, and a run with no passing test. A package-level pass event does not
-// count as a selected test.
+// "go test -json -count=1 -timeout TIMEOUT -tags TAGS -run PATTERN PACKAGE",
+// decodes the test events, and rejects a failing command, a go test timeout,
+// zero selected tests, any skipped test, and a run with no passing test. A
+// package-level pass event does not count as a selected test.
 //
 // Usage:
 //
-//	library-live-gate -tags live -run '^TestLibraryWrite' ./test/live/
+//	library-live-gate [-timeout 30m] -tags live -run '^TestLibraryWrite' ./test/live/
 package main
 
 import (
@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
@@ -38,7 +39,19 @@ const (
 	testActionFail   = "fail"
 	testActionSkip   = "skip"
 	testActionOutput = "output"
+	// timeoutPanicPrefix starts the line that the go test binary prints when
+	// its -timeout expires.
+	timeoutPanicPrefix = "panic: test timed out after"
 )
+
+// defaultTestTimeout is the go test -timeout of one lane run. Go's own default
+// of 10 minutes ended a contended make library-live-l1 run at 2026-09-29 05:54
+// UTC, while baseline ingestion used the embedding endpoint. The longest
+// complete contended run, make library-live-l1 at 05:49:58 to 05:56:52 UTC,
+// took 6 minutes 54 seconds; an uncontended run at 02:59:55 to 03:02:38 UTC
+// took 2 minutes 43 seconds. Thirty minutes is more than four times the
+// longest complete contended run.
+const defaultTestTimeout = 30 * time.Minute
 
 // testEvent is one line of "go test -json" output.
 type testEvent struct {
@@ -59,6 +72,9 @@ type testOutcome struct {
 type gateReport struct {
 	outcomes map[string]*testOutcome
 	order    []string
+	// timeout is the go test timeout panic line, or empty when the run did not
+	// time out.
+	timeout string
 }
 
 func main() {
@@ -78,16 +94,17 @@ func run(ctx context.Context, arguments []string, stdout io.Writer, stderr io.Wr
 	flags.SetOutput(stderr)
 	tags := flags.String("tags", "", "build tags for go test")
 	pattern := flags.String("run", "", "go test -run pattern that selects the lane tests")
+	timeout := flags.Duration("timeout", defaultTestTimeout, "go test -timeout of the whole run")
 	if err := flags.Parse(arguments); err != nil {
 		return exitUsage
 	}
-	if *pattern == "" || flags.NArg() != 1 {
-		writeLine(stderr, "library-live-gate: usage: library-live-gate [-tags TAGS] -run PATTERN PACKAGE")
+	if *pattern == "" || flags.NArg() != 1 || *timeout <= 0 {
+		writeLine(stderr, "library-live-gate: usage: library-live-gate [-timeout DURATION] [-tags TAGS] -run PATTERN PACKAGE")
 		return exitUsage
 	}
 	packagePath := flags.Arg(0)
 
-	goArguments := []string{"test", "-json", "-count=1"}
+	goArguments := []string{"test", "-json", "-count=1", "-timeout", timeout.String()}
 	if *tags != "" {
 		goArguments = append(goArguments, "-tags", *tags)
 	}
@@ -135,7 +152,7 @@ func run(ctx context.Context, arguments []string, stdout io.Writer, stderr io.Wr
 // decodeEvents reads test events, copies each output line to stdout, and
 // records the final action of every selected test.
 func decodeEvents(events io.Reader, stdout io.Writer) (gateReport, error) {
-	report := gateReport{outcomes: make(map[string]*testOutcome), order: nil}
+	report := gateReport{outcomes: make(map[string]*testOutcome), order: nil, timeout: ""}
 	scanner := bufio.NewScanner(events)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxEventBytes)
 	for scanner.Scan() {
@@ -148,6 +165,9 @@ func decodeEvents(events io.Reader, stdout io.Writer) (gateReport, error) {
 		}
 		if event.Action == testActionOutput {
 			_, _ = io.WriteString(stdout, event.Output)
+			if report.timeout == "" && strings.HasPrefix(event.Output, timeoutPanicPrefix) {
+				report.timeout = strings.TrimSpace(event.Output)
+			}
 		}
 		if event.Test == "" {
 			continue
@@ -206,6 +226,9 @@ func judge(report gateReport, commandStatus int, pattern string, packagePath str
 	)
 
 	var problems []string
+	if report.timeout != "" {
+		problems = append(problems, fmt.Sprintf("go test timed out (%s)", report.timeout))
+	}
 	if commandStatus != exitPassed {
 		problems = append(problems, fmt.Sprintf("go test exited with status %d", commandStatus))
 	}
@@ -219,7 +242,7 @@ func judge(report gateReport, commandStatus int, pattern string, packagePath str
 		}
 	}
 	if len(unfinished) > 0 {
-		problems = append(problems, "tests without a final result: "+strings.Join(unfinished, ", "))
+		problems = append(problems, "unfinished tests: "+strings.Join(unfinished, ", "))
 	}
 	if len(passed)+len(failed)+len(skipped)+len(unfinished) == 0 {
 		problems = append(problems, fmt.Sprintf("no selected test ran for -run %q in %s", pattern, packagePath))
