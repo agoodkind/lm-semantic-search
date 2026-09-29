@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
@@ -30,23 +31,20 @@ const snapshotIDBytes = 16
 // cursorVersion identifies the cursor encoding.
 const cursorVersion = 1
 
-// queryDatabaseSchema creates the tables of one query database. universe and
-// filter_sets store the filter evaluation. candidates stores every eligible
+// queryDatabaseSchema creates the tables of one query database. filter_sets
+// stores one occurrence set per filter node. candidates stores every eligible
 // occurrence copied from the catalog read transaction. query_vectors stores
 // each distinct eligible vector with its copied identity and its exact score.
-// postings and lexical_scores store the hybrid leg. ranked stores the final
-// ordered result.
+// postings and lexical_scores store the hybrid leg. dense_order,
+// lexical_order, and final_order are keyed in rank order, and dense_ranks and
+// lexical_ranks number their rows by rowid. Each ordering is a b-tree in the
+// query database file, and the page limit of that file bounds it. ranked
+// stores the final ordered result.
 var queryDatabaseSchema = []string{
-	`CREATE TABLE universe (
-		owner_id TEXT NOT NULL,
-		row_key TEXT NOT NULL,
-		PRIMARY KEY (owner_id, row_key)
-	) WITHOUT ROWID`,
 	`CREATE TABLE filter_sets (
 		node INTEGER NOT NULL,
 		owner_id TEXT NOT NULL,
 		row_key TEXT NOT NULL,
-		truth INTEGER NOT NULL,
 		PRIMARY KEY (node, owner_id, row_key)
 	) WITHOUT ROWID`,
 	`CREATE TABLE candidates (
@@ -77,6 +75,46 @@ var queryDatabaseSchema = []string{
 		search_hash TEXT PRIMARY KEY,
 		score REAL NOT NULL
 	) WITHOUT ROWID`,
+	`CREATE INDEX candidates_search_hash ON candidates (search_hash)`,
+	`CREATE TABLE dense_order (
+		negated_score REAL NOT NULL,
+		owner_id TEXT NOT NULL,
+		row_key TEXT NOT NULL,
+		PRIMARY KEY (negated_score, owner_id, row_key)
+	) WITHOUT ROWID`,
+	`CREATE TABLE dense_ranks (
+		rank INTEGER PRIMARY KEY,
+		owner_id TEXT NOT NULL,
+		row_key TEXT NOT NULL
+	)`,
+	`CREATE UNIQUE INDEX dense_ranks_key ON dense_ranks (owner_id, row_key)`,
+	`CREATE TABLE lexical_order (
+		negated_score REAL NOT NULL,
+		owner_id TEXT NOT NULL,
+		row_key TEXT NOT NULL,
+		PRIMARY KEY (negated_score, owner_id, row_key)
+	) WITHOUT ROWID`,
+	`CREATE TABLE lexical_ranks (
+		rank INTEGER PRIMARY KEY,
+		owner_id TEXT NOT NULL,
+		row_key TEXT NOT NULL
+	)`,
+	`CREATE UNIQUE INDEX lexical_ranks_key ON lexical_ranks (owner_id, row_key)`,
+	`CREATE TABLE final_order (
+		negated_score REAL NOT NULL,
+		sort_key TEXT NOT NULL,
+		owner_id TEXT NOT NULL,
+		row_key TEXT NOT NULL,
+		source_blob_id TEXT NOT NULL,
+		vector_id TEXT NOT NULL,
+		scalars TEXT NOT NULL,
+		group_key TEXT NOT NULL,
+		PRIMARY KEY (negated_score, sort_key, owner_id, row_key)
+	) WITHOUT ROWID`,
+	`CREATE TABLE group_counts (
+		group_key TEXT PRIMARY KEY,
+		count INTEGER NOT NULL
+	) WITHOUT ROWID`,
 	`CREATE TABLE ranked (
 		ordinal INTEGER PRIMARY KEY,
 		owner_id TEXT NOT NULL,
@@ -86,6 +124,46 @@ var queryDatabaseSchema = []string{
 		scalars TEXT NOT NULL,
 		score REAL NOT NULL
 	)`,
+}
+
+// queryDatabasePattern is the [os.CreateTemp] pattern of a query database file.
+// queryDatabasePrefix is its fixed part.
+const (
+	queryDatabasePattern = ".lms-query-*.sqlite"
+	queryDatabasePrefix  = ".lms-query-"
+)
+
+// removeStaleQueryDatabases deletes query database files in directory that
+// were last written more than staleAfter ago. A process that ended during a
+// search leaves its file behind. A running search writes its file within its
+// QueryTimeout. A failure to list or delete a file is logged and does not fail
+// the search.
+func removeStaleQueryDatabases(ctx context.Context, directory string, staleAfter time.Duration) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		slog.WarnContext(ctx, "list query databases failed", "directory", directory, "err", err)
+		return
+	}
+	cutoff := clock.Now().Add(-staleAfter)
+	var removed []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), queryDatabasePrefix) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.WarnContext(ctx, "remove stale query database failed", "path", path, "err", err)
+			continue
+		}
+		removed = append(removed, entry.Name())
+	}
+	if len(removed) > 0 {
+		slog.InfoContext(ctx, "removed stale query databases", "directory", directory, "files", removed)
+	}
 }
 
 // queryDatabase is one per-query SQLite file in the catalog directory. Every
@@ -98,8 +176,9 @@ type queryDatabase struct {
 }
 
 // openQueryDatabase creates an empty query database limited to maxBytes.
-func openQueryDatabase(ctx context.Context, catalogPath string, maxBytes int64) (*queryDatabase, error) {
-	file, err := os.CreateTemp(filepath.Dir(catalogPath), ".lms-query-*.sqlite")
+func openQueryDatabase(ctx context.Context, catalogPath string, maxBytes int64, staleAfter time.Duration) (*queryDatabase, error) {
+	removeStaleQueryDatabases(ctx, filepath.Dir(catalogPath), staleAfter)
+	file, err := os.CreateTemp(filepath.Dir(catalogPath), queryDatabasePattern)
 	if err != nil {
 		slog.ErrorContext(ctx, "create query database failed", "err", err)
 		return nil, fmt.Errorf("create query database: %w", err)
@@ -132,9 +211,13 @@ func (query *queryDatabase) initialize(ctx context.Context, maxBytes int64) erro
 		return fmt.Errorf("open query database connection: %w", err)
 	}
 	query.conn = conn
+	// The query database statements open no temporary b-tree or sorter;
+	// TestQueryDatabaseStatementsUseNoTemporaryStore checks their bytecode.
+	// temp_store FILE keeps any unexpected temporary table off the process heap.
 	statements := []string{
 		"PRAGMA page_size = " + strconv.Itoa(queryDatabasePageBytes),
 		"PRAGMA max_page_count = " + strconv.FormatInt(max(maxBytes/queryDatabasePageBytes, 1), 10),
+		"PRAGMA temp_store = FILE",
 	}
 	statements = append(statements, queryDatabaseSchema...)
 	for _, statement := range statements {
@@ -241,7 +324,7 @@ WHERE o.namespace = :namespace`
 const (
 	allCandidatesStatement = candidateColumns
 	oneCandidateStatement  = candidateColumns + ` AND o.owner_id = :owner_id AND o.row_key = :row_key`
-	eligibleKeysStatement  = `SELECT owner_id, row_key FROM filter_sets WHERE node = :node AND truth = 2`
+	eligibleKeysStatement  = `SELECT owner_id, row_key FROM filter_sets WHERE node = :node`
 )
 
 // copyCandidates copies every eligible occurrence of the plan and the identity
@@ -270,8 +353,8 @@ func copyCandidates(ctx context.Context, tx *sql.Tx, query *queryDatabase, plan 
 		}
 		count, err = insertCandidateRows(ctx, writer, rows)
 	} else {
-		evaluator := filterEvaluator{catalog: tx, writer: writer, namespace: plan.request.Namespace, nextNode: 0, universe: false}
-		root, evaluateErr := evaluator.evaluate(ctx, *plan.request.Filter)
+		evaluator := filterEvaluator{catalog: tx, writer: writer, namespace: plan.request.Namespace, columns: declaredColumns(plan.spec), nextNode: 0}
+		root, evaluateErr := evaluator.evaluate(ctx, *plan.request.Filter, false)
 		if evaluateErr != nil {
 			return 0, evaluateErr
 		}
@@ -378,15 +461,12 @@ func insertCandidate(ctx context.Context, writer *sql.Tx, row eligibleRow) error
 		slog.ErrorContext(ctx, "eligible occurrence has no catalog vector", "err", missing)
 		return missing
 	}
-	if _, err := writer.ExecContext(ctx,
-		`INSERT INTO candidates (owner_id, row_key, sort_key, vector_id, source_blob_id, search_hash, group_key, scalars)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	if _, err := writer.ExecContext(ctx, insertCandidateStatement,
 		row.ownerID, row.rowKey, row.sortKey, row.vectorID, row.blobID, row.searchHash, row.groupKey, row.scalars,
 	); err != nil {
 		return queryDatabaseError(ctx, "copy eligible occurrence", err)
 	}
-	if _, err := writer.ExecContext(ctx,
-		`INSERT OR IGNORE INTO query_vectors (vector_id, identity_digest, vector_checksum) VALUES (?, ?, ?)`,
+	if _, err := writer.ExecContext(ctx, insertQueryVectorStatement,
 		row.vectorID, row.digest.String, row.checksum.String,
 	); err != nil {
 		return queryDatabaseError(ctx, "copy eligible vector identity", err)
@@ -408,11 +488,7 @@ type rankedRow struct {
 // readRankedRows returns up to limit rows of the query database ranking from
 // ordinal first.
 func readRankedRows(ctx context.Context, query *queryDatabase, first int64, limit int) (_ []rankedRow, err error) {
-	rows, err := query.conn.QueryContext(ctx,
-		`SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, scalars, score FROM ranked
-		WHERE ordinal >= ? ORDER BY ordinal LIMIT ?`,
-		first, limit,
-	)
+	rows, err := query.conn.QueryContext(ctx, rankedPageStatement, first, limit)
 	if err != nil {
 		return nil, queryDatabaseError(ctx, "read ranked rows", err)
 	}
@@ -509,11 +585,7 @@ func rankedResultBytes(ctx context.Context, query *queryDatabase, namespace stri
 	const numericColumns = 2
 	perRow := int64(snapshotIDBytes*2+len(namespace)) + numericColumns*numericColumnBytes
 	var total sql.NullInt64
-	if err := query.conn.QueryRowContext(ctx,
-		`SELECT SUM(? + length(CAST(owner_id AS BLOB)) + length(CAST(row_key AS BLOB)) + length(CAST(source_blob_id AS BLOB))
-			+ length(CAST(vector_id AS BLOB)) + length(CAST(scalars AS BLOB))) FROM ranked`,
-		perRow,
-	).Scan(&total); err != nil {
+	if err := query.conn.QueryRowContext(ctx, rankedBytesStatement, perRow).Scan(&total); err != nil {
 		return 0, queryDatabaseError(ctx, "measure ranked result bytes", err)
 	}
 	return total.Int64, nil
@@ -556,9 +628,7 @@ func checkSnapshotBudget(ctx context.Context, tx *sql.Tx, nowMilli int64, newByt
 }
 
 func copyRankedResults(ctx context.Context, tx *sql.Tx, query *queryDatabase, snapshotID string, namespace string) (err error) {
-	rows, err := query.conn.QueryContext(ctx,
-		`SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, scalars, score FROM ranked ORDER BY ordinal`,
-	)
+	rows, err := query.conn.QueryContext(ctx, rankedRowsStatement)
 	if err != nil {
 		return queryDatabaseError(ctx, "read ranking for the snapshot", err)
 	}
@@ -796,3 +866,15 @@ func decodeEffectiveScalar(name string, fields []json.RawMessage) (ScalarValue, 
 	}
 	return value, nil
 }
+
+// Query database statements of the candidate copy and the ranked result.
+const (
+	insertCandidateStatement = `INSERT INTO candidates (owner_id, row_key, sort_key, vector_id, source_blob_id, search_hash, group_key, scalars)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	insertQueryVectorStatement = `INSERT OR IGNORE INTO query_vectors (vector_id, identity_digest, vector_checksum) VALUES (?, ?, ?)`
+	rankedPageStatement        = `SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, scalars, score FROM ranked
+		WHERE ordinal >= ? ORDER BY ordinal LIMIT ?`
+	rankedRowsStatement  = `SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, scalars, score FROM ranked ORDER BY ordinal`
+	rankedBytesStatement = `SELECT SUM(? + length(CAST(owner_id AS BLOB)) + length(CAST(row_key AS BLOB)) + length(CAST(source_blob_id AS BLOB))
+			+ length(CAST(vector_id AS BLOB)) + length(CAST(scalars AS BLOB))) FROM ranked`
+)

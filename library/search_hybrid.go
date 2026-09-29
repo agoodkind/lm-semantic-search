@@ -8,12 +8,11 @@ import (
 	"log/slog"
 )
 
-// lexicalLeg is the frozen lexical input of one hybrid search: the analyzed
-// query terms, the corpus statistics generation, and the scorer. ranked is
-// false when the query has no terms or the corpus average length is zero; the
-// search then omits the lexical ranking.
+// lexicalLeg is the frozen lexical input of one hybrid search: the corpus
+// statistics generation and the scorer of the analyzed query. ranked is false
+// when the query has no terms or the corpus average length is zero; the search
+// then omits the lexical ranking.
 type lexicalLeg struct {
-	terms      []lexicalTerm
 	generation uint64
 	scorer     lexicalScorer
 	ranked     bool
@@ -41,7 +40,7 @@ func (library *Library) copyLexical(
 		return lexicalLeg{}, err
 	}
 	scorer, ranked := newLexicalScorer(parameters, corpus, terms, frequencies)
-	leg := lexicalLeg{terms: terms, generation: generation, scorer: scorer, ranked: ranked}
+	leg := lexicalLeg{generation: generation, scorer: scorer, ranked: ranked}
 	if !ranked {
 		return leg, nil
 	}
@@ -84,8 +83,7 @@ func copyTermPostings(ctx context.Context, tx *sql.Tx, query *queryDatabase, nam
 			slog.ErrorContext(ctx, "scan lexical posting failed", "err", err)
 			return fmt.Errorf("scan lexical posting: %w", err)
 		}
-		if _, err := writer.ExecContext(ctx,
-			`INSERT INTO postings (search_hash, term_hash, tf, document_length) VALUES (?, ?, ?, ?)`,
+		if _, err := writer.ExecContext(ctx, insertPostingStatement,
 			searchHash, term, frequency, documentLength,
 		); err != nil {
 			return queryDatabaseError(ctx, "copy lexical posting", err)
@@ -100,6 +98,12 @@ func copyTermPostings(ctx context.Context, tx *sql.Tx, query *queryDatabase, nam
 	}
 	return nil
 }
+
+// eligiblePostingsStatement reads the copied postings of every content that a
+// candidate occurrence references, in primary key order.
+const eligiblePostingsStatement = `SELECT p.search_hash, p.term_hash, p.tf, p.document_length FROM postings p
+	WHERE EXISTS (SELECT 1 FROM candidates c WHERE c.search_hash = p.search_hash)
+	ORDER BY p.search_hash, p.term_hash`
 
 // scoreLexical computes one BM25 score for each eligible lexical content from
 // the copied postings and saves it in lexical_scores. A content without a
@@ -117,17 +121,14 @@ func scoreLexical(ctx context.Context, query *queryDatabase, leg lexicalLeg) (er
 			err = errors.Join(err, writer.Rollback())
 		}
 	}()
-	insert, err := writer.PrepareContext(ctx, `INSERT INTO lexical_scores (search_hash, score) VALUES (?, ?)`)
+	insert, err := writer.PrepareContext(ctx, insertLexicalScoreStatement)
 	if err != nil {
 		return queryDatabaseError(ctx, "prepare lexical score insert", err)
 	}
 	defer func() {
 		err = errors.Join(err, closeStatement(ctx, insert))
 	}()
-	rows, err := writer.QueryContext(ctx,
-		`SELECT search_hash, term_hash, tf, document_length FROM postings
-		WHERE search_hash IN (SELECT search_hash FROM candidates) ORDER BY search_hash, term_hash`,
-	)
+	rows, err := writer.QueryContext(ctx, eligiblePostingsStatement)
 	if err != nil {
 		return queryDatabaseError(ctx, "read copied postings", err)
 	}
@@ -144,3 +145,9 @@ func scoreLexical(ctx context.Context, query *queryDatabase, leg lexicalLeg) (er
 	}
 	return nil
 }
+
+// Query database statements of the lexical leg.
+const (
+	insertPostingStatement      = `INSERT INTO postings (search_hash, term_hash, tf, document_length) VALUES (?, ?, ?, ?)`
+	insertLexicalScoreStatement = `INSERT INTO lexical_scores (search_hash, score) VALUES (?, ?)`
+)

@@ -568,6 +568,18 @@ func searchRequests() map[string]library.SearchRequest {
 		{Op: library.Range, Column: "message_index", Upper: int64Bound(5)},
 		{Op: library.In, Column: "conversation", Values: []library.ScalarValue{stringValue("conv-c"), stringValue("conv-z")}},
 	}})
+	add("not any range or prefix", library.Filter{Op: library.Not, Children: []library.Filter{
+		{Op: library.Any, Children: []library.Filter{
+			{Op: library.Range, Column: "message_index", Lower: int64Bound(20), Upper: int64Bound(45)},
+			{Op: library.Prefix, Column: "workspace", Prefix: "/w/alpha"},
+		}},
+	}})
+	add("not all in and equal", library.Filter{Op: library.Not, Children: []library.Filter{
+		{Op: library.All, Children: []library.Filter{
+			{Op: library.In, Column: "conversation", Values: []library.ScalarValue{stringValue("conv-a"), stringValue("conv-b")}},
+			{Op: library.Equal, Column: "archived", Values: []library.ScalarValue{{Type: library.Bool, Null: false, String: "", Bool: false, Int64: 0}}},
+		}},
+	}})
 	grouped := base
 	grouped.GroupBy = "workspace"
 	grouped.PerGroupLimit = 2
@@ -762,6 +774,27 @@ func TestSearchRejectsForeignAndExpiredCursors(t *testing.T) {
 	if pins := fixture.snapshotPins(t); len(pins) != oracleCount {
 		t.Fatalf("after cleanup the catalog has %d snapshot rows, want only the %d of the new snapshot", len(pins), oracleCount)
 	}
+	if rows := fixture.countRows(t, "search_results"); rows != oracleCount {
+		t.Fatalf("after cleanup search_results has %d rows, want only the %d of the new snapshot", rows, oracleCount)
+	}
+	if rows := fixture.countRows(t, "search_snapshots"); rows != 1 {
+		t.Fatalf("after cleanup search_snapshots has %d rows, want only the new snapshot", rows)
+	}
+}
+
+// countRows counts every row of a catalog table, including rows that no
+// other table references.
+func (fixture *searchFixture) countRows(t *testing.T, table string) int {
+	t.Helper()
+	queries := map[string]string{
+		"search_results":   `SELECT COUNT(*) FROM search_results`,
+		"search_snapshots": `SELECT COUNT(*) FROM search_snapshots`,
+	}
+	var count int
+	if err := openCatalogReadOnly(t, fixture.descriptor).QueryRowContext(fixture.ctx, queries[table]).Scan(&count); err != nil {
+		t.Fatalf("count %s rows: %v", table, err)
+	}
+	return count
 }
 
 func TestSearchCursorRejectsAnotherRankConfiguration(t *testing.T) {
@@ -781,6 +814,44 @@ func TestSearchCursorRejectsAnotherRankConfiguration(t *testing.T) {
 	}
 }
 
+// TestSearchReturnsResourceLimitWhenTheQueryDatabaseIsFull raises
+// MaxTemporaryBytes one query database page at a time. Every search below the
+// size that the query needs fails with ErrResourceLimit and no page, and at
+// least one of them fails after the query database schema exists.
+func TestSearchReturnsResourceLimitWhenTheQueryDatabaseIsFull(t *testing.T) {
+	fixture := newSearchFixture(t, nil)
+	request := library.SearchRequest{Namespace: "chat", Query: "strong consistency reads verify the checksum", PageSize: 1}
+	const pageBytes = 4096
+	const maxPages = 1024
+	dataFailures := 0
+	for pages := 1; pages <= maxPages; pages++ {
+		config := denseConfig(fixture.descriptor, fixture.pool, fixture.embedder)
+		config.MaxTemporaryBytes = int64(pages * pageBytes)
+		limited, err := library.Open(fixture.ctx, config)
+		if err != nil {
+			t.Fatalf("Open with %d query database pages: %v", pages, err)
+		}
+		page, err := limited.Search(fixture.ctx, request)
+		if closeErr := limited.Close(); closeErr != nil {
+			t.Fatalf("Close: %v", closeErr)
+		}
+		if err == nil {
+			if dataFailures == 0 {
+				t.Fatalf("Search succeeded at %d pages with no earlier failure after the schema", pages)
+			}
+			t.Logf("Search failed after the schema at %d budgets and succeeded at %d pages", dataFailures, pages)
+			return
+		}
+		if !errors.Is(err, library.ErrResourceLimit) || len(page.Hits) != 0 || page.NextCursor != "" {
+			t.Fatalf("Search at %d pages = %d hits, %v; want no page and ErrResourceLimit", pages, len(page.Hits), err)
+		}
+		if !strings.Contains(err.Error(), "create query database schema") {
+			dataFailures++
+		}
+	}
+	t.Fatalf("Search did not succeed within %d query database pages", maxPages)
+}
+
 func TestSearchFailsWithoutAPageOnBudgetDeadlineAndVectorLoss(t *testing.T) {
 	request := library.SearchRequest{Namespace: "chat", Query: "strong consistency reads verify the checksum", PageSize: 1}
 	cases := []struct {
@@ -789,7 +860,6 @@ func TestSearchFailsWithoutAPageOnBudgetDeadlineAndVectorLoss(t *testing.T) {
 		damage    func(*testing.T, *searchFixture)
 		want      error
 	}{
-		{name: "temporary disk", configure: func(config *library.Config) { config.MaxTemporaryBytes = 7 * 4096 }, damage: nil, want: library.ErrResourceLimit},
 		{name: "snapshot disk", configure: func(config *library.Config) { config.MaxSnapshotBytes = 512 }, damage: nil, want: library.ErrResourceLimit},
 		{name: "deadline", configure: func(config *library.Config) { config.QueryTimeout = time.Nanosecond }, damage: nil, want: library.ErrDeadline},
 		{name: "missing vector", configure: nil, damage: removeOneVector, want: library.ErrVectorMissing},
@@ -821,6 +891,56 @@ func TestSearchFailsWithoutAPageOnBudgetDeadlineAndVectorLoss(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSearchVerifiesVectorIdentityBeforeScoring changes one eligible vector's
+// checksum in the catalog and leaves the pool unchanged. VerifyStrong compares
+// the pool with the checksum that the snapshot copies from the catalog;
+// ScoreExact reads only the pool.
+func TestSearchVerifiesVectorIdentityBeforeScoring(t *testing.T) {
+	fixture := newSearchFixture(t, nil)
+	vectorID := fixture.catalogVectorIDs(t, "chat")[library.OccurrenceID{Namespace: "chat", OwnerID: "conv-a", RowKey: "m000"}]
+	database, err := sql.Open("sqlite3", "file:"+fixture.descriptor.CatalogPath)
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.ExecContext(fixture.ctx,
+		`UPDATE vectors SET vector_checksum = ? WHERE vector_id = ?`, strings.Repeat("0", 64), vectorID); err != nil {
+		t.Fatalf("change catalog checksum: %v", err)
+	}
+	page, err := fixture.library.Search(fixture.ctx, library.SearchRequest{Namespace: "chat", Query: "alpha", PageSize: 5})
+	if !errors.Is(err, library.ErrVectorCorrupt) || len(page.Hits) != 0 {
+		t.Fatalf("Search with a changed catalog checksum = %d hits, %v; want no page and ErrVectorCorrupt", len(page.Hits), err)
+	}
+}
+
+// TestSearchRemovesStaleQueryDatabases leaves one query database file older
+// than twice the QueryTimeout and one recent file in the catalog directory.
+// Page one deletes the old file and keeps the recent one.
+func TestSearchRemovesStaleQueryDatabases(t *testing.T) {
+	fixture := newSearchFixture(t, func(config *library.Config) { config.QueryTimeout = time.Minute })
+	directory := filepath.Dir(fixture.descriptor.CatalogPath)
+	stale := filepath.Join(directory, ".lms-query-stale.sqlite")
+	recent := filepath.Join(directory, ".lms-query-recent.sqlite")
+	for _, path := range []string{stale, recent} {
+		if err := os.WriteFile(path, []byte("left by a stopped search"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	old := time.Now().Add(-3 * time.Minute)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatalf("age %s: %v", stale, err)
+	}
+	if _, err := fixture.library.Search(fixture.ctx, library.SearchRequest{Namespace: "chat", Query: "alpha", PageSize: 5}); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale query database after Search: %v, want it removed", err)
+	}
+	if _, err := os.Stat(recent); err != nil {
+		t.Fatalf("recent query database after Search: %v, want it kept", err)
 	}
 }
 
@@ -865,16 +985,22 @@ func (fixture *searchFixture) hybridOracle(
 	lexicalOrder []library.OccurrenceID,
 ) []library.SearchHit {
 	t.Helper()
-	dense := fixture.oracle(t, library.SearchRequest{Namespace: request.Namespace, Query: request.Query})
+	dense := fixture.oracle(t, library.SearchRequest{Namespace: request.Namespace, Query: request.Query, Filter: request.Filter})
 	slices.SortFunc(dense, func(left library.SearchHit, right library.SearchHit) int {
 		if left.Score != right.Score {
 			return cmp.Compare(right.Score, left.Score)
 		}
 		return cmp.Or(strings.Compare(left.ID.OwnerID, right.ID.OwnerID), strings.Compare(left.ID.RowKey, right.ID.RowKey))
 	})
+	eligible := map[library.OccurrenceID]bool{}
+	for _, hit := range dense {
+		eligible[hit.ID] = true
+	}
 	lexicalRank := map[library.OccurrenceID]int{}
-	for index, id := range lexicalOrder {
-		lexicalRank[id] = index + 1
+	for _, id := range lexicalOrder {
+		if eligible[id] {
+			lexicalRank[id] = len(lexicalRank) + 1
+		}
 	}
 	fused := make([]oracleHit, 0, len(dense))
 	for index, hit := range dense {
@@ -882,11 +1008,19 @@ func (fixture *searchFixture) hybridOracle(
 		if rank, matched := lexicalRank[hit.ID]; matched {
 			score += 1.0 / float64(hybridRRFK+rank)
 		}
-		fused = append(fused, oracleHit{record: fixture.records[hit.ID], score: score, group: ""})
+		if request.MinScore > 0 && score < request.MinScore {
+			continue
+		}
+		record := fixture.records[hit.ID]
+		fused = append(fused, oracleHit{record: record, score: score, group: groupKey(record.effective(), request.GroupBy)})
 	}
 	slices.SortFunc(fused, compareOracleHits)
 	return applyGroupQuota(fused, request)
 }
+
+// lexicalWorkspaces are the workspace scalars of the five lexical rows: a
+// value, absent, another value, the first value again, and null.
+var lexicalWorkspaces = []string{"/w/alpha", "", "/w/beta", "/w/alpha", "null"}
 
 func TestSearchHybridFusesDenseAndLexicalRanks(t *testing.T) {
 	fixture := newSearchFixture(t, func(config *library.Config) { config.SearchMode = library.Hybrid })
@@ -898,9 +1032,17 @@ func TestSearchHybridFusesDenseAndLexicalRanks(t *testing.T) {
 			text = "zzqx alpha beta gamma delta epsilon"
 		}
 		rowKey := fmt.Sprintf("lex%d", index)
+		scalars := map[string]library.ScalarValue{}
+		switch workspace := lexicalWorkspaces[index]; workspace {
+		case "":
+		case "null":
+			scalars["workspace"] = library.ScalarValue{Type: library.String, Null: true, String: "", Bool: false, Int64: 0}
+		default:
+			scalars["workspace"] = stringValue(workspace)
+		}
 		rows = append(rows, library.Occurrence{
 			RowKey: rowKey, SortKey: fmt.Sprintf("s%02d", index), SourceText: text, SearchText: text,
-			EmbeddingInput: searchTopics[index], Scalars: nil,
+			EmbeddingInput: searchTopics[index], Scalars: scalars,
 		})
 		id := library.OccurrenceID{Namespace: "chat", OwnerID: "conv-lex", RowKey: rowKey}
 		if index < 3 {
@@ -918,6 +1060,36 @@ func TestSearchHybridFusesDenseAndLexicalRanks(t *testing.T) {
 	for _, pageSize := range []int{1, 10, 100} {
 		assertHitsEqual(t, fmt.Sprintf("hybrid zzqx at page size %d", pageSize), pageAll(t, fixture.library, matched, pageSize), want)
 	}
+
+	// Both ranks count only the occurrences that the filter selects. lex1 has
+	// no workspace and lex2 has another workspace, so neither is eligible.
+	filtered := matched
+	filtered.Filter = &library.Filter{Op: library.Any, Children: []library.Filter{
+		{Op: library.Prefix, Column: "workspace", Prefix: "/w/alpha"},
+		{Op: library.IsNull, Column: "workspace"},
+	}}
+	want = fixture.hybridOracle(t, filtered, append(slices.Clone(short), long...))
+	assertHitsEqual(t, "hybrid filtered", pageAll(t, fixture.library, filtered, 10), want)
+
+	grouped := matched
+	grouped.GroupBy = "workspace"
+	grouped.PerGroupLimit = 1
+	want = fixture.hybridOracle(t, grouped, append(slices.Clone(short), long...))
+	assertHitsEqual(t, "hybrid grouped", pageAll(t, fixture.library, grouped, 10), want)
+
+	all := fixture.hybridOracle(t, matched, append(slices.Clone(short), long...))
+	floored := matched
+	for index := 3; index+1 < len(all); index++ {
+		if all[index].Score > all[index+1].Score {
+			floored.MinScore = (all[index].Score + all[index+1].Score) / 2
+			break
+		}
+	}
+	want = fixture.hybridOracle(t, floored, append(slices.Clone(short), long...))
+	if len(want) == 0 || len(want) == len(all) {
+		t.Fatalf("hybrid MinScore %v keeps %d of %d hits; the floor does not split the result", floored.MinScore, len(want), len(all))
+	}
+	assertHitsEqual(t, "hybrid MinScore", pageAll(t, fixture.library, floored, 10), want)
 
 	// A query with no analyzed terms ranks by the dense term alone.
 	unanalyzed := library.SearchRequest{Namespace: "chat", Query: "!!! ???"}

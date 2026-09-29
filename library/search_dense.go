@@ -73,7 +73,7 @@ func (library *Library) scoreDense(ctx context.Context, query *queryDatabase, qu
 		after = last
 	}
 	var unscored int64
-	if err := query.conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM query_vectors WHERE score IS NULL`).Scan(&unscored); err != nil {
+	if err := query.conn.QueryRowContext(ctx, unscoredVectorsStatement).Scan(&unscored); err != nil {
 		return queryDatabaseError(ctx, "count unscored vectors", err)
 	}
 	if unscored != 0 {
@@ -93,10 +93,7 @@ func readScoreBlocks(
 	blockSize int,
 	workers int,
 ) (_ []*scoreBlock, _ string, err error) {
-	rows, err := query.conn.QueryContext(ctx,
-		`SELECT vector_id, identity_digest, vector_checksum FROM query_vectors WHERE vector_id > ? ORDER BY vector_id LIMIT ?`,
-		after, blockSize*workers,
-	)
+	rows, err := query.conn.QueryContext(ctx, vectorBlockStatement, after, blockSize*workers)
 	if err != nil {
 		return nil, "", queryDatabaseError(ctx, "read vector identities", err)
 	}
@@ -190,7 +187,7 @@ func saveScores(ctx context.Context, query *queryDatabase, blocks []*scoreBlock)
 	}()
 	for _, block := range blocks {
 		for _, score := range block.scores {
-			if _, err := writer.ExecContext(ctx, `UPDATE query_vectors SET score = ? WHERE vector_id = ?`, score.Score, score.ID); err != nil {
+			if _, err := writer.ExecContext(ctx, saveScoreStatement, score.Score, score.ID); err != nil {
 				return queryDatabaseError(ctx, "save vector score", err)
 			}
 		}
@@ -200,3 +197,10 @@ func saveScores(ctx context.Context, query *queryDatabase, blocks []*scoreBlock)
 	}
 	return nil
 }
+
+// Query database statements of the dense leg.
+const (
+	vectorBlockStatement     = `SELECT vector_id, identity_digest, vector_checksum FROM query_vectors WHERE vector_id > ? ORDER BY vector_id LIMIT ?`
+	saveScoreStatement       = `UPDATE query_vectors SET score = ? WHERE vector_id = ?`
+	unscoredVectorsStatement = `SELECT COUNT(*) FROM query_vectors WHERE score IS NULL`
+)

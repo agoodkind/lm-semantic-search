@@ -208,7 +208,7 @@ func hashJSON[Identity requestIdentity | rankConfig](value Identity) (string, er
 // scores and ranks them in a query database, and returns the first page.
 func (library *Library) searchFirstPage(ctx context.Context, plan searchPlan, phases *searchPhases) (_ SearchPage, err error) {
 	started := clock.Now()
-	query, err := openQueryDatabase(ctx, library.config.Store.CatalogPath, library.config.MaxTemporaryBytes)
+	query, err := openQueryDatabase(ctx, library.config.Store.CatalogPath, library.config.MaxTemporaryBytes, 2*library.config.QueryTimeout)
 	if err != nil {
 		return SearchPage{}, err
 	}
