@@ -12,7 +12,7 @@ This design replaces the planned generic conversation RPC cutover. The current g
 
 ## Public contract
 
-Create the importable package `goodkind.io/lm-semantic-search/library`. Its public contract is backend-neutral. `library/milvus.New` accepts a caller-owned `*milvusclient.Client`; `library/embedded.New` adapts the existing offline vector store. Neither adapter closes a caller-owned connection. The package does not start a daemon, open a network listener, load conversation files, or select a source policy.
+Create the importable package `goodkind.io/lm-semantic-search/library`. Its public contract is backend-neutral. `library/milvus.New` accepts a caller-owned `*milvusclient.Client`; `library/embedded.New` opens an exact, file-backed vector pool in its own directory. The existing offline `local_code_chunks_*` collections stay unchanged, and L4 builds the new pool before it switches offline reads to it. Neither adapter closes a caller-owned connection. The package does not start a daemon, open a network listener, load conversation files, or select a source policy.
 
 ```go
 type StoreDescriptor struct {
@@ -168,7 +168,7 @@ type Tokenizer interface { CountTokens(context.Context, string) (int, error) }
 type PreparedPart struct { Suffix string; ByteStart, ByteEnd int; EmbeddingInput string }
 ```
 
-`PrepareText` splits text at model limits with stable part suffixes and returns the exact transformed document inputs. Clyde and the codebase adapter select source rows and supply their policies before calling this helper. `Apply` and `Stage` accept already prepared parts and never split again. Importable library packages expose the existing embedding provider implementations.
+`PrepareText` splits text at model limits with stable part suffixes and returns the exact transformed document inputs. A caller with the model's real tokenizer passes it as `Tokenizer`, and every transformed input then fits `MaxTokens`. Without a tokenizer, `PrepareText` counts one byte as one token and limits each transformed input, document prefix included, to `int(MaxTokens * 0.9)` bytes; a smaller `MaxBytes` still applies. A byte-fallback BPE tokenizer emits at most one token per input byte plus its added tokens. For NV-EmbedCode on lmd-serve, 21 single-input requests between 2026-09-29 02:48:15 and 02:51:24 UTC measured at most bytes plus 2 tokens: Deseret text of 4,092 bytes counted 4,094 tokens, and 4,096 bytes counted 4,098 tokens and returned `context_length_exceeded`. Clyde and the codebase adapter select source rows and supply their policies before calling this helper. `Apply` and `Stage` accept already prepared parts and never split again. Importable library packages expose the existing embedding provider implementations.
 
 The exported error contract includes `ErrStoreMismatch`, `ErrInvalidRequest`, `ErrAppendConflict`, `ErrStaleGeneration`, `ErrVectorCorrupt`, `ErrVectorMissing`, `ErrCursorExpired`, `ErrCursorMismatch`, `ErrDeadline`, and `ErrResourceLimit`. Each supports `errors.Is`. A failed write preserves the prior committed generation; a failed search returns no successful page or premature end marker.
 
