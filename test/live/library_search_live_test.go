@@ -302,6 +302,70 @@ func (store *searchLiveStore) deterministicQueryVector(t *testing.T, query strin
 	return first
 }
 
+// searchLivePageSizes are the page sizes that every live request pages to
+// exhaustion.
+var searchLivePageSizes = []int{1, 10, 100}
+
+// searchLiveCosineTolerance is the largest accepted difference between a
+// Milvus COSINE score, computed in float32, and the test's float64 cosine.
+const searchLiveCosineTolerance = 1e-5
+
+// searchLiveVectorReadBlock is the ID count of one strong vector read.
+const searchLiveVectorReadBlock = 256
+
+// checkOracleCosine reads every published vector with a strong Milvus query,
+// computes its cosine with the query vector in float64, and compares it with
+// the oracle score that a Milvus search returned for the same ID.
+func (store *searchLiveStore) checkOracleCosine(t *testing.T, query string) {
+	t.Helper()
+	vectorIDs := store.catalogVectorIDs(t)
+	distinct := map[string]bool{}
+	for _, id := range vectorIDs {
+		distinct[id] = true
+	}
+	ids := slices.Sorted(searchLiveKeys(distinct))
+	queryVector := store.deterministicQueryVector(t, query)
+	scores := store.oracleScores(t, queryVector, ids)
+	largest := 0.0
+	for start := 0; start < len(ids); start += searchLiveVectorReadBlock {
+		block := ids[start:min(start+searchLiveVectorReadBlock, len(ids))]
+		result, err := store.testbed.milvus.Query(store.ctx, milvusclient.NewQueryOption(store.collection).
+			WithIDs(column.NewColumnVarChar("vector_id", block)).
+			WithOutputFields("vector_id", "vector").
+			WithConsistencyLevel(entity.ClStrong))
+		if err != nil {
+			t.Fatalf("strong read of vectors from %d: %v", start, err)
+		}
+		vectors, ok := result.GetColumn("vector").(*column.ColumnFloatVector)
+		if !ok || result.ResultCount != len(block) {
+			t.Fatalf("strong read of vectors from %d returned %d rows for %d IDs", start, result.ResultCount, len(block))
+		}
+		for row := range result.ResultCount {
+			id, err := result.GetColumn("vector_id").GetAsString(row)
+			if err != nil {
+				t.Fatalf("decode vector ID: %v", err)
+			}
+			difference := math.Abs(searchLiveCosine(queryVector, vectors.Data()[row]) - scores[id])
+			largest = max(largest, difference)
+			if difference > searchLiveCosineTolerance {
+				t.Fatalf("vector %s: Milvus score %v, the test's cosine differs by %v", id, scores[id], difference)
+			}
+		}
+	}
+	t.Logf("oracle scores of %d vectors equal the test's float64 cosine within %v (largest difference %v)", len(ids), searchLiveCosineTolerance, largest)
+}
+
+// searchLiveCosine returns the cosine similarity of two vectors in float64.
+func searchLiveCosine(left []float32, right []float32) float64 {
+	var dot, leftNorm, rightNorm float64
+	for index := range left {
+		dot += float64(left[index]) * float64(right[index])
+		leftNorm += float64(left[index]) * float64(left[index])
+		rightNorm += float64(right[index]) * float64(right[index])
+	}
+	return dot / (math.Sqrt(leftNorm) * math.Sqrt(rightNorm))
+}
+
 // oracleScores asks Milvus directly for the exact COSINE score of every
 // vector ID with its own client and batching.
 func (store *searchLiveStore) oracleScores(t *testing.T, queryVector []float32, ids []string) map[string]float64 {
@@ -615,17 +679,14 @@ func TestLibrarySearchCompletePagesMatchTheExhaustiveOracle(t *testing.T) {
 				t.Fatalf("filtered request: the deepest eligible hit has unfiltered rank %d, within the prior depth %d", deepest, searchLivePriorDepth)
 			}
 		}
-		pageSizes := []int{10, 100}
-		if name == "unfiltered" {
-			pageSizes = []int{1, 10, 100}
-		}
-		for _, pageSize := range pageSizes {
+		for _, pageSize := range searchLivePageSizes {
 			got := store.pageAll(t, store.library, request, pageSize, metrics, name)
 			searchLiveAssertHits(t, fmt.Sprintf("%s at page size %d", name, pageSize), got, want)
 			t.Logf("%s at page size %d: %d hits equal the oracle hit for hit", name, pageSize, len(got))
 		}
 	}
 	stopWatch()
+	store.checkOracleCosine(t, requests["unfiltered"].Query)
 	store.checkHybrid(t, metrics)
 	store.measureVectorReads(t, metrics)
 
@@ -848,7 +909,7 @@ func (store *searchLiveStore) checkHybrid(t *testing.T, metrics *searchLiveMetri
 	for _, name := range slices.Sorted(searchLiveKeys(requests)) {
 		request := requests[name]
 		want := store.hybridOracle(t, request, bm25)
-		for _, pageSize := range []int{10, 100} {
+		for _, pageSize := range searchLivePageSizes {
 			got := store.pageAll(t, hybrid, request, pageSize, metrics, name)
 			searchLiveAssertHits(t, fmt.Sprintf("%s at page size %d", name, pageSize), got, want)
 			t.Logf("%s at page size %d: %d hits equal the oracle hit for hit", name, pageSize, len(got))
