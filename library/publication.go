@@ -1,0 +1,396 @@
+package library
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log/slog"
+)
+
+// stagedRow is one staged occurrence of a generation.
+type stagedRow struct {
+	occurrence     Occurrence
+	occurrenceHash string
+	vectorID       string
+}
+
+// CommitGeneration publishes one staged owner generation in one SQLite
+// transaction. The staged row count and manifest hash must equal seal, and
+// every staged vector must pass a strong backend read first. Append inserts
+// the new rows and accepts identical repeats. Replace removes the owner's
+// previous rows. A committed token returns its saved receipt. A seal mismatch
+// returns an error that wraps [ErrInvalidRequest] and keeps the staged rows.
+func (library *Library) CommitGeneration(ctx context.Context, key GenerationKey, seal GenerationSeal) (ApplyReceipt, error) {
+	if err := validateGenerationKey(key); err != nil {
+		return ApplyReceipt{}, err
+	}
+	release, err := library.lock.acquire(ctx)
+	if err != nil {
+		return ApplyReceipt{}, err
+	}
+	defer release()
+	if err := library.replayOutbox(ctx); err != nil {
+		return ApplyReceipt{}, err
+	}
+
+	var receipt *ApplyReceipt
+	var mode BatchMode
+	var rows []stagedRow
+	if err := library.read(ctx, func(tx *sql.Tx) error {
+		var readErr error
+		receipt, readErr = checkGeneration(ctx, tx, key)
+		if readErr != nil || receipt != nil {
+			return readErr
+		}
+		mode, rows, readErr = readStagedGeneration(ctx, tx, key)
+		return readErr
+	}); err != nil {
+		return ApplyReceipt{}, err
+	}
+	if receipt != nil {
+		return *receipt, nil
+	}
+	manifest, err := checkSeal(key, rows, seal)
+	if err != nil {
+		return ApplyReceipt{}, err
+	}
+	if err := library.verifyStagedVectors(ctx, rows); err != nil {
+		return ApplyReceipt{}, err
+	}
+
+	published := ApplyReceipt{
+		Namespace:       key.Namespace,
+		OwnerID:         key.OwnerID,
+		GenerationOrder: key.GenerationOrder,
+		Fingerprint:     generationFingerprint(key, manifest),
+	}
+	err = library.write(ctx, func(tx *sql.Tx) error {
+		saved, err := checkGeneration(ctx, tx, key)
+		if err != nil {
+			return err
+		}
+		if saved != nil {
+			published = *saved
+			return nil
+		}
+		return publishGeneration(ctx, tx, key, mode, rows, manifest, published.Fingerprint)
+	})
+	if err != nil {
+		return ApplyReceipt{}, err
+	}
+	return published, nil
+}
+
+func readStagedGeneration(ctx context.Context, tx *sql.Tx, key GenerationKey) (mode BatchMode, rows []stagedRow, err error) {
+	scanErr := tx.QueryRowContext(
+		ctx,
+		`SELECT mode FROM staged_generations WHERE namespace = ? AND owner_id = ? AND generation_order = ? AND generation_token = ?`,
+		key.Namespace, key.OwnerID, key.GenerationOrder, key.IdempotencyToken,
+	).Scan(&mode)
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		return 0, nil, invalidRequest(fmt.Sprintf("commit: owner %q order %d has no staged generation", key.OwnerID, key.GenerationOrder))
+	}
+	if scanErr != nil {
+		slog.ErrorContext(ctx, "read staged generation failed", "err", scanErr)
+		return 0, nil, fmt.Errorf("read staged generation: %w", scanErr)
+	}
+	result, queryErr := tx.QueryContext(
+		ctx,
+		`SELECT payload, occurrence_hash, vector_id FROM staged_occurrences
+		WHERE namespace = ? AND owner_id = ? AND generation_order = ? AND generation_token = ? ORDER BY row_key`,
+		key.Namespace, key.OwnerID, key.GenerationOrder, key.IdempotencyToken,
+	)
+	if queryErr != nil {
+		slog.ErrorContext(ctx, "read staged rows failed", "err", queryErr)
+		return 0, nil, fmt.Errorf("read staged rows: %w", queryErr)
+	}
+	defer func() {
+		err = errors.Join(err, closeRows(ctx, result))
+	}()
+	for result.Next() {
+		var payload []byte
+		var row stagedRow
+		if err := result.Scan(&payload, &row.occurrenceHash, &row.vectorID); err != nil {
+			slog.ErrorContext(ctx, "scan staged row failed", "err", err)
+			return 0, nil, fmt.Errorf("scan staged row: %w", err)
+		}
+		row.occurrence, err = decodeOccurrence(payload)
+		if err != nil {
+			return 0, nil, err
+		}
+		rows = append(rows, row)
+	}
+	if err := result.Err(); err != nil {
+		slog.ErrorContext(ctx, "read staged rows failed", "err", err)
+		return 0, nil, fmt.Errorf("read staged rows: %w", err)
+	}
+	return mode, rows, nil
+}
+
+// checkSeal compares the staged rows with seal and returns the manifest hash.
+func checkSeal(key GenerationKey, rows []stagedRow, seal GenerationSeal) (string, error) {
+	entries := make([]manifestEntry, 0, len(rows))
+	for _, row := range rows {
+		entries = append(entries, manifestEntry{rowKey: row.occurrence.RowKey, occurrenceHash: row.occurrenceHash})
+	}
+	manifest := manifestHash(entries)
+	if uint64(len(rows)) != seal.RowCount || manifest != seal.ManifestHash {
+		return "", invalidRequest(fmt.Sprintf(
+			"commit: owner %q order %d staged %d rows with manifest %s, the seal states %d rows with manifest %s",
+			key.OwnerID, key.GenerationOrder, len(rows), manifest, seal.RowCount, seal.ManifestHash,
+		))
+	}
+	return manifest, nil
+}
+
+// verifyStagedVectors requires a verified catalog vector and a matching
+// strong backend read for every vector the staged rows reference.
+func (library *Library) verifyStagedVectors(ctx context.Context, rows []stagedRow) error {
+	seen := make(map[string]bool, len(rows))
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if !seen[row.vectorID] {
+			seen[row.vectorID] = true
+			ids = append(ids, row.vectorID)
+		}
+	}
+	var stored map[string]storedVector
+	if err := library.read(ctx, func(tx *sql.Tx) error {
+		var readErr error
+		stored, readErr = lookupVectors(ctx, tx, ids)
+		return readErr
+	}); err != nil {
+		return err
+	}
+	identities := make([]VectorIdentity, 0, len(ids))
+	for _, id := range ids {
+		vector, found := stored[id]
+		if !found || vector.state != vectorStateVerified {
+			err := fmt.Errorf("%w: staged vector %s is not verified in the catalog", ErrVectorMissing, id)
+			slog.ErrorContext(ctx, "staged vector not verified", "vector_id", id, "err", err)
+			return err
+		}
+		identities = append(identities, VectorIdentity{ID: id, IdentityDigest: vector.digest, Checksum: vector.checksum})
+	}
+	return library.verifyStrong(ctx, identities)
+}
+
+// publishGeneration writes the published rows, owner state, and receipt, and
+// removes the staged generation, inside tx.
+func publishGeneration(
+	ctx context.Context,
+	tx *sql.Tx,
+	key GenerationKey,
+	mode BatchMode,
+	rows []stagedRow,
+	manifest string,
+	fingerprint string,
+) error {
+	if mode == Replace {
+		if err := deleteOwnerOccurrences(ctx, tx, key.Namespace, key.OwnerID); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows {
+		if err := publishRow(ctx, tx, key, row); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO owners (namespace, owner_id, generation_order, generation_token, fingerprint) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (namespace, owner_id) DO UPDATE SET generation_order = excluded.generation_order,
+		generation_token = excluded.generation_token, fingerprint = excluded.fingerprint`,
+		key.Namespace, key.OwnerID, key.GenerationOrder, key.IdempotencyToken, fingerprint,
+	); err != nil {
+		slog.ErrorContext(ctx, "save owner state failed", "namespace", key.Namespace, "err", err)
+		return fmt.Errorf("save owner state: %w", err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO batch_receipts (namespace, owner_id, generation_order, generation_token, batch_hash, fingerprint) VALUES (?, ?, ?, ?, ?, ?)`,
+		key.Namespace, key.OwnerID, key.GenerationOrder, key.IdempotencyToken, manifest, fingerprint,
+	); err != nil {
+		slog.ErrorContext(ctx, "save generation receipt failed", "namespace", key.Namespace, "err", err)
+		return fmt.Errorf("save generation receipt: %w", err)
+	}
+	if err := deleteStagedGeneration(ctx, tx, key); err != nil {
+		return err
+	}
+	_, err := incrementRevision(ctx, tx, identityKeyVisibilityRevision)
+	return err
+}
+
+// publishRow inserts one occurrence. In Append mode an existing row with the
+// same content is a repeat and an existing row with different content returns
+// an error that wraps [ErrAppendConflict]. Replace mode deleted the owner's
+// rows first.
+func publishRow(ctx context.Context, tx *sql.Tx, key GenerationKey, row stagedRow) error {
+	occurrence := row.occurrence
+	var savedHash string
+	scanErr := tx.QueryRowContext(
+		ctx,
+		`SELECT occurrence_hash FROM occurrences WHERE namespace = ? AND owner_id = ? AND row_key = ?`,
+		key.Namespace, key.OwnerID, occurrence.RowKey,
+	).Scan(&savedHash)
+	if scanErr == nil {
+		if savedHash == row.occurrenceHash {
+			return nil
+		}
+		err := fmt.Errorf("%w: owner %q row %q exists with different content", ErrAppendConflict, key.OwnerID, occurrence.RowKey)
+		slog.WarnContext(ctx, "append rewrite rejected", "namespace", key.Namespace, "err", err)
+		return err
+	}
+	if !errors.Is(scanErr, sql.ErrNoRows) {
+		slog.ErrorContext(ctx, "read occurrence failed", "row_key", occurrence.RowKey, "err", scanErr)
+		return fmt.Errorf("read occurrence %q: %w", occurrence.RowKey, scanErr)
+	}
+	blobID := sourceBlobID(occurrence.SourceText)
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO source_blobs (blob_id, content) VALUES (?, ?)`, blobID, occurrence.SourceText); err != nil {
+		slog.ErrorContext(ctx, "save source blob failed", "row_key", occurrence.RowKey, "err", err)
+		return fmt.Errorf("save source blob for %q: %w", occurrence.RowKey, err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO occurrences (namespace, owner_id, row_key, sort_key, vector_id, source_blob_id, search_hash, source_length, generation_order, occurrence_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		key.Namespace, key.OwnerID, occurrence.RowKey, occurrence.SortKey, row.vectorID, blobID,
+		searchTextHash(occurrence.SearchText), len(occurrence.SourceText), key.GenerationOrder, row.occurrenceHash,
+	); err != nil {
+		slog.ErrorContext(ctx, "save occurrence failed", "row_key", occurrence.RowKey, "err", err)
+		return fmt.Errorf("save occurrence %q: %w", occurrence.RowKey, err)
+	}
+	for _, name := range sortedScalarNames(occurrence.Scalars) {
+		if err := insertOccurrenceScalar(ctx, tx, key.Namespace, key.OwnerID, occurrence.RowKey, name, occurrence.Scalars[name]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// typedScalar is the column form of one [ScalarValue]. Only the column of the
+// value's type is valid, and a null value leaves every column invalid.
+type typedScalar struct {
+	stringValue sql.NullString
+	int64Value  sql.NullInt64
+	boolValue   sql.NullBool
+}
+
+func newTypedScalar(value ScalarValue) typedScalar {
+	return typedScalar{
+		stringValue: sql.NullString{String: value.String, Valid: !value.Null && value.Type == String},
+		int64Value:  sql.NullInt64{Int64: value.Int64, Valid: !value.Null && value.Type == Int64},
+		boolValue:   sql.NullBool{Bool: value.Bool, Valid: !value.Null && value.Type == Bool},
+	}
+}
+
+func insertOccurrenceScalar(ctx context.Context, tx *sql.Tx, namespace string, ownerID string, rowKey string, name string, value ScalarValue) error {
+	typed := newTypedScalar(value)
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO occurrence_scalars (namespace, owner_id, row_key, column_name, type, string_value, int64_value, bool_value, is_null)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		namespace, ownerID, rowKey, name, value.Type, typed.stringValue, typed.int64Value, typed.boolValue, value.Null,
+	); err != nil {
+		slog.ErrorContext(ctx, "save occurrence scalar failed", "column", name, "err", err)
+		return fmt.Errorf("save occurrence scalar %s for %q: %w", name, rowKey, err)
+	}
+	return nil
+}
+
+func upsertEffectiveScalar(
+	ctx context.Context,
+	tx *sql.Tx,
+	namespace string,
+	ownerID string,
+	rowKey string,
+	name string,
+	value ScalarValue,
+	projectionOrder uint64,
+) error {
+	typed := newTypedScalar(value)
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO effective_scalars (namespace, owner_id, row_key, column_name, type, string_value, int64_value, bool_value, is_null, projection_order)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (namespace, owner_id, row_key, column_name) DO UPDATE SET type = excluded.type,
+		string_value = excluded.string_value, int64_value = excluded.int64_value, bool_value = excluded.bool_value,
+		is_null = excluded.is_null, projection_order = excluded.projection_order`,
+		namespace, ownerID, rowKey, name, value.Type, typed.stringValue, typed.int64Value, typed.boolValue, value.Null, projectionOrder,
+	); err != nil {
+		slog.ErrorContext(ctx, "save effective scalar failed", "column", name, "err", err)
+		return fmt.Errorf("save effective scalar %s for %q: %w", name, rowKey, err)
+	}
+	return nil
+}
+
+// ownerDeleteStatements remove every published row of one owner with its
+// scalars and effective scalars.
+var ownerDeleteStatements = []string{
+	`DELETE FROM occurrences WHERE namespace = ? AND owner_id = ?`,
+	`DELETE FROM occurrence_scalars WHERE namespace = ? AND owner_id = ?`,
+	`DELETE FROM effective_scalars WHERE namespace = ? AND owner_id = ?`,
+}
+
+func deleteOwnerOccurrences(ctx context.Context, tx *sql.Tx, namespace string, ownerID string) error {
+	for _, statement := range ownerDeleteStatements {
+		if _, err := tx.ExecContext(ctx, statement, namespace, ownerID); err != nil {
+			slog.ErrorContext(ctx, "remove owner rows failed", "err", err)
+			return fmt.Errorf("remove owner rows: %w", err)
+		}
+	}
+	return nil
+}
+
+// Delete removes the exact occurrence IDs from ReplaceAllowed namespaces with
+// their scalars. An ID in an AppendOnly namespace returns an error that wraps
+// [ErrInvalidRequest] and removes no row. Canonical vectors stay in the pool.
+func (library *Library) Delete(ctx context.Context, ids []OccurrenceID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	release, err := library.lock.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return library.write(ctx, func(tx *sql.Tx) error {
+		checked := make(map[string]bool)
+		for _, id := range ids {
+			if !checked[id.Namespace] {
+				spec, err := loadNamespace(ctx, tx, id.Namespace)
+				if err != nil {
+					return err
+				}
+				if spec.Policy != ReplaceAllowed {
+					return invalidRequest(fmt.Sprintf("delete: namespace %q is AppendOnly", id.Namespace))
+				}
+				checked[id.Namespace] = true
+			}
+			if err := deleteOccurrence(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		_, err := incrementRevision(ctx, tx, identityKeyVisibilityRevision)
+		return err
+	})
+}
+
+// occurrenceDeleteStatements remove one published row with its scalars and
+// effective scalars.
+var occurrenceDeleteStatements = []string{
+	`DELETE FROM occurrences WHERE namespace = ? AND owner_id = ? AND row_key = ?`,
+	`DELETE FROM occurrence_scalars WHERE namespace = ? AND owner_id = ? AND row_key = ?`,
+	`DELETE FROM effective_scalars WHERE namespace = ? AND owner_id = ? AND row_key = ?`,
+}
+
+func deleteOccurrence(ctx context.Context, tx *sql.Tx, id OccurrenceID) error {
+	for _, statement := range occurrenceDeleteStatements {
+		if _, err := tx.ExecContext(ctx, statement, id.Namespace, id.OwnerID, id.RowKey); err != nil {
+			slog.ErrorContext(ctx, "delete occurrence failed", "err", err)
+			return fmt.Errorf("delete occurrence %s/%s/%s: %w", id.Namespace, id.OwnerID, id.RowKey, err)
+		}
+	}
+	return nil
+}

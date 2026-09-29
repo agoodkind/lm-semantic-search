@@ -173,6 +173,12 @@ type Filter struct {
 	Prefix       string
 }
 
+// StandardAnalyzer identifies the Milvus 2.6.18 default analyzer: maximal runs
+// of alphanumeric characters, lowercased, with no stop words, and CRC-32 IEEE
+// token hashes over the first 100 token bytes. A later analyzer change uses a
+// new identity string.
+const StandardAnalyzer = "milvus-standard-v1"
+
 // SearchMode selects dense or hybrid ranking. The zero value selects the
 // default, [Hybrid].
 type SearchMode uint8
@@ -218,8 +224,9 @@ type Config struct {
 	MaxFilterDepth  int
 	MaxFilterValues int
 
-	// AnalyzerIdentity identifies the lexical analyzer. It must match the saved
-	// catalog.
+	// AnalyzerIdentity identifies the lexical analyzer. Zero selects
+	// [StandardAnalyzer], the only identity this build supports. It must match
+	// the saved catalog.
 	AnalyzerIdentity string
 	// QueryInstructionPrefix is prepended to a query before query embedding
 	// only. It never changes stored document identity.

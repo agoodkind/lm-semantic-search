@@ -79,6 +79,9 @@ func (config Config) resolved() (Config, error) {
 	}
 	resolved.BM25B = &bm25B
 	resolved.RRFK = defaultInt(config.RRFK, defaultRRFK)
+	if config.AnalyzerIdentity == "" {
+		resolved.AnalyzerIdentity = StandardAnalyzer
+	}
 	return resolved, nil
 }
 
@@ -147,6 +150,13 @@ func validateRanking(config Config) error {
 	}
 	if config.RRFK < 0 {
 		return invalidRequest(fmt.Sprintf("config RRFK %d must be positive", config.RRFK))
+	}
+	if config.AnalyzerIdentity != "" && config.AnalyzerIdentity != StandardAnalyzer {
+		return invalidRequest(fmt.Sprintf(
+			"config AnalyzerIdentity %q is not supported; use %q",
+			config.AnalyzerIdentity,
+			StandardAnalyzer,
+		))
 	}
 	return nil
 }
@@ -292,7 +302,8 @@ func validateColumn(namespace string, column ScalarColumn) error {
 
 // ValidateOccurrence reports whether the occurrence can be written to the
 // namespace. The row key is nonempty, every text field is valid UTF-8, the
-// embedding input contains a non-whitespace character, and every scalar key is
+// search text contains no NUL byte, the embedding input contains a
+// non-whitespace character, and every scalar key is
 // a declared column with a value of that column's type. A null value requires
 // a nullable column. A violation returns an error that wraps
 // [ErrInvalidRequest].
@@ -319,6 +330,13 @@ func (spec NamespaceSpec) ValidateOccurrence(occurrence Occurrence) error {
 				text.name,
 			))
 		}
+	}
+	if strings.ContainsRune(occurrence.SearchText, 0) {
+		return invalidRequest(fmt.Sprintf(
+			"namespace %q row %q SearchText contains a NUL byte, which the analyzer reads as the end of the text",
+			spec.ID,
+			occurrence.RowKey,
+		))
 	}
 	if strings.TrimSpace(occurrence.EmbeddingInput) == "" {
 		return invalidRequest(fmt.Sprintf(

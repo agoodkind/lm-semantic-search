@@ -28,16 +28,18 @@ func TestConfigValidateAcceptsZeroBudgetsAndExplicitZeroBM25B(t *testing.T) {
 	zero := 0.0
 	one := 1.0
 	for _, testCase := range []struct {
-		name  string
-		bm25B *float64
+		name     string
+		bm25B    *float64
+		analyzer string
 	}{
-		{name: "default b", bm25B: nil},
-		{name: "explicit zero b", bm25B: &zero},
-		{name: "explicit one b", bm25B: &one},
+		{name: "default b", bm25B: nil, analyzer: ""},
+		{name: "explicit zero b", bm25B: &zero, analyzer: ""},
+		{name: "explicit one b", bm25B: &one, analyzer: ""},
+		{name: "standard analyzer", bm25B: nil, analyzer: library.StandardAnalyzer},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			config := library.Config{Store: validDescriptor(t), BM25B: testCase.bm25B}
+			config := library.Config{Store: validDescriptor(t), BM25B: testCase.bm25B, AnalyzerIdentity: testCase.analyzer}
 			if err := config.Validate(); err != nil {
 				t.Fatalf("Validate() = %v, want nil", err)
 			}
@@ -89,6 +91,7 @@ func TestConfigValidateRejectsNegativeBudgetsAndInvalidRanking(t *testing.T) {
 		{name: "negative b", mutate: func(c *library.Config) { c.BM25B = &negativeB }, want: "BM25B"},
 		{name: "b over one", mutate: func(c *library.Config) { c.BM25B = &overOneB }, want: "BM25B"},
 		{name: "negative rrf k", mutate: func(c *library.Config) { c.RRFK = -60 }, want: "RRFK"},
+		{name: "unknown analyzer", mutate: func(c *library.Config) { c.AnalyzerIdentity = "english-stemmer" }, want: `AnalyzerIdentity "english-stemmer" is not supported`},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -177,6 +180,7 @@ func TestNamespaceValidateOccurrenceChecksScalarsAgainstDeclaration(t *testing.T
 		{name: "empty row key", mutate: func(o *library.Occurrence) { o.RowKey = "" }, want: "row key is empty"},
 		{name: "whitespace embedding input", mutate: func(o *library.Occurrence) { o.EmbeddingInput = " \n" }, want: "no non-whitespace"},
 		{name: "invalid source text", mutate: func(o *library.Occurrence) { o.SourceText = "\xff" }, want: "SourceText is not valid UTF-8"},
+		{name: "NUL in search text", mutate: func(o *library.Occurrence) { o.SearchText = "before\x00after" }, want: "SearchText contains a NUL byte"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
