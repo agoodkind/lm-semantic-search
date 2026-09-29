@@ -17,15 +17,16 @@ type lexicalRankParameters struct {
 }
 
 // newLexicalRankParameters converts resolved configuration values to the
-// float32 settings. It rejects a k1 that is not positive and finite in float32
-// and a b outside [0, 1], with an error that wraps [ErrInvalidRequest].
+// float32 settings. It rejects a k1 that is zero as a float32 or outside
+// (0, [maxBM25K1]] and a b outside [0, 1], with an error that wraps
+// [ErrInvalidRequest].
 func newLexicalRankParameters(k1 float64, b float64) (lexicalRankParameters, error) {
 	converted := lexicalRankParameters{k1: float32(k1), b: float32(b)}
-	k1Finite := !math.IsNaN(float64(converted.k1)) && !math.IsInf(float64(converted.k1), 0)
-	if !k1Finite || converted.k1 <= 0 {
+	if math.IsNaN(k1) || k1 > maxBM25K1 || converted.k1 <= 0 {
 		return lexicalRankParameters{}, invalidRequest(fmt.Sprintf(
-			"BM25 k1 %v must be positive and finite as a float32",
+			"BM25 k1 %v must be positive as a float32 and at most %v",
 			k1,
+			maxBM25K1,
 		))
 	}
 	if math.IsNaN(b) || converted.b < 0 || converted.b > 1 {

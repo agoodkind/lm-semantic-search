@@ -60,6 +60,11 @@ func TestNewLexicalRankParametersValidatesFloat32Settings(t *testing.T) {
 		{name: "k1 negative", k1: -1, b: 0.75, valid: false},
 		{name: "k1 not a number", k1: math.NaN(), b: 0.75, valid: false},
 		{name: "k1 overflows float32", k1: 1e300, b: 0.75, valid: false},
+		{name: "k1 at the maximum", k1: maxBM25K1, b: 0.75, valid: true},
+		{name: "k1 above the maximum", k1: math.Nextafter(maxBM25K1, math.Inf(1)), b: 0.75, valid: false},
+		{name: "k1 with NaN scores", k1: 3e38, b: 0.75, valid: false},
+		{name: "k1 infinite", k1: math.Inf(1), b: 0.75, valid: false},
+		{name: "k1 zero as float32", k1: 1e-50, b: 0.75, valid: false},
 		{name: "b negative", k1: 1.2, b: -0.1, valid: false},
 		{name: "b above one", k1: 1.2, b: 1.1, valid: false},
 		{name: "b not a number", k1: 1.2, b: math.NaN(), valid: false},
@@ -120,5 +125,28 @@ func TestLexicalScorerMultipliesRepeatedQueryTerms(t *testing.T) {
 	repeatedScore := repeated.scoreDocument(document.terms, document.length)
 	if singleScore <= 0 || repeatedScore <= singleScore {
 		t.Fatalf("scores single %v repeated %v, want 0 < single < repeated", singleScore, repeatedScore)
+	}
+}
+
+func TestLexicalScorerStaysFiniteAtTheMaximumK1(t *testing.T) {
+	t.Parallel()
+	for _, b := range []float64{0, 0.75, 1} {
+		parameters, err := newLexicalRankParameters(maxBM25K1, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		alpha := lexicalTermHash("alpha")
+		query := []lexicalTerm{{hash: alpha, frequency: lexicalMaxTermFrequency}}
+		corpus := lexicalCorpus{size: math.MaxInt64, totalTokens: math.MaxInt64}
+		scorer, ranked := newLexicalScorer(parameters, corpus, query, map[uint32]uint64{alpha: 1})
+		if !ranked {
+			t.Fatal("query was not ranked")
+		}
+		for _, length := range []uint64{lexicalMaxTermFrequency, math.MaxInt64} {
+			score := scorer.scoreDocument([]lexicalTerm{{hash: alpha, frequency: lexicalMaxTermFrequency}}, length)
+			if math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) || score <= 0 {
+				t.Fatalf("b %v document length %d: score %v, want a finite positive score", b, length, score)
+			}
+		}
 	}
 }
