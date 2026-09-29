@@ -46,7 +46,8 @@ jobs:
             libpcre2-dev \
             pkg-config \
             tar \
-            xz-utils
+            xz-utils \
+            zlib1g-dev
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -56,7 +57,14 @@ jobs:
         with:
           cache: false
           go-version-file: go.mod
+      # The container runs every step as root, and root reads files that the
+      # offline suite makes unreadable to test failed worktree builds. The
+      # suite and the update test run as an unprivileged user instead.
+      - name: Create unprivileged build user
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
       - name: Test offline runtime
-        run: make offline-live
+        run: runuser -u builder -- env HOME=/home/builder make offline-live
       - name: Test automatic update
-        run: go run ./cmd/ci-auto-update
+        run: runuser -u builder -- env HOME=/home/builder go run ./cmd/ci-auto-update
