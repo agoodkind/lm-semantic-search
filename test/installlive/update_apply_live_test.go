@@ -35,6 +35,7 @@ const (
 	updateAPIBaseURLEnv    = "LM_SEMANTIC_SEARCH_UPDATE_API_BASE_URL"
 	releaseListPath        = "/repos/agoodkind/lm-semantic-search/releases"
 	releaseAssetPathPrefix = "/repos/agoodkind/lm-semantic-search/releases/assets/"
+	githubAPIHost          = "api.github.com"
 	// The updater also fetches the release commit attestation at
 	// attestations/sha1:<commit>, which every archive shares. Only the
 	// sha256 paths identify one archive each.
@@ -201,6 +202,8 @@ type apiResponse struct {
 	path       string
 	authorized bool
 	status     int
+	// redirectHost is the Location host of a redirect response.
+	redirectHost string
 }
 
 func startGitHubAPIProxy(t *testing.T) *githubAPIProxy {
@@ -215,11 +218,16 @@ func startGitHubAPIProxy(t *testing.T) *githubAPIProxy {
 			request.SetURL(target)
 		},
 		ModifyResponse: func(response *http.Response) error {
+			redirectHost := ""
+			if location, err := response.Location(); err == nil {
+				redirectHost = location.Hostname()
+			}
 			proxy.mutex.Lock()
 			proxy.responses = append(proxy.responses, apiResponse{
-				path:       response.Request.URL.Path,
-				authorized: response.Request.Header.Get("Authorization") != "",
-				status:     response.StatusCode,
+				path:         response.Request.URL.Path,
+				authorized:   response.Request.Header.Get("Authorization") != "",
+				status:       response.StatusCode,
+				redirectHost: redirectHost,
 			})
 			proxy.mutex.Unlock()
 			return nil
@@ -253,6 +261,13 @@ func (proxy *githubAPIProxy) assertReleaseVerifiedThroughProxy(t *testing.T) {
 		assetRedirect := strings.HasPrefix(response.path, releaseAssetPathPrefix) && response.status == http.StatusFound
 		if response.status != http.StatusOK && !assetRedirect {
 			t.Fatalf("GitHub API %s returned HTTP %d through the proxy; all responses %v", response.path, response.status, responses)
+		}
+		// net/http drops Authorization on a redirect to a host that is not
+		// the original host or its subdomain. In production the original host
+		// is api.github.com. The storage host must be outside api.github.com.
+		if assetRedirect && (response.redirectHost == "" || response.redirectHost == githubAPIHost ||
+			strings.HasSuffix(response.redirectHost, "."+githubAPIHost)) {
+			t.Fatalf("asset %s redirects to host %q, want a host outside %s", response.path, response.redirectHost, githubAPIHost)
 		}
 		if tokenInEnvironment && !response.authorized {
 			t.Fatalf("updater sent %s without an Authorization header while a token variable is set; all responses %v",
