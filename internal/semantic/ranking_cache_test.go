@@ -527,3 +527,10 @@ func TestRankingTokenExpires(t *testing.T) {
 		}
 	}
 }
+
+// get locks the cache and reads the ranking under digest with getLocked.
+func (cache *rankingCache) get(digest string, eligible int64) (collectionRanking, bool) {
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+	return cache.getLocked(digest, eligible)
+}

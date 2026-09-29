@@ -262,13 +262,12 @@ func (cache *rankingCache) noteWrite(collectionName string) {
 	}
 }
 
-// get returns the unexpired ranking stored under digest when it was computed
-// over eligible rows. A stored ranking with a different eligible count is a
-// miss: a process other than this daemon wrote rows after the ranking.
-func (cache *rankingCache) get(digest string, eligible int64) (collectionRanking, bool) {
+// getLocked returns the unexpired ranking stored under digest when it was
+// computed over eligible rows. A stored ranking with a different eligible count
+// is a miss: a process other than this daemon wrote rows after the ranking.
+// The caller owns cache.mutex.
+func (cache *rankingCache) getLocked(digest string, eligible int64) (collectionRanking, bool) {
 	var missing collectionRanking
-	cache.mutex.Lock()
-	defer cache.mutex.Unlock()
 	element, found := cache.entries[digest]
 	if !found {
 		return missing, false
@@ -292,14 +291,17 @@ func (cache *rankingCache) get(digest string, eligible int64) (collectionRanking
 
 // rank returns the cached ranking under digest for eligible rows, or runs
 // compute once for every concurrent request that misses the same digest and
-// count and stores its result under key.
+// count and stores its result under key. The cache read and the flight
+// registration share one lock. A request that misses after a flight stored
+// its ranking and ended reads that ranking instead of computing again.
 func (cache *rankingCache) rank(key rankingKey, eligible int64, compute func() (collectionRanking, error)) (collectionRanking, error) {
 	digest := key.digest()
-	if ranking, cached := cache.get(digest, eligible); cached {
-		return ranking, nil
-	}
 	flightKey := digest + ":" + strconv.FormatInt(eligible, 10)
 	cache.mutex.Lock()
+	if ranking, cached := cache.getLocked(digest, eligible); cached {
+		cache.mutex.Unlock()
+		return ranking, nil
+	}
 	existing, inFlight := cache.flights[flightKey]
 	if inFlight {
 		cache.mutex.Unlock()
