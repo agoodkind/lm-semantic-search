@@ -209,6 +209,7 @@ func TestResidencyReportsLoadWaitTimeout(t *testing.T) {
 		result <- err
 	}()
 	waitForLeaseCount(t, controller, "live", 1)
+	clock.waitForPendingTimer(t, 15*time.Second)
 	clock.Advance(15 * time.Second)
 	if err := <-result; !errors.Is(err, ErrCollectionLoadWaitTimeout) {
 		t.Fatalf("Acquire error = %v, want ErrCollectionLoadWaitTimeout", err)
