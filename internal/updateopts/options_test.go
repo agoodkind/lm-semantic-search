@@ -87,46 +87,15 @@ func TestOptionsForInstallDirBuildsSharedStateOptionsInApplyOrder(t *testing.T) 
 	}
 }
 
-func TestApplyAllAbortsBeforeDaemonWhenClientApplyFails(t *testing.T) {
-	originalApply := applyBinary
-	t.Cleanup(func() {
-		applyBinary = originalApply
-	})
-	clientFailure := errors.New("client apply failed")
-	calls := []string{}
-	applyBinary = func(ctx context.Context, options selfupdate.Options) (selfupdate.ApplyResult, error) {
-		_ = ctx
-		calls = append(calls, options.Config.Binary)
-		if options.Config.Binary == "lm-semantic-search-mcp" {
-			return selfupdate.ApplyResult{}, clientFailure
-		}
-		return selfupdate.ApplyResult{Applied: true}, nil
-	}
-
-	_, err := ApplyAll(context.Background(), Overrides{
-		InstallDir: t.TempDir(),
-		StateRoot:  t.TempDir(),
-		CacheDir:   t.TempDir(),
-	})
-	if !errors.Is(err, clientFailure) {
-		t.Fatalf("ApplyAll error = %v, want client failure", err)
-	}
-
-	wantCalls := []string{"lm-semantic-search", "lm-semantic-search-mcp"}
-	if !reflect.DeepEqual(calls, wantCalls) {
-		t.Fatalf("apply calls = %#v, want %#v", calls, wantCalls)
-	}
-}
-
 func TestApplyAllLogsApplyFailuresWithOperationLogger(t *testing.T) {
-	originalApply := applyBinary
+	originalApply := applyBinaries
 	t.Cleanup(func() {
-		applyBinary = originalApply
+		applyBinaries = originalApply
 	})
-	applyBinary = func(ctx context.Context, options selfupdate.Options) (selfupdate.ApplyResult, error) {
+	applyBinaries = func(ctx context.Context, options []selfupdate.Options) ([]selfupdate.ApplyResult, error) {
 		_ = ctx
 		_ = options
-		return selfupdate.ApplyResult{}, errors.New("apply failed")
+		return nil, errors.New("apply failed")
 	}
 
 	var output bytes.Buffer
@@ -142,7 +111,7 @@ func TestApplyAllLogsApplyFailuresWithOperationLogger(t *testing.T) {
 	}
 
 	logOutput := output.String()
-	if !strings.Contains(logOutput, "apply binary update failed") {
+	if !strings.Contains(logOutput, "apply binary updates failed") {
 		t.Fatalf("operation logger output = %q, want apply failure message", logOutput)
 	}
 	if !strings.Contains(logOutput, "component=update") {

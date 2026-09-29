@@ -87,6 +87,10 @@ func newUpdateApplyCmd(options *rootOptions) *cobra.Command {
 			}
 			if dryRun || result.DryRun {
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "lm-semantic-search: update apply dry run ok")
+				if result.LaunchCheckSkipped {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(),
+						"lm-semantic-search: candidate launch check skipped; a dry run writes nothing into the install directory")
+				}
 				return nil
 			}
 			restarted, err := requestDaemonShutdown(commandContext(cmd), options.socketPath)
@@ -102,7 +106,7 @@ func newUpdateApplyCmd(options *rootOptions) *cobra.Command {
 			return nil
 		},
 	}
-	apply.Flags().BoolVar(&dryRun, "dry-run", false, "download and verify without installing")
+	apply.Flags().BoolVar(&dryRun, "dry-run", false, "download and verify without installing or launching the candidates")
 	return apply
 }
 
