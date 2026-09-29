@@ -27,10 +27,7 @@ const (
 	updateAPIBaseURLEnv = "LM_SEMANTIC_SEARCH_UPDATE_API_BASE_URL"
 )
 
-var (
-	binaryApplyOrder = []string{cliBinary, mcpBinary, daemonBinary}
-	applyBinaries    = selfupdate.ApplyAll
-)
+var binaryApplyOrder = []string{cliBinary, mcpBinary, daemonBinary}
 
 // Overrides carries operation-specific update settings.
 type Overrides struct {
@@ -156,7 +153,7 @@ func ApplyAll(ctx context.Context, overrides Overrides) (ApplyAllResult, error) 
 		DryRun:             overrides.DryRun,
 		LaunchCheckSkipped: false,
 	}
-	applyResults, applyErr := applyBinaries(ctx, options)
+	applyResults, applyErr := selfupdate.ApplyAll(ctx, options)
 	for index, applyResult := range applyResults {
 		result.Results = append(result.Results, BinaryApplyResult{
 			Binary: options[index].Config.Binary,
