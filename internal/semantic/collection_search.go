@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -125,6 +126,25 @@ type CollectionSearch struct {
 	PerGroupLimit  int32
 	Declaration    model.CollectionDeclaration
 	CallerState    string
+	// Offset skips the first Offset selected rows. The search returns at most
+	// Limit rows from position Offset and loads content only for them.
+	Offset int32
+}
+
+// PageSelectionLimit returns the selection length that covers a page of limit
+// rows at offset: offset plus limit, capped at [math.MaxInt32].
+func PageSelectionLimit(offset int32, limit int32) int32 {
+	start := max(offset, 0)
+	if limit > math.MaxInt32-start {
+		return math.MaxInt32
+	}
+	return start + limit
+}
+
+// PageStart returns the index of the first page row in a selection of length
+// selected, which is offset capped at selected.
+func PageStart(offset int32, selected int) int {
+	return min(int(max(offset, 0)), selected)
 }
 
 // CollectionSearchResult is the outcome of one collection search. Hits is the
@@ -235,7 +255,8 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 	if err != nil {
 		return emptyResult, err
 	}
-	selected := selectRankedCandidates(ranking.Candidates, perGroupLimit, search.MinScore, limit)
+	selected := selectRankedCandidates(ranking.Candidates, perGroupLimit, search.MinScore, PageSelectionLimit(search.Offset, limit))
+	selected = selected[PageStart(search.Offset, len(selected)):]
 	hits, err := service.loadRankedHits(ctx, collectionName, selected, search.Declaration.Scalars)
 	if err != nil {
 		return emptyResult, err

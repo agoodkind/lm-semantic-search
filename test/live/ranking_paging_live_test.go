@@ -11,6 +11,8 @@ import (
 	"time"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -73,17 +75,49 @@ func pagingCorpus() (map[string][]*pb.ConversationDocument, int) {
 // conversationPage runs one SearchConversations request.
 func (h *harness) conversationPage(limit int32, conversationIDs []string) *pb.SearchConversationsResponse {
 	h.t.Helper()
-	response, err := h.client.SearchConversations(correlatedContext(), &pb.SearchConversationsRequest{
+	response, err := h.searchConversationsAt(limit, 0, conversationIDs)
+	if err != nil {
+		h.t.Fatalf("SearchConversations(limit %d) returned error: %v", limit, err)
+	}
+	return response
+}
+
+// searchConversationsAt runs one SearchConversations request with an offset.
+func (h *harness) searchConversationsAt(limit int32, offset int32, conversationIDs []string) (*pb.SearchConversationsResponse, error) {
+	h.t.Helper()
+	return h.client.SearchConversations(correlatedContext(), &pb.SearchConversationsRequest{
 		CollectionId:         h.collectionID,
 		Query:                pagingQuery,
 		Limit:                limit,
 		PerConversationLimit: 0,
 		Filter:               &pb.ConversationSearchFilter{ConversationIds: conversationIDs},
+		Offset:               offset,
 	})
-	if err != nil {
-		h.t.Fatalf("SearchConversations(limit %d) returned error: %v", limit, err)
+}
+
+// pageByOffset pages one query with the offset field: each request asks for
+// pageSize rows at the number of rows already read. It stops at the first page
+// shorter than pageSize and returns the kept keys and each request's duration.
+func (h *harness) pageByOffset(pageSize int, conversationIDs []string) ([]string, []time.Duration) {
+	h.t.Helper()
+	kept := make([]string, 0)
+	durations := make([]time.Duration, 0)
+	for {
+		started := time.Now()
+		response, err := h.searchConversationsAt(int32(pageSize), int32(len(kept)), conversationIDs)
+		durations = append(durations, time.Since(started))
+		if err != nil {
+			h.t.Fatalf("SearchConversations(offset %d, limit %d) returned error: %v", len(kept), pageSize, err)
+		}
+		page := rankingKeys(response.GetResults())
+		if len(page) > pageSize {
+			h.t.Fatalf("SearchConversations(offset %d, limit %d) returned %d rows", len(kept), pageSize, len(page))
+		}
+		kept = append(kept, page...)
+		if len(page) < pageSize {
+			return kept, durations
+		}
 	}
-	return response
 }
 
 // pageInClydeShape pages one query the way Clyde does: each request asks for
@@ -250,6 +284,36 @@ func TestConversationSearchKeysRankingsByFilter(t *testing.T) {
 				t.Fatalf("filter %v returned row %s from conversation %s", scope, rankingKey(result), result.GetConversationId())
 			}
 		}
+	}
+}
+
+// TestConversationSearchPagesByOffset pages one query with the offset request
+// field at page sizes 1, 10, and 100, unfiltered and filtered by conversation
+// ids. Each request returns only its page. The pages equal the full ranking
+// with no row repeated or omitted. A negative offset is an invalid argument.
+func TestConversationSearchPagesByOffset(t *testing.T) {
+	h, total, scope, scopedRows := newPagingHarness(t)
+	cases := []struct {
+		name     string
+		scope    []string
+		eligible int
+	}{
+		{name: "unfiltered", scope: nil, eligible: total},
+		{name: "conversation ids", scope: scope, eligible: scopedRows},
+	}
+	for _, testCase := range cases {
+		full := rankingKeys(h.conversationPage(int32(testCase.eligible), testCase.scope).GetResults())
+		if len(full) != testCase.eligible {
+			t.Fatalf("%s: full ranking has %d rows, want %d", testCase.name, len(full), testCase.eligible)
+		}
+		for _, pageSize := range pagingPageSizes {
+			paged, durations := h.pageByOffset(pageSize, testCase.scope)
+			requireSamePages(t, fmt.Sprintf("%s offset page size %d", testCase.name, pageSize), paged, full)
+			t.Logf("%s offset page size %d: %s", testCase.name, pageSize, durationSummary(durations))
+		}
+	}
+	if _, err := h.searchConversationsAt(10, -1, nil); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("offset -1 returned %v, want InvalidArgument", err)
 	}
 }
 

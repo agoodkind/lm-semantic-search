@@ -1048,20 +1048,28 @@ message SearchConversationsRequest {
   // per_conversation_limit caps hits per conversation so one large transcript
   // does not monopolize the result list. Zero means uncapped.
   int32 per_conversation_limit = 5;
+  // offset skips the first offset rows of the selected ranking. The response
+  // returns at most limit rows starting at position offset, and the daemon
+  // loads content only for those rows. Zero returns the first limit rows. A
+  // negative offset is an invalid argument.
+  int32 offset = 6;
 }
 
-// SearchConversationsResponse returns the first limit rows of one ranking.
-// Paging contract: the daemon ranks a query once and caches the ranking until
-// 10 minutes pass without a request that reads it. A later request with the
-// same collection, query, filter, min_score, and per_conversation_limit reads
-// that ranking, and a larger limit returns a longer prefix of it. A client
-// pages by raising limit and keeping the rows past the previous page. The
-// daemon ranks again after it commits a write to the collection, when the
-// number of rows matching the filter changes, and after 10 minutes without a
-// request for it, a cache eviction, or a restart. A process other than the
-// daemon that deletes and inserts the same number of matching rows is not
-// detected until the ranking expires. The offline profile keeps no cache and
-// ranks every request again.
+// SearchConversationsResponse returns at most limit rows of one ranking,
+// starting at offset. Paging contract: the daemon ranks a query once and caches
+// the ranking until 10 minutes pass without a request that reads it. A later
+// request with the same collection, query, filter, min_score, and
+// per_conversation_limit reads that ranking, and a larger limit returns a
+// longer prefix of it. A client pages by raising limit and keeping the rows
+// past the previous page, or by setting offset to the rows already read. A
+// write that the daemon commits between two pages of one query re-ranks the
+// next page at the full eligible depth, and that page can repeat or omit rows
+// at positions the write changed. The daemon also ranks again when the number
+// of rows matching the filter changes, and after 10 minutes without a request
+// for it, a cache eviction, or a restart. A process other than the daemon that
+// deletes and inserts the same number of matching rows is not detected until
+// the ranking expires. The offline profile keeps no cache and ranks every
+// request again.
 message SearchConversationsResponse {
   repeated ConversationSearchResult results = 1;
   string display_text = 2;
@@ -1078,20 +1086,27 @@ message SearchWithinConversationRequest {
   string query = 3;
   int32 limit = 4;
   ConversationSearchFilter filter = 5;
+  // offset skips the first offset rows of the selected ranking. The response
+  // returns at most limit rows starting at position offset, and the daemon
+  // loads content only for those rows. Zero returns the first limit rows. A
+  // negative offset is an invalid argument.
+  int32 offset = 6;
 }
 
-// SearchWithinConversationResponse returns the first limit rows of one ranking
-// of one conversation. Paging contract: the daemon ranks a query once and
-// caches the ranking until 10 minutes pass without a request that reads it. A
-// later request with the same collection, conversation, query, filter, and
-// indexed fingerprint reads that ranking, and a larger limit returns a longer
-// prefix of it. The daemon ranks again after it commits a write to the
-// collection, when the conversation's indexed fingerprint or the number of rows
-// matching the filter changes, and after 10 minutes without a request for it, a
-// cache eviction, or a restart. A process other than the daemon that deletes
-// and inserts the same number of matching rows is not detected until the
-// ranking expires. The offline profile keeps no cache and ranks every request
-// again.
+// SearchWithinConversationResponse returns at most limit rows of one ranking
+// of one conversation, starting at offset. Paging contract: the daemon ranks a
+// query once and caches the ranking until 10 minutes pass without a request
+// that reads it. A later request with the same collection, conversation, query,
+// filter, and indexed fingerprint reads that ranking, and a larger limit
+// returns a longer prefix of it. A write that the daemon commits between two
+// pages of one query re-ranks the next page at the full eligible depth, and
+// that page can repeat or omit rows at positions the write changed. The daemon
+// also ranks again when the conversation's indexed fingerprint or the number of
+// rows matching the filter changes, and after 10 minutes without a request for
+// it, a cache eviction, or a restart. A process other than the daemon that
+// deletes and inserts the same number of matching rows is not detected until
+// the ranking expires. The offline profile keeps no cache and ranks every
+// request again.
 message SearchWithinConversationResponse {
   repeated ConversationSearchResult results = 1;
   // indexed_fingerprint is the content fingerprint the engine had embedded for
@@ -1189,6 +1204,11 @@ message SearchCollectionRequest {
   CollectionFilter filter = 5;
   string group_by = 6;
   int32 per_group_limit = 7;
+  // offset skips the first offset rows of the selected ranking. The response
+  // returns at most limit rows starting at position offset, and the daemon
+  // loads content only for those rows. Zero returns the first limit rows. A
+  // negative offset is an invalid argument.
+  int32 offset = 8;
 }
 
 // CollectionHitScalar is one declared scalar column value on a search hit. An
@@ -1214,18 +1234,21 @@ message CollectionSearchHit {
   repeated CollectionHitScalar scalars = 4;
 }
 
-// SearchCollectionResponse returns the first limit hits of one ranking. Paging
-// contract: the daemon ranks a query once and caches the ranking until 10
-// minutes pass without a request that reads it. A later request with the same
-// collection, query, filter, min_score, group_by, and per_group_limit reads
-// that ranking, and a larger limit returns a longer prefix of it. A client
-// pages by raising limit and keeping the hits past the previous page. The
-// daemon ranks again after it commits a write to the collection, when the
-// number of rows matching the filter changes, and after 10 minutes without a
-// request for it, a cache eviction, or a restart. A process other than the
-// daemon that deletes and inserts the same number of matching rows is not
-// detected until the ranking expires. The offline profile keeps no cache and
-// ranks every request again.
+// SearchCollectionResponse returns at most limit hits of one ranking, starting
+// at offset. Paging contract: the daemon ranks a query once and caches the
+// ranking until 10 minutes pass without a request that reads it. A later
+// request with the same collection, query, filter, min_score, group_by, and
+// per_group_limit reads that ranking, and a larger limit returns a longer
+// prefix of it. A client pages by raising limit and keeping the hits past the
+// previous page, or by setting offset to the hits already read. A write that
+// the daemon commits between two pages of one query re-ranks the next page at
+// the full eligible depth, and that page can repeat or omit rows at positions
+// the write changed. The daemon also ranks again when the number of rows
+// matching the filter changes, and after 10 minutes without a request for it, a
+// cache eviction, or a restart. A process other than the daemon that deletes
+// and inserts the same number of matching rows is not detected until the
+// ranking expires. The offline profile keeps no cache and ranks every request
+// again.
 message SearchCollectionResponse {
   repeated CollectionSearchHit hits = 1;
   string display_text = 2;

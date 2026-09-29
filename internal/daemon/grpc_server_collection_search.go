@@ -38,6 +38,7 @@ func (server *GRPCServer) SearchCollection(ctx context.Context, request *pb.Sear
 		Filter:        filter,
 		GroupBy:       request.GetGroupBy(),
 		PerGroupLimit: request.GetPerGroupLimit(),
+		Offset:        request.GetOffset(),
 		CallerState:   "",
 	})
 	if callErr != nil {

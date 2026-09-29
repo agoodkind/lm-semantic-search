@@ -355,7 +355,7 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 			store := newSearchTestStore(t)
 			chunks, reuse := tiedConversationFixture(total)
 			stageAndPromoteWithReuse(t, store, codebasePath, chunks, reuse)
-			search := func(limit int32, filter *semantic.CollectionFilter) []string {
+			searchAt := func(limit int32, offset int32, filter *semantic.CollectionFilter) []string {
 				t.Helper()
 				result, err := store.SearchCollection(context.Background(), semantic.CollectionSearch{
 					CollectionName: store.CollectionName(codebasePath),
@@ -367,6 +367,7 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 					PerGroupLimit:  2,
 					Declaration:    semantic.ConversationDeclaration(),
 					CallerState:    "",
+					Offset:         offset,
 				})
 				if err != nil {
 					t.Fatalf("SearchCollection returned error: %v", err)
@@ -376,6 +377,10 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 					paths = append(paths, hit.Chunk.RelativePath)
 				}
 				return paths
+			}
+			search := func(limit int32, filter *semantic.CollectionFilter) []string {
+				t.Helper()
+				return searchAt(limit, 0, filter)
 			}
 
 			larger := search(20, nil)
@@ -395,6 +400,13 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 			for range 3 {
 				if again := search(20, nil); !slices.Equal(again, larger) {
 					t.Fatalf("repeated search rows %v, want %v", again, larger)
+				}
+			}
+			wider := search(30, nil)
+			for _, offset := range []int32{1, 7, 18, 20} {
+				page := searchAt(3, offset, nil)
+				if want := wider[offset : offset+3]; !slices.Equal(page, want) {
+					t.Fatalf("offset %d limit 3 rows %v, want %v", offset, page, want)
 				}
 			}
 

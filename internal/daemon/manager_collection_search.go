@@ -28,6 +28,7 @@ type CollectionSearchRequest struct {
 	GroupBy       string
 	PerGroupLimit int32
 	CallerState   string
+	Offset        int32
 }
 
 // SearchCollection searches a registered document collection. The daemon's
@@ -98,6 +99,9 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 	if err := validateCollectionSearch(collectionID, declaration, request.Filter, request.GroupBy, request.PerGroupLimit); err != nil {
 		return emptyResult, err
 	}
+	if request.Offset < 0 {
+		return emptyResult, adapterr.NewInvalidArgument(fmt.Sprintf("offset %d is negative", request.Offset))
+	}
 	limit := request.Limit
 	if limit <= 0 {
 		limit = defaultCollectionSearchLimit
@@ -133,6 +137,7 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 		PerGroupLimit:  request.PerGroupLimit,
 		Declaration:    declaration,
 		CallerState:    request.CallerState,
+		Offset:         request.Offset,
 	})
 	if err != nil {
 		manager.noteDependencyFailure(err)

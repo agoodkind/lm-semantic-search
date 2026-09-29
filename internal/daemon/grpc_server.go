@@ -736,7 +736,7 @@ func (server *GRPCServer) SearchConversations(ctx context.Context, request *pb.S
 	if argErr := requireNonEmpty(ctx, request.GetQuery(), "query", false); argErr != nil {
 		return nil, argErr
 	}
-	searchResult, callErr := server.manager.SearchConversations(ctx, request.GetCollectionId(), request.GetQuery(), request.GetLimit(), pbConversationSearchFilter(request.GetFilter()), request.GetPerConversationLimit())
+	searchResult, callErr := server.manager.SearchConversations(ctx, request.GetCollectionId(), request.GetQuery(), request.GetLimit(), pbConversationSearchFilter(request.GetFilter()), request.GetPerConversationLimit(), request.GetOffset())
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
 	}
@@ -771,7 +771,7 @@ func (server *GRPCServer) SearchWithinConversation(ctx context.Context, request 
 	if argErr := requireNonEmpty(ctx, request.GetQuery(), "query", false); argErr != nil {
 		return nil, argErr
 	}
-	searchResult, callErr := server.manager.SearchWithinConversation(ctx, request.GetCollectionId(), request.GetConversationId(), request.GetQuery(), request.GetLimit(), pbConversationSearchFilter(request.GetFilter()))
+	searchResult, callErr := server.manager.SearchWithinConversation(ctx, request.GetCollectionId(), request.GetConversationId(), request.GetQuery(), request.GetLimit(), pbConversationSearchFilter(request.GetFilter()), request.GetOffset())
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
 	}

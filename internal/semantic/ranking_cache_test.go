@@ -2,6 +2,7 @@ package semantic
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -390,3 +391,48 @@ func TestPrimaryKeyColumnKeepsCallerKeys(t *testing.T) {
 	}
 }
 
+// TestPageWindowSelectsOffsetRows proves an offset page selects offset plus
+// limit rows, capped at the int32 maximum, and starts at the offset capped at
+// the selection length. Paging a cached ranking by offset returns the whole
+// selection once at page sizes 1, 10, and 100.
+func TestPageWindowSelectsOffsetRows(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		offset int32
+		limit  int32
+		want   int32
+	}{
+		{offset: 0, limit: 10, want: 10},
+		{offset: 30, limit: 10, want: 40},
+		{offset: -5, limit: 10, want: 10},
+		{offset: math.MaxInt32 - 3, limit: 10, want: math.MaxInt32},
+	} {
+		if got := PageSelectionLimit(testCase.offset, testCase.limit); got != testCase.want {
+			t.Fatalf("PageSelectionLimit(%d, %d) = %d, want %d", testCase.offset, testCase.limit, got, testCase.want)
+		}
+	}
+	if got := PageStart(30, 12); got != 12 {
+		t.Fatalf("PageStart(30, 12) = %d, want 12", got)
+	}
+	if got := PageStart(-1, 12); got != 0 {
+		t.Fatalf("PageStart(-1, 12) = %d, want 0", got)
+	}
+
+	ranking := rankingOf(137, 137, "offset")
+	whole := selectRankedCandidates(ranking.Candidates, 0, 0, int32(len(ranking.Candidates)))
+	for _, pageSize := range []int32{1, 10, 100} {
+		paged := make([]rankedCandidate, 0, len(whole))
+		for offset := int32(0); ; offset += pageSize {
+			selected := selectRankedCandidates(ranking.Candidates, 0, 0, PageSelectionLimit(offset, pageSize))
+			page := selected[PageStart(offset, len(selected)):]
+			paged = append(paged, page...)
+			if int32(len(page)) < pageSize {
+				break
+			}
+		}
+		if !slices.Equal(paged, whole) {
+			t.Fatalf("page size %d: offset pages returned %d rows, want the %d selected rows in order", pageSize, len(paged), len(whole))
+		}
+	}
+}

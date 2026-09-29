@@ -257,7 +257,7 @@ type ConversationSearchResult struct {
 // to the typed filter tree, and a per-conversation limit becomes a per-group
 // cap on conversationId. An unregistered collection returns no results and
 // registers nothing.
-func (manager *Manager) SearchConversations(ctx context.Context, collectionID string, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32) (ConversationSearchResult, error) {
+func (manager *Manager) SearchConversations(ctx context.Context, collectionID string, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32, offset int32) (ConversationSearchResult, error) {
 	emptyResult := ConversationSearchResult{Chunks: nil, IndexedFingerprint: "", RankingTruncated: false}
 	if refusal := manager.maintenanceRefusal(); refusal != nil {
 		return emptyResult, refusal
@@ -270,7 +270,7 @@ func (manager *Manager) SearchConversations(ctx context.Context, collectionID st
 	if !found {
 		return emptyResult, nil
 	}
-	result, err := manager.searchRegisteredCollection(ctx, trimmedCollectionID, codebase, filter.collectionSearchRequest(trimmedCollectionID, query, limit, perConversationLimit))
+	result, err := manager.searchRegisteredCollection(ctx, trimmedCollectionID, codebase, filter.collectionSearchRequest(trimmedCollectionID, query, limit, perConversationLimit, offset))
 	if err != nil {
 		return emptyResult, err
 	}
@@ -286,7 +286,7 @@ func (manager *Manager) SearchConversations(ctx context.Context, collectionID st
 // fingerprint differing from the conversation's current one means the index
 // trails the transcript. Either way the caller decides whether to refresh
 // newer content.
-func (manager *Manager) SearchWithinConversation(ctx context.Context, collectionID string, conversationID string, query string, limit int32, filter conversationSearchFilter) (ConversationSearchResult, error) {
+func (manager *Manager) SearchWithinConversation(ctx context.Context, collectionID string, conversationID string, query string, limit int32, filter conversationSearchFilter, offset int32) (ConversationSearchResult, error) {
 	emptyResult := ConversationSearchResult{Chunks: nil, IndexedFingerprint: "", RankingTruncated: false}
 	trimmedConversationID := strings.TrimSpace(conversationID)
 	if trimmedConversationID == "" {
@@ -305,7 +305,7 @@ func (manager *Manager) SearchWithinConversation(ctx context.Context, collection
 		return emptyResult, err
 	}
 	filter.ConversationIDs = []string{trimmedConversationID}
-	request := filter.collectionSearchRequest(trimmedCollectionID, query, limit, 0)
+	request := filter.collectionSearchRequest(trimmedCollectionID, query, limit, 0, offset)
 	request.CallerState = fingerprint
 	result, err := manager.searchRegisteredCollection(ctx, trimmedCollectionID, codebase, request)
 	if err != nil {

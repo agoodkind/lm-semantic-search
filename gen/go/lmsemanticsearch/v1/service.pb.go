@@ -6528,8 +6528,13 @@ type SearchConversationsRequest struct {
 	// per_conversation_limit caps hits per conversation so one large transcript
 	// does not monopolize the result list. Zero means uncapped.
 	PerConversationLimit int32 `protobuf:"varint,5,opt,name=per_conversation_limit,json=perConversationLimit,proto3" json:"per_conversation_limit,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// offset skips the first offset rows of the selected ranking. The response
+	// returns at most limit rows starting at position offset, and the daemon
+	// loads content only for those rows. Zero returns the first limit rows. A
+	// negative offset is an invalid argument.
+	Offset        int32 `protobuf:"varint,6,opt,name=offset,proto3" json:"offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SearchConversationsRequest) Reset() {
@@ -6597,18 +6602,28 @@ func (x *SearchConversationsRequest) GetPerConversationLimit() int32 {
 	return 0
 }
 
-// SearchConversationsResponse returns the first limit rows of one ranking.
-// Paging contract: the daemon ranks a query once and caches the ranking until
-// 10 minutes pass without a request that reads it. A later request with the
-// same collection, query, filter, min_score, and per_conversation_limit reads
-// that ranking, and a larger limit returns a longer prefix of it. A client
-// pages by raising limit and keeping the rows past the previous page. The
-// daemon ranks again after it commits a write to the collection, when the
-// number of rows matching the filter changes, and after 10 minutes without a
-// request for it, a cache eviction, or a restart. A process other than the
-// daemon that deletes and inserts the same number of matching rows is not
-// detected until the ranking expires. The offline profile keeps no cache and
-// ranks every request again.
+func (x *SearchConversationsRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+// SearchConversationsResponse returns at most limit rows of one ranking,
+// starting at offset. Paging contract: the daemon ranks a query once and caches
+// the ranking until 10 minutes pass without a request that reads it. A later
+// request with the same collection, query, filter, min_score, and
+// per_conversation_limit reads that ranking, and a larger limit returns a
+// longer prefix of it. A client pages by raising limit and keeping the rows
+// past the previous page, or by setting offset to the rows already read. A
+// write that the daemon commits between two pages of one query re-ranks the
+// next page at the full eligible depth, and that page can repeat or omit rows
+// at positions the write changed. The daemon also ranks again when the number
+// of rows matching the filter changes, and after 10 minutes without a request
+// for it, a cache eviction, or a restart. A process other than the daemon that
+// deletes and inserts the same number of matching rows is not detected until
+// the ranking expires. The offline profile keeps no cache and ranks every
+// request again.
 type SearchConversationsResponse struct {
 	state            protoimpl.MessageState      `protogen:"open.v1"`
 	Results          []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
@@ -6687,8 +6702,13 @@ type SearchWithinConversationRequest struct {
 	Query          string                    `protobuf:"bytes,3,opt,name=query,proto3" json:"query,omitempty"`
 	Limit          int32                     `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
 	Filter         *ConversationSearchFilter `protobuf:"bytes,5,opt,name=filter,proto3" json:"filter,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// offset skips the first offset rows of the selected ranking. The response
+	// returns at most limit rows starting at position offset, and the daemon
+	// loads content only for those rows. Zero returns the first limit rows. A
+	// negative offset is an invalid argument.
+	Offset        int32 `protobuf:"varint,6,opt,name=offset,proto3" json:"offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SearchWithinConversationRequest) Reset() {
@@ -6756,18 +6776,27 @@ func (x *SearchWithinConversationRequest) GetFilter() *ConversationSearchFilter 
 	return nil
 }
 
-// SearchWithinConversationResponse returns the first limit rows of one ranking
-// of one conversation. Paging contract: the daemon ranks a query once and
-// caches the ranking until 10 minutes pass without a request that reads it. A
-// later request with the same collection, conversation, query, filter, and
-// indexed fingerprint reads that ranking, and a larger limit returns a longer
-// prefix of it. The daemon ranks again after it commits a write to the
-// collection, when the conversation's indexed fingerprint or the number of rows
-// matching the filter changes, and after 10 minutes without a request for it, a
-// cache eviction, or a restart. A process other than the daemon that deletes
-// and inserts the same number of matching rows is not detected until the
-// ranking expires. The offline profile keeps no cache and ranks every request
-// again.
+func (x *SearchWithinConversationRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+// SearchWithinConversationResponse returns at most limit rows of one ranking
+// of one conversation, starting at offset. Paging contract: the daemon ranks a
+// query once and caches the ranking until 10 minutes pass without a request
+// that reads it. A later request with the same collection, conversation, query,
+// filter, and indexed fingerprint reads that ranking, and a larger limit
+// returns a longer prefix of it. A write that the daemon commits between two
+// pages of one query re-ranks the next page at the full eligible depth, and
+// that page can repeat or omit rows at positions the write changed. The daemon
+// also ranks again when the conversation's indexed fingerprint or the number of
+// rows matching the filter changes, and after 10 minutes without a request for
+// it, a cache eviction, or a restart. A process other than the daemon that
+// deletes and inserts the same number of matching rows is not detected until
+// the ranking expires. The offline profile keeps no cache and ranks every
+// request again.
 type SearchWithinConversationResponse struct {
 	state   protoimpl.MessageState      `protogen:"open.v1"`
 	Results []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
@@ -7417,6 +7446,11 @@ type SearchCollectionRequest struct {
 	Filter        *CollectionFilter      `protobuf:"bytes,5,opt,name=filter,proto3" json:"filter,omitempty"`
 	GroupBy       string                 `protobuf:"bytes,6,opt,name=group_by,json=groupBy,proto3" json:"group_by,omitempty"`
 	PerGroupLimit int32                  `protobuf:"varint,7,opt,name=per_group_limit,json=perGroupLimit,proto3" json:"per_group_limit,omitempty"`
+	// offset skips the first offset rows of the selected ranking. The response
+	// returns at most limit rows starting at position offset, and the daemon
+	// loads content only for those rows. Zero returns the first limit rows. A
+	// negative offset is an invalid argument.
+	Offset        int32 `protobuf:"varint,8,opt,name=offset,proto3" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7496,6 +7530,13 @@ func (x *SearchCollectionRequest) GetGroupBy() string {
 func (x *SearchCollectionRequest) GetPerGroupLimit() int32 {
 	if x != nil {
 		return x.PerGroupLimit
+	}
+	return 0
+}
+
+func (x *SearchCollectionRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
 	}
 	return 0
 }
@@ -7696,18 +7737,21 @@ func (x *CollectionSearchHit) GetScalars() []*CollectionHitScalar {
 	return nil
 }
 
-// SearchCollectionResponse returns the first limit hits of one ranking. Paging
-// contract: the daemon ranks a query once and caches the ranking until 10
-// minutes pass without a request that reads it. A later request with the same
-// collection, query, filter, min_score, group_by, and per_group_limit reads
-// that ranking, and a larger limit returns a longer prefix of it. A client
-// pages by raising limit and keeping the hits past the previous page. The
-// daemon ranks again after it commits a write to the collection, when the
-// number of rows matching the filter changes, and after 10 minutes without a
-// request for it, a cache eviction, or a restart. A process other than the
-// daemon that deletes and inserts the same number of matching rows is not
-// detected until the ranking expires. The offline profile keeps no cache and
-// ranks every request again.
+// SearchCollectionResponse returns at most limit hits of one ranking, starting
+// at offset. Paging contract: the daemon ranks a query once and caches the
+// ranking until 10 minutes pass without a request that reads it. A later
+// request with the same collection, query, filter, min_score, group_by, and
+// per_group_limit reads that ranking, and a larger limit returns a longer
+// prefix of it. A client pages by raising limit and keeping the hits past the
+// previous page, or by setting offset to the hits already read. A write that
+// the daemon commits between two pages of one query re-ranks the next page at
+// the full eligible depth, and that page can repeat or omit rows at positions
+// the write changed. The daemon also ranks again when the number of rows
+// matching the filter changes, and after 10 minutes without a request for it, a
+// cache eviction, or a restart. A process other than the daemon that deletes
+// and inserts the same number of matching rows is not detected until the
+// ranking expires. The offline profile keeps no cache and ranks every request
+// again.
 type SearchCollectionResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Hits             []*CollectionSearchHit `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`
@@ -9273,24 +9317,26 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x0fworkspace_roots\x18\n" +
 	" \x03(\tR\x0eworkspaceRoots\x12\x1f\n" +
 	"\barchived\x18\v \x01(\bH\x00R\barchived\x88\x01\x01B\v\n" +
-	"\t_archived\"\xea\x01\n" +
+	"\t_archived\"\x82\x02\n" +
 	"\x1aSearchConversationsRequest\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x14\n" +
 	"\x05query\x18\x02 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12E\n" +
 	"\x06filter\x18\x04 \x01(\v2-.lmsemanticsearch.v1.ConversationSearchFilterR\x06filter\x124\n" +
-	"\x16per_conversation_limit\x18\x05 \x01(\x05R\x14perConversationLimit\"\x8a\x02\n" +
+	"\x16per_conversation_limit\x18\x05 \x01(\x05R\x14perConversationLimit\x12\x16\n" +
+	"\x06offset\x18\x06 \x01(\x05R\x06offset\"\x8a\x02\n" +
 	"\x1bSearchConversationsResponse\x12G\n" +
 	"\aresults\x18\x01 \x03(\v2-.lmsemanticsearch.v1.ConversationSearchResultR\aresults\x12!\n" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\x12R\n" +
 	"\x11dependency_health\x18\x03 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\x12+\n" +
-	"\x11ranking_truncated\x18\x04 \x01(\bR\x10rankingTruncated\"\xe2\x01\n" +
+	"\x11ranking_truncated\x18\x04 \x01(\bR\x10rankingTruncated\"\xfa\x01\n" +
 	"\x1fSearchWithinConversationRequest\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x14\n" +
 	"\x05query\x18\x03 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x04 \x01(\x05R\x05limit\x12E\n" +
-	"\x06filter\x18\x05 \x01(\v2-.lmsemanticsearch.v1.ConversationSearchFilterR\x06filter\"\xc0\x02\n" +
+	"\x06filter\x18\x05 \x01(\v2-.lmsemanticsearch.v1.ConversationSearchFilterR\x06filter\x12\x16\n" +
+	"\x06offset\x18\x06 \x01(\x05R\x06offset\"\xc0\x02\n" +
 	" SearchWithinConversationResponse\x12G\n" +
 	"\aresults\x18\x01 \x03(\v2-.lmsemanticsearch.v1.ConversationSearchResultR\aresults\x12/\n" +
 	"\x13indexed_fingerprint\x18\x02 \x01(\tR\x12indexedFingerprint\x12!\n" +
@@ -9330,7 +9376,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\ais_null\x18\a \x01(\v2+.lmsemanticsearch.v1.CollectionFilterColumnH\x00R\x06isNull\x12L\n" +
 	"\n" +
 	"is_present\x18\b \x01(\v2+.lmsemanticsearch.v1.CollectionFilterColumnH\x00R\tisPresentB\x06\n" +
-	"\x04node\"\x89\x02\n" +
+	"\x04node\"\xa1\x02\n" +
 	"\x17SearchCollectionRequest\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x14\n" +
 	"\x05query\x18\x02 \x01(\tR\x05query\x12\x14\n" +
@@ -9338,7 +9384,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\tmin_score\x18\x04 \x01(\x01R\bminScore\x12=\n" +
 	"\x06filter\x18\x05 \x01(\v2%.lmsemanticsearch.v1.CollectionFilterR\x06filter\x12\x19\n" +
 	"\bgroup_by\x18\x06 \x01(\tR\agroupBy\x12&\n" +
-	"\x0fper_group_limit\x18\a \x01(\x05R\rperGroupLimit\"\xdc\x01\n" +
+	"\x0fper_group_limit\x18\a \x01(\x05R\rperGroupLimit\x12\x16\n" +
+	"\x06offset\x18\b \x01(\x05R\x06offset\"\xdc\x01\n" +
 	"\x13CollectionHitScalar\x12\x16\n" +
 	"\x06column\x18\x01 \x01(\tR\x06column\x12#\n" +
 	"\fstring_value\x18\x02 \x01(\tH\x00R\vstringValue\x12\x1f\n" +

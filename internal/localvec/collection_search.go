@@ -83,10 +83,14 @@ func (store *Store) SearchCollection(
 	if search.GroupBy != "" && search.PerGroupLimit > 0 {
 		groupLimit = search.PerGroupLimit
 	}
+	pageLimit := search.Limit
+	if pageLimit <= 0 {
+		pageLimit = defaultSearchLimit
+	}
 	perGroup := make(map[string]int32)
 	scored := limitScoredRows(
 		candidates,
-		effectiveLimit(search.Limit),
+		int(semantic.PageSelectionLimit(search.Offset, pageLimit)),
 		func(candidate scoredRow) bool {
 			if search.MinScore > 0 && candidate.score < search.MinScore {
 				return false
@@ -105,6 +109,7 @@ func (store *Store) SearchCollection(
 			return true
 		},
 	)
+	scored = scored[semantic.PageStart(search.Offset, len(scored)):]
 	hits := make([]semantic.CollectionHit, 0, len(scored))
 	for _, candidate := range scored {
 		cells := make([]semantic.ScalarCell, 0, len(declared))
