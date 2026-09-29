@@ -358,7 +358,9 @@ func (check *updateCheck) installOldRelease(ctx context.Context, release githubR
 // token. It removes every release published after newest from release list
 // responses. The daemon applies the newest listed release, and a release
 // published while the check runs would otherwise replace the release under
-// test.
+// test. The filter covers only the release list, which the updater reads when
+// prereleases are allowed, as for LMS. A stable-channel updater reads
+// /releases/latest, and the proxy passes that response through unfiltered.
 func authenticatedProxy(target *url.URL, token string, newest githubRelease) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
