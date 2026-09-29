@@ -162,7 +162,11 @@ library-live-prereqs: | $(GO_MK_PREREQS)
 library-live-l1: library-live-prereqs
 	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibraryWrite' ./test/live/
 
+# library-live-l2 runs the in-package analyzer and BM25 parity suite in
+# ./library/ and then the public lexical suite in ./test/live/. Make stops at
+# the first invocation that fails. The target passes only when both pass.
 library-live-l2: library-live-prereqs
+	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibraryLexical' ./library/
 	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibraryLexical' ./test/live/
 
 library-live-l3: library-live-prereqs

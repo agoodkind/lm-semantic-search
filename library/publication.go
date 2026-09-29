@@ -82,7 +82,7 @@ func (library *Library) CommitGeneration(ctx context.Context, key GenerationKey,
 			published = *saved
 			return checkCommittedSeal(ctx, tx, key, seal)
 		}
-		return publishGeneration(ctx, tx, key, mode, rows, manifest, published.Fingerprint)
+		return publishGeneration(ctx, tx, library.config.AnalyzerIdentity, key, mode, rows, manifest, published.Fingerprint)
 	})
 	if err != nil {
 		return ApplyReceipt{}, err
@@ -184,26 +184,48 @@ func (library *Library) verifyStagedVectors(ctx context.Context, rows []stagedRo
 	return library.verifyStrong(ctx, identities)
 }
 
-// publishGeneration writes the published rows, owner state, and receipt, and
-// removes the staged generation, inside tx.
+// publishGeneration writes the published rows, their lexical index entries,
+// owner state, and receipt, and removes the staged generation, inside tx. A
+// Replace passes the owner's previous rows to the lexical index as removed
+// and every new row as added. An Append passes only the rows it inserted.
 func publishGeneration(
 	ctx context.Context,
 	tx *sql.Tx,
+	analyzer string,
 	key GenerationKey,
 	mode BatchMode,
 	rows []stagedRow,
 	manifest string,
 	fingerprint string,
 ) error {
+	var removed []lexicalOccurrence
 	if mode == Replace {
+		var err error
+		removed, err = readOwnerLexicalRows(ctx, tx, key.Namespace, key.OwnerID)
+		if err != nil {
+			return err
+		}
 		if err := deleteOwnerOccurrences(ctx, tx, key.Namespace, key.OwnerID); err != nil {
 			return err
 		}
 	}
+	added := make([]lexicalOccurrence, 0, len(rows))
 	for _, row := range rows {
-		if err := publishRow(ctx, tx, key, row); err != nil {
+		inserted, err := publishRow(ctx, tx, key, row)
+		if err != nil {
 			return err
 		}
+		if inserted {
+			added = append(added, lexicalOccurrence{
+				OwnerID:    key.OwnerID,
+				RowKey:     row.occurrence.RowKey,
+				SearchHash: searchTextHash(row.occurrence.SearchText),
+				SearchText: row.occurrence.SearchText,
+			})
+		}
+	}
+	if err := publishLexical(ctx, tx, analyzer, key.Namespace, added, removed); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(
 		ctx,
@@ -234,11 +256,11 @@ func publishGeneration(
 	return err
 }
 
-// publishRow inserts one occurrence. In Append mode an existing row with the
-// same content is a repeat and an existing row with different content returns
-// an error that wraps [ErrAppendConflict]. Replace mode deleted the owner's
-// rows first.
-func publishRow(ctx context.Context, tx *sql.Tx, key GenerationKey, row stagedRow) error {
+// publishRow inserts one occurrence and reports whether it inserted a row. In
+// Append mode an existing row with the same content is a repeat that inserts
+// nothing, and an existing row with different content returns an error that
+// wraps [ErrAppendConflict]. Replace mode deleted the owner's rows first.
+func publishRow(ctx context.Context, tx *sql.Tx, key GenerationKey, row stagedRow) (bool, error) {
 	occurrence := row.occurrence
 	var savedHash string
 	scanErr := tx.QueryRowContext(
@@ -248,20 +270,20 @@ func publishRow(ctx context.Context, tx *sql.Tx, key GenerationKey, row stagedRo
 	).Scan(&savedHash)
 	if scanErr == nil {
 		if savedHash == row.occurrenceHash {
-			return nil
+			return false, nil
 		}
 		err := fmt.Errorf("%w: owner %q row %q exists with different content", ErrAppendConflict, key.OwnerID, occurrence.RowKey)
 		slog.WarnContext(ctx, "append rewrite rejected", "namespace", key.Namespace, "err", err)
-		return err
+		return false, err
 	}
 	if !errors.Is(scanErr, sql.ErrNoRows) {
 		slog.ErrorContext(ctx, "read occurrence failed", "row_key", occurrence.RowKey, "err", scanErr)
-		return fmt.Errorf("read occurrence %q: %w", occurrence.RowKey, scanErr)
+		return false, fmt.Errorf("read occurrence %q: %w", occurrence.RowKey, scanErr)
 	}
 	blobID := sourceBlobID(occurrence.SourceText)
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO source_blobs (blob_id, content) VALUES (?, ?)`, blobID, occurrence.SourceText); err != nil {
 		slog.ErrorContext(ctx, "save source blob failed", "row_key", occurrence.RowKey, "err", err)
-		return fmt.Errorf("save source blob for %q: %w", occurrence.RowKey, err)
+		return false, fmt.Errorf("save source blob for %q: %w", occurrence.RowKey, err)
 	}
 	if _, err := tx.ExecContext(
 		ctx,
@@ -271,14 +293,44 @@ func publishRow(ctx context.Context, tx *sql.Tx, key GenerationKey, row stagedRo
 		searchTextHash(occurrence.SearchText), len(occurrence.SourceText), key.GenerationOrder, row.occurrenceHash,
 	); err != nil {
 		slog.ErrorContext(ctx, "save occurrence failed", "row_key", occurrence.RowKey, "err", err)
-		return fmt.Errorf("save occurrence %q: %w", occurrence.RowKey, err)
+		return false, fmt.Errorf("save occurrence %q: %w", occurrence.RowKey, err)
 	}
 	for _, name := range sortedScalarNames(occurrence.Scalars) {
 		if err := insertOccurrenceScalar(ctx, tx, key.Namespace, key.OwnerID, occurrence.RowKey, name, occurrence.Scalars[name]); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return true, nil
+}
+
+// readOwnerLexicalRows returns the row key and search hash of every published
+// occurrence of one owner, ordered by row key.
+func readOwnerLexicalRows(ctx context.Context, tx *sql.Tx, namespace string, ownerID string) (rows []lexicalOccurrence, err error) {
+	result, queryErr := tx.QueryContext(
+		ctx,
+		`SELECT row_key, search_hash FROM occurrences WHERE namespace = ? AND owner_id = ? ORDER BY row_key`,
+		namespace, ownerID,
+	)
+	if queryErr != nil {
+		slog.ErrorContext(ctx, "read owner rows failed", "namespace", namespace, "err", queryErr)
+		return nil, fmt.Errorf("read owner %q rows: %w", ownerID, queryErr)
+	}
+	defer func() {
+		err = errors.Join(err, closeRows(ctx, result))
+	}()
+	for result.Next() {
+		row := lexicalOccurrence{OwnerID: ownerID, RowKey: "", SearchHash: "", SearchText: ""}
+		if err := result.Scan(&row.RowKey, &row.SearchHash); err != nil {
+			slog.ErrorContext(ctx, "scan owner row failed", "namespace", namespace, "err", err)
+			return nil, fmt.Errorf("scan owner %q row: %w", ownerID, err)
+		}
+		rows = append(rows, row)
+	}
+	if err := result.Err(); err != nil {
+		slog.ErrorContext(ctx, "read owner rows failed", "namespace", namespace, "err", err)
+		return nil, fmt.Errorf("read owner %q rows: %w", ownerID, err)
+	}
+	return rows, nil
 }
 
 // typedScalar is the column form of one [ScalarValue]. Only the column of the
@@ -356,8 +408,9 @@ func deleteOwnerOccurrences(ctx context.Context, tx *sql.Tx, namespace string, o
 }
 
 // Delete removes the exact occurrence IDs from ReplaceAllowed namespaces with
-// their scalars. An ID in an AppendOnly namespace returns an error that wraps
-// [ErrInvalidRequest] and removes no row. Canonical vectors stay in the pool.
+// their scalars and lexical index entries. An absent ID removes nothing. An ID
+// in an AppendOnly namespace returns an error that wraps [ErrInvalidRequest]
+// and removes no row. Canonical vectors stay in the pool.
 func (library *Library) Delete(ctx context.Context, ids []OccurrenceID) (err error) {
 	if len(ids) == 0 {
 		return nil
@@ -371,6 +424,8 @@ func (library *Library) Delete(ctx context.Context, ids []OccurrenceID) (err err
 	}()
 	return library.write(ctx, func(tx *sql.Tx) error {
 		checked := make(map[string]bool)
+		removed := make(map[string][]lexicalOccurrence)
+		var namespaces []string
 		for _, id := range ids {
 			if !checked[id.Namespace] {
 				spec, err := loadNamespace(ctx, tx, id.Namespace)
@@ -381,8 +436,23 @@ func (library *Library) Delete(ctx context.Context, ids []OccurrenceID) (err err
 					return invalidRequest(fmt.Sprintf("delete: namespace %q is AppendOnly", id.Namespace))
 				}
 				checked[id.Namespace] = true
+				namespaces = append(namespaces, id.Namespace)
 			}
-			if err := deleteOccurrence(ctx, tx, id); err != nil {
+			searchHash, deleted, err := deleteOccurrence(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if deleted {
+				removed[id.Namespace] = append(removed[id.Namespace], lexicalOccurrence{
+					OwnerID:    id.OwnerID,
+					RowKey:     id.RowKey,
+					SearchHash: searchHash,
+					SearchText: "",
+				})
+			}
+		}
+		for _, namespace := range namespaces {
+			if err := publishLexical(ctx, tx, library.config.AnalyzerIdentity, namespace, nil, removed[namespace]); err != nil {
 				return err
 			}
 		}
@@ -391,20 +461,35 @@ func (library *Library) Delete(ctx context.Context, ids []OccurrenceID) (err err
 	})
 }
 
-// occurrenceDeleteStatements remove one published row with its scalars and
-// effective scalars.
-var occurrenceDeleteStatements = []string{
-	`DELETE FROM occurrences WHERE namespace = ? AND owner_id = ? AND row_key = ?`,
+// occurrenceScalarDeleteStatements remove the scalars and effective scalars of
+// one published row.
+var occurrenceScalarDeleteStatements = []string{
 	`DELETE FROM occurrence_scalars WHERE namespace = ? AND owner_id = ? AND row_key = ?`,
 	`DELETE FROM effective_scalars WHERE namespace = ? AND owner_id = ? AND row_key = ?`,
 }
 
-func deleteOccurrence(ctx context.Context, tx *sql.Tx, id OccurrenceID) error {
-	for _, statement := range occurrenceDeleteStatements {
+// deleteOccurrence removes one published row with its scalars and effective
+// scalars. It returns the search hash of the deleted row and whether a row
+// existed.
+func deleteOccurrence(ctx context.Context, tx *sql.Tx, id OccurrenceID) (string, bool, error) {
+	var searchHash string
+	scanErr := tx.QueryRowContext(
+		ctx,
+		`DELETE FROM occurrences WHERE namespace = ? AND owner_id = ? AND row_key = ? RETURNING search_hash`,
+		id.Namespace, id.OwnerID, id.RowKey,
+	).Scan(&searchHash)
+	deleted := true
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		deleted = false
+	} else if scanErr != nil {
+		slog.ErrorContext(ctx, "delete occurrence failed", "err", scanErr)
+		return "", false, fmt.Errorf("delete occurrence %s/%s/%s: %w", id.Namespace, id.OwnerID, id.RowKey, scanErr)
+	}
+	for _, statement := range occurrenceScalarDeleteStatements {
 		if _, err := tx.ExecContext(ctx, statement, id.Namespace, id.OwnerID, id.RowKey); err != nil {
 			slog.ErrorContext(ctx, "delete occurrence failed", "err", err)
-			return fmt.Errorf("delete occurrence %s/%s/%s: %w", id.Namespace, id.OwnerID, id.RowKey, err)
+			return "", false, fmt.Errorf("delete occurrence %s/%s/%s: %w", id.Namespace, id.OwnerID, id.RowKey, err)
 		}
 	}
-	return nil
+	return searchHash, deleted, nil
 }
