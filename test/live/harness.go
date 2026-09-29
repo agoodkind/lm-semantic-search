@@ -78,6 +78,13 @@ const (
 	countOutputField  = "count(*)"
 
 	jobPollTimeout  = 90 * time.Second
+	// realEmbeddingJobTimeout bounds one job that embeds through the real
+	// endpoint, which shares its capacity with other lanes.
+	realEmbeddingJobTimeout = 20 * time.Minute
+	// realEmbeddingProbeTimeout bounds the embedding dimension probe.
+	realEmbeddingProbeTimeout = 2 * time.Minute
+	// fakeEmbeddingModelPrefix starts the model name of the local fake embedder.
+	fakeEmbeddingModelPrefix = "live-harness-"
 	jobPollInterval = 100 * time.Millisecond
 )
 
@@ -286,15 +293,17 @@ type liveEmbedding struct {
 func fakeLiveEmbedding(baseURL string, harnessID string) liveEmbedding {
 	return liveEmbedding{
 		baseURL:   baseURL,
-		model:     "live-harness-" + harnessID,
+		model:     fakeEmbeddingModelPrefix + harnessID,
 		apiKey:    "live-harness-dummy-key", //gitleaks:allow // not a secret: the fake embedder accepts any non-empty key
 		dimension: fakeEmbeddingDimension,
 	}
 }
 
 // realLiveEmbedding returns the embedding endpoint, model, key, and dimension
-// that config.Default resolves from the operator environment. It fails the
-// test as BLOCKED when any of them is missing.
+// that config.Default resolves from the operator environment. A zero
+// dimension makes one probe embedding request read the dimension. The
+// harness then tracks the reuse catalog collection for that dimension. It
+// fails the test as BLOCKED when the endpoint or model is missing.
 func realLiveEmbedding(t *testing.T, resolved config.Config) liveEmbedding {
 	t.Helper()
 	embedding := liveEmbedding{
@@ -303,10 +312,54 @@ func realLiveEmbedding(t *testing.T, resolved config.Config) liveEmbedding {
 		apiKey:    resolved.OpenAIAPIKey,
 		dimension: int(resolved.EmbeddingDimension),
 	}
-	if embedding.baseURL == "" || embedding.model == "" || embedding.dimension <= 0 {
-		t.Fatal("BLOCKED: the real embedding endpoint needs OPENAI_BASE_URL, EMBEDDING_MODEL, and EMBEDDING_DIMENSION in the operator environment")
+	if embedding.baseURL == "" || embedding.model == "" {
+		t.Fatal("BLOCKED: the real embedding endpoint needs OPENAI_BASE_URL and EMBEDDING_MODEL in the operator environment")
+	}
+	if embedding.dimension <= 0 {
+		embedding.dimension = probeEmbeddingDimension(t, embedding)
 	}
 	return embedding
+}
+
+// probeEmbeddingDimension sends one embedding request for a short input and
+// returns the width of the returned vector.
+func probeEmbeddingDimension(t *testing.T, embedding liveEmbedding) int {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"model": embedding.model, "input": []string{"dimension probe"}})
+	if err != nil {
+		t.Fatalf("encode embedding dimension probe: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), realEmbeddingProbeTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(embedding.baseURL, "/")+"/embeddings", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("build embedding dimension probe: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+embedding.apiKey)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("BLOCKED: embedding dimension probe to %s failed: %v", embedding.baseURL, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	var decoded struct {
+		Data []struct {
+			Embedding []float64 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil || len(decoded.Data) != 1 || len(decoded.Data[0].Embedding) == 0 {
+		t.Fatalf("BLOCKED: embedding dimension probe returned status %d and no vector: %v", response.StatusCode, err)
+	}
+	return len(decoded.Data[0].Embedding)
+}
+
+// jobTimeout returns how long waitJob waits for one job: jobPollTimeout with
+// the local fake embedder, and realEmbeddingJobTimeout with the real endpoint.
+func (h *harness) jobTimeout() time.Duration {
+	if strings.HasPrefix(h.config.EmbeddingModel, fakeEmbeddingModelPrefix) {
+		return jobPollTimeout
+	}
+	return realEmbeddingJobTimeout
 }
 
 // newRealEmbeddingHarness builds the isolated daemon like newHarness but
