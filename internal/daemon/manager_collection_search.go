@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -29,6 +30,15 @@ type CollectionSearchRequest struct {
 	PerGroupLimit int32
 	CallerState   string
 	Offset        int32
+	RankingToken  string
+}
+
+// searchPage selects the page of a search: Offset skips the first rows of the
+// ranking, and RankingToken continues the cached ranking a previous response
+// returned.
+type searchPage struct {
+	Offset       int32
+	RankingToken string
 }
 
 // SearchCollection searches a registered document collection. The daemon's
@@ -37,7 +47,7 @@ type CollectionSearchRequest struct {
 // loads the collection or runs the query. An unregistered collection fails
 // with [adapterr.NewCollectionNotRegistered] and registers nothing.
 func (manager *Manager) SearchCollection(ctx context.Context, request CollectionSearchRequest) (semantic.CollectionSearchResult, error) {
-	emptyResult := semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: ""}
+	emptyResult := semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}
 	if refusal := manager.maintenanceRefusal(); refusal != nil {
 		return emptyResult, refusal
 	}
@@ -94,7 +104,7 @@ func collectionDeclaration(codebase model.Codebase) model.CollectionDeclaration 
 // applies every filter natively and returns the result already reduced to the
 // limit, the group cap, and the score floor.
 func (manager *Manager) searchRegisteredCollection(ctx context.Context, collectionID string, codebase model.Codebase, request CollectionSearchRequest) (semantic.CollectionSearchResult, error) {
-	emptyResult := semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: ""}
+	emptyResult := semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}
 	declaration := collectionDeclaration(codebase)
 	if err := validateCollectionSearch(collectionID, declaration, request.Filter, request.GroupBy, request.PerGroupLimit); err != nil {
 		return emptyResult, err
@@ -138,7 +148,14 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 		Declaration:    declaration,
 		CallerState:    request.CallerState,
 		Offset:         request.Offset,
+		RankingToken:   request.RankingToken,
 	})
+	if errors.Is(err, semantic.ErrRankingExpired) {
+		return emptyResult, adapterr.NewRankingExpired(err)
+	}
+	if errors.Is(err, semantic.ErrRankingTokenMismatch) {
+		return emptyResult, adapterr.NewInvalidArgument("ranking_token belongs to another query, filter, score floor, or group cap")
+	}
 	if err != nil {
 		manager.noteDependencyFailure(err)
 		slog.ErrorContext(ctx, "search collection failed", "collection_id", collectionID, "collection", codebase.CollectionName, "err", err)

@@ -43,8 +43,13 @@ func (store *Store) SearchCollection(
 	ctx context.Context,
 	search semantic.CollectionSearch,
 ) (semantic.CollectionSearchResult, error) {
-	emptyResult := semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: ""}
+	emptyResult := semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}
 	if err := operationContextError(ctx, "search local collection"); err != nil {
+		return emptyResult, err
+	}
+	if search.RankingToken != "" {
+		err := fmt.Errorf("%w: the offline store keeps no ranking cache", semantic.ErrRankingExpired)
+		slog.WarnContext(ctx, "local collection search rejected a ranking token", "collection", search.CollectionName, "err", err)
 		return emptyResult, err
 	}
 	collectionName := strings.TrimSpace(search.CollectionName)
@@ -68,7 +73,7 @@ func (store *Store) SearchCollection(
 		return emptyResult, err
 	}
 	if eligible == 0 {
-		return semantic.CollectionSearchResult{Hits: []semantic.CollectionHit{}, RankingTruncated: false, CallerState: search.CallerState}, nil
+		return semantic.CollectionSearchResult{Hits: []semantic.CollectionHit{}, RankingTruncated: false, CallerState: search.CallerState, RankingToken: ""}, nil
 	}
 	query, err := store.embedQuery(ctx, collectionName, search.Query)
 	if err != nil {
@@ -125,6 +130,7 @@ func (store *Store) SearchCollection(
 		Hits:             hits,
 		RankingTruncated: semantic.RankingTruncated(eligible),
 		CallerState:      search.CallerState,
+		RankingToken:     "",
 	}, nil
 }
 

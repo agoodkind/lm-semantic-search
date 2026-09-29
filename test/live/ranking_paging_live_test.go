@@ -77,6 +77,13 @@ func (h *harness) conversationPage(limit int32, conversationIDs []string) *pb.Se
 // searchConversationsAt runs one SearchConversations request with an offset.
 func (h *harness) searchConversationsAt(limit int32, offset int32, conversationIDs []string) (*pb.SearchConversationsResponse, error) {
 	h.t.Helper()
+	return h.searchConversationsWithToken(limit, offset, "", conversationIDs)
+}
+
+// searchConversationsWithToken runs one SearchConversations request with an
+// offset and a ranking token.
+func (h *harness) searchConversationsWithToken(limit int32, offset int32, token string, conversationIDs []string) (*pb.SearchConversationsResponse, error) {
+	h.t.Helper()
 	return h.client.SearchConversations(correlatedContext(), &pb.SearchConversationsRequest{
 		CollectionId:         h.collectionID,
 		Query:                pagingQuery,
@@ -84,7 +91,29 @@ func (h *harness) searchConversationsAt(limit int32, offset int32, conversationI
 		PerConversationLimit: 0,
 		Filter:               &pb.ConversationSearchFilter{ConversationIds: conversationIDs},
 		Offset:               offset,
+		RankingToken:         token,
 	})
+}
+
+// pageByToken pages one query by offset with a ranking token and returns the
+// kept keys.
+func (h *harness) pageByToken(pageSize int, token string, conversationIDs []string) []string {
+	h.t.Helper()
+	kept := make([]string, 0)
+	for {
+		response, err := h.searchConversationsWithToken(int32(pageSize), int32(len(kept)), token, conversationIDs)
+		if err != nil {
+			h.t.Fatalf("SearchConversations(offset %d, limit %d, token) returned error: %v", len(kept), pageSize, err)
+		}
+		if response.GetRankingToken() != token {
+			h.t.Fatalf("a token page returned token %q, want %q", response.GetRankingToken(), token)
+		}
+		page := rankingKeys(response.GetResults())
+		kept = append(kept, page...)
+		if len(page) < pageSize {
+			return kept
+		}
+	}
 }
 
 // pageByOffset pages one query with the offset field: each request asks for
@@ -321,6 +350,79 @@ func invalidationMessages(conversationID string, count int, token string) []*pb.
 		})
 	}
 	return documents
+}
+
+// tokenWriteMessages is the number of matching messages the token test adds
+// to a scoped conversation after the first page.
+const tokenWriteMessages = 5
+
+// TestConversationSearchTokenPagesOneRankingAcrossWrites takes a ranking token
+// from the first page, adds matching rows to a conversation in the filter, and
+// pages the token to its end at page sizes 1, 10, and 100. The pages equal the
+// ranking of the first page with no row repeated or omitted, and a request
+// without the token then returns the added rows.
+func TestConversationSearchTokenPagesOneRankingAcrossWrites(t *testing.T) {
+	h, _, scope, scopedRows := newPagingHarness(t)
+	corpus, _ := pagingCorpus()
+	firstPage, err := h.searchConversationsAt(int32(scopedRows), 0, scope)
+	if err != nil {
+		t.Fatalf("first page returned error: %v", err)
+	}
+	token := firstPage.GetRankingToken()
+	full := rankingKeys(firstPage.GetResults())
+	if token == "" || len(full) != scopedRows {
+		t.Fatalf("first page returned %d rows and token %q, want %d rows and a token", len(full), token, scopedRows)
+	}
+
+	written := scope[0]
+	messages := slices.Clone(corpus[written])
+	for index := range tokenWriteMessages {
+		messages = append(messages, &pb.ConversationDocument{
+			ConversationId: written,
+			MessageIndex:   int32(len(corpus[written]) + index),
+			Role:           "user",
+			TimestampUnix:  int64(1_700_000_000 + index),
+			Text:           fmt.Sprintf("%s written after the first page %d", pagingQuery, index),
+		})
+	}
+	requireCompleted(t, h.upsert(map[string][]*pb.ConversationDocument{written: messages}, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, false, false), "write after the first page")
+
+	for _, pageSize := range pagingPageSizes {
+		requireSamePages(t, fmt.Sprintf("token page size %d after a write", pageSize), h.pageByToken(pageSize, token, scope), full)
+	}
+	fresh, err := h.searchConversationsAt(int32(scopedRows+tokenWriteMessages), 0, scope)
+	if err != nil {
+		t.Fatalf("search without the token returned error: %v", err)
+	}
+	if got := len(fresh.GetResults()); got != scopedRows+tokenWriteMessages {
+		t.Fatalf("search without the token after the write returned %d rows, want %d", got, scopedRows+tokenWriteMessages)
+	}
+}
+
+// TestConversationSearchRejectsExpiredAndForeignTokens restarts the daemon,
+// which empties the ranking cache, and requires FailedPrecondition with no rows
+// for the old token. A token sent with another filter is an invalid argument.
+func TestConversationSearchRejectsExpiredAndForeignTokens(t *testing.T) {
+	h, _, scope, scopedRows := newPagingHarness(t)
+	firstPage, err := h.searchConversationsAt(10, 0, scope)
+	if err != nil {
+		t.Fatalf("first page returned error: %v", err)
+	}
+	token := firstPage.GetRankingToken()
+	if token == "" {
+		t.Fatal("first page returned no ranking token")
+	}
+	if _, err := h.searchConversationsWithToken(10, 0, token, scope[:1]); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("a token with another filter returned %v, want InvalidArgument", err)
+	}
+	h.restart(nil)
+	response, err := h.searchConversationsWithToken(10, 10, token, scope)
+	if status.Code(err) != codes.FailedPrecondition || len(response.GetResults()) != 0 {
+		t.Fatalf("an expired token returned %d rows and %v, want no rows and FailedPrecondition", len(response.GetResults()), err)
+	}
+	if again, err := h.searchConversationsAt(int32(scopedRows), 0, scope); err != nil || len(again.GetResults()) != scopedRows {
+		t.Fatalf("a search without a token after the restart returned %v and %d rows, want %d rows", err, len(again.GetResults()), scopedRows)
+	}
 }
 
 // TestConversationSearchSeesDaemonWritesBetweenSearches searches one key,

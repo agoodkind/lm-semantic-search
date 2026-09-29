@@ -736,7 +736,7 @@ func (server *GRPCServer) SearchConversations(ctx context.Context, request *pb.S
 	if argErr := requireNonEmpty(ctx, request.GetQuery(), "query", false); argErr != nil {
 		return nil, argErr
 	}
-	searchResult, callErr := server.manager.SearchConversations(ctx, request.GetCollectionId(), request.GetQuery(), request.GetLimit(), pbConversationSearchFilter(request.GetFilter()), request.GetPerConversationLimit(), request.GetOffset())
+	searchResult, callErr := server.manager.SearchConversations(ctx, request.GetCollectionId(), request.GetQuery(), request.GetLimit(), pbConversationSearchFilter(request.GetFilter()), request.GetPerConversationLimit(), searchPage{Offset: request.GetOffset(), RankingToken: request.GetRankingToken()})
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
 	}
@@ -752,6 +752,7 @@ func (server *GRPCServer) SearchConversations(ctx context.Context, request *pb.S
 		DependencyHealth: toDependencyHealth(health),
 		DisplayText:      server.envelopeText(ctx, health, render.ConversationSearch(conversationView)),
 		RankingTruncated: searchResult.RankingTruncated,
+		RankingToken:     searchResult.RankingToken,
 	}
 	return response, nil
 }
@@ -771,7 +772,7 @@ func (server *GRPCServer) SearchWithinConversation(ctx context.Context, request 
 	if argErr := requireNonEmpty(ctx, request.GetQuery(), "query", false); argErr != nil {
 		return nil, argErr
 	}
-	searchResult, callErr := server.manager.SearchWithinConversation(ctx, request.GetCollectionId(), request.GetConversationId(), request.GetQuery(), request.GetLimit(), pbConversationSearchFilter(request.GetFilter()), request.GetOffset())
+	searchResult, callErr := server.manager.SearchWithinConversation(ctx, request.GetCollectionId(), request.GetConversationId(), request.GetQuery(), request.GetLimit(), pbConversationSearchFilter(request.GetFilter()), searchPage{Offset: request.GetOffset(), RankingToken: request.GetRankingToken()})
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(request.GetCollectionId(), callErr)))
 	}
@@ -788,6 +789,7 @@ func (server *GRPCServer) SearchWithinConversation(ctx context.Context, request 
 		DependencyHealth:   toDependencyHealth(health),
 		DisplayText:        server.envelopeText(ctx, health, render.ConversationSearch(conversationView)),
 		RankingTruncated:   searchResult.RankingTruncated,
+		RankingToken:       searchResult.RankingToken,
 	}, nil
 }
 

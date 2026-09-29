@@ -129,6 +129,9 @@ type CollectionSearch struct {
 	// Offset skips the first Offset selected rows. The search returns at most
 	// Limit rows from position Offset and loads content only for them.
 	Offset int32
+	// RankingToken continues the cached ranking a previous result returned.
+	// Empty ranks or reads the current ranking.
+	RankingToken string
 }
 
 // PageSelectionLimit returns the selection length that covers a page of limit
@@ -156,6 +159,9 @@ type CollectionSearchResult struct {
 	Hits             []CollectionHit
 	RankingTruncated bool
 	CallerState      string
+	// RankingToken continues the ranking that served Hits. Empty when no
+	// cached ranking served them.
+	RankingToken string
 }
 
 // groupColumnFor returns the declared column the per-group cap reads. It
@@ -184,7 +190,7 @@ func groupColumnFor(search CollectionSearch) (model.ScalarColumn, bool) {
 // different count, a recreated collection, a restart, eviction, and
 // RankingCacheTTL each make the next request rank again.
 func (service *Service) SearchCollection(ctx context.Context, search CollectionSearch) (CollectionSearchResult, error) {
-	emptyResult := CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: ""}
+	emptyResult := CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}
 	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
 		return emptyResult, ErrUnavailable
@@ -221,15 +227,6 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 	if err != nil {
 		return emptyResult, err
 	}
-	writeGeneration := service.rankings.writeGeneration(collectionName)
-	eligible, err := service.countEligibleRows(ctx, collectionName, compiled)
-	if err != nil {
-		return emptyResult, err
-	}
-	if eligible == 0 {
-		return CollectionSearchResult{Hits: []CollectionHit{}, RankingTruncated: false, CallerState: search.CallerState}, nil
-	}
-
 	groupColumn, grouped := groupColumnFor(search)
 	perGroupLimit := int32(0)
 	groupColumnName := ""
@@ -237,10 +234,10 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 		perGroupLimit = search.PerGroupLimit
 		groupColumnName = groupColumn.Name
 	}
-	digest := rankingKey{
+	key := rankingKey{
 		CollectionName:  collectionName,
 		CollectionID:    collectionID,
-		WriteGeneration: writeGeneration,
+		WriteGeneration: service.rankings.writeGeneration(collectionName),
 		Query:           search.Query,
 		Hybrid:          service.cfg.HybridMode,
 		Filter:          compiled,
@@ -248,20 +245,49 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 		GroupColumn:     groupColumnName,
 		PerGroupLimit:   perGroupLimit,
 		CallerState:     search.CallerState,
-	}.digest()
-	ranking, err := service.rankings.rank(digest, collectionName, writeGeneration, eligible, func() (collectionRanking, error) {
+	}
+	if search.RankingToken != "" {
+		ranking, err := service.rankings.lookupToken(search.RankingToken, collectionID, key.requestDigest())
+		if err != nil {
+			slog.WarnContext(ctx, "ranking token rejected", "collection", collectionName, "peer", peerInfo.String(), "err", err)
+			return emptyResult, err
+		}
+		return service.rankingPage(ctx, collectionName, search, ranking, perGroupLimit, limit, search.RankingToken)
+	}
+	eligible, err := service.countEligibleRows(ctx, collectionName, compiled)
+	if err != nil {
+		return emptyResult, err
+	}
+	if eligible == 0 {
+		return CollectionSearchResult{Hits: []CollectionHit{}, RankingTruncated: false, CallerState: search.CallerState, RankingToken: ""}, nil
+	}
+	ranking, err := service.rankings.rank(key, eligible, func() (collectionRanking, error) {
 		return service.computeRanking(ctx, collectionName, search, compiled, eligible)
 	})
 	if err != nil {
 		return emptyResult, err
 	}
+	return service.rankingPage(ctx, collectionName, search, ranking, perGroupLimit, limit, service.rankings.issueToken(key.digest()))
+}
+
+// rankingPage selects the page of ranking at search.Offset, loads content for
+// its rows, and returns it with token.
+func (service *Service) rankingPage(
+	ctx context.Context,
+	collectionName string,
+	search CollectionSearch,
+	ranking collectionRanking,
+	perGroupLimit int32,
+	limit int32,
+	token string,
+) (CollectionSearchResult, error) {
 	selected := selectRankedCandidates(ranking.Candidates, perGroupLimit, search.MinScore, PageSelectionLimit(search.Offset, limit))
 	selected = selected[PageStart(search.Offset, len(selected)):]
 	hits, err := service.loadRankedHits(ctx, collectionName, selected, search.Declaration.Scalars)
 	if err != nil {
-		return emptyResult, err
+		return CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}, err
 	}
-	return CollectionSearchResult{Hits: hits, RankingTruncated: ranking.Truncated, CallerState: ranking.CallerState}, nil
+	return CollectionSearchResult{Hits: hits, RankingTruncated: ranking.Truncated, CallerState: ranking.CallerState, RankingToken: token}, nil
 }
 
 // computeRanking embeds the query and runs one ranking search over eligible

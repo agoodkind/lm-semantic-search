@@ -245,11 +245,13 @@ func (manager *Manager) DeleteConversation(ctx context.Context, collectionID str
 // ConversationSearchResult is one page of a conversation search. Chunks are
 // the hits in ranking order. IndexedFingerprint is set only by
 // SearchWithinConversation. RankingTruncated is true when more rows matched
-// the filter than one ranking covers.
+// the filter than one ranking covers. RankingToken continues the ranking
+// that served Chunks.
 type ConversationSearchResult struct {
 	Chunks             []model.StoredChunk
 	IndexedFingerprint string
 	RankingTruncated   bool
+	RankingToken       string
 }
 
 // SearchConversations searches a registered virtual conversation collection
@@ -257,8 +259,8 @@ type ConversationSearchResult struct {
 // to the typed filter tree, and a per-conversation limit becomes a per-group
 // cap on conversationId. An unregistered collection returns no results and
 // registers nothing.
-func (manager *Manager) SearchConversations(ctx context.Context, collectionID string, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32, offset int32) (ConversationSearchResult, error) {
-	emptyResult := ConversationSearchResult{Chunks: nil, IndexedFingerprint: "", RankingTruncated: false}
+func (manager *Manager) SearchConversations(ctx context.Context, collectionID string, query string, limit int32, filter conversationSearchFilter, perConversationLimit int32, page searchPage) (ConversationSearchResult, error) {
+	emptyResult := ConversationSearchResult{Chunks: nil, IndexedFingerprint: "", RankingTruncated: false, RankingToken: ""}
 	if refusal := manager.maintenanceRefusal(); refusal != nil {
 		return emptyResult, refusal
 	}
@@ -270,11 +272,11 @@ func (manager *Manager) SearchConversations(ctx context.Context, collectionID st
 	if !found {
 		return emptyResult, nil
 	}
-	result, err := manager.searchRegisteredCollection(ctx, trimmedCollectionID, codebase, filter.collectionSearchRequest(trimmedCollectionID, query, limit, perConversationLimit, offset))
+	result, err := manager.searchRegisteredCollection(ctx, trimmedCollectionID, codebase, filter.collectionSearchRequest(trimmedCollectionID, query, limit, perConversationLimit, page))
 	if err != nil {
 		return emptyResult, err
 	}
-	return ConversationSearchResult{Chunks: collectionHitChunks(result.Hits), IndexedFingerprint: "", RankingTruncated: result.RankingTruncated}, nil
+	return ConversationSearchResult{Chunks: collectionHitChunks(result.Hits), IndexedFingerprint: "", RankingTruncated: result.RankingTruncated, RankingToken: result.RankingToken}, nil
 }
 
 // SearchWithinConversation retrieves one conversation's matching rows plus the
@@ -286,8 +288,8 @@ func (manager *Manager) SearchConversations(ctx context.Context, collectionID st
 // fingerprint differing from the conversation's current one means the index
 // trails the transcript. Either way the caller decides whether to refresh
 // newer content.
-func (manager *Manager) SearchWithinConversation(ctx context.Context, collectionID string, conversationID string, query string, limit int32, filter conversationSearchFilter, offset int32) (ConversationSearchResult, error) {
-	emptyResult := ConversationSearchResult{Chunks: nil, IndexedFingerprint: "", RankingTruncated: false}
+func (manager *Manager) SearchWithinConversation(ctx context.Context, collectionID string, conversationID string, query string, limit int32, filter conversationSearchFilter, page searchPage) (ConversationSearchResult, error) {
+	emptyResult := ConversationSearchResult{Chunks: nil, IndexedFingerprint: "", RankingTruncated: false, RankingToken: ""}
 	trimmedConversationID := strings.TrimSpace(conversationID)
 	if trimmedConversationID == "" {
 		return emptyResult, errors.New("conversation id is required")
@@ -305,13 +307,13 @@ func (manager *Manager) SearchWithinConversation(ctx context.Context, collection
 		return emptyResult, err
 	}
 	filter.ConversationIDs = []string{trimmedConversationID}
-	request := filter.collectionSearchRequest(trimmedCollectionID, query, limit, 0, offset)
+	request := filter.collectionSearchRequest(trimmedCollectionID, query, limit, 0, page)
 	request.CallerState = fingerprint
 	result, err := manager.searchRegisteredCollection(ctx, trimmedCollectionID, codebase, request)
 	if err != nil {
 		return emptyResult, err
 	}
-	return ConversationSearchResult{Chunks: collectionHitChunks(result.Hits), IndexedFingerprint: result.CallerState, RankingTruncated: result.RankingTruncated}, nil
+	return ConversationSearchResult{Chunks: collectionHitChunks(result.Hits), IndexedFingerprint: result.CallerState, RankingTruncated: result.RankingTruncated, RankingToken: result.RankingToken}, nil
 }
 
 // collectionHitChunks returns the stored chunk of every hit, in order. The

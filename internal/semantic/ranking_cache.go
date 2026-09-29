@@ -4,16 +4,32 @@ import (
 	"container/list"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"hash"
 	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
 
 	"goodkind.io/lm-semantic-search/internal/model"
 )
+
+// rankingTokenPrefix starts every ranking token. A token is the prefix and
+// the ranking key digest.
+const rankingTokenPrefix = "rk1."
+
+// ErrRankingExpired reports a ranking token that names no cached ranking: the
+// ranking expired, was evicted, belongs to a dropped collection, or the daemon
+// restarted.
+var ErrRankingExpired = errors.New("ranking expired")
+
+// ErrRankingTokenMismatch reports a ranking token sent with a query, filter,
+// score floor, or group cap other than the ones of its ranking.
+var ErrRankingTokenMismatch = errors.New("ranking token belongs to another query")
 
 // RankingCacheTTL is how long a cached collection ranking serves pages after
 // the last request that computed or read it.
@@ -94,9 +110,25 @@ type rankingKey struct {
 // order has one encoding.
 func (key rankingKey) digest() string {
 	encoder := rankingKeyEncoder{hash: sha256.New()}
-	encoder.field("collection", key.CollectionName)
 	encoder.field("collection_id", strconv.FormatInt(key.CollectionID, 10))
 	encoder.field("write_generation", strconv.FormatUint(key.WriteGeneration, 10))
+	encoder.field("caller_state", key.CallerState)
+	key.encodeRequest(encoder)
+	return hex.EncodeToString(encoder.hash.Sum(nil))
+}
+
+// requestDigest returns the SHA-256 of the fields a request repeats on every
+// page: the collection name, query, hybrid mode, filter, score floor, and group
+// cap. It leaves out the collection ID, write generation, and caller state,
+// which can change between pages of one ranking.
+func (key rankingKey) requestDigest() string {
+	encoder := rankingKeyEncoder{hash: sha256.New()}
+	key.encodeRequest(encoder)
+	return hex.EncodeToString(encoder.hash.Sum(nil))
+}
+
+func (key rankingKey) encodeRequest(encoder rankingKeyEncoder) {
+	encoder.field("collection", key.CollectionName)
 	encoder.field("query", key.Query)
 	encoder.field("hybrid", strconv.FormatBool(key.Hybrid))
 	encoder.field("expression", key.Filter.Expression)
@@ -107,8 +139,6 @@ func (key rankingKey) digest() string {
 	encoder.field("min_score", strconv.FormatFloat(key.MinScore, 'g', -1, 64))
 	encoder.field("group_column", key.GroupColumn)
 	encoder.field("per_group_limit", strconv.FormatInt(int64(key.PerGroupLimit), 10))
-	encoder.field("caller_state", key.CallerState)
-	return hex.EncodeToString(encoder.hash.Sum(nil))
 }
 
 type rankingKeyEncoder struct {
@@ -150,11 +180,15 @@ func (encoder rankingKeyEncoder) templateParam(param filterTemplateParam) {
 
 // rankingCacheEntry is one cached ranking and its bookkeeping.
 type rankingCacheEntry struct {
-	digest     string
-	collection string
-	ranking    collectionRanking
-	lastUsed   time.Time
-	bytes      int64
+	digest        string
+	requestDigest string
+	collection    string
+	collectionID  int64
+	ranking       collectionRanking
+	lastUsed      time.Time
+	bytes         int64
+	// tokenIssued is true after a response returned a token for the entry.
+	tokenIssued bool
 }
 
 // rankingCache stores collection rankings in process, one per ranking key. An
@@ -162,7 +196,9 @@ type rankingCacheEntry struct {
 // Storing past maxBytes evicts the least recently used entries. The cache also
 // counts committed writes per collection name. A ranking key includes that
 // count. A write changes the key of every later request for the collection
-// and removes the collection's stored rankings. Concurrent requests that miss one key and count share one
+// and removes the collection's stored rankings that no token names. A token
+// reads its ranking until the ranking expires or is evicted. Concurrent
+// requests that miss one key and count share one
 // ranking computation.
 type rankingCache struct {
 	mutex       sync.Mutex
@@ -208,7 +244,8 @@ func (cache *rankingCache) writeGeneration(collectionName string) uint64 {
 }
 
 // noteWrite counts one committed write to collectionName and removes every
-// stored ranking of collectionName. A nil cache ignores it.
+// stored ranking of collectionName that no token names. A nil cache ignores
+// it.
 func (cache *rankingCache) noteWrite(collectionName string) {
 	if cache == nil {
 		return
@@ -219,7 +256,7 @@ func (cache *rankingCache) noteWrite(collectionName string) {
 	for element := cache.recency.Front(); element != nil; {
 		next := element.Next()
 		entry, isEntry := element.Value.(*rankingCacheEntry)
-		if isEntry && entry.collection == collectionName {
+		if isEntry && entry.collection == collectionName && !entry.tokenIssued {
 			cache.removeLocked(element)
 		}
 		element = next
@@ -256,14 +293,9 @@ func (cache *rankingCache) get(digest string, eligible int64) (collectionRanking
 
 // rank returns the cached ranking under digest for eligible rows, or runs
 // compute once for every concurrent request that misses the same digest and
-// count and stores its result for collectionName at generation.
-func (cache *rankingCache) rank(
-	digest string,
-	collectionName string,
-	generation uint64,
-	eligible int64,
-	compute func() (collectionRanking, error),
-) (collectionRanking, error) {
+// count and stores its result under key.
+func (cache *rankingCache) rank(key rankingKey, eligible int64, compute func() (collectionRanking, error)) (collectionRanking, error) {
+	digest := key.digest()
 	if ranking, cached := cache.get(digest, eligible); cached {
 		return ranking, nil
 	}
@@ -285,7 +317,7 @@ func (cache *rankingCache) rank(
 
 	flight.ranking, flight.err = compute()
 	if flight.err == nil {
-		cache.put(digest, collectionName, generation, flight.ranking)
+		cache.put(key, flight.ranking)
 	}
 	cache.mutex.Lock()
 	delete(cache.flights, flightKey)
@@ -294,17 +326,100 @@ func (cache *rankingCache) rank(
 	return flight.ranking, flight.err
 }
 
-// put stores ranking of collectionName under digest, replacing an earlier
-// entry, and evicts the least recently used entries until the cache fits
-// maxBytes. A ranking larger than maxBytes is not stored. A ranking computed at
-// a generation older than the collection's current generation is not stored:
-// a write committed while it was computed.
-func (cache *rankingCache) put(digest string, collectionName string, generation uint64, ranking collectionRanking) {
+// issueToken marks the ranking stored under digest as named by a token and
+// returns the token. It returns an empty token when no ranking is stored under
+// digest, for example after a write removed it or when it exceeded the bound.
+func (cache *rankingCache) issueToken(digest string) string {
 	cache.mutex.Lock()
 	defer cache.mutex.Unlock()
-	if generation != cache.generations[collectionName] {
+	element, found := cache.entries[digest]
+	if !found {
+		return ""
+	}
+	entry, isEntry := element.Value.(*rankingCacheEntry)
+	if !isEntry {
+		return ""
+	}
+	entry.tokenIssued = true
+	return rankingTokenPrefix + digest
+}
+
+// lookupToken returns the unexpired ranking that token names, whatever writes
+// followed it. It fails with an error that wraps [ErrRankingExpired] for an
+// unknown, malformed, or expired token or a ranking of another collection ID,
+// and with an error that wraps [ErrRankingTokenMismatch] when requestDigest
+// differs from the ranking's request digest. A read restarts the expiry period.
+func (cache *rankingCache) lookupToken(token string, collectionID int64, requestDigest string) (collectionRanking, error) {
+	var missing collectionRanking
+	ranking, reason := cache.readToken(token, collectionID, requestDigest)
+	switch reason {
+	case "":
+		return ranking, nil
+	case tokenReasonMismatch:
+		slog.Warn("ranking token rejected", "reason", reason)
+		return missing, ErrRankingTokenMismatch
+	default:
+		err := fmt.Errorf("%w: %s", ErrRankingExpired, reason)
+		slog.Warn("ranking token rejected", "reason", reason)
+		return missing, err
+	}
+}
+
+// Reasons readToken gives for a token that reads no ranking.
+const (
+	tokenReasonMalformed = "malformed token"
+	tokenReasonUnknown   = "no cached ranking for the token"
+	tokenReasonExpired   = "the ranking expired"
+	tokenReasonRecreated = "the collection was recreated"
+	tokenReasonMismatch  = "the token belongs to another query"
+)
+
+// readToken returns the ranking token names, or an empty ranking and the
+// reason no ranking was read.
+func (cache *rankingCache) readToken(token string, collectionID int64, requestDigest string) (collectionRanking, string) {
+	var missing collectionRanking
+	digest, prefixed := strings.CutPrefix(token, rankingTokenPrefix)
+	if !prefixed {
+		return missing, tokenReasonMalformed
+	}
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+	element, found := cache.entries[digest]
+	if !found {
+		return missing, tokenReasonUnknown
+	}
+	entry, isEntry := element.Value.(*rankingCacheEntry)
+	if !isEntry {
+		return missing, tokenReasonUnknown
+	}
+	now := cache.clock()
+	if now.Sub(entry.lastUsed) >= RankingCacheTTL {
+		cache.removeLocked(element)
+		return missing, tokenReasonExpired
+	}
+	if entry.collectionID != collectionID {
+		return missing, tokenReasonRecreated
+	}
+	if entry.requestDigest != requestDigest {
+		return missing, tokenReasonMismatch
+	}
+	entry.lastUsed = now
+	cache.recency.MoveToFront(element)
+	return entry.ranking, ""
+}
+
+// put stores ranking under the digest of key, replacing an earlier entry, and
+// evicts the least recently used entries until the cache fits maxBytes. A
+// ranking larger than maxBytes is not stored. A ranking computed at a write
+// generation older than the collection's current generation is not stored: a
+// write committed while it was computed.
+func (cache *rankingCache) put(key rankingKey, ranking collectionRanking) {
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+	if key.WriteGeneration != cache.generations[key.CollectionName] {
 		return
 	}
+	digest := key.digest()
 	if element, found := cache.entries[digest]; found {
 		cache.removeLocked(element)
 	}
@@ -314,7 +429,16 @@ func (cache *rankingCache) put(digest string, collectionName string, generation 
 			"ranking_bytes", bytes, "cache_bytes", cache.maxBytes, "candidates", len(ranking.Candidates))
 		return
 	}
-	entry := &rankingCacheEntry{digest: digest, collection: collectionName, ranking: ranking, lastUsed: cache.clock(), bytes: bytes}
+	entry := &rankingCacheEntry{
+		digest:        digest,
+		requestDigest: key.requestDigest(),
+		collection:    key.CollectionName,
+		collectionID:  key.CollectionID,
+		ranking:       ranking,
+		lastUsed:      cache.clock(),
+		bytes:         bytes,
+		tokenIssued:   false,
+	}
 	cache.entries[digest] = cache.recency.PushFront(entry)
 	cache.usedBytes += bytes
 	for cache.usedBytes > cache.maxBytes {

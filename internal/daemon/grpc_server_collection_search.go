@@ -39,6 +39,7 @@ func (server *GRPCServer) SearchCollection(ctx context.Context, request *pb.Sear
 		GroupBy:       request.GetGroupBy(),
 		PerGroupLimit: request.GetPerGroupLimit(),
 		Offset:        request.GetOffset(),
+		RankingToken:  request.GetRankingToken(),
 		CallerState:   "",
 	})
 	if callErr != nil {
@@ -70,6 +71,7 @@ func (server *GRPCServer) SearchCollection(ctx context.Context, request *pb.Sear
 		DependencyHealth: toDependencyHealth(health),
 		DisplayText:      server.envelopeText(ctx, health, render.CollectionSearch(searchView)),
 		RankingTruncated: searchResult.RankingTruncated,
+		RankingToken:     searchResult.RankingToken,
 	}, nil
 }
 

@@ -238,17 +238,17 @@ func (f *fakeSemantic) SearchCollection(ctx context.Context, search semantic.Col
 	f.conversationSearchScopes = append(f.conversationSearchScopes, itemIDScope(search.Filter, search.Declaration.ItemIDColumn))
 	f.mu.Unlock()
 	if f.conversationSearch == nil {
-		return semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: search.CallerState}, nil
+		return semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: search.CallerState, RankingToken: ""}, nil
 	}
 	chunks, err := f.conversationSearch(ctx, search.CollectionName, search.Query, search.Limit)
 	if err != nil {
-		return semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: ""}, err
+		return semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}, err
 	}
 	hits := make([]semantic.CollectionHit, 0, len(chunks))
 	for _, chunk := range chunks {
 		hits = append(hits, semantic.CollectionHit{Chunk: chunk, Scalars: nil})
 	}
-	return semantic.CollectionSearchResult{Hits: hits, RankingTruncated: false, CallerState: search.CallerState}, nil
+	return semantic.CollectionSearchResult{Hits: hits, RankingTruncated: false, CallerState: search.CallerState, RankingToken: ""}, nil
 }
 
 // itemIDScope returns the values of the item id membership child of a root all
