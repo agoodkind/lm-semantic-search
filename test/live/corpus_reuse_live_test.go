@@ -22,7 +22,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
-	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/embedding/providers"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -1379,7 +1379,7 @@ func TestCorpusReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load configured embedder: %v", err)
 	}
-	provider, err := embedding.NewProvider(context.Background(), actualConfig)
+	provider, err := providers.New(context.Background(), actualConfig)
 	if err != nil {
 		t.Fatalf("create configured embedder: %v", err)
 	}

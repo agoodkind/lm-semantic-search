@@ -4,6 +4,7 @@ package live
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -145,10 +146,10 @@ func TestOperatorStateAuditRejectsEveryProtectedDifference(t *testing.T) {
 		want           string
 	}{
 		{
-			name:           "database list changed",
-			afterDatabases: []string{"default", "unexpected"},
+			name:           "own database left behind",
+			afterDatabases: []string{"default", "live_sandbox"},
 			afterInventory: baseline,
-			want:           "Milvus database inventory changed",
+			want:           `temporary Milvus database "live_sandbox" remains after teardown`,
 		},
 		{
 			name:           "baseline collection removed",
@@ -348,5 +349,29 @@ func TestMilvusIsolationRejectsAbsentDatabaseAndRenameDestination(t *testing.T) 
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("violations = %v, want %q", violations, expected)
 		}
+	}
+}
+
+
+// TestOperatorStateAuditAllowsDatabasesOutsideTheHarness proves a database
+// outside the harness database name that appears or disappears during a test
+// is logged as a change and is not a violation.
+func TestOperatorStateAuditAllowsDatabasesOutsideTheHarness(t *testing.T) {
+	baseline := milvusInventory{"operator_collection": {"load_state": "3"}}
+	audit := auditOperatorState(
+		"live_sandbox",
+		[]string{"default", "clyde_live_dropped"},
+		[]string{"default", "clyde_live_created", "lms_lib_live_other"},
+		baseline,
+		baseline,
+		nil,
+		nil,
+	)
+	if len(audit.violations) != 0 {
+		t.Fatalf("violations = %v, want none for databases outside the harness", audit.violations)
+	}
+	want := []string{"added clyde_live_created", "added lms_lib_live_other", "removed clyde_live_dropped"}
+	if !slices.Equal(audit.concurrentDatabases, want) {
+		t.Fatalf("concurrent databases = %v, want %v", audit.concurrentDatabases, want)
 	}
 }

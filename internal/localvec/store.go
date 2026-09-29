@@ -16,6 +16,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/embedding/providers"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/tshash"
@@ -71,7 +72,7 @@ func (store *Store) EmbeddingProviderName() model.EmbeddingProvider {
 func New(ctx context.Context, cfg config.Config) (*Store, error) {
 	var provider embedding.Provider
 	if cfg.EmbeddingProvider != model.EmbeddingProviderNone {
-		configuredProvider, err := embedding.NewProvider(ctx, cfg)
+		configuredProvider, err := providers.New(ctx, cfg)
 		if err != nil {
 			slog.ErrorContext(
 				ctx,
