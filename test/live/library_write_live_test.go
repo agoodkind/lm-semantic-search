@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/library"
 )
 
@@ -198,6 +200,25 @@ func TestLibraryWriteAppendReplayAndConflicts(t *testing.T) {
 	requireError(t, err, library.ErrStaleGeneration)
 	_, err = opened.Apply(harness.ctx, appendBatch("conversation-a", 3, "token-3", messageRow("m1", "rewritten text", 1)))
 	requireError(t, err, library.ErrAppendConflict)
+
+	// A committed token replayed with other content conflicts through every
+	// entry point: Apply, Stage, and CommitGeneration with a different seal.
+	_, err = opened.Apply(harness.ctx, appendBatch("conversation-a", 1, "token-1", messageRow("m1", "changed after commit", 1)))
+	requireError(t, err, library.ErrAppendConflict)
+	_, err = opened.Apply(harness.ctx, appendBatch("conversation-a", 1, "token-1", messageRow("m1", "open the config file", 1), messageRow("m9", "added after commit", 9)))
+	requireError(t, err, library.ErrAppendConflict)
+	firstKey := library.GenerationKey{Namespace: "conversations", OwnerID: "conversation-a", GenerationOrder: 1, IdempotencyToken: "token-1"}
+	requireError(t, opened.Stage(harness.ctx, library.StageBatch{Key: firstKey, Mode: library.Append, Rows: []library.Occurrence{messageRow("m1", "changed after commit", 1)}}), library.ErrAppendConflict)
+	otherSeal, err := library.SealRows([]library.Occurrence{messageRow("m1", "changed after commit", 1)})
+	if err != nil {
+		t.Fatalf("seal changed rows: %v", err)
+	}
+	_, err = opened.CommitGeneration(harness.ctx, firstKey, otherSeal)
+	requireError(t, err, library.ErrAppendConflict)
+	if replay := mustApply(t, harness.ctx, opened, firstBatch); replay != firstReceipt {
+		t.Fatalf("identical replay after rejected rewrites returned %+v, want %+v", replay, firstReceipt)
+	}
+
 	replace := appendBatch("conversation-a", 4, "token-4", messageRow("m4", "replacement", 4))
 	replace.Mode = library.Replace
 	_, err = opened.Apply(harness.ctx, replace)
@@ -324,6 +345,16 @@ func TestLibraryWriteReprojectsScalarsWithoutVectorWrites(t *testing.T) {
 	}
 	if after := harness.backendVectorIDs("reproject_pool"); !slices.Equal(before, after) {
 		t.Fatalf("reprojection changed backend vectors from %v to %v", before, after)
+	}
+	effective := harness.readScalars(descriptor, "effective_scalars", "m1")
+	wantEffective := map[string]string{"archived": "bool=1", "workspace": "null"}
+	if !maps.Equal(effective, wantEffective) {
+		t.Fatalf("effective scalars of m1 = %v, want %v", effective, wantEffective)
+	}
+	original := harness.readScalars(descriptor, "occurrence_scalars", "m1")
+	wantOriginal := map[string]string{"archived": "bool=0", "workspace": "string=/workspace/alpha", "message_index": "int64=1"}
+	if !maps.Equal(original, wantOriginal) {
+		t.Fatalf("occurrence scalars of m1 = %v, want %v", original, wantOriginal)
 	}
 	immutable := projection
 	immutable.ProjectionOrder = 2
@@ -532,5 +563,37 @@ func TestLibraryWriteReplaysAmbiguousUpsert(t *testing.T) {
 	}
 	if backend := harness.backendVectorIDs("ambiguous_pool"); len(backend) != 1 {
 		t.Fatalf("backend has %d live vectors, want 1", len(backend))
+	}
+}
+
+func TestLibraryWriteRejectsAnotherPoolOrLockPath(t *testing.T) {
+	harness := newLibraryHarness(t)
+	descriptor := harness.descriptor("identity")
+	first, err := library.Open(harness.ctx, library.Config{Store: descriptor, Vectors: harness.vectorStore("identity_pool"), Embedder: harness.embedder})
+	if err != nil {
+		t.Fatalf("open the catalog: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close the catalog: %v", err)
+	}
+
+	_, err = library.Open(harness.ctx, library.Config{Store: descriptor, Vectors: harness.vectorStore("other_pool"), Embedder: harness.embedder})
+	requireError(t, err, library.ErrStoreMismatch)
+	collections, err := harness.milvus.ListCollections(harness.ctx, milvusclient.NewListCollectionOption())
+	if err != nil {
+		t.Fatalf("list collections: %v", err)
+	}
+	if slices.Contains(collections, "other_pool") {
+		t.Fatal("a rejected open created the other pool collection")
+	}
+
+	movedLock := descriptor
+	movedLock.LockPath = descriptor.LockPath + ".moved"
+	_, err = library.Open(harness.ctx, library.Config{Store: movedLock, Vectors: harness.vectorStore("identity_pool"), Embedder: harness.embedder})
+	requireError(t, err, library.ErrStoreMismatch)
+
+	reopened := harness.open(descriptor, harness.vectorStore("identity_pool"))
+	if err := reopened.RegisterNamespace(harness.ctx, conversationSpec()); err != nil {
+		t.Fatalf("register after the rejected opens: %v", err)
 	}
 }

@@ -19,9 +19,12 @@ type stagedRow struct {
 // transaction. The staged row count and manifest hash must equal seal, and
 // every staged vector must pass a strong backend read first. Append inserts
 // the new rows and accepts identical repeats. Replace removes the owner's
-// previous rows. A committed token returns its saved receipt. A seal mismatch
-// returns an error that wraps [ErrInvalidRequest] and keeps the staged rows.
-func (library *Library) CommitGeneration(ctx context.Context, key GenerationKey, seal GenerationSeal) (ApplyReceipt, error) {
+// previous rows. A committed token with the committed row count and manifest
+// returns its saved receipt, and any other seal for that token returns an
+// error that wraps [ErrAppendConflict]. A seal that differs from the staged
+// rows returns an error that wraps [ErrInvalidRequest] and keeps the staged
+// rows.
+func (library *Library) CommitGeneration(ctx context.Context, key GenerationKey, seal GenerationSeal) (_ ApplyReceipt, err error) {
 	if err := validateGenerationKey(key); err != nil {
 		return ApplyReceipt{}, err
 	}
@@ -29,7 +32,9 @@ func (library *Library) CommitGeneration(ctx context.Context, key GenerationKey,
 	if err != nil {
 		return ApplyReceipt{}, err
 	}
-	defer release()
+	defer func() {
+		err = errors.Join(err, release())
+	}()
 	if err := library.replayOutbox(ctx); err != nil {
 		return ApplyReceipt{}, err
 	}
@@ -40,8 +45,11 @@ func (library *Library) CommitGeneration(ctx context.Context, key GenerationKey,
 	if err := library.read(ctx, func(tx *sql.Tx) error {
 		var readErr error
 		receipt, readErr = checkGeneration(ctx, tx, key)
-		if readErr != nil || receipt != nil {
+		if readErr != nil {
 			return readErr
+		}
+		if receipt != nil {
+			return checkCommittedSeal(ctx, tx, key, seal)
 		}
 		mode, rows, readErr = readStagedGeneration(ctx, tx, key)
 		return readErr
@@ -72,7 +80,7 @@ func (library *Library) CommitGeneration(ctx context.Context, key GenerationKey,
 		}
 		if saved != nil {
 			published = *saved
-			return nil
+			return checkCommittedSeal(ctx, tx, key, seal)
 		}
 		return publishGeneration(ctx, tx, key, mode, rows, manifest, published.Fingerprint)
 	})
@@ -209,11 +217,15 @@ func publishGeneration(
 	}
 	if _, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO batch_receipts (namespace, owner_id, generation_order, generation_token, batch_hash, fingerprint) VALUES (?, ?, ?, ?, ?, ?)`,
-		key.Namespace, key.OwnerID, key.GenerationOrder, key.IdempotencyToken, manifest, fingerprint,
+		`INSERT INTO batch_receipts (namespace, owner_id, generation_order, generation_token, batch_hash, row_count, mode, fingerprint)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		key.Namespace, key.OwnerID, key.GenerationOrder, key.IdempotencyToken, manifest, len(rows), mode, fingerprint,
 	); err != nil {
 		slog.ErrorContext(ctx, "save generation receipt failed", "namespace", key.Namespace, "err", err)
 		return fmt.Errorf("save generation receipt: %w", err)
+	}
+	if err := saveReceiptRows(ctx, tx, key, rows); err != nil {
+		return err
 	}
 	if err := deleteStagedGeneration(ctx, tx, key); err != nil {
 		return err
@@ -346,7 +358,7 @@ func deleteOwnerOccurrences(ctx context.Context, tx *sql.Tx, namespace string, o
 // Delete removes the exact occurrence IDs from ReplaceAllowed namespaces with
 // their scalars. An ID in an AppendOnly namespace returns an error that wraps
 // [ErrInvalidRequest] and removes no row. Canonical vectors stay in the pool.
-func (library *Library) Delete(ctx context.Context, ids []OccurrenceID) error {
+func (library *Library) Delete(ctx context.Context, ids []OccurrenceID) (err error) {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -354,7 +366,9 @@ func (library *Library) Delete(ctx context.Context, ids []OccurrenceID) error {
 	if err != nil {
 		return err
 	}
-	defer release()
+	defer func() {
+		err = errors.Join(err, release())
+	}()
 	return library.write(ctx, func(tx *sql.Tx) error {
 		checked := make(map[string]bool)
 		for _, id := range ids {

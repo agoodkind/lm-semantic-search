@@ -77,9 +77,12 @@ func Open(ctx context.Context, config Config) (*Library, error) {
 		return nil, errors.Join(err, lock.close())
 	}
 	library, err := openLocked(ctx, resolved, lock)
-	release()
+	err = errors.Join(err, release())
 	if err != nil {
 		slog.ErrorContext(ctx, "open library failed", "catalog", descriptor.CatalogPath, "err", err)
+		if library != nil {
+			return nil, errors.Join(err, library.Close())
+		}
 		return nil, errors.Join(err, lock.close())
 	}
 	return library, nil
@@ -149,11 +152,14 @@ func (library *Library) initialize(ctx context.Context) error {
 	return library.replayOutbox(ctx)
 }
 
-// savedDescriptor is the catalog's stored identity. The analyzer identity is
-// saved beside it.
+// savedDescriptor is the catalog's stored identity: the canonical catalog and
+// lock paths, the descriptor, and the vector backend pool identity. The
+// analyzer identity is saved beside it.
 type savedDescriptor struct {
 	CatalogPath       string `json:"catalog_path"`
+	LockPath          string `json:"lock_path"`
 	PoolID            string `json:"pool_id"`
+	VectorPool        string `json:"vector_pool"`
 	EmbeddingModel    string `json:"embedding_model"`
 	EmbeddingRevision string `json:"embedding_revision"`
 	Dimension         int    `json:"dimension"`
@@ -167,7 +173,9 @@ func (library *Library) initializeIdentity(ctx context.Context) (string, error) 
 	descriptor := library.config.Store
 	wantDescriptor, err := json.Marshal(savedDescriptor{
 		CatalogPath:       descriptor.CatalogPath,
+		LockPath:          descriptor.LockPath,
 		PoolID:            descriptor.PoolID,
+		VectorPool:        library.config.Vectors.PoolIdentity(),
 		EmbeddingModel:    descriptor.EmbeddingModel,
 		EmbeddingRevision: descriptor.EmbeddingRevision,
 		Dimension:         descriptor.Dimension,

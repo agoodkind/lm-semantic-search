@@ -17,7 +17,7 @@ import (
 // saved receipt. An unknown order at or below the owner's latest projection
 // returns an error that wraps [ErrStaleGeneration]. A reused order with
 // another token or payload returns an error that wraps [ErrAppendConflict].
-func (library *Library) ReprojectScalars(ctx context.Context, projection ScalarProjection) (ProjectionReceipt, error) {
+func (library *Library) ReprojectScalars(ctx context.Context, projection ScalarProjection) (_ ProjectionReceipt, err error) {
 	if projection.Namespace == "" || projection.OwnerID == "" || projection.IdempotencyToken == "" || projection.ProjectionOrder == 0 {
 		return ProjectionReceipt{}, invalidRequest("reproject: namespace, owner ID, idempotency token, and a positive order are required")
 	}
@@ -53,7 +53,9 @@ func (library *Library) ReprojectScalars(ctx context.Context, projection ScalarP
 	if err != nil {
 		return ProjectionReceipt{}, err
 	}
-	defer release()
+	defer func() {
+		err = errors.Join(err, release())
+	}()
 	err = library.write(ctx, func(tx *sql.Tx) error {
 		saved, err := checkProjection(ctx, tx, projection, payloadHash)
 		if err != nil {

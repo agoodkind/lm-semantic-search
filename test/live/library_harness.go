@@ -279,6 +279,60 @@ func (harness *libraryHarness) readCatalog(descriptor library.StoreDescriptor) c
 	return rows
 }
 
+// scalarQueries read one row's typed scalar columns from a scalar table.
+var scalarQueries = map[string]string{
+	"occurrence_scalars": `SELECT column_name, type, string_value, int64_value, bool_value, is_null FROM occurrence_scalars WHERE row_key = ?`,
+	"effective_scalars":  `SELECT column_name, type, string_value, int64_value, bool_value, is_null FROM effective_scalars WHERE row_key = ?`,
+}
+
+// readScalars returns the scalar columns of rowKey in table as
+// "string=<value>", "int64=<value>", "bool=<0 or 1>", or "null".
+func (harness *libraryHarness) readScalars(descriptor library.StoreDescriptor, table string, rowKey string) map[string]string {
+	harness.t.Helper()
+	query, known := scalarQueries[table]
+	if !known {
+		harness.t.Fatalf("no scalar query for table %s", table)
+	}
+	database, err := sql.Open("sqlite3", "file:"+descriptor.CatalogPath+"?mode=ro")
+	if err != nil {
+		harness.t.Fatalf("open catalog %s: %v", descriptor.CatalogPath, err)
+	}
+	defer func() { _ = database.Close() }()
+	rows, err := database.QueryContext(harness.ctx, query, rowKey)
+	if err != nil {
+		harness.t.Fatalf("read %s: %v", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	values := map[string]string{}
+	for rows.Next() {
+		var name string
+		var scalarType library.ScalarType
+		var stringValue sql.NullString
+		var int64Value sql.NullInt64
+		var boolValue sql.NullBool
+		var isNull bool
+		if err := rows.Scan(&name, &scalarType, &stringValue, &int64Value, &boolValue, &isNull); err != nil {
+			harness.t.Fatalf("scan %s: %v", table, err)
+		}
+		switch {
+		case isNull:
+			values[name] = "null"
+		case scalarType == library.String:
+			values[name] = "string=" + stringValue.String
+		case scalarType == library.Int64:
+			values[name] = fmt.Sprintf("int64=%d", int64Value.Int64)
+		case boolValue.Bool:
+			values[name] = "bool=1"
+		default:
+			values[name] = "bool=0"
+		}
+	}
+	if err := rows.Err(); err != nil {
+		harness.t.Fatalf("read %s: %v", table, err)
+	}
+	return values
+}
+
 func (harness *libraryHarness) scanPairs(database *sql.DB, query string, into map[string]string) {
 	harness.t.Helper()
 	result, err := database.QueryContext(harness.ctx, query)

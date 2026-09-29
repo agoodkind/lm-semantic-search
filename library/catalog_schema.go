@@ -66,8 +66,19 @@ var catalogSchemaStatements = []string{
 		generation_order INTEGER NOT NULL,
 		generation_token TEXT NOT NULL,
 		batch_hash TEXT NOT NULL,
+		row_count INTEGER NOT NULL,
+		mode INTEGER NOT NULL,
 		fingerprint TEXT NOT NULL,
 		PRIMARY KEY (namespace, owner_id, generation_order, generation_token)
+	)`,
+	`CREATE TABLE IF NOT EXISTS receipt_rows (
+		namespace TEXT NOT NULL,
+		owner_id TEXT NOT NULL,
+		generation_order INTEGER NOT NULL,
+		generation_token TEXT NOT NULL,
+		row_key TEXT NOT NULL,
+		occurrence_hash TEXT NOT NULL,
+		PRIMARY KEY (namespace, owner_id, generation_order, generation_token, row_key)
 	)`,
 	`CREATE TABLE IF NOT EXISTS staged_generations (
 		namespace TEXT NOT NULL,

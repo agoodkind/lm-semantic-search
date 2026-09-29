@@ -15,7 +15,7 @@ const stagedStateOpen = "open"
 // RegisterNamespace saves a namespace declaration. An identical declaration
 // succeeds again. A changed declaration for a saved ID returns an error that
 // wraps [ErrInvalidRequest].
-func (library *Library) RegisterNamespace(ctx context.Context, spec NamespaceSpec) error {
+func (library *Library) RegisterNamespace(ctx context.Context, spec NamespaceSpec) (err error) {
 	if err := spec.Validate(); err != nil {
 		return err
 	}
@@ -27,7 +27,9 @@ func (library *Library) RegisterNamespace(ctx context.Context, spec NamespaceSpe
 	if err != nil {
 		return err
 	}
-	defer release()
+	defer func() {
+		err = errors.Join(err, release())
+	}()
 	return library.write(ctx, func(tx *sql.Tx) error {
 		var saved string
 		scanErr := tx.QueryRowContext(ctx, `SELECT declaration FROM namespaces WHERE id = ?`, spec.ID).Scan(&saved)
@@ -67,8 +69,10 @@ func loadNamespace(ctx context.Context, tx *sql.Tx, id string) (NamespaceSpec, e
 // Stage embeds, persists, and verifies the vectors of one bounded batch and
 // adds its rows to a staged generation. No staged row is searchable before
 // CommitGeneration publishes the generation. A batch for a committed
-// generation token succeeds without change.
-func (library *Library) Stage(ctx context.Context, batch StageBatch) error {
+// generation token succeeds without change when its mode and every row match
+// the committed generation, and returns an error that wraps
+// [ErrAppendConflict] otherwise.
+func (library *Library) Stage(ctx context.Context, batch StageBatch) (err error) {
 	if err := library.validateStageBatch(batch); err != nil {
 		return err
 	}
@@ -93,7 +97,9 @@ func (library *Library) Stage(ctx context.Context, batch StageBatch) error {
 	if err != nil {
 		return err
 	}
-	defer release()
+	defer func() {
+		err = errors.Join(err, release())
+	}()
 	if err := library.replayOutbox(ctx); err != nil {
 		return err
 	}
@@ -109,8 +115,11 @@ func (library *Library) Stage(ctx context.Context, batch StageBatch) error {
 			return err
 		}
 		receipt, err := checkGeneration(ctx, tx, batch.Key)
-		if err != nil || receipt != nil {
+		if err != nil {
 			return err
+		}
+		if receipt != nil {
+			return checkCommittedRows(ctx, tx, batch.Key, batch.Mode, batch.Rows)
 		}
 		return stageRows(ctx, tx, library.config.Store, batch)
 	})
@@ -140,6 +149,9 @@ func (library *Library) prepareStage(ctx context.Context, batch StageBatch) ([]v
 			return err
 		}
 		committed = receipt != nil
+		if committed {
+			return checkCommittedRows(ctx, tx, batch.Key, batch.Mode, batch.Rows)
+		}
 		identities = distinctIdentities(library.config.Store, batch.Rows)
 		return nil
 	})
@@ -315,7 +327,7 @@ func stageRow(ctx context.Context, tx *sql.Tx, descriptor StoreDescriptor, key G
 
 // AbortGeneration removes the unpublished staging rows of key. Vectors that
 // the staged rows referenced stay in the pool.
-func (library *Library) AbortGeneration(ctx context.Context, key GenerationKey) error {
+func (library *Library) AbortGeneration(ctx context.Context, key GenerationKey) (err error) {
 	if err := validateGenerationKey(key); err != nil {
 		return err
 	}
@@ -323,7 +335,9 @@ func (library *Library) AbortGeneration(ctx context.Context, key GenerationKey) 
 	if err != nil {
 		return err
 	}
-	defer release()
+	defer func() {
+		err = errors.Join(err, release())
+	}()
 	return library.write(ctx, func(tx *sql.Tx) error {
 		return deleteStagedGeneration(ctx, tx, key)
 	})
