@@ -7,11 +7,15 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"goodkind.io/lm-semantic-search/internal/onnxruntimedist"
@@ -26,7 +30,18 @@ const (
 
 	oldMCPContent    = "installed mcp before the update\n"
 	oldDaemonContent = "installed daemon before the update\n"
+
+	githubTokenEnv        = "GH_TOKEN"
+	githubAPIBaseURL      = "https://api.github.com"
+	updateAPIBaseURLEnv   = "LM_SEMANTIC_SEARCH_UPDATE_API_BASE_URL"
+	releaseListPath       = "/repos/agoodkind/lm-semantic-search/releases"
+	// The updater also fetches the release commit attestation at
+	// attestations/sha1:<commit>, which every archive shares. Only the
+	// sha256 paths identify one archive each.
+	attestationPathPrefix = "/repos/agoodkind/lm-semantic-search/attestations/sha256:"
 )
+
+var releaseBinaries = []string{cliBinary, mcpBinary, daemonBinary}
 
 // updateApplyDirectory is a temporary install directory holding a CLI stamped
 // with an old release version and placeholder MCP and daemon files. Running
@@ -95,7 +110,7 @@ func writeFile(t *testing.T, path string, content []byte) {
 
 // runUpdateApply runs the stamped CLI with its state, socket, config, and
 // context roots under the temporary root, using the sandbox isolation table.
-func (directory updateApplyDirectory) runUpdateApply(t *testing.T) commandResult {
+func (directory updateApplyDirectory) runUpdateApply(t *testing.T, proxy *githubAPIProxy) commandResult {
 	t.Helper()
 	command := exec.Command(directory.cliPath, "update", "apply")
 	environment := os.Environ()
@@ -104,6 +119,7 @@ func (directory updateApplyDirectory) runUpdateApply(t *testing.T) commandResult
 			environment = append(environment, variable.Name+"="+variable.Value)
 		}
 	}
+	environment = append(environment, updateAPIBaseURLEnv+"="+proxy.server.URL)
 	command.Env = environment
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -127,12 +143,14 @@ func (directory updateApplyDirectory) runUpdateApply(t *testing.T) commandResult
 // The CLI, MCP, and daemon must all be replaced with the release binaries.
 func TestUpdateApplyReplacesAllBinariesWhenDaemonLoadsLibraryFromInstallDir(t *testing.T) {
 	directory := newUpdateApplyDirectory(t, true)
+	proxy := startGitHubAPIProxy(t)
 
-	result := directory.runUpdateApply(t)
+	result := directory.runUpdateApply(t, proxy)
 	if result.exitCode != 0 {
 		t.Fatalf("update apply exit = %d\nstdout:\n%s\nstderr:\n%s", result.exitCode, result.stdout, result.stderr)
 	}
-	for _, binary := range []string{cliBinary, mcpBinary, daemonBinary} {
+	proxy.assertReleaseVerifiedThroughProxy(t)
+	for _, binary := range releaseBinaries {
 		version := runCommand(t, filepath.Join(directory.installDir, binary), "version")
 		if version.exitCode != 0 || !strings.Contains(version.stdout, "version:") {
 			t.Fatalf("%s version after update exit = %d\nstdout:\n%s\nstderr:\n%s",
@@ -151,18 +169,94 @@ func TestUpdateApplyReplacesAllBinariesWhenDaemonLoadsLibraryFromInstallDir(t *t
 // fail and leave the CLI, MCP, and daemon files unchanged.
 func TestUpdateApplyLeavesAllBinariesWhenDaemonCandidateFails(t *testing.T) {
 	directory := newUpdateApplyDirectory(t, false)
+	proxy := startGitHubAPIProxy(t)
 
-	result := directory.runUpdateApply(t)
+	result := directory.runUpdateApply(t, proxy)
 	if result.exitCode == 0 {
 		t.Fatalf("update apply succeeded without ONNX Runtime\nstdout:\n%s", result.stdout)
 	}
 	if !strings.Contains(result.stderr, "candidate version failed") {
 		t.Fatalf("update apply stderr does not report the daemon candidate failure:\n%s", result.stderr)
 	}
+	proxy.assertReleaseVerifiedThroughProxy(t)
 	assertFileContent(t, directory.cliPath, directory.cliBytes)
 	assertFileContent(t, filepath.Join(directory.installDir, mcpBinary), []byte(oldMCPContent))
 	assertFileContent(t, filepath.Join(directory.installDir, daemonBinary), []byte(oldDaemonContent))
 	assertNoHiddenUpdateFiles(t, directory.installDir)
+}
+
+// githubAPIProxy forwards the updater's GitHub API requests to api.github.com
+// and records each request path with its response status. When GH_TOKEN is
+// set, it adds an Authorization header; it forwards the rest of each request
+// and each response unmodified. GitHub answers unauthenticated release queries
+// from shared CI runner addresses with HTTP 403, and the updater reads no
+// token. cmd/ci-auto-update uses the same kind of proxy.
+type githubAPIProxy struct {
+	server    *httptest.Server
+	mutex     sync.Mutex
+	responses []apiResponse
+}
+
+type apiResponse struct {
+	path   string
+	status int
+}
+
+func startGitHubAPIProxy(t *testing.T) *githubAPIProxy {
+	t.Helper()
+	target, err := url.Parse(githubAPIBaseURL)
+	if err != nil {
+		t.Fatalf("parse GitHub API URL: %v", err)
+	}
+	token := strings.TrimSpace(os.Getenv(githubTokenEnv))
+	proxy := &githubAPIProxy{}
+	proxy.server = httptest.NewServer(&httputil.ReverseProxy{
+		Rewrite: func(request *httputil.ProxyRequest) {
+			request.SetURL(target)
+			if token != "" {
+				request.Out.Header.Set("Authorization", "Bearer "+token)
+			}
+		},
+		ModifyResponse: func(response *http.Response) error {
+			proxy.mutex.Lock()
+			proxy.responses = append(proxy.responses, apiResponse{path: response.Request.URL.Path, status: response.StatusCode})
+			proxy.mutex.Unlock()
+			return nil
+		},
+	})
+	t.Cleanup(proxy.server.Close)
+	return proxy
+}
+
+// assertReleaseVerifiedThroughProxy fails unless the updater listed the
+// releases and fetched the attestations of all three release archives through
+// the proxy, with every response HTTP 200. Each archive digest has its own
+// attestation path.
+func (proxy *githubAPIProxy) assertReleaseVerifiedThroughProxy(t *testing.T) {
+	t.Helper()
+	proxy.mutex.Lock()
+	responses := append([]apiResponse(nil), proxy.responses...)
+	proxy.mutex.Unlock()
+	listedReleases := false
+	attestationPaths := map[string]bool{}
+	for _, response := range responses {
+		if response.status != http.StatusOK {
+			t.Fatalf("GitHub API %s returned HTTP %d through the proxy; all responses %v", response.path, response.status, responses)
+		}
+		if response.path == releaseListPath {
+			listedReleases = true
+		}
+		if strings.HasPrefix(response.path, attestationPathPrefix) {
+			attestationPaths[response.path] = true
+		}
+	}
+	if !listedReleases {
+		t.Fatalf("updater sent no release list request through the proxy; responses %v", responses)
+	}
+	if len(attestationPaths) < len(releaseBinaries) {
+		t.Fatalf("updater fetched attestations for %d archive digests, want %d; responses %v",
+			len(attestationPaths), len(releaseBinaries), responses)
+	}
 }
 
 func assertFileContent(t *testing.T, path string, want []byte) {
