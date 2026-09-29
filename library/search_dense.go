@@ -169,7 +169,7 @@ func (library *Library) scoreBlock(ctx context.Context, queryVector []float32, r
 			slog.ErrorContext(ctx, "verify eligible vectors failed", "vectors", len(pending), "err", err)
 			return nil, fmt.Errorf("verify %d eligible vectors: %w", len(pending), err)
 		}
-		library.verified.record(revision, pending)
+		library.verified.record(ctx, revision, pending)
 	}
 	block.verified = len(pending)
 	verified := clock.Now()
