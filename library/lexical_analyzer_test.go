@@ -74,8 +74,8 @@ func TestAnalyzeLexicalSortsTermsAndSumsLength(t *testing.T) {
 
 func TestValidateLexicalAnalyzer(t *testing.T) {
 	t.Parallel()
-	if err := validateLexicalAnalyzer(standardAnalyzer); err != nil {
-		t.Fatalf("validateLexicalAnalyzer(%q) = %v, want nil", standardAnalyzer, err)
+	if err := validateLexicalAnalyzer(StandardAnalyzer); err != nil {
+		t.Fatalf("validateLexicalAnalyzer(%q) = %v, want nil", StandardAnalyzer, err)
 	}
 	if err := validateLexicalAnalyzer("milvus-english-v1"); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("validateLexicalAnalyzer(other identity) = %v, want ErrInvalidRequest", err)

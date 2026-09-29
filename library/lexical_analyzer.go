@@ -10,13 +10,6 @@ import (
 	"unicode/utf8"
 )
 
-// standardAnalyzer identifies the only lexical analyzer the library
-// implements. It reproduces the default analyzer of Milvus 2.6.18, which is the
-// tantivy SimpleTokenizer followed by LowerCaser with no stop words, and the
-// Milvus BM25 function token hash. A catalog saves this identity, and a change
-// to the analyzer behavior requires a new identity.
-const standardAnalyzer = "milvus-standard-v1"
-
 const (
 	// lexicalHashPrefixBytes is the number of leading token bytes that the
 	// Milvus BM25 function hashes. Tokens that share these bytes share a term.
@@ -48,7 +41,7 @@ type lexicalDocument struct {
 	length uint64
 }
 
-// analyzeLexical analyzes text with [standardAnalyzer] and merges tokens that
+// analyzeLexical analyzes text with [StandardAnalyzer] and merges tokens that
 // share a hash. The caller validates that text is UTF-8.
 func analyzeLexical(text string) lexicalDocument {
 	frequencies := make(map[uint32]uint32)
@@ -174,18 +167,18 @@ var unicode17Alphanumerics = &unicode.RangeTable{
 }
 
 // validateLexicalAnalyzer reports whether the running binary reproduces
-// [standardAnalyzer] for identity. The correction table matches one version of
+// [StandardAnalyzer] for identity. The correction table matches one version of
 // the Go unicode tables. Another version classifies a different set of
 // characters, and this function then returns an error that wraps
 // [ErrInvalidRequest].
 func validateLexicalAnalyzer(identity string) error {
-	if identity != standardAnalyzer {
-		return invalidRequest(fmt.Sprintf("analyzer identity %q is not %q", identity, standardAnalyzer))
+	if identity != StandardAnalyzer {
+		return invalidRequest(fmt.Sprintf("analyzer identity %q is not %q", identity, StandardAnalyzer))
 	}
 	if unicode.Version != lexicalUnicodeVersion {
 		return invalidRequest(fmt.Sprintf(
 			"analyzer %s was verified with Go unicode tables %s, and this binary uses %s",
-			standardAnalyzer,
+			StandardAnalyzer,
 			lexicalUnicodeVersion,
 			unicode.Version,
 		))
