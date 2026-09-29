@@ -342,6 +342,14 @@ func lexicalParityTexts() []string {
 		"emoji 👍🏽 flags 🇺🇸 zwj 👨‍👩‍👧 math 𝐀𝐁𝐂 𝟙𝟚 ancient 𐌰𐌱",
 		"tabs\tand\nnewlines\r\nand\u00a0nbsp\u2028line\u3000ideographic",
 		"before\x00after nul",
+		// The inputs of TestLexicalTokensMatchMilvusStandardAnalyzer.
+		"Hello, happy tax payer!",
+		"foo_bar v2.6.18",
+		"İstanbul",
+		"été",
+		"中文分词",
+		"x\U00010940y",
+		"!!! --- \t\n",
 		"",
 		"   \t\n",
 	}

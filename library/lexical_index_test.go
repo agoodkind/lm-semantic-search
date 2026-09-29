@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"math"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -202,15 +204,19 @@ func TestPublishLexicalCountsEveryOccurrence(t *testing.T) {
 	first := lexicalTestRow{namespace: "code", ownerID: "file-a", rowKey: "1", text: "alpha beta"}
 	duplicate := lexicalTestRow{namespace: "code", ownerID: "file-a", rowKey: "2", text: "alpha beta"}
 	different := lexicalTestRow{namespace: "code", ownerID: "file-a", rowKey: "3", text: "beta Gamma gamma"}
+	empty := lexicalTestRow{namespace: "code", ownerID: "file-b", rowKey: "1", text: ""}
+	punctuation := lexicalTestRow{namespace: "code", ownerID: "file-b", rowKey: "2", text: "!!! ---"}
 	shared := lexicalTestRow{namespace: "chat", ownerID: "conversation", rowKey: "1", text: "alpha beta"}
 
-	if err := publishLexicalTest(t, database, "code", []lexicalTestRow{first, duplicate, different}, nil); err != nil {
+	if err := publishLexicalTest(t, database, "code", []lexicalTestRow{first, duplicate, different, empty, punctuation}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := publishLexicalTest(t, database, "chat", []lexicalTestRow{shared}, nil); err != nil {
 		t.Fatal(err)
 	}
-	live := []lexicalTestRow{first, duplicate, different, shared}
+	// Milvus counts a row without tokens in the corpus size. The two token-free
+	// occurrences count here too.
+	live := []lexicalTestRow{first, duplicate, different, empty, punctuation, shared}
 	assertLexicalStatistics(t, database, "code", live, 1)
 	assertLexicalStatistics(t, database, "chat", live, 1)
 
@@ -220,22 +226,23 @@ func TestPublishLexicalCountsEveryOccurrence(t *testing.T) {
 	if err := publishLexicalTest(t, database, "code", []lexicalTestRow{first, added}, []lexicalTestRow{first, duplicate, different}); err != nil {
 		t.Fatal(err)
 	}
-	live = []lexicalTestRow{first, added, shared}
+	live = []lexicalTestRow{first, added, empty, punctuation, shared}
 	assertLexicalStatistics(t, database, "code", live, 2)
 	assertLexicalStatistics(t, database, "chat", live, 1)
 
 	// The deletion removes the last code occurrence of the content that the
-	// chat namespace also stores.
-	if err := publishLexicalTest(t, database, "code", nil, []lexicalTestRow{first}); err != nil {
+	// chat namespace also stores, and one token-free occurrence.
+	if err := publishLexicalTest(t, database, "code", nil, []lexicalTestRow{first, empty}); err != nil {
 		t.Fatal(err)
 	}
-	live = []lexicalTestRow{added, shared}
+	live = []lexicalTestRow{added, punctuation, shared}
 	assertLexicalStatistics(t, database, "code", live, 3)
 	assertLexicalStatistics(t, database, "chat", live, 1)
 }
 
 func TestPublishLexicalRejectsUnknownRemovalWithoutChanges(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
 	database := openLexicalTestCatalog(t)
 	row := lexicalTestRow{namespace: "code", ownerID: "file-a", rowKey: "1", text: "alpha"}
 	if err := publishLexicalTest(t, database, "code", []lexicalTestRow{row}, nil); err != nil {
@@ -243,10 +250,79 @@ func TestPublishLexicalRejectsUnknownRemovalWithoutChanges(t *testing.T) {
 	}
 	missing := lexicalTestRow{namespace: "code", ownerID: "file-a", rowKey: "2", text: "alpha"}
 	extra := lexicalTestRow{namespace: "code", ownerID: "file-a", rowKey: "3", text: "beta"}
-	if err := publishLexicalTest(t, database, "code", []lexicalTestRow{extra}, []lexicalTestRow{missing}); err == nil {
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			t.Errorf("rollback: %v", err)
+		}
+	}()
+	err = publishLexical(ctx, tx, StandardAnalyzer, "code",
+		testLexicalOccurrences([]lexicalTestRow{extra}), testLexicalOccurrences([]lexicalTestRow{missing}))
+	if err == nil {
 		t.Fatal("publishLexical accepted the removal of an occurrence that was never published")
 	}
-	assertLexicalStatistics(t, database, "code", []lexicalTestRow{row}, 1)
+	// The failed call wrote nothing inside the transaction before it returned.
+	var occurrences, contents int
+	var generation int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT (SELECT COUNT(*) FROM lexical_occurrences), (SELECT COUNT(*) FROM lexical_content),
+			(SELECT generation FROM lexical_stats WHERE namespace = 'code')`,
+	).Scan(&occurrences, &contents, &generation); err != nil {
+		t.Fatal(err)
+	}
+	if occurrences != 1 || contents != 1 || generation != 1 {
+		t.Fatalf("after the rejected call the transaction contains %d occurrences, %d contents, generation %d; want 1, 1, 1",
+			occurrences, contents, generation)
+	}
+}
+
+// bm25Oracle computes the BM25 score of text for query in float64 from the
+// specification formula, with ASCII word tokens, independently of the
+// library analyzer and scorer.
+func bm25Oracle(corpus []string, query string, text string, k1 float64, b float64) float64 {
+	tokenize := func(value string) []string {
+		return strings.FieldsFunc(strings.ToLower(value), func(character rune) bool {
+			return (character < 'a' || character > 'z') && (character < '0' || character > '9')
+		})
+	}
+	documentFrequency := map[string]float64{}
+	var totalTokens float64
+	for _, document := range corpus {
+		tokens := tokenize(document)
+		totalTokens += float64(len(tokens))
+		seen := map[string]bool{}
+		for _, token := range tokens {
+			if !seen[token] {
+				seen[token] = true
+				documentFrequency[token]++
+			}
+		}
+	}
+	corpusSize := float64(len(corpus))
+	averageLength := totalTokens / corpusSize
+	queryFrequency := map[string]float64{}
+	for _, token := range tokenize(query) {
+		queryFrequency[token]++
+	}
+	termFrequency := map[string]float64{}
+	tokens := tokenize(text)
+	for _, token := range tokens {
+		termFrequency[token]++
+	}
+	var score float64
+	for token, count := range queryFrequency {
+		tf := termFrequency[token]
+		if tf == 0 {
+			continue
+		}
+		df := documentFrequency[token]
+		inverse := math.Log(1 + (corpusSize-df+0.5)/(df+0.5))
+		score += count * inverse * tf * (k1 + 1) / (tf + k1*(1-b+b*float64(len(tokens))/averageLength))
+	}
+	return score
 }
 
 func TestAccumulateLexicalScoresFromStoredPostings(t *testing.T) {
@@ -261,11 +337,13 @@ func TestAccumulateLexicalScoresFromStoredPostings(t *testing.T) {
 	if err := publishLexicalTest(t, database, "code", rows, nil); err != nil {
 		t.Fatal(err)
 	}
+	assertLexicalStatistics(t, database, "code", rows, 1)
+	const queryText = "alpha beta alpha"
 	parameters, err := newLexicalRankParameters(1.2, 0.75)
 	if err != nil {
 		t.Fatal(err)
 	}
-	query := analyzeLexical("alpha beta alpha").terms
+	query := analyzeLexical(queryText).terms
 	tx, err := database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		t.Fatal(err)
@@ -300,20 +378,26 @@ func TestAccumulateLexicalScoresFromStoredPostings(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := make(map[string]float32)
+	// The float32 scores stay within a relative 1e-5 of the float64 oracle for
+	// these small inputs. A doubled or missing term is far outside it.
+	const tolerance = 1e-5
+	matched := map[string]bool{}
 	for _, text := range texts {
-		document := analyzeLexical(text)
-		if score := scorer.scoreDocument(document.terms, document.length); score > 0 {
-			want[testSearchHash(text)] = score
+		want := bm25Oracle(texts, queryText, text, 1.2, 0.75)
+		score, found := got[testSearchHash(text)]
+		if want == 0 {
+			if found {
+				t.Fatalf("content %q has score %v, want no score", text, score)
+			}
+			continue
+		}
+		matched[testSearchHash(text)] = true
+		if !found || math.Abs(float64(score)-want) > tolerance*want {
+			t.Fatalf("content %q score %v, oracle %v", text, score, want)
 		}
 	}
-	if len(got) != len(want) || len(want) != 3 {
-		t.Fatalf("accumulated %d content scores, want %d and 3 matching contents", len(got), len(want))
-	}
-	for searchHash, score := range want {
-		if got[searchHash] != score {
-			t.Fatalf("content %s score %v, want %v", searchHash, got[searchHash], score)
-		}
+	if len(matched) != 3 || len(got) != 3 {
+		t.Fatalf("accumulated %d content scores and the oracle scored %d contents, want 3", len(got), len(matched))
 	}
 }
 

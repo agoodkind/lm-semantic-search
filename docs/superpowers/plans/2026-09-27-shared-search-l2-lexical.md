@@ -35,7 +35,9 @@ Steps:
 
 Files:
 
-- Create `library/lexical_rank.go` and extend `test/live/library_lexical_live_test.go` after L3 implements public `Search`.
+- Create `library/lexical_rank.go`.
+- Create `library/lexical_live_test.go` for the in-package Milvus `RunAnalyzer` and BM25 score parity suite, which `make library-live-l2` runs in `./library/`.
+- Extend `test/live/library_lexical_live_test.go` after L3 implements public `Search`.
 
 Steps:
 
