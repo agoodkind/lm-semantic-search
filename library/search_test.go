@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -128,6 +129,7 @@ type oracleRecord struct {
 	id        library.OccurrenceID
 	sortKey   string
 	source    string
+	input     string
 	published map[string]library.ScalarValue
 	projected map[string]library.ScalarValue
 }
@@ -245,6 +247,7 @@ func (fixture *searchFixture) replaceOwner(t *testing.T, namespace string, owner
 			id:        id,
 			sortKey:   row.SortKey,
 			source:    row.SourceText,
+			input:     row.EmbeddingInput,
 			published: row.Scalars,
 			projected: map[string]library.ScalarValue{},
 		}
@@ -574,6 +577,16 @@ func searchRequests() map[string]library.SearchRequest {
 			{Op: library.Prefix, Column: "workspace", Prefix: "/w/alpha"},
 		}},
 	}})
+	add("not is present", library.Filter{Op: library.Not, Children: []library.Filter{{Op: library.IsPresent, Column: "archived"}}})
+	add("int64 in", library.Filter{Op: library.In, Column: "message_index", Values: []library.ScalarValue{
+		*int64Bound(3), *int64Bound(17), *int64Bound(40), *int64Bound(999),
+	}})
+	add("not int64 in", library.Filter{Op: library.Not, Children: []library.Filter{
+		{Op: library.In, Column: "message_index", Values: []library.ScalarValue{*int64Bound(3), *int64Bound(17)}},
+	}})
+	add("bool in", library.Filter{Op: library.In, Column: "archived", Values: []library.ScalarValue{
+		{Type: library.Bool, Null: false, String: "", Bool: true, Int64: 0},
+	}})
 	add("not all in and equal", library.Filter{Op: library.Not, Children: []library.Filter{
 		{Op: library.All, Children: []library.Filter{
 			{Op: library.In, Column: "conversation", Values: []library.ScalarValue{stringValue("conv-a"), stringValue("conv-b")}},
@@ -604,6 +617,55 @@ func TestSearchPagesMatchTheExhaustiveOracle(t *testing.T) {
 			assertHitsEqual(t, fmt.Sprintf("%s at page size %d", name, pageSize), got, want)
 		}
 	}
+}
+
+// cosineTolerance is the largest accepted difference between a Search score
+// and the test's own cosine. The test embeds each input alone, and the
+// library embeds inputs in batches. The two float32 vectors of one input can
+// differ in the last bits.
+const cosineTolerance = 1e-5
+
+// TestSearchScoresEqualAnIndependentCosine embeds the query and every
+// occurrence input with the test's own embedder calls, computes each cosine in
+// float64, and compares it with the Search score of every hit. A wrong metric
+// or a wrong vector for an occurrence fails the comparison.
+func TestSearchScoresEqualAnIndependentCosine(t *testing.T) {
+	fixture := newSearchFixture(t, nil)
+	request := library.SearchRequest{Namespace: "chat", Query: "cursor pagination over a persisted result snapshot"}
+	queryVectors, err := fixture.embedder.EmbedBatch(fixture.ctx, []string{request.Query})
+	if err != nil {
+		t.Fatalf("embed query: %v", err)
+	}
+	inputVectors := map[string][]float32{}
+	hits := pageAll(t, fixture.library, request, 100)
+	if len(hits) == 0 {
+		t.Fatal("Search returned no hits")
+	}
+	for _, hit := range hits {
+		input := fixture.records[hit.ID].input
+		if _, embedded := inputVectors[input]; !embedded {
+			vectors, err := fixture.embedder.EmbedBatch(fixture.ctx, []string{input})
+			if err != nil {
+				t.Fatalf("embed %q: %v", input, err)
+			}
+			inputVectors[input] = vectors[0]
+		}
+		want := cosine(queryVectors[0], inputVectors[input])
+		if math.Abs(hit.Score-want) > cosineTolerance {
+			t.Fatalf("hit %+v scores %v, the test's cosine is %v", hit.ID, hit.Score, want)
+		}
+	}
+}
+
+// cosine returns the cosine similarity of two vectors in float64.
+func cosine(left []float32, right []float32) float64 {
+	var dot, leftNorm, rightNorm float64
+	for index := range left {
+		dot += float64(left[index]) * float64(right[index])
+		leftNorm += float64(left[index]) * float64(left[index])
+		rightNorm += float64(right[index]) * float64(right[index])
+	}
+	return dot / (math.Sqrt(leftNorm) * math.Sqrt(rightNorm))
 }
 
 func TestSearchAppliesMinScoreBeforePaging(t *testing.T) {
@@ -669,7 +731,7 @@ func TestSearchPageSequenceIgnoresWritesAfterPageOne(t *testing.T) {
 	}
 	fixture.records[library.OccurrenceID{Namespace: "chat", OwnerID: "conv-c", RowKey: "appended"}] = &oracleRecord{
 		id: library.OccurrenceID{Namespace: "chat", OwnerID: "conv-c", RowKey: "appended"}, sortKey: "s00", source: "appended",
-		published: nil, projected: map[string]library.ScalarValue{},
+		input: "owner replacement removes previous occurrences", published: nil, projected: map[string]library.ScalarValue{},
 	}
 
 	got := slices.Clone(first.Hits)
@@ -852,6 +914,89 @@ func TestSearchReturnsResourceLimitWhenTheQueryDatabaseIsFull(t *testing.T) {
 	t.Fatalf("Search did not succeed within %d query database pages", maxPages)
 }
 
+// afterDenseOperations are error texts of the page-one operations that run
+// after dense scoring: ranking, the snapshot write transaction, and the hit
+// read.
+var afterDenseOperations = []string{"rank", "order", "snapshot", "catalog transaction", "group", "source blob"}
+
+// TestSearchReturnsDeadlineInEveryPhase raises QueryTimeout by a factor of
+// 1.2 from 1 microsecond until Search succeeds, then runs 100 searches with
+// timeouts from 0.3 to 1.2 times that success timeout. Every failed search
+// returns ErrDeadline, no page, and no query database file, and at least one
+// fails after dense scoring.
+func TestSearchReturnsDeadlineInEveryPhase(t *testing.T) {
+	fixture := newSearchFixture(t, nil)
+	const growth = 1.2
+	const maxTimeout = 30 * time.Second
+	succeeded := time.Duration(0)
+	for timeout := time.Microsecond; timeout <= maxTimeout; timeout = time.Duration(float64(timeout) * growth) {
+		if _, ok := fixture.searchWithTimeout(t, timeout); ok {
+			succeeded = timeout
+			break
+		}
+	}
+	if succeeded == 0 {
+		t.Fatalf("Search did not succeed within QueryTimeout %v", maxTimeout)
+	}
+	const steps = 100
+	const lowest = 0.3
+	const highest = 1.2
+	afterDense := 0
+	failures := 0
+	for step := range steps {
+		fraction := lowest + (highest-lowest)*float64(step)/float64(steps-1)
+		failure, ok := fixture.searchWithTimeout(t, time.Duration(fraction*float64(succeeded)))
+		if ok {
+			continue
+		}
+		failures++
+		for _, operation := range afterDenseOperations {
+			if strings.Contains(failure, operation) {
+				afterDense++
+				break
+			}
+		}
+	}
+	if afterDense == 0 {
+		t.Fatalf("%d of %d searches around QueryTimeout %v failed, none after dense scoring", failures, steps, succeeded)
+	}
+	t.Logf("success at QueryTimeout %v; %d of %d nearby searches failed, %d after dense scoring", succeeded, failures, steps, afterDense)
+}
+
+// searchWithTimeout opens a library with QueryTimeout timeout and runs page
+// one. It returns true on success. A failure must wrap ErrDeadline, return no
+// page, and leave no query database file; searchWithTimeout returns its text.
+func (fixture *searchFixture) searchWithTimeout(t *testing.T, timeout time.Duration) (string, bool) {
+	t.Helper()
+	request := library.SearchRequest{Namespace: "chat", Query: "strong consistency reads verify the checksum", PageSize: 1}
+	config := denseConfig(fixture.descriptor, fixture.pool, fixture.embedder)
+	config.QueryTimeout = timeout
+	limited, err := library.Open(fixture.ctx, config)
+	if err != nil {
+		t.Fatalf("Open with QueryTimeout %v: %v", timeout, err)
+	}
+	page, err := limited.Search(fixture.ctx, request)
+	if closeErr := limited.Close(); closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+	entries, readErr := os.ReadDir(filepath.Dir(fixture.descriptor.CatalogPath))
+	if readErr != nil {
+		t.Fatalf("read catalog directory: %v", readErr)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".lms-query-") {
+			t.Fatalf("Search with QueryTimeout %v left query database %s", timeout, entry.Name())
+		}
+	}
+	if err == nil {
+		return "", true
+	}
+	if !errors.Is(err, library.ErrDeadline) || len(page.Hits) != 0 || page.NextCursor != "" {
+		t.Fatalf("Search at QueryTimeout %v = %d hits, %v; want no page and ErrDeadline", timeout, len(page.Hits), err)
+	}
+	return err.Error(), false
+}
+
 func TestSearchFailsWithoutAPageOnBudgetDeadlineAndVectorLoss(t *testing.T) {
 	request := library.SearchRequest{Namespace: "chat", Query: "strong consistency reads verify the checksum", PageSize: 1}
 	cases := []struct {
@@ -861,7 +1006,6 @@ func TestSearchFailsWithoutAPageOnBudgetDeadlineAndVectorLoss(t *testing.T) {
 		want      error
 	}{
 		{name: "snapshot disk", configure: func(config *library.Config) { config.MaxSnapshotBytes = 512 }, damage: nil, want: library.ErrResourceLimit},
-		{name: "deadline", configure: func(config *library.Config) { config.QueryTimeout = time.Nanosecond }, damage: nil, want: library.ErrDeadline},
 		{name: "missing vector", configure: nil, damage: removeOneVector, want: library.ErrVectorMissing},
 		{name: "corrupt vector", configure: nil, damage: corruptOneVector, want: library.ErrVectorCorrupt},
 	}

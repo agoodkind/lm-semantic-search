@@ -53,13 +53,7 @@ func (library *Library) copyLexical(
 }
 
 func copyTermPostings(ctx context.Context, tx *sql.Tx, query *queryDatabase, namespace string, termHash uint32) (err error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT t.search_hash, t.term_hash, t.tf, c.document_length FROM lexical_terms t
-		JOIN lexical_content c ON c.search_hash = t.search_hash
-		WHERE t.term_hash = ? AND EXISTS (
-			SELECT 1 FROM lexical_occurrences lo WHERE lo.search_hash = t.search_hash AND lo.namespace = ?)`,
-		int64(termHash), namespace,
-	)
+	rows, err := tx.QueryContext(ctx, termPostingsStatement, int64(termHash), namespace)
 	if err != nil {
 		slog.ErrorContext(ctx, "read lexical postings failed", "term", termHash, "err", err)
 		return fmt.Errorf("read lexical postings of term %d: %w", termHash, err)
@@ -148,6 +142,10 @@ func scoreLexical(ctx context.Context, query *queryDatabase, leg lexicalLeg) (er
 
 // Query database statements of the lexical leg.
 const (
+	termPostingsStatement = `SELECT t.search_hash, t.term_hash, t.tf, c.document_length FROM lexical_terms t
+		JOIN lexical_content c ON c.search_hash = t.search_hash
+		WHERE t.term_hash = ? AND EXISTS (
+			SELECT 1 FROM lexical_occurrences lo WHERE lo.search_hash = t.search_hash AND lo.namespace = ?)`
 	insertPostingStatement      = `INSERT INTO postings (search_hash, term_hash, tf, document_length) VALUES (?, ?, ?, ?)`
 	insertLexicalScoreStatement = `INSERT INTO lexical_scores (search_hash, score) VALUES (?, ?)`
 )

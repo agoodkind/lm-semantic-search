@@ -3,7 +3,6 @@ package library
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -45,12 +44,6 @@ const (
 	int64NotEqual       = `v.int64_value <> :value`
 	boolEqual           = `v.bool_value = :value`
 	boolNotEqual        = `v.bool_value <> :value`
-	stringIn            = `v.string_value IN (SELECT j.value FROM json_each(:values) AS j)`
-	stringNotIn         = `v.string_value NOT IN (SELECT j.value FROM json_each(:values) AS j)`
-	int64In             = `v.int64_value IN (SELECT j.value FROM json_each(:values) AS j)`
-	int64NotIn          = `v.int64_value NOT IN (SELECT j.value FROM json_each(:values) AS j)`
-	boolIn              = `v.bool_value IN (SELECT j.value FROM json_each(:values) AS j)`
-	boolNotIn           = `v.bool_value NOT IN (SELECT j.value FROM json_each(:values) AS j)`
 	int64InRange        = `v.int64_value BETWEEN :lower AND :upper`
 	int64OutsideRange   = `(v.int64_value < :lower OR v.int64_value > :upper)`
 	stringInPrefix      = `v.string_value >= :prefix AND v.string_value < :successor`
@@ -70,12 +63,6 @@ const (
 	int64NotEqualLeaf       = effectiveLeafHead + int64NotEqual + publishedLeafHead + int64NotEqual
 	boolEqualLeaf           = effectiveLeafHead + boolEqual + publishedLeafHead + boolEqual
 	boolNotEqualLeaf        = effectiveLeafHead + boolNotEqual + publishedLeafHead + boolNotEqual
-	stringInLeaf            = effectiveLeafHead + stringIn + publishedLeafHead + stringIn
-	stringNotInLeaf         = effectiveLeafHead + stringNotIn + publishedLeafHead + stringNotIn
-	int64InLeaf             = effectiveLeafHead + int64In + publishedLeafHead + int64In
-	int64NotInLeaf          = effectiveLeafHead + int64NotIn + publishedLeafHead + int64NotIn
-	boolInLeaf              = effectiveLeafHead + boolIn + publishedLeafHead + boolIn
-	boolNotInLeaf           = effectiveLeafHead + boolNotIn + publishedLeafHead + boolNotIn
 	int64InRangeLeaf        = effectiveLeafHead + int64InRange + publishedLeafHead + int64InRange
 	int64OutsideRangeLeaf   = effectiveLeafHead + int64OutsideRange + publishedLeafHead + int64OutsideRange
 	stringInPrefixLeaf      = effectiveLeafHead + stringInPrefix + publishedLeafHead + stringInPrefix
@@ -102,6 +89,7 @@ const absentLeaf = `SELECT o.owner_id, o.row_key FROM occurrences o WHERE o.name
 const (
 	insertFilterRowStatement = `INSERT OR IGNORE INTO filter_sets (node, owner_id, row_key) VALUES (:node, :owner_id, :row_key)`
 	filterNodeRowsStatement  = `SELECT owner_id, row_key FROM filter_sets WHERE node = :node`
+	filterRowStatement       = `SELECT 1 FROM filter_sets WHERE node = :node AND owner_id = :owner_id AND row_key = :row_key`
 	filterBothRowsStatement  = `SELECT f.owner_id, f.row_key FROM filter_sets f WHERE f.node = :left
 		AND EXISTS (SELECT 1 FROM filter_sets g WHERE g.node = :right AND g.owner_id = f.owner_id AND g.row_key = f.row_key)`
 )
@@ -136,7 +124,9 @@ func (evaluator *filterEvaluator) evaluate(ctx context.Context, filter Filter, n
 			return evaluator.intersect(ctx, children)
 		}
 		return evaluator.union(ctx, children)
-	case Equal, In, Range, Prefix, IsNull, IsPresent:
+	case In:
+		return evaluator.inLeaf(ctx, filter, negated)
+	case Equal, Range, Prefix, IsNull, IsPresent:
 		return evaluator.leaf(ctx, filter, negated)
 	default:
 		return 0, invalidRequest(fmt.Sprintf("filter operator %d is not a FilterOp", filter.Op))
@@ -158,7 +148,7 @@ func (evaluator *filterEvaluator) intersect(ctx context.Context, children []int)
 		if err != nil {
 			return 0, queryDatabaseError(ctx, "read filter intersection", err)
 		}
-		if err := evaluator.saveRows(ctx, rows, target); err != nil {
+		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode); err != nil {
 			return 0, err
 		}
 		node = target
@@ -177,7 +167,7 @@ func (evaluator *filterEvaluator) union(ctx context.Context, children []int) (in
 		if err != nil {
 			return 0, queryDatabaseError(ctx, "read filter union", err)
 		}
-		if err := evaluator.saveRows(ctx, rows, target); err != nil {
+		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode); err != nil {
 			return 0, err
 		}
 	}
@@ -198,7 +188,7 @@ func (evaluator *filterEvaluator) leaf(ctx context.Context, filter Filter, negat
 		if err != nil {
 			return 0, err
 		}
-		if err := evaluator.saveRows(ctx, rows, target); err != nil {
+		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode); err != nil {
 			return 0, err
 		}
 	}
@@ -209,11 +199,48 @@ func (evaluator *filterEvaluator) leaf(ctx context.Context, filter Filter, negat
 			slog.ErrorContext(ctx, "read absent filter column failed", "column", filter.Column, "err", err)
 			return 0, fmt.Errorf("read occurrences without column %s: %w", filter.Column, err)
 		}
-		if err := evaluator.saveRows(ctx, rows, target); err != nil {
+		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode); err != nil {
 			return 0, err
 		}
 	}
 	return target, nil
+}
+
+// inLeaf writes the true set of an In leaf, or its false set when negated,
+// as one node. The true set runs the Equal statement once per listed value.
+// The false set is the non-null set of the column without the true set.
+func (evaluator *filterEvaluator) inLeaf(ctx context.Context, filter Filter, negated bool) (int, error) {
+	scalarType := evaluator.columns[filter.Column].Type
+	equal, err := leafStatement(Equal, scalarType, "", false)
+	if err != nil {
+		return 0, err
+	}
+	matched := evaluator.newNode()
+	for _, value := range filter.Values {
+		rows, err := evaluator.catalog.QueryContext(ctx, equal,
+			sql.Named("namespace", evaluator.namespace), sql.Named("column", filter.Column), scalarParameter("value", value))
+		if err != nil {
+			slog.ErrorContext(ctx, "evaluate In filter value failed", "column", filter.Column, "err", err)
+			return 0, fmt.Errorf("evaluate In filter on column %s: %w", filter.Column, err)
+		}
+		if err := evaluator.saveRows(ctx, rows, matched, noExcludedNode); err != nil {
+			return 0, err
+		}
+	}
+	if !negated {
+		return matched, nil
+	}
+	unmatched := evaluator.newNode()
+	rows, err := evaluator.catalog.QueryContext(ctx, nonNullValueLeaf,
+		sql.Named("namespace", evaluator.namespace), sql.Named("column", filter.Column))
+	if err != nil {
+		slog.ErrorContext(ctx, "read non-null filter column failed", "column", filter.Column, "err", err)
+		return 0, fmt.Errorf("read non-null values of column %s: %w", filter.Column, err)
+	}
+	if err := evaluator.saveRows(ctx, rows, unmatched, matched); err != nil {
+		return 0, err
+	}
+	return unmatched, nil
 }
 
 // leafStatement returns the statement of one leaf set. The false set of
@@ -225,11 +252,6 @@ func leafStatement(op FilterOp, scalarType ScalarType, prefix string, negated bo
 			[2]string{stringEqualLeaf, stringNotEqualLeaf},
 			[2]string{int64EqualLeaf, int64NotEqualLeaf},
 			[2]string{boolEqualLeaf, boolNotEqualLeaf})
-	case In:
-		return typedStatement(scalarType, negated,
-			[2]string{stringInLeaf, stringNotInLeaf},
-			[2]string{int64InLeaf, int64NotInLeaf},
-			[2]string{boolInLeaf, boolNotInLeaf})
 	case Range:
 		return chooseSet(negated, int64InRangeLeaf, int64OutsideRangeLeaf), nil
 	case Prefix:
@@ -241,8 +263,8 @@ func leafStatement(op FilterOp, scalarType ScalarType, prefix string, negated bo
 		return chooseSet(negated, nullValueLeaf, nonNullValueLeaf), nil
 	case IsPresent:
 		return chooseSet(negated, anyValueLeaf, ""), nil
-	case All, Any, Not:
-		return "", invalidRequest(fmt.Sprintf("filter operator %d is not a leaf", op))
+	case In, All, Any, Not:
+		return "", invalidRequest(fmt.Sprintf("filter operator %d has no single leaf statement", op))
 	default:
 		return "", invalidRequest(fmt.Sprintf("filter operator %d is not a FilterOp", op))
 	}
@@ -280,12 +302,6 @@ func (evaluator *filterEvaluator) queryLeaf(ctx context.Context, statement strin
 	switch filter.Op {
 	case Equal:
 		rows, err = evaluator.catalog.QueryContext(ctx, statement, namespace, column, scalarParameter("value", filter.Values[0]))
-	case In:
-		encoded, encodeErr := encodeScalarList(filter.Values)
-		if encodeErr != nil {
-			return nil, encodeErr
-		}
-		rows, err = evaluator.catalog.QueryContext(ctx, statement, namespace, column, sql.Named("values", encoded))
 	case Range:
 		lower, upper := inclusiveRange(filter)
 		rows, err = evaluator.catalog.QueryContext(ctx, statement, namespace, column, sql.Named("lower", lower), sql.Named("upper", upper))
@@ -299,8 +315,8 @@ func (evaluator *filterEvaluator) queryLeaf(ctx context.Context, statement strin
 		}
 	case IsNull, IsPresent:
 		rows, err = evaluator.catalog.QueryContext(ctx, statement, namespace, column)
-	case All, Any, Not:
-		return nil, invalidRequest(fmt.Sprintf("filter operator %d is not a leaf", filter.Op))
+	case In, All, Any, Not:
+		return nil, invalidRequest(fmt.Sprintf("filter operator %d has no single leaf statement", filter.Op))
 	default:
 		return nil, invalidRequest(fmt.Sprintf("filter operator %d is not a FilterOp", filter.Op))
 	}
@@ -311,9 +327,12 @@ func (evaluator *filterEvaluator) queryLeaf(ctx context.Context, statement strin
 	return rows, nil
 }
 
-// saveRows inserts every owner_id and row_key of rows into the set of node
-// and closes rows.
-func (evaluator *filterEvaluator) saveRows(ctx context.Context, rows *sql.Rows, node int) (err error) {
+// noExcludedNode tells saveRows to keep every row.
+const noExcludedNode = -1
+
+// saveRows inserts every owner_id and row_key of rows into the set of node,
+// except the rows in the set of excluded, and closes rows.
+func (evaluator *filterEvaluator) saveRows(ctx context.Context, rows *sql.Rows, node int, excluded int) (err error) {
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, rows))
 	}()
@@ -329,6 +348,15 @@ func (evaluator *filterEvaluator) saveRows(ctx context.Context, rows *sql.Rows, 
 		if err := rows.Scan(&ownerID, &rowKey); err != nil {
 			slog.ErrorContext(ctx, "scan filter row failed", "err", err)
 			return fmt.Errorf("scan filter row: %w", err)
+		}
+		if excluded != noExcludedNode {
+			present, err := evaluator.inSet(ctx, excluded, ownerID, rowKey)
+			if err != nil {
+				return err
+			}
+			if present {
+				continue
+			}
 		}
 		if _, err := insert.ExecContext(ctx, sql.Named("node", node), sql.Named("owner_id", ownerID), sql.Named("row_key", rowKey)); err != nil {
 			return queryDatabaseError(ctx, "save filter row", err)
@@ -393,41 +421,16 @@ func scalarParameter(name string, value ScalarValue) sql.NamedArg {
 	}
 }
 
-// jsonScalar encodes a non-null comparison value as its JSON string, number,
-// or boolean. SQLite json_each returns each one in the storage form of the
-// typed column: text, integer, or 1 and 0.
-type jsonScalar ScalarValue
-
-// MarshalJSON encodes the typed field of the value.
-func (value jsonScalar) MarshalJSON() ([]byte, error) {
-	var encoded []byte
-	var err error
-	switch value.Type {
-	case Bool:
-		encoded, err = json.Marshal(value.Bool)
-	case Int64:
-		encoded, err = json.Marshal(value.Int64)
-	case String:
-		encoded, err = json.Marshal(value.String)
-	default:
-		encoded, err = json.Marshal(value.String)
+// inSet reports whether the set of node contains the occurrence.
+func (evaluator *filterEvaluator) inSet(ctx context.Context, node int, ownerID string, rowKey string) (bool, error) {
+	var present int
+	err := evaluator.writer.QueryRowContext(ctx, filterRowStatement,
+		sql.Named("node", node), sql.Named("owner_id", ownerID), sql.Named("row_key", rowKey)).Scan(&present)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
 	}
 	if err != nil {
-		slog.Error("encode filter value failed", "err", err)
-		return nil, fmt.Errorf("encode filter value: %w", err)
+		return false, queryDatabaseError(ctx, "read filter row", err)
 	}
-	return encoded, nil
-}
-
-func encodeScalarList(values []ScalarValue) (string, error) {
-	encodable := make([]jsonScalar, 0, len(values))
-	for _, value := range values {
-		encodable = append(encodable, jsonScalar(value))
-	}
-	encoded, err := json.Marshal(encodable)
-	if err != nil {
-		slog.Error("encode filter values failed", "err", err)
-		return "", fmt.Errorf("encode filter values: %w", err)
-	}
-	return string(encoded), nil
+	return true, nil
 }

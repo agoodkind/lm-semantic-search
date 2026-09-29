@@ -151,7 +151,11 @@ func removeStaleQueryDatabases(ctx context.Context, directory string, staleAfter
 			continue
 		}
 		info, err := entry.Info()
-		if err != nil || !info.ModTime().Before(cutoff) {
+		if err != nil {
+			slog.WarnContext(ctx, "read query database file information failed", "file", entry.Name(), "err", err)
+			continue
+		}
+		if !info.ModTime().Before(cutoff) {
 			continue
 		}
 		path := filepath.Join(directory, entry.Name())
@@ -560,9 +564,7 @@ func (library *Library) persistSnapshot(
 		if err := checkSnapshotBudget(ctx, tx, now.UnixMilli(), resultBytes, library.config.MaxSnapshotBytes); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO search_snapshots (snapshot_id, namespace, request_hash, visibility_revision, projection_revision, rank_config, expires_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		if _, err := tx.ExecContext(ctx, insertSnapshotStatement,
 			snapshotID, plan.request.Namespace, plan.requestHash, revisions.Visibility, revisions.Projection, string(record), expiresAt,
 		); err != nil {
 			slog.ErrorContext(ctx, "save search snapshot failed", "err", err)
@@ -591,28 +593,55 @@ func rankedResultBytes(ctx context.Context, query *queryDatabase, namespace stri
 	return total.Int64, nil
 }
 
+// deleteExpiredSnapshots reads the IDs of expired snapshots through the
+// expiry index and deletes each snapshot's result rows and snapshot row by
+// primary key.
 func deleteExpiredSnapshots(ctx context.Context, tx *sql.Tx, nowMilli int64) error {
-	statements := []string{
-		`DELETE FROM search_results WHERE snapshot_id IN (SELECT snapshot_id FROM search_snapshots WHERE expires_at <= ?)`,
-		`DELETE FROM search_snapshots WHERE expires_at <= ?`,
+	expired, err := expiredSnapshotIDs(ctx, tx, nowMilli)
+	if err != nil {
+		return err
 	}
-	for _, statement := range statements {
-		if _, err := tx.ExecContext(ctx, statement, nowMilli); err != nil {
-			slog.ErrorContext(ctx, "delete expired search snapshots failed", "err", err)
-			return fmt.Errorf("delete expired search snapshots: %w", err)
+	for _, snapshotID := range expired {
+		for _, statement := range []string{deleteSnapshotResultsStatement, deleteSnapshotStatement} {
+			if _, err := tx.ExecContext(ctx, statement, snapshotID); err != nil {
+				slog.ErrorContext(ctx, "delete expired search snapshot failed", "snapshot", snapshotID, "err", err)
+				return fmt.Errorf("delete expired search snapshot %s: %w", snapshotID, err)
+			}
 		}
 	}
 	return nil
+}
+
+func expiredSnapshotIDs(ctx context.Context, tx *sql.Tx, nowMilli int64) (_ []string, err error) {
+	rows, err := tx.QueryContext(ctx, expiredSnapshotsStatement, nowMilli)
+	if err != nil {
+		slog.ErrorContext(ctx, "read expired search snapshots failed", "err", err)
+		return nil, fmt.Errorf("read expired search snapshots: %w", err)
+	}
+	defer func() {
+		err = errors.Join(err, closeRows(ctx, rows))
+	}()
+	var expired []string
+	for rows.Next() {
+		var snapshotID string
+		if err := rows.Scan(&snapshotID); err != nil {
+			slog.ErrorContext(ctx, "scan expired search snapshot failed", "err", err)
+			return nil, fmt.Errorf("scan expired search snapshot: %w", err)
+		}
+		expired = append(expired, snapshotID)
+	}
+	if err := rows.Err(); err != nil {
+		slog.ErrorContext(ctx, "read expired search snapshots failed", "err", err)
+		return nil, fmt.Errorf("read expired search snapshots: %w", err)
+	}
+	return expired, nil
 }
 
 // checkSnapshotBudget fails with [ErrResourceLimit] when the unexpired
 // snapshots and the new snapshot exceed maxBytes of logical result bytes.
 func checkSnapshotBudget(ctx context.Context, tx *sql.Tx, nowMilli int64, newBytes int64, maxBytes int64) error {
 	var existing sql.NullInt64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT SUM(json_extract(rank_config, '$.result_bytes')) FROM search_snapshots WHERE expires_at > ?`,
-		nowMilli,
-	).Scan(&existing); err != nil {
+	if err := tx.QueryRowContext(ctx, snapshotBytesStatement, nowMilli).Scan(&existing); err != nil {
 		slog.ErrorContext(ctx, "measure search snapshot bytes failed", "err", err)
 		return fmt.Errorf("measure search snapshot bytes: %w", err)
 	}
@@ -635,10 +664,7 @@ func copyRankedResults(ctx context.Context, tx *sql.Tx, query *queryDatabase, sn
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, rows))
 	}()
-	insert, err := tx.PrepareContext(ctx,
-		`INSERT INTO search_results (snapshot_id, ordinal, namespace, owner_id, row_key, source_blob_id, vector_id, effective_scalars, score)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-	)
+	insert, err := tx.PrepareContext(ctx, insertSearchResultStatement)
 	if err != nil {
 		slog.ErrorContext(ctx, "prepare search result insert failed", "err", err)
 		return fmt.Errorf("prepare search result insert: %w", err)
@@ -716,11 +742,7 @@ func decodeCursor(text string) (searchCursor, error) {
 func loadSnapshotForCursor(ctx context.Context, tx *sql.Tx, cursor searchCursor, plan searchPlan, nowMilli int64) error {
 	var namespace, requestHash, record string
 	var visibility, projection, expiresAt int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT namespace, request_hash, visibility_revision, projection_revision, rank_config, expires_at
-		FROM search_snapshots WHERE snapshot_id = ?`,
-		cursor.SnapshotID,
-	).Scan(&namespace, &requestHash, &visibility, &projection, &record, &expiresAt)
+	err := tx.QueryRowContext(ctx, cursorSnapshotStatement, cursor.SnapshotID).Scan(&namespace, &requestHash, &visibility, &projection, &record, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		expired := fmt.Errorf("%w: snapshot %s does not exist", ErrCursorExpired, cursor.SnapshotID)
 		slog.WarnContext(ctx, "search cursor rejected", "err", expired)
@@ -758,11 +780,7 @@ func loadSnapshotForCursor(ctx context.Context, tx *sql.Tx, cursor searchCursor,
 // readSnapshotRows returns up to limit persisted rows of a snapshot from
 // ordinal first.
 func readSnapshotRows(ctx context.Context, tx *sql.Tx, snapshotID string, first int64, limit int) (_ []rankedRow, err error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, effective_scalars, score FROM search_results
-		WHERE snapshot_id = ? AND ordinal >= ? ORDER BY ordinal LIMIT ?`,
-		snapshotID, first, limit,
-	)
+	rows, err := tx.QueryContext(ctx, snapshotPageStatement, snapshotID, first, limit)
 	if err != nil {
 		slog.ErrorContext(ctx, "read search results failed", "err", err)
 		return nil, fmt.Errorf("read search results of %s: %w", snapshotID, err)
@@ -792,7 +810,7 @@ func buildHits(ctx context.Context, tx *sql.Tx, namespace string, rows []rankedR
 	hits := make([]SearchHit, 0, len(rows))
 	for _, row := range rows {
 		var content string
-		err := tx.QueryRowContext(ctx, `SELECT content FROM source_blobs WHERE blob_id = ?`, row.sourceBlobID).Scan(&content)
+		err := tx.QueryRowContext(ctx, sourceBlobStatement, row.sourceBlobID).Scan(&content)
 		if err != nil {
 			slog.ErrorContext(ctx, "read source blob failed", "blob_id", row.sourceBlobID, "err", err)
 			return nil, fmt.Errorf("read source blob %s of %s/%s: %w", row.sourceBlobID, row.ownerID, row.rowKey, err)
@@ -877,4 +895,23 @@ const (
 	rankedRowsStatement  = `SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, scalars, score FROM ranked ORDER BY ordinal`
 	rankedBytesStatement = `SELECT SUM(? + length(CAST(owner_id AS BLOB)) + length(CAST(row_key AS BLOB)) + length(CAST(source_blob_id AS BLOB))
 			+ length(CAST(vector_id AS BLOB)) + length(CAST(scalars AS BLOB))) FROM ranked`
+)
+
+// Catalog statements of the snapshot, the cursor pages, and the hits.
+const (
+	insertSnapshotStatement = `INSERT INTO search_snapshots
+		(snapshot_id, namespace, request_hash, visibility_revision, projection_revision, rank_config, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`
+	expiredSnapshotsStatement      = `SELECT snapshot_id FROM search_snapshots WHERE expires_at <= ?`
+	deleteSnapshotResultsStatement = `DELETE FROM search_results WHERE snapshot_id = ?`
+	deleteSnapshotStatement        = `DELETE FROM search_snapshots WHERE snapshot_id = ?`
+	snapshotBytesStatement         = `SELECT SUM(json_extract(rank_config, '$.result_bytes')) FROM search_snapshots WHERE expires_at > ?`
+	insertSearchResultStatement    = `INSERT INTO search_results
+		(snapshot_id, ordinal, namespace, owner_id, row_key, source_blob_id, vector_id, effective_scalars, score)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	cursorSnapshotStatement = `SELECT namespace, request_hash, visibility_revision, projection_revision, rank_config, expires_at
+		FROM search_snapshots WHERE snapshot_id = ?`
+	snapshotPageStatement = `SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, effective_scalars, score FROM search_results
+		WHERE snapshot_id = ? AND ordinal >= ? ORDER BY ordinal LIMIT ?`
+	sourceBlobStatement = `SELECT content FROM source_blobs WHERE blob_id = ?`
 )

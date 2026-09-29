@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/clock"
@@ -53,7 +54,8 @@ type searchPlan struct {
 // from one catalog read transaction, scores every eligible vector exactly, and
 // persists the full ordered result when more pages follow. A cursor page reads
 // that persisted result. A later write does not change the page sequence of a
-// cursor. Search takes no writer lock.
+// cursor. Search acquires no kernel writer lock; page one writes its snapshot
+// in one SQLite write transaction.
 //
 // A request that fails [Config.ValidateSearchRequest] returns an error that
 // wraps [ErrInvalidRequest] before any embedding or scoring. An expired or
@@ -81,13 +83,31 @@ func (library *Library) Search(ctx context.Context, request SearchRequest) (Sear
 }
 
 // classifySearchError logs a failed search and wraps a failure caused by the
-// search deadline with [ErrDeadline].
+// search deadline with [ErrDeadline]. An error that already wraps a library
+// sentinel keeps that classification alone.
 func classifySearchError(ctx context.Context, namespace string, err error) error {
-	if !errors.Is(err, ErrDeadline) && (errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+	if !wrapsLibraryError(err) && (errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)) {
 		err = fmt.Errorf("%w: search did not finish before its deadline: %w", ErrDeadline, err)
 	}
 	slog.WarnContext(ctx, "library search failed", "namespace", namespace, "err", err)
 	return err
+}
+
+// libraryErrors are the sentinels that a search error keeps without an added
+// ErrDeadline.
+var libraryErrors = []error{
+	ErrStoreMismatch, ErrInvalidRequest, ErrVectorCorrupt, ErrVectorMissing,
+	ErrCursorExpired, ErrCursorMismatch, ErrDeadline, ErrResourceLimit,
+}
+
+// wrapsLibraryError reports whether err already wraps a library sentinel.
+func wrapsLibraryError(err error) bool {
+	for _, sentinel := range libraryErrors {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+	return false
 }
 
 func (library *Library) search(ctx context.Context, request SearchRequest) (SearchPage, error) {
@@ -344,7 +364,7 @@ func (library *Library) readCursorPage(ctx context.Context, plan searchPlan) (Se
 		if err := loadSnapshotForCursor(ctx, tx, cursor, plan, clock.Now().UnixMilli()); err != nil {
 			return err
 		}
-		rows, err := readSnapshotRows(ctx, tx, cursor.SnapshotID, cursor.NextOrdinal, pageSize+1)
+		rows, err := readSnapshotRows(ctx, tx, cursor.SnapshotID, cursor.NextOrdinal, min(pageSize, math.MaxInt-1)+1)
 		if err != nil {
 			return err
 		}

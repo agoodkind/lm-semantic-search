@@ -42,6 +42,7 @@ func TestQueryDatabaseStatementsUseNoTemporaryStore(t *testing.T) {
 		"filterNodeRowsStatement":   filterNodeRowsStatement,
 		"filterBothRowsStatement":   filterBothRowsStatement,
 		"eligibleKeysStatement":     eligibleKeysStatement,
+		"filterRowStatement":        filterRowStatement,
 		"groupCountStatement":       groupCountStatement,
 		"incrementGroupStatement":   incrementGroupStatement,
 		"insertPostingStatement":    insertPostingStatement,
@@ -118,7 +119,10 @@ var scalarIndexStep = regexp.MustCompile(`^SEARCH v USING (COVERING )?INDEX (eff
 // TestFilterLeavesSearchTheTypedScalarIndexes plans every leaf statement over
 // the catalog schema. Each read of effective_scalars or occurrence_scalars as
 // v must search a typed index by namespace and column, and each comparison on
-// a typed value must use that value's index.
+// a typed value must use that value's index. The plan text comes from the
+// SQLite build of the pinned github.com/mattn/go-sqlite3 module. It then
+// compiles every catalog statement of Search and fails on any opcode that
+// uses SQLite's temporary store.
 func TestFilterLeavesSearchTheTypedScalarIndexes(t *testing.T) {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "catalog.sqlite"))
@@ -146,16 +150,12 @@ func TestFilterLeavesSearchTheTypedScalarIndexes(t *testing.T) {
 		"int64NotEqualLeaf":       {int64NotEqualLeaf, ""},
 		"boolEqualLeaf":           {boolEqualLeaf, "bool_value=?"},
 		"boolNotEqualLeaf":        {boolNotEqualLeaf, ""},
-		"stringInLeaf":            {stringInLeaf, "string_value=?"},
-		"stringNotInLeaf":         {stringNotInLeaf, ""},
-		"int64InLeaf":             {int64InLeaf, "int64_value=?"},
-		"int64NotInLeaf":          {int64NotInLeaf, ""},
-		"boolInLeaf":              {boolInLeaf, "bool_value=?"},
-		"boolNotInLeaf":           {boolNotInLeaf, ""},
 		"int64InRangeLeaf":        {int64InRangeLeaf, "int64_value>? AND int64_value<?"},
 		"int64OutsideRangeLeaf":   {int64OutsideRangeLeaf, ""},
 		"stringInPrefixLeaf":      {stringInPrefixLeaf, "string_value>? AND string_value<?"},
 		"stringOutsidePrefixLeaf": {stringOutsidePrefixLeaf, ""},
+		"stringFromPrefixLeaf":    {stringFromPrefixLeaf, "string_value>?"},
+		"stringBeforePrefixLeaf":  {stringBeforePrefixLeaf, ""},
 		"nullValueLeaf":           {nullValueLeaf, ""},
 		"nonNullValueLeaf":        {nonNullValueLeaf, ""},
 		"anyValueLeaf":            {anyValueLeaf, ""},
@@ -180,17 +180,37 @@ func TestFilterLeavesSearchTheTypedScalarIndexes(t *testing.T) {
 			t.Errorf("%s plan has %d reads of a scalar table, want one or more per part: %q", name, reads, steps)
 		}
 	}
-	// absentLeaf reads every occurrence of the namespace. It streams from the
-	// catalog into the query database and opens no temporary store.
+	// Every catalog statement of Search, including absentLeaf, reads the
+	// catalog without SQLite's temporary store.
 	conn, err := database.Conn(ctx)
 	if err != nil {
 		t.Fatalf("open catalog connection: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
-	for _, opcode := range explainOpcodes(t, conn, absentLeaf) {
-		for _, temporary := range temporaryStoreOpcodes {
-			if opcode == temporary {
-				t.Errorf("absentLeaf compiles to %s, which uses SQLite's temporary store", opcode)
+	catalogStatements := map[string]string{
+		"absentLeaf":                     absentLeaf,
+		"allCandidatesStatement":         allCandidatesStatement,
+		"oneCandidateStatement":          oneCandidateStatement,
+		"termPostingsStatement":          termPostingsStatement,
+		"insertSnapshotStatement":        insertSnapshotStatement,
+		"expiredSnapshotsStatement":      expiredSnapshotsStatement,
+		"deleteSnapshotResultsStatement": deleteSnapshotResultsStatement,
+		"deleteSnapshotStatement":        deleteSnapshotStatement,
+		"snapshotBytesStatement":         snapshotBytesStatement,
+		"insertSearchResultStatement":    insertSearchResultStatement,
+		"cursorSnapshotStatement":        cursorSnapshotStatement,
+		"snapshotPageStatement":          snapshotPageStatement,
+		"sourceBlobStatement":            sourceBlobStatement,
+	}
+	for name, leaf := range leaves {
+		catalogStatements[name] = leaf.statement
+	}
+	for name, statement := range catalogStatements {
+		for _, opcode := range explainOpcodes(t, conn, statement) {
+			for _, temporary := range temporaryStoreOpcodes {
+				if opcode == temporary {
+					t.Errorf("%s compiles to %s, which uses SQLite's temporary store", name, opcode)
+				}
 			}
 		}
 	}

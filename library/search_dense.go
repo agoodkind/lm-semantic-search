@@ -59,11 +59,10 @@ func (library *Library) scoreDense(ctx context.Context, query *queryDatabase, qu
 		if len(blocks) == 0 {
 			break
 		}
-		library.runScoreBlocks(ctx, queryVector, blocks)
+		if err := library.runScoreBlocks(ctx, queryVector, blocks); err != nil {
+			return err
+		}
 		for _, block := range blocks {
-			if block.err != nil {
-				return block.err
-			}
 			phases.verify += block.verifyTime
 			phases.score += block.scoreTime
 		}
@@ -121,15 +120,27 @@ func readScoreBlocks(
 }
 
 // runScoreBlocks scores every block on its own goroutine and records each
-// block's scores or error in the block.
-func (library *Library) runScoreBlocks(ctx context.Context, queryVector []float32, blocks []*scoreBlock) {
+// block's scores in the block. The first failure cancels the other blocks,
+// and runScoreBlocks returns that failure.
+func (library *Library) runScoreBlocks(ctx context.Context, queryVector []float32, blocks []*scoreBlock) error {
+	blockContext, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var group sync.WaitGroup
+	var failure error
+	var failed sync.Once
 	for _, block := range blocks {
 		group.Go(func() {
-			block.scores, block.err = library.scoreBlock(ctx, queryVector, block)
+			block.scores, block.err = library.scoreBlock(blockContext, queryVector, block)
+			if block.err != nil {
+				failed.Do(func() {
+					failure = block.err
+					cancel()
+				})
+			}
 		})
 	}
 	group.Wait()
+	return failure
 }
 
 // scoreBlock verifies the identity digest and checksum of each vector of block
