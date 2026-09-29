@@ -308,21 +308,20 @@ func (service *Service) computeRanking(ctx context.Context, collectionName strin
 	}
 	groupColumn, grouped := groupColumnFor(search)
 	depth := RankingDepth(eligible)
-	candidates, err := service.rankCollectionCandidates(ctx, collectionName, queryVector, search.Query, compiled, groupColumn, grouped, depth)
+	candidates, denseReturned, err := service.rankCollectionCandidates(ctx, collectionName, queryVector, search.Query, compiled, groupColumn, grouped, depth)
 	if err != nil {
 		return failed, err
 	}
-	// A dense search returns at most depth rows, and a hybrid ranking contains
-	// every row of its dense leg. A ranking with fewer than depth rows comes
-	// from a dense leg that returned fewer rows than it requested.
-	truncation := RankingTruncation(eligible, len(candidates))
+	// A dense leg with fewer rows than depth misses eligible rows, even when
+	// sparse rows fill the fused ranking to depth.
+	truncation := RankingTruncation(eligible, denseReturned)
 	if truncation != "" {
 		level := slog.LevelInfo
-		if len(candidates) < depth {
+		if denseReturned < depth {
 			level = slog.LevelWarn
 		}
 		slog.Log(ctx, level, "collection ranking does not contain every eligible row",
-			"collection", collectionName, "cause", truncation, "eligible", eligible, "requested", depth, "returned", len(candidates), "peer", peerInfo.String())
+			"collection", collectionName, "cause", truncation, "eligible", eligible, "requested", depth, "dense_returned", denseReturned, "ranked", len(candidates), "peer", peerInfo.String())
 	}
 	if grouped && IsConversationDeclaration(search.Declaration) && groupColumn.Name == search.Declaration.ItemIDColumn {
 		candidates, err = service.resolveLegacyConversationGroups(ctx, collectionName, groupColumn.Name, candidates)
@@ -441,11 +440,13 @@ func selectRankedCandidates(candidates []rankedCandidate, perGroupLimit int32, m
 	return kept
 }
 
-// rankCollectionCandidates runs the one ranking search of a collection search.
-// A hybrid collection runs both legs at depth and fuses them with the RRF
-// reranker into at most depth rows. A dense collection runs one search at
-// depth.
-func (service *Service) rankCollectionCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled compiledFilter, groupColumn model.ScalarColumn, grouped bool, depth int) ([]rankedCandidate, error) {
+// rankCollectionCandidates runs the ranking search of a collection search and
+// returns the ranked candidates and the row count of the dense leg. A hybrid
+// collection runs both legs at depth, fuses them with the RRF reranker into at
+// most depth rows, and runs the dense leg again with no output field: the
+// fused result does not report how many rows the dense leg returned. A dense
+// collection runs one search at depth, and its row count is the dense count.
+func (service *Service) rankCollectionCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled compiledFilter, groupColumn model.ScalarColumn, grouped bool, depth int) ([]rankedCandidate, int, error) {
 	outputFields := []string{relativePathFieldName}
 	if grouped {
 		outputFields = append(outputFields, groupColumn.Name)
@@ -470,17 +471,42 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...).WithConsistencyLevel(rankingConsistency)
 		resultSets, err := service.milvus.HybridSearch(ctx, hybridOption)
 		if err != nil {
-			return nil, searchErr(ctx, "hybrid ranking search", collectionName, err)
+			return nil, 0, searchErr(ctx, "hybrid ranking search", collectionName, err)
 		}
-		return rankedCandidatesFromResultSets(ctx, collectionName, resultSets, groupColumn, grouped)
+		candidates, err := rankedCandidatesFromResultSets(ctx, collectionName, resultSets, groupColumn, grouped)
+		if err != nil {
+			return nil, 0, err
+		}
+		denseSets, err := service.milvus.Search(ctx, denseRankingOption(collectionName, queryVector, compiled, depth))
+		if err != nil {
+			return nil, 0, searchErr(ctx, "dense ranking leg count", collectionName, err)
+		}
+		return candidates, resultRowCount(denseSets), nil
 	}
 
+	resultSets, err := service.milvus.Search(ctx, denseRankingOption(collectionName, queryVector, compiled, depth, outputFields...))
+	if err != nil {
+		return nil, 0, searchErr(ctx, "dense ranking search", collectionName, err)
+	}
+	candidates, err := rankedCandidatesFromResultSets(ctx, collectionName, resultSets, groupColumn, grouped)
+	if err != nil {
+		return nil, 0, err
+	}
+	return candidates, len(candidates), nil
+}
+
+// denseRankingOption returns the dense search of a ranking at depth with the
+// compiled filter, its template parameters, and outputFields. With no output
+// field the search returns only primary keys and scores.
+func denseRankingOption(collectionName string, queryVector []float32, compiled compiledFilter, depth int, outputFields ...string) milvusclient.SearchOption {
 	searchOption := milvusclient.NewSearchOption(
 		collectionName,
 		depth,
 		[]entity.Vector{entity.FloatVector(queryVector)},
-	).WithANNSField(denseVectorFieldName).WithAnnParam(rankingAnnParam(depth)).
-		WithOutputFields(outputFields...).WithConsistencyLevel(rankingConsistency)
+	).WithANNSField(denseVectorFieldName).WithAnnParam(rankingAnnParam(depth)).WithConsistencyLevel(rankingConsistency)
+	if len(outputFields) > 0 {
+		searchOption = searchOption.WithOutputFields(outputFields...)
+	}
 	if compiled.Expression != "" {
 		searchOption = searchOption.WithFilter(compiled.Expression)
 	}
@@ -496,11 +522,15 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 			searchOption = searchOption.WithTemplateParam(param.Name, param.Strings)
 		}
 	}
-	resultSets, err := service.milvus.Search(ctx, searchOption)
-	if err != nil {
-		return nil, searchErr(ctx, "dense ranking search", collectionName, err)
+	return searchOption
+}
+
+// resultRowCount returns the row count of the first result set, or zero.
+func resultRowCount(resultSets []milvusclient.ResultSet) int {
+	if len(resultSets) == 0 {
+		return 0
 	}
-	return rankedCandidatesFromResultSets(ctx, collectionName, resultSets, groupColumn, grouped)
+	return resultSets[0].ResultCount
 }
 
 // rankingAnnParam returns the dense search parameters of a ranking search at
