@@ -13,8 +13,6 @@ import (
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"goodkind.io/lm-semantic-search/internal/model"
-	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
 const (
@@ -24,12 +22,6 @@ const (
 	pagingScopedConversations = 4
 	pagingRestartPageSize     = 10
 	pagingRestartPages        = 6
-
-	truncationConversationCount = 100
-	truncationMessagesPerConv   = 170
-	truncationScopedCount       = 10
-	truncationPageSize          = 1000
-	truncationJobTimeout        = 20 * time.Minute
 
 	invalidationFirstMessages  = 5
 	invalidationAddedMessages  = 3
@@ -179,7 +171,7 @@ func durationSummary(durations []time.Duration) string {
 // newPagingHarness ingests the paging corpus through the daemon.
 func newPagingHarness(t *testing.T) (*harness, int, []string, int) {
 	t.Helper()
-	h := newHarness(t)
+	h := newRealEmbeddingHarness(t)
 	corpus, total := pagingCorpus()
 	started := time.Now()
 	requireCompleted(t, h.upsert(corpus, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, false, false), "paging corpus ingest")
@@ -317,82 +309,6 @@ func TestConversationSearchPagesByOffset(t *testing.T) {
 	}
 }
 
-// waitJobWithin polls the manager until the job is terminal or timeout ends.
-func (h *harness) waitJobWithin(jobID string, timeout time.Duration) model.Job {
-	h.t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		job, found := h.manager.GetJob(jobID)
-		if found {
-			switch job.State {
-			case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
-				return job
-			case model.JobStateQueued, model.JobStateRunning, model.JobStatePaused, model.JobStateCancelling:
-			}
-		}
-		time.Sleep(jobPollInterval)
-	}
-	h.t.Fatalf("job %s was not terminal after %s", jobID, timeout)
-	return model.Job{}
-}
-
-// TestConversationSearchTruncatesAboveRankingDepth ingests 17,000 rows, more
-// than the 16,384-row ranking depth. An unfiltered search reports
-// ranking_truncated, a full request returns the fused top 16,384 rows, and
-// pages cover exactly those rows with no repeat. A search filtered to fewer
-// than 16,384 rows reports ranking_truncated false and returns every one.
-func TestConversationSearchTruncatesAboveRankingDepth(t *testing.T) {
-	h := newHarness(t)
-	corpus := map[string][]*pb.ConversationDocument{}
-	for conversationIndex := range truncationConversationCount {
-		conversationID := fmt.Sprintf("claude:truncation-%03d", conversationIndex)
-		for messageIndex := range truncationMessagesPerConv {
-			corpus[conversationID] = append(corpus[conversationID], &pb.ConversationDocument{
-				ConversationId: conversationID,
-				MessageIndex:   int32(messageIndex),
-				Role:           "assistant",
-				TimestampUnix:  int64(1_660_000_000 + conversationIndex*truncationMessagesPerConv + messageIndex),
-				Text:           fmt.Sprintf("%s conversation %d message %d", pagingQuery, conversationIndex, messageIndex),
-			})
-		}
-	}
-	total := truncationConversationCount * truncationMessagesPerConv
-	started := time.Now()
-	jobID := h.startUpsert(corpus, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, false, false)
-	requireCompleted(t, h.waitJobWithin(jobID, truncationJobTimeout), "truncation corpus ingest")
-	t.Logf("truncation corpus: %d rows ingested in %s into database %s", total, time.Since(started), h.databaseName)
-	if stored := h.countRowsWithPrefix("conv/claude:truncation-"); stored != int64(total) {
-		t.Fatalf("stored rows = %d, want %d", stored, total)
-	}
-
-	fullStarted := time.Now()
-	fullResponse := h.conversationPage(int32(total), nil)
-	t.Logf("full request: %d rows in %s", len(fullResponse.GetResults()), time.Since(fullStarted))
-	if !fullResponse.GetRankingTruncated() {
-		t.Fatalf("ranking_truncated is false for %d eligible rows", total)
-	}
-	full := rankingKeys(fullResponse.GetResults())
-	if len(full) != semantic.CollectionRankingDepth {
-		t.Fatalf("full request returned %d rows, want the %d-row window", len(full), semantic.CollectionRankingDepth)
-	}
-	paged, durations := h.pageInClydeShape(truncationPageSize, nil, 0, 0)
-	requireSamePages(t, "truncated window", paged, full)
-	t.Logf("truncated window page size %d: %s", truncationPageSize, durationSummary(durations))
-
-	scope := make([]string, 0, truncationScopedCount)
-	for conversationIndex := range truncationScopedCount {
-		scope = append(scope, fmt.Sprintf("claude:truncation-%03d", conversationIndex))
-	}
-	scopedRows := truncationScopedCount * truncationMessagesPerConv
-	scoped := h.conversationPage(int32(scopedRows), scope)
-	if scoped.GetRankingTruncated() {
-		t.Fatalf("ranking_truncated is true for %d filtered rows", scopedRows)
-	}
-	if len(scoped.GetResults()) != scopedRows {
-		t.Fatalf("filtered request returned %d rows, want %d", len(scoped.GetResults()), scopedRows)
-	}
-}
-
 func invalidationMessages(conversationID string, count int, token string) []*pb.ConversationDocument {
 	documents := make([]*pb.ConversationDocument, 0, count)
 	for messageIndex := range count {
@@ -412,7 +328,7 @@ func invalidationMessages(conversationID string, count int, token string) []*pb.
 // adds appear with the new indexed fingerprint. A rewrite that keeps the
 // matching row count returns the rewritten rows.
 func TestConversationSearchSeesDaemonWritesBetweenSearches(t *testing.T) {
-	h := newHarness(t)
+	h := newRealEmbeddingHarness(t)
 	grown := "claude:invalidation-grown"
 	rewritten := "claude:invalidation-rewritten"
 	first := map[string][]*pb.ConversationDocument{

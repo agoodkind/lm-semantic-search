@@ -263,7 +263,7 @@ func newHarness(t *testing.T) *harness {
 
 func newResidencyHarness(t *testing.T, idleTimeout time.Duration) *harness {
 	t.Helper()
-	return newHarnessWithOptions(t, nil, idleTimeout, true)
+	return newHarnessWithOptions(t, nil, idleTimeout, true, false)
 }
 
 // newHarnessWithGate builds the isolated daemon like newHarness but installs an
@@ -271,7 +271,50 @@ func newResidencyHarness(t *testing.T, idleTimeout time.Duration) *harness {
 // between batches. A nil gate is the normal, ungated path.
 func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 	t.Helper()
-	return newHarnessWithOptions(t, gate, 0, false)
+	return newHarnessWithOptions(t, gate, 0, false, false)
+}
+
+// liveEmbedding is the embedding endpoint one harness daemon uses.
+type liveEmbedding struct {
+	baseURL   string
+	model     string
+	apiKey    string
+	dimension int
+}
+
+// fakeLiveEmbedding returns the local fake embedding server at baseURL.
+func fakeLiveEmbedding(baseURL string, harnessID string) liveEmbedding {
+	return liveEmbedding{
+		baseURL:   baseURL,
+		model:     "live-harness-" + harnessID,
+		apiKey:    "live-harness-dummy-key", //gitleaks:allow // not a secret: the fake embedder accepts any non-empty key
+		dimension: fakeEmbeddingDimension,
+	}
+}
+
+// realLiveEmbedding returns the embedding endpoint, model, key, and dimension
+// that config.Default resolves from the operator environment. It fails the
+// test as BLOCKED when any of them is missing.
+func realLiveEmbedding(t *testing.T, resolved config.Config) liveEmbedding {
+	t.Helper()
+	embedding := liveEmbedding{
+		baseURL:   strings.TrimSpace(resolved.OpenAIBaseURL),
+		model:     strings.TrimSpace(resolved.EmbeddingModel),
+		apiKey:    resolved.OpenAIAPIKey,
+		dimension: int(resolved.EmbeddingDimension),
+	}
+	if embedding.baseURL == "" || embedding.model == "" || embedding.dimension <= 0 {
+		t.Fatal("BLOCKED: the real embedding endpoint needs OPENAI_BASE_URL, EMBEDDING_MODEL, and EMBEDDING_DIMENSION in the operator environment")
+	}
+	return embedding
+}
+
+// newRealEmbeddingHarness builds the isolated daemon like newHarness but
+// embeds through the operator's real embedding endpoint instead of the local
+// fake server.
+func newRealEmbeddingHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessWithOptions(t, nil, 0, false, true)
 }
 
 func newHarnessWithOptions(
@@ -279,6 +322,7 @@ func newHarnessWithOptions(
 	gate *embedGate,
 	idleTimeout time.Duration,
 	requireMilvus bool,
+	realEmbedding bool,
 ) *harness {
 	t.Helper()
 
@@ -414,11 +458,15 @@ func newHarnessWithOptions(
 		embeddingRecorder,
 	)
 
+	embedding := fakeLiveEmbedding(embedServer.URL, harnessID)
+	if realEmbedding {
+		embedding = realLiveEmbedding(t, defaultConfig)
+	}
 	cfg := resolveLiveConfig(
 		t,
 		stateRoot,
 		socketPath,
-		embedServer.URL,
+		embedding,
 		milvusAddress,
 		defaultConfig.MilvusToken,
 		databaseName,
@@ -1006,7 +1054,7 @@ func resolveLiveConfig(
 	t *testing.T,
 	sandboxRoot string,
 	socketPath string,
-	embedServerURL string,
+	embedding liveEmbedding,
 	milvusAddress string,
 	milvusToken string,
 	databaseName string,
@@ -1024,13 +1072,13 @@ func resolveLiveConfig(
 		{name: "MILVUS_ADDRESS", value: milvusAddress},
 		{name: "MILVUS_TOKEN", value: milvusToken},
 		{name: "MILVUS_DATABASE", value: databaseName},
-		// A local fake stands in for the embedder, so no run spends GPU time or
-		// depends on a model server being up.
+		// The local fake embedder by default, or the operator's real endpoint
+		// for a harness built with newRealEmbeddingHarness.
 		{name: "EMBEDDING_PROVIDER", value: "OpenAI"},
-		{name: "EMBEDDING_MODEL", value: "live-harness-" + harnessID},
-		{name: "OPENAI_BASE_URL", value: embedServerURL},
-		{name: "OPENAI_API_KEY", value: "live-harness-dummy-key"}, //gitleaks:allow // not a secret: the fake embedder accepts any non-empty key
-		{name: "EMBEDDING_DIMENSION", value: strconv.Itoa(fakeEmbeddingDimension)},
+		{name: "EMBEDDING_MODEL", value: embedding.model},
+		{name: "OPENAI_BASE_URL", value: embedding.baseURL},
+		{name: "OPENAI_API_KEY", value: embedding.apiKey},
+		{name: "EMBEDDING_DIMENSION", value: strconv.Itoa(embedding.dimension)},
 		{name: "EMBEDDING_BATCH_SIZE", value: "8"},
 		// The sandbox default sits under a temp root long enough to overflow
 		// the platform's socket path limit.
@@ -1069,11 +1117,11 @@ func resolveLiveConfig(
 			databaseName,
 		)
 	}
-	if resolved.OpenAIBaseURL != embedServerURL {
+	if resolved.OpenAIBaseURL != embedding.baseURL {
 		t.Fatalf(
-			"resolved OpenAIBaseURL = %q, want the fake embedder at %q",
+			"resolved OpenAIBaseURL = %q, want the harness embedder at %q",
 			resolved.OpenAIBaseURL,
-			embedServerURL,
+			embedding.baseURL,
 		)
 	}
 	return resolved
