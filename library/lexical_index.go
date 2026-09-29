@@ -209,10 +209,8 @@ func changeDocumentFrequencies(ctx context.Context, tx *sql.Tx, namespace string
 }
 
 // deleteUnreferencedContent deletes the terms and the content row of a search
-// hash that no lexical occurrence in any namespace references. A query
-// snapshot copies the postings it scores before its read transaction ends, and
-// publication stores the content again when an occurrence with that text
-// returns.
+// hash that no lexical occurrence in any namespace references. Publication
+// stores the content again when an occurrence with that text returns.
 func deleteUnreferencedContent(ctx context.Context, tx *sql.Tx, searchHash string) error {
 	var referenced bool
 	if err := tx.QueryRowContext(ctx,

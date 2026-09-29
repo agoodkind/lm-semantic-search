@@ -4,6 +4,7 @@ package live
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"maps"
@@ -197,6 +198,7 @@ func TestLibraryLexicalPublicationCountsEveryOccurrence(t *testing.T) {
 	rows = append(rows, lexicalOracleRow{namespace: "code", ownerID: "parse.go", rowKey: "parse.go#2", searchText: "zeta alpha alpha"})
 	assertLexicalIndex(t, harness, descriptor, rows, "second replace")
 
+	generationsBefore := readLexicalGenerations(t, harness, descriptor)
 	if _, err := opened.ReprojectScalars(harness.ctx, library.ScalarProjection{
 		Namespace: "conversations", OwnerID: "conversation-a", ProjectionOrder: 1, IdempotencyToken: "projection-1",
 		Rows: map[string]map[string]library.ScalarValue{
@@ -206,6 +208,9 @@ func TestLibraryLexicalPublicationCountsEveryOccurrence(t *testing.T) {
 		t.Fatalf("reproject scalars: %v", err)
 	}
 	assertLexicalIndex(t, harness, descriptor, rows, "reprojection")
+	if generationsAfter := readLexicalGenerations(t, harness, descriptor); !maps.Equal(generationsAfter, generationsBefore) {
+		t.Fatalf("reprojection changed the lexical statistics generations from %v to %v", generationsBefore, generationsAfter)
+	}
 
 	if err := opened.Delete(harness.ctx, []library.OccurrenceID{
 		{Namespace: "code", OwnerID: "parse.go", RowKey: "parse.go#2"},
@@ -314,4 +319,36 @@ func readSchemaVersion(t *testing.T, harness *libraryHarness, descriptor library
 		t.Fatalf("read schema version: %v", err)
 	}
 	return version
+}
+
+// readLexicalGenerations returns the lexical statistics generation of every
+// namespace in the catalog.
+func readLexicalGenerations(t *testing.T, harness *libraryHarness, descriptor library.StoreDescriptor) map[string]int64 {
+	t.Helper()
+	database, err := sql.Open("sqlite3", "file:"+descriptor.CatalogPath+"?mode=ro")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("close catalog: %v", err)
+		}
+	}()
+	result, err := database.QueryContext(harness.ctx, `SELECT namespace, generation FROM lexical_stats`)
+	if err != nil {
+		t.Fatalf("read lexical_stats generations: %v", err)
+	}
+	generations := map[string]int64{}
+	for result.Next() {
+		var namespace string
+		var generation int64
+		if err := result.Scan(&namespace, &generation); err != nil {
+			t.Fatalf("scan lexical_stats generation: %v", err)
+		}
+		generations[namespace] = generation
+	}
+	if err := errors.Join(result.Err(), result.Close()); err != nil {
+		t.Fatalf("read lexical_stats generations: %v", err)
+	}
+	return generations
 }
