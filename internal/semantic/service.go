@@ -316,6 +316,13 @@ func conversationCollectionIDFromPath(codebasePath string) (string, bool) {
 	return strings.TrimPrefix(codebasePath, conversationPathPrefix), true
 }
 
+// IsConversationPath reports whether codebasePath is the canonical path of a
+// virtual conversation collection rather than a filesystem codebase.
+func IsConversationPath(codebasePath string) bool {
+	_, isConversation := conversationCollectionIDFromPath(codebasePath)
+	return isConversation
+}
+
 // CollectionName matches the TypeScript collection naming contract at
 // packages/core/src/context.ts:275 so the Go daemon reads and writes the
 // same Milvus collections as the upstream TS adapter. A conversation canonical

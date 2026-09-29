@@ -113,7 +113,11 @@ type IndexConfig struct {
 	EmbeddingModel     string            `json:"embedding_model,omitempty"`
 	EmbeddingDimension int32             `json:"embedding_dimension,omitempty"`
 	VectorBackend      VectorBackend     `json:"vector_backend,omitempty"`
-	Hybrid             bool              `json:"hybrid"`
+	// CodebaseStore is "library" when codebase chunks go to the shared search
+	// library, and empty for the default store. The config digest includes it.
+	// A store switch changes the digest and starts a new checkpoint.
+	CodebaseStore string `json:"codebase_store,omitempty"`
+	Hybrid        bool   `json:"hybrid"`
 }
 
 // AdmissionBudget carries per-request fixed caps that must not enter

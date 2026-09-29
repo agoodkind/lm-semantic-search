@@ -416,6 +416,7 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 			EmbeddingModel:     "",
 			EmbeddingDimension: 0,
 			VectorBackend:      "",
+			CodebaseStore:      "",
 			Hybrid:             false,
 		},
 		SchedulingPolicy:            model.DefaultSchedulingPolicy(),

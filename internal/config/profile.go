@@ -20,6 +20,14 @@ const (
 	EmbeddingProviderONNX = model.EmbeddingProviderONNX
 	// EmbeddingProviderOpenAI selects the OpenAI-compatible embedding adapter.
 	EmbeddingProviderOpenAI = model.EmbeddingProviderOpenAI
+	// CodebaseStoreSemantic writes codebase chunks to the per-codebase
+	// collections of the index backend (default).
+	CodebaseStoreSemantic = "semantic"
+	// CodebaseStoreLibrary writes codebase chunks to the shared search library
+	// catalog and vector pool.
+	CodebaseStoreLibrary = "library"
+	// codebaseStoreEnv selects the codebase store.
+	codebaseStoreEnv = "CLAUDE_CONTEXT_CODEBASE_STORE"
 )
 
 // ApplyProfile expands the user-facing Profile into the derived backend and

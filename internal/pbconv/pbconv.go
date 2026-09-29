@@ -24,6 +24,7 @@ func FromStartIndexConfig(request *pb.StartIndexRequest) model.IndexConfig {
 		EmbeddingModel:     "",
 		EmbeddingDimension: 0,
 		VectorBackend:      "milvus",
+		CodebaseStore:      "",
 		Hybrid:             true,
 	}
 	if request.GetSplitter() != nil {
