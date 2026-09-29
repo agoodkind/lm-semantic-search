@@ -1,9 +1,9 @@
 //go:build updatelive
 
-// Package updatelive runs the daemon through the sandbox command against a
-// local release API server and records which builds ask that server for
-// releases. It builds the daemon twice with the same release version stamp, once
-// with the release build tag and once without it.
+// Package updatelive runs real daemon processes against a local release API
+// server and records which daemons ask that server for releases. It builds the
+// daemon twice with the same release version stamp, once with the release
+// build tag and once without it.
 package updatelive
 
 import (
@@ -19,24 +19,28 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"goodkind.io/lm-semantic-search/internal/sandbox"
 )
 
 const (
 	daemonBinary  = "lm-semantic-search-daemon"
 	daemonPackage = "goodkind.io/lm-semantic-search/cmd/lm-semantic-search-daemon"
 
-	releaseBuildTag      = "lmsrelease"
-	gklogVersionPackage  = "goodkind.io/gklog/version"
-	stampedVersion       = "202609290000-1-0123abc"
-	stampedCommit        = "0123abc"
-	stampedBuildTime     = "2026-09-29T00:00:00Z"
-	updateAPIBaseURLEnv  = "LM_SEMANTIC_SEARCH_UPDATE_API_BASE_URL"
-	releaseListPath      = "/repos/agoodkind/lm-semantic-search/releases"
-	schedulerDisabledLog = "update scheduler disabled; binary is not a release artifact"
-	daemonIdentityLog    = "daemon identity"
+	releaseBuildTag     = "lmsrelease"
+	gklogVersionPackage = "goodkind.io/gklog/version"
+	stampedVersion      = "202609290000-1-0123abc"
+	stampedCommit       = "0123abc"
+	stampedBuildTime    = "2026-09-29T00:00:00Z"
+	updateAPIBaseURLEnv = "LM_SEMANTIC_SEARCH_UPDATE_API_BASE_URL"
+	releaseListPath     = "/repos/agoodkind/lm-semantic-search/releases"
+
+	localBuildDisabledLog = "update scheduler disabled; binary is not a release artifact"
+	sandboxDisabledLog    = "update scheduler disabled; sandbox daemon"
+	daemonIdentityLog     = "daemon identity"
 
 	// The scheduler waits one minute before its first check when the update
-	// state has no next check time. The untagged daemon must send no request
+	// state has no next check time. A daemon that must not check stays silent
 	// for longer than that wait.
 	firstCheckDelay   = time.Minute
 	silenceMargin     = 15 * time.Second
@@ -45,13 +49,14 @@ const (
 	pollInterval      = 250 * time.Millisecond
 	stopTimeout       = 15 * time.Second
 
-	// Each sandbox root sits under /tmp instead of the longer platform temp
+	// Each daemon root sits under /tmp instead of the longer platform temp
 	// directory. The kernel caps a socket path near 104 bytes.
-	sandboxRootParent  = "/tmp"
-	sandboxRootPattern = "lms-updatelive-"
+	daemonRootParent  = "/tmp"
+	daemonRootPattern = "lms-updatelive-"
 	// The router writes each record without a dotted concern prefix to the
-	// daemon concern file under the sandbox state root.
-	sandboxLogPath = "state/logs/daemon.jsonl"
+	// daemon concern file under the state root, which sandbox.Env places at
+	// root/state.
+	daemonLogPath = "state/logs/daemon.jsonl"
 )
 
 var (
@@ -139,48 +144,79 @@ func (api *releaseAPIServer) receivedReleaseListRequest() bool {
 	return false
 }
 
-type sandboxDaemon struct {
+// daemonMode selects how the test starts a daemon.
+type daemonMode int
+
+const (
+	// installedMode runs the daemon command itself, the way the service
+	// manager starts the installed daemon.
+	installedMode daemonMode = iota + 1
+	// sandboxMode runs the sandbox subcommand.
+	sandboxMode
+)
+
+type runningDaemon struct {
 	command *exec.Cmd
 	root    string
 	started time.Time
 	done    chan error
 }
 
-func startSandboxDaemon(t *testing.T, binaryPath string, api *releaseAPIServer) *sandboxDaemon {
+// startDaemon roots both modes in a fresh directory with the sandbox
+// environment defaults. The installed mode passes them as environment
+// variables and runs no sandbox code.
+func startDaemon(t *testing.T, binaryPath string, mode daemonMode, api *releaseAPIServer) *runningDaemon {
 	t.Helper()
-	root, err := os.MkdirTemp(sandboxRootParent, sandboxRootPattern)
+	root, err := os.MkdirTemp(daemonRootParent, daemonRootPattern)
 	if err != nil {
-		t.Fatalf("create sandbox root: %v", err)
+		t.Fatalf("create daemon root: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 
-	command := exec.Command(binaryPath, "sandbox", "--root", root)
-	command.Env = append(os.Environ(),
+	environment := append(os.Environ(),
 		updateAPIBaseURLEnv+"="+api.server.URL,
 		"CLAUDE_CONTEXT_BACKGROUND_SYNC=false",
 		"CLAUDE_CONTEXT_FILE_WATCHER=false",
 		"CLAUDE_CONTEXT_RESUME_ON_BOOT=false",
 		"CLAUDE_CONTEXT_TRIGGER_WATCHER=false",
 	)
+	var command *exec.Cmd
+	switch mode {
+	case installedMode:
+		for _, variable := range sandbox.Env(root) {
+			if variable.Value != "" {
+				environment = append(environment, variable.Name+"="+variable.Value)
+			}
+		}
+		if err := os.MkdirAll(filepath.Join(root, "state"), 0o700); err != nil {
+			t.Fatalf("create state root: %v", err)
+		}
+		command = exec.Command(binaryPath)
+	case sandboxMode:
+		command = exec.Command(binaryPath, "sandbox", "--root", root)
+	default:
+		t.Fatalf("unknown daemon mode %d", mode)
+	}
+	command.Env = environment
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
-		t.Fatalf("start %s sandbox: %v", binaryPath, err)
+		t.Fatalf("start %s: %v", binaryPath, err)
 	}
-	daemon := &sandboxDaemon{command: command, root: root, started: time.Now(), done: make(chan error, 1)}
+	daemon := &runningDaemon{command: command, root: root, started: time.Now(), done: make(chan error, 1)}
 	go func() { daemon.done <- command.Wait() }()
 	t.Cleanup(func() { daemon.stop(t) })
 	return daemon
 }
 
-func (daemon *sandboxDaemon) logContents() string {
-	contents, err := os.ReadFile(filepath.Join(daemon.root, sandboxLogPath))
+func (daemon *runningDaemon) logContents() string {
+	contents, err := os.ReadFile(filepath.Join(daemon.root, daemonLogPath))
 	if err != nil {
 		return ""
 	}
 	return string(contents)
 }
 
-func (daemon *sandboxDaemon) waitForLog(t *testing.T, message string) {
+func (daemon *runningDaemon) waitForLog(t *testing.T, message string) {
 	t.Helper()
 	deadline := time.Now().Add(startupTimeout)
 	for time.Now().Before(deadline) {
@@ -193,7 +229,7 @@ func (daemon *sandboxDaemon) waitForLog(t *testing.T, message string) {
 	t.Fatalf("daemon log did not contain %q within %s:\n%s", message, startupTimeout, daemon.logContents())
 }
 
-func (daemon *sandboxDaemon) failIfExited(t *testing.T) {
+func (daemon *runningDaemon) failIfExited(t *testing.T) {
 	t.Helper()
 	select {
 	case err := <-daemon.done:
@@ -203,7 +239,7 @@ func (daemon *sandboxDaemon) failIfExited(t *testing.T) {
 	}
 }
 
-func (daemon *sandboxDaemon) stop(t *testing.T) {
+func (daemon *runningDaemon) stop(t *testing.T) {
 	t.Helper()
 	processGroup := -daemon.command.Process.Pid
 	if err := syscall.Kill(processGroup, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
@@ -220,39 +256,55 @@ func (daemon *sandboxDaemon) stop(t *testing.T) {
 	<-daemon.done
 }
 
-// TestOnlyReleaseArtifactChecksForUpdates starts both builds at once. The
-// release-tagged daemon asks its server for releases after the first check
-// delay. The untagged daemon logs that its scheduler is disabled and sends its
-// server no request for longer than that delay.
-func TestOnlyReleaseArtifactChecksForUpdates(t *testing.T) {
+// TestOnlyInstalledReleaseArtifactChecksForUpdates starts three daemons at
+// once. The installed release-tagged daemon asks its server for releases after
+// the first check delay. The installed untagged daemon and the release-tagged
+// sandbox daemon each log that the scheduler is disabled and send their
+// servers no request for longer than that delay.
+func TestOnlyInstalledReleaseArtifactChecksForUpdates(t *testing.T) {
 	releaseAPI := startReleaseAPIServer(t)
 	localAPI := startReleaseAPIServer(t)
-	releaseDaemon := startSandboxDaemon(t, releaseDaemonPath, releaseAPI)
-	localDaemon := startSandboxDaemon(t, localDaemonPath, localAPI)
+	sandboxAPI := startReleaseAPIServer(t)
+	releaseDaemon := startDaemon(t, releaseDaemonPath, installedMode, releaseAPI)
+	localDaemon := startDaemon(t, localDaemonPath, installedMode, localAPI)
+	sandboxDaemon := startDaemon(t, releaseDaemonPath, sandboxMode, sandboxAPI)
 
 	releaseDaemon.waitForLog(t, daemonIdentityLog)
 	localDaemon.waitForLog(t, daemonIdentityLog)
-	localDaemon.waitForLog(t, schedulerDisabledLog)
+	sandboxDaemon.waitForLog(t, daemonIdentityLog)
+	localDaemon.waitForLog(t, localBuildDisabledLog)
+	sandboxDaemon.waitForLog(t, sandboxDisabledLog)
 
 	deadline := time.Now().Add(firstCheckTimeout)
 	for !releaseAPI.receivedReleaseListRequest() {
 		if time.Now().After(deadline) {
-			t.Fatalf("release-tagged daemon sent no release list request within %s; paths %v\n%s",
+			t.Fatalf("installed release-tagged daemon sent no release list request within %s; paths %v\n%s",
 				firstCheckTimeout, releaseAPI.requestPaths(), releaseDaemon.logContents())
 		}
 		releaseDaemon.failIfExited(t)
 		time.Sleep(pollInterval)
 	}
-	if strings.Contains(releaseDaemon.logContents(), schedulerDisabledLog) {
-		t.Fatalf("release-tagged daemon logged %q:\n%s", schedulerDisabledLog, releaseDaemon.logContents())
+	releaseLog := releaseDaemon.logContents()
+	if strings.Contains(releaseLog, localBuildDisabledLog) || strings.Contains(releaseLog, sandboxDisabledLog) {
+		t.Fatalf("installed release-tagged daemon logged a disabled scheduler:\n%s", releaseLog)
 	}
 
-	silentUntil := localDaemon.started.Add(firstCheckDelay + silenceMargin)
-	for time.Now().Before(silentUntil) {
-		localDaemon.failIfExited(t)
-		time.Sleep(pollInterval)
+	silentDaemons := []struct {
+		name   string
+		daemon *runningDaemon
+		api    *releaseAPIServer
+	}{
+		{name: "installed untagged daemon", daemon: localDaemon, api: localAPI},
+		{name: "release-tagged sandbox daemon", daemon: sandboxDaemon, api: sandboxAPI},
 	}
-	if paths := localAPI.requestPaths(); len(paths) != 0 {
-		t.Fatalf("untagged daemon sent update requests %v", paths)
+	for _, silent := range silentDaemons {
+		silentUntil := silent.daemon.started.Add(firstCheckDelay + silenceMargin)
+		for time.Now().Before(silentUntil) {
+			silent.daemon.failIfExited(t)
+			time.Sleep(pollInterval)
+		}
+		if paths := silent.api.requestPaths(); len(paths) != 0 {
+			t.Fatalf("%s sent update requests %v", silent.name, paths)
+		}
 	}
 }

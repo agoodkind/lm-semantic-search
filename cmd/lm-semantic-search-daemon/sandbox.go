@@ -31,7 +31,8 @@ const (
 // it owns can outlive this call.
 //
 // Isolation comes from where the configuration is rooted, not from a reduced
-// daemon: everything past the resolve is the installed daemon's own path.
+// daemon: everything past the resolve is the installed daemon's own path,
+// except the automatic update scheduler, which a sandbox never starts.
 func runSandbox(rootContext context.Context, arguments []string) error {
 	root, keepRoot, err := resolveSandboxRoot(arguments)
 	if err != nil {
@@ -65,7 +66,7 @@ func runSandbox(rootContext context.Context, arguments []string) error {
 	defer stopServing()
 	goSafe(serveContext, func() { orphanguard.Watch(serveContext, stopServing) })
 
-	return serve(serveContext, resolved)
+	return serve(serveContext, resolved, updateSchedulerNever)
 }
 
 // resolveSandboxRoot returns the directory to root the daemon in and whether the

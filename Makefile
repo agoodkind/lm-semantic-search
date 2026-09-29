@@ -166,8 +166,9 @@ install-live: | $(GO_MK_PREREQS)
 	go test -tags installlive -count=1 ./test/installlive/
 
 # update-live builds the daemon with and without the release build tag, runs
-# each build through the sandbox command against a local release API server, and
-# checks which build asks that server for releases. It writes only into test
+# both builds as installed daemons and the tagged build as a sandbox against
+# local release API servers, and checks that only the installed tagged daemon
+# asks for releases. It writes only into test
 # temporary directories and waits for the scheduler's first check, which takes
 # about a minute. The CI workflow runs it on every push.
 .PHONY: update-live

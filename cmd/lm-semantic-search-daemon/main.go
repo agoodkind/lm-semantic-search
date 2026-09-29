@@ -148,15 +148,30 @@ func run(rootContext context.Context) error {
 		}
 	}
 
-	return serve(rootContext, cfg)
+	return serve(rootContext, cfg, updateSchedulerByBuild)
 }
+
+// updateSchedulerPolicy selects whether serve starts the automatic update
+// scheduler.
+type updateSchedulerPolicy int
+
+const (
+	// updateSchedulerByBuild starts the scheduler when the build is a release
+	// artifact. The installed daemon uses it.
+	updateSchedulerByBuild updateSchedulerPolicy = iota + 1
+	// updateSchedulerNever never starts the scheduler. A sandbox daemon uses
+	// it. The scheduler replaces binaries in the executable's directory, and a
+	// sandbox started from the install directory would replace the production
+	// binaries.
+	updateSchedulerNever
+)
 
 // serve runs the daemon against an already-resolved configuration and returns
 // when the process is signalled, a client asks it to stop, or serving fails. It
-// is split from run so a throwaway daemon reaches the same serving path rather
-// than a reduced copy of it: where the configuration was rooted is the only
-// difference between an installed daemon and a sandbox.
-func serve(rootContext context.Context, cfg config.Config) error {
+// is split from run so a throwaway daemon runs the same serving path rather
+// than a reduced copy of it. The configuration root and the update scheduler
+// policy are the differences between an installed daemon and a sandbox.
+func serve(rootContext context.Context, cfg config.Config, updatePolicy updateSchedulerPolicy) error {
 	var err error
 	installConcernRouter(cfg.LogsDir, cfg.LogPath, rotationConfig(cfg))
 	metrics.Register()
@@ -226,7 +241,11 @@ func serve(rootContext context.Context, cfg config.Config) error {
 		default:
 		}
 	}))
-	startUpdateScheduler(runtimeContext, cfg, shutdownCh)
+	if updatePolicy == updateSchedulerByBuild {
+		startUpdateScheduler(runtimeContext, cfg, shutdownCh)
+	} else {
+		slog.InfoContext(rootContext, "update scheduler disabled; sandbox daemon")
+	}
 
 	serveErrCh := make(chan error, 1)
 	goSafe(rootContext, func() {
