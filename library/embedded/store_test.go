@@ -26,8 +26,10 @@ const (
 	scoreTolerance = 1e-9
 	// bindRaceAttempts repeats the first-bind race on fresh roots.
 	bindRaceAttempts = 32
-	catalogUUIDA     = "11111111-1111-4111-8111-111111111111"
-	catalogUUIDB     = "22222222-2222-4222-8222-222222222222"
+	// fanOutVectorCount is the number of library-format IDs in the fan-out test.
+	fanOutVectorCount = 64
+	catalogUUIDA      = "11111111-1111-4111-8111-111111111111"
+	catalogUUIDB      = "22222222-2222-4222-8222-222222222222"
 )
 
 func encodeBinding(t *testing.T, catalogUUID string, writerHost string, dimension int) string {
@@ -266,6 +268,86 @@ func TestPutCanonicalThenVerifyStrong(t *testing.T) {
 	putRecords(t, store, records)
 	if err := store.VerifyStrong(context.Background(), identities); err != nil {
 		t.Fatalf("VerifyStrong: %v", err)
+	}
+}
+
+// isFanOutName reports whether name is two lowercase hex characters.
+func isFanOutName(name string) bool {
+	if len(name) != 2 {
+		return false
+	}
+	for _, character := range name {
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			return false
+		}
+	}
+	return true
+}
+
+// vectorDirectoryCounts walks root/vectors and returns the number of vector
+// files in each fan-out directory, keyed by the path relative to root/vectors.
+// It fails t when a file is not at <2 hex>/<2 hex>/<id>.vec for an ID in ids.
+func vectorDirectoryCounts(t *testing.T, root string, ids map[string]struct{}) map[string]int {
+	t.Helper()
+	vectorsRoot := filepath.Join(root, "vectors")
+	counts := make(map[string]int)
+	for _, path := range vectorFiles(t, vectorsRoot) {
+		relative, err := filepath.Rel(vectorsRoot, path)
+		if err != nil {
+			t.Fatalf("relative path of %s: %v", path, err)
+		}
+		parts := strings.Split(relative, string(filepath.Separator))
+		if len(parts) != 3 || !isFanOutName(parts[0]) || !isFanOutName(parts[1]) {
+			t.Fatalf("vector file %s is not at vectors/<2 hex>/<2 hex>/<id>.vec", relative)
+		}
+		id, found := strings.CutSuffix(parts[2], ".vec")
+		if _, known := ids[id]; !found || !known {
+			t.Fatalf("vector file %s does not name a written vector ID", relative)
+		}
+		counts[filepath.Join(parts[0], parts[1])]++
+	}
+	return counts
+}
+
+func TestLibraryVectorIDsSpreadAcrossFanOutDirectories(t *testing.T) {
+	t.Parallel()
+	store, root := newBoundStore(t)
+	random := rand.New(rand.NewPCG(13, 13))
+	records := make([]library.VectorRecord, 0, fanOutVectorCount)
+	identities := make([]library.VectorIdentity, 0, fanOutVectorCount)
+	ids := make(map[string]struct{}, fanOutVectorCount)
+	for range fanOutVectorCount {
+		id := fmt.Sprintf("v1_%016x%016x", random.Uint64(), random.Uint64())
+		record := newRecord(id, randomVector(random))
+		records = append(records, record)
+		identities = append(identities, identityOf(record))
+		ids[id] = struct{}{}
+	}
+	putRecords(t, store, records)
+	if err := store.VerifyStrong(context.Background(), identities); err != nil {
+		t.Fatalf("VerifyStrong: %v", err)
+	}
+
+	counts := vectorDirectoryCounts(t, root, ids)
+	firstLevel := make(map[string]struct{})
+	fileCount := 0
+	for directory, count := range counts {
+		firstLevel[filepath.Dir(directory)] = struct{}{}
+		fileCount += count
+		if count == fanOutVectorCount {
+			t.Fatalf("directory vectors/%s contains all %d vector files", directory, count)
+		}
+	}
+	if fileCount != fanOutVectorCount {
+		t.Fatalf("found %d vector files, want %d", fileCount, fanOutVectorCount)
+	}
+	if len(firstLevel) < 2 || len(counts) < 2 {
+		t.Fatalf(
+			"vector files occupy %d first-level and %d second-level directories, want more than one of each: %v",
+			len(firstLevel),
+			len(counts),
+			counts,
+		)
 	}
 }
 

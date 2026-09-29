@@ -1,12 +1,15 @@
 // Package embedded implements [library.VectorStore] in one local directory.
 // The directory stores one vector pool: a catalog binding file and one file for
-// each canonical vector. ScoreExact reads every requested vector and computes
-// its exact cosine similarity. The package builds no approximate index.
+// each canonical vector. The file of vector ID id is
+// vectors/<hex of SHA-256(id)[0]>/<hex of SHA-256(id)[1]>/<id>.vec under the
+// root. ScoreExact reads every requested vector and computes its exact cosine
+// similarity. The package builds no approximate index.
 package embedded
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -36,8 +39,6 @@ const (
 	vectorFileHeader = "lms-embedded-vector-v1\n"
 	// poolIdentityPrefix starts the value of [Store.PoolIdentity].
 	poolIdentityPrefix = "embedded:"
-	// missingFanOutByte replaces an absent ID byte in a fan-out directory name.
-	missingFanOutByte = 0
 )
 
 // Config selects the pool directory of a [Store].
@@ -295,15 +296,15 @@ func (store *Store) readBinding(ctx context.Context) (storebinding.Binding, erro
 }
 
 // vectorPath returns the file path of id. The two fan-out directories are the
-// hex values of the first and second bytes of id.
+// hex values of the first and second bytes of the SHA-256 digest of id. The
+// digest bytes vary across library IDs, which all start with the same prefix.
 func (store *Store) vectorPath(id string) string {
-	fanOut := []byte{missingFanOutByte, missingFanOutByte}
-	copy(fanOut, id)
+	sum := sha256.Sum256([]byte(id))
 	return filepath.Join(
 		store.root,
 		vectorsDirectoryName,
-		hex.EncodeToString(fanOut[:1]),
-		hex.EncodeToString(fanOut[1:]),
+		hex.EncodeToString(sum[:1]),
+		hex.EncodeToString(sum[1:2]),
 		id+vectorFileSuffix,
 	)
 }
