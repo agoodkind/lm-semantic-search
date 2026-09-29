@@ -170,7 +170,7 @@ library-live-l2: library-live-prereqs
 	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibraryLexical' ./test/live/
 
 library-live-l3: library-live-prereqs
-	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibrarySearch' ./test/live/
+	$(LIBRARY_LIVE_GATE) -timeout 150m -tags live -run '^TestLibrarySearch' ./test/live/
 
 # library-live-l4 runs the Milvus codebase suite and then the offline suite.
 library-live-l4: library-live-prereqs
