@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,13 +28,14 @@ func TestAuthenticatedProxyAddsTokenAndPreservesRequest(t *testing.T) {
 		t.Fatalf("Parse() error = %v", err)
 	}
 	var receivedRequest *http.Request
-	proxy := authenticatedProxy(target, "ci-token")
+	proxy := authenticatedProxy(target, "ci-token", githubRelease{TagName: "202609291328-112-582d81e"})
 	proxy.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		receivedRequest = request.Clone(request.Context())
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader("ok")),
+			Body:       io.NopCloser(strings.NewReader("[]")),
+			Request:    request,
 		}, nil
 	})
 	recorder := httptest.NewRecorder()
@@ -186,4 +188,90 @@ func TestRemoveTestRootRejectsTempDirectory(t *testing.T) {
 	if err := removeTestRoot(os.TempDir()); err == nil {
 		t.Fatal("removeTestRoot() error = nil, want refusal")
 	}
+}
+
+const (
+	proxyTestNewerTag  = "202609291344-114-73e8f0b"
+	proxyTestTargetTag = "202609291328-112-582d81e"
+	proxyTestOlderTag  = "202609291250-111-1e81c83"
+	proxyTestReleases  = `[
+{"tag_name":"` + proxyTestNewerTag + `","draft":false,"prerelease":true,"published_at":"2026-09-29T13:53:08Z","assets":[{"name":"newer.tar.gz"}]},
+{"tag_name":"` + proxyTestTargetTag + `","draft":false,"prerelease":true,"published_at":"2026-09-29T13:41:35Z","assets":[{"name":"target.tar.gz","digest":"sha256:abc"}]},
+{"tag_name":"` + proxyTestOlderTag + `","draft":false,"prerelease":true,"published_at":"2026-09-29T12:57:00Z","assets":[{"name":"older.tar.gz"}]}
+]`
+	proxyTestAttestationPath = "/repos/fork/lms/attestations/sha256:abc"
+	proxyTestAttestationBody = `{"attestations":[{"bundle":{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}}]}`
+)
+
+// TestAuthenticatedProxyHidesReleasesPublishedAfterTarget sends the daemon's
+// release list and attestation requests through the proxy to a local GitHub
+// API server. The release list from the proxy must contain the target and the
+// older release, with their assets, and omit the release published after the
+// target. The attestation response must pass through unchanged.
+func TestAuthenticatedProxyHidesReleasesPublishedAfterTarget(t *testing.T) {
+	t.Parallel()
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/repos/fork/lms/releases":
+			_, _ = io.WriteString(writer, proxyTestReleases)
+		case proxyTestAttestationPath:
+			_, _ = io.WriteString(writer, proxyTestAttestationBody)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	newest := githubRelease{
+		TagName:     proxyTestTargetTag,
+		PublishedAt: time.Date(2026, 9, 29, 13, 41, 35, 0, time.UTC),
+	}
+	proxy := httptest.NewServer(authenticatedProxy(target, "ci-token", newest))
+	t.Cleanup(proxy.Close)
+
+	listBody := getProxyBody(t, proxy.URL+"/repos/fork/lms/releases?per_page=100")
+	var releases []struct {
+		TagName string `json:"tag_name"`
+		Assets  []struct {
+			Name   string `json:"name"`
+			Digest string `json:"digest"`
+		} `json:"assets"`
+	}
+	if err := json.Unmarshal([]byte(listBody), &releases); err != nil {
+		t.Fatalf("decode proxied release list %q: %v", listBody, err)
+	}
+	tags := make([]string, 0, len(releases))
+	for _, release := range releases {
+		tags = append(tags, release.TagName)
+	}
+	if strings.Join(tags, ",") != proxyTestTargetTag+","+proxyTestOlderTag {
+		t.Fatalf("proxied release tags = %v, want the target and the older release", tags)
+	}
+	if len(releases[0].Assets) != 1 || releases[0].Assets[0].Digest != "sha256:abc" {
+		t.Fatalf("proxied target assets = %+v, want the target archive digest", releases[0].Assets)
+	}
+
+	if got := getProxyBody(t, proxy.URL+proxyTestAttestationPath); got != proxyTestAttestationBody {
+		t.Fatalf("proxied attestation body = %q, want the upstream body", got)
+	}
+}
+
+func getProxyBody(t *testing.T, requestURL string) string {
+	t.Helper()
+	response, err := http.Get(requestURL)
+	if err != nil {
+		t.Fatalf("GET %s: %v", requestURL, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read %s: %v", requestURL, err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status = %d, body %q", requestURL, response.StatusCode, body)
+	}
+	return string(body)
 }
