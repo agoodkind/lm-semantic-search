@@ -94,3 +94,28 @@ jobs:
         env:
           CLAUDE_CONTEXTD_MODEL_CACHE_ROOT: ${{ runner.temp }}/offline-model-cache
         run: make offline-live
+
+  # install-live installs the latest release with the CLI install command and
+  # runs update apply from a CLI stamped with an old version. It downloads the
+  # newest GitHub release and verifies its attestations, and it fails when a
+  # daemon candidate that cannot load libonnxruntime changes any installed
+  # binary.
+  install-live:
+    name: Install Live
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      attestations: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test release install and update apply
+        run: make install-live

@@ -159,9 +159,11 @@ milvus-integration: | $(GO_MK_PREREQS)
 	LMS_MILVUS_INTEGRATION=1 go test -tags milvusintegration -count=1 -timeout 60m ./test/milvusintegration/
 
 # install-live builds the CLI and runs its install command against the latest
-# GitHub release and the pinned ONNX Runtime archive. It writes only into test
-# temporary directories and always passes --no-service, so the operator's
-# installed binaries and daemon service stay untouched. It needs network access.
+# GitHub release and the pinned ONNX Runtime archive. It also runs update apply
+# from a CLI stamped with an old version against the newest release. It writes
+# only into test temporary directories and always passes --no-service. The
+# operator's installed binaries and daemon service are never written. It needs
+# network access, and the CI workflow runs it on every push.
 install-live: | $(GO_MK_PREREQS)
 	go test -tags installlive -count=1 ./test/installlive/
 
