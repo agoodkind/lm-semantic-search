@@ -177,10 +177,13 @@ var catalogSchemaStatements = []string{
 		owner_id TEXT NOT NULL,
 		row_key TEXT NOT NULL,
 		source_blob_id TEXT NOT NULL,
+		vector_id TEXT NOT NULL,
 		effective_scalars TEXT NOT NULL,
 		score REAL NOT NULL,
 		PRIMARY KEY (snapshot_id, ordinal)
 	)`,
+	`CREATE INDEX IF NOT EXISTS search_results_vector_id ON search_results (vector_id)`,
+	`CREATE INDEX IF NOT EXISTS search_results_source_blob_id ON search_results (source_blob_id)`,
 }
 
 // createCatalogSchema creates every table and index and records the schema
