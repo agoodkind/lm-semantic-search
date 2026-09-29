@@ -1079,8 +1079,10 @@ message SearchConversationsResponse {
   repeated ConversationSearchResult results = 1;
   string display_text = 2;
   DependencyHealth dependency_health = 3;
-  // ranking_truncated is true when more than 16,384 rows match the filter.
-  // The ranking then covers only its first 16,384 rows, and pages stop there.
+  // ranking_truncated is true when the ranking does not contain every row that
+  // matches the filter: more than 16,384 rows match, or the ranking search
+  // returned fewer rows than it requested. Pages stop at the end of the
+  // ranking.
   bool ranking_truncated = 4;
   // ranking_token identifies the ranking that served this response. A client
   // that sends it with the next page reads the same ranking. Empty when the
@@ -1135,8 +1137,10 @@ message SearchWithinConversationResponse {
   string indexed_fingerprint = 2;
   string display_text = 3;
   DependencyHealth dependency_health = 4;
-  // ranking_truncated is true when more than 16,384 rows match the filter.
-  // The ranking then covers only its first 16,384 rows, and pages stop there.
+  // ranking_truncated is true when the ranking does not contain every row that
+  // matches the filter: more than 16,384 rows match, or the ranking search
+  // returned fewer rows than it requested. Pages stop at the end of the
+  // ranking.
   bool ranking_truncated = 5;
   // ranking_token identifies the ranking that served this response. A client
   // that sends it with the next page reads the same ranking. Empty when the
@@ -1279,8 +1283,10 @@ message SearchCollectionResponse {
   repeated CollectionSearchHit hits = 1;
   string display_text = 2;
   DependencyHealth dependency_health = 3;
-  // ranking_truncated is true when more than 16,384 rows match the filter.
-  // The ranking then covers only its first 16,384 rows, and pages stop there.
+  // ranking_truncated is true when the ranking does not contain every row that
+  // matches the filter: more than 16,384 rows match, or the ranking search
+  // returned fewer rows than it requested. Pages stop at the end of the
+  // ranking.
   bool ranking_truncated = 4;
   // ranking_token identifies the ranking that served this response. A client
   // that sends it with the next page reads the same ranking. Empty when the

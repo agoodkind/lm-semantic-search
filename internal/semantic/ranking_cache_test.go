@@ -34,8 +34,39 @@ func TestRankingDepthBoundaries(t *testing.T) {
 		if got := RankingDepth(testCase.eligible); got != testCase.wantDepth {
 			t.Fatalf("RankingDepth(%d) = %d, want %d", testCase.eligible, got, testCase.wantDepth)
 		}
-		if got := RankingTruncated(testCase.eligible); got != testCase.wantTruncated {
-			t.Fatalf("RankingTruncated(%d) = %t, want %t", testCase.eligible, got, testCase.wantTruncated)
+		if got := RankingTruncated(testCase.eligible, testCase.wantDepth); got != testCase.wantTruncated {
+			t.Fatalf("RankingTruncated(%d, %d) = %t, want %t", testCase.eligible, testCase.wantDepth, got, testCase.wantTruncated)
+		}
+	}
+}
+
+// TestRankingTruncationReportsEveryMissingRowCause proves a ranking is
+// truncated when more rows match than CollectionRankingDepth, when the
+// ranking search returned fewer rows than RankingDepth, including a filter
+// with fewer than CollectionRankingDepth eligible rows, and when both apply.
+// The short counts are the run 2 dense probe results for q005 and q045.
+func TestRankingTruncationReportsEveryMissingRowCause(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		eligible int64
+		ranked   int
+		want     string
+	}{
+		{name: "no eligible row", eligible: 0, ranked: 0, want: ""},
+		{name: "complete filtered ranking", eligible: 9_000, ranked: 9_000, want: ""},
+		{name: "short filtered ranking", eligible: 9_000, ranked: 2_935, want: TruncationShortSearch},
+		{name: "complete ranking at the cap", eligible: 16_384, ranked: 16_384, want: ""},
+		{name: "one row short at the cap", eligible: 16_384, ranked: 16_383, want: TruncationShortSearch},
+		{name: "depth cap", eligible: 16_385, ranked: 16_384, want: TruncationDepthCap},
+		{name: "depth cap and short ranking", eligible: 38_128, ranked: 3_550, want: TruncationDepthCap + " and " + TruncationShortSearch},
+	} {
+		if got := RankingTruncation(testCase.eligible, testCase.ranked); got != testCase.want {
+			t.Fatalf("%s: RankingTruncation(%d, %d) = %q, want %q", testCase.name, testCase.eligible, testCase.ranked, got, testCase.want)
+		}
+		if got := RankingTruncated(testCase.eligible, testCase.ranked); got != (testCase.want != "") {
+			t.Fatalf("%s: RankingTruncated(%d, %d) = %t", testCase.name, testCase.eligible, testCase.ranked, got)
 		}
 	}
 }
@@ -151,7 +182,7 @@ func rankingOf(eligible int64, count int, prefix string) collectionRanking {
 			1-float64(index)/float64(count+1),
 		))
 	}
-	return collectionRanking{Candidates: candidates, Eligible: eligible, Truncated: RankingTruncated(eligible), CallerState: ""}
+	return collectionRanking{Candidates: candidates, Eligible: eligible, Truncated: RankingTruncated(eligible, count), CallerState: ""}
 }
 
 // TestRankingCacheMissesOtherKeysAndCounts proves a ranking serves only its

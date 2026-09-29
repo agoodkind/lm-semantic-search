@@ -13,6 +13,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
+	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc/peer"
@@ -151,10 +152,10 @@ func PageStart(offset int32, selected int) int {
 }
 
 // CollectionSearchResult is the outcome of one collection search. Hits is the
-// selected page. RankingTruncated is true when more rows matched the filter
-// than CollectionRankingDepth, and the ranking then covers only the first
-// CollectionRankingDepth rows. CallerState is the CollectionSearch.CallerState
-// stored with the ranking that served Hits.
+// selected page. RankingTruncated is true when the ranking misses matching
+// rows: more rows matched the filter than CollectionRankingDepth, or the
+// ranking search returned fewer rows than it requested. CallerState is the
+// CollectionSearch.CallerState stored with the ranking that served Hits.
 type CollectionSearchResult struct {
 	Hits             []CollectionHit
 	RankingTruncated bool
@@ -311,21 +312,29 @@ func (service *Service) computeRanking(ctx context.Context, collectionName strin
 	if err != nil {
 		return failed, err
 	}
+	// A dense search returns at most depth rows, and a hybrid ranking contains
+	// every row of its dense leg. A ranking with fewer than depth rows comes
+	// from a dense leg that returned fewer rows than it requested.
+	truncation := RankingTruncation(eligible, len(candidates))
+	if truncation != "" {
+		level := slog.LevelInfo
+		if len(candidates) < depth {
+			level = slog.LevelWarn
+		}
+		slog.Log(ctx, level, "collection ranking does not contain every eligible row",
+			"collection", collectionName, "cause", truncation, "eligible", eligible, "requested", depth, "returned", len(candidates), "peer", peerInfo.String())
+	}
 	if grouped && IsConversationDeclaration(search.Declaration) && groupColumn.Name == search.Declaration.ItemIDColumn {
 		candidates, err = service.resolveLegacyConversationGroups(ctx, collectionName, groupColumn.Name, candidates)
 		if err != nil {
 			return failed, err
 		}
 	}
-	if len(candidates) < depth {
-		slog.InfoContext(ctx, "collection ranking returned fewer rows than its depth",
-			"collection", collectionName, "eligible", eligible, "depth", depth, "ranked", len(candidates), "peer", peerInfo.String())
-	}
 	sortRankedCandidates(candidates)
 	return collectionRanking{
 		Candidates:  candidates,
 		Eligible:    eligible,
-		Truncated:   RankingTruncated(eligible),
+		Truncated:   truncation != "",
 		CallerState: search.CallerState,
 	}, nil
 }
@@ -442,7 +451,8 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 		outputFields = append(outputFields, groupColumn.Name)
 	}
 	if service.cfg.HybridMode {
-		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, depth, entity.FloatVector(queryVector))
+		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, depth, entity.FloatVector(queryVector)).
+			WithAnnParam(rankingAnnParam(depth))
 		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, depth, entity.Text(rawQuery))
 		if compiled.Expression != "" {
 			denseRequest = denseRequest.WithFilter(compiled.Expression)
@@ -469,7 +479,8 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 		collectionName,
 		depth,
 		[]entity.Vector{entity.FloatVector(queryVector)},
-	).WithANNSField(denseVectorFieldName).WithOutputFields(outputFields...).WithConsistencyLevel(rankingConsistency)
+	).WithANNSField(denseVectorFieldName).WithAnnParam(rankingAnnParam(depth)).
+		WithOutputFields(outputFields...).WithConsistencyLevel(rankingConsistency)
 	if compiled.Expression != "" {
 		searchOption = searchOption.WithFilter(compiled.Expression)
 	}
@@ -490,6 +501,14 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 		return nil, searchErr(ctx, "dense ranking search", collectionName, err)
 	}
 	return rankedCandidatesFromResultSets(ctx, collectionName, resultSets, groupColumn, grouped)
+}
+
+// rankingAnnParam returns the dense search parameters of a ranking search at
+// depth. It sets ef, the HNSW search list size, to depth.
+func rankingAnnParam(depth int) index.AnnParam {
+	params := index.NewCustomAnnParam()
+	params.WithExtraParam("ef", depth)
+	return params
 }
 
 func bindAnnTemplateParam(request *milvusclient.AnnRequest, param filterTemplateParam) *milvusclient.AnnRequest {

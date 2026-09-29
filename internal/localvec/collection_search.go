@@ -128,7 +128,7 @@ func (store *Store) SearchCollection(
 	}
 	return semantic.CollectionSearchResult{
 		Hits:             hits,
-		RankingTruncated: semantic.RankingTruncated(eligible),
+		RankingTruncated: semantic.RankingTruncated(eligible, len(candidates)),
 		CallerState:      search.CallerState,
 		RankingToken:     "",
 	}, nil

@@ -6641,8 +6641,10 @@ type SearchConversationsResponse struct {
 	Results          []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
 	DisplayText      string                      `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
 	DependencyHealth *DependencyHealth           `protobuf:"bytes,3,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
-	// ranking_truncated is true when more than 16,384 rows match the filter.
-	// The ranking then covers only its first 16,384 rows, and pages stop there.
+	// ranking_truncated is true when the ranking does not contain every row that
+	// matches the filter: more than 16,384 rows match, or the ranking search
+	// returned fewer rows than it requested. Pages stop at the end of the
+	// ranking.
 	RankingTruncated bool `protobuf:"varint,4,opt,name=ranking_truncated,json=rankingTruncated,proto3" json:"ranking_truncated,omitempty"`
 	// ranking_token identifies the ranking that served this response. A client
 	// that sends it with the next page reads the same ranking. Empty when the
@@ -6847,8 +6849,10 @@ type SearchWithinConversationResponse struct {
 	IndexedFingerprint string            `protobuf:"bytes,2,opt,name=indexed_fingerprint,json=indexedFingerprint,proto3" json:"indexed_fingerprint,omitempty"`
 	DisplayText        string            `protobuf:"bytes,3,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
 	DependencyHealth   *DependencyHealth `protobuf:"bytes,4,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
-	// ranking_truncated is true when more than 16,384 rows match the filter.
-	// The ranking then covers only its first 16,384 rows, and pages stop there.
+	// ranking_truncated is true when the ranking does not contain every row that
+	// matches the filter: more than 16,384 rows match, or the ranking search
+	// returned fewer rows than it requested. Pages stop at the end of the
+	// ranking.
 	RankingTruncated bool `protobuf:"varint,5,opt,name=ranking_truncated,json=rankingTruncated,proto3" json:"ranking_truncated,omitempty"`
 	// ranking_token identifies the ranking that served this response. A client
 	// that sends it with the next page reads the same ranking. Empty when the
@@ -7818,8 +7822,10 @@ type SearchCollectionResponse struct {
 	Hits             []*CollectionSearchHit `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`
 	DisplayText      string                 `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
 	DependencyHealth *DependencyHealth      `protobuf:"bytes,3,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
-	// ranking_truncated is true when more than 16,384 rows match the filter.
-	// The ranking then covers only its first 16,384 rows, and pages stop there.
+	// ranking_truncated is true when the ranking does not contain every row that
+	// matches the filter: more than 16,384 rows match, or the ranking search
+	// returned fewer rows than it requested. Pages stop at the end of the
+	// ranking.
 	RankingTruncated bool `protobuf:"varint,4,opt,name=ranking_truncated,json=rankingTruncated,proto3" json:"ranking_truncated,omitempty"`
 	// ranking_token identifies the ranking that served this response. A client
 	// that sends it with the next page reads the same ranking. Empty when the

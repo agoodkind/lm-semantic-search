@@ -58,11 +58,36 @@ func RankingDepth(eligible int64) int {
 	return int(eligible)
 }
 
-// RankingTruncated reports whether more rows match the filter than one
-// ranking search returns. Pages of such a search stop at the first
-// CollectionRankingDepth rows of the ranking.
-func RankingTruncated(eligible int64) bool {
-	return eligible > CollectionRankingDepth
+// Causes RankingTruncation returns for a ranking that does not contain every
+// eligible row.
+const (
+	// TruncationDepthCap reports more eligible rows than CollectionRankingDepth.
+	TruncationDepthCap = "depth cap"
+	// TruncationShortSearch reports a ranking search that returned fewer rows
+	// than RankingDepth(eligible).
+	TruncationShortSearch = "short ranking search"
+)
+
+// RankingTruncation returns why a ranking of ranked rows over eligible matching
+// rows does not contain every eligible row: TruncationDepthCap,
+// TruncationShortSearch, or both joined with " and ". It returns an empty
+// string for a ranking that contains every eligible row.
+func RankingTruncation(eligible int64, ranked int) string {
+	causes := make([]string, 0, 2)
+	if eligible > CollectionRankingDepth {
+		causes = append(causes, TruncationDepthCap)
+	}
+	if ranked < RankingDepth(eligible) {
+		causes = append(causes, TruncationShortSearch)
+	}
+	return strings.Join(causes, " and ")
+}
+
+// RankingTruncated reports whether a ranking of ranked rows over eligible
+// matching rows misses eligible rows. Pages of such a ranking stop at its last
+// row.
+func RankingTruncated(eligible int64, ranked int) bool {
+	return RankingTruncation(eligible, ranked) != ""
 }
 
 // collectionRanking is one computed ranking of a collection search: the
