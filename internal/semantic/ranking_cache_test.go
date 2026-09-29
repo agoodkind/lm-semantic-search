@@ -1,7 +1,6 @@
 package semantic
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -486,26 +485,25 @@ func TestRankingTokenReadsItsRankingAfterWrites(t *testing.T) {
 	if issued := cache.issueToken(plain.digest()); issued != "" {
 		t.Fatal("a write kept a ranking that no token names")
 	}
-	ranking, err := cache.lookupToken(token, key.CollectionID, after.requestDigest())
-	if err != nil {
-		t.Fatalf("lookupToken after a write returned %v", err)
+	ranking, reason := cache.readToken(token, key.CollectionID, after.requestDigest())
+	if reason != "" {
+		t.Fatalf("readToken after a write returned %q", reason)
 	}
 	if len(ranking.Candidates) != 10 || ranking.Candidates[0].PrimaryKey != "token-0000" {
-		t.Fatalf("lookupToken returned %d candidates starting %v, want the stored ranking", len(ranking.Candidates), ranking.Candidates)
+		t.Fatalf("readToken returned %d candidates starting %v, want the stored ranking", len(ranking.Candidates), ranking.Candidates)
 	}
 	otherQuery := key
 	otherQuery.Query = "another query"
-	if _, err := cache.lookupToken(token, key.CollectionID, otherQuery.requestDigest()); !errors.Is(err, ErrRankingTokenMismatch) {
-		t.Fatalf("lookupToken for another query returned %v, want ErrRankingTokenMismatch", err)
+	if _, reason := cache.readToken(token, key.CollectionID, otherQuery.requestDigest()); reason != tokenReasonMismatch {
+		t.Fatalf("readToken for another query returned %q, want %q", reason, tokenReasonMismatch)
 	}
-	if _, err := cache.lookupToken(token, key.CollectionID+1, key.requestDigest()); !errors.Is(err, ErrRankingExpired) {
-		t.Fatalf("lookupToken for a recreated collection returned %v, want ErrRankingExpired", err)
+	if _, reason := cache.readToken(token, key.CollectionID+1, key.requestDigest()); reason != tokenReasonRecreated {
+		t.Fatalf("readToken for a recreated collection returned %q, want %q", reason, tokenReasonRecreated)
 	}
 }
 
-// TestRankingTokenExpires proves a token fails with ErrRankingExpired once
-// RankingCacheTTL passes without a read, and for an unknown or malformed
-// token.
+// TestRankingTokenExpires proves a token reads no ranking once RankingCacheTTL
+// passes without a read, and that an unknown or malformed token reads none.
 func TestRankingTokenExpires(t *testing.T) {
 	t.Parallel()
 
@@ -515,13 +513,17 @@ func TestRankingTokenExpires(t *testing.T) {
 	cache.put(key, rankingOf(5, 5, "expiring"))
 	token := cache.issueToken(key.digest())
 	clock.now = clock.now.Add(RankingCacheTTL - time.Second)
-	if _, err := cache.lookupToken(token, key.CollectionID, key.requestDigest()); err != nil {
-		t.Fatalf("lookupToken one second before expiry returned %v", err)
+	if _, reason := cache.readToken(token, key.CollectionID, key.requestDigest()); reason != "" {
+		t.Fatalf("readToken one second before expiry returned %q", reason)
 	}
 	clock.now = clock.now.Add(RankingCacheTTL)
-	for _, candidate := range []string{token, rankingTokenPrefix + "unknown", "malformed"} {
-		if _, err := cache.lookupToken(candidate, key.CollectionID, key.requestDigest()); !errors.Is(err, ErrRankingExpired) {
-			t.Fatalf("lookupToken(%q) returned %v, want ErrRankingExpired", candidate, err)
+	for candidate, want := range map[string]string{
+		token:                          tokenReasonExpired,
+		rankingTokenPrefix + "unknown": tokenReasonUnknown,
+		"malformed":                    tokenReasonMalformed,
+	} {
+		if _, reason := cache.readToken(candidate, key.CollectionID, key.requestDigest()); reason != want {
+			t.Fatalf("readToken(%q) returned %q, want %q", candidate, reason, want)
 		}
 	}
 }

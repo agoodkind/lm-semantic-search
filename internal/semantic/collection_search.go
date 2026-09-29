@@ -247,8 +247,12 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 		CallerState:     search.CallerState,
 	}
 	if search.RankingToken != "" {
-		ranking, err := service.rankings.lookupToken(search.RankingToken, collectionID, key.requestDigest())
-		if err != nil {
+		ranking, reason := service.rankings.readToken(search.RankingToken, collectionID, key.requestDigest())
+		if reason != "" {
+			err := ErrRankingTokenMismatch
+			if reason != tokenReasonMismatch {
+				err = fmt.Errorf("%w: %s", ErrRankingExpired, reason)
+			}
 			slog.WarnContext(ctx, "ranking token rejected", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 			return emptyResult, err
 		}

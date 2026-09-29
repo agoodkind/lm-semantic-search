@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"hash"
 	"log/slog"
 	"slices"
@@ -344,27 +343,6 @@ func (cache *rankingCache) issueToken(digest string) string {
 	return rankingTokenPrefix + digest
 }
 
-// lookupToken returns the unexpired ranking that token names, whatever writes
-// followed it. It fails with an error that wraps [ErrRankingExpired] for an
-// unknown, malformed, or expired token or a ranking of another collection ID,
-// and with an error that wraps [ErrRankingTokenMismatch] when requestDigest
-// differs from the ranking's request digest. A read restarts the expiry period.
-func (cache *rankingCache) lookupToken(token string, collectionID int64, requestDigest string) (collectionRanking, error) {
-	var missing collectionRanking
-	ranking, reason := cache.readToken(token, collectionID, requestDigest)
-	switch reason {
-	case "":
-		return ranking, nil
-	case tokenReasonMismatch:
-		slog.Warn("ranking token rejected", "reason", reason)
-		return missing, ErrRankingTokenMismatch
-	default:
-		err := fmt.Errorf("%w: %s", ErrRankingExpired, reason)
-		slog.Warn("ranking token rejected", "reason", reason)
-		return missing, err
-	}
-}
-
 // Reasons readToken gives for a token that reads no ranking.
 const (
 	tokenReasonMalformed = "malformed token"
@@ -374,8 +352,11 @@ const (
 	tokenReasonMismatch  = "the token belongs to another query"
 )
 
-// readToken returns the ranking token names, or an empty ranking and the
-// reason no ranking was read.
+// readToken returns the unexpired ranking that token names, whatever writes
+// followed it, or an empty ranking and the reason no ranking was read: a
+// malformed or unknown token, an expired ranking, a ranking of another
+// collection ID, or a requestDigest that differs from the ranking's request
+// digest. A read restarts the expiry period.
 func (cache *rankingCache) readToken(token string, collectionID int64, requestDigest string) (collectionRanking, string) {
 	var missing collectionRanking
 	digest, prefixed := strings.CutPrefix(token, rankingTokenPrefix)
