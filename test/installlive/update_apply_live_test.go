@@ -95,7 +95,11 @@ func newUpdateApplyDirectory(t *testing.T, withONNXRuntime bool) updateApplyDire
 		if err != nil {
 			t.Fatalf("resolve ONNX Runtime library names: %v", err)
 		}
-		if err := onnxruntimedist.InstallSharedLibrary(context.Background(), http.DefaultClient, archive, names, installDir); err != nil {
+		archiveDirectory, err := onnxruntimedist.FetchArchive(context.Background(), http.DefaultClient, archive, t.TempDir())
+		if err != nil {
+			t.Fatalf("fetch ONNX Runtime archive: %v", err)
+		}
+		if err := onnxruntimedist.InstallLibrary(archiveDirectory, names, installDir); err != nil {
 			t.Fatalf("install ONNX Runtime beside the binaries: %v", err)
 		}
 	}

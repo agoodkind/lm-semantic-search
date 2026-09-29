@@ -16,6 +16,7 @@ import (
 
 	"goodkind.io/go-makefile/selfupdate"
 	"goodkind.io/lm-semantic-search/internal/onnxruntimedist"
+	"goodkind.io/lm-semantic-search/internal/updateopts"
 )
 
 const (
@@ -52,9 +53,17 @@ type Options struct {
 	Stdout         io.Writer
 }
 
-// Run installs the daemon, MCP, and CLI binaries from one release into
-// BinDir, stages ONNX Runtime beside the daemon, links the lms alias, and
-// optionally installs the daemon user service.
+// Run installs the daemon, MCP, and CLI binaries from one release into BinDir
+// as one set, links the lms alias, and optionally installs the daemon user
+// service.
+//
+// Run writes the pinned versioned ONNX Runtime library file into BinDir first.
+// An installed daemon loads the library named by the SONAME symlink, and a new
+// versioned file leaves that symlink unchanged. Each candidate validates with
+// a library search path that finds the new library file. The SONAME and
+// unversioned symlinks change in the same commit as the binaries. A failed
+// download, verification, or validation leaves every binary and symlink
+// unchanged.
 func Run(ctx context.Context, options Options) error {
 	binDir := strings.TrimSpace(options.BinDir)
 	if binDir == "" {
@@ -70,21 +79,13 @@ func Run(ctx context.Context, options Options) error {
 		return err
 	}
 
-	daemonResult, err := installReleaseBinary(ctx, daemonBinary, options.Version, binDir)
+	results, err := installReleaseSet(ctx, options.Version, binDir)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(stdout, "installed: %s (%s)\n", daemonResult.InstallPath, daemonResult.Tag)
-	for _, binary := range []string{mcpBinary, cliBinary} {
-		result, installErr := installReleaseBinary(ctx, binary, daemonResult.Tag, binDir)
-		if installErr != nil {
-			return installErr
-		}
+	daemonPath := filepath.Join(binDir, daemonBinary)
+	for _, result := range results {
 		_, _ = fmt.Fprintf(stdout, "installed: %s (%s)\n", result.InstallPath, result.Tag)
-	}
-
-	if err := installONNXRuntime(ctx, binDir); err != nil {
-		return err
 	}
 	_, _ = fmt.Fprintf(stdout, "installed: ONNX Runtime %s in %s\n", onnxruntimedist.Version, binDir)
 
@@ -97,7 +98,7 @@ func Run(ctx context.Context, options Options) error {
 		_, _ = fmt.Fprintln(stdout, "service setup skipped")
 		return nil
 	}
-	return installService(daemonResult.InstallPath, stdout)
+	return installService(daemonPath, stdout)
 }
 
 // LinkCLIAlias points binDir/lms at the CLI binary with a relative symlink. It
@@ -144,62 +145,86 @@ func checkAliasPath(binDir string) error {
 	return nil
 }
 
-func installReleaseBinary(
+// installReleaseSet writes the versioned ONNX Runtime library into binDir and
+// installs the CLI, MCP, and daemon binaries of one release with the SONAME
+// and unversioned library symlinks in one selfupdate.InstallReleaseBinaries
+// commit.
+func installReleaseSet(
 	ctx context.Context,
-	binary string,
 	version string,
 	binDir string,
-) (selfupdate.InstallReleaseBinaryResult, error) {
-	result, err := selfupdate.InstallReleaseBinary(ctx, selfupdate.InstallReleaseBinaryOptions{
-		Options: selfupdate.Options{
-			Config: selfupdate.Config{
-				Repo:          repository,
-				Binary:        binary,
-				APIBaseURLEnv: updateAPIBaseURLEnv,
-				AuthToken:     githubToken(),
-			},
-		},
-		Version: version,
-		Channel: selfupdate.ReleaseChannelRolling,
-		BinDir:  binDir,
-	})
-	if err != nil {
-		slog.ErrorContext(ctx, "install release binary failed", "binary", binary, "err", err)
-		return selfupdate.InstallReleaseBinaryResult{}, fmt.Errorf("install %s: %w", binary, err)
-	}
-	return result, nil
-}
-
-func githubToken() string {
-	token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
-	if token != "" {
-		return token
-	}
-	return strings.TrimSpace(os.Getenv("GH_TOKEN"))
-}
-
-func installONNXRuntime(ctx context.Context, binDir string) error {
+) ([]selfupdate.InstallReleaseBinaryResult, error) {
 	archive, err := onnxruntimedist.ArchiveFor(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		slog.ErrorContext(ctx, "resolve ONNX Runtime archive failed", "err", err)
-		return fmt.Errorf("resolve ONNX Runtime archive: %w", err)
+		return nil, fmt.Errorf("resolve ONNX Runtime archive: %w", err)
 	}
 	names, err := onnxruntimedist.LibraryNamesFor(runtime.GOOS)
 	if err != nil {
 		slog.ErrorContext(ctx, "resolve ONNX Runtime library names failed", "err", err)
-		return fmt.Errorf("resolve ONNX Runtime library names: %w", err)
+		return nil, fmt.Errorf("resolve ONNX Runtime library names: %w", err)
 	}
-	if err := onnxruntimedist.InstallSharedLibrary(
-		ctx,
-		http.DefaultClient,
-		archive,
-		names,
-		binDir,
-	); err != nil {
-		slog.ErrorContext(ctx, "install ONNX Runtime failed", "err", err)
-		return fmt.Errorf("install ONNX Runtime: %w", err)
+	if err := onnxruntimedist.StageSharedLibrary(ctx, http.DefaultClient, archive, names, binDir); err != nil {
+		slog.ErrorContext(ctx, "stage ONNX Runtime failed", "err", err)
+		return nil, fmt.Errorf("stage ONNX Runtime: %w", err)
 	}
-	return nil
+	validationDir, err := os.MkdirTemp("", "lms-install-validation.")
+	if err != nil {
+		slog.ErrorContext(ctx, "create validation library dir failed", "err", err)
+		return nil, fmt.Errorf("create validation library dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(validationDir) }()
+	stagedLibraryPath, err := filepath.Abs(filepath.Join(binDir, names.Versioned))
+	if err != nil {
+		slog.ErrorContext(ctx, "resolve staged library path failed", "err", err)
+		return nil, fmt.Errorf("resolve staged library path: %w", err)
+	}
+	if err := os.Symlink(stagedLibraryPath, filepath.Join(validationDir, names.SONAME)); err != nil {
+		slog.ErrorContext(ctx, "create validation library link failed", "err", err)
+		return nil, fmt.Errorf("create validation library link: %w", err)
+	}
+
+	options, err := updateopts.NetworkOptionsForInstallDir(ctx, binDir, updateopts.Overrides{
+		Client:     nil,
+		InstallDir: binDir,
+		StateRoot:  "",
+		CacheDir:   "",
+		DryRun:     false,
+		Log:        nil,
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "build install options failed", "err", err)
+		return nil, fmt.Errorf("build install options: %w", err)
+	}
+	validateEnv := []string{libraryPathEnv() + "=" + validationDir}
+	for index := range options {
+		options[index].Config.ValidateEnv = validateEnv
+	}
+	results, err := selfupdate.InstallReleaseBinaries(ctx, selfupdate.InstallReleaseBinariesOptions{
+		Options: options,
+		Version: version,
+		Channel: selfupdate.ReleaseChannelRolling,
+		BinDir:  binDir,
+		Symlinks: []selfupdate.InstallSymlink{
+			{Name: names.SONAME, Target: names.Versioned},
+			{Name: names.Unversioned, Target: names.Versioned},
+		},
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "install release binaries failed", "err", err)
+		return nil, fmt.Errorf("install release binaries: %w", err)
+	}
+	return results, nil
+}
+
+// libraryPathEnv returns the dynamic loader variable that the loader searches
+// before the runpath beside the binary: DYLD_LIBRARY_PATH on darwin and
+// LD_LIBRARY_PATH on linux, where the release binaries carry DT_RUNPATH.
+func libraryPathEnv() string {
+	if operatingSystem(runtime.GOOS) == operatingSystemDarwin {
+		return "DYLD_LIBRARY_PATH"
+	}
+	return "LD_LIBRARY_PATH"
 }
 
 func installService(daemonPath string, stdout io.Writer) error {
