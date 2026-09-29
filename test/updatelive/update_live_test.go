@@ -81,7 +81,7 @@ func TestMain(m *testing.M) {
 		_ = os.RemoveAll(buildDirectory)
 		os.Exit(1)
 	}
-	exitCode := m.Run()
+	exitCode := runWithOperatorStateGuard(m.Run)
 	_ = os.RemoveAll(buildDirectory)
 	os.Exit(exitCode)
 }
