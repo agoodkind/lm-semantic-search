@@ -218,6 +218,7 @@ func (service *Service) executeInsert(
 	} else {
 		result, err = service.milvus.Insert(ctx, option)
 	}
+	service.rankings.noteWrite(option.CollectionName())
 	if err != nil {
 		return result, wrapStoreError(
 			ctx,

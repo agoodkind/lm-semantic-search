@@ -1048,12 +1048,46 @@ message SearchConversationsRequest {
   // per_conversation_limit caps hits per conversation so one large transcript
   // does not monopolize the result list. Zero means uncapped.
   int32 per_conversation_limit = 5;
+  // offset skips the first offset rows of the selected ranking. The response
+  // returns at most limit rows starting at position offset, and the daemon
+  // loads content only for those rows. Zero returns the first limit rows. A
+  // negative offset is an invalid argument.
+  int32 offset = 6;
+  // ranking_token is the value a previous response returned for the ranking
+  // this request continues. With a token the daemon reads that exact ranking
+  // regardless of later writes, and an expired or unknown token fails with
+  // FailedPrecondition and error code ranking_expired, with no rows. The
+  // request must repeat the query and filter of the ranking; another query or
+  // filter is an invalid argument. Empty ranks or reads the current ranking.
+  string ranking_token = 7;
 }
 
+// SearchConversationsResponse returns at most limit rows of one ranking,
+// starting at offset. Paging contract: the daemon ranks a query once, caches
+// the ranking until 10 minutes pass without a request that reads it, and
+// returns ranking_token for it. A request that sends that token reads the same
+// ranking for every page, and later writes do not change it; a row deleted
+// after the ranking is left out of its page. A request without a token with the
+// same collection, query, filter, min_score, and per_conversation_limit reads
+// the current ranking. The daemon ranks again for such a request after it
+// commits a write to the collection, when the number of rows matching the
+// filter changes, and after expiry, a cache eviction, or a restart. A process
+// other than the daemon that deletes and inserts the same number of matching
+// rows is not detected until the ranking expires. The offline profile keeps no
+// cache, ranks every request again, and returns no token.
 message SearchConversationsResponse {
   repeated ConversationSearchResult results = 1;
   string display_text = 2;
   DependencyHealth dependency_health = 3;
+  // ranking_truncated is true when the ranking does not contain every row that
+  // matches the filter: more than 16,384 rows match, or the ranking search
+  // returned fewer rows than it requested. Pages stop at the end of the
+  // ranking.
+  bool ranking_truncated = 4;
+  // ranking_token identifies the ranking that served this response. A client
+  // that sends it with the next page reads the same ranking. Empty when the
+  // daemon keeps no cache, as in the offline profile.
+  string ranking_token = 5;
 }
 
 message SearchWithinConversationRequest {
@@ -1063,18 +1097,55 @@ message SearchWithinConversationRequest {
   string query = 3;
   int32 limit = 4;
   ConversationSearchFilter filter = 5;
+  // offset skips the first offset rows of the selected ranking. The response
+  // returns at most limit rows starting at position offset, and the daemon
+  // loads content only for those rows. Zero returns the first limit rows. A
+  // negative offset is an invalid argument.
+  int32 offset = 6;
+  // ranking_token is the value a previous response returned for the ranking
+  // this request continues. With a token the daemon reads that exact ranking
+  // regardless of later writes, and an expired or unknown token fails with
+  // FailedPrecondition and error code ranking_expired, with no rows. The
+  // request must repeat the query and filter of the ranking; another query or
+  // filter is an invalid argument. Empty ranks or reads the current ranking.
+  string ranking_token = 7;
 }
 
+// SearchWithinConversationResponse returns at most limit rows of one ranking of
+// one conversation, starting at offset. Paging contract: the daemon ranks a
+// query once, caches the ranking until 10 minutes pass without a request that
+// reads it, and returns ranking_token for it. A request that sends that token
+// reads the same ranking for every page, and later writes do not change it; a
+// row deleted after the ranking is left out of its page. A token request
+// returns the indexed fingerprint stored with the ranking. A request without a
+// token with the same collection, conversation, query, filter, and indexed
+// fingerprint reads the current ranking. The daemon ranks again for such a
+// request after it commits a write to the collection, when the conversation's
+// indexed fingerprint or the number of rows matching the filter changes, and
+// after expiry, a cache eviction, or a restart. A process other than the daemon
+// that deletes and inserts the same number of matching rows is not detected
+// until the ranking expires. The offline profile keeps no cache, ranks every
+// request again, and returns no token.
 message SearchWithinConversationResponse {
   repeated ConversationSearchResult results = 1;
-  // indexed_fingerprint is the content fingerprint the engine has embedded for
-  // this conversation, from its checkpoint. Empty means the conversation is not
-  // indexed. A caller compares it to the conversation's current fingerprint to
-  // decide whether the hits are complete or a literal scan of newer content is
+  // indexed_fingerprint is the content fingerprint the engine had embedded for
+  // this conversation, from its checkpoint, when the ranking that served the
+  // results was computed. Empty means the conversation was not indexed. A
+  // caller compares it to the conversation's current fingerprint to decide
+  // whether the hits are complete or a literal scan of newer content is
   // needed.
   string indexed_fingerprint = 2;
   string display_text = 3;
   DependencyHealth dependency_health = 4;
+  // ranking_truncated is true when the ranking does not contain every row that
+  // matches the filter: more than 16,384 rows match, or the ranking search
+  // returned fewer rows than it requested. Pages stop at the end of the
+  // ranking.
+  bool ranking_truncated = 5;
+  // ranking_token identifies the ranking that served this response. A client
+  // that sends it with the next page reads the same ranking. Empty when the
+  // daemon keeps no cache, as in the offline profile.
+  string ranking_token = 6;
 }
 
 // CollectionFilterValue is one typed literal in a collection filter. Its type
@@ -1146,10 +1217,10 @@ message CollectionFilter {
 // group value share one group. In a conversation collection grouped by
 // conversationId, a row with a null conversationId instead groups by the
 // conversation id in its legacy metadata. per_group_limit requires group_by.
-// min_score drops hits scoring below the floor, and zero means no floor. One
-// query and request always return the same rows in the same order, ranked by
-// descending score, then ascending row_key, then ascending stored primary
-// key. A smaller limit returns a prefix of a larger one.
+// min_score drops hits scoring below the floor, and zero means no floor. Hits
+// are ranked by descending score, then ascending row_key, then ascending
+// stored primary key. Requests that read one cached ranking return prefixes of
+// it; SearchCollectionResponse states when the daemon ranks again.
 message SearchCollectionRequest {
   string collection_id = 1;
   string query = 2;
@@ -1158,6 +1229,18 @@ message SearchCollectionRequest {
   CollectionFilter filter = 5;
   string group_by = 6;
   int32 per_group_limit = 7;
+  // offset skips the first offset rows of the selected ranking. The response
+  // returns at most limit rows starting at position offset, and the daemon
+  // loads content only for those rows. Zero returns the first limit rows. A
+  // negative offset is an invalid argument.
+  int32 offset = 8;
+  // ranking_token is the value a previous response returned for the ranking
+  // this request continues. With a token the daemon reads that exact ranking
+  // regardless of later writes, and an expired or unknown token fails with
+  // FailedPrecondition and error code ranking_expired, with no rows. The
+  // request must repeat the query and filter of the ranking; another query or
+  // filter is an invalid argument. Empty ranks or reads the current ranking.
+  string ranking_token = 9;
 }
 
 // CollectionHitScalar is one declared scalar column value on a search hit. An
@@ -1183,10 +1266,32 @@ message CollectionSearchHit {
   repeated CollectionHitScalar scalars = 4;
 }
 
+// SearchCollectionResponse returns at most limit hits of one ranking, starting
+// at offset. Paging contract: the daemon ranks a query once, caches the ranking
+// until 10 minutes pass without a request that reads it, and returns
+// ranking_token for it. A request that sends that token reads the same ranking
+// for every page, and later writes do not change it; a row deleted after the
+// ranking is left out of its page. A request without a token with the same
+// collection, query, filter, min_score, group_by, and per_group_limit reads the
+// current ranking. The daemon ranks again for such a request after it commits a
+// write to the collection, when the number of rows matching the filter changes,
+// and after expiry, a cache eviction, or a restart. A process other than the
+// daemon that deletes and inserts the same number of matching rows is not
+// detected until the ranking expires. The offline profile keeps no cache, ranks
+// every request again, and returns no token.
 message SearchCollectionResponse {
   repeated CollectionSearchHit hits = 1;
   string display_text = 2;
   DependencyHealth dependency_health = 3;
+  // ranking_truncated is true when the ranking does not contain every row that
+  // matches the filter: more than 16,384 rows match, or the ranking search
+  // returned fewer rows than it requested. Pages stop at the end of the
+  // ranking.
+  bool ranking_truncated = 4;
+  // ranking_token identifies the ranking that served this response. A client
+  // that sends it with the next page reads the same ranking. Empty when the
+  // daemon keeps no cache, as in the offline profile.
+  string ranking_token = 5;
 }
 
 message GetCollectionItemStateRequest {

@@ -316,7 +316,9 @@ func (service *Service) writeScalarBackfill(ctx context.Context, collectionName 
 		WithVarcharColumn(idFieldName, page.ids).
 		WithColumns(declaredColumns...).
 		WithPartialUpdate(true)
-	if _, err := service.milvus.Upsert(ctx, option); err != nil {
+	_, err = service.milvus.Upsert(ctx, option)
+	service.rankings.noteWrite(collectionName)
+	if err != nil {
 		slog.ErrorContext(ctx, "scalar backfill partial update failed", "collection", collectionName, "rows", len(page.ids), "err", err)
 		return wrapStoreError(ctx, err, "backfill scalars in "+collectionName)
 	}

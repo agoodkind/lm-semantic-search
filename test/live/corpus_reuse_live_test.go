@@ -380,11 +380,12 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 		GroupBy:        "conversationId",
 		PerGroupLimit:  10,
 		Declaration:    semantic.ConversationDeclaration(),
+		CallerState:    "",
 	})
 	if err != nil {
 		t.Fatalf("search collection containing untagged row: %v", err)
 	}
-	if !slices.ContainsFunc(searchResults, func(hit semantic.CollectionHit) bool {
+	if !slices.ContainsFunc(searchResults.Hits, func(hit semantic.CollectionHit) bool {
 		return hit.Chunk.Content == legacyContent
 	}) {
 		t.Fatalf("search results omitted untagged content: %+v", searchResults)

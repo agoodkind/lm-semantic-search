@@ -96,6 +96,11 @@ const (
 	// refuses the conflicting declaration.
 	ClassCollectionSchemaMismatch Class = "collection_schema_mismatch"
 
+	// ClassRankingExpired reports a search ranking token that names no cached
+	// ranking: the ranking expired, was evicted, belongs to a recreated
+	// collection, or the daemon restarted. The request returns no rows.
+	ClassRankingExpired Class = "ranking_expired"
+
 	// ClassInternal is the catch-all class for unknown errors. The
 	// message is sanitized at the boundary; the operator finds the
 	// real cause in the daemon log by grepping trace_id.
@@ -113,7 +118,7 @@ func CodeFor(class Class) codes.Code {
 	case ClassNotIndexed, ClassJobNotFound, ClassUnknownCodebaseID:
 		return codes.NotFound
 	case ClassCollectionMissing, ClassCollectionNotReady, ClassConflictingJob, ClassMaintenance,
-		ClassCollectionSchemaMismatch:
+		ClassCollectionSchemaMismatch, ClassRankingExpired:
 		return codes.FailedPrecondition
 	case ClassMilvusUnavailable, ClassEmbedderUnreachable:
 		return codes.Unavailable
@@ -366,6 +371,19 @@ func NewCollectionNotRegistered(collectionID string) *AdapterError {
 		Code:          "not_indexed",
 		Hint:          "register the collection with RegisterCollection first",
 		Cause:         nil,
+		SafeForClient: true,
+	}
+}
+
+// NewRankingExpired reports a search ranking token that names no cached
+// ranking.
+func NewRankingExpired(cause error) *AdapterError {
+	return &AdapterError{
+		Class:         ClassRankingExpired,
+		Message:       "the search ranking for this ranking_token expired",
+		Code:          "ranking_expired",
+		Hint:          "search again without ranking_token to start a new ranking",
+		Cause:         cause,
 		SafeForClient: true,
 	}
 }

@@ -223,7 +223,8 @@ func (h *harness) upsert(convs map[string][]*pb.ConversationDocument, reconcile 
 // wire Progress.
 func (h *harness) waitJob(jobID string) model.Job {
 	h.t.Helper()
-	deadline := time.Now().Add(jobPollTimeout)
+	timeout := h.jobTimeout()
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		job, found := h.manager.GetJob(jobID)
 		if found {
@@ -234,7 +235,7 @@ func (h *harness) waitJob(jobID string) model.Job {
 		}
 		time.Sleep(jobPollInterval)
 	}
-	h.t.Fatalf("job %s did not reach a terminal state within %s", jobID, jobPollTimeout)
+	h.t.Fatalf("job %s did not reach a terminal state within %s", jobID, timeout)
 	return model.Job{}
 }
 

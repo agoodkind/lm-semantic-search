@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,13 +22,16 @@ import (
 // caller sets no positive limit.
 const defaultCollectionSearchLimit = 10
 
-// CollectionRankingDepth is the number of candidates one collection search
-// ranks: the topK of each hybrid leg, the fused hybrid limit, and the dense
-// topK. It is the Milvus single-search ceiling. It never depends on the
-// requested limit, the group cap, or the score floor. Every request for one
-// query and filter therefore ranks the same candidate list. The offline store
-// ranks at the same depth.
+// CollectionRankingDepth is the largest candidate count of one collection
+// ranking search, the Milvus single-search ceiling. RankingDepth caps the
+// depth of every ranking search at this value.
 const CollectionRankingDepth = 16384
+
+// rankingConsistency is the Milvus consistency level of every read in a
+// collection search: the eligible count, the ranking search, the legacy group
+// query, and the content load. A Strong read observes every write Milvus
+// acknowledged before the read started.
+const rankingConsistency = entity.ClStrong
 
 // nullGroupKey is the group key of every hit with a null or absent group
 // column value. Those hits share one group.
@@ -108,7 +113,9 @@ func (hit CollectionHit) Scalar(column string) (ScalarCell, bool) {
 // CollectionSearch is one validated typed search of a registered collection.
 // Filter is nil to match every row. PerGroupLimit caps the hits that share one
 // GroupBy value, and zero means uncapped. Declaration is the collection's saved
-// declaration.
+// declaration. CallerState is an opaque value the caller reads before the
+// search. It is part of the ranking cache key, and the result returns the
+// CallerState stored with the ranking that served the hits.
 type CollectionSearch struct {
 	CollectionName string
 	Query          string
@@ -118,6 +125,43 @@ type CollectionSearch struct {
 	GroupBy        string
 	PerGroupLimit  int32
 	Declaration    model.CollectionDeclaration
+	CallerState    string
+	// Offset skips the first Offset selected rows. The search returns at most
+	// Limit rows from position Offset and loads content only for them.
+	Offset int32
+	// RankingToken continues the cached ranking a previous result returned.
+	// Empty ranks or reads the current ranking.
+	RankingToken string
+}
+
+// PageSelectionLimit returns the selection length that covers a page of limit
+// rows at offset: offset plus limit, capped at [math.MaxInt32].
+func PageSelectionLimit(offset int32, limit int32) int32 {
+	start := max(offset, 0)
+	if limit > math.MaxInt32-start {
+		return math.MaxInt32
+	}
+	return start + limit
+}
+
+// PageStart returns the index of the first page row in a selection of length
+// selected, which is offset capped at selected.
+func PageStart(offset int32, selected int) int {
+	return min(int(max(offset, 0)), selected)
+}
+
+// CollectionSearchResult is the outcome of one collection search. Hits is the
+// selected page. RankingTruncated is true when the ranking misses matching
+// rows: more rows matched the filter than CollectionRankingDepth, or the
+// ranking search returned fewer rows than it requested. CallerState is the
+// CollectionSearch.CallerState stored with the ranking that served Hits.
+type CollectionSearchResult struct {
+	Hits             []CollectionHit
+	RankingTruncated bool
+	CallerState      string
+	// RankingToken continues the ranking that served Hits. Empty when no
+	// cached ranking served them.
+	RankingToken string
 }
 
 // groupColumnFor returns the declared column the per-group cap reads. It
@@ -135,23 +179,29 @@ func groupColumnFor(search CollectionSearch) (model.ScalarColumn, bool) {
 }
 
 // SearchCollection runs a typed search and returns at most Limit hits, at most
-// PerGroupLimit per GroupBy value, none scoring below MinScore. On an unchanged
-// collection, repeating the same query with the same filter returns the same
-// rows in the same order, and a smaller limit returns a prefix of a larger
-// one. The filter restricts one fixed-depth ranking natively, and every
-// membership set binds as one template parameter.
-func (service *Service) SearchCollection(ctx context.Context, search CollectionSearch) ([]CollectionHit, error) {
+// PerGroupLimit per GroupBy value, none scoring below MinScore.
+//
+// Every request counts the rows that match the filter. A count of zero returns
+// no hits without a ranking search. The first request for a ranking key embeds
+// the query and runs one ranking search at RankingDepth of the count. The
+// sorted candidates are cached under the key. A later request with the same
+// key and the same count reads the cached candidates, and every limit then
+// selects a prefix of one ranking. A committed write through this service, a
+// different count, a recreated collection, a restart, eviction, and
+// RankingCacheTTL each make the next request rank again.
+func (service *Service) SearchCollection(ctx context.Context, search CollectionSearch) (CollectionSearchResult, error) {
+	emptyResult := CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}
 	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
-		return nil, ErrUnavailable
+		return emptyResult, ErrUnavailable
 	}
 	collectionName := strings.TrimSpace(search.CollectionName)
 	if collectionName == "" {
-		return nil, errors.New("collection name is required")
+		return emptyResult, errors.New("collection name is required")
 	}
 	if IsConversationDeclaration(search.Declaration) {
 		if err := service.ensureConversationScalarColumnsOnce(ctx, collectionName); err != nil {
-			return nil, err
+			return emptyResult, err
 		}
 	}
 	limit := search.Limit
@@ -160,43 +210,181 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 	}
 	compiled, err := compileCollectionFilterExpr(search.Filter)
 	if err != nil {
-		slog.ErrorContext(ctx, "compile collection filter failed", "collection", collectionName, "err", err)
-		return nil, fmt.Errorf("compile filter for %s: %w", collectionName, err)
+		slog.ErrorContext(ctx, "compile collection filter failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
+		return emptyResult, fmt.Errorf("compile filter for %s: %w", collectionName, err)
 	}
 	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		return nil, err
+		return emptyResult, err
 	}
 	if !hasCollection {
-		return nil, ErrCollectionMissing
+		return emptyResult, ErrCollectionMissing
 	}
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
-		return nil, err
+		return emptyResult, err
 	}
+	collectionID, err := service.collectionIdentity(ctx, collectionName)
+	if err != nil {
+		return emptyResult, err
+	}
+	groupColumn, grouped := groupColumnFor(search)
+	perGroupLimit := int32(0)
+	groupColumnName := ""
+	if grouped {
+		perGroupLimit = search.PerGroupLimit
+		groupColumnName = groupColumn.Name
+	}
+	key := rankingKey{
+		CollectionName:  collectionName,
+		CollectionID:    collectionID,
+		WriteGeneration: service.rankings.writeGeneration(collectionName),
+		Query:           search.Query,
+		Hybrid:          service.cfg.HybridMode,
+		Filter:          compiled,
+		MinScore:        search.MinScore,
+		GroupColumn:     groupColumnName,
+		PerGroupLimit:   perGroupLimit,
+		CallerState:     search.CallerState,
+	}
+	if search.RankingToken != "" {
+		ranking, reason := service.rankings.readToken(search.RankingToken, collectionID, key.requestDigest())
+		if reason != "" {
+			err := ErrRankingTokenMismatch
+			if reason != tokenReasonMismatch {
+				err = fmt.Errorf("%w: %s", ErrRankingExpired, reason)
+			}
+			slog.WarnContext(ctx, "ranking token rejected", "collection", collectionName, "peer", peerInfo.String(), "err", err)
+			return emptyResult, err
+		}
+		return service.rankingPage(ctx, collectionName, search, ranking, perGroupLimit, limit, search.RankingToken)
+	}
+	eligible, err := service.countEligibleRows(ctx, collectionName, compiled)
+	if err != nil {
+		return emptyResult, err
+	}
+	if eligible == 0 {
+		return CollectionSearchResult{Hits: []CollectionHit{}, RankingTruncated: false, CallerState: search.CallerState, RankingToken: ""}, nil
+	}
+	ranking, err := service.rankings.rank(key, eligible, func() (collectionRanking, error) {
+		return service.computeRanking(ctx, collectionName, search, compiled, eligible)
+	})
+	if err != nil {
+		return emptyResult, err
+	}
+	return service.rankingPage(ctx, collectionName, search, ranking, perGroupLimit, limit, service.rankings.issueToken(key.digest()))
+}
+
+// rankingPage selects the page of ranking at search.Offset, loads content for
+// its rows, and returns it with token.
+func (service *Service) rankingPage(
+	ctx context.Context,
+	collectionName string,
+	search CollectionSearch,
+	ranking collectionRanking,
+	perGroupLimit int32,
+	limit int32,
+	token string,
+) (CollectionSearchResult, error) {
+	selected := selectRankedCandidates(ranking.Candidates, perGroupLimit, search.MinScore, PageSelectionLimit(search.Offset, limit))
+	selected = selected[PageStart(search.Offset, len(selected)):]
+	hits, err := service.loadRankedHits(ctx, collectionName, selected, search.Declaration.Scalars)
+	if err != nil {
+		return CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}, err
+	}
+	return CollectionSearchResult{Hits: hits, RankingTruncated: ranking.Truncated, CallerState: ranking.CallerState, RankingToken: token}, nil
+}
+
+// computeRanking embeds the query and runs one ranking search over eligible
+// matching rows at RankingDepth(eligible). It resolves legacy conversation
+// groups and sorts the candidates.
+func (service *Service) computeRanking(ctx context.Context, collectionName string, search CollectionSearch, compiled compiledFilter, eligible int64) (collectionRanking, error) {
+	var failed collectionRanking
+	peerInfo, _ := peer.FromContext(ctx)
 	queryVector, err := service.embedder.Embed(ctx, service.queryTextForEmbedding(search.Query))
 	if err != nil {
 		slog.ErrorContext(ctx, "embed query failed", "peer", peerInfo.String(), "err", err)
-		return nil, fmt.Errorf("embed query: %w", err)
+		return failed, fmt.Errorf("embed query: %w", err)
 	}
-
 	groupColumn, grouped := groupColumnFor(search)
-	candidates, err := service.rankCollectionCandidates(ctx, collectionName, queryVector, search.Query, compiled, groupColumn, grouped)
+	depth := RankingDepth(eligible)
+	candidates, denseReturned, err := service.rankCollectionCandidates(ctx, collectionName, queryVector, search.Query, compiled, groupColumn, grouped, depth)
 	if err != nil {
-		return nil, err
+		return failed, err
+	}
+	// A dense leg with fewer rows than depth misses eligible rows, even when
+	// sparse rows fill the fused ranking to depth.
+	truncation := RankingTruncation(eligible, denseReturned)
+	if truncation != "" {
+		level := slog.LevelInfo
+		if denseReturned < depth {
+			level = slog.LevelWarn
+		}
+		slog.Log(ctx, level, "collection ranking does not contain every eligible row",
+			"collection", collectionName, "cause", truncation, "eligible", eligible, "requested", depth, "dense_returned", denseReturned, "ranked", len(candidates), "peer", peerInfo.String())
 	}
 	if grouped && IsConversationDeclaration(search.Declaration) && groupColumn.Name == search.Declaration.ItemIDColumn {
 		candidates, err = service.resolveLegacyConversationGroups(ctx, collectionName, groupColumn.Name, candidates)
 		if err != nil {
-			return nil, err
+			return failed, err
 		}
 	}
 	sortRankedCandidates(candidates)
-	perGroupLimit := int32(0)
-	if grouped {
-		perGroupLimit = search.PerGroupLimit
+	return collectionRanking{
+		Candidates:  candidates,
+		Eligible:    eligible,
+		Truncated:   truncation != "",
+		CallerState: search.CallerState,
+	}, nil
+}
+
+// collectionIdentity returns the Milvus collection ID of collectionName. A
+// dropped and recreated collection has a new ID.
+func (service *Service) collectionIdentity(ctx context.Context, collectionName string) (int64, error) {
+	collection, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
+	if err != nil {
+		return 0, searchErr(ctx, "describe collection for ranking identity", collectionName, err)
 	}
-	selected := selectRankedCandidates(candidates, perGroupLimit, search.MinScore, limit)
-	return service.loadRankedHits(ctx, collectionName, selected, search.Declaration.Scalars)
+	if collection == nil {
+		return 0, fmt.Errorf("describe collection %s returned no collection", collectionName)
+	}
+	return collection.ID, nil
+}
+
+// countEligibleRows counts the rows that match compiled with a count(*) query
+// that binds the same expression and template parameters as the ranking
+// search.
+func (service *Service) countEligibleRows(ctx context.Context, collectionName string, compiled compiledFilter) (int64, error) {
+	option := milvusclient.NewQueryOption(collectionName).
+		WithOutputFields(countOutputField).
+		WithConsistencyLevel(rankingConsistency)
+	if compiled.Expression != "" {
+		option = option.WithFilter(compiled.Expression)
+	}
+	for _, param := range compiled.Params {
+		switch param.Type {
+		case model.ScalarTypeBool:
+			option = option.WithTemplateParam(param.Name, param.Bools)
+		case model.ScalarTypeInt64:
+			option = option.WithTemplateParam(param.Name, param.Int64s)
+		case model.ScalarTypeString:
+			option = option.WithTemplateParam(param.Name, param.Strings)
+		default:
+			option = option.WithTemplateParam(param.Name, param.Strings)
+		}
+	}
+	resultSet, err := service.milvus.Query(ctx, option)
+	if err != nil {
+		return 0, searchErr(ctx, "count eligible rows", collectionName, err)
+	}
+	countColumn := resultSet.GetColumn(countOutputField)
+	if countColumn == nil {
+		return 0, ErrSearchResultIncomplete
+	}
+	eligible, err := countColumn.GetAsInt64(0)
+	if err != nil {
+		return 0, rankingReadError(ctx, collectionName, countOutputField, 0, err)
+	}
+	return eligible, nil
 }
 
 // rankedCandidate is one row of a collection search's fused ranking. It
@@ -251,18 +439,20 @@ func selectRankedCandidates(candidates []rankedCandidate, perGroupLimit int32, m
 	return kept
 }
 
-// rankCollectionCandidates runs the one ranking search of a collection search.
-// A hybrid collection runs both legs at CollectionRankingDepth and fuses them
-// with the RRF reranker into at most CollectionRankingDepth rows. A dense
-// collection runs one search at the same depth.
-func (service *Service) rankCollectionCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled compiledFilter, groupColumn model.ScalarColumn, grouped bool) ([]rankedCandidate, error) {
+// rankCollectionCandidates runs the ranking search of a collection search and
+// returns the ranked candidates and the row count of the dense leg. A hybrid
+// collection runs both legs at depth, fuses them with the RRF reranker into at
+// most depth rows, and runs the dense leg again with no output field: the
+// fused result does not report how many rows the dense leg returned. A dense
+// collection runs one search at depth, and its row count is the dense count.
+func (service *Service) rankCollectionCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled compiledFilter, groupColumn model.ScalarColumn, grouped bool, depth int) ([]rankedCandidate, int, error) {
 	outputFields := []string{relativePathFieldName}
 	if grouped {
 		outputFields = append(outputFields, groupColumn.Name)
 	}
 	if service.cfg.HybridMode {
-		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, CollectionRankingDepth, entity.FloatVector(queryVector))
-		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, CollectionRankingDepth, entity.Text(rawQuery))
+		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, depth, entity.FloatVector(queryVector))
+		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, depth, entity.Text(rawQuery))
 		if compiled.Expression != "" {
 			denseRequest = denseRequest.WithFilter(compiled.Expression)
 			sparseRequest = sparseRequest.WithFilter(compiled.Expression)
@@ -273,22 +463,48 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 		}
 		hybridOption := milvusclient.NewHybridSearchOption(
 			collectionName,
-			CollectionRankingDepth,
+			depth,
 			denseRequest,
 			sparseRequest,
-		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...)
+		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...).WithConsistencyLevel(rankingConsistency)
 		resultSets, err := service.milvus.HybridSearch(ctx, hybridOption)
 		if err != nil {
-			return nil, searchErr(ctx, "hybrid ranking search", collectionName, err)
+			return nil, 0, searchErr(ctx, "hybrid ranking search", collectionName, err)
 		}
-		return rankedCandidatesFromResultSets(ctx, collectionName, resultSets, groupColumn, grouped)
+		candidates, err := rankedCandidatesFromResultSets(ctx, collectionName, resultSets, groupColumn, grouped)
+		if err != nil {
+			return nil, 0, err
+		}
+		denseSets, err := service.milvus.Search(ctx, denseRankingOption(collectionName, queryVector, compiled, depth))
+		if err != nil {
+			return nil, 0, searchErr(ctx, "dense ranking leg count", collectionName, err)
+		}
+		return candidates, resultRowCount(denseSets), nil
 	}
 
+	resultSets, err := service.milvus.Search(ctx, denseRankingOption(collectionName, queryVector, compiled, depth, outputFields...))
+	if err != nil {
+		return nil, 0, searchErr(ctx, "dense ranking search", collectionName, err)
+	}
+	candidates, err := rankedCandidatesFromResultSets(ctx, collectionName, resultSets, groupColumn, grouped)
+	if err != nil {
+		return nil, 0, err
+	}
+	return candidates, len(candidates), nil
+}
+
+// denseRankingOption returns the dense search of a ranking at depth with the
+// compiled filter, its template parameters, and outputFields. With no output
+// field the search returns only primary keys and scores.
+func denseRankingOption(collectionName string, queryVector []float32, compiled compiledFilter, depth int, outputFields ...string) milvusclient.SearchOption {
 	searchOption := milvusclient.NewSearchOption(
 		collectionName,
-		CollectionRankingDepth,
+		depth,
 		[]entity.Vector{entity.FloatVector(queryVector)},
-	).WithANNSField(denseVectorFieldName).WithOutputFields(outputFields...)
+	).WithANNSField(denseVectorFieldName).WithConsistencyLevel(rankingConsistency)
+	if len(outputFields) > 0 {
+		searchOption = searchOption.WithOutputFields(outputFields...)
+	}
 	if compiled.Expression != "" {
 		searchOption = searchOption.WithFilter(compiled.Expression)
 	}
@@ -304,11 +520,15 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 			searchOption = searchOption.WithTemplateParam(param.Name, param.Strings)
 		}
 	}
-	resultSets, err := service.milvus.Search(ctx, searchOption)
-	if err != nil {
-		return nil, searchErr(ctx, "dense ranking search", collectionName, err)
+	return searchOption
+}
+
+// resultRowCount returns the row count of the first result set, or zero.
+func resultRowCount(resultSets []milvusclient.ResultSet) int {
+	if len(resultSets) == 0 {
+		return 0
 	}
-	return rankedCandidatesFromResultSets(ctx, collectionName, resultSets, groupColumn, grouped)
+	return resultSets[0].ResultCount
 }
 
 func bindAnnTemplateParam(request *milvusclient.AnnRequest, param filterTemplateParam) *milvusclient.AnnRequest {
@@ -380,8 +600,9 @@ func (service *Service) resolveLegacyConversationGroups(ctx context.Context, col
 		return candidates, nil
 	}
 	resultSet, err := service.milvus.Query(ctx, milvusclient.NewQueryOption(collectionName).
-		WithIDs(column.NewColumnVarChar(idFieldName, legacyKeys)).
-		WithOutputFields(idFieldName, metadataFieldName))
+		WithIDs(primaryKeyColumn(legacyKeys)).
+		WithOutputFields(idFieldName, metadataFieldName).
+		WithConsistencyLevel(rankingConsistency))
 	if err != nil {
 		return nil, searchErr(ctx, "load legacy conversation identity", collectionName, err)
 	}
@@ -403,6 +624,13 @@ func (service *Service) resolveLegacyConversationGroups(ctx context.Context, col
 		legacyIDs[primaryKey] = decodeMetadata(metadata).ConversationID
 	}
 	return applyLegacyConversationGroups(candidates, groupColumnName, legacyIDs), nil
+}
+
+// primaryKeyColumn returns an id column over a copy of primaryKeys. The Milvus
+// client WithIDs option quotes each value of the column's backing slice in
+// place, and the copy keeps that write off the caller's slice.
+func primaryKeyColumn(primaryKeys []string) column.Column {
+	return column.NewColumnVarChar(idFieldName, slices.Clone(primaryKeys))
 }
 
 // applyLegacyConversationGroups sets each null-group candidate's group from
@@ -448,8 +676,9 @@ func (service *Service) loadRankedHits(ctx context.Context, collectionName strin
 		outputFields = append(outputFields, declared.Name)
 	}
 	resultSet, err := service.milvus.Query(ctx, milvusclient.NewQueryOption(collectionName).
-		WithIDs(column.NewColumnVarChar(idFieldName, primaryKeys)).
-		WithOutputFields(outputFields...))
+		WithIDs(primaryKeyColumn(primaryKeys)).
+		WithOutputFields(outputFields...).
+		WithConsistencyLevel(rankingConsistency))
 	if err != nil {
 		return nil, searchErr(ctx, "load ranked rows", collectionName, err)
 	}

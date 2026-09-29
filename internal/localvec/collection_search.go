@@ -23,58 +23,79 @@ const (
 	truthUnknown
 )
 
-// SearchCollection runs a typed search of a local collection. It ranks a
-// fixed candidate set that never depends on the limit, the group cap, or the
-// score floor, at the depth the Milvus collection search ranks. When at most
-// semantic.CollectionRankingDepth rows match the filter tree, the candidates
-// are every matching row, scored exactly. Otherwise the candidates are the
-// semantic.CollectionRankingDepth nearest rows from the HNSW index. It sorts
-// the candidates with sortScoredRows and walks them once to keep the rows
-// that match the filter tree and score at or above MinScore, at most
-// PerGroupLimit per GroupBy value, up to Limit rows. A smaller limit therefore
-// returns a prefix of a larger one at any collection size. A local row stores
-// the conversation scalar fields, so each hit decodes a declared conversation
-// column from the row and reports every other declared column as absent.
+// SearchCollection runs a typed search of a local collection. It counts the
+// rows that match the filter tree and returns no hits without embedding the
+// query when none match. It ranks at semantic.RankingDepth of the count, a
+// candidate set that never depends on the limit, the group cap, or the score
+// floor. When at most semantic.CollectionRankingDepth rows match, the
+// candidates are every matching row, scored exactly. Otherwise the candidates
+// are the semantic.CollectionRankingDepth nearest rows from the HNSW index,
+// and the result reports RankingTruncated. It sorts the candidates with
+// sortScoredRows and walks them once to keep the rows that match the filter
+// tree and score at or above MinScore, at most PerGroupLimit per GroupBy
+// value, up to Limit rows. A smaller limit returns a prefix of a larger one at
+// any collection size. The offline store keeps no ranking cache: each request
+// ranks again, and the result returns the request's CallerState. A local row
+// stores the conversation scalar fields, and each hit decodes a declared
+// conversation column from the row and reports every other declared column as
+// absent.
 func (store *Store) SearchCollection(
 	ctx context.Context,
 	search semantic.CollectionSearch,
-) ([]semantic.CollectionHit, error) {
+) (semantic.CollectionSearchResult, error) {
+	emptyResult := semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}
 	if err := operationContextError(ctx, "search local collection"); err != nil {
-		return nil, err
+		return emptyResult, err
+	}
+	if search.RankingToken != "" {
+		err := fmt.Errorf("%w: the offline store keeps no ranking cache", semantic.ErrRankingExpired)
+		slog.WarnContext(ctx, "local collection search rejected a ranking token", "collection", search.CollectionName, "err", err)
+		return emptyResult, err
 	}
 	collectionName := strings.TrimSpace(search.CollectionName)
 	stored, err := store.collectionForName(collectionName, false)
 	if err != nil {
-		return nil, err
+		return emptyResult, err
 	}
 	_, exists, err := stored.vectorCount()
 	if err != nil {
-		return nil, err
+		return emptyResult, err
 	}
 	if !exists {
-		return nil, semantic.ErrCollectionMissing
-	}
-	query, err := store.embedQuery(ctx, collectionName, search.Query)
-	if err != nil {
-		return nil, err
+		return emptyResult, semantic.ErrCollectionMissing
 	}
 	declared := search.Declaration.Scalars
 	matchesFilter := func(candidate row) bool {
 		return search.Filter == nil || evaluateFilter(*search.Filter, candidate, declared) == truthTrue
 	}
-	candidates, err := stored.rankCandidates(ctx, query, matchesFilter, semantic.CollectionRankingDepth)
+	eligible, err := stored.countMatching(matchesFilter)
 	if err != nil {
-		return nil, err
+		return emptyResult, err
+	}
+	if eligible == 0 {
+		return semantic.CollectionSearchResult{Hits: []semantic.CollectionHit{}, RankingTruncated: false, CallerState: search.CallerState, RankingToken: ""}, nil
+	}
+	query, err := store.embedQuery(ctx, collectionName, search.Query)
+	if err != nil {
+		return emptyResult, err
+	}
+	candidates, err := stored.rankCandidates(ctx, query, matchesFilter, semantic.RankingDepth(eligible))
+	if err != nil {
+		return emptyResult, err
 	}
 	sortScoredRows(candidates)
 	groupLimit := int32(0)
 	if search.GroupBy != "" && search.PerGroupLimit > 0 {
 		groupLimit = search.PerGroupLimit
 	}
+	pageLimit := search.Limit
+	if pageLimit <= 0 {
+		pageLimit = defaultSearchLimit
+	}
 	perGroup := make(map[string]int32)
 	scored := limitScoredRows(
 		candidates,
-		effectiveLimit(search.Limit),
+		int(semantic.PageSelectionLimit(search.Offset, pageLimit)),
 		func(candidate scoredRow) bool {
 			if search.MinScore > 0 && candidate.score < search.MinScore {
 				return false
@@ -93,6 +114,7 @@ func (store *Store) SearchCollection(
 			return true
 		},
 	)
+	scored = scored[semantic.PageStart(search.Offset, len(scored)):]
 	hits := make([]semantic.CollectionHit, 0, len(scored))
 	for _, candidate := range scored {
 		cells := make([]semantic.ScalarCell, 0, len(declared))
@@ -104,7 +126,31 @@ func (store *Store) SearchCollection(
 			Scalars: cells,
 		})
 	}
-	return hits, nil
+	return semantic.CollectionSearchResult{
+		Hits:             hits,
+		RankingTruncated: semantic.RankingTruncated(eligible, len(candidates)),
+		CallerState:      search.CallerState,
+		RankingToken:     "",
+	}, nil
+}
+
+// countMatching counts the stored rows that keep accepts.
+func (stored *collection) countMatching(keep func(row) bool) (int64, error) {
+	stored.mutex.Lock()
+	defer stored.mutex.Unlock()
+	if err := stored.loadLocked(); err != nil {
+		return 0, err
+	}
+	if !stored.exists {
+		return 0, semantic.ErrCollectionMissing
+	}
+	var matching int64
+	for rowIndex := range stored.rows {
+		if keep(stored.rows[rowIndex]) {
+			matching++
+		}
+	}
+	return matching, nil
 }
 
 // rankCandidates returns the ranking candidates for query. It evaluates keep

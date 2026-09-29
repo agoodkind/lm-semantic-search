@@ -22,7 +22,7 @@ func TestResolveLiveConfigMakesEveryLaterDefaultUseSandboxDatabase(t *testing.T)
 		t,
 		stateRoot,
 		filepath.Join(stateRoot, "daemon.sock"),
-		"http://127.0.0.1:1",
+		fakeLiveEmbedding("http://127.0.0.1:1", harnessID),
 		"127.0.0.1:1",
 		"",
 		databaseName,

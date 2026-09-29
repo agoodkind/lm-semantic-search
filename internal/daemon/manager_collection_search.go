@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -16,7 +17,9 @@ import (
 const defaultCollectionSearchLimit = 10
 
 // CollectionSearchRequest is one typed search of a registered document
-// collection. Filter is nil to match every row.
+// collection. Filter is nil to match every row. CallerState is the opaque
+// value the store keys the ranking by and returns with the ranking that
+// served the hits.
 type CollectionSearchRequest struct {
 	CollectionID  string
 	Query         string
@@ -25,6 +28,17 @@ type CollectionSearchRequest struct {
 	Filter        *semantic.CollectionFilter
 	GroupBy       string
 	PerGroupLimit int32
+	CallerState   string
+	Offset        int32
+	RankingToken  string
+}
+
+// searchPage selects the page of a search: Offset skips the first rows of the
+// ranking, and RankingToken continues the cached ranking a previous response
+// returned.
+type searchPage struct {
+	Offset       int32
+	RankingToken string
 }
 
 // SearchCollection searches a registered document collection. The daemon's
@@ -32,19 +46,20 @@ type CollectionSearchRequest struct {
 // The request is validated against the saved declaration before the store
 // loads the collection or runs the query. An unregistered collection fails
 // with [adapterr.NewCollectionNotRegistered] and registers nothing.
-func (manager *Manager) SearchCollection(ctx context.Context, request CollectionSearchRequest) ([]semantic.CollectionHit, error) {
+func (manager *Manager) SearchCollection(ctx context.Context, request CollectionSearchRequest) (semantic.CollectionSearchResult, error) {
+	emptyResult := semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}
 	if refusal := manager.maintenanceRefusal(); refusal != nil {
-		return nil, refusal
+		return emptyResult, refusal
 	}
 	collectionID := strings.TrimSpace(request.CollectionID)
 	if collectionID == "" {
-		return nil, adapterr.NewMissingArgument("collection_id")
+		return emptyResult, adapterr.NewMissingArgument("collection_id")
 	}
 	manager.mu.Lock()
 	codebase, found := manager.findConversationCollectionLocked(collectionID)
 	manager.mu.Unlock()
 	if !found {
-		return nil, adapterr.NewCollectionNotRegistered(collectionID)
+		return emptyResult, adapterr.NewCollectionNotRegistered(collectionID)
 	}
 	return manager.searchRegisteredCollection(ctx, collectionID, codebase, request)
 }
@@ -88,10 +103,14 @@ func collectionDeclaration(codebase model.Codebase) model.CollectionDeclaration 
 // collection lease for the query, and runs the store's typed search. The store
 // applies every filter natively and returns the result already reduced to the
 // limit, the group cap, and the score floor.
-func (manager *Manager) searchRegisteredCollection(ctx context.Context, collectionID string, codebase model.Codebase, request CollectionSearchRequest) ([]semantic.CollectionHit, error) {
+func (manager *Manager) searchRegisteredCollection(ctx context.Context, collectionID string, codebase model.Codebase, request CollectionSearchRequest) (semantic.CollectionSearchResult, error) {
+	emptyResult := semantic.CollectionSearchResult{Hits: nil, RankingTruncated: false, CallerState: "", RankingToken: ""}
 	declaration := collectionDeclaration(codebase)
 	if err := validateCollectionSearch(collectionID, declaration, request.Filter, request.GroupBy, request.PerGroupLimit); err != nil {
-		return nil, err
+		return emptyResult, err
+	}
+	if request.Offset < 0 {
+		return emptyResult, adapterr.NewInvalidArgument(fmt.Sprintf("offset %d is negative", request.Offset))
 	}
 	limit := request.Limit
 	if limit <= 0 {
@@ -100,7 +119,7 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 
 	if manager.semantic == nil || !manager.semantic.Available() {
 		manager.noteDependencyFailure(semantic.ErrUnavailable)
-		return nil, semantic.ErrUnavailable
+		return emptyResult, semantic.ErrUnavailable
 	}
 	// PrepareCollection runs the conversation scalar migration on every
 	// conv_chunks_ collection. A collection with another declaration must not
@@ -109,16 +128,16 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 	if semantic.IsConversationDeclaration(declaration) {
 		if prepareErr := manager.semantic.PrepareCollection(ctx, codebase.CollectionName); prepareErr != nil {
 			manager.noteDependencyFailure(prepareErr)
-			return nil, fmt.Errorf("prepare collection %s: %w", codebase.CollectionName, prepareErr)
+			return emptyResult, fmt.Errorf("prepare collection %s: %w", codebase.CollectionName, prepareErr)
 		}
 	}
 	lease, leaseErr := manager.semantic.AcquireCollection(ctx, codebase.CollectionName)
 	if leaseErr != nil {
 		manager.noteDependencyFailure(leaseErr)
-		return nil, fmt.Errorf("acquire collection %s: %w", codebase.CollectionName, leaseErr)
+		return emptyResult, fmt.Errorf("acquire collection %s: %w", codebase.CollectionName, leaseErr)
 	}
 	defer lease.Release()
-	hits, err := manager.semantic.SearchCollection(ctx, semantic.CollectionSearch{
+	result, err := manager.semantic.SearchCollection(ctx, semantic.CollectionSearch{
 		CollectionName: codebase.CollectionName,
 		Query:          request.Query,
 		Limit:          limit,
@@ -127,12 +146,21 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 		GroupBy:        request.GroupBy,
 		PerGroupLimit:  request.PerGroupLimit,
 		Declaration:    declaration,
+		CallerState:    request.CallerState,
+		Offset:         request.Offset,
+		RankingToken:   request.RankingToken,
 	})
+	if errors.Is(err, semantic.ErrRankingExpired) {
+		return emptyResult, adapterr.NewRankingExpired(err)
+	}
+	if errors.Is(err, semantic.ErrRankingTokenMismatch) {
+		return emptyResult, adapterr.NewInvalidArgument("ranking_token belongs to another query, filter, score floor, or group cap")
+	}
 	if err != nil {
 		manager.noteDependencyFailure(err)
 		slog.ErrorContext(ctx, "search collection failed", "collection_id", collectionID, "collection", codebase.CollectionName, "err", err)
-		return nil, fmt.Errorf("search collection %s: %w", codebase.CollectionName, err)
+		return emptyResult, fmt.Errorf("search collection %s: %w", codebase.CollectionName, err)
 	}
 	manager.noteDependencyHealthy()
-	return hits, nil
+	return result, nil
 }

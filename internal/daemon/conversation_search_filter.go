@@ -46,7 +46,7 @@ func (filter conversationSearchFilter) toSemanticFilter() semantic.ConversationF
 // collection search. An empty filter converts to no filter tree, which matches
 // every row. A positive perConversationLimit becomes a per-group cap on the
 // conversationId column.
-func (filter conversationSearchFilter) collectionSearchRequest(collectionID string, query string, limit int32, perConversationLimit int32) CollectionSearchRequest {
+func (filter conversationSearchFilter) collectionSearchRequest(collectionID string, query string, limit int32, perConversationLimit int32, page searchPage) CollectionSearchRequest {
 	groupBy := ""
 	perGroupLimit := int32(0)
 	if perConversationLimit > 0 {
@@ -61,5 +61,8 @@ func (filter conversationSearchFilter) collectionSearchRequest(collectionID stri
 		Filter:        filter.toSemanticFilter().CollectionFilter(),
 		GroupBy:       groupBy,
 		PerGroupLimit: perGroupLimit,
+		CallerState:   "",
+		Offset:        page.Offset,
+		RankingToken:  page.RankingToken,
 	}
 }
