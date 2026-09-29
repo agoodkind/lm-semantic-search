@@ -221,7 +221,7 @@ type openAICompatibleProvider struct {
 }
 
 // NewOpenAICompatibleProvider constructs the OpenAI-compatible adapter from
-// explicit options. [NewProvider] requires an API key before it constructs the
+// explicit options. [NewHostedProvider] requires an API key before it constructs the
 // daemon's adapter. The shared search library constructs its adapter here
 // without that requirement.
 func NewOpenAICompatibleProvider(options OpenAICompatibleOptions) (Provider, error) {
