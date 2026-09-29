@@ -41,6 +41,12 @@ endif
 SIGNING_WRAPPER_DIR := $(CURDIR)/.make/signing-bin
 export PATH := $(SIGNING_WRAPPER_DIR):$(PATH)
 
+# Every go command that make runs uses the Go release in the go.mod go line.
+# CI installs that release with actions/setup-go, so local builds and tests
+# compile with the same standard library as CI. A newer local Go would
+# otherwise build with its own standard library tables.
+export GOTOOLCHAIN := go$(shell sed -n 's/^go //p' go.mod)
+
 # Pipeline modules. Add go-service.mk if this binary ships as a daemon and
 # set LAUNCHD_LABEL, SYSTEMD_UNIT, LOG_PATH before -include $(GO_MK).
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
