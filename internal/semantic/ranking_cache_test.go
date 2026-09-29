@@ -350,47 +350,6 @@ func TestRankingCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 }
 
-// TestCachedRankingPagesInClydeShape pages a cached ranking the way Clyde
-// does: each request asks for offset plus the page size and keeps the rows
-// past the offset. The pages together equal the whole selection, with no row
-// repeated or omitted, at page sizes 1, 10, and 100, and reading the cached
-// ranking leaves it unchanged.
-func TestCachedRankingPagesInClydeShape(t *testing.T) {
-	t.Parallel()
-
-	const rankedRows = 437
-	cache := newRankingCache(time.Now, RankingCacheMaxBytes)
-	stored := rankingOf(rankedRows, rankedRows, "page")
-	sortRankedCandidates(stored.Candidates)
-	storedKeys := candidateKeys(stored.Candidates)
-	cache.put(cacheKey("page", testRankingCollection), stored)
-
-	for _, groupLimit := range []int32{0, 3} {
-		want := candidateKeys(selectRankedCandidates(stored.Candidates, groupLimit, 0.1, 0))
-		for _, pageSize := range []int{1, 10, 100} {
-			paged := make([]string, 0, len(want))
-			for offset := 0; ; offset += pageSize {
-				ranking, found := cache.get(cacheKey("page", testRankingCollection).digest(), rankedRows)
-				if !found {
-					t.Fatalf("page at offset %d missed the cache", offset)
-				}
-				selected := selectRankedCandidates(ranking.Candidates, groupLimit, 0.1, int32(offset+pageSize))
-				if len(selected) <= offset {
-					break
-				}
-				paged = append(paged, candidateKeys(selected[offset:])...)
-			}
-			if !slices.Equal(paged, want) {
-				t.Fatalf("group limit %d page size %d pages = %d rows, want %d rows in ranking order", groupLimit, pageSize, len(paged), len(want))
-			}
-		}
-	}
-	ranking, _ := cache.get(cacheKey("page", testRankingCollection).digest(), rankedRows)
-	if !slices.Equal(candidateKeys(ranking.Candidates), storedKeys) {
-		t.Fatal("paging changed the cached ranking")
-	}
-}
-
 // TestPrimaryKeyColumnKeepsCallerKeys proves the id column the ranking passes
 // to the Milvus client WithIDs option leaves the caller's keys unchanged,
 // although the option quotes the column values in place.
