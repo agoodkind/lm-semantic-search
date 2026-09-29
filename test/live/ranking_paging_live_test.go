@@ -226,6 +226,33 @@ func TestConversationSearchPagesAcrossRestart(t *testing.T) {
 	}
 }
 
+// TestConversationSearchKeysRankingsByFilter searches two conversation id
+// filters that match the same number of rows. The eligible count check cannot
+// tell the two rankings apart, and only the filter in the ranking key keeps the
+// second search from reading the first search's cached ranking.
+func TestConversationSearchKeysRankingsByFilter(t *testing.T) {
+	h, _, _, _ := newPagingHarness(t)
+	corpus, _ := pagingCorpus()
+	first := []string{pagingConversationID(0), pagingConversationID(3)}
+	second := []string{pagingConversationID(1), pagingConversationID(2)}
+	firstRows := len(corpus[first[0]]) + len(corpus[first[1]])
+	secondRows := len(corpus[second[0]]) + len(corpus[second[1]])
+	if firstRows != secondRows {
+		t.Fatalf("filters match %d and %d rows, want equal counts", firstRows, secondRows)
+	}
+	for _, scope := range [][]string{first, second} {
+		results := h.conversationPage(int32(firstRows), scope).GetResults()
+		if len(results) != firstRows {
+			t.Fatalf("filter %v returned %d rows, want %d", scope, len(results), firstRows)
+		}
+		for _, result := range results {
+			if !slices.Contains(scope, result.GetConversationId()) {
+				t.Fatalf("filter %v returned row %s from conversation %s", scope, rankingKey(result), result.GetConversationId())
+			}
+		}
+	}
+}
+
 // waitJobWithin polls the manager until the job is terminal or timeout ends.
 func (h *harness) waitJobWithin(jobID string, timeout time.Duration) model.Job {
 	h.t.Helper()
