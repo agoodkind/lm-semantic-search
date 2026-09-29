@@ -32,17 +32,19 @@ func TestConfigValidateAcceptsZeroBudgetsAndExplicitZeroBM25B(t *testing.T) {
 		name     string
 		bm25B    *float64
 		bm25K1   float64
+		block    int
 		analyzer string
 	}{
-		{name: "default b", bm25B: nil, bm25K1: 0, analyzer: ""},
-		{name: "explicit zero b", bm25B: &zero, bm25K1: 0, analyzer: ""},
-		{name: "explicit one b", bm25B: &one, bm25K1: 0, analyzer: ""},
-		{name: "standard analyzer", bm25B: nil, bm25K1: 0, analyzer: library.StandardAnalyzer},
-		{name: "maximum k1", bm25B: nil, bm25K1: 1e6, analyzer: ""},
+		{name: "default b", bm25B: nil, bm25K1: 0, block: 0, analyzer: ""},
+		{name: "explicit zero b", bm25B: &zero, bm25K1: 0, block: 0, analyzer: ""},
+		{name: "explicit one b", bm25B: &one, bm25K1: 0, block: 0, analyzer: ""},
+		{name: "standard analyzer", bm25B: nil, bm25K1: 0, block: 0, analyzer: library.StandardAnalyzer},
+		{name: "maximum k1", bm25B: nil, bm25K1: 1e6, block: 0, analyzer: ""},
+		{name: "maximum query block", bm25B: nil, bm25K1: 0, block: 16384, analyzer: ""},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			config := library.Config{Store: validDescriptor(t), BM25B: testCase.bm25B, BM25K1: testCase.bm25K1, AnalyzerIdentity: testCase.analyzer}
+			config := library.Config{Store: validDescriptor(t), BM25B: testCase.bm25B, BM25K1: testCase.bm25K1, QueryBlockSize: testCase.block, AnalyzerIdentity: testCase.analyzer}
 			if err := config.Validate(); err != nil {
 				t.Fatalf("Validate() = %v, want nil", err)
 			}
@@ -93,6 +95,7 @@ func TestConfigValidateRejectsNegativeBudgetsAndInvalidRanking(t *testing.T) {
 		{name: "negative k1", mutate: func(c *library.Config) { c.BM25K1 = -1 }, want: "BM25K1"},
 		{name: "k1 zero as float32", mutate: func(c *library.Config) { c.BM25K1 = 1e-50 }, want: "BM25K1"},
 		{name: "k1 infinite as float32", mutate: func(c *library.Config) { c.BM25K1 = 1e39 }, want: "BM25K1"},
+		{name: "query block above the Milvus limit", mutate: func(c *library.Config) { c.QueryBlockSize = 16385 }, want: "QueryBlockSize"},
 		{name: "k1 finite float32 overflow", mutate: func(c *library.Config) { c.BM25K1 = 3e38 }, want: "BM25K1"},
 		{name: "k1 just above the maximum", mutate: func(c *library.Config) { c.BM25K1 = math.Nextafter(1e6, 2e6) }, want: "BM25K1"},
 		{name: "negative b", mutate: func(c *library.Config) { c.BM25B = &negativeB }, want: "BM25B"},

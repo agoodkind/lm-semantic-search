@@ -202,16 +202,20 @@ type Config struct {
 	// MaxBatchBytes bounds the bytes of one physical write batch. Default 8 MiB.
 	MaxBatchBytes int64
 	// QueryBlockSize bounds the vector IDs of one exact scoring request.
-	// Default 512.
+	// Default 512, at most 16,384, the Milvus single-search limit.
 	QueryBlockSize int
 	// QueryWorkers bounds concurrent scoring requests. Default 2.
 	QueryWorkers int
-	// MaxTemporaryBytes bounds temporary query disk. Default 1 GiB.
+	// MaxTemporaryBytes bounds the per-query SQLite file that Search creates in
+	// the catalog directory, through PRAGMA max_page_count. Default 1 GiB.
 	MaxTemporaryBytes int64
 	// SnapshotTTL bounds how long a persisted result snapshot serves cursors.
 	// Default 10 minutes.
 	SnapshotTTL time.Duration
-	// MaxSnapshotBytes bounds persisted snapshot disk. Default 256 MiB.
+	// MaxSnapshotBytes bounds the logical result bytes of unexpired search
+	// snapshots, measured after expired snapshots are deleted: the lengths of
+	// the text columns plus 8 bytes per numeric column. It does not count index
+	// pages or free pages. Default 256 MiB.
 	MaxSnapshotBytes int64
 	// QueryTimeout bounds one search. Default 30 seconds.
 	QueryTimeout time.Duration
