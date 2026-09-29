@@ -11,7 +11,6 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"goodkind.io/lm-semantic-search/internal/config"
 	internalonnx "goodkind.io/lm-semantic-search/internal/embedding/onnx"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 	"goodkind.io/lm-semantic-search/library"
@@ -185,10 +184,11 @@ func TestPrepareTextKeepsMultibyteCharactersWhole(t *testing.T) {
 	assertCompleteParts(t, tokenizer, maxTokens, text, parts)
 }
 
-func TestPrepareTextWithoutTokenizerUsesTheConservativeByteBudget(t *testing.T) {
+func TestPrepareTextWithoutTokenizerCountsOneTokenPerByte(t *testing.T) {
 	t.Parallel()
 	const maxTokens = 4096
-	byteBudget := config.EmbedChunkByteBudgetForLimit(0, maxTokens)
+	// int(4096 * 0.9) bytes for the whole input, prefix included.
+	const byteBudget = 3686
 	text := strings.Repeat("func alpha() { return beta }\n", 3*byteBudget/30)
 	parts, err := library.PrepareText(context.Background(), library.PrepareRequest{
 		Text:           text,
@@ -202,6 +202,9 @@ func TestPrepareTextWithoutTokenizerUsesTheConservativeByteBudget(t *testing.T) 
 	}
 	if len(parts) < 3 {
 		t.Fatalf("PrepareText returned %d parts, want at least 3", len(parts))
+	}
+	if len(parts[0].EmbeddingInput) != byteBudget {
+		t.Fatalf("first part input is %d bytes, want the full %d-byte budget", len(parts[0].EmbeddingInput), byteBudget)
 	}
 	var covered strings.Builder
 	for ordinal, part := range parts {

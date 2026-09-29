@@ -375,8 +375,8 @@ type PrepareRequest struct {
 	// MaxBytes is the byte limit for one embedding input. Zero applies no byte
 	// limit of its own.
 	MaxBytes int
-	// Tokenizer counts the tokens the embedding model measures. Nil converts
-	// MaxTokens to a conservative byte budget instead.
+	// Tokenizer counts the tokens the embedding model measures. Nil limits each
+	// embedding input to 90 percent of MaxTokens bytes, one byte per token.
 	Tokenizer Tokenizer
 }
 

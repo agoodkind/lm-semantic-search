@@ -18,8 +18,9 @@ import (
 //
 // Every part's EmbeddingInput is DocumentPrefix followed by the part's bytes of
 // Text, and that whole input fits MaxTokens and MaxBytes. With a Tokenizer, the
-// token limit applies to the counted input. Without one, the existing
-// conservative conversion turns MaxTokens into a byte budget. Parts cut Text at
+// token limit applies to the counted input. Without one, the whole input is at
+// most 90 percent of MaxTokens bytes, which treats every byte as one token. A
+// caller with the model's real tokenizer passes it as Tokenizer. Parts cut Text at
 // the largest fitting UTF-8 boundary, in order, and their Suffix values are the
 // decimal ordinals "0", "1", and so on. The same request always returns the
 // same parts.
@@ -99,7 +100,10 @@ func prepareLimits(request PrepareRequest) (prepareLimit, error) {
 	if request.Tokenizer != nil {
 		limits.tokens = request.MaxTokens
 	} else if request.MaxTokens > 0 {
-		derivedBytes := config.EmbedChunkByteBudgetForLimit(0, request.MaxTokens)
+		// Without a tokenizer, one input byte counts as one token. A byte-fallback
+		// BPE tokenizer emits at most one token per byte plus its added tokens,
+		// and the existing safety margin leaves room for those added tokens.
+		derivedBytes := config.EffectiveEmbedTokenCapForLimit(0, request.MaxTokens)
 		if limits.bytes == 0 || derivedBytes < limits.bytes {
 			limits.bytes = derivedBytes
 		}
