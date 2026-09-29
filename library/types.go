@@ -56,8 +56,8 @@ type VectorStore interface {
 	// VerifyStrong reads each identity with strong consistency and compares its
 	// digest and checksum.
 	VerifyStrong(context.Context, []VectorIdentity) error
-	// ScoreExact returns one finite exact score for every requested ID or a
-	// typed failure.
+	// ScoreExact returns one finite exact score for every requested ID, in
+	// request order, or a typed failure.
 	ScoreExact(context.Context, []float32, []string) ([]VectorScore, error)
 }
 
