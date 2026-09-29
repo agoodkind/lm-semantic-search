@@ -39,6 +39,10 @@ func TestRankingDepthBoundaries(t *testing.T) {
 	}
 }
 
+// testRankingCollection is the collection name of the rankings the cache
+// tests store at generation 0.
+const testRankingCollection = "conv_chunks_cache_test"
+
 func baseRankingKey() rankingKey {
 	return rankingKey{
 		CollectionName:  "conv_chunks_base",
@@ -137,7 +141,7 @@ func TestRankingCacheMissesOtherKeysAndCounts(t *testing.T) {
 	clock := &fakeRankingClock{now: time.Unix(1_700_000_000, 0)}
 	cache := newRankingCache(clock.read, RankingCacheMaxBytes)
 	base := baseRankingKey()
-	cache.put(base.digest(), rankingOf(40, 40, "base"))
+	cache.put(base.digest(), testRankingCollection, 0, rankingOf(40, 40, "base"))
 
 	if _, found := cache.get(base.digest(), 40); !found {
 		t.Fatal("the stored key missed")
@@ -165,7 +169,7 @@ func TestRankingCacheWriteGenerationChangesKey(t *testing.T) {
 	cache := newRankingCache(time.Now, RankingCacheMaxBytes)
 	key := baseRankingKey()
 	key.WriteGeneration = cache.writeGeneration(key.CollectionName)
-	cache.put(key.digest(), rankingOf(10, 10, "gen"))
+	cache.put(key.digest(), key.CollectionName, key.WriteGeneration, rankingOf(10, 10, "gen"))
 	cache.noteWrite("conv_chunks_unrelated")
 	if generation := cache.writeGeneration(key.CollectionName); generation != key.WriteGeneration {
 		t.Fatalf("a write to another collection moved the generation to %d", generation)
@@ -181,6 +185,31 @@ func TestRankingCacheWriteGenerationChangesKey(t *testing.T) {
 	}
 }
 
+// TestRankingCacheWritePurgesCollectionRankings proves a noted write removes
+// every stored ranking of its collection and keeps other collections'
+// rankings, and that a ranking computed before a write is not stored after it.
+func TestRankingCacheWritePurgesCollectionRankings(t *testing.T) {
+	t.Parallel()
+
+	cache := newRankingCache(time.Now, RankingCacheMaxBytes)
+	cache.put("written-a", "conv_chunks_written", 0, rankingOf(10, 10, "a"))
+	cache.put("written-b", "conv_chunks_written", 0, rankingOf(10, 10, "b"))
+	cache.put("other", "conv_chunks_other", 0, rankingOf(10, 10, "c"))
+	other := rankingOf(10, 10, "c").estimatedBytes()
+
+	cache.noteWrite("conv_chunks_written")
+	if len(cache.entries) != 1 || cache.usedBytes != other {
+		t.Fatalf("after a write the cache stores %d rankings and %d bytes, want 1 and %d", len(cache.entries), cache.usedBytes, other)
+	}
+	if _, found := cache.get("other", 10); !found {
+		t.Fatal("a write to one collection removed another collection's ranking")
+	}
+	cache.put("late", "conv_chunks_written", 0, rankingOf(10, 10, "late"))
+	if _, found := cache.get("late", 10); found {
+		t.Fatal("a ranking computed before a write was stored after it")
+	}
+}
+
 // TestRankingCacheExpiresAfterTTL proves an entry serves until RankingCacheTTL
 // passes without a read, that every read restarts that period, and that the
 // entry misses once a full period passes without a read.
@@ -190,7 +219,7 @@ func TestRankingCacheExpiresAfterTTL(t *testing.T) {
 	clock := &fakeRankingClock{now: time.Unix(1_700_000_000, 0)}
 	cache := newRankingCache(clock.read, RankingCacheMaxBytes)
 	digest := baseRankingKey().digest()
-	cache.put(digest, rankingOf(5, 5, "ttl"))
+	cache.put(digest, testRankingCollection, 0, rankingOf(5, 5, "ttl"))
 
 	for read := range 3 {
 		clock.now = clock.now.Add(RankingCacheTTL - time.Second)
@@ -234,7 +263,7 @@ func TestRankingCacheSharesOneComputation(t *testing.T) {
 		go func() {
 			defer finished.Done()
 			started.Done()
-			results[request], failures[request] = cache.rank(digest, 5, compute)
+			results[request], failures[request] = cache.rank(digest, testRankingCollection, 0, 5, compute)
 		}()
 	}
 	started.Wait()
@@ -272,12 +301,12 @@ func TestRankingCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	bound := first.estimatedBytes() + second.estimatedBytes() + third.estimatedBytes()/2
 	clock := &fakeRankingClock{now: time.Unix(1_700_000_000, 0)}
 	cache := newRankingCache(clock.read, bound)
-	cache.put("first", first)
-	cache.put("second", second)
+	cache.put("first", testRankingCollection, 0, first)
+	cache.put("second", testRankingCollection, 0, second)
 	if _, found := cache.get("first", 100); !found {
 		t.Fatal("first ranking missed before eviction")
 	}
-	cache.put("third", third)
+	cache.put("third", testRankingCollection, 0, third)
 
 	if _, found := cache.get("second", 100); found {
 		t.Fatal("the least recently used ranking survived eviction")
@@ -293,7 +322,7 @@ func TestRankingCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 
 	oversized := newRankingCache(clock.read, first.estimatedBytes()-1)
-	oversized.put("first", first)
+	oversized.put("first", testRankingCollection, 0, first)
 	if _, found := oversized.get("first", 100); found {
 		t.Fatal("a ranking larger than the bound was stored")
 	}
@@ -312,7 +341,7 @@ func TestCachedRankingPagesInClydeShape(t *testing.T) {
 	stored := rankingOf(rankedRows, rankedRows, "page")
 	sortRankedCandidates(stored.Candidates)
 	storedKeys := candidateKeys(stored.Candidates)
-	cache.put("page", stored)
+	cache.put("page", testRankingCollection, 0, stored)
 
 	for _, groupLimit := range []int32{0, 3} {
 		want := candidateKeys(selectRankedCandidates(stored.Candidates, groupLimit, 0.1, 0))
@@ -360,3 +389,4 @@ func TestPrimaryKeyColumnKeepsCallerKeys(t *testing.T) {
 		t.Fatalf("id column value after WithIDs = %q, want the client to quote its own copy", quoted)
 	}
 }
+

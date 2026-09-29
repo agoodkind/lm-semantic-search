@@ -229,7 +229,7 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 		PerGroupLimit:   perGroupLimit,
 		CallerState:     search.CallerState,
 	}.digest()
-	ranking, err := service.rankings.rank(digest, eligible, func() (collectionRanking, error) {
+	ranking, err := service.rankings.rank(digest, collectionName, writeGeneration, eligible, func() (collectionRanking, error) {
 		return service.computeRanking(ctx, collectionName, search, compiled, eligible)
 	})
 	if err != nil {

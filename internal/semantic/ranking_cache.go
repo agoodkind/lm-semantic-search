@@ -150,18 +150,19 @@ func (encoder rankingKeyEncoder) templateParam(param filterTemplateParam) {
 
 // rankingCacheEntry is one cached ranking and its bookkeeping.
 type rankingCacheEntry struct {
-	digest   string
-	ranking  collectionRanking
-	lastUsed time.Time
-	bytes    int64
+	digest     string
+	collection string
+	ranking    collectionRanking
+	lastUsed   time.Time
+	bytes      int64
 }
 
 // rankingCache stores collection rankings in process, one per ranking key. An
 // entry expires RankingCacheTTL after the last request that stored or read it.
 // Storing past maxBytes evicts the least recently used entries. The cache also
 // counts committed writes per collection name. A ranking key includes that
-// count, and a write changes the key of every later request for the
-// collection. Concurrent requests that miss one key and count share one
+// count. A write changes the key of every later request for the collection
+// and removes the collection's stored rankings. Concurrent requests that miss one key and count share one
 // ranking computation.
 type rankingCache struct {
 	mutex       sync.Mutex
@@ -206,8 +207,8 @@ func (cache *rankingCache) writeGeneration(collectionName string) uint64 {
 	return cache.generations[collectionName]
 }
 
-// noteWrite counts one committed write to collectionName. A nil cache ignores
-// it.
+// noteWrite counts one committed write to collectionName and removes every
+// stored ranking of collectionName. A nil cache ignores it.
 func (cache *rankingCache) noteWrite(collectionName string) {
 	if cache == nil {
 		return
@@ -215,6 +216,14 @@ func (cache *rankingCache) noteWrite(collectionName string) {
 	cache.mutex.Lock()
 	defer cache.mutex.Unlock()
 	cache.generations[collectionName]++
+	for element := cache.recency.Front(); element != nil; {
+		next := element.Next()
+		entry, isEntry := element.Value.(*rankingCacheEntry)
+		if isEntry && entry.collection == collectionName {
+			cache.removeLocked(element)
+		}
+		element = next
+	}
 }
 
 // get returns the unexpired ranking stored under digest when it was computed
@@ -247,8 +256,14 @@ func (cache *rankingCache) get(digest string, eligible int64) (collectionRanking
 
 // rank returns the cached ranking under digest for eligible rows, or runs
 // compute once for every concurrent request that misses the same digest and
-// count and stores its result.
-func (cache *rankingCache) rank(digest string, eligible int64, compute func() (collectionRanking, error)) (collectionRanking, error) {
+// count and stores its result for collectionName at generation.
+func (cache *rankingCache) rank(
+	digest string,
+	collectionName string,
+	generation uint64,
+	eligible int64,
+	compute func() (collectionRanking, error),
+) (collectionRanking, error) {
 	if ranking, cached := cache.get(digest, eligible); cached {
 		return ranking, nil
 	}
@@ -270,7 +285,7 @@ func (cache *rankingCache) rank(digest string, eligible int64, compute func() (c
 
 	flight.ranking, flight.err = compute()
 	if flight.err == nil {
-		cache.put(digest, flight.ranking)
+		cache.put(digest, collectionName, generation, flight.ranking)
 	}
 	cache.mutex.Lock()
 	delete(cache.flights, flightKey)
@@ -279,12 +294,17 @@ func (cache *rankingCache) rank(digest string, eligible int64, compute func() (c
 	return flight.ranking, flight.err
 }
 
-// put stores ranking under digest, replacing an earlier entry, and evicts the
-// least recently used entries until the cache fits maxBytes. A ranking larger
-// than maxBytes is not stored.
-func (cache *rankingCache) put(digest string, ranking collectionRanking) {
+// put stores ranking of collectionName under digest, replacing an earlier
+// entry, and evicts the least recently used entries until the cache fits
+// maxBytes. A ranking larger than maxBytes is not stored. A ranking computed at
+// a generation older than the collection's current generation is not stored:
+// a write committed while it was computed.
+func (cache *rankingCache) put(digest string, collectionName string, generation uint64, ranking collectionRanking) {
 	cache.mutex.Lock()
 	defer cache.mutex.Unlock()
+	if generation != cache.generations[collectionName] {
+		return
+	}
 	if element, found := cache.entries[digest]; found {
 		cache.removeLocked(element)
 	}
@@ -294,7 +314,7 @@ func (cache *rankingCache) put(digest string, ranking collectionRanking) {
 			"ranking_bytes", bytes, "cache_bytes", cache.maxBytes, "candidates", len(ranking.Candidates))
 		return
 	}
-	entry := &rankingCacheEntry{digest: digest, ranking: ranking, lastUsed: cache.clock(), bytes: bytes}
+	entry := &rankingCacheEntry{digest: digest, collection: collectionName, ranking: ranking, lastUsed: cache.clock(), bytes: bytes}
 	cache.entries[digest] = cache.recency.PushFront(entry)
 	cache.usedBytes += bytes
 	for cache.usedBytes > cache.maxBytes {
