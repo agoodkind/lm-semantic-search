@@ -53,7 +53,18 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      # The update-live daemons read the offline embedding model from the
+      # model cache root, which defaults to ~/.local/state/lm-semantic-search.
+      # The suite fails when a run writes a file there. The cache root here is
+      # the runner temp directory, with the Offline Live cache entry.
+      - name: Restore offline embedding model cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/offline-model-cache
+          key: offline-model-${{ runner.os }}-${{ hashFiles('internal/offlinemodel/registry.go') }}
       - name: Test update scheduler build gate
+        env:
+          CLAUDE_CONTEXTD_MODEL_CACHE_ROOT: ${{ runner.temp }}/offline-model-cache
         run: make update-live
 
   # offline-live runs the offline-profile daemon in process against the fixture
