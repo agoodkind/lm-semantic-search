@@ -124,6 +124,21 @@ func NetworkCheckOptions(ctx context.Context, overrides Overrides) (selfupdate.O
 	return option, nil
 }
 
+// NetworkOptionsForInstallDir returns OptionsForInstallDir with the resolved
+// GitHub token set on every binary, for an install that queries the release
+// API.
+func NetworkOptionsForInstallDir(ctx context.Context, installDir string, overrides Overrides) ([]selfupdate.Options, error) {
+	options, err := OptionsForInstallDir(installDir, overrides)
+	if err != nil {
+		return nil, err
+	}
+	authToken := resolveGitHubToken(ctx, overrides.Log)
+	for index := range options {
+		options[index].Config.AuthToken = authToken
+	}
+	return options, nil
+}
+
 // StatePath returns the shared update state path.
 func StatePath(overrides Overrides) (string, error) {
 	stateRoot, err := resolveStateRoot(overrides)

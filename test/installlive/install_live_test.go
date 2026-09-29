@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/test/operatorstate"
 )
 
 const (
@@ -43,7 +45,7 @@ func TestMain(m *testing.M) {
 		_ = os.RemoveAll(buildDirectory)
 		os.Exit(1)
 	}
-	exitCode := m.Run()
+	exitCode := operatorstate.RunWithGuard(m.Run)
 	_ = os.RemoveAll(buildDirectory)
 	os.Exit(exitCode)
 }
@@ -83,7 +85,15 @@ type commandResult struct {
 
 func runCommand(t *testing.T, path string, args ...string) commandResult {
 	t.Helper()
+	return runCommandWithEnvironment(t, nil, path, args...)
+}
+
+// runCommandWithEnvironment runs path with environment, or with the test
+// process environment when environment is nil.
+func runCommandWithEnvironment(t *testing.T, environment []string, path string, args ...string) commandResult {
+	t.Helper()
 	command := exec.Command(path, args...)
+	command.Env = environment
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -100,9 +110,26 @@ func runCommand(t *testing.T, path string, args ...string) commandResult {
 	return commandResult{exitCode: exitCode, stdout: stdout.String(), stderr: stderr.String()}
 }
 
+// newIsolatedRoot creates a directory under /tmp for one test's LMS state,
+// config, context, and socket.
+func newIsolatedRoot(t *testing.T) string {
+	t.Helper()
+	root, err := os.MkdirTemp("/tmp", "lms-install-live-")
+	if err != nil {
+		t.Fatalf("create isolated root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	return root
+}
+
 func runInstall(t *testing.T, binDir string) commandResult {
 	t.Helper()
-	return runCommand(t, builtCLIPath, "install", "--no-service", "--bin-dir", binDir)
+	return runInstallInRoot(t, newIsolatedRoot(t), binDir)
+}
+
+func runInstallInRoot(t *testing.T, root string, binDir string) commandResult {
+	t.Helper()
+	return runCommandWithEnvironment(t, isolatedEnvironment(root), builtCLIPath, "install", "--no-service", "--bin-dir", binDir)
 }
 
 func directoryEntryNames(t *testing.T, directory string) []string {

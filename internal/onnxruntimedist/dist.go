@@ -121,16 +121,18 @@ func LibraryNamesFor(goos string) (LibraryNames, error) {
 	}
 }
 
-// InstallSharedLibrary downloads archive, verifies its pinned SHA-256, and
-// installs its shared library into directory through InstallLibrary.
-func InstallSharedLibrary(
+// StageSharedLibrary downloads archive, verifies its pinned SHA-256, and
+// writes only its versioned library file into directory. It writes no SONAME
+// or unversioned symlink. A binary already installed in directory keeps
+// loading the library that those symlinks name.
+func StageSharedLibrary(
 	ctx context.Context,
 	httpClient *http.Client,
 	archive Archive,
 	names LibraryNames,
 	directory string,
 ) error {
-	slog.DebugContext(ctx, "install ONNX Runtime shared library", "directory", directory)
+	slog.DebugContext(ctx, "stage ONNX Runtime shared library", "directory", directory)
 	temporaryDirectory, err := os.MkdirTemp("", "lms-onnxruntime.")
 	if err != nil {
 		return wrapError("create temporary directory", err)
@@ -146,7 +148,11 @@ func InstallSharedLibrary(
 	if err := os.MkdirAll(directory, defaultDirectoryMode); err != nil {
 		return wrapError("create library directory", err)
 	}
-	return InstallLibrary(archiveDirectory, names, directory)
+	sourceLibraryPath := filepath.Join(archiveDirectory, "lib", names.Versioned)
+	if err := copyFileReplacing(sourceLibraryPath, filepath.Join(directory, names.Versioned)); err != nil {
+		return wrapError("copy ONNX Runtime shared library", err)
+	}
+	return nil
 }
 
 // FetchArchive downloads archive into workDirectory, verifies its pinned

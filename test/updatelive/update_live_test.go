@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/sandbox"
+	"goodkind.io/lm-semantic-search/test/operatorstate"
 )
 
 const (
@@ -81,7 +82,7 @@ func TestMain(m *testing.M) {
 		_ = os.RemoveAll(buildDirectory)
 		os.Exit(1)
 	}
-	exitCode := m.Run()
+	exitCode := operatorstate.RunWithGuard(m.Run)
 	_ = os.RemoveAll(buildDirectory)
 	os.Exit(exitCode)
 }
