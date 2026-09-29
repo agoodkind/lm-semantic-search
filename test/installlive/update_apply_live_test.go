@@ -31,10 +31,10 @@ const (
 	oldMCPContent    = "installed mcp before the update\n"
 	oldDaemonContent = "installed daemon before the update\n"
 
-	githubTokenEnv        = "GH_TOKEN"
-	githubAPIBaseURL      = "https://api.github.com"
-	updateAPIBaseURLEnv   = "LM_SEMANTIC_SEARCH_UPDATE_API_BASE_URL"
-	releaseListPath       = "/repos/agoodkind/lm-semantic-search/releases"
+	githubAPIBaseURL       = "https://api.github.com"
+	updateAPIBaseURLEnv    = "LM_SEMANTIC_SEARCH_UPDATE_API_BASE_URL"
+	releaseListPath        = "/repos/agoodkind/lm-semantic-search/releases"
+	releaseAssetPathPrefix = "/repos/agoodkind/lm-semantic-search/releases/assets/"
 	// The updater also fetches the release commit attestation at
 	// attestations/sha1:<commit>, which every archive shares. Only the
 	// sha256 paths identify one archive each.
@@ -146,6 +146,7 @@ func TestUpdateApplyReplacesAllBinariesWhenDaemonLoadsLibraryFromInstallDir(t *t
 	proxy := startGitHubAPIProxy(t)
 
 	result := directory.runUpdateApply(t, proxy)
+	failOnGitHubRefusal(t, result)
 	if result.exitCode != 0 {
 		t.Fatalf("update apply exit = %d\nstdout:\n%s\nstderr:\n%s", result.exitCode, result.stdout, result.stderr)
 	}
@@ -172,6 +173,7 @@ func TestUpdateApplyLeavesAllBinariesWhenDaemonCandidateFails(t *testing.T) {
 	proxy := startGitHubAPIProxy(t)
 
 	result := directory.runUpdateApply(t, proxy)
+	failOnGitHubRefusal(t, result)
 	if result.exitCode == 0 {
 		t.Fatalf("update apply succeeded without ONNX Runtime\nstdout:\n%s", result.stdout)
 	}
@@ -186,11 +188,9 @@ func TestUpdateApplyLeavesAllBinariesWhenDaemonCandidateFails(t *testing.T) {
 }
 
 // githubAPIProxy forwards the updater's GitHub API requests to api.github.com
-// and records each request path with its response status. When GH_TOKEN is
-// set, it adds an Authorization header; it forwards the rest of each request
-// and each response unmodified. GitHub answers unauthenticated release queries
-// from shared CI runner addresses with HTTP 403, and the updater reads no
-// token. cmd/ci-auto-update uses the same kind of proxy.
+// unmodified, including the Authorization header the updater sends. It
+// records each request path, whether the request had an Authorization header,
+// and the response status. It never records the header value.
 type githubAPIProxy struct {
 	server    *httptest.Server
 	mutex     sync.Mutex
@@ -198,8 +198,9 @@ type githubAPIProxy struct {
 }
 
 type apiResponse struct {
-	path   string
-	status int
+	path       string
+	authorized bool
+	status     int
 }
 
 func startGitHubAPIProxy(t *testing.T) *githubAPIProxy {
@@ -208,18 +209,18 @@ func startGitHubAPIProxy(t *testing.T) *githubAPIProxy {
 	if err != nil {
 		t.Fatalf("parse GitHub API URL: %v", err)
 	}
-	token := strings.TrimSpace(os.Getenv(githubTokenEnv))
 	proxy := &githubAPIProxy{}
 	proxy.server = httptest.NewServer(&httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
 			request.SetURL(target)
-			if token != "" {
-				request.Out.Header.Set("Authorization", "Bearer "+token)
-			}
 		},
 		ModifyResponse: func(response *http.Response) error {
 			proxy.mutex.Lock()
-			proxy.responses = append(proxy.responses, apiResponse{path: response.Request.URL.Path, status: response.StatusCode})
+			proxy.responses = append(proxy.responses, apiResponse{
+				path:       response.Request.URL.Path,
+				authorized: response.Request.Header.Get("Authorization") != "",
+				status:     response.StatusCode,
+			})
 			proxy.mutex.Unlock()
 			return nil
 		},
@@ -237,11 +238,25 @@ func (proxy *githubAPIProxy) assertReleaseVerifiedThroughProxy(t *testing.T) {
 	proxy.mutex.Lock()
 	responses := append([]apiResponse(nil), proxy.responses...)
 	proxy.mutex.Unlock()
+	// The updater resolves GH_TOKEN and GITHUB_TOKEN before `gh auth token`.
+	// When either variable is set, every request must carry the updater's own
+	// Authorization header.
+	tokenInEnvironment := false
+	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
+		tokenInEnvironment = tokenInEnvironment || strings.TrimSpace(os.Getenv(name)) != ""
+	}
 	listedReleases := false
 	attestationPaths := map[string]bool{}
 	for _, response := range responses {
-		if response.status != http.StatusOK {
+		// With a token the updater downloads each archive through the API
+		// asset endpoint, which answers with a redirect to the storage host.
+		assetRedirect := strings.HasPrefix(response.path, releaseAssetPathPrefix) && response.status == http.StatusFound
+		if response.status != http.StatusOK && !assetRedirect {
 			t.Fatalf("GitHub API %s returned HTTP %d through the proxy; all responses %v", response.path, response.status, responses)
+		}
+		if tokenInEnvironment && !response.authorized {
+			t.Fatalf("updater sent %s without an Authorization header while a token variable is set; all responses %v",
+				response.path, responses)
 		}
 		if response.path == releaseListPath {
 			listedReleases = true
@@ -256,6 +271,20 @@ func (proxy *githubAPIProxy) assertReleaseVerifiedThroughProxy(t *testing.T) {
 	if len(attestationPaths) < len(releaseBinaries) {
 		t.Fatalf("updater fetched attestations for %d archive digests, want %d; responses %v",
 			len(attestationPaths), len(releaseBinaries), responses)
+	}
+}
+
+// failOnGitHubRefusal fails with a quota error when GitHub refused an API
+// request with HTTP 403 or 429. A refused request stops update apply before
+// it stages any candidate, and the file assertions would then report the
+// refusal as a replaced or unchanged binary.
+func failOnGitHubRefusal(t *testing.T, result commandResult) {
+	t.Helper()
+	for _, status := range []string{"HTTP 403", "HTTP 429"} {
+		if strings.Contains(result.stderr, status) {
+			t.Fatalf("GitHub refused an update API request with %s (rate limit or missing credentials); "+
+				"set GH_TOKEN or GITHUB_TOKEN, or run `gh auth login`\nstderr:\n%s", status, result.stderr)
+		}
 	}
 }
 
