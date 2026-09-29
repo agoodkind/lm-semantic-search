@@ -13,7 +13,6 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc/peer"
@@ -452,8 +451,7 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 		outputFields = append(outputFields, groupColumn.Name)
 	}
 	if service.cfg.HybridMode {
-		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, depth, entity.FloatVector(queryVector)).
-			WithAnnParam(rankingAnnParam(depth))
+		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, depth, entity.FloatVector(queryVector))
 		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, depth, entity.Text(rawQuery))
 		if compiled.Expression != "" {
 			denseRequest = denseRequest.WithFilter(compiled.Expression)
@@ -503,7 +501,7 @@ func denseRankingOption(collectionName string, queryVector []float32, compiled c
 		collectionName,
 		depth,
 		[]entity.Vector{entity.FloatVector(queryVector)},
-	).WithANNSField(denseVectorFieldName).WithAnnParam(rankingAnnParam(depth)).WithConsistencyLevel(rankingConsistency)
+	).WithANNSField(denseVectorFieldName).WithConsistencyLevel(rankingConsistency)
 	if len(outputFields) > 0 {
 		searchOption = searchOption.WithOutputFields(outputFields...)
 	}
@@ -531,14 +529,6 @@ func resultRowCount(resultSets []milvusclient.ResultSet) int {
 		return 0
 	}
 	return resultSets[0].ResultCount
-}
-
-// rankingAnnParam returns the dense search parameters of a ranking search at
-// depth. It sets ef, the HNSW search list size, to depth.
-func rankingAnnParam(depth int) index.AnnParam {
-	params := index.NewCustomAnnParam()
-	params.WithExtraParam("ef", depth)
-	return params
 }
 
 func bindAnnTemplateParam(request *milvusclient.AnnRequest, param filterTemplateParam) *milvusclient.AnnRequest {
