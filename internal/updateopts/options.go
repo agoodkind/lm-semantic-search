@@ -27,10 +27,7 @@ const (
 	updateAPIBaseURLEnv = "LM_SEMANTIC_SEARCH_UPDATE_API_BASE_URL"
 )
 
-var (
-	binaryApplyOrder = []string{cliBinary, mcpBinary, daemonBinary}
-	applyBinary      = selfupdate.Apply
-)
+var binaryApplyOrder = []string{cliBinary, mcpBinary, daemonBinary}
 
 // Overrides carries operation-specific update settings.
 type Overrides struct {
@@ -50,10 +47,11 @@ type BinaryApplyResult struct {
 
 // ApplyAllResult records a multi-binary self-update run.
 type ApplyAllResult struct {
-	Results         []BinaryApplyResult
-	UpdateAvailable bool
-	Applied         bool
-	DryRun          bool
+	Results            []BinaryApplyResult
+	UpdateAvailable    bool
+	Applied            bool
+	DryRun             bool
+	LaunchCheckSkipped bool
 }
 
 // Options builds selfupdate options for every release binary in apply order.
@@ -115,6 +113,17 @@ func CheckOptions(overrides Overrides) (selfupdate.Options, error) {
 	return selfupdate.Options{}, fmt.Errorf("daemon update options unavailable")
 }
 
+// NetworkCheckOptions returns CheckOptions with the resolved GitHub token set,
+// for a check that queries the release API.
+func NetworkCheckOptions(ctx context.Context, overrides Overrides) (selfupdate.Options, error) {
+	option, err := CheckOptions(overrides)
+	if err != nil {
+		return selfupdate.Options{}, err
+	}
+	option.Config.AuthToken = resolveGitHubToken(ctx, overrides.Log)
+	return option, nil
+}
+
 // StatePath returns the shared update state path.
 func StatePath(overrides Overrides) (string, error) {
 	stateRoot, err := resolveStateRoot(overrides)
@@ -124,35 +133,44 @@ func StatePath(overrides Overrides) (string, error) {
 	return filepath.Join(stateRoot, updateStateFileName), nil
 }
 
-// ApplyAll applies the CLI and MCP binaries before applying the daemon binary.
+// ApplyAll updates the CLI, MCP, and daemon binaries as one set through
+// selfupdate.ApplyAll. It validates every candidate in the install directory
+// before it replaces any binary, and a failing candidate leaves all three
+// installed binaries unchanged.
 func ApplyAll(ctx context.Context, overrides Overrides) (ApplyAllResult, error) {
 	options, err := Options(overrides)
 	if err != nil {
 		return ApplyAllResult{}, err
 	}
-	result := ApplyAllResult{
-		Results:         make([]BinaryApplyResult, 0, len(options)),
-		UpdateAvailable: false,
-		Applied:         false,
-		DryRun:          overrides.DryRun,
+	authToken := resolveGitHubToken(ctx, overrides.Log)
+	for index := range options {
+		options[index].Config.AuthToken = authToken
 	}
-	for _, option := range options {
-		applyResult, applyErr := applyBinary(ctx, option)
+	result := ApplyAllResult{
+		Results:            make([]BinaryApplyResult, 0, len(options)),
+		UpdateAvailable:    false,
+		Applied:            false,
+		DryRun:             overrides.DryRun,
+		LaunchCheckSkipped: false,
+	}
+	applyResults, applyErr := selfupdate.ApplyAll(ctx, options)
+	for index, applyResult := range applyResults {
 		result.Results = append(result.Results, BinaryApplyResult{
-			Binary: option.Config.Binary,
+			Binary: options[index].Config.Binary,
 			Result: applyResult,
 		})
 		result.UpdateAvailable = result.UpdateAvailable || applyResult.UpdateAvailable
 		result.Applied = result.Applied || applyResult.Applied
 		result.DryRun = result.DryRun || applyResult.DryRun
-		if applyErr != nil {
-			log := option.Log
-			if log == nil {
-				log = slog.Default()
-			}
-			log.WarnContext(ctx, "apply binary update failed", "binary", option.Config.Binary, "err", applyErr)
-			return result, fmt.Errorf("apply %s: %w", option.Config.Binary, applyErr)
+		result.LaunchCheckSkipped = result.LaunchCheckSkipped || applyResult.LaunchCheckSkipped
+	}
+	if applyErr != nil {
+		log := overrides.Log
+		if log == nil {
+			log = slog.Default()
 		}
+		log.WarnContext(ctx, "apply binary updates failed", "err", applyErr)
+		return result, fmt.Errorf("apply release binaries: %w", applyErr)
 	}
 	return result, nil
 }

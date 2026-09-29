@@ -53,7 +53,7 @@ func newUpdateCheckCmd() *cobra.Command {
 		Short: "Check the latest release",
 		Args:  requireNoArgs("update check"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			option, err := updateopts.CheckOptions(defaultUpdateOverrides(false))
+			option, err := updateopts.NetworkCheckOptions(commandContext(cmd), defaultUpdateOverrides(false))
 			if err != nil {
 				slog.Error("build update check options failed", "err", err)
 				return fmt.Errorf("build update check options: %w", err)
@@ -87,6 +87,10 @@ func newUpdateApplyCmd(options *rootOptions) *cobra.Command {
 			}
 			if dryRun || result.DryRun {
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "lm-semantic-search: update apply dry run ok")
+				if result.LaunchCheckSkipped {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(),
+						"lm-semantic-search: candidate launch check skipped; a dry run writes nothing into the install directory")
+				}
 				return nil
 			}
 			restarted, err := requestDaemonShutdown(commandContext(cmd), options.socketPath)
@@ -102,7 +106,7 @@ func newUpdateApplyCmd(options *rootOptions) *cobra.Command {
 			return nil
 		},
 	}
-	apply.Flags().BoolVar(&dryRun, "dry-run", false, "download and verify without installing")
+	apply.Flags().BoolVar(&dryRun, "dry-run", false, "download and verify without installing or launching the candidates")
 	return apply
 }
 

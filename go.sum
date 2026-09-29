@@ -937,8 +937,8 @@ goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e h1:rc0g9PskdABDDhsXsL9rlf
 goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e/go.mod h1:6QHBKQ4ylZgScAMpaQkDaPvHHh41UYlVUXPUDgxlQFU=
 goodkind.io/gksyntax v0.0.0-20260608044551-dcae2f033996 h1:e+gojRXDzLC7aI6k2EGPoF3pmqiWZ1s2GjH64jPzvoM=
 goodkind.io/gksyntax v0.0.0-20260608044551-dcae2f033996/go.mod h1:3JLFnrp91eEKlJy10WzsUECoOnypuhhv9uJxKcmvE24=
-goodkind.io/go-makefile v0.0.0-20260918034203-6f29e0969c7c h1:4F/mn1wHIAlGD5ZkTM8S3PEOUtSVFjrZIlldqKIfwwY=
-goodkind.io/go-makefile v0.0.0-20260918034203-6f29e0969c7c/go.mod h1:OSA03hU6SJ51lPhD+foq7k5Y1xuuOxGep1MbfRXE6y0=
+goodkind.io/go-makefile v0.0.0-20260929041825-3e60c5035f40 h1:SWG2RHllfkTN+AqLGk89UOrdbX7KGxkllQ2RWtllI5k=
+goodkind.io/go-makefile v0.0.0-20260929041825-3e60c5035f40/go.mod h1:n3rZSoH1Ru/7LVDq534mSbsOMnKY/ndvusw1haJP8Cs=
 google.golang.org/api v0.283.0 h1:0lkp8u0MPwJVHqRL+nJlMAoZVVzbmiXmFHXMOTmSPik=
 google.golang.org/api v0.283.0/go.mod h1:6Wssta4c5n9qHq5CBhmlai5h/PUa1djdDAIhYEHyvcM=
 google.golang.org/appengine v1.1.0/go.mod h1:EbEs0AVv82hx2wNQdGPgUI5lhzA/G0D9YwlJXL52JkM=

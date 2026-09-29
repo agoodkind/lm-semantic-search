@@ -3,16 +3,15 @@ package updateopts
 import (
 	"bytes"
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"goodkind.io/gklog/version"
-	"goodkind.io/go-makefile/selfupdate"
 )
 
 func TestOptionsForInstallDirBuildsSharedStateOptionsInApplyOrder(t *testing.T) {
@@ -87,47 +86,18 @@ func TestOptionsForInstallDirBuildsSharedStateOptionsInApplyOrder(t *testing.T) 
 	}
 }
 
-func TestApplyAllAbortsBeforeDaemonWhenClientApplyFails(t *testing.T) {
-	originalApply := applyBinary
-	t.Cleanup(func() {
-		applyBinary = originalApply
-	})
-	clientFailure := errors.New("client apply failed")
-	calls := []string{}
-	applyBinary = func(ctx context.Context, options selfupdate.Options) (selfupdate.ApplyResult, error) {
-		_ = ctx
-		calls = append(calls, options.Config.Binary)
-		if options.Config.Binary == "lm-semantic-search-mcp" {
-			return selfupdate.ApplyResult{}, clientFailure
-		}
-		return selfupdate.ApplyResult{Applied: true}, nil
-	}
-
-	_, err := ApplyAll(context.Background(), Overrides{
-		InstallDir: t.TempDir(),
-		StateRoot:  t.TempDir(),
-		CacheDir:   t.TempDir(),
-	})
-	if !errors.Is(err, clientFailure) {
-		t.Fatalf("ApplyAll error = %v, want client failure", err)
-	}
-
-	wantCalls := []string{"lm-semantic-search", "lm-semantic-search-mcp"}
-	if !reflect.DeepEqual(calls, wantCalls) {
-		t.Fatalf("apply calls = %#v, want %#v", calls, wantCalls)
-	}
-}
-
+// TestApplyAllLogsApplyFailuresWithOperationLogger runs ApplyAll against a
+// local release API that answers the release query with HTTP 500. ApplyAll
+// must return the error and write the failure to the operation logger.
 func TestApplyAllLogsApplyFailuresWithOperationLogger(t *testing.T) {
-	originalApply := applyBinary
-	t.Cleanup(func() {
-		applyBinary = originalApply
-	})
-	applyBinary = func(ctx context.Context, options selfupdate.Options) (selfupdate.ApplyResult, error) {
-		_ = ctx
-		_ = options
-		return selfupdate.ApplyResult{}, errors.New("apply failed")
-	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "injected failure", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv(updateAPIBaseURLEnv, server.URL)
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("PATH", t.TempDir())
 
 	var output bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&output, nil)).With("component", "update")
@@ -137,12 +107,12 @@ func TestApplyAllLogsApplyFailuresWithOperationLogger(t *testing.T) {
 		CacheDir:   t.TempDir(),
 		Log:        logger,
 	})
-	if err == nil {
-		t.Fatalf("ApplyAll returned nil error")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("ApplyAll error = %v, want the release query HTTP 500", err)
 	}
 
 	logOutput := output.String()
-	if !strings.Contains(logOutput, "apply binary update failed") {
+	if !strings.Contains(logOutput, "apply binary updates failed") {
 		t.Fatalf("operation logger output = %q, want apply failure message", logOutput)
 	}
 	if !strings.Contains(logOutput, "component=update") {
