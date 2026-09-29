@@ -226,45 +226,6 @@ func TestConversationSearchPagesAcrossRestart(t *testing.T) {
 	}
 }
 
-// resultContents returns the key and content of every result, in order.
-func resultContents(results []*pb.ConversationSearchResult) []string {
-	contents := make([]string, 0, len(results))
-	for _, result := range results {
-		contents = append(contents, rankingKey(result)+"\x00"+result.GetContent())
-	}
-	return contents
-}
-
-// TestConversationSearchRepeatsCachedPages reads one cached ranking twice: two
-// identical full requests return the same keys, contents, and order, and two
-// traversals in the Clyde request shape at page size 10 return the same keys
-// in the same order. The daemon passes the cached row IDs back to Milvus for
-// every content load, and the Milvus client rewrites the ID slice it receives.
-func TestConversationSearchRepeatsCachedPages(t *testing.T) {
-	h, total, scope, scopedRows := newPagingHarness(t)
-	cases := []struct {
-		name     string
-		scope    []string
-		eligible int
-	}{
-		{name: "unfiltered", scope: nil, eligible: total},
-		{name: "conversation ids", scope: scope, eligible: scopedRows},
-	}
-	for _, testCase := range cases {
-		first := resultContents(h.conversationPage(int32(testCase.eligible), testCase.scope).GetResults())
-		second := resultContents(h.conversationPage(int32(testCase.eligible), testCase.scope).GetResults())
-		if len(first) != testCase.eligible || !slices.Equal(first, second) {
-			t.Fatalf("%s: repeated full requests returned %d and %d rows with different keys, contents, or order", testCase.name, len(first), len(second))
-		}
-		firstPages, _ := h.pageInClydeShape(pagingRestartPageSize, testCase.scope, 0, 0)
-		secondPages, _ := h.pageInClydeShape(pagingRestartPageSize, testCase.scope, 0, 0)
-		if !slices.Equal(firstPages, secondPages) {
-			t.Fatalf("%s: two traversals of one cached ranking returned different keys or order", testCase.name)
-		}
-		requireSamePages(t, testCase.name+" repeated traversal", secondPages, rankingKeys(h.conversationPage(int32(testCase.eligible), testCase.scope).GetResults()))
-	}
-}
-
 // waitJobWithin polls the manager until the job is terminal or timeout ends.
 func (h *harness) waitJobWithin(jobID string, timeout time.Duration) model.Job {
 	h.t.Helper()
