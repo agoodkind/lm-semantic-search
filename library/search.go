@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/clock"
 )
@@ -90,6 +91,7 @@ func classifySearchError(ctx context.Context, namespace string, err error) error
 }
 
 func (library *Library) search(ctx context.Context, request SearchRequest) (SearchPage, error) {
+	started := clock.Now()
 	plan, err := library.planSearch(ctx, request)
 	if err != nil {
 		return SearchPage{}, err
@@ -97,7 +99,53 @@ func (library *Library) search(ctx context.Context, request SearchRequest) (Sear
 	if request.Cursor != "" {
 		return library.readCursorPage(ctx, plan)
 	}
-	return library.searchFirstPage(ctx, plan)
+	phases := &searchPhases{plan: clock.Now().Sub(started)}
+	page, err := library.searchFirstPage(ctx, plan, phases)
+	if err != nil {
+		return SearchPage{}, err
+	}
+	phases.log(ctx, request.Namespace)
+	return page, nil
+}
+
+// searchPhases are the wall-clock durations of one page-one search. verify
+// and score sum the VerifyStrong and ScoreExact durations of every block,
+// which run concurrently inside dense. writeWait is the time until the
+// snapshot write transaction starts, which includes waiting for another
+// SQLite writer; write is the rest of that transaction.
+type searchPhases struct {
+	plan      time.Duration
+	read      time.Duration
+	embed     time.Duration
+	dense     time.Duration
+	verify    time.Duration
+	score     time.Duration
+	lexical   time.Duration
+	rank      time.Duration
+	writeWait time.Duration
+	write     time.Duration
+	hits      time.Duration
+}
+
+// log writes the phase durations in milliseconds at debug level.
+func (phases *searchPhases) log(ctx context.Context, namespace string) {
+	milliseconds := func(duration time.Duration) float64 {
+		return float64(duration.Microseconds()) / 1000
+	}
+	slog.DebugContext(ctx, "library search phases",
+		"namespace", namespace,
+		"plan_ms", milliseconds(phases.plan),
+		"read_ms", milliseconds(phases.read),
+		"embed_ms", milliseconds(phases.embed),
+		"dense_ms", milliseconds(phases.dense),
+		"verify_ms", milliseconds(phases.verify),
+		"score_ms", milliseconds(phases.score),
+		"lexical_ms", milliseconds(phases.lexical),
+		"rank_ms", milliseconds(phases.rank),
+		"write_wait_ms", milliseconds(phases.writeWait),
+		"write_ms", milliseconds(phases.write),
+		"hits_ms", milliseconds(phases.hits),
+	)
 }
 
 // planSearch loads the registered namespace declaration, validates the
@@ -158,7 +206,8 @@ func hashJSON[Identity requestIdentity | rankConfig](value Identity) (string, er
 
 // searchFirstPage copies the eligible occurrences under one read transaction,
 // scores and ranks them in a query database, and returns the first page.
-func (library *Library) searchFirstPage(ctx context.Context, plan searchPlan) (_ SearchPage, err error) {
+func (library *Library) searchFirstPage(ctx context.Context, plan searchPlan, phases *searchPhases) (_ SearchPage, err error) {
+	started := clock.Now()
 	query, err := openQueryDatabase(ctx, library.config.Store.CatalogPath, library.config.MaxTemporaryBytes)
 	if err != nil {
 		return SearchPage{}, err
@@ -175,21 +224,33 @@ func (library *Library) searchFirstPage(ctx context.Context, plan searchPlan) (_
 	}); err != nil {
 		return SearchPage{}, err
 	}
+	started = phases.mark(&phases.read, started)
 	queryVector, err := library.embedQuery(ctx, plan.request.Query)
 	if err != nil {
 		return SearchPage{}, err
 	}
-	if err := library.scoreDense(ctx, query, queryVector); err != nil {
+	started = phases.mark(&phases.embed, started)
+	if err := library.scoreDense(ctx, query, queryVector, phases); err != nil {
 		return SearchPage{}, err
 	}
+	started = phases.mark(&phases.dense, started)
 	if err := scoreLexical(ctx, query, leg); err != nil {
 		return SearchPage{}, err
 	}
+	started = phases.mark(&phases.lexical, started)
 	total, err := rankCandidates(ctx, query, plan)
 	if err != nil {
 		return SearchPage{}, err
 	}
-	return library.firstPage(ctx, query, plan, revisions, total)
+	phases.mark(&phases.rank, started)
+	return library.firstPage(ctx, query, plan, revisions, total, phases)
+}
+
+// mark stores the time since started in phase and returns the current time.
+func (phases *searchPhases) mark(phase *time.Duration, started time.Time) time.Time {
+	now := clock.Now()
+	*phase = now.Sub(started)
+	return now
 }
 
 // copySnapshot reads the catalog revisions, the lexical corpus in Hybrid
@@ -227,6 +288,7 @@ func (library *Library) firstPage(
 	plan searchPlan,
 	revisions snapshotRevisions,
 	total int64,
+	phases *searchPhases,
 ) (SearchPage, error) {
 	pageSize := plan.request.PageSize
 	rows, err := readRankedRows(ctx, query, 0, pageSize)
@@ -236,7 +298,7 @@ func (library *Library) firstPage(
 	hasMore := total > int64(pageSize)
 	nextCursor := ""
 	if hasMore {
-		snapshotID, err := library.persistSnapshot(ctx, query, plan, revisions)
+		snapshotID, err := library.persistSnapshot(ctx, query, plan, revisions, phases)
 		if err != nil {
 			return SearchPage{}, err
 		}
@@ -252,6 +314,7 @@ func (library *Library) firstPage(
 			return SearchPage{}, err
 		}
 	}
+	started := clock.Now()
 	var hits []SearchHit
 	if err := library.read(ctx, func(tx *sql.Tx) error {
 		var buildErr error
@@ -260,6 +323,7 @@ func (library *Library) firstPage(
 	}); err != nil {
 		return SearchPage{}, err
 	}
+	phases.mark(&phases.hits, started)
 	return SearchPage{Hits: hits, HasMore: hasMore, NextCursor: nextCursor}, nil
 }
 

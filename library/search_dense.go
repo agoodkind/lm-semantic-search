@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"time"
 
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/library/internal/vectorcodec"
 )
 
@@ -31,11 +33,14 @@ func (library *Library) embedQuery(ctx context.Context, query string) ([]float32
 	return vectors[0], nil
 }
 
-// scoreBlock is one bounded request of distinct vector identities.
+// scoreBlock is one bounded request of distinct vector identities with its
+// result and the durations of its VerifyStrong and ScoreExact calls.
 type scoreBlock struct {
 	identities []VectorIdentity
 	scores     []VectorScore
 	err        error
+	verifyTime time.Duration
+	scoreTime  time.Duration
 }
 
 // scoreDense verifies and scores every distinct eligible vector in the query
@@ -43,7 +48,7 @@ type scoreBlock struct {
 // time in vector ID order, runs VerifyStrong and then ScoreExact for each
 // block concurrently, and saves each block's scores. Any block failure fails
 // the search. The last check requires a score for every vector.
-func (library *Library) scoreDense(ctx context.Context, query *queryDatabase, queryVector []float32) error {
+func (library *Library) scoreDense(ctx context.Context, query *queryDatabase, queryVector []float32, phases *searchPhases) error {
 	after := ""
 	blockSize := library.config.QueryBlockSize
 	for {
@@ -59,6 +64,8 @@ func (library *Library) scoreDense(ctx context.Context, query *queryDatabase, qu
 			if block.err != nil {
 				return block.err
 			}
+			phases.verify += block.verifyTime
+			phases.score += block.scoreTime
 		}
 		if err := saveScores(ctx, query, blocks); err != nil {
 			return err
@@ -122,25 +129,31 @@ func (library *Library) runScoreBlocks(ctx context.Context, queryVector []float3
 	var group sync.WaitGroup
 	for _, block := range blocks {
 		group.Go(func() {
-			block.scores, block.err = library.scoreBlock(ctx, queryVector, block.identities)
+			block.scores, block.err = library.scoreBlock(ctx, queryVector, block)
 		})
 	}
 	group.Wait()
 }
 
-// scoreBlock verifies the identity digest and checksum of each vector with a
-// strong read and then asks for one exact score per ID. It rejects a result
-// with a missing, extra, reordered, duplicate, or nonfinite score.
-func (library *Library) scoreBlock(ctx context.Context, queryVector []float32, identities []VectorIdentity) ([]VectorScore, error) {
+// scoreBlock verifies the identity digest and checksum of each vector of block
+// with a strong read and then asks for one exact score per ID. It records the
+// duration of each call in block. It rejects a result with a missing, extra,
+// reordered, duplicate, or nonfinite score.
+func (library *Library) scoreBlock(ctx context.Context, queryVector []float32, block *scoreBlock) ([]VectorScore, error) {
+	identities := block.identities
+	started := clock.Now()
 	if err := library.config.Vectors.VerifyStrong(ctx, identities); err != nil {
 		slog.ErrorContext(ctx, "verify eligible vectors failed", "vectors", len(identities), "err", err)
 		return nil, fmt.Errorf("verify %d eligible vectors: %w", len(identities), err)
 	}
+	verified := clock.Now()
+	block.verifyTime = verified.Sub(started)
 	ids := make([]string, 0, len(identities))
 	for _, identity := range identities {
 		ids = append(ids, identity.ID)
 	}
 	scores, err := library.config.Vectors.ScoreExact(ctx, queryVector, ids)
+	block.scoreTime = clock.Now().Sub(verified)
 	if err != nil {
 		slog.ErrorContext(ctx, "exact scoring failed", "vectors", len(ids), "err", err)
 		return nil, fmt.Errorf("score %d eligible vectors: %w", len(ids), err)

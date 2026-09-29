@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"goodkind.io/lm-semantic-search/internal/clock"
@@ -449,6 +450,7 @@ func (library *Library) persistSnapshot(
 	query *queryDatabase,
 	plan searchPlan,
 	revisions snapshotRevisions,
+	phases *searchPhases,
 ) (string, error) {
 	resultBytes, err := rankedResultBytes(ctx, query, plan.request.Namespace)
 	if err != nil {
@@ -470,7 +472,12 @@ func (library *Library) persistSnapshot(
 	}
 	now := clock.Now()
 	expiresAt := now.Add(library.config.SnapshotTTL).UnixMilli()
+	// Library.write opens the transaction with BEGIN IMMEDIATE, which waits for
+	// any other SQLite writer before the closure runs.
+	requested := clock.Now()
+	var writing time.Time
 	err = library.write(ctx, func(tx *sql.Tx) error {
+		writing = phases.mark(&phases.writeWait, requested)
 		if err := deleteExpiredSnapshots(ctx, tx, now.UnixMilli()); err != nil {
 			return err
 		}
@@ -490,6 +497,7 @@ func (library *Library) persistSnapshot(
 	if err != nil {
 		return "", err
 	}
+	phases.mark(&phases.write, writing)
 	return snapshotID, nil
 }
 
