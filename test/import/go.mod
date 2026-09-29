@@ -2,10 +2,11 @@ module goodkind.io/lms-import-fixture
 
 go 1.27.1
 
-require goodkind.io/lm-semantic-search v0.0.0-20260929014226-971a173eb5ba
+require goodkind.io/lm-semantic-search v0.0.0-20260929041447-ef4666695591
 
 require (
 	github.com/daulet/tokenizers v1.27.0 // indirect
+	github.com/mattn/go-sqlite3 v1.14.44 // indirect
 	github.com/openai/openai-go/v2 v2.7.1 // indirect
 	github.com/tidwall/gjson v1.17.1 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

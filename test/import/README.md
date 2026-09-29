@@ -1,6 +1,6 @@
 # Run the external import check
 
-This fixture is a separate Go module that imports a published `goodkind.io/lm-semantic-search` commit through the module proxy and tests `library.PrepareText` with the real bge-small tokenizer. The fixture has no `replace` for LMS. Its workspace contains only this fixture and the pinned gksyntax checkout, never an LMS checkout. The commands below were verified on macOS arm64.
+This fixture is a separate Go module that imports a published `goodkind.io/lm-semantic-search` commit through the module proxy. It tests `library.PrepareText` with the real bge-small tokenizer, and `library.Open` over `library/embedded` with the bge-small ONNX embedder. The fixture has no `replace` for LMS. Its workspace contains only this fixture and the pinned gksyntax checkout, never an LMS checkout. The commands below were verified on macOS arm64.
 
 Run every command from the LMS repository root.
 

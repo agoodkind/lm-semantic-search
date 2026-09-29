@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"goodkind.io/lm-semantic-search/library"
+	"goodkind.io/lm-semantic-search/library/embedded"
 	"goodkind.io/lm-semantic-search/library/embedding"
 	"goodkind.io/lm-semantic-search/library/embedding/onnx"
 )
@@ -131,5 +132,72 @@ func TestNewOpenAIRejectsAnEmptyBaseURL(t *testing.T) {
 	}
 	if embedder != nil {
 		t.Fatal("NewOpenAI returned an embedder with an error")
+	}
+}
+
+// bgeSmallDimension is the vector width of the bge-small model.
+const bgeSmallDimension = 384
+
+func TestOpenOverTheEmbeddedPoolAppliesAndReplays(t *testing.T) {
+	root := t.TempDir()
+	embedder, err := onnx.New(t.Context(), onnx.Config{
+		ModelName:      modelName,
+		ModelCacheRoot: filepath.Join(os.TempDir(), sharedModelCache),
+	})
+	if err != nil {
+		t.Fatalf("onnx.New: %v", err)
+	}
+	pool, err := embedded.New(embedded.Config{Root: filepath.Join(root, "pool")})
+	if err != nil {
+		t.Fatalf("embedded.New: %v", err)
+	}
+	opened, err := library.Open(t.Context(), library.Config{
+		Store: library.StoreDescriptor{
+			CatalogPath:       filepath.Join(root, "catalog.sqlite"),
+			LockPath:          filepath.Join(root, "catalog.lock"),
+			PoolID:            "import-fixture",
+			EmbeddingModel:    modelName,
+			EmbeddingRevision: "import-fixture",
+			Dimension:         bgeSmallDimension,
+			Normalization:     "none",
+		},
+		Vectors:  pool,
+		Embedder: embedder,
+	})
+	if err != nil {
+		t.Fatalf("library.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := opened.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	if err := opened.RegisterNamespace(t.Context(), library.NamespaceSpec{ID: "notes", Policy: library.AppendOnly}); err != nil {
+		t.Fatalf("RegisterNamespace: %v", err)
+	}
+	batch := library.Batch{
+		Namespace:        "notes",
+		OwnerID:          "note-1",
+		GenerationOrder:  1,
+		IdempotencyToken: "first",
+		Mode:             library.Append,
+		Rows: []library.Occurrence{{
+			RowKey:         "line-1",
+			SortKey:        "1",
+			SourceText:     shortText,
+			SearchText:     shortText,
+			EmbeddingInput: documentPrefix + shortText,
+		}},
+	}
+	receipt, err := opened.Apply(t.Context(), batch)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	state, err := opened.GetOwnerState(t.Context(), "notes", "note-1")
+	if err != nil || state.GenerationOrder != 1 || state.Fingerprint != receipt.Fingerprint {
+		t.Fatalf("GetOwnerState = %+v, %v, want order 1 with fingerprint %s", state, err, receipt.Fingerprint)
+	}
+	if replay, err := opened.Apply(t.Context(), batch); err != nil || replay != receipt {
+		t.Fatalf("replay = %+v, %v, want %+v", replay, err, receipt)
 	}
 }
