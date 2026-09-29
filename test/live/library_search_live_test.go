@@ -313,6 +313,62 @@ const searchLiveCosineTolerance = 1e-5
 // searchLiveVectorReadBlock is the ID count of one strong vector read.
 const searchLiveVectorReadBlock = 256
 
+// searchLiveWorkerCounts are the QueryWorkers values that the cache
+// measurement compares.
+var searchLiveWorkerCounts = []int{2, 4, 8}
+
+// searchLiveWarmSamples is the number of page one searches after the first
+// search of a library at one catalog revision.
+const searchLiveWarmSamples = 3
+
+// measureVerificationCache opens a library for each QueryWorkers value, which
+// starts with an empty verification cache, and times page one of the
+// unfiltered and filtered requests: the first search verifies every eligible
+// vector, and the next searches at the same catalog revision verify none.
+func (store *searchLiveStore) measureVerificationCache(
+	t *testing.T,
+	metrics *searchLiveMetrics,
+	requests map[string]library.SearchRequest,
+) {
+	t.Helper()
+	recorder := &searchLivePhaseRecorder{mutex: sync.Mutex{}, records: nil}
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(previousLogger)
+	metrics.PageOneCache = map[string]string{}
+	for _, workers := range searchLiveWorkerCounts {
+		searcher := store.open(t, func(config *library.Config) { config.QueryWorkers = workers })
+		for _, name := range []string{"unfiltered", "filtered"} {
+			request := requests[name]
+			request.PageSize = 10
+			for sample := range 1 + searchLiveWarmSamples {
+				started := time.Now()
+				if _, err := searcher.Search(store.ctx, request); err != nil {
+					t.Fatalf("%s page one with %d workers, sample %d: %v", name, workers, sample, err)
+				}
+				elapsed := time.Since(started)
+				records := recorder.take()
+				if len(records) != 1 {
+					t.Fatalf("%s page one with %d workers wrote %d phase records", name, workers, len(records))
+				}
+				phase := records[0]
+				state := "warm"
+				if sample == 0 {
+					state = "cold"
+				}
+				if state == "warm" && phase["verified_vectors"] != 0 {
+					t.Fatalf("%s warm page one with %d workers verified %v vectors, want 0", name, workers, phase["verified_vectors"])
+				}
+				summary := fmt.Sprintf("total_ms %.1f dense_ms %.1f verify_ms %.1f score_ms %.1f verified_vectors %.0f",
+					float64(elapsed.Microseconds())/1000, phase["dense_ms"], phase["verify_ms"], phase["score_ms"], phase["verified_vectors"])
+				key := fmt.Sprintf("%s/workers %d/%s %d", name, workers, state, sample)
+				metrics.PageOneCache[key] = summary
+				t.Logf("page one %s: %s", key, summary)
+			}
+		}
+	}
+}
+
 // checkOracleCosine reads every published vector with a strong Milvus query,
 // computes its cosine with the query vector in float64, and compares it with
 // the oracle score that a Milvus search returned for the same ID.
@@ -550,6 +606,7 @@ type searchLiveMetrics struct {
 	MilvusLiveVectors    int64              `json:"milvus_live_vectors"`
 	CompactedSegmentRows int64              `json:"compacted_segment_rows"`
 	MeasuredVectors      int                `json:"measured_vectors"`
+	PageOneCache         map[string]string  `json:"page_one_cache"`
 	VerifyStrongSeconds  float64            `json:"verify_strong_seconds_all_vectors"`
 	ScoreExactSeconds    float64            `json:"score_exact_seconds_all_vectors"`
 	cursorDurations      []time.Duration
@@ -687,6 +744,7 @@ func TestLibrarySearchCompletePagesMatchTheExhaustiveOracle(t *testing.T) {
 	}
 	stopWatch()
 	store.checkOracleCosine(t, requests["unfiltered"].Query)
+	store.measureVerificationCache(t, metrics, requests)
 	store.checkHybrid(t, metrics)
 	store.measureVectorReads(t, metrics)
 
@@ -1248,8 +1306,12 @@ func (recorder *searchLivePhaseRecorder) Handle(_ context.Context, record slog.R
 	}
 	values := map[string]float64{}
 	record.Attrs(func(attribute slog.Attr) bool {
-		if attribute.Value.Kind() == slog.KindFloat64 {
+		switch attribute.Value.Kind() {
+		case slog.KindFloat64:
 			values[attribute.Key] = attribute.Value.Float64()
+		case slog.KindInt64:
+			values[attribute.Key] = float64(attribute.Value.Int64())
+		default:
 		}
 		return true
 	})
