@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/test/operatorstate"
 )
 
 const (
@@ -43,7 +45,7 @@ func TestMain(m *testing.M) {
 		_ = os.RemoveAll(buildDirectory)
 		os.Exit(1)
 	}
-	exitCode := runWithOperatorStateGuard(m.Run)
+	exitCode := operatorstate.RunWithGuard(m.Run)
 	_ = os.RemoveAll(buildDirectory)
 	os.Exit(exitCode)
 }
