@@ -62,11 +62,6 @@ func TestValidateLexicalAnalyzer(t *testing.T) {
 	if err := validateLexicalAnalyzer("milvus-english-v1"); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("validateLexicalAnalyzer(other identity) = %v, want ErrInvalidRequest", err)
 	}
-	for _, tables := range []string{"15.0.0", "17.0.0", ""} {
-		if err := validateLexicalAnalyzerTables(StandardAnalyzer, tables); !errors.Is(err, ErrInvalidRequest) {
-			t.Fatalf("validateLexicalAnalyzerTables(unicode %q) = %v, want ErrInvalidRequest", tables, err)
-		}
-	}
 }
 
 // The expected classes and lowercase forms come from the Unicode 16.0.0
@@ -101,8 +96,5 @@ func TestLexicalCharacterTablesFollowUnicode16(t *testing.T) {
 				t.Fatalf("lowercaseLexicalCharacter(U+%04X) = %q, want %q", testCase.character, got, testCase.lowercase)
 			}
 		})
-	}
-	if lexicalUnicodeTablesVersion != lexicalAnalyzerUnicodeVersion {
-		t.Fatalf("generated tables are Unicode %s, the analyzer requires %s", lexicalUnicodeTablesVersion, lexicalAnalyzerUnicodeVersion)
 	}
 }

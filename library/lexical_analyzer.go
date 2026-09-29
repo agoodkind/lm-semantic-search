@@ -20,10 +20,6 @@ const (
 	// function can represent. It counts a token by adding 1 to a float32, and
 	// the float32 sum stops growing at 2^24.
 	lexicalMaxTermFrequency = 1 << 24
-	// lexicalAnalyzerUnicodeVersion is the Unicode version of the Rust 1.89
-	// character tables in the Milvus 2.6.18 tantivy build. The exhaustive
-	// RunAnalyzer parity test verifies the generated tables against Milvus.
-	lexicalAnalyzerUnicodeVersion = "16.0.0"
 )
 
 // lexicalTerm is one distinct term hash of an analyzed text and the number of
@@ -124,27 +120,12 @@ func isLexicalTokenCharacter(character rune) bool {
 	return unicode.Is(lexicalAlphanumeric, character)
 }
 
-// validateLexicalAnalyzer reports whether this build reproduces
-// [StandardAnalyzer] for identity. It returns an error that wraps
-// [ErrInvalidRequest] for another identity or for generated character tables
-// of another Unicode version.
+// validateLexicalAnalyzer returns an error that wraps [ErrInvalidRequest] when
+// identity is not [StandardAnalyzer], the only analyzer this build
+// implements.
 func validateLexicalAnalyzer(identity string) error {
-	return validateLexicalAnalyzerTables(identity, lexicalUnicodeTablesVersion)
-}
-
-// validateLexicalAnalyzerTables checks identity and the Unicode version of the
-// character tables against the ones [StandardAnalyzer] requires.
-func validateLexicalAnalyzerTables(identity string, tables string) error {
 	if identity != StandardAnalyzer {
 		return invalidRequest(fmt.Sprintf("analyzer identity %q is not %q", identity, StandardAnalyzer))
-	}
-	if tables != lexicalAnalyzerUnicodeVersion {
-		return invalidRequest(fmt.Sprintf(
-			"analyzer %s requires Unicode %s character tables, and this build has %s",
-			StandardAnalyzer,
-			lexicalAnalyzerUnicodeVersion,
-			tables,
-		))
 	}
 	return nil
 }

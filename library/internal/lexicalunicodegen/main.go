@@ -1,10 +1,10 @@
 // Command lexicalunicodegen writes the Unicode 16.0.0 character tables of the
 // library lexical analyzer. Milvus 2.6.18 tokenizes with tantivy built by
 // Rust 1.89, and Rust 1.89 derives char::is_alphanumeric and
-// char::to_lowercase from Unicode 16.0.0. The command downloads the pinned
-// UCD files, checks their SHA-256 values, and writes a Go file that
-// classifies and lowercases characters without the Go unicode package tables
-// of the build toolchain.
+// char::to_lowercase from Unicode 16.0.0. The command reads the checked-in
+// copies of the UCD files in the ucd directory, checks their pinned SHA-256
+// values, and writes a Go file that classifies and lowercases characters
+// without the Go unicode package tables of the build toolchain.
 //
 // Run it from the library directory with go generate.
 package main
@@ -12,30 +12,24 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"flag"
 	"fmt"
 	"go/format"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
-	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"unicode/utf8"
 )
 
 const (
-	unicodeVersion  = "16.0.0"
-	ucdBaseURL      = "https://www.unicode.org/Public/" + unicodeVersion + "/ucd/"
-	maximumUCDBytes = 16 << 20
-	outputFileMode  = 0o644
+	unicodeVersion = "16.0.0"
+	ucdBaseURL     = "https://www.unicode.org/Public/" + unicodeVersion + "/ucd/"
+	outputFileMode = 0o644
 	// maximumRange16 is the largest code point of a unicode.Range16 entry.
 	maximumRange16 = 0xFFFF
 	// maximumLatin1 is the largest Latin-1 code point. unicode.RangeTable
@@ -87,63 +81,51 @@ func main() {
 }
 
 func runMain() int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	output := flag.String("output", "lexical_unicode_tables.go", "path of the generated Go file")
+	ucdDirectory := flag.String("ucd", "internal/lexicalunicodegen/ucd", "directory with the pinned UCD files")
 	flag.Parse()
 
-	client := &http.Client{}
+	source, err := generate(*ucdDirectory)
+	if err != nil {
+		slog.Error("generate lexical unicode tables failed", "err", err)
+		return 1
+	}
+	if err := os.WriteFile(*output, source, outputFileMode); err != nil {
+		slog.Error("write lexical unicode tables failed", "path", *output, "err", err)
+		return 1
+	}
+	slog.Info("wrote lexical unicode tables", "path", *output, "unicode", unicodeVersion)
+	return 0
+}
+
+// generate reads the pinned UCD files from ucdDirectory and returns the
+// formatted Go source of the tables.
+func generate(ucdDirectory string) ([]byte, error) {
 	files := map[string][]byte{}
 	for _, file := range []ucdFile{unicodeDataFile, derivedCorePropertiesFile, specialCasingFile} {
-		content, err := download(ctx, client, file)
+		content, err := readPinned(ucdDirectory, file)
 		if err != nil {
-			slog.ErrorContext(ctx, "download UCD file failed", "file", file.name, "err", err)
-			return 1
+			return nil, err
 		}
 		files[file.name] = content
 	}
 	tables, err := buildTables(files)
 	if err != nil {
-		slog.ErrorContext(ctx, "build lexical unicode tables failed", "err", err)
-		return 1
+		return nil, err
 	}
-	source, err := render(tables)
-	if err != nil {
-		slog.ErrorContext(ctx, "render lexical unicode tables failed", "err", err)
-		return 1
-	}
-	if err := os.WriteFile(*output, source, outputFileMode); err != nil {
-		slog.ErrorContext(ctx, "write lexical unicode tables failed", "path", *output, "err", err)
-		return 1
-	}
-	slog.InfoContext(ctx, "wrote lexical unicode tables", "path", *output, "unicode", unicodeVersion)
-	return 0
+	return render(tables)
 }
 
-// download reads one UCD file and requires its pinned SHA-256.
-func download(ctx context.Context, client *http.Client, file ucdFile) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ucdBaseURL+file.name, nil)
+// readPinned reads one UCD file and requires its pinned SHA-256.
+func readPinned(ucdDirectory string, file ucdFile) ([]byte, error) {
+	path := filepath.Join(ucdDirectory, file.name)
+	content, err := os.ReadFile(path)
 	if err != nil {
-		slog.ErrorContext(ctx, "create UCD request failed", "file", file.name, "err", err)
-		return nil, generatorError(fmt.Errorf("create request for %s: %w", file.name, err))
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		slog.ErrorContext(ctx, "UCD request failed", "file", file.name, "err", err)
-		return nil, generatorError(fmt.Errorf("request %s: %w", file.name, err))
-	}
-	content, readErr := io.ReadAll(io.LimitReader(response.Body, maximumUCDBytes))
-	closeErr := response.Body.Close()
-	if err := errors.Join(readErr, closeErr); err != nil {
-		slog.ErrorContext(ctx, "read UCD response failed", "file", file.name, "err", err)
-		return nil, generatorError(fmt.Errorf("read %s: %w", file.name, err))
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, generatorError(fmt.Errorf("request %s returned HTTP %d", file.name, response.StatusCode))
+		return nil, generatorError(fmt.Errorf("read %s: %w", path, err))
 	}
 	digest := sha256.Sum256(content)
 	if got := hex.EncodeToString(digest[:]); got != file.sha256 {
-		return nil, generatorError(fmt.Errorf("%s has SHA-256 %s, want %s", file.name, got, file.sha256))
+		return nil, generatorError(fmt.Errorf("%s has SHA-256 %s, want %s", path, got, file.sha256))
 	}
 	return content, nil
 }
@@ -323,13 +305,12 @@ func alphanumericRanges(alphanumeric []bool) []characterRange {
 func render(tables characterTables) ([]byte, error) {
 	var source strings.Builder
 	source.WriteString("// Code generated by go run ./internal/lexicalunicodegen; DO NOT EDIT.\n\n")
-	fmt.Fprintf(&source, "// The tables come from the Unicode %s Character Database:\n", unicodeVersion)
+	fmt.Fprintf(&source, "// The tables come from the Unicode %s Character Database files in\n", unicodeVersion)
+	source.WriteString("// internal/lexicalunicodegen/ucd, copied from:\n")
 	for _, file := range []ucdFile{unicodeDataFile, derivedCorePropertiesFile, specialCasingFile} {
 		fmt.Fprintf(&source, "// %s%s SHA-256 %s\n", ucdBaseURL, file.name, file.sha256)
 	}
 	source.WriteString("\npackage library\n\nimport \"unicode\"\n\n")
-	source.WriteString("// lexicalUnicodeTablesVersion is the Unicode version of the generated tables.\n")
-	fmt.Fprintf(&source, "const lexicalUnicodeTablesVersion = %q\n\n", unicodeVersion)
 
 	ranges := alphanumericRanges(tables.alphanumeric)
 	var small, large []characterRange
