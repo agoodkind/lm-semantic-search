@@ -1,7 +1,10 @@
 package library
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
+	"log/slog"
 	"math"
 )
 
@@ -137,4 +140,88 @@ func fusedMultiplyAdd32(a float32, b float32, c float32) float32 {
 		return above
 	}
 	return below
+}
+
+// accumulateLexicalScores reads postings with the columns search_hash,
+// term_hash, tf, and document_length, ordered by search hash and then term
+// hash, and calls emit once per search hash with its score. It keeps the
+// postings of one content in memory at a time and writes every score through
+// emit, which can store scores on disk. It closes rows. Out-of-order postings
+// or a stored value that the analyzer cannot produce fail the call.
+func accumulateLexicalScores(
+	ctx context.Context,
+	rows *sql.Rows,
+	scorer lexicalScorer,
+	emit func(searchHash string, score float32) error,
+) error {
+	defer func() {
+		if err := rows.Close(); err != nil {
+			slog.WarnContext(ctx, "lexical postings close failed", "err", err)
+		}
+	}()
+	var (
+		currentHash   string
+		currentLength uint64
+		previousTerm  uint32
+		postings      []lexicalTerm
+	)
+	emitCurrent := func() error {
+		if len(postings) == 0 {
+			return nil
+		}
+		err := emit(currentHash, scorer.scoreDocument(postings, currentLength))
+		postings = postings[:0]
+		return err
+	}
+	for rows.Next() {
+		var (
+			searchHash     string
+			posting        lexicalTerm
+			documentLength uint64
+		)
+		if err := rows.Scan(&searchHash, &posting.hash, &posting.frequency, &documentLength); err != nil {
+			return lexicalIndexError(ctx, fmt.Errorf("scan lexical posting: %w", err))
+		}
+		if err := validatePosting(posting, documentLength); err != nil {
+			return lexicalIndexError(ctx, fmt.Errorf("lexical posting of %s: %w", searchHash, err))
+		}
+		switch {
+		case len(postings) > 0 && searchHash == currentHash:
+			if posting.hash <= previousTerm {
+				return lexicalIndexError(ctx, fmt.Errorf(
+					"lexical postings of %s are not in ascending term hash order", searchHash,
+				))
+			}
+		case len(postings) > 0 && searchHash < currentHash:
+			return lexicalIndexError(ctx, fmt.Errorf(
+				"lexical postings are not in ascending search hash order at %s", searchHash,
+			))
+		default:
+			if err := emitCurrent(); err != nil {
+				return err
+			}
+			currentHash = searchHash
+			currentLength = documentLength
+		}
+		previousTerm = posting.hash
+		postings = append(postings, posting)
+	}
+	if err := rows.Err(); err != nil {
+		return lexicalIndexError(ctx, fmt.Errorf("read lexical postings: %w", err))
+	}
+	return emitCurrent()
+}
+
+// validatePosting rejects a stored posting that the analyzer cannot produce.
+func validatePosting(posting lexicalTerm, documentLength uint64) error {
+	if posting.hash == math.MaxUint32 {
+		return fmt.Errorf("term hash %d is outside the analyzer hash range", posting.hash)
+	}
+	if posting.frequency == 0 || posting.frequency > lexicalMaxTermFrequency {
+		return fmt.Errorf("term frequency %d is outside 1 through %d", posting.frequency, lexicalMaxTermFrequency)
+	}
+	if documentLength < uint64(posting.frequency) {
+		return fmt.Errorf("document length %d is below the term frequency %d", documentLength, posting.frequency)
+	}
+	return nil
 }
