@@ -6598,16 +6598,17 @@ func (x *SearchConversationsRequest) GetPerConversationLimit() int32 {
 }
 
 // SearchConversationsResponse returns the first limit rows of one ranking.
-// Paging contract: the daemon ranks a query once and caches the ranking for up
-// to 10 minutes. A later request with the same collection, query, filter,
-// min_score, and per_conversation_limit reads that ranking, and a larger limit
-// returns a longer prefix of it. A client pages by raising limit and keeping
-// the rows past the previous page. The daemon ranks again after it commits a
-// write to the collection, when the number of rows matching the filter
-// changes, and after 10 minutes, a cache eviction, or a restart. A process
-// other than the daemon that deletes and inserts the same number of matching
-// rows is not detected until the ranking expires. The offline profile keeps no
-// cache and ranks every request again.
+// Paging contract: the daemon ranks a query once and caches the ranking until
+// 10 minutes pass without a request that reads it. A later request with the
+// same collection, query, filter, min_score, and per_conversation_limit reads
+// that ranking, and a larger limit returns a longer prefix of it. A client
+// pages by raising limit and keeping the rows past the previous page. The
+// daemon ranks again after it commits a write to the collection, when the
+// number of rows matching the filter changes, and after 10 minutes without a
+// request for it, a cache eviction, or a restart. A process other than the
+// daemon that deletes and inserts the same number of matching rows is not
+// detected until the ranking expires. The offline profile keeps no cache and
+// ranks every request again.
 type SearchConversationsResponse struct {
 	state            protoimpl.MessageState      `protogen:"open.v1"`
 	Results          []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
@@ -6755,17 +6756,18 @@ func (x *SearchWithinConversationRequest) GetFilter() *ConversationSearchFilter 
 	return nil
 }
 
-// SearchWithinConversationResponse returns the first limit rows of one
-// ranking of one conversation. Paging contract: the daemon ranks a query once
-// and caches the ranking for up to 10 minutes. A later request with the same
-// collection, conversation, query, filter, and indexed fingerprint reads that
-// ranking, and a larger limit returns a longer prefix of it. The daemon ranks
-// again after it commits a write to the collection, when the conversation's
-// indexed fingerprint or the number of rows matching the filter changes, and
-// after 10 minutes, a cache eviction, or a restart. A process other than the
-// daemon that deletes and inserts the same number of matching rows is not
-// detected until the ranking expires. The offline profile keeps no cache and
-// ranks every request again.
+// SearchWithinConversationResponse returns the first limit rows of one ranking
+// of one conversation. Paging contract: the daemon ranks a query once and
+// caches the ranking until 10 minutes pass without a request that reads it. A
+// later request with the same collection, conversation, query, filter, and
+// indexed fingerprint reads that ranking, and a larger limit returns a longer
+// prefix of it. The daemon ranks again after it commits a write to the
+// collection, when the conversation's indexed fingerprint or the number of rows
+// matching the filter changes, and after 10 minutes without a request for it, a
+// cache eviction, or a restart. A process other than the daemon that deletes
+// and inserts the same number of matching rows is not detected until the
+// ranking expires. The offline profile keeps no cache and ranks every request
+// again.
 type SearchWithinConversationResponse struct {
 	state   protoimpl.MessageState      `protogen:"open.v1"`
 	Results []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
@@ -7694,17 +7696,18 @@ func (x *CollectionSearchHit) GetScalars() []*CollectionHitScalar {
 	return nil
 }
 
-// SearchCollectionResponse returns the first limit hits of one ranking.
-// Paging contract: the daemon ranks a query once and caches the ranking for up
-// to 10 minutes. A later request with the same collection, query, filter,
-// min_score, group_by, and per_group_limit reads that ranking, and a larger
-// limit returns a longer prefix of it. A client pages by raising limit and
-// keeping the hits past the previous page. The daemon ranks again after it
-// commits a write to the collection, when the number of rows matching the
-// filter changes, and after 10 minutes, a cache eviction, or a restart. A
-// process other than the daemon that deletes and inserts the same number of
-// matching rows is not detected until the ranking expires. The offline
-// profile keeps no cache and ranks every request again.
+// SearchCollectionResponse returns the first limit hits of one ranking. Paging
+// contract: the daemon ranks a query once and caches the ranking until 10
+// minutes pass without a request that reads it. A later request with the same
+// collection, query, filter, min_score, group_by, and per_group_limit reads
+// that ranking, and a larger limit returns a longer prefix of it. A client
+// pages by raising limit and keeping the hits past the previous page. The
+// daemon ranks again after it commits a write to the collection, when the
+// number of rows matching the filter changes, and after 10 minutes without a
+// request for it, a cache eviction, or a restart. A process other than the
+// daemon that deletes and inserts the same number of matching rows is not
+// detected until the ranking expires. The offline profile keeps no cache and
+// ranks every request again.
 type SearchCollectionResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Hits             []*CollectionSearchHit `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`

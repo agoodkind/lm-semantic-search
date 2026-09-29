@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"hash"
+	"log/slog"
 	"slices"
 	"strconv"
 	"sync"
@@ -15,7 +16,7 @@ import (
 )
 
 // RankingCacheTTL is how long a cached collection ranking serves pages after
-// the request that computed it.
+// the last request that computed or read it.
 const RankingCacheTTL = 10 * time.Minute
 
 // RankingCacheMaxBytes bounds the estimated candidate bytes of every cached
@@ -149,17 +150,19 @@ func (encoder rankingKeyEncoder) templateParam(param filterTemplateParam) {
 
 // rankingCacheEntry is one cached ranking and its bookkeeping.
 type rankingCacheEntry struct {
-	digest    string
-	ranking   collectionRanking
-	createdAt time.Time
-	bytes     int64
+	digest   string
+	ranking  collectionRanking
+	lastUsed time.Time
+	bytes    int64
 }
 
 // rankingCache stores collection rankings in process, one per ranking key. An
-// entry expires RankingCacheTTL after the request that stored it. Storing past
-// maxBytes evicts the least recently used entries. The cache also counts
-// committed writes per collection name. A ranking key includes that count,
-// and a write changes the key of every later request for the collection.
+// entry expires RankingCacheTTL after the last request that stored or read it.
+// Storing past maxBytes evicts the least recently used entries. The cache also
+// counts committed writes per collection name. A ranking key includes that
+// count, and a write changes the key of every later request for the
+// collection. Concurrent requests that miss one key and count share one
+// ranking computation.
 type rankingCache struct {
 	mutex       sync.Mutex
 	clock       func() time.Time
@@ -168,6 +171,15 @@ type rankingCache struct {
 	entries     map[string]*list.Element
 	recency     *list.List
 	generations map[string]uint64
+	flights     map[string]*rankingFlight
+}
+
+// rankingFlight is one ranking computation that concurrent requests share.
+// done closes after ranking and err are set.
+type rankingFlight struct {
+	done    chan struct{}
+	ranking collectionRanking
+	err     error
 }
 
 func newRankingCache(clock func() time.Time, maxBytes int64) *rankingCache {
@@ -179,6 +191,7 @@ func newRankingCache(clock func() time.Time, maxBytes int64) *rankingCache {
 		entries:     make(map[string]*list.Element),
 		recency:     list.New(),
 		generations: make(map[string]uint64),
+		flights:     make(map[string]*rankingFlight),
 	}
 }
 
@@ -219,15 +232,51 @@ func (cache *rankingCache) get(digest string, eligible int64) (collectionRanking
 	if !isEntry {
 		return missing, false
 	}
-	if cache.clock().Sub(entry.createdAt) >= RankingCacheTTL {
+	now := cache.clock()
+	if now.Sub(entry.lastUsed) >= RankingCacheTTL {
 		cache.removeLocked(element)
 		return missing, false
 	}
 	if entry.ranking.Eligible != eligible {
 		return missing, false
 	}
+	entry.lastUsed = now
 	cache.recency.MoveToFront(element)
 	return entry.ranking, true
+}
+
+// rank returns the cached ranking under digest for eligible rows, or runs
+// compute once for every concurrent request that misses the same digest and
+// count and stores its result.
+func (cache *rankingCache) rank(digest string, eligible int64, compute func() (collectionRanking, error)) (collectionRanking, error) {
+	if ranking, cached := cache.get(digest, eligible); cached {
+		return ranking, nil
+	}
+	flightKey := digest + ":" + strconv.FormatInt(eligible, 10)
+	cache.mutex.Lock()
+	existing, inFlight := cache.flights[flightKey]
+	if inFlight {
+		cache.mutex.Unlock()
+		<-existing.done
+		return existing.ranking, existing.err
+	}
+	flight := &rankingFlight{
+		done:    make(chan struct{}),
+		ranking: collectionRanking{Candidates: nil, Eligible: 0, Truncated: false, CallerState: ""},
+		err:     nil,
+	}
+	cache.flights[flightKey] = flight
+	cache.mutex.Unlock()
+
+	flight.ranking, flight.err = compute()
+	if flight.err == nil {
+		cache.put(digest, flight.ranking)
+	}
+	cache.mutex.Lock()
+	delete(cache.flights, flightKey)
+	cache.mutex.Unlock()
+	close(flight.done)
+	return flight.ranking, flight.err
 }
 
 // put stores ranking under digest, replacing an earlier entry, and evicts the
@@ -241,9 +290,11 @@ func (cache *rankingCache) put(digest string, ranking collectionRanking) {
 	}
 	bytes := ranking.estimatedBytes()
 	if bytes > cache.maxBytes {
+		slog.Warn("collection ranking exceeds the ranking cache bound and is not cached",
+			"ranking_bytes", bytes, "cache_bytes", cache.maxBytes, "candidates", len(ranking.Candidates))
 		return
 	}
-	entry := &rankingCacheEntry{digest: digest, ranking: ranking, createdAt: cache.clock(), bytes: bytes}
+	entry := &rankingCacheEntry{digest: digest, ranking: ranking, lastUsed: cache.clock(), bytes: bytes}
 	cache.entries[digest] = cache.recency.PushFront(entry)
 	cache.usedBytes += bytes
 	for cache.usedBytes > cache.maxBytes {

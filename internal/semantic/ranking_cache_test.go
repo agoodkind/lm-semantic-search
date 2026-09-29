@@ -3,6 +3,8 @@ package semantic
 import (
 	"fmt"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -180,7 +182,8 @@ func TestRankingCacheWriteGenerationChangesKey(t *testing.T) {
 }
 
 // TestRankingCacheExpiresAfterTTL proves an entry serves until RankingCacheTTL
-// after it was stored and misses from then on.
+// passes without a read, that every read restarts that period, and that the
+// entry misses once a full period passes without a read.
 func TestRankingCacheExpiresAfterTTL(t *testing.T) {
 	t.Parallel()
 
@@ -189,16 +192,72 @@ func TestRankingCacheExpiresAfterTTL(t *testing.T) {
 	digest := baseRankingKey().digest()
 	cache.put(digest, rankingOf(5, 5, "ttl"))
 
-	clock.now = clock.now.Add(RankingCacheTTL - time.Second)
-	if _, found := cache.get(digest, 5); !found {
-		t.Fatal("the entry missed one second before its TTL")
+	for read := range 3 {
+		clock.now = clock.now.Add(RankingCacheTTL - time.Second)
+		if _, found := cache.get(digest, 5); !found {
+			t.Fatalf("read %d missed one second before the TTL after the previous read", read)
+		}
 	}
-	clock.now = clock.now.Add(time.Second)
+	clock.now = clock.now.Add(RankingCacheTTL)
 	if _, found := cache.get(digest, 5); found {
-		t.Fatal("the entry hit at its TTL")
+		t.Fatal("the entry hit a full TTL after its last read")
 	}
 	if cache.usedBytes != 0 {
 		t.Fatalf("expired entry left %d bytes counted", cache.usedBytes)
+	}
+}
+
+// TestRankingCacheSharesOneComputation proves concurrent requests that miss
+// one digest and count run the ranking computation once and all receive its
+// ranking.
+func TestRankingCacheSharesOneComputation(t *testing.T) {
+	t.Parallel()
+
+	clock := &fakeRankingClock{now: time.Unix(1_700_000_000, 0)}
+	cache := newRankingCache(clock.read, RankingCacheMaxBytes)
+	digest := baseRankingKey().digest()
+	const requests = 8
+	release := make(chan struct{})
+	var computations atomic.Int32
+	compute := func() (collectionRanking, error) {
+		computations.Add(1)
+		<-release
+		return rankingOf(5, 5, "shared"), nil
+	}
+	var started sync.WaitGroup
+	var finished sync.WaitGroup
+	results := make([]collectionRanking, requests)
+	failures := make([]error, requests)
+	for request := range requests {
+		started.Add(1)
+		finished.Add(1)
+		go func() {
+			defer finished.Done()
+			started.Done()
+			results[request], failures[request] = cache.rank(digest, 5, compute)
+		}()
+	}
+	started.Wait()
+	for computations.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	finished.Wait()
+
+	if got := computations.Load(); got != 1 {
+		t.Fatalf("%d concurrent misses ran %d computations, want 1", requests, got)
+	}
+	for request := range requests {
+		if failures[request] != nil {
+			t.Fatalf("request %d failed: %v", request, failures[request])
+		}
+		if len(results[request].Candidates) != 5 {
+			t.Fatalf("request %d received %d candidates, want 5", request, len(results[request].Candidates))
+		}
+	}
+	if _, found := cache.get(digest, 5); !found {
+		t.Fatal("the shared computation did not store its ranking")
 	}
 }
 

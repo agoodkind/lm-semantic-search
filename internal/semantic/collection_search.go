@@ -229,13 +229,11 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 		PerGroupLimit:   perGroupLimit,
 		CallerState:     search.CallerState,
 	}.digest()
-	ranking, cached := service.rankings.get(digest, eligible)
-	if !cached {
-		ranking, err = service.computeRanking(ctx, collectionName, search, compiled, eligible)
-		if err != nil {
-			return emptyResult, err
-		}
-		service.rankings.put(digest, ranking)
+	ranking, err := service.rankings.rank(digest, eligible, func() (collectionRanking, error) {
+		return service.computeRanking(ctx, collectionName, search, compiled, eligible)
+	})
+	if err != nil {
+		return emptyResult, err
 	}
 	selected := selectRankedCandidates(ranking.Candidates, perGroupLimit, search.MinScore, limit)
 	hits, err := service.loadRankedHits(ctx, collectionName, selected, search.Declaration.Scalars)
@@ -267,6 +265,10 @@ func (service *Service) computeRanking(ctx context.Context, collectionName strin
 		if err != nil {
 			return failed, err
 		}
+	}
+	if len(candidates) < depth {
+		slog.InfoContext(ctx, "collection ranking returned fewer rows than its depth",
+			"collection", collectionName, "eligible", eligible, "depth", depth, "ranked", len(candidates), "peer", peerInfo.String())
 	}
 	sortRankedCandidates(candidates)
 	return collectionRanking{
