@@ -55,3 +55,32 @@ jobs:
           go-version-file: go.mod
       - name: Test update scheduler build gate
         run: make update-live
+
+  # offline-live runs the offline-profile daemon in process against the fixture
+  # and throwaway state, with the local vector store and the ONNX embedder.
+  offline-live:
+    name: Offline Live
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Install system dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            libpcre2-dev \
+            pkg-config \
+            zlib1g-dev
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test offline runtime
+        run: make offline-live
