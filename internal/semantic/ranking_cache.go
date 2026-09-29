@@ -1,0 +1,266 @@
+package semantic
+
+import (
+	"container/list"
+	"crypto/sha256"
+	"encoding/hex"
+	"hash"
+	"slices"
+	"strconv"
+	"sync"
+	"time"
+	"unsafe"
+
+	"goodkind.io/lm-semantic-search/internal/model"
+)
+
+// RankingCacheTTL is how long a cached collection ranking serves pages after
+// the request that computed it.
+const RankingCacheTTL = 10 * time.Minute
+
+// RankingCacheMaxBytes bounds the estimated candidate bytes of every cached
+// ranking together. Storing past the bound evicts the least recently used
+// rankings.
+const RankingCacheMaxBytes int64 = 256 << 20
+
+// rankedCandidateFixedBytes is the in-memory size of one rankedCandidate
+// without the bytes its strings point to.
+var rankedCandidateFixedBytes = int64(unsafe.Sizeof(rankedCandidate{PrimaryKey: "", RelativePath: "", Group: ScalarCell{Column: "", State: "", Value: ScalarValue{Type: "", String: "", Bool: false, Int64: 0}}, Score: 0}))
+
+// RankingDepth returns the candidate count of one collection ranking search
+// over eligible rows that match the filter: every eligible row up to
+// CollectionRankingDepth, the Milvus single-search ceiling. Both hybrid legs,
+// the fused hybrid limit, the dense search, and the offline store rank at this
+// depth. The depth depends only on the eligible count.
+func RankingDepth(eligible int64) int {
+	if eligible <= 0 {
+		return 0
+	}
+	if eligible >= CollectionRankingDepth {
+		return CollectionRankingDepth
+	}
+	return int(eligible)
+}
+
+// RankingTruncated reports whether more rows match the filter than one
+// ranking search returns. Pages of such a search stop at the first
+// CollectionRankingDepth rows of the ranking.
+func RankingTruncated(eligible int64) bool {
+	return eligible > CollectionRankingDepth
+}
+
+// collectionRanking is one computed ranking of a collection search: the
+// sorted candidates after legacy group resolution, the eligible row count the
+// ranking was computed over, and the caller state read before it was
+// computed. It stores no content or metadata.
+type collectionRanking struct {
+	Candidates  []rankedCandidate
+	Eligible    int64
+	Truncated   bool
+	CallerState string
+}
+
+// estimatedBytes returns the in-memory size of the ranking's candidates,
+// counting each candidate struct and the string bytes it references.
+func (ranking collectionRanking) estimatedBytes() int64 {
+	total := int64(len(ranking.CallerState))
+	for _, ranked := range ranking.Candidates {
+		total += rankedCandidateFixedBytes
+		total += int64(len(ranked.PrimaryKey) + len(ranked.RelativePath))
+		total += int64(len(ranked.Group.Column) + len(ranked.Group.Value.String))
+	}
+	return total
+}
+
+// rankingKey lists every input that selects one ranking. Two requests with an
+// equal key rank the same candidate list on an unchanged collection.
+type rankingKey struct {
+	CollectionName  string
+	CollectionID    int64
+	WriteGeneration uint64
+	Query           string
+	Hybrid          bool
+	Filter          compiledFilter
+	MinScore        float64
+	GroupColumn     string
+	PerGroupLimit   int32
+	CallerState     string
+}
+
+// digest returns the SHA-256 of the key's canonical encoding. The encoding
+// writes every field as its name and a length-prefixed value. Each template
+// parameter writes its values in sorted order, and a membership set in any
+// order has one encoding.
+func (key rankingKey) digest() string {
+	encoder := rankingKeyEncoder{hash: sha256.New()}
+	encoder.field("collection", key.CollectionName)
+	encoder.field("collection_id", strconv.FormatInt(key.CollectionID, 10))
+	encoder.field("write_generation", strconv.FormatUint(key.WriteGeneration, 10))
+	encoder.field("query", key.Query)
+	encoder.field("hybrid", strconv.FormatBool(key.Hybrid))
+	encoder.field("expression", key.Filter.Expression)
+	encoder.field("params", strconv.Itoa(len(key.Filter.Params)))
+	for _, param := range key.Filter.Params {
+		encoder.templateParam(param)
+	}
+	encoder.field("min_score", strconv.FormatFloat(key.MinScore, 'g', -1, 64))
+	encoder.field("group_column", key.GroupColumn)
+	encoder.field("per_group_limit", strconv.FormatInt(int64(key.PerGroupLimit), 10))
+	encoder.field("caller_state", key.CallerState)
+	return hex.EncodeToString(encoder.hash.Sum(nil))
+}
+
+type rankingKeyEncoder struct {
+	hash hash.Hash
+}
+
+func (encoder rankingKeyEncoder) field(name string, value string) {
+	for _, part := range []string{name, value} {
+		_, _ = encoder.hash.Write([]byte(strconv.Itoa(len(part))))
+		_, _ = encoder.hash.Write([]byte{':'})
+		_, _ = encoder.hash.Write([]byte(part))
+	}
+}
+
+func (encoder rankingKeyEncoder) templateParam(param filterTemplateParam) {
+	encoder.field("param", param.Name)
+	encoder.field("type", string(param.Type))
+	values := make([]string, 0, len(param.Strings)+len(param.Bools)+len(param.Int64s))
+	switch param.Type {
+	case model.ScalarTypeBool:
+		for _, value := range param.Bools {
+			values = append(values, strconv.FormatBool(value))
+		}
+	case model.ScalarTypeInt64:
+		for _, value := range param.Int64s {
+			values = append(values, strconv.FormatInt(value, 10))
+		}
+	case model.ScalarTypeString:
+		values = append(values, param.Strings...)
+	default:
+		values = append(values, param.Strings...)
+	}
+	slices.Sort(values)
+	encoder.field("values", strconv.Itoa(len(values)))
+	for _, value := range values {
+		encoder.field("value", value)
+	}
+}
+
+// rankingCacheEntry is one cached ranking and its bookkeeping.
+type rankingCacheEntry struct {
+	digest    string
+	ranking   collectionRanking
+	createdAt time.Time
+	bytes     int64
+}
+
+// rankingCache stores collection rankings in process, one per ranking key. An
+// entry expires RankingCacheTTL after the request that stored it. Storing past
+// maxBytes evicts the least recently used entries. The cache also counts
+// committed writes per collection name. A ranking key includes that count,
+// and a write changes the key of every later request for the collection.
+type rankingCache struct {
+	mutex       sync.Mutex
+	clock       func() time.Time
+	maxBytes    int64
+	usedBytes   int64
+	entries     map[string]*list.Element
+	recency     *list.List
+	generations map[string]uint64
+}
+
+func newRankingCache(clock func() time.Time, maxBytes int64) *rankingCache {
+	return &rankingCache{
+		mutex:       sync.Mutex{},
+		clock:       clock,
+		maxBytes:    maxBytes,
+		usedBytes:   0,
+		entries:     make(map[string]*list.Element),
+		recency:     list.New(),
+		generations: make(map[string]uint64),
+	}
+}
+
+// writeGeneration returns the committed write count of collectionName. A nil
+// cache returns zero.
+func (cache *rankingCache) writeGeneration(collectionName string) uint64 {
+	if cache == nil {
+		return 0
+	}
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+	return cache.generations[collectionName]
+}
+
+// noteWrite counts one committed write to collectionName. A nil cache ignores
+// it.
+func (cache *rankingCache) noteWrite(collectionName string) {
+	if cache == nil {
+		return
+	}
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+	cache.generations[collectionName]++
+}
+
+// get returns the unexpired ranking stored under digest when it was computed
+// over eligible rows. A stored ranking with a different eligible count is a
+// miss: a process other than this daemon wrote rows after the ranking.
+func (cache *rankingCache) get(digest string, eligible int64) (collectionRanking, bool) {
+	var missing collectionRanking
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+	element, found := cache.entries[digest]
+	if !found {
+		return missing, false
+	}
+	entry, isEntry := element.Value.(*rankingCacheEntry)
+	if !isEntry {
+		return missing, false
+	}
+	if cache.clock().Sub(entry.createdAt) >= RankingCacheTTL {
+		cache.removeLocked(element)
+		return missing, false
+	}
+	if entry.ranking.Eligible != eligible {
+		return missing, false
+	}
+	cache.recency.MoveToFront(element)
+	return entry.ranking, true
+}
+
+// put stores ranking under digest, replacing an earlier entry, and evicts the
+// least recently used entries until the cache fits maxBytes. A ranking larger
+// than maxBytes is not stored.
+func (cache *rankingCache) put(digest string, ranking collectionRanking) {
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+	if element, found := cache.entries[digest]; found {
+		cache.removeLocked(element)
+	}
+	bytes := ranking.estimatedBytes()
+	if bytes > cache.maxBytes {
+		return
+	}
+	entry := &rankingCacheEntry{digest: digest, ranking: ranking, createdAt: cache.clock(), bytes: bytes}
+	cache.entries[digest] = cache.recency.PushFront(entry)
+	cache.usedBytes += bytes
+	for cache.usedBytes > cache.maxBytes {
+		oldest := cache.recency.Back()
+		if oldest == nil {
+			return
+		}
+		cache.removeLocked(oldest)
+	}
+}
+
+func (cache *rankingCache) removeLocked(element *list.Element) {
+	cache.recency.Remove(element)
+	entry, isEntry := element.Value.(*rankingCacheEntry)
+	if !isEntry {
+		return
+	}
+	delete(cache.entries, entry.digest)
+	cache.usedBytes -= entry.bytes
+}

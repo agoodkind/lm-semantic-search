@@ -30,7 +30,7 @@ func (server *GRPCServer) SearchCollection(ctx context.Context, request *pb.Sear
 	if filterErr != nil {
 		return nil, adapterr.RespondGRPC(ctx, filterErr)
 	}
-	hits, callErr := server.manager.SearchCollection(ctx, CollectionSearchRequest{
+	searchResult, callErr := server.manager.SearchCollection(ctx, CollectionSearchRequest{
 		CollectionID:  request.GetCollectionId(),
 		Query:         request.GetQuery(),
 		Limit:         request.GetLimit(),
@@ -38,14 +38,15 @@ func (server *GRPCServer) SearchCollection(ctx context.Context, request *pb.Sear
 		Filter:        filter,
 		GroupBy:       request.GetGroupBy(),
 		PerGroupLimit: request.GetPerGroupLimit(),
+		CallerState:   "",
 	})
 	if callErr != nil {
 		return nil, adapterr.RespondGRPC(ctx, callErr)
 	}
 	health := server.manager.DependencyHealth()
-	results := make([]view.CollectionResultView, 0, len(hits))
-	pbHits := make([]*pb.CollectionSearchHit, 0, len(hits))
-	for _, hit := range hits {
+	results := make([]view.CollectionResultView, 0, len(searchResult.Hits))
+	pbHits := make([]*pb.CollectionSearchHit, 0, len(searchResult.Hits))
+	for _, hit := range searchResult.Hits {
 		results = append(results, view.CollectionResultView{
 			RowKey:  hit.Chunk.RelativePath,
 			Score:   hit.Chunk.Score,
@@ -67,6 +68,7 @@ func (server *GRPCServer) SearchCollection(ctx context.Context, request *pb.Sear
 		Hits:             pbHits,
 		DependencyHealth: toDependencyHealth(health),
 		DisplayText:      server.envelopeText(ctx, health, render.CollectionSearch(searchView)),
+		RankingTruncated: searchResult.RankingTruncated,
 	}, nil
 }
 

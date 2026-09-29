@@ -1050,10 +1050,24 @@ message SearchConversationsRequest {
   int32 per_conversation_limit = 5;
 }
 
+// SearchConversationsResponse returns the first limit rows of one ranking.
+// Paging contract: the daemon ranks a query once and caches the ranking for up
+// to 10 minutes. A later request with the same collection, query, filter,
+// min_score, and per_conversation_limit reads that ranking, and a larger limit
+// returns a longer prefix of it. A client pages by raising limit and keeping
+// the rows past the previous page. The daemon ranks again after it commits a
+// write to the collection, when the number of rows matching the filter
+// changes, and after 10 minutes, a cache eviction, or a restart. A process
+// other than the daemon that deletes and inserts the same number of matching
+// rows is not detected until the ranking expires. The offline profile keeps no
+// cache and ranks every request again.
 message SearchConversationsResponse {
   repeated ConversationSearchResult results = 1;
   string display_text = 2;
   DependencyHealth dependency_health = 3;
+  // ranking_truncated is true when more than 16,384 rows match the filter.
+  // The ranking then covers only its first 16,384 rows, and pages stop there.
+  bool ranking_truncated = 4;
 }
 
 message SearchWithinConversationRequest {
@@ -1065,16 +1079,31 @@ message SearchWithinConversationRequest {
   ConversationSearchFilter filter = 5;
 }
 
+// SearchWithinConversationResponse returns the first limit rows of one
+// ranking of one conversation. Paging contract: the daemon ranks a query once
+// and caches the ranking for up to 10 minutes. A later request with the same
+// collection, conversation, query, filter, and indexed fingerprint reads that
+// ranking, and a larger limit returns a longer prefix of it. The daemon ranks
+// again after it commits a write to the collection, when the conversation's
+// indexed fingerprint or the number of rows matching the filter changes, and
+// after 10 minutes, a cache eviction, or a restart. A process other than the
+// daemon that deletes and inserts the same number of matching rows is not
+// detected until the ranking expires. The offline profile keeps no cache and
+// ranks every request again.
 message SearchWithinConversationResponse {
   repeated ConversationSearchResult results = 1;
-  // indexed_fingerprint is the content fingerprint the engine has embedded for
-  // this conversation, from its checkpoint. Empty means the conversation is not
-  // indexed. A caller compares it to the conversation's current fingerprint to
-  // decide whether the hits are complete or a literal scan of newer content is
+  // indexed_fingerprint is the content fingerprint the engine had embedded for
+  // this conversation, from its checkpoint, when the ranking that served the
+  // results was computed. Empty means the conversation was not indexed. A
+  // caller compares it to the conversation's current fingerprint to decide
+  // whether the hits are complete or a literal scan of newer content is
   // needed.
   string indexed_fingerprint = 2;
   string display_text = 3;
   DependencyHealth dependency_health = 4;
+  // ranking_truncated is true when more than 16,384 rows match the filter.
+  // The ranking then covers only its first 16,384 rows, and pages stop there.
+  bool ranking_truncated = 5;
 }
 
 // CollectionFilterValue is one typed literal in a collection filter. Its type
@@ -1146,10 +1175,10 @@ message CollectionFilter {
 // group value share one group. In a conversation collection grouped by
 // conversationId, a row with a null conversationId instead groups by the
 // conversation id in its legacy metadata. per_group_limit requires group_by.
-// min_score drops hits scoring below the floor, and zero means no floor. One
-// query and request always return the same rows in the same order, ranked by
-// descending score, then ascending row_key, then ascending stored primary
-// key. A smaller limit returns a prefix of a larger one.
+// min_score drops hits scoring below the floor, and zero means no floor. Hits
+// are ranked by descending score, then ascending row_key, then ascending
+// stored primary key. Requests that read one cached ranking return prefixes of
+// it; SearchCollectionResponse states when the daemon ranks again.
 message SearchCollectionRequest {
   string collection_id = 1;
   string query = 2;
@@ -1183,10 +1212,24 @@ message CollectionSearchHit {
   repeated CollectionHitScalar scalars = 4;
 }
 
+// SearchCollectionResponse returns the first limit hits of one ranking.
+// Paging contract: the daemon ranks a query once and caches the ranking for up
+// to 10 minutes. A later request with the same collection, query, filter,
+// min_score, group_by, and per_group_limit reads that ranking, and a larger
+// limit returns a longer prefix of it. A client pages by raising limit and
+// keeping the hits past the previous page. The daemon ranks again after it
+// commits a write to the collection, when the number of rows matching the
+// filter changes, and after 10 minutes, a cache eviction, or a restart. A
+// process other than the daemon that deletes and inserts the same number of
+// matching rows is not detected until the ranking expires. The offline
+// profile keeps no cache and ranks every request again.
 message SearchCollectionResponse {
   repeated CollectionSearchHit hits = 1;
   string display_text = 2;
   DependencyHealth dependency_health = 3;
+  // ranking_truncated is true when more than 16,384 rows match the filter.
+  // The ranking then covers only its first 16,384 rows, and pages stop there.
+  bool ranking_truncated = 4;
 }
 
 message GetCollectionItemStateRequest {

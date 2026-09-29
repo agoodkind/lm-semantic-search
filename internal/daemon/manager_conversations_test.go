@@ -597,10 +597,11 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 		},
 	}
 
-	chunks, err := manager.SearchConversations(context.Background(), collectionID, "needle", 5, conversationSearchFilter{Roles: nil, FromUnix: 0, UntilUnix: 0, ConversationIDs: nil, ParentConversationID: "", MinScore: 0, MessageIndexFrom: 0, MessageIndexUntil: 0}, 0)
+	searchResult, err := manager.SearchConversations(context.Background(), collectionID, "needle", 5, conversationSearchFilter{Roles: nil, FromUnix: 0, UntilUnix: 0, ConversationIDs: nil, ParentConversationID: "", MinScore: 0, MessageIndexFrom: 0, MessageIndexUntil: 0}, 0)
 	if err != nil {
 		t.Fatalf("SearchConversations returned error: %v", err)
 	}
+	chunks := searchResult.Chunks
 	if len(chunks) != 1 {
 		t.Fatalf("SearchConversations returned %d chunks, want 1", len(chunks))
 	}
@@ -669,8 +670,8 @@ func TestSearchConversationsReturnsConversationMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchConversations for unregistered collection returned error: %v", err)
 	}
-	if len(unregisteredChunks) != 0 {
-		t.Fatalf("SearchConversations for unregistered collection returned %d chunks, want 0", len(unregisteredChunks))
+	if len(unregisteredChunks.Chunks) != 0 {
+		t.Fatalf("SearchConversations for unregistered collection returned %d chunks, want 0", len(unregisteredChunks.Chunks))
 	}
 	if searchCalls != callsBeforeUnregistered {
 		t.Fatalf("SearchConversations called semantic backend for unregistered collection")
@@ -788,8 +789,8 @@ func TestSearchConversationsReturnsUnavailableWhenSemanticUnavailable(t *testing
 	if !errors.Is(err, semantic.ErrUnavailable) {
 		t.Fatalf("SearchConversations error = %v, want semantic.ErrUnavailable", err)
 	}
-	if len(results) != 0 {
-		t.Fatalf("SearchConversations returned %d chunks, want none", len(results))
+	if len(results.Chunks) != 0 {
+		t.Fatalf("SearchConversations returned %d chunks, want none", len(results.Chunks))
 	}
 }
 
@@ -1973,10 +1974,11 @@ func TestSearchWithinConversationScopesAndReportsFingerprint(t *testing.T) {
 	}
 	waitForConversationJobState(t, manager, job.ID, model.JobStateCompleted)
 
-	hits, indexedFingerprint, err := manager.SearchWithinConversation(ctx, collectionID, "conv-a", "needle", 5, emptyConversationSearchFilter())
+	withinResult, err := manager.SearchWithinConversation(ctx, collectionID, "conv-a", "needle", 5, emptyConversationSearchFilter())
 	if err != nil {
 		t.Fatalf("SearchWithinConversation returned error: %v", err)
 	}
+	hits, indexedFingerprint := withinResult.Chunks, withinResult.IndexedFingerprint
 	if len(hits) != 1 || hits[0].ConversationID != "conv-a" {
 		t.Fatalf("within hits = %+v, want only conv-a", hits)
 	}
@@ -1987,10 +1989,11 @@ func TestSearchWithinConversationScopesAndReportsFingerprint(t *testing.T) {
 		t.Fatalf("indexed fingerprint = %q, want fp-a-1", indexedFingerprint)
 	}
 
-	missingHits, missingFingerprint, err := manager.SearchWithinConversation(ctx, collectionID, "conv-unknown", "needle", 5, emptyConversationSearchFilter())
+	missingResult, err := manager.SearchWithinConversation(ctx, collectionID, "conv-unknown", "needle", 5, emptyConversationSearchFilter())
 	if err != nil {
 		t.Fatalf("SearchWithinConversation for unknown conversation returned error: %v", err)
 	}
+	missingHits, missingFingerprint := missingResult.Chunks, missingResult.IndexedFingerprint
 	if len(missingHits) != 0 {
 		t.Fatalf("unknown conversation hits = %+v, want none", missingHits)
 	}
@@ -2014,7 +2017,7 @@ func TestSearchWithinConversationPushesNativeScope(t *testing.T) {
 	manager.semantic = fake
 	ctx := context.Background()
 
-	if _, _, err := manager.SearchWithinConversation(ctx, "thread-scope", "conv-scoped", "needle", 5, emptyConversationSearchFilter()); err != nil {
+	if _, err := manager.SearchWithinConversation(ctx, "thread-scope", "conv-scoped", "needle", 5, emptyConversationSearchFilter()); err != nil {
 		t.Fatalf("SearchWithinConversation returned error: %v", err)
 	}
 

@@ -373,9 +373,11 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 		WithInt64Column(timestampUnixFieldName, scalars.timestamps).
 		WithInt64Column(messageIndexFieldName, scalars.messageIndexes)
 
-	if _, err := service.milvus.Upsert(ctx, option); err != nil {
-		slog.ErrorContext(ctx, "conversation backfill upsert failed", "collection", collectionName, "rows", len(ids), "err", err)
-		return fmt.Errorf("upsert backfill batch into %s: %w", collectionName, err)
+	_, upsertErr := service.milvus.Upsert(ctx, option)
+	service.rankings.noteWrite(collectionName)
+	if upsertErr != nil {
+		slog.ErrorContext(ctx, "conversation backfill upsert failed", "collection", collectionName, "rows", len(ids), "err", upsertErr)
+		return fmt.Errorf("upsert backfill batch into %s: %w", collectionName, upsertErr)
 	}
 	return nil
 }

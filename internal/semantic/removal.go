@@ -163,6 +163,7 @@ func (service *Service) deleteByItemIDs(
 			ctx,
 			milvusclient.NewDeleteOption(collectionName).WithExpr(inStringClause(itemColumn, idBatch)),
 		)
+		service.rankings.noteWrite(collectionName)
 		if err != nil {
 			return removed, wrapStoreError(
 				ctx,
@@ -191,6 +192,7 @@ func (service *Service) deleteByRelativePathPrefix(
 		ctx,
 		milvusclient.NewDeleteOption(collectionName).WithExpr(expression),
 	)
+	service.rankings.noteWrite(collectionName)
 	if err != nil {
 		return 0, wrapStoreError(
 			ctx,

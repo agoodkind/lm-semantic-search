@@ -121,11 +121,12 @@ func TestConversationSearchAppliesFiltersScoreAndPerConversationLimit(
 		GroupBy:        "conversationId",
 		PerGroupLimit:  1,
 		Declaration:    semantic.ConversationDeclaration(),
+		CallerState:    "",
 	})
 	if err != nil {
 		t.Fatalf("SearchCollection returned error: %v", err)
 	}
-	if got, want := hitContents(results), []string{"a best", "b kept"}; !slices.Equal(got, want) {
+	if got, want := hitContents(results.Hits), []string{"a best", "b kept"}; !slices.Equal(got, want) {
 		t.Fatalf("conversation contents = %v, want %v", got, want)
 	}
 }
@@ -162,7 +163,7 @@ func TestCollectionSearchEvaluatesNestedFilterTree(t *testing.T) {
 	lower := int64(250)
 	search := func(filter semantic.CollectionFilter) []semantic.CollectionHit {
 		t.Helper()
-		hits, searchErr := store.SearchCollection(context.Background(), semantic.CollectionSearch{
+		result, searchErr := store.SearchCollection(context.Background(), semantic.CollectionSearch{
 			CollectionName: store.CollectionName(codebasePath),
 			Query:          "query",
 			Limit:          10,
@@ -171,11 +172,12 @@ func TestCollectionSearchEvaluatesNestedFilterTree(t *testing.T) {
 			GroupBy:        "",
 			PerGroupLimit:  0,
 			Declaration:    declaration,
+			CallerState:    "",
 		})
 		if searchErr != nil {
 			t.Fatalf("SearchCollection returned error: %v", searchErr)
 		}
-		return hits
+		return result.Hits
 	}
 
 	either := semantic.AnyOf(
@@ -355,7 +357,7 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 			stageAndPromoteWithReuse(t, store, codebasePath, chunks, reuse)
 			search := func(limit int32, filter *semantic.CollectionFilter) []string {
 				t.Helper()
-				hits, err := store.SearchCollection(context.Background(), semantic.CollectionSearch{
+				result, err := store.SearchCollection(context.Background(), semantic.CollectionSearch{
 					CollectionName: store.CollectionName(codebasePath),
 					Query:          "query",
 					Limit:          limit,
@@ -364,12 +366,13 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 					GroupBy:        "conversationId",
 					PerGroupLimit:  2,
 					Declaration:    semantic.ConversationDeclaration(),
+					CallerState:    "",
 				})
 				if err != nil {
 					t.Fatalf("SearchCollection returned error: %v", err)
 				}
-				paths := make([]string, 0, len(hits))
-				for _, hit := range hits {
+				paths := make([]string, 0, len(result.Hits))
+				for _, hit := range result.Hits {
 					paths = append(paths, hit.Chunk.RelativePath)
 				}
 				return paths

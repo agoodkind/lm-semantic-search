@@ -6597,11 +6597,25 @@ func (x *SearchConversationsRequest) GetPerConversationLimit() int32 {
 	return 0
 }
 
+// SearchConversationsResponse returns the first limit rows of one ranking.
+// Paging contract: the daemon ranks a query once and caches the ranking for up
+// to 10 minutes. A later request with the same collection, query, filter,
+// min_score, and per_conversation_limit reads that ranking, and a larger limit
+// returns a longer prefix of it. A client pages by raising limit and keeping
+// the rows past the previous page. The daemon ranks again after it commits a
+// write to the collection, when the number of rows matching the filter
+// changes, and after 10 minutes, a cache eviction, or a restart. A process
+// other than the daemon that deletes and inserts the same number of matching
+// rows is not detected until the ranking expires. The offline profile keeps no
+// cache and ranks every request again.
 type SearchConversationsResponse struct {
 	state            protoimpl.MessageState      `protogen:"open.v1"`
 	Results          []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
 	DisplayText      string                      `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
 	DependencyHealth *DependencyHealth           `protobuf:"bytes,3,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
+	// ranking_truncated is true when more than 16,384 rows match the filter.
+	// The ranking then covers only its first 16,384 rows, and pages stop there.
+	RankingTruncated bool `protobuf:"varint,4,opt,name=ranking_truncated,json=rankingTruncated,proto3" json:"ranking_truncated,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -6655,6 +6669,13 @@ func (x *SearchConversationsResponse) GetDependencyHealth() *DependencyHealth {
 		return x.DependencyHealth
 	}
 	return nil
+}
+
+func (x *SearchConversationsResponse) GetRankingTruncated() bool {
+	if x != nil {
+		return x.RankingTruncated
+	}
+	return false
 }
 
 type SearchWithinConversationRequest struct {
@@ -6734,19 +6755,34 @@ func (x *SearchWithinConversationRequest) GetFilter() *ConversationSearchFilter 
 	return nil
 }
 
+// SearchWithinConversationResponse returns the first limit rows of one
+// ranking of one conversation. Paging contract: the daemon ranks a query once
+// and caches the ranking for up to 10 minutes. A later request with the same
+// collection, conversation, query, filter, and indexed fingerprint reads that
+// ranking, and a larger limit returns a longer prefix of it. The daemon ranks
+// again after it commits a write to the collection, when the conversation's
+// indexed fingerprint or the number of rows matching the filter changes, and
+// after 10 minutes, a cache eviction, or a restart. A process other than the
+// daemon that deletes and inserts the same number of matching rows is not
+// detected until the ranking expires. The offline profile keeps no cache and
+// ranks every request again.
 type SearchWithinConversationResponse struct {
 	state   protoimpl.MessageState      `protogen:"open.v1"`
 	Results []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
-	// indexed_fingerprint is the content fingerprint the engine has embedded for
-	// this conversation, from its checkpoint. Empty means the conversation is not
-	// indexed. A caller compares it to the conversation's current fingerprint to
-	// decide whether the hits are complete or a literal scan of newer content is
+	// indexed_fingerprint is the content fingerprint the engine had embedded for
+	// this conversation, from its checkpoint, when the ranking that served the
+	// results was computed. Empty means the conversation was not indexed. A
+	// caller compares it to the conversation's current fingerprint to decide
+	// whether the hits are complete or a literal scan of newer content is
 	// needed.
 	IndexedFingerprint string            `protobuf:"bytes,2,opt,name=indexed_fingerprint,json=indexedFingerprint,proto3" json:"indexed_fingerprint,omitempty"`
 	DisplayText        string            `protobuf:"bytes,3,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
 	DependencyHealth   *DependencyHealth `protobuf:"bytes,4,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// ranking_truncated is true when more than 16,384 rows match the filter.
+	// The ranking then covers only its first 16,384 rows, and pages stop there.
+	RankingTruncated bool `protobuf:"varint,5,opt,name=ranking_truncated,json=rankingTruncated,proto3" json:"ranking_truncated,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SearchWithinConversationResponse) Reset() {
@@ -6805,6 +6841,13 @@ func (x *SearchWithinConversationResponse) GetDependencyHealth() *DependencyHeal
 		return x.DependencyHealth
 	}
 	return nil
+}
+
+func (x *SearchWithinConversationResponse) GetRankingTruncated() bool {
+	if x != nil {
+		return x.RankingTruncated
+	}
+	return false
 }
 
 // CollectionFilterValue is one typed literal in a collection filter. Its type
@@ -7359,10 +7402,10 @@ func (*CollectionFilter_IsPresent) isCollectionFilter_Node() {}
 // group value share one group. In a conversation collection grouped by
 // conversationId, a row with a null conversationId instead groups by the
 // conversation id in its legacy metadata. per_group_limit requires group_by.
-// min_score drops hits scoring below the floor, and zero means no floor. One
-// query and request always return the same rows in the same order, ranked by
-// descending score, then ascending row_key, then ascending stored primary
-// key. A smaller limit returns a prefix of a larger one.
+// min_score drops hits scoring below the floor, and zero means no floor. Hits
+// are ranked by descending score, then ascending row_key, then ascending
+// stored primary key. Requests that read one cached ranking return prefixes of
+// it; SearchCollectionResponse states when the daemon ranks again.
 type SearchCollectionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CollectionId  string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
@@ -7651,11 +7694,25 @@ func (x *CollectionSearchHit) GetScalars() []*CollectionHitScalar {
 	return nil
 }
 
+// SearchCollectionResponse returns the first limit hits of one ranking.
+// Paging contract: the daemon ranks a query once and caches the ranking for up
+// to 10 minutes. A later request with the same collection, query, filter,
+// min_score, group_by, and per_group_limit reads that ranking, and a larger
+// limit returns a longer prefix of it. A client pages by raising limit and
+// keeping the hits past the previous page. The daemon ranks again after it
+// commits a write to the collection, when the number of rows matching the
+// filter changes, and after 10 minutes, a cache eviction, or a restart. A
+// process other than the daemon that deletes and inserts the same number of
+// matching rows is not detected until the ranking expires. The offline
+// profile keeps no cache and ranks every request again.
 type SearchCollectionResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Hits             []*CollectionSearchHit `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`
 	DisplayText      string                 `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
 	DependencyHealth *DependencyHealth      `protobuf:"bytes,3,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
+	// ranking_truncated is true when more than 16,384 rows match the filter.
+	// The ranking then covers only its first 16,384 rows, and pages stop there.
+	RankingTruncated bool `protobuf:"varint,4,opt,name=ranking_truncated,json=rankingTruncated,proto3" json:"ranking_truncated,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -7709,6 +7766,13 @@ func (x *SearchCollectionResponse) GetDependencyHealth() *DependencyHealth {
 		return x.DependencyHealth
 	}
 	return nil
+}
+
+func (x *SearchCollectionResponse) GetRankingTruncated() bool {
+	if x != nil {
+		return x.RankingTruncated
+	}
+	return false
 }
 
 type GetCollectionItemStateRequest struct {
@@ -9212,22 +9276,24 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x05query\x18\x02 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12E\n" +
 	"\x06filter\x18\x04 \x01(\v2-.lmsemanticsearch.v1.ConversationSearchFilterR\x06filter\x124\n" +
-	"\x16per_conversation_limit\x18\x05 \x01(\x05R\x14perConversationLimit\"\xdd\x01\n" +
+	"\x16per_conversation_limit\x18\x05 \x01(\x05R\x14perConversationLimit\"\x8a\x02\n" +
 	"\x1bSearchConversationsResponse\x12G\n" +
 	"\aresults\x18\x01 \x03(\v2-.lmsemanticsearch.v1.ConversationSearchResultR\aresults\x12!\n" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\x12R\n" +
-	"\x11dependency_health\x18\x03 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\"\xe2\x01\n" +
+	"\x11dependency_health\x18\x03 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\x12+\n" +
+	"\x11ranking_truncated\x18\x04 \x01(\bR\x10rankingTruncated\"\xe2\x01\n" +
 	"\x1fSearchWithinConversationRequest\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x14\n" +
 	"\x05query\x18\x03 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x04 \x01(\x05R\x05limit\x12E\n" +
-	"\x06filter\x18\x05 \x01(\v2-.lmsemanticsearch.v1.ConversationSearchFilterR\x06filter\"\x93\x02\n" +
+	"\x06filter\x18\x05 \x01(\v2-.lmsemanticsearch.v1.ConversationSearchFilterR\x06filter\"\xc0\x02\n" +
 	" SearchWithinConversationResponse\x12G\n" +
 	"\aresults\x18\x01 \x03(\v2-.lmsemanticsearch.v1.ConversationSearchResultR\aresults\x12/\n" +
 	"\x13indexed_fingerprint\x18\x02 \x01(\tR\x12indexedFingerprint\x12!\n" +
 	"\fdisplay_text\x18\x03 \x01(\tR\vdisplayText\x12R\n" +
-	"\x11dependency_health\x18\x04 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\"\x89\x01\n" +
+	"\x11dependency_health\x18\x04 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\x12+\n" +
+	"\x11ranking_truncated\x18\x05 \x01(\bR\x10rankingTruncated\"\x89\x01\n" +
 	"\x15CollectionFilterValue\x12#\n" +
 	"\fstring_value\x18\x01 \x01(\tH\x00R\vstringValue\x12\x1f\n" +
 	"\n" +
@@ -9284,11 +9350,12 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\arow_key\x18\x01 \x01(\tR\x06rowKey\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12\x14\n" +
 	"\x05score\x18\x03 \x01(\x01R\x05score\x12B\n" +
-	"\ascalars\x18\x04 \x03(\v2(.lmsemanticsearch.v1.CollectionHitScalarR\ascalars\"\xcf\x01\n" +
+	"\ascalars\x18\x04 \x03(\v2(.lmsemanticsearch.v1.CollectionHitScalarR\ascalars\"\xfc\x01\n" +
 	"\x18SearchCollectionResponse\x12<\n" +
 	"\x04hits\x18\x01 \x03(\v2(.lmsemanticsearch.v1.CollectionSearchHitR\x04hits\x12!\n" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\x12R\n" +
-	"\x11dependency_health\x18\x03 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\"]\n" +
+	"\x11dependency_health\x18\x03 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\x12+\n" +
+	"\x11ranking_truncated\x18\x04 \x01(\bR\x10rankingTruncated\"]\n" +
 	"\x1dGetCollectionItemStateRequest\x12#\n" +
 	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x17\n" +
 	"\aitem_id\x18\x02 \x01(\tR\x06itemId\"t\n" +

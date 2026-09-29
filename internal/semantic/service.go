@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
@@ -143,6 +144,9 @@ type Service struct {
 	// declaredCollections records the live names of document collections with a
 	// generic saved declaration. See isConversationCollection.
 	declaredCollections sync.Map
+	// rankings caches collection search rankings and counts committed writes
+	// per collection. See SearchCollection.
+	rankings *rankingCache
 }
 
 // NewService constructs the semantic search runtime.
@@ -181,6 +185,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
 			ensuredBackfill:             sync.Map{},
 			declaredCollections:         sync.Map{},
+			rankings:                    newRankingCache(time.Now, RankingCacheMaxBytes),
 		}
 		service.initializeResidencyController()
 		return service, nil
@@ -225,6 +230,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
 		ensuredBackfill:             sync.Map{},
 		declaredCollections:         sync.Map{},
+		rankings:                    newRankingCache(time.Now, RankingCacheMaxBytes),
 	}
 	service.initializeResidencyController()
 
@@ -372,6 +378,7 @@ func (service *Service) renameCollection(ctx context.Context, oldName string, ne
 }
 
 func (service *Service) invalidateCollectionCaches(collectionName string) {
+	service.rankings.noteWrite(collectionName)
 	service.ensuredConvColumns.Delete(collectionName)
 	service.ensuredSplitPartColumns.Delete(collectionName)
 	service.ensuredReuseIdentityColumns.Delete(collectionName)
@@ -499,7 +506,9 @@ func (service *Service) PruneToCurrent(ctx context.Context, codebasePath string,
 	}
 	expression := fmt.Sprintf(`%s not in [%s]`, relativePathFieldName, strings.Join(quoted, ","))
 
-	if _, err := service.milvus.Delete(ctx, milvusclient.NewDeleteOption(collectionName).WithExpr(expression)); err != nil {
+	_, err = service.milvus.Delete(ctx, milvusclient.NewDeleteOption(collectionName).WithExpr(expression))
+	service.rankings.noteWrite(collectionName)
+	if err != nil {
 		return wrapStoreError(ctx, err, "prune orphans from "+collectionName)
 	}
 	return nil
@@ -526,6 +535,7 @@ func (service *Service) deleteByRelativePaths(
 		ctx,
 		milvusclient.NewDeleteOption(collectionName).WithExpr(expression),
 	)
+	service.rankings.noteWrite(collectionName)
 	if err != nil {
 		return 0, wrapStoreError(
 			ctx,

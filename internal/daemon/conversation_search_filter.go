@@ -61,5 +61,6 @@ func (filter conversationSearchFilter) collectionSearchRequest(collectionID stri
 		Filter:        filter.toSemanticFilter().CollectionFilter(),
 		GroupBy:       groupBy,
 		PerGroupLimit: perGroupLimit,
+		CallerState:   "",
 	}
 }
