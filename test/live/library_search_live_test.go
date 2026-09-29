@@ -321,10 +321,11 @@ var searchLiveWorkerCounts = []int{2, 4, 8}
 // search of a library at one catalog revision.
 const searchLiveWarmSamples = 3
 
-// measureVerificationCache opens a library for each QueryWorkers value, which
-// starts with an empty verification cache, and times page one of the
-// unfiltered and filtered requests: the first search verifies every eligible
-// vector, and the next searches at the same catalog revision verify none.
+// measureVerificationCache opens a library for each QueryWorkers value and
+// request, which starts with an empty verification cache, and times page one
+// of the unfiltered and filtered requests: the first search verifies every
+// eligible vector, and the next searches at the same catalog revision verify
+// none.
 func (store *searchLiveStore) measureVerificationCache(
 	t *testing.T,
 	metrics *searchLiveMetrics,
@@ -337,8 +338,8 @@ func (store *searchLiveStore) measureVerificationCache(
 	defer slog.SetDefault(previousLogger)
 	metrics.PageOneCache = map[string]string{}
 	for _, workers := range searchLiveWorkerCounts {
-		searcher := store.open(t, func(config *library.Config) { config.QueryWorkers = workers })
 		for _, name := range []string{"unfiltered", "filtered"} {
+			searcher := store.open(t, func(config *library.Config) { config.QueryWorkers = workers })
 			request := requests[name]
 			request.PageSize = 10
 			for sample := range 1 + searchLiveWarmSamples {
@@ -1186,8 +1187,9 @@ func (store *searchLiveStore) measureVectorReads(t *testing.T, metrics *searchLi
 }
 
 // checkVectorLoss changes one eligible vector's values in Milvus without
-// changing its identity fields, which only VerifyStrong detects, and then
-// deletes eligible vectors.
+// changing its identity fields, which only VerifyStrong detects, publishes a
+// new owner to advance the catalog visibility revision, and then deletes
+// eligible vectors.
 func (store *searchLiveStore) checkVectorLoss(t *testing.T) {
 	t.Helper()
 	request := library.SearchRequest{Namespace: "search", Query: "vector loss", PageSize: 10}
@@ -1212,9 +1214,18 @@ func (store *searchLiveStore) checkVectorLoss(t *testing.T) {
 	)); err != nil {
 		t.Fatalf("replace vector values: %v", err)
 	}
+	// Earlier searches verified every vector at this catalog visibility
+	// revision. A search at the same revision reuses that verification and
+	// scores the changed vector. A publication advances the revision, and the
+	// next search verifies again.
 	page, err := store.library.Search(store.ctx, request)
+	if err != nil || len(page.Hits) == 0 {
+		t.Fatalf("Search over a changed vector at the verified revision = %d hits, %v; want a page", len(page.Hits), err)
+	}
+	store.replaceOwner(t, "owner-verification", 1, []library.Occurrence{searchLiveRow(900002, false)})
+	page, err = store.library.Search(store.ctx, request)
 	if !errors.Is(err, library.ErrVectorCorrupt) || len(page.Hits) != 0 {
-		t.Fatalf("Search over a changed vector = %d hits, %v; want no page and ErrVectorCorrupt", len(page.Hits), err)
+		t.Fatalf("Search over a changed vector after a publication = %d hits, %v; want no page and ErrVectorCorrupt", len(page.Hits), err)
 	}
 	if _, err := store.testbed.milvus.Delete(store.ctx,
 		milvusclient.NewDeleteOption(store.collection).WithStringIDs("vector_id", []string{corruptID, missingID})); err != nil {
