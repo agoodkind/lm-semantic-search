@@ -361,6 +361,22 @@ type OwnerState struct {
 	IdempotencyToken, Fingerprint string
 }
 
+// OwnerOccurrences lists one owner's published occurrences. State is the
+// committed generation, ProjectionOrder is the latest saved [ScalarProjection]
+// order or zero, and Rows are sorted by row key.
+type OwnerOccurrences struct {
+	State           OwnerState
+	ProjectionOrder uint64
+	Rows            []OwnerOccurrence
+}
+
+// OwnerOccurrence is one published row key and the generation order that
+// published it.
+type OwnerOccurrence struct {
+	RowKey          string
+	GenerationOrder uint64
+}
+
 // PrepareRequest asks [PrepareText] to split one selected source text at the
 // embedding model's limits.
 type PrepareRequest struct {
