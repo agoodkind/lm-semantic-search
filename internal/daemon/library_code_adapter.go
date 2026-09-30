@@ -203,10 +203,10 @@ func codebaseSpec(namespace string) library.NamespaceSpec {
 // CollectionName returns the wrapped index's name. For a filesystem codebase it
 // stores the codebase namespace under that name.
 func (index *libraryCodeIndex) CollectionName(codebasePath string) string {
-	name := index.semanticIndex.CollectionName(codebasePath)
-	if !semantic.IsConversationPath(codebasePath) {
-		index.codeNamespaces.Store(name, codebaseNamespaceID(codebasePath))
+	if semantic.IsConversationPath(codebasePath) {
+		return index.semanticIndex.CollectionName(codebasePath)
 	}
+	name, _ := index.codebaseNames(codebasePath)
 	return name
 }
 
@@ -220,10 +220,15 @@ func codebaseNamespaceID(codebasePath string) string {
 // codebaseNamespace returns the namespace of codebasePath and stores it under
 // the wrapped index's collection name.
 func (index *libraryCodeIndex) codebaseNamespace(codebasePath string) string {
+	_, namespace := index.codebaseNames(codebasePath)
+	return namespace
+}
+
+func (index *libraryCodeIndex) codebaseNames(codebasePath string) (string, string) {
 	name := index.semanticIndex.CollectionName(codebasePath)
 	namespace := codebaseNamespaceID(codebasePath)
 	index.codeNamespaces.Store(name, namespace)
-	return namespace
+	return name, namespace
 }
 
 // collectionNamespace returns the codebase namespace stored for a collection
