@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"goodkind.io/lm-semantic-search/library/observation"
+
 	"goodkind.io/lm-semantic-search/library/internal/vectorcodec"
 )
 
@@ -76,7 +78,10 @@ func closeStatement(ctx context.Context, statement *sql.Stmt) error {
 // missingIdentities returns the identities without a catalog vector. An
 // existing vector with different identity bytes returns an error that wraps
 // [ErrVectorCorrupt].
-func missingIdentities(ctx context.Context, tx *sql.Tx, identities []vectorIdentity) ([]vectorIdentity, error) {
+func (library *Library) missingIdentities(ctx context.Context, tx *sql.Tx, identities []vectorIdentity, secondLookup bool) (_ []vectorIdentity, err error) {
+	ctx, span := observation.Start(ctx, library.config.Observer, observation.IdentitySelection)
+	counts := observation.IdentityData{SecondLookup: secondLookup}
+	defer func() { span.End(ctx, err, observation.Data{Identity: counts}) }()
 	ids := make([]string, 0, len(identities))
 	for _, identity := range identities {
 		ids = append(ids, identity.id)
@@ -89,6 +94,7 @@ func missingIdentities(ctx context.Context, tx *sql.Tx, identities []vectorIdent
 	for _, identity := range identities {
 		stored, found := existing[identity.id]
 		if !found {
+			counts.Missing++
 			missing = append(missing, identity)
 			continue
 		}
@@ -96,6 +102,11 @@ func missingIdentities(ctx context.Context, tx *sql.Tx, identities []vectorIdent
 			err := fmt.Errorf("%w: vector %s has a different saved identity", ErrVectorCorrupt, identity.id)
 			slog.ErrorContext(ctx, "vector identity collision", "vector_id", identity.id, "err", err)
 			return nil, err
+		}
+		if stored.state == vectorStateVerified {
+			counts.VerifiedReuse++
+		} else {
+			counts.PendingReuse++
 		}
 	}
 	return missing, nil
@@ -118,23 +129,33 @@ func (library *Library) embedIdentities(ctx context.Context, identities []vector
 			slog.ErrorContext(ctx, "embed occurrence inputs failed", "inputs", len(inputs), "err", err)
 			return nil, fmt.Errorf("embed %d occurrence inputs: %w", len(inputs), err)
 		}
-		if len(vectors) != len(batch) {
-			err := fmt.Errorf("embedder returned %d vectors for %d inputs", len(vectors), len(batch))
-			slog.ErrorContext(ctx, "embed occurrence inputs failed", "err", err)
+		validated, err := library.validateEmbeddedVectors(ctx, batch, vectors)
+		if err != nil {
 			return nil, err
 		}
-		for index, identity := range batch {
-			if err := vectorcodec.Validate(vectors[index], library.config.Store.Dimension); err != nil {
-				slog.ErrorContext(ctx, "embedder returned an invalid vector", "vector_id", identity.id, "err", err)
-				return nil, fmt.Errorf("embedder vector for %s: %w", identity.id, err)
-			}
-			embedded = append(embedded, embeddedVector{
-				identity: identity,
-				values:   vectors[index],
-				checksum: vectorcodec.Checksum(vectors[index]),
-			})
-		}
+		embedded = append(embedded, validated...)
 	}
+	return embedded, nil
+}
+
+func (library *Library) validateEmbeddedVectors(ctx context.Context, identities []vectorIdentity, vectors [][]float32) (_ []embeddedVector, err error) {
+	ctx, span := observation.Start(ctx, library.config.Observer, observation.EmbeddingValidation)
+	counts := observation.EmbeddingData{Requested: len(identities), Returned: len(vectors), Validation: observation.CanonicalValidation}
+	defer func() { span.End(ctx, err, observation.Data{Embedding: counts}) }()
+	if len(vectors) != len(identities) {
+		err := fmt.Errorf("embedder returned %d vectors for %d inputs", len(vectors), len(identities))
+		slog.ErrorContext(ctx, "embed occurrence inputs failed", "err", err)
+		return nil, err
+	}
+	embedded := make([]embeddedVector, 0, len(identities))
+	for index, identity := range identities {
+		if err := vectorcodec.Validate(vectors[index], library.config.Store.Dimension); err != nil {
+			slog.ErrorContext(ctx, "embedder returned an invalid vector", "vector_id", identity.id, "err", err)
+			return nil, fmt.Errorf("embedder vector for %s: %w", identity.id, err)
+		}
+		embedded = append(embedded, embeddedVector{identity: identity, values: vectors[index], checksum: vectorcodec.Checksum(vectors[index])})
+	}
+	counts.Validated = len(embedded)
 	return embedded, nil
 }
 
@@ -152,7 +173,7 @@ func (library *Library) publishVectors(ctx context.Context, vectors []embeddedVe
 		for _, vector := range vectors {
 			identities = append(identities, vector.identity)
 		}
-		missing, err := missingIdentities(ctx, tx, identities)
+		missing, err := library.missingIdentities(ctx, tx, identities, true)
 		if err != nil {
 			return err
 		}

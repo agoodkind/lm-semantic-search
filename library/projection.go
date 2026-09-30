@@ -49,7 +49,7 @@ func (library *Library) ReprojectScalars(ctx context.Context, projection ScalarP
 		}, "\x00"))),
 	}
 
-	release, err := library.lock.acquire(ctx)
+	release, err := library.acquireWriter(ctx)
 	if err != nil {
 		return ProjectionReceipt{}, err
 	}

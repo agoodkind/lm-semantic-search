@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/lm-semantic-search/library/observation"
+
 	internalembedding "goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/library"
 	"goodkind.io/lm-semantic-search/library/internal/embedadapter"
@@ -36,6 +38,8 @@ var (
 // OpenAIConfig configures the OpenAI-compatible adapter. The caller resolves
 // any credential reference and passes the credential value in APIKey.
 type OpenAIConfig struct {
+	// Observer receives actual SDK request attempts and validated batch results.
+	Observer observation.Observer
 	// BaseURL is the endpoint root, for example "http://localhost:5400/v1".
 	BaseURL string
 	// APIKey is the bearer credential. Empty sends no Authorization header.
@@ -75,6 +79,7 @@ func NewOpenAI(ctx context.Context, config OpenAIConfig) (library.Embedder, erro
 		backoffBase = internalembedding.DefaultEmbedBackoffBase
 	}
 	provider, err := internalembedding.NewOpenAICompatibleProvider(internalembedding.OpenAICompatibleOptions{
+		Observer:       config.Observer,
 		APIKey:         config.APIKey,
 		BaseURL:        config.BaseURL,
 		Model:          config.Model,
@@ -87,7 +92,7 @@ func NewOpenAI(ctx context.Context, config OpenAIConfig) (library.Embedder, erro
 		slog.ErrorContext(ctx, "construct OpenAI-compatible embedding adapter failed", "model", config.Model, "err", err)
 		return nil, fmt.Errorf("%w: embedding: %w", library.ErrInvalidRequest, err)
 	}
-	return embedadapter.New(provider, config.Dimension), nil
+	return embedadapter.NewObserved(provider, config.Dimension, config.Observer), nil
 }
 
 func openAIConfigViolation(config OpenAIConfig) string {

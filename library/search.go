@@ -10,6 +10,8 @@ import (
 	"math"
 	"time"
 
+	"goodkind.io/lm-semantic-search/library/observation"
+
 	"goodkind.io/lm-semantic-search/internal/clock"
 )
 
@@ -66,6 +68,7 @@ type searchPlan struct {
 // or corrupt vector returns [ErrVectorMissing] or [ErrVectorCorrupt]. Every
 // failure returns no page.
 func (library *Library) Search(ctx context.Context, request SearchRequest) (SearchPage, error) {
+	ctx = observation.WithPurpose(ctx, observation.Query)
 	ctx, cancel := context.WithTimeout(ctx, library.config.QueryTimeout)
 	defer cancel()
 	started := clock.Now()

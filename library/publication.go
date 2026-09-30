@@ -28,7 +28,7 @@ func (library *Library) CommitGeneration(ctx context.Context, key GenerationKey,
 	if err := validateGenerationKey(key); err != nil {
 		return ApplyReceipt{}, err
 	}
-	release, err := library.lock.acquire(ctx)
+	release, err := library.acquireWriter(ctx)
 	if err != nil {
 		return ApplyReceipt{}, err
 	}
@@ -415,7 +415,7 @@ func (library *Library) Delete(ctx context.Context, ids []OccurrenceID) (err err
 	if len(ids) == 0 {
 		return nil
 	}
-	release, err := library.lock.acquire(ctx)
+	release, err := library.acquireWriter(ctx)
 	if err != nil {
 		return err
 	}

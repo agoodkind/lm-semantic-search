@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/lm-semantic-search/library/observation"
+
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
@@ -175,6 +177,7 @@ func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, di
 		return nil, fmt.Errorf("%s embedding provider requires an API key", openAIProviderName)
 	}
 	return NewOpenAICompatibleProvider(OpenAICompatibleOptions{
+		Observer:       nil,
 		APIKey:         apiKey,
 		BaseURL:        baseURL,
 		Model:          model,
@@ -187,6 +190,8 @@ func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, di
 
 // OpenAICompatibleOptions configures one OpenAI-compatible embedding adapter.
 type OpenAICompatibleOptions struct {
+	// Observer receives one event pair for each SDK request attempt.
+	Observer observation.Observer
 	// APIKey is sent as a bearer credential. An empty key sends no
 	// Authorization header, for a local endpoint without authentication.
 	APIKey string
@@ -208,6 +213,7 @@ type OpenAICompatibleOptions struct {
 }
 
 type openAICompatibleProvider struct {
+	observer   observation.Observer
 	name       model.EmbeddingProvider
 	model      string
 	dimensions int
@@ -259,6 +265,7 @@ func NewOpenAICompatibleProvider(options OpenAICompatibleOptions) (Provider, err
 	}
 
 	return &openAICompatibleProvider{
+		observer:       options.Observer,
 		name:           openAIProviderName,
 		model:          options.Model,
 		dimensions:     options.Dimensions,
@@ -507,7 +514,13 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 		if provider.requestTimeout > 0 {
 			requestCtx, cancel = context.WithTimeout(ctx, provider.requestTimeout)
 		}
+		requestCtx, span := observation.Start(requestCtx, provider.observer, observation.EmbeddingAttempt)
 		response, err := provider.client.Embeddings.New(requestCtx, params)
+		counts := observation.EmbeddingData{Attempt: attempt, Requested: len(params.Input.OfArrayOfStrings)}
+		if response != nil {
+			counts.Returned = len(response.Data)
+		}
+		span.End(requestCtx, err, observation.Data{Embedding: counts})
 		if cancel != nil {
 			cancel()
 		}

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"goodkind.io/lm-semantic-search/library/observation"
+
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
@@ -44,6 +46,8 @@ const maxSearchLimit = 16384
 // creates the client for Database, and the adapter uses the client's
 // database for every request.
 type Config struct {
+	// Observer receives logical SDK upserts and strong verification outcomes.
+	Observer   observation.Observer
 	Database   string
 	Collection string
 }
@@ -229,7 +233,14 @@ func (store *Store) PutCanonical(ctx context.Context, record library.VectorRecor
 		column.NewColumnVarChar(fieldIdentityDigest, []string{record.IdentityDigest}),
 		column.NewColumnVarChar(fieldChecksum, []string{record.Checksum}),
 	)
-	if _, err := store.client.Upsert(ctx, option); err != nil {
+	ctx, span := observation.Start(ctx, store.config.Observer, observation.UpsertCall)
+	result, err := store.client.Upsert(ctx, option)
+	counts := observation.VectorData{Requested: 1}
+	if err == nil {
+		counts.Acknowledged = result.UpsertCount
+	}
+	span.End(ctx, err, observation.Data{Vector: counts})
+	if err != nil {
 		slog.ErrorContext(ctx, "upsert canonical vector failed", "vector_id", record.ID, "err", err)
 		return fmt.Errorf("upsert canonical vector %s: %w", record.ID, err)
 	}
@@ -240,7 +251,10 @@ func (store *Store) PutCanonical(ctx context.Context, record library.VectorRecor
 // returns an error that wraps [library.ErrVectorMissing]. A stored digest or
 // checksum that differs from the identity, or stored values that do not match
 // the stored checksum, return an error that wraps [library.ErrVectorCorrupt].
-func (store *Store) VerifyStrong(ctx context.Context, identities []library.VectorIdentity) error {
+func (store *Store) VerifyStrong(ctx context.Context, identities []library.VectorIdentity) (err error) {
+	ctx, span := observation.Start(ctx, store.config.Observer, observation.StrongVerification)
+	counts := observation.VectorData{Requested: len(identities)}
+	defer func() { span.End(ctx, err, observation.Data{Vector: counts}) }()
 	if _, err := store.binding(ctx); err != nil {
 		return err
 	}
@@ -268,6 +282,7 @@ func (store *Store) VerifyStrong(ctx context.Context, identities []library.Vecto
 			return corrupt
 		}
 	}
+	counts.Verified = len(identities)
 	return nil
 }
 
