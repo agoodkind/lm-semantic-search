@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,9 @@ func TestLibraryDatabaseIntentChild(t *testing.T) {
 }
 
 func TestLibraryDatabaseIntentRejectsUnsafeRegistration(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("registered oracle admission requires the Mac isolated /private/tmp testbed")
+	}
 	runID := fmt.Sprintf("oracle_intent_%d", time.Now().UnixNano())
 	if registeredID := os.Getenv("LMS_LIBRARY_INTENT_NEGATIVE_RUN_ID"); registeredID != "" {
 		if !validLibraryRunID(registeredID) || len(libraryLiveDatabasePrefix+registeredID) > 128 {
@@ -41,7 +45,7 @@ func TestLibraryDatabaseIntentRejectsUnsafeRegistration(t *testing.T) {
 	intent := libraryDatabaseIntent{SchemaVersion: 1, Database: libraryLiveDatabasePrefix + runID,
 		MilvusAddress: "localhost:39630", RunRoot: root, RunID: runID,
 		RegisteredAt: time.Now().UTC(), AbsenceVerified: true}
-	for _, name := range []string{"database", "endpoint", "permission", "scope"} {
+	for _, name := range []string{"database", "endpoint", "permission", "scope", "contention"} {
 		t.Run(name, func(t *testing.T) {
 			candidate := intent
 			mode := os.FileMode(0o600)
@@ -60,6 +64,8 @@ func TestLibraryDatabaseIntentRejectsUnsafeRegistration(t *testing.T) {
 			case "scope":
 				pattern = "^TestLibraryDatabaseIntentChild$"
 				reason = "database intent requires the exact existing exhaustive oracle test"
+			case "contention":
+				reason = "claim exclusive database intent:"
 			}
 			data, err := json.Marshal(candidate)
 			if err != nil {
@@ -71,6 +77,18 @@ func TestLibraryDatabaseIntentRejectsUnsafeRegistration(t *testing.T) {
 			}
 			if err = os.Chmod(path, mode); err != nil {
 				t.Fatal(err)
+			}
+			var registration *os.File
+			if name == "contention" {
+				_, registration, err = readLibraryDatabaseIntent("TestLibrarySearchCompletePagesMatchTheExhaustiveOracle", path, intent.MilvusAddress)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := registration.Close(); err != nil {
+						t.Error(err)
+					}
+				})
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
@@ -88,6 +106,15 @@ func TestLibraryDatabaseIntentRejectsUnsafeRegistration(t *testing.T) {
 			output, commandErr := command.CombinedOutput()
 			if commandErr == nil || ctx.Err() != nil || !strings.Contains(string(output), "reject library database intent: "+reason) || strings.Contains(string(output), "created Milvus database") {
 				t.Fatalf("unsafe registration did not fail before database creation: err=%v context=%v output=%s", commandErr, ctx.Err(), output)
+			}
+			if registration != nil {
+				if err := registration.Close(); err != nil {
+					t.Fatal(err)
+				}
+				_, registration, err = readLibraryDatabaseIntent("TestLibrarySearchCompletePagesMatchTheExhaustiveOracle", path, intent.MilvusAddress)
+				if err != nil {
+					t.Fatalf("reclaim database intent after close: %v", err)
+				}
 			}
 		})
 	}

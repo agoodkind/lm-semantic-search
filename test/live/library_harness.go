@@ -89,10 +89,17 @@ func newLibraryHarness(t *testing.T) *libraryHarness {
 	database := libraryLiveDatabasePrefix + randomHex(t, 16)
 	if path := os.Getenv("LMS_LIBRARY_LIVE_DATABASE_INTENT"); path != "" {
 		var err error
-		database, err = readLibraryDatabaseIntent(t.Name(), path, environment.MilvusAddress)
+		var registration *os.File
+		database, registration, err = readLibraryDatabaseIntent(t.Name(), path, environment.MilvusAddress)
 		if err != nil {
 			t.Fatalf("reject library database intent: %v", err)
 		}
+		// Cleanup callbacks run in reverse order, after database cleanup.
+		t.Cleanup(func() {
+			if err := registration.Close(); err != nil {
+				t.Errorf("close database registration lock: %v", err)
+			}
+		})
 	}
 
 	admin, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: environment.MilvusAddress})
@@ -135,51 +142,82 @@ type libraryDatabaseIntent struct {
 	AbsenceVerified bool      `json:"absence_verified"`
 }
 
-func readLibraryDatabaseIntent(testName, path, address string) (database string, resultErr error) {
+func readLibraryDatabaseIntent(testName, path, address string) (database string, registration *os.File, resultErr error) {
 	defer func() {
 		if resultErr != nil {
+			if registration != nil {
+				resultErr = errors.Join(resultErr, registration.Close())
+				registration = nil
+			}
 			slog.Warn("library database intent rejected", "err", resultErr)
 		}
 	}()
 	if testName != "TestLibrarySearchCompletePagesMatchTheExhaustiveOracle" {
-		return "", errors.New("database intent requires the exact existing exhaustive oracle test")
+		return "", nil, errors.New("database intent requires the exact existing exhaustive oracle test")
 	}
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != "database-intent.json" {
-		return "", errors.New("database intent requires an absolute canonical registration path")
+		return "", nil, errors.New("database intent requires an absolute canonical registration path")
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve database intent: %w", err)
+		return "", nil, fmt.Errorf("resolve database intent: %w", err)
 	}
 	if resolved != path {
-		return "", errors.New("database intent path contains a symlink")
+		return "", nil, errors.New("database intent path contains a symlink")
 	}
 	registrationRoot, err := os.OpenRoot("/private/tmp")
 	if err != nil {
-		return "", fmt.Errorf("open isolated registration root: %w", err)
+		return "", nil, fmt.Errorf("open isolated registration root: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, registrationRoot.Close()) }()
 	file, err := registrationRoot.Open(strings.TrimPrefix(path, "/private/tmp/"))
 	if err != nil {
-		return "", fmt.Errorf("open database intent: %w", err)
+		return "", nil, fmt.Errorf("open database intent: %w", err)
 	}
-	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	defer func() {
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, file.Close())
+		}
+	}()
 	info, err := file.Stat()
 	if err != nil {
-		return "", fmt.Errorf("inspect database intent: %w", err)
+		return "", nil, fmt.Errorf("inspect database intent: %w", err)
 	}
 	owner, ok := info.Sys().(*syscall.Stat_t)
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !ok || strconv.FormatUint(uint64(owner.Uid), 10) != strconv.Itoa(os.Geteuid()) || info.Size() > 4096 {
-		return "", errors.New("database intent must be a private owned regular file of at most 4096 bytes")
+		return "", nil, errors.New("database intent must be a private owned regular file of at most 4096 bytes")
 	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return "", nil, fmt.Errorf("claim exclusive database intent: %w", err)
+	}
+	pathInfo, err := registrationRoot.Stat(strings.TrimPrefix(path, "/private/tmp/"))
+	if err != nil {
+		return "", nil, fmt.Errorf("inspect locked database intent path: %w", err)
+	}
+	if !os.SameFile(info, pathInfo) {
+		return "", nil, errors.New("database intent path differs from the locked file")
+	}
+	database, err = decodeLibraryDatabaseIntent(file, path, address)
+	if err != nil {
+		return "", nil, err
+	}
+	return database, file, nil
+}
+
+func decodeLibraryDatabaseIntent(file *os.File, path, address string) (database string, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			slog.Warn("library database registration rejected", "err", resultErr)
+		}
+	}()
 	var intent libraryDatabaseIntent
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&intent); err != nil {
+	if err := decoder.Decode(&intent); err != nil {
 		return "", fmt.Errorf("decode database intent: %w", err)
 	}
 	var trailing json.RawMessage
-	if err = decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return "", errors.New("database intent contains trailing data")
 	}
 	root := filepath.Join("/private/tmp", "lms-oracle-rerun-"+intent.RunID)
