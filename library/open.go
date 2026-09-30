@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"sync"
 
+	"goodkind.io/lm-semantic-search/library/observation"
+
 	"goodkind.io/lm-semantic-search/library/internal/storebinding"
 
 	// The driver registers the "sqlite3" database/sql driver. Clyde links the
@@ -340,19 +342,26 @@ func closeCatalog(catalog *sql.DB) error {
 
 // write runs work in one SQLite write transaction and commits it when work
 // returns nil.
-func (library *Library) write(ctx context.Context, work func(*sql.Tx) error) error {
+func (library *Library) write(ctx context.Context, work func(*sql.Tx) error) (err error) {
+	ctx, span := observation.Start(ctx, library.config.Observer, observation.CatalogTransaction)
+	data := observation.TransactionData{Boundary: observation.TransactionBegin}
+	defer func() { span.End(ctx, err, observation.Data{Transaction: data}) }()
 	tx, err := library.catalog.BeginTx(ctx, nil)
 	if err != nil {
 		slog.ErrorContext(ctx, "begin catalog transaction failed", "err", err)
 		return fmt.Errorf("begin catalog transaction: %w", err)
 	}
+	data.Boundary = observation.TransactionWork
 	if err := work(tx); err != nil {
+		data.Boundary = observation.TransactionRollback
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			data.RollbackFailed = true
 			slog.ErrorContext(ctx, "roll back catalog transaction failed", "err", rollbackErr)
 			return errors.Join(err, fmt.Errorf("roll back catalog transaction: %w", rollbackErr))
 		}
 		return err
 	}
+	data.Boundary = observation.TransactionCommit
 	if err := tx.Commit(); err != nil {
 		slog.ErrorContext(ctx, "commit catalog transaction failed", "err", err)
 		return fmt.Errorf("commit catalog transaction: %w", err)

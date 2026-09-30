@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+
+	"goodkind.io/lm-semantic-search/library/observation"
 )
 
 // Staged generation states.
@@ -23,7 +25,7 @@ func (library *Library) RegisterNamespace(ctx context.Context, spec NamespaceSpe
 	if err != nil {
 		return err
 	}
-	release, err := library.lock.acquire(ctx)
+	release, err := library.acquireWriter(ctx)
 	if err != nil {
 		return err
 	}
@@ -73,17 +75,22 @@ func loadNamespace(ctx context.Context, tx *sql.Tx, id string) (NamespaceSpec, e
 // the committed generation, and returns an error that wraps
 // [ErrAppendConflict] otherwise.
 func (library *Library) Stage(ctx context.Context, batch StageBatch) (err error) {
+	ctx = observation.WithPurpose(ctx, observation.Ingestion)
+	ctx, span := observation.Start(ctx, library.config.Observer, observation.Stage)
+	counts := observation.StageData{Rows: len(batch.Rows)}
+	defer func() { span.End(ctx, err, observation.Data{Stage: counts}) }()
 	if err := library.validateStageBatch(batch); err != nil {
 		return err
 	}
 	identities, committed, err := library.prepareStage(ctx, batch)
+	counts.CommittedReceipt = committed
 	if err != nil || committed {
 		return err
 	}
 	var missing []vectorIdentity
 	if err := library.read(ctx, func(tx *sql.Tx) error {
 		var readErr error
-		missing, readErr = missingIdentities(ctx, tx, identities)
+		missing, readErr = library.missingIdentities(ctx, tx, identities, false)
 		return readErr
 	}); err != nil {
 		return err
@@ -93,7 +100,7 @@ func (library *Library) Stage(ctx context.Context, batch StageBatch) (err error)
 		return err
 	}
 
-	release, err := library.lock.acquire(ctx)
+	release, err := library.acquireWriter(ctx)
 	if err != nil {
 		return err
 	}
@@ -129,7 +136,7 @@ func (library *Library) Stage(ctx context.Context, batch StageBatch) (err error)
 // distinct vector identities of the batch. It reports whether the generation
 // token is already committed.
 func (library *Library) prepareStage(ctx context.Context, batch StageBatch) ([]vectorIdentity, bool, error) {
-	var identities []vectorIdentity
+	var returnIdentities []vectorIdentity
 	committed := false
 	err := library.read(ctx, func(tx *sql.Tx) error {
 		spec, err := loadNamespace(ctx, tx, batch.Key.Namespace)
@@ -152,10 +159,13 @@ func (library *Library) prepareStage(ctx context.Context, batch StageBatch) ([]v
 		if committed {
 			return checkCommittedRows(ctx, tx, batch.Key, batch.Mode, batch.Rows)
 		}
-		identities = distinctIdentities(library.config.Store, batch.Rows)
+		selectionCtx, span := observation.Start(ctx, library.config.Observer, observation.IdentitySelection)
+		identities, duplicates := distinctIdentities(library.config.Store, batch.Rows)
+		span.End(selectionCtx, nil, observation.Data{Identity: observation.IdentityData{DuplicateInputs: duplicates}})
+		returnIdentities = identities
 		return nil
 	})
-	return identities, committed, err
+	return returnIdentities, committed, err
 }
 
 func (library *Library) validateStageBatch(batch StageBatch) error {
@@ -201,18 +211,20 @@ func checkNamespaceMode(spec NamespaceSpec, mode BatchMode) error {
 	return nil
 }
 
-func distinctIdentities(descriptor StoreDescriptor, rows []Occurrence) []vectorIdentity {
+func distinctIdentities(descriptor StoreDescriptor, rows []Occurrence) ([]vectorIdentity, int) {
+	duplicates := 0
 	seen := make(map[string]bool, len(rows))
 	identities := make([]vectorIdentity, 0, len(rows))
 	for _, row := range rows {
 		identity := newVectorIdentity(descriptor, row.EmbeddingInput)
 		if seen[identity.id] {
+			duplicates++
 			continue
 		}
 		seen[identity.id] = true
 		identities = append(identities, identity)
 	}
-	return identities
+	return identities, duplicates
 }
 
 // checkGeneration returns the saved receipt when key is already committed. An
@@ -331,7 +343,7 @@ func (library *Library) AbortGeneration(ctx context.Context, key GenerationKey) 
 	if err := validateGenerationKey(key); err != nil {
 		return err
 	}
-	release, err := library.lock.acquire(ctx)
+	release, err := library.acquireWriter(ctx)
 	if err != nil {
 		return err
 	}

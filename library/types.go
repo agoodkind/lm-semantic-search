@@ -11,6 +11,8 @@ package library
 import (
 	"context"
 	"time"
+
+	"goodkind.io/lm-semantic-search/library/observation"
 )
 
 // StoreDescriptor identifies one immutable vector pool and its catalog. The
@@ -193,6 +195,8 @@ const (
 // Config opens a library. A zero budget selects its documented default, and a
 // nonzero invalid value fails validation with [ErrInvalidRequest].
 type Config struct {
+	// Observer receives synchronous operation events. Nil emits no events.
+	Observer observation.Observer
 	Store    StoreDescriptor
 	Vectors  VectorStore
 	Embedder Embedder

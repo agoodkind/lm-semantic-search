@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"goodkind.io/lm-semantic-search/library/observation"
+
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/library"
@@ -26,10 +28,16 @@ var (
 // New returns a [library.Embedder] for provider. A positive dimension is the
 // required length of every vector. Zero leaves the length to the provider.
 func New(provider embedding.Provider, dimension int) library.Embedder {
-	return &adapter{provider: provider, dimension: dimension}
+	return NewObserved(provider, dimension, nil)
+}
+
+// NewObserved constructs an adapter that reports final batch validation.
+func NewObserved(provider embedding.Provider, dimension int, observer observation.Observer) library.Embedder {
+	return &adapter{provider: provider, dimension: dimension, observer: observer}
 }
 
 type adapter struct {
+	observer  observation.Observer
 	provider  embedding.Provider
 	dimension int
 }
@@ -37,7 +45,7 @@ type adapter struct {
 // EmbedBatch returns one vector for every text. A provider that skips an input,
 // returns a nil vector, or returns a vector of the wrong length makes the whole
 // batch fail with [ErrEmbedderRejected]. It never returns a shorter slice.
-func (adapter *adapter) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+func (adapter *adapter) EmbedBatch(ctx context.Context, texts []string) (_ [][]float32, err error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
@@ -47,6 +55,9 @@ func (adapter *adapter) EmbedBatch(ctx context.Context, texts []string) ([][]flo
 		slog.WarnContext(ctx, "embedding batch failed", "inputs", len(texts), "err", classified)
 		return nil, classified
 	}
+	ctx, span := observation.Start(ctx, adapter.observer, observation.EmbeddingValidation)
+	counts := observation.EmbeddingData{Requested: len(texts), Returned: len(result.Vectors), Validation: observation.AdapterValidation}
+	defer func() { span.End(ctx, err, observation.Data{Embedding: counts}) }()
 	if len(result.Skipped) > 0 {
 		skipped := result.Skipped[0]
 		err := fmt.Errorf(
@@ -83,6 +94,7 @@ func (adapter *adapter) EmbedBatch(ctx context.Context, texts []string) ([][]flo
 			return nil, err
 		}
 	}
+	counts.Validated = len(result.Vectors)
 	return result.Vectors, nil
 }
 
