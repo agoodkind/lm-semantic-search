@@ -421,18 +421,19 @@ func readOwnerState(ctx context.Context, tx *sql.Tx, namespace string, ownerID s
 
 // read runs work in one read transaction. Readers do not take the writer
 // lock.
-func (library *Library) read(ctx context.Context, work func(*sql.Tx) error) error {
+func (library *Library) read(ctx context.Context, work func(*sql.Tx) error) (readErr error) {
 	tx, err := library.reader.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
 	if err != nil {
 		slog.ErrorContext(ctx, "begin catalog read failed", "err", err)
 		return fmt.Errorf("begin catalog read: %w", err)
 	}
-	workErr := work(tx)
-	if err := tx.Rollback(); err != nil {
-		slog.ErrorContext(ctx, "end catalog read failed", "err", err)
-		return errors.Join(workErr, fmt.Errorf("end catalog read: %w", err))
-	}
-	return workErr
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			slog.ErrorContext(ctx, "end catalog read failed", "err", err)
+			readErr = errors.Join(readErr, fmt.Errorf("end catalog read: %w", err))
+		}
+	}()
+	return work(tx)
 }
 
 // sortedScalarNames returns the column names of scalars in ascending order.
