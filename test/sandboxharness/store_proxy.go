@@ -1,4 +1,4 @@
-//go:build restartacceptance
+//go:build restartacceptance || live
 
 package sandboxharness
 
@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -20,12 +21,14 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// EmbeddingStoreProxyOptions configures a local gRPC proxy and its real backend.
 type EmbeddingStoreProxyOptions struct {
 	Listener       net.Listener
 	BackendAddress string
 	Start          bool
 }
 
+// StoreCall records a collection operation observed by the proxy.
 type StoreCall struct {
 	Database   string `json:"database"`
 	Collection string `json:"collection"`
@@ -49,6 +52,7 @@ type storeTarget struct {
 	collection string
 }
 
+// EmbeddingStoreProxy forwards Milvus requests and supports explicit test barriers.
 type EmbeddingStoreProxy struct {
 	listener    net.Listener
 	server      *grpc.Server
@@ -58,8 +62,10 @@ type EmbeddingStoreProxy struct {
 	counts      map[storeCallKey]int
 	calls       []StoreCall
 	unavailable *storeFault
+	publication *storePublicationPause
 }
 
+// StartEmbeddingStoreProxy opens a proxy connection to the configured backend.
 func StartEmbeddingStoreProxy(
 	options EmbeddingStoreProxyOptions,
 ) (*EmbeddingStoreProxy, error) {
@@ -72,13 +78,15 @@ func StartEmbeddingStoreProxy(
 		grpc.WithDefaultCallOptions(grpc.ForceCodec(rawCodec{})),
 	)
 	if err != nil {
+		slog.Error("create embedding store backend connection", "err", err)
 		return nil, fmt.Errorf("create embedding store backend connection: %w", err)
 	}
 	listener := options.Listener
 	if listener == nil {
-		listener, err = net.Listen("tcp", "127.0.0.1:0")
+		listener, err = (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 		if err != nil {
 			_ = connection.Close()
+			slog.Error("listen embedding store proxy", "err", err)
 			return nil, fmt.Errorf("listen embedding store proxy: %w", err)
 		}
 	}
@@ -90,31 +98,47 @@ func StartEmbeddingStoreProxy(
 	}
 	proxy.server = grpc.NewServer(
 		grpc.ForceServerCodec(rawCodec{}),
-		grpc.UnknownServiceHandler(proxy.forward),
+		grpc.UnknownServiceHandler(proxy.streamHandler),
 	)
 	if options.Start {
-		go func() { _ = proxy.Serve() }()
+		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.Error("embedding store proxy panic", "err", fmt.Errorf("proxy panic: %v", recovered))
+				}
+			}()
+			_ = proxy.Serve()
+		}()
 	}
 	return proxy, nil
 }
 
+// Address returns the proxy listener address.
 func (proxy *EmbeddingStoreProxy) Address() string {
 	return proxy.listener.Addr().String()
 }
 
+// Serve accepts requests until the proxy stops.
 func (proxy *EmbeddingStoreProxy) Serve() error {
 	if err := proxy.server.Serve(proxy.listener); err != nil &&
 		!errors.Is(err, grpc.ErrServerStopped) {
+		slog.Error("serve embedding store proxy", "err", err)
 		return fmt.Errorf("serve embedding store proxy: %w", err)
 	}
 	return nil
 }
 
+// Close stops the listener and closes the backend connection.
 func (proxy *EmbeddingStoreProxy) Close() error {
 	proxy.server.Stop()
-	return proxy.backend.Close()
+	if err := proxy.backend.Close(); err != nil {
+		slog.Warn("embedding store forwarding failed", "err", err)
+		return fmt.Errorf("close embedding store backend: %w", err)
+	}
+	return nil
 }
 
+// SetLoadState overrides the load state for a selected collection.
 func (proxy *EmbeddingStoreProxy) SetLoadState(
 	database string,
 	collection string,
@@ -128,6 +152,7 @@ func (proxy *EmbeddingStoreProxy) SetLoadState(
 	proxy.mutex.Unlock()
 }
 
+// SetLoadFailure rejects load operations for a selected collection.
 func (proxy *EmbeddingStoreProxy) SetLoadFailure(
 	database string,
 	collection string,
@@ -143,30 +168,35 @@ func (proxy *EmbeddingStoreProxy) SetLoadFailure(
 	proxy.mutex.Unlock()
 }
 
+// ClearLoadFault restores forwarding for a selected collection.
 func (proxy *EmbeddingStoreProxy) ClearLoadFault(database string, collection string) {
 	proxy.mutex.Lock()
 	delete(proxy.faults, storeTarget{database: database, collection: collection})
 	proxy.mutex.Unlock()
 }
 
+// SetUnavailable rejects every request with the configured status.
 func (proxy *EmbeddingStoreProxy) SetUnavailable(code codes.Code, message string) {
 	proxy.mutex.Lock()
 	proxy.unavailable = &storeFault{failureCode: code, failureText: message}
 	proxy.mutex.Unlock()
 }
 
+// ClearUnavailable restores ordinary request forwarding.
 func (proxy *EmbeddingStoreProxy) ClearUnavailable() {
 	proxy.mutex.Lock()
 	proxy.unavailable = nil
 	proxy.mutex.Unlock()
 }
 
+// IsUnavailable reports whether every request is configured to fail.
 func (proxy *EmbeddingStoreProxy) IsUnavailable() bool {
 	proxy.mutex.RLock()
 	defer proxy.mutex.RUnlock()
 	return proxy.unavailable != nil
 }
 
+// CallCount returns the observed count for a selected collection operation.
 func (proxy *EmbeddingStoreProxy) CallCount(
 	method string,
 	database string,
@@ -179,13 +209,14 @@ func (proxy *EmbeddingStoreProxy) CallCount(
 	}]
 }
 
+// Calls returns a copy of observed collection operations.
 func (proxy *EmbeddingStoreProxy) Calls() []StoreCall {
 	proxy.mutex.RLock()
 	defer proxy.mutex.RUnlock()
 	return append([]StoreCall(nil), proxy.calls...)
 }
 
-func (proxy *EmbeddingStoreProxy) forward(_ interface{}, stream grpc.ServerStream) error {
+func (proxy *EmbeddingStoreProxy) forward(stream grpc.ServerStream) error {
 	method, ok := grpc.MethodFromServerStream(stream)
 	if !ok {
 		return status.Error(codes.Internal, "embedding store proxy cannot identify method")
@@ -198,7 +229,8 @@ func (proxy *EmbeddingStoreProxy) forward(_ interface{}, stream grpc.ServerStrea
 	}
 	var request []byte
 	if err := stream.RecvMsg(&request); err != nil {
-		return err
+		slog.Warn("embedding store forwarding failed", "err", err)
+		return fmt.Errorf("receive frontend request: %w", err)
 	}
 	methodName := methodBase(method)
 	incoming, _ := metadata.FromIncomingContext(stream.Context())
@@ -208,32 +240,54 @@ func (proxy *EmbeddingStoreProxy) forward(_ interface{}, stream grpc.ServerStrea
 	}
 	target := targetForLoadMethod(methodName, request, metadataDatabase)
 	if target.collection != "" {
-		proxy.mutex.Lock()
-		key := storeCallKey{
-			method:     methodName,
-			database:   target.database,
-			collection: target.collection,
+		intercepted, err := proxy.respondToLoadFault(methodName, target, stream)
+		if err != nil || intercepted {
+			return err
 		}
-		proxy.counts[key]++
-		proxy.calls = append(proxy.calls, StoreCall{
-			Database:   target.database,
-			Collection: target.collection,
-			Method:     methodName,
-		})
-		fault, configured := proxy.faults[target]
-		proxy.mutex.Unlock()
-		if configured {
-			response, intercepted, err := interceptLoadMethod(methodName, fault)
-			if err != nil {
-				return err
-			}
-			if intercepted {
-				return stream.SendMsg(response)
-			}
+	}
+	if methodName == "Upsert" {
+		var mutation milvuspb.UpsertRequest
+		if err := proto.Unmarshal(request, &mutation); err != nil {
+			slog.Warn("embedding store forwarding failed", "err", err)
+			return fmt.Errorf("decode publication request: %w", err)
+		}
+		proxy.mutex.RLock()
+		pause := proxy.publication
+		proxy.mutex.RUnlock()
+		if pause != nil && pause.matches(mutation.GetDbName(), mutation.GetCollectionName(), metadataDatabase) {
+			return proxy.forwardPausedPublication(method, request, stream, pause)
 		}
 	}
 	return proxy.relay(method, request, stream)
 }
+
+func (proxy *EmbeddingStoreProxy) respondToLoadFault(method string, target storeTarget, stream grpc.ServerStream) (bool, error) {
+	proxy.mutex.Lock()
+	proxy.counts[storeCallKey{method: method, database: target.database, collection: target.collection}]++
+	proxy.calls = append(proxy.calls, StoreCall{Database: target.database, Collection: target.collection, Method: method})
+	fault, configured := proxy.faults[target]
+	proxy.mutex.Unlock()
+	if !configured {
+		return false, nil
+	}
+	response, intercepted, err := interceptLoadMethod(method, fault)
+	if err != nil || !intercepted {
+		return intercepted, err
+	}
+	if err := stream.SendMsg(response); err != nil {
+		slog.Warn("embedding store forwarding failed", "err", err)
+		return true, fmt.Errorf("send configured load response: %w", err)
+	}
+	return true, nil
+}
+
+type storeMethod string
+
+const (
+	loadCollectionMethod storeMethod = "LoadCollection"
+	loadStateMethod      storeMethod = "GetLoadState"
+	loadProgressMethod   storeMethod = "GetLoadingProgress"
+)
 
 func targetForLoadMethod(
 	method string,
@@ -241,12 +295,12 @@ func targetForLoadMethod(
 	metadataDatabase string,
 ) storeTarget {
 	var request proto.Message
-	switch method {
-	case "LoadCollection":
+	switch storeMethod(method) {
+	case loadCollectionMethod:
 		request = &milvuspb.LoadCollectionRequest{}
-	case "GetLoadState":
+	case loadStateMethod:
 		request = &milvuspb.GetLoadStateRequest{}
-	case "GetLoadingProgress":
+	case loadProgressMethod:
 		request = &milvuspb.GetLoadingProgressRequest{}
 	default:
 		return storeTarget{}
@@ -284,18 +338,35 @@ func (proxy *EmbeddingStoreProxy) relay(
 		method,
 	)
 	if err != nil {
-		return err
+		slog.Warn("embedding store forwarding failed", "err", err)
+		return fmt.Errorf("open backend stream: %w", err)
 	}
 	if err := backend.SendMsg(firstRequest); err != nil {
-		return err
+		slog.Warn("embedding store forwarding failed", "err", err)
+		return fmt.Errorf("send backend request: %w", err)
 	}
 	clientResult := make(chan error, 1)
 	serverResult := make(chan error, 1)
-	go relayClientMessages(frontend, backend, clientResult)
-	go relayServerMessages(frontend, backend, serverResult)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("embedding store proxy panic", "err", fmt.Errorf("proxy panic: %v", recovered))
+			}
+		}()
+		relayClientMessages(frontend, backend, clientResult)
+	}()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("embedding store proxy panic", "err", fmt.Errorf("proxy panic: %v", recovered))
+			}
+		}()
+		relayServerMessages(frontend, backend, serverResult)
+	}()
 	return WaitForRelay(frontend.Context(), cancel, clientResult, serverResult)
 }
 
+// WaitForRelay waits for both directions and returns the first stream failure.
 func WaitForRelay(
 	frontendContext context.Context,
 	cancel context.CancelFunc,
@@ -328,7 +399,11 @@ func WaitForRelay(
 			frontendDone = nil
 		}
 	}
-	return firstError
+	if firstError != nil {
+		slog.Warn("embedding store forwarding failed", "err", firstError)
+		return fmt.Errorf("relay stream: %w", firstError)
+	}
+	return nil
 }
 
 func relayClientMessages(
@@ -400,12 +475,14 @@ func interceptLoadMethod(
 	if fault.state == nil {
 		return nil, false, nil
 	}
-	success := &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}
+	success := &commonpb.Status{Code: 0}
 	var response proto.Message
-	switch method {
-	case "GetLoadState":
+	switch storeMethod(method) {
+	case loadCollectionMethod:
+		return nil, false, nil
+	case loadStateMethod:
 		response = &milvuspb.GetLoadStateResponse{Status: success, State: *fault.state}
-	case "GetLoadingProgress":
+	case loadProgressMethod:
 		progress := int64(0)
 		if *fault.state == commonpb.LoadState_LoadStateLoaded {
 			progress = 100
@@ -434,27 +511,4 @@ func methodBase(method string) string {
 		}
 	}
 	return method
-}
-
-type rawCodec struct{}
-
-func (rawCodec) Name() string {
-	return "proto"
-}
-
-func (rawCodec) Marshal(value interface{}) ([]byte, error) {
-	body, ok := value.([]byte)
-	if !ok {
-		return nil, fmt.Errorf("raw codec cannot marshal %T", value)
-	}
-	return body, nil
-}
-
-func (rawCodec) Unmarshal(body []byte, value interface{}) error {
-	target, ok := value.(*[]byte)
-	if !ok {
-		return fmt.Errorf("raw codec cannot unmarshal into %T", value)
-	}
-	*target = append((*target)[:0], body...)
-	return nil
 }

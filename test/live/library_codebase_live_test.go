@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +41,7 @@ type libraryCodebaseDaemon struct {
 	config  config.Config
 	manager *daemon.Manager
 	client  pb.SemanticSearchDaemonServiceClient
+	stop    func()
 }
 
 func newLibraryCodebaseDaemon(t *testing.T) *libraryCodebaseDaemon {
@@ -50,6 +52,11 @@ func newLibraryCodebaseDaemon(t *testing.T) *libraryCodebaseDaemon {
 func newCodebaseLiveDaemon(t *testing.T, codebaseStore config.CodebaseStoreKind) *libraryCodebaseDaemon {
 	t.Helper()
 	harness := newLibraryHarness(t)
+	return newCodebaseLiveDaemonWithHarness(t, harness, codebaseStore)
+}
+
+func newCodebaseLiveDaemonWithHarness(t *testing.T, harness *libraryHarness, codebaseStore config.CodebaseStoreKind) *libraryCodebaseDaemon {
+	t.Helper()
 	sandboxRoot := t.TempDir()
 	socketDir, err := os.MkdirTemp("/tmp", "lms-lib-live-")
 	if err != nil {
@@ -99,25 +106,29 @@ func newCodebaseLiveDaemon(t *testing.T, codebaseStore config.CodebaseStoreKind)
 	if err := store.WriteRegistry(cfg.RegistryPath, model.RegistryFile{}); err != nil {
 		t.Fatalf("write registry: %v", err)
 	}
-	manager, err := daemon.NewManager(harness.ctx, cfg)
+	manager, err := daemon.NewManager(harness.context(), cfg)
 	if err != nil {
 		t.Fatalf("start daemon manager: %v", err)
 	}
-	stopServer := startInProcessServer(t, manager, cfg.SocketPath)
+	stopServer := startInProcessServer(t, harness.context(), manager, cfg.SocketPath)
 	conn, client, err := grpcutil.DialDaemon(context.Background(), cfg.SocketPath)
 	if err != nil {
 		t.Fatalf("dial daemon: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = conn.Close()
-		stopServer()
-		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := manager.Close(closeCtx); err != nil {
-			t.Errorf("close daemon manager: %v", err)
-		}
-	})
-	return &libraryCodebaseDaemon{harness: harness, config: cfg, manager: manager, client: client}
+	var closeOnce sync.Once
+	stop := func() {
+		closeOnce.Do(func() {
+			_ = conn.Close()
+			stopServer()
+			closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := manager.Close(closeCtx); err != nil {
+				t.Errorf("close daemon manager: %v", err)
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return &libraryCodebaseDaemon{harness: harness, config: cfg, manager: manager, client: client, stop: stop}
 }
 
 func (codebaseDaemon *libraryCodebaseDaemon) waitJob(t *testing.T, jobID string, label string) {
@@ -215,7 +226,7 @@ func (codebaseDaemon *libraryCodebaseDaemon) stagedRowCount(t *testing.T) int {
 	}
 	defer func() { _ = database.Close() }()
 	var count int
-	if err := database.QueryRowContext(codebaseDaemon.harness.ctx, `SELECT COUNT(*) FROM staged_occurrences`).Scan(&count); err != nil {
+	if err := database.QueryRowContext(codebaseDaemon.harness.context(), `SELECT COUNT(*) FROM staged_occurrences`).Scan(&count); err != nil {
 		t.Fatalf("count staged occurrences: %v", err)
 	}
 	return count
@@ -241,14 +252,14 @@ func (codebaseDaemon *libraryCodebaseDaemon) readCodebaseOwners(t *testing.T) ma
 	}
 	defer func() { _ = database.Close() }()
 	var namespaceCount int
-	if err := database.QueryRowContext(codebaseDaemon.harness.ctx, `SELECT COUNT(*) FROM namespaces`).Scan(&namespaceCount); err != nil {
+	if err := database.QueryRowContext(codebaseDaemon.harness.context(), `SELECT COUNT(*) FROM namespaces`).Scan(&namespaceCount); err != nil {
 		t.Fatalf("count namespaces: %v", err)
 	}
 	if namespaceCount != 1 {
 		t.Fatalf("catalog has %d namespaces, want 1", namespaceCount)
 	}
 	rows, err := database.QueryContext(
-		codebaseDaemon.harness.ctx,
+		codebaseDaemon.harness.context(),
 		`SELECT occurrences.owner_id, occurrences.row_key, occurrences.vector_id, source_blobs.content,
 		occurrences.occurrence_hash, occurrences.generation_order
 		FROM occurrences JOIN source_blobs ON source_blobs.blob_id = occurrences.source_blob_id

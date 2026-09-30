@@ -91,6 +91,9 @@ func TestLibraryCodebaseMatchesHealthyBaseline(t *testing.T) {
 		if !maps.Equal(baselineIdentitySet(expected), baselineIdentitySet(actual)) {
 			t.Fatalf("%s identity sets differ: baseline %v, library %v", label, expected, actual)
 		}
+		if !slices.Equal(expected, actual) {
+			t.Fatalf("%s ordered identities differ: baseline %v, library %v", label, expected, actual)
+		}
 		t.Logf("%s has %d exact matching identities; ordered identity equality=%t", label, len(actual), slices.Equal(expected, actual))
 	}
 }

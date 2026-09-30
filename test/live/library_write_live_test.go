@@ -128,7 +128,7 @@ func TestLibraryWriteSharesOneVectorAcrossOccurrences(t *testing.T) {
 	descriptor := harness.descriptor("shared")
 	opened := harness.open(descriptor, harness.vectorStore("shared_pool"))
 	for _, spec := range []library.NamespaceSpec{conversationSpec(), codeSpec()} {
-		if err := opened.RegisterNamespace(harness.ctx, spec); err != nil {
+		if err := opened.RegisterNamespace(harness.context(), spec); err != nil {
 			t.Fatalf("register %s: %v", spec.ID, err)
 		}
 	}
@@ -138,9 +138,9 @@ func TestLibraryWriteSharesOneVectorAcrossOccurrences(t *testing.T) {
 	second := messageRow("m2", shared, 2)
 	second.SourceText = "a different displayed excerpt"
 	second.Scalars["workspace"] = library.ScalarValue{Type: library.String, String: "/workspace/beta"}
-	mustApply(t, harness.ctx, opened, appendBatch("conversation-a", 1, "token-1", first, second))
+	mustApply(t, harness.context(), opened, appendBatch("conversation-a", 1, "token-1", first, second))
 	code := codeRow("config.go", 0, "func parseConfig(path string) (Config, error)")
-	mustApply(t, harness.ctx, opened, library.Batch{Namespace: "code", OwnerID: "config.go", GenerationOrder: 1, IdempotencyToken: "code-1", Mode: library.Replace, Rows: []library.Occurrence{code}})
+	mustApply(t, harness.context(), opened, library.Batch{Namespace: "code", OwnerID: "config.go", GenerationOrder: 1, IdempotencyToken: "code-1", Mode: library.Replace, Rows: []library.Occurrence{code}})
 
 	rows := assertCatalogConsistent(t, harness, descriptor, "shared_pool")
 	if len(rows.occurrences) != 3 {
@@ -155,10 +155,10 @@ func TestLibraryWriteSharesOneVectorAcrossOccurrences(t *testing.T) {
 	otherModel.LockPath = harness.descriptor("other-model").LockPath
 	otherModel.EmbeddingRevision = "another-revision"
 	otherOpened := harness.open(otherModel, harness.vectorStore("other_model_pool"))
-	if err := otherOpened.RegisterNamespace(harness.ctx, conversationSpec()); err != nil {
+	if err := otherOpened.RegisterNamespace(harness.context(), conversationSpec()); err != nil {
 		t.Fatalf("register under the other revision: %v", err)
 	}
-	mustApply(t, harness.ctx, otherOpened, appendBatch("conversation-a", 1, "token-1", first))
+	mustApply(t, harness.context(), otherOpened, appendBatch("conversation-a", 1, "token-1", first))
 	otherRows := harness.readCatalog(otherModel)
 	if otherRows.occurrences["conversations/conversation-a/m1"] == rows.occurrences["conversations/conversation-a/m1"] {
 		t.Fatal("the same input under another model revision reused the first revision's vector identity")
@@ -171,22 +171,22 @@ func TestLibraryWriteAppendReplayAndConflicts(t *testing.T) {
 	defer func() { t.Logf("embedding window end %s", time.Now().UTC().Format(time.RFC3339)) }()
 	descriptor := harness.descriptor("append")
 	opened := harness.open(descriptor, harness.vectorStore("append_pool"))
-	if err := opened.RegisterNamespace(harness.ctx, conversationSpec()); err != nil {
+	if err := opened.RegisterNamespace(harness.context(), conversationSpec()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
 	firstBatch := appendBatch("conversation-a", 1, "token-1", messageRow("m1", "open the config file", 1))
-	firstReceipt := mustApply(t, harness.ctx, opened, firstBatch)
-	if replay := mustApply(t, harness.ctx, opened, firstBatch); replay != firstReceipt {
+	firstReceipt := mustApply(t, harness.context(), opened, firstBatch)
+	if replay := mustApply(t, harness.context(), opened, firstBatch); replay != firstReceipt {
 		t.Fatalf("replay receipt %+v differs from %+v", replay, firstReceipt)
 	}
 
 	secondBatch := appendBatch("conversation-a", 2, "token-2", messageRow("m1", "open the config file", 1), messageRow("m2", "read the parser tests", 2))
-	secondReceipt := mustApply(t, harness.ctx, opened, secondBatch)
-	if replay := mustApply(t, harness.ctx, opened, firstBatch); replay != firstReceipt {
+	secondReceipt := mustApply(t, harness.context(), opened, secondBatch)
+	if replay := mustApply(t, harness.context(), opened, firstBatch); replay != firstReceipt {
 		t.Fatalf("replay of an older token after a later generation returned %+v, want %+v", replay, firstReceipt)
 	}
-	state, err := opened.GetOwnerState(harness.ctx, "conversations", "conversation-a")
+	state, err := opened.GetOwnerState(harness.context(), "conversations", "conversation-a")
 	if err != nil {
 		t.Fatalf("owner state: %v", err)
 	}
@@ -194,36 +194,36 @@ func TestLibraryWriteAppendReplayAndConflicts(t *testing.T) {
 		t.Fatalf("owner state = %+v, want order 2, token-2, fingerprint %s", state, secondReceipt.Fingerprint)
 	}
 
-	_, err = opened.Apply(harness.ctx, appendBatch("conversation-a", 2, "other-token", messageRow("m3", "new text", 3)))
+	_, err = opened.Apply(harness.context(), appendBatch("conversation-a", 2, "other-token", messageRow("m3", "new text", 3)))
 	requireError(t, err, library.ErrAppendConflict)
-	_, err = opened.Apply(harness.ctx, appendBatch("conversation-a", 1, "unknown-token", messageRow("m3", "new text", 3)))
+	_, err = opened.Apply(harness.context(), appendBatch("conversation-a", 1, "unknown-token", messageRow("m3", "new text", 3)))
 	requireError(t, err, library.ErrStaleGeneration)
-	_, err = opened.Apply(harness.ctx, appendBatch("conversation-a", 3, "token-3", messageRow("m1", "rewritten text", 1)))
+	_, err = opened.Apply(harness.context(), appendBatch("conversation-a", 3, "token-3", messageRow("m1", "rewritten text", 1)))
 	requireError(t, err, library.ErrAppendConflict)
 
 	// A committed token replayed with other content conflicts through every
 	// entry point: Apply, Stage, and CommitGeneration with a different seal.
-	_, err = opened.Apply(harness.ctx, appendBatch("conversation-a", 1, "token-1", messageRow("m1", "changed after commit", 1)))
+	_, err = opened.Apply(harness.context(), appendBatch("conversation-a", 1, "token-1", messageRow("m1", "changed after commit", 1)))
 	requireError(t, err, library.ErrAppendConflict)
-	_, err = opened.Apply(harness.ctx, appendBatch("conversation-a", 1, "token-1", messageRow("m1", "open the config file", 1), messageRow("m9", "added after commit", 9)))
+	_, err = opened.Apply(harness.context(), appendBatch("conversation-a", 1, "token-1", messageRow("m1", "open the config file", 1), messageRow("m9", "added after commit", 9)))
 	requireError(t, err, library.ErrAppendConflict)
 	firstKey := library.GenerationKey{Namespace: "conversations", OwnerID: "conversation-a", GenerationOrder: 1, IdempotencyToken: "token-1"}
-	requireError(t, opened.Stage(harness.ctx, library.StageBatch{Key: firstKey, Mode: library.Append, Rows: []library.Occurrence{messageRow("m1", "changed after commit", 1)}}), library.ErrAppendConflict)
+	requireError(t, opened.Stage(harness.context(), library.StageBatch{Key: firstKey, Mode: library.Append, Rows: []library.Occurrence{messageRow("m1", "changed after commit", 1)}}), library.ErrAppendConflict)
 	otherSeal, err := library.SealRows([]library.Occurrence{messageRow("m1", "changed after commit", 1)})
 	if err != nil {
 		t.Fatalf("seal changed rows: %v", err)
 	}
-	_, err = opened.CommitGeneration(harness.ctx, firstKey, otherSeal)
+	_, err = opened.CommitGeneration(harness.context(), firstKey, otherSeal)
 	requireError(t, err, library.ErrAppendConflict)
-	if replay := mustApply(t, harness.ctx, opened, firstBatch); replay != firstReceipt {
+	if replay := mustApply(t, harness.context(), opened, firstBatch); replay != firstReceipt {
 		t.Fatalf("identical replay after rejected rewrites returned %+v, want %+v", replay, firstReceipt)
 	}
 
 	replace := appendBatch("conversation-a", 4, "token-4", messageRow("m4", "replacement", 4))
 	replace.Mode = library.Replace
-	_, err = opened.Apply(harness.ctx, replace)
+	_, err = opened.Apply(harness.context(), replace)
 	requireError(t, err, library.ErrInvalidRequest)
-	requireError(t, opened.Delete(harness.ctx, []library.OccurrenceID{{Namespace: "conversations", OwnerID: "conversation-a", RowKey: "m1"}}), library.ErrInvalidRequest)
+	requireError(t, opened.Delete(harness.context(), []library.OccurrenceID{{Namespace: "conversations", OwnerID: "conversation-a", RowKey: "m1"}}), library.ErrInvalidRequest)
 
 	rows := assertCatalogConsistent(t, harness, descriptor, "append_pool")
 	if len(rows.occurrences) != 2 {
@@ -237,7 +237,7 @@ func TestLibraryWriteReplaceStagesAndSealsWholeGenerations(t *testing.T) {
 	defer func() { t.Logf("embedding window end %s", time.Now().UTC().Format(time.RFC3339)) }()
 	descriptor := harness.descriptor("replace")
 	opened := harness.open(descriptor, harness.vectorStore("replace_pool"))
-	if err := opened.RegisterNamespace(harness.ctx, codeSpec()); err != nil {
+	if err := opened.RegisterNamespace(harness.context(), codeSpec()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	firstRows := []library.Occurrence{
@@ -245,26 +245,26 @@ func TestLibraryWriteReplaceStagesAndSealsWholeGenerations(t *testing.T) {
 		codeRow("main.go", 1, "func main() { run() }"),
 		codeRow("main.go", 2, "func run() { serve() }"),
 	}
-	stageAndCommit(t, harness.ctx, opened, library.GenerationKey{Namespace: "code", OwnerID: "main.go", GenerationOrder: 1, IdempotencyToken: "g1"}, firstRows)
+	stageAndCommit(t, harness.context(), opened, library.GenerationKey{Namespace: "code", OwnerID: "main.go", GenerationOrder: 1, IdempotencyToken: "g1"}, firstRows)
 
 	secondRows := []library.Occurrence{codeRow("main.go", 0, "package main"), codeRow("main.go", 1, "func main() { serve() }")}
 	secondKey := library.GenerationKey{Namespace: "code", OwnerID: "main.go", GenerationOrder: 2, IdempotencyToken: "g2"}
-	if err := opened.Stage(harness.ctx, library.StageBatch{Key: secondKey, Mode: library.Replace, Rows: secondRows[:1]}); err != nil {
+	if err := opened.Stage(harness.context(), library.StageBatch{Key: secondKey, Mode: library.Replace, Rows: secondRows[:1]}); err != nil {
 		t.Fatalf("stage first part: %v", err)
 	}
 	fullSeal, err := library.SealRows(secondRows)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	_, err = opened.CommitGeneration(harness.ctx, secondKey, fullSeal)
+	_, err = opened.CommitGeneration(harness.context(), secondKey, fullSeal)
 	requireError(t, err, library.ErrInvalidRequest)
 	if rows := harness.readCatalog(descriptor); len(rows.occurrences) != 3 {
 		t.Fatalf("a truncated staged generation replaced the owner: %d occurrences, want 3", len(rows.occurrences))
 	}
-	if err := opened.Stage(harness.ctx, library.StageBatch{Key: secondKey, Mode: library.Replace, Rows: secondRows[1:]}); err != nil {
+	if err := opened.Stage(harness.context(), library.StageBatch{Key: secondKey, Mode: library.Replace, Rows: secondRows[1:]}); err != nil {
 		t.Fatalf("stage second part: %v", err)
 	}
-	if _, err := opened.CommitGeneration(harness.ctx, secondKey, fullSeal); err != nil {
+	if _, err := opened.CommitGeneration(harness.context(), secondKey, fullSeal); err != nil {
 		t.Fatalf("commit complete generation: %v", err)
 	}
 	rows := assertCatalogConsistent(t, harness, descriptor, "replace_pool")
@@ -279,16 +279,16 @@ func TestLibraryWriteReplaceStagesAndSealsWholeGenerations(t *testing.T) {
 	}
 
 	abortKey := library.GenerationKey{Namespace: "code", OwnerID: "main.go", GenerationOrder: 3, IdempotencyToken: "g3"}
-	if err := opened.Stage(harness.ctx, library.StageBatch{Key: abortKey, Mode: library.Replace, Rows: []library.Occurrence{codeRow("main.go", 0, "package main")}}); err != nil {
+	if err := opened.Stage(harness.context(), library.StageBatch{Key: abortKey, Mode: library.Replace, Rows: []library.Occurrence{codeRow("main.go", 0, "package main")}}); err != nil {
 		t.Fatalf("stage aborted generation: %v", err)
 	}
-	if err := opened.AbortGeneration(harness.ctx, abortKey); err != nil {
+	if err := opened.AbortGeneration(harness.context(), abortKey); err != nil {
 		t.Fatalf("abort: %v", err)
 	}
-	_, err = opened.CommitGeneration(harness.ctx, abortKey, fullSeal)
+	_, err = opened.CommitGeneration(harness.context(), abortKey, fullSeal)
 	requireError(t, err, library.ErrInvalidRequest)
 
-	if err := opened.Delete(harness.ctx, []library.OccurrenceID{{Namespace: "code", OwnerID: "main.go", RowKey: "main.go#1"}}); err != nil {
+	if err := opened.Delete(harness.context(), []library.OccurrenceID{{Namespace: "code", OwnerID: "main.go", RowKey: "main.go#1"}}); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if rows := harness.readCatalog(descriptor); len(rows.occurrences) != 1 {
@@ -320,10 +320,10 @@ func TestLibraryWriteReprojectsScalarsWithoutVectorWrites(t *testing.T) {
 	defer func() { t.Logf("embedding window end %s", time.Now().UTC().Format(time.RFC3339)) }()
 	descriptor := harness.descriptor("reproject")
 	opened := harness.open(descriptor, harness.vectorStore("reproject_pool"))
-	if err := opened.RegisterNamespace(harness.ctx, conversationSpec()); err != nil {
+	if err := opened.RegisterNamespace(harness.context(), conversationSpec()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	mustApply(t, harness.ctx, opened, appendBatch("conversation-a", 1, "token-1", messageRow("m1", "archive this conversation later", 1)))
+	mustApply(t, harness.context(), opened, appendBatch("conversation-a", 1, "token-1", messageRow("m1", "archive this conversation later", 1)))
 	before := harness.backendVectorIDs("reproject_pool")
 
 	projection := library.ScalarProjection{
@@ -335,11 +335,11 @@ func TestLibraryWriteReprojectsScalarsWithoutVectorWrites(t *testing.T) {
 			"m1": {"archived": {Type: library.Bool, Bool: true}, "workspace": {Type: library.String, Null: true}},
 		},
 	}
-	receipt, err := opened.ReprojectScalars(harness.ctx, projection)
+	receipt, err := opened.ReprojectScalars(harness.context(), projection)
 	if err != nil {
 		t.Fatalf("reproject: %v", err)
 	}
-	replay, err := opened.ReprojectScalars(harness.ctx, projection)
+	replay, err := opened.ReprojectScalars(harness.context(), projection)
 	if err != nil || replay != receipt {
 		t.Fatalf("replayed projection = %+v, %v, want %+v", replay, err, receipt)
 	}
@@ -360,11 +360,11 @@ func TestLibraryWriteReprojectsScalarsWithoutVectorWrites(t *testing.T) {
 	immutable.ProjectionOrder = 2
 	immutable.IdempotencyToken = "projection-2"
 	immutable.Rows = map[string]map[string]library.ScalarValue{"m1": {"message_index": {Type: library.Int64, Int64: 9}}}
-	_, err = opened.ReprojectScalars(harness.ctx, immutable)
+	_, err = opened.ReprojectScalars(harness.context(), immutable)
 	requireError(t, err, library.ErrInvalidRequest)
 	conflicting := projection
 	conflicting.IdempotencyToken = "projection-other"
-	_, err = opened.ReprojectScalars(harness.ctx, conflicting)
+	_, err = opened.ReprojectScalars(harness.context(), conflicting)
 	requireError(t, err, library.ErrAppendConflict)
 }
 
@@ -396,7 +396,7 @@ func TestLibraryWriteBindingRaceBetweenProcesses(t *testing.T) {
 		t.Fatalf("child exit statuses = %v, want one success and one store mismatch", statuses)
 	}
 	winner, loser := descriptors[0], descriptors[1]
-	probe, probeErr := library.Open(harness.ctx, library.Config{Store: winner, Vectors: harness.vectorStore("race_pool"), Embedder: harness.embedder})
+	probe, probeErr := library.Open(harness.context(), library.Config{Store: winner, Vectors: harness.vectorStore("race_pool"), Embedder: harness.embedder})
 	switch {
 	case errors.Is(probeErr, library.ErrStoreMismatch):
 		winner, loser = loser, winner
@@ -408,10 +408,10 @@ func TestLibraryWriteBindingRaceBetweenProcesses(t *testing.T) {
 		}
 	}
 	opened := harness.open(winner, harness.vectorStore("race_pool"))
-	if err := opened.RegisterNamespace(harness.ctx, conversationSpec()); err != nil {
+	if err := opened.RegisterNamespace(harness.context(), conversationSpec()); err != nil {
 		t.Fatalf("register on the winning catalog: %v", err)
 	}
-	_, err := library.Open(harness.ctx, library.Config{Store: loser, Vectors: harness.vectorStore("race_pool"), Embedder: harness.embedder})
+	_, err := library.Open(harness.context(), library.Config{Store: loser, Vectors: harness.vectorStore("race_pool"), Embedder: harness.embedder})
 	requireError(t, err, library.ErrStoreMismatch)
 	if backend := harness.backendVectorIDs("race_pool"); len(backend) != 0 {
 		t.Fatalf("race wrote %d vectors, want 0", len(backend))
@@ -461,7 +461,7 @@ func TestLibraryWriteConcurrentWriterProcesses(t *testing.T) {
 	for writer := range 3 {
 		for owner := range 3 {
 			ownerID := fmt.Sprintf("writer-%d-owner-%d", writer, owner)
-			state, err := opened.GetOwnerState(harness.ctx, "conversations", ownerID)
+			state, err := opened.GetOwnerState(harness.context(), "conversations", ownerID)
 			if err != nil || state.GenerationOrder != 1 {
 				t.Fatalf("owner %s state = %+v, %v, want order 1", ownerID, state, err)
 			}
@@ -500,10 +500,10 @@ func TestLibraryWriteRecoversAfterProcessDeath(t *testing.T) {
 			}
 
 			opened := harness.open(descriptor, harness.vectorStore(collection))
-			if err := opened.RegisterNamespace(harness.ctx, conversationSpec()); err != nil {
+			if err := opened.RegisterNamespace(harness.context(), conversationSpec()); err != nil {
 				t.Fatalf("register after restart: %v", err)
 			}
-			receipt := mustApply(t, harness.ctx, opened, batch)
+			receipt := mustApply(t, harness.context(), opened, batch)
 			if receipt.GenerationOrder != 1 {
 				t.Fatalf("receipt after restart = %+v", receipt)
 			}
@@ -538,14 +538,14 @@ func TestLibraryWriteReplaysAmbiguousUpsert(t *testing.T) {
 	descriptor := harness.descriptor("ambiguous")
 	batch := appendBatch("conversation-ambiguous", 1, "token-1", messageRow("m1", "ambiguous upsert input", 1))
 
-	failing, err := library.Open(harness.ctx, library.Config{Store: descriptor, Vectors: ambiguousVectorStore{VectorStore: harness.vectorStore("ambiguous_pool")}, Embedder: harness.embedder})
+	failing, err := library.Open(harness.context(), library.Config{Store: descriptor, Vectors: ambiguousVectorStore{VectorStore: harness.vectorStore("ambiguous_pool")}, Embedder: harness.embedder})
 	if err != nil {
 		t.Fatalf("open with the ambiguous adapter: %v", err)
 	}
-	if err := failing.RegisterNamespace(harness.ctx, conversationSpec()); err != nil {
+	if err := failing.RegisterNamespace(harness.context(), conversationSpec()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	_, err = failing.Apply(harness.ctx, batch)
+	_, err = failing.Apply(harness.context(), batch)
 	requireError(t, err, context.DeadlineExceeded)
 	if err := failing.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -556,7 +556,7 @@ func TestLibraryWriteReplaysAmbiguousUpsert(t *testing.T) {
 	}
 
 	opened := harness.open(descriptor, harness.vectorStore("ambiguous_pool"))
-	mustApply(t, harness.ctx, opened, batch)
+	mustApply(t, harness.context(), opened, batch)
 	rows := assertCatalogConsistent(t, harness, descriptor, "ambiguous_pool")
 	if len(rows.occurrences) != 1 {
 		t.Fatalf("catalog has %d occurrences, want 1", len(rows.occurrences))
@@ -569,7 +569,7 @@ func TestLibraryWriteReplaysAmbiguousUpsert(t *testing.T) {
 func TestLibraryWriteRejectsAnotherPoolOrLockPath(t *testing.T) {
 	harness := newLibraryHarness(t)
 	descriptor := harness.descriptor("identity")
-	first, err := library.Open(harness.ctx, library.Config{Store: descriptor, Vectors: harness.vectorStore("identity_pool"), Embedder: harness.embedder})
+	first, err := library.Open(harness.context(), library.Config{Store: descriptor, Vectors: harness.vectorStore("identity_pool"), Embedder: harness.embedder})
 	if err != nil {
 		t.Fatalf("open the catalog: %v", err)
 	}
@@ -577,9 +577,9 @@ func TestLibraryWriteRejectsAnotherPoolOrLockPath(t *testing.T) {
 		t.Fatalf("close the catalog: %v", err)
 	}
 
-	_, err = library.Open(harness.ctx, library.Config{Store: descriptor, Vectors: harness.vectorStore("other_pool"), Embedder: harness.embedder})
+	_, err = library.Open(harness.context(), library.Config{Store: descriptor, Vectors: harness.vectorStore("other_pool"), Embedder: harness.embedder})
 	requireError(t, err, library.ErrStoreMismatch)
-	collections, err := harness.milvus.ListCollections(harness.ctx, milvusclient.NewListCollectionOption())
+	collections, err := harness.milvus.ListCollections(harness.context(), milvusclient.NewListCollectionOption())
 	if err != nil {
 		t.Fatalf("list collections: %v", err)
 	}
@@ -589,11 +589,11 @@ func TestLibraryWriteRejectsAnotherPoolOrLockPath(t *testing.T) {
 
 	movedLock := descriptor
 	movedLock.LockPath = descriptor.LockPath + ".moved"
-	_, err = library.Open(harness.ctx, library.Config{Store: movedLock, Vectors: harness.vectorStore("identity_pool"), Embedder: harness.embedder})
+	_, err = library.Open(harness.context(), library.Config{Store: movedLock, Vectors: harness.vectorStore("identity_pool"), Embedder: harness.embedder})
 	requireError(t, err, library.ErrStoreMismatch)
 
 	reopened := harness.open(descriptor, harness.vectorStore("identity_pool"))
-	if err := reopened.RegisterNamespace(harness.ctx, conversationSpec()); err != nil {
+	if err := reopened.RegisterNamespace(harness.context(), conversationSpec()); err != nil {
 		t.Fatalf("register after the rejected opens: %v", err)
 	}
 }

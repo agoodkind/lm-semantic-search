@@ -21,16 +21,7 @@ package live
 
 import (
 	"context"
-	cryptorand "crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"log/slog"
-	"math"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -44,14 +35,13 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
-	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/sandbox"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
-	"goodkind.io/lm-semantic-search/internal/store"
 	"goodkind.io/lm-semantic-search/internal/tshash"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -107,7 +97,7 @@ type harness struct {
 	temporaryNames    map[string]struct{}
 	callRecorder      *milvusCallRecorder
 	embeddingRecorder *embeddingCallRecorder
-	milvusContext     context.Context
+	milvusContext     func() context.Context
 	stopServer        func()
 }
 
@@ -189,7 +179,7 @@ func (recorder *milvusCallRecorder) observe(
 		destinationDatabaseName: destinationDatabaseName,
 		method:                  method,
 		collectionNames:         slices.Clone(collectionNames),
-		recordedAt:              time.Now(),
+		recordedAt:              clock.Now(),
 		caller:                  milvusCallContext(),
 	})
 	recorder.mutex.Unlock()
@@ -261,6 +251,7 @@ func (recorder *milvusCallRecorder) count(method string, collectionName string) 
 // failure). It registers a per-test UUID conversation collection and asserts the
 // derived Milvus name is not the production collection before any ingest runs.
 func newHarness(t *testing.T) *harness {
+	t.Helper()
 	return newHarnessWithGate(t, nil)
 }
 
@@ -277,26 +268,11 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 	return newHarnessWithOptions(t, gate, 0, false)
 }
 
-func newHarnessWithOptions(
-	t *testing.T,
-	gate *embedGate,
-	idleTimeout time.Duration,
-	requireMilvus bool,
-) *harness {
+func newHarnessWithOptions(t *testing.T, gate *embedGate, idleTimeout time.Duration, requireMilvus bool) *harness {
 	t.Helper()
 
-	defaultConfig, err := config.Default()
-	if err != nil {
-		t.Fatalf("config.Default returned error: %v", err)
-	}
+	defaultConfig := resolveHarnessConfig(t, requireMilvus)
 	milvusAddress := strings.TrimSpace(defaultConfig.MilvusAddress)
-	if milvusAddress == "" {
-		if requireMilvus {
-			t.Fatal("BLOCKED: MilvusAddress is empty; set MILVUS_ADDRESS or local config before running the residency suite")
-		}
-		t.Skip("BLOCKED: MilvusAddress is empty; set MILVUS_ADDRESS or local config before running the live suite")
-	}
-
 	harnessID := randomID()
 	databaseName := liveDatabasePrefix + harnessID
 	callRecorder := &milvusCallRecorder{}
@@ -305,22 +281,7 @@ func newHarnessWithOptions(
 		milvusgrpc.CallObserverContextKey{},
 		milvusgrpc.CallObserver(callRecorder.observe),
 	)
-	// Probe Milvus directly first. A dial failure here means the backend is down,
-	// so the whole scenario is blocked on the environment rather than the code.
-	dialCtx, dialCancel := context.WithTimeout(operatorContext, 5*time.Second)
-	operatorMilvus, err := milvusclient.New(dialCtx, &milvusclient.ClientConfig{
-		Address:     milvusAddress,
-		APIKey:      defaultConfig.MilvusToken,
-		DialOptions: milvusgrpc.DialOptions(operatorContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
-	})
-	dialCancel()
-	if err != nil {
-		if requireMilvus {
-			t.Fatalf("BLOCKED: Milvus unreachable at %s: %v", milvusAddress, err)
-		}
-		t.Skipf("BLOCKED: Milvus unreachable at %s: %v", milvusAddress, err)
-	}
-
+	operatorMilvus := connectLiveOperator(t, operatorContext, milvusAddress, defaultConfig.MilvusToken, requireMilvus)
 	var (
 		databaseCreated bool
 		manager         *daemon.Manager
@@ -369,113 +330,28 @@ func newHarnessWithOptions(
 	createCancel()
 	databaseCreated = true
 
-	sandboxContext := context.WithValue(
-		context.Background(),
-		milvusgrpc.CallObserverContextKey{},
-		milvusgrpc.CallObserver(callRecorder.observe),
-	)
-	dialCtx, dialCancel = context.WithTimeout(sandboxContext, 5*time.Second)
-	sandboxMilvus, err = milvusclient.New(dialCtx, &milvusclient.ClientConfig{
-		Address:     milvusAddress,
-		APIKey:      defaultConfig.MilvusToken,
-		DBName:      databaseName,
-		DialOptions: milvusgrpc.DialOptions(sandboxContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
-	})
-	dialCancel()
-	if err != nil {
-		t.Fatalf("connect to temporary Milvus database %s: %v", databaseName, err)
-	}
-	sandboxBefore, err := readMilvusInventory(sandboxMilvus)
-	if err != nil {
-		t.Fatalf("read sandbox Milvus inventory before: %v", err)
-	}
-	if len(sandboxBefore) != 0 {
-		t.Fatalf(
-			"temporary Milvus database %q started with collections: %v",
-			databaseName,
-			sandboxBefore,
-		)
-	}
+	sandboxContext, sandboxClient, sandboxBefore := connectLiveSandbox(t, milvusAddress, defaultConfig.MilvusToken, databaseName, callRecorder)
+	sandboxMilvus = sandboxClient
 
-	stateRoot := t.TempDir()
-	// The unix socket path must fit macOS's ~104-char sun_path limit, and
-	// t.TempDir lives under a long /var/folders path that overflows it, so the
-	// socket gets a short /tmp dir instead. State and merkle can use the long temp
-	// root.
-	socketDir, err := os.MkdirTemp("/tmp", "lms-live-")
-	if err != nil {
-		t.Fatalf("mkdir short socket dir returned error: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
-	socketPath := filepath.Join(socketDir, "daemon.sock")
+	cfg, stateRoot, embeddingRecorder := prepareLiveDaemonConfig(t, gate, milvusAddress, defaultConfig.MilvusToken, databaseName, harnessID, idleTimeout)
 
-	embeddingRecorder := &embeddingCallRecorder{}
-	embedServer := newFakeEmbeddingServerWithRecorder(
-		t,
-		gate,
-		fakeEmbeddingDimension,
-		embeddingRecorder,
-	)
-
-	cfg := resolveLiveConfig(
-		t,
-		stateRoot,
-		socketPath,
-		embedServer.URL,
-		milvusAddress,
-		defaultConfig.MilvusToken,
-		databaseName,
-		harnessID,
-		idleTimeout,
-	)
-	for _, dir := range sandbox.Directories(cfg) {
-		if err := store.EnsureDir(dir); err != nil {
-			t.Fatalf("EnsureDir(%s) returned error: %v", dir, err)
-		}
-	}
-	if err := store.WriteRegistry(cfg.RegistryPath, model.RegistryFile{}); err != nil {
-		t.Fatalf("WriteRegistry returned error: %v", err)
-	}
-
-	manager, err = daemon.NewManager(sandboxContext, cfg)
-	if err != nil {
-		t.Fatalf("NewManager returned error: %v", err)
-	}
-
-	stopServer = startInProcessServer(t, manager, socketPath)
-
-	conn, client, err := grpcutil.DialDaemon(context.Background(), socketPath)
-	if err != nil {
-		t.Fatalf("DialDaemon returned error: %v", err)
-	}
-
-	// A fresh random id derives a unique conv_chunks_<hash> collection name, so
-	// the throwaway collection can never be the production one.
 	collectionID := "live-marker-" + harnessID
-	codebase, err := manager.RegisterConversationCollection(context.Background(), collectionID)
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-	if codebase.CollectionName == "" {
-		t.Fatal("RegisterConversationCollection returned an empty collection name")
-	}
-	if codebase.CollectionName == productionConversationCollection {
-		t.Fatalf("throwaway collection name equals production %q; refusing to run", productionConversationCollection)
-	}
+	started := startLiveHarnessDaemon(t, sandboxContext, cfg, collectionID)
+	manager, conn, stopServer = started.manager, started.conn, started.stopServer
 
 	h := &harness{
 		t:                 t,
 		config:            cfg,
 		manager:           manager,
 		conn:              conn,
-		client:            client,
+		client:            started.client,
 		operatorMilvus:    operatorMilvus,
 		milvus:            sandboxMilvus,
 		databaseName:      databaseName,
 		collectionID:      collectionID,
-		collectionName:    codebase.CollectionName,
+		collectionName:    started.collectionName,
 		reuseCatalogName:  semantic.ReuseCatalogCollectionName(cfg),
-		codebaseID:        codebase.ID,
+		codebaseID:        started.codebaseID,
 		stateRoot:         stateRoot,
 		merkleDir:         cfg.MerkleDir,
 		embedGate:         gate,
@@ -485,10 +361,10 @@ func newHarnessWithOptions(
 		temporaryNames:    make(map[string]struct{}),
 		callRecorder:      callRecorder,
 		embeddingRecorder: embeddingRecorder,
-		milvusContext:     sandboxContext,
+		milvusContext:     func() context.Context { return sandboxContext },
 		stopServer:        stopServer,
 	}
-	h.trackCollectionFamily(codebase.CollectionName)
+	h.trackCollectionFamily(started.collectionName)
 	h.trackTemporaryCollection(h.reuseCatalogName)
 	t.Cleanup(func() { h.teardown(h.stopServer) })
 	setupComplete = true
@@ -513,12 +389,12 @@ func (h *harness) restart(between func()) {
 	if between != nil {
 		between()
 	}
-	manager, err := daemon.NewManager(h.milvusContext, h.config)
+	manager, err := daemon.NewManager(h.milvusContext(), h.config)
 	if err != nil {
 		h.t.Fatalf("NewManager on restart returned error: %v", err)
 	}
 	h.manager = manager
-	h.stopServer = startInProcessServer(h.t, manager, h.config.SocketPath)
+	h.stopServer = startInProcessServer(h.t, h.milvusContext(), manager, h.config.SocketPath)
 	conn, client, err := grpcutil.DialDaemon(context.Background(), h.config.SocketPath)
 	if err != nil {
 		h.t.Fatalf("DialDaemon on restart returned error: %v", err)
@@ -849,16 +725,13 @@ func protectedMilvusCall(method string) bool {
 	if strings.HasPrefix(method, "Alter") {
 		return true
 	}
-	switch method {
-	case "CreateAlias", "CreateCollection", "CreateIndex", "CreatePartition",
+	return slices.Contains([]string{
+		"CreateAlias", "CreateCollection", "CreateIndex", "CreatePartition",
 		"Delete", "DropAlias", "DropCollection", "DropIndex", "DropPartition",
 		"Flush", "FlushAll", "Import", "Insert", "LoadCollection",
 		"ReleaseCollection", "RenameCollection", "ReplicateMessage",
-		"TruncateCollection", "Upsert":
-		return true
-	default:
-		return false
-	}
+		"TruncateCollection", "Upsert",
+	}, method)
 }
 
 func (h *harness) trackTemporaryCollection(collectionName string) {
@@ -899,125 +772,6 @@ func (h *harness) trackCodebasePath(codebasePath string) string {
 	collectionName := prefix + "_" + tshash.PathPrefix(canonicalPath)
 	h.trackCollectionFamily(collectionName)
 	return collectionName
-}
-
-func readMilvusInventory(client *milvusclient.Client) (milvusInventory, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	collectionNames, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
-	if err != nil {
-		return nil, fmt.Errorf("list Milvus collections for inventory: %w", err)
-	}
-	slices.Sort(collectionNames)
-	inventory := make(milvusInventory, len(collectionNames))
-	for _, collectionName := range collectionNames {
-		properties := make(map[string]string)
-		loadState, loadErr := client.GetLoadState(
-			ctx,
-			milvusclient.NewGetLoadStateOption(collectionName),
-		)
-		if loadErr != nil {
-			return nil, fmt.Errorf(
-				"get Milvus load state for %s inventory: %w",
-				collectionName,
-				loadErr,
-			)
-		}
-		properties["load_state"] = strconv.FormatInt(int64(loadState.State), 10)
-		collection, describeErr := client.DescribeCollection(
-			ctx,
-			milvusclient.NewDescribeCollectionOption(collectionName),
-		)
-		if describeErr != nil {
-			return nil, fmt.Errorf(
-				"describe Milvus collection %s for inventory: %w",
-				collectionName,
-				describeErr,
-			)
-		}
-		for key, value := range collection.Properties {
-			properties["collection:"+key] = value
-		}
-		if collection.Schema != nil {
-			for _, field := range collection.Schema.Fields {
-				properties["field:"+field.Name] = field.TypeParams["mmap.enabled"]
-			}
-		}
-		indexNames, listErr := client.ListIndexes(
-			ctx,
-			milvusclient.NewListIndexOption(collectionName),
-		)
-		if listErr != nil {
-			return nil, fmt.Errorf(
-				"list Milvus indexes for %s inventory: %w",
-				collectionName,
-				listErr,
-			)
-		}
-		slices.Sort(indexNames)
-		for _, indexName := range indexNames {
-			description, indexErr := client.DescribeIndex(
-				ctx,
-				milvusclient.NewDescribeIndexOption(collectionName, indexName),
-			)
-			if indexErr != nil {
-				return nil, fmt.Errorf(
-					"describe Milvus index %s on %s: %w",
-					indexName,
-					collectionName,
-					indexErr,
-				)
-			}
-			properties["index:"+indexName] = description.Params()["mmap.enabled"]
-		}
-		inventory[collectionName] = properties
-	}
-	return inventory, nil
-}
-
-func listMilvusDatabases(client *milvusclient.Client) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	databaseNames, err := client.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
-	if err != nil {
-		return nil, fmt.Errorf("list Milvus databases: %w", err)
-	}
-	slices.Sort(databaseNames)
-	return databaseNames, nil
-}
-
-func dropCollectionIfPresent(
-	client *milvusclient.Client,
-	collectionName string,
-) error {
-	dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := client.DropCollection(
-		dropCtx,
-		milvusclient.NewDropCollectionOption(collectionName),
-	); err != nil {
-		if !strings.Contains(err.Error(), "not exist") && !strings.Contains(err.Error(), "not found") {
-			return fmt.Errorf("DropCollection(%s) returned error: %w", collectionName, err)
-		}
-	}
-	return nil
-}
-
-func dropEveryCollection(client *milvusclient.Client) []error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	collectionNames, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
-	cancel()
-	if err != nil {
-		return []error{fmt.Errorf("list temporary Milvus collections for cleanup: %w", err)}
-	}
-	cleanupErrors := make([]error, 0)
-	slices.Sort(collectionNames)
-	for _, collectionName := range collectionNames {
-		if err := dropCollectionIfPresent(client, collectionName); err != nil {
-			cleanupErrors = append(cleanupErrors, err)
-		}
-	}
-	return cleanupErrors
 }
 
 func closeMilvusClient(client *milvusclient.Client) {
@@ -1111,197 +865,4 @@ func resolveLiveConfig(
 		)
 	}
 	return resolved
-}
-
-// startInProcessServer serves the daemon gRPC service on a throwaway unix socket
-// in a goroutine and returns a stop closure that GracefulStops the server and
-// removes the socket. Readiness is a successful dial by the caller, so no log
-// tailing is needed. It mirrors internal/daemon's own test helper.
-func startInProcessServer(t *testing.T, manager *daemon.Manager, socketPath string) func() {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
-		t.Fatalf("mkdir socket dir returned error: %v", err)
-	}
-	_ = os.Remove(socketPath)
-
-	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", socketPath)
-	if err != nil {
-		t.Fatalf("listen on unix socket returned error: %v", err)
-	}
-	server := grpc.NewServer(
-		grpc.MaxRecvMsgSize(grpcutil.MaxMessageBytes),
-		grpc.MaxSendMsgSize(grpcutil.MaxMessageBytes),
-	)
-	pb.RegisterSemanticSearchDaemonServiceServer(server, daemon.NewGRPCServer(manager, nil))
-	go func() {
-		_ = server.Serve(listener)
-	}()
-	return func() {
-		server.GracefulStop()
-		_ = listener.Close()
-		_ = os.Remove(socketPath)
-	}
-}
-
-// newFakeEmbeddingServer starts a local OpenAI-compatible embedding endpoint. It
-// answers the health probe (GET .../models) with a minimal models list and every
-// embed request (POST .../embeddings) with one fixed-width vector per input,
-// keyed by a content hash so identical content yields an identical vector and the
-// engine's content-hash reuse path stays exercised.
-// embedGate lets a test pace embedding requests. When installed, every embed
-// request announces its batch size on arrived, then blocks until the test sends
-// on release, so the test can read job progress between batches. The models
-// (health) route is never gated.
-type embedGate struct {
-	arrived chan int
-	release chan struct{}
-}
-
-func newFakeEmbeddingServer(t *testing.T, gate *embedGate) *httptest.Server {
-	return newFakeEmbeddingServerWithDimension(t, gate, fakeEmbeddingDimension)
-}
-
-func newFakeEmbeddingServerWithDimension(
-	t *testing.T,
-	gate *embedGate,
-	dimension int,
-) *httptest.Server {
-	return newFakeEmbeddingServerWithRecorder(t, gate, dimension, nil)
-}
-
-func newFakeEmbeddingServerWithRecorder(
-	t *testing.T,
-	gate *embedGate,
-	dimension int,
-	recorder *embeddingCallRecorder,
-) *httptest.Server {
-	t.Helper()
-	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch {
-		case strings.HasSuffix(request.URL.Path, "/models"):
-			writeModelsList(writer)
-		case strings.HasSuffix(request.URL.Path, "/embeddings"):
-			writeEmbeddings(t, writer, request, gate, dimension, recorder)
-		default:
-			http.Error(writer, "unexpected path "+request.URL.Path, http.StatusNotFound)
-		}
-	})
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
-	return server
-}
-
-func writeModelsList(writer http.ResponseWriter) {
-	writer.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(writer).Encode(map[string]any{
-		"object": "list",
-		"data": []map[string]any{
-			{"id": "text-embedding-3-small", "object": "model", "created": 0, "owned_by": "live-harness"},
-		},
-	})
-}
-
-func writeEmbeddings(
-	t *testing.T,
-	writer http.ResponseWriter,
-	request *http.Request,
-	gate *embedGate,
-	dimension int,
-	recorder *embeddingCallRecorder,
-) {
-	inputs, err := decodeEmbeddingInputs(request)
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if recorder != nil {
-		recorder.record(inputs)
-	}
-	if gate != nil {
-		gate.arrived <- len(inputs)
-		<-gate.release
-	}
-	type row struct {
-		Object    string    `json:"object"`
-		Index     int       `json:"index"`
-		Embedding []float64 `json:"embedding"`
-	}
-	rows := make([]row, 0, len(inputs))
-	for index, text := range inputs {
-		rows = append(rows, row{
-			Object:    "embedding",
-			Index:     index,
-			Embedding: deterministicVector(text, dimension),
-		})
-	}
-	writer.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(writer).Encode(map[string]any{
-		"object": "list",
-		"model":  "text-embedding-3-small",
-		"data":   rows,
-		"usage":  map[string]int{"prompt_tokens": 1, "total_tokens": 1},
-	}); err != nil {
-		t.Logf("encode embedding response failed: %v", err)
-	}
-}
-
-// decodeEmbeddingInputs reads the request's input field, accepting both the array
-// form the batch embedder sends and a bare single string, so the fake is robust
-// to either shape.
-func decodeEmbeddingInputs(request *http.Request) ([]string, error) {
-	var body struct {
-		Input json.RawMessage `json:"input"`
-	}
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("decode embedding request: %w", err)
-	}
-	var asArray []string
-	if err := json.Unmarshal(body.Input, &asArray); err == nil {
-		return asArray, nil
-	}
-	var asString string
-	if err := json.Unmarshal(body.Input, &asString); err == nil {
-		return []string{asString}, nil
-	}
-	return nil, fmt.Errorf("embedding request input was neither an array nor a string")
-}
-
-// deterministicVector maps content to a fixed-width unit vector derived from its
-// SHA-256 digest, so identical content always yields an identical vector (reuse
-// works) and distinct content yields a distinct one.
-func deterministicVector(content string, dimension int) []float64 {
-	digest := sha256.Sum256([]byte(content))
-	vector := make([]float64, dimension)
-	var norm float64
-	for i := range dimension {
-		value := (float64(digest[i%len(digest)]) - 128.0) / 128.0
-		vector[i] = value
-		norm += value * value
-	}
-	norm = math.Sqrt(norm)
-	if norm == 0 {
-		vector[0] = 1
-		return vector
-	}
-	for i := range vector {
-		vector[i] /= norm
-	}
-	return vector
-}
-
-// correlatedContext wraps ctx with the trace/span identity the daemon requires in
-// strict mode, so every RPC and manager read carries a correlation.
-func correlatedContext() context.Context {
-	return grpcutil.WithCorrelation(context.Background())
-}
-
-// randomID returns a hex token unique per test, so each run's collection id (and
-// therefore its derived Milvus collection name) is fresh and never collides with
-// another run or with production.
-func randomID() string {
-	buffer := make([]byte, 16)
-	if _, err := cryptorand.Read(buffer); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
-	}
-	return hex.EncodeToString(buffer)
 }

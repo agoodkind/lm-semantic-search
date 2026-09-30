@@ -88,11 +88,11 @@ func bigConversation(id string, messages int) []*pb.ConversationDocument {
 			Thinking:       fmt.Sprintf("thinking about step %d of %s: decide the next command and why it is the right one", index, id),
 			Tools: []*pb.ConversationToolCall{
 				{
-						Name:     "run_shell",
-						Display:  fmt.Sprintf("ls -la /work/%s/%d", id, index),
-						LangHint: "bash",
-					Output:    fmt.Sprintf("total %d\nfile-%d-alpha\nfile-%d-bravo\nfile-%d-charlie", index, index, index, index),
-					IsError:   false,
+					Name:     "run_shell",
+					Display:  fmt.Sprintf("ls -la /work/%s/%d", id, index),
+					LangHint: "bash",
+					Output:   fmt.Sprintf("total %d\nfile-%d-alpha\nfile-%d-bravo\nfile-%d-charlie", index, index, index, index),
+					IsError:  false,
 				},
 			},
 		})
