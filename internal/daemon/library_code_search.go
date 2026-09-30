@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -71,7 +72,7 @@ func (index *libraryCodeIndex) Search(
 	}
 	page, err := index.store.Search(ctx, library.SearchRequest{
 		Namespace:     namespace,
-		Query:         query,
+		Query:         strings.ReplaceAll(query, "\x00", " "),
 		Filter:        codeSearchFilter(extensionFilter, relativePathPrefix),
 		GroupBy:       "",
 		PerGroupLimit: 0,

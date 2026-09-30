@@ -454,8 +454,8 @@ func (index *libraryCodeIndex) stageBatches(rows []library.Occurrence) [][]libra
 }
 
 // codeOccurrences prepares every chunk at the model limit and returns one
-// occurrence per part. It replaces NUL bytes with spaces and skips
-// whitespace-only chunks, which have no embedding.
+// occurrence per part. It replaces NUL bytes with spaces in lexical and
+// embedding inputs, preserves source bytes, and skips whitespace-only chunks.
 func (index *libraryCodeIndex) codeOccurrences(ctx context.Context, chunks []model.StoredChunk) ([]library.Occurrence, error) {
 	rows := make([]library.Occurrence, 0, len(chunks))
 	for _, chunk := range chunks {
@@ -474,7 +474,7 @@ func (index *libraryCodeIndex) codeOccurrences(ctx context.Context, chunks []mod
 			slog.ErrorContext(ctx, "prepare code chunk failed", "path", chunk.RelativePath, "start_line", chunk.StartLine, "err", err)
 			return nil, fmt.Errorf("prepare %s:%d: %w", chunk.RelativePath, chunk.StartLine, err)
 		}
-		contentHash := sha256.Sum256([]byte(content))
+		contentHash := sha256.Sum256([]byte(chunk.Content))
 		hashText := hex.EncodeToString(contentHash[:])[:libraryCodeContentHashLength]
 		for _, part := range parts {
 			rows = append(rows, codeOccurrence(chunk, content, hashText, part))
@@ -489,7 +489,7 @@ func codeOccurrence(chunk model.StoredChunk, content string, hashText string, pa
 	return library.Occurrence{
 		RowKey:         fmt.Sprintf("%d:%d:%d:%s:%s", chunk.StartLine, chunk.EndLine, chunk.SplitPart, hashText, part.Suffix),
 		SortKey:        fmt.Sprintf("%010d:%010d:%010d:%010d", chunk.StartLine, chunk.EndLine, chunk.SplitPart, partNumber),
-		SourceText:     text,
+		SourceText:     chunk.Content[part.ByteStart:part.ByteEnd],
 		SearchText:     text,
 		EmbeddingInput: part.EmbeddingInput,
 		Scalars: map[string]library.ScalarValue{
