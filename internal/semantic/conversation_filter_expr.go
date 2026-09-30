@@ -101,20 +101,6 @@ func (filter ConversationFilter) CollectionFilter() *CollectionFilter {
 	return &tree
 }
 
-// inStringClause renders a Milvus `field in ["a", "b"]` membership clause, each
-// value escaped for use inside a double-quoted Milvus string literal. An empty
-// value set contributes no clause.
-func inStringClause(field string, values []string) string {
-	if len(values) == 0 {
-		return ""
-	}
-	quoted := make([]string, 0, len(values))
-	for _, value := range values {
-		quoted = append(quoted, `"`+escapeMilvusString(value)+`"`)
-	}
-	return field + " in [" + strings.Join(quoted, ", ") + "]"
-}
-
 func lowercaseAll(values []string) []string {
 	if len(values) == 0 {
 		return values
@@ -124,22 +110,4 @@ func lowercaseAll(values []string) []string {
 		lowered = append(lowered, strings.ToLower(value))
 	}
 	return lowered
-}
-
-// batchConversationIDs splits ids into chunks of at most size, returning a
-// single empty batch when ids is empty so callers run exactly one unscoped
-// search.
-func batchConversationIDs(ids []string, size int) [][]string {
-	if len(ids) == 0 {
-		return [][]string{nil}
-	}
-	if size <= 0 || len(ids) <= size {
-		return [][]string{ids}
-	}
-	batches := make([][]string, 0, (len(ids)+size-1)/size)
-	for start := 0; start < len(ids); start += size {
-		end := min(start+size, len(ids))
-		batches = append(batches, ids[start:end])
-	}
-	return batches
 }
