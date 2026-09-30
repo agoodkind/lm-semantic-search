@@ -7,13 +7,16 @@ import (
 	cryptorand "crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -65,14 +68,15 @@ type libraryEnvironment struct {
 // libraryHarness owns one isolated Milvus database and one temporary
 // directory for catalogs.
 type libraryHarness struct {
-	t           *testing.T
-	context     func() context.Context
-	environment libraryEnvironment
-	database    string
-	admin       *milvusclient.Client
-	milvus      *milvusclient.Client
-	root        string
-	embedder    library.Embedder
+	t               *testing.T
+	context         func() context.Context
+	environment     libraryEnvironment
+	database        string
+	admin           *milvusclient.Client
+	milvus          *milvusclient.Client
+	root            string
+	embedder        library.Embedder
+	createRequested bool
 }
 
 // newLibraryHarness creates a new isolated Milvus database and a real
@@ -83,11 +87,23 @@ func newLibraryHarness(t *testing.T) *libraryHarness {
 	t.Cleanup(cancel)
 	environment := resolveLibraryEnvironment(t)
 	database := libraryLiveDatabasePrefix + randomHex(t, 16)
+	if path := os.Getenv("LMS_LIBRARY_LIVE_DATABASE_INTENT"); path != "" {
+		var err error
+		database, err = readLibraryDatabaseIntent(t.Name(), path, environment.MilvusAddress)
+		if err != nil {
+			t.Fatalf("reject library database intent: %v", err)
+		}
+	}
 
 	admin, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: environment.MilvusAddress})
 	if err != nil {
 		t.Fatalf("connect to Milvus at %s: %v", environment.MilvusAddress, err)
 	}
+	harness := &libraryHarness{
+		t: t, context: func() context.Context { return ctx }, environment: environment,
+		database: database, admin: admin, root: t.TempDir(),
+	}
+	t.Cleanup(harness.dropDatabase)
 	existing, err := admin.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
 	if err != nil {
 		t.Fatalf("list Milvus databases: %v", err)
@@ -95,6 +111,7 @@ func newLibraryHarness(t *testing.T) *libraryHarness {
 	if slices.Contains(existing, database) {
 		t.Fatalf("Milvus database %s already exists", database)
 	}
+	harness.createRequested = true
 	if err := admin.CreateDatabase(ctx, milvusclient.NewCreateDatabaseOption(database)); err != nil {
 		t.Fatalf("create Milvus database %s: %v", database, err)
 	}
@@ -103,18 +120,88 @@ func newLibraryHarness(t *testing.T) *libraryHarness {
 	if err != nil {
 		t.Fatalf("connect to Milvus database %s: %v", database, err)
 	}
-	harness := &libraryHarness{
-		t:           t,
-		context:     func() context.Context { return ctx },
-		environment: environment,
-		database:    database,
-		admin:       admin,
-		milvus:      client,
-		root:        t.TempDir(),
-		embedder:    newLiveEmbedder(t, ctx, environment),
-	}
-	t.Cleanup(harness.dropDatabase)
+	harness.milvus = client
+	harness.embedder = newLiveEmbedder(t, ctx, environment)
 	return harness
+}
+
+type libraryDatabaseIntent struct {
+	SchemaVersion   int       `json:"schema_version"`
+	Database        string    `json:"database"`
+	MilvusAddress   string    `json:"milvus_address"`
+	RunRoot         string    `json:"run_root"`
+	RunID           string    `json:"run_id"`
+	RegisteredAt    time.Time `json:"registered_at"`
+	AbsenceVerified bool      `json:"absence_verified"`
+}
+
+func readLibraryDatabaseIntent(testName, path, address string) (database string, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			slog.Warn("library database intent rejected", "err", resultErr)
+		}
+	}()
+	if testName != "TestLibrarySearchCompletePagesMatchTheExhaustiveOracle" {
+		return "", errors.New("database intent requires the exact existing exhaustive oracle test")
+	}
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != "database-intent.json" {
+		return "", errors.New("database intent requires an absolute canonical registration path")
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve database intent: %w", err)
+	}
+	if resolved != path {
+		return "", errors.New("database intent path contains a symlink")
+	}
+	registrationRoot, err := os.OpenRoot("/private/tmp")
+	if err != nil {
+		return "", fmt.Errorf("open isolated registration root: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, registrationRoot.Close()) }()
+	file, err := registrationRoot.Open(strings.TrimPrefix(path, "/private/tmp/"))
+	if err != nil {
+		return "", fmt.Errorf("open database intent: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("inspect database intent: %w", err)
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !ok || strconv.FormatUint(uint64(owner.Uid), 10) != strconv.Itoa(os.Geteuid()) || info.Size() > 4096 {
+		return "", errors.New("database intent must be a private owned regular file of at most 4096 bytes")
+	}
+	var intent libraryDatabaseIntent
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&intent); err != nil {
+		return "", fmt.Errorf("decode database intent: %w", err)
+	}
+	var trailing json.RawMessage
+	if err = decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return "", errors.New("database intent contains trailing data")
+	}
+	root := filepath.Join("/private/tmp", "lms-oracle-rerun-"+intent.RunID)
+	if !validLibraryRunID(intent.RunID) || intent.RunRoot != root || filepath.Dir(path) != root || intent.Database != libraryLiveDatabasePrefix+intent.RunID || len(intent.Database) > 128 {
+		return "", errors.New("database intent does not bind its exact isolated root and database")
+	}
+	if intent.SchemaVersion != 1 || !intent.AbsenceVerified || intent.RegisteredAt.IsZero() || intent.RegisteredAt.After(clock.Now()) || address != "localhost:39630" || intent.MilvusAddress != address {
+		return "", errors.New("database intent requires prior absence, timestamp and exact isolated native endpoint")
+	}
+	return intent.Database, nil
+}
+
+func validLibraryRunID(runID string) bool {
+	if runID == "" {
+		return false
+	}
+	for _, character := range runID {
+		if character != '_' && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveLibraryEnvironment reads the Milvus and embedding endpoints from the
@@ -159,16 +246,46 @@ func newLiveEmbedder(t *testing.T, ctx context.Context, environment libraryEnvir
 func (harness *libraryHarness) dropDatabase() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	defer func() {
+		var closeErr error
+		if harness.milvus != nil {
+			closeErr = harness.milvus.Close(ctx)
+		}
+		if err := errors.Join(closeErr, harness.admin.Close(ctx)); err != nil {
+			harness.t.Errorf("close Milvus clients: %v", err)
+		}
+	}()
 	if !strings.HasPrefix(harness.database, libraryLiveDatabasePrefix) || slices.Contains(libraryProtectedDatabases, harness.database) {
 		harness.t.Errorf("refusing to drop database %s", harness.database)
 		return
 	}
-	collections, err := harness.milvus.ListCollections(ctx, milvusclient.NewListCollectionOption())
+	if !harness.createRequested {
+		return
+	}
+	databases, err := harness.admin.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
+	if err != nil {
+		harness.t.Errorf("inspect database %s for cleanup: %v", harness.database, err)
+		return
+	}
+	if !slices.Contains(databases, harness.database) {
+		return
+	}
+	client := harness.milvus
+	if client == nil {
+		client, err = milvusclient.New(ctx, &milvusclient.ClientConfig{Address: harness.environment.MilvusAddress, DBName: harness.database})
+		if err != nil {
+			harness.t.Errorf("open partial-startup cleanup client: %v", err)
+			return
+		}
+		harness.milvus = client
+	}
+	collections, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
 	if err != nil {
 		harness.t.Errorf("list collections in %s: %v", harness.database, err)
+		return
 	}
 	for _, collection := range collections {
-		if err := harness.milvus.DropCollection(ctx, milvusclient.NewDropCollectionOption(collection)); err != nil {
+		if err := client.DropCollection(ctx, milvusclient.NewDropCollectionOption(collection)); err != nil {
 			harness.t.Errorf("drop collection %s.%s: %v", harness.database, collection, err)
 		}
 	}
@@ -177,8 +294,9 @@ func (harness *libraryHarness) dropDatabase() {
 		return
 	}
 	harness.t.Logf("dropped Milvus database %s", harness.database)
-	if err := errors.Join(harness.milvus.Close(ctx), harness.admin.Close(ctx)); err != nil {
-		harness.t.Errorf("close Milvus clients: %v", err)
+	databases, err = harness.admin.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
+	if err != nil || slices.Contains(databases, harness.database) {
+		harness.t.Errorf("verify database %s absence after cleanup: present=%t err=%v", harness.database, slices.Contains(databases, harness.database), err)
 	}
 }
 
