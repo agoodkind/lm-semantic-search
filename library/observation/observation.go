@@ -197,7 +197,10 @@ type Span struct {
 	event    Event
 }
 
-var nextOperationID atomic.Uint64
+var (
+	processID       = os.Getpid()
+	nextOperationID atomic.Uint64
+)
 
 // Start returns an operation context. A nil observer emits no events.
 func Start(ctx context.Context, observer Observer, operation Operation) (context.Context, *Span) {
@@ -206,7 +209,7 @@ func Start(ctx context.Context, observer Observer, operation Operation) (context
 		return ctx, span
 	}
 	scope := ScopeFromContext(ctx)
-	scope.ProcessID = os.Getpid()
+	scope.ProcessID = processID
 	scope.ParentOperationID = scope.OperationID
 	scope.OperationID = nextOperationID.Add(1)
 	ctx = WithScope(ctx, scope)
