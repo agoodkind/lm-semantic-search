@@ -44,6 +44,11 @@ type libraryCodebaseDaemon struct {
 
 func newLibraryCodebaseDaemon(t *testing.T) *libraryCodebaseDaemon {
 	t.Helper()
+	return newCodebaseLiveDaemon(t, config.CodebaseStoreLibrary)
+}
+
+func newCodebaseLiveDaemon(t *testing.T, codebaseStore string) *libraryCodebaseDaemon {
+	t.Helper()
 	harness := newLibraryHarness(t)
 	sandboxRoot := t.TempDir()
 	socketDir, err := os.MkdirTemp("/tmp", "lms-lib-live-")
@@ -53,7 +58,7 @@ func newLibraryCodebaseDaemon(t *testing.T) *libraryCodebaseDaemon {
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	settings := [][2]string{
 		{"CLAUDE_CONTEXT_PROFILE", config.ProfileStandard},
-		{"CLAUDE_CONTEXT_CODEBASE_STORE", config.CodebaseStoreLibrary},
+		{"CLAUDE_CONTEXT_CODEBASE_STORE", codebaseStore},
 		{"MILVUS_ADDRESS", harness.environment.MilvusAddress},
 		{"MILVUS_DATABASE", harness.database},
 		{"EMBEDDING_PROVIDER", string(model.EmbeddingProviderOpenAI)},
@@ -83,8 +88,8 @@ func newLibraryCodebaseDaemon(t *testing.T) *libraryCodebaseDaemon {
 	if err != nil {
 		t.Fatalf("resolve daemon config: %v", err)
 	}
-	if cfg.CodebaseStore != config.CodebaseStoreLibrary || cfg.MilvusDatabase != harness.database {
-		t.Fatalf("daemon config store %q database %q, want library and %s", cfg.CodebaseStore, cfg.MilvusDatabase, harness.database)
+	if cfg.CodebaseStore != codebaseStore || cfg.MilvusDatabase != harness.database {
+		t.Fatalf("daemon config store %q database %q, want %s and %s", cfg.CodebaseStore, cfg.MilvusDatabase, codebaseStore, harness.database)
 	}
 	for _, directory := range sandbox.Directories(cfg) {
 		if err := store.EnsureDir(directory); err != nil {
@@ -310,12 +315,12 @@ func TestLibraryCodebaseReplacesFileOwners(t *testing.T) {
 	duplicate := goFile(goFunction("Shared", "shared"))
 	stable := goFile(goFunction("Stable", "stable"))
 	files := map[string]string{
-		"grow.go":    grow,
-		"shrink.go":  shrink,
-		"delete.go":  goFile(goFunction("Deleted", "deleted")),
-		"dup_a.go":   duplicate,
-		"dup_b.go":   duplicate,
-		"stable.go":  stable,
+		"grow.go":   grow,
+		"shrink.go": shrink,
+		"delete.go": goFile(goFunction("Deleted", "deleted")),
+		"dup_a.go":  duplicate,
+		"dup_b.go":  duplicate,
+		"stable.go": stable,
 	}
 	for name, content := range files {
 		writeCodebaseFile(t, root, name, content)
