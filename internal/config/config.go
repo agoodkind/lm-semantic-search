@@ -208,7 +208,7 @@ type Config struct {
 	// the default, or [CodebaseStoreLibrary], the shared search library catalog
 	// and vector pool under StateRoot. Conversation collections always use
 	// IndexBackend.
-	CodebaseStore          string
+	CodebaseStore          CodebaseStoreKind
 	CollectionNameOverride string
 	HybridMode             bool
 	BackgroundSyncEnabled  bool
@@ -882,7 +882,7 @@ func resolveProfile(persistedProfile string) string {
 // codebase store. The provider name is the one raw name that enters the
 // config, and this function resolves it to its canonical value. Later
 // comparisons and stored records then read only canonical spellings.
-func resolveBackendSelection(defaultProvider string) (model.EmbeddingProvider, string, error) {
+func resolveBackendSelection(defaultProvider string) (model.EmbeddingProvider, CodebaseStoreKind, error) {
 	embeddingProviderName, err := model.ParseEmbeddingProvider(
 		envOrDefault("EMBEDDING_PROVIDER", defaultProvider),
 	)
@@ -899,12 +899,12 @@ func resolveBackendSelection(defaultProvider string) (model.EmbeddingProvider, s
 
 // resolveCodebaseStore reads CLAUDE_CONTEXT_CODEBASE_STORE. An unset value
 // selects [CodebaseStoreSemantic]. An unknown value returns an error.
-func resolveCodebaseStore() (string, error) {
+func resolveCodebaseStore() (CodebaseStoreKind, error) {
 	requested := strings.ToLower(strings.TrimSpace(os.Getenv(codebaseStoreEnv)))
 	switch requested {
-	case "", CodebaseStoreSemantic:
+	case "", string(CodebaseStoreSemantic):
 		return CodebaseStoreSemantic, nil
-	case CodebaseStoreLibrary:
+	case string(CodebaseStoreLibrary):
 		return CodebaseStoreLibrary, nil
 	default:
 		err := fmt.Errorf(

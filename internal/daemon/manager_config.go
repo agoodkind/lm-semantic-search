@@ -143,7 +143,7 @@ func (manager *Manager) enrichIndexConfig(indexConfig model.IndexConfig) model.I
 	}
 	indexConfig.VectorBackend = manager.reportedVectorBackend()
 	if manager.config.CodebaseStore == config.CodebaseStoreLibrary {
-		indexConfig.CodebaseStore = config.CodebaseStoreLibrary
+		indexConfig.CodebaseStore = string(config.CodebaseStoreLibrary)
 	}
 	indexConfig.Hybrid = manager.config.HybridMode
 	indexConfig.IgnorePatterns = mergeDistinct(indexConfig.IgnorePatterns, manager.config.CustomIgnorePatterns)

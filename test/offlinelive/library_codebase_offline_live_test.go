@@ -15,7 +15,7 @@ import (
 // writes the codebase catalog and the exact embedded vector pool under its
 // state root, and SearchCode returns the target function from the library.
 func TestLibraryCodebaseOfflineSearchUsesTheEmbeddedPool(t *testing.T) {
-	t.Setenv("CLAUDE_CONTEXT_CODEBASE_STORE", config.CodebaseStoreLibrary)
+	t.Setenv("CLAUDE_CONTEXT_CODEBASE_STORE", string(config.CodebaseStoreLibrary))
 	harness := newHarness(t)
 	if harness.config.CodebaseStore != config.CodebaseStoreLibrary {
 		t.Fatalf("codebase store = %q, want %q", harness.config.CodebaseStore, config.CodebaseStoreLibrary)

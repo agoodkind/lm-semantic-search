@@ -36,9 +36,9 @@ func TestLibraryCodebaseMatchesHealthyBaseline(t *testing.T) {
 	for name, content := range files {
 		writeCodebaseFile(t, root, name, content)
 	}
-	results := map[string]codebaseBaselineResult{}
-	for _, backend := range []string{config.CodebaseStoreSemantic, config.CodebaseStoreLibrary} {
-		t.Run(backend, func(t *testing.T) {
+	results := map[config.CodebaseStoreKind]codebaseBaselineResult{}
+	for _, backend := range []config.CodebaseStoreKind{config.CodebaseStoreSemantic, config.CodebaseStoreLibrary} {
+		t.Run(string(backend), func(t *testing.T) {
 			codebaseDaemon := newCodebaseLiveDaemon(t, backend)
 			codebaseDaemon.index(t, root)
 			status, err := codebaseDaemon.client.GetIndex(context.Background(), &pb.GetIndexRequest{Path: root})

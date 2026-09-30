@@ -760,7 +760,7 @@ func TestDefaultResolvesTheCodebaseStore(t *testing.T) {
 	for _, testCase := range []struct {
 		name      string
 		requested string
-		want      string
+		want      CodebaseStoreKind
 	}{
 		{name: "unset", requested: "", want: CodebaseStoreSemantic},
 		{name: "semantic", requested: "semantic", want: CodebaseStoreSemantic},

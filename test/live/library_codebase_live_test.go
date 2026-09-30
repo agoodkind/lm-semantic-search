@@ -47,7 +47,7 @@ func newLibraryCodebaseDaemon(t *testing.T) *libraryCodebaseDaemon {
 	return newCodebaseLiveDaemon(t, config.CodebaseStoreLibrary)
 }
 
-func newCodebaseLiveDaemon(t *testing.T, codebaseStore string) *libraryCodebaseDaemon {
+func newCodebaseLiveDaemon(t *testing.T, codebaseStore config.CodebaseStoreKind) *libraryCodebaseDaemon {
 	t.Helper()
 	harness := newLibraryHarness(t)
 	sandboxRoot := t.TempDir()
@@ -58,7 +58,7 @@ func newCodebaseLiveDaemon(t *testing.T, codebaseStore string) *libraryCodebaseD
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	settings := [][2]string{
 		{"CLAUDE_CONTEXT_PROFILE", config.ProfileStandard},
-		{"CLAUDE_CONTEXT_CODEBASE_STORE", codebaseStore},
+		{"CLAUDE_CONTEXT_CODEBASE_STORE", string(codebaseStore)},
 		{"MILVUS_ADDRESS", harness.environment.MilvusAddress},
 		{"MILVUS_DATABASE", harness.database},
 		{"EMBEDDING_PROVIDER", string(model.EmbeddingProviderOpenAI)},

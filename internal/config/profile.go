@@ -5,6 +5,9 @@ import (
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
+// CodebaseStoreKind selects the codebase storage implementation.
+type CodebaseStoreKind string
+
 const (
 	// ProfileStandard is the default profile: the Milvus store and the
 	// OpenAI-compatible embedder.
@@ -22,10 +25,10 @@ const (
 	EmbeddingProviderOpenAI = model.EmbeddingProviderOpenAI
 	// CodebaseStoreSemantic writes codebase chunks to the per-codebase
 	// collections of the index backend (default).
-	CodebaseStoreSemantic = "semantic"
+	CodebaseStoreSemantic CodebaseStoreKind = "semantic"
 	// CodebaseStoreLibrary writes codebase chunks to the shared search library
 	// catalog and vector pool.
-	CodebaseStoreLibrary = "library"
+	CodebaseStoreLibrary CodebaseStoreKind = "library"
 	// codebaseStoreEnv selects the codebase store.
 	codebaseStoreEnv = "CLAUDE_CONTEXT_CODEBASE_STORE"
 )
