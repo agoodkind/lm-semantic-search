@@ -203,26 +203,6 @@ func conversationBatchMessageIndexAt(
 	return 0, false, nil
 }
 
-func readOptionalStringAt(valueColumn column.Column, rowIndex int) (string, bool, error) {
-	if valueColumn == nil {
-		return "", false, nil
-	}
-	isNull, nullErr := valueColumn.IsNull(rowIndex)
-	if nullErr != nil {
-		slog.Error("read optional string null state failed", "row", rowIndex, "err", nullErr)
-		return "", false, fmt.Errorf("read null state at row %d: %w", rowIndex, nullErr)
-	}
-	if isNull {
-		return "", false, nil
-	}
-	value, valueErr := valueColumn.GetAsString(rowIndex)
-	if valueErr != nil {
-		slog.Error("read optional string failed", "row", rowIndex, "err", valueErr)
-		return "", false, fmt.Errorf("read string at row %d: %w", rowIndex, valueErr)
-	}
-	return value, true, nil
-}
-
 func appendConversationBatchRows(
 	resultSet milvusclient.ResultSet,
 	conversationIDs []string,
