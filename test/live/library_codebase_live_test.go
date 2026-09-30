@@ -4,7 +4,10 @@ package live
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +19,7 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/gksyntax/chunk"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/daemon"
@@ -25,6 +29,9 @@ import (
 	"goodkind.io/lm-semantic-search/internal/store"
 	"goodkind.io/lm-semantic-search/test/sandboxharness"
 )
+
+//go:embed library_codebase_namespace_rows.sql
+var codebaseNamespaceRowsSQL string
 
 const (
 	// codebaseFunctionBytes sizes one generated function below the 2,500-byte
@@ -604,4 +611,319 @@ func TestLibraryCodebaseSearchReturnsCompleteLibraryPages(t *testing.T) {
 	requireFiles("search of the root", search(root, nil), "alpha.go", "notes.md", "sub/bravo.go")
 	requireFiles("extension filter .go", search(root, []string{".go"}), "alpha.go", "sub/bravo.go")
 	requireFiles("search of sub", search(filepath.Join(root, "sub"), nil), "sub/bravo.go")
+}
+
+func TestLibraryCodebaseNamespacesShareVectorsAndRetainExactResults(t *testing.T) {
+	harness := newCrossNamespaceHarness(t)
+	daemon := newCodebaseLiveDaemonWithHarness(t, harness, config.CodebaseStoreLibrary)
+	firstRoot, secondRoot := t.TempDir(), t.TempDir()
+	firstFiles := writeCrossNamespaceFiles(t, firstRoot, "firstmarker")
+	secondFiles := writeCrossNamespaceFiles(t, secondRoot, "secondmarker")
+	daemon.index(t, firstRoot)
+	firstBefore := readCrossNamespaceOwners(t, daemon, firstRoot)
+	firstVectors := harness.backendVectorIDs("lms_library_codebase")
+	if len(firstVectors) != 3 {
+		t.Fatalf("first root published %d canonical vectors, want 3", len(firstVectors))
+	}
+	firstHits := requireCrossNamespaceQueries(t, daemon, firstRoot, firstFiles)
+	daemon.index(t, secondRoot)
+	firstAfter := readCrossNamespaceOwners(t, daemon, firstRoot)
+	secondBefore := readCrossNamespaceOwners(t, daemon, secondRoot)
+	requireCrossNamespaceOwnersEqual(t, firstBefore, firstAfter)
+	for _, owners := range []map[string][]codebaseOccurrence{firstAfter, secondBefore} {
+		if len(owners) != 3 {
+			t.Fatalf("namespace published %d owners, want 3", len(owners))
+		}
+		for _, owner := range []string{"shared.go", "notes.md", "sub/unique.go"} {
+			if len(owners[owner]) != 1 {
+				t.Fatalf("namespace owner %s published %d rows, want 1", owner, len(owners[owner]))
+			}
+		}
+	}
+	for _, owner := range []string{"shared.go", "notes.md"} {
+		if len(firstAfter[owner]) != 1 || len(secondBefore[owner]) != 1 || firstAfter[owner][0].vectorID != secondBefore[owner][0].vectorID {
+			t.Fatalf("shared owner %s did not retain one canonical vector across namespaces", owner)
+		}
+	}
+	secondVectors := harness.backendVectorIDs("lms_library_codebase")
+	added := 0
+	for _, id := range secondVectors {
+		if _, found := slices.BinarySearch(firstVectors, id); !found {
+			added++
+		}
+	}
+	if len(secondVectors) != 4 || added != 1 || secondBefore["sub/unique.go"][0].vectorID == firstAfter["sub/unique.go"][0].vectorID {
+		t.Fatalf("second root vector pool has %d IDs and %d new IDs, want 4 and 1", len(secondVectors), added)
+	}
+	secondHits := requireCrossNamespaceQueries(t, daemon, secondRoot, secondFiles)
+	requireCrossNamespaceQueryOrder(t, firstHits, requireCrossNamespaceQueries(t, daemon, firstRoot, firstFiles))
+	cleared, err := daemon.client.ClearIndex(t.Context(), &pb.ClearIndexRequest{Path: firstRoot})
+	if err != nil || !cleared.GetCleared() {
+		t.Fatalf("clear first root: cleared=%t error=%v", cleared.GetCleared(), err)
+	}
+	if owners := readCrossNamespaceOwners(t, daemon, firstRoot); len(owners) != 0 {
+		t.Fatalf("cleared first namespace retained %d owners", len(owners))
+	}
+	requireCrossNamespaceOwnersEqual(t, secondBefore, readCrossNamespaceOwners(t, daemon, secondRoot))
+	requireCrossNamespaceQueryOrder(t, secondHits, requireCrossNamespaceQueries(t, daemon, secondRoot, secondFiles))
+	if actual := harness.backendVectorIDs("lms_library_codebase"); !slices.Equal(secondVectors, actual) {
+		t.Fatal("clearing one namespace changed the canonical pool IDs")
+	}
+	t.Logf("two namespaces each published 3 owners; second root added 1 canonical input, shared 2 vectors; retained 4 vectors and exact remaining public results after ClearIndex")
+}
+
+func writeCrossNamespaceFiles(t *testing.T, root, marker string) map[string]string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"shared.go":     goFile(goFunction("Shared", "sharedmarker")),
+		"sub/unique.go": goFile(goFunction("Unique", marker)),
+		"notes.md":      "# Shared marker\n\nThe sharedmarker notes describe both source roots.\n",
+	}
+	for path, content := range files {
+		writeCodebaseFile(t, root, path, content)
+	}
+	return files
+}
+
+func requireCrossNamespaceQueries(t *testing.T, daemon *libraryCodebaseDaemon, root string, files map[string]string) map[string][]string {
+	t.Helper()
+	expected := crossNamespaceSourceIdentities(t, root, files)
+	results := make(map[string][]string)
+	for _, query := range []struct {
+		label      string
+		path       string
+		extensions []string
+		owners     []string
+	}{
+		{label: "all", path: root, extensions: nil, owners: []string{"shared.go", "notes.md", "sub/unique.go"}},
+		{label: "go", path: root, extensions: []string{".go"}, owners: []string{"shared.go", "sub/unique.go"}},
+		{label: "sub", path: filepath.Join(root, "sub"), extensions: nil, owners: []string{"sub/unique.go"}},
+	} {
+		response, err := daemon.client.SearchCode(t.Context(), &pb.SearchCodeRequest{Path: query.path, Query: "sharedmarker", Limit: codebaseSearchLimit, ExtensionFilter: query.extensions})
+		if err != nil {
+			t.Fatalf("%s public search: %v", query.label, err)
+		}
+		actual := baselineHitIdentities(t, response.GetResults(), files, query.owners)
+		wanted := make([]string, 0, len(query.owners))
+		for _, owner := range query.owners {
+			wanted = append(wanted, expected[owner])
+		}
+		actualSet, wantedSet := slices.Clone(actual), slices.Clone(wanted)
+		slices.Sort(actualSet)
+		slices.Sort(wantedSet)
+		if !slices.Equal(actualSet, wantedSet) {
+			t.Fatalf("%s public identities differ: actual=%v expected=%v", query.label, actualSet, wantedSet)
+		}
+		results[query.label] = actual
+	}
+	return results
+}
+
+func crossNamespaceSourceIdentities(t *testing.T, root string, files map[string]string) map[string]string {
+	t.Helper()
+	dispatcher := chunk.NewDispatcher()
+	identities := make(map[string]string, len(files))
+	for path, source := range files {
+		projected, err := dispatcher.SplitFileWithType(t.Context(), filepath.Join(root, path), []byte(source), "ast")
+		if err != nil || len(projected.Chunks) != 1 {
+			t.Fatalf("source %s has %d chunks, want one nonoverlapping chunk: %v", path, len(projected.Chunks), err)
+		}
+		part := projected.Chunks[0]
+		identities[path] = fmt.Sprintf("%s:%d:%d:%x", path, part.StartLine, part.EndLine, sha256.Sum256([]byte(part.Content)))
+	}
+	return identities
+}
+
+func requireCrossNamespaceQueryOrder(t *testing.T, before, after map[string][]string) {
+	t.Helper()
+	for label, expected := range before {
+		if !slices.Equal(expected, after[label]) {
+			t.Fatalf("%s ordered public identities changed: before=%v after=%v", label, expected, after[label])
+		}
+	}
+}
+
+func requireCrossNamespaceOwnersEqual(t *testing.T, before, after map[string][]codebaseOccurrence) {
+	t.Helper()
+	if len(before) != len(after) {
+		t.Fatalf("namespace owner count changed from %d to %d", len(before), len(after))
+	}
+	for owner, expected := range before {
+		if !slices.Equal(expected, after[owner]) {
+			t.Fatalf("namespace owner %s occurrence state changed", owner)
+		}
+	}
+}
+
+func readCrossNamespaceOwners(t *testing.T, daemon *libraryCodebaseDaemon, root string) map[string][]codebaseOccurrence {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(canonical))
+	namespace := fmt.Sprintf("code_%x", digest[:8])
+	catalog, err := sql.Open("sqlite3", "file:"+filepath.Join(daemon.config.StateRoot, "library", "codebase", "catalog.sqlite")+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := catalog.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	rows, err := catalog.QueryContext(t.Context(), codebaseNamespaceRowsSQL, namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	owners := make(map[string][]codebaseOccurrence)
+	for rows.Next() {
+		var owner string
+		var occurrence codebaseOccurrence
+		if err := rows.Scan(&owner, &occurrence.rowKey, &occurrence.vectorID, &occurrence.source, &occurrence.occurrenceHash, &occurrence.generationOrder); err != nil {
+			t.Fatal(err)
+		}
+		owners[owner] = append(owners[owner], occurrence)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return owners
+}
+
+func newCrossNamespaceHarness(t *testing.T) *libraryHarness {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), libraryLiveTimeout)
+	t.Cleanup(cancel)
+	environment := resolveLibraryEnvironment(t)
+	if environment.MilvusAddress != "localhost:39530" {
+		t.Fatalf("cross-namespace fixture requires localhost:39530, got %s", environment.MilvusAddress)
+	}
+	database := libraryLiveDatabasePrefix + randomHex(t, 16)
+	admin, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: environment.MilvusAddress})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+		defer cancel()
+		if err := admin.Close(cleanupCtx); err != nil {
+			t.Error(err)
+		}
+	})
+	existing, err := admin.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
+	if err != nil || slices.Contains(existing, database) {
+		t.Fatalf("verify fresh database %s absence: %v", database, err)
+	}
+	registerCrossNamespaceDatabase(t, database, environment.MilvusAddress)
+	t.Cleanup(func() { dropCrossNamespaceDatabase(t, admin, database, environment.MilvusAddress) })
+	if err := admin.CreateDatabase(ctx, milvusclient.NewCreateDatabaseOption(database)); err != nil {
+		t.Fatal(err)
+	}
+	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: environment.MilvusAddress, DBName: database})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+		defer cancel()
+		if err := client.Close(cleanupCtx); err != nil {
+			t.Error(err)
+		}
+	})
+	return &libraryHarness{t: t, context: func() context.Context { return ctx }, environment: environment, database: database, admin: admin, milvus: client, root: t.TempDir(), embedder: newLiveEmbedder(t, ctx, environment)}
+}
+
+func registerCrossNamespaceDatabase(t *testing.T, database, address string) {
+	t.Helper()
+	path := os.Getenv("LMS_L4_DATABASE_REGISTRY")
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != "database-registration.jsonl" || filepath.Dir(filepath.Dir(path)) != "/private/tmp" || !strings.HasPrefix(filepath.Dir(path), "/private/tmp/lms-cross-namespace-live-") {
+		t.Fatalf("invalid private cross-namespace registry path %s", path)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatalf("registry must be an existing private regular file: %v", err)
+	}
+	directory, err := os.Lstat(filepath.Dir(path))
+	if err != nil || !directory.IsDir() || directory.Mode().Perm() != 0o700 {
+		t.Fatalf("registry root must be a private directory: %v", err)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		t.Fatalf("registry file changed before registration: %v", err)
+	}
+	entry := struct {
+		Database        string `json:"database"`
+		Address         string `json:"address"`
+		AbsenceVerified bool   `json:"absence_verified"`
+	}{Database: database, Address: address, AbsenceVerified: true}
+	if err := json.NewEncoder(file).Encode(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("registered absent isolated database %s at %s before creation", database, address)
+}
+
+func dropCrossNamespaceDatabase(t *testing.T, admin *milvusclient.Client, database, address string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+	defer cancel()
+	existing, err := admin.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if !slices.Contains(existing, database) {
+		return
+	}
+	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address, DBName: database})
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer func() {
+		if err := client.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	collections, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	for _, collection := range collections {
+		if err := client.DropCollection(ctx, milvusclient.NewDropCollectionOption(collection)); err != nil {
+			t.Error(err)
+			return
+		}
+	}
+	if err := admin.DropDatabase(ctx, milvusclient.NewDropDatabaseOption(database)); err != nil {
+		t.Error(err)
+		return
+	}
+	existing, err = admin.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
+	if err != nil || slices.Contains(existing, database) {
+		t.Errorf("exact database %s remains after cleanup: %v", database, err)
+		return
+	}
+	t.Logf("verified isolated database %s absent after cleanup", database)
 }
