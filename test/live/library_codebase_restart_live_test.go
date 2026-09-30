@@ -65,20 +65,8 @@ func TestLibraryCodebaseRecoversProcessBeforeAndAfterVectorPublication(t *testin
 		sandboxharness.BeforeStorePublication, sandboxharness.AfterStorePublication,
 	} {
 		t.Run(phaseName(phase), func(t *testing.T) {
-			harness := newLibraryHarness(t)
-			proxy, err := sandboxharness.StartEmbeddingStoreProxy(sandboxharness.EmbeddingStoreProxyOptions{
-				BackendAddress: harness.environment.MilvusAddress, Start: true,
-			})
-			if err != nil {
-				t.Fatalf("start real Milvus forwarding proxy: %v", err)
-			}
-			t.Cleanup(func() {
-				if err := proxy.Close(); err != nil {
-					t.Errorf("close forwarding proxy: %v", err)
-				}
-			})
-			harness.environment.MilvusAddress = proxy.Address()
-			codebaseDaemon := newCodebaseLiveDaemonWithHarness(t, harness, config.CodebaseStoreLibrary)
+			codebaseDaemon, proxy := newProxiedCodebaseDaemon(t)
+			harness := codebaseDaemon.harness
 			root := t.TempDir()
 			writeCodebaseFile(t, root, "recovery.go", goFile(goFunction("OldVersion", "oldversionmarker")))
 			codebaseDaemon.index(t, root)
@@ -128,6 +116,24 @@ func TestLibraryCodebaseRecoversProcessBeforeAndAfterVectorPublication(t *testin
 			killCodebaseRestartChild(t, reopened)
 		})
 	}
+}
+
+func newProxiedCodebaseDaemon(t *testing.T) (*libraryCodebaseDaemon, *sandboxharness.EmbeddingStoreProxy) {
+	t.Helper()
+	harness := newLibraryHarness(t)
+	proxy, err := sandboxharness.StartEmbeddingStoreProxy(sandboxharness.EmbeddingStoreProxyOptions{
+		BackendAddress: harness.environment.MilvusAddress, Start: true,
+	})
+	if err != nil {
+		t.Fatalf("start real Milvus forwarding proxy: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := proxy.Close(); err != nil {
+			t.Errorf("close forwarding proxy: %v", err)
+		}
+	})
+	harness.environment.MilvusAddress = proxy.Address()
+	return newCodebaseLiveDaemonWithHarness(t, harness, config.CodebaseStoreLibrary), proxy
 }
 
 func phaseName(phase sandboxharness.StorePublicationPhase) string {

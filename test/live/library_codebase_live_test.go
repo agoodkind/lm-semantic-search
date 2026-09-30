@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/daemon"
@@ -22,6 +23,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/sandbox"
 	"goodkind.io/lm-semantic-search/internal/store"
+	"goodkind.io/lm-semantic-search/test/sandboxharness"
 )
 
 const (
@@ -180,27 +182,21 @@ func (codebaseDaemon *libraryCodebaseDaemon) startSync(t *testing.T, root string
 	return response.GetJobId()
 }
 
-// cancelAfterFirstStagedBatch waits until the catalog has staged rows, which
-// the library saves only after it writes and strongly verifies their vectors,
-// and then cancels the job. It returns the staged row count at cancellation
-// and the terminal job state.
-func (codebaseDaemon *libraryCodebaseDaemon) cancelAfterFirstStagedBatch(t *testing.T, jobID string) (int, string) {
+func (codebaseDaemon *libraryCodebaseDaemon) cancelPausedJob(t *testing.T, jobID string, release func()) string {
 	t.Helper()
-	deadline := time.Now().Add(codebaseJobTimeout)
-	staged := 0
-	for staged == 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("job %s staged no rows within %s", jobID, codebaseJobTimeout)
-		}
-		time.Sleep(codebaseJobPoll)
-		staged = codebaseDaemon.stagedRowCount(t)
-	}
 	if _, err := codebaseDaemon.client.CancelJob(context.Background(), &pb.CancelJobRequest{
 		JobId:  jobID,
 		Client: &pb.ClientInfo{Name: "library-codebase-live"},
 	}); err != nil {
 		t.Fatalf("cancel job %s: %v", jobID, err)
 	}
+	release()
+	return codebaseDaemon.waitTerminalJob(t, jobID)
+}
+
+func (codebaseDaemon *libraryCodebaseDaemon) waitTerminalJob(t *testing.T, jobID string) string {
+	t.Helper()
+	deadline := time.Now().Add(codebaseJobTimeout)
 	for time.Now().Before(deadline) {
 		response, err := codebaseDaemon.client.GetJob(context.Background(), &pb.GetJobRequest{JobId: jobID})
 		if err != nil {
@@ -208,12 +204,12 @@ func (codebaseDaemon *libraryCodebaseDaemon) cancelAfterFirstStagedBatch(t *test
 		}
 		switch state := response.GetJob().GetState(); state {
 		case "completed", "failed", "cancelled":
-			return staged, state
+			return state
 		}
 		time.Sleep(codebaseJobPoll)
 	}
-	t.Fatalf("job %s did not end after cancellation", jobID)
-	return staged, ""
+	t.Fatalf("job %s did not finish within %s", jobID, codebaseJobTimeout)
+	return ""
 }
 
 // stagedRowCount counts staged, unpublished occurrences in the catalog.
@@ -430,7 +426,7 @@ func largeGoFile(markerPrefix string) string {
 }
 
 func TestLibraryCodebaseKeepsOldGenerationUntilCommit(t *testing.T) {
-	codebaseDaemon := newLibraryCodebaseDaemon(t)
+	codebaseDaemon, proxy := newProxiedCodebaseDaemon(t)
 	t.Logf("embedding window start %s", time.Now().UTC().Format(time.RFC3339))
 	defer func() { t.Logf("embedding window end %s", time.Now().UTC().Format(time.RFC3339)) }()
 	root := t.TempDir()
@@ -444,18 +440,28 @@ func TestLibraryCodebaseKeepsOldGenerationUntilCommit(t *testing.T) {
 
 	newContent := largeGoFile("new")
 	writeCodebaseFile(t, root, "large.go", newContent)
-	staged, state := codebaseDaemon.cancelAfterFirstStagedBatch(t, codebaseDaemon.startSync(t, root))
+	observed, release := proxy.PausePublication(codebaseDaemon.harness.database, "lms_library_codebase", sandboxharness.BeforeStorePublication)
+	t.Cleanup(release)
+	jobID := codebaseDaemon.startSync(t, root)
+	select {
+	case boundary := <-observed:
+		if boundary.ResponseReceived || boundary.Method != "Upsert" || boundary.Phase != sandboxharness.BeforeStorePublication {
+			t.Fatalf("unexpected cancellation boundary: %+v", boundary)
+		}
+		t.Logf("public CancelJob at real %s before backend forwarding", boundary.Method)
+	case <-codebaseDaemon.harness.context().Done():
+		t.Fatal("the changed codebase did not request vector publication")
+	}
+	state := codebaseDaemon.cancelPausedJob(t, jobID, release)
 	if state != "cancelled" {
 		t.Fatalf("interrupted sync ended %s, want cancelled", state)
-	}
-	if staged >= interruptedFunctionCount {
-		t.Fatalf("the sync staged %d rows before cancellation, want fewer than %d", staged, interruptedFunctionCount)
 	}
 	interrupted := codebaseDaemon.readCodebaseOwners(t)
 	if !slices.Equal(before["large.go"], interrupted["large.go"]) {
 		t.Fatal("an interrupted generation changed the published occurrences of large.go")
 	}
 	assertExcerpts(t, interrupted, "large.go", oldContent)
+	assertPublicCodebaseSource(t, codebaseDaemon, root, "old0", oldContent)
 
 	codebaseDaemon.sync(t, root)
 	after := codebaseDaemon.readCodebaseOwners(t)
@@ -463,10 +469,54 @@ func TestLibraryCodebaseKeepsOldGenerationUntilCommit(t *testing.T) {
 		t.Fatalf("large.go has %d occurrences after the resumed sync, want %d", got, interruptedFunctionCount)
 	}
 	assertExcerpts(t, after, "large.go", newContent)
+	assertPublicCodebaseSource(t, codebaseDaemon, root, "new0", newContent)
 	if remaining := codebaseDaemon.stagedRowCount(t); remaining != 0 {
 		t.Fatalf("catalog keeps %d staged rows after the resumed sync committed", remaining)
 	}
-	t.Logf("cancelled after %d staged rows; the resumed sync committed %d occurrences", staged, len(after["large.go"]))
+	t.Logf("cancelled before backend forwarding; the resumed sync committed %d occurrences", len(after["large.go"]))
+}
+
+func assertPublicCodebaseSource(t *testing.T, codebaseDaemon *libraryCodebaseDaemon, root string, query string, content string) {
+	t.Helper()
+	response, err := codebaseDaemon.client.SearchCode(codebaseDaemon.harness.context(), &pb.SearchCodeRequest{
+		Path: root, Query: query, Limit: codebaseSearchLimit,
+	})
+	if err != nil || len(response.GetResults()) == 0 {
+		t.Fatalf("public SearchCode returned %d results, error=%v", len(response.GetResults()), err)
+	}
+	for _, result := range response.GetResults() {
+		if result.GetRelativePath() != "large.go" || !strings.Contains(content, result.GetContent()) {
+			t.Fatalf("public SearchCode returned an excerpt outside the committed source: %q", result.GetContent())
+		}
+	}
+}
+
+func TestLibraryCodebaseReportsRealBackendFailure(t *testing.T) {
+	codebaseDaemon, proxy := newProxiedCodebaseDaemon(t)
+	root := t.TempDir()
+	writeCodebaseFile(t, root, "failure.go", goFile(goFunction("OldVersion", "oldfailuremarker")))
+	codebaseDaemon.index(t, root)
+	writeCodebaseFile(t, root, "failure.go", goFile(goFunction("NewVersion", "newfailuremarker")))
+	observed, release := proxy.PausePublication(codebaseDaemon.harness.database, "lms_library_codebase", sandboxharness.BeforeStorePublication)
+	t.Cleanup(release)
+	jobID := codebaseDaemon.startSync(t, root)
+	select {
+	case <-observed:
+	case <-codebaseDaemon.harness.context().Done():
+		t.Fatal("the changed codebase did not request vector publication")
+	}
+	if err := codebaseDaemon.harness.milvus.DropCollection(codebaseDaemon.harness.context(), milvusclient.NewDropCollectionOption("lms_library_codebase")); err != nil {
+		t.Fatalf("drop the isolated vector collection: %v", err)
+	}
+	release()
+	if state := codebaseDaemon.waitTerminalJob(t, jobID); state != "failed" {
+		t.Fatalf("real backend failure ended %s, want failed", state)
+	}
+	response, err := codebaseDaemon.client.GetJob(codebaseDaemon.harness.context(), &pb.GetJobRequest{JobId: jobID})
+	if err != nil || response.GetJob().GetDisplayError() == "" {
+		t.Fatalf("public job omitted the failure message: %v, %s", err, response.GetJob().GetDisplayError())
+	}
+	t.Logf("public GetJob returned failed after the real backend collection error; sanitized message=%s", response.GetJob().GetDisplayError())
 }
 
 // codebaseSearchLimit is larger than every occurrence count of the search
