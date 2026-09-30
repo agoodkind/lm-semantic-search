@@ -202,7 +202,13 @@ type Config struct {
 	// IndexBackend selects the vector store implementation, resolved to its
 	// canonical value when the config is read. Derived from Profile by
 	// ApplyProfile; may also be set directly.
-	IndexBackend           model.VectorBackend
+	IndexBackend model.VectorBackend
+	// CodebaseStore selects where codebase chunks are written:
+	// [CodebaseStoreSemantic], the per-codebase collections of IndexBackend and
+	// the default, or [CodebaseStoreLibrary], the shared search library catalog
+	// and vector pool under StateRoot. Conversation collections always use
+	// IndexBackend.
+	CodebaseStore          CodebaseStoreKind
 	CollectionNameOverride string
 	HybridMode             bool
 	BackgroundSyncEnabled  bool
@@ -379,17 +385,12 @@ func Default() (Config, error) {
 		requestTimeoutMS = *fileConfig.EmbeddingRequestTimeoutMS
 	}
 	loadWaitTimeoutMS, idleTimeoutMS := resolveMilvusCollectionResidencyTimeouts(fileConfig)
-	// Resolve the configured provider name to its canonical value here, the one
-	// place a raw name enters the config, so no later comparison and no stored
-	// record can hold a variant spelling.
-	embeddingProviderName, err := model.ParseEmbeddingProvider(
-		envOrDefault("EMBEDDING_PROVIDER", embeddingDefaults.provider),
-	)
+	embeddingProviderName, codebaseStore, err := resolveBackendSelection(embeddingDefaults.provider)
 	if err != nil {
-		return Config{}, fmt.Errorf("resolve configured embedding provider: %w", err)
+		return Config{}, err
 	}
 	return ApplyProfile(Config{
-		Profile: resolveProfile(fileConfig.Profile), IndexBackend: IndexBackendMilvus,
+		Profile: resolveProfile(fileConfig.Profile), IndexBackend: IndexBackendMilvus, CodebaseStore: codebaseStore,
 		ConfigRoot:                         configRoot,
 		ConfigPath:                         configPath,
 		StateRoot:                          stateRoot,
@@ -875,6 +876,47 @@ func resolveProfile(persistedProfile string) string {
 	)
 	normalizedProfile := strings.ToLower(strings.TrimSpace(resolvedProfile))
 	return stringOrDefault(normalizedProfile, ProfileStandard)
+}
+
+// resolveBackendSelection resolves the configured embedding provider and the
+// codebase store. The provider name is the one raw name that enters the
+// config, and this function resolves it to its canonical value. Later
+// comparisons and stored records then read only canonical spellings.
+func resolveBackendSelection(defaultProvider string) (model.EmbeddingProvider, CodebaseStoreKind, error) {
+	embeddingProviderName, err := model.ParseEmbeddingProvider(
+		envOrDefault("EMBEDDING_PROVIDER", defaultProvider),
+	)
+	if err != nil {
+		slog.Error("resolve configured embedding provider failed", "err", err)
+		return "", "", fmt.Errorf("resolve configured embedding provider: %w", err)
+	}
+	codebaseStore, err := resolveCodebaseStore()
+	if err != nil {
+		return "", "", err
+	}
+	return embeddingProviderName, codebaseStore, nil
+}
+
+// resolveCodebaseStore reads CLAUDE_CONTEXT_CODEBASE_STORE. An unset value
+// selects [CodebaseStoreSemantic]. An unknown value returns an error.
+func resolveCodebaseStore() (CodebaseStoreKind, error) {
+	requested := strings.ToLower(strings.TrimSpace(os.Getenv(codebaseStoreEnv)))
+	switch requested {
+	case "", string(CodebaseStoreSemantic):
+		return CodebaseStoreSemantic, nil
+	case string(CodebaseStoreLibrary):
+		return CodebaseStoreLibrary, nil
+	default:
+		err := fmt.Errorf(
+			"%s %q is not supported; use %q or %q",
+			codebaseStoreEnv,
+			requested,
+			CodebaseStoreSemantic,
+			CodebaseStoreLibrary,
+		)
+		slog.Error("resolve codebase store failed", "err", err)
+		return "", err
+	}
 }
 
 func boolOrDefault(value *bool, fallback bool) bool {

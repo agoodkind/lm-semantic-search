@@ -172,7 +172,7 @@ func newSandboxWatcherHarness(t *testing.T, gate *embedGate) (*harness, string) 
 		sandboxBefore:   sandboxBefore,
 		temporaryNames:  make(map[string]struct{}),
 		callRecorder:    callRecorder,
-		milvusContext:   sandboxContext,
+		milvusContext:   func() context.Context { return sandboxContext },
 	}
 	t.Cleanup(func() {
 		for _, cleanupErr := range harness.cleanupMilvus() {

@@ -173,7 +173,7 @@ func TestDuplicateLegacyCorpusReuseImmutabilitySmoke(t *testing.T) {
 	lookupConfig := harness.childConfig()
 	lookupConfig.OpenAIBaseURL = embedServer.URL
 	lookupConfig.EmbeddingDimension = vectorDimension
-	service, err := semantic.NewService(harness.milvusContext, lookupConfig)
+	service, err := semantic.NewService(harness.milvusContext(), lookupConfig)
 	if err != nil {
 		t.Fatalf("open 4096-dimension semantic service: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 		t.Fatalf("legacy identity = hash:%t model:%t, want both absent", legacyBefore.contentHashKnown, legacyBefore.embeddingModelKnown)
 	}
 	searchConfig := harness.childConfig()
-	searchService, err := semantic.NewService(harness.milvusContext, searchConfig)
+	searchService, err := semantic.NewService(harness.milvusContext(), searchConfig)
 	if err != nil {
 		t.Fatalf("open search service: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 
 	cfg := harness.childConfig()
 	cfg.EmbeddingModel = "known-unequal-model"
-	unequalService, err := semantic.NewService(harness.milvusContext, cfg)
+	unequalService, err := semantic.NewService(harness.milvusContext(), cfg)
 	if err != nil {
 		t.Fatalf("open unequal-model service: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 	requireCompleted(t, seed, "model A catalog seed")
 
 	cfgA := harness.childConfig()
-	serviceA, err := semantic.NewService(harness.milvusContext, cfgA)
+	serviceA, err := semantic.NewService(harness.milvusContext(), cfgA)
 	if err != nil {
 		t.Fatalf("open model A service: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 
 	cfgB := cfgA
 	cfgB.EmbeddingModel = "known-model-b"
-	serviceB, err := semantic.NewService(harness.milvusContext, cfgB)
+	serviceB, err := semantic.NewService(harness.milvusContext(), cfgB)
 	if err != nil {
 		t.Fatalf("open model B service: %v", err)
 	}
@@ -579,7 +579,7 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 
 	cfgC := cfgA
 	cfgC.EmbeddingModel = "known-model-c"
-	serviceC, err := semantic.NewService(harness.milvusContext, cfgC)
+	serviceC, err := semantic.NewService(harness.milvusContext(), cfgC)
 	if err != nil {
 		t.Fatalf("open model C service: %v", err)
 	}
@@ -628,7 +628,7 @@ func TestCompleteCatalogHitSkipsCollectionFallback(t *testing.T) {
 
 	cfg := harness.childConfig()
 	cfg.RegistryPath = filepath.Join(t.TempDir(), "missing-registry.json")
-	service, err := semantic.NewService(harness.milvusContext, cfg)
+	service, err := semantic.NewService(harness.milvusContext(), cfg)
 	if err != nil {
 		t.Fatalf("open complete catalog hit service: %v", err)
 	}
@@ -663,12 +663,12 @@ func TestUnknownConfiguredDimensionScopesCatalogByReturnedVectorWidth(t *testing
 	targetConfig := initialConfig
 	targetConfig.OpenAIBaseURL = targetServer.URL
 
-	initialService, err := semantic.NewService(harness.milvusContext, initialConfig)
+	initialService, err := semantic.NewService(harness.milvusContext(), initialConfig)
 	if err != nil {
 		t.Fatalf("open initial dimension service: %v", err)
 	}
 	t.Cleanup(func() { _ = initialService.Close(context.Background()) })
-	targetService, err := semantic.NewService(harness.milvusContext, targetConfig)
+	targetService, err := semantic.NewService(harness.milvusContext(), targetConfig)
 	if err != nil {
 		t.Fatalf("open target dimension service: %v", err)
 	}
@@ -1407,7 +1407,7 @@ func TestCorpusReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 	)
 	requireCompleted(t, completed, "reuse performance seed")
 
-	service, err := semantic.NewService(harness.milvusContext, lookupConfig)
+	service, err := semantic.NewService(harness.milvusContext(), lookupConfig)
 	if err != nil {
 		t.Fatalf("open semantic service for lookup measurement: %v", err)
 	}

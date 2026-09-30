@@ -7,9 +7,9 @@ import (
 	cryptorand "crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +21,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/library"
 	"goodkind.io/lm-semantic-search/library/embedding"
@@ -65,7 +66,7 @@ type libraryEnvironment struct {
 // directory for catalogs.
 type libraryHarness struct {
 	t           *testing.T
-	ctx         context.Context
+	context     func() context.Context
 	environment libraryEnvironment
 	database    string
 	admin       *milvusclient.Client
@@ -104,7 +105,7 @@ func newLibraryHarness(t *testing.T) *libraryHarness {
 	}
 	harness := &libraryHarness{
 		t:           t,
-		ctx:         ctx,
+		context:     func() context.Context { return ctx },
 		environment: environment,
 		database:    database,
 		admin:       admin,
@@ -207,7 +208,7 @@ func (harness *libraryHarness) vectorStore(collection string) *milvus.Store {
 // open opens a library over descriptor and vectors and closes it at cleanup.
 func (harness *libraryHarness) open(descriptor library.StoreDescriptor, vectors library.VectorStore) *library.Library {
 	harness.t.Helper()
-	opened, err := library.Open(harness.ctx, library.Config{Store: descriptor, Vectors: vectors, Embedder: harness.embedder})
+	opened, err := library.Open(harness.context(), library.Config{Store: descriptor, Vectors: vectors, Embedder: harness.embedder})
 	if err != nil {
 		harness.t.Fatalf("open library %s: %v", descriptor.CatalogPath, err)
 	}
@@ -223,7 +224,7 @@ func (harness *libraryHarness) open(descriptor library.StoreDescriptor, vectors 
 func (harness *libraryHarness) backendVectorIDs(collection string) []string {
 	harness.t.Helper()
 	result, err := harness.milvus.Query(
-		harness.ctx,
+		harness.context(),
 		milvusclient.NewQueryOption(collection).
 			WithFilter(`vector_id != ""`).
 			WithOutputFields("vector_id").
@@ -268,12 +269,12 @@ func (harness *libraryHarness) readCatalog(descriptor library.StoreDescriptor) c
 	harness.scanPairs(database, `SELECT namespace || '/' || owner_id || '/' || row_key, vector_id FROM occurrences`, rows.occurrences)
 	harness.scanPairs(database, `SELECT vector_id, state FROM vectors`, rows.vectorStates)
 	if err := database.QueryRowContext(
-		harness.ctx,
+		harness.context(),
 		`SELECT COUNT(*) FROM occurrences JOIN vectors ON vectors.vector_id = occurrences.vector_id WHERE vectors.state != 'verified'`,
 	).Scan(&rows.unverifiedLinked); err != nil {
 		harness.t.Fatalf("count unverified occurrence vectors: %v", err)
 	}
-	if err := database.QueryRowContext(harness.ctx, `SELECT COUNT(*) FROM vector_outbox`).Scan(&rows.outboxEntries); err != nil {
+	if err := database.QueryRowContext(harness.context(), `SELECT COUNT(*) FROM vector_outbox`).Scan(&rows.outboxEntries); err != nil {
 		harness.t.Fatalf("count outbox entries: %v", err)
 	}
 	return rows
@@ -298,7 +299,7 @@ func (harness *libraryHarness) readScalars(descriptor library.StoreDescriptor, t
 		harness.t.Fatalf("open catalog %s: %v", descriptor.CatalogPath, err)
 	}
 	defer func() { _ = database.Close() }()
-	rows, err := database.QueryContext(harness.ctx, query, rowKey)
+	rows, err := database.QueryContext(harness.context(), query, rowKey)
 	if err != nil {
 		harness.t.Fatalf("read %s: %v", table, err)
 	}
@@ -335,7 +336,7 @@ func (harness *libraryHarness) readScalars(descriptor library.StoreDescriptor, t
 
 func (harness *libraryHarness) scanPairs(database *sql.DB, query string, into map[string]string) {
 	harness.t.Helper()
-	result, err := database.QueryContext(harness.ctx, query)
+	result, err := database.QueryContext(harness.context(), query)
 	if err != nil {
 		harness.t.Fatalf("query catalog: %v", err)
 	}
@@ -397,11 +398,17 @@ const childExitStoreMismatch = 3
 // the embedding credential from the same configuration as the parent.
 func startLibraryChild(t *testing.T, request libraryChildRequest) *exec.Cmd {
 	t.Helper()
-	encoded, err := json.Marshal(request)
+	request.Environment.APIKey = ""
+	encoded, err := MarshalLibraryChild(request)
 	if err != nil {
 		t.Fatalf("encode child request: %v", err)
 	}
-	command := exec.Command(os.Args[0], "-test.run=^$")
+	slog.Debug("start library acceptance child", "action", request.Action)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	command := exec.CommandContext(t.Context(), executable, "-test.run=^$")
 	command.Env = append(os.Environ(), libraryLiveChildEnv+"="+string(encoded))
 	command.Stdout = os.Stderr
 	command.Stderr = os.Stderr
@@ -432,8 +439,8 @@ func waitLibraryChild(t *testing.T, command *exec.Cmd) (int, syscall.Signal) {
 
 // runLibraryChild runs one child request and returns the process exit status.
 func runLibraryChild(encoded string) int {
-	var request libraryChildRequest
-	if err := json.Unmarshal([]byte(encoded), &request); err != nil {
+	request, err := UnmarshalLibraryChild([]byte(encoded))
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "decode child request: %v\n", err)
 		return 2
 	}
@@ -471,8 +478,14 @@ func runLibraryChild(encoded string) int {
 		fmt.Fprintf(os.Stderr, "create child embedder: %v\n", err)
 		return 2
 	}
-	if wait := time.Until(request.StartAt); wait > 0 {
-		time.Sleep(wait)
+	if wait := clock.Until(request.StartAt); wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return 2
+		}
 	}
 	return runChildAction(ctx, request, &crashingVectorStore{VectorStore: store, crashPoint: request.CrashPoint, putDone: false}, embedder)
 }
@@ -526,7 +539,11 @@ func (store *crashingVectorStore) PutCanonical(ctx context.Context, record libra
 	if store.crashPoint == crashAfterPut && store.putDone {
 		killSelf()
 	}
-	return err
+	if err != nil {
+		slog.Warn("live test dependency failed", "err", err)
+		return fmt.Errorf("put canonical vector before child interruption: %w", err)
+	}
+	return nil
 }
 
 func (store *crashingVectorStore) VerifyStrong(ctx context.Context, identities []library.VectorIdentity) error {
@@ -534,7 +551,11 @@ func (store *crashingVectorStore) VerifyStrong(ctx context.Context, identities [
 	if store.crashPoint == crashAfterVerify && store.putDone && err == nil {
 		killSelf()
 	}
-	return err
+	if err != nil {
+		slog.Warn("live test dependency failed", "err", err)
+		return fmt.Errorf("verify vector before child interruption: %w", err)
+	}
+	return nil
 }
 
 // killSelf ends the process with SIGKILL, which runs no deferred function and

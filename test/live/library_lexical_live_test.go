@@ -79,7 +79,7 @@ func assertLexicalIndex(t *testing.T, harness *libraryHarness, descriptor librar
 	for _, namespace := range slices.Sorted(maps.Keys(namespaces)) {
 		want := recountLexical(rows, namespace)
 		var corpusSize, totalTokens int64
-		if err := database.QueryRowContext(harness.ctx,
+		if err := database.QueryRowContext(harness.context(),
 			`SELECT corpus_size, total_tokens FROM lexical_stats WHERE namespace = ?`, namespace,
 		).Scan(&corpusSize, &totalTokens); err != nil {
 			t.Fatalf("%s: read lexical_stats of %s: %v", step, namespace, err)
@@ -89,7 +89,7 @@ func assertLexicalIndex(t *testing.T, harness *libraryHarness, descriptor librar
 				step, namespace, corpusSize, totalTokens, want.corpusSize, want.totalTokens)
 		}
 		got := map[int64]int64{}
-		result, err := database.QueryContext(harness.ctx, `SELECT term_hash, df FROM lexical_df WHERE namespace = ?`, namespace)
+		result, err := database.QueryContext(harness.context(), `SELECT term_hash, df FROM lexical_df WHERE namespace = ?`, namespace)
 		if err != nil {
 			t.Fatalf("%s: read lexical_df of %s: %v", step, namespace, err)
 		}
@@ -120,7 +120,7 @@ func assertLexicalIndex(t *testing.T, harness *libraryHarness, descriptor librar
 	}
 	for _, check := range checks {
 		var count int
-		if err := database.QueryRowContext(harness.ctx, check.query).Scan(&count); err != nil {
+		if err := database.QueryRowContext(harness.context(), check.query).Scan(&count); err != nil {
 			t.Fatalf("%s: %s: %v", step, check.name, err)
 		}
 		if count != 0 {
@@ -128,7 +128,7 @@ func assertLexicalIndex(t *testing.T, harness *libraryHarness, descriptor librar
 		}
 	}
 	var occurrences int
-	if err := database.QueryRowContext(harness.ctx, `SELECT COUNT(*) FROM occurrences`).Scan(&occurrences); err != nil {
+	if err := database.QueryRowContext(harness.context(), `SELECT COUNT(*) FROM occurrences`).Scan(&occurrences); err != nil {
 		t.Fatalf("%s: count occurrences: %v", step, err)
 	}
 	if occurrences != len(rows) {
@@ -153,7 +153,7 @@ func TestLibraryLexicalPublicationCountsEveryOccurrence(t *testing.T) {
 	descriptor := harness.descriptor("lexical")
 	opened := harness.open(descriptor, harness.vectorStore("lexical_pool"))
 	for _, spec := range []library.NamespaceSpec{conversationSpec(), codeSpec()} {
-		if err := opened.RegisterNamespace(harness.ctx, spec); err != nil {
+		if err := opened.RegisterNamespace(harness.context(), spec); err != nil {
 			t.Fatalf("register %s: %v", spec.ID, err)
 		}
 	}
@@ -163,7 +163,7 @@ func TestLibraryLexicalPublicationCountsEveryOccurrence(t *testing.T) {
 		lexicalMessage("m2", "Alpha beta", 2),
 		lexicalMessage("m3", "beta gamma gamma", 3),
 	)
-	mustApply(t, harness.ctx, opened, conversation)
+	mustApply(t, harness.context(), opened, conversation)
 	rows := []lexicalOracleRow{
 		{namespace: "conversations", ownerID: "conversation-a", rowKey: "m1", searchText: "Alpha beta"},
 		{namespace: "conversations", ownerID: "conversation-a", rowKey: "m2", searchText: "Alpha beta"},
@@ -171,7 +171,7 @@ func TestLibraryLexicalPublicationCountsEveryOccurrence(t *testing.T) {
 	}
 	assertLexicalIndex(t, harness, descriptor, rows, "append")
 
-	mustApply(t, harness.ctx, opened, conversation)
+	mustApply(t, harness.context(), opened, conversation)
 	assertLexicalIndex(t, harness, descriptor, rows, "append replay")
 
 	codeBatch := func(order uint64, occurrences ...library.Occurrence) library.Batch {
@@ -180,7 +180,7 @@ func TestLibraryLexicalPublicationCountsEveryOccurrence(t *testing.T) {
 			IdempotencyToken: fmt.Sprintf("code-%d", order), Mode: library.Replace, Rows: occurrences,
 		}
 	}
-	mustApply(t, harness.ctx, opened, codeBatch(1,
+	mustApply(t, harness.context(), opened, codeBatch(1,
 		codeRow("parse.go", 0, "alpha delta"),
 		codeRow("parse.go", 1, "epsilon"),
 	))
@@ -190,7 +190,7 @@ func TestLibraryLexicalPublicationCountsEveryOccurrence(t *testing.T) {
 	)
 	assertLexicalIndex(t, harness, descriptor, rows, "first replace")
 
-	mustApply(t, harness.ctx, opened, codeBatch(2,
+	mustApply(t, harness.context(), opened, codeBatch(2,
 		codeRow("parse.go", 0, "alpha delta"),
 		codeRow("parse.go", 2, "zeta alpha alpha"),
 	))
@@ -199,7 +199,7 @@ func TestLibraryLexicalPublicationCountsEveryOccurrence(t *testing.T) {
 	assertLexicalIndex(t, harness, descriptor, rows, "second replace")
 
 	generationsBefore := readLexicalGenerations(t, harness, descriptor)
-	if _, err := opened.ReprojectScalars(harness.ctx, library.ScalarProjection{
+	if _, err := opened.ReprojectScalars(harness.context(), library.ScalarProjection{
 		Namespace: "conversations", OwnerID: "conversation-a", ProjectionOrder: 1, IdempotencyToken: "projection-1",
 		Rows: map[string]map[string]library.ScalarValue{
 			"m1": {"archived": {Type: library.Bool, Bool: true}},
@@ -212,7 +212,7 @@ func TestLibraryLexicalPublicationCountsEveryOccurrence(t *testing.T) {
 		t.Fatalf("reprojection changed the lexical statistics generations from %v to %v", generationsBefore, generationsAfter)
 	}
 
-	if err := opened.Delete(harness.ctx, []library.OccurrenceID{
+	if err := opened.Delete(harness.context(), []library.OccurrenceID{
 		{Namespace: "code", OwnerID: "parse.go", RowKey: "parse.go#2"},
 		{Namespace: "code", OwnerID: "parse.go", RowKey: "absent"},
 	}); err != nil {
@@ -233,7 +233,7 @@ func TestLibraryLexicalSchemaUpgradesEmptyVersionOneCatalogs(t *testing.T) {
 
 	empty := harness.descriptor("empty-v1")
 	emptyPool := harness.vectorStore("empty_v1_pool")
-	first, err := library.Open(harness.ctx, library.Config{Store: empty, Vectors: emptyPool, Embedder: harness.embedder})
+	first, err := library.Open(harness.context(), library.Config{Store: empty, Vectors: emptyPool, Embedder: harness.embedder})
 	if err != nil {
 		t.Fatalf("open empty catalog: %v", err)
 	}
@@ -242,10 +242,10 @@ func TestLibraryLexicalSchemaUpgradesEmptyVersionOneCatalogs(t *testing.T) {
 	}
 	rewriteToVersionOne(t, harness, empty)
 	upgraded := harness.open(empty, emptyPool)
-	if err := upgraded.RegisterNamespace(harness.ctx, conversationSpec()); err != nil {
+	if err := upgraded.RegisterNamespace(harness.context(), conversationSpec()); err != nil {
 		t.Fatalf("register after the upgrade: %v", err)
 	}
-	mustApply(t, harness.ctx, upgraded, appendBatch("conversation-a", 1, "append-1", lexicalMessage("m1", "alpha", 1)))
+	mustApply(t, harness.context(), upgraded, appendBatch("conversation-a", 1, "append-1", lexicalMessage("m1", "alpha", 1)))
 	assertLexicalIndex(t, harness, empty, []lexicalOracleRow{
 		{namespace: "conversations", ownerID: "conversation-a", rowKey: "m1", searchText: "alpha"},
 	}, "upgraded empty catalog")
@@ -255,19 +255,19 @@ func TestLibraryLexicalSchemaUpgradesEmptyVersionOneCatalogs(t *testing.T) {
 
 	populated := harness.descriptor("populated-v1")
 	populatedPool := harness.vectorStore("populated_v1_pool")
-	writer, err := library.Open(harness.ctx, library.Config{Store: populated, Vectors: populatedPool, Embedder: harness.embedder})
+	writer, err := library.Open(harness.context(), library.Config{Store: populated, Vectors: populatedPool, Embedder: harness.embedder})
 	if err != nil {
 		t.Fatalf("open populated catalog: %v", err)
 	}
-	if err := writer.RegisterNamespace(harness.ctx, conversationSpec()); err != nil {
+	if err := writer.RegisterNamespace(harness.context(), conversationSpec()); err != nil {
 		t.Fatalf("register populated namespace: %v", err)
 	}
-	mustApply(t, harness.ctx, writer, appendBatch("conversation-a", 1, "append-1", lexicalMessage("m1", "alpha", 1)))
+	mustApply(t, harness.context(), writer, appendBatch("conversation-a", 1, "append-1", lexicalMessage("m1", "alpha", 1)))
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close populated catalog: %v", err)
 	}
 	rewriteToVersionOne(t, harness, populated)
-	reopened, err := library.Open(harness.ctx, library.Config{Store: populated, Vectors: populatedPool, Embedder: harness.embedder})
+	reopened, err := library.Open(harness.context(), library.Config{Store: populated, Vectors: populatedPool, Embedder: harness.embedder})
 	if err == nil {
 		_ = reopened.Close()
 		t.Fatal("a version 1 catalog with occurrences opened without a lexical index")
@@ -297,7 +297,7 @@ func rewriteToVersionOne(t *testing.T, harness *libraryHarness, descriptor libra
 		`UPDATE store_identity SET value = '1' WHERE key = 'schema_version'`,
 	}
 	for _, statement := range statements {
-		if _, err := database.ExecContext(harness.ctx, statement); err != nil {
+		if _, err := database.ExecContext(harness.context(), statement); err != nil {
 			t.Fatalf("rewrite catalog to version 1 with %q: %v", statement, err)
 		}
 	}
@@ -315,7 +315,7 @@ func readSchemaVersion(t *testing.T, harness *libraryHarness, descriptor library
 		}
 	}()
 	var version string
-	if err := database.QueryRowContext(harness.ctx, `SELECT value FROM store_identity WHERE key = 'schema_version'`).Scan(&version); err != nil {
+	if err := database.QueryRowContext(harness.context(), `SELECT value FROM store_identity WHERE key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
 	return version
@@ -334,7 +334,7 @@ func readLexicalGenerations(t *testing.T, harness *libraryHarness, descriptor li
 			t.Errorf("close catalog: %v", err)
 		}
 	}()
-	result, err := database.QueryContext(harness.ctx, `SELECT namespace, generation FROM lexical_stats`)
+	result, err := database.QueryContext(harness.context(), `SELECT namespace, generation FROM lexical_stats`)
 	if err != nil {
 		t.Fatalf("read lexical_stats generations: %v", err)
 	}

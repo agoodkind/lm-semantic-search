@@ -871,7 +871,7 @@ func (manager *Manager) classifyReindexErr(ctx context.Context, job model.Job, e
 		manager.routeToBootstrap(ctx, job.ID, bootstrapReasonDeltaCollectionMissing)
 		slog.WarnContext(ctx, "semantic collection missing; falling back to full reindex", "job_id", job.ID, "phase", phase)
 		return deltaOutcome{fallback: true, handled: false, progressed: false}
-	case errors.Is(err, context.Canceled):
+	case errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled):
 		manager.updateJobCancelled(ctx, job.ID)
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	default:

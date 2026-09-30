@@ -755,3 +755,35 @@ func TestDefaultRejectsOutOfRangeMilvusMutationCallTimeout(t *testing.T) {
 		}
 	})
 }
+
+func TestDefaultResolvesTheCodebaseStore(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		requested string
+		want      CodebaseStoreKind
+	}{
+		{name: "unset", requested: "", want: CodebaseStoreSemantic},
+		{name: "semantic", requested: "semantic", want: CodebaseStoreSemantic},
+		{name: "library with case and space", requested: " Library ", want: CodebaseStoreLibrary},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			isolateState(t)
+			t.Setenv(codebaseStoreEnv, testCase.requested)
+			cfg, err := Default()
+			if err != nil {
+				t.Fatalf("Default returned error: %v", err)
+			}
+			if cfg.CodebaseStore != testCase.want {
+				t.Fatalf("CodebaseStore = %q, want %q", cfg.CodebaseStore, testCase.want)
+			}
+		})
+	}
+}
+
+func TestDefaultRejectsAnUnknownCodebaseStore(t *testing.T) {
+	isolateState(t)
+	t.Setenv(codebaseStoreEnv, "milvus")
+	if _, err := Default(); err == nil {
+		t.Fatal("Default accepted an unknown codebase store")
+	}
+}

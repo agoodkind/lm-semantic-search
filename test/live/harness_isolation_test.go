@@ -352,7 +352,6 @@ func TestMilvusIsolationRejectsAbsentDatabaseAndRenameDestination(t *testing.T) 
 	}
 }
 
-
 // TestOperatorStateAuditAllowsDatabasesOutsideTheHarness proves a database
 // outside the harness database name that appears or disappears during a test
 // is logged as a change and is not a violation.

@@ -14,6 +14,10 @@ CLI_CMD := ./cmd/$(CLI_BINARY)
 MCP_BINARY := lm-semantic-search-mcp
 MCP_CMD := ./cmd/$(MCP_BINARY)
 
+# gRPC mandates these three dynamic interface signatures. Typed proxy helpers
+# remain checked. Exclude only this analyzer's diagnostics on those signatures.
+STATICCHECK_EXTRA_EXCLUDE_PATHS := ^test/sandboxharness/store_grpc_boundary[.]go:(19|29|37):[0-9]+: (do not use any;|signature uses any,)
+
 # make install builds and installs the daemon plus both client binaries.
 INSTALL_BINS := $(BINARY):$(CMD) $(CLI_BINARY):$(CLI_CMD) $(MCP_BINARY):$(MCP_CMD)
 RELEASE_BINS := $(INSTALL_BINS)

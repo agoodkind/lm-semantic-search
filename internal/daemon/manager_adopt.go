@@ -28,7 +28,7 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 		SplitterType: "", SplitterChunkSize: 0, SplitterOverlap: 0,
 		IgnorePatterns: nil, IncludeSubmodules: nil, IgnoreDigest: "",
 		EmbeddingProvider: "", EmbeddingModel: "", EmbeddingDimension: 0,
-		VectorBackend: "", Hybrid: false,
+		VectorBackend: "", CodebaseStore: "", Hybrid: false,
 	})
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 
