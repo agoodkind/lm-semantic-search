@@ -2,6 +2,7 @@ package model
 
 import "time"
 
+// MaintenanceState records the operator maintenance mode and activation time.
 type MaintenanceState struct {
 	Enabled bool `json:"enabled"`
 	// Reason is the operator's note, shown on every status surface while the

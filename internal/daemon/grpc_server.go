@@ -588,17 +588,6 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	return response, nil
 }
 
-// cloneOptionalBool copies a proto3 optional bool into a freshly allocated
-// pointer so the manager filter does not alias the wire message's memory. A nil
-// input (the field was unset) stays nil, meaning no archived filter.
-func cloneOptionalBool(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	copied := *value
-	return &copied
-}
-
 // Doctor reports daemon-local diagnostics.
 func (server *GRPCServer) Doctor(ctx context.Context, request *pb.DoctorRequest) (resp *pb.DoctorResponse, err error) {
 	ctx, done := beginRPC(ctx, "Doctor")

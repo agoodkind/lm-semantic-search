@@ -68,14 +68,13 @@ func (delivery collectionItemDelivery) backfillFamilies(itemID string) []string 
 	return families
 }
 
-func (delivery collectionItemDelivery) rowFamilies(ctx context.Context, itemID string) ([]collectionRowFamily, error) {
-
+func (delivery collectionItemDelivery) rowFamilies(itemID string) []collectionRowFamily {
 	rows := delivery.rows[itemID]
 	families := make([]collectionRowFamily, 0, len(rows))
 	for _, row := range rows {
 		families = append(families, collectionRowFamily{Key: row.RowKey, Chunks: delivery.rowChunks(row)})
 	}
-	return families, nil
+	return families
 }
 
 func (delivery collectionItemDelivery) rowChunks(row collectionRow) []model.StoredChunk {
@@ -95,7 +94,7 @@ func (delivery collectionItemDelivery) rowChunks(row collectionRow) []model.Stor
 }
 
 func newCollectionRowChunk(row collectionRow, relativePath string, content string) model.StoredChunk {
-	return model.StoredChunk{Content: content, RelativePath: relativePath, SplitPartRecorded: true, Scalars: maps.Clone(row.Scalars)}
+	return model.StoredChunk{Content: content, RelativePath: relativePath, StartLine: 0, EndLine: 0, Language: "", FileExtension: "", SplitPart: 0, SplitPartRecorded: true, Scalars: maps.Clone(row.Scalars), Score: 0}
 }
 
 // collectionStoredItems is one batched read of the live collection for every
@@ -317,10 +316,7 @@ func (source collectionItemSource) indexOne(ctx context.Context, itemID string) 
 		result.SkipReason = indexer.SkipPending
 		return result, nil
 	}
-	families, err := source.delivery.rowFamilies(ctx, itemID)
-	if err != nil {
-		return result, err
-	}
+	families := source.delivery.rowFamilies(itemID)
 	result.FileHash = source.manifest[itemID]
 	if source.force || source.stored == nil || source.collectionName == "" {
 		result.Chunks = familyChunks(families, nil)
@@ -370,7 +366,7 @@ func (source collectionItemSource) absencePolicy() absencePolicy {
 }
 
 func (source collectionItemSource) reuseSource(_ string) itemReuseSource {
-	return itemReuseSource{Scope: itemReuseScopeNone}
+	return itemReuseSource{Scope: itemReuseScopeNone, CollectionName: "", RelativePath: ""}
 }
 
 func (source collectionItemSource) unit() string {

@@ -148,6 +148,7 @@ func (store *Store) CollectionName(codebasePath string) string {
 	return localCollectionNamePrefix + pathHash
 }
 
+// DocumentCollectionName derives the persistent collection identifier from the caller ID.
 func (store *Store) DocumentCollectionName(collectionID string) string {
 	return "conv_chunks_" + tshash.PathPrefix(strings.TrimSpace(collectionID))
 }
@@ -253,6 +254,7 @@ func (store *Store) InspectCollection(
 	return semantic.CollectionFacts{Exists: true, Rows: count, RowsKnown: true}, nil
 }
 
+// DescribeScalarColumns returns the recorded scalar schema and collection existence.
 func (store *Store) DescribeScalarColumns(
 	_ context.Context,
 	collectionName string,

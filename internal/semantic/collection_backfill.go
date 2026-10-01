@@ -18,6 +18,7 @@ import (
 // partial update writes. A backfill page reads no vector.
 const scalarBackfillBatchSize = 1000
 
+// ScalarBackfill selects nullable scalar columns and replacement values by item ID.
 type ScalarBackfill struct {
 	ItemColumn string
 	Columns    []model.ScalarColumn
@@ -42,6 +43,7 @@ func (backfill ScalarBackfill) Needs(stored map[string]model.ScalarValue) bool {
 	return false
 }
 
+// ItemValues returns replacement scalar values for a streamed item.
 func (backfill ScalarBackfill) ItemValues(itemID string, relativePath string) (map[string]model.ScalarValue, bool) {
 	if itemID == "" {
 		return nil, false

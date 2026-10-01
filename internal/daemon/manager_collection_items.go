@@ -53,6 +53,7 @@ type collectionItemsRequest struct {
 	Force        bool
 }
 
+// SyncCollectionManifest returns item IDs that differ from the registered collection manifest.
 func (manager *Manager) SyncCollectionManifest(ctx context.Context, collectionID string, manifest map[string]string) ([]string, error) {
 	codebase, err := manager.registeredCollection(collectionID)
 	if err != nil {
@@ -108,7 +109,7 @@ func (manager *Manager) registeredCollection(collectionID string) (model.Codebas
 
 func savedCollectionDeclaration(codebase model.Codebase) model.CollectionDeclaration {
 	if codebase.Declaration == nil {
-		return model.CollectionDeclaration{}
+		return model.CollectionDeclaration{ItemIDColumn: "", Scalars: nil}
 	}
 	return cloneCollectionDeclaration(*codebase.Declaration)
 }

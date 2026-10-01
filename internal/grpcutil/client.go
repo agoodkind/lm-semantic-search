@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// MaxMessageBytes limits daemon RPC payload sizes.
 const MaxMessageBytes = 128 << 20
 
 // DialDaemon creates a gRPC client connection to the local daemon

@@ -297,11 +297,13 @@ func documentCollectionIDFromPath(codebasePath string) (string, bool) {
 	return strings.TrimPrefix(codebasePath, documentPathPrefix), true
 }
 
+// IsDocumentPath reports whether a path identifies a document collection.
 func IsDocumentPath(codebasePath string) bool {
 	_, isDocument := documentCollectionIDFromPath(codebasePath)
 	return isDocument
 }
 
+// CollectionName derives the persistent collection identifier for a codebase or document path.
 func (service *Service) CollectionName(codebasePath string) string {
 	if collectionID, isDocument := documentCollectionIDFromPath(codebasePath); isDocument {
 		return service.DocumentCollectionName(collectionID)
@@ -335,6 +337,7 @@ func (service *Service) CollectionName(codebasePath string) string {
 	return prefix + "_" + sanitized + hashSuffix
 }
 
+// DocumentCollectionName derives the persistent collection identifier from the caller ID.
 func (service *Service) DocumentCollectionName(collectionID string) string {
 	_ = service
 	return "conv_chunks_" + tshash.PathPrefix(strings.TrimSpace(collectionID))
@@ -396,6 +399,7 @@ func (service *Service) hasCollection(
 	return hasCollection, nil
 }
 
+// Reindex replaces selected rows with prepared chunks and reusable vectors.
 func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.reindex")
 	defer done(&err)

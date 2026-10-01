@@ -54,6 +54,7 @@ func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []
 	return reuse, nil
 }
 
+// LoadReuseVectorsForPrefix reads reusable vectors from rows matching a path prefix.
 func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	reuse := make(map[string][]float32)

@@ -23,6 +23,7 @@ const (
 	truthUnknown
 )
 
+// SearchCollection ranks local rows with caller-declared scalar filters.
 func (store *Store) SearchCollection(
 	ctx context.Context,
 	search semantic.CollectionSearch,

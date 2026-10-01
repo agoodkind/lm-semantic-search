@@ -37,6 +37,7 @@ const (
 	storeColumnKindDeclared
 )
 
+// StoreColumnSet selects code columns or caller-declared scalar columns.
 type StoreColumnSet struct {
 	kind    storeColumnKind
 	scalars []model.ScalarColumn
@@ -47,10 +48,12 @@ func CodeColumns() StoreColumnSet {
 	return StoreColumnSet{kind: storeColumnKindCode, scalars: nil}
 }
 
+// ColumnsForDeclaration copies the scalar columns of a collection declaration.
 func ColumnsForDeclaration(declaration model.CollectionDeclaration) StoreColumnSet {
 	return StoreColumnSet{kind: storeColumnKindDeclared, scalars: slices.Clone(declaration.Scalars)}
 }
 
+// DeclaredScalars returns the scalar columns for a declared collection.
 func (columnSet StoreColumnSet) DeclaredScalars() []model.ScalarColumn {
 	if columnSet.kind != storeColumnKindDeclared {
 		return nil
@@ -77,7 +80,9 @@ func (columnSet StoreColumnSet) creationScalars() []model.ScalarColumn {
 // passes its StoreColumnSet directly instead of calling this.
 func (service *Service) storeColumnSetForCollection(collectionName string) StoreColumnSet {
 	if stored, found := service.declaredCollections.Load(liveCollectionName(collectionName)); found {
-		return ColumnsForDeclaration(stored.(model.CollectionDeclaration))
+		if declaration, valid := stored.(model.CollectionDeclaration); valid {
+			return ColumnsForDeclaration(declaration)
+		}
 	}
 	return CodeColumns()
 }
@@ -588,6 +593,7 @@ func (service *Service) requestCollectionLoad(
 	return service.awaitCollectionLoaded(ctx, collectionName)
 }
 
+// RecordCollectionDeclaration stores scalar definitions for collection operations.
 func (service *Service) RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration) {
 	service.declaredCollections.Store(liveCollectionName(collectionName), declaration)
 }

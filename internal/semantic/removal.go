@@ -11,6 +11,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
+// Removal selects stored rows by path, prefix, or declared item ID.
 type Removal struct {
 	Paths      []string
 	Prefixes   []string
@@ -35,6 +36,7 @@ func RemovePaths(paths []string) Removal {
 	return Removal{Paths: paths, Prefixes: nil, ItemColumn: "", ItemIDs: nil}
 }
 
+// DeleteItemRows deletes selected rows from a document collection.
 func (service *Service) DeleteItemRows(ctx context.Context, collectionName string, removal Removal) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.deleteItemRows")
 	defer done(&err)

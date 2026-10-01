@@ -475,13 +475,16 @@ func documentDeclaration() model.CollectionDeclaration {
 		{Name: "timestampUnix", Type: model.ScalarTypeInt64},
 	}}
 }
+
 func documentChunk(content string, documentID string, role string, sequence int32, created int64) model.StoredChunk {
 	category, _, _ := strings.Cut(documentID, ":")
-	return model.StoredChunk{Content: content, RelativePath: "items/" + documentID + "/row", StartLine: sequence,
+	return model.StoredChunk{
+		Content: content, RelativePath: "items/" + documentID + "/row", StartLine: sequence,
 		Scalars: map[string]model.ScalarValue{
 			"itemId":        {Type: model.ScalarTypeString, String: documentID},
 			"role":          {Type: model.ScalarTypeString, String: role},
 			"provider":      {Type: model.ScalarTypeString, String: category},
 			"timestampUnix": {Type: model.ScalarTypeInt64, Int64: created},
-		}}
+		},
+	}
 }

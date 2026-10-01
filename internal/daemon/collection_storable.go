@@ -10,13 +10,6 @@ func collectionTextIsStorable(text string) bool {
 	return strings.TrimSpace(text) != ""
 }
 
-func collectionStorableText(text string) string {
-	if collectionTextIsStorable(text) {
-		return text
-	}
-	return ""
-}
-
 // Check the complete field before splitting. Removing whitespace-only interior
 // pieces would change the reconstructed text.
 func appendStorableCollectionField(

@@ -55,7 +55,8 @@ const (
 	SkipOversize SkipReason = "oversize"
 	// SkipUnreadable marks a file whose bytes are not valid UTF-8.
 	SkipUnreadable SkipReason = "unreadable"
-	SkipPending    SkipReason = "pending"
+	// SkipPending marks a file awaiting indexing.
+	SkipPending SkipReason = "pending"
 )
 
 // Progress describes one visible indexing progress update.
@@ -115,6 +116,7 @@ func NewRunner() *Runner {
 	}
 }
 
+// OneFileResult includes indexed chunks and row removal instructions.
 type OneFileResult struct {
 	Chunks     []model.StoredChunk
 	FileHash   string

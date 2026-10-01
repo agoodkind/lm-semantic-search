@@ -28,6 +28,7 @@ type CollectionRegistration struct {
 	Declaration  model.CollectionDeclaration
 }
 
+// RegisterCollection validates and persists a caller-declared collection schema.
 func (manager *Manager) RegisterCollection(ctx context.Context, registration CollectionRegistration) (model.Codebase, error) {
 	collectionID := strings.TrimSpace(registration.CollectionID)
 	if collectionID == "" {
@@ -55,7 +56,7 @@ func (manager *Manager) RegisterCollection(ctx context.Context, registration Col
 	legacyRecord := false
 	if found {
 		collectionName = existing.CollectionName
-		saved := model.CollectionDeclaration{}
+		saved := model.CollectionDeclaration{ItemIDColumn: "", Scalars: nil}
 		if existing.Declaration != nil {
 			saved = cloneCollectionDeclaration(*existing.Declaration)
 		} else {

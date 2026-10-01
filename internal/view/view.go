@@ -597,6 +597,7 @@ type StartIndexView struct {
 	MergeNote          string
 }
 
+// MutationAckView includes the public job acknowledgment and selected collection identifiers.
 type MutationAckView struct {
 	Kind            string
 	Path            string

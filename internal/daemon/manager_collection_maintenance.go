@@ -102,21 +102,6 @@ func (manager *Manager) itemSelector(codebaseID string) collectionItemSelector {
 	return newCollectionItemSelector(savedCollectionDeclaration(codebase))
 }
 
-// declaredColumnsNamed returns the declared columns of declaration with the
-// given names, in the order of names. It skips a name the declaration lacks.
-func declaredColumnsNamed(declaration model.CollectionDeclaration, names ...string) []model.ScalarColumn {
-	columns := make([]model.ScalarColumn, 0, len(names))
-	for _, name := range names {
-		index := slices.IndexFunc(declaration.Scalars, func(column model.ScalarColumn) bool {
-			return column.Name == name
-		})
-		if index >= 0 {
-			columns = append(columns, declaration.Scalars[index])
-		}
-	}
-	return columns
-}
-
 // validateCollectionBackfill checks a generic scalar backfill against the saved
 // declaration and returns the backfill to run. It rejects an empty or repeated
 // item id. validateBackfillColumns and validateBackfillItem list the column and

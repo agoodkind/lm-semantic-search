@@ -9,6 +9,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
+// RecordCollectionDeclaration stores scalar definitions for local collection operations.
 func (store *Store) RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration) {
 	store.declaredScalars.Store(collectionName, slices.Clone(declaration.Scalars))
 }

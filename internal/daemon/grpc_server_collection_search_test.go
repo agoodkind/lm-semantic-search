@@ -423,6 +423,7 @@ func requireMaintenanceStatus(t *testing.T, method string, err error) {
 func rowKey(itemID string, sequence int32) string {
 	return fmt.Sprintf("items/%s/%d", itemID, sequence)
 }
+
 func newSearchCorpusDaemon(t *testing.T) *offlineCollectionDaemon {
 	t.Helper()
 	daemon := newOfflineCollectionDaemon(t)
