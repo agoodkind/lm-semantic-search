@@ -194,25 +194,28 @@ func (manager *Manager) graphEngine(ctx context.Context, codebaseID string) (*cb
 	return engine, release, nil
 }
 
-// CloseGraphEngines flushes the manager's journal writer, closes every idle
-// cached graph engine, and blocks new graph operations. An engine with an
-// in-flight call is left open on purpose: the blocking C call cannot be
-// interrupted, closing under it would free memory the call still reads, and
-// waiting for it could stall shutdown behind a detached post-timeout call, so
-// process exit reclaims that handle instead. It is safe to call more than once.
+// CloseGraphEngines closes cached handles when no tracked graph operation is
+// active. Every native engine shares a process-wide mutex;
+// closing even an idle handle would wait behind an active native call. Process
+// exit reclaims all handles when a call is still running.
 func (manager *Manager) CloseGraphEngines() {
 	manager.closeJobJournal()
 
 	manager.graphMutex.Lock()
 	defer manager.graphMutex.Unlock()
 
-	for codebaseID, engine := range manager.graphEngines {
-		state := manager.graphLifecycleStateLocked(codebaseID)
+	active := false
+	for codebaseID, state := range manager.graphLifecycle {
 		state.clearing = true
 		if state.active > 0 {
-			slog.Warn("graph engine left open at shutdown; in-flight call still running", "codebase_id", codebaseID, "active", state.active)
-			continue
+			active = true
+			slog.Warn("graph handles remain open at shutdown; graph operation still active", "codebase_id", codebaseID, "active", state.active)
 		}
+	}
+	if active {
+		return
+	}
+	for codebaseID, engine := range manager.graphEngines {
 		engine.Close()
 		delete(manager.graphEngines, codebaseID)
 	}
