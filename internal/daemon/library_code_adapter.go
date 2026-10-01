@@ -479,6 +479,7 @@ func (index *libraryCodeIndex) stageBatches(rows []library.Occurrence) [][]libra
 // embedding inputs, preserves source bytes, and skips whitespace-only chunks.
 func (index *libraryCodeIndex) codeOccurrences(ctx context.Context, chunks []model.StoredChunk) ([]library.Occurrence, error) {
 	rows := make([]library.Occurrence, 0, len(chunks))
+	occurrenceCounts := make(map[string]int)
 	for _, chunk := range chunks {
 		content := strings.ReplaceAll(chunk.Content, "\x00", " ")
 		if strings.TrimSpace(content) == "" {
@@ -498,7 +499,14 @@ func (index *libraryCodeIndex) codeOccurrences(ctx context.Context, chunks []mod
 		contentHash := sha256.Sum256([]byte(chunk.Content))
 		hashText := hex.EncodeToString(contentHash[:])[:libraryCodeContentHashLength]
 		for _, part := range parts {
-			rows = append(rows, codeOccurrence(chunk, content, hashText, part))
+			row := codeOccurrence(chunk, content, hashText, part)
+			ordinal := occurrenceCounts[row.RowKey]
+			occurrenceCounts[row.RowKey] = ordinal + 1
+			if ordinal > 0 {
+				row.RowKey += fmt.Sprintf(":occurrence:%010d", ordinal)
+				row.SortKey += fmt.Sprintf(":occurrence:%010d", ordinal)
+			}
+			rows = append(rows, row)
 		}
 	}
 	return rows, nil
