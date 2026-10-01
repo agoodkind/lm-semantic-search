@@ -11,8 +11,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
-// defaultCollectionSearchLimit is the hit count a search returns when the
-// request sets no positive limit. Both conversation search RPCs keep it.
 const defaultCollectionSearchLimit = 10
 
 // CollectionSearchRequest is one typed search of a registered document
@@ -41,7 +39,7 @@ func (manager *Manager) SearchCollection(ctx context.Context, request Collection
 		return nil, adapterr.NewMissingArgument("collection_id")
 	}
 	manager.mu.Lock()
-	codebase, found := manager.findConversationCollectionLocked(collectionID)
+	codebase, found := manager.findDocumentCollectionLocked(collectionID)
 	manager.mu.Unlock()
 	if !found {
 		return nil, adapterr.NewCollectionNotRegistered(collectionID)
@@ -63,7 +61,7 @@ func (manager *Manager) CollectionItemState(ctx context.Context, collectionID st
 		return "", adapterr.NewMissingArgument("item_id")
 	}
 	manager.mu.Lock()
-	codebase, found := manager.findConversationCollectionLocked(trimmedCollectionID)
+	codebase, found := manager.findDocumentCollectionLocked(trimmedCollectionID)
 	manager.mu.Unlock()
 	if !found {
 		return "", nil
@@ -72,22 +70,10 @@ func (manager *Manager) CollectionItemState(ctx context.Context, collectionID st
 	return checkpoint.snapshot.Files[trimmedItemID], nil
 }
 
-// collectionDeclaration returns the saved declaration of a document
-// collection. A record written before declarations were saved was created by
-// conversation registration, and it uses the conversation declaration.
 func collectionDeclaration(codebase model.Codebase) model.CollectionDeclaration {
-	if codebase.Declaration == nil {
-		return semantic.ConversationDeclaration()
-	}
-	return *codebase.Declaration
+	return savedCollectionDeclaration(codebase)
 }
 
-// searchRegisteredCollection is the one retrieval path under the generic and
-// both conversation search RPCs. It validates the request against the saved
-// declaration, prepares a conversation collection's schema, acquires a
-// collection lease for the query, and runs the store's typed search. The store
-// applies every filter natively and returns the result already reduced to the
-// limit, the group cap, and the score floor.
 func (manager *Manager) searchRegisteredCollection(ctx context.Context, collectionID string, codebase model.Codebase, request CollectionSearchRequest) ([]semantic.CollectionHit, error) {
 	declaration := collectionDeclaration(codebase)
 	if err := validateCollectionSearch(collectionID, declaration, request.Filter, request.GroupBy, request.PerGroupLimit); err != nil {
@@ -102,16 +88,7 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 		manager.noteDependencyFailure(semantic.ErrUnavailable)
 		return nil, semantic.ErrUnavailable
 	}
-	// PrepareCollection runs the conversation scalar migration on every
-	// conv_chunks_ collection. A collection with another declaration must not
-	// gain the conversation columns, and only the conversation declaration
-	// prepares here.
-	if semantic.IsConversationDeclaration(declaration) {
-		if prepareErr := manager.semantic.PrepareCollection(ctx, codebase.CollectionName); prepareErr != nil {
-			manager.noteDependencyFailure(prepareErr)
-			return nil, fmt.Errorf("prepare collection %s: %w", codebase.CollectionName, prepareErr)
-		}
-	}
+
 	lease, leaseErr := manager.semantic.AcquireCollection(ctx, codebase.CollectionName)
 	if leaseErr != nil {
 		manager.noteDependencyFailure(leaseErr)

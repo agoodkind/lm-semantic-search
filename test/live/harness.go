@@ -1,7 +1,7 @@
 //go:build live
 
 // Package live holds the build-tagged, end-to-end validation of the merged
-// conversation-marker feature against a real Milvus.
+// generic collection operations against a real Milvus.
 //
 // Every run boots the daemon gRPC server in-process on a throwaway unix socket,
 // points embedding at a local fake, and connects every Milvus client to a unique
@@ -51,10 +51,10 @@ const (
 	defaultMilvusDatabase = "default"
 	liveDatabasePrefix    = "lms_live_"
 
-	// productionConversationCollection is the operator's real conversation
+	// productionProtectedCollection is the protected production
 	// collection. The harness asserts every throwaway collection differs from it,
-	// so a live run can never read, write, or drop production conversation rows.
-	productionConversationCollection = "conv_chunks_09cfca5e"
+	// so a live run can never read, write, or drop protected production rows.
+	productionProtectedCollection = "conv_chunks_09cfca5e"
 
 	// fakeEmbeddingDimension is the width of every vector the fake embedder
 	// returns. It defines the throwaway collection's dimension, learned lazily on
@@ -248,7 +248,7 @@ func (recorder *milvusCallRecorder) count(method string, collectionName string) 
 
 // newHarness builds the isolated daemon and returns a ready harness, or skips the
 // test when Milvus is unreachable (a BLOCKED environment condition, not a code
-// failure). It registers a per-test UUID conversation collection and asserts the
+// failure). It registers a per-test UUID document collection and asserts the
 // derived Milvus name is not the production collection before any ingest runs.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
@@ -268,7 +268,7 @@ func newHarnessWithGate(t *testing.T, gate *embedGate) *harness {
 	return newHarnessWithOptions(t, gate, 0, false)
 }
 
-func newHarnessWithOptions(t *testing.T, gate *embedGate, idleTimeout time.Duration, requireMilvus bool) *harness {
+func newHarnessWithOptions(t *testing.T, gate *embedGate, idleTimeout time.Duration, requireMilvus bool, realEmbedding ...bool) *harness {
 	t.Helper()
 
 	defaultConfig := resolveHarnessConfig(t, requireMilvus)
@@ -333,7 +333,8 @@ func newHarnessWithOptions(t *testing.T, gate *embedGate, idleTimeout time.Durat
 	sandboxContext, sandboxClient, sandboxBefore := connectLiveSandbox(t, milvusAddress, defaultConfig.MilvusToken, databaseName, callRecorder)
 	sandboxMilvus = sandboxClient
 
-	cfg, stateRoot, embeddingRecorder := prepareLiveDaemonConfig(t, gate, milvusAddress, defaultConfig.MilvusToken, databaseName, harnessID, idleTimeout)
+	useRealEmbedding := len(realEmbedding) > 0 && realEmbedding[0]
+	cfg, stateRoot, embeddingRecorder := prepareLiveDaemonConfig(t, gate, milvusAddress, defaultConfig.MilvusToken, databaseName, harnessID, idleTimeout, useRealEmbedding)
 
 	collectionID := "live-marker-" + harnessID
 	started := startLiveHarnessDaemon(t, sandboxContext, cfg, collectionID)
@@ -800,6 +801,7 @@ func resolveLiveConfig(
 	databaseName string,
 	harnessID string,
 	idleTimeout time.Duration,
+	realEmbedding ...config.Config,
 ) config.Config {
 	t.Helper()
 
@@ -834,6 +836,12 @@ func resolveLiveConfig(
 		{name: "CLAUDE_CONTEXT_MILVUS_COLLECTION_IDLE_TIMEOUT_MS", value: strconv.FormatInt(idleTimeout.Milliseconds(), 10)},
 	}
 	for _, setting := range chosen {
+		if len(realEmbedding) > 0 {
+			switch setting.name {
+			case "EMBEDDING_PROVIDER", "EMBEDDING_MODEL", "OPENAI_BASE_URL", "OPENAI_API_KEY", "EMBEDDING_DIMENSION", "EMBEDDING_BATCH_SIZE":
+				continue
+			}
+		}
 		t.Setenv(setting.name, setting.value)
 	}
 	for _, variable := range sandbox.Env(sandboxRoot) {

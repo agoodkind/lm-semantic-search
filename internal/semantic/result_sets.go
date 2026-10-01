@@ -25,12 +25,6 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 	fileExtensionColumn := resultSet.GetColumn(fileExtensionFieldName)
 	metadataColumn := resultSet.GetColumn(metadataFieldName)
 	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
-	// workspaceRoot is only present on conversation-collection result sets, where
-	// the search requests the native scalar column. It is nil for code
-	// collections and on rows that never carried a workspace root, so reads stay
-	// optional and default to empty. loadRules follows the same contract.
-	workspaceRootColumn := resultSet.GetColumn(workspaceRootFieldName)
-	loadRulesColumn := resultSet.GetColumn(loadRulesFieldName)
 	if contentColumn == nil || relativePathColumn == nil || startLineColumn == nil || endLineColumn == nil || fileExtensionColumn == nil {
 		return nil, ErrSearchResultIncomplete
 	}
@@ -69,9 +63,6 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 				metadataValue = decodeMetadata(rawMetadata)
 			}
 		}
-
-		workspaceRootValue := backfillString(workspaceRootColumn, index)
-		loadRulesValue := backfillString(loadRulesColumn, index)
 		splitPartValue, splitPartRecorded, splitPartErr := splitPartAt(
 			splitPartColumn,
 			index,
@@ -85,24 +76,16 @@ func resultSetsToChunks(resultSets []milvusclient.ResultSet) ([]model.StoredChun
 			score = float64(resultSet.Scores[index])
 		}
 		chunks = append(chunks, model.StoredChunk{
-			Content:              contentValue,
-			RelativePath:         relativePathValue,
-			StartLine:            safeInt32FromInt64(startLineValue),
-			EndLine:              safeInt32FromInt64(endLineValue),
-			Language:             metadataValue.Language,
-			FileExtension:        fileExtensionValue,
-			ConversationID:       metadataValue.ConversationID,
-			ParentConversationID: metadataValue.ParentConversationID,
-			MessageIndex:         metadataValue.messageIndex(),
-			Role:                 metadataValue.Role,
-			TimestampUnix:        metadataValue.timestampUnix(),
-			WorkspaceRoot:        workspaceRootValue,
-			Archived:             false,
-			SplitPart:            splitPartValue,
-			SplitPartRecorded:    splitPartRecorded,
-			LoadRules:            loadRulesValue,
-			Scalars:              nil,
-			Score:                score,
+			Content:           contentValue,
+			RelativePath:      relativePathValue,
+			StartLine:         safeInt32FromInt64(startLineValue),
+			EndLine:           safeInt32FromInt64(endLineValue),
+			Language:          metadataValue.Language,
+			FileExtension:     fileExtensionValue,
+			SplitPart:         splitPartValue,
+			SplitPartRecorded: splitPartRecorded,
+			Scalars:           nil,
+			Score:             score,
 		})
 	}
 	return chunks, nil

@@ -27,7 +27,7 @@ const (
 	defaultEmbeddingBatchTokenBudget = 6000
 	defaultEmbeddingRequestTimeoutMS = 300000
 	defaultMaxJobChunks              = 200000
-	defaultMaxConversationsPerIngest = 100
+	defaultMaxItemsPerIngest         = 100
 	defaultMaxJobBytes               = 1073741824
 	defaultExpectedJobGrowthFactor   = 4
 	defaultExpectedJobGrowthFloor    = 10000
@@ -125,6 +125,10 @@ type Config struct {
 	// checkpoint.
 	EmbeddingProvider model.EmbeddingProvider
 	EmbeddingModel    string
+	// EmbeddingRevision identifies the immutable artifacts used by the embedding model.
+	EmbeddingRevision string
+	// EmbeddingNormalization declares the normalization of vectors returned by the provider.
+	EmbeddingNormalization string
 	// OfflineEmbeddingModel selects a pinned ONNX model preset for the offline
 	// profile. ApplyProfile derives EmbeddingModel and EmbeddingDimension from it.
 	OfflineEmbeddingModel string
@@ -202,12 +206,7 @@ type Config struct {
 	// IndexBackend selects the vector store implementation, resolved to its
 	// canonical value when the config is read. Derived from Profile by
 	// ApplyProfile; may also be set directly.
-	IndexBackend model.VectorBackend
-	// CodebaseStore selects where codebase chunks are written:
-	// [CodebaseStoreSemantic], the per-codebase collections of IndexBackend and
-	// the default, or [CodebaseStoreLibrary], the shared search library catalog
-	// and vector pool under StateRoot. Conversation collections always use
-	// IndexBackend.
+	IndexBackend           model.VectorBackend
 	CodebaseStore          CodebaseStoreKind
 	CollectionNameOverride string
 	HybridMode             bool
@@ -233,9 +232,8 @@ type Config struct {
 	// the embedding endpoint.
 	MaxConcurrentIndexJobs int
 	// MaxJobChunks caps the chunks one job may write before admission halts it.
-	MaxJobChunks int32
-	// MaxConversationsPerIngest caps the conversation ids one manifest sync may request.
-	MaxConversationsPerIngest int
+	MaxJobChunks      int32
+	MaxItemsPerIngest int
 	// MaxJobBytes caps the chunk content bytes one job may write.
 	MaxJobBytes int64
 	// ExpectedJobGrowthFactor caps growth relative to the last successful run
@@ -267,6 +265,8 @@ type persistedConfig struct {
 	Profile                   string `json:"profile"`
 	EmbeddingProvider         string `json:"embeddingProvider"`
 	EmbeddingModel            string `json:"embeddingModel"`
+	EmbeddingRevision         string `json:"embeddingRevision"`
+	EmbeddingNormalization    string `json:"embeddingNormalization"`
 	OfflineEmbeddingModel     string `json:"offlineEmbeddingModel"`
 	EmbeddingBatchSize        int    `json:"embeddingBatchSize"`
 	EmbeddingBatchTokenBudget int    `json:"embeddingBatchTokenBudget"`
@@ -409,6 +409,8 @@ func Default() (Config, error) {
 		ModelCacheRoot:                     modelCacheRoot,
 		EmbeddingProvider:                  embeddingProviderName,
 		EmbeddingModel:                     envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model),
+		EmbeddingRevision:                  envOrDefault("EMBEDDING_REVISION", fileConfig.EmbeddingRevision),
+		EmbeddingNormalization:             envOrDefault("EMBEDDING_NORMALIZATION", fileConfig.EmbeddingNormalization),
 		OfflineEmbeddingModel:              embeddingDefaults.offlineModel,
 		EmbeddingBatchSize:                 envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
 		EmbeddingBatchTokenBudget:          intOrDefault(fileConfig.EmbeddingBatchTokenBudget, defaultEmbeddingBatchTokenBudget),
@@ -440,7 +442,7 @@ func Default() (Config, error) {
 		PerfCountersIntervalMS:             envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),
 		MaxConcurrentIndexJobs:             envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
 		MaxJobChunks:                       envInt32OrDefault("CLAUDE_CONTEXT_MAX_JOB_CHUNKS", defaultMaxJobChunks),
-		MaxConversationsPerIngest:          envIntOrDefault("CLAUDE_CONTEXT_MAX_CONVERSATIONS_PER_INGEST", defaultMaxConversationsPerIngest),
+		MaxItemsPerIngest:                  envIntOrDefault("CLAUDE_CONTEXT_MAX_ITEMS_PER_INGEST", defaultMaxItemsPerIngest),
 		MaxJobBytes:                        envInt64OrDefault("CLAUDE_CONTEXT_MAX_JOB_BYTES", defaultMaxJobBytes),
 		ExpectedJobGrowthFactor:            envFloat64OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FACTOR", defaultExpectedJobGrowthFactor),
 		ExpectedJobGrowthFloor:             envInt32OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FLOOR", defaultExpectedJobGrowthFloor),

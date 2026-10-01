@@ -12,11 +12,11 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-func candidate(primaryKey string, relativePath string, conversationID string, score float64) rankedCandidate {
+func candidate(primaryKey string, relativePath string, itemID string, score float64) rankedCandidate {
 	return rankedCandidate{
 		PrimaryKey:   primaryKey,
 		RelativePath: relativePath,
-		Group:        ValueCell(conversationIDFieldName, StringScalar(conversationID)),
+		Group:        ValueCell("itemId", StringScalar(itemID)),
 		Score:        score,
 	}
 }
@@ -43,37 +43,10 @@ func TestRankedCandidatesRejectMissingScores(t *testing.T) {
 		},
 		Scores: []float32{0.9},
 	}
-	groupColumn := model.ScalarColumn{Name: conversationIDFieldName, Type: model.ScalarTypeString, Nullable: true, MaxLength: 256}
+	groupColumn := model.ScalarColumn{Name: "itemId", Type: model.ScalarTypeString, Nullable: true, MaxLength: 256}
 	_, err := rankedCandidatesFromResultSets(context.Background(), "conv_chunks_test", []milvusclient.ResultSet{resultSet}, groupColumn, false)
 	if !errors.Is(err, ErrSearchResultIncomplete) {
 		t.Fatalf("rankedCandidatesFromResultSets error = %v, want ErrSearchResultIncomplete", err)
-	}
-}
-
-// TestApplyLegacyConversationGroupsDropsDeletedRows proves a null-group row
-// deleted after the ranking search leaves the candidates before the cap
-// applies. The deleted row takes no empty-id cap slot from a surviving row.
-func TestApplyLegacyConversationGroupsDropsDeletedRows(t *testing.T) {
-	t.Parallel()
-
-	nullGroup := func(primaryKey string, relativePath string, score float64) rankedCandidate {
-		return rankedCandidate{PrimaryKey: primaryKey, RelativePath: relativePath, Group: AbsentCell(conversationIDFieldName), Score: score}
-	}
-	resolved := applyLegacyConversationGroups(
-		[]rankedCandidate{
-			nullGroup("gone", "conv/legacy-a/0", 0.9),
-			nullGroup("kept", "conv/legacy-b/0", 0.8),
-			candidate("current", "conv/c/0", "c", 0.7),
-			nullGroup("unnamed", "conv/legacy-c/0", 0.6),
-		},
-		conversationIDFieldName,
-		map[string]string{"kept": "legacy-b", "unnamed": ""},
-	)
-	if got, want := candidateKeys(resolved), []string{"kept", "current", "unnamed"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("resolved keys = %v, want %v", got, want)
-	}
-	if got, want := candidateKeys(selectRankedCandidates(resolved, 1, 0, 10)), []string{"kept", "current", "unnamed"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("capped keys = %v, want %v", got, want)
 	}
 }
 
@@ -108,8 +81,8 @@ func TestSelectRankedCandidatesFillsPastAnOverfilledTop(t *testing.T) {
 		candidates = append(candidates, candidate(fmt.Sprintf("dense-%02d", index), fmt.Sprintf("conv/dense/%02d", index), "dense", 1.0))
 	}
 	for index := range 10 {
-		conversationID := fmt.Sprintf("other-%02d", index)
-		candidates = append(candidates, candidate(conversationID, "conv/"+conversationID+"/0", conversationID, 0.5-float64(index)/100))
+		itemID := fmt.Sprintf("other-%02d", index)
+		candidates = append(candidates, candidate(itemID, "conv/"+itemID+"/0", itemID, 0.5-float64(index)/100))
 	}
 	sortRankedCandidates(candidates)
 	selected := selectRankedCandidates(candidates, 2, 0, 10)
@@ -167,8 +140,8 @@ func TestSelectRankedCandidatesGroupsByCellValue(t *testing.T) {
 		candidate("k2", "conv/x/1", "x", 0.8),
 		candidate("k3", "code/a", "", 0.7),
 		candidate("k4", "code/b", "", 0.6),
-		nullCandidate("k5", 0.5, NullCell(conversationIDFieldName)),
-		nullCandidate("k6", 0.4, AbsentCell(conversationIDFieldName)),
+		nullCandidate("k5", 0.5, NullCell("itemId")),
+		nullCandidate("k6", 0.4, AbsentCell("itemId")),
 	}
 	if got, want := candidateKeys(selectRankedCandidates(candidates, 1, 0, 10)), []string{"k1", "k3", "k5"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected %v, want %v", got, want)
@@ -187,20 +160,20 @@ func TestCompileCollectionFilterExprNestsBooleanNodes(t *testing.T) {
 	upper := int64(9)
 	tree := AllOf(
 		AnyOf(
-			ColumnEquals(roleFieldName, StringScalar(`ro"le`)),
-			ColumnRange(messageIndexFieldName, &lower, &upper),
-			AllOf(ColumnEquals(archivedFieldName, BoolScalar(false)), ColumnIsNull(workspaceRootFieldName)),
+			ColumnEquals("category", StringScalar(`ro"le`)),
+			ColumnRange("sequence", &lower, &upper),
+			AllOf(ColumnEquals("hidden", BoolScalar(false)), ColumnIsNull("location")),
 		),
-		Negate(ColumnIn(timestampUnixFieldName, []ScalarValue{Int64Scalar(1), Int64Scalar(2)})),
-		ColumnIn(archivedFieldName, []ScalarValue{BoolScalar(true)}),
-		ColumnIsPresent(loadRulesFieldName),
-		ColumnRange(timestampUnixFieldName, nil, &upper),
+		Negate(ColumnIn("created", []ScalarValue{Int64Scalar(1), Int64Scalar(2)})),
+		ColumnIn("hidden", []ScalarValue{BoolScalar(true)}),
+		ColumnIsPresent("tag"),
+		ColumnRange("created", nil, &upper),
 	)
 	got, err := compileCollectionFilterExpr(&tree)
 	if err != nil {
 		t.Fatalf("compile returned error: %v", err)
 	}
-	want := `(role == "ro\"le" or (messageIndex >= 5 and messageIndex < 9) or (archived == false and workspaceRoot IS NULL)) and not (timestampUnix in {p0}) and archived in {p1} and loadRules IS NOT NULL and timestampUnix < 9`
+	want := `(category == "ro\"le" or (sequence >= 5 and sequence < 9) or (hidden == false and location IS NULL)) and not (created in {p0}) and hidden in {p1} and tag IS NOT NULL and created < 9`
 	if got.Expression != want {
 		t.Fatalf("expression = %q, want %q", got.Expression, want)
 	}
@@ -230,7 +203,7 @@ func TestScalarCellsAtDecodesDeclaredScalars(t *testing.T) {
 	t.Parallel()
 
 	workspaceRoots, err := column.NewNullableColumnVarChar(
-		workspaceRootFieldName,
+		"location",
 		[]string{"", "/work/alpha"},
 		[]bool{false, true},
 		column.WithSparseNullableMode[string](true),
@@ -242,28 +215,28 @@ func TestScalarCellsAtDecodesDeclaredScalars(t *testing.T) {
 		ResultCount: 2,
 		Fields: milvusclient.DataSet{
 			workspaceRoots,
-			column.NewColumnBool(archivedFieldName, []bool{true, false}),
-			column.NewColumnInt64(messageIndexFieldName, []int64{0, 1}),
+			column.NewColumnBool("hidden", []bool{true, false}),
+			column.NewColumnInt64("sequence", []int64{0, 1}),
 		},
 	}
 	declared := []model.ScalarColumn{
-		{Name: workspaceRootFieldName, Type: model.ScalarTypeString, Nullable: true, MaxLength: conversationWorkspaceMaxLength},
-		{Name: archivedFieldName, Type: model.ScalarTypeBool, Nullable: true, MaxLength: 0},
-		{Name: messageIndexFieldName, Type: model.ScalarTypeInt64, Nullable: true, MaxLength: 0},
-		{Name: loadRulesFieldName, Type: model.ScalarTypeString, Nullable: true, MaxLength: conversationLoadRulesMaxLength},
+		{Name: "location", Type: model.ScalarTypeString, Nullable: true, MaxLength: 1024},
+		{Name: "hidden", Type: model.ScalarTypeBool, Nullable: true, MaxLength: 0},
+		{Name: "sequence", Type: model.ScalarTypeInt64, Nullable: true, MaxLength: 0},
+		{Name: "tag", Type: model.ScalarTypeString, Nullable: true, MaxLength: 256},
 	}
 	want := [][]ScalarCell{
 		{
-			NullCell(workspaceRootFieldName),
-			ValueCell(archivedFieldName, BoolScalar(true)),
-			ValueCell(messageIndexFieldName, Int64Scalar(0)),
-			AbsentCell(loadRulesFieldName),
+			NullCell("location"),
+			ValueCell("hidden", BoolScalar(true)),
+			ValueCell("sequence", Int64Scalar(0)),
+			AbsentCell("tag"),
 		},
 		{
-			ValueCell(workspaceRootFieldName, StringScalar("/work/alpha")),
-			ValueCell(archivedFieldName, BoolScalar(false)),
-			ValueCell(messageIndexFieldName, Int64Scalar(1)),
-			AbsentCell(loadRulesFieldName),
+			ValueCell("location", StringScalar("/work/alpha")),
+			ValueCell("hidden", BoolScalar(false)),
+			ValueCell("sequence", Int64Scalar(1)),
+			AbsentCell("tag"),
 		},
 	}
 	for rowIndex := range 2 {

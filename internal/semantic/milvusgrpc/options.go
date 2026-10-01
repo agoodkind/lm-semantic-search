@@ -27,17 +27,6 @@ const (
 	// from reporting itself as running while nothing moves.
 	defaultMetadataCallTimeout = 60 * time.Second
 
-	// defaultMutationCallTimeout is the bound a client applies to a Milvus call
-	// that writes or deletes rows when its configuration names no other value.
-	// One filter-based Delete covers every row of a conversation, and Milvus
-	// evaluates the non-primary relativePath predicate across the loaded
-	// collection before it answers, so the matching row count is unbounded and a
-	// valid bulk delete on a large collection can run well past the metadata
-	// bound. A separate, larger bound keeps the call bounded without turning a
-	// valid delete into a milvus_unavailable ingest failure. No fixed duration is
-	// provably sufficient for an unbounded row count, so the bound is tunable
-	// through CallTimeouts.WithMutation and an operator whose collection is large
-	// enough to outlast this default raises it without a rebuild.
 	defaultMutationCallTimeout = 5 * time.Minute
 
 	// keepaliveTime is how long the connection stays idle before the client

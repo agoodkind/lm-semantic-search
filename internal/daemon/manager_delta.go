@@ -54,12 +54,9 @@ type deltaOutcome struct {
 }
 
 type deltaState struct {
-	plan         deltaPlan
-	snapshotPath string
-	working      map[string]string
-	// source lists items and produces one item's chunks. It is the only
-	// kind-specific part of the routine: a code source walks the filesystem, a
-	// conversation source reads the manifest and documents handed over the wire.
+	plan             deltaPlan
+	snapshotPath     string
+	working          map[string]string
 	source           itemSource
 	semantic         bool
 	itemReuseEnabled bool
@@ -675,10 +672,6 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		if outcome.fallback || outcome.handled {
 			return result, outcome
 		}
-		// A skipped item changes nothing in the working set, so rewriting the
-		// snapshot for it would be one full-file disk write per skipped item; a
-		// job that skips a thousand undelivered conversations checkpoints only
-		// after the items that actually embedded or removed.
 		if outcome.progressed {
 			manager.writeCheckpoint(ctx, state, relativePath)
 		}
@@ -852,9 +845,6 @@ func (manager *Manager) finishJobForReuseFailure(ctx context.Context, jobID stri
 	manager.updateJobFailed(ctx, jobID, err)
 }
 
-// mergedReuse overlays an item's own reuse vectors on any build-wide reuse map
-// without mutating either input. With no build-wide map the item map is used
-// as-is, which is the conversation delta case.
 func mergedReuse(base map[string][]float32, item map[string][]float32) map[string][]float32 {
 	if len(base) == 0 {
 		return item

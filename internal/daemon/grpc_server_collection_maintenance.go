@@ -159,7 +159,7 @@ func (server *GRPCServer) DeleteCollectionItem(ctx context.Context, request *pb.
 		CollectionID:    request.GetCollectionId(),
 		CollectionName:  "",
 		CodebaseID:      job.CodebaseID,
-		ConversationID:  request.GetItemId(),
+		ItemID:          request.GetItemId(),
 		DocumentCount:   0,
 		NeededCount:     0,
 		TotalCount:      0,
@@ -179,9 +179,6 @@ func (server *GRPCServer) DeleteCollectionItem(ctx context.Context, request *pb.
 	}, nil
 }
 
-// backfillScalarsDisplayText renders the reply of a scalar backfill. kind is
-// the collection kind that the reply text states: "conversation" or
-// "document".
 func backfillScalarsDisplayText(kind string, collectionID string, changed int, orphan int, dryRun bool) string {
 	prefix := "Backfilled"
 	if dryRun {

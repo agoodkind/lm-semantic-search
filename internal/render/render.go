@@ -56,11 +56,6 @@ func Search(searchView view.SearchView) string {
 	return renderSearch(searchView)
 }
 
-// ConversationSearch formats conversation search results.
-func ConversationSearch(conversationView view.ConversationSearchView) string {
-	return renderConversationSearch(conversationView)
-}
-
 func renderStartIndex(startIndex view.StartIndexView) string {
 	if startIndex.Deduplicated {
 		return fmt.Sprintf(
@@ -115,13 +110,6 @@ func renderMutationAck(ack view.MutationAckView) string {
 		return fmt.Sprintf("Started sync job %s for '%s'", ack.JobID, ack.Path)
 	case view.AckUpdatePolicy:
 		return fmt.Sprintf("Updated scheduling policy for codebase '%s'", ack.Path)
-	case view.AckRegisterConversation:
-		return fmt.Sprintf(
-			"Registered conversation collection '%s' as codebase %s using Milvus collection '%s'.",
-			ack.CollectionID,
-			ack.CodebaseID,
-			ack.CollectionName,
-		)
 	case view.AckRegisterCollection:
 		return fmt.Sprintf(
 			"Registered document collection '%s' as codebase %s using collection '%s'.",
@@ -129,23 +117,6 @@ func renderMutationAck(ack view.MutationAckView) string {
 			ack.CodebaseID,
 			ack.CollectionName,
 		)
-	case view.AckUpsertConversation:
-		return fmt.Sprintf(
-			"Started conversation ingest job %s for collection '%s' with %d %s.",
-			ack.JobID,
-			ack.CollectionID,
-			ack.DocumentCount,
-			plural("document", ack.DocumentCount),
-		)
-	case view.AckDeleteConversation:
-		return fmt.Sprintf(
-			"Started conversation delete job %s for conversation '%s' in collection '%s'.",
-			ack.JobID,
-			ack.ConversationID,
-			ack.CollectionID,
-		)
-	case view.AckManifest:
-		return fmt.Sprintf("Conversation collection '%s' needs %d of %d %s.", ack.CollectionID, ack.NeededCount, ack.TotalCount, plural("conversation", ack.TotalCount))
 	case view.AckUpsertCollectionItems:
 		return fmt.Sprintf(
 			"Started document ingest job %s for collection '%s' with %d %s.",
@@ -160,7 +131,7 @@ func renderMutationAck(ack view.MutationAckView) string {
 		return fmt.Sprintf(
 			"Started document delete job %s for item '%s' in collection '%s'.",
 			ack.JobID,
-			ack.ConversationID,
+			ack.ItemID,
 			ack.CollectionID,
 		)
 	default:
@@ -587,30 +558,6 @@ func renderSearch(searchView view.SearchView) string {
 	header := fmt.Sprintf("🔍 Found %d results for query: %q in codebase '%s'", len(searchView.Results), searchView.Query, searchView.CodebasePath)
 	body := header + "\n\n" + strings.Join(formatted, "\n\n")
 	return joinSearchSections(searchView, body, status, resolution, true)
-}
-
-func renderConversationSearch(conversationView view.ConversationSearchView) string {
-	if len(conversationView.Results) == 0 {
-		return fmt.Sprintf("🔍 No conversation results found for query: %q in collection '%s'", conversationView.Query, conversationView.CollectionID)
-	}
-
-	formatted := make([]string, 0, len(conversationView.Results))
-	for index, result := range conversationView.Results {
-		formatted = append(formatted, fmt.Sprintf(
-			"%d. Conversation message [%s]\n   Conversation: %s\n   Message index: %d\n   Role: %s\n   Timestamp Unix: %d\n   Rank: %d\n   Content:\n```\n%s\n```",
-			index+1,
-			conversationView.CollectionID,
-			result.ConversationID,
-			result.MessageIndex,
-			orDefault(result.Role, "unknown"),
-			result.TimestampUnix,
-			index+1,
-			strings.TrimSpace(truncateContent(result.Content, 5000)),
-		))
-	}
-
-	header := fmt.Sprintf("🔍 Found %d conversation results for query: %q in collection '%s'", len(conversationView.Results), conversationView.Query, conversationView.CollectionID)
-	return header + "\n\n" + strings.Join(formatted, "\n\n")
 }
 
 // joinSearchSections appends the identity (resolution), in-progress status, and

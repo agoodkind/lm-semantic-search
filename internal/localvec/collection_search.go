@@ -23,18 +23,7 @@ const (
 	truthUnknown
 )
 
-// SearchCollection runs a typed search of a local collection. It ranks a
-// fixed candidate set that never depends on the limit, the group cap, or the
-// score floor, at the depth the Milvus collection search ranks. When at most
-// semantic.CollectionRankingDepth rows match the filter tree, the candidates
-// are every matching row, scored exactly. Otherwise the candidates are the
-// semantic.CollectionRankingDepth nearest rows from the HNSW index. It sorts
-// the candidates with sortScoredRows and walks them once to keep the rows
-// that match the filter tree and score at or above MinScore, at most
-// PerGroupLimit per GroupBy value, up to Limit rows. A smaller limit therefore
-// returns a prefix of a larger one at any collection size. A local row stores
-// the conversation scalar fields, so each hit decodes a declared conversation
-// column from the row and reports every other declared column as absent.
+// SearchCollection ranks local rows with caller-declared scalar filters.
 func (store *Store) SearchCollection(
 	ctx context.Context,
 	search semantic.CollectionSearch,
@@ -190,21 +179,19 @@ func (stored *collection) nearestCandidatesLocked(query []float32, depth int) ([
 	return scored, nil
 }
 
-// rowScalarCell returns the row's cell for a declared column. The row stores
-// the conversation scalar fields concretely. provider comes from the
-// conversation id prefix and role is lowercased, as the Milvus insert writes
-// them. A column the declaration omits, a column the row format lacks, and a
-// column declared with a different type are absent.
 func rowScalarCell(stored row, columnName string, declared []model.ScalarColumn) semantic.ScalarCell {
 	declaredType, found := declaredColumnType(declared, columnName)
 	if !found {
 		return semantic.AbsentCell(columnName)
 	}
-	value, stores := conversationRowValue(stored, columnName)
+	value, stores := stored.Scalars[columnName]
 	if !stores || value.Type != declaredType {
 		return semantic.AbsentCell(columnName)
 	}
-	return semantic.ValueCell(columnName, value)
+	if value.Null {
+		return semantic.NullCell(columnName)
+	}
+	return semantic.ValueCell(columnName, semantic.ScalarValue{Type: value.Type, String: value.String, Bool: value.Bool, Int64: value.Int64})
 }
 
 func declaredColumnType(declared []model.ScalarColumn, columnName string) (model.ScalarType, bool) {
@@ -214,47 +201,6 @@ func declaredColumnType(declared []model.ScalarColumn, columnName string) (model
 		}
 	}
 	return "", false
-}
-
-// conversationRowColumn is the closed set of conversation scalar columns a
-// local row stores. The names match the conversation declaration.
-type conversationRowColumn string
-
-const (
-	rowColumnConversationID       conversationRowColumn = "conversationId"
-	rowColumnParentConversationID conversationRowColumn = "parentConversationId"
-	rowColumnRole                 conversationRowColumn = "role"
-	rowColumnProvider             conversationRowColumn = "provider"
-	rowColumnWorkspaceRoot        conversationRowColumn = "workspaceRoot"
-	rowColumnArchived             conversationRowColumn = "archived"
-	rowColumnTimestampUnix        conversationRowColumn = "timestampUnix"
-	rowColumnMessageIndex         conversationRowColumn = "messageIndex"
-	rowColumnLoadRules            conversationRowColumn = "loadRules"
-)
-
-func conversationRowValue(stored row, columnName string) (semantic.ScalarValue, bool) {
-	switch conversationRowColumn(columnName) {
-	case rowColumnConversationID:
-		return semantic.StringScalar(stored.ConversationID), true
-	case rowColumnParentConversationID:
-		return semantic.StringScalar(stored.ParentConversationID), true
-	case rowColumnRole:
-		return semantic.StringScalar(strings.ToLower(stored.Role)), true
-	case rowColumnProvider:
-		return semantic.StringScalar(conversationProvider(stored.ConversationID)), true
-	case rowColumnWorkspaceRoot:
-		return semantic.StringScalar(stored.WorkspaceRoot), true
-	case rowColumnArchived:
-		return semantic.BoolScalar(stored.Archived), true
-	case rowColumnTimestampUnix:
-		return semantic.Int64Scalar(stored.TimestampUnix), true
-	case rowColumnMessageIndex:
-		return semantic.Int64Scalar(int64(stored.MessageIndex)), true
-	case rowColumnLoadRules:
-		return semantic.StringScalar(stored.LoadRules), true
-	default:
-		return semantic.ScalarValue{Type: "", String: "", Bool: false, Int64: 0}, false
-	}
 }
 
 // evaluateFilter evaluates a validated filter tree on one row with three-valued

@@ -213,8 +213,8 @@ type Config struct {
 	// MaxTemporaryBytes bounds the per-query SQLite file that Search creates in
 	// the catalog directory, through PRAGMA max_page_count. Default 1 GiB.
 	MaxTemporaryBytes int64
-	// SnapshotTTL bounds how long a persisted result snapshot serves cursors.
-	// Default 10 minutes.
+	// SnapshotTTL bounds inactivity between successful cursor pages. Each
+	// successful continuation renews the saved expiration. Default 10 minutes.
 	SnapshotTTL time.Duration
 	// MaxSnapshotBytes bounds the logical result bytes of unexpired search
 	// snapshots, measured after expired snapshots are deleted: the lengths of

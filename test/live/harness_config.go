@@ -24,7 +24,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/store"
 )
 
-func prepareLiveDaemonConfig(t *testing.T, gate *embedGate, milvusAddress string, token string, databaseName string, harnessID string, idleTimeout time.Duration) (config.Config, string, *embeddingCallRecorder) {
+func prepareLiveDaemonConfig(t *testing.T, gate *embedGate, milvusAddress string, token string, databaseName string, harnessID string, idleTimeout time.Duration, realEmbedding bool) (config.Config, string, *embeddingCallRecorder) {
 	t.Helper()
 	slog.Debug("prepare isolated daemon configuration", "database", databaseName)
 	stateRoot := t.TempDir()
@@ -37,23 +37,32 @@ func prepareLiveDaemonConfig(t *testing.T, gate *embedGate, milvusAddress string
 	socketPath := filepath.Join(socketDir, "daemon.sock")
 
 	embeddingRecorder := &embeddingCallRecorder{}
-	embedServer := newFakeEmbeddingServerWithRecorder(
-		t,
-		gate,
-		fakeEmbeddingDimension,
-		embeddingRecorder,
-	)
+	var embeddingConfig []config.Config
+	var embeddingURL string
+	if realEmbedding {
+		resolved := resolveHarnessConfig(t, true)
+		if resolved.OpenAIBaseURL == "" || resolved.EmbeddingModel == "" || resolved.EmbeddingDimension <= 0 {
+			t.Fatal("real embedding requires the resolved endpoint, model, and dimension")
+		}
+		embeddingConfig = []config.Config{resolved}
+		embeddingURL = resolved.OpenAIBaseURL
+		t.Logf("Real embedding endpoint=%s model=%s dimension=%d", embeddingURL, resolved.EmbeddingModel, resolved.EmbeddingDimension)
+	} else {
+		embedServer := newFakeEmbeddingServerWithRecorder(t, gate, fakeEmbeddingDimension, embeddingRecorder)
+		embeddingURL = embedServer.URL
+	}
 
 	cfg := resolveLiveConfig(
 		t,
 		stateRoot,
 		socketPath,
-		embedServer.URL,
+		embeddingURL,
 		milvusAddress,
 		token,
 		databaseName,
 		harnessID,
 		idleTimeout,
+		embeddingConfig...,
 	)
 	for _, dir := range sandbox.Directories(cfg) {
 		if err := store.EnsureDir(dir); err != nil {
@@ -207,15 +216,15 @@ func startLiveHarnessDaemon(t *testing.T, ctx context.Context, cfg config.Config
 
 	// A fresh random id derives a unique conv_chunks_<hash> collection name, so
 	// the throwaway collection can never be the production one.
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
+	codebase, err := manager.RegisterCollection(ctx, daemon.CollectionRegistration{CollectionID: collectionID, Declaration: liveCollectionDeclaration()})
 	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
+		t.Fatalf("RegisterCollection returned error: %v", err)
 	}
 	if codebase.CollectionName == "" {
-		t.Fatal("RegisterConversationCollection returned an empty collection name")
+		t.Fatal("RegisterCollection returned an empty collection name")
 	}
-	if codebase.CollectionName == productionConversationCollection {
-		t.Fatalf("throwaway collection name equals production %q; refusing to run", productionConversationCollection)
+	if codebase.CollectionName == productionProtectedCollection {
+		t.Fatalf("throwaway collection name equals production %q; refusing to run", productionProtectedCollection)
 	}
 
 	initialized = true

@@ -21,7 +21,6 @@ type insertBatchColumns struct {
 	fileExtensions []string
 	metadataValues []string
 	splitParts     []int64
-	scalars        conversationScalarColumns
 	sanitizedCount int
 }
 
@@ -70,16 +69,14 @@ func (service *Service) insertBatchWithIDs(
 	); err != nil {
 		return err
 	}
-	conversationCollection := columnSet.ConversationScalars()
 	if err := service.ensureInsertColumns(
 		ctx,
 		collectionName,
-		conversationCollection,
 	); err != nil {
 		return err
 	}
 
-	columns := buildInsertBatchColumns(ctx, chunks, conversationCollection)
+	columns := buildInsertBatchColumns(ctx, chunks)
 	columns.contentHashes = contentHashes(columns.contents)
 	if columns.sanitizedCount > 0 {
 		slog.WarnContext(
@@ -120,7 +117,6 @@ func (service *Service) insertBatchWithIDs(
 		columns,
 		splitPartColumn,
 		embeddingModelColumn,
-		conversationCollection,
 		declaredColumns,
 	)
 
@@ -158,7 +154,6 @@ func buildInsertOption(
 	columns insertBatchColumns,
 	splitPartColumn column.Column,
 	embeddingModelColumn column.Column,
-	conversationCollection bool,
 	declaredColumns []column.Column,
 ) milvusclient.InsertOption {
 	insertOption := milvusclient.NewColumnBasedInsertOption(collectionName).
@@ -172,18 +167,6 @@ func buildInsertOption(
 		WithVarcharColumn(metadataFieldName, columns.metadataValues).
 		WithColumns(splitPartColumn, embeddingModelColumn).
 		WithFloatVectorColumn(denseVectorFieldName, len(vectors[0]), vectors)
-	if conversationCollection {
-		insertOption = insertOption.
-			WithVarcharColumn(conversationIDFieldName, columns.scalars.conversationIDs).
-			WithVarcharColumn(parentConversationIDFieldName, columns.scalars.parentConversationIDs).
-			WithVarcharColumn(roleFieldName, columns.scalars.roles).
-			WithVarcharColumn(providerFieldName, columns.scalars.providers).
-			WithVarcharColumn(workspaceRootFieldName, columns.scalars.workspaceRoots).
-			WithBoolColumn(archivedFieldName, columns.scalars.archiveds).
-			WithInt64Column(timestampUnixFieldName, columns.scalars.timestamps).
-			WithInt64Column(messageIndexFieldName, columns.scalars.messageIndexes).
-			WithVarcharColumn(loadRulesFieldName, columns.scalars.loadRules)
-	}
 	if len(declaredColumns) > 0 {
 		insertOption = insertOption.WithColumns(declaredColumns...)
 	}
@@ -193,7 +176,6 @@ func buildInsertOption(
 func (service *Service) ensureInsertColumns(
 	ctx context.Context,
 	collectionName string,
-	conversationCollection bool,
 ) error {
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return err
@@ -201,10 +183,7 @@ func (service *Service) ensureInsertColumns(
 	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
 		return err
 	}
-	if !conversationCollection {
-		return nil
-	}
-	return service.ensureConversationScalarColumnsOnce(ctx, collectionName)
+	return nil
 }
 
 func (service *Service) executeInsert(
@@ -259,7 +238,6 @@ func validateInsertBatchCounts(
 func buildInsertBatchColumns(
 	ctx context.Context,
 	chunks []model.StoredChunk,
-	conversationCollection bool,
 ) insertBatchColumns {
 	columns := insertBatchColumns{
 		contents:       make([]string, 0, len(chunks)),
@@ -270,7 +248,6 @@ func buildInsertBatchColumns(
 		fileExtensions: make([]string, 0, len(chunks)),
 		metadataValues: make([]string, 0, len(chunks)),
 		splitParts:     make([]int64, 0, len(chunks)),
-		scalars:        newConversationScalarColumns(conversationCollection, len(chunks)),
 		sanitizedCount: 0,
 	}
 	for _, chunk := range chunks {
@@ -289,7 +266,6 @@ func buildInsertBatchColumns(
 		columns.fileExtensions = append(columns.fileExtensions, fileExtension)
 		columns.metadataValues = append(columns.metadataValues, metadataValue)
 		columns.splitParts = append(columns.splitParts, int64(chunk.SplitPart))
-		columns.scalars.append(chunk)
 	}
 	return columns
 }

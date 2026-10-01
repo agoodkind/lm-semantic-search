@@ -45,7 +45,7 @@ func (server *GRPCServer) RegisterCollection(ctx context.Context, request *pb.Re
 		CollectionID:    request.GetCollectionId(),
 		CollectionName:  codebase.CollectionName,
 		CodebaseID:      codebase.ID,
-		ConversationID:  "",
+		ItemID:          "",
 		DocumentCount:   0,
 		NeededCount:     0,
 		TotalCount:      0,

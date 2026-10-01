@@ -17,59 +17,11 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
-// Conversation collections carry their filterable attributes as native scalar
-// columns so Milvus can pre-filter a search by them, rather than the engine
-// over-fetching and post-filtering the JSON metadata column. These columns
-// exist only on conversation collections. Conversation collections and generic
-// document collections share the conv_chunks_ name prefix, and only this
-// daemon writes them. The TS-adapter-owned code collections never declare
-// these columns, and a generic document collection declares its own scalar
-// columns instead. The values are still mirrored into the metadata JSON for
-// backward compatibility with rows written before the columns existed.
 const (
-	conversationCollectionPrefix   = "conv_chunks_"
-	conversationIDFieldName        = "conversationId"
-	parentConversationIDFieldName  = "parentConversationId"
-	roleFieldName                  = "role"
-	timestampUnixFieldName         = "timestampUnix"
-	messageIndexFieldName          = "messageIndex"
-	providerFieldName              = "provider"
-	workspaceRootFieldName         = "workspaceRoot"
-	archivedFieldName              = "archived"
-	loadRulesFieldName             = "loadRules"
-	conversationIDFieldMaxLength   = 256
-	conversationRoleFieldMaxLength = 64
-	conversationProviderMaxLength  = 32
-	conversationWorkspaceMaxLength = 1024
-	conversationLoadRulesMaxLength = 256
-	idFieldMaxLength               = 512
-	contentFieldMaxLength          = 65_535
-	embeddingModelFieldMaxLength   = 65535
+	idFieldMaxLength             = 512
+	contentFieldMaxLength        = 65_535
+	embeddingModelFieldMaxLength = 65_535
 )
-
-// hasConversationCollectionPrefix reports whether a collection name uses the
-// document collection prefix, including its staging twin. Conversation
-// collections and generic document collections share this prefix. A Service
-// decides whether a name stores conversation rows in
-// [Service.isConversationCollection].
-func hasConversationCollectionPrefix(collectionName string) bool {
-	return strings.HasPrefix(collectionName, conversationCollectionPrefix)
-}
-
-// isConversationCollection reports whether a collection stores conversation
-// rows with the conversation scalar columns. A name with the document
-// collection prefix stores conversation rows unless the manager recorded a
-// generic declaration for it through [Service.RecordCollectionDeclaration].
-// The name-based conversation schema migration, the conversation backfills,
-// and the search output column choice use this check. None of them adds
-// conversation columns to a generic collection.
-func (service *Service) isConversationCollection(collectionName string) bool {
-	if !hasConversationCollectionPrefix(collectionName) {
-		return false
-	}
-	_, declared := service.declaredCollections.Load(liveCollectionName(collectionName))
-	return !declared
-}
 
 // liveCollectionName strips the staging and promotion recovery suffixes. A
 // staging or recovery twin then resolves to the live collection it replaces.
@@ -78,57 +30,14 @@ func liveCollectionName(collectionName string) string {
 	return strings.TrimSuffix(trimmed, recoveryCollectionSuffix)
 }
 
-// RecordCollectionDeclaration records the saved declaration of a document
-// collection. The conversation declaration clears any recorded generic
-// declaration. The conversation schema migrations then apply to the
-// collection. Any other declaration marks the collection as generic. The
-// conversation migrations and backfills then skip it.
-func (service *Service) RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration) {
-	name := liveCollectionName(collectionName)
-	if IsConversationDeclaration(declaration) {
-		service.declaredCollections.Delete(name)
-		return
-	}
-	service.declaredCollections.Store(name, struct{}{})
-}
-
-// IsConversationDeclaration reports whether declaration has the item id column
-// and the scalar columns of [ConversationDeclaration] in any order: the same
-// column names, types, nullability, and string lengths. Only that declaration
-// stores rows in the conversation schema.
-// Registration compares declarations without regard to column order.
-// A saved declaration preserves the column order supplied during the
-// registration that saved it.
-func IsConversationDeclaration(declaration model.CollectionDeclaration) bool {
-	conversation := ConversationDeclaration()
-	return declaration.ItemIDColumn == conversation.ItemIDColumn &&
-		slices.Equal(scalarColumnsByName(declaration.Scalars), scalarColumnsByName(conversation.Scalars))
-}
-
-// scalarColumnsByName returns a copy of columns sorted by column name.
-func scalarColumnsByName(columns []model.ScalarColumn) []model.ScalarColumn {
-	sorted := slices.Clone(columns)
-	slices.SortFunc(sorted, func(left model.ScalarColumn, right model.ScalarColumn) int {
-		return strings.Compare(left.Name, right.Name)
-	})
-	return sorted
-}
-
 type storeColumnKind int
 
 const (
 	storeColumnKindCode storeColumnKind = iota
-	storeColumnKindConversation
 	storeColumnKindDeclared
 )
 
-// StoreColumnSet is the set of scalar columns a store write populates and a
-// created collection declares. The ingest caller (the item source) passes it
-// into the write path. insertBatch never derives the row shape from the
-// collection name. A code write sends only the base columns. A conversation
-// write also sends the conversation scalar columns from the conversation
-// fields of each chunk. A declared write also sends each declared column from
-// [model.StoredChunk.Scalars].
+// StoreColumnSet selects code columns or caller-declared scalar columns.
 type StoreColumnSet struct {
 	kind    storeColumnKind
 	scalars []model.ScalarColumn
@@ -139,30 +48,12 @@ func CodeColumns() StoreColumnSet {
 	return StoreColumnSet{kind: storeColumnKindCode, scalars: nil}
 }
 
-// ConversationColumns returns the column set of a conversation collection.
-func ConversationColumns() StoreColumnSet {
-	return StoreColumnSet{kind: storeColumnKindConversation, scalars: nil}
-}
-
-// ColumnsForDeclaration returns the column set of a document collection with
-// the given saved declaration. The conversation declaration returns
-// [ConversationColumns]. Its rows keep the conversation schema byte for byte.
+// ColumnsForDeclaration copies the scalar columns of a collection declaration.
 func ColumnsForDeclaration(declaration model.CollectionDeclaration) StoreColumnSet {
-	if IsConversationDeclaration(declaration) {
-		return ConversationColumns()
-	}
 	return StoreColumnSet{kind: storeColumnKindDeclared, scalars: slices.Clone(declaration.Scalars)}
 }
 
-// ConversationScalars reports whether this column set writes the conversation
-// scalar columns. The caller chooses the row shape. The store write never
-// infers it from the collection name.
-func (columnSet StoreColumnSet) ConversationScalars() bool {
-	return columnSet.kind == storeColumnKindConversation
-}
-
-// DeclaredScalars returns the declared columns a declared write sends. It is
-// nil for the code and conversation column sets.
+// DeclaredScalars returns the scalar columns for a declared collection.
 func (columnSet StoreColumnSet) DeclaredScalars() []model.ScalarColumn {
 	if columnSet.kind != storeColumnKindDeclared {
 		return nil
@@ -174,8 +65,6 @@ func (columnSet StoreColumnSet) DeclaredScalars() []model.ScalarColumn {
 // collection it creates for this column set.
 func (columnSet StoreColumnSet) creationScalars() []model.ScalarColumn {
 	switch columnSet.kind {
-	case storeColumnKindConversation:
-		return ConversationDeclaration().Scalars
 	case storeColumnKindDeclared:
 		return columnSet.scalars
 	case storeColumnKindCode:
@@ -190,8 +79,10 @@ func (columnSet StoreColumnSet) creationScalars() []model.ScalarColumn {
 // existing rows within one known collection). The source-driven ingest path
 // passes its StoreColumnSet directly instead of calling this.
 func (service *Service) storeColumnSetForCollection(collectionName string) StoreColumnSet {
-	if service.isConversationCollection(collectionName) {
-		return ConversationColumns()
+	if stored, found := service.declaredCollections.Load(liveCollectionName(collectionName)); found {
+		if declaration, valid := stored.(model.CollectionDeclaration); valid {
+			return ColumnsForDeclaration(declaration)
+		}
 	}
 	return CodeColumns()
 }
@@ -202,15 +93,6 @@ func (service *Service) storeColumnSetForCollection(collectionName string) Store
 // yet, and is not a durable surface to migrate, so sweeping it only logs noise.
 func isStagingCollection(collectionName string) bool {
 	return strings.HasSuffix(collectionName, stagingCollectionSuffix)
-}
-
-// conversationScalarFields returns the native scalar columns a conversation
-// collection carries so Milvus can pre-filter a search by provider, workspace,
-// role, time, message index, and conversation lineage. Every field is nullable
-// so the same definitions serve both a freshly created collection and an
-// AddCollectionField migration onto a collection with existing rows.
-func conversationScalarFields() []*entity.Field {
-	return scalarFields(ConversationDeclaration().Scalars)
 }
 
 // scalarFields builds the Milvus field definitions for declared scalar columns,
@@ -613,135 +495,6 @@ func (service *Service) ensureSplitPartColumnOnce(
 	return migration.err
 }
 
-// ensureConversationScalarColumns adds any conversation scalar column the
-// existing collection is missing, in place and without re-embedding, using the
-// Milvus 2.5 AddCollectionField API. It is idempotent: it describes the
-// collection first and only adds columns that are absent, so it is safe to run
-// on every conversation-collection load. Every added column is nullable, which
-// AddCollectionField requires for a collection that already holds rows. A
-// freshly created collection already has the columns from createCollection, so
-// this finds nothing to add. Backfilling the column values onto existing rows
-// is a separate step; the columns read null until then.
-// addMissingConversationScalarColumns describes the collection and adds, via the
-// Milvus AddCollectionField API, any conversation scalar column it is missing,
-// returning the names it added. It does not backfill values, so a caller can add
-// the columns and then decide how to populate them without recursing through the
-// on-add backfill trigger. Every added column is nullable, which AddCollectionField
-// requires for a collection that already holds rows.
-func (service *Service) addMissingConversationScalarColumns(ctx context.Context, collectionName string) ([]string, error) {
-	peerInfo, _ := peer.FromContext(ctx)
-	collection, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
-	if err != nil {
-		slog.ErrorContext(ctx, "describe conversation collection for scalar migration failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
-		return nil, fmt.Errorf("describe conversation collection %s: %w", collectionName, err)
-	}
-	existing := make(map[string]struct{})
-	if collection.Schema != nil {
-		for _, field := range collection.Schema.Fields {
-			existing[field.Name] = struct{}{}
-		}
-	}
-	added := make([]string, 0, len(conversationScalarFields()))
-	for _, field := range conversationScalarFields() {
-		if _, found := existing[field.Name]; found {
-			continue
-		}
-		if err := service.milvus.AddCollectionField(ctx, milvusclient.NewAddCollectionFieldOption(collectionName, field)); err != nil {
-			slog.ErrorContext(ctx, "add conversation scalar column failed", "collection", collectionName, "field", field.Name, "peer", peerInfo.String(), "err", err)
-			return added, fmt.Errorf("add scalar column %s to %s: %w", field.Name, collectionName, err)
-		}
-		service.invalidateMmapPolicy(collectionName)
-		added = append(added, field.Name)
-	}
-	return added, nil
-}
-
-func (service *Service) ensureConversationScalarColumns(ctx context.Context, collectionName string) error {
-	if !service.isConversationCollection(collectionName) {
-		return nil
-	}
-	hasCollection, err := service.hasCollection(
-		ctx,
-		collectionName,
-		"check conversation collection "+collectionName,
-	)
-	if err != nil {
-		return err
-	}
-	if !hasCollection {
-		return nil
-	}
-	added, err := service.addMissingConversationScalarColumns(ctx, collectionName)
-	if err != nil {
-		return err
-	}
-	if len(added) > 0 {
-		slog.InfoContext(ctx, "semantic.conversation_scalar_columns_added", "collection", collectionName, "fields", strings.Join(added, ","), "count", len(added))
-		// Columns were just added to a collection that already holds rows, so
-		// those rows read null until backfilled. Run the no-reindex backfill in
-		// the background, detached from this request's cancellation, so this call
-		// returns promptly.
-		detached := context.WithoutCancel(ctx)
-		go func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					slog.ErrorContext(detached, "conversation scalar backfill panic", "collection", collectionName, "err", fmt.Sprintf("panic: %v", recovered))
-				}
-			}()
-			if rows, backfillErr := service.BackfillConversationScalarColumns(detached, collectionName); backfillErr != nil {
-				slog.ErrorContext(detached, "conversation scalar backfill failed", "collection", collectionName, "rows", rows, "err", backfillErr)
-			}
-		}()
-	}
-	return nil
-}
-
-// conversationScalarMigration guards the one-time scalar-column migration for a
-// single conversation collection. The [sync.Once] runs the migration exactly once
-// even when several goroutines race, and err caches the result so every waiter
-// observes the same outcome. A failed migration is not cached as done, so a
-// later call retries it.
-type conversationScalarMigration struct {
-	once sync.Once
-	err  error
-}
-
-// ensureConversationScalarColumnsOnce runs the scalar-column migration at most
-// once per conversation collection per process. The search and insert paths
-// both call it so a pre-migration collection gains its native filter columns
-// before the first native-filtered search or scalar-populated insert, without
-// paying a DescribeCollection on every call. The per-collection [sync.Once] makes
-// concurrent callers safe: only one runs DescribeCollection/AddCollectionField,
-// and the rest wait and observe its result. A migration error is not retained as
-// a success, so a transient failure can be retried on the next call.
-func (service *Service) ensureConversationScalarColumnsOnce(ctx context.Context, collectionName string) error {
-	if !service.isConversationCollection(collectionName) {
-		return nil
-	}
-	loaded, _ := service.ensuredConvColumns.LoadOrStore(collectionName, &conversationScalarMigration{once: sync.Once{}, err: nil})
-	migration, ok := loaded.(*conversationScalarMigration)
-	if !ok {
-		return fmt.Errorf("conversation scalar migration guard for %s has unexpected type %T", collectionName, loaded)
-	}
-	migration.once.Do(func() {
-		maintenance, maintainErr := service.residency.Maintain(ctx, collectionName)
-		if maintainErr != nil {
-			migration.err = maintainErr
-			service.ensuredConvColumns.CompareAndDelete(collectionName, loaded)
-			return
-		}
-		defer maintenance.ReleaseContext(ctx)
-		migration.err = service.ensureConversationScalarColumns(ctx, collectionName)
-		if migration.err != nil {
-			// Drop the failed guard so a later call retries the migration instead of
-			// returning the cached error forever. A concurrent waiter that already
-			// observed this run still sees migration.err below.
-			service.ensuredConvColumns.CompareAndDelete(collectionName, loaded)
-		}
-	})
-	return migration.err
-}
-
 // PrepareCollection applies schema migrations before a caller acquires a data lease.
 func (service *Service) PrepareCollection(
 	ctx context.Context,
@@ -757,10 +510,7 @@ func (service *Service) PrepareCollection(
 	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
 		return classifyPrepareCollectionError(collectionName, err)
 	}
-	return classifyPrepareCollectionError(
-		collectionName,
-		service.ensureConversationScalarColumnsOnce(ctx, collectionName),
-	)
+	return nil
 }
 
 func classifyPrepareCollectionError(collectionName string, err error) error {
@@ -773,26 +523,6 @@ func classifyPrepareCollectionError(collectionName string, err error) error {
 	return err
 }
 
-// loadCollection loads collectionName into memory and waits for the load to
-// finish. A loaded collection is what makes an expression-filtered delete
-// usable: Milvus answers a Delete(WithExpr(...)) on a non-primary field by
-// first querying for the matching ids, which requires the collection to be
-// loaded, and rejects the delete with "collection not loaded" otherwise.
-// createCollection runs it once for a freshly built collection; the
-// conversation upsert and delete paths run it against an already-existing
-// collection before their prefix delete, since a daemon process that did not
-// create the collection itself never loaded it.
-//
-// Concurrent callers for one collection share one initial request, both polls,
-// and one recovery request. A concurrent cohort therefore issues at most two
-// LoadCollection calls. The shared load runs detached from every caller, so one
-// caller cancelling ends only its own wait and leaves the others waiting on a
-// load that is still running; sharedCollectionLoadCeiling is what ends that load
-// once no caller remains. A caller's earlier deadline still ends its own wait
-// first. A collection that never finishes loading fails as not-ready instead of
-// multiplying work across callers. Across different collections the transition
-// itself takes a slot from the daemon-wide limiter, so a burst of cold
-// collections loads a few at a time rather than all at once.
 func (service *Service) loadCollection(ctx context.Context, collectionName string) error {
 	return service.collectionLoads.Do(
 		ctx,
@@ -861,4 +591,9 @@ func (service *Service) requestCollectionLoad(
 		return wrapStoreError(ctx, err, "load Milvus collection "+collectionName)
 	}
 	return service.awaitCollectionLoaded(ctx, collectionName)
+}
+
+// RecordCollectionDeclaration stores scalar definitions for collection operations.
+func (service *Service) RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration) {
+	service.declaredCollections.Store(liveCollectionName(collectionName), declaration)
 }

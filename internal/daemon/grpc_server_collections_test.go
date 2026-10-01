@@ -1,14 +1,12 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 	"time"
 
@@ -17,7 +15,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/model"
-	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
@@ -147,52 +144,6 @@ func (daemon *offlineCollectionDaemon) registerCollection(collectionID string, i
 	})
 }
 
-func (daemon *offlineCollectionDaemon) registerConversationCollection(collectionID string) (*pb.RegisterConversationCollectionResponse, error) {
-	return daemon.client.RegisterConversationCollection(grpcutil.WithCorrelation(context.Background()), &pb.RegisterConversationCollectionRequest{
-		CollectionId: collectionID,
-		Client:       &pb.ClientInfo{Name: "collection-test"},
-	})
-}
-
-// ingestConversation streams one two-message conversation through the
-// conversation upsert RPC and waits for the ingest job to complete. The job
-// writes local rows and the Merkle checkpoint.
-func (daemon *offlineCollectionDaemon) ingestConversation(collectionID string, conversationID string) {
-	daemon.t.Helper()
-	stream, err := daemon.client.UpsertConversationDocumentsStream(grpcutil.WithCorrelation(context.Background()))
-	if err != nil {
-		daemon.t.Fatalf("open UpsertConversationDocumentsStream returned error: %v", err)
-	}
-	chunks := []*pb.UpsertConversationDocumentsChunk{
-		{Chunk: &pb.UpsertConversationDocumentsChunk_Header{Header: &pb.UpsertConversationDocumentsHeader{
-			CollectionId: collectionID,
-			Client:       &pb.ClientInfo{Name: "collection-test"},
-		}}},
-		{Chunk: &pb.UpsertConversationDocumentsChunk_Documents{Documents: &pb.UpsertConversationDocumentsDocuments{
-			Documents: []*pb.ConversationDocument{
-				{ConversationId: conversationID, MessageIndex: 0, Role: "user", TimestampUnix: 1712345678, Text: "how do collections register their schema"},
-				{ConversationId: conversationID, MessageIndex: 1, Role: "assistant", TimestampUnix: 1712345679, Text: "registration saves the declared scalar columns"},
-			},
-		}}},
-		{Chunk: &pb.UpsertConversationDocumentsChunk_Manifest{Manifest: &pb.UpsertConversationDocumentsManifest{
-			Manifest: []*pb.ConversationFingerprint{{ConversationId: conversationID, Fingerprint: "fingerprint-" + conversationID}},
-		}}},
-	}
-	for _, chunk := range chunks {
-		if err := stream.Send(chunk); err != nil {
-			daemon.t.Fatalf("send upsert chunk returned error: %v", err)
-		}
-	}
-	response, err := stream.CloseAndRecv()
-	if err != nil {
-		daemon.t.Fatalf("CloseAndRecv returned error: %v", err)
-	}
-	job := waitForRPCJobTerminal(daemon.t, daemon.client, response.GetJobId())
-	if job.GetState() != string(model.JobStateCompleted) {
-		daemon.t.Fatalf("ingest job state = %q, want completed: %+v", job.GetState(), job.GetError())
-	}
-}
-
 func (daemon *offlineCollectionDaemon) checkpointPath(codebaseID string) string {
 	return filepath.Join(daemon.config.MerkleDir, codebaseID+".json")
 }
@@ -207,7 +158,7 @@ func (daemon *offlineCollectionDaemon) documentCollectionRecords(collectionID st
 	}
 	records := make([]*pb.Codebase, 0)
 	for _, codebase := range response.GetIndexes() {
-		if codebase.GetCanonicalPath() == conversationCanonicalPath(collectionID) {
+		if codebase.GetCanonicalPath() == documentCanonicalPath(collectionID) {
 			records = append(records, codebase)
 		}
 	}
@@ -277,7 +228,7 @@ func savedRegistryDeclaration(t *testing.T, registryPath string, collectionID st
 		t.Fatalf("decode registry: %v", err)
 	}
 	for _, codebase := range registry.Codebases {
-		if codebase.CanonicalPath == conversationCanonicalPath(collectionID) {
+		if codebase.CanonicalPath == documentCanonicalPath(collectionID) {
 			return codebase.Declaration
 		}
 	}
@@ -335,10 +286,6 @@ func documentScalars() []*pb.ScalarColumnDeclaration {
 		{Column: "pinned", Type: pb.ScalarColumnType_SCALAR_COLUMN_TYPE_BOOL, Nullable: true, MaxLength: 0},
 		{Column: "rank", Type: pb.ScalarColumnType_SCALAR_COLUMN_TYPE_INT64, Nullable: false, MaxLength: 0},
 	}
-}
-
-func conversationScalarsPB() []*pb.ScalarColumnDeclaration {
-	return scalarColumnsToPB(semantic.ConversationDeclaration().Scalars)
 }
 
 // TestRegisterCollectionPersistsDeclarationAcrossRestart registers a generic
@@ -424,179 +371,6 @@ func TestRegisterCollectionConflictReturnsSchemaMismatch(t *testing.T) {
 		t.Fatalf("RegisterCollection with the saved declaration returned error: %v", err)
 	}
 	requireScalars(t, "saved declaration", again.GetScalars(), documentScalars())
-}
-
-// TestConversationRegistrationRPCsResolveOneRecord registers a conversation
-// collection through the old RPC, ingests a conversation, and registers the
-// same collection through the generic RPC with the conversation declaration,
-// before and after a restart. Every registration returns the same record, and
-// the ingest checkpoint stays byte-identical.
-func TestConversationRegistrationRPCsResolveOneRecord(t *testing.T) {
-	t.Parallel()
-	daemon := newOfflineCollectionDaemon(t)
-
-	old, err := daemon.registerConversationCollection("conv-shared")
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-	daemon.ingestConversation("conv-shared", "claude:conv-shared-1")
-	checkpointPath := daemon.checkpointPath(old.GetCodebaseId())
-	checkpoint := readFileBytes(t, checkpointPath)
-
-	generic, err := daemon.registerCollection("conv-shared", "conversationId", conversationScalarsPB())
-	if err != nil {
-		t.Fatalf("RegisterCollection with the conversation declaration returned error: %v", err)
-	}
-	if generic.GetCodebaseId() != old.GetCodebaseId() || generic.GetCollectionName() != old.GetCollectionName() {
-		t.Fatalf("generic registration = %s/%s, want %s/%s", generic.GetCodebaseId(), generic.GetCollectionName(), old.GetCodebaseId(), old.GetCollectionName())
-	}
-	requireScalars(t, "conversation declaration", generic.GetScalars(), conversationScalarsPB())
-
-	conflicting := conversationScalarsPB()
-	conflicting[4].MaxLength = 2048
-	_, err = daemon.registerCollection("conv-shared", "conversationId", conflicting)
-	requireColumnError(t, err, codes.FailedPrecondition, adapterr.CodeCollectionSchemaMismatch, conflicting[4].GetColumn())
-
-	daemon.restart(nil)
-
-	oldAgain, err := daemon.registerConversationCollection("conv-shared")
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection after restart returned error: %v", err)
-	}
-	genericAgain, err := daemon.registerCollection("conv-shared", "conversationId", conversationScalarsPB())
-	if err != nil {
-		t.Fatalf("RegisterCollection after restart returned error: %v", err)
-	}
-	for _, codebaseID := range []string{oldAgain.GetCodebaseId(), genericAgain.GetCodebaseId()} {
-		if codebaseID != old.GetCodebaseId() {
-			t.Fatalf("codebase id after restart = %q, want %q", codebaseID, old.GetCodebaseId())
-		}
-	}
-	if records := daemon.documentCollectionRecords("conv-shared"); len(records) != 1 {
-		t.Fatalf("records for conv-shared = %d, want 1", len(records))
-	}
-	if !bytes.Equal(readFileBytes(t, checkpointPath), checkpoint) {
-		t.Fatal("Merkle checkpoint changed across registrations")
-	}
-}
-
-// TestRegisterCollectionReorderedConversationDeclaration registers the
-// conversation declaration with its columns in reverse order. Registration
-// compares declarations without regard to column order, and the conversation
-// declaration check does too. The collection keeps conversation behavior: a
-// generic row stores the conversation fields and no generic scalars, and after
-// a restart the conversation manifest RPC accepts the collection.
-func TestRegisterCollectionReorderedConversationDeclaration(t *testing.T) {
-	t.Parallel()
-	daemon := newOfflineCollectionDaemon(t)
-
-	reordered := conversationScalarsPB()
-	slices.Reverse(reordered)
-	registered, err := daemon.registerCollection("conv-reordered", "conversationId", reordered)
-	if err != nil {
-		t.Fatalf("RegisterCollection with the reordered conversation declaration returned error: %v", err)
-	}
-	conversationID := "claude:reordered-1"
-	row := &pb.CollectionRow{
-		RowKey:  "conv/" + conversationID + "/0",
-		ItemId:  conversationID,
-		Text:    "a message stored under a reordered declaration",
-		Scalars: []*pb.CollectionScalarValue{stringScalar("role", "user"), int64Scalar("messageIndex", 0)},
-	}
-	daemon.upsertItems(
-		collectionHeader("conv-reordered", pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED, false, false),
-		[]*pb.CollectionRow{row},
-		map[string]string{conversationID: "fp-reordered"},
-	)
-	stored := rowByPath(t, daemon.localRows(registered.GetCollectionName()), row.GetRowKey())
-	if stored.ConversationID != conversationID || stored.Role != "user" || stored.Scalars != nil {
-		t.Fatalf("stored row has conversationId %q, role %q, and scalars %v, want the conversation fields and no generic scalars", stored.ConversationID, stored.Role, stored.Scalars)
-	}
-
-	daemon.restart(nil)
-	response, err := daemon.client.SyncConversationManifest(grpcutil.WithCorrelation(context.Background()), &pb.SyncConversationManifestRequest{
-		CollectionId: "conv-reordered",
-		Manifest:     []*pb.ConversationFingerprint{{ConversationId: conversationID, Fingerprint: "fp-reordered"}},
-	})
-	if err != nil {
-		t.Fatalf("SyncConversationManifest after a reordered registration returned error: %v", err)
-	}
-	if needed := response.GetNeededConversationIds(); len(needed) != 0 {
-		t.Fatalf("needed after ingest = %v, want none", needed)
-	}
-}
-
-// TestRegisterCollectionAdoptsLegacyConversationRecord starts from a registry
-// written before declarations were saved. A generic declaration conflicts with
-// the legacy conversation declaration. The conversation declaration registers
-// against the saved record and its local rows, saves the declaration, and
-// leaves the checkpoint unchanged.
-func TestRegisterCollectionAdoptsLegacyConversationRecord(t *testing.T) {
-	t.Parallel()
-	daemon := newOfflineCollectionDaemon(t)
-
-	old, err := daemon.registerConversationCollection("conv-legacy")
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-	daemon.ingestConversation("conv-legacy", "claude:conv-legacy-1")
-	checkpointPath := daemon.checkpointPath(old.GetCodebaseId())
-	checkpoint := readFileBytes(t, checkpointPath)
-	daemon.restart(func() { removeRegistryDeclarations(t, daemon.config.RegistryPath) })
-
-	_, err = daemon.registerCollection("conv-legacy", "docId", documentScalars())
-	requireColumnError(t, err, codes.FailedPrecondition, adapterr.CodeCollectionSchemaMismatch, "docId")
-	if saved := savedRegistryDeclaration(t, daemon.config.RegistryPath, "conv-legacy"); saved != nil {
-		t.Fatalf("conflicting registration saved declaration %+v, want none", saved)
-	}
-
-	adopted, err := daemon.registerCollection("conv-legacy", "conversationId", conversationScalarsPB())
-	if err != nil {
-		t.Fatalf("RegisterCollection with the conversation declaration returned error: %v", err)
-	}
-	if adopted.GetCodebaseId() != old.GetCodebaseId() {
-		t.Fatalf("adopted codebase id = %q, want %q", adopted.GetCodebaseId(), old.GetCodebaseId())
-	}
-	saved := savedRegistryDeclaration(t, daemon.config.RegistryPath, "conv-legacy")
-	if saved == nil || saved.ItemIDColumn != "conversationId" {
-		t.Fatalf("registry declaration = %+v, want the conversation declaration", saved)
-	}
-	requireScalars(t, "adopted declaration", scalarColumnsToPB(saved.Scalars), conversationScalarsPB())
-	if !bytes.Equal(readFileBytes(t, checkpointPath), checkpoint) {
-		t.Fatal("Merkle checkpoint changed during legacy adoption")
-	}
-}
-
-// TestRegisterCollectionComparesLocalRows registers a generic declaration for
-// a collection id with existing local rows and no registry record. The local
-// rows store the conversation scalar fields. The registration fails with a
-// schema mismatch, creates no record, and keeps the rows.
-func TestRegisterCollectionComparesLocalRows(t *testing.T) {
-	t.Parallel()
-	daemon := newOfflineCollectionDaemon(t)
-
-	old, err := daemon.registerConversationCollection("conv-orphan")
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-	daemon.ingestConversation("conv-orphan", "claude:conv-orphan-1")
-	localRowsPath := filepath.Join(daemon.config.StateRoot, "localvec", old.GetCollectionName(), "metadata.jsonl")
-	rowsBefore := readFileBytes(t, localRowsPath)
-	daemon.restart(func() {
-		if err := store.WriteRegistry(daemon.config.RegistryPath, model.RegistryFile{}); err != nil {
-			t.Fatalf("WriteRegistry returned error: %v", err)
-		}
-	})
-
-	scalars := append(documentScalars(), conversationScalarsPB()...)
-	_, err = daemon.registerCollection("conv-orphan", "docId", scalars)
-	requireColumnError(t, err, codes.FailedPrecondition, adapterr.CodeCollectionSchemaMismatch, "docId")
-	if records := daemon.documentCollectionRecords("conv-orphan"); len(records) != 0 {
-		t.Fatalf("records for conv-orphan = %d, want 0 after a rejected registration", len(records))
-	}
-	if !bytes.Equal(readFileBytes(t, localRowsPath), rowsBefore) {
-		t.Fatal("local rows changed after a rejected registration")
-	}
 }
 
 // TestRegisterCollectionRejectsInvalidDeclarations sends invalid declarations

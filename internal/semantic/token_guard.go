@@ -9,15 +9,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// expandOverTokenBudget splits any chunk longer than the embedding byte budget
-// into byte-budgeted sub-chunks, so no input reaches the embedder above the
-// model's input limit and gets dropped as context_length_exceeded or silently
-// truncated. The budget is derived from the active provider's hard input-token
-// limit at a conservative bytes-per-token ratio, so it is always positive and the
-// split runs even when EmbeddingMaxTokens is unset. It is the single backstop
-// covering every Milvus embed path, including the conversation tool payloads that
-// split by syntax rather than by the byte budget. Unlike the varchar guardrail, a
-// token split is expected for large content, so it logs at info level.
 func (service *Service) expandOverTokenBudget(ctx context.Context, codebasePath string, chunks []model.StoredChunk, operation string) []model.StoredChunk {
 	byteBudget := config.EmbedChunkByteBudgetForLimit(service.cfg.EmbeddingMaxTokens, config.ActiveEmbedTokenLimit(service.cfg))
 	out, splitCount := SplitChunksToByteBudget(chunks, byteBudget)

@@ -22,12 +22,13 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/embedding/providers"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
-func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
+func TestCollectionContentReusesVectorAcrossCorpus(t *testing.T) {
 	gate := &embedGate{arrived: make(chan int), release: make(chan struct{})}
 	var mutex sync.Mutex
 	embedCalls := 0
@@ -58,31 +59,26 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 
 	harness := newHarnessWithGate(t, gate)
 	secondCollectionID := "live-reuse-" + randomID()
-	secondCodebase, err := harness.manager.RegisterConversationCollection(
-		context.Background(),
-		secondCollectionID,
-	)
+	secondCodebase, err := harness.manager.RegisterCollection(context.Background(), daemon.CollectionRegistration{CollectionID: secondCollectionID, Declaration: liveCollectionDeclaration()})
 	if err != nil {
-		t.Fatalf("RegisterConversationCollection for second corpus returned error: %v", err)
+		t.Fatalf("RegisterCollection for second corpus returned error: %v", err)
 	}
 	harness.trackCollectionFamily(secondCodebase.CollectionName)
 	secondHarness := *harness
 	secondHarness.collectionID = secondCollectionID
 	secondHarness.collectionName = secondCodebase.CollectionName
 	secondHarness.codebaseID = secondCodebase.ID
-	sharedContent := "cross conversation reuse sentinel"
-	uniqueContent := "cross conversation unique control"
+	sharedContent := "cross collection reuse sentinel"
+	uniqueContent := "cross collection unique control"
 
 	first := harness.upsert(
-		map[string][]*pb.ConversationDocument{
+		map[string][]*pb.CollectionRow{
 			"reuse-first": {{
-				ConversationId: "reuse-first",
-				MessageIndex:   0,
-				Role:           "user",
-				Text:           sharedContent,
+				ItemId: "reuse-first",
+				Text:   sharedContent,
 			}},
 		},
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -92,23 +88,19 @@ func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 	}
 
 	second := secondHarness.upsert(
-		map[string][]*pb.ConversationDocument{
+		map[string][]*pb.CollectionRow{
 			"reuse-second": {
 				{
-					ConversationId: "reuse-second",
-					MessageIndex:   0,
-					Role:           "user",
-					Text:           sharedContent,
+					ItemId: "reuse-second",
+					Text:   sharedContent,
 				},
 				{
-					ConversationId: "reuse-second",
-					MessageIndex:   1,
-					Role:           "assistant",
-					Text:           uniqueContent,
+					ItemId: "reuse-second",
+					Text:   uniqueContent,
 				},
 			},
 		},
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -343,15 +335,13 @@ func TestDuplicateLegacyCorpusReuseImmutabilitySmoke(t *testing.T) {
 func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	harness := newHarness(t)
 	seed := harness.upsert(
-		map[string][]*pb.ConversationDocument{
+		map[string][]*pb.CollectionRow{
 			"catalog-seed": {{
-				ConversationId: "catalog-seed",
-				MessageIndex:   0,
-				Role:           "user",
-				Text:           "current identity catalog seed",
+				ItemId: "catalog-seed",
+				Text:   "current identity catalog seed",
 			}},
 		},
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -377,9 +367,9 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 		Limit:          10,
 		MinScore:       -1,
 		Filter:         nil,
-		GroupBy:        "conversationId",
+		GroupBy:        "itemId",
 		PerGroupLimit:  10,
-		Declaration:    semantic.ConversationDeclaration(),
+		Declaration:    liveCollectionDeclaration(),
 	})
 	if err != nil {
 		t.Fatalf("search collection containing untagged row: %v", err)
@@ -391,12 +381,9 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	}
 
 	secondCollectionID := "live-legacy-reuse-" + randomID()
-	secondCodebase, err := harness.manager.RegisterConversationCollection(
-		context.Background(),
-		secondCollectionID,
-	)
+	secondCodebase, err := harness.manager.RegisterCollection(context.Background(), daemon.CollectionRegistration{CollectionID: secondCollectionID, Declaration: liveCollectionDeclaration()})
 	if err != nil {
-		t.Fatalf("RegisterConversationCollection for second corpus returned error: %v", err)
+		t.Fatalf("RegisterCollection for second corpus returned error: %v", err)
 	}
 	harness.trackCollectionFamily(secondCodebase.CollectionName)
 	secondHarness := *harness
@@ -404,17 +391,15 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	secondHarness.collectionName = secondCodebase.CollectionName
 	secondHarness.codebaseID = secondCodebase.ID
 
-	secondDocuments := map[string][]*pb.ConversationDocument{
+	secondDocuments := map[string][]*pb.CollectionRow{
 		"legacy-second": {{
-			ConversationId: "legacy-second",
-			MessageIndex:   0,
-			Role:           "user",
-			Text:           legacyContent,
+			ItemId: "legacy-second",
+			Text:   legacyContent,
 		}},
 	}
 	second := secondHarness.upsert(
 		secondDocuments,
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -455,7 +440,7 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	repeatBefore := snapshotsForContent(t, harness, secondHarness.collectionName, legacyContent)
 	repeat := secondHarness.upsert(
 		secondDocuments,
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -508,15 +493,13 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 	content := "two known model catalog sentinel"
 	emptyModelContent := "empty model catalog sentinel"
 	seed := harness.upsert(
-		map[string][]*pb.ConversationDocument{
+		map[string][]*pb.CollectionRow{
 			"model-a": {{
-				ConversationId: "model-a",
-				MessageIndex:   0,
-				Role:           "user",
-				Text:           content,
+				ItemId: "model-a",
+				Text:   content,
 			}},
 		},
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -612,15 +595,13 @@ func TestCompleteCatalogHitSkipsCollectionFallback(t *testing.T) {
 	harness := newHarness(t)
 	content := "complete catalog hit sentinel"
 	seed := harness.upsert(
-		map[string][]*pb.ConversationDocument{
+		map[string][]*pb.CollectionRow{
 			"complete-hit": {{
-				ConversationId: "complete-hit",
-				MessageIndex:   0,
-				Role:           "user",
-				Text:           content,
+				ItemId: "complete-hit",
+				Text:   content,
 			}},
 		},
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -1388,20 +1369,18 @@ func TestCorpusReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 	lookupConfig := harness.childConfig()
 	const sampleCount = 20
 	contents := make([]string, 0, sampleCount)
-	documents := make([]*pb.ConversationDocument, 0, sampleCount)
+	documents := make([]*pb.CollectionRow, 0, sampleCount)
 	for index := range sampleCount {
 		content := fmt.Sprintf("harmless corpus reuse performance control %02d", index)
 		contents = append(contents, content)
-		documents = append(documents, &pb.ConversationDocument{
-			ConversationId: "reuse-performance",
-			MessageIndex:   int32(index),
-			Role:           "user",
-			Text:           content,
+		documents = append(documents, &pb.CollectionRow{
+			ItemId: "reuse-performance",
+			Text:   content,
 		})
 	}
 	completed := harness.upsert(
-		map[string][]*pb.ConversationDocument{"reuse-performance": documents},
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		map[string][]*pb.CollectionRow{"reuse-performance": documents},
+		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)

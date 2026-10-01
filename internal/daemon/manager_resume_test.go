@@ -203,14 +203,14 @@ func sameInt32Pointer(actual *int32, expected *int32) bool {
 	return actual != nil && *actual == *expected
 }
 
-// A document conversation codebase left mid-index must never be re-launched
+// A document codebase left mid-index must never be re-launched
 // by the boot resume pass: its path is a chat URI, not a directory, and the
-// conversation trigger path owns its recovery.
+// collection trigger path owns its recovery.
 func TestResumeOrphanedJobsSkipsDocumentCodebases(t *testing.T) {
 	manager, _, _ := newTestManager(t)
 	manager.config.ResumeIndexingOnBoot = true
 
-	codebase := newCodebaseRecord("chat:///clyde-conversations")
+	codebase := newCodebaseRecord("chat:///document-items")
 	codebase.Kind = model.CodebaseKindDocument
 	codebase.Status = model.CodebaseStatusIndexing
 	codebase.EffectiveConfig = defaultIndexConfig()
@@ -221,7 +221,7 @@ func TestResumeOrphanedJobsSkipsDocumentCodebases(t *testing.T) {
 
 	snapshot := merkle.Snapshot{
 		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
-		Files:        map[string]string{"conversation.json": "sha256:seed"},
+		Files:        map[string]string{"item.json": "sha256:seed"},
 	}
 	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), snapshot); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
