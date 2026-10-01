@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -153,7 +155,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer, stde
 	if err := check.installOldRelease(ctx, selection.previous); err != nil {
 		return err
 	}
-	if err := check.startAuthenticatedProxy(ctx); err != nil {
+	if err := check.startAuthenticatedProxy(ctx, selection.target); err != nil {
 		return err
 	}
 	if err := check.startDaemon(ctx); err != nil {
@@ -352,14 +354,75 @@ func (check *updateCheck) installOldRelease(ctx context.Context, release githubR
 	return nil
 }
 
-func authenticatedProxy(target *url.URL, token string) *httputil.ReverseProxy {
-	return &httputil.ReverseProxy{Rewrite: func(request *httputil.ProxyRequest) {
-		request.SetURL(target)
-		request.Out.Header.Set("Authorization", "Bearer "+token)
-	}}
+// authenticatedProxy forwards the daemon's GitHub API requests to target with
+// token. It removes every release published after newest from release list
+// responses. The daemon applies the newest listed release, and a release
+// published while the check runs would otherwise replace the release under
+// test. The filter covers only the release list, which the updater reads when
+// prereleases are allowed, as for LMS. A stable-channel updater reads
+// /releases/latest, and the proxy passes that response through unfiltered.
+func authenticatedProxy(target *url.URL, token string, newest githubRelease) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Rewrite: func(request *httputil.ProxyRequest) {
+			request.SetURL(target)
+			request.Out.Header.Set("Authorization", "Bearer "+token)
+			// The transport then requests and decodes gzip itself, and
+			// ModifyResponse reads a plain release list body.
+			request.Out.Header.Del("Accept-Encoding")
+		},
+		ModifyResponse: func(response *http.Response) error {
+			return dropReleasesPublishedAfter(response, newest.PublishedAt)
+		},
+	}
 }
 
-func (check *updateCheck) startAuthenticatedProxy(ctx context.Context) error {
+// dropReleasesPublishedAfter rewrites a successful release list response to
+// omit releases published after cutoff. It leaves every other response
+// unchanged.
+func dropReleasesPublishedAfter(response *http.Response, cutoff time.Time) error {
+	if response.StatusCode != http.StatusOK || !strings.HasSuffix(response.Request.URL.Path, "/releases") {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxGitHubBodyBytes))
+	_ = response.Body.Close()
+	if err != nil {
+		slog.Warn("ci.auto_update.release_list_read_failed", "err", err)
+		return fmt.Errorf("read release list: %w", err)
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(body, &entries); err != nil {
+		slog.Warn("ci.auto_update.release_list_decode_failed", "err", err)
+		return fmt.Errorf("decode release list: %w", err)
+	}
+	kept := make([]json.RawMessage, 0, len(entries))
+	hiddenTags := make([]string, 0)
+	for _, entry := range entries {
+		var release githubRelease
+		if err := json.Unmarshal(entry, &release); err != nil {
+			slog.Warn("ci.auto_update.release_decode_failed", "err", err)
+			return fmt.Errorf("decode release: %w", err)
+		}
+		if release.PublishedAt.After(cutoff) {
+			hiddenTags = append(hiddenTags, release.TagName)
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	if len(hiddenTags) > 0 {
+		slog.Info("ci.auto_update.releases_hidden", "tags", hiddenTags, "cutoff", cutoff)
+	}
+	rewritten, err := json.Marshal(kept)
+	if err != nil {
+		slog.Warn("ci.auto_update.release_list_encode_failed", "err", err)
+		return fmt.Errorf("encode release list: %w", err)
+	}
+	response.Body = io.NopCloser(bytes.NewReader(rewritten))
+	response.ContentLength = int64(len(rewritten))
+	response.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
+	return nil
+}
+
+func (check *updateCheck) startAuthenticatedProxy(ctx context.Context, newest githubRelease) error {
 	target, err := url.Parse(githubAPIBaseURL)
 	if err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.api_proxy_url_invalid", "err", err)
@@ -370,7 +433,7 @@ func (check *updateCheck) startAuthenticatedProxy(ctx context.Context) error {
 		slog.WarnContext(ctx, "ci.auto_update.api_proxy_listen_failed", "err", err)
 		return fmt.Errorf("listen for authenticated GitHub API proxy: %w", err)
 	}
-	server := httptest.NewUnstartedServer(authenticatedProxy(target, check.environment.token))
+	server := httptest.NewUnstartedServer(authenticatedProxy(target, check.environment.token, newest))
 	server.Listener = listener
 	server.Start()
 	check.apiProxy = server
