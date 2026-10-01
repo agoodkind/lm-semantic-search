@@ -147,7 +147,7 @@ func startGraphShutdownDaemon(t *testing.T, instance *libraryCodebaseDaemon, bin
 		cancel()
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("daemon PID%d did not serve its private socket; log=%s", command.Process.Pid, logPath)
+	t.Fatalf("daemon PID %d did not serve its private socket; log=%s", command.Process.Pid, logPath)
 	return nil
 }
 
