@@ -198,6 +198,14 @@ func (service *Service) reconcileResidency(
 		if isRecoveryCollection(collectionName) {
 			continue
 		}
+		managed, schemaErr := collectionUsesLegacyResidency(ctx, client, collectionName)
+		if schemaErr != nil {
+			service.handleReconciliationError(ctx, schemaErr, "inspect residency schema for "+collectionName)
+			return
+		}
+		if !managed {
+			continue
+		}
 		loadState, loadStateErr := client.GetLoadState(
 			ctx,
 			milvusclient.NewGetLoadStateOption(collectionName),
