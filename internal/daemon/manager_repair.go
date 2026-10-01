@@ -118,7 +118,13 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 		return nil, nil, nil
 	}
 
-	collections, err := manager.listCollectionsForRepair(ctx)
+	var collections []string
+	var err error
+	if lister, usesCodebaseCatalog := manager.semantic.(codebaseCollectionLister); usesCodebaseCatalog {
+		collections, err = manager.listCollectionsForRepair(ctx, lister)
+	} else {
+		collections, err = manager.semantic.ListCollections(ctx)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("list semantic collections: %w", err)
 	}
@@ -158,18 +164,11 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 	return plans, cleanups, nil
 }
 
-func (manager *Manager) listCollectionsForRepair(ctx context.Context) ([]string, error) {
-	lister, usesCodebaseCatalog := manager.semantic.(interface {
-		listCollectionsForCodebases(context.Context, []model.Codebase) ([]string, error)
-	})
-	if !usesCodebaseCatalog {
-		collections, err := manager.semantic.ListCollections(ctx)
-		if err != nil {
-			slog.ErrorContext(ctx, "list collections for repair failed", "err", err)
-			return nil, fmt.Errorf("list collections for repair: %w", err)
-		}
-		return collections, nil
-	}
+type codebaseCollectionLister interface {
+	listCollectionsForCodebases(context.Context, []model.Codebase) ([]string, error)
+}
+
+func (manager *Manager) listCollectionsForRepair(ctx context.Context, lister codebaseCollectionLister) ([]string, error) {
 	manager.mu.Lock()
 	codebases := make([]model.Codebase, 0, len(manager.codebases))
 	for _, codebase := range manager.codebases {
