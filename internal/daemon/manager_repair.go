@@ -118,7 +118,7 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 		return nil, nil, nil
 	}
 
-	collections, err := manager.semantic.ListCollections(ctx)
+	collections, err := manager.listCollectionsForRepair(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list semantic collections: %w", err)
 	}
@@ -156,6 +156,27 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 		}
 	}
 	return plans, cleanups, nil
+}
+
+func (manager *Manager) listCollectionsForRepair(ctx context.Context) ([]string, error) {
+	lister, usesCodebaseCatalog := manager.semantic.(interface {
+		listCollectionsForCodebases(context.Context, []model.Codebase) ([]string, error)
+	})
+	if !usesCodebaseCatalog {
+		collections, err := manager.semantic.ListCollections(ctx)
+		if err != nil {
+			slog.ErrorContext(ctx, "list collections for repair failed", "err", err)
+			return nil, fmt.Errorf("list collections for repair: %w", err)
+		}
+		return collections, nil
+	}
+	manager.mu.Lock()
+	codebases := make([]model.Codebase, 0, len(manager.codebases))
+	for _, codebase := range manager.codebases {
+		codebases = append(codebases, codebase)
+	}
+	manager.mu.Unlock()
+	return lister.listCollectionsForCodebases(ctx, codebases)
 }
 
 // repairOutcome is the per-codebase decision the planning loop applies: whether
