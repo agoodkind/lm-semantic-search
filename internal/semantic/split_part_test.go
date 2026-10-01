@@ -391,19 +391,15 @@ func TestInvalidateCollectionCachesClearsSchemaState(t *testing.T) {
 
 	const collectionName = "test_collection"
 	service := &Service{}
-	service.ensuredConvColumns.Store(collectionName, "conversation")
 	service.ensuredSplitPartColumns.Store(collectionName, "split-part")
 	service.ensuredReuseIdentityColumns.Store(collectionName, "reuse-identity")
 	service.mmapPolicyVersions = map[string]int{collectionName: mmapPolicyVersion}
-	service.ensuredBackfill.Store(collectionName, "backfill")
 
 	service.invalidateCollectionCaches(collectionName)
 
 	caches := []*sync.Map{
-		&service.ensuredConvColumns,
 		&service.ensuredSplitPartColumns,
 		&service.ensuredReuseIdentityColumns,
-		&service.ensuredBackfill,
 	}
 	for index, cache := range caches {
 		if _, found := cache.Load(collectionName); found {
@@ -412,99 +408,5 @@ func TestInvalidateCollectionCachesClearsSchemaState(t *testing.T) {
 	}
 	if _, found := service.mmapPolicyVersions[collectionName]; found {
 		t.Fatal("mmap policy cache retained collection state")
-	}
-}
-
-func TestConversationAssemblyOrdersRowsBySplitPart(t *testing.T) {
-	t.Parallel()
-
-	splitParts, err := column.NewNullableColumnInt64(
-		splitPartFieldName,
-		[]int64{7, 1},
-		[]bool{true, true},
-		column.WithSparseNullableMode[int64](true),
-	)
-	if err != nil {
-		t.Fatalf("NewNullableColumnInt64 returned error: %v", err)
-	}
-	resultSet := milvusclient.ResultSet{
-		ResultCount: 2,
-		Fields: milvusclient.DataSet{
-			column.NewColumnVarChar(relativePathFieldName, []string{"conv/example/0", "conv/example/0"}),
-			column.NewColumnVarChar(roleFieldName, []string{"user", "user"}),
-			column.NewColumnVarChar(contentFieldName, []string{"second", "first"}),
-			column.NewColumnInt64(messageIndexFieldName, []int64{0, 0}),
-			column.NewColumnFloatVector(denseVectorFieldName, 1, [][]float32{{2}, {1}}),
-			splitParts,
-		},
-	}
-	assemblies := make(map[int32]*storedMessageAssembly)
-	reuse := make(map[string][]float32)
-
-	legacyRows, err := appendConversationMessageStateRows(
-		resultSet,
-		"conv/example/",
-		assemblies,
-		reuse,
-	)
-	if err != nil {
-		t.Fatalf("appendConversationMessageStateRows returned error: %v", err)
-	}
-	if legacyRows != 0 {
-		t.Fatalf("legacy rows = %d, want 0", legacyRows)
-	}
-	state := assembleStoredMessageState(assemblies)
-	if got := state[0].Text; got != "firstsecond" {
-		t.Fatalf("assembled text = %q, want firstsecond", got)
-	}
-}
-
-func TestConversationAssemblyOrdersMigratedRowsDeterministically(t *testing.T) {
-	t.Parallel()
-
-	splitParts, err := newSplitPartColumn(
-		"test_collection",
-		[]int64{0, 0},
-		[]bool{false, false},
-	)
-	if err != nil {
-		t.Fatalf("newSplitPartColumn returned error: %v", err)
-	}
-	resultSet := milvusclient.ResultSet{
-		ResultCount: 2,
-		Fields: milvusclient.DataSet{
-			column.NewColumnVarChar(
-				relativePathFieldName,
-				[]string{"conv/example/0", "conv/example/0"},
-			),
-			column.NewColumnVarChar(roleFieldName, []string{"user", "user"}),
-			column.NewColumnVarChar(contentFieldName, []string{"second", "first"}),
-			column.NewColumnInt64(messageIndexFieldName, []int64{0, 0}),
-			column.NewColumnFloatVector(
-				denseVectorFieldName,
-				1,
-				[][]float32{{2}, {1}},
-			),
-			splitParts,
-		},
-	}
-	assemblies := make(map[int32]*storedMessageAssembly)
-	reuse := make(map[string][]float32)
-
-	legacyRows, err := appendConversationMessageStateRows(
-		resultSet,
-		"conv/example/",
-		assemblies,
-		reuse,
-	)
-	if err != nil {
-		t.Fatalf("appendConversationMessageStateRows returned error: %v", err)
-	}
-	if legacyRows != 0 {
-		t.Fatalf("legacy rows = %d, want 0", legacyRows)
-	}
-	state := assembleStoredMessageState(assemblies)
-	if got := state[0].Text; got != "firstsecond" {
-		t.Fatalf("assembled migrated text = %q, want firstsecond", got)
 	}
 }

@@ -22,10 +22,10 @@ func inStringClause(field string, values []string) string {
 	return field + " in [" + strings.Join(quoted, ", ") + "]"
 }
 
-// batchConversationIDs splits ids into chunks of at most size, returning a
-// single empty batch when ids is empty so callers run exactly one unscoped
-// search.
-func batchConversationIDs(ids []string, size int) [][]string {
+const itemIDFilterBatchSize = 256
+
+// Return one empty batch for an unscoped search.
+func batchItemIDs(ids []string, size int) [][]string {
 	if len(ids) == 0 {
 		return [][]string{nil}
 	}
@@ -58,4 +58,35 @@ func readOptionalStringAt(valueColumn column.Column, rowIndex int) (string, bool
 		return "", false, fmt.Errorf("read string at row %d: %w", rowIndex, valueErr)
 	}
 	return value, true, nil
+}
+
+func dedupeItemIDs(itemIDs []string) []string {
+	seen := make(map[string]struct{}, len(itemIDs))
+	unique := make([]string, 0, len(itemIDs))
+	for _, itemID := range itemIDs {
+		trimmed := strings.TrimSpace(itemID)
+		if trimmed == "" {
+			continue
+		}
+		if _, found := seen[trimmed]; found {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		unique = append(unique, trimmed)
+	}
+	return unique
+}
+
+func contentVectorAt(contentColumn column.Column, vectorColumn column.Column, rowIndex int) (string, []float32, error) {
+	contentValue, contentErr := contentColumn.GetAsString(rowIndex)
+	if contentErr != nil {
+		slog.Error("read collection item content column failed", "index", rowIndex, "err", contentErr)
+		return "", nil, fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
+	}
+	vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+	if vectorErr != nil {
+		slog.Error("read collection item vector column failed", "index", rowIndex, "err", vectorErr)
+		return "", nil, fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
+	}
+	return contentValue, vector, nil
 }

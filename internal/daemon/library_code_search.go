@@ -42,10 +42,6 @@ func (index *libraryCodeIndex) AcquireCollection(ctx context.Context, collection
 	return value, wrapDelegated(ctx, "acquire collection", err)
 }
 
-// Search returns the first library page of a codebase search and passes a
-// conversation path to the wrapped index. The extension filter selects
-// file_extension values, and relativePathPrefix selects a relative_path
-// prefix. The page contains at most limit hits in library rank order.
 func (index *libraryCodeIndex) Search(
 	ctx context.Context,
 	codebasePath string,
@@ -54,7 +50,7 @@ func (index *libraryCodeIndex) Search(
 	extensionFilter []string,
 	relativePathPrefix string,
 ) ([]model.StoredChunk, error) {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		value, err := index.semanticIndex.Search(ctx, codebasePath, query, limit, extensionFilter, relativePathPrefix)
 		return value, wrapDelegated(ctx, "search", err)
 	}

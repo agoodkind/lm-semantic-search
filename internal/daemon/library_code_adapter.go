@@ -64,10 +64,6 @@ const (
 	codeExtensionMaxBytes    = 64
 )
 
-// libraryCodeIndex writes codebase chunks to the shared search library and
-// passes every conversation, collection, and search call to the wrapped index.
-// Each file is one owner in the codebase namespace, and each write replaces the
-// owner with one complete generation.
 type libraryCodeIndex struct {
 	semanticIndex
 	store         *library.Library
@@ -203,7 +199,7 @@ func codebaseSpec(namespace string) library.NamespaceSpec {
 // CollectionName returns the wrapped index's name. For a filesystem codebase it
 // stores the codebase namespace under that name.
 func (index *libraryCodeIndex) CollectionName(codebasePath string) string {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		return index.semanticIndex.CollectionName(codebasePath)
 	}
 	name, _ := index.codebaseNames(codebasePath)
@@ -275,8 +271,6 @@ func (index *libraryCodeIndex) namespaceStats(ctx context.Context, namespace str
 	return stats, true, nil
 }
 
-// Reindex replaces every owner that removal or chunks select for a codebase
-// path, and passes a conversation path to the wrapped index.
 func (index *libraryCodeIndex) Reindex(
 	ctx context.Context,
 	codebasePath string,
@@ -286,7 +280,7 @@ func (index *libraryCodeIndex) Reindex(
 	reuse map[string][]float32,
 	columnSet semantic.StoreColumnSet,
 ) error {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		return wrapDelegated(ctx, "reindex", index.semanticIndex.Reindex(ctx, codebasePath, chunks, removal, progress, reuse, columnSet))
 	}
 	return index.replaceOwners(ctx, codebasePath, chunks, removal, progress)
@@ -304,7 +298,7 @@ func (index *libraryCodeIndex) StageReindex(
 	reuse map[string][]float32,
 	columnSet semantic.StoreColumnSet,
 ) error {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		return wrapDelegated(ctx, "stage reindex", index.semanticIndex.StageReindex(ctx, codebasePath, chunks, removal, progress, reuse, columnSet))
 	}
 	return index.replaceOwners(ctx, codebasePath, chunks, removal, progress)
@@ -515,7 +509,7 @@ func libraryInt64Scalar(value int64) library.ScalarValue {
 // Drop removes every published owner of a codebase path with an empty
 // generation. Canonical vectors stay in the pool.
 func (index *libraryCodeIndex) Drop(ctx context.Context, codebasePath string) error {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		return wrapDelegated(ctx, "drop", index.semanticIndex.Drop(ctx, codebasePath))
 	}
 	return index.removeOwners(ctx, codebasePath, nil)
@@ -524,7 +518,7 @@ func (index *libraryCodeIndex) Drop(ctx context.Context, codebasePath string) er
 // PruneToCurrent removes every published owner of a codebase path outside
 // currentRelativePaths.
 func (index *libraryCodeIndex) PruneToCurrent(ctx context.Context, codebasePath string, currentRelativePaths []string) error {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		return wrapDelegated(ctx, "prune to current", index.semanticIndex.PruneToCurrent(ctx, codebasePath, currentRelativePaths))
 	}
 	return index.removeOwners(ctx, codebasePath, currentRelativePaths)
@@ -560,7 +554,7 @@ func (index *libraryCodeIndex) removeOwners(ctx context.Context, codebasePath st
 
 // Count returns the published occurrence count of a codebase path.
 func (index *libraryCodeIndex) Count(ctx context.Context, codebasePath string) (int32, error) {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		value, err := index.semanticIndex.Count(ctx, codebasePath)
 		return value, wrapDelegated(ctx, "count", err)
 	}
@@ -574,7 +568,7 @@ func (index *libraryCodeIndex) Count(ctx context.Context, codebasePath string) (
 // HasCollectionForPath reports whether a codebase path has a registered
 // namespace.
 func (index *libraryCodeIndex) HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error) {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		value, err := index.semanticIndex.HasCollectionForPath(ctx, codebasePath)
 		return value, wrapDelegated(ctx, "has collection for path", err)
 	}
@@ -600,7 +594,7 @@ func (index *libraryCodeIndex) InspectCollection(ctx context.Context, collection
 // ObserveCollection reports a registered codebase namespace as ready with its
 // occurrence count.
 func (index *libraryCodeIndex) ObserveCollection(ctx context.Context, codebasePath string) (semantic.CollectionObservation, error) {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		value, err := index.semanticIndex.ObserveCollection(ctx, codebasePath)
 		return value, wrapDelegated(ctx, "observe collection", err)
 	}
@@ -617,7 +611,7 @@ func (index *libraryCodeIndex) ObserveCollection(ctx context.Context, codebasePa
 // CollectionState reports a registered codebase namespace as existing and
 // loaded.
 func (index *libraryCodeIndex) CollectionState(ctx context.Context, codebasePath string) (bool, bool, error) {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		exists, loaded, err := index.semanticIndex.CollectionState(ctx, codebasePath)
 		return exists, loaded, wrapDelegated(ctx, "collection state", err)
 	}
@@ -627,7 +621,7 @@ func (index *libraryCodeIndex) CollectionState(ctx context.Context, codebasePath
 
 // HasStaging reports no staging collection for a codebase path.
 func (index *libraryCodeIndex) HasStaging(ctx context.Context, codebasePath string) (bool, error) {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		value, err := index.semanticIndex.HasStaging(ctx, codebasePath)
 		return value, wrapDelegated(ctx, "has staging", err)
 	}
@@ -636,7 +630,7 @@ func (index *libraryCodeIndex) HasStaging(ctx context.Context, codebasePath stri
 
 // PinStaging returns a no-op pin for a codebase path.
 func (index *libraryCodeIndex) PinStaging(ctx context.Context, codebasePath string) (semantic.CollectionPin, error) {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		value, err := index.semanticIndex.PinStaging(ctx, codebasePath)
 		return value, wrapDelegated(ctx, "pin staging", err)
 	}
@@ -646,7 +640,7 @@ func (index *libraryCodeIndex) PinStaging(ctx context.Context, codebasePath stri
 // PromoteStaging returns nil for a codebase path. StageReindex already
 // committed every owner generation.
 func (index *libraryCodeIndex) PromoteStaging(ctx context.Context, codebasePath string) error {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		return wrapDelegated(ctx, "promote staging", index.semanticIndex.PromoteStaging(ctx, codebasePath))
 	}
 	return nil
@@ -655,7 +649,7 @@ func (index *libraryCodeIndex) PromoteStaging(ctx context.Context, codebasePath 
 // DropStaging returns nil for a codebase path, which has no staging
 // collection.
 func (index *libraryCodeIndex) DropStaging(ctx context.Context, codebasePath string) error {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		return wrapDelegated(ctx, "drop staging", index.semanticIndex.DropStaging(ctx, codebasePath))
 	}
 	return nil
@@ -665,7 +659,7 @@ func (index *libraryCodeIndex) DropStaging(ctx context.Context, codebasePath str
 // destination file, and the library reuses the stored vector of every
 // identical embedding input.
 func (index *libraryCodeIndex) CopyChunks(ctx context.Context, codebasePath string, srcRelativePath string, dstRelativePath string) (int, error) {
-	if semantic.IsConversationPath(codebasePath) {
+	if semantic.IsDocumentPath(codebasePath) {
 		value, err := index.semanticIndex.CopyChunks(ctx, codebasePath, srcRelativePath, dstRelativePath)
 		return value, wrapDelegated(ctx, "copy chunks", err)
 	}

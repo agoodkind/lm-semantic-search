@@ -37,7 +37,7 @@ func newDaemonMaintenanceCmd(options *rootOptions) *cobra.Command {
 			"Pause or resume the daemon's store work for a backup or restore.",
 			"",
 			"While maintenance mode is on the daemon starts no background sync, repair",
-			"pass, automatic rebuild, or collection load, refuses index and conversation",
+			"pass, automatic rebuild, or collection load, refuses index and collection",
 			"writes, and fails searches fast with a maintenance status. Jobs already",
 			"running keep going; the reply counts them so you can wait or cancel them.",
 			"The mode survives a daemon restart until it is turned off.",

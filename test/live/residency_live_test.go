@@ -54,7 +54,7 @@ func TestPublicCodeSearchLoadsAnIdleCollection(t *testing.T) {
 		t.Fatalf("public code search from idle: %v", err)
 	}
 	if len(searchResponse.GetResults()) == 0 {
-		t.Fatalf("public code search from idle returned no results: %s", searchResponse.GetDisplayText())
+		t.Fatalf("public code search from idle returned no results: %s", searchResponse.String())
 	}
 	requireKnownReleaseAttribution(t, harness, collectionName)
 }
@@ -96,7 +96,7 @@ func TestConcurrentColdSearchesShareOneLoadAndLastUseUnloads(t *testing.T) {
 		if len(result.response.GetResults()) == 0 {
 			t.Fatalf(
 				"concurrent public code search from idle returned no results: %s",
-				result.response.GetDisplayText(),
+				result.response.String(),
 			)
 		}
 	}
@@ -171,7 +171,7 @@ func TestActiveSearchPreventsIdleUnload(t *testing.T) {
 		t.Fatalf("active public code search: %v", search.err)
 	}
 	if len(search.response.GetResults()) == 0 {
-		t.Fatalf("active public code search returned no results: %s", search.response.GetDisplayText())
+		t.Fatalf("active public code search returned no results: %s", search.response.String())
 	}
 	waitForLoadState(t, harness, collectionName, entity.LoadStateNotLoad)
 }
@@ -325,7 +325,7 @@ func TestActiveMutationPreventsIdleUnloadAndUnpinnedStagingPreservesRows(t *test
 		t.Fatalf("cancel public staging job: %v", err)
 	}
 	if !cancelResponse.GetCancelled() {
-		t.Fatalf("cancel public staging job returned not cancelled: %s", cancelResponse.GetDisplayText())
+		t.Fatalf("cancel public staging job returned not cancelled: %s", cancelResponse.String())
 	}
 	gate.release <- struct{}{}
 	job := waitForPublicJob(t, harness, jobID)
@@ -359,52 +359,49 @@ func TestActiveMutationPreventsIdleUnloadAndUnpinnedStagingPreservesRows(t *test
 	cancelRelease()
 }
 
-func TestPublicConversationSearchLoadsAnIdleCollection(t *testing.T) {
+func TestPublicCollectionSearchLoadsAnIdleCollection(t *testing.T) {
 	harness := newResidencyHarness(t, residencyLiveIdleTimeout)
-	conversationID := "idle-conversation-" + randomID()
-	sentinel := "public idle conversation residency sentinel"
+	itemID := "idle-item-" + randomID()
+	sentinel := "public idle collection residency sentinel"
 	job := harness.upsert(
-		map[string][]*pb.ConversationDocument{
-			conversationID: {
+		map[string][]*pb.CollectionRow{
+			itemID: {
 				{
-					ConversationId: conversationID,
-					MessageIndex:   0,
-					Role:           "user",
-					TimestampUnix:  1712345000,
-					Text:           sentinel,
+					ItemId: itemID,
+					Text:   sentinel,
 				},
 			},
 		},
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
 		true,
 		false,
 	)
-	requireCompleted(t, job, "public conversation idle setup")
+	requireCompleted(t, job, "public collection idle setup")
 	waitForLoadState(t, harness, harness.collectionName, entity.LoadStateNotLoad)
 	harness.callRecorder.reset()
 
-	response, err := harness.client.SearchConversations(
+	response, err := harness.client.SearchCollection(
 		correlatedContext(),
-		&pb.SearchConversationsRequest{
+		&pb.SearchCollectionRequest{
 			CollectionId: harness.collectionID,
 			Query:        sentinel,
 			Limit:        5,
 		},
 	)
 	if err != nil {
-		t.Fatalf("public conversation search from idle: %v", err)
+		t.Fatalf("public collection search from idle: %v", err)
 	}
-	if len(response.GetResults()) == 0 {
+	if len(response.GetHits()) == 0 {
 		t.Fatalf(
-			"public conversation search from idle returned no results: %s",
-			response.GetDisplayText(),
+			"public collection search from idle returned no results: %s",
+			response.String(),
 		)
 	}
-	if got := response.GetResults()[0].GetConversationId(); got != conversationID {
-		t.Fatalf("public conversation result id = %q, want %q", got, conversationID)
+	if got := response.GetHits()[0].GetRowKey(); got != "items/"+itemID+"/0" {
+		t.Fatalf("public collection result id = %q, want %q", got, "items/"+itemID+"/0")
 	}
 	if calls := harness.callRecorder.count("LoadCollection", harness.collectionName); calls != 1 {
-		t.Fatalf("conversation idle load calls = %d, want 1", calls)
+		t.Fatalf("collection idle load calls = %d, want 1", calls)
 	}
 }
 
@@ -441,7 +438,7 @@ func TestColdResidencyTransitionPreservesRowsMmapAndJobs(t *testing.T) {
 		t.Fatalf("public cold preservation search: %v", err)
 	}
 	if len(response.GetResults()) == 0 {
-		t.Fatalf("public cold preservation search returned no results: %s", response.GetDisplayText())
+		t.Fatalf("public cold preservation search returned no results: %s", response.String())
 	}
 	waitForLoadState(t, harness, collectionName, entity.LoadStateNotLoad)
 

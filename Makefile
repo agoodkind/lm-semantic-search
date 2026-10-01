@@ -140,7 +140,7 @@ build install release: | daemon-entitlements-signer
 
 .PHONY: daemon-entitlements-signer go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live offline-live library-live-prereqs library-live-l1 library-live-l2 library-live-l3 library-live-l4 library-live-l4-offline library-live-l5 install-live milvus-integration service-activity-live restart-acceptance-unit restart-acceptance proto
 
-# live runs the opt-in conversation-marker validation suite against a real local
+# live runs the opt-in generic collection validation suite against a real local
 # Milvus, fully isolated from the operator's daemon (build tag `live`). It reuses
 # the go.mk order-only prerequisites so the gksyntax grammars, go.work routing,
 # and cgo libraries exist before the suite compiles. Milvus must be reachable; when

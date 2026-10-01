@@ -27,7 +27,7 @@ const (
 	defaultEmbeddingBatchTokenBudget = 6000
 	defaultEmbeddingRequestTimeoutMS = 300000
 	defaultMaxJobChunks              = 200000
-	defaultMaxConversationsPerIngest = 100
+	defaultMaxItemsPerIngest         = 100
 	defaultMaxJobBytes               = 1073741824
 	defaultExpectedJobGrowthFactor   = 4
 	defaultExpectedJobGrowthFloor    = 10000
@@ -202,12 +202,7 @@ type Config struct {
 	// IndexBackend selects the vector store implementation, resolved to its
 	// canonical value when the config is read. Derived from Profile by
 	// ApplyProfile; may also be set directly.
-	IndexBackend model.VectorBackend
-	// CodebaseStore selects where codebase chunks are written:
-	// [CodebaseStoreSemantic], the per-codebase collections of IndexBackend and
-	// the default, or [CodebaseStoreLibrary], the shared search library catalog
-	// and vector pool under StateRoot. Conversation collections always use
-	// IndexBackend.
+	IndexBackend           model.VectorBackend
 	CodebaseStore          CodebaseStoreKind
 	CollectionNameOverride string
 	HybridMode             bool
@@ -233,9 +228,8 @@ type Config struct {
 	// the embedding endpoint.
 	MaxConcurrentIndexJobs int
 	// MaxJobChunks caps the chunks one job may write before admission halts it.
-	MaxJobChunks int32
-	// MaxConversationsPerIngest caps the conversation ids one manifest sync may request.
-	MaxConversationsPerIngest int
+	MaxJobChunks      int32
+	MaxItemsPerIngest int
 	// MaxJobBytes caps the chunk content bytes one job may write.
 	MaxJobBytes int64
 	// ExpectedJobGrowthFactor caps growth relative to the last successful run
@@ -440,7 +434,7 @@ func Default() (Config, error) {
 		PerfCountersIntervalMS:             envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),
 		MaxConcurrentIndexJobs:             envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
 		MaxJobChunks:                       envInt32OrDefault("CLAUDE_CONTEXT_MAX_JOB_CHUNKS", defaultMaxJobChunks),
-		MaxConversationsPerIngest:          envIntOrDefault("CLAUDE_CONTEXT_MAX_CONVERSATIONS_PER_INGEST", defaultMaxConversationsPerIngest),
+		MaxItemsPerIngest:                  envIntOrDefault("CLAUDE_CONTEXT_MAX_ITEMS_PER_INGEST", defaultMaxItemsPerIngest),
 		MaxJobBytes:                        envInt64OrDefault("CLAUDE_CONTEXT_MAX_JOB_BYTES", defaultMaxJobBytes),
 		ExpectedJobGrowthFactor:            envFloat64OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FACTOR", defaultExpectedJobGrowthFactor),
 		ExpectedJobGrowthFloor:             envInt32OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FLOOR", defaultExpectedJobGrowthFloor),

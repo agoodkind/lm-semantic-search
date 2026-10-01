@@ -24,23 +24,6 @@ type sourceStamp struct {
 	modTime time.Time
 }
 
-// ignoreObserver is the single owner of resolver-cache invalidation. Every other
-// daemon component routes its "a codebase's ignore rules may have changed" signal
-// here instead of calling the resolver's invalidate directly, so invalidation has
-// exactly one home. It maps two triggers to invalidate: a caller-supplied signal
-// that a codebase's ignore rules may have changed (Invalidate), which the watcher
-// raises for a per-event ignore-source path and the config-commit, sync,
-// adoption, worktree-discovery, and conversation-registration paths raise after
-// an effective-config mutation, and the periodic backstop that stats each
-// codebase's ignore sources and notices an edit the watcher missed or that
-// happened while the watcher was disabled (CheckSources).
-//
-// Locking: the observer's mutex guards only lastSeen, the per-codebase freshness
-// record CheckSources reads and writes. The observer never holds that mutex while
-// calling the resolver, so it cannot deadlock against an in-flight Decide.
-// Invalidate only invalidates and takes no lock, so a caller holding manager.mu
-// may call it safely, matching the prior direct InvalidateRules calls it
-// replaces.
 type ignoreObserver struct {
 	resolver ignoreSourceResolver
 
@@ -58,13 +41,6 @@ func newIgnoreObserver(resolver ignoreSourceResolver) *ignoreObserver {
 	}
 }
 
-// Invalidate drops the codebase's resolver entry so the next decision rebuilds
-// the matcher. It is the observer's sole invalidate entry: the watcher raises it
-// for a raw filesystem event on one of the codebase's ignore sources, and the
-// config-commit, sync, adoption, worktree-discovery, and conversation-
-// registration paths raise it after an effective-config mutation. It only
-// invalidates and takes no lock, so a caller holding manager.mu may call it
-// safely.
 func (observer *ignoreObserver) Invalidate(codebaseID string) {
 	observer.resolver.InvalidateRules(codebaseID)
 }

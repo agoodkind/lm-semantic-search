@@ -242,7 +242,7 @@ func (manager *Manager) updateJobQuarantined(ctx context.Context, jobID string, 
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	delete(manager.conversationJobs, jobID)
+	delete(manager.collectionJobs, jobID)
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
 		return

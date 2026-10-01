@@ -62,11 +62,11 @@ func TestResolveProgressSurfaceResumingIngest(t *testing.T) {
 	job := model.Job{
 		ID:        "job-p",
 		State:     model.JobStateRunning,
-		Operation: "conversation_ingest",
+		Operation: "collection_ingest",
 		Progress: model.Progress{
 			RunMode:         model.RunModeResuming,
 			Unit:            "document",
-			ScopeUnit:       "conversation",
+			ScopeUnit:       "item",
 			OverallPercent:  23.5,
 			FilesTotal:      1011,
 			FilesProcessed:  238,
@@ -104,7 +104,7 @@ func TestResolveProgressSurfaceResumingIngest(t *testing.T) {
 	if !hasRow(breakdown.ChunkRows, view.KindReused) {
 		t.Fatalf("reused row missing on a reuse-capable pass: %+v", breakdown.ChunkRows)
 	}
-	if !strings.Contains(got.ScopeLine, "1,004 conversations added · 7 modified") {
+	if !strings.Contains(got.ScopeLine, "1,004 items added · 7 modified") {
 		t.Fatalf("scope line = %q, want the typed classification", got.ScopeLine)
 	}
 }
@@ -196,7 +196,7 @@ func TestResolveListSummarySplitsSuperseded(t *testing.T) {
 	}
 }
 
-// TestBatchDenominatorGating checks the within-conversation batch denominator in
+// TestBatchDenominatorGating checks the within-item batch denominator in
 // resolveProgressSurface: an active run surfaces "embedding batch N of M", and a
 // terminal run surfaces nothing even when the batch counts linger, so a finished
 // job shows no stale bounded progress.

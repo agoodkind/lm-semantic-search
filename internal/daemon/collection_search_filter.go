@@ -11,11 +11,7 @@ import (
 const (
 	// maxCollectionFilterDepth is the deepest filter tree a search accepts. The
 	// root node is depth 1.
-	maxCollectionFilterDepth = 16
-	// maxCollectionFilterValues is the largest set a membership leaf accepts.
-	// The conversation adapter sends an explicit conversation scope as one
-	// membership leaf, and the search splits a scope larger than one Milvus
-	// membership clause into batches.
+	maxCollectionFilterDepth  = 16
 	maxCollectionFilterValues = 65_536
 )
 

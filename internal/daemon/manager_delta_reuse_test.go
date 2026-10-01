@@ -223,7 +223,7 @@ func TestRunDeltaSyncSeedsSiblingReuseOnlyForAddedFiles(t *testing.T) {
 			t.Fatalf("job state = %q, want completed", completed.State)
 		}
 		// A chat:/// document collection has no git siblings in practice, so
-		// conversations still rely on per-item reuse. This fixture uses a linked
+		// items still rely on per-item reuse. This fixture uses a linked
 		// worktree to pin that the build-wide rule itself is Kind neutral.
 		if !fake.requestedReuseCollection("cc_repo") {
 			t.Fatalf("sibling collection cc_repo was not loaded; calls = %v", fake.reuseCollectionsSnapshot())

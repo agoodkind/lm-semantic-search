@@ -67,69 +67,6 @@ func TestSearchAppliesExtensionAndRelativePathPrefixFilters(t *testing.T) {
 	}
 }
 
-func TestConversationSearchAppliesFiltersScoreAndPerConversationLimit(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	const codebasePath = "chat:///local-search"
-	provider := &fakeEmbeddingProvider{
-		vectors: map[string][]float32{
-			"a best":    {1, 0},
-			"a second":  {0.9, 0.1},
-			"b kept":    {0.8, 0.2},
-			"b too low": {0.1, 0.9},
-			"filtered":  {0.95, 0.05},
-			"query":     {1, 0},
-		},
-	}
-	store, err := newStoreWithProvider(
-		config.Config{StateRoot: t.TempDir()},
-		provider,
-	)
-	if err != nil {
-		t.Fatalf("newStoreWithProvider returned error: %v", err)
-	}
-	chunks := []model.StoredChunk{
-		conversationChunk("a best", "claude:a", "assistant", 1, 100),
-		conversationChunk("a second", "claude:a", "assistant", 2, 101),
-		conversationChunk("b kept", "claude:b", "assistant", 1, 102),
-		conversationChunk("b too low", "claude:b", "assistant", 2, 103),
-		conversationChunk("filtered", "cursor:c", "user", 1, 104),
-	}
-	stageAndPromote(
-		t,
-		store,
-		codebasePath,
-		chunks,
-		semantic.ConversationColumns(),
-	)
-
-	filter := semantic.ConversationFilter{
-		Providers:        []string{"claude"},
-		Roles:            []string{"ASSISTANT"},
-		FromUnix:         100,
-		UntilUnix:        104,
-		MessageIndexFrom: 1,
-	}
-	results, err := store.SearchCollection(context.Background(), semantic.CollectionSearch{
-		CollectionName: store.CollectionName(codebasePath),
-		Query:          "query",
-		Limit:          10,
-		MinScore:       0.5,
-		Filter:         filter.CollectionFilter(),
-		GroupBy:        "conversationId",
-		PerGroupLimit:  1,
-		Declaration:    semantic.ConversationDeclaration(),
-	})
-	if err != nil {
-		t.Fatalf("SearchCollection returned error: %v", err)
-	}
-	if got, want := hitContents(results), []string{"a best", "b kept"}; !slices.Equal(got, want) {
-		t.Fatalf("conversation contents = %v, want %v", got, want)
-	}
-}
-
 // TestCollectionSearchEvaluatesNestedFilterTree proves the local store keeps a
 // row only when the whole tree is true. An any node keeps either branch. A not
 // node rejects its child's matches. A leaf on a column the row format lacks is
@@ -152,12 +89,12 @@ func TestCollectionSearchEvaluatesNestedFilterTree(t *testing.T) {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
 	stageAndPromote(t, store, codebasePath, []model.StoredChunk{
-		conversationChunk("first", "claude:a", "User", 0, 100),
-		conversationChunk("second", "codex:b", "assistant", 1, 200),
-		conversationChunk("third", "claude:c", "assistant", 2, 300),
-	}, semantic.ConversationColumns())
+		documentChunk("first", "claude:a", "user", 0, 100),
+		documentChunk("second", "codex:b", "assistant", 1, 200),
+		documentChunk("third", "claude:c", "assistant", 2, 300),
+	}, semantic.ColumnsForDeclaration(documentDeclaration()))
 
-	declaration := semantic.ConversationDeclaration()
+	declaration := documentDeclaration()
 	declaration.Scalars = append(declaration.Scalars, model.ScalarColumn{Name: "priority", Type: model.ScalarTypeInt64, Nullable: true, MaxLength: 0})
 	lower := int64(250)
 	search := func(filter semantic.CollectionFilter) []semantic.CollectionHit {
@@ -197,7 +134,7 @@ func TestCollectionSearchEvaluatesNestedFilterTree(t *testing.T) {
 		t.Fatalf("is_null on an absent column kept %v, want every row", got)
 	}
 
-	hits := search(semantic.ColumnEquals("conversationId", semantic.StringScalar("claude:a")))
+	hits := search(semantic.ColumnEquals("itemId", semantic.StringScalar("claude:a")))
 	if len(hits) != 1 {
 		t.Fatalf("equality kept %d hits, want 1", len(hits))
 	}
@@ -221,14 +158,6 @@ func hitContents(hits []semantic.CollectionHit) []string {
 		contents = append(contents, hit.Chunk.Content)
 	}
 	return contents
-}
-
-func TestConversationPartIndexRejectsNegativeMessageIndex(t *testing.T) {
-	t.Parallel()
-
-	if _, err := conversationPartIndex("conv/test/-1", "test"); err == nil {
-		t.Fatal("conversationPartIndex returned nil error for a negative message index")
-	}
 }
 
 func TestSearchAboveExactThresholdReturnsNearestNeighbor(t *testing.T) {
@@ -295,36 +224,34 @@ func TestSearchAboveExactThresholdAdaptivelyOverfetchesAfterFiltering(t *testing
 }
 
 const (
-	tiedDenseConversation = "claude:dense"
-	tiedFarConversation   = "claude:far"
-	tiedDenseRows         = 300
-	tiedFarRows           = 3
+	tiedDenseDocument = "claude:dense"
+	tiedFarDocument   = "claude:far"
+	tiedDenseRows     = 300
+	tiedFarRows       = 3
 )
 
-// tiedConversationFixture builds total conversation rows. The dense
-// conversation has tiedDenseRows rows with the query vector, so they tie at
-// the top score. The far conversation has tiedFarRows rows with the opposite
-// vector, so they score lowest. Every other row is its own conversation at a
+// tiedDocumentFixture builds total document rows. The dense
+// document has tiedDenseRows rows with the query vector, so they tie at
+// the top score. The far document has tiedFarRows rows with the opposite
+// vector, so they score lowest. Every other row is its own document at a
 // distinct angle between them.
-func tiedConversationFixture(total int) ([]model.StoredChunk, map[string][]float32) {
+func tiedDocumentFixture(total int) ([]model.StoredChunk, map[string][]float32) {
 	const firstOtherAngle = 0.01
 	chunks := make([]model.StoredChunk, 0, total)
 	reuse := make(map[string][]float32, total)
-	add := func(content string, conversationID string, messageIndex int, vector []float32) {
+	add := func(content string, documentID string, messageIndex int, vector []float32) {
 		chunks = append(chunks, model.StoredChunk{
-			Content:        content,
-			RelativePath:   fmt.Sprintf("conv/%s/%d", conversationID, messageIndex),
-			ConversationID: conversationID,
-			MessageIndex:   int32(messageIndex),
-			Role:           "user",
+			Content:      content,
+			RelativePath: fmt.Sprintf("conv/%s/%d", documentID, messageIndex),
+			Scalars:      map[string]model.ScalarValue{"itemId": {Type: model.ScalarTypeString, String: documentID}},
 		})
 		reuse[semantic.ContentVectorKey(content)] = vector
 	}
 	for messageIndex := range tiedDenseRows {
-		add(fmt.Sprintf("dense-%04d", messageIndex), tiedDenseConversation, messageIndex, []float32{1, 0})
+		add(fmt.Sprintf("dense-%04d", messageIndex), tiedDenseDocument, messageIndex, []float32{1, 0})
 	}
 	for messageIndex := range tiedFarRows {
-		add(fmt.Sprintf("far-%d", messageIndex), tiedFarConversation, messageIndex, []float32{-1, 0})
+		add(fmt.Sprintf("far-%d", messageIndex), tiedFarDocument, messageIndex, []float32{-1, 0})
 	}
 	otherCount := total - tiedDenseRows - tiedFarRows
 	for index := range otherCount {
@@ -338,10 +265,10 @@ func tiedConversationFixture(total int) ([]model.StoredChunk, map[string][]float
 // TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold proves collection
 // search ranks a fixed candidate set above the 4,096-row exact threshold of
 // code search, both below and above semantic.CollectionRankingDepth rows. The
-// dense conversation's rows tie at the top score, and a cap of two per
-// conversation keeps two of them. Every smaller limit returns a prefix of limit
+// dense document's rows tie at the top score, and a cap of two per
+// document keeps two of them. Every smaller limit returns a prefix of limit
 // 20, repeated searches return the same rows, and a search scoped to the far
-// conversation finds its rows although they score lowest.
+// document finds its rows although they score lowest.
 func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 	t.Parallel()
 
@@ -351,7 +278,7 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 
 			codebasePath := fmt.Sprintf("chat:///local-prefix-%d", total)
 			store := newSearchTestStore(t)
-			chunks, reuse := tiedConversationFixture(total)
+			chunks, reuse := tiedDocumentFixture(total)
 			stageAndPromoteWithReuse(t, store, codebasePath, chunks, reuse)
 			search := func(limit int32, filter *semantic.CollectionFilter) []string {
 				t.Helper()
@@ -361,9 +288,9 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 					Limit:          limit,
 					MinScore:       0,
 					Filter:         filter,
-					GroupBy:        "conversationId",
+					GroupBy:        "itemId",
 					PerGroupLimit:  2,
-					Declaration:    semantic.ConversationDeclaration(),
+					Declaration:    documentDeclaration(),
 				})
 				if err != nil {
 					t.Fatalf("SearchCollection returned error: %v", err)
@@ -380,7 +307,7 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 				t.Fatalf("limit 20 returned %d rows, want 20", len(larger))
 			}
 			for _, path := range larger[:2] {
-				if !strings.HasPrefix(path, "conv/"+tiedDenseConversation+"/") {
+				if !strings.HasPrefix(path, "conv/"+tiedDenseDocument+"/") {
 					t.Fatalf("top rows %v, want two dense rows first", larger[:2])
 				}
 			}
@@ -395,9 +322,9 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 				}
 			}
 
-			scope := semantic.ColumnIn("conversationId", semantic.StringValues([]string{tiedFarConversation}))
+			scope := semantic.ColumnIn("itemId", semantic.StringValues([]string{tiedFarDocument}))
 			far := search(10, &scope)
-			if len(far) != 2 || !strings.HasPrefix(far[0], "conv/"+tiedFarConversation+"/") {
+			if len(far) != 2 || !strings.HasPrefix(far[0], "conv/"+tiedFarDocument+"/") {
 				t.Fatalf("scoped search rows %v, want the two far rows the cap keeps", far)
 			}
 		})
@@ -540,20 +467,21 @@ func stageAndPromote(
 	}
 }
 
-func conversationChunk(
-	content string,
-	conversationID string,
-	role string,
-	messageIndex int32,
-	timestampUnix int64,
-) model.StoredChunk {
-	return model.StoredChunk{
-		Content:        content,
-		RelativePath:   "conv/" + conversationID + "/message",
-		ConversationID: conversationID,
-		MessageIndex:   messageIndex,
-		Role:           role,
-		TimestampUnix:  timestampUnix,
-		WorkspaceRoot:  "/workspace",
-	}
+func documentDeclaration() model.CollectionDeclaration {
+	return model.CollectionDeclaration{ItemIDColumn: "itemId", Scalars: []model.ScalarColumn{
+		{Name: "itemId", Type: model.ScalarTypeString, MaxLength: 256},
+		{Name: "role", Type: model.ScalarTypeString, MaxLength: 64},
+		{Name: "provider", Type: model.ScalarTypeString, MaxLength: 64},
+		{Name: "timestampUnix", Type: model.ScalarTypeInt64},
+	}}
+}
+func documentChunk(content string, documentID string, role string, sequence int32, created int64) model.StoredChunk {
+	category, _, _ := strings.Cut(documentID, ":")
+	return model.StoredChunk{Content: content, RelativePath: "items/" + documentID + "/row", StartLine: sequence,
+		Scalars: map[string]model.ScalarValue{
+			"itemId":        {Type: model.ScalarTypeString, String: documentID},
+			"role":          {Type: model.ScalarTypeString, String: role},
+			"provider":      {Type: model.ScalarTypeString, String: category},
+			"timestampUnix": {Type: model.ScalarTypeInt64, Int64: created},
+		}}
 }

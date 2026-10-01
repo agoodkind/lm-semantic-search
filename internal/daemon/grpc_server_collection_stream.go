@@ -19,12 +19,7 @@ import (
 const (
 	// maxCollectionRowsPerFrame bounds the rows one rows chunk may send.
 	maxCollectionRowsPerFrame = 1024
-	// maxCollectionStreamBytes bounds the row bytes one item upsert stream may
-	// buffer before the handler queues its job: row keys, item ids, text,
-	// continuation prefixes, scalar column names, and string values. The bound is
-	// about twelve times the largest conversation of the operator's local
-	// corpus, 43 MB.
-	maxCollectionStreamBytes = 512 << 20
+	maxCollectionStreamBytes  = 512 << 20
 )
 
 // SyncCollectionManifest diffs a registered document collection's item
@@ -54,7 +49,7 @@ func (server *GRPCServer) SyncCollectionManifest(ctx context.Context, request *p
 		CollectionID:    request.GetCollectionId(),
 		CollectionName:  "",
 		CodebaseID:      request.GetCollectionId(),
-		ConversationID:  "",
+		ItemID:          "",
 		DocumentCount:   0,
 		NeededCount:     len(needed),
 		TotalCount:      len(request.GetManifest()),
@@ -137,7 +132,7 @@ func (server *GRPCServer) UpsertCollectionItemsStream(stream pb.SemanticSearchDa
 		CollectionID:    state.request.CollectionID,
 		CollectionName:  "",
 		CodebaseID:      job.CodebaseID,
-		ConversationID:  "",
+		ItemID:          "",
 		DocumentCount:   len(state.request.Rows),
 		NeededCount:     0,
 		TotalCount:      0,

@@ -18,25 +18,11 @@ import (
 // partial update writes. A backfill page reads no vector.
 const scalarBackfillBatchSize = 1000
 
-// legacyConversationFamilies are the relativePath family prefixes of
-// conversation rows. A conversation row written before the conversationId
-// column existed stores its conversation id only in this path.
-var legacyConversationFamilies = []string{"conv/", "convtool/", "convthink/"}
-
-// ScalarBackfill is one backfill of declared scalar columns in a document
-// collection. A row needs the backfill when one of Columns is null, or an
-// empty string, on the row. ItemColumn is the declared item id column, and
-// Values maps an item id to the value of every column in Columns. Conversation
-// marks the conversation declaration. A conversation row without an item id
-// then belongs to the item id that follows its conv/, convtool/, or convthink/
-// path prefix, and the local store keeps the conversation columns in its
-// conversation row fields. DryRun counts rows and writes nothing.
 type ScalarBackfill struct {
-	ItemColumn   string
-	Columns      []model.ScalarColumn
-	Values       map[string]map[string]model.ScalarValue
-	Conversation bool
-	DryRun       bool
+	ItemColumn string
+	Columns    []model.ScalarColumn
+	Values     map[string]map[string]model.ScalarValue
+	DryRun     bool
 }
 
 // ScalarValueMissing reports whether a backfill fills a stored value: a null
@@ -56,37 +42,12 @@ func (backfill ScalarBackfill) Needs(stored map[string]model.ScalarValue) bool {
 	return false
 }
 
-// ItemValues returns the backfill values of the item that owns a row. itemID
-// is the row's item id column value, and it is empty when the column is null.
-// A conversation row without an item id belongs to the longest streamed item
-// id that follows its conv/, convtool/, or convthink/ path prefix.
 func (backfill ScalarBackfill) ItemValues(itemID string, relativePath string) (map[string]model.ScalarValue, bool) {
-	if itemID == "" && backfill.Conversation {
-		itemID = backfill.legacyConversationItem(relativePath)
-	}
 	if itemID == "" {
 		return nil, false
 	}
 	values, streamed := backfill.Values[itemID]
 	return values, streamed
-}
-
-// legacyConversationItem returns the longest streamed item id that follows the
-// family prefix of a conversation row path, or an empty string.
-func (backfill ScalarBackfill) legacyConversationItem(relativePath string) string {
-	for _, family := range legacyConversationFamilies {
-		remainder, found := strings.CutPrefix(relativePath, family)
-		if !found {
-			continue
-		}
-		for end := strings.LastIndexByte(remainder, '/'); end > 0; end = strings.LastIndexByte(remainder[:end], '/') {
-			if _, streamed := backfill.Values[remainder[:end]]; streamed {
-				return remainder[:end]
-			}
-		}
-		return ""
-	}
-	return ""
 }
 
 // Filled returns the backfill column values a row stores after the backfill.
@@ -283,24 +244,16 @@ func storedBackfillValues(resultSet milvusclient.ResultSet, columns []model.Scal
 // build error identifies the row by relativePath.
 func scalarBackfillRow(relativePath string, scalars map[string]model.ScalarValue) model.StoredChunk {
 	return model.StoredChunk{
-		Content:              "",
-		RelativePath:         relativePath,
-		StartLine:            0,
-		EndLine:              0,
-		Language:             "",
-		FileExtension:        "",
-		ConversationID:       "",
-		ParentConversationID: "",
-		MessageIndex:         0,
-		Role:                 "",
-		TimestampUnix:        0,
-		WorkspaceRoot:        "",
-		Archived:             false,
-		SplitPart:            0,
-		SplitPartRecorded:    false,
-		LoadRules:            "",
-		Scalars:              scalars,
-		Score:                0,
+		Content:           "",
+		RelativePath:      relativePath,
+		StartLine:         0,
+		EndLine:           0,
+		Language:          "",
+		FileExtension:     "",
+		SplitPart:         0,
+		SplitPartRecorded: false,
+		Scalars:           scalars,
+		Score:             0,
 	}
 }
 

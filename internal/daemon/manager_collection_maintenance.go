@@ -12,11 +12,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
-// conversationDerivedColumns are the conversation declaration columns a scalar
-// backfill cannot fill. The engine derives provider from the item id and
-// messageIndex from the row key.
-var conversationDerivedColumns = []string{semantic.ConversationProviderColumn, semantic.ConversationMessageIndexColumn}
-
 // collectionBackfillItemInput is one streamed item of a generic scalar backfill
 // before validation.
 type collectionBackfillItemInput struct {
@@ -82,13 +77,13 @@ func (manager *Manager) deleteCollectionItem(ctx context.Context, collectionID s
 // queueItemDelete queues the asynchronous removal of one item's rows. Both
 // delete RPCs queue their deletes here.
 func (manager *Manager) queueItemDelete(ctx context.Context, codebase model.Codebase, itemID string, client model.ClientInfo) (model.Job, error) {
-	return manager.queueConversationJob(ctx, codebase, client, conversationJobPayload{
-		Kind:           conversationJobKindDelete,
+	return manager.queueCollectionJob(ctx, codebase, client, collectionJobPayload{
+		Kind:           collectionJobKindDelete,
 		CollectionName: codebase.CollectionName,
 		Manifest:       nil,
-		Documents:      nil,
-		Rows:           nil,
-		ItemID:         itemID,
+
+		Rows:   nil,
+		ItemID: itemID,
 		// A delete removes exactly one item and never runs the manifest-absence
 		// branch. Absence stays unused, and exhaustruct requires it set.
 		Absence: absenceRetain,
@@ -127,12 +122,11 @@ func declaredColumnsNamed(declaration model.CollectionDeclaration, names ...stri
 // item id. validateBackfillColumns and validateBackfillItem list the column and
 // value cases it rejects.
 func validateCollectionBackfill(declaration model.CollectionDeclaration, request collectionBackfillRequest) (semantic.ScalarBackfill, error) {
-	conversation := semantic.IsConversationDeclaration(declaration)
 	declared := make(map[string]model.ScalarColumn, len(declaration.Scalars))
 	for _, column := range declaration.Scalars {
 		declared[column.Name] = column
 	}
-	columns, err := validateBackfillColumns(declaration.ItemIDColumn, declared, conversation, request.Columns)
+	columns, err := validateBackfillColumns(declaration.ItemIDColumn, declared, request.Columns)
 	if err != nil {
 		return semantic.ScalarBackfill{}, err
 	}
@@ -152,19 +146,15 @@ func validateCollectionBackfill(declaration model.CollectionDeclaration, request
 		values[itemID] = itemValues
 	}
 	return semantic.ScalarBackfill{
-		ItemColumn:   declaration.ItemIDColumn,
-		Columns:      columns,
-		Values:       values,
-		Conversation: conversation,
-		DryRun:       request.DryRun,
+		ItemColumn: declaration.ItemIDColumn,
+		Columns:    columns,
+		Values:     values,
+
+		DryRun: request.DryRun,
 	}, nil
 }
 
-// validateBackfillColumns resolves the header columns of a scalar backfill to
-// their declarations. It rejects an empty list, an undeclared or repeated
-// column, the item id column, a derived conversation column, and a column that
-// is never null or empty: a bool or int64 column that is not nullable.
-func validateBackfillColumns(itemColumn string, declared map[string]model.ScalarColumn, conversation bool, names []string) ([]model.ScalarColumn, error) {
+func validateBackfillColumns(itemColumn string, declared map[string]model.ScalarColumn, names []string) ([]model.ScalarColumn, error) {
 	if len(names) == 0 {
 		return nil, adapterr.NewMissingArgument("columns")
 	}
@@ -180,9 +170,7 @@ func validateBackfillColumns(itemColumn string, declared map[string]model.Scalar
 		if name == itemColumn {
 			return nil, adapterr.NewInvalidColumnValue(name, fmt.Sprintf("backfill column %q is the item id column, which selects the rows of an item", name))
 		}
-		if conversation && slices.Contains(conversationDerivedColumns, name) {
-			return nil, adapterr.NewInvalidColumnValue(name, fmt.Sprintf("backfill column %q is derived: the conversation declaration derives provider from the item id and messageIndex from the row key", name))
-		}
+
 		if !column.Nullable && column.Type != model.ScalarTypeString {
 			return nil, adapterr.NewInvalidColumnValue(name, fmt.Sprintf("backfill column %q is a %s column that is not nullable, and a backfill fills only null or empty values", name, column.Type))
 		}

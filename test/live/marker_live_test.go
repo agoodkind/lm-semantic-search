@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -14,213 +15,9 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"google.golang.org/protobuf/proto"
 )
 
-// The three conversations every backfill scenario seeds. Each carries a tool call
-// and thinking text so derived convtool/ and convthink/ rows exist alongside the
-// base conv/ rows.
-var seedConversationIDs = []string{"live-a", "live-b", "live-c"}
-
-// TestScenario1FullBackfillThenReexamineIsBounded proves the core bounded-
-// examination guarantee: after a full stamped backfill, an identical reexamine
-// embeds nothing because every marker is current.
-func TestScenario1FullBackfillThenReexamineIsBounded(t *testing.T) {
-	h := newHarness(t)
-
-	convs := seedConversations()
-	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
-	requireCompleted(t, backfill, "backfill")
-	if backfill.Progress.ChunksEmbedded <= 0 {
-		t.Fatalf("backfill ChunksEmbedded = %d, want > 0 (nothing embedded on first pass)\n%s", backfill.Progress.ChunksEmbedded, progressString(backfill))
-	}
-
-	second := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
-	requireCompleted(t, second, "second reexamine")
-	if second.Progress.ChunksEmbedded != 0 {
-		t.Fatalf("second reexamine ChunksEmbedded = %d, want 0 (bounded examination)\n%s", second.Progress.ChunksEmbedded, progressString(second))
-	}
-	if second.Progress.FilesEmbedded != 0 {
-		t.Fatalf("second reexamine FilesEmbedded = %d, want 0 (no conversation re-embedded)\n%s", second.Progress.FilesEmbedded, progressString(second))
-	}
-	if second.Progress.FilesModified != 0 {
-		t.Fatalf("second reexamine FilesModified = %d, want 0 (no forced items, empty diff)\n%s", second.Progress.FilesModified, progressString(second))
-	}
-}
-
-// TestScenario2AppendReexaminesOnlyThatConversation proves an appended message
-// re-examines and re-embeds only its own conversation, leaving the rest skipped.
-func TestScenario2AppendReexaminesOnlyThatConversation(t *testing.T) {
-	h := newHarness(t)
-
-	convs := seedConversations()
-	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
-	requireCompleted(t, backfill, "backfill")
-
-	// Append one message to a single conversation. Its content and derived
-	// fingerprint both change, so the merkle diff classifies exactly it as
-	// modified.
-	convs["live-b"] = appendMessage(convs["live-b"], "live-b")
-	appended := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
-	requireCompleted(t, appended, "appended reexamine")
-
-	if appended.Progress.FilesModified != 1 {
-		t.Fatalf("appended FilesModified = %d, want 1 (only the changed conversation)\n%s", appended.Progress.FilesModified, progressString(appended))
-	}
-	if appended.Progress.FilesEmbedded != 1 {
-		t.Fatalf("appended FilesEmbedded = %d, want 1 (only the changed conversation re-embedded)\n%s", appended.Progress.FilesEmbedded, progressString(appended))
-	}
-	if appended.Progress.ChunksEmbedded <= 0 {
-		t.Fatalf("appended ChunksEmbedded = %d, want > 0 (the appended message embedded)\n%s", appended.Progress.ChunksEmbedded, progressString(appended))
-	}
-}
-
-// TestScenario3ForceRebuildsPresentBackfillSkips proves the force-vs-backfill
-// distinction directly over a fully-present corpus. After a full backfill embeds
-// every seeded conversation, a plain BACKFILL re-run re-embeds NOTHING because
-// backfill is presence-based and every derived row is already present. A FORCE
-// re-run then re-embeds those same present rows, because force rebuilds every
-// delivered conversation with reuse disabled. The two flags are orthogonal:
-// backfill fills only missing rows, force rebuilds present ones.
-func TestScenario3ForceRebuildsPresentBackfillSkips(t *testing.T) {
-	h := newHarness(t)
-
-	convs := seedConversations()
-	initial := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
-	requireCompleted(t, initial, "initial backfill")
-	if initial.Progress.ChunksEmbedded <= 0 {
-		t.Fatalf("initial backfill ChunksEmbedded = %d, want > 0 (the seed rows embedded)\n%s", initial.Progress.ChunksEmbedded, progressString(initial))
-	}
-
-	// A plain backfill over the now fully-present corpus is presence-based, so the
-	// classifier prunes every conversation and nothing re-embeds.
-	plainBackfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
-	requireCompleted(t, plainBackfill, "plain backfill")
-	if plainBackfill.Progress.FilesModified != 0 {
-		t.Fatalf("plain backfill FilesModified = %d, want 0 (present rows skipped; backfill is presence-based)\n%s", plainBackfill.Progress.FilesModified, progressString(plainBackfill))
-	}
-	if plainBackfill.Progress.ChunksEmbedded != 0 {
-		t.Fatalf("plain backfill ChunksEmbedded = %d, want 0 (present rows are not rebuilt by a backfill)\n%s", plainBackfill.Progress.ChunksEmbedded, progressString(plainBackfill))
-	}
-
-	// A force over the same fully-present corpus rebuilds every delivered
-	// conversation with reuse disabled, so the present rows re-embed.
-	forced := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, false, true)
-	requireCompleted(t, forced, "force rebuild")
-	if want := int32(len(seedConversationIDs)); forced.Progress.FilesModified != want {
-		t.Fatalf("force FilesModified = %d, want %d (force rebuilds every delivered conversation)\n%s", forced.Progress.FilesModified, want, progressString(forced))
-	}
-	if forced.Progress.ChunksEmbedded <= 0 {
-		t.Fatalf("force ChunksEmbedded = %d, want > 0 (present rows re-embedded, reuse disabled)\n%s", forced.Progress.ChunksEmbedded, progressString(forced))
-	}
-	if forced.Progress.ChunksReused != 0 {
-		t.Fatalf("force ChunksReused = %d, want 0 (reuse disabled under force)\n%s", forced.Progress.ChunksReused, progressString(forced))
-	}
-}
-
-// TestScenario4AuthoritativeDeletePurgesRows proves an AUTHORITATIVE upsert whose
-// manifest omits a conversation drops that conversation's base, tool, and
-// thinking rows from the live collection while the others survive.
-func TestScenario4AuthoritativeDeletePurgesRows(t *testing.T) {
-	h := newHarness(t)
-
-	convs := seedConversations()
-	backfill := h.upsert(convs, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, true, false)
-	requireCompleted(t, backfill, "backfill")
-
-	dropped := "live-c"
-	kept := "live-a"
-	// Assert all three row families exist before the delete so the post-delete
-	// == 0 checks below cannot pass vacuously against rows that were never
-	// produced. The seeded conversation carries a tool call and thinking text, so
-	// its base, tool, and thinking prefixes must all be present here.
-	for _, prefix := range []string{convBasePrefix(dropped), convToolPrefix(dropped), convThinkPrefix(dropped)} {
-		if h.countRowsWithPrefix(prefix) <= 0 {
-			t.Fatalf("expected %q rows present before delete\n%s", prefix, progressString(backfill))
-		}
-	}
-
-	// Deliver every conversation except the dropped one under AUTHORITATIVE, so the
-	// manifest omits it and the engine reconciles it away.
-	remaining := map[string][]*pb.ConversationDocument{}
-	for _, id := range seedConversationIDs {
-		if id == dropped {
-			continue
-		}
-		remaining[id] = convs[id]
-	}
-	authoritative := h.upsert(remaining, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_AUTHORITATIVE, false, false)
-	requireCompleted(t, authoritative, "authoritative delete")
-
-	for _, prefix := range []string{convBasePrefix(dropped), convToolPrefix(dropped), convThinkPrefix(dropped)} {
-		if count := h.countRowsWithPrefix(prefix); count != 0 {
-			t.Fatalf("after authoritative delete, %d rows remain under %q, want 0", count, prefix)
-		}
-	}
-	if count := h.countRowsWithPrefix(convBasePrefix(kept)); count <= 0 {
-		t.Fatalf("kept conversation %s lost its rows (%d) after an unrelated delete", kept, count)
-	}
-}
-
-// upsert drives one client-streaming conversation ingest over gRPC (header,
-// documents, manifest, CloseAndRecv), then polls the job to a terminal state and
-// returns the full model.Job so a test can read the per-run progress the wire
-// Progress does not expose (FilesEmbedded and FilesModified). backfill and force
-// are the two orthogonal header flags: backfill fills absent derived rows, force
-// rebuilds every delivered conversation with reuse disabled.
-func (h *harness) upsert(convs map[string][]*pb.ConversationDocument, reconcile pb.ConversationReconcileMode, backfill bool, force bool) model.Job {
-	h.t.Helper()
-
-	stream, err := h.client.UpsertConversationDocumentsStream(correlatedContext())
-	if err != nil {
-		h.t.Fatalf("open UpsertConversationDocumentsStream returned error: %v", err)
-	}
-
-	header := &pb.UpsertConversationDocumentsChunk{
-		Chunk: &pb.UpsertConversationDocumentsChunk_Header{Header: &pb.UpsertConversationDocumentsHeader{
-			CollectionId:      h.collectionID,
-			Client:            &pb.ClientInfo{Name: "live-harness"},
-			ReconcileMode:     reconcile,
-			BackfillDelivered: backfill,
-			ForceReexamine:    force,
-		}},
-	}
-	if err := stream.Send(header); err != nil {
-		h.t.Fatalf("send header returned error: %v", err)
-	}
-
-	documents := make([]*pb.ConversationDocument, 0)
-	manifest := make([]*pb.ConversationFingerprint, 0, len(convs))
-	for _, id := range sortedKeys(convs) {
-		documents = append(documents, convs[id]...)
-		manifest = append(manifest, &pb.ConversationFingerprint{ConversationId: id, Fingerprint: fingerprint(convs[id])})
-	}
-	documentsChunk := &pb.UpsertConversationDocumentsChunk{
-		Chunk: &pb.UpsertConversationDocumentsChunk_Documents{Documents: &pb.UpsertConversationDocumentsDocuments{Documents: documents}},
-	}
-	if err := stream.Send(documentsChunk); err != nil {
-		h.t.Fatalf("send documents returned error: %v", err)
-	}
-	manifestChunk := &pb.UpsertConversationDocumentsChunk{
-		Chunk: &pb.UpsertConversationDocumentsChunk_Manifest{Manifest: &pb.UpsertConversationDocumentsManifest{Manifest: manifest}},
-	}
-	if err := stream.Send(manifestChunk); err != nil {
-		h.t.Fatalf("send manifest returned error: %v", err)
-	}
-
-	response, err := stream.CloseAndRecv()
-	if err != nil {
-		h.t.Fatalf("CloseAndRecv returned error: %v", err)
-	}
-	jobID := response.GetJobId()
-	if jobID == "" {
-		h.t.Fatal("CloseAndRecv returned an empty job id")
-	}
-	return h.waitJob(jobID)
-}
-
-// waitJob polls the in-process manager for the job until it reaches a terminal
-// state, so the test reads the full model.Job progress rather than the reduced
-// wire Progress.
 func (h *harness) waitJob(jobID string) model.Job {
 	h.t.Helper()
 	deadline := time.Now().Add(jobPollTimeout)
@@ -238,8 +35,6 @@ func (h *harness) waitJob(jobID string) model.Job {
 	return model.Job{}
 }
 
-// countRowsWithPrefix counts rows in the throwaway collection whose relativePath
-// begins with prefix, using a direct Milvus count(*) query at strong consistency.
 func (h *harness) countRowsWithPrefix(prefix string) int64 {
 	h.t.Helper()
 	expression := fmt.Sprintf(`%s like "%s%%"`, relativePathField, prefix)
@@ -280,88 +75,61 @@ func progressString(job model.Job) string {
 	)
 }
 
-// seedConversations builds the three-conversation fixture fresh each call, so a
-// test can mutate its own copy without disturbing another.
-func seedConversations() map[string][]*pb.ConversationDocument {
-	convs := make(map[string][]*pb.ConversationDocument, len(seedConversationIDs))
-	for _, id := range seedConversationIDs {
-		convs[id] = baseConversation(id)
-	}
-	return convs
+func liveCollectionDeclaration() model.CollectionDeclaration {
+	return model.CollectionDeclaration{ItemIDColumn: "itemId", Scalars: []model.ScalarColumn{
+		{Name: "itemId", Type: model.ScalarTypeString, MaxLength: 512},
+	}}
 }
 
-// baseConversation is a two-message conversation whose assistant turn carries a
-// bash tool call and thinking text, so it produces conv/, convtool/, and
-// convthink/ rows.
-func baseConversation(id string) []*pb.ConversationDocument {
-	return []*pb.ConversationDocument{
-		{
-			ConversationId: id,
-			MessageIndex:   0,
-			Role:           "user",
-			TimestampUnix:  1712345000,
-			Text:           "please list the files in " + id,
-		},
-		{
-			ConversationId: id,
-			MessageIndex:   1,
-			Role:           "assistant",
-			TimestampUnix:  1712345001,
-			Text:           "listing the files now for " + id,
-			Thinking:       "the user for " + id + " wants a directory listing, so I will run ls",
-			Tools: []*pb.ConversationToolCall{
-				{
-					Name:     "run_shell",
-					Display:  "ls -la /work/" + id,
-					LangHint: "bash",
-					Output:   "total 0\ndrwxr-xr-x  2 user  staff   64 " + id,
-					IsError:  false,
-				},
-			},
-		},
-	}
-}
-
-// appendMessage returns a copy of docs with one additional assistant message, so
-// both the content and the derived fingerprint change.
-func appendMessage(docs []*pb.ConversationDocument, id string) []*pb.ConversationDocument {
-	extended := make([]*pb.ConversationDocument, len(docs), len(docs)+1)
-	copy(extended, docs)
-	nextIndex := int32(len(docs))
-	extended = append(extended, &pb.ConversationDocument{
-		ConversationId: id,
-		MessageIndex:   nextIndex,
-		Role:           "assistant",
-		TimestampUnix:  1712345002,
-		Text:           "here is a follow-up answer for " + id,
-		Thinking:       "adding one more turn to " + id,
-	})
-	return extended
-}
-
-// fingerprint hashes a conversation's ordered message content, so identical
-// content yields an identical fingerprint and any change yields a new one. The
-// engine compares these for equality to detect which conversations changed.
-func fingerprint(docs []*pb.ConversationDocument) string {
-	hasher := sha256.New()
-	for _, document := range docs {
-		fmt.Fprintf(hasher, "%d\x00%s\x00%s\x00%s\x00", document.MessageIndex, document.Role, document.Text, document.Thinking)
-		for _, tool := range document.Tools {
-			fmt.Fprintf(hasher, "%s\x00%s\x00%s\x00%s\x00", tool.Name, tool.Display, tool.LangHint, tool.Output)
-		}
-	}
-	return hex.EncodeToString(hasher.Sum(nil))
-}
-
-func convBasePrefix(id string) string  { return "conv/" + id + "/" }
-func convToolPrefix(id string) string  { return "convtool/" + id + "/" }
-func convThinkPrefix(id string) string { return "convthink/" + id + "/" }
-
-func sortedKeys(convs map[string][]*pb.ConversationDocument) []string {
-	keys := make([]string, 0, len(convs))
-	for key := range convs {
-		keys = append(keys, key)
+func (h *harness) upsert(items map[string][]*pb.CollectionRow, reconcile pb.CollectionReconcileMode, backfill bool, force bool) model.Job {
+	h.t.Helper()
+	rows := make([]*pb.CollectionRow, 0)
+	manifest := make(map[string]string, len(items))
+	keys := make([]string, 0, len(items))
+	for itemID := range items {
+		keys = append(keys, itemID)
 	}
 	sort.Strings(keys)
-	return keys
+	for _, itemID := range keys {
+		hasher := sha256.New()
+		for ordinal, row := range items[itemID] {
+			copied := proto.Clone(row).(*pb.CollectionRow)
+			copied.ItemId = itemID
+			if copied.RowKey == "" {
+				copied.RowKey = fmt.Sprintf("items/%s/%d", itemID, ordinal)
+			}
+			fmt.Fprintf(hasher, "%s\x00%s\x00", copied.RowKey, copied.Text)
+			rows = append(rows, copied)
+		}
+		manifest[itemID] = hex.EncodeToString(hasher.Sum(nil))
+	}
+	response, err := h.sendGeneric(h.collectionID, rows, manifest, reconcile, backfill, force)
+	if err != nil {
+		h.t.Fatalf("UpsertCollectionItemsStream: %v", err)
+	}
+	return h.waitJob(response.GetJobId())
+}
+
+func seedItems() map[string][]*pb.CollectionRow {
+	return map[string][]*pb.CollectionRow{
+		"live-a": {{Text: "alpha item text"}},
+		"live-b": {{Text: "bravo item text"}},
+		"live-c": {{Text: "charlie item text"}},
+	}
+}
+
+func (h *harness) countRowsContaining(content string) int64 {
+	h.t.Helper()
+	result, err := h.milvus.Query(correlatedContext(), milvusclient.NewQueryOption(h.collectionName).
+		WithFilter("content like "+strconv.Quote("%"+content+"%")).
+		WithOutputFields(countOutputField).
+		WithConsistencyLevel(entity.ClStrong))
+	if err != nil {
+		h.t.Fatalf("count stored content: %v", err)
+	}
+	count, err := result.GetColumn(countOutputField).GetAsInt64(0)
+	if err != nil {
+		h.t.Fatalf("read content count: %v", err)
+	}
+	return count
 }

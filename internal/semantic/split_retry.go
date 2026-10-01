@@ -203,7 +203,6 @@ func logRejectedDrop(ctx context.Context, chunk model.StoredChunk, skip embeddin
 		"semantic.embed_input_dropped",
 		"drop_kind", rejectedDropKind(chunk, skip, activeModelMaxTokens),
 		"reason", skip.Reason,
-		"conversation_id", chunk.ConversationID,
 		"relative_path", chunk.RelativePath,
 		"estimated_tokens", estimatedTokenCount(chunk.Content),
 		"content_bytes", len(chunk.Content),

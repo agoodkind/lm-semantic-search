@@ -9,15 +9,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
-// RecordCollectionDeclaration records the saved declaration of a document
-// collection. A generic declaration replaces the conversation declaration that
-// DescribeScalarColumns reports for the collection, and the conversation
-// declaration removes a recorded generic one.
 func (store *Store) RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration) {
-	if semantic.IsConversationDeclaration(declaration) {
-		store.declaredScalars.Delete(collectionName)
-		return
-	}
 	store.declaredScalars.Store(collectionName, slices.Clone(declaration.Scalars))
 }
 
