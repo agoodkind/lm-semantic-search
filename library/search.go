@@ -56,8 +56,9 @@ type searchPlan struct {
 // from one catalog read transaction, scores every eligible vector exactly, and
 // persists the full ordered result when more pages follow. A cursor page reads
 // that persisted result. A later write does not change the page sequence of a
-// cursor. Search acquires no kernel writer lock; page one writes its snapshot
-// in one SQLite write transaction.
+// cursor. Search acquires no kernel writer lock. Each successful cursor page
+// renews SnapshotTTL after building its hits. Its SQLite write transaction
+// serializes expiration validation and renewal with snapshot cleanup.
 //
 // A request that fails [Config.ValidateSearchRequest] returns an error that
 // wraps [ErrInvalidRequest] before any embedding or scoring. An expired or
@@ -367,7 +368,7 @@ func (library *Library) readCursorPage(ctx context.Context, plan searchPlan) (Se
 	}
 	pageSize := plan.request.PageSize
 	var page SearchPage
-	err = library.read(ctx, func(tx *sql.Tx) error {
+	err = library.write(ctx, func(tx *sql.Tx) error {
 		if err := loadSnapshotForCursor(ctx, tx, cursor, plan, clock.Now().UnixMilli()); err != nil {
 			return err
 		}
@@ -386,7 +387,15 @@ func (library *Library) readCursorPage(ctx context.Context, plan searchPlan) (Se
 			}
 		}
 		page.Hits, err = buildHits(ctx, tx, plan.request.Namespace, rows)
-		return err
+		if err != nil {
+			return err
+		}
+		expiresAt := clock.Now().Add(library.config.SnapshotTTL).UnixMilli()
+		if _, err := tx.ExecContext(ctx, renewSnapshotStatement, expiresAt, cursor.SnapshotID); err != nil {
+			slog.ErrorContext(ctx, "renew search snapshot failed", "snapshot", cursor.SnapshotID, "err", err)
+			return fmt.Errorf("renew search snapshot %s: %w", cursor.SnapshotID, err)
+		}
+		return nil
 	})
 	if err != nil {
 		return SearchPage{}, err

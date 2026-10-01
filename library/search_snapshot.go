@@ -911,7 +911,8 @@ const (
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	cursorSnapshotStatement = `SELECT namespace, request_hash, visibility_revision, projection_revision, rank_config, expires_at
 		FROM search_snapshots WHERE snapshot_id = ?`
-	snapshotPageStatement = `SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, effective_scalars, score FROM search_results
+	renewSnapshotStatement = `UPDATE search_snapshots SET expires_at = MAX(expires_at, ?) WHERE snapshot_id = ?`
+	snapshotPageStatement  = `SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, effective_scalars, score FROM search_results
 		WHERE snapshot_id = ? AND ordinal >= ? ORDER BY ordinal LIMIT ?`
 	sourceBlobStatement = `SELECT content FROM source_blobs WHERE blob_id = ?`
 )
