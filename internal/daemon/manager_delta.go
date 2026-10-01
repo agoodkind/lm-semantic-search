@@ -589,10 +589,10 @@ func (manager *Manager) promoteStagingMerkle(ctx context.Context, job model.Job,
 	return deltaOutcome{fallback: false, handled: false, progressed: false}
 }
 
-// promoteBootstrap swaps the freshly built staging collection onto the live
-// name. When no file produced chunks there is no staging collection to
-// promote, which is a successful empty index rather than an error. A handled
-// outcome means promoteBootstrap already set a terminal job state.
+// promoteBootstrap publishes the completed library namespace or swaps a
+// legacy staging collection onto the live name. An empty library bootstrap
+// still registers its namespace. An empty legacy bootstrap has no collection
+// to promote. A handled outcome means the job already has a terminal state.
 func (manager *Manager) promoteBootstrap(ctx context.Context, job model.Job, state deltaState) deltaOutcome {
 	if !state.semantic {
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
@@ -603,7 +603,10 @@ func (manager *Manager) promoteBootstrap(ctx context.Context, job model.Job, sta
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
 	if !hasStaging {
-		return deltaOutcome{fallback: false, handled: false, progressed: false}
+		_, libraryStore := manager.semantic.(*libraryCodeIndex)
+		if !libraryStore || semantic.IsDocumentPath(job.CanonicalPath) {
+			return deltaOutcome{fallback: false, handled: false, progressed: false}
+		}
 	}
 	if err := manager.semantic.PromoteStaging(ctx, job.CanonicalPath); err != nil {
 		manager.cleanupHaltedStaging(ctx, job, state)

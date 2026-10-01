@@ -664,13 +664,14 @@ func (index *libraryCodeIndex) PinStaging(ctx context.Context, codebasePath stri
 	return semantic.NoopCollectionPin{}, nil
 }
 
-// PromoteStaging returns nil for a codebase path. StageReindex already
-// committed every owner generation.
+// PromoteStaging registers the completed codebase namespace even when no file
+// produced a generation. StageReindex already committed every nonempty owner.
 func (index *libraryCodeIndex) PromoteStaging(ctx context.Context, codebasePath string) error {
 	if semantic.IsDocumentPath(codebasePath) {
 		return wrapDelegated(ctx, "promote staging", index.semanticIndex.PromoteStaging(ctx, codebasePath))
 	}
-	return nil
+	_, err := index.namespace(ctx, codebasePath)
+	return err
 }
 
 // DropStaging returns nil for a codebase path, which has no staging
