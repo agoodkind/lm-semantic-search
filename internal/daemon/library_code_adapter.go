@@ -201,6 +201,38 @@ func (index *libraryCodeIndex) CollectionName(codebasePath string) string {
 	return name
 }
 
+// A codebase's logical collection exists in the catalog rather than as a
+// separate Milvus collection. Registry names also identify it after restart.
+func (index *libraryCodeIndex) listCollectionsForCodebases(ctx context.Context, codebases []model.Codebase) ([]string, error) {
+	collections, err := index.ListCollections(ctx)
+	if err != nil {
+		return nil, wrapDelegated(ctx, "list collections", err)
+	}
+	for _, codebase := range codebases {
+		if codebase.Kind == model.CodebaseKindDocument {
+			continue
+		}
+		namespace := index.codebaseNamespace(codebase.CanonicalPath)
+		stats, registered, err := index.namespaceStats(ctx, namespace)
+		if err != nil {
+			return nil, err
+		}
+		run := codebase.LastSuccessfulRun
+		completedEmpty := run != nil && run.Status == "completed" && run.TotalChunks == 0
+		if !registered || (stats.Occurrences == 0 && !completedEmpty) {
+			continue
+		}
+		name := codebase.CollectionName
+		if name == "" {
+			name = index.CollectionName(codebase.CanonicalPath)
+		}
+		index.codeNamespaces.Store(name, namespace)
+		collections = append(collections, name)
+	}
+	slices.Sort(collections)
+	return slices.Compact(collections), nil
+}
+
 // codebaseNamespaceID returns "code_" and the first 16 hex characters of the
 // SHA-256 of the canonical codebase path.
 func codebaseNamespaceID(codebasePath string) string {

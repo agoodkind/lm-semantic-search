@@ -53,6 +53,8 @@ func TestCodebaseRestartProcess(t *testing.T) {
 	stopServer := startInProcessServer(t, ctx, manager, request.Config.SocketPath)
 	defer stopServer()
 	defer func() { _ = manager.Close(context.Background()) }()
+	background := daemon.NewBackgroundSync(request.Config, manager)
+	background.Start(ctx)
 	if err := os.WriteFile(request.Ready, []byte("ready"), 0o600); err != nil {
 		t.Fatalf("publish child readiness: %v", err)
 	}
