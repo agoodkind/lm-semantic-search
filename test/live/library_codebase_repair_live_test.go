@@ -6,11 +6,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/daemon"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestLibraryCodebaseRepairRecognizesPublishedNamespaces(t *testing.T) {
@@ -38,6 +42,7 @@ func TestLibraryCodebaseRepairRecognizesPublishedNamespaces(t *testing.T) {
 			if shape != "published" && len(before) != 0 {
 				t.Fatalf("%s source has %d owners", shape, len(before))
 			}
+			requirePublishedCodebaseSearch(t, codebaseDaemon, root, len(before))
 			index, err := codebaseDaemon.client.GetIndex(t.Context(), &pb.GetIndexRequest{Path: root})
 			if err != nil {
 				t.Fatal(err)
@@ -66,10 +71,46 @@ func TestLibraryCodebaseRepairRecognizesPublishedNamespaces(t *testing.T) {
 				t.Fatalf("restart and unchanged sync submitted %d embedding batches", count)
 			}
 			requireCrossNamespaceOwnersEqual(t, before, readCrossNamespaceOwners(t, codebaseDaemon, root))
+			requirePublishedCodebaseSearch(t, codebaseDaemon, root, len(before))
 			killCodebaseRestartChild(t, child)
 			t.Log("automatic repair and restart preserved public status and published rows; unchanged sync submitted zero embedding batches")
 		})
 	}
+}
+
+func requirePublishedCodebaseSearch(t *testing.T, codebaseDaemon *libraryCodebaseDaemon, root string, wanted int) {
+	t.Helper()
+	response, err := codebaseDaemon.client.SearchCode(t.Context(), &pb.SearchCodeRequest{Path: root, Query: "repairmarker", Limit: codebaseSearchLimit})
+	if err != nil {
+		t.Fatalf("search completed codebase: %v", err)
+	}
+	if len(response.GetResults()) != wanted {
+		t.Fatalf("search completed codebase returned %d results, want %d", len(response.GetResults()), wanted)
+	}
+	for _, result := range response.GetResults() {
+		if result.GetRelativePath() != "repair.go" || !strings.Contains(result.GetContent(), "repairmarker") {
+			t.Fatal("search returned content outside the completed source")
+		}
+	}
+}
+
+func TestLibraryCodebaseSearchReportsLostNonemptyPool(t *testing.T) {
+	codebaseDaemon := newLibraryCodebaseDaemon(t)
+	root := t.TempDir()
+	writeCodebaseFile(t, root, "repair.go", goFile(goFunction("Repair", "repairmarker")))
+	codebaseDaemon.index(t, root)
+	requirePublishedCodebaseSearch(t, codebaseDaemon, root, 1)
+	if err := codebaseDaemon.harness.milvus.DropCollection(t.Context(), milvusclient.NewDropCollectionOption("lms_library_codebase")); err != nil {
+		t.Fatalf("drop isolated nonempty pool: %v", err)
+	}
+	_, err := codebaseDaemon.client.SearchCode(t.Context(), &pb.SearchCodeRequest{Path: root, Query: "repairmarker", Limit: codebaseSearchLimit})
+	if err == nil {
+		t.Fatal("search reported success after the nonempty vector pool was lost")
+	}
+	if status.Code(err) != codes.Internal || !strings.Contains(status.Convert(err).Message(), "internal error; see daemon logs") {
+		t.Fatalf("lost nonempty pool returned an unexpected public error: %v", err)
+	}
+	t.Logf("public search reported the lost nonempty pool: %v", err)
 }
 
 func codebaseRepairCounters(t *testing.T, codebaseDaemon *libraryCodebaseDaemon) map[string]int64 {
