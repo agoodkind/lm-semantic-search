@@ -36,7 +36,7 @@ func TestLibraryCodebaseRepairRecognizesPublishedNamespaces(t *testing.T) {
 				t.Fatalf("published source has %d owners, want 1", len(before))
 			}
 			if shape != "published" && len(before) != 0 {
-				t.Fatalf("empty source has %d owners", len(before))
+				t.Fatalf("%s source has %d owners", shape, len(before))
 			}
 			index, err := codebaseDaemon.client.GetIndex(t.Context(), &pb.GetIndexRequest{Path: root})
 			if err != nil {
