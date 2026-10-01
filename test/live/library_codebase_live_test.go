@@ -8,8 +8,10 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -32,6 +34,9 @@ import (
 
 //go:embed library_codebase_namespace_rows.sql
 var codebaseNamespaceRowsSQL string
+
+//go:embed library_codebase_descriptor.sql
+var codebaseDescriptorSQL string
 
 const (
 	// codebaseFunctionBytes sizes one generated function below the 2,500-byte
@@ -254,6 +259,26 @@ func (codebaseDaemon *libraryCodebaseDaemon) readCodebaseOwners(t *testing.T) ma
 		t.Fatalf("open catalog %s: %v", catalogPath, err)
 	}
 	defer func() { _ = database.Close() }()
+	var descriptorJSON string
+	if err := database.QueryRowContext(codebaseDaemon.harness.context(), codebaseDescriptorSQL).Scan(&descriptorJSON); err != nil {
+		t.Fatalf("read codebase store descriptor: %v", err)
+	}
+	var descriptor struct {
+		Model         string `json:"embedding_model"`
+		Revision      string `json:"embedding_revision"`
+		Dimension     int32  `json:"dimension"`
+		Normalization string `json:"normalization"`
+	}
+	if err := json.Unmarshal([]byte(descriptorJSON), &descriptor); err != nil {
+		t.Fatalf("decode codebase store descriptor: %v", err)
+	}
+	cfg, err := config.ResolveLibraryEmbeddingIdentity(codebaseDaemon.config)
+	if err != nil {
+		t.Fatalf("resolve expected codebase model identity: %v", err)
+	}
+	if descriptor.Model != cfg.EmbeddingModel || descriptor.Revision != cfg.EmbeddingRevision || descriptor.Dimension != cfg.EmbeddingDimension || descriptor.Normalization != cfg.EmbeddingNormalization {
+		t.Fatalf("stored codebase model identity differs from the configured identity: %+v", descriptor)
+	}
 	var namespaceCount int
 	if err := database.QueryRowContext(codebaseDaemon.harness.context(), `SELECT COUNT(*) FROM namespaces`).Scan(&namespaceCount); err != nil {
 		t.Fatalf("count namespaces: %v", err)
@@ -341,6 +366,16 @@ func TestLibraryCodebaseReplacesFileOwners(t *testing.T) {
 	}
 	codebaseDaemon.index(t, root)
 	before := codebaseDaemon.readCodebaseOwners(t)
+	codebaseDaemon.sync(t, root)
+	unchanged := codebaseDaemon.readCodebaseOwners(t)
+	if len(unchanged) != len(before) {
+		t.Fatalf("unchanged sync returned %d owners, want %d", len(unchanged), len(before))
+	}
+	for owner, occurrences := range before {
+		if !slices.Equal(occurrences, unchanged[owner]) {
+			t.Fatalf("unchanged sync replaced owner %s", owner)
+		}
+	}
 	if got := len(before["shrink.go"]); got != 3 {
 		t.Fatalf("shrink.go has %d occurrences after the first index, want 3", got)
 	}
@@ -403,20 +438,99 @@ func TestLibraryCodebaseReplacesFileOwners(t *testing.T) {
 	if len(distinct) >= total {
 		t.Fatalf("%d occurrences reference %d distinct vectors, want reuse across dup_a.go and dup_b.go", total, len(distinct))
 	}
+	codebaseDaemon.stop()
+	restarted := startCodebaseRestartChild(t, codebaseDaemon)
+	response, err := codebaseDaemon.client.SearchCode(codebaseDaemon.harness.context(), &pb.SearchCodeRequest{
+		Path: root, Query: "growtwo", Limit: codebaseSearchLimit, ExtensionFilter: []string{"go"},
+	})
+	if err != nil {
+		t.Fatalf("search after restart: %v", err)
+	}
+	if len(response.GetResults()) == 0 {
+		t.Fatal("search after restart returned no results")
+	}
+	foundUpdated := false
+	for _, result := range response.GetResults() {
+		if result.GetRelativePath() == "delete.go" {
+			t.Fatal("search after restart returned the deleted file")
+		}
+		current, err := os.ReadFile(filepath.Join(root, result.GetRelativePath()))
+		if err != nil {
+			t.Fatalf("read searched codebase file: %v", err)
+		}
+		if !strings.Contains(string(current), result.GetContent()) {
+			t.Fatalf("search after restart returned an excerpt absent from %s", result.GetRelativePath())
+		}
+		if result.GetRelativePath() == "grow.go" && strings.Contains(result.GetContent(), "growtwo") {
+			foundUpdated = true
+		}
+	}
+	if !foundUpdated {
+		t.Fatal("search after restart omitted the updated GrowTwo function")
+	}
+	t.Cleanup(func() {
+		if restarted.ProcessState == nil {
+			killCodebaseRestartChild(t, restarted)
+		}
+	})
 
-	response, err := codebaseDaemon.client.ClearIndex(context.Background(), &pb.ClearIndexRequest{
+	clearResponse, err := codebaseDaemon.client.ClearIndex(context.Background(), &pb.ClearIndexRequest{
 		Path:   root,
 		Client: &pb.ClientInfo{Name: "library-codebase-live"},
 	})
 	if err != nil {
 		t.Fatalf("clear index: %v", err)
 	}
-	if !response.GetCleared() {
-		t.Fatalf("clear index returned cleared=false: %s", response.GetDisplayText())
+	if !clearResponse.GetCleared() {
+		t.Fatalf("clear index returned cleared=false: %s", clearResponse.GetDisplayText())
 	}
 	cleared := codebaseDaemon.readCodebaseOwners(t)
 	if len(cleared) != 0 {
 		t.Fatalf("catalog still has %d owners after clearing the codebase", len(cleared))
+	}
+}
+
+func TestLibraryCodebaseRejectsIncompleteEmbeddingIdentity(t *testing.T) {
+	codebaseDaemon := newLibraryCodebaseDaemon(t)
+	binary := os.Getenv("LMS_DAEMON_BINARY")
+	if binary == "" {
+		t.Fatal("LMS_DAEMON_BINARY must identify the current compiled daemon")
+	}
+	for _, field := range []string{"EMBEDDING_REVISION", "EMBEDDING_NORMALIZATION"} {
+		t.Run(field, func(t *testing.T) {
+			t.Setenv(field, "")
+			t.Setenv("CLAUDE_CONTEXTD_CONFIG_ROOT", t.TempDir())
+			t.Setenv("CLAUDE_CONTEXTD_CONTEXT_ROOT", t.TempDir())
+			root := t.TempDir()
+			socketRoot, err := os.MkdirTemp("/private/tmp", "lms-id-")
+			if err != nil {
+				t.Fatalf("create short daemon socket directory: %v", err)
+			}
+			t.Cleanup(func() {
+				if err := os.RemoveAll(socketRoot); err != nil {
+					t.Errorf("remove daemon socket directory: %v", err)
+				}
+			})
+			socket := filepath.Join(socketRoot, "daemon.sock")
+			ctx, cancel := context.WithTimeout(codebaseDaemon.harness.context(), time.Minute)
+			defer cancel()
+			command := exec.CommandContext(ctx, binary, "--state-root", root, "--socket", socket)
+			output, err := command.CombinedOutput()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+				t.Fatalf("daemon with missing %s returned %v: %s", field, err, output)
+			}
+			log, err := os.ReadFile(filepath.Join(root, "logs", "lm-semantic-search-daemon.log"))
+			if err != nil {
+				t.Fatalf("read failed daemon log: %v", err)
+			}
+			if !strings.Contains(string(log), "the library codebase store requires EMBEDDING_MODEL, EMBEDDING_DIMENSION, EMBEDDING_REVISION, and EMBEDDING_NORMALIZATION") {
+				t.Fatalf("daemon with missing %s returned a different error: %s", field, log)
+			}
+			if _, err := os.Stat(socket); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("daemon with missing %s created its socket: %v", field, err)
+			}
+		})
 	}
 }
 

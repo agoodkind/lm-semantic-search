@@ -125,6 +125,10 @@ type Config struct {
 	// checkpoint.
 	EmbeddingProvider model.EmbeddingProvider
 	EmbeddingModel    string
+	// EmbeddingRevision identifies the immutable artifacts used by the embedding model.
+	EmbeddingRevision string
+	// EmbeddingNormalization declares the normalization of vectors returned by the provider.
+	EmbeddingNormalization string
 	// OfflineEmbeddingModel selects a pinned ONNX model preset for the offline
 	// profile. ApplyProfile derives EmbeddingModel and EmbeddingDimension from it.
 	OfflineEmbeddingModel string
@@ -261,6 +265,8 @@ type persistedConfig struct {
 	Profile                   string `json:"profile"`
 	EmbeddingProvider         string `json:"embeddingProvider"`
 	EmbeddingModel            string `json:"embeddingModel"`
+	EmbeddingRevision         string `json:"embeddingRevision"`
+	EmbeddingNormalization    string `json:"embeddingNormalization"`
 	OfflineEmbeddingModel     string `json:"offlineEmbeddingModel"`
 	EmbeddingBatchSize        int    `json:"embeddingBatchSize"`
 	EmbeddingBatchTokenBudget int    `json:"embeddingBatchTokenBudget"`
@@ -403,6 +409,8 @@ func Default() (Config, error) {
 		ModelCacheRoot:                     modelCacheRoot,
 		EmbeddingProvider:                  embeddingProviderName,
 		EmbeddingModel:                     envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model),
+		EmbeddingRevision:                  envOrDefault("EMBEDDING_REVISION", fileConfig.EmbeddingRevision),
+		EmbeddingNormalization:             envOrDefault("EMBEDDING_NORMALIZATION", fileConfig.EmbeddingNormalization),
 		OfflineEmbeddingModel:              embeddingDefaults.offlineModel,
 		EmbeddingBatchSize:                 envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
 		EmbeddingBatchTokenBudget:          intOrDefault(fileConfig.EmbeddingBatchTokenBudget, defaultEmbeddingBatchTokenBudget),

@@ -27,11 +27,6 @@ const (
 	libraryCodePoolID = "codebase"
 	// libraryCodeCollection is the Milvus collection of the codebase vector pool.
 	libraryCodeCollection = "lms_library_codebase"
-	// libraryCodeEmbeddingRevision is the model revision the catalog records. A
-	// change to how code text is embedded needs a new revision.
-	libraryCodeEmbeddingRevision = "1"
-	// libraryCodeNormalization records that stored vectors are not normalized.
-	libraryCodeNormalization = "none"
 	// libraryCodeMaxBatchBytes bounds the text bytes of one staged batch.
 	libraryCodeMaxBatchBytes = 8 << 20
 	// libraryCodeContentHashLength is the hex length of the content hash in a
@@ -85,10 +80,10 @@ type libraryCodeIndex struct {
 // OpenAI-compatible embedder; the offline profile uses a library/embedded pool,
 // the ONNX embedder, and its exact tokenizer.
 func newLibraryCodeIndex(ctx context.Context, cfg config.Config, inner semanticIndex) (*libraryCodeIndex, error) {
-	if cfg.EmbeddingDimension <= 0 {
-		err := errors.New("the library codebase store requires EMBEDDING_DIMENSION")
+	cfg, err := config.ResolveLibraryEmbeddingIdentity(cfg)
+	if err != nil {
 		slog.ErrorContext(ctx, "open library codebase store failed", "err", err)
-		return nil, err
+		return nil, fmt.Errorf("resolve library codebase model identity: %w", err)
 	}
 	backends, err := newLibraryCodeBackends(ctx, cfg)
 	if err != nil {
@@ -102,9 +97,9 @@ func newLibraryCodeIndex(ctx context.Context, cfg config.Config, inner semanticI
 			LockPath:          filepath.Join(directory, "catalog.lock"),
 			PoolID:            libraryCodePoolID,
 			EmbeddingModel:    cfg.EmbeddingModel,
-			EmbeddingRevision: libraryCodeEmbeddingRevision,
+			EmbeddingRevision: cfg.EmbeddingRevision,
 			Dimension:         int(cfg.EmbeddingDimension),
-			Normalization:     libraryCodeNormalization,
+			Normalization:     cfg.EmbeddingNormalization,
 		},
 		Vectors:                backends.vectors,
 		Embedder:               backends.embedder,
