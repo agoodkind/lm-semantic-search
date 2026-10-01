@@ -194,10 +194,10 @@ func (manager *Manager) graphEngine(ctx context.Context, codebaseID string) (*cb
 	return engine, release, nil
 }
 
-// CloseGraphEngines closes cached handles when no tracked graph operation is
-// active. Every native engine shares a process-wide mutex;
-// closing even an idle handle would wait behind an active native call. Process
-// exit reclaims all handles when a call is still running.
+// CloseGraphEngines skips all cached handle closes when a tracked graph
+// operation remains active. Every native engine shares a process-wide mutex;
+// closing an idle handle would wait behind an active native call. Process exit
+// reclaims these handles.
 func (manager *Manager) CloseGraphEngines() {
 	manager.closeJobJournal()
 
