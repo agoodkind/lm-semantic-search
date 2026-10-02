@@ -212,7 +212,7 @@ func (fixture *verifiedSearchFixture) identities(t *testing.T) []verifiedSearchR
 		t.Fatal(err)
 	}
 	if len(selected) != 9 {
-		t.Fatalf("published identities=%d, want9", len(selected))
+		t.Fatalf("published identities=%d, want 9", len(selected))
 	}
 	return selected
 }
@@ -249,7 +249,7 @@ func testVerifiedNativeSearchParityPagingAndCache(t *testing.T, fixture *verifie
 		}
 		for index, score := range separate {
 			if score.ID != combined[index].ID || math.Float32bits(float32(score.Score)) != math.Float32bits(float32(combined[index].Score)) {
-				t.Fatalf("native score mismatch for%s", score.ID)
+				t.Fatalf("native score mismatch for %s", score.ID)
 			}
 			native[score.ID] = score.Score
 		}
@@ -265,16 +265,16 @@ func testVerifiedNativeSearchParityPagingAndCache(t *testing.T, fixture *verifie
 		return cmp.Compare(left.key, right.key)
 	})
 	if len(got) != len(selected) {
-		t.Fatalf("hits=%d want%d", len(got), len(selected))
+		t.Fatalf("hits=%d want %d", len(got), len(selected))
 	}
 	for index, hit := range got {
 		row := selected[index]
 		if hit.ID.OwnerID != row.owner || hit.ID.RowKey != row.key || hit.Score != native[row.identity.ID] {
-			t.Fatalf("ranked hit%d does not match native score/order: ID=%+v score=%v", index, hit.ID, hit.Score)
+			t.Fatalf("ranked hit %d does not match native score/order: ID=%+v score=%v", index, hit.ID, hit.Score)
 		}
 		for _, input := range fixture.rows {
 			if input.RowKey == row.key && hit.SourceText != input.SourceText {
-				t.Fatalf("source text mismatch for%s", row.key)
+				t.Fatalf("source text mismatch for %s", row.key)
 			}
 		}
 	}
@@ -331,7 +331,7 @@ func (fixture *verifiedSearchFixture) assertFailure(t *testing.T, request librar
 	before := fixture.snapshots(t)
 	page, err := fixture.library.Search(fixture.ctx, request)
 	if !errors.Is(err, want) || len(page.Hits) != 0 || page.HasMore || page.NextCursor != "" {
-		t.Fatalf("failed search hits=%d has_more=%t cursor_present=%t error=%v want%v", len(page.Hits), page.HasMore, page.NextCursor != "", err, want)
+		t.Fatalf("failed search hits=%d has_more=%t cursor_present=%t error=%v want %v", len(page.Hits), page.HasMore, page.NextCursor != "", err, want)
 	}
 	fixture.assertCleanup(t, before)
 }
@@ -339,7 +339,7 @@ func (fixture *verifiedSearchFixture) assertFailure(t *testing.T, request librar
 func (fixture *verifiedSearchFixture) assertCleanup(t *testing.T, snapshots int64) {
 	t.Helper()
 	if got := fixture.snapshots(t); got != snapshots {
-		t.Fatalf("failed query changed snapshots%d to%d", snapshots, got)
+		t.Fatalf("failed query changed snapshots %d to %d", snapshots, got)
 	}
 	files, err := filepath.Glob(filepath.Join(filepath.Dir(fixture.config.Store.CatalogPath), ".lms-query-*.sqlite"))
 	if err != nil || len(files) != 0 {
