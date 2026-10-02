@@ -41,6 +41,28 @@ func publishLexical(
 	added []lexicalOccurrence,
 	removed []lexicalOccurrence,
 ) error {
+	documents := make(map[string]lexicalDocument)
+	for _, occurrence := range added {
+		if _, found := documents[occurrence.SearchHash]; !found {
+			documents[occurrence.SearchHash] = analyzeLexical(occurrence.SearchText)
+		}
+	}
+	missing, err := prepareLexicalContent(ctx, tx, analyzer, documents)
+	if err != nil {
+		return lexicalIndexError(ctx, err)
+	}
+	return publishPreparedLexical(ctx, tx, analyzer, namespace, added, removed, missing)
+}
+
+func publishPreparedLexical(
+	ctx context.Context,
+	tx *sql.Tx,
+	analyzer string,
+	namespace string,
+	added []lexicalOccurrence,
+	removed []lexicalOccurrence,
+	documents map[string]lexicalDocument,
+) error {
 	if err := validateLexicalAnalyzer(analyzer); err != nil {
 		return err
 	}
@@ -48,185 +70,25 @@ func publishLexical(
 		return nil
 	}
 	deltas := make(map[string]int64, len(added)+len(removed))
-	for _, occurrence := range removed {
-		var storedHash string
-		err := tx.QueryRowContext(ctx,
-			`DELETE FROM lexical_occurrences WHERE namespace = ? AND owner_id = ? AND row_key = ? RETURNING search_hash`,
-			namespace, occurrence.OwnerID, occurrence.RowKey,
-		).Scan(&storedHash)
-		if err != nil {
-			return lexicalIndexError(ctx, fmt.Errorf(
-				"delete lexical occurrence %s/%s/%s: %w", namespace, occurrence.OwnerID, occurrence.RowKey, err,
-			))
-		}
-		if storedHash != occurrence.SearchHash {
-			return lexicalIndexError(ctx, fmt.Errorf(
-				"lexical occurrence %s/%s/%s stores search hash %s, and the catalog removed %s",
-				namespace, occurrence.OwnerID, occurrence.RowKey, storedHash, occurrence.SearchHash,
-			))
-		}
-		deltas[storedHash]--
+	if err := removeLexicalOccurrences(ctx, tx, namespace, removed, deltas); err != nil {
+		return lexicalIndexError(ctx, err)
 	}
+	if err := storePreparedLexicalContent(ctx, tx, analyzer, documents); err != nil {
+		return lexicalIndexError(ctx, err)
+	}
+	insert := publicationInsert{statement: publicationLexicalOccurrencesStatement, columns: 4}
 	for _, occurrence := range added {
-		if err := storeLexicalContent(ctx, tx, analyzer, occurrence.SearchHash, occurrence.SearchText); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO lexical_occurrences (namespace, owner_id, row_key, search_hash) VALUES (?, ?, ?, ?)`,
-			namespace, occurrence.OwnerID, occurrence.RowKey, occurrence.SearchHash,
-		); err != nil {
-			return lexicalIndexError(ctx, fmt.Errorf(
-				"insert lexical occurrence %s/%s/%s: %w", namespace, occurrence.OwnerID, occurrence.RowKey, err,
-			))
+		if err := insert.append(ctx, tx, namespace, occurrence.OwnerID, occurrence.RowKey, occurrence.SearchHash); err != nil {
+			return lexicalIndexError(ctx, err)
 		}
 		deltas[occurrence.SearchHash]++
 	}
+	if err := insert.flush(ctx, tx); err != nil {
+		return lexicalIndexError(ctx, err)
+	}
 
-	var sizeDelta, tokenDelta int64
-	changed := false
-	for _, content := range sortedLexicalDeltas(deltas) {
-		if content.delta == 0 {
-			continue
-		}
-		changed = true
-		var documentLength int64
-		if err := tx.QueryRowContext(ctx,
-			`SELECT document_length FROM lexical_content WHERE search_hash = ?`,
-			content.searchHash,
-		).Scan(&documentLength); err != nil {
-			return lexicalIndexError(ctx, fmt.Errorf("read lexical content %s: %w", content.searchHash, err))
-		}
-		sizeDelta += content.delta
-		tokenDelta += content.delta * documentLength
-		if err := changeDocumentFrequencies(ctx, tx, namespace, content); err != nil {
-			return err
-		}
-		if content.delta < 0 {
-			if err := deleteUnreferencedContent(ctx, tx, content.searchHash); err != nil {
-				return err
-			}
-		}
-	}
-	if !changed {
-		return nil
-	}
-	return updateLexicalStats(ctx, tx, namespace, sizeDelta, tokenDelta)
-}
-
-// storeLexicalContent analyzes searchText and stores its document length and
-// term frequencies under searchHash. For a content that is already stored, it
-// compares the stored analyzer identity and document length and writes
-// nothing.
-func storeLexicalContent(ctx context.Context, tx *sql.Tx, analyzer string, searchHash string, searchText string) error {
-	document := analyzeLexical(searchText)
-	var storedAnalyzer string
-	var storedLength uint64
-	err := tx.QueryRowContext(ctx,
-		`SELECT analyzer_identity, document_length FROM lexical_content WHERE search_hash = ?`,
-		searchHash,
-	).Scan(&storedAnalyzer, &storedLength)
-	switch {
-	case err == nil:
-		if storedAnalyzer != analyzer || storedLength != document.length {
-			return lexicalIndexError(ctx, fmt.Errorf(
-				"%w: lexical content %s stores analyzer %q and length %d, and the analysis produced %q and %d",
-				ErrStoreMismatch, searchHash, storedAnalyzer, storedLength, analyzer, document.length,
-			))
-		}
-		return nil
-	case !errors.Is(err, sql.ErrNoRows):
-		return lexicalIndexError(ctx, fmt.Errorf("read lexical content %s: %w", searchHash, err))
-	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO lexical_content (search_hash, analyzer_identity, document_length) VALUES (?, ?, ?)`,
-		searchHash, analyzer, document.length,
-	); err != nil {
-		return lexicalIndexError(ctx, fmt.Errorf("insert lexical content %s: %w", searchHash, err))
-	}
-	for _, term := range document.terms {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO lexical_terms (search_hash, term_hash, tf) VALUES (?, ?, ?)`,
-			searchHash, int64(term.hash), int64(term.frequency),
-		); err != nil {
-			return lexicalIndexError(ctx, fmt.Errorf("insert lexical term %d of %s: %w", term.hash, searchHash, err))
-		}
-	}
-	return nil
-}
-
-// changeDocumentFrequencies adds the content delta to the document frequency
-// of each term of one content. For a negative delta it deletes each frequency
-// row of those terms that equals the removed count and subtracts the count
-// from the others. It reads only that content's terms. A negative delta fails
-// when any term has no frequency row or a frequency below the removed count.
-func changeDocumentFrequencies(ctx context.Context, tx *sql.Tx, namespace string, content lexicalContentDelta) error {
-	switch {
-	case content.delta > 0:
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO lexical_df (namespace, term_hash, df)
-			SELECT ?, term_hash, ? FROM lexical_terms WHERE search_hash = ?
-			ON CONFLICT (namespace, term_hash) DO UPDATE SET df = df + excluded.df`,
-			namespace, content.delta, content.searchHash,
-		); err != nil {
-			return lexicalIndexError(ctx, fmt.Errorf("add document frequencies of %s: %w", content.searchHash, err))
-		}
-		return nil
-	case content.delta == 0:
-		return nil
-	}
-	removedCount := -content.delta
-	var terms, covered int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT count(*), count(lexical_df.term_hash) FROM lexical_terms
-		LEFT JOIN lexical_df ON lexical_df.namespace = ? AND lexical_df.term_hash = lexical_terms.term_hash
-			AND lexical_df.df >= ?
-		WHERE lexical_terms.search_hash = ?`,
-		namespace, removedCount, content.searchHash,
-	).Scan(&terms, &covered); err != nil {
-		return lexicalIndexError(ctx, fmt.Errorf("check document frequencies of %s: %w", content.searchHash, err))
-	}
-	if covered != terms {
-		return lexicalIndexError(ctx, fmt.Errorf(
-			"lexical statistics of %s cover %d of %d terms of %s at frequency %d or more",
-			namespace, covered, terms, content.searchHash, removedCount,
-		))
-	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM lexical_df
-		WHERE namespace = ? AND df = ? AND term_hash IN (SELECT term_hash FROM lexical_terms WHERE search_hash = ?)`,
-		namespace, removedCount, content.searchHash,
-	); err != nil {
-		return lexicalIndexError(ctx, fmt.Errorf("delete exhausted document frequencies of %s: %w", content.searchHash, err))
-	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE lexical_df SET df = df - ?
-		WHERE namespace = ? AND term_hash IN (SELECT term_hash FROM lexical_terms WHERE search_hash = ?)`,
-		removedCount, namespace, content.searchHash,
-	); err != nil {
-		return lexicalIndexError(ctx, fmt.Errorf("subtract document frequencies of %s: %w", content.searchHash, err))
-	}
-	return nil
-}
-
-// deleteUnreferencedContent deletes the terms and the content row of a search
-// hash that no lexical occurrence in any namespace references. Publication
-// stores the content again when an occurrence with that text returns.
-func deleteUnreferencedContent(ctx context.Context, tx *sql.Tx, searchHash string) error {
-	var referenced bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS (SELECT 1 FROM lexical_occurrences WHERE search_hash = ?)`,
-		searchHash,
-	).Scan(&referenced); err != nil {
-		return lexicalIndexError(ctx, fmt.Errorf("check references to lexical content %s: %w", searchHash, err))
-	}
-	if referenced {
-		return nil
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM lexical_terms WHERE search_hash = ?`, searchHash); err != nil {
-		return lexicalIndexError(ctx, fmt.Errorf("delete lexical terms of %s: %w", searchHash, err))
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM lexical_content WHERE search_hash = ?`, searchHash); err != nil {
-		return lexicalIndexError(ctx, fmt.Errorf("delete lexical content %s: %w", searchHash, err))
+	if err := publishLexicalDeltas(ctx, tx, namespace, deltas); err != nil {
+		return lexicalIndexError(ctx, err)
 	}
 	return nil
 }

@@ -92,16 +92,11 @@ func checkCommittedRows(ctx context.Context, tx *sql.Tx, key GenerationKey, mode
 
 // saveReceiptRows saves the row key and occurrence hash of every row of a
 // committed generation.
-func saveReceiptRows(ctx context.Context, tx *sql.Tx, key GenerationKey, rows []stagedRow) error {
-	for _, row := range rows {
-		if _, err := tx.ExecContext(
-			ctx,
-			`INSERT INTO receipt_rows (namespace, owner_id, generation_order, generation_token, row_key, occurrence_hash) VALUES (?, ?, ?, ?, ?, ?)`,
-			key.Namespace, key.OwnerID, key.GenerationOrder, key.IdempotencyToken, row.occurrence.RowKey, row.occurrenceHash,
-		); err != nil {
-			slog.ErrorContext(ctx, "save committed row failed", "row_key", row.occurrence.RowKey, "err", err)
-			return fmt.Errorf("save committed row %q: %w", row.occurrence.RowKey, err)
-		}
+func saveReceiptRows(ctx context.Context, tx *sql.Tx, key GenerationKey) error {
+	if _, err := tx.ExecContext(ctx, publicationReceiptRowsStatement,
+		key.Namespace, key.OwnerID, key.GenerationOrder, key.IdempotencyToken,
+	); err != nil {
+		return fmt.Errorf("save committed rows: %w", err)
 	}
 	return nil
 }
