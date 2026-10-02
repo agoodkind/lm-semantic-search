@@ -348,7 +348,7 @@ const (
 // namespace. With a filter it evaluates the filter and reads each occurrence
 // with a true root value. An occurrence that references a vector without a
 // catalog row fails the copy.
-func copyCandidates(ctx context.Context, tx *sql.Tx, query *queryDatabase, plan searchPlan) (count int64, err error) {
+func copyCandidates(ctx context.Context, tx *sql.Tx, query *queryDatabase, plan searchPlan, phases *searchPhases) (count int64, err error) {
 	writer, err := query.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, queryDatabaseError(ctx, "begin candidate copy", err)
@@ -368,25 +368,33 @@ func copyCandidates(ctx context.Context, tx *sql.Tx, query *queryDatabase, plan 
 		err = errors.Join(err, inserts.close(ctx))
 	}()
 	if plan.request.Filter == nil {
+		started := clock.Now()
 		rows, queryErr := tx.QueryContext(ctx, allCandidatesStatement, namespace, groupColumn)
 		if queryErr != nil {
+			phases.selectedCopy += clock.Now().Sub(started)
 			slog.ErrorContext(ctx, "select occurrences failed", "namespace", plan.request.Namespace, "err", queryErr)
 			return 0, fmt.Errorf("select occurrences of %s: %w", plan.request.Namespace, queryErr)
 		}
-		count, err = insertSelectedCandidateRows(ctx, writer, rows, nil, &inserts)
+		count, err = insertSelectedCandidateRows(ctx, writer, rows, nil, &inserts, phases)
+		phases.selectedCopy += clock.Now().Sub(started)
 	} else {
-		evaluator := filterEvaluator{catalog: tx, writer: writer, namespace: plan.request.Namespace, columns: declaredColumns(plan.spec), nextNode: 0}
+		evaluator := filterEvaluator{catalog: tx, writer: writer, namespace: plan.request.Namespace, columns: declaredColumns(plan.spec), nextNode: 0, phases: phases}
+		started := clock.Now()
 		root, evaluateErr := evaluator.evaluate(ctx, *plan.request.Filter, false)
+		phases.filterEval += clock.Now().Sub(started)
 		if evaluateErr != nil {
 			return 0, evaluateErr
 		}
-		count, err = copyEligibleCandidates(ctx, tx, writer, root, namespace, groupColumn, &inserts)
+		count, err = copyEligibleCandidates(ctx, tx, writer, root, namespace, groupColumn, &inserts, phases)
 	}
 	if err != nil {
 		return 0, err
 	}
-	if err := writer.Commit(); err != nil {
-		return 0, queryDatabaseError(ctx, "commit candidate copy", err)
+	started := clock.Now()
+	commitErr := writer.Commit()
+	phases.candidateCommit += clock.Now().Sub(started)
+	if commitErr != nil {
+		return 0, queryDatabaseError(ctx, "commit candidate copy", commitErr)
 	}
 	return count, nil
 }
@@ -401,6 +409,7 @@ func copyEligibleCandidates(
 	namespace sql.NamedArg,
 	groupColumn sql.NamedArg,
 	inserts *candidateInserts,
+	phases *searchPhases,
 ) (count int64, err error) {
 	keys, err := writer.QueryContext(ctx, eligibleKeysStatement, sql.Named("node", root))
 	if err != nil {
@@ -434,11 +443,14 @@ func copyEligibleCandidates(
 		if len(selected) == 0 {
 			break
 		}
+		started := clock.Now()
 		rows, err := lookup.query(ctx, tx, bindings, placeholders)
 		if err != nil {
+			phases.selectedCopy += clock.Now().Sub(started)
 			return 0, err
 		}
-		copied, err := insertSelectedCandidateRows(ctx, writer, rows, selected, inserts)
+		copied, err := insertSelectedCandidateRows(ctx, writer, rows, selected, inserts, phases)
+		phases.selectedCopy += clock.Now().Sub(started)
 		if err != nil {
 			return 0, err
 		}
@@ -456,7 +468,7 @@ type eligibleRow struct {
 	digest, checksum                                                          sql.NullString
 }
 
-func insertSelectedCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.Rows, selected map[[2]string]bool, inserts *candidateInserts) (count int64, err error) {
+func insertSelectedCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.Rows, selected map[[2]string]bool, inserts *candidateInserts, phases *searchPhases) (count int64, err error) {
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, rows))
 	}()
@@ -483,14 +495,19 @@ func insertSelectedCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.
 			slog.ErrorContext(ctx, "eligible occurrence has no catalog vector", "err", missing)
 			return 0, missing
 		}
+		started := clock.Now()
 		if err := inserts.candidates.append(ctx, writer,
 			publicationString(row.ownerID), publicationString(row.rowKey), publicationString(row.sortKey), publicationString(row.vectorID),
 			publicationString(row.blobID), publicationString(row.searchHash), publicationString(row.groupKey), publicationString(row.scalars)); err != nil {
+			phases.candidateInsert += clock.Now().Sub(started)
 			return 0, queryDatabaseError(ctx, "copy eligible occurrences", err)
 		}
 		if err := inserts.vectors.append(ctx, writer, publicationString(row.vectorID), publicationString(row.digest.String), publicationString(row.checksum.String)); err != nil {
+			phases.candidateInsert += clock.Now().Sub(started)
 			return 0, queryDatabaseError(ctx, "copy eligible vector identities", err)
 		}
+		phases.candidateInsert += clock.Now().Sub(started)
+		phases.acceptedCandidates++
 		count++
 	}
 	if err := rows.Err(); err != nil {
@@ -502,6 +519,8 @@ func insertSelectedCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.
 			return 0, fmt.Errorf("filtered occurrence %s/%s has 0 catalog rows in the read snapshot", key[0], key[1])
 		}
 	}
+	started := clock.Now()
+	defer func() { phases.candidateInsert += clock.Now().Sub(started) }()
 	if err := inserts.candidates.flush(ctx, writer); err != nil {
 		return 0, queryDatabaseError(ctx, "copy eligible occurrences", err)
 	}
