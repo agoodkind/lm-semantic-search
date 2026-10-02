@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/library"
 	"goodkind.io/lm-semantic-search/library/internal/vectorcodec"
 	"goodkind.io/lm-semantic-search/library/observation"
@@ -21,6 +22,12 @@ func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, ide
 	counts := observation.VectorData{Requested: len(identities)}
 	defer func() { span.End(ctx, err, observation.Data{Vector: counts}) }()
 	defer func() {
+		slog.InfoContext(ctx, "verified exact vector search completed",
+			"operation", string(observation.VerifiedExactScoring),
+			"vectors", counts.Requested, "verified_vectors", counts.Verified,
+			"client_search_duration_ns", counts.ClientSearchDuration.Nanoseconds(),
+			"local_verification_duration_ns", counts.LocalVerificationDuration.Nanoseconds(),
+		)
 		if err != nil {
 			slog.ErrorContext(ctx, "verified exact vector search failed", "vectors", len(identities), "err", err)
 		}
@@ -39,6 +46,7 @@ func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, ide
 	if len(ids) == 0 {
 		return []library.VectorScore{}, nil
 	}
+	started := clock.Now()
 	results, err := store.client.Search(ctx,
 		milvusclient.NewSearchOption(store.config.Collection, len(ids), []entity.Vector{entity.FloatVector(query)}).
 			WithANNSField(fieldVector).
@@ -46,10 +54,13 @@ func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, ide
 			WithTemplateParam(idsTemplateName, ids).
 			WithOutputFields(fieldIdentityDigest, fieldChecksum, fieldVector).
 			WithConsistencyLevel(entity.ClStrong))
+	counts.ClientSearchDuration = clock.Now().Sub(started)
 	if err != nil {
 		return nil, fmt.Errorf("verified exact vector search over %d vectors: %w", len(ids), err)
 	}
+	started = clock.Now()
 	scores, failure := verifiedSearchScores(results, identities, bound.Dimension)
+	counts.LocalVerificationDuration = clock.Now().Sub(started)
 	if failure != nil {
 		if failure.category == nil {
 			return nil, fmt.Errorf("%s: %w", failure.detail, failure.cause)
