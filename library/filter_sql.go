@@ -87,10 +87,9 @@ const absentLeaf = `SELECT o.owner_id, o.row_key FROM occurrences o WHERE o.name
 // and write another through Go. A single INSERT that selects from filter_sets
 // would copy its input into a temporary table outside the query database.
 const (
-	insertFilterRowStatement = `INSERT OR IGNORE INTO filter_sets (node, owner_id, row_key) VALUES (:node, :owner_id, :row_key)`
-	filterNodeRowsStatement  = `SELECT owner_id, row_key FROM filter_sets WHERE node = :node`
-	filterRowStatement       = `SELECT 1 FROM filter_sets WHERE node = :node AND owner_id = :owner_id AND row_key = :row_key`
-	filterBothRowsStatement  = `SELECT f.owner_id, f.row_key FROM filter_sets f WHERE f.node = :left
+	filterNodeRowsStatement = `SELECT owner_id, row_key FROM filter_sets WHERE node = :node`
+	filterRowStatement      = `SELECT 1 FROM filter_sets WHERE node = :node AND owner_id = :owner_id AND row_key = :row_key`
+	filterBothRowsStatement = `SELECT f.owner_id, f.row_key FROM filter_sets f WHERE f.node = :left
 		AND EXISTS (SELECT 1 FROM filter_sets g WHERE g.node = :right AND g.owner_id = f.owner_id AND g.row_key = f.row_key)`
 )
 
@@ -336,12 +335,11 @@ func (evaluator *filterEvaluator) saveRows(ctx context.Context, rows *sql.Rows, 
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, rows))
 	}()
-	insert, err := evaluator.writer.PrepareContext(ctx, insertFilterRowStatement)
-	if err != nil {
-		return queryDatabaseError(ctx, "prepare filter row insert", err)
-	}
+	insert := publicationInsert{statement: searchFilterRowsStatement, columns: 3}
 	defer func() {
-		err = errors.Join(err, closeStatement(ctx, insert))
+		if insert.prepared != nil {
+			err = errors.Join(err, closeStatement(ctx, insert.prepared))
+		}
 	}()
 	for rows.Next() {
 		var ownerID, rowKey string
@@ -358,13 +356,16 @@ func (evaluator *filterEvaluator) saveRows(ctx context.Context, rows *sql.Rows, 
 				continue
 			}
 		}
-		if _, err := insert.ExecContext(ctx, sql.Named("node", node), sql.Named("owner_id", ownerID), sql.Named("row_key", rowKey)); err != nil {
+		if err := insert.append(ctx, evaluator.writer, publicationInteger(int64(node)), publicationString(ownerID), publicationString(rowKey)); err != nil {
 			return queryDatabaseError(ctx, "save filter row", err)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		slog.ErrorContext(ctx, "read filter rows failed", "err", err)
 		return fmt.Errorf("read filter rows: %w", err)
+	}
+	if err := insert.flush(ctx, evaluator.writer); err != nil {
+		return queryDatabaseError(ctx, "save filter rows", err)
 	}
 	return nil
 }

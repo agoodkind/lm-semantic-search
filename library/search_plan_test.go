@@ -32,6 +32,9 @@ func TestQueryDatabaseStatementsUseNoTemporaryStore(t *testing.T) {
 		}
 	})
 	statements := map[string]string{
+		"bulkFilterRows":            strings.ReplaceAll(searchFilterRowsStatement, "{{rows}}", strings.TrimSuffix(strings.Repeat("(?,?,?),", publicationInsertRows), ",")),
+		"bulkCandidates":            strings.ReplaceAll(searchCandidatesStatement, "{{rows}}", strings.TrimSuffix(strings.Repeat("(?,?,?,?,?,?,?,?),", publicationInsertRows), ",")),
+		"bulkVectors":               strings.ReplaceAll(searchVectorsStatement, "{{rows}}", strings.TrimSuffix(strings.Repeat("(?,?,?),", publicationInsertRows), ",")),
 		"denseOrderStatement":       denseOrderStatement,
 		"denseRankStatement":        denseRankStatement,
 		"lexicalOrderStatement":     lexicalOrderStatement,
@@ -40,7 +43,6 @@ func TestQueryDatabaseStatementsUseNoTemporaryStore(t *testing.T) {
 		"finalRowsStatement":        finalRowsStatement,
 		"insertRankedStatement":     insertRankedStatement,
 		"eligiblePostingsStatement": eligiblePostingsStatement,
-		"insertFilterRowStatement":  insertFilterRowStatement,
 		"filterNodeRowsStatement":   filterNodeRowsStatement,
 		"filterBothRowsStatement":   filterBothRowsStatement,
 		"eligibleKeysStatement":     eligibleKeysStatement,
@@ -49,8 +51,6 @@ func TestQueryDatabaseStatementsUseNoTemporaryStore(t *testing.T) {
 		"incrementGroupStatement":   incrementGroupStatement,
 		"insertPostingStatement":    insertPostingStatement,
 		"insertLexicalScore":        insertLexicalScoreStatement,
-		"insertCandidateStatement":  insertCandidateStatement,
-		"insertQueryVector":         insertQueryVectorStatement,
 		"rankedPageStatement":       rankedPageStatement,
 		"rankedRowsStatement":       rankedRowsStatement,
 		"rankedBytesStatement":      rankedBytesStatement,
@@ -222,7 +222,6 @@ func TestFilterLeavesSearchTheTypedScalarIndexes(t *testing.T) {
 	catalogStatements := map[string]string{
 		"absentLeaf":                     absentLeaf,
 		"allCandidatesStatement":         allCandidatesStatement,
-		"oneCandidateStatement":          oneCandidateStatement,
 		"termPostingsStatement":          termPostingsStatement,
 		"insertSnapshotStatement":        insertSnapshotStatement,
 		"expiredSnapshotsStatement":      expiredSnapshotsStatement,

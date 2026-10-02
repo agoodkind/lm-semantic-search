@@ -607,6 +607,8 @@ func searchRequests() map[string]library.SearchRequest {
 
 func TestSearchPagesMatchTheExhaustiveOracle(t *testing.T) {
 	fixture := newSearchFixture(t, nil)
+	fixture.publish(t, "chat", searchCorpus("-bulk-one"), 1)
+	fixture.publish(t, "chat", searchCorpus("-bulk-two"), 1)
 	requests := searchRequests()
 	for _, name := range slices.Sorted(maps.Keys(requests)) {
 		request := requests[name]
