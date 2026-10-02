@@ -17,7 +17,7 @@ import (
 )
 
 // ScoreExactVerified returns native FLAT COSINE scores and verifies each
-// identity and canonical float32 checksum from one strongly consistent search.
+// identity and canonical float32 checksum at one strongly consistent snapshot.
 func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, identities []library.VectorIdentity) (_ []library.VectorScore, err error) {
 	if store.config.QueryMode == QueryModeLargeTopK {
 		reader, err := store.beginExactSnapshot(ctx)

@@ -64,7 +64,7 @@ type VectorStore interface {
 }
 
 // VerifiedExactScorer optionally verifies canonical identities and vector bytes
-// with the same strong read that returns native exact scores. The result contains
+// at the consistent backend snapshot used for native exact scoring. It returns
 // one finite score per identity in request order, or a typed vector failure.
 type VerifiedExactScorer interface {
 	ScoreExactVerified(context.Context, []float32, []VectorIdentity) ([]VectorScore, error)
