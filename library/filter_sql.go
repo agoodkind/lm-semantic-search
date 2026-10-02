@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+
+	"goodkind.io/lm-semantic-search/internal/clock"
 )
 
 // A filter node evaluates to true, false, or unknown for each occurrence, with
@@ -102,6 +104,7 @@ type filterEvaluator struct {
 	namespace string
 	columns   map[string]ScalarColumn
 	nextNode  int
+	phases    *searchPhases
 }
 
 // evaluate writes the true set of filter, or its false set when negated, as
@@ -147,7 +150,7 @@ func (evaluator *filterEvaluator) intersect(ctx context.Context, children []int)
 		if err != nil {
 			return 0, queryDatabaseError(ctx, "read filter intersection", err)
 		}
-		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode); err != nil {
+		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode, "intersection", ""); err != nil {
 			return 0, err
 		}
 		node = target
@@ -166,7 +169,7 @@ func (evaluator *filterEvaluator) union(ctx context.Context, children []int) (in
 		if err != nil {
 			return 0, queryDatabaseError(ctx, "read filter union", err)
 		}
-		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode); err != nil {
+		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode, "union", ""); err != nil {
 			return 0, err
 		}
 	}
@@ -187,7 +190,7 @@ func (evaluator *filterEvaluator) leaf(ctx context.Context, filter Filter, negat
 		if err != nil {
 			return 0, err
 		}
-		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode); err != nil {
+		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode, "leaf", filter.Column); err != nil {
 			return 0, err
 		}
 	}
@@ -198,7 +201,7 @@ func (evaluator *filterEvaluator) leaf(ctx context.Context, filter Filter, negat
 			slog.ErrorContext(ctx, "read absent filter column failed", "column", filter.Column, "err", err)
 			return 0, fmt.Errorf("read occurrences without column %s: %w", filter.Column, err)
 		}
-		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode); err != nil {
+		if err := evaluator.saveRows(ctx, rows, target, noExcludedNode, "leaf", filter.Column); err != nil {
 			return 0, err
 		}
 	}
@@ -222,7 +225,7 @@ func (evaluator *filterEvaluator) inLeaf(ctx context.Context, filter Filter, neg
 			slog.ErrorContext(ctx, "evaluate In filter value failed", "column", filter.Column, "err", err)
 			return 0, fmt.Errorf("evaluate In filter on column %s: %w", filter.Column, err)
 		}
-		if err := evaluator.saveRows(ctx, rows, matched, noExcludedNode); err != nil {
+		if err := evaluator.saveRows(ctx, rows, matched, noExcludedNode, "in_match", filter.Column); err != nil {
 			return 0, err
 		}
 	}
@@ -236,7 +239,7 @@ func (evaluator *filterEvaluator) inLeaf(ctx context.Context, filter Filter, neg
 		slog.ErrorContext(ctx, "read non-null filter column failed", "column", filter.Column, "err", err)
 		return 0, fmt.Errorf("read non-null values of column %s: %w", filter.Column, err)
 	}
-	if err := evaluator.saveRows(ctx, rows, unmatched, matched); err != nil {
+	if err := evaluator.saveRows(ctx, rows, unmatched, matched, "in_exclude", filter.Column); err != nil {
 		return 0, err
 	}
 	return unmatched, nil
@@ -331,7 +334,16 @@ const noExcludedNode = -1
 
 // saveRows inserts every owner_id and row_key of rows into the set of node,
 // except the rows in the set of excluded, and closes rows.
-func (evaluator *filterEvaluator) saveRows(ctx context.Context, rows *sql.Rows, node int, excluded int) (err error) {
+func (evaluator *filterEvaluator) saveRows(ctx context.Context, rows *sql.Rows, node int, excluded int, operation string, column string) (err error) {
+	started := clock.Now()
+	var scanned, accepted int64
+	defer func() {
+		evaluator.phases.recordFilterNode(filterNodeTiming{
+			node: node, operation: operation, column: column,
+			scanned: scanned, accepted: accepted, elapsed: clock.Now().Sub(started),
+			complete: err == nil,
+		})
+	}()
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, rows))
 	}()
@@ -347,6 +359,7 @@ func (evaluator *filterEvaluator) saveRows(ctx context.Context, rows *sql.Rows, 
 			slog.ErrorContext(ctx, "scan filter row failed", "err", err)
 			return fmt.Errorf("scan filter row: %w", err)
 		}
+		scanned++
 		if excluded != noExcludedNode {
 			present, err := evaluator.inSet(ctx, excluded, ownerID, rowKey)
 			if err != nil {
@@ -359,6 +372,7 @@ func (evaluator *filterEvaluator) saveRows(ctx context.Context, rows *sql.Rows, 
 		if err := insert.append(ctx, evaluator.writer, publicationInteger(int64(node)), publicationString(ownerID), publicationString(rowKey)); err != nil {
 			return queryDatabaseError(ctx, "save filter row", err)
 		}
+		accepted++
 	}
 	if err := rows.Err(); err != nil {
 		slog.ErrorContext(ctx, "read filter rows failed", "err", err)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
 	"time"
 
 	"goodkind.io/lm-semantic-search/library/observation"
@@ -141,26 +142,41 @@ func (library *Library) search(ctx context.Context, request SearchRequest) (Sear
 // count identities from successful block calls, including a joined wave with
 // another failed block. Earlier verification at the same revision is excluded.
 type searchPhases struct {
-	stage          string
-	init           time.Duration
-	copyLexical    time.Duration
-	copyCandidates time.Duration
-	scoreSave      time.Duration
-	plan           time.Duration
-	read           time.Duration
-	embed          time.Duration
-	dense          time.Duration
-	verify         time.Duration
-	score          time.Duration
-	lexical        time.Duration
-	rank           time.Duration
-	writeWait      time.Duration
-	write          time.Duration
-	hits           time.Duration
-	verified       int
-	scored         int
+	stage              string
+	filterNodes        [5]filterNodeTiming
+	filterNodeCount    int
+	filterEval         time.Duration
+	selectedCopy       time.Duration
+	candidateInsert    time.Duration
+	candidateCommit    time.Duration
+	acceptedCandidates int64
+	queryBytes         int64
+	cacheSize          int64
+	pageSize           int64
+	mmapSize           int64
+	maxPageCount       int64
+	init               time.Duration
+	copyLexical        time.Duration
+	copyCandidates     time.Duration
+	scoreSave          time.Duration
+	plan               time.Duration
+	read               time.Duration
+	embed              time.Duration
+	dense              time.Duration
+	verify             time.Duration
+	score              time.Duration
+	lexical            time.Duration
+	rank               time.Duration
+	writeWait          time.Duration
+	write              time.Duration
+	hits               time.Duration
+	verified           int
+	scored             int
 }
 
+// acceptedCandidates counts rows accepted by both insertion buffers, including
+// rows pending a flush. selectedCopy minus candidateInsert includes catalog row
+// reads, scalar JSON evaluation, and validation; it is not SQL execution alone.
 // log uses warning level for failures and debug level for completed searches.
 func (phases *searchPhases) log(ctx context.Context, namespace string, err error) {
 	milliseconds := func(duration time.Duration) float64 {
@@ -170,6 +186,12 @@ func (phases *searchPhases) log(ctx context.Context, namespace string, err error
 	if err != nil {
 		level, outcome, failedStage = slog.LevelWarn, "failure", phases.stage
 	}
+	for _, node := range phases.filterNodes[:min(phases.filterNodeCount, len(phases.filterNodes))] {
+		slog.Log(ctx, level, "library filter materialization",
+			"namespace", namespace, "node", node.node, "operation", node.operation, "column", node.column,
+			"scanned_rows", node.scanned, "accepted_rows", node.accepted,
+			"wall_ms", milliseconds(node.elapsed), "complete", node.complete)
+	}
 	slog.Log(ctx, level, "library search phases",
 		"namespace", namespace,
 		"outcome", outcome,
@@ -177,6 +199,19 @@ func (phases *searchPhases) log(ctx context.Context, namespace string, err error
 		"init_ms", milliseconds(phases.init),
 		"copy_lexical_ms", milliseconds(phases.copyLexical),
 		"copy_candidates_ms", milliseconds(phases.copyCandidates),
+		"filter_eval_ms", milliseconds(phases.filterEval),
+		"filter_materializations", phases.filterNodeCount,
+		"omitted_filter_materializations", max(phases.filterNodeCount-len(phases.filterNodes), 0),
+		"selected_copy_ms", milliseconds(phases.selectedCopy),
+		"candidate_insert_ms", milliseconds(phases.candidateInsert),
+		"selected_read_validation_ms", milliseconds(phases.selectedCopy-phases.candidateInsert),
+		"candidate_commit_ms", milliseconds(phases.candidateCommit),
+		"accepted_candidate_rows", phases.acceptedCandidates,
+		"query_file_bytes_before_close", phases.queryBytes,
+		"query_cache_size", phases.cacheSize,
+		"query_page_size", phases.pageSize,
+		"query_mmap_size", phases.mmapSize,
+		"query_max_page_count", phases.maxPageCount,
 		"score_save_ms", milliseconds(phases.scoreSave),
 		"native_duration_kind", "sum_concurrent_blocks",
 		"phase_duration_kind", "wall_elapsed",
@@ -265,12 +300,27 @@ func (library *Library) searchFirstPage(ctx context.Context, plan searchPlan, ph
 		return SearchPage{}, err
 	}
 	defer func() {
+		stat, statErr := os.Stat(query.path)
+		if statErr == nil {
+			phases.queryBytes = stat.Size()
+		}
+		if err == nil && statErr != nil {
+			phases.stage = "query_file_stat"
+		}
+		if statErr != nil {
+			err = errors.Join(err, fmt.Errorf("stat query database before close: %w", statErr))
+		}
 		closeErr := query.close()
 		if err == nil && closeErr != nil {
 			phases.stage = "query_close"
 		}
 		err = errors.Join(err, closeErr)
 	}()
+	phases.stage = "query_settings"
+	if err := phases.readQuerySettings(ctx, query); err != nil {
+		phases.mark(&phases.read, started)
+		return SearchPage{}, err
+	}
 	var revisions snapshotRevisions
 	var leg lexicalLeg
 	phases.stage = "catalog_read"
@@ -347,7 +397,7 @@ func (library *Library) copySnapshot(
 	}
 	phases.stage = "copy_candidates"
 	started := clock.Now()
-	_, copyErr := copyCandidates(ctx, tx, query, plan)
+	_, copyErr := copyCandidates(ctx, tx, query, plan, phases)
 	phases.mark(&phases.copyCandidates, started)
 	if copyErr != nil {
 		return snapshotRevisions{}, lexicalLeg{}, copyErr
@@ -453,4 +503,39 @@ func (library *Library) readCursorPage(ctx context.Context, plan searchPlan) (Se
 		return SearchPage{}, err
 	}
 	return page, nil
+}
+
+func (phases *searchPhases) readQuerySettings(ctx context.Context, query *queryDatabase) error {
+	for _, setting := range []struct {
+		statement string
+		value     *int64
+	}{
+		{statement: "PRAGMA cache_size", value: &phases.cacheSize},
+		{statement: "PRAGMA page_size", value: &phases.pageSize},
+		{statement: "PRAGMA mmap_size", value: &phases.mmapSize},
+		{statement: "PRAGMA max_page_count", value: &phases.maxPageCount},
+	} {
+		if err := query.conn.QueryRowContext(ctx, setting.statement).Scan(setting.value); err != nil {
+			return queryDatabaseError(ctx, "read query database setting", err)
+		}
+	}
+	return nil
+}
+
+type filterNodeTiming struct {
+	node              int
+	operation, column string
+	scanned, accepted int64
+	elapsed           time.Duration
+	complete          bool
+}
+
+func (phases *searchPhases) recordFilterNode(node filterNodeTiming) {
+	if phases == nil {
+		return
+	}
+	if phases.filterNodeCount < len(phases.filterNodes) {
+		phases.filterNodes[phases.filterNodeCount] = node
+	}
+	phases.filterNodeCount++
 }
