@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+// lexicalTokens returns the lowercased tokens of text in order, before hashing.
+func lexicalTokens(text string) []string {
+	var tokens []string
+	forEachLexicalToken(text, func(token string) {
+		tokens = append(tokens, token)
+	})
+	return tokens
+}
+
 // The expected tokens below are the tokens that Milvus 2.6.18 RunAnalyzer
 // returned for the same inputs in TestLibraryLexicalAnalyzerParity.
 func TestLexicalTokensMatchMilvusStandardAnalyzer(t *testing.T) {

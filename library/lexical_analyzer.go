@@ -72,15 +72,6 @@ func analyzeLexical(text string) lexicalDocument {
 	return document
 }
 
-// lexicalTokens returns the lowercased tokens of text in order, before hashing.
-func lexicalTokens(text string) []string {
-	var tokens []string
-	forEachLexicalToken(text, func(token string) {
-		tokens = append(tokens, token)
-	})
-	return tokens
-}
-
 // forEachLexicalToken calls emit with every lowercased token of text in order.
 // A token is a maximal run of characters that Rust char::is_alphanumeric
 // accepts. Milvus passes text to tantivy as a C string, and tantivy reads no
