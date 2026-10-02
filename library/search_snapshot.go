@@ -320,12 +320,12 @@ const candidateColumns = `SELECT o.owner_id, o.row_key, o.sort_key, o.vector_id,
 	CASE WHEN ge.column_name IS NULL AND gs.column_name IS NULL THEN 'a'
 		WHEN (CASE WHEN ge.column_name IS NOT NULL THEN ge.is_null ELSE gs.is_null END) = 1 THEN 'n'
 		ELSE 'v' || CAST(CASE WHEN ge.column_name IS NOT NULL THEN COALESCE(ge.string_value, ge.int64_value, ge.bool_value)
-			ELSE COALESCE(gs.string_value, gs.int64_value, gs.bool_value) END AS TEXT) END,
+			ELSE COALESCE(gs.string_value, gs.int64_value, gs.bool_value) END AS TEXT) END AS group_key,
 	json_patch(
 		(SELECT json_group_object(s.column_name, json_array(s.type, s.is_null, s.string_value, s.int64_value, s.bool_value))
 			FROM occurrence_scalars s WHERE s.namespace = o.namespace AND s.owner_id = o.owner_id AND s.row_key = o.row_key),
 		(SELECT json_group_object(e.column_name, json_array(e.type, e.is_null, e.string_value, e.int64_value, e.bool_value))
-			FROM effective_scalars e WHERE e.namespace = o.namespace AND e.owner_id = o.owner_id AND e.row_key = o.row_key))
+			FROM effective_scalars e WHERE e.namespace = o.namespace AND e.owner_id = o.owner_id AND e.row_key = o.row_key)) AS scalars
 FROM occurrences o
 LEFT JOIN vectors v ON v.vector_id = o.vector_id
 LEFT JOIN effective_scalars ge ON ge.namespace = o.namespace AND ge.owner_id = o.owner_id
@@ -411,53 +411,50 @@ func copyEligibleCandidates(
 	inserts *candidateInserts,
 	phases *searchPhases,
 ) (count int64, err error) {
-	keys, err := writer.QueryContext(ctx, eligibleKeysStatement, sql.Named("node", root))
-	if err != nil {
-		return 0, queryDatabaseError(ctx, "read filtered occurrences", err)
-	}
-	defer func() {
-		err = errors.Join(err, closeRows(ctx, keys))
-	}()
+	keys := candidateKeyReader{}
+	defer func() { err = errors.Join(err, keys.close(ctx)) }()
 	lookup := candidateLookup{}
 	defer func() {
 		err = errors.Join(err, lookup.close(ctx))
 	}()
 	for {
+		batch, readErr := keys.read(ctx, writer, root)
+		if readErr != nil {
+			return 0, readErr
+		}
+		if len(batch) == 0 {
+			break
+		}
 		bindings := []sql.NamedArg{namespace, groupColumn}
 		selected := make(map[[2]string]bool, publicationInsertRows)
 		var placeholders []string
-		for len(selected) < publicationInsertRows && keys.Next() {
-			var ownerID, rowKey string
-			if err := keys.Scan(&ownerID, &rowKey); err != nil {
-				return 0, queryDatabaseError(ctx, "scan filtered occurrence", err)
+		for index, key := range batch {
+			ownerID, rowKey := key[0], key[1]
+			if _, duplicate := selected[key]; duplicate {
+				return 0, fmt.Errorf("filtered occurrence %s/%s has duplicate keys in the read snapshot", ownerID, rowKey)
 			}
-			index := len(selected)
 			ownerName, rowName := fmt.Sprintf("owner_%d", index), fmt.Sprintf("row_%d", index)
 			placeholders = append(placeholders, "(:"+ownerName+", :"+rowName+")")
 			bindings = append(bindings, sql.Named(ownerName, ownerID), sql.Named(rowName, rowKey))
 			selected[[2]string{ownerID, rowKey}] = false
 		}
-		if err := keys.Err(); err != nil {
-			return 0, queryDatabaseError(ctx, "read filtered occurrences", err)
-		}
-		if len(selected) == 0 {
-			break
-		}
 		started := clock.Now()
-		rows, err := lookup.query(ctx, tx, bindings, placeholders)
+		encoded, rows, err := lookup.query(ctx, tx, bindings, placeholders)
 		if err != nil {
 			phases.selectedCopy += clock.Now().Sub(started)
 			return 0, err
 		}
-		copied, err := insertSelectedCandidateRows(ctx, writer, rows, selected, inserts, phases)
+		var copied int64
+		if rows != nil {
+			copied, err = insertSelectedCandidateRows(ctx, writer, rows, selected, inserts, phases)
+		} else {
+			copied, err = insertSelectedCandidateBatch(ctx, writer, encoded, selected, inserts, phases)
+		}
 		phases.selectedCopy += clock.Now().Sub(started)
 		if err != nil {
 			return 0, err
 		}
 		count += copied
-	}
-	if err := keys.Err(); err != nil {
-		return 0, queryDatabaseError(ctx, "read filtered occurrences", err)
 	}
 	return count, nil
 }
@@ -481,51 +478,17 @@ func insertSelectedCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.
 			slog.ErrorContext(ctx, "scan eligible occurrence failed", "err", err)
 			return 0, fmt.Errorf("scan eligible occurrence: %w", err)
 		}
-		if selected != nil {
-			key := [2]string{row.ownerID, row.rowKey}
-			seen, found := selected[key]
-			if !found || seen {
-				return 0, fmt.Errorf("filtered occurrence %s/%s has unexpected catalog rows in the read snapshot", row.ownerID, row.rowKey)
-			}
-			selected[key] = true
+		if err := appendEligibleCandidate(ctx, writer, row, selected, inserts, phases); err != nil {
+			return 0, err
 		}
-		if !row.digest.Valid || !row.checksum.Valid {
-			missing := fmt.Errorf("%w: occurrence %s/%s references vector %s without a catalog row",
-				ErrVectorMissing, row.ownerID, row.rowKey, row.vectorID)
-			slog.ErrorContext(ctx, "eligible occurrence has no catalog vector", "err", missing)
-			return 0, missing
-		}
-		started := clock.Now()
-		if err := inserts.candidates.append(ctx, writer,
-			publicationString(row.ownerID), publicationString(row.rowKey), publicationString(row.sortKey), publicationString(row.vectorID),
-			publicationString(row.blobID), publicationString(row.searchHash), publicationString(row.groupKey), publicationString(row.scalars)); err != nil {
-			phases.candidateInsert += clock.Now().Sub(started)
-			return 0, queryDatabaseError(ctx, "copy eligible occurrences", err)
-		}
-		if err := inserts.vectors.append(ctx, writer, publicationString(row.vectorID), publicationString(row.digest.String), publicationString(row.checksum.String)); err != nil {
-			phases.candidateInsert += clock.Now().Sub(started)
-			return 0, queryDatabaseError(ctx, "copy eligible vector identities", err)
-		}
-		phases.candidateInsert += clock.Now().Sub(started)
-		phases.acceptedCandidates++
 		count++
 	}
 	if err := rows.Err(); err != nil {
 		slog.ErrorContext(ctx, "read eligible occurrences failed", "err", err)
 		return 0, fmt.Errorf("read eligible occurrences: %w", err)
 	}
-	for key, seen := range selected {
-		if !seen {
-			return 0, fmt.Errorf("filtered occurrence %s/%s has 0 catalog rows in the read snapshot", key[0], key[1])
-		}
-	}
-	started := clock.Now()
-	defer func() { phases.candidateInsert += clock.Now().Sub(started) }()
-	if err := inserts.candidates.flush(ctx, writer); err != nil {
-		return 0, queryDatabaseError(ctx, "copy eligible occurrences", err)
-	}
-	if err := inserts.vectors.flush(ctx, writer); err != nil {
-		return 0, queryDatabaseError(ctx, "copy eligible vector identities", err)
+	if err := finishEligibleCandidates(ctx, writer, selected, inserts, phases); err != nil {
+		return 0, err
 	}
 	return count, nil
 }

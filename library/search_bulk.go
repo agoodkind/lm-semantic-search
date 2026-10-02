@@ -16,11 +16,14 @@ var searchRankedStatement string
 //go:embed search_results.sql
 var searchResultsStatement string
 
+//go:embed search_selected_rows.sql
+var searchSelectedRowsStatement string
+
 type candidateLookup struct {
 	prepared *sql.Stmt
 }
 
-func (lookup *candidateLookup) query(ctx context.Context, tx *sql.Tx, bindings []sql.NamedArg, placeholders []string) (*sql.Rows, error) {
+func (lookup *candidateLookup) query(ctx context.Context, tx *sql.Tx, bindings []sql.NamedArg, placeholders []string) (string, *sql.Rows, error) {
 	arguments := make([]any, len(bindings))
 	for index, binding := range bindings {
 		arguments[index] = binding
@@ -34,22 +37,30 @@ func (lookup *candidateLookup) query(ctx context.Context, tx *sql.Tx, bindings [
 		prepared, err := tx.PrepareContext(ctx, statement)
 		if err != nil {
 			slog.ErrorContext(ctx, "prepare filtered occurrence batch failed", "err", err)
-			return nil, fmt.Errorf("prepare filtered occurrence batch: %w", err)
+			return "", nil, fmt.Errorf("prepare filtered occurrence batch: %w", err)
 		}
 		lookup.prepared = prepared
 	}
-	var rows *sql.Rows
+	var encoded string
 	var err error
 	if full {
-		rows, err = lookup.prepared.QueryContext(ctx, arguments...)
+		err = lookup.prepared.QueryRowContext(ctx, arguments...).Scan(&encoded)
 	} else {
-		rows, err = tx.QueryContext(ctx, statement, arguments...)
+		err = tx.QueryRowContext(ctx, statement, arguments...).Scan(&encoded)
+	}
+	if isSQLiteLengthLimit(err) {
+		statement = strings.NewReplacer("{{columns}}", candidateColumns, "{{keys}}", strings.Join(placeholders, ",")).Replace(searchSelectedRowsStatement)
+		rows, queryErr := tx.QueryContext(ctx, statement, arguments...)
+		if queryErr == nil {
+			return "", rows, nil
+		}
+		err = queryErr
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "read filtered occurrence failed", "err", err)
-		return nil, fmt.Errorf("read filtered occurrence batch: %w", err)
+		return "", nil, fmt.Errorf("read filtered occurrence batch: %w", err)
 	}
-	return rows, nil
+	return encoded, nil, nil
 }
 
 func (lookup *candidateLookup) close(ctx context.Context) error {

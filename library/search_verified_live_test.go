@@ -419,4 +419,98 @@ func TestVerifiedNativeSearch(t *testing.T) {
 	fixture := newVerifiedSearchFixture(t)
 	t.Run("parity paging and cache", func(t *testing.T) { testVerifiedNativeSearchParityPagingAndCache(t, fixture) })
 	t.Run("tail damage and cancellation", func(t *testing.T) { testVerifiedNativeSearchRejectsTailDamageAndJoinsCancellation(t, fixture) })
+	t.Run("filtered batches preserve bytes and frozen scalars", func(t *testing.T) { testVerifiedSearchFilteredBatches(t, fixture) })
+}
+
+func testVerifiedSearchFilteredBatches(t *testing.T, fixture *verifiedSearchFixture) {
+	const namespace = "filtered-batches"
+	const scalarText = "nul\x00 quote\" slash\\ Unicode雪🙂"
+	spec := library.NamespaceSpec{ID: namespace, Policy: library.ReplaceAllowed, Scalars: []library.ScalarColumn{
+		{Name: "label", Type: library.String, MaxLength: 256, Mutable: true},
+		{Name: "optional", Type: library.String, MaxLength: 256, Nullable: true},
+		{Name: "number", Type: library.Int64},
+	}}
+	if err := fixture.library.RegisterNamespace(fixture.ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	owners := []string{"plain-owner" + strings.Repeat("p", 4096), "raw\xffowner\x00" + strings.Repeat("r", 4096)}
+	projections := make([]library.ScalarProjection, 0, len(owners))
+	for ownerIndex, owner := range owners {
+		rowCount := 33 + ownerIndex
+		rows := make([]library.Occurrence, 0, rowCount)
+		projection := library.ScalarProjection{Namespace: namespace, OwnerID: owner, ProjectionOrder: 1, IdempotencyToken: "first", Rows: make(map[string]map[string]library.ScalarValue)}
+		for index := range rowCount {
+			row := fixture.rows[index%len(fixture.rows)]
+			row.RowKey = fmt.Sprintf("row%03d\x00\"\\雪", index)
+			row.SortKey = fmt.Sprintf("sort%03d", rowCount-index)
+			row.Scalars = map[string]library.ScalarValue{"label": stringValue("original"), "number": {Type: library.Int64, Int64: math.MaxInt64}}
+			if index%2 == 0 {
+				row.Scalars["optional"] = library.ScalarValue{Type: library.String, Null: true}
+			}
+			if ownerIndex == 1 && index >= rowCount-2 {
+				row.Scalars["optional"] = stringValue("excluded")
+			}
+			rows = append(rows, row)
+			projection.Rows[row.RowKey] = map[string]library.ScalarValue{"label": stringValue(scalarText)}
+		}
+		fixture.publish(t, namespace, owner, 1, rows)
+		if _, err := fixture.library.ReprojectScalars(fixture.ctx, projection); err != nil {
+			t.Fatal(err)
+		}
+		projections = append(projections, projection)
+	}
+	request := library.SearchRequest{Namespace: namespace, Query: searchTopics[3], PageSize: 7, MinScore: 0}
+	baseline := pageAll(t, fixture.library, request, request.PageSize)
+	if len(baseline) != 67 {
+		t.Fatalf("unfiltered occurrences=%d, want 67", len(baseline))
+	}
+	var expected []library.SearchHit
+	for _, hit := range baseline {
+		if hit.Scalars["label"].String != scalarText || hit.Scalars["number"].Int64 != math.MaxInt64 {
+			t.Fatalf("unfiltered scalar bytes changed for %+v", hit.ID)
+		}
+		value, present := hit.Scalars["optional"]
+		if !present || value.Null {
+			expected = append(expected, hit)
+		}
+	}
+	if len(expected) != 65 {
+		t.Fatalf("eligible occurrences=%d, want 65", len(expected))
+	}
+	request.Filter = &library.Filter{Op: library.All, Children: []library.Filter{
+		{Op: library.Equal, Column: "label", Values: []library.ScalarValue{stringValue(scalarText)}},
+		{Op: library.Any, Children: []library.Filter{
+			{Op: library.IsNull, Column: "optional"},
+			{Op: library.Not, Children: []library.Filter{{Op: library.IsPresent, Column: "optional"}}},
+		}},
+	}}
+	page, err := fixture.library.Search(fixture.ctx, request)
+	if err != nil || len(page.Hits) != request.PageSize || !page.HasMore || page.NextCursor == "" {
+		t.Fatalf("filtered first page hits=%d has_more=%t error=%v", len(page.Hits), page.HasMore, err)
+	}
+	for _, projection := range projections {
+		projection.ProjectionOrder = 2
+		projection.IdempotencyToken = "second"
+		for key := range projection.Rows {
+			projection.Rows[key] = map[string]library.ScalarValue{"label": stringValue("changed after snapshot")}
+		}
+		if _, err := fixture.library.ReprojectScalars(fixture.ctx, projection); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := slices.Clone(page.Hits)
+	for page.HasMore {
+		request.Cursor = page.NextCursor
+		page, err = fixture.library.Search(fixture.ctx, request)
+		if err != nil || len(page.Hits) == 0 || (page.HasMore && len(page.Hits) != request.PageSize) || (!page.HasMore && page.NextCursor != "") {
+			t.Fatalf("filtered continuation hits=%d has_more=%t error=%v", len(page.Hits), page.HasMore, err)
+		}
+		got = append(got, page.Hits...)
+	}
+	assertHitsEqual(t, "filtered frozen batches", got, expected)
+	request.Cursor = ""
+	page, err = fixture.library.Search(fixture.ctx, request)
+	if err != nil || len(page.Hits) != 0 || page.HasMore || page.NextCursor != "" {
+		t.Fatalf("new search retained old projection: hits=%d error=%v", len(page.Hits), err)
+	}
 }
