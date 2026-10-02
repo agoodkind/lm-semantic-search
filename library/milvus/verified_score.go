@@ -30,15 +30,16 @@ func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, ide
 	counts := observation.VectorData{Requested: len(identities)}
 	defer func() { span.End(ctx, err, observation.Data{Vector: counts}) }()
 	defer func() {
+		if err != nil {
+			slog.ErrorContext(ctx, "verified exact vector search failed", "vectors", len(identities), "err", err)
+			return
+		}
 		slog.InfoContext(ctx, "verified exact vector search completed",
 			"operation", string(observation.VerifiedExactScoring),
 			"vectors", counts.Requested, "verified_vectors", counts.Verified,
 			"client_search_duration_ns", counts.ClientSearchDuration.Nanoseconds(),
 			"local_verification_duration_ns", counts.LocalVerificationDuration.Nanoseconds(),
 		)
-		if err != nil {
-			slog.ErrorContext(ctx, "verified exact vector search failed", "vectors", len(identities), "err", err)
-		}
 	}()
 	bound, err := store.binding(ctx)
 	if err != nil {

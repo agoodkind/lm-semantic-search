@@ -273,6 +273,9 @@ func (reader *snapshotReader) ScoreExactVerified(ctx context.Context, query []fl
 	counts := observation.VectorData{Requested: len(identities)}
 	defer func() {
 		span.End(ctx, err, observation.Data{Vector: counts})
+		if err != nil {
+			return
+		}
 		slog.InfoContext(ctx, "snapshot verified scoring completed", "vectors", counts.Requested, "verified_vectors", counts.Verified,
 			"client_search_duration_ns", counts.ClientSearchDuration.Nanoseconds(), "client_query_duration_ns", counts.ClientQueryDuration.Nanoseconds(),
 			"local_verification_duration_ns", counts.LocalVerificationDuration.Nanoseconds())

@@ -61,11 +61,11 @@ type Config struct {
 	Observer   observation.Observer
 	Database   string
 	Collection string
-	// QueryMode defaults to normal. Existing collection modes must match.
+	// An empty QueryMode selects normal. Existing collection modes must match.
 	QueryMode string
-	// MaxScoreWindow is required for large_topk and cannot exceed one million.
+	// MaxScoreWindow must be 1 through one million for large_topk and zero for normal.
 	MaxScoreWindow int
-	// MaxVerifyBatchRows defaults to 4096 and cannot exceed 4096.
+	// A zero MaxVerifyBatchRows selects 4096. Explicit values must be 1 through 4096.
 	MaxVerifyBatchRows int
 }
 
@@ -93,11 +93,19 @@ func New(client *milvusclient.Client, config Config) (*Store, error) {
 	if config.MaxVerifyBatchRows == 0 {
 		config.MaxVerifyBatchRows = maxVerifyBatchRows
 	}
-	if (config.QueryMode != QueryModeNormal && config.QueryMode != QueryModeLargeTopK) ||
-		(config.QueryMode == QueryModeLargeTopK && (config.MaxScoreWindow <= 0 || config.MaxScoreWindow > maxLargeScoreWindow)) ||
-		(config.QueryMode == QueryModeNormal && config.MaxScoreWindow != 0) ||
-		config.MaxVerifyBatchRows < 1 || config.MaxVerifyBatchRows > maxVerifyBatchRows {
-		err := fmt.Errorf("%w: invalid Milvus query mode or request bounds", library.ErrInvalidRequest)
+	var configurationError string
+	switch {
+	case config.QueryMode != QueryModeNormal && config.QueryMode != QueryModeLargeTopK:
+		configurationError = fmt.Sprintf("QueryMode %q must be normal or large_topk", config.QueryMode)
+	case config.QueryMode == QueryModeLargeTopK && (config.MaxScoreWindow <= 0 || config.MaxScoreWindow > maxLargeScoreWindow):
+		configurationError = fmt.Sprintf("MaxScoreWindow %d must be 1 through %d for large_topk", config.MaxScoreWindow, maxLargeScoreWindow)
+	case config.QueryMode == QueryModeNormal && config.MaxScoreWindow != 0:
+		configurationError = fmt.Sprintf("MaxScoreWindow %d must be zero for normal", config.MaxScoreWindow)
+	case config.MaxVerifyBatchRows < 1 || config.MaxVerifyBatchRows > maxVerifyBatchRows:
+		configurationError = fmt.Sprintf("MaxVerifyBatchRows %d must be 1 through %d", config.MaxVerifyBatchRows, maxVerifyBatchRows)
+	}
+	if configurationError != "" {
+		err := fmt.Errorf("%w: %s", library.ErrInvalidRequest, configurationError)
 		slog.Warn("milvus adapter configuration rejected", "err", err)
 		return nil, err
 	}
