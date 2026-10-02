@@ -360,20 +360,27 @@ func copyCandidates(ctx context.Context, tx *sql.Tx, query *queryDatabase, plan 
 	}()
 	namespace := sql.Named("namespace", plan.request.Namespace)
 	groupColumn := sql.Named("group_column", plan.request.GroupBy)
+	inserts := candidateInserts{
+		candidates: publicationInsert{statement: searchCandidatesStatement, columns: 8},
+		vectors:    publicationInsert{statement: searchVectorsStatement, columns: 3},
+	}
+	defer func() {
+		err = errors.Join(err, inserts.close(ctx))
+	}()
 	if plan.request.Filter == nil {
 		rows, queryErr := tx.QueryContext(ctx, allCandidatesStatement, namespace, groupColumn)
 		if queryErr != nil {
 			slog.ErrorContext(ctx, "select occurrences failed", "namespace", plan.request.Namespace, "err", queryErr)
 			return 0, fmt.Errorf("select occurrences of %s: %w", plan.request.Namespace, queryErr)
 		}
-		count, err = insertCandidateRows(ctx, writer, rows)
+		count, err = insertSelectedCandidateRows(ctx, writer, rows, nil, &inserts)
 	} else {
 		evaluator := filterEvaluator{catalog: tx, writer: writer, namespace: plan.request.Namespace, columns: declaredColumns(plan.spec), nextNode: 0}
 		root, evaluateErr := evaluator.evaluate(ctx, *plan.request.Filter, false)
 		if evaluateErr != nil {
 			return 0, evaluateErr
 		}
-		count, err = copyEligibleCandidates(ctx, tx, writer, root, namespace, groupColumn)
+		count, err = copyEligibleCandidates(ctx, tx, writer, root, namespace, groupColumn, &inserts)
 	}
 	if err != nil {
 		return 0, err
@@ -393,6 +400,7 @@ func copyEligibleCandidates(
 	root int,
 	namespace sql.NamedArg,
 	groupColumn sql.NamedArg,
+	inserts *candidateInserts,
 ) (count int64, err error) {
 	keys, err := writer.QueryContext(ctx, eligibleKeysStatement, sql.Named("node", root))
 	if err != nil {
@@ -400,6 +408,10 @@ func copyEligibleCandidates(
 	}
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, keys))
+	}()
+	lookup := candidateLookup{}
+	defer func() {
+		err = errors.Join(err, lookup.close(ctx))
 	}()
 	for {
 		bindings := []sql.NamedArg{namespace, groupColumn}
@@ -422,17 +434,11 @@ func copyEligibleCandidates(
 		if len(selected) == 0 {
 			break
 		}
-		statement := strings.NewReplacer("{{columns}}", candidateColumns, "{{keys}}", strings.Join(placeholders, ",")).Replace(searchSelectedStatement)
-		arguments := make([]any, len(bindings))
-		for index, binding := range bindings {
-			arguments[index] = binding
-		}
-		rows, err := tx.QueryContext(ctx, statement, arguments...)
+		rows, err := lookup.query(ctx, tx, bindings, placeholders)
 		if err != nil {
-			slog.ErrorContext(ctx, "read filtered occurrence failed", "err", err)
-			return 0, fmt.Errorf("read filtered occurrence batch: %w", err)
+			return 0, err
 		}
-		copied, err := insertSelectedCandidateRows(ctx, writer, rows, selected)
+		copied, err := insertSelectedCandidateRows(ctx, writer, rows, selected, inserts)
 		if err != nil {
 			return 0, err
 		}
@@ -450,24 +456,9 @@ type eligibleRow struct {
 	digest, checksum                                                          sql.NullString
 }
 
-// insertCandidateRows copies every row of a candidate statement into the
-// query database and closes rows.
-func insertCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.Rows) (count int64, err error) {
-	return insertSelectedCandidateRows(ctx, writer, rows, nil)
-}
-
-func insertSelectedCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.Rows, selected map[[2]string]bool) (count int64, err error) {
+func insertSelectedCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.Rows, selected map[[2]string]bool, inserts *candidateInserts) (count int64, err error) {
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, rows))
-	}()
-	candidates := publicationInsert{statement: searchCandidatesStatement, columns: 8}
-	vectors := publicationInsert{statement: searchVectorsStatement, columns: 3}
-	defer func() {
-		for _, insert := range []*publicationInsert{&candidates, &vectors} {
-			if insert.prepared != nil {
-				err = errors.Join(err, closeStatement(ctx, insert.prepared))
-			}
-		}
 	}()
 	for rows.Next() {
 		var row eligibleRow
@@ -492,12 +483,12 @@ func insertSelectedCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.
 			slog.ErrorContext(ctx, "eligible occurrence has no catalog vector", "err", missing)
 			return 0, missing
 		}
-		if err := candidates.append(ctx, writer,
+		if err := inserts.candidates.append(ctx, writer,
 			publicationString(row.ownerID), publicationString(row.rowKey), publicationString(row.sortKey), publicationString(row.vectorID),
 			publicationString(row.blobID), publicationString(row.searchHash), publicationString(row.groupKey), publicationString(row.scalars)); err != nil {
 			return 0, queryDatabaseError(ctx, "copy eligible occurrences", err)
 		}
-		if err := vectors.append(ctx, writer, publicationString(row.vectorID), publicationString(row.digest.String), publicationString(row.checksum.String)); err != nil {
+		if err := inserts.vectors.append(ctx, writer, publicationString(row.vectorID), publicationString(row.digest.String), publicationString(row.checksum.String)); err != nil {
 			return 0, queryDatabaseError(ctx, "copy eligible vector identities", err)
 		}
 		count++
@@ -511,10 +502,10 @@ func insertSelectedCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.
 			return 0, fmt.Errorf("filtered occurrence %s/%s has 0 catalog rows in the read snapshot", key[0], key[1])
 		}
 	}
-	if err := candidates.flush(ctx, writer); err != nil {
+	if err := inserts.candidates.flush(ctx, writer); err != nil {
 		return 0, queryDatabaseError(ctx, "copy eligible occurrences", err)
 	}
-	if err := vectors.flush(ctx, writer); err != nil {
+	if err := inserts.vectors.flush(ctx, writer); err != nil {
 		return 0, queryDatabaseError(ctx, "copy eligible vector identities", err)
 	}
 	return count, nil
@@ -574,6 +565,7 @@ func (library *Library) persistSnapshot(
 	revisions snapshotRevisions,
 	phases *searchPhases,
 ) (string, error) {
+	phases.stage = "snapshot_prepare"
 	resultBytes, err := rankedResultBytes(ctx, query, plan.request.Namespace)
 	if err != nil {
 		return "", err
@@ -597,9 +589,11 @@ func (library *Library) persistSnapshot(
 	// Library.write opens the transaction with BEGIN IMMEDIATE, which waits for
 	// any other SQLite writer before the closure runs.
 	requested := clock.Now()
+	phases.stage = "snapshot_write_wait"
 	var writing time.Time
 	err = library.write(ctx, func(tx *sql.Tx) error {
 		writing = phases.mark(&phases.writeWait, requested)
+		phases.stage = "snapshot_write"
 		if err := deleteExpiredSnapshots(ctx, tx, now.UnixMilli()); err != nil {
 			return err
 		}
@@ -614,10 +608,14 @@ func (library *Library) persistSnapshot(
 		}
 		return copyRankedResults(ctx, tx, query, snapshotID, plan.request.Namespace)
 	})
+	if writing.IsZero() {
+		phases.mark(&phases.writeWait, requested)
+	} else {
+		phases.mark(&phases.write, writing)
+	}
 	if err != nil {
 		return "", err
 	}
-	phases.mark(&phases.write, writing)
 	return snapshotID, nil
 }
 
@@ -706,28 +704,25 @@ func copyRankedResults(ctx context.Context, tx *sql.Tx, query *queryDatabase, sn
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, rows))
 	}()
-	insert, err := tx.PrepareContext(ctx, insertSearchResultStatement)
-	if err != nil {
-		slog.ErrorContext(ctx, "prepare search result insert failed", "err", err)
-		return fmt.Errorf("prepare search result insert: %w", err)
-	}
+	insert := rankedInsert{snapshotID: snapshotID, namespace: namespace}
 	defer func() {
-		err = errors.Join(err, closeStatement(ctx, insert))
+		err = errors.Join(err, insert.close(ctx))
 	}()
 	for rows.Next() {
 		var row rankedRow
 		if err := rows.Scan(&row.ordinal, &row.ownerID, &row.rowKey, &row.sourceBlobID, &row.vectorID, &row.scalars, &row.score); err != nil {
 			return queryDatabaseError(ctx, "scan ranking for the snapshot", err)
 		}
-		if _, err := insert.ExecContext(ctx,
-			snapshotID, row.ordinal, namespace, row.ownerID, row.rowKey, row.sourceBlobID, row.vectorID, row.scalars, row.score,
-		); err != nil {
+		if err := insert.append(ctx, tx, row); err != nil {
 			slog.ErrorContext(ctx, "save search result failed", "ordinal", row.ordinal, "err", err)
 			return fmt.Errorf("save search result %d: %w", row.ordinal, err)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return queryDatabaseError(ctx, "read ranking for the snapshot", err)
+	}
+	if err := insert.flush(ctx, tx); err != nil {
+		return fmt.Errorf("save search results: %w", err)
 	}
 	return nil
 }
@@ -945,10 +940,7 @@ const (
 	deleteSnapshotResultsStatement = `DELETE FROM search_results WHERE snapshot_id = ?`
 	deleteSnapshotStatement        = `DELETE FROM search_snapshots WHERE snapshot_id = ?`
 	snapshotBytesStatement         = `SELECT SUM(json_extract(rank_config, '$.result_bytes')) FROM search_snapshots WHERE expires_at > ?`
-	insertSearchResultStatement    = `INSERT INTO search_results
-		(snapshot_id, ordinal, namespace, owner_id, row_key, source_blob_id, vector_id, effective_scalars, score)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	cursorSnapshotStatement = `SELECT namespace, request_hash, visibility_revision, projection_revision, rank_config, expires_at
+	cursorSnapshotStatement        = `SELECT namespace, request_hash, visibility_revision, projection_revision, rank_config, expires_at
 		FROM search_snapshots WHERE snapshot_id = ?`
 	renewSnapshotStatement = `UPDATE search_snapshots SET expires_at = MAX(expires_at, ?) WHERE snapshot_id = ?`
 	snapshotPageStatement  = `SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, effective_scalars, score FROM search_results

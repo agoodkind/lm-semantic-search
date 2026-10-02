@@ -63,6 +63,7 @@ func (library *Library) scoreDense(
 	after := ""
 	blockSize := library.config.QueryBlockSize
 	for {
+		phases.stage = "dense_read_blocks"
 		blocks, last, err := readScoreBlocks(ctx, query, after, blockSize, library.config.QueryWorkers)
 		if err != nil {
 			return err
@@ -70,19 +71,27 @@ func (library *Library) scoreDense(
 		if len(blocks) == 0 {
 			break
 		}
-		if err := library.runScoreBlocks(ctx, queryVector, revision, blocks); err != nil {
-			return err
-		}
+		phases.stage = "dense_native"
+		scoreErr := library.runScoreBlocks(ctx, queryVector, revision, blocks)
 		for _, block := range blocks {
 			phases.verify += block.verifyTime
 			phases.verified += block.verified
 			phases.score += block.scoreTime
+			phases.scored += len(block.scores)
 		}
-		if err := saveScores(ctx, query, blocks); err != nil {
-			return err
+		if scoreErr != nil {
+			return scoreErr
+		}
+		phases.stage = "dense_save_scores"
+		started := clock.Now()
+		saveErr := saveScores(ctx, query, blocks)
+		phases.scoreSave += clock.Now().Sub(started)
+		if saveErr != nil {
+			return saveErr
 		}
 		after = last
 	}
+	phases.stage = "dense_check_scores"
 	var unscored int64
 	if err := query.conn.QueryRowContext(ctx, unscoredVectorsStatement).Scan(&unscored); err != nil {
 		return queryDatabaseError(ctx, "count unscored vectors", err)
@@ -166,6 +175,7 @@ func (library *Library) scoreBlock(ctx context.Context, queryVector []float32, r
 	pending := library.verified.unverified(revision, identities)
 	if len(pending) > 0 {
 		if err := library.config.Vectors.VerifyStrong(ctx, pending); err != nil {
+			block.verifyTime = clock.Now().Sub(started)
 			slog.ErrorContext(ctx, "verify eligible vectors failed", "vectors", len(pending), "err", err)
 			return nil, fmt.Errorf("verify %d eligible vectors: %w", len(pending), err)
 		}
@@ -214,9 +224,16 @@ func saveScores(ctx context.Context, query *queryDatabase, blocks []*scoreBlock)
 			err = errors.Join(err, writer.Rollback())
 		}
 	}()
+	update, err := writer.PrepareContext(ctx, saveScoreStatement)
+	if err != nil {
+		return queryDatabaseError(ctx, "prepare score save", err)
+	}
+	defer func() {
+		err = errors.Join(err, closeStatement(ctx, update))
+	}()
 	for _, block := range blocks {
 		for _, score := range block.scores {
-			if _, err := writer.ExecContext(ctx, saveScoreStatement, score.Score, score.ID); err != nil {
+			if _, err := update.ExecContext(ctx, score.Score, score.ID); err != nil {
 				return queryDatabaseError(ctx, "save vector score", err)
 			}
 		}
