@@ -159,6 +159,10 @@ type VectorData struct {
 	Requested    int
 	Acknowledged int64
 	Verified     int
+	// ClientSearchDuration includes the complete SDK call and result decoding.
+	ClientSearchDuration time.Duration
+	// LocalVerificationDuration includes local identity, vector, and score checks.
+	LocalVerificationDuration time.Duration
 }
 
 // StageData distinguishes committed receipt reuse from newly staged rows.

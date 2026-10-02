@@ -181,6 +181,9 @@ func (evaluator *filterEvaluator) union(ctx context.Context, children []int) (in
 // an absent column.
 func (evaluator *filterEvaluator) leaf(ctx context.Context, filter Filter, negated bool) (int, error) {
 	target := evaluator.newNode()
+	if filter.Op == Equal && !negated {
+		return target, evaluator.equalLeaf(ctx, filter, target)
+	}
 	statement, err := leafStatement(filter.Op, evaluator.columns[filter.Column].Type, filter.Prefix, negated)
 	if err != nil {
 		return 0, err

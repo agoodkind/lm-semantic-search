@@ -426,9 +426,10 @@ func testVerifiedSearchFilteredBatches(t *testing.T, fixture *verifiedSearchFixt
 	const namespace = "filtered-batches"
 	const scalarText = "nul\x00 quote\" slash\\ Unicode雪🙂"
 	spec := library.NamespaceSpec{ID: namespace, Policy: library.ReplaceAllowed, Scalars: []library.ScalarColumn{
-		{Name: "label", Type: library.String, MaxLength: 256, Mutable: true},
+		{Name: "label", Type: library.String, MaxLength: 256, Mutable: true, Nullable: true},
 		{Name: "optional", Type: library.String, MaxLength: 256, Nullable: true},
-		{Name: "number", Type: library.Int64},
+		{Name: "number", Type: library.Int64, Mutable: true, Nullable: true},
+		{Name: "flag", Type: library.Bool, Mutable: true, Nullable: true},
 	}}
 	if err := fixture.library.RegisterNamespace(fixture.ctx, spec); err != nil {
 		t.Fatal(err)
@@ -443,7 +444,7 @@ func testVerifiedSearchFilteredBatches(t *testing.T, fixture *verifiedSearchFixt
 			row := fixture.rows[index%len(fixture.rows)]
 			row.RowKey = fmt.Sprintf("row%03d\x00\"\\雪", index)
 			row.SortKey = fmt.Sprintf("sort%03d", rowCount-index)
-			row.Scalars = map[string]library.ScalarValue{"label": stringValue("original"), "number": {Type: library.Int64, Int64: math.MaxInt64}}
+			row.Scalars = map[string]library.ScalarValue{"label": stringValue("original"), "number": {Type: library.Int64, Int64: math.MaxInt64}, "flag": {Type: library.Bool, Bool: true}}
 			if index%2 == 0 {
 				row.Scalars["optional"] = library.ScalarValue{Type: library.String, Null: true}
 			}
@@ -452,6 +453,13 @@ func testVerifiedSearchFilteredBatches(t *testing.T, fixture *verifiedSearchFixt
 			}
 			rows = append(rows, row)
 			projection.Rows[row.RowKey] = map[string]library.ScalarValue{"label": stringValue(scalarText)}
+			if ownerIndex == 0 && index == 0 {
+				projection.Rows[row.RowKey] = map[string]library.ScalarValue{
+					"label":  {Type: library.String, Null: true},
+					"number": {Type: library.Int64, Null: true},
+					"flag":   {Type: library.Bool, Null: true},
+				}
+			}
 		}
 		fixture.publish(t, namespace, owner, 1, rows)
 		if _, err := fixture.library.ReprojectScalars(fixture.ctx, projection); err != nil {
@@ -465,20 +473,38 @@ func testVerifiedSearchFilteredBatches(t *testing.T, fixture *verifiedSearchFixt
 		t.Fatalf("unfiltered occurrences=%d, want 67", len(baseline))
 	}
 	var expected []library.SearchHit
+	var equalExpected []library.SearchHit
 	for _, hit := range baseline {
+		if hit.ID.OwnerID == owners[0] && hit.ID.RowKey == "row000\x00\"\\雪" {
+			if !hit.Scalars["label"].Null || !hit.Scalars["number"].Null || !hit.Scalars["flag"].Null {
+				t.Fatalf("explicit-null projection did not override published values for %+v", hit.ID)
+			}
+			continue
+		}
 		if hit.Scalars["label"].String != scalarText || hit.Scalars["number"].Int64 != math.MaxInt64 {
 			t.Fatalf("unfiltered scalar bytes changed for %+v", hit.ID)
 		}
+		equalExpected = append(equalExpected, hit)
 		value, present := hit.Scalars["optional"]
 		if !present || value.Null {
 			expected = append(expected, hit)
 		}
 	}
-	if len(expected) != 65 {
-		t.Fatalf("eligible occurrences=%d, want 65", len(expected))
+	if len(expected) != 64 {
+		t.Fatalf("eligible occurrences=%d, want 64", len(expected))
+	}
+	for _, filter := range []library.Filter{
+		{Op: library.Equal, Column: "label", Values: []library.ScalarValue{stringValue(scalarText)}},
+		{Op: library.Equal, Column: "number", Values: []library.ScalarValue{{Type: library.Int64, Int64: math.MaxInt64}}},
+		{Op: library.Equal, Column: "flag", Values: []library.ScalarValue{{Type: library.Bool, Bool: true}}},
+	} {
+		request.Filter = &filter
+		assertHitsEqual(t, "equal "+filter.Column, pageAll(t, fixture.library, request, request.PageSize), equalExpected)
 	}
 	request.Filter = &library.Filter{Op: library.All, Children: []library.Filter{
 		{Op: library.Equal, Column: "label", Values: []library.ScalarValue{stringValue(scalarText)}},
+		{Op: library.Equal, Column: "number", Values: []library.ScalarValue{{Type: library.Int64, Int64: math.MaxInt64}}},
+		{Op: library.Equal, Column: "flag", Values: []library.ScalarValue{{Type: library.Bool, Bool: true}}},
 		{Op: library.Any, Children: []library.Filter{
 			{Op: library.IsNull, Column: "optional"},
 			{Op: library.Not, Children: []library.Filter{{Op: library.IsPresent, Column: "optional"}}},
