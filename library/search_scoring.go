@@ -38,6 +38,7 @@ type searchScoring struct {
 	totals                scoringTotals
 	stream                *scoreStream
 	queryVector           []float32
+	reader                ExactScoreReader
 	started, copyFinished time.Time
 	reserved              int64
 	recorded              bool
@@ -72,6 +73,15 @@ func (scoring *searchScoring) start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	reader := ExactScoreReader(scoring.library.config.Vectors)
+	if backend, ok := scoring.library.config.Vectors.(ExactScoringSnapshotter); ok {
+		reader, err = backend.BeginExactScoring(ctx)
+		if err != nil {
+			slog.ErrorContext(ctx, "begin exact scoring snapshot failed", "err", err)
+			return fmt.Errorf("begin exact scoring snapshot: %w", err)
+		}
+	}
+	scoring.reader = reader
 	stream, err := newScoreStream(ctx, scoring.query.path)
 	if err != nil {
 		return err
@@ -133,7 +143,7 @@ func (scoring *searchScoring) work(ctx context.Context) {
 				return
 			}
 			block := &scoreBlock{identities: identities}
-			block.scores, block.err = scoring.library.scoreBlock(ctx, scoring.queryVector, scoring.revision, block)
+			block.scores, block.err = scoring.library.scoreBlock(ctx, scoring.reader, scoring.queryVector, scoring.revision, block)
 			scoring.mutex.Lock()
 			scoring.totals.verify += block.verifyTime
 			scoring.totals.score += block.scoreTime

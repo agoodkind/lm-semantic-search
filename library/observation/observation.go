@@ -161,6 +161,8 @@ type VectorData struct {
 	Verified     int
 	// ClientSearchDuration includes the complete SDK call and result decoding.
 	ClientSearchDuration time.Duration
+	// ClientQueryDuration includes bounded vector Query calls and wire decoding.
+	ClientQueryDuration time.Duration
 	// LocalVerificationDuration includes local identity, vector, and score checks.
 	LocalVerificationDuration time.Duration
 }

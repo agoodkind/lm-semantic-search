@@ -70,6 +70,23 @@ type VerifiedExactScorer interface {
 	ScoreExactVerified(context.Context, []float32, []VectorIdentity) ([]VectorScore, error)
 }
 
+// ExactScoreLimits optionally declares the backend's bounded score request size.
+type ExactScoreLimits interface {
+	MaxExactScoreIDs() int
+}
+
+// ExactScoreReader verifies and scores canonical vectors for one search.
+type ExactScoreReader interface {
+	VerifyStrong(context.Context, []VectorIdentity) error
+	ScoreExact(context.Context, []float32, []string) ([]VectorScore, error)
+}
+
+// ExactScoringSnapshotter optionally creates an immutable reader shared by every
+// score block in a search. The reader requires no cursor or close operation.
+type ExactScoringSnapshotter interface {
+	BeginExactScoring(context.Context) (ExactScoreReader, error)
+}
+
 // VectorRecord is one canonical vector write.
 type VectorRecord struct {
 	ID, IdentityDigest, Checksum string
@@ -213,7 +230,7 @@ type Config struct {
 	// MaxBatchBytes bounds the bytes of one physical write batch. Default 8 MiB.
 	MaxBatchBytes int64
 	// QueryBlockSize bounds the vector IDs of one exact scoring request.
-	// Default 512, at most 16,384, the Milvus single-search limit.
+	// Default 512. ExactScoreLimits supplies the bound; other backends use 16,384.
 	QueryBlockSize int
 	// QueryWorkers bounds concurrent scoring requests. Default 2.
 	QueryWorkers int

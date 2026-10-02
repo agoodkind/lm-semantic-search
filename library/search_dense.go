@@ -49,15 +49,15 @@ type scoreBlock struct {
 // unverified block. Mixed and warm blocks retain separate verification and
 // scoring. It caches a combined result only after validating every ordered,
 // finite score.
-func (library *Library) scoreBlock(ctx context.Context, queryVector []float32, revision int64, block *scoreBlock) ([]VectorScore, error) {
+func (library *Library) scoreBlock(ctx context.Context, reader ExactScoreReader, queryVector []float32, revision int64, block *scoreBlock) ([]VectorScore, error) {
 	identities := block.identities
 	started := clock.Now()
 	pending := library.verified.unverified(revision, identities)
-	if scorer, ok := library.config.Vectors.(VerifiedExactScorer); ok && len(pending) == len(identities) {
+	if scorer, ok := reader.(VerifiedExactScorer); ok && len(pending) == len(identities) {
 		return library.scoreVerifiedBlock(ctx, queryVector, revision, block, scorer)
 	}
 	if len(pending) > 0 {
-		if err := library.config.Vectors.VerifyStrong(ctx, pending); err != nil {
+		if err := reader.VerifyStrong(ctx, pending); err != nil {
 			block.verifyTime = clock.Now().Sub(started)
 			slog.ErrorContext(ctx, "verify eligible vectors failed", "vectors", len(pending), "err", err)
 			return nil, fmt.Errorf("verify %d eligible vectors: %w", len(pending), err)
@@ -71,7 +71,7 @@ func (library *Library) scoreBlock(ctx context.Context, queryVector []float32, r
 	for _, identity := range identities {
 		ids = append(ids, identity.ID)
 	}
-	scores, err := library.config.Vectors.ScoreExact(ctx, queryVector, ids)
+	scores, err := reader.ScoreExact(ctx, queryVector, ids)
 	block.scoreTime = clock.Now().Sub(verified)
 	if err != nil {
 		slog.ErrorContext(ctx, "exact scoring failed", "vectors", len(ids), "err", err)

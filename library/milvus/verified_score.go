@@ -19,6 +19,13 @@ import (
 // ScoreExactVerified returns native FLAT COSINE scores and verifies each
 // identity and canonical float32 checksum from one strongly consistent search.
 func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, identities []library.VectorIdentity) (_ []library.VectorScore, err error) {
+	if store.config.QueryMode == QueryModeLargeTopK {
+		reader, err := store.beginExactSnapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return reader.ScoreExactVerified(ctx, query, identities)
+	}
 	ctx, span := observation.Start(ctx, store.config.Observer, observation.VerifiedExactScoring)
 	counts := observation.VectorData{Requested: len(identities)}
 	defer func() { span.End(ctx, err, observation.Data{Vector: counts}) }()
@@ -41,7 +48,7 @@ func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, ide
 	for index, identity := range identities {
 		ids[index] = identity.ID
 	}
-	if err := validateScoreRequest(ctx, query, ids, bound.Dimension); err != nil {
+	if err := validateScoreRequest(ctx, query, ids, bound.Dimension, store.MaxExactScoreIDs()); err != nil {
 		return nil, err
 	}
 	if len(ids) == 0 {
