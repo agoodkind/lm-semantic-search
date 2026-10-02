@@ -69,6 +69,10 @@ type verifiedSearchFixture struct {
 }
 
 func newVerifiedSearchFixture(t *testing.T) *verifiedSearchFixture {
+	return newVerifiedSearchFixtureMode(t, librarymilvus.QueryModeNormal)
+}
+
+func newVerifiedSearchFixtureMode(t *testing.T, mode string) *verifiedSearchFixture {
 	t.Helper()
 	address := os.Getenv("LMS_VERIFIED_SEARCH_MILVUS_ADDRESS")
 	if address == "" {
@@ -115,7 +119,11 @@ func newVerifiedSearchFixture(t *testing.T) *verifiedSearchFixture {
 		}
 	})
 	events := &verifiedSearchEvents{active: make(map[uint64]bool), admitted: make(chan struct{}, 16)}
-	store, err := librarymilvus.New(client, librarymilvus.Config{Database: database, Collection: "verified", Observer: events})
+	adapter := librarymilvus.Config{Database: database, Collection: "verified", Observer: events, QueryMode: mode, MaxVerifyBatchRows: 2}
+	if mode == librarymilvus.QueryModeLargeTopK {
+		adapter.MaxScoreWindow = 32768
+	}
+	store, err := librarymilvus.New(client, adapter)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +298,7 @@ func testVerifiedNativeSearchParityPagingAndCache(t *testing.T, fixture *verifie
 	unrelatedKey := fixture.identities(t)[0].key
 	for _, row := range fixture.rows {
 		if row.RowKey == unrelatedKey {
-			fixture.publish(t, "unrelated", "new-owner", 1, []library.Occurrence{row})
+			fixture.publish(t, "unrelated", "new-owner-"+t.Name(), 1, []library.Occurrence{row})
 		}
 	}
 	fixture.assertFailure(t, request, library.ErrVectorCorrupt)
@@ -357,7 +365,7 @@ func testVerifiedNativeSearchRejectsTailDamageAndJoinsCancellation(t *testing.T,
 	tail := fixture.identities(t)[8].identity
 	record := fixture.readBackend(t, tail)
 	request := library.SearchRequest{Namespace: "verified", Query: searchTopics[3], PageSize: 2, MinScore: 0}
-	for _, damage := range []string{"digest", "checksum", "bytes", "missing"} {
+	for _, damage := range []string{"digest", "checksum", "bytes", "zero norm", "missing"} {
 		t.Run(damage, func(t *testing.T) {
 			fixture.reopen(t)
 			changed := record
@@ -370,6 +378,8 @@ func testVerifiedNativeSearchRejectsTailDamageAndJoinsCancellation(t *testing.T,
 				changed.Checksum = strings.Repeat("0", 64)
 			case "bytes":
 				changed.Values[0] += 0.125
+			case "zero norm":
+				clear(changed.Values)
 			case "missing":
 				want = library.ErrVectorMissing
 			}
@@ -421,6 +431,22 @@ func TestVerifiedNativeSearch(t *testing.T) {
 	t.Run("parity paging and cache", func(t *testing.T) { testVerifiedNativeSearchParityPagingAndCache(t, fixture) })
 	t.Run("tail damage and cancellation", func(t *testing.T) { testVerifiedNativeSearchRejectsTailDamageAndJoinsCancellation(t, fixture) })
 	t.Run("filtered batches preserve bytes and frozen scalars", func(t *testing.T) { testVerifiedSearchFilteredBatches(t, fixture) })
+}
+
+func TestLargeWindowVerifiedSearch(t *testing.T) {
+	fixture := newVerifiedSearchFixtureMode(t, librarymilvus.QueryModeLargeTopK)
+	t.Run("disjoint score windows and bounded verification", func(t *testing.T) {
+		testVerifiedNativeSearchParityPagingAndCache(t, fixture)
+	})
+	t.Run("large configured window and cold damage", func(t *testing.T) {
+		fixture.config.QueryBlockSize = 32768
+		fixture.reopen(t)
+		testVerifiedNativeSearchParityPagingAndCache(t, fixture)
+		testVerifiedNativeSearchRejectsTailDamageAndJoinsCancellation(t, fixture)
+	})
+	t.Run("filtered batches preserve bytes and frozen scalars", func(t *testing.T) {
+		testVerifiedSearchFilteredBatches(t, fixture)
+	})
 }
 
 func testVerifiedSearchFilteredBatches(t *testing.T, fixture *verifiedSearchFixture) {

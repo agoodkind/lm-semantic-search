@@ -42,6 +42,17 @@ const (
 // maxSearchLimit is the largest result count one Milvus search returns.
 const maxSearchLimit = 16384
 
+const (
+	queryModeProperty = "query_mode"
+	// QueryModeNormal uses the backend's ordinary bounded search operation.
+	QueryModeNormal = "normal"
+	// QueryModeLargeTopK enables configured complete score windows above 16384.
+	QueryModeLargeTopK   = "large_topk"
+	maxLargeScoreWindow  = 1000000
+	maxVerifyBatchRows   = 4096
+	maxVerifyVectorBytes = 64 * 1024 * 1024
+)
+
 // Config selects the collection that stores one vector pool. The caller
 // creates the client for Database, and the adapter uses the client's
 // database for every request.
@@ -50,6 +61,12 @@ type Config struct {
 	Observer   observation.Observer
 	Database   string
 	Collection string
+	// An empty QueryMode selects normal. Existing collection modes must match.
+	QueryMode string
+	// MaxScoreWindow must be 1 through one million for large_topk and zero for normal.
+	MaxScoreWindow int
+	// A zero MaxVerifyBatchRows selects 4096. Explicit values must be 1 through 4096.
+	MaxVerifyBatchRows int
 }
 
 // Store is a [library.VectorStore] backed by one Milvus collection. It never
@@ -70,7 +87,37 @@ func New(client *milvusclient.Client, config Config) (*Store, error) {
 		slog.Warn("milvus adapter configuration rejected", "err", err)
 		return nil, err
 	}
+	if config.QueryMode == "" {
+		config.QueryMode = QueryModeNormal
+	}
+	if config.MaxVerifyBatchRows == 0 {
+		config.MaxVerifyBatchRows = maxVerifyBatchRows
+	}
+	var configurationError string
+	switch {
+	case config.QueryMode != QueryModeNormal && config.QueryMode != QueryModeLargeTopK:
+		configurationError = fmt.Sprintf("QueryMode %q must be normal or large_topk", config.QueryMode)
+	case config.QueryMode == QueryModeLargeTopK && (config.MaxScoreWindow <= 0 || config.MaxScoreWindow > maxLargeScoreWindow):
+		configurationError = fmt.Sprintf("MaxScoreWindow %d must be 1 through %d for large_topk", config.MaxScoreWindow, maxLargeScoreWindow)
+	case config.QueryMode == QueryModeNormal && config.MaxScoreWindow != 0:
+		configurationError = fmt.Sprintf("MaxScoreWindow %d must be zero for normal", config.MaxScoreWindow)
+	case config.MaxVerifyBatchRows < 1 || config.MaxVerifyBatchRows > maxVerifyBatchRows:
+		configurationError = fmt.Sprintf("MaxVerifyBatchRows %d must be 1 through %d", config.MaxVerifyBatchRows, maxVerifyBatchRows)
+	}
+	if configurationError != "" {
+		err := fmt.Errorf("%w: %s", library.ErrInvalidRequest, configurationError)
+		slog.Warn("milvus adapter configuration rejected", "err", err)
+		return nil, err
+	}
 	return &Store{client: client, config: config, mutex: sync.Mutex{}, bound: nil}, nil
+}
+
+// MaxExactScoreIDs returns the configured complete score request bound.
+func (store *Store) MaxExactScoreIDs() int {
+	if store.config.QueryMode == QueryModeLargeTopK {
+		return store.config.MaxScoreWindow
+	}
+	return maxSearchLimit
 }
 
 // PoolIdentity returns the database and collection of the pool.
@@ -90,7 +137,11 @@ func (store *Store) BindCatalog(ctx context.Context, binding string) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", library.ErrInvalidRequest, err)
 	}
-	createErr := store.client.CreateCollection(ctx, milvusclient.NewCreateCollectionOption(store.config.Collection, collectionSchema(requested.Dimension, binding)))
+	option := milvusclient.NewCreateCollectionOption(store.config.Collection, collectionSchema(requested.Dimension, binding))
+	if store.config.QueryMode == QueryModeLargeTopK {
+		option.WithProperty(queryModeProperty, store.config.QueryMode)
+	}
+	createErr := store.client.CreateCollection(ctx, option)
 	if createErr != nil {
 		slog.WarnContext(ctx, "create vector collection returned an error; reading the saved binding", "collection", store.config.Collection, "err", createErr)
 	}
@@ -141,6 +192,15 @@ func (store *Store) savedBinding(ctx context.Context, dimension int) (storebindi
 	if err != nil {
 		slog.ErrorContext(ctx, "read vector collection schema failed", "collection", store.config.Collection, "err", err)
 		return storebinding.Binding{}, fmt.Errorf("read vector collection %s schema: %w", store.config.Collection, err)
+	}
+	mode := collection.Properties[queryModeProperty]
+	if mode == "" {
+		mode = QueryModeNormal
+	}
+	if mode != store.config.QueryMode {
+		err := fmt.Errorf("%w: collection %s query mode is %s, want %s", library.ErrStoreMismatch, store.config.Collection, mode, store.config.QueryMode)
+		slog.ErrorContext(ctx, "vector collection query mode mismatch", "err", err)
+		return storebinding.Binding{}, err
 	}
 	saved, err := storebinding.Decode(collection.Schema.Description)
 	if err != nil {
@@ -252,6 +312,27 @@ func (store *Store) PutCanonical(ctx context.Context, record library.VectorRecor
 // checksum that differs from the identity, or stored values that do not match
 // the stored checksum, return an error that wraps [library.ErrVectorCorrupt].
 func (store *Store) VerifyStrong(ctx context.Context, identities []library.VectorIdentity) (err error) {
+	if store.config.QueryMode == QueryModeLargeTopK {
+		reader, err := store.beginExactSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		return reader.VerifyStrong(ctx, identities)
+	}
+	bound, err := store.binding(ctx)
+	if err != nil {
+		return err
+	}
+	step := store.verificationBatchRows(bound.Dimension)
+	for begin := 0; begin < len(identities); begin += step {
+		if err := store.verifyStrongBatch(ctx, identities[begin:min(begin+step, len(identities))]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (store *Store) verifyStrongBatch(ctx context.Context, identities []library.VectorIdentity) (err error) {
 	ctx, span := observation.Start(ctx, store.config.Observer, observation.StrongVerification)
 	counts := observation.VectorData{Requested: len(identities)}
 	defer func() { span.End(ctx, err, observation.Data{Vector: counts}) }()
@@ -334,11 +415,18 @@ func (store *Store) readVectors(ctx context.Context, ids []string) (map[string]s
 // [library.ErrVectorMissing]. A duplicate or unexpected ID, or a nonfinite
 // score, returns an error that wraps [library.ErrVectorCorrupt].
 func (store *Store) ScoreExact(ctx context.Context, query []float32, ids []string) ([]library.VectorScore, error) {
+	if store.config.QueryMode == QueryModeLargeTopK {
+		reader, err := store.beginExactSnapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return reader.ScoreExact(ctx, query, ids)
+	}
 	bound, err := store.binding(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateScoreRequest(ctx, query, ids, bound.Dimension); err != nil {
+	if err := validateScoreRequest(ctx, query, ids, bound.Dimension, store.MaxExactScoreIDs()); err != nil {
 		return nil, err
 	}
 	if len(ids) == 0 {
@@ -378,14 +466,14 @@ func (store *Store) ScoreExact(ctx context.Context, query []float32, ids []strin
 	return ordered, nil
 }
 
-func validateScoreRequest(ctx context.Context, query []float32, ids []string, dimension int) error {
+func validateScoreRequest(ctx context.Context, query []float32, ids []string, dimension, limit int) error {
 	if err := vectorcodec.Validate(query, dimension); err != nil {
 		invalid := fmt.Errorf("%w: query vector: %w", library.ErrInvalidRequest, err)
 		slog.WarnContext(ctx, "reject exact score request", "err", invalid)
 		return invalid
 	}
-	if len(ids) > maxSearchLimit {
-		invalid := fmt.Errorf("%w: %d IDs exceed the %d-result search limit", library.ErrInvalidRequest, len(ids), maxSearchLimit)
+	if len(ids) > limit {
+		invalid := fmt.Errorf("%w: %d IDs exceed the %d-result search limit", library.ErrInvalidRequest, len(ids), limit)
 		slog.WarnContext(ctx, "reject exact score request", "err", invalid)
 		return invalid
 	}

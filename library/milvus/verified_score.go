@@ -17,21 +17,29 @@ import (
 )
 
 // ScoreExactVerified returns native FLAT COSINE scores and verifies each
-// identity and canonical float32 checksum from one strongly consistent search.
+// identity and canonical float32 checksum at one strongly consistent snapshot.
 func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, identities []library.VectorIdentity) (_ []library.VectorScore, err error) {
+	if store.config.QueryMode == QueryModeLargeTopK {
+		reader, err := store.beginExactSnapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return reader.ScoreExactVerified(ctx, query, identities)
+	}
 	ctx, span := observation.Start(ctx, store.config.Observer, observation.VerifiedExactScoring)
 	counts := observation.VectorData{Requested: len(identities)}
 	defer func() { span.End(ctx, err, observation.Data{Vector: counts}) }()
 	defer func() {
+		if err != nil {
+			slog.ErrorContext(ctx, "verified exact vector search failed", "vectors", len(identities), "err", err)
+			return
+		}
 		slog.InfoContext(ctx, "verified exact vector search completed",
 			"operation", string(observation.VerifiedExactScoring),
 			"vectors", counts.Requested, "verified_vectors", counts.Verified,
 			"client_search_duration_ns", counts.ClientSearchDuration.Nanoseconds(),
 			"local_verification_duration_ns", counts.LocalVerificationDuration.Nanoseconds(),
 		)
-		if err != nil {
-			slog.ErrorContext(ctx, "verified exact vector search failed", "vectors", len(identities), "err", err)
-		}
 	}()
 	bound, err := store.binding(ctx)
 	if err != nil {
@@ -41,7 +49,7 @@ func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, ide
 	for index, identity := range identities {
 		ids[index] = identity.ID
 	}
-	if err := validateScoreRequest(ctx, query, ids, bound.Dimension); err != nil {
+	if err := validateScoreRequest(ctx, query, ids, bound.Dimension, store.MaxExactScoreIDs()); err != nil {
 		return nil, err
 	}
 	if len(ids) == 0 {

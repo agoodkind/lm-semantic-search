@@ -34,9 +34,7 @@ const (
 // stays finite for any realistic query length.
 const maxBM25K1 = 1e6
 
-// maxQueryBlockSize is the largest accepted QueryBlockSize: the Milvus
-// single-search limit of 16,384 results, which the Milvus adapter's ScoreExact
-// enforces.
+// maxQueryBlockSize bounds backends that do not declare ExactScoreLimits.
 const maxQueryBlockSize = 16384
 
 // scalarColumnNamePattern accepts a column name that starts with a letter or an
@@ -119,8 +117,12 @@ func validateBudgets(config Config) error {
 			))
 		}
 	}
-	if config.QueryBlockSize > maxQueryBlockSize {
-		return invalidRequest(fmt.Sprintf("config QueryBlockSize %d exceeds %d", config.QueryBlockSize, maxQueryBlockSize))
+	limit := maxQueryBlockSize
+	if backend, ok := config.Vectors.(ExactScoreLimits); ok {
+		limit = backend.MaxExactScoreIDs()
+	}
+	if config.QueryBlockSize > limit {
+		return invalidRequest(fmt.Sprintf("config QueryBlockSize %d exceeds %d", config.QueryBlockSize, limit))
 	}
 	return nil
 }
