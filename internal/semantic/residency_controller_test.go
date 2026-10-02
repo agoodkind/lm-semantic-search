@@ -161,6 +161,34 @@ func (clock *testResidencyClock) LastTimer() *testResidencyTimer {
 	return clock.timers[len(clock.timers)-1]
 }
 
+// waitForPendingTimer waits until a timer due delay after the current fake time
+// is registered and has neither fired nor stopped. Acquire counts its lease
+// before it registers its wait timer, and it registers that timer after it
+// releases the controller mutex.
+func (clock *testResidencyClock) waitForPendingTimer(t *testing.T, delay time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if clock.hasPendingTimer(delay) {
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatalf("no pending timer due %s after the current fake time", delay)
+}
+
+func (clock *testResidencyClock) hasPendingTimer(delay time.Duration) bool {
+	clock.mutex.Lock()
+	defer clock.mutex.Unlock()
+	due := clock.now.Add(delay)
+	for _, timer := range clock.timers {
+		if !timer.stopped && !timer.fired && timer.deadline.Equal(due) {
+			return true
+		}
+	}
+	return false
+}
+
 func (timer *testResidencyTimer) FireStale() {
 	timer.callback()
 }
@@ -269,6 +297,7 @@ func TestResidencyAcquireSharesLoadWithIndependentCallerLimits(t *testing.T) {
 		firstResult <- err
 	}()
 	<-loadStarted
+	clock.waitForPendingTimer(t, 15*time.Second)
 
 	clock.Advance(5 * time.Second)
 	secondResult := make(chan error, 1)
