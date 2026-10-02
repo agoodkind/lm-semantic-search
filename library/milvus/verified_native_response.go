@@ -1,38 +1,12 @@
 package milvus
 
 import (
-	"context"
-	"fmt"
-	"log/slog"
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"goodkind.io/lm-semantic-search/library"
 )
-
-func (store *Store) searchVerifiedNative(ctx context.Context, option milvusclient.SearchOption) (_ *milvuspb.SearchResults, err error) {
-	defer func() {
-		if err != nil {
-			slog.ErrorContext(ctx, "verified native response failed", "err", err)
-		}
-	}()
-	request, err := option.Request()
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
-	}
-	service := store.client.GetService()
-	if service == nil {
-		return nil, fmt.Errorf("%w", merr.WrapErrServiceNotReady("SDK", 0, "not connected"))
-	}
-	response, err := service.Search(ctx, request)
-	if err := merr.CheckRPCCall(response, err); err != nil {
-		return response, fmt.Errorf("%w", err)
-	}
-	return response, nil
-}
 
 func verifiedNativeResults(response *milvuspb.SearchResults, dimension int) ([]milvusclient.ResultSet, *verifiedSearchFailure) {
 	data := response.GetResults()

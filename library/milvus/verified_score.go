@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/library"
 	"goodkind.io/lm-semantic-search/library/internal/vectorcodec"
@@ -47,15 +48,22 @@ func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, ide
 		return []library.VectorScore{}, nil
 	}
 	started := clock.Now()
-	response, err := store.searchVerifiedNative(ctx,
-		milvusclient.NewSearchOption(store.config.Collection, len(ids), []entity.Vector{entity.FloatVector(query)}).
-			WithANNSField(fieldVector).
-			WithFilter(idsFilterExpression).
-			WithTemplateParam(idsTemplateName, ids).
-			WithOutputFields(fieldIdentityDigest, fieldChecksum, fieldVector).
-			WithConsistencyLevel(entity.ClStrong))
-	counts.ClientSearchDuration = clock.Now().Sub(started)
+	request, err := milvusclient.NewSearchOption(store.config.Collection, len(ids), []entity.Vector{entity.FloatVector(query)}).
+		WithANNSField(fieldVector).
+		WithFilter(idsFilterExpression).
+		WithTemplateParam(idsTemplateName, ids).
+		WithOutputFields(fieldIdentityDigest, fieldChecksum, fieldVector).
+		WithConsistencyLevel(entity.ClStrong).Request()
 	if err != nil {
+		return nil, fmt.Errorf("verified exact vector search request: %w", err)
+	}
+	service := store.client.GetService()
+	if service == nil {
+		return nil, fmt.Errorf("verified exact vector search: %w", merr.WrapErrServiceNotReady("SDK", 0, "not connected"))
+	}
+	response, err := service.Search(ctx, request)
+	counts.ClientSearchDuration = clock.Now().Sub(started)
+	if err := merr.CheckRPCCall(response, err); err != nil {
 		return nil, fmt.Errorf("verified exact vector search over %d vectors: %w", len(ids), err)
 	}
 	started = clock.Now()
