@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -30,6 +31,18 @@ const snapshotIDBytes = 16
 
 // cursorVersion identifies the cursor encoding.
 const cursorVersion = 1
+
+//go:embed search_filter_rows.sql
+var searchFilterRowsStatement string
+
+//go:embed search_candidates.sql
+var searchCandidatesStatement string
+
+//go:embed search_vectors.sql
+var searchVectorsStatement string
+
+//go:embed search_selected.sql
+var searchSelectedStatement string
 
 // queryDatabaseSchema creates the tables of one query database. filter_sets
 // stores one occurrence set per filter node. candidates stores every eligible
@@ -322,12 +335,10 @@ LEFT JOIN occurrence_scalars gs ON gs.namespace = o.namespace AND gs.owner_id = 
 WHERE o.namespace = :namespace`
 
 // Candidate statements. allCandidatesStatement reads every occurrence of the
-// namespace. oneCandidateStatement reads one occurrence that the filter
-// selected. eligibleKeysStatement reads the true rows of the filter root node
+// namespace. eligibleKeysStatement reads the true rows of the filter root node
 // from the query database.
 const (
 	allCandidatesStatement = candidateColumns
-	oneCandidateStatement  = candidateColumns + ` AND o.owner_id = :owner_id AND o.row_key = :row_key`
 	eligibleKeysStatement  = `SELECT owner_id, row_key FROM filter_sets WHERE node = :node`
 )
 
@@ -383,14 +394,6 @@ func copyEligibleCandidates(
 	namespace sql.NamedArg,
 	groupColumn sql.NamedArg,
 ) (count int64, err error) {
-	lookup, err := tx.PrepareContext(ctx, oneCandidateStatement)
-	if err != nil {
-		slog.ErrorContext(ctx, "prepare occurrence lookup failed", "err", err)
-		return 0, fmt.Errorf("prepare occurrence lookup: %w", err)
-	}
-	defer func() {
-		err = errors.Join(err, closeStatement(ctx, lookup))
-	}()
 	keys, err := writer.QueryContext(ctx, eligibleKeysStatement, sql.Named("node", root))
 	if err != nil {
 		return 0, queryDatabaseError(ctx, "read filtered occurrences", err)
@@ -398,26 +401,42 @@ func copyEligibleCandidates(
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, keys))
 	}()
-	for keys.Next() {
-		var ownerID, rowKey string
-		if err := keys.Scan(&ownerID, &rowKey); err != nil {
-			return 0, queryDatabaseError(ctx, "scan filtered occurrence", err)
+	for {
+		bindings := []sql.NamedArg{namespace, groupColumn}
+		selected := make(map[[2]string]bool, publicationInsertRows)
+		var placeholders []string
+		for len(selected) < publicationInsertRows && keys.Next() {
+			var ownerID, rowKey string
+			if err := keys.Scan(&ownerID, &rowKey); err != nil {
+				return 0, queryDatabaseError(ctx, "scan filtered occurrence", err)
+			}
+			index := len(selected)
+			ownerName, rowName := fmt.Sprintf("owner_%d", index), fmt.Sprintf("row_%d", index)
+			placeholders = append(placeholders, "(:"+ownerName+", :"+rowName+")")
+			bindings = append(bindings, sql.Named(ownerName, ownerID), sql.Named(rowName, rowKey))
+			selected[[2]string{ownerID, rowKey}] = false
 		}
-		rows, err := lookup.QueryContext(ctx, namespace, groupColumn, sql.Named("owner_id", ownerID), sql.Named("row_key", rowKey))
+		if err := keys.Err(); err != nil {
+			return 0, queryDatabaseError(ctx, "read filtered occurrences", err)
+		}
+		if len(selected) == 0 {
+			break
+		}
+		statement := strings.NewReplacer("{{columns}}", candidateColumns, "{{keys}}", strings.Join(placeholders, ",")).Replace(searchSelectedStatement)
+		arguments := make([]any, len(bindings))
+		for index, binding := range bindings {
+			arguments[index] = binding
+		}
+		rows, err := tx.QueryContext(ctx, statement, arguments...)
 		if err != nil {
 			slog.ErrorContext(ctx, "read filtered occurrence failed", "err", err)
-			return 0, fmt.Errorf("read occurrence %s/%s: %w", ownerID, rowKey, err)
+			return 0, fmt.Errorf("read filtered occurrence batch: %w", err)
 		}
-		copied, err := insertCandidateRows(ctx, writer, rows)
+		copied, err := insertSelectedCandidateRows(ctx, writer, rows, selected)
 		if err != nil {
 			return 0, err
 		}
-		if copied != 1 {
-			err := fmt.Errorf("filtered occurrence %s/%s has %d catalog rows in the read snapshot", ownerID, rowKey, copied)
-			slog.ErrorContext(ctx, "filtered occurrence lookup failed", "err", err)
-			return 0, err
-		}
-		count++
+		count += copied
 	}
 	if err := keys.Err(); err != nil {
 		return 0, queryDatabaseError(ctx, "read filtered occurrences", err)
@@ -434,8 +453,21 @@ type eligibleRow struct {
 // insertCandidateRows copies every row of a candidate statement into the
 // query database and closes rows.
 func insertCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.Rows) (count int64, err error) {
+	return insertSelectedCandidateRows(ctx, writer, rows, nil)
+}
+
+func insertSelectedCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.Rows, selected map[[2]string]bool) (count int64, err error) {
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, rows))
+	}()
+	candidates := publicationInsert{statement: searchCandidatesStatement, columns: 8}
+	vectors := publicationInsert{statement: searchVectorsStatement, columns: 3}
+	defer func() {
+		for _, insert := range []*publicationInsert{&candidates, &vectors} {
+			if insert.prepared != nil {
+				err = errors.Join(err, closeStatement(ctx, insert.prepared))
+			}
+		}
 	}()
 	for rows.Next() {
 		var row eligibleRow
@@ -446,8 +478,27 @@ func insertCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.Rows) (c
 			slog.ErrorContext(ctx, "scan eligible occurrence failed", "err", err)
 			return 0, fmt.Errorf("scan eligible occurrence: %w", err)
 		}
-		if err := insertCandidate(ctx, writer, row); err != nil {
-			return 0, err
+		if selected != nil {
+			key := [2]string{row.ownerID, row.rowKey}
+			seen, found := selected[key]
+			if !found || seen {
+				return 0, fmt.Errorf("filtered occurrence %s/%s has unexpected catalog rows in the read snapshot", row.ownerID, row.rowKey)
+			}
+			selected[key] = true
+		}
+		if !row.digest.Valid || !row.checksum.Valid {
+			missing := fmt.Errorf("%w: occurrence %s/%s references vector %s without a catalog row",
+				ErrVectorMissing, row.ownerID, row.rowKey, row.vectorID)
+			slog.ErrorContext(ctx, "eligible occurrence has no catalog vector", "err", missing)
+			return 0, missing
+		}
+		if err := candidates.append(ctx, writer,
+			publicationString(row.ownerID), publicationString(row.rowKey), publicationString(row.sortKey), publicationString(row.vectorID),
+			publicationString(row.blobID), publicationString(row.searchHash), publicationString(row.groupKey), publicationString(row.scalars)); err != nil {
+			return 0, queryDatabaseError(ctx, "copy eligible occurrences", err)
+		}
+		if err := vectors.append(ctx, writer, publicationString(row.vectorID), publicationString(row.digest.String), publicationString(row.checksum.String)); err != nil {
+			return 0, queryDatabaseError(ctx, "copy eligible vector identities", err)
 		}
 		count++
 	}
@@ -455,27 +506,18 @@ func insertCandidateRows(ctx context.Context, writer *sql.Tx, rows *sql.Rows) (c
 		slog.ErrorContext(ctx, "read eligible occurrences failed", "err", err)
 		return 0, fmt.Errorf("read eligible occurrences: %w", err)
 	}
+	for key, seen := range selected {
+		if !seen {
+			return 0, fmt.Errorf("filtered occurrence %s/%s has 0 catalog rows in the read snapshot", key[0], key[1])
+		}
+	}
+	if err := candidates.flush(ctx, writer); err != nil {
+		return 0, queryDatabaseError(ctx, "copy eligible occurrences", err)
+	}
+	if err := vectors.flush(ctx, writer); err != nil {
+		return 0, queryDatabaseError(ctx, "copy eligible vector identities", err)
+	}
 	return count, nil
-}
-
-func insertCandidate(ctx context.Context, writer *sql.Tx, row eligibleRow) error {
-	if !row.digest.Valid || !row.checksum.Valid {
-		missing := fmt.Errorf("%w: occurrence %s/%s references vector %s without a catalog row",
-			ErrVectorMissing, row.ownerID, row.rowKey, row.vectorID)
-		slog.ErrorContext(ctx, "eligible occurrence has no catalog vector", "err", missing)
-		return missing
-	}
-	if _, err := writer.ExecContext(ctx, insertCandidateStatement,
-		row.ownerID, row.rowKey, row.sortKey, row.vectorID, row.blobID, row.searchHash, row.groupKey, row.scalars,
-	); err != nil {
-		return queryDatabaseError(ctx, "copy eligible occurrence", err)
-	}
-	if _, err := writer.ExecContext(ctx, insertQueryVectorStatement,
-		row.vectorID, row.digest.String, row.checksum.String,
-	); err != nil {
-		return queryDatabaseError(ctx, "copy eligible vector identity", err)
-	}
-	return nil
 }
 
 // rankedRow is one row of a ranked result.
@@ -887,10 +929,7 @@ func decodeEffectiveScalar(name string, fields []json.RawMessage) (ScalarValue, 
 
 // Query database statements of the candidate copy and the ranked result.
 const (
-	insertCandidateStatement = `INSERT INTO candidates (owner_id, row_key, sort_key, vector_id, source_blob_id, search_hash, group_key, scalars)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	insertQueryVectorStatement = `INSERT OR IGNORE INTO query_vectors (vector_id, identity_digest, vector_checksum) VALUES (?, ?, ?)`
-	rankedPageStatement        = `SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, scalars, score FROM ranked
+	rankedPageStatement = `SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, scalars, score FROM ranked
 		WHERE ordinal >= ? ORDER BY ordinal LIMIT ?`
 	rankedRowsStatement  = `SELECT ordinal, owner_id, row_key, source_blob_id, vector_id, scalars, score FROM ranked ORDER BY ordinal`
 	rankedBytesStatement = `SELECT SUM(? + length(CAST(owner_id AS BLOB)) + length(CAST(row_key AS BLOB)) + length(CAST(source_blob_id AS BLOB))
