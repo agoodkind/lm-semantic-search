@@ -224,9 +224,16 @@ func saveScores(ctx context.Context, query *queryDatabase, blocks []*scoreBlock)
 			err = errors.Join(err, writer.Rollback())
 		}
 	}()
+	update, err := writer.PrepareContext(ctx, saveScoreStatement)
+	if err != nil {
+		return queryDatabaseError(ctx, "prepare score save", err)
+	}
+	defer func() {
+		err = errors.Join(err, closeStatement(ctx, update))
+	}()
 	for _, block := range blocks {
 		for _, score := range block.scores {
-			if _, err := writer.ExecContext(ctx, saveScoreStatement, score.Score, score.ID); err != nil {
+			if _, err := update.ExecContext(ctx, score.Score, score.ID); err != nil {
 				return queryDatabaseError(ctx, "save vector score", err)
 			}
 		}

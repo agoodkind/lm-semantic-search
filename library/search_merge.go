@@ -40,8 +40,6 @@ const (
 		LEFT JOIN lexical_ranks x ON x.owner_id = c.owner_id AND x.row_key = c.row_key`
 	finalRowsStatement = `SELECT negated_score, owner_id, row_key, source_blob_id, vector_id, scalars, group_key
 		FROM final_order ORDER BY negated_score, sort_key, owner_id, row_key`
-	insertRankedStatement = `INSERT INTO ranked (ordinal, owner_id, row_key, source_blob_id, vector_id, scalars, score)
-		VALUES (:ordinal, :owner_id, :row_key, :source_blob_id, :vector_id, :scalars, :score)`
 	groupCountStatement     = `SELECT count FROM group_counts WHERE group_key = :group_key`
 	incrementGroupStatement = `INSERT INTO group_counts (group_key, count) VALUES (:group_key, 1)
 		ON CONFLICT (group_key) DO UPDATE SET count = count + 1`
@@ -95,12 +93,9 @@ func writeRanked(ctx context.Context, writer *sql.Tx, request SearchRequest) (co
 	defer func() {
 		err = errors.Join(err, closeRows(ctx, rows))
 	}()
-	insert, err := writer.PrepareContext(ctx, insertRankedStatement)
-	if err != nil {
-		return 0, queryDatabaseError(ctx, "prepare ranked insert", err)
-	}
+	insert := rankedInsert{}
 	defer func() {
-		err = errors.Join(err, closeStatement(ctx, insert))
+		err = errors.Join(err, insert.close(ctx))
 	}()
 	for rows.Next() {
 		var negatedScore float64
@@ -122,17 +117,17 @@ func writeRanked(ctx context.Context, writer *sql.Tx, request SearchRequest) (co
 				continue
 			}
 		}
-		if _, err := insert.ExecContext(ctx,
-			sql.Named("ordinal", count), sql.Named("owner_id", row.ownerID), sql.Named("row_key", row.rowKey),
-			sql.Named("source_blob_id", row.sourceBlobID), sql.Named("vector_id", row.vectorID),
-			sql.Named("scalars", row.scalars), sql.Named("score", row.score),
-		); err != nil {
+		row.ordinal = count
+		if err := insert.append(ctx, writer, row); err != nil {
 			return 0, queryDatabaseError(ctx, "save ranked row", err)
 		}
 		count++
 	}
 	if err := rows.Err(); err != nil {
 		return 0, queryDatabaseError(ctx, "read final order", err)
+	}
+	if err := insert.flush(ctx, writer); err != nil {
+		return 0, queryDatabaseError(ctx, "save ranked rows", err)
 	}
 	return count, nil
 }
