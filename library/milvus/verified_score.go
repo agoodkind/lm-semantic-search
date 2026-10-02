@@ -47,7 +47,7 @@ func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, ide
 		return []library.VectorScore{}, nil
 	}
 	started := clock.Now()
-	results, err := store.client.Search(ctx,
+	response, err := store.searchVerifiedNative(ctx,
 		milvusclient.NewSearchOption(store.config.Collection, len(ids), []entity.Vector{entity.FloatVector(query)}).
 			WithANNSField(fieldVector).
 			WithFilter(idsFilterExpression).
@@ -59,7 +59,11 @@ func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, ide
 		return nil, fmt.Errorf("verified exact vector search over %d vectors: %w", len(ids), err)
 	}
 	started = clock.Now()
-	scores, failure := verifiedSearchScores(results, identities, bound.Dimension)
+	results, failure := verifiedNativeResults(response, bound.Dimension)
+	var scores []library.VectorScore
+	if failure == nil {
+		scores, failure = verifiedSearchScores(results, identities, bound.Dimension)
+	}
 	counts.LocalVerificationDuration = clock.Now().Sub(started)
 	if failure != nil {
 		if failure.category == nil {
