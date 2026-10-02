@@ -49,36 +49,44 @@ func (store *Store) ScoreExactVerified(ctx context.Context, query []float32, ide
 	if err != nil {
 		return nil, fmt.Errorf("verified exact vector search over %d vectors: %w", len(ids), err)
 	}
-	scores, err := verifiedSearchScores(ctx, results, identities, bound.Dimension)
-	if err == nil {
-		counts.Verified = len(identities)
+	scores, failure := verifiedSearchScores(results, identities, bound.Dimension)
+	if failure != nil {
+		if failure.category == nil {
+			return nil, fmt.Errorf("%s: %w", failure.detail, failure.cause)
+		}
+		if failure.cause != nil {
+			return nil, fmt.Errorf("%w: %s: %w", failure.category, failure.detail, failure.cause)
+		}
+		return nil, fmt.Errorf("%w: %s", failure.category, failure.detail)
 	}
-	return scores, err
+	counts.Verified = len(identities)
+	return scores, nil
 }
 
-func verifiedSearchScores(ctx context.Context, results []milvusclient.ResultSet, identities []library.VectorIdentity, dimension int) (_ []library.VectorScore, err error) {
-	defer func() {
-		if err != nil {
-			slog.ErrorContext(ctx, "decode verified exact search failed", "err", err)
-		}
-	}()
+type verifiedSearchFailure struct {
+	category error
+	detail   string
+	cause    error
+}
+
+func verifiedSearchScores(results []milvusclient.ResultSet, identities []library.VectorIdentity, dimension int) ([]library.VectorScore, *verifiedSearchFailure) {
 	if len(results) == 0 {
-		return nil, fmt.Errorf("%w: verified exact search returned no result", library.ErrVectorMissing)
+		return nil, &verifiedSearchFailure{category: library.ErrVectorMissing, detail: "verified exact search returned no result"}
 	}
 	if len(results) != 1 {
-		return nil, fmt.Errorf("%w: verified exact search returned %d query results", library.ErrVectorCorrupt, len(results))
+		return nil, &verifiedSearchFailure{category: library.ErrVectorCorrupt, detail: fmt.Sprintf("verified exact search returned %d query results", len(results))}
 	}
 	result := results[0]
 	if result.Err != nil {
-		return nil, fmt.Errorf("verified exact search result: %w", result.Err)
+		return nil, &verifiedSearchFailure{detail: "verified exact search result", cause: result.Err}
 	}
 	if result.ResultCount == 0 {
-		return nil, fmt.Errorf("%w: verified exact search returned no vectors", library.ErrVectorMissing)
+		return nil, &verifiedSearchFailure{category: library.ErrVectorMissing, detail: "verified exact search returned no vectors"}
 	}
 	if result.ResultCount > len(identities) {
-		return nil, fmt.Errorf("%w: verified exact search returned too many vectors", library.ErrVectorCorrupt)
+		return nil, &verifiedSearchFailure{category: library.ErrVectorCorrupt, detail: "verified exact search returned too many vectors"}
 	}
-	fields, err := verifiedSearchFields(ctx, result)
+	fields, err := verifiedSearchFields(result)
 	if err != nil {
 		return nil, err
 	}
@@ -91,17 +99,17 @@ func verifiedSearchScores(ctx context.Context, results []milvusclient.ResultSet,
 		id := fields.ids.Data()[row]
 		identity, found := expected[id]
 		if !found {
-			return nil, fmt.Errorf("%w: verified exact search returned unexpected ID %s", library.ErrVectorCorrupt, id)
+			return nil, &verifiedSearchFailure{category: library.ErrVectorCorrupt, detail: "verified exact search returned unexpected ID " + id}
 		}
 		if _, duplicate := scores[id]; duplicate {
-			return nil, fmt.Errorf("%w: verified exact search returned ID %s twice", library.ErrVectorCorrupt, id)
+			return nil, &verifiedSearchFailure{category: library.ErrVectorCorrupt, detail: "verified exact search returned ID " + id + " twice"}
 		}
-		if err := verifySearchVector(ctx, fields, row, identity, dimension); err != nil {
+		if err := verifySearchVector(fields, row, identity, dimension); err != nil {
 			return nil, err
 		}
 		score := float64(result.Scores[row])
 		if math.IsNaN(score) || math.IsInf(score, 0) {
-			return nil, fmt.Errorf("%w: verified exact score for %s is not finite", library.ErrVectorCorrupt, id)
+			return nil, &verifiedSearchFailure{category: library.ErrVectorCorrupt, detail: "verified exact score for " + id + " is not finite"}
 		}
 		scores[id] = score
 	}
@@ -109,7 +117,7 @@ func verifiedSearchScores(ctx context.Context, results []milvusclient.ResultSet,
 	for index, identity := range identities {
 		score, found := scores[identity.ID]
 		if !found {
-			return nil, fmt.Errorf("%w: verified exact search returned no score for %s", library.ErrVectorMissing, identity.ID)
+			return nil, &verifiedSearchFailure{category: library.ErrVectorMissing, detail: "verified exact search returned no score for " + identity.ID}
 		}
 		ordered[index] = library.VectorScore{ID: identity.ID, Score: score}
 	}
@@ -121,38 +129,28 @@ type verifiedFields struct {
 	vectors                 *column.ColumnFloatVector
 }
 
-func verifiedSearchFields(ctx context.Context, result milvusclient.ResultSet) (_ verifiedFields, err error) {
-	defer func() {
-		if err != nil {
-			slog.ErrorContext(ctx, "decode verified exact fields failed", "err", err)
-		}
-	}()
+func verifiedSearchFields(result milvusclient.ResultSet) (verifiedFields, *verifiedSearchFailure) {
 	ids, idsOK := result.IDs.(*column.ColumnVarChar)
 	digests, digestsOK := result.GetColumn(fieldIdentityDigest).(*column.ColumnVarChar)
 	checksums, checksumsOK := result.GetColumn(fieldChecksum).(*column.ColumnVarChar)
 	vectors, vectorsOK := result.GetColumn(fieldVector).(*column.ColumnFloatVector)
 	if !idsOK || !digestsOK || !checksumsOK || !vectorsOK || ids == nil || digests == nil || checksums == nil || vectors == nil {
-		return verifiedFields{}, fmt.Errorf("%w: verified exact search returned invalid field types", library.ErrVectorCorrupt)
+		return verifiedFields{}, &verifiedSearchFailure{category: library.ErrVectorCorrupt, detail: "verified exact search returned invalid field types"}
 	}
 	count := result.ResultCount
 	if count < 0 || ids.Len() != count || digests.Len() != count || checksums.Len() != count || vectors.Len() != count || len(result.Scores) != count {
-		return verifiedFields{}, fmt.Errorf("%w: verified exact search returned inconsistent field lengths", library.ErrVectorCorrupt)
+		return verifiedFields{}, &verifiedSearchFailure{category: library.ErrVectorCorrupt, detail: "verified exact search returned inconsistent field lengths"}
 	}
 	return verifiedFields{ids: ids, digests: digests, checksums: checksums, vectors: vectors}, nil
 }
 
-func verifySearchVector(ctx context.Context, fields verifiedFields, row int, identity library.VectorIdentity, dimension int) (err error) {
-	defer func() {
-		if err != nil {
-			slog.ErrorContext(ctx, "verify exact search vector failed", "err", err)
-		}
-	}()
+func verifySearchVector(fields verifiedFields, row int, identity library.VectorIdentity, dimension int) *verifiedSearchFailure {
 	values := fields.vectors.Data()[row]
 	if err := vectorcodec.Validate(values, dimension); err != nil {
-		return fmt.Errorf("%w: vector %s: %w", library.ErrVectorCorrupt, identity.ID, err)
+		return &verifiedSearchFailure{category: library.ErrVectorCorrupt, detail: "vector " + identity.ID, cause: err}
 	}
 	if fields.digests.Data()[row] != identity.IdentityDigest || fields.checksums.Data()[row] != identity.Checksum || vectorcodec.Checksum(values) != identity.Checksum {
-		return fmt.Errorf("%w: vector %s does not match its identity or checksum", library.ErrVectorCorrupt, identity.ID)
+		return &verifiedSearchFailure{category: library.ErrVectorCorrupt, detail: "vector " + identity.ID + " does not match its identity or checksum"}
 	}
 	return nil
 }
