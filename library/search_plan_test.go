@@ -54,8 +54,6 @@ func TestQueryDatabaseStatementsUseNoTemporaryStore(t *testing.T) {
 		"rankedPageStatement":       rankedPageStatement,
 		"rankedRowsStatement":       rankedRowsStatement,
 		"rankedBytesStatement":      rankedBytesStatement,
-		"vectorBlockStatement":      vectorBlockStatement,
-		"saveScoreStatement":        saveScoreStatement,
 		"unscoredVectorsStatement":  unscoredVectorsStatement,
 	}
 	for name, statement := range statements {

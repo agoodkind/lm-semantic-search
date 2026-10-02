@@ -255,6 +255,7 @@ func testVerifiedNativeSearchParityPagingAndCache(t *testing.T, fixture *verifie
 		}
 	}
 	got := pageAll(t, fixture.library, request, 2)
+	fixture.assertCleanup(t, fixture.snapshots(t))
 	slices.SortFunc(selected, func(left, right verifiedSearchRow) int {
 		if result := cmp.Compare(native[right.identity.ID], native[left.identity.ID]); result != 0 {
 			return result
@@ -341,7 +342,7 @@ func (fixture *verifiedSearchFixture) assertCleanup(t *testing.T, snapshots int6
 	if got := fixture.snapshots(t); got != snapshots {
 		t.Fatalf("failed query changed snapshots %d to %d", snapshots, got)
 	}
-	files, err := filepath.Glob(filepath.Join(filepath.Dir(fixture.config.Store.CatalogPath), ".lms-query-*.sqlite"))
+	files, err := filepath.Glob(filepath.Join(filepath.Dir(fixture.config.Store.CatalogPath), ".lms-query-*.sqlite*"))
 	if err != nil || len(files) != 0 {
 		t.Fatalf("query cleanup files=%v error=%v", files, err)
 	}

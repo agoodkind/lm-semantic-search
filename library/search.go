@@ -160,6 +160,9 @@ type searchPhases struct {
 	copyLexical        time.Duration
 	copyCandidates     time.Duration
 	scoreSave          time.Duration
+	copyScoreWait      time.Duration
+	copyScoreOverlap   time.Duration
+	scoreStreamBytes   int64
 	plan               time.Duration
 	read               time.Duration
 	embed              time.Duration
@@ -215,8 +218,11 @@ func (phases *searchPhases) log(ctx context.Context, namespace string, err error
 		"query_mmap_size", phases.mmapSize,
 		"query_max_page_count", phases.maxPageCount,
 		"score_save_ms", milliseconds(phases.scoreSave),
+		"copy_score_wait_ms", milliseconds(phases.copyScoreWait),
+		"copy_score_overlap_ms", milliseconds(phases.copyScoreOverlap),
+		"score_stream_bytes", phases.scoreStreamBytes,
 		"native_duration_kind", "sum_concurrent_blocks",
-		"phase_duration_kind", "wall_elapsed",
+		"phase_duration_kind", "overlapping_wall_elapsed",
 		"plan_ms", milliseconds(phases.plan),
 		"read_ms", milliseconds(phases.read),
 		"embed_ms", milliseconds(phases.embed),
@@ -326,28 +332,25 @@ func (library *Library) searchFirstPage(ctx context.Context, plan searchPlan, ph
 	}
 	var revisions snapshotRevisions
 	var leg lexicalLeg
+	scoringContext, cancelScoring := context.WithCancelCause(ctx)
+	scoring := newSearchScoring(cancelScoring, library, query, plan.request.Query, phases)
+	defer func() { err = errors.Join(err, scoring.close(scoringContext, err)) }()
 	phases.stage = "catalog_read"
-	readErr := library.read(ctx, func(tx *sql.Tx) error {
+	readErr := library.read(scoringContext, func(tx *sql.Tx) error {
 		var copyErr error
-		revisions, leg, copyErr = library.copySnapshot(ctx, tx, query, plan, phases)
+		revisions, leg, copyErr = library.copySnapshot(scoringContext, tx, query, plan, phases, scoring)
 		if copyErr == nil {
 			phases.stage = "catalog_read"
 		}
 		return copyErr
 	})
-	started = phases.mark(&phases.read, started)
+	phases.mark(&phases.read, started)
 	if readErr != nil {
-		return SearchPage{}, readErr
-	}
-	phases.stage = "embed"
-	queryVector, err := library.embedQuery(ctx, plan.request.Query)
-	started = phases.mark(&phases.embed, started)
-	if err != nil {
-		return SearchPage{}, err
+		return SearchPage{}, scoringFailure(scoringContext, readErr)
 	}
 	phases.stage = "dense"
-	denseErr := library.scoreDense(ctx, query, queryVector, revisions.Visibility, phases)
-	started = phases.mark(&phases.dense, started)
+	denseErr := scoring.finish(scoringContext)
+	started = clock.Now()
 	if denseErr != nil {
 		return SearchPage{}, denseErr
 	}
@@ -382,11 +385,13 @@ func (library *Library) copySnapshot(
 	query *queryDatabase,
 	plan searchPlan,
 	phases *searchPhases,
+	scoring *searchScoring,
 ) (snapshotRevisions, lexicalLeg, error) {
 	revisions, err := readRevisions(ctx, tx)
 	if err != nil {
 		return snapshotRevisions{}, lexicalLeg{}, err
 	}
+	scoring.revision = revisions.Visibility
 	var leg lexicalLeg
 	if plan.rank.Mode == Hybrid {
 		phases.stage = "copy_lexical"
@@ -400,7 +405,8 @@ func (library *Library) copySnapshot(
 	}
 	phases.stage = "copy_candidates"
 	started := clock.Now()
-	_, copyErr := copyCandidates(ctx, tx, query, plan, phases)
+	_, copyErr := copyCandidates(ctx, tx, query, plan, phases, scoring)
+	scoring.copyFinished = clock.Now()
 	phases.mark(&phases.copyCandidates, started)
 	if copyErr != nil {
 		return snapshotRevisions{}, lexicalLeg{}, copyErr
