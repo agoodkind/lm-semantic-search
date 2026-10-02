@@ -135,7 +135,8 @@ func (library *Library) search(ctx context.Context, request SearchRequest) (Sear
 
 // searchPhases are the wall-clock durations of one page-one search. init,
 // copyLexical, and copyCandidates are parts of read; scoreSave is part of dense. verify
-// and score sum the VerifyStrong and ScoreExact durations of every block,
+// and score sum separate VerifyStrong and ScoreExact calls; combined sums
+// ScoreExactVerified calls. These durations include joined failed blocks,
 // which run concurrently inside dense. writeWait is the time until the
 // snapshot write transaction starts, which includes waiting for another
 // SQLite writer; write is the rest of that transaction. verified and scored
@@ -163,6 +164,7 @@ type searchPhases struct {
 	read               time.Duration
 	embed              time.Duration
 	dense              time.Duration
+	combined           time.Duration
 	verify             time.Duration
 	score              time.Duration
 	lexical            time.Duration
@@ -219,6 +221,7 @@ func (phases *searchPhases) log(ctx context.Context, namespace string, err error
 		"read_ms", milliseconds(phases.read),
 		"embed_ms", milliseconds(phases.embed),
 		"dense_ms", milliseconds(phases.dense),
+		"combined_verify_score_ms", milliseconds(phases.combined),
 		"verify_ms", milliseconds(phases.verify),
 		"score_ms", milliseconds(phases.score),
 		"lexical_ms", milliseconds(phases.lexical),
