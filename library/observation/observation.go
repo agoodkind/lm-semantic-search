@@ -45,6 +45,8 @@ const (
 	UpsertCall Operation = "milvus_sdk_upsert"
 	// StrongVerification measures strong backend verification.
 	StrongVerification Operation = "strong_verification"
+	// VerifiedExactScoring measures one combined strong verification and native scoring operation.
+	VerifiedExactScoring Operation = "verified_exact_scoring"
 )
 
 // Outcome classifies the completed operation without retaining its error text.

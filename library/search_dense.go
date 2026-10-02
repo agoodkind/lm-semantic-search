@@ -34,22 +34,24 @@ func (library *Library) embedQuery(ctx context.Context, query string) ([]float32
 }
 
 // scoreBlock is one bounded request of distinct vector identities with its
-// result and the durations of its VerifyStrong and ScoreExact calls.
+// result and separate or combined native call durations.
 type scoreBlock struct {
-	identities []VectorIdentity
-	scores     []VectorScore
-	err        error
-	verifyTime time.Duration
-	scoreTime  time.Duration
-	// verified is the count of identities that VerifyStrong checked for this
+	identities   []VectorIdentity
+	scores       []VectorScore
+	err          error
+	verifyTime   time.Duration
+	scoreTime    time.Duration
+	combinedTime time.Duration
+	// verified counts identities checked by separate or combined verification in this
 	// block; identities verified earlier at the same revision are skipped.
 	verified int
 }
 
 // scoreDense verifies and scores every distinct eligible vector in the query
 // database. It reads QueryWorkers blocks of QueryBlockSize identities at a
-// time in vector ID order, runs VerifyStrong and then ScoreExact for each
-// block concurrently, and saves each block's scores. Any block failure fails
+// time in vector ID order, verifies and scores blocks concurrently, and saves
+// each block's scores. Entirely unverified blocks use VerifiedExactScorer when
+// available; other blocks use VerifyStrong and ScoreExact. Any block failure fails
 // the search. The last check requires a score for every vector. revision is
 // the catalog visibility revision of the snapshot, which keys the
 // verification cache.
@@ -77,6 +79,7 @@ func (library *Library) scoreDense(
 			phases.verify += block.verifyTime
 			phases.verified += block.verified
 			phases.score += block.scoreTime
+			phases.combined += block.combinedTime
 			phases.scored += len(block.scores)
 		}
 		if scoreErr != nil {
@@ -164,15 +167,17 @@ func (library *Library) runScoreBlocks(ctx context.Context, queryVector []float3
 	return failure
 }
 
-// scoreBlock verifies the identity digest and checksum of each vector of block
-// with a strong read, except the identities that an earlier search verified
-// at revision, and then asks for one exact score per ID. It records the
-// duration of each call in block. It rejects a result with a missing, extra,
-// reordered, duplicate, or nonfinite score.
+// scoreBlock uses optional combined verification and scoring for an entirely
+// unverified block. Mixed and warm blocks retain separate verification and
+// scoring. It caches a combined result only after validating every ordered,
+// finite score.
 func (library *Library) scoreBlock(ctx context.Context, queryVector []float32, revision int64, block *scoreBlock) ([]VectorScore, error) {
 	identities := block.identities
 	started := clock.Now()
 	pending := library.verified.unverified(revision, identities)
+	if scorer, ok := library.config.Vectors.(VerifiedExactScorer); ok && len(pending) == len(identities) {
+		return library.scoreVerifiedBlock(ctx, queryVector, revision, block, scorer)
+	}
 	if len(pending) > 0 {
 		if err := library.config.Vectors.VerifyStrong(ctx, pending); err != nil {
 			block.verifyTime = clock.Now().Sub(started)
@@ -194,6 +199,31 @@ func (library *Library) scoreBlock(ctx context.Context, queryVector []float32, r
 		slog.ErrorContext(ctx, "exact scoring failed", "vectors", len(ids), "err", err)
 		return nil, fmt.Errorf("score %d eligible vectors: %w", len(ids), err)
 	}
+	return validateBlockScores(ctx, ids, scores)
+}
+
+func (library *Library) scoreVerifiedBlock(ctx context.Context, queryVector []float32, revision int64, block *scoreBlock, scorer VerifiedExactScorer) ([]VectorScore, error) {
+	started := clock.Now()
+	scores, err := scorer.ScoreExactVerified(ctx, queryVector, block.identities)
+	block.combinedTime = clock.Now().Sub(started)
+	if err != nil {
+		slog.ErrorContext(ctx, "verified exact scoring failed", "vectors", len(block.identities), "err", err)
+		return nil, fmt.Errorf("verify and score %d eligible vectors: %w", len(block.identities), err)
+	}
+	ids := make([]string, len(block.identities))
+	for index, identity := range block.identities {
+		ids[index] = identity.ID
+	}
+	validated, err := validateBlockScores(ctx, ids, scores)
+	if err != nil {
+		return nil, err
+	}
+	library.verified.record(ctx, revision, block.identities)
+	block.verified = len(block.identities)
+	return validated, nil
+}
+
+func validateBlockScores(ctx context.Context, ids []string, scores []VectorScore) ([]VectorScore, error) {
 	if len(scores) < len(ids) {
 		missing := fmt.Errorf("%w: the vector store returned %d scores for %d IDs", ErrVectorMissing, len(scores), len(ids))
 		slog.ErrorContext(ctx, "exact scoring returned too few scores", "err", missing)

@@ -63,6 +63,13 @@ type VectorStore interface {
 	ScoreExact(context.Context, []float32, []string) ([]VectorScore, error)
 }
 
+// VerifiedExactScorer optionally verifies canonical identities and vector bytes
+// with the same strong read that returns native exact scores. The result contains
+// one finite score per identity in request order, or a typed vector failure.
+type VerifiedExactScorer interface {
+	ScoreExactVerified(context.Context, []float32, []VectorIdentity) ([]VectorScore, error)
+}
+
 // VectorRecord is one canonical vector write.
 type VectorRecord struct {
 	ID, IdentityDigest, Checksum string
