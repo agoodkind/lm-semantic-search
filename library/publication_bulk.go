@@ -6,6 +6,8 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"log/slog"
+	"math"
 	"strings"
 )
 
@@ -35,12 +37,24 @@ var publicationLexicalTermsStatement string
 type publicationInsert struct {
 	statement string
 	columns   int
-	arguments []any
+	arguments []ScalarValue
 	rows      int
 	prepared  *sql.Stmt
 }
 
-func (insert *publicationInsert) append(ctx context.Context, tx *sql.Tx, arguments ...any) error {
+func publicationString(value string) ScalarValue {
+	return ScalarValue{Type: String, String: value}
+}
+
+func publicationInteger(value int64) ScalarValue {
+	return ScalarValue{Type: Int64, Int64: value}
+}
+
+func publicationBoolean(value bool) ScalarValue {
+	return ScalarValue{Type: Bool, Bool: value}
+}
+
+func (insert *publicationInsert) append(ctx context.Context, tx *sql.Tx, arguments ...ScalarValue) error {
 	insert.arguments = append(insert.arguments, arguments...)
 	insert.rows++
 	if insert.rows == publicationInsertRows {
@@ -59,17 +73,35 @@ func (insert *publicationInsert) flush(ctx context.Context, tx *sql.Tx) error {
 	if insert.rows == publicationInsertRows && insert.prepared == nil {
 		prepared, err := tx.PrepareContext(ctx, statement)
 		if err != nil {
+			slog.ErrorContext(ctx, "prepare publication rows failed", "err", err)
 			return fmt.Errorf("prepare publication rows: %w", err)
 		}
 		insert.prepared = prepared
 	}
 	var err error
+	arguments := make([]any, len(insert.arguments))
+	for index, argument := range insert.arguments {
+		if argument.Null {
+			continue
+		}
+		switch argument.Type {
+		case String:
+			arguments[index] = argument.String
+		case Int64:
+			arguments[index] = argument.Int64
+		case Bool:
+			arguments[index] = argument.Bool
+		default:
+			return fmt.Errorf("publication argument %d has invalid type %d", index, argument.Type)
+		}
+	}
 	if insert.rows == publicationInsertRows {
-		_, err = insert.prepared.ExecContext(ctx, insert.arguments...)
+		_, err = insert.prepared.ExecContext(ctx, arguments...)
 	} else {
-		_, err = tx.ExecContext(ctx, statement, insert.arguments...)
+		_, err = tx.ExecContext(ctx, statement, arguments...)
 	}
 	if err != nil {
+		slog.ErrorContext(ctx, "insert publication rows failed", "err", err)
 		return fmt.Errorf("insert publication rows: %w", err)
 	}
 	insert.arguments = insert.arguments[:0]
@@ -101,8 +133,12 @@ func preparePublication(rows []stagedRow) ([]preparedPublicationRow, map[string]
 }
 
 func publishRows(ctx context.Context, tx *sql.Tx, key GenerationKey, rows []preparedPublicationRow) (_ []lexicalOccurrence, err error) {
+	if key.GenerationOrder > math.MaxInt64 {
+		return nil, fmt.Errorf("generation order %d exceeds the SQL integer range", key.GenerationOrder)
+	}
 	result, err := tx.QueryContext(ctx, publicationOwnerHashesStatement, key.Namespace, key.OwnerID)
 	if err != nil {
+		slog.ErrorContext(ctx, "read published occurrence hashes failed", "namespace", key.Namespace, "err", err)
 		return nil, fmt.Errorf("read published occurrence hashes: %w", err)
 	}
 	saved := make(map[string]string)
@@ -132,7 +168,7 @@ func publishRows(ctx context.Context, tx *sql.Tx, key GenerationKey, rows []prep
 	blobs := publicationInsert{statement: publicationBlobsStatement, columns: 2}
 	for _, row := range fresh {
 		occurrence := row.occurrence
-		if err := blobs.append(ctx, tx, row.blobID, occurrence.SourceText); err != nil {
+		if err := blobs.append(ctx, tx, publicationString(row.blobID), publicationString(occurrence.SourceText)); err != nil {
 			return nil, err
 		}
 	}
@@ -142,7 +178,12 @@ func publishRows(ctx context.Context, tx *sql.Tx, key GenerationKey, rows []prep
 	occurrences := publicationInsert{statement: publicationOccurrencesStatement, columns: 10}
 	for _, row := range fresh {
 		occurrence := row.occurrence
-		if err := occurrences.append(ctx, tx, key.Namespace, key.OwnerID, occurrence.RowKey, occurrence.SortKey, row.vectorID, row.blobID, row.searchHash, len(occurrence.SourceText), key.GenerationOrder, row.occurrenceHash); err != nil {
+		if err := occurrences.append(ctx, tx,
+			publicationString(key.Namespace), publicationString(key.OwnerID), publicationString(occurrence.RowKey),
+			publicationString(occurrence.SortKey), publicationString(row.vectorID), publicationString(row.blobID),
+			publicationString(row.searchHash), publicationInteger(int64(len(occurrence.SourceText))),
+			publicationInteger(int64(key.GenerationOrder)), publicationString(row.occurrenceHash),
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -155,7 +196,14 @@ func publishRows(ctx context.Context, tx *sql.Tx, key GenerationKey, rows []prep
 		for _, name := range row.scalarNames {
 			value := occurrence.Scalars[name]
 			typed := newTypedScalar(value)
-			if err := scalars.append(ctx, tx, key.Namespace, key.OwnerID, occurrence.RowKey, name, value.Type, typed.stringValue, typed.int64Value, typed.boolValue, value.Null); err != nil {
+			if err := scalars.append(ctx, tx,
+				publicationString(key.Namespace), publicationString(key.OwnerID), publicationString(occurrence.RowKey),
+				publicationString(name), publicationInteger(int64(value.Type)),
+				ScalarValue{Type: String, String: typed.stringValue.String, Null: !typed.stringValue.Valid},
+				ScalarValue{Type: Int64, Int64: typed.int64Value.Int64, Null: !typed.int64Value.Valid},
+				ScalarValue{Type: Bool, Bool: typed.boolValue.Bool, Null: !typed.boolValue.Valid},
+				publicationBoolean(value.Null),
+			); err != nil {
 				return nil, err
 			}
 		}

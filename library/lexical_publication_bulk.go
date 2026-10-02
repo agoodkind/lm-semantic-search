@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 )
@@ -55,6 +57,7 @@ func removeLexicalOccurrences(ctx context.Context, tx *sql.Tx, namespace string,
 		groups := strings.TrimSuffix(strings.Repeat("(?,?),", len(batch)), ",")
 		rows, err := tx.QueryContext(ctx, strings.ReplaceAll(publicationLexicalRemoveStatement, "{{rows}}", groups), arguments...)
 		if err != nil {
+			slog.ErrorContext(ctx, "remove lexical occurrences failed", "namespace", namespace, "err", err)
 			return fmt.Errorf("remove lexical occurrences: %w", err)
 		}
 		if err := checkRemovedLexicalOccurrences(ctx, rows, expected, deltas); err != nil {
@@ -69,6 +72,7 @@ func checkRemovedLexicalOccurrences(ctx context.Context, rows *sql.Rows, expecte
 	for rows.Next() {
 		var owner, key, hash string
 		if err := rows.Scan(&owner, &key, &hash); err != nil {
+			slog.ErrorContext(ctx, "read removed lexical occurrence failed", "err", err)
 			return fmt.Errorf("read removed lexical occurrence: %w", err)
 		}
 		id := [2]string{owner, key}
@@ -79,7 +83,8 @@ func checkRemovedLexicalOccurrences(ctx context.Context, rows *sql.Rows, expecte
 		deltas[hash]--
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		slog.ErrorContext(ctx, "iterate removed lexical occurrences failed", "err", err)
+		return fmt.Errorf("iterate removed lexical occurrences: %w", err)
 	}
 	if len(expected) != 0 {
 		return fmt.Errorf("%d removed occurrences have no lexical occurrence", len(expected))
@@ -100,6 +105,7 @@ func prepareLexicalContent(ctx context.Context, tx *sql.Tx, analyzer string, doc
 		statement := strings.ReplaceAll(publicationLexicalExistingStatement, "{{hashes}}", placeholders)
 		rows, err := tx.QueryContext(ctx, statement, arguments...)
 		if err != nil {
+			slog.ErrorContext(ctx, "read lexical content identities failed", "err", err)
 			return nil, fmt.Errorf("read lexical content identities: %w", err)
 		}
 		if err := checkLexicalContent(ctx, rows, analyzer, documents, missing); err != nil {
@@ -115,6 +121,7 @@ func checkLexicalContent(ctx context.Context, rows *sql.Rows, analyzer string, d
 		var hash, storedAnalyzer string
 		var length uint64
 		if err := rows.Scan(&hash, &storedAnalyzer, &length); err != nil {
+			slog.ErrorContext(ctx, "read lexical content identity failed", "err", err)
 			return fmt.Errorf("read lexical content identity: %w", err)
 		}
 		if storedAnalyzer != analyzer || length != documents[hash].length {
@@ -122,14 +129,22 @@ func checkLexicalContent(ctx context.Context, rows *sql.Rows, analyzer string, d
 		}
 		delete(missing, hash)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		slog.ErrorContext(ctx, "iterate lexical content identities failed", "err", err)
+		return fmt.Errorf("iterate lexical content identities: %w", err)
+	}
+	return nil
 }
 
 func storePreparedLexicalContent(ctx context.Context, tx *sql.Tx, analyzer string, documents map[string]lexicalDocument) error {
 	hashes := slices.Sorted(maps.Keys(documents))
 	contents := publicationInsert{statement: publicationLexicalContentStatement, columns: 3}
 	for _, hash := range hashes {
-		if err := contents.append(ctx, tx, hash, analyzer, documents[hash].length); err != nil {
+		length := documents[hash].length
+		if length > math.MaxInt64 {
+			return fmt.Errorf("lexical content %s length exceeds the SQL integer range", hash)
+		}
+		if err := contents.append(ctx, tx, publicationString(hash), publicationString(analyzer), publicationInteger(int64(length))); err != nil {
 			return err
 		}
 	}
@@ -139,7 +154,7 @@ func storePreparedLexicalContent(ctx context.Context, tx *sql.Tx, analyzer strin
 	terms := publicationInsert{statement: publicationLexicalTermsStatement, columns: 3}
 	for _, hash := range hashes {
 		for _, term := range documents[hash].terms {
-			if err := terms.append(ctx, tx, hash, int64(term.hash), int64(term.frequency)); err != nil {
+			if err := terms.append(ctx, tx, publicationString(hash), publicationInteger(int64(term.hash)), publicationInteger(int64(term.frequency))); err != nil {
 				return err
 			}
 		}
@@ -164,10 +179,12 @@ func publishLexicalDeltas(ctx context.Context, tx *sql.Tx, namespace string, del
 	}
 	payload, err := json.Marshal(changes)
 	if err != nil {
+		slog.ErrorContext(ctx, "encode lexical publication deltas failed", "err", err)
 		return fmt.Errorf("encode lexical publication deltas: %w", err)
 	}
 	var matched, sizeDelta, tokenDelta int64
 	if err := tx.QueryRowContext(ctx, publicationLexicalTotalsStatement, string(payload)).Scan(&matched, &sizeDelta, &tokenDelta); err != nil {
+		slog.ErrorContext(ctx, "read lexical publication totals failed", "namespace", namespace, "err", err)
 		return fmt.Errorf("read lexical publication totals: %w", err)
 	}
 	if matched != int64(len(changes)) {
@@ -175,6 +192,7 @@ func publishLexicalDeltas(ctx context.Context, tx *sql.Tx, namespace string, del
 	}
 	var invalid int64
 	if err := tx.QueryRowContext(ctx, publicationLexicalDeltasStatement+publicationLexicalFrequencyCheckStatement, string(payload), namespace).Scan(&invalid); err != nil {
+		slog.ErrorContext(ctx, "check lexical document frequencies failed", "namespace", namespace, "err", err)
 		return fmt.Errorf("check lexical document frequencies: %w", err)
 	}
 	if invalid != 0 {
@@ -182,11 +200,13 @@ func publishLexicalDeltas(ctx context.Context, tx *sql.Tx, namespace string, del
 	}
 	for _, statement := range []string{publicationLexicalFrequencyDeleteStatement, publicationLexicalFrequencyUpsertStatement} {
 		if _, err := tx.ExecContext(ctx, publicationLexicalDeltasStatement+statement, string(payload), namespace, namespace); err != nil {
+			slog.ErrorContext(ctx, "publish lexical document frequencies failed", "namespace", namespace, "err", err)
 			return fmt.Errorf("publish lexical document frequencies: %w", err)
 		}
 	}
 	for _, statement := range []string{publicationLexicalUnusedTermsStatement, publicationLexicalUnusedContentStatement} {
 		if _, err := tx.ExecContext(ctx, statement, string(payload)); err != nil {
+			slog.ErrorContext(ctx, "remove unused lexical content failed", "err", err)
 			return fmt.Errorf("remove unused lexical content: %w", err)
 		}
 	}

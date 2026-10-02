@@ -96,6 +96,7 @@ func saveReceiptRows(ctx context.Context, tx *sql.Tx, key GenerationKey) error {
 	if _, err := tx.ExecContext(ctx, publicationReceiptRowsStatement,
 		key.Namespace, key.OwnerID, key.GenerationOrder, key.IdempotencyToken,
 	); err != nil {
+		slog.ErrorContext(ctx, "save committed rows failed", "namespace", key.Namespace, "err", err)
 		return fmt.Errorf("save committed rows: %w", err)
 	}
 	return nil

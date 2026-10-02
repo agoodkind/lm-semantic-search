@@ -78,7 +78,7 @@ func publishPreparedLexical(
 	}
 	insert := publicationInsert{statement: publicationLexicalOccurrencesStatement, columns: 4}
 	for _, occurrence := range added {
-		if err := insert.append(ctx, tx, namespace, occurrence.OwnerID, occurrence.RowKey, occurrence.SearchHash); err != nil {
+		if err := insert.append(ctx, tx, publicationString(namespace), publicationString(occurrence.OwnerID), publicationString(occurrence.RowKey), publicationString(occurrence.SearchHash)); err != nil {
 			return lexicalIndexError(ctx, err)
 		}
 		deltas[occurrence.SearchHash]++
