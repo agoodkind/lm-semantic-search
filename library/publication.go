@@ -66,6 +66,14 @@ func (library *Library) CommitGeneration(ctx context.Context, key GenerationKey,
 	if err := library.verifyStagedVectors(ctx, rows); err != nil {
 		return ApplyReceipt{}, err
 	}
+	prepared, documents := preparePublication(rows)
+	if err := library.read(ctx, func(tx *sql.Tx) error {
+		var err error
+		documents, err = prepareLexicalContent(ctx, tx, library.config.AnalyzerIdentity, documents)
+		return err
+	}); err != nil {
+		return ApplyReceipt{}, err
+	}
 
 	published := ApplyReceipt{
 		Namespace:       key.Namespace,
@@ -82,7 +90,7 @@ func (library *Library) CommitGeneration(ctx context.Context, key GenerationKey,
 			published = *saved
 			return checkCommittedSeal(ctx, tx, key, seal)
 		}
-		return publishGeneration(ctx, tx, library.config.AnalyzerIdentity, key, mode, rows, manifest, published.Fingerprint)
+		return publishGeneration(ctx, tx, library.config.AnalyzerIdentity, key, mode, prepared, documents, manifest, published.Fingerprint)
 	})
 	if err != nil {
 		return ApplyReceipt{}, err
@@ -194,7 +202,8 @@ func publishGeneration(
 	analyzer string,
 	key GenerationKey,
 	mode BatchMode,
-	rows []stagedRow,
+	rows []preparedPublicationRow,
+	documents map[string]lexicalDocument,
 	manifest string,
 	fingerprint string,
 ) error {
@@ -209,22 +218,11 @@ func publishGeneration(
 			return err
 		}
 	}
-	added := make([]lexicalOccurrence, 0, len(rows))
-	for _, row := range rows {
-		inserted, err := publishRow(ctx, tx, key, row)
-		if err != nil {
-			return err
-		}
-		if inserted {
-			added = append(added, lexicalOccurrence{
-				OwnerID:    key.OwnerID,
-				RowKey:     row.occurrence.RowKey,
-				SearchHash: searchTextHash(row.occurrence.SearchText),
-				SearchText: row.occurrence.SearchText,
-			})
-		}
+	added, err := publishRows(ctx, tx, key, rows)
+	if err != nil {
+		return err
 	}
-	if err := publishLexical(ctx, tx, analyzer, key.Namespace, added, removed); err != nil {
+	if err := publishPreparedLexical(ctx, tx, analyzer, key.Namespace, added, removed, documents); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(
@@ -246,61 +244,14 @@ func publishGeneration(
 		slog.ErrorContext(ctx, "save generation receipt failed", "namespace", key.Namespace, "err", err)
 		return fmt.Errorf("save generation receipt: %w", err)
 	}
-	if err := saveReceiptRows(ctx, tx, key, rows); err != nil {
+	if err := saveReceiptRows(ctx, tx, key); err != nil {
 		return err
 	}
 	if err := deleteStagedGeneration(ctx, tx, key); err != nil {
 		return err
 	}
-	_, err := incrementRevision(ctx, tx, identityKeyVisibilityRevision)
+	_, err = incrementRevision(ctx, tx, identityKeyVisibilityRevision)
 	return err
-}
-
-// publishRow inserts one occurrence and reports whether it inserted a row. In
-// Append mode an existing row with the same content is a repeat that inserts
-// nothing, and an existing row with different content returns an error that
-// wraps [ErrAppendConflict]. Replace mode deleted the owner's rows first.
-func publishRow(ctx context.Context, tx *sql.Tx, key GenerationKey, row stagedRow) (bool, error) {
-	occurrence := row.occurrence
-	var savedHash string
-	scanErr := tx.QueryRowContext(
-		ctx,
-		`SELECT occurrence_hash FROM occurrences WHERE namespace = ? AND owner_id = ? AND row_key = ?`,
-		key.Namespace, key.OwnerID, occurrence.RowKey,
-	).Scan(&savedHash)
-	if scanErr == nil {
-		if savedHash == row.occurrenceHash {
-			return false, nil
-		}
-		err := fmt.Errorf("%w: owner %q row %q exists with different content", ErrAppendConflict, key.OwnerID, occurrence.RowKey)
-		slog.WarnContext(ctx, "append rewrite rejected", "namespace", key.Namespace, "err", err)
-		return false, err
-	}
-	if !errors.Is(scanErr, sql.ErrNoRows) {
-		slog.ErrorContext(ctx, "read occurrence failed", "row_key", occurrence.RowKey, "err", scanErr)
-		return false, fmt.Errorf("read occurrence %q: %w", occurrence.RowKey, scanErr)
-	}
-	blobID := sourceBlobID(occurrence.SourceText)
-	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO source_blobs (blob_id, content) VALUES (?, ?)`, blobID, occurrence.SourceText); err != nil {
-		slog.ErrorContext(ctx, "save source blob failed", "row_key", occurrence.RowKey, "err", err)
-		return false, fmt.Errorf("save source blob for %q: %w", occurrence.RowKey, err)
-	}
-	if _, err := tx.ExecContext(
-		ctx,
-		`INSERT INTO occurrences (namespace, owner_id, row_key, sort_key, vector_id, source_blob_id, search_hash, source_length, generation_order, occurrence_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		key.Namespace, key.OwnerID, occurrence.RowKey, occurrence.SortKey, row.vectorID, blobID,
-		searchTextHash(occurrence.SearchText), len(occurrence.SourceText), key.GenerationOrder, row.occurrenceHash,
-	); err != nil {
-		slog.ErrorContext(ctx, "save occurrence failed", "row_key", occurrence.RowKey, "err", err)
-		return false, fmt.Errorf("save occurrence %q: %w", occurrence.RowKey, err)
-	}
-	for _, name := range sortedScalarNames(occurrence.Scalars) {
-		if err := insertOccurrenceScalar(ctx, tx, key.Namespace, key.OwnerID, occurrence.RowKey, name, occurrence.Scalars[name]); err != nil {
-			return false, err
-		}
-	}
-	return true, nil
 }
 
 // readOwnerLexicalRows returns the row key and search hash of every published
@@ -347,20 +298,6 @@ func newTypedScalar(value ScalarValue) typedScalar {
 		int64Value:  sql.NullInt64{Int64: value.Int64, Valid: !value.Null && value.Type == Int64},
 		boolValue:   sql.NullBool{Bool: value.Bool, Valid: !value.Null && value.Type == Bool},
 	}
-}
-
-func insertOccurrenceScalar(ctx context.Context, tx *sql.Tx, namespace string, ownerID string, rowKey string, name string, value ScalarValue) error {
-	typed := newTypedScalar(value)
-	if _, err := tx.ExecContext(
-		ctx,
-		`INSERT INTO occurrence_scalars (namespace, owner_id, row_key, column_name, type, string_value, int64_value, bool_value, is_null)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		namespace, ownerID, rowKey, name, value.Type, typed.stringValue, typed.int64Value, typed.boolValue, value.Null,
-	); err != nil {
-		slog.ErrorContext(ctx, "save occurrence scalar failed", "column", name, "err", err)
-		return fmt.Errorf("save occurrence scalar %s for %q: %w", name, rowKey, err)
-	}
-	return nil
 }
 
 func upsertEffectiveScalar(
