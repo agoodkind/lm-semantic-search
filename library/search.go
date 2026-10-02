@@ -125,42 +125,61 @@ func (library *Library) search(ctx context.Context, request SearchRequest) (Sear
 	}
 	phases := &searchPhases{plan: clock.Now().Sub(started)}
 	page, err := library.searchFirstPage(ctx, plan, phases)
+	phases.log(ctx, request.Namespace, err)
 	if err != nil {
 		return SearchPage{}, err
 	}
-	phases.log(ctx, request.Namespace)
 	return page, nil
 }
 
-// searchPhases are the wall-clock durations of one page-one search. verify
+// searchPhases are the wall-clock durations of one page-one search. init,
+// copyLexical, and copyCandidates are parts of read; scoreSave is part of dense. verify
 // and score sum the VerifyStrong and ScoreExact durations of every block,
 // which run concurrently inside dense. writeWait is the time until the
 // snapshot write transaction starts, which includes waiting for another
-// SQLite writer; write is the rest of that transaction. verified counts the
-// vector identities that VerifyStrong checked; identities that an earlier
-// search verified at the same visibility revision are not counted.
+// SQLite writer; write is the rest of that transaction. verified and scored
+// count identities from successful block calls, including a joined wave with
+// another failed block. Earlier verification at the same revision is excluded.
 type searchPhases struct {
-	plan      time.Duration
-	read      time.Duration
-	embed     time.Duration
-	dense     time.Duration
-	verify    time.Duration
-	score     time.Duration
-	lexical   time.Duration
-	rank      time.Duration
-	writeWait time.Duration
-	write     time.Duration
-	hits      time.Duration
-	verified  int
+	stage          string
+	init           time.Duration
+	copyLexical    time.Duration
+	copyCandidates time.Duration
+	scoreSave      time.Duration
+	plan           time.Duration
+	read           time.Duration
+	embed          time.Duration
+	dense          time.Duration
+	verify         time.Duration
+	score          time.Duration
+	lexical        time.Duration
+	rank           time.Duration
+	writeWait      time.Duration
+	write          time.Duration
+	hits           time.Duration
+	verified       int
+	scored         int
 }
 
-// log writes the phase durations in milliseconds at debug level.
-func (phases *searchPhases) log(ctx context.Context, namespace string) {
+// log uses warning level for failures and debug level for completed searches.
+func (phases *searchPhases) log(ctx context.Context, namespace string, err error) {
 	milliseconds := func(duration time.Duration) float64 {
 		return float64(duration.Microseconds()) / 1000
 	}
-	slog.DebugContext(ctx, "library search phases",
+	level, outcome, failedStage := slog.LevelDebug, "success", ""
+	if err != nil {
+		level, outcome, failedStage = slog.LevelWarn, "failure", phases.stage
+	}
+	slog.Log(ctx, level, "library search phases",
 		"namespace", namespace,
+		"outcome", outcome,
+		"failed_stage", failedStage,
+		"init_ms", milliseconds(phases.init),
+		"copy_lexical_ms", milliseconds(phases.copyLexical),
+		"copy_candidates_ms", milliseconds(phases.copyCandidates),
+		"score_save_ms", milliseconds(phases.scoreSave),
+		"native_duration_kind", "sum_concurrent_blocks",
+		"phase_duration_kind", "wall_elapsed",
 		"plan_ms", milliseconds(phases.plan),
 		"read_ms", milliseconds(phases.read),
 		"embed_ms", milliseconds(phases.embed),
@@ -173,6 +192,8 @@ func (phases *searchPhases) log(ctx context.Context, namespace string) {
 		"write_ms", milliseconds(phases.write),
 		"hits_ms", milliseconds(phases.hits),
 		"verified_vectors", phases.verified,
+		"scored_vectors", phases.scored,
+		"complete", err == nil,
 	)
 }
 
@@ -236,41 +257,60 @@ func hashJSON[Identity requestIdentity | rankConfig](value Identity) (string, er
 // scores and ranks them in a query database, and returns the first page.
 func (library *Library) searchFirstPage(ctx context.Context, plan searchPlan, phases *searchPhases) (_ SearchPage, err error) {
 	started := clock.Now()
+	phases.stage = "initialize"
 	query, err := openQueryDatabase(ctx, library.config.Store.CatalogPath, library.config.MaxTemporaryBytes, 2*library.config.QueryTimeout)
+	phases.mark(&phases.init, started)
 	if err != nil {
+		phases.mark(&phases.read, started)
 		return SearchPage{}, err
 	}
 	defer func() {
-		err = errors.Join(err, query.close())
+		closeErr := query.close()
+		if err == nil && closeErr != nil {
+			phases.stage = "query_close"
+		}
+		err = errors.Join(err, closeErr)
 	}()
 	var revisions snapshotRevisions
 	var leg lexicalLeg
-	if err := library.read(ctx, func(tx *sql.Tx) error {
+	phases.stage = "catalog_read"
+	readErr := library.read(ctx, func(tx *sql.Tx) error {
 		var copyErr error
-		revisions, leg, copyErr = library.copySnapshot(ctx, tx, query, plan)
+		revisions, leg, copyErr = library.copySnapshot(ctx, tx, query, plan, phases)
+		if copyErr == nil {
+			phases.stage = "catalog_read"
+		}
 		return copyErr
-	}); err != nil {
-		return SearchPage{}, err
-	}
+	})
 	started = phases.mark(&phases.read, started)
+	if readErr != nil {
+		return SearchPage{}, readErr
+	}
+	phases.stage = "embed"
 	queryVector, err := library.embedQuery(ctx, plan.request.Query)
-	if err != nil {
-		return SearchPage{}, err
-	}
 	started = phases.mark(&phases.embed, started)
-	if err := library.scoreDense(ctx, query, queryVector, revisions.Visibility, phases); err != nil {
-		return SearchPage{}, err
-	}
-	started = phases.mark(&phases.dense, started)
-	if err := scoreLexical(ctx, query, leg); err != nil {
-		return SearchPage{}, err
-	}
-	started = phases.mark(&phases.lexical, started)
-	total, err := rankCandidates(ctx, query, plan)
 	if err != nil {
 		return SearchPage{}, err
 	}
+	phases.stage = "dense"
+	denseErr := library.scoreDense(ctx, query, queryVector, revisions.Visibility, phases)
+	started = phases.mark(&phases.dense, started)
+	if denseErr != nil {
+		return SearchPage{}, denseErr
+	}
+	phases.stage = "lexical"
+	lexicalErr := scoreLexical(ctx, query, leg)
+	started = phases.mark(&phases.lexical, started)
+	if lexicalErr != nil {
+		return SearchPage{}, lexicalErr
+	}
+	phases.stage = "rank"
+	total, err := rankCandidates(ctx, query, plan)
 	phases.mark(&phases.rank, started)
+	if err != nil {
+		return SearchPage{}, err
+	}
+	phases.stage = "first_page"
 	return library.firstPage(ctx, query, plan, revisions, total, phases)
 }
 
@@ -288,6 +328,7 @@ func (library *Library) copySnapshot(
 	tx *sql.Tx,
 	query *queryDatabase,
 	plan searchPlan,
+	phases *searchPhases,
 ) (snapshotRevisions, lexicalLeg, error) {
 	revisions, err := readRevisions(ctx, tx)
 	if err != nil {
@@ -295,14 +336,21 @@ func (library *Library) copySnapshot(
 	}
 	var leg lexicalLeg
 	if plan.rank.Mode == Hybrid {
+		phases.stage = "copy_lexical"
+		started := clock.Now()
 		leg, err = library.copyLexical(ctx, tx, query, plan.request.Namespace, plan.request.Query)
+		phases.mark(&phases.copyLexical, started)
 		if err != nil {
 			return snapshotRevisions{}, lexicalLeg{}, err
 		}
 		revisions.Statistics = leg.generation
 	}
-	if _, err := copyCandidates(ctx, tx, query, plan); err != nil {
-		return snapshotRevisions{}, lexicalLeg{}, err
+	phases.stage = "copy_candidates"
+	started := clock.Now()
+	_, copyErr := copyCandidates(ctx, tx, query, plan)
+	phases.mark(&phases.copyCandidates, started)
+	if copyErr != nil {
+		return snapshotRevisions{}, lexicalLeg{}, copyErr
 	}
 	return revisions, leg, nil
 }
@@ -319,6 +367,7 @@ func (library *Library) firstPage(
 	phases *searchPhases,
 ) (SearchPage, error) {
 	pageSize := plan.request.PageSize
+	phases.stage = "first_page_rows"
 	rows, err := readRankedRows(ctx, query, 0, pageSize)
 	if err != nil {
 		return SearchPage{}, err
@@ -330,6 +379,7 @@ func (library *Library) firstPage(
 		if err != nil {
 			return SearchPage{}, err
 		}
+		phases.stage = "encode_cursor"
 		nextCursor, err = encodeCursor(searchCursor{
 			Version:     cursorVersion,
 			SnapshotID:  snapshotID,
@@ -343,15 +393,17 @@ func (library *Library) firstPage(
 		}
 	}
 	started := clock.Now()
+	phases.stage = "hits"
 	var hits []SearchHit
-	if err := library.read(ctx, func(tx *sql.Tx) error {
+	readErr := library.read(ctx, func(tx *sql.Tx) error {
 		var buildErr error
 		hits, buildErr = buildHits(ctx, tx, plan.request.Namespace, rows)
 		return buildErr
-	}); err != nil {
-		return SearchPage{}, err
-	}
+	})
 	phases.mark(&phases.hits, started)
+	if readErr != nil {
+		return SearchPage{}, readErr
+	}
 	return SearchPage{Hits: hits, HasMore: hasMore, NextCursor: nextCursor}, nil
 }
 

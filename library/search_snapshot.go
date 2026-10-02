@@ -574,6 +574,7 @@ func (library *Library) persistSnapshot(
 	revisions snapshotRevisions,
 	phases *searchPhases,
 ) (string, error) {
+	phases.stage = "snapshot_prepare"
 	resultBytes, err := rankedResultBytes(ctx, query, plan.request.Namespace)
 	if err != nil {
 		return "", err
@@ -597,9 +598,11 @@ func (library *Library) persistSnapshot(
 	// Library.write opens the transaction with BEGIN IMMEDIATE, which waits for
 	// any other SQLite writer before the closure runs.
 	requested := clock.Now()
+	phases.stage = "snapshot_write_wait"
 	var writing time.Time
 	err = library.write(ctx, func(tx *sql.Tx) error {
 		writing = phases.mark(&phases.writeWait, requested)
+		phases.stage = "snapshot_write"
 		if err := deleteExpiredSnapshots(ctx, tx, now.UnixMilli()); err != nil {
 			return err
 		}
@@ -614,10 +617,14 @@ func (library *Library) persistSnapshot(
 		}
 		return copyRankedResults(ctx, tx, query, snapshotID, plan.request.Namespace)
 	})
+	if writing.IsZero() {
+		phases.mark(&phases.writeWait, requested)
+	} else {
+		phases.mark(&phases.write, writing)
+	}
 	if err != nil {
 		return "", err
 	}
-	phases.mark(&phases.write, writing)
 	return snapshotID, nil
 }
 
