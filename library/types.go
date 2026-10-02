@@ -217,8 +217,9 @@ type Config struct {
 	QueryBlockSize int
 	// QueryWorkers bounds concurrent scoring requests. Default 2.
 	QueryWorkers int
-	// MaxTemporaryBytes bounds the per-query SQLite file that Search creates in
-	// the catalog directory, through PRAGMA max_page_count. Default 1 GiB.
+	// MaxTemporaryBytes bounds the combined query database and verified score
+	// stream bytes in the catalog directory. PRAGMA max_page_count reserves the
+	// stream budget before admitting each scoring block. Default 1 GiB.
 	MaxTemporaryBytes int64
 	// SnapshotTTL bounds inactivity between successful cursor pages. Each
 	// successful continuation renews the saved expiration. Default 10 minutes.

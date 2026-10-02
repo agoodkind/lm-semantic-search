@@ -198,7 +198,7 @@ func appendEligibleCandidate(ctx context.Context, writer *sql.Tx, row eligibleRo
 		publicationString(row.blobID), publicationString(row.searchHash), publicationString(row.groupKey), publicationString(row.scalars)); err != nil {
 		return queryDatabaseError(ctx, "copy eligible occurrences", err)
 	}
-	if err := inserts.vectors.append(ctx, writer, publicationString(row.vectorID), publicationString(row.digest.String), publicationString(row.checksum.String)); err != nil {
+	if err := inserts.vectors.append(ctx, writer, VectorIdentity{ID: row.vectorID, IdentityDigest: row.digest.String, Checksum: row.checksum.String}); err != nil {
 		return queryDatabaseError(ctx, "copy eligible vector identities", err)
 	}
 	phases.acceptedCandidates++

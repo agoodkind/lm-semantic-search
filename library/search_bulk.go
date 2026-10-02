@@ -72,16 +72,19 @@ func (lookup *candidateLookup) close(ctx context.Context) error {
 
 type candidateInserts struct {
 	candidates publicationInsert
-	vectors    publicationInsert
+	vectors    queryVectorInsert
 }
 
 func (inserts *candidateInserts) close(ctx context.Context) (err error) {
-	for _, insert := range []*publicationInsert{&inserts.candidates, &inserts.vectors} {
-		if insert.prepared != nil {
-			err = errors.Join(err, closeStatement(ctx, insert.prepared))
+	defer func() {
+		if err != nil {
+			slog.ErrorContext(ctx, "close candidate inserts failed", "err", err)
 		}
+	}()
+	if inserts.candidates.prepared != nil {
+		err = closeStatement(ctx, inserts.candidates.prepared)
 	}
-	return err
+	return errors.Join(err, inserts.vectors.close(ctx))
 }
 
 // rankedInsert buffers at most 64 rows. Scores retain their float64 SQL binding.

@@ -228,9 +228,8 @@ func (query *queryDatabase) initialize(ctx context.Context, maxBytes int64) erro
 		return fmt.Errorf("open query database connection: %w", err)
 	}
 	query.conn = conn
-	// The query database statements open no temporary b-tree or sorter;
-	// TestQueryDatabaseStatementsUseNoTemporaryStore checks their bytecode.
-	// temp_store FILE keeps any unexpected temporary table off the process heap.
+	// Ranking uses indexed tables. RETURNING buffers at most 64 inserted
+	// identities. temp_store FILE prevents temporary tables from using the heap.
 	statements := []string{
 		"PRAGMA page_size = " + strconv.Itoa(queryDatabasePageBytes),
 		"PRAGMA max_page_count = " + strconv.FormatInt(max(maxBytes/queryDatabasePageBytes, 1), 10),
@@ -348,7 +347,7 @@ const (
 // namespace. With a filter it evaluates the filter and reads each occurrence
 // with a true root value. An occurrence that references a vector without a
 // catalog row fails the copy.
-func copyCandidates(ctx context.Context, tx *sql.Tx, query *queryDatabase, plan searchPlan, phases *searchPhases) (count int64, err error) {
+func copyCandidates(ctx context.Context, tx *sql.Tx, query *queryDatabase, plan searchPlan, phases *searchPhases, scoring *searchScoring) (count int64, err error) {
 	writer, err := query.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, queryDatabaseError(ctx, "begin candidate copy", err)
@@ -362,7 +361,7 @@ func copyCandidates(ctx context.Context, tx *sql.Tx, query *queryDatabase, plan 
 	groupColumn := sql.Named("group_column", plan.request.GroupBy)
 	inserts := candidateInserts{
 		candidates: publicationInsert{statement: searchCandidatesStatement, columns: 8},
-		vectors:    publicationInsert{statement: searchVectorsStatement, columns: 3},
+		vectors:    queryVectorInsert{scoring: scoring},
 	}
 	defer func() {
 		err = errors.Join(err, inserts.close(ctx))
@@ -388,6 +387,9 @@ func copyCandidates(ctx context.Context, tx *sql.Tx, query *queryDatabase, plan 
 		count, err = copyEligibleCandidates(ctx, tx, writer, root, namespace, groupColumn, &inserts, phases)
 	}
 	if err != nil {
+		return 0, err
+	}
+	if err := scoring.submit(ctx, writer); err != nil {
 		return 0, err
 	}
 	started := clock.Now()
