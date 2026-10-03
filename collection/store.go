@@ -62,6 +62,36 @@ type QueryRequest struct {
 	Limit       int
 }
 
+// StoredRow is one stored row as a writer reads it back: the primary key, the
+// content, the relative path, the split position, the reuse identity (embedding
+// model and content hash), the dense vector when the request asked for it, and
+// the declared scalar cells. EmbeddingModel and ContentHash are empty when the
+// row has none.
+type StoredRow struct {
+	ID                string
+	RelativePath      string
+	Content           string
+	SplitPart         int32
+	SplitPartRecorded bool
+	EmbeddingModel    string
+	ContentHash       string
+	Vector            []float32
+	Scalars           map[string]ScalarCell
+}
+
+// RowsRequest selects the stored rows of a set of items. A row matches when the
+// value of the declaration's item ID column is in ItemIDs, or when its
+// relativePath starts with one of PathPrefixes. The prefixes select legacy rows
+// with a null item ID column. IncludeVector asks for the dense vector of each
+// row. The caller bounds the size of ItemIDs and PathPrefixes per request.
+type RowsRequest struct {
+	Collection    string
+	Declaration   Declaration
+	ItemIDs       []string
+	PathPrefixes  []string
+	IncludeVector bool
+}
+
 // EnsureRequest is the input of [Store.EnsureCollection]. Dimension is the
 // dense vector width of a collection the store creates.
 type EnsureRequest struct {
@@ -82,6 +112,9 @@ type Store interface {
 	Delete(ctx context.Context, collection string, filter Filter) (int64, error)
 	// Query returns the rows a filter matches without ranking.
 	Query(ctx context.Context, request QueryRequest) ([]Hit, error)
+	// QueryRows returns every stored row of the requested items, past the
+	// single-query row ceiling, without ranking.
+	QueryRows(ctx context.Context, request RowsRequest) ([]StoredRow, error)
 	// EnsureCollection creates the collection when it is absent and adds any
 	// declared scalar column it lacks.
 	EnsureCollection(ctx context.Context, request EnsureRequest) error

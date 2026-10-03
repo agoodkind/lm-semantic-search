@@ -6,6 +6,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
 )
 
 type conversationBatchTestRow struct {
@@ -101,6 +102,38 @@ func conversationBatchResultSet(t *testing.T, rows []conversationBatchTestRow) m
 	return milvusclient.ResultSet{ResultCount: len(rows), Fields: fields}
 }
 
+func conversationBatchStoredRows(rows []conversationBatchTestRow) []collection.StoredRow {
+	stored := make([]collection.StoredRow, 0, len(rows))
+	for _, row := range rows {
+		scalars := map[string]collection.ScalarCell{
+			conversationIDFieldName: collection.NullCell(conversationIDFieldName),
+			roleFieldName:           collection.NullCell(roleFieldName),
+			messageIndexFieldName:   collection.NullCell(messageIndexFieldName),
+		}
+		if row.hasConversationID || row.conversationID != "" {
+			scalars[conversationIDFieldName] = collection.ValueCell(conversationIDFieldName, collection.StringScalar(row.conversationID))
+		}
+		if !row.missingRole {
+			scalars[roleFieldName] = collection.ValueCell(roleFieldName, collection.StringScalar(row.role))
+		}
+		if row.hasMessageIndex {
+			scalars[messageIndexFieldName] = collection.ValueCell(messageIndexFieldName, collection.Int64Scalar(row.messageIndex))
+		}
+		stored = append(stored, collection.StoredRow{
+			ID:                "",
+			RelativePath:      row.relativePath,
+			Content:           row.content,
+			SplitPart:         0,
+			SplitPartRecorded: false,
+			EmbeddingModel:    row.embeddingModel,
+			ContentHash:       "",
+			Vector:            row.vector,
+			Scalars:           scalars,
+		})
+	}
+	return stored
+}
+
 func TestAppendConversationBatchRowsRejectsOnlyKnownUnequalEmbeddingModels(t *testing.T) {
 	currentModel := "model-b"
 	rows := []conversationBatchTestRow{
@@ -111,7 +144,7 @@ func TestAppendConversationBatchRowsRejectsOnlyKnownUnequalEmbeddingModels(t *te
 	assemblies := newConversationBatchAssemblies()
 	reuse := map[string][]float32{}
 	if err := appendConversationBatchRows(
-		conversationBatchResultSet(t, rows),
+		conversationBatchStoredRows(rows),
 		[]string{"claude:a"},
 		currentModel,
 		assemblies,
@@ -142,7 +175,7 @@ func TestAppendConversationBatchRowsBucketsBaseAndDerived(t *testing.T) {
 	}
 	assemblies := newConversationBatchAssemblies()
 	reuse := map[string][]float32{}
-	if err := appendConversationBatchRows(conversationBatchResultSet(t, rows), []string{"claude:a", "claude:b"}, "", assemblies, reuse); err != nil {
+	if err := appendConversationBatchRows(conversationBatchStoredRows(rows), []string{"claude:a", "claude:b"}, "", assemblies, reuse); err != nil {
 		t.Fatalf("appendConversationBatchRows returned error: %v", err)
 	}
 	batchRows := assemblies.finalize()
@@ -177,9 +210,9 @@ func TestAppendConversationBatchRowsBucketsBaseAndDerived(t *testing.T) {
 	}
 }
 
-// TestDerivedRowsRegisterTheirMessageWithItsRole covers a message whose only
-// stored rows are derived, which is what a turn carrying just a tool call or
-// just reasoning leaves behind once no blank text row is written for it.
+// TestDerivedRowsRegisterTheirMessageWithItsRole covers a message with only
+// derived stored rows, left by a turn with just a tool call or just reasoning
+// once no blank text row is written for it.
 //
 // Registering derived-only messages preserves the stored message index and role
 // even when no base row exists.
@@ -191,7 +224,7 @@ func TestDerivedRowsRegisterTheirMessageWithItsRole(t *testing.T) {
 		{conversationID: "claude:a", relativePath: "convthink/claude:a/2", role: "assistant", content: "considering", messageIndex: 2, hasMessageIndex: true, vector: []float32{4}},
 	}
 	assemblies := newConversationBatchAssemblies()
-	if err := appendConversationBatchRows(conversationBatchResultSet(t, rows), []string{"claude:a"}, "", assemblies, map[string][]float32{}); err != nil {
+	if err := appendConversationBatchRows(conversationBatchStoredRows(rows), []string{"claude:a"}, "", assemblies, map[string][]float32{}); err != nil {
 		t.Fatalf("appendConversationBatchRows returned error: %v", err)
 	}
 	stored := assemblies.finalize()["claude:a"]
@@ -224,7 +257,7 @@ func TestDerivedRowsRegisterTheirMessageWithItsRole(t *testing.T) {
 }
 
 // TestDerivedRowRegistrationKeepsTheBaseRole proves a base row's role wins over
-// a derived row's, whatever order the rows arrive in. Both carry the same role
+// a derived row's, whatever order the rows arrive in. Both have the same role
 // in practice, and the base row owns the assembled base state.
 func TestDerivedRowRegistrationKeepsTheBaseRole(t *testing.T) {
 	derivedFirst := []conversationBatchTestRow{
@@ -232,7 +265,7 @@ func TestDerivedRowRegistrationKeepsTheBaseRole(t *testing.T) {
 		{conversationID: "claude:a", relativePath: "conv/claude:a/0", role: "user", content: "text", messageIndex: 0, hasMessageIndex: true, vector: []float32{2}},
 	}
 	assemblies := newConversationBatchAssemblies()
-	if err := appendConversationBatchRows(conversationBatchResultSet(t, derivedFirst), []string{"claude:a"}, "", assemblies, map[string][]float32{}); err != nil {
+	if err := appendConversationBatchRows(conversationBatchStoredRows(derivedFirst), []string{"claude:a"}, "", assemblies, map[string][]float32{}); err != nil {
 		t.Fatalf("appendConversationBatchRows returned error: %v", err)
 	}
 	stored := assemblies.finalize()["claude:a"]
@@ -268,7 +301,7 @@ func TestAppendConversationBatchRowsMarksOnlyUsableDerivedPaths(t *testing.T) {
 	}
 	assemblies := newConversationBatchAssemblies()
 	if err := appendConversationBatchRows(
-		conversationBatchResultSet(t, rows),
+		conversationBatchStoredRows(rows),
 		[]string{"claude:a"},
 		"",
 		assemblies,
@@ -308,7 +341,7 @@ func TestAppendConversationBatchRowsResolvesScalarLessLegacyPaths(t *testing.T) 
 	}
 	assemblies := newConversationBatchAssemblies()
 	if err := appendConversationBatchRows(
-		conversationBatchResultSet(t, rows),
+		conversationBatchStoredRows(rows),
 		[]string{"claude:legacy"},
 		"",
 		assemblies,
@@ -323,14 +356,6 @@ func TestAppendConversationBatchRowsResolvesScalarLessLegacyPaths(t *testing.T) 
 	}
 	if _, found := stored.UsableDerivedPaths["convtool/claude:legacy/4/0/tok"]; !found {
 		t.Fatalf("usable derived paths = %v, want scalar-less tool row", stored.UsableDerivedPaths)
-	}
-}
-
-func TestConversationBatchFilterExpressionIncludesLegacyFamilyPrefixes(t *testing.T) {
-	got := conversationBatchFilterExpression([]string{"claude:a"})
-	want := `(conversationId in ["claude:a"] or relativePath like "conv/claude:a/%" or relativePath like "convtool/claude:a/%" or relativePath like "convthink/claude:a/%")`
-	if got != want {
-		t.Fatalf("conversationBatchFilterExpression = %q, want %q", got, want)
 	}
 }
 
