@@ -38,7 +38,7 @@ func (store *Store) DeleteItemRows(ctx context.Context, collectionName string, r
 // that need the backfill: changed counts the rows of streamed items, and
 // orphan counts the rest, which it leaves unchanged. A dry run counts and
 // writes nothing. A missing collection returns semantic.ErrCollectionMissing.
-func (store *Store) BackfillCollectionScalars(ctx context.Context, collectionName string, backfill semantic.ScalarBackfill) (int, int, error) {
+func (store *Store) BackfillCollectionScalars(ctx context.Context, collectionName string, backfill lmcollection.ScalarBackfill) (int, int, error) {
 	if err := operationContextError(ctx, "backfill local collection scalars"); err != nil {
 		return 0, 0, err
 	}
@@ -69,11 +69,12 @@ func (store *Store) BackfillCollectionScalars(ctx context.Context, collectionNam
 // backfillRows counts the rows that need the backfill. Unless the backfill is a
 // dry run, it fills the missing backfill columns of streamed items' rows in
 // place.
-func backfillRows(rows []row, backfill semantic.ScalarBackfill) (int, int, error) {
+func backfillRows(rows []row, backfill lmcollection.ScalarBackfill) (int, int, error) {
+	conversation := len(backfill.LegacyPathFamilies) > 0
 	changed := 0
 	orphan := 0
 	for index := range rows {
-		stored, err := rows[index].backfillValues(backfill)
+		stored, err := rows[index].backfillValues(backfill, conversation)
 		if err != nil {
 			return changed, orphan, err
 		}
@@ -95,7 +96,7 @@ func backfillRows(rows []row, backfill semantic.ScalarBackfill) (int, int, error
 			if filled[column.Name] == stored[column.Name] {
 				continue
 			}
-			rows[index], err = rows[index].withScalarValue(column, filled[column.Name], backfill.Conversation)
+			rows[index], err = rows[index].withScalarValue(column, filled[column.Name], conversation)
 			if err != nil {
 				return changed, orphan, err
 			}
@@ -105,10 +106,10 @@ func backfillRows(rows []row, backfill semantic.ScalarBackfill) (int, int, error
 }
 
 // backfillValues returns the row's stored value of every backfill column.
-func (stored row) backfillValues(backfill semantic.ScalarBackfill) (map[string]lmcollection.ScalarValue, error) {
+func (stored row) backfillValues(backfill lmcollection.ScalarBackfill, conversation bool) (map[string]lmcollection.ScalarValue, error) {
 	values := make(map[string]lmcollection.ScalarValue, len(backfill.Columns))
 	for _, column := range backfill.Columns {
-		value, err := stored.scalarValue(column, backfill.Conversation)
+		value, err := stored.scalarValue(column, conversation)
 		if err != nil {
 			return nil, err
 		}

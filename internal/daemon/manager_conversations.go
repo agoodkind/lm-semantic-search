@@ -321,12 +321,12 @@ func (manager *Manager) backfillConversationScalars(ctx context.Context, collect
 		return 0, 0, err
 	}
 	declaration := semantic.ConversationDeclaration()
-	return manager.runScalarBackfill(ctx, codebase, semantic.ScalarBackfill{
-		ItemColumn:   declaration.ItemIDColumn,
-		Columns:      declaredColumnsNamed(declaration, semantic.ConversationWorkspaceRootColumn, semantic.ConversationArchivedColumn),
-		Values:       values,
-		Conversation: true,
-		DryRun:       dryRun,
+	return manager.runScalarBackfill(ctx, codebase, collection.ScalarBackfill{
+		ItemColumn:         declaration.ItemIDColumn,
+		Columns:            declaredColumnsNamed(declaration, semantic.ConversationWorkspaceRootColumn, semantic.ConversationArchivedColumn),
+		Values:             values,
+		LegacyPathFamilies: semantic.ConversationLegacyPathFamilies,
+		DryRun:             dryRun,
 	})
 }
 

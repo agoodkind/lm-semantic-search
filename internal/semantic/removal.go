@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
@@ -108,27 +108,37 @@ func (service *Service) deleteByRemoval(ctx context.Context, collectionName stri
 			return err
 		}
 	}
+	store := service.collectionStore()
+	declaration := collection.Declaration{ItemIDColumn: removal.ItemColumn, Scalars: nil}
 	var itemRowsRemoved int64
 	if len(removal.ItemIDs) > 0 {
-		itemRowsRemoved, err = service.deleteByItemIDs(ctx, collectionName, removal.ItemColumn, removal.ItemIDs)
+		itemRowsRemoved, err = store.DeleteItems(ctx, collection.DeleteItemsRequest{
+			Collection:   collectionName,
+			Declaration:  declaration,
+			ItemIDs:      removal.ItemIDs,
+			PathPrefixes: nil,
+		})
 		if err != nil {
-			return err
+			slog.ErrorContext(ctx, "delete item rows failed", "collection", collectionName, "err", err)
+			return fmt.Errorf("delete items from %s: %w", collectionName, err)
 		}
 	}
 	var prefixRowsRemoved int64
-	if len(removal.Prefixes) > 0 {
-		for _, prefix := range removal.Prefixes {
-			removed, deleteErr := service.deleteByRelativePathPrefix(
-				ctx,
-				collectionName,
-				prefix,
-			)
-			if deleteErr != nil {
-				err = deleteErr
-				return err
-			}
-			prefixRowsRemoved += removed
+	for _, prefix := range removal.Prefixes {
+		if prefix == "" {
+			continue
 		}
+		removed, deleteErr := store.DeleteItems(ctx, collection.DeleteItemsRequest{
+			Collection:   collectionName,
+			Declaration:  declaration,
+			ItemIDs:      nil,
+			PathPrefixes: []string{prefix},
+		})
+		if deleteErr != nil {
+			slog.ErrorContext(ctx, "delete prefix rows failed", "collection", collectionName, "prefix", prefix, "err", deleteErr)
+			return fmt.Errorf("delete prefix %s from %s: %w", prefix, collectionName, deleteErr)
+		}
+		prefixRowsRemoved += removed
 	}
 	slog.InfoContext(
 		ctx,
@@ -145,60 +155,6 @@ func (service *Service) deleteByRemoval(ctx context.Context, collectionName stri
 		pathRowsRemoved+prefixRowsRemoved+itemRowsRemoved,
 	)
 	return nil
-}
-
-// deleteByItemIDs removes every row with an itemColumn value in itemIDs.
-func (service *Service) deleteByItemIDs(
-	ctx context.Context,
-	collectionName string,
-	itemColumn string,
-	itemIDs []string,
-) (int64, error) {
-	if itemColumn == "" {
-		return 0, fmt.Errorf("delete items from %s: item column is required", collectionName)
-	}
-	var removed int64
-	for _, idBatch := range batchConversationIDs(itemIDs, conversationFilterIDBatchSize) {
-		result, err := service.milvus.Delete(
-			ctx,
-			milvusclient.NewDeleteOption(collectionName).WithExpr(inStringClause(itemColumn, idBatch)),
-		)
-		if err != nil {
-			return removed, wrapStoreError(
-				ctx,
-				err,
-				"delete from "+collectionName+" by item id column "+itemColumn,
-			)
-		}
-		removed += result.DeleteCount
-	}
-	return removed, nil
-}
-
-// deleteByRelativePathPrefix removes every row whose relativePath begins with
-// prefix. A conversation uses it to drop all of one conversation's message rows
-// in a single expression delete.
-func (service *Service) deleteByRelativePathPrefix(
-	ctx context.Context,
-	collectionName string,
-	prefix string,
-) (int64, error) {
-	if prefix == "" {
-		return 0, nil
-	}
-	expression := relativePathPrefixExpression(prefix)
-	result, err := service.milvus.Delete(
-		ctx,
-		milvusclient.NewDeleteOption(collectionName).WithExpr(expression),
-	)
-	if err != nil {
-		return 0, wrapStoreError(
-			ctx,
-			err,
-			"delete from "+collectionName+" by relative path prefix "+prefix,
-		)
-	}
-	return result.DeleteCount, nil
 }
 
 // relativePathPrefixExpression renders the Milvus filter expression matching
