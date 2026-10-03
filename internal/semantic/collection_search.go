@@ -180,7 +180,8 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 	}
 
 	groupColumn, grouped := groupColumnFor(search)
-	candidates, err := service.rankCollectionCandidates(ctx, collectionName, queryVector, search.Query, compiled, groupColumn, grouped)
+	depth := collectionRankingDepthFor(limit)
+	candidates, err := service.rankCollectionCandidates(ctx, collectionName, queryVector, search.Query, compiled, groupColumn, grouped, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -251,18 +252,34 @@ func selectRankedCandidates(candidates []rankedCandidate, perGroupLimit int32, m
 	return kept
 }
 
+// collectionRankingOverfetch multiplies the requested limit to leave room for
+// rows that the score floor or the per-group cap drop after ranking.
+const collectionRankingOverfetch = 4
+
+// collectionRankingMinimumDepth keeps small requests from ranking too few rows
+// to fill a page after the per-group cap.
+const collectionRankingMinimumDepth = 64
+
+// collectionRankingDepthFor returns how many rows each ranking leg requests
+// for a search with limit. Before 2026-09-26 searches requested about the page
+// size; ranking every search at CollectionRankingDepth timed out on the
+// conversation collection.
+func collectionRankingDepthFor(limit int32) int {
+	return min(max(int(limit)*collectionRankingOverfetch, collectionRankingMinimumDepth), CollectionRankingDepth)
+}
+
 // rankCollectionCandidates runs the one ranking search of a collection search.
-// A hybrid collection runs both legs at CollectionRankingDepth and fuses them
-// with the RRF reranker into at most CollectionRankingDepth rows. A dense
-// collection runs one search at the same depth.
-func (service *Service) rankCollectionCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled compiledFilter, groupColumn model.ScalarColumn, grouped bool) ([]rankedCandidate, error) {
+// A hybrid collection runs both legs at depth and fuses them with the RRF
+// reranker into at most depth rows. A dense collection runs one search at the
+// same depth.
+func (service *Service) rankCollectionCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled compiledFilter, groupColumn model.ScalarColumn, grouped bool, depth int) ([]rankedCandidate, error) {
 	outputFields := []string{relativePathFieldName}
 	if grouped {
 		outputFields = append(outputFields, groupColumn.Name)
 	}
 	if service.cfg.HybridMode {
-		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, CollectionRankingDepth, entity.FloatVector(queryVector))
-		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, CollectionRankingDepth, entity.Text(rawQuery))
+		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, depth, entity.FloatVector(queryVector))
+		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, depth, entity.Text(rawQuery))
 		if compiled.Expression != "" {
 			denseRequest = denseRequest.WithFilter(compiled.Expression)
 			sparseRequest = sparseRequest.WithFilter(compiled.Expression)
@@ -273,7 +290,7 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 		}
 		hybridOption := milvusclient.NewHybridSearchOption(
 			collectionName,
-			CollectionRankingDepth,
+			depth,
 			denseRequest,
 			sparseRequest,
 		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...)
@@ -286,7 +303,7 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 
 	searchOption := milvusclient.NewSearchOption(
 		collectionName,
-		CollectionRankingDepth,
+		depth,
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	).WithANNSField(denseVectorFieldName).WithOutputFields(outputFields...)
 	if compiled.Expression != "" {
