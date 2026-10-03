@@ -20,7 +20,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/embeddingprovider"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
-	"goodkind.io/lm-semantic-search/internal/tshash"
 )
 
 const (
@@ -151,7 +150,7 @@ func (store *Store) CollectionName(codebasePath string) string {
 
 // ConversationCollectionName returns the collection name for a conversation collection.
 func (store *Store) ConversationCollectionName(collectionID string) string {
-	return "conv_chunks_" + tshash.PathPrefix(strings.TrimSpace(collectionID))
+	return lmcollection.DocumentName(collectionID)
 }
 
 // Count returns the number of stored chunks for a codebase.
