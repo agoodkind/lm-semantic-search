@@ -576,7 +576,7 @@ func (f *fakeSemantic) DeleteItemRows(ctx context.Context, collectionName string
 }
 
 // BackfillCollectionScalars reports no rows that need a backfill.
-func (f *fakeSemantic) BackfillCollectionScalars(context.Context, string, semantic.ScalarBackfill) (int, int, error) {
+func (f *fakeSemantic) BackfillCollectionScalars(context.Context, string, collection.ScalarBackfill) (int, int, error) {
 	return 0, 0, nil
 }
 

@@ -115,6 +115,13 @@ type Store interface {
 	// QueryRows returns every stored row of the requested items, past the
 	// single-query row ceiling, without ranking.
 	QueryRows(ctx context.Context, request RowsRequest) ([]StoredRow, error)
+	// DeleteItems removes the rows of the requested items and no other row. It
+	// returns the deleted count.
+	DeleteItems(ctx context.Context, request DeleteItemsRequest) (int64, error)
+	// BackfillScalars fills the null or empty backfill columns of the streamed
+	// items and keeps every other stored value. It returns the changed and
+	// orphan row counts.
+	BackfillScalars(ctx context.Context, collection string, backfill ScalarBackfill) (int, int, error)
 	// EnsureCollection creates the collection when it is absent and adds any
 	// declared scalar column it lacks.
 	EnsureCollection(ctx context.Context, request EnsureRequest) error

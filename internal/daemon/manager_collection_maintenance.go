@@ -54,7 +54,7 @@ func (manager *Manager) backfillCollectionItems(ctx context.Context, request col
 
 // runScalarBackfill runs one scalar backfill against the stored rows of a
 // document collection. Both backfill RPCs run their backfills here.
-func (manager *Manager) runScalarBackfill(ctx context.Context, codebase model.Codebase, backfill semantic.ScalarBackfill) (int, int, error) {
+func (manager *Manager) runScalarBackfill(ctx context.Context, codebase model.Codebase, backfill collection.ScalarBackfill) (int, int, error) {
 	if manager.semantic == nil {
 		return 0, 0, semantic.ErrUnavailable
 	}
@@ -127,7 +127,7 @@ func declaredColumnsNamed(declaration collection.Declaration, names ...string) [
 // declaration and returns the backfill to run. It rejects an empty or repeated
 // item id. validateBackfillColumns and validateBackfillItem list the column and
 // value cases it rejects.
-func validateCollectionBackfill(declaration collection.Declaration, request collectionBackfillRequest) (semantic.ScalarBackfill, error) {
+func validateCollectionBackfill(declaration collection.Declaration, request collectionBackfillRequest) (collection.ScalarBackfill, error) {
 	conversation := semantic.IsConversationDeclaration(declaration)
 	declared := make(map[string]collection.ScalarColumn, len(declaration.Scalars))
 	for _, column := range declaration.Scalars {
@@ -135,29 +135,33 @@ func validateCollectionBackfill(declaration collection.Declaration, request coll
 	}
 	columns, err := validateBackfillColumns(declaration.ItemIDColumn, declared, conversation, request.Columns)
 	if err != nil {
-		return semantic.ScalarBackfill{}, err
+		return collection.ScalarBackfill{}, err
 	}
 	values := make(map[string]map[string]collection.ScalarValue, len(request.Items))
 	for _, item := range request.Items {
 		itemID := strings.TrimSpace(item.ItemID)
 		if itemID == "" {
-			return semantic.ScalarBackfill{}, adapterr.NewMissingArgument("item_id")
+			return collection.ScalarBackfill{}, adapterr.NewMissingArgument("item_id")
 		}
 		if _, duplicate := values[itemID]; duplicate {
-			return semantic.ScalarBackfill{}, adapterr.NewInvalidArgument(fmt.Sprintf("item_id %q appears more than once", itemID))
+			return collection.ScalarBackfill{}, adapterr.NewInvalidArgument(fmt.Sprintf("item_id %q appears more than once", itemID))
 		}
 		itemValues, err := validateBackfillItem(itemID, declared, columns, item.Scalars)
 		if err != nil {
-			return semantic.ScalarBackfill{}, err
+			return collection.ScalarBackfill{}, err
 		}
 		values[itemID] = itemValues
 	}
-	return semantic.ScalarBackfill{
-		ItemColumn:   declaration.ItemIDColumn,
-		Columns:      columns,
-		Values:       values,
-		Conversation: conversation,
-		DryRun:       request.DryRun,
+	var legacyPathFamilies []string
+	if conversation {
+		legacyPathFamilies = semantic.ConversationLegacyPathFamilies
+	}
+	return collection.ScalarBackfill{
+		ItemColumn:         declaration.ItemIDColumn,
+		Columns:            columns,
+		Values:             values,
+		LegacyPathFamilies: legacyPathFamilies,
+		DryRun:             request.DryRun,
 	}, nil
 }
 

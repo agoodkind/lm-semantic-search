@@ -97,7 +97,7 @@ type semanticWriter interface {
 	// BackfillCollectionScalars fills the backfill columns that are null or an
 	// empty string on the rows of streamed items and returns the changed and
 	// orphan row counts.
-	BackfillCollectionScalars(ctx context.Context, collectionName string, backfill semantic.ScalarBackfill) (int, int, error)
+	BackfillCollectionScalars(ctx context.Context, collectionName string, backfill collection.ScalarBackfill) (int, int, error)
 	CopyChunks(ctx context.Context, codebasePath string, srcRelativePath string, dstRelativePath string) (int, error)
 	PruneToCurrent(ctx context.Context, codebasePath string, currentRelativePaths []string) error
 }
