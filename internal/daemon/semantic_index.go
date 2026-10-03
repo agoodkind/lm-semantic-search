@@ -25,6 +25,13 @@ type semanticReader interface {
 	HasStaging(ctx context.Context, codebasePath string) (bool, error)
 }
 
+// semanticConversationSearcher runs the typed collection search over a
+// collection with the conversation declaration. It also resolves the
+// conversation of rows written before the conversationId column existed.
+type semanticConversationSearcher interface {
+	SearchConversationCollection(ctx context.Context, search semantic.CollectionSearch) ([]semantic.CollectionHit, error)
+}
+
 type semanticResidencyReader interface {
 	PrepareCollection(ctx context.Context, collectionName string) error
 	AcquireCollection(ctx context.Context, collectionName string) (semantic.CollectionLease, error)
@@ -140,6 +147,7 @@ type semanticMaintenanceGate interface {
 // exactly what the daemon calls, no more.
 type semanticIndex interface {
 	semanticReader
+	semanticConversationSearcher
 	semanticHealthReader
 	semanticReuseLoader
 	semanticWriter

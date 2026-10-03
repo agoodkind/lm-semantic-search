@@ -1,6 +1,9 @@
 package semantic
 
-import "goodkind.io/lm-semantic-search/internal/adapterr"
+import (
+	"goodkind.io/lm-semantic-search/collection"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
+)
 
 // ErrUnavailable reports that the semantic backend is not configured.
 var ErrUnavailable error = newSentinel(
@@ -11,20 +14,10 @@ var ErrUnavailable error = newSentinel(
 )
 
 // ErrCollectionMissing reports that the semantic collection does not exist yet.
-var ErrCollectionMissing error = newSentinel(
-	adapterr.ClassCollectionMissing,
-	"semantic collection is missing",
-	"collection_missing",
-	"re-run index_codebase to recreate the collection",
-)
+var ErrCollectionMissing = collection.ErrCollectionMissing
 
 // ErrCollectionNotReady reports that the semantic collection exists but cannot be searched yet.
-var ErrCollectionNotReady error = newSentinel(
-	adapterr.ClassCollectionNotReady,
-	"semantic collection is not ready",
-	"collection_not_ready",
-	"retry in a few seconds; the background collection load continues",
-)
+var ErrCollectionNotReady = collection.ErrCollectionNotReady
 
 // ErrCollectionLoadDeferred reports that the daemon refused to start a
 // collection load because Milvus recently ran out of memory loading one, and
@@ -48,12 +41,7 @@ var ErrMaintenance error = newSentinel(
 )
 
 // ErrSearchResultIncomplete reports that Milvus returned a result set without the requested fields.
-var ErrSearchResultIncomplete error = newSentinel(
-	adapterr.ClassSearchResultIncomplete,
-	"semantic search result is incomplete",
-	"search_result_incomplete",
-	"retry the query; the daemon will refetch missing fields",
-)
+var ErrSearchResultIncomplete = collection.ErrSearchResultIncomplete
 
 func newSentinel(class adapterr.Class, message, code, hint string) error {
 	return &adapterr.AdapterError{

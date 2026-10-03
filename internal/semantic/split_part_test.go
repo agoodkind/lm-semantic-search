@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
@@ -111,10 +113,11 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 		}
 	}
 
-	chunks, err := resultSetsToChunks([]milvusclient.ResultSet{resultSet})
+	hits, err := milvusstore.HitsFromResultSet(resultSet, nil)
 	if err != nil {
-		t.Fatalf("resultSetsToChunks returned error: %v", err)
+		t.Fatalf("HitsFromResultSet returned error: %v", err)
 	}
+	chunks := chunksFromHits(hits)
 	if got := []int32{chunks[0].SplitPart, chunks[1].SplitPart}; !slices.Equal(got, []int32{1, 513}) {
 		t.Fatalf("restored split parts = %v, want [1 513]", got)
 	}
@@ -196,9 +199,9 @@ func testInsertCollection(collectionName string, dimension int64) *entity.Collec
 			WithName(metadataFieldName).
 			WithDataType(entity.FieldTypeVarChar).
 			WithMaxLength(65535)).
-		WithField(contentHashField()).
-		WithField(embeddingModelField()).
-		WithField(splitPartField()).
+		WithField(milvusstore.ContentHashFieldSchema()).
+		WithField(milvusstore.EmbeddingModelFieldSchema()).
+		WithField(milvusstore.SplitPartFieldSchema()).
 		WithField(entity.NewField().
 			WithName(denseVectorFieldName).
 			WithDataType(entity.FieldTypeFloatVector).
@@ -244,7 +247,7 @@ func TestInsertBatchRejectsPartialInsertCount(t *testing.T) {
 func TestResultSetsToChunksDistinguishesLegacyNullFromRecordedZero(t *testing.T) {
 	t.Parallel()
 
-	splitParts, err := newSplitPartColumn(
+	splitParts, err := milvusstore.NewSplitPartColumn(
 		"test_collection",
 		[]int64{0, 0},
 		[]bool{false, true},
@@ -265,10 +268,11 @@ func TestResultSetsToChunksDistinguishesLegacyNullFromRecordedZero(t *testing.T)
 		},
 	}
 
-	chunks, err := resultSetsToChunks([]milvusclient.ResultSet{resultSet})
+	hits, err := milvusstore.HitsFromResultSet(resultSet, nil)
 	if err != nil {
-		t.Fatalf("resultSetsToChunks returned error: %v", err)
+		t.Fatalf("HitsFromResultSet returned error: %v", err)
 	}
+	chunks := chunksFromHits(hits)
 	if chunks[0].SplitPartRecorded {
 		t.Fatal("legacy null split part was treated as recorded zero")
 	}
@@ -462,7 +466,7 @@ func TestConversationAssemblyOrdersRowsBySplitPart(t *testing.T) {
 func TestConversationAssemblyOrdersMigratedRowsDeterministically(t *testing.T) {
 	t.Parallel()
 
-	splitParts, err := newSplitPartColumn(
+	splitParts, err := milvusstore.NewSplitPartColumn(
 		"test_collection",
 		[]int64{0, 0},
 		[]bool{false, false},

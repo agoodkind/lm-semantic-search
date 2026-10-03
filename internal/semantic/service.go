@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"unicode"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/collection"
@@ -26,26 +28,23 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
-// Milvus field names match the upstream TS schema at
-// packages/core/src/vectordb/milvus-vectordb.ts so the Go daemon reads and
-// writes the same collections the TS adapter does. The names are camelCase
-// because that is what the TS adapter wrote.
+// The collection/milvus package defines the column name constants below.
 const (
 	maxCollectionNameLength = 255
 	stagingCollectionSuffix = "_stg"
-	denseVectorFieldName    = "vector"
-	sparseVectorFieldName   = "sparse_vector"
-	contentFieldName        = "content"
-	relativePathFieldName   = "relativePath"
-	startLineFieldName      = "startLine"
-	endLineFieldName        = "endLine"
-	fileExtensionFieldName  = "fileExtension"
-	metadataFieldName       = "metadata"
-	idFieldName             = "id"
-	splitPartFieldName      = "splitPart"
-	contentHashFieldName    = "contentHash"
-	embeddingModelFieldName = "embeddingModel"
-	countOutputField        = "count(*)"
+	denseVectorFieldName    = milvusstore.DenseVectorField
+	sparseVectorFieldName   = milvusstore.SparseVectorField
+	contentFieldName        = milvusstore.ContentField
+	relativePathFieldName   = milvusstore.RelativePathField
+	startLineFieldName      = milvusstore.StartLineField
+	endLineFieldName        = milvusstore.EndLineField
+	fileExtensionFieldName  = milvusstore.FileExtensionField
+	metadataFieldName       = milvusstore.MetadataField
+	idFieldName             = milvusstore.IDField
+	splitPartFieldName      = milvusstore.SplitPartField
+	contentHashFieldName    = milvusstore.ContentHashField
+	embeddingModelFieldName = milvusstore.EmbeddingModelField
+	countOutputField        = milvusstore.CountOutputField
 )
 
 // Progress reports semantic indexing progress after chunk extraction.
@@ -587,77 +586,22 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 // query vector. rawQuery feeds the BM25 sparse leg, which is lexical and never
 // embeds. The caller confirms the collection exists.
 func (service *Service) searchCollectionWithVector(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, limit int, filterExpr string) ([]model.StoredChunk, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return nil, err
 	}
-	searchLimit := limit
-	if searchLimit <= 0 {
-		searchLimit = 10
-	}
-
-	outputFields := []string{
-		contentFieldName,
-		relativePathFieldName,
-		startLineFieldName,
-		endLineFieldName,
-		fileExtensionFieldName,
-		metadataFieldName,
-		splitPartFieldName,
-	}
-	if service.isConversationCollection(collectionName) {
-		// Conversation collections carry workspaceRoot as a native scalar column.
-		// Request it so a workspace_roots post-filter on the daemon side sees the
-		// real value rather than the empty default; code collections have no such
-		// column, so they keep the base output set. loadRules rides along so a
-		// search hit can report which loading rules produced its message index.
-		outputFields = append(outputFields, workspaceRootFieldName, loadRulesFieldName)
-	}
-
-	if service.cfg.HybridMode {
-		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, maxInt(searchLimit, 10), entity.FloatVector(queryVector))
-		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, maxInt(searchLimit, 10), entity.Text(rawQuery))
-		if filterExpr != "" {
-			denseRequest = denseRequest.WithFilter(filterExpr)
-			sparseRequest = sparseRequest.WithFilter(filterExpr)
-		}
-		hybridOption := milvusclient.NewHybridSearchOption(
-			collectionName,
-			searchLimit,
-			denseRequest,
-			sparseRequest,
-		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...)
-		resultSets, err := service.milvus.HybridSearch(ctx, hybridOption)
-		if err != nil {
-			return nil, searchErr(ctx, "hybrid search", collectionName, err)
-		}
-		return resultSetsToChunks(resultSets)
-	}
-
-	searchOption := milvusclient.NewSearchOption(
-		collectionName,
-		searchLimit,
-		[]entity.Vector{entity.FloatVector(queryVector)},
-	).WithANNSField(denseVectorFieldName).WithOutputFields(outputFields...)
-	if filterExpr != "" {
-		searchOption = searchOption.WithFilter(filterExpr)
-	}
-
-	resultSets, err := service.milvus.Search(ctx, searchOption)
+	hits, err := service.collectionStore().SearchExpression(ctx, milvusstore.ExpressionSearch{
+		Collection: collectionName,
+		Vector:     queryVector,
+		Query:      rawQuery,
+		Limit:      limit,
+		Expression: filterExpr,
+	})
 	if err != nil {
-		return nil, searchErr(ctx, "dense search", collectionName, err)
+		slog.ErrorContext(ctx, "search collection rows failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
+		return nil, fmt.Errorf("search %s: %w", collectionName, err)
 	}
-	return resultSetsToChunks(resultSets)
-}
-
-// searchErr logs a Milvus search failure and maps it to a typed store sentinel
-// when one applies, otherwise wraps it with the operation and collection for
-// context.
-func searchErr(ctx context.Context, operation string, collectionName string, err error) error {
-	slog.ErrorContext(ctx, operation+" failed", "collection", collectionName, "err", err)
-	if sentinel := storeSearchSentinel(err); sentinel != nil {
-		return sentinel
-	}
-	return fmt.Errorf("%s collection %s: %w", operation, collectionName, err)
+	return chunksFromHits(hits), nil
 }
 
 // Drop removes one semantic index collection.
@@ -713,7 +657,7 @@ func (service *Service) collectionRowCount(ctx context.Context, collectionName s
 		slog.ErrorContext(ctx, "read count column failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return 0, fmt.Errorf("read count(*) column for %s: %w", collectionName, err)
 	}
-	return safeInt32FromInt64(total), nil
+	return milvusstore.SafeInt32(total), nil
 }
 
 // InspectCollection reports whether one collection exists and counts rows only
@@ -825,16 +769,6 @@ func sanitizeCollectionSuffix(value string) string {
 	return builder.String()
 }
 
-func maxInt(values ...int) int {
-	currentMax := 0
-	for _, value := range values {
-		if value > currentMax {
-			currentMax = value
-		}
-	}
-	return currentMax
-}
-
 // ValidateExtensionFilter returns the normalized extension list or an error if any entry is invalid.
 func ValidateExtensionFilter(extensionFilter []string) ([]string, error) {
 	cleanedExtensions := normalizeExtensionFilter(extensionFilter)
@@ -927,16 +861,6 @@ func minInt32(left int32, right int32) int32 {
 }
 
 func safeInt32FromInt(value int) int32 {
-	if value > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	if value < math.MinInt32 {
-		return math.MinInt32
-	}
-	return int32(value)
-}
-
-func safeInt32FromInt64(value int64) int32 {
 	if value > math.MaxInt32 {
 		return math.MaxInt32
 	}

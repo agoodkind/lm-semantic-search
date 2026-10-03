@@ -119,7 +119,7 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 		return nil, fmt.Errorf("acquire collection %s: %w", codebase.CollectionName, leaseErr)
 	}
 	defer lease.Release()
-	hits, err := manager.semantic.SearchCollection(ctx, semantic.CollectionSearch{
+	search := semantic.CollectionSearch{
 		CollectionName: codebase.CollectionName,
 		Query:          request.Query,
 		Limit:          limit,
@@ -128,7 +128,14 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 		GroupBy:        request.GroupBy,
 		PerGroupLimit:  request.PerGroupLimit,
 		Declaration:    declaration,
-	})
+	}
+	var hits []semantic.CollectionHit
+	var err error
+	if semantic.IsConversationDeclaration(declaration) {
+		hits, err = manager.semantic.SearchConversationCollection(ctx, search)
+	} else {
+		hits, err = manager.semantic.SearchCollection(ctx, search)
+	}
 	if err != nil {
 		manager.noteDependencyFailure(err)
 		slog.ErrorContext(ctx, "search collection failed", "collection_id", collectionID, "collection", codebase.CollectionName, "err", err)

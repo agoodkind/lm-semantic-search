@@ -23,6 +23,16 @@ const (
 	truthUnknown
 )
 
+// SearchConversationCollection runs the typed search of a local collection with
+// the conversation declaration. A local row stores the conversation fields, so
+// the search needs no legacy group resolution.
+func (store *Store) SearchConversationCollection(
+	ctx context.Context,
+	search semantic.CollectionSearch,
+) ([]semantic.CollectionHit, error) {
+	return store.SearchCollection(ctx, search)
+}
+
 // SearchCollection runs a typed search of a local collection. It ranks a
 // fixed candidate set that never depends on the limit, the group cap, or the
 // score floor, at the depth the Milvus collection search ranks. When at most

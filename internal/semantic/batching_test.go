@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/client/v2/column"
@@ -336,10 +338,10 @@ func actualInsertRequestBytes(
 	vectors := make([][]float32, 0, len(chunks))
 	scalars := newConversationScalarColumns(columnSet.ConversationScalars(), len(chunks))
 	for index, chunk := range chunks {
-		content, _ := sanitizeUTF8(chunk.Content)
-		relativePath, _ := sanitizeUTF8(chunk.RelativePath)
-		fileExtension, _ := sanitizeUTF8(chunk.FileExtension)
-		metadataValue, _ := sanitizeUTF8(encodeMetadata(chunk))
+		content, _ := milvusstore.SanitizeUTF8(chunk.Content)
+		relativePath, _ := milvusstore.SanitizeUTF8(chunk.RelativePath)
+		fileExtension, _ := milvusstore.SanitizeUTF8(chunk.FileExtension)
+		metadataValue, _ := milvusstore.SanitizeUTF8(encodeMetadata(chunk))
 		ids = append(ids, generateID(chunk, index))
 		contents = append(contents, content)
 		contentHashes = append(contentHashes, ContentVectorKey(content))

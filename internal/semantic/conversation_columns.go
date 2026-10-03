@@ -120,6 +120,23 @@ func (columns *conversationScalarColumns) append(chunk model.StoredChunk) {
 	columns.loadRules = append(columns.loadRules, chunk.LoadRules)
 }
 
+// conversationScalarValues returns the value of every conversation scalar
+// column for one chunk. The role is lowercased and the provider comes from the
+// conversation id prefix. Every value is concrete and none is null.
+func conversationScalarValues(chunk model.StoredChunk) map[string]collection.ScalarValue {
+	return map[string]collection.ScalarValue{
+		conversationIDFieldName:       collection.StringScalar(chunk.ConversationID),
+		parentConversationIDFieldName: collection.StringScalar(chunk.ParentConversationID),
+		roleFieldName:                 collection.StringScalar(strings.ToLower(chunk.Role)),
+		providerFieldName:             collection.StringScalar(providerFromConversationID(chunk.ConversationID)),
+		workspaceRootFieldName:        collection.StringScalar(chunk.WorkspaceRoot),
+		archivedFieldName:             collection.BoolScalar(chunk.Archived),
+		timestampUnixFieldName:        collection.Int64Scalar(chunk.TimestampUnix),
+		messageIndexFieldName:         collection.Int64Scalar(int64(chunk.MessageIndex)),
+		loadRulesFieldName:            collection.StringScalar(chunk.LoadRules),
+	}
+}
+
 // providerFromConversationID returns the provider encoded as the prefix of a
 // clyde conversation id (claude:<id> -> "claude", codex:<id> -> "codex"). An id
 // with no provider separator yields the empty string, which no provider filter

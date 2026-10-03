@@ -31,7 +31,7 @@ type CompiledFilter struct {
 // inline with the existing Milvus string escape. An all node joins its
 // children with " and " and wraps only an any child in parentheses.
 func Compile(filter *Filter) (CompiledFilter, error) {
-	compiler := filterCompiler{params: nil}
+	compiler := filterCompiler{params: nil, inline: false}
 	if filter == nil {
 		return CompiledFilter{Expression: "", Params: nil}, nil
 	}
@@ -42,9 +42,23 @@ func Compile(filter *Filter) (CompiledFilter, error) {
 	return CompiledFilter{Expression: expression, Params: compiler.params}, nil
 }
 
-// filterCompiler numbers template placeholders in tree order.
+// CompileInline renders a validated filter tree as a Milvus boolean expression
+// with every membership set written inline as `column in [v1, v2]`. A request
+// that cannot bind template parameters, such as a delete, uses this form. A nil
+// tree renders the empty expression.
+func CompileInline(filter *Filter) (string, error) {
+	compiler := filterCompiler{params: nil, inline: true}
+	if filter == nil {
+		return "", nil
+	}
+	return compiler.node(*filter)
+}
+
+// filterCompiler numbers template placeholders in tree order. An inline
+// compiler writes membership sets in the expression and binds no parameter.
 type filterCompiler struct {
 	params []TemplateParam
+	inline bool
 }
 
 func (compiler *filterCompiler) node(filter Filter) (string, error) {
@@ -104,6 +118,13 @@ func (compiler *filterCompiler) group(children []Filter, separator string, needs
 func (compiler *filterCompiler) membership(filter Filter) (string, error) {
 	if len(filter.Values) == 0 {
 		return "", fmt.Errorf("membership filter on %s has no values", filter.Column)
+	}
+	if compiler.inline {
+		literals := make([]string, 0, len(filter.Values))
+		for _, value := range filter.Values {
+			literals = append(literals, literal(value))
+		}
+		return filter.Column + " in [" + strings.Join(literals, ", ") + "]", nil
 	}
 	param := TemplateParam{
 		Name:    "p" + strconv.Itoa(len(compiler.params)),

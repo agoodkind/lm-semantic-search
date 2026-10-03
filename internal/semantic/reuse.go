@@ -9,6 +9,8 @@ import (
 	"io"
 	"log/slog"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/spans"
@@ -177,7 +179,7 @@ func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collection
 			if contentErr != nil {
 				return fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
 			}
-			vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+			vector, vectorErr := milvusstore.VectorAt(vectorColumn, rowIndex)
 			if vectorErr != nil {
 				return fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
 			}

@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -228,7 +230,7 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 			slog.Error("read relative path column failed", "index", rowIndex, "err", relativePathErr)
 			return nil, nil, nil, fmt.Errorf("read relative path column at %d: %w", rowIndex, relativePathErr)
 		}
-		vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+		vector, vectorErr := milvusstore.VectorAt(vectorColumn, rowIndex)
 		if vectorErr != nil {
 			slog.Error("read vector column failed", "index", rowIndex, "err", vectorErr)
 			return nil, nil, nil, fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
@@ -242,12 +244,12 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 				metadata = decodeMetadata(rawMetadata)
 			}
 		}
-		splitPart, splitPartRecorded, splitPartErr := splitPartAt(
+		splitPart, splitPartRecorded, splitPartErr := milvusstore.SplitPartAt(
 			splitPartColumn,
 			rowIndex,
 		)
 		if splitPartErr != nil {
-			return nil, nil, nil, splitPartErr
+			return nil, nil, nil, fmt.Errorf("read backfill split part at %d: %w", rowIndex, splitPartErr)
 		}
 
 		ids = append(ids, id)
@@ -255,8 +257,8 @@ func readBackfillRows(resultSet milvusclient.ResultSet) ([]string, []model.Store
 		chunks = append(chunks, model.StoredChunk{
 			Content:              content,
 			RelativePath:         relativePath,
-			StartLine:            safeInt32FromInt64(startLine),
-			EndLine:              safeInt32FromInt64(endLine),
+			StartLine:            milvusstore.SafeInt32(startLine),
+			EndLine:              milvusstore.SafeInt32(endLine),
 			Language:             metadata.Language,
 			FileExtension:        fileExtension,
 			ConversationID:       metadata.ConversationID,
@@ -317,10 +319,10 @@ func (service *Service) upsertConversationColumns(ctx context.Context, collectio
 	splitParts := make([]int64, 0, len(chunks))
 	splitPartsRecorded := make([]bool, 0, len(chunks))
 	for _, chunk := range chunks {
-		content, _ := sanitizeUTF8(chunk.Content)
-		relativePath, _ := sanitizeUTF8(chunk.RelativePath)
-		fileExtension, _ := sanitizeUTF8(chunk.FileExtension)
-		metadataValue, _ := sanitizeUTF8(encodeMetadata(chunk))
+		content, _ := milvusstore.SanitizeUTF8(chunk.Content)
+		relativePath, _ := milvusstore.SanitizeUTF8(chunk.RelativePath)
+		fileExtension, _ := milvusstore.SanitizeUTF8(chunk.FileExtension)
+		metadataValue, _ := milvusstore.SanitizeUTF8(encodeMetadata(chunk))
 		contents = append(contents, content)
 		relativePaths = append(relativePaths, relativePath)
 		startLines = append(startLines, int64(chunk.StartLine))

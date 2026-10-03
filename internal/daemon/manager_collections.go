@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
@@ -275,7 +277,7 @@ func validateCollectionDeclaration(declaration collection.Declaration) error {
 	if strings.TrimSpace(declaration.ItemIDColumn) == "" {
 		return adapterr.NewMissingArgument("item_id_column")
 	}
-	builtinColumns := semantic.BuiltinColumnNames()
+	builtinColumns := milvusstore.BuiltinColumnNames()
 	declared := make(map[string]collection.ScalarColumn, len(declaration.Scalars))
 	for _, column := range declaration.Scalars {
 		if err := validateScalarColumn(column, builtinColumns); err != nil {

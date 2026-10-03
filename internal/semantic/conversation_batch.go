@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"google.golang.org/grpc/peer"
@@ -337,7 +339,7 @@ func registerConversationBatchDerivedMessage(
 		slog.Error("read conversation batch derived role column failed", "index", rowIndex, "err", roleErr)
 		return fmt.Errorf("read role column at %d: %w", rowIndex, roleErr)
 	}
-	assemblies.addDerivedMessage(conversationID, safeInt32FromInt64(messageIndex), role)
+	assemblies.addDerivedMessage(conversationID, milvusstore.SafeInt32(messageIndex), role)
 	return nil
 }
 
@@ -374,16 +376,16 @@ func appendConversationBatchBaseRow(
 		slog.Error("read conversation batch part index failed", "index", rowIndex, "err", partErr)
 		return fmt.Errorf("read conversation part index at %d: %w", rowIndex, partErr)
 	}
-	splitPart, splitPartRecorded, splitPartErr := splitPartAt(
+	splitPart, splitPartRecorded, splitPartErr := milvusstore.SplitPartAt(
 		splitPartColumn,
 		rowIndex,
 	)
 	if splitPartErr != nil {
-		return splitPartErr
+		return fmt.Errorf("read conversation batch split part at %d: %w", rowIndex, splitPartErr)
 	}
 	assemblies.addBasePart(
 		conversationID,
-		safeInt32FromInt64(messageIndex),
+		milvusstore.SafeInt32(messageIndex),
 		role,
 		partIndex,
 		splitPart,

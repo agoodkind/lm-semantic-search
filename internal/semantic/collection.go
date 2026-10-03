@@ -9,6 +9,10 @@ import (
 	"strings"
 	"sync"
 
+	"goodkind.io/lm-semantic-search/internal/model"
+
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
@@ -185,6 +189,23 @@ func (columnSet StoreColumnSet) creationScalars() []collection.ScalarColumn {
 	}
 }
 
+// rowScalars returns the scalar values an insert of chunk writes for this
+// column set. A conversation row derives its values from the conversation
+// fields, a declared row stores the chunk's own values, and a code row has
+// none.
+func (columnSet StoreColumnSet) rowScalars(chunk model.StoredChunk) map[string]collection.ScalarValue {
+	switch columnSet.kind {
+	case storeColumnKindConversation:
+		return conversationScalarValues(chunk)
+	case storeColumnKindDeclared:
+		return chunk.Scalars
+	case storeColumnKindCode:
+		return nil
+	default:
+		return nil
+	}
+}
+
 // storeColumnSetForCollection classifies a collection by name for the callers
 // that rewrite rows in place and have no item source to ask (CopyChunks copies
 // existing rows within one known collection). The source-driven ingest path
@@ -210,54 +231,7 @@ func isStagingCollection(collectionName string) bool {
 // so the same definitions serve both a freshly created collection and an
 // AddCollectionField migration onto a collection with existing rows.
 func conversationScalarFields() []*entity.Field {
-	return scalarFields(ConversationDeclaration().Scalars)
-}
-
-// scalarFields builds the Milvus field definitions for declared scalar columns,
-// in declaration order.
-func scalarFields(columns []collection.ScalarColumn) []*entity.Field {
-	fields := make([]*entity.Field, 0, len(columns))
-	for _, column := range columns {
-		fields = append(fields, scalarField(column))
-	}
-	return fields
-}
-
-// scalarField builds the Milvus field definition for one declared scalar
-// column. A string column becomes a VarChar with the declared maximum length.
-func scalarField(column collection.ScalarColumn) *entity.Field {
-	field := entity.NewField().WithName(column.Name)
-	switch column.Type {
-	case collection.ScalarTypeString:
-		field = field.WithDataType(entity.FieldTypeVarChar).WithMaxLength(int64(column.MaxLength))
-	case collection.ScalarTypeBool:
-		field = field.WithDataType(entity.FieldTypeBool)
-	case collection.ScalarTypeInt64:
-		field = field.WithDataType(entity.FieldTypeInt64)
-	default:
-		field = field.WithDataType(entity.FieldTypeNone)
-	}
-	return field.WithNullable(column.Nullable)
-}
-
-// BuiltinColumnNames returns the columns the built-in collection schema
-// defines. A collection declaration may not declare any of them as a scalar
-// column, and a stored schema lists them outside its declared scalars.
-func BuiltinColumnNames() []string {
-	return []string{
-		idFieldName,
-		contentFieldName,
-		relativePathFieldName,
-		startLineFieldName,
-		endLineFieldName,
-		fileExtensionFieldName,
-		metadataFieldName,
-		contentHashFieldName,
-		embeddingModelFieldName,
-		splitPartFieldName,
-		denseVectorFieldName,
-		sparseVectorFieldName,
-	}
+	return milvusstore.ScalarFieldSchemas(ConversationDeclaration().Scalars)
 }
 
 // DescribeScalarColumns reports the declared scalar columns of a stored
@@ -292,7 +266,7 @@ func (service *Service) DescribeScalarColumns(
 		return nil, false, wrapStoreError(ctx, err, "describe Milvus collection "+collectionName)
 	}
 	builtin := make(map[string]struct{})
-	for _, name := range BuiltinColumnNames() {
+	for _, name := range milvusstore.BuiltinColumnNames() {
 		builtin[name] = struct{}{}
 	}
 	columns := make([]collection.ScalarColumn, 0)
@@ -339,29 +313,6 @@ func storedScalarColumn(ctx context.Context, collectionName string, field *entit
 	return column, nil
 }
 
-func splitPartField() *entity.Field {
-	return entity.NewField().
-		WithName(splitPartFieldName).
-		WithDataType(entity.FieldTypeInt64).
-		WithNullable(true)
-}
-
-func contentHashField() *entity.Field {
-	return entity.NewField().
-		WithName(contentHashFieldName).
-		WithDataType(entity.FieldTypeVarChar).
-		WithMaxLength(64).
-		WithNullable(true)
-}
-
-func embeddingModelField() *entity.Field {
-	return entity.NewField().
-		WithName(embeddingModelFieldName).
-		WithDataType(entity.FieldTypeVarChar).
-		WithMaxLength(embeddingModelFieldMaxLength).
-		WithNullable(true)
-}
-
 func splitPartFieldsToAdd(schema *entity.Schema) []*entity.Field {
 	if schema != nil {
 		for _, field := range schema.Fields {
@@ -370,7 +321,7 @@ func splitPartFieldsToAdd(schema *entity.Schema) []*entity.Field {
 			}
 		}
 	}
-	return []*entity.Field{splitPartField()}
+	return []*entity.Field{milvusstore.SplitPartFieldSchema()}
 }
 
 func (service *Service) createCollection(
@@ -379,42 +330,12 @@ func (service *Service) createCollection(
 	dimension int,
 	declaredScalars []collection.ScalarColumn,
 ) (CollectionLease, error) {
-	schema := entity.NewSchema().
-		WithField(entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(idFieldMaxLength).WithIsPrimaryKey(true)).
-		WithField(entity.NewField().WithName(contentFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(contentFieldMaxLength).WithEnableAnalyzer(true).WithEnableMatch(true)).
-		WithField(entity.NewField().WithName(relativePathFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(1024)).
-		WithField(entity.NewField().WithName(startLineFieldName).WithDataType(entity.FieldTypeInt64)).
-		WithField(entity.NewField().WithName(endLineFieldName).WithDataType(entity.FieldTypeInt64)).
-		WithField(entity.NewField().WithName(fileExtensionFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(32)).
-		WithField(entity.NewField().WithName(metadataFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
-		WithField(contentHashField()).
-		WithField(embeddingModelField()).
-		WithField(splitPartField()).
-		WithField(entity.NewField().WithName(denseVectorFieldName).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(dimension)))
-
-	for _, field := range scalarFields(declaredScalars) {
-		schema = schema.WithField(field)
-	}
-
-	// Milvus 2.6 rejects mmap.enabled on AUTOINDEX creation. The policy is applied
-	// through field and index property changes after every required index exists.
-	indexOptions := []milvusclient.CreateIndexOption{
-		milvusclient.NewCreateIndexOption(collectionName, denseVectorFieldName, index.NewAutoIndex(entity.COSINE)),
-		milvusclient.NewCreateIndexOption(collectionName, contentHashFieldName, index.NewInvertedIndex()),
-	}
-
-	if service.cfg.HybridMode {
-		schema = schema.
-			WithField(entity.NewField().WithName(sparseVectorFieldName).WithDataType(entity.FieldTypeSparseVector)).
-			WithFunction(entity.NewFunction().WithName("bm25").WithType(entity.FunctionTypeBM25).WithInputFields(contentFieldName).WithOutputFields(sparseVectorFieldName))
-		indexOptions = append(indexOptions, milvusclient.NewCreateIndexOption(collectionName, sparseVectorFieldName, index.NewSparseInvertedIndex(entity.BM25, 0.2)))
-	}
-
 	maintenance, err := service.residency.Maintain(ctx, collectionName)
 	if err != nil {
 		return nil, err
 	}
-	if err := service.milvus.CreateCollection(ctx, milvusclient.NewCreateCollectionOption(collectionName, schema).WithIndexOptions(indexOptions...)); err != nil {
+	createOption := service.collectionStore().CreateCollectionOption(collectionName, dimension, declaredScalars)
+	if err := service.milvus.CreateCollection(ctx, createOption); err != nil {
 		maintenance.ReleaseContext(ctx)
 		return nil, wrapStoreError(ctx, err, "create Milvus collection "+collectionName)
 	}
@@ -496,7 +417,7 @@ func (service *Service) ensureReuseIdentityColumns(
 	for _, field := range described.Schema.Fields {
 		existingFields[field.Name] = struct{}{}
 	}
-	for _, field := range []*entity.Field{contentHashField(), embeddingModelField()} {
+	for _, field := range []*entity.Field{milvusstore.ContentHashFieldSchema(), milvusstore.EmbeddingModelFieldSchema()} {
 		if _, found := existingFields[field.Name]; found {
 			continue
 		}

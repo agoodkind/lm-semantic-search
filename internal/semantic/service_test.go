@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -90,12 +92,12 @@ func TestDeduplicateChunks(t *testing.T) {
 	}
 }
 
-func TestResultSetsToChunksReturnsIncompleteResultError(t *testing.T) {
+func TestHitsFromResultSetReturnsIncompleteResultError(t *testing.T) {
 	t.Parallel()
 
-	_, err := resultSetsToChunks([]milvusclient.ResultSet{{ResultCount: 1}})
+	_, err := milvusstore.HitsFromResultSet(milvusclient.ResultSet{ResultCount: 1}, nil)
 	if !errors.Is(err, ErrSearchResultIncomplete) {
-		t.Fatalf("resultSetsToChunks returned err=%v", err)
+		t.Fatalf("HitsFromResultSet returned err=%v", err)
 	}
 }
 

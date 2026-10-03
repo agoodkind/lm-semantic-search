@@ -8,10 +8,11 @@ import (
 	"log/slog"
 	"strings"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/collection"
-	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc/peer"
 )
 
@@ -112,7 +113,7 @@ func (backfill ScalarBackfill) Filled(stored map[string]collection.ScalarValue, 
 // values. changed and orphan count the page rows that need the backfill.
 type scalarBackfillPage struct {
 	ids     []string
-	rows    []model.StoredChunk
+	rows    []collection.Row
 	changed int
 	orphan  int
 }
@@ -270,38 +271,32 @@ func readScalarBackfillPage(resultSet milvusclient.ResultSet, backfill ScalarBac
 func storedBackfillValues(resultSet milvusclient.ResultSet, columns []collection.ScalarColumn, rowIndex int) (map[string]collection.ScalarValue, error) {
 	stored := make(map[string]collection.ScalarValue, len(columns))
 	for _, column := range columns {
-		value, err := declaredScalarValueAt(resultSet.GetColumn(column.Name), column, rowIndex)
+		value, err := milvusstore.ScalarValueAt(resultSet.GetColumn(column.Name), column, rowIndex)
 		if err != nil {
-			return nil, err
+			slog.Error("read stored backfill column failed", "column", column.Name, "index", rowIndex, "err", err)
+			return nil, fmt.Errorf("read stored backfill column %s: %w", column.Name, err)
 		}
 		stored[column.Name] = value
 	}
 	return stored, nil
 }
 
-// scalarBackfillRow builds the stored chunk that declaredScalarInsertColumns
-// reads for one row. Scalars stores the row's filled backfill values, and a
-// build error identifies the row by relativePath.
-func scalarBackfillRow(relativePath string, scalars map[string]collection.ScalarValue) model.StoredChunk {
-	return model.StoredChunk{
-		Content:              "",
-		RelativePath:         relativePath,
-		StartLine:            0,
-		EndLine:              0,
-		Language:             "",
-		FileExtension:        "",
-		ConversationID:       "",
-		ParentConversationID: "",
-		MessageIndex:         0,
-		Role:                 "",
-		TimestampUnix:        0,
-		WorkspaceRoot:        "",
-		Archived:             false,
-		SplitPart:            0,
-		SplitPartRecorded:    false,
-		LoadRules:            "",
-		Scalars:              scalars,
-		Score:                0,
+// scalarBackfillRow builds the row that DeclaredScalarInsertColumns reads for
+// one row. Scalars stores the row's filled backfill values, and a build error
+// identifies the row by relativePath.
+func scalarBackfillRow(relativePath string, scalars map[string]collection.ScalarValue) collection.Row {
+	return collection.Row{
+		ID:                "",
+		Content:           "",
+		RelativePath:      relativePath,
+		StartLine:         0,
+		EndLine:           0,
+		FileExtension:     "",
+		Metadata:          "",
+		SplitPart:         0,
+		SplitPartRecorded: false,
+		Vector:            nil,
+		Scalars:           scalars,
 	}
 }
 
@@ -309,9 +304,9 @@ func scalarBackfillRow(relativePath string, scalars map[string]collection.Scalar
 // partial update. The update sends the primary key and the backfill columns,
 // and Milvus keeps every other stored field of each row.
 func (service *Service) writeScalarBackfill(ctx context.Context, collectionName string, columns []collection.ScalarColumn, page scalarBackfillPage) error {
-	declaredColumns, err := declaredScalarInsertColumns(collectionName, columns, page.rows)
+	declaredColumns, err := milvusstore.DeclaredScalarInsertColumns(collectionName, columns, page.rows)
 	if err != nil {
-		return err
+		return fmt.Errorf("build backfill columns for %s: %w", collectionName, err)
 	}
 	option := milvusclient.NewColumnBasedInsertOption(collectionName).
 		WithVarcharColumn(idFieldName, page.ids).

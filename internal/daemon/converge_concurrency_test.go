@@ -234,6 +234,10 @@ func (lease fakeCollectionLease) ReleaseContext(context.Context) {
 	lease.Release()
 }
 
+func (f *fakeSemantic) SearchConversationCollection(ctx context.Context, search semantic.CollectionSearch) ([]semantic.CollectionHit, error) {
+	return f.SearchCollection(ctx, search)
+}
+
 func (f *fakeSemantic) SearchCollection(ctx context.Context, search semantic.CollectionSearch) ([]semantic.CollectionHit, error) {
 	f.mu.Lock()
 	f.conversationSearchScopes = append(f.conversationSearchScopes, itemIDScope(search.Filter, search.Declaration.ItemIDColumn))

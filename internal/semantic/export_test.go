@@ -41,9 +41,9 @@ func SetPromotionRecoveryServerAddressForTest(address string) {
 }
 
 // WrapStoreErrorForTest exposes wrapStoreError to the external semantic_test
-// package, where constructing a real gRPC transport error is allowed, so the
-// store-outage classification of the write/index path can be tested without the
-// production package importing google.golang.org/grpc.
+// package, where constructing a real gRPC transport error is allowed. The
+// store-outage classification of the write and index path is then tested
+// without the production package importing google.golang.org/grpc.
 func WrapStoreErrorForTest(ctx context.Context, err error, operation string) error {
 	return wrapStoreError(ctx, err, operation)
 }
