@@ -2,24 +2,22 @@ package semantic
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
 
+	"goodkind.io/lm-semantic-search/collection"
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 
 	"github.com/milvus-io/milvus/client/v2/column"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"google.golang.org/grpc/peer"
 )
 
 // ConversationStoredRows is one conversation's stored rows as read from the live
-// collection. DerivedPaths retains every derived-row identity, while
-// UsableDerivedPaths contains only paths whose content can satisfy a family.
+// collection. DerivedPaths retains every derived-row identity. UsableDerivedPaths
+// contains only the paths with content that can satisfy a family.
 type ConversationStoredRows struct {
 	Messages           map[int32]StoredMessageState
 	DerivedPaths       map[string]string
@@ -29,8 +27,8 @@ type ConversationStoredRows struct {
 // ConversationBatchState is one batched read of the live conversation collection
 // for a set of conversation ids. Rows maps each requested id to its stored rows;
 // Reuse is the batch-wide content-hash -> dense-vector map. A missing target row
-// can reuse a vector Reuse holds for identical content embedded anywhere in the
-// batch, so the row is inserted without re-embedding. Rows with no recorded
+// can reuse a vector from Reuse for identical content embedded anywhere in the
+// batch, and the row is inserted without re-embedding. Rows with no recorded
 // embedding model remain reusable, while known unequal model names are excluded.
 type ConversationBatchState struct {
 	Rows  map[string]ConversationStoredRows
@@ -38,7 +36,7 @@ type ConversationBatchState struct {
 }
 
 // conversationBatchIDFilterSize bounds how many conversation ids go into one
-// Milvus membership clause, mirroring conversationFilterIDBatchSize, so a large
+// Milvus membership clause, mirroring conversationFilterIDBatchSize. A large
 // bootstrap scope splits across several queries instead of overflowing the
 // expression-size limit. A normal ingest scope is one query.
 const conversationBatchIDFilterSize = conversationFilterIDBatchSize
@@ -94,68 +92,65 @@ func (service *Service) LoadConversationDerivedBatch(ctx context.Context, collec
 	return state, nil
 }
 
+// conversationBatchDeclaration is the item ID column and the scalar columns the
+// batch read needs: the conversation ID, the role, and the message index.
+func conversationBatchDeclaration() collection.Declaration {
+	declaration := ConversationDeclaration()
+	needed := map[string]struct{}{
+		conversationIDFieldName: {},
+		roleFieldName:           {},
+		messageIndexFieldName:   {},
+	}
+	scalars := make([]collection.ScalarColumn, 0, len(needed))
+	for _, scalar := range declaration.Scalars {
+		if _, found := needed[scalar.Name]; found {
+			scalars = append(scalars, scalar)
+		}
+	}
+	return collection.Declaration{ItemIDColumn: declaration.ItemIDColumn, Scalars: scalars}
+}
+
 func (service *Service) loadConversationBatchGroup(ctx context.Context, collectionName string, conversationIDs []string, assemblies *conversationBatchAssemblies, reuse map[string][]float32) error {
 	if len(conversationIDs) == 0 {
 		return nil
 	}
-	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
-		WithBatchSize(reuseVectorBatchSize).
-		WithFilter(conversationBatchFilterExpression(conversationIDs)).
-		WithOutputFields(
-			conversationIDFieldName,
-			relativePathFieldName,
-			messageIndexFieldName,
-			roleFieldName,
-			contentFieldName,
-			embeddingModelFieldName,
-			denseVectorFieldName,
-			splitPartFieldName,
-		))
-	if err != nil {
-		slog.ErrorContext(ctx, "open conversation batch query iterator failed", "collection", collectionName, "err", err)
-		return fmt.Errorf("open conversation batch iterator for %s: %w", collectionName, err)
-	}
-	for {
-		resultSet, nextErr := iterator.Next(ctx)
-		if errors.Is(nextErr, io.EOF) {
-			return nil
-		}
-		if nextErr != nil {
-			slog.ErrorContext(ctx, "conversation batch query iterator next failed", "collection", collectionName, "err", nextErr)
-			return fmt.Errorf("iterate %s for conversation batch: %w", collectionName, nextErr)
-		}
-		if err := appendConversationBatchRows(resultSet, conversationIDs, service.cfg.EmbeddingModel, assemblies, reuse); err != nil {
-			return err
-		}
-	}
-}
-
-func conversationBatchFilterExpression(conversationIDs []string) string {
-	clauses := []string{inStringClause(conversationIDFieldName, conversationIDs)}
+	prefixes := make([]string, 0, len(conversationIDs)*3)
 	for _, conversationID := range conversationIDs {
-		clauses = append(
-			clauses,
-			relativePathPrefixExpression("conv/"+conversationID+"/"),
-			relativePathPrefixExpression("convtool/"+conversationID+"/"),
-			relativePathPrefixExpression("convthink/"+conversationID+"/"),
+		prefixes = append(
+			prefixes,
+			"conv/"+conversationID+"/",
+			"convtool/"+conversationID+"/",
+			"convthink/"+conversationID+"/",
 		)
 	}
-	return "(" + strings.Join(clauses, " or ") + ")"
+	rows, err := service.collectionStore().QueryRows(ctx, collection.RowsRequest{
+		Collection:    collectionName,
+		Declaration:   conversationBatchDeclaration(),
+		ItemIDs:       conversationIDs,
+		PathPrefixes:  prefixes,
+		IncludeVector: true,
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "load conversation batch rows failed", "collection", collectionName, "err", err)
+		return fmt.Errorf("load conversation batch rows from %s: %w", collectionName, err)
+	}
+	return appendConversationBatchRows(rows, conversationIDs, service.cfg.EmbeddingModel, assemblies, reuse)
 }
 
-func conversationBatchRowID(
-	conversationIDColumn column.Column,
-	rowIndex int,
-	relativePath string,
-	conversationIDs []string,
-) (string, error) {
-	conversationID, present, err := readOptionalStringAt(conversationIDColumn, rowIndex)
-	if err != nil {
-		slog.Error("read conversation batch id column failed", "index", rowIndex, "err", err)
-		return "", fmt.Errorf("read conversation id column at %d: %w", rowIndex, err)
+// cellString returns the string value of a row's scalar cell and whether the
+// cell has a value.
+func cellString(row collection.StoredRow, columnName string) (string, bool) {
+	cell, found := row.Scalars[columnName]
+	if !found || cell.State != collection.ScalarCellValue {
+		return "", false
 	}
+	return cell.Value.String, true
+}
+
+func conversationBatchRowID(row collection.StoredRow, conversationIDs []string) string {
+	conversationID, present := cellString(row, conversationIDFieldName)
 	if present && conversationID != "" && slices.Contains(conversationIDs, conversationID) {
-		return conversationID, nil
+		return conversationID
 	}
 	matchedID := ""
 	matchedPrefixLength := 0
@@ -166,24 +161,20 @@ func conversationBatchRowID(
 			"convthink/" + requestedID + "/",
 		}
 		for _, prefix := range prefixes {
-			if strings.HasPrefix(relativePath, prefix) && len(prefix) > matchedPrefixLength {
+			if strings.HasPrefix(row.RelativePath, prefix) && len(prefix) > matchedPrefixLength {
 				matchedID = requestedID
 				matchedPrefixLength = len(prefix)
 			}
 		}
 	}
-	return matchedID, nil
+	return matchedID
 }
 
-func conversationBatchMessageIndexAt(
-	messageIndexColumn column.Column,
-	rowIndex int,
-	relativePath string,
-	conversationID string,
-) (int64, bool, error) {
-	messageIndex, present, err := messageIndexAt(messageIndexColumn, rowIndex)
-	if err != nil || present {
-		return messageIndex, present, err
+// conversationBatchMessageIndex returns the message index of a stored row: the
+// messageIndex cell when it has a value, otherwise the index in the family path.
+func conversationBatchMessageIndex(row collection.StoredRow, conversationID string) (int64, bool) {
+	if cell, found := row.Scalars[messageIndexFieldName]; found && cell.State == collection.ScalarCellValue {
+		return cell.Value.Int64, true
 	}
 	prefixes := []string{
 		"conv/" + conversationID + "/",
@@ -191,118 +182,49 @@ func conversationBatchMessageIndexAt(
 		"convthink/" + conversationID + "/",
 	}
 	for _, prefix := range prefixes {
-		remainder, found := strings.CutPrefix(relativePath, prefix)
+		remainder, found := strings.CutPrefix(row.RelativePath, prefix)
 		if !found {
 			continue
 		}
 		indexText, _, _ := strings.Cut(remainder, "/")
 		parsed, parseErr := strconv.ParseInt(indexText, 10, 32)
 		if parseErr == nil && parsed >= 0 {
-			return parsed, true, nil
+			return parsed, true
 		}
-		return 0, false, nil
+		return 0, false
 	}
-	return 0, false, nil
-}
-
-func readOptionalStringAt(valueColumn column.Column, rowIndex int) (string, bool, error) {
-	if valueColumn == nil {
-		return "", false, nil
-	}
-	isNull, nullErr := valueColumn.IsNull(rowIndex)
-	if nullErr != nil {
-		slog.Error("read optional string null state failed", "row", rowIndex, "err", nullErr)
-		return "", false, fmt.Errorf("read null state at row %d: %w", rowIndex, nullErr)
-	}
-	if isNull {
-		return "", false, nil
-	}
-	value, valueErr := valueColumn.GetAsString(rowIndex)
-	if valueErr != nil {
-		slog.Error("read optional string failed", "row", rowIndex, "err", valueErr)
-		return "", false, fmt.Errorf("read string at row %d: %w", rowIndex, valueErr)
-	}
-	return value, true, nil
+	return 0, false
 }
 
 func appendConversationBatchRows(
-	resultSet milvusclient.ResultSet,
+	rows []collection.StoredRow,
 	conversationIDs []string,
 	currentEmbeddingModel string,
 	assemblies *conversationBatchAssemblies,
 	reuse map[string][]float32,
 ) error {
-	contentColumn := resultSet.GetColumn(contentFieldName)
-	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
-	conversationIDColumn := resultSet.GetColumn(conversationIDFieldName)
-	relativePathColumn := resultSet.GetColumn(relativePathFieldName)
-	if contentColumn == nil || vectorColumn == nil || conversationIDColumn == nil || relativePathColumn == nil {
-		return ErrSearchResultIncomplete
-	}
-	roleColumn := resultSet.GetColumn(roleFieldName)
-	messageIndexColumn := resultSet.GetColumn(messageIndexFieldName)
-	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
-	embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
-
-	for rowIndex := range resultSet.ResultCount {
-		contentValue, vector, contentErr := conversationContentVectorAt(contentColumn, vectorColumn, rowIndex)
-		if contentErr != nil {
-			return contentErr
+	for _, row := range rows {
+		if row.Vector == nil {
+			return ErrSearchResultIncomplete
 		}
-		contentHash := contentVectorKey(contentValue)
-		embeddingModel, modelErr := nullableStringAt(embeddingModelColumn, rowIndex)
-		if modelErr != nil {
-			return fmt.Errorf("read conversation batch embedding model at %d: %w", rowIndex, modelErr)
+		contentHash := contentVectorKey(row.Content)
+		if embeddingModelsCompatible(row.EmbeddingModel, currentEmbeddingModel) {
+			reuse[contentHash] = row.Vector
 		}
-		if embeddingModelsCompatible(embeddingModel, currentEmbeddingModel) {
-			reuse[contentHash] = vector
-		}
-
-		relativePath, relativePathErr := relativePathColumn.GetAsString(rowIndex)
-		if relativePathErr != nil {
-			slog.Error("read conversation batch relative path column failed", "index", rowIndex, "err", relativePathErr)
-			return fmt.Errorf("read relative path column at %d: %w", rowIndex, relativePathErr)
-		}
-		conversationID, idErr := conversationBatchRowID(
-			conversationIDColumn,
-			rowIndex,
-			relativePath,
-			conversationIDs,
-		)
-		if idErr != nil {
-			return idErr
-		}
+		conversationID := conversationBatchRowID(row, conversationIDs)
 		if conversationID == "" {
 			continue
 		}
-		if isDerivedConversationRelativePath(relativePath) {
-			usable := strings.TrimSpace(contentValue) != ""
-			assemblies.addDerived(conversationID, relativePath, contentHash, usable)
+		if isDerivedConversationRelativePath(row.RelativePath) {
+			usable := strings.TrimSpace(row.Content) != ""
+			assemblies.addDerived(conversationID, row.RelativePath, contentHash, usable)
 			if !usable {
 				continue
 			}
-			if err := registerConversationBatchDerivedMessage(
-				assemblies,
-				conversationID,
-				relativePath,
-				roleColumn,
-				messageIndexColumn,
-				rowIndex,
-			); err != nil {
-				return err
-			}
+			registerConversationBatchDerivedMessage(assemblies, conversationID, row)
 			continue
 		}
-		if err := appendConversationBatchBaseRow(
-			assemblies,
-			conversationID,
-			relativePath,
-			contentValue,
-			roleColumn,
-			messageIndexColumn,
-			splitPartColumn,
-			rowIndex,
-		); err != nil {
+		if err := appendConversationBatchBaseRow(assemblies, conversationID, row); err != nil {
 			return err
 		}
 	}
@@ -314,83 +236,40 @@ func appendConversationBatchRows(
 func registerConversationBatchDerivedMessage(
 	assemblies *conversationBatchAssemblies,
 	conversationID string,
-	relativePath string,
-	roleColumn column.Column,
-	messageIndexColumn column.Column,
-	rowIndex int,
-) error {
-	messageIndex, ok, messageIndexErr := conversationBatchMessageIndexAt(
-		messageIndexColumn,
-		rowIndex,
-		relativePath,
-		conversationID,
-	)
-	if messageIndexErr != nil {
-		return messageIndexErr
-	}
+	row collection.StoredRow,
+) {
+	messageIndex, ok := conversationBatchMessageIndex(row, conversationID)
 	if !ok {
-		return nil
+		return
 	}
-	if roleColumn == nil {
-		return ErrSearchResultIncomplete
-	}
-	role, _, roleErr := readOptionalStringAt(roleColumn, rowIndex)
-	if roleErr != nil {
-		slog.Error("read conversation batch derived role column failed", "index", rowIndex, "err", roleErr)
-		return fmt.Errorf("read role column at %d: %w", rowIndex, roleErr)
-	}
+	role, _ := cellString(row, roleFieldName)
 	assemblies.addDerivedMessage(conversationID, milvusstore.SafeInt32(messageIndex), role)
-	return nil
 }
 
 func appendConversationBatchBaseRow(
 	assemblies *conversationBatchAssemblies,
 	conversationID string,
-	relativePath string,
-	content string,
-	roleColumn column.Column,
-	messageIndexColumn column.Column,
-	splitPartColumn column.Column,
-	rowIndex int,
+	row collection.StoredRow,
 ) error {
-	messageIndex, ok, messageIndexErr := conversationBatchMessageIndexAt(
-		messageIndexColumn,
-		rowIndex,
-		relativePath,
-		conversationID,
-	)
-	if messageIndexErr != nil {
-		return messageIndexErr
-	}
+	messageIndex, ok := conversationBatchMessageIndex(row, conversationID)
 	if !ok {
 		return nil
 	}
-	role, _, roleErr := readOptionalStringAt(roleColumn, rowIndex)
-	if roleErr != nil {
-		slog.Error("read conversation batch role column failed", "index", rowIndex, "err", roleErr)
-		return fmt.Errorf("read role column at %d: %w", rowIndex, roleErr)
-	}
+	role, _ := cellString(row, roleFieldName)
 	conversationPrefix := "conv/" + conversationID + "/"
-	partIndex, partErr := conversationMessagePartIndex(relativePath, conversationPrefix)
+	partIndex, partErr := conversationMessagePartIndex(row.RelativePath, conversationPrefix)
 	if partErr != nil {
-		slog.Error("read conversation batch part index failed", "index", rowIndex, "err", partErr)
-		return fmt.Errorf("read conversation part index at %d: %w", rowIndex, partErr)
-	}
-	splitPart, splitPartRecorded, splitPartErr := milvusstore.SplitPartAt(
-		splitPartColumn,
-		rowIndex,
-	)
-	if splitPartErr != nil {
-		return fmt.Errorf("read conversation batch split part at %d: %w", rowIndex, splitPartErr)
+		slog.Error("read conversation batch part index failed", "relative_path", row.RelativePath, "err", partErr)
+		return fmt.Errorf("read conversation part index of %s: %w", row.RelativePath, partErr)
 	}
 	assemblies.addBasePart(
 		conversationID,
 		milvusstore.SafeInt32(messageIndex),
 		role,
 		partIndex,
-		splitPart,
-		splitPartRecorded,
-		content,
+		row.SplitPart,
+		row.SplitPartRecorded,
+		row.Content,
 	)
 	return nil
 }
@@ -437,11 +316,10 @@ func (assemblies *conversationBatchAssemblies) addBasePart(
 }
 
 // addDerivedMessage records a message that exists because one of its derived
-// rows was read, carrying the role that row holds. It adds no text part, so a
-// message with no base row assembles an empty text, which is what the store
-// holds for it.
+// rows was read, with the role of that row. It adds no text part. A message with
+// no base row assembles an empty text, matching the store.
 //
-// The role is filled only when the assembly has none, so a base row's role wins
+// The role is filled only when the assembly has none. A base row's role wins
 // whatever order the rows arrive in.
 func (assemblies *conversationBatchAssemblies) addDerivedMessage(
 	conversationID string,
@@ -506,6 +384,26 @@ func (assemblies *conversationBatchAssemblies) finalize() map[string]Conversatio
 		}
 	}
 	return rows
+}
+
+func readOptionalStringAt(valueColumn column.Column, rowIndex int) (string, bool, error) {
+	if valueColumn == nil {
+		return "", false, nil
+	}
+	isNull, nullErr := valueColumn.IsNull(rowIndex)
+	if nullErr != nil {
+		slog.Error("read optional string null state failed", "row", rowIndex, "err", nullErr)
+		return "", false, fmt.Errorf("read null state at row %d: %w", rowIndex, nullErr)
+	}
+	if isNull {
+		return "", false, nil
+	}
+	value, valueErr := valueColumn.GetAsString(rowIndex)
+	if valueErr != nil {
+		slog.Error("read optional string failed", "row", rowIndex, "err", valueErr)
+		return "", false, fmt.Errorf("read string at row %d: %w", rowIndex, valueErr)
+	}
+	return value, true, nil
 }
 
 func dedupeConversationIDs(conversationIDs []string) []string {
