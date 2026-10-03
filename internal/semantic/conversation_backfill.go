@@ -148,14 +148,14 @@ func (service *Service) BackfillConversationCollectionsOnce(ctx context.Context)
 // skips re-upserting every row on a later process.
 func (service *Service) conversationCollectionNeedsBackfill(ctx context.Context, collectionName string) (bool, error) {
 	peerInfo, _ := peer.FromContext(ctx)
-	collection, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
+	described, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "describe conversation collection for backfill check failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return false, fmt.Errorf("describe %s for backfill check: %w", collectionName, err)
 	}
 	hasProvider := false
-	if collection.Schema != nil {
-		for _, field := range collection.Schema.Fields {
+	if described.Schema != nil {
+		for _, field := range described.Schema.Fields {
 			if field.Name == providerFieldName {
 				hasProvider = true
 				break

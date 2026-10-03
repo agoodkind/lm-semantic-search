@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	lmcollection "goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -158,9 +159,9 @@ func TestCollectionSearchEvaluatesNestedFilterTree(t *testing.T) {
 	}, semantic.ConversationColumns())
 
 	declaration := semantic.ConversationDeclaration()
-	declaration.Scalars = append(declaration.Scalars, model.ScalarColumn{Name: "priority", Type: model.ScalarTypeInt64, Nullable: true, MaxLength: 0})
+	declaration.Scalars = append(declaration.Scalars, lmcollection.ScalarColumn{Name: "priority", Type: lmcollection.ScalarTypeInt64, Nullable: true, MaxLength: 0})
 	lower := int64(250)
-	search := func(filter semantic.CollectionFilter) []semantic.CollectionHit {
+	search := func(filter lmcollection.Filter) []semantic.CollectionHit {
 		t.Helper()
 		hits, searchErr := store.SearchCollection(context.Background(), semantic.CollectionSearch{
 			CollectionName: store.CollectionName(codebasePath),
@@ -178,39 +179,39 @@ func TestCollectionSearchEvaluatesNestedFilterTree(t *testing.T) {
 		return hits
 	}
 
-	either := semantic.AnyOf(
-		semantic.ColumnEquals("role", semantic.StringScalar("user")),
-		semantic.ColumnRange("timestampUnix", &lower, nil),
+	either := lmcollection.AnyOf(
+		lmcollection.ColumnEquals("role", lmcollection.StringScalar("user")),
+		lmcollection.ColumnRange("timestampUnix", &lower, nil),
 	)
 	if got, want := hitContents(search(either)), []string{"first", "third"}; !slices.Equal(got, want) {
 		t.Fatalf("any node contents = %v, want %v", got, want)
 	}
-	notClaude := semantic.Negate(semantic.ColumnIn("provider", semantic.StringValues([]string{"claude"})))
+	notClaude := lmcollection.Negate(lmcollection.ColumnIn("provider", lmcollection.StringValues([]string{"claude"})))
 	if got, want := hitContents(search(notClaude)), []string{"second"}; !slices.Equal(got, want) {
 		t.Fatalf("not node contents = %v, want %v", got, want)
 	}
-	unknownPriority := semantic.Negate(semantic.ColumnEquals("priority", semantic.Int64Scalar(1)))
+	unknownPriority := lmcollection.Negate(lmcollection.ColumnEquals("priority", lmcollection.Int64Scalar(1)))
 	if got := hitContents(search(unknownPriority)); len(got) != 0 {
 		t.Fatalf("not over an absent column kept %v, want none", got)
 	}
-	if got, want := hitContents(search(semantic.ColumnIsNull("priority"))), []string{"first", "second", "third"}; !slices.Equal(got, want) {
+	if got, want := hitContents(search(lmcollection.ColumnIsNull("priority"))), []string{"first", "second", "third"}; !slices.Equal(got, want) {
 		t.Fatalf("is_null on an absent column kept %v, want every row", got)
 	}
 
-	hits := search(semantic.ColumnEquals("conversationId", semantic.StringScalar("claude:a")))
+	hits := search(lmcollection.ColumnEquals("conversationId", lmcollection.StringScalar("claude:a")))
 	if len(hits) != 1 {
 		t.Fatalf("equality kept %d hits, want 1", len(hits))
 	}
 	role, _ := hits[0].Scalar("role")
-	if role != semantic.ValueCell("role", semantic.StringScalar("user")) {
+	if role != lmcollection.ValueCell("role", lmcollection.StringScalar("user")) {
 		t.Fatalf("role cell = %+v, want the lowercased stored role", role)
 	}
 	providerCell, _ := hits[0].Scalar("provider")
-	if providerCell != semantic.ValueCell("provider", semantic.StringScalar("claude")) {
+	if providerCell != lmcollection.ValueCell("provider", lmcollection.StringScalar("claude")) {
 		t.Fatalf("provider cell = %+v, want claude", providerCell)
 	}
 	priority, _ := hits[0].Scalar("priority")
-	if priority != semantic.AbsentCell("priority") {
+	if priority != lmcollection.AbsentCell("priority") {
 		t.Fatalf("priority cell = %+v, want absent", priority)
 	}
 }
@@ -337,7 +338,7 @@ func tiedConversationFixture(total int) ([]model.StoredChunk, map[string][]float
 
 // TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold proves collection
 // search ranks a fixed candidate set above the 4,096-row exact threshold of
-// code search, both below and above semantic.CollectionRankingDepth rows. The
+// code search, both below and above lmcollection.RankingDepth rows. The
 // dense conversation's rows tie at the top score, and a cap of two per
 // conversation keeps two of them. Every smaller limit returns a prefix of limit
 // 20, repeated searches return the same rows, and a search scoped to the far
@@ -345,7 +346,7 @@ func tiedConversationFixture(total int) ([]model.StoredChunk, map[string][]float
 func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 	t.Parallel()
 
-	for _, total := range []int{exactSearchThreshold + 104, semantic.CollectionRankingDepth + 616} {
+	for _, total := range []int{exactSearchThreshold + 104, lmcollection.RankingDepth + 616} {
 		t.Run(fmt.Sprintf("%d rows", total), func(t *testing.T) {
 			t.Parallel()
 
@@ -353,7 +354,7 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 			store := newSearchTestStore(t)
 			chunks, reuse := tiedConversationFixture(total)
 			stageAndPromoteWithReuse(t, store, codebasePath, chunks, reuse)
-			search := func(limit int32, filter *semantic.CollectionFilter) []string {
+			search := func(limit int32, filter *lmcollection.Filter) []string {
 				t.Helper()
 				hits, err := store.SearchCollection(context.Background(), semantic.CollectionSearch{
 					CollectionName: store.CollectionName(codebasePath),
@@ -395,7 +396,7 @@ func TestCollectionSearchSmallerLimitIsPrefixAboveExactThreshold(t *testing.T) {
 				}
 			}
 
-			scope := semantic.ColumnIn("conversationId", semantic.StringValues([]string{tiedFarConversation}))
+			scope := lmcollection.ColumnIn("conversationId", lmcollection.StringValues([]string{tiedFarConversation}))
 			far := search(10, &scope)
 			if len(far) != 2 || !strings.HasPrefix(far[0], "conv/"+tiedFarConversation+"/") {
 				t.Fatalf("scoped search rows %v, want the two far rows the cap keeps", far)

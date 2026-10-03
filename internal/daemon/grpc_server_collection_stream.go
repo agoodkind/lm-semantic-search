@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"goodkind.io/lm-semantic-search/collection"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -278,16 +279,16 @@ func collectionRowInputBytes(input collectionRowInput) int {
 func pbCollectionScalars(wireScalars []*pb.CollectionScalarValue) []collectionScalarInput {
 	scalars := make([]collectionScalarInput, 0, len(wireScalars))
 	for _, scalar := range wireScalars {
-		value := model.ScalarValue{Type: "", Null: false, String: "", Bool: false, Int64: 0}
+		value := collection.ScalarValue{Type: "", Null: false, String: "", Bool: false, Int64: 0}
 		switch typed := scalar.GetValue().(type) {
 		case *pb.CollectionScalarValue_StringValue:
-			value.Type = model.ScalarTypeString
+			value.Type = collection.ScalarTypeString
 			value.String = typed.StringValue
 		case *pb.CollectionScalarValue_BoolValue:
-			value.Type = model.ScalarTypeBool
+			value.Type = collection.ScalarTypeBool
 			value.Bool = typed.BoolValue
 		case *pb.CollectionScalarValue_Int64Value:
-			value.Type = model.ScalarTypeInt64
+			value.Type = collection.ScalarTypeInt64
 			value.Int64 = typed.Int64Value
 		default:
 			value.Null = true

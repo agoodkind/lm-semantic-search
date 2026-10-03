@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/milvus-io/milvus/client/v2/column"
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -14,7 +15,7 @@ import (
 // missing or null value, and every column rejects a value of another type.
 func declaredScalarInsertColumns(
 	collectionName string,
-	declared []model.ScalarColumn,
+	declared []collection.ScalarColumn,
 	chunks []model.StoredChunk,
 ) ([]column.Column, error) {
 	columns := make([]column.Column, 0, len(declared))
@@ -30,7 +31,7 @@ func declaredScalarInsertColumns(
 
 func declaredScalarInsertColumn(
 	collectionName string,
-	declaration model.ScalarColumn,
+	declaration collection.ScalarColumn,
 	chunks []model.StoredChunk,
 ) (column.Column, error) {
 	validData := make([]bool, 0, len(chunks))
@@ -57,7 +58,7 @@ func declaredScalarInsertColumn(
 
 func newDeclaredColumn(
 	collectionName string,
-	declaration model.ScalarColumn,
+	declaration collection.ScalarColumn,
 	validData []bool,
 	stringValues []string,
 	boolValues []bool,
@@ -66,17 +67,17 @@ func newDeclaredColumn(
 	var built column.Column
 	var err error
 	switch declaration.Type {
-	case model.ScalarTypeString:
+	case collection.ScalarTypeString:
 		if !declaration.Nullable {
 			return column.NewColumnVarChar(declaration.Name, stringValues), nil
 		}
 		built, err = column.NewNullableColumnVarChar(declaration.Name, stringValues, validData, column.WithSparseNullableMode[string](true))
-	case model.ScalarTypeBool:
+	case collection.ScalarTypeBool:
 		if !declaration.Nullable {
 			return column.NewColumnBool(declaration.Name, boolValues), nil
 		}
 		built, err = column.NewNullableColumnBool(declaration.Name, boolValues, validData, column.WithSparseNullableMode[bool](true))
-	case model.ScalarTypeInt64:
+	case collection.ScalarTypeInt64:
 		if !declaration.Nullable {
 			return column.NewColumnInt64(declaration.Name, int64Values), nil
 		}
@@ -93,8 +94,8 @@ func newDeclaredColumn(
 
 // declaredScalarValueAt reads the value of one declared column at a row of a
 // query result, with its null state.
-func declaredScalarValueAt(valueColumn column.Column, declaration model.ScalarColumn, rowIndex int) (model.ScalarValue, error) {
-	value := model.ScalarValue{Type: declaration.Type, Null: false, String: "", Bool: false, Int64: 0}
+func declaredScalarValueAt(valueColumn column.Column, declaration collection.ScalarColumn, rowIndex int) (collection.ScalarValue, error) {
+	value := collection.ScalarValue{Type: declaration.Type, Null: false, String: "", Bool: false, Int64: 0}
 	if valueColumn == nil {
 		return value, ErrSearchResultIncomplete
 	}
@@ -108,11 +109,11 @@ func declaredScalarValueAt(valueColumn column.Column, declaration model.ScalarCo
 		return value, nil
 	}
 	switch declaration.Type {
-	case model.ScalarTypeString:
+	case collection.ScalarTypeString:
 		value.String, err = valueColumn.GetAsString(rowIndex)
-	case model.ScalarTypeBool:
+	case collection.ScalarTypeBool:
 		value.Bool, err = valueColumn.GetAsBool(rowIndex)
-	case model.ScalarTypeInt64:
+	case collection.ScalarTypeInt64:
 		value.Int64, err = valueColumn.GetAsInt64(rowIndex)
 	default:
 		err = fmt.Errorf("unsupported declared column type %q", declaration.Type)
@@ -126,18 +127,18 @@ func declaredScalarValueAt(valueColumn column.Column, declaration model.ScalarCo
 
 // declaredScalarRowBytes estimates the raw bytes the declared scalar values of
 // one row add to an insert request, plus a small per-column framing allowance.
-func declaredScalarRowBytes(declared []model.ScalarColumn, chunk model.StoredChunk) int {
+func declaredScalarRowBytes(declared []collection.ScalarColumn, chunk model.StoredChunk) int {
 	const perColumnFraming = 6
 	total := 0
 	for _, declaration := range declared {
 		total += perColumnFraming
 		value := chunk.Scalars[declaration.Name]
 		switch declaration.Type {
-		case model.ScalarTypeString:
+		case collection.ScalarTypeString:
 			total += len(value.String)
-		case model.ScalarTypeBool:
+		case collection.ScalarTypeBool:
 			total += boolBytes
-		case model.ScalarTypeInt64:
+		case collection.ScalarTypeInt64:
 			total += int64Bytes
 		default:
 		}

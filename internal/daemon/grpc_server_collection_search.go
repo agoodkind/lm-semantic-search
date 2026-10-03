@@ -4,11 +4,10 @@ import (
 	"context"
 	"fmt"
 
+	"goodkind.io/lm-semantic-search/collection"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
-	"goodkind.io/lm-semantic-search/internal/model"
 	render "goodkind.io/lm-semantic-search/internal/render"
-	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/view"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -102,7 +101,7 @@ func (server *GRPCServer) GetCollectionItemState(ctx context.Context, request *p
 // to nil, which matches every row. A node with no member set, a literal with no
 // value set, and a negate node without a child fail with InvalidArgument.
 // Column and type checks against the declaration run later in the manager.
-func pbCollectionFilterTree(filter *pb.CollectionFilter) (*semantic.CollectionFilter, error) {
+func pbCollectionFilterTree(filter *pb.CollectionFilter) (*collection.Filter, error) {
 	if filter == nil {
 		return nil, nil
 	}
@@ -113,8 +112,8 @@ func pbCollectionFilterTree(filter *pb.CollectionFilter) (*semantic.CollectionFi
 	return &converted, nil
 }
 
-func pbCollectionFilterNode(filter *pb.CollectionFilter, depth int) (semantic.CollectionFilter, error) {
-	var rejected semantic.CollectionFilter
+func pbCollectionFilterNode(filter *pb.CollectionFilter, depth int) (collection.Filter, error) {
+	var rejected collection.Filter
 	if depth > maxCollectionFilterDepth {
 		return rejected, adapterr.NewInvalidArgument(fmt.Sprintf("filter tree is deeper than %d levels", maxCollectionFilterDepth))
 	}
@@ -124,13 +123,13 @@ func pbCollectionFilterNode(filter *pb.CollectionFilter, depth int) (semantic.Co
 		if err != nil {
 			return rejected, err
 		}
-		return semantic.AllOf(children...), nil
+		return collection.AllOf(children...), nil
 	case *pb.CollectionFilter_AnyOf:
 		children, err := pbCollectionFilterChildren(node.AnyOf.GetFilters(), depth)
 		if err != nil {
 			return rejected, err
 		}
-		return semantic.AnyOf(children...), nil
+		return collection.AnyOf(children...), nil
 	case *pb.CollectionFilter_Negate:
 		if node.Negate == nil {
 			return rejected, adapterr.NewInvalidArgument("filter negate node needs exactly one child")
@@ -139,15 +138,15 @@ func pbCollectionFilterNode(filter *pb.CollectionFilter, depth int) (semantic.Co
 		if err != nil {
 			return rejected, err
 		}
-		return semantic.Negate(child), nil
+		return collection.Negate(child), nil
 	case *pb.CollectionFilter_Equals:
 		value, err := pbCollectionFilterValue(node.Equals.GetColumn(), node.Equals.GetValue())
 		if err != nil {
 			return rejected, err
 		}
-		return semantic.ColumnEquals(node.Equals.GetColumn(), value), nil
+		return collection.ColumnEquals(node.Equals.GetColumn(), value), nil
 	case *pb.CollectionFilter_InSet:
-		values := make([]semantic.ScalarValue, 0, len(node.InSet.GetValues()))
+		values := make([]collection.ScalarValue, 0, len(node.InSet.GetValues()))
 		for _, wireValue := range node.InSet.GetValues() {
 			value, err := pbCollectionFilterValue(node.InSet.GetColumn(), wireValue)
 			if err != nil {
@@ -155,20 +154,20 @@ func pbCollectionFilterNode(filter *pb.CollectionFilter, depth int) (semantic.Co
 			}
 			values = append(values, value)
 		}
-		return semantic.ColumnIn(node.InSet.GetColumn(), values), nil
+		return collection.ColumnIn(node.InSet.GetColumn(), values), nil
 	case *pb.CollectionFilter_Range:
-		return semantic.ColumnRange(node.Range.GetColumn(), optionalInt64(node.Range.Lower), optionalInt64(node.Range.Upper)), nil
+		return collection.ColumnRange(node.Range.GetColumn(), optionalInt64(node.Range.Lower), optionalInt64(node.Range.Upper)), nil
 	case *pb.CollectionFilter_IsNull:
-		return semantic.ColumnIsNull(node.IsNull.GetColumn()), nil
+		return collection.ColumnIsNull(node.IsNull.GetColumn()), nil
 	case *pb.CollectionFilter_IsPresent:
-		return semantic.ColumnIsPresent(node.IsPresent.GetColumn()), nil
+		return collection.ColumnIsPresent(node.IsPresent.GetColumn()), nil
 	default:
 		return rejected, adapterr.NewInvalidArgument("filter node sets no member")
 	}
 }
 
-func pbCollectionFilterChildren(filters []*pb.CollectionFilter, depth int) ([]semantic.CollectionFilter, error) {
-	children := make([]semantic.CollectionFilter, 0, len(filters))
+func pbCollectionFilterChildren(filters []*pb.CollectionFilter, depth int) ([]collection.Filter, error) {
+	children := make([]collection.Filter, 0, len(filters))
 	for _, child := range filters {
 		converted, err := pbCollectionFilterNode(child, depth+1)
 		if err != nil {
@@ -179,16 +178,16 @@ func pbCollectionFilterChildren(filters []*pb.CollectionFilter, depth int) ([]se
 	return children, nil
 }
 
-func pbCollectionFilterValue(column string, value *pb.CollectionFilterValue) (semantic.ScalarValue, error) {
+func pbCollectionFilterValue(column string, value *pb.CollectionFilterValue) (collection.ScalarValue, error) {
 	switch typed := value.GetValue().(type) {
 	case *pb.CollectionFilterValue_StringValue:
-		return semantic.StringScalar(typed.StringValue), nil
+		return collection.StringScalar(typed.StringValue), nil
 	case *pb.CollectionFilterValue_BoolValue:
-		return semantic.BoolScalar(typed.BoolValue), nil
+		return collection.BoolScalar(typed.BoolValue), nil
 	case *pb.CollectionFilterValue_Int64Value:
-		return semantic.Int64Scalar(typed.Int64Value), nil
+		return collection.Int64Scalar(typed.Int64Value), nil
 	default:
-		var rejected semantic.ScalarValue
+		var rejected collection.ScalarValue
 		return rejected, adapterr.NewInvalidFilterColumn(column, fmt.Sprintf("filter value for column %q sets no value", column))
 	}
 }
@@ -205,29 +204,29 @@ func optionalInt64(value *int64) *int64 {
 
 // collectionHitScalarsToPB converts hit cells to the wire shape. An absent
 // cell sets no value, and a null cell sets null_value.
-func collectionHitScalarsToPB(cells []semantic.ScalarCell) []*pb.CollectionHitScalar {
+func collectionHitScalarsToPB(cells []collection.ScalarCell) []*pb.CollectionHitScalar {
 	scalars := make([]*pb.CollectionHitScalar, 0, len(cells))
 	for _, cell := range cells {
 		scalar := &pb.CollectionHitScalar{Column: cell.Column, Value: nil}
 		switch cell.State {
-		case semantic.ScalarCellNull:
+		case collection.ScalarCellNull:
 			scalar.Value = &pb.CollectionHitScalar_NullValue{NullValue: structpb.NullValue_NULL_VALUE}
-		case semantic.ScalarCellValue:
+		case collection.ScalarCellValue:
 			setHitScalarValue(scalar, cell.Value)
-		case semantic.ScalarCellAbsent:
+		case collection.ScalarCellAbsent:
 		}
 		scalars = append(scalars, scalar)
 	}
 	return scalars
 }
 
-func setHitScalarValue(scalar *pb.CollectionHitScalar, value semantic.ScalarValue) {
+func setHitScalarValue(scalar *pb.CollectionHitScalar, value collection.ScalarValue) {
 	switch value.Type {
-	case model.ScalarTypeBool:
+	case collection.ScalarTypeBool:
 		scalar.Value = &pb.CollectionHitScalar_BoolValue{BoolValue: value.Bool}
-	case model.ScalarTypeInt64:
+	case collection.ScalarTypeInt64:
 		scalar.Value = &pb.CollectionHitScalar_Int64Value{Int64Value: value.Int64}
-	case model.ScalarTypeString:
+	case collection.ScalarTypeString:
 		scalar.Value = &pb.CollectionHitScalar_StringValue{StringValue: value.String}
 	default:
 		scalar.Value = &pb.CollectionHitScalar_StringValue{StringValue: value.String}

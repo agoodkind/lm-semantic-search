@@ -311,11 +311,11 @@ func baseConversation(id string) []*pb.ConversationDocument {
 			Thinking:       "the user for " + id + " wants a directory listing, so I will run ls",
 			Tools: []*pb.ConversationToolCall{
 				{
-						Name:     "run_shell",
-						Display:  "ls -la /work/" + id,
-						LangHint: "bash",
-						Output:   "total 0\ndrwxr-xr-x  2 user  staff   64 " + id,
-					IsError:   false,
+					Name:     "run_shell",
+					Display:  "ls -la /work/" + id,
+					LangHint: "bash",
+					Output:   "total 0\ndrwxr-xr-x  2 user  staff   64 " + id,
+					IsError:  false,
 				},
 			},
 		},

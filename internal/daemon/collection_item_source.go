@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -23,7 +24,7 @@ type collectionRow struct {
 	RowKey             string
 	ItemID             string
 	Text               string
-	Scalars            map[string]model.ScalarValue
+	Scalars            map[string]collection.ScalarValue
 	ContinuationPrefix string
 }
 
@@ -330,7 +331,7 @@ type collectionItemSelector struct {
 // newCollectionItemSelector returns the stored-row selector of a saved
 // declaration. Only the conversation declaration adds the legacy conversation
 // path prefixes.
-func newCollectionItemSelector(declaration model.CollectionDeclaration) collectionItemSelector {
+func newCollectionItemSelector(declaration collection.Declaration) collectionItemSelector {
 	return collectionItemSelector{
 		itemColumn:         declaration.ItemIDColumn,
 		legacyConversation: semantic.IsConversationDeclaration(declaration),
@@ -428,7 +429,7 @@ type documentDelivery struct {
 // stores client rows in the conversation fields and selects legacy
 // conversation rows by path prefix. stored reads the live collection and may
 // be nil, which embeds every delivered item in full.
-func newDocumentItemSource(collectionName string, declaration model.CollectionDeclaration, stored collectionStoredReader, delivery documentDelivery) collectionItemSource {
+func newDocumentItemSource(collectionName string, declaration collection.Declaration, stored collectionStoredReader, delivery documentDelivery) collectionItemSource {
 	conversation := semantic.IsConversationDeclaration(declaration)
 	return newCollectionItemSource(collectionItemSourceConfig{
 		collectionName: collectionName,

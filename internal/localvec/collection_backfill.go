@@ -7,7 +7,7 @@ import (
 	"maps"
 	"strings"
 
-	"goodkind.io/lm-semantic-search/internal/model"
+	lmcollection "goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
@@ -105,8 +105,8 @@ func backfillRows(rows []row, backfill semantic.ScalarBackfill) (int, int, error
 }
 
 // backfillValues returns the row's stored value of every backfill column.
-func (stored row) backfillValues(backfill semantic.ScalarBackfill) (map[string]model.ScalarValue, error) {
-	values := make(map[string]model.ScalarValue, len(backfill.Columns))
+func (stored row) backfillValues(backfill semantic.ScalarBackfill) (map[string]lmcollection.ScalarValue, error) {
+	values := make(map[string]lmcollection.ScalarValue, len(backfill.Columns))
 	for _, column := range backfill.Columns {
 		value, err := stored.scalarValue(column, backfill.Conversation)
 		if err != nil {
@@ -122,11 +122,11 @@ func (stored row) backfillValues(backfill semantic.ScalarBackfill) (map[string]m
 // conversation row keeps the conversation columns in its conversation fields.
 // An unset string field there is an empty string, and archived and
 // timestampUnix are never null.
-func (stored row) scalarValue(column model.ScalarColumn, conversation bool) (model.ScalarValue, error) {
+func (stored row) scalarValue(column lmcollection.ScalarColumn, conversation bool) (lmcollection.ScalarValue, error) {
 	if !conversation {
 		value, found := stored.Scalars[column.Name]
 		if !found {
-			return model.ScalarValue{Type: column.Type, Null: true, String: "", Bool: false, Int64: 0}, nil
+			return lmcollection.ScalarValue{Type: column.Type, Null: true, String: "", Bool: false, Int64: 0}, nil
 		}
 		return value, nil
 	}
@@ -140,21 +140,21 @@ func (stored row) scalarValue(column model.ScalarColumn, conversation bool) (mod
 	case semantic.ConversationLoadRulesColumn:
 		return stringScalarValue(stored.LoadRules), nil
 	case semantic.ConversationArchivedColumn:
-		return model.ScalarValue{Type: model.ScalarTypeBool, Null: false, String: "", Bool: stored.Archived, Int64: 0}, nil
+		return lmcollection.ScalarValue{Type: lmcollection.ScalarTypeBool, Null: false, String: "", Bool: stored.Archived, Int64: 0}, nil
 	case semantic.ConversationTimestampColumn:
-		return model.ScalarValue{Type: model.ScalarTypeInt64, Null: false, String: "", Bool: false, Int64: stored.TimestampUnix}, nil
+		return lmcollection.ScalarValue{Type: lmcollection.ScalarTypeInt64, Null: false, String: "", Bool: false, Int64: stored.TimestampUnix}, nil
 	default:
-		return model.ScalarValue{}, fmt.Errorf("a local conversation row does not store column %s", column.Name)
+		return lmcollection.ScalarValue{}, fmt.Errorf("a local conversation row does not store column %s", column.Name)
 	}
 }
 
 // withScalarValue returns a copy of the row that stores value in one declared
 // column. The copy owns its Scalars map, and the stored row keeps its own.
-func (stored row) withScalarValue(column model.ScalarColumn, value model.ScalarValue, conversation bool) (row, error) {
+func (stored row) withScalarValue(column lmcollection.ScalarColumn, value lmcollection.ScalarValue, conversation bool) (row, error) {
 	if !conversation {
 		scalars := maps.Clone(stored.Scalars)
 		if scalars == nil {
-			scalars = make(map[string]model.ScalarValue, 1)
+			scalars = make(map[string]lmcollection.ScalarValue, 1)
 		}
 		scalars[column.Name] = value
 		stored.Scalars = scalars
@@ -181,6 +181,6 @@ func (stored row) withScalarValue(column model.ScalarColumn, value model.ScalarV
 
 // stringScalarValue returns a string value that a conversation row field
 // stores.
-func stringScalarValue(value string) model.ScalarValue {
-	return model.ScalarValue{Type: model.ScalarTypeString, Null: false, String: value, Bool: false, Int64: 0}
+func stringScalarValue(value string) lmcollection.ScalarValue {
+	return lmcollection.ScalarValue{Type: lmcollection.ScalarTypeString, Null: false, String: value, Bool: false, Int64: 0}
 }

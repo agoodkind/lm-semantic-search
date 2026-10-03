@@ -17,6 +17,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -495,7 +496,7 @@ func (service *Service) PruneToCurrent(ctx context.Context, codebasePath string,
 
 	quoted := make([]string, 0, len(currentRelativePaths))
 	for _, path := range currentRelativePaths {
-		quoted = append(quoted, `"`+escapeMilvusString(path)+`"`)
+		quoted = append(quoted, `"`+collection.EscapeString(path)+`"`)
 	}
 	expression := fmt.Sprintf(`%s not in [%s]`, relativePathFieldName, strings.Join(quoted, ","))
 
@@ -518,7 +519,7 @@ func (service *Service) deleteByRelativePaths(
 
 	quoted := make([]string, 0, len(relativePaths))
 	for _, path := range relativePaths {
-		quoted = append(quoted, `"`+escapeMilvusString(path)+`"`)
+		quoted = append(quoted, `"`+collection.EscapeString(path)+`"`)
 	}
 	expression := fmt.Sprintf(`%s in [%s]`, relativePathFieldName, strings.Join(quoted, ","))
 

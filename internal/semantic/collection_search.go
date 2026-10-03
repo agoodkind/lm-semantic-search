@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc/peer"
 )
@@ -20,89 +20,23 @@ import (
 // caller sets no positive limit.
 const defaultCollectionSearchLimit = 10
 
-// CollectionRankingDepth is the number of candidates one collection search
-// ranks: the topK of each hybrid leg, the fused hybrid limit, and the dense
-// topK. It is the Milvus single-search ceiling. It never depends on the
-// requested limit, the group cap, or the score floor. Every request for one
-// query and filter therefore ranks the same candidate list. The offline store
-// ranks at the same depth.
-const CollectionRankingDepth = 16384
-
-// nullGroupKey is the group key of every hit with a null or absent group
-// column value. Those hits share one group.
-const nullGroupKey = "null"
-
-// ScalarCellState is the closed set of states of one declared scalar column on
-// a stored row.
-type ScalarCellState string
-
-const (
-	// ScalarCellAbsent means the stored row has no such column.
-	ScalarCellAbsent ScalarCellState = "absent"
-	// ScalarCellNull means the stored row has the column and its value is null.
-	ScalarCellNull ScalarCellState = "null"
-	// ScalarCellValue means the stored row has a concrete value in Value.
-	ScalarCellValue ScalarCellState = "value"
-)
-
-// ScalarCell is one declared scalar column value on a search hit.
-type ScalarCell struct {
-	Column string
-	State  ScalarCellState
-	Value  ScalarValue
-}
-
-// AbsentCell returns the cell of a column the stored row does not have.
-func AbsentCell(column string) ScalarCell {
-	return ScalarCell{Column: column, State: ScalarCellAbsent, Value: ScalarValue{Type: "", String: "", Bool: false, Int64: 0}}
-}
-
-// NullCell returns the cell of a column with a null value.
-func NullCell(column string) ScalarCell {
-	return ScalarCell{Column: column, State: ScalarCellNull, Value: ScalarValue{Type: "", String: "", Bool: false, Int64: 0}}
-}
-
-// ValueCell returns the cell of a column with a concrete value.
-func ValueCell(column string, value ScalarValue) ScalarCell {
-	return ScalarCell{Column: column, State: ScalarCellValue, Value: value}
-}
-
-// GroupKey returns the key that groups hits by this cell's value for a
-// per-group cap. Every null or absent cell returns one shared key. Values of
-// different types never share a key.
-func (cell ScalarCell) GroupKey() string {
-	if cell.State != ScalarCellValue {
-		return nullGroupKey
-	}
-	switch cell.Value.Type {
-	case model.ScalarTypeBool:
-		return "bool:" + strconv.FormatBool(cell.Value.Bool)
-	case model.ScalarTypeInt64:
-		return "int64:" + strconv.FormatInt(cell.Value.Int64, 10)
-	case model.ScalarTypeString:
-		return "string:" + cell.Value.String
-	default:
-		return "string:" + cell.Value.String
-	}
-}
-
 // CollectionHit is one ranked search hit. Chunk is the stored row decoded
 // through the legacy metadata JSON, and Chunk.RelativePath is the logical row
 // key. Scalars lists every declared scalar column in declaration order.
 type CollectionHit struct {
 	Chunk   model.StoredChunk
-	Scalars []ScalarCell
+	Scalars []collection.ScalarCell
 }
 
 // Scalar returns the hit's cell for column. It reports false when column is
 // not declared.
-func (hit CollectionHit) Scalar(column string) (ScalarCell, bool) {
+func (hit CollectionHit) Scalar(column string) (collection.ScalarCell, bool) {
 	for _, cell := range hit.Scalars {
 		if cell.Column == column {
 			return cell, true
 		}
 	}
-	return AbsentCell(column), false
+	return collection.AbsentCell(column), false
 }
 
 // CollectionSearch is one validated typed search of a registered collection.
@@ -114,24 +48,24 @@ type CollectionSearch struct {
 	Query          string
 	Limit          int32
 	MinScore       float64
-	Filter         *CollectionFilter
+	Filter         *collection.Filter
 	GroupBy        string
 	PerGroupLimit  int32
-	Declaration    model.CollectionDeclaration
+	Declaration    collection.Declaration
 }
 
 // groupColumnFor returns the declared column the per-group cap reads. It
 // reports false when the search is uncapped.
-func groupColumnFor(search CollectionSearch) (model.ScalarColumn, bool) {
+func groupColumnFor(search CollectionSearch) (collection.ScalarColumn, bool) {
 	if search.GroupBy == "" || search.PerGroupLimit <= 0 {
-		return model.ScalarColumn{Name: "", Type: "", Nullable: false, MaxLength: 0}, false
+		return collection.ScalarColumn{Name: "", Type: "", Nullable: false, MaxLength: 0}, false
 	}
 	for _, declared := range search.Declaration.Scalars {
 		if declared.Name == search.GroupBy {
 			return declared, true
 		}
 	}
-	return model.ScalarColumn{Name: search.GroupBy, Type: model.ScalarTypeString, Nullable: true, MaxLength: 0}, true
+	return collection.ScalarColumn{Name: search.GroupBy, Type: collection.ScalarTypeString, Nullable: true, MaxLength: 0}, true
 }
 
 // SearchCollection runs a typed search and returns at most Limit hits, at most
@@ -158,7 +92,7 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 	if limit <= 0 {
 		limit = defaultCollectionSearchLimit
 	}
-	compiled, err := compileCollectionFilterExpr(search.Filter)
+	compiled, err := collection.Compile(search.Filter)
 	if err != nil {
 		slog.ErrorContext(ctx, "compile collection filter failed", "collection", collectionName, "err", err)
 		return nil, fmt.Errorf("compile filter for %s: %w", collectionName, err)
@@ -180,8 +114,7 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 	}
 
 	groupColumn, grouped := groupColumnFor(search)
-	depth := collectionRankingDepthFor(limit)
-	candidates, err := service.rankCollectionCandidates(ctx, collectionName, queryVector, search.Query, compiled, groupColumn, grouped, depth)
+	candidates, err := service.rankCollectionCandidates(ctx, collectionName, queryVector, search.Query, compiled, groupColumn, grouped)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +138,7 @@ func (service *Service) SearchCollection(ctx context.Context, search CollectionS
 type rankedCandidate struct {
 	PrimaryKey   string
 	RelativePath string
-	Group        ScalarCell
+	Group        collection.ScalarCell
 	Score        float64
 }
 
@@ -252,34 +185,18 @@ func selectRankedCandidates(candidates []rankedCandidate, perGroupLimit int32, m
 	return kept
 }
 
-// collectionRankingOverfetch multiplies the requested limit to leave room for
-// rows that the score floor or the per-group cap drop after ranking.
-const collectionRankingOverfetch = 4
-
-// collectionRankingMinimumDepth keeps small requests from ranking too few rows
-// to fill a page after the per-group cap.
-const collectionRankingMinimumDepth = 64
-
-// collectionRankingDepthFor returns how many rows each ranking leg requests
-// for a search with limit. Before 2026-09-26 searches requested about the page
-// size; ranking every search at CollectionRankingDepth timed out on the
-// conversation collection.
-func collectionRankingDepthFor(limit int32) int {
-	return min(max(int(limit)*collectionRankingOverfetch, collectionRankingMinimumDepth), CollectionRankingDepth)
-}
-
 // rankCollectionCandidates runs the one ranking search of a collection search.
-// A hybrid collection runs both legs at depth and fuses them with the RRF
-// reranker into at most depth rows. A dense collection runs one search at the
-// same depth.
-func (service *Service) rankCollectionCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled compiledFilter, groupColumn model.ScalarColumn, grouped bool, depth int) ([]rankedCandidate, error) {
+// A hybrid collection runs both legs at collection.RankingDepth and fuses them
+// with the RRF reranker into at most collection.RankingDepth rows. A dense
+// collection runs one search at the same depth.
+func (service *Service) rankCollectionCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled collection.CompiledFilter, groupColumn collection.ScalarColumn, grouped bool) ([]rankedCandidate, error) {
 	outputFields := []string{relativePathFieldName}
 	if grouped {
 		outputFields = append(outputFields, groupColumn.Name)
 	}
 	if service.cfg.HybridMode {
-		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, depth, entity.FloatVector(queryVector))
-		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, depth, entity.Text(rawQuery))
+		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, collection.RankingDepth, entity.FloatVector(queryVector))
+		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, collection.RankingDepth, entity.Text(rawQuery))
 		if compiled.Expression != "" {
 			denseRequest = denseRequest.WithFilter(compiled.Expression)
 			sparseRequest = sparseRequest.WithFilter(compiled.Expression)
@@ -290,7 +207,7 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 		}
 		hybridOption := milvusclient.NewHybridSearchOption(
 			collectionName,
-			depth,
+			collection.RankingDepth,
 			denseRequest,
 			sparseRequest,
 		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...)
@@ -303,7 +220,7 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 
 	searchOption := milvusclient.NewSearchOption(
 		collectionName,
-		depth,
+		collection.RankingDepth,
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	).WithANNSField(denseVectorFieldName).WithOutputFields(outputFields...)
 	if compiled.Expression != "" {
@@ -311,11 +228,11 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 	}
 	for _, param := range compiled.Params {
 		switch param.Type {
-		case model.ScalarTypeBool:
+		case collection.ScalarTypeBool:
 			searchOption = searchOption.WithTemplateParam(param.Name, param.Bools)
-		case model.ScalarTypeInt64:
+		case collection.ScalarTypeInt64:
 			searchOption = searchOption.WithTemplateParam(param.Name, param.Int64s)
-		case model.ScalarTypeString:
+		case collection.ScalarTypeString:
 			searchOption = searchOption.WithTemplateParam(param.Name, param.Strings)
 		default:
 			searchOption = searchOption.WithTemplateParam(param.Name, param.Strings)
@@ -328,13 +245,13 @@ func (service *Service) rankCollectionCandidates(ctx context.Context, collection
 	return rankedCandidatesFromResultSets(ctx, collectionName, resultSets, groupColumn, grouped)
 }
 
-func bindAnnTemplateParam(request *milvusclient.AnnRequest, param filterTemplateParam) *milvusclient.AnnRequest {
+func bindAnnTemplateParam(request *milvusclient.AnnRequest, param collection.TemplateParam) *milvusclient.AnnRequest {
 	switch param.Type {
-	case model.ScalarTypeBool:
+	case collection.ScalarTypeBool:
 		return request.WithTemplateParam(param.Name, param.Bools)
-	case model.ScalarTypeInt64:
+	case collection.ScalarTypeInt64:
 		return request.WithTemplateParam(param.Name, param.Int64s)
-	case model.ScalarTypeString:
+	case collection.ScalarTypeString:
 		return request.WithTemplateParam(param.Name, param.Strings)
 	default:
 		return request.WithTemplateParam(param.Name, param.Strings)
@@ -344,7 +261,7 @@ func bindAnnTemplateParam(request *milvusclient.AnnRequest, param filterTemplate
 // rankedCandidatesFromResultSets decodes the ranking rows and each row's group
 // column cell. A result without a score for every row returns
 // ErrSearchResultIncomplete.
-func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, resultSets []milvusclient.ResultSet, groupColumn model.ScalarColumn, grouped bool) ([]rankedCandidate, error) {
+func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, resultSets []milvusclient.ResultSet, groupColumn collection.ScalarColumn, grouped bool) ([]rankedCandidate, error) {
 	if len(resultSets) == 0 || resultSets[0].ResultCount == 0 {
 		return []rankedCandidate{}, nil
 	}
@@ -363,7 +280,7 @@ func rankedCandidatesFromResultSets(ctx context.Context, collectionName string, 
 		if err != nil {
 			return nil, rankingReadError(ctx, collectionName, relativePathFieldName, index, err)
 		}
-		group := AbsentCell(groupColumn.Name)
+		group := collection.AbsentCell(groupColumn.Name)
 		if grouped {
 			group, err = scalarCellAt(resultSet.GetColumn(groupColumn.Name), groupColumn, index)
 			if err != nil {
@@ -389,7 +306,7 @@ func rankingReadError(ctx context.Context, collectionName string, field string, 
 func (service *Service) resolveLegacyConversationGroups(ctx context.Context, collectionName string, groupColumnName string, candidates []rankedCandidate) ([]rankedCandidate, error) {
 	legacyKeys := make([]string, 0)
 	for _, candidate := range candidates {
-		if candidate.Group.State != ScalarCellValue {
+		if candidate.Group.State != collection.ScalarCellValue {
 			legacyKeys = append(legacyKeys, candidate.PrimaryKey)
 		}
 	}
@@ -427,12 +344,12 @@ func (service *Service) resolveLegacyConversationGroups(ctx context.Context, col
 func applyLegacyConversationGroups(candidates []rankedCandidate, groupColumnName string, legacyIDs map[string]string) []rankedCandidate {
 	resolved := make([]rankedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.Group.State != ScalarCellValue {
+		if candidate.Group.State != collection.ScalarCellValue {
 			conversationID, found := legacyIDs[candidate.PrimaryKey]
 			if !found {
 				continue
 			}
-			candidate.Group = ValueCell(groupColumnName, StringScalar(conversationID))
+			candidate.Group = collection.ValueCell(groupColumnName, collection.StringScalar(conversationID))
 		}
 		resolved = append(resolved, candidate)
 	}
@@ -442,7 +359,7 @@ func applyLegacyConversationGroups(candidates []rankedCandidate, groupColumnName
 // loadRankedHits queries content, output columns, and declared scalar columns
 // for the selected rows by primary key and returns them in selection order. A
 // row deleted after the ranking search is skipped.
-func (service *Service) loadRankedHits(ctx context.Context, collectionName string, selected []rankedCandidate, scalarColumns []model.ScalarColumn) ([]CollectionHit, error) {
+func (service *Service) loadRankedHits(ctx context.Context, collectionName string, selected []rankedCandidate, scalarColumns []collection.ScalarColumn) ([]CollectionHit, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	if len(selected) == 0 {
 		return []CollectionHit{}, nil

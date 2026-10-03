@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/merkle"
@@ -314,7 +315,7 @@ func collectionHitChunks(hits []semantic.CollectionHit) []model.StoredChunk {
 // conversation collection through the generic scalar backfill. values maps a
 // conversation id to its workspaceRoot and archived values. The collection
 // resolves the way every conversation RPC resolves it.
-func (manager *Manager) backfillConversationScalars(ctx context.Context, collectionID string, values map[string]map[string]model.ScalarValue, dryRun bool) (int, int, error) {
+func (manager *Manager) backfillConversationScalars(ctx context.Context, collectionID string, values map[string]map[string]collection.ScalarValue, dryRun bool) (int, int, error) {
 	codebase, err := manager.resolveConversationCollection(ctx, collectionID)
 	if err != nil {
 		return 0, 0, err

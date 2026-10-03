@@ -800,8 +800,8 @@ func (driver *realAcceptanceDriver) runInstalledScenarioI(
 	_, err = runScenarioI(ctx, scenarioIInput{
 		StartLow: func(startContext context.Context) (*pb.StartIndexResponse, error) {
 			return runtime.client.StartIndex(startContext, &pb.StartIndexRequest{
-				Path: fixture.root,
-				Client: scenarioClientInfo(),
+				Path:             fixture.root,
+				Client:           scenarioClientInfo(),
 				SchedulingPolicy: &pb.SchedulingPolicyPatch{Priority: &priorityLow},
 			})
 		},
@@ -815,8 +815,8 @@ func (driver *realAcceptanceDriver) runInstalledScenarioI(
 		},
 		StartHigh: func(startContext context.Context) (*pb.StartIndexResponse, error) {
 			return runtime.client.StartIndex(startContext, &pb.StartIndexRequest{
-				Path: fixture.secondRoot,
-				Client: scenarioClientInfo(),
+				Path:             fixture.secondRoot,
+				Client:           scenarioClientInfo(),
 				SchedulingPolicy: &pb.SchedulingPolicyPatch{Priority: &priorityHigh},
 			})
 		},

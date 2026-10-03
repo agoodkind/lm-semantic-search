@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -22,7 +23,7 @@ type CollectionSearchRequest struct {
 	Query         string
 	Limit         int32
 	MinScore      float64
-	Filter        *semantic.CollectionFilter
+	Filter        *collection.Filter
 	GroupBy       string
 	PerGroupLimit int32
 }
@@ -75,7 +76,7 @@ func (manager *Manager) CollectionItemState(ctx context.Context, collectionID st
 // collectionDeclaration returns the saved declaration of a document
 // collection. A record written before declarations were saved was created by
 // conversation registration, and it uses the conversation declaration.
-func collectionDeclaration(codebase model.Codebase) model.CollectionDeclaration {
+func collectionDeclaration(codebase model.Codebase) collection.Declaration {
 	if codebase.Declaration == nil {
 		return semantic.ConversationDeclaration()
 	}

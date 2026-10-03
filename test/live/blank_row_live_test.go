@@ -231,10 +231,10 @@ func blankRowShapes(id string) []*pb.ConversationDocument {
 			Thinking:       "the user is asking about the blank row class",
 			Tools: []*pb.ConversationToolCall{
 				{
-						Name:     "run_shell",
-						Display:  "ls -la /work/" + id,
-						LangHint: "bash",
-						Output:   "total 0\ndrwxr-xr-x  2 user  staff   64 " + id,
+					Name:     "run_shell",
+					Display:  "ls -la /work/" + id,
+					LangHint: "bash",
+					Output:   "total 0\ndrwxr-xr-x  2 user  staff   64 " + id,
 				},
 			},
 		},
@@ -246,9 +246,9 @@ func blankRowShapes(id string) []*pb.ConversationDocument {
 			Text:           "",
 			Tools: []*pb.ConversationToolCall{
 				{
-						Name:    "read_file",
-						Display: "/work/" + id + "/main.go",
-						Output:  "package main\n\nfunc main() {}\n",
+					Name:    "read_file",
+					Display: "/work/" + id + "/main.go",
+					Output:  "package main\n\nfunc main() {}\n",
 				},
 			},
 		},
@@ -268,10 +268,10 @@ func blankRowShapes(id string) []*pb.ConversationDocument {
 			Text:           "   \n  ",
 			Tools: []*pb.ConversationToolCall{
 				{
-						Name:     "run_shell",
-						Display:  "echo done",
-						LangHint: "bash",
-						Output:   "done\n",
+					Name:     "run_shell",
+					Display:  "echo done",
+					LangHint: "bash",
+					Output:   "done\n",
 				},
 			},
 		},

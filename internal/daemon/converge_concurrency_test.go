@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
@@ -54,7 +55,7 @@ type fakeSemantic struct {
 	collectionName        func(codebasePath string) string
 	conversationName      func(collectionID string) string
 	inspectCollection     func(context.Context, string) (semantic.CollectionFacts, error)
-	describeScalars       func(context.Context, string) ([]model.ScalarColumn, bool, error)
+	describeScalars       func(context.Context, string) ([]collection.ScalarColumn, bool, error)
 	listCollections       func(context.Context) ([]string, error)
 	hasCollectionForPath  func(context.Context, string) (bool, error)
 	collectionState       func(context.Context, string) (bool, bool, error)
@@ -116,7 +117,7 @@ func (f *fakeSemantic) SetMaintenance(enabled bool) {
 
 // RecordCollectionDeclaration accepts the manager's declaration record. The
 // fake has no schema migrations for the record to steer.
-func (f *fakeSemantic) RecordCollectionDeclaration(string, model.CollectionDeclaration) {}
+func (f *fakeSemantic) RecordCollectionDeclaration(string, collection.Declaration) {}
 
 // LoadCollectionItemBatch reports no stored rows for a generic collection.
 func (f *fakeSemantic) LoadCollectionItemBatch(context.Context, string, string, []string) (semantic.CollectionItemBatchState, error) {
@@ -171,7 +172,7 @@ func (f *fakeSemantic) ConversationCollectionName(collectionID string) string {
 	return "conv_chunks_" + tshash.PathPrefix(collectionID)
 }
 
-func (f *fakeSemantic) DescribeScalarColumns(ctx context.Context, collectionName string) ([]model.ScalarColumn, bool, error) {
+func (f *fakeSemantic) DescribeScalarColumns(ctx context.Context, collectionName string) ([]collection.ScalarColumn, bool, error) {
 	if f.describeScalars != nil {
 		return f.describeScalars(ctx, collectionName)
 	}
@@ -254,12 +255,12 @@ func (f *fakeSemantic) SearchCollection(ctx context.Context, search semantic.Col
 // itemIDScope returns the values of the item id membership child of a root all
 // node, which is where the conversation adapter puts an explicit conversation
 // scope. It returns nil when the filter has no such child.
-func itemIDScope(filter *semantic.CollectionFilter, itemIDColumn string) []string {
-	if filter == nil || filter.Kind != semantic.CollectionFilterAll {
+func itemIDScope(filter *collection.Filter, itemIDColumn string) []string {
+	if filter == nil || filter.Kind != collection.FilterAll {
 		return nil
 	}
 	for _, child := range filter.Children {
-		if child.Kind != semantic.CollectionFilterIn || child.Column != itemIDColumn {
+		if child.Kind != collection.FilterIn || child.Column != itemIDColumn {
 			continue
 		}
 		scope := make([]string, 0, len(child.Values))

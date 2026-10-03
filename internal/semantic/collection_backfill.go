@@ -10,6 +10,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc/peer"
 )
@@ -33,21 +34,21 @@ var legacyConversationFamilies = []string{"conv/", "convtool/", "convthink/"}
 // conversation row fields. DryRun counts rows and writes nothing.
 type ScalarBackfill struct {
 	ItemColumn   string
-	Columns      []model.ScalarColumn
-	Values       map[string]map[string]model.ScalarValue
+	Columns      []collection.ScalarColumn
+	Values       map[string]map[string]collection.ScalarValue
 	Conversation bool
 	DryRun       bool
 }
 
 // ScalarValueMissing reports whether a backfill fills a stored value: a null
 // value or an empty string.
-func ScalarValueMissing(value model.ScalarValue) bool {
-	return value.Null || (value.Type == model.ScalarTypeString && value.String == "")
+func ScalarValueMissing(value collection.ScalarValue) bool {
+	return value.Null || (value.Type == collection.ScalarTypeString && value.String == "")
 }
 
 // Needs reports whether a row with the stored backfill column values needs the
 // backfill, because one of them is null or an empty string.
-func (backfill ScalarBackfill) Needs(stored map[string]model.ScalarValue) bool {
+func (backfill ScalarBackfill) Needs(stored map[string]collection.ScalarValue) bool {
 	for _, column := range backfill.Columns {
 		if ScalarValueMissing(stored[column.Name]) {
 			return true
@@ -60,7 +61,7 @@ func (backfill ScalarBackfill) Needs(stored map[string]model.ScalarValue) bool {
 // is the row's item id column value, and it is empty when the column is null.
 // A conversation row without an item id belongs to the longest streamed item
 // id that follows its conv/, convtool/, or convthink/ path prefix.
-func (backfill ScalarBackfill) ItemValues(itemID string, relativePath string) (map[string]model.ScalarValue, bool) {
+func (backfill ScalarBackfill) ItemValues(itemID string, relativePath string) (map[string]collection.ScalarValue, bool) {
 	if itemID == "" && backfill.Conversation {
 		itemID = backfill.legacyConversationItem(relativePath)
 	}
@@ -92,8 +93,8 @@ func (backfill ScalarBackfill) legacyConversationItem(relativePath string) strin
 // Filled returns the backfill column values a row stores after the backfill.
 // A missing stored value takes the item's value, and every other stored value
 // stays. changed reports whether any value differs from the stored one.
-func (backfill ScalarBackfill) Filled(stored map[string]model.ScalarValue, values map[string]model.ScalarValue) (map[string]model.ScalarValue, bool) {
-	filled := make(map[string]model.ScalarValue, len(backfill.Columns))
+func (backfill ScalarBackfill) Filled(stored map[string]collection.ScalarValue, values map[string]collection.ScalarValue) (map[string]collection.ScalarValue, bool) {
+	filled := make(map[string]collection.ScalarValue, len(backfill.Columns))
 	changed := false
 	for _, column := range backfill.Columns {
 		value := stored[column.Name]
@@ -188,14 +189,14 @@ func (service *Service) BackfillCollectionScalars(ctx context.Context, collectio
 // scalarBackfillFilter renders the Milvus filter that matches every row with a
 // backfill column that is null or an empty string. A column that is neither
 // nullable nor a string column is never missing and adds no clause.
-func scalarBackfillFilter(columns []model.ScalarColumn) string {
+func scalarBackfillFilter(columns []collection.ScalarColumn) string {
 	clauses := make([]string, 0, len(columns))
 	for _, column := range columns {
 		missing := make([]string, 0, 2)
 		if column.Nullable {
 			missing = append(missing, column.Name+" is null")
 		}
-		if column.Type == model.ScalarTypeString {
+		if column.Type == collection.ScalarTypeString {
 			missing = append(missing, column.Name+` == ""`)
 		}
 		if len(missing) == 0 {
@@ -266,8 +267,8 @@ func readScalarBackfillPage(resultSet milvusclient.ResultSet, backfill ScalarBac
 
 // storedBackfillValues reads the stored value of every backfill column at one
 // row.
-func storedBackfillValues(resultSet milvusclient.ResultSet, columns []model.ScalarColumn, rowIndex int) (map[string]model.ScalarValue, error) {
-	stored := make(map[string]model.ScalarValue, len(columns))
+func storedBackfillValues(resultSet milvusclient.ResultSet, columns []collection.ScalarColumn, rowIndex int) (map[string]collection.ScalarValue, error) {
+	stored := make(map[string]collection.ScalarValue, len(columns))
 	for _, column := range columns {
 		value, err := declaredScalarValueAt(resultSet.GetColumn(column.Name), column, rowIndex)
 		if err != nil {
@@ -281,7 +282,7 @@ func storedBackfillValues(resultSet milvusclient.ResultSet, columns []model.Scal
 // scalarBackfillRow builds the stored chunk that declaredScalarInsertColumns
 // reads for one row. Scalars stores the row's filled backfill values, and a
 // build error identifies the row by relativePath.
-func scalarBackfillRow(relativePath string, scalars map[string]model.ScalarValue) model.StoredChunk {
+func scalarBackfillRow(relativePath string, scalars map[string]collection.ScalarValue) model.StoredChunk {
 	return model.StoredChunk{
 		Content:              "",
 		RelativePath:         relativePath,
@@ -307,7 +308,7 @@ func scalarBackfillRow(relativePath string, scalars map[string]model.ScalarValue
 // writeScalarBackfill writes the backfill columns of one page through a Milvus
 // partial update. The update sends the primary key and the backfill columns,
 // and Milvus keeps every other stored field of each row.
-func (service *Service) writeScalarBackfill(ctx context.Context, collectionName string, columns []model.ScalarColumn, page scalarBackfillPage) error {
+func (service *Service) writeScalarBackfill(ctx context.Context, collectionName string, columns []collection.ScalarColumn, page scalarBackfillPage) error {
 	declaredColumns, err := declaredScalarInsertColumns(collectionName, columns, page.rows)
 	if err != nil {
 		return err

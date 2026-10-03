@@ -20,14 +20,14 @@ import (
 )
 
 const (
-	seedIDField        = "id"
-	seedVectorField    = "vector"
-	seedIndexName      = "vector_flat"
-	milvusCallTimeout  = 2 * time.Minute
-	milvusReadyPoll    = 2 * time.Second
-	loadStatePoll      = 25 * time.Millisecond
-	loadStateWait      = 2 * time.Minute
-	flushRateLimitWait = 11 * time.Second
+	seedIDField           = "id"
+	seedVectorField       = "vector"
+	seedIndexName         = "vector_flat"
+	milvusCallTimeout     = 2 * time.Minute
+	milvusReadyPoll       = 2 * time.Second
+	loadStatePoll         = 25 * time.Millisecond
+	loadStateWait         = 2 * time.Minute
+	flushRateLimitWait    = 11 * time.Second
 	flushRateLimitRetries = 12
 )
 

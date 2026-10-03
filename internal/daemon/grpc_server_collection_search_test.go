@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/collection"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/model"
-	"goodkind.io/lm-semantic-search/internal/semantic"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -420,10 +420,10 @@ func requireHitScalars(t *testing.T, got []*pb.CollectionHitScalar, want []*pb.C
 func TestCollectionHitScalarsDistinguishNullFromAbsent(t *testing.T) {
 	t.Parallel()
 
-	scalars := collectionHitScalarsToPB([]semantic.ScalarCell{
-		semantic.NullCell("workspaceRoot"),
-		semantic.AbsentCell("priority"),
-		semantic.ValueCell("archived", semantic.BoolScalar(false)),
+	scalars := collectionHitScalarsToPB([]collection.ScalarCell{
+		collection.NullCell("workspaceRoot"),
+		collection.AbsentCell("priority"),
+		collection.ValueCell("archived", collection.BoolScalar(false)),
 	})
 	if _, isNull := scalars[0].GetValue().(*pb.CollectionHitScalar_NullValue); !isNull || scalars[0].GetNullValue() != structpb.NullValue_NULL_VALUE {
 		t.Fatalf("null cell = %v, want null_value", scalars[0])

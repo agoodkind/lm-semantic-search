@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/collection"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/merkle"
@@ -26,14 +27,14 @@ import (
 // storedLocalRow is one persisted local vector row, decoded from the local
 // store's metadata file. Line is the row's exact persisted JSON line.
 type storedLocalRow struct {
-	ID             string                       `json:"id"`
-	RelativePath   string                       `json:"relativePath"`
-	Content        string                       `json:"content"`
-	ConversationID string                       `json:"conversationId"`
-	Role           string                       `json:"role"`
-	SplitPart      int32                        `json:"splitPart"`
-	Scalars        map[string]model.ScalarValue `json:"scalars"`
-	Line           string                       `json:"-"`
+	ID             string                            `json:"id"`
+	RelativePath   string                            `json:"relativePath"`
+	Content        string                            `json:"content"`
+	ConversationID string                            `json:"conversationId"`
+	Role           string                            `json:"role"`
+	SplitPart      int32                             `json:"splitPart"`
+	Scalars        map[string]collection.ScalarValue `json:"scalars"`
+	Line           string                            `json:"-"`
 }
 
 // localRows reads every stored row of a local collection, sorted by relative
@@ -406,11 +407,11 @@ func TestUpsertCollectionItemsStreamStoresTypedRows(t *testing.T) {
 		t.Fatal("stored body parts do not reassemble the delivered text")
 	}
 	title := rowByPath(t, rows, "doc-a/title")
-	wantTitleScalars := map[string]model.ScalarValue{
-		"docId":  {Type: model.ScalarTypeString, String: "doc-a"},
-		"title":  {Type: model.ScalarTypeString, String: "title of doc-a/title"},
-		"pinned": {Type: model.ScalarTypeBool, Bool: true},
-		"rank":   {Type: model.ScalarTypeInt64, Int64: 2},
+	wantTitleScalars := map[string]collection.ScalarValue{
+		"docId":  {Type: collection.ScalarTypeString, String: "doc-a"},
+		"title":  {Type: collection.ScalarTypeString, String: "title of doc-a/title"},
+		"pinned": {Type: collection.ScalarTypeBool, Bool: true},
+		"rank":   {Type: collection.ScalarTypeInt64, Int64: 2},
 	}
 	if !reflect.DeepEqual(title.Scalars, wantTitleScalars) {
 		t.Fatalf("doc-a/title scalars = %+v, want %+v", title.Scalars, wantTitleScalars)

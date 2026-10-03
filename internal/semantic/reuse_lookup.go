@@ -13,6 +13,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
 	"google.golang.org/grpc/peer"
@@ -344,7 +345,7 @@ func reuseLookupBatches(values []string) [][]string {
 		count := 0
 		escapedBytes := 0
 		for count < len(values) && count < reuseLookupBatchSize {
-			valueBytes := len(escapeMilvusString(values[count])) + 4
+			valueBytes := len(collection.EscapeString(values[count])) + 4
 			if count > 0 && escapedBytes+valueBytes > reuseLookupMaxEscapedBytes {
 				break
 			}
@@ -523,7 +524,7 @@ func (service *Service) loadLegacyReuseContent(
 		milvusclient.NewQueryIteratorOption(collectionName).
 			WithBatchSize(reuseVectorBatchSize).
 			WithFilter(contentHashFieldName+" is null and "+
-				contentFieldName+" == \""+escapeMilvusString(content)+"\"").
+				contentFieldName+" == \""+collection.EscapeString(content)+"\"").
 			WithOutputFields(idFieldName, embeddingModelFieldName),
 	)
 	if err != nil {
@@ -635,7 +636,7 @@ func (service *Service) resolveReuseVectorDimension(
 		return dimension, nil
 	}
 
-	collection, err := service.milvus.DescribeCollection(
+	described, err := service.milvus.DescribeCollection(
 		ctx,
 		milvusclient.NewDescribeCollectionOption(collectionName),
 	)
@@ -654,12 +655,12 @@ func (service *Service) resolveReuseVectorDimension(
 			err,
 		)
 	}
-	if collection == nil || collection.Schema == nil {
+	if described == nil || described.Schema == nil {
 		return 0, fmt.Errorf("reuse source collection %s is missing schema", collectionName)
 	}
 	schemaDimension, err := reuseVectorDimensionFromSchema(
 		collectionName,
-		collection.Schema,
+		described.Schema,
 	)
 	if err != nil {
 		return 0, err

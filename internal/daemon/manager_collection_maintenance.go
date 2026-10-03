@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -109,10 +110,10 @@ func (manager *Manager) itemSelector(codebaseID string) collectionItemSelector {
 
 // declaredColumnsNamed returns the declared columns of declaration with the
 // given names, in the order of names. It skips a name the declaration lacks.
-func declaredColumnsNamed(declaration model.CollectionDeclaration, names ...string) []model.ScalarColumn {
-	columns := make([]model.ScalarColumn, 0, len(names))
+func declaredColumnsNamed(declaration collection.Declaration, names ...string) []collection.ScalarColumn {
+	columns := make([]collection.ScalarColumn, 0, len(names))
 	for _, name := range names {
-		index := slices.IndexFunc(declaration.Scalars, func(column model.ScalarColumn) bool {
+		index := slices.IndexFunc(declaration.Scalars, func(column collection.ScalarColumn) bool {
 			return column.Name == name
 		})
 		if index >= 0 {
@@ -126,9 +127,9 @@ func declaredColumnsNamed(declaration model.CollectionDeclaration, names ...stri
 // declaration and returns the backfill to run. It rejects an empty or repeated
 // item id. validateBackfillColumns and validateBackfillItem list the column and
 // value cases it rejects.
-func validateCollectionBackfill(declaration model.CollectionDeclaration, request collectionBackfillRequest) (semantic.ScalarBackfill, error) {
+func validateCollectionBackfill(declaration collection.Declaration, request collectionBackfillRequest) (semantic.ScalarBackfill, error) {
 	conversation := semantic.IsConversationDeclaration(declaration)
-	declared := make(map[string]model.ScalarColumn, len(declaration.Scalars))
+	declared := make(map[string]collection.ScalarColumn, len(declaration.Scalars))
 	for _, column := range declaration.Scalars {
 		declared[column.Name] = column
 	}
@@ -136,7 +137,7 @@ func validateCollectionBackfill(declaration model.CollectionDeclaration, request
 	if err != nil {
 		return semantic.ScalarBackfill{}, err
 	}
-	values := make(map[string]map[string]model.ScalarValue, len(request.Items))
+	values := make(map[string]map[string]collection.ScalarValue, len(request.Items))
 	for _, item := range request.Items {
 		itemID := strings.TrimSpace(item.ItemID)
 		if itemID == "" {
@@ -164,11 +165,11 @@ func validateCollectionBackfill(declaration model.CollectionDeclaration, request
 // their declarations. It rejects an empty list, an undeclared or repeated
 // column, the item id column, a derived conversation column, and a column that
 // is never null or empty: a bool or int64 column that is not nullable.
-func validateBackfillColumns(itemColumn string, declared map[string]model.ScalarColumn, conversation bool, names []string) ([]model.ScalarColumn, error) {
+func validateBackfillColumns(itemColumn string, declared map[string]collection.ScalarColumn, conversation bool, names []string) ([]collection.ScalarColumn, error) {
 	if len(names) == 0 {
 		return nil, adapterr.NewMissingArgument("columns")
 	}
-	columns := make([]model.ScalarColumn, 0, len(names))
+	columns := make([]collection.ScalarColumn, 0, len(names))
 	for _, name := range names {
 		column, found := declared[name]
 		if !found {
@@ -183,7 +184,7 @@ func validateBackfillColumns(itemColumn string, declared map[string]model.Scalar
 		if conversation && slices.Contains(conversationDerivedColumns, name) {
 			return nil, adapterr.NewInvalidColumnValue(name, fmt.Sprintf("backfill column %q is derived: the conversation declaration derives provider from the item id and messageIndex from the row key", name))
 		}
-		if !column.Nullable && column.Type != model.ScalarTypeString {
+		if !column.Nullable && column.Type != collection.ScalarTypeString {
 			return nil, adapterr.NewInvalidColumnValue(name, fmt.Sprintf("backfill column %q is a %s column that is not nullable, and a backfill fills only null or empty values", name, column.Type))
 		}
 		columns = append(columns, column)
@@ -195,9 +196,9 @@ func validateBackfillColumns(itemColumn string, declared map[string]model.Scalar
 // by column. It rejects a value that is undeclared, mistyped, oversized, null,
 // set more than once, or outside the header columns, and it rejects an item
 // that sets no value for a header column.
-func validateBackfillItem(itemID string, declared map[string]model.ScalarColumn, columns []model.ScalarColumn, scalars []collectionScalarInput) (map[string]model.ScalarValue, error) {
+func validateBackfillItem(itemID string, declared map[string]collection.ScalarColumn, columns []collection.ScalarColumn, scalars []collectionScalarInput) (map[string]collection.ScalarValue, error) {
 	subject := fmt.Sprintf("item %q", itemID)
-	values := make(map[string]model.ScalarValue, len(columns))
+	values := make(map[string]collection.ScalarValue, len(columns))
 	for _, scalar := range scalars {
 		if _, duplicate := values[scalar.Column]; duplicate {
 			return nil, adapterr.NewInvalidColumnValue(scalar.Column, fmt.Sprintf("%s sets column %q more than once", subject, scalar.Column))

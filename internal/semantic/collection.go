@@ -12,8 +12,8 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
-	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc/peer"
 )
 
@@ -83,7 +83,7 @@ func liveCollectionName(collectionName string) string {
 // declaration. The conversation schema migrations then apply to the
 // collection. Any other declaration marks the collection as generic. The
 // conversation migrations and backfills then skip it.
-func (service *Service) RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration) {
+func (service *Service) RecordCollectionDeclaration(collectionName string, declaration collection.Declaration) {
 	name := liveCollectionName(collectionName)
 	if IsConversationDeclaration(declaration) {
 		service.declaredCollections.Delete(name)
@@ -99,16 +99,16 @@ func (service *Service) RecordCollectionDeclaration(collectionName string, decla
 // Registration compares declarations without regard to column order.
 // A saved declaration preserves the column order supplied during the
 // registration that saved it.
-func IsConversationDeclaration(declaration model.CollectionDeclaration) bool {
+func IsConversationDeclaration(declaration collection.Declaration) bool {
 	conversation := ConversationDeclaration()
 	return declaration.ItemIDColumn == conversation.ItemIDColumn &&
 		slices.Equal(scalarColumnsByName(declaration.Scalars), scalarColumnsByName(conversation.Scalars))
 }
 
 // scalarColumnsByName returns a copy of columns sorted by column name.
-func scalarColumnsByName(columns []model.ScalarColumn) []model.ScalarColumn {
+func scalarColumnsByName(columns []collection.ScalarColumn) []collection.ScalarColumn {
 	sorted := slices.Clone(columns)
-	slices.SortFunc(sorted, func(left model.ScalarColumn, right model.ScalarColumn) int {
+	slices.SortFunc(sorted, func(left collection.ScalarColumn, right collection.ScalarColumn) int {
 		return strings.Compare(left.Name, right.Name)
 	})
 	return sorted
@@ -131,7 +131,7 @@ const (
 // [model.StoredChunk.Scalars].
 type StoreColumnSet struct {
 	kind    storeColumnKind
-	scalars []model.ScalarColumn
+	scalars []collection.ScalarColumn
 }
 
 // CodeColumns returns the column set of a code collection.
@@ -147,7 +147,7 @@ func ConversationColumns() StoreColumnSet {
 // ColumnsForDeclaration returns the column set of a document collection with
 // the given saved declaration. The conversation declaration returns
 // [ConversationColumns]. Its rows keep the conversation schema byte for byte.
-func ColumnsForDeclaration(declaration model.CollectionDeclaration) StoreColumnSet {
+func ColumnsForDeclaration(declaration collection.Declaration) StoreColumnSet {
 	if IsConversationDeclaration(declaration) {
 		return ConversationColumns()
 	}
@@ -163,7 +163,7 @@ func (columnSet StoreColumnSet) ConversationScalars() bool {
 
 // DeclaredScalars returns the declared columns a declared write sends. It is
 // nil for the code and conversation column sets.
-func (columnSet StoreColumnSet) DeclaredScalars() []model.ScalarColumn {
+func (columnSet StoreColumnSet) DeclaredScalars() []collection.ScalarColumn {
 	if columnSet.kind != storeColumnKindDeclared {
 		return nil
 	}
@@ -172,7 +172,7 @@ func (columnSet StoreColumnSet) DeclaredScalars() []model.ScalarColumn {
 
 // creationScalars returns the scalar columns createCollection adds to a
 // collection it creates for this column set.
-func (columnSet StoreColumnSet) creationScalars() []model.ScalarColumn {
+func (columnSet StoreColumnSet) creationScalars() []collection.ScalarColumn {
 	switch columnSet.kind {
 	case storeColumnKindConversation:
 		return ConversationDeclaration().Scalars
@@ -215,7 +215,7 @@ func conversationScalarFields() []*entity.Field {
 
 // scalarFields builds the Milvus field definitions for declared scalar columns,
 // in declaration order.
-func scalarFields(columns []model.ScalarColumn) []*entity.Field {
+func scalarFields(columns []collection.ScalarColumn) []*entity.Field {
 	fields := make([]*entity.Field, 0, len(columns))
 	for _, column := range columns {
 		fields = append(fields, scalarField(column))
@@ -225,14 +225,14 @@ func scalarFields(columns []model.ScalarColumn) []*entity.Field {
 
 // scalarField builds the Milvus field definition for one declared scalar
 // column. A string column becomes a VarChar with the declared maximum length.
-func scalarField(column model.ScalarColumn) *entity.Field {
+func scalarField(column collection.ScalarColumn) *entity.Field {
 	field := entity.NewField().WithName(column.Name)
 	switch column.Type {
-	case model.ScalarTypeString:
+	case collection.ScalarTypeString:
 		field = field.WithDataType(entity.FieldTypeVarChar).WithMaxLength(int64(column.MaxLength))
-	case model.ScalarTypeBool:
+	case collection.ScalarTypeBool:
 		field = field.WithDataType(entity.FieldTypeBool)
-	case model.ScalarTypeInt64:
+	case collection.ScalarTypeInt64:
 		field = field.WithDataType(entity.FieldTypeInt64)
 	default:
 		field = field.WithDataType(entity.FieldTypeNone)
@@ -267,7 +267,7 @@ func BuiltinColumnNames() []string {
 func (service *Service) DescribeScalarColumns(
 	ctx context.Context,
 	collectionName string,
-) ([]model.ScalarColumn, bool, error) {
+) ([]collection.ScalarColumn, bool, error) {
 	if !service.Available() {
 		return nil, false, ErrUnavailable
 	}
@@ -283,7 +283,7 @@ func (service *Service) DescribeScalarColumns(
 	if !hasCollection {
 		return nil, false, nil
 	}
-	collection, err := service.milvus.DescribeCollection(
+	described, err := service.milvus.DescribeCollection(
 		ctx,
 		milvusclient.NewDescribeCollectionOption(collectionName),
 	)
@@ -295,11 +295,11 @@ func (service *Service) DescribeScalarColumns(
 	for _, name := range BuiltinColumnNames() {
 		builtin[name] = struct{}{}
 	}
-	columns := make([]model.ScalarColumn, 0)
-	if collection.Schema == nil {
+	columns := make([]collection.ScalarColumn, 0)
+	if described.Schema == nil {
 		return columns, true, nil
 	}
-	for _, field := range collection.Schema.Fields {
+	for _, field := range described.Schema.Fields {
 		if _, isBuiltin := builtin[field.Name]; isBuiltin {
 			continue
 		}
@@ -314,21 +314,21 @@ func (service *Service) DescribeScalarColumns(
 
 // storedScalarColumn converts one stored Milvus field into the declaration
 // shape a registration compares against.
-func storedScalarColumn(ctx context.Context, collectionName string, field *entity.Field) (model.ScalarColumn, error) {
-	column := model.ScalarColumn{
+func storedScalarColumn(ctx context.Context, collectionName string, field *entity.Field) (collection.ScalarColumn, error) {
+	column := collection.ScalarColumn{
 		Name:      field.Name,
-		Type:      model.ScalarType("milvus:" + field.DataType.Name()),
+		Type:      collection.ScalarType("milvus:" + field.DataType.Name()),
 		Nullable:  field.Nullable,
 		MaxLength: 0,
 	}
 	if field.DataType == entity.FieldTypeBool {
-		column.Type = model.ScalarTypeBool
+		column.Type = collection.ScalarTypeBool
 	}
 	if field.DataType == entity.FieldTypeInt64 {
-		column.Type = model.ScalarTypeInt64
+		column.Type = collection.ScalarTypeInt64
 	}
 	if field.DataType == entity.FieldTypeVarChar {
-		column.Type = model.ScalarTypeString
+		column.Type = collection.ScalarTypeString
 		maxLength, err := strconv.ParseInt(field.TypeParams[entity.TypeParamMaxLength], 10, 32)
 		if err != nil {
 			slog.ErrorContext(ctx, "parse stored field max length failed", "collection", collectionName, "field", field.Name, "err", err)
@@ -377,7 +377,7 @@ func (service *Service) createCollection(
 	ctx context.Context,
 	collectionName string,
 	dimension int,
-	declaredScalars []model.ScalarColumn,
+	declaredScalars []collection.ScalarColumn,
 ) (CollectionLease, error) {
 	schema := entity.NewSchema().
 		WithField(entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar).WithMaxLength(idFieldMaxLength).WithIsPrimaryKey(true)).
@@ -479,7 +479,7 @@ func (service *Service) ensureReuseIdentityColumns(
 	ctx context.Context,
 	collectionName string,
 ) error {
-	collection, err := service.milvus.DescribeCollection(
+	described, err := service.milvus.DescribeCollection(
 		ctx,
 		milvusclient.NewDescribeCollectionOption(collectionName),
 	)
@@ -492,8 +492,8 @@ func (service *Service) ensureReuseIdentityColumns(
 		)
 		return fmt.Errorf("describe collection %s for reuse identity: %w", collectionName, err)
 	}
-	existingFields := make(map[string]struct{}, len(collection.Schema.Fields))
-	for _, field := range collection.Schema.Fields {
+	existingFields := make(map[string]struct{}, len(described.Schema.Fields))
+	for _, field := range described.Schema.Fields {
 		existingFields[field.Name] = struct{}{}
 	}
 	for _, field := range []*entity.Field{contentHashField(), embeddingModelField()} {
@@ -538,7 +538,7 @@ func (service *Service) ensureReuseIdentityColumns(
 }
 
 func (service *Service) addMissingSplitPartColumn(ctx context.Context, collectionName string) error {
-	collection, err := service.milvus.DescribeCollection(
+	described, err := service.milvus.DescribeCollection(
 		ctx,
 		milvusclient.NewDescribeCollectionOption(collectionName),
 	)
@@ -553,7 +553,7 @@ func (service *Service) addMissingSplitPartColumn(ctx context.Context, collectio
 		)
 		return fmt.Errorf("describe collection %s for split part migration: %w", collectionName, err)
 	}
-	fields := splitPartFieldsToAdd(collection.Schema)
+	fields := splitPartFieldsToAdd(described.Schema)
 	for _, field := range fields {
 		if err := service.milvus.AddCollectionField(
 			ctx,
@@ -630,14 +630,14 @@ func (service *Service) ensureSplitPartColumnOnce(
 // requires for a collection that already holds rows.
 func (service *Service) addMissingConversationScalarColumns(ctx context.Context, collectionName string) ([]string, error) {
 	peerInfo, _ := peer.FromContext(ctx)
-	collection, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
+	described, err := service.milvus.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
 	if err != nil {
 		slog.ErrorContext(ctx, "describe conversation collection for scalar migration failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return nil, fmt.Errorf("describe conversation collection %s: %w", collectionName, err)
 	}
 	existing := make(map[string]struct{})
-	if collection.Schema != nil {
-		for _, field := range collection.Schema.Fields {
+	if described.Schema != nil {
+		for _, field := range described.Schema.Fields {
 			existing[field.Name] = struct{}{}
 		}
 	}

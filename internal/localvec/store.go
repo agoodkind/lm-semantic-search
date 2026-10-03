@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	lmcollection "goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -262,7 +263,7 @@ func (store *Store) InspectCollection(
 func (store *Store) DescribeScalarColumns(
 	_ context.Context,
 	collectionName string,
-) ([]model.ScalarColumn, bool, error) {
+) ([]lmcollection.ScalarColumn, bool, error) {
 	stored, err := store.collectionForName(collectionName, false)
 	if err != nil {
 		return nil, false, err

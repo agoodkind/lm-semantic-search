@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -25,7 +26,7 @@ const (
 // with a declared scalar schema.
 type CollectionRegistration struct {
 	CollectionID string
-	Declaration  model.CollectionDeclaration
+	Declaration  collection.Declaration
 }
 
 // RegisterCollection records a document collection addressed by logical
@@ -154,7 +155,7 @@ func (manager *Manager) resolveConversationCollection(ctx context.Context, colle
 // for the conversation declaration. That case covers a stored conversation
 // collection from before the scalar columns existed and without a registry
 // record, which the conversation RPC registered before schemas were validated.
-func migratesConversationColumns(collectionID string, declaration model.CollectionDeclaration, found bool, legacyRecord bool) bool {
+func migratesConversationColumns(collectionID string, declaration collection.Declaration, found bool, legacyRecord bool) bool {
 	if legacyRecord {
 		return true
 	}
@@ -172,7 +173,7 @@ func (manager *Manager) validateStoredCollectionSchema(
 	ctx context.Context,
 	collectionID string,
 	collectionName string,
-	declaration model.CollectionDeclaration,
+	declaration collection.Declaration,
 	migrateLegacy bool,
 ) error {
 	columns, exists, err := manager.semantic.DescribeScalarColumns(ctx, collectionName)
@@ -207,7 +208,7 @@ func (manager *Manager) saveCollectionDeclarationLocked(
 	ctx context.Context,
 	collectionID string,
 	codebaseID string,
-	declaration model.CollectionDeclaration,
+	declaration collection.Declaration,
 ) (model.Codebase, error) {
 	current, tracked := manager.codebases[codebaseID]
 	if !tracked {
@@ -241,7 +242,7 @@ func (manager *Manager) createDocumentCollectionLocked(
 	ctx context.Context,
 	collectionID string,
 	collectionName string,
-	declaration model.CollectionDeclaration,
+	declaration collection.Declaration,
 ) (model.Codebase, error) {
 	codebase := newCodebaseRecord(conversationCanonicalPath(collectionID))
 	codebase.Kind = model.CodebaseKindDocument
@@ -270,12 +271,12 @@ func (manager *Manager) createDocumentCollectionLocked(
 // validateCollectionDeclaration rejects a declaration with a missing or
 // undeclared item id column, a duplicate column, a built-in schema column, an
 // invalid column identifier, or an unsupported column type or length.
-func validateCollectionDeclaration(declaration model.CollectionDeclaration) error {
+func validateCollectionDeclaration(declaration collection.Declaration) error {
 	if strings.TrimSpace(declaration.ItemIDColumn) == "" {
 		return adapterr.NewMissingArgument("item_id_column")
 	}
 	builtinColumns := semantic.BuiltinColumnNames()
-	declared := make(map[string]model.ScalarColumn, len(declaration.Scalars))
+	declared := make(map[string]collection.ScalarColumn, len(declaration.Scalars))
 	for _, column := range declaration.Scalars {
 		if err := validateScalarColumn(column, builtinColumns); err != nil {
 			return err
@@ -295,7 +296,7 @@ func validateCollectionDeclaration(declaration model.CollectionDeclaration) erro
 			fmt.Sprintf("item_id_column %q is not a declared scalar column", declaration.ItemIDColumn),
 		)
 	}
-	if itemColumn.Type != model.ScalarTypeString {
+	if itemColumn.Type != collection.ScalarTypeString {
 		return adapterr.NewInvalidColumnDeclaration(
 			declaration.ItemIDColumn,
 			fmt.Sprintf("item_id_column %q must be a string column, not %s", declaration.ItemIDColumn, itemColumn.Type),
@@ -304,7 +305,7 @@ func validateCollectionDeclaration(declaration model.CollectionDeclaration) erro
 	return nil
 }
 
-func validateScalarColumn(column model.ScalarColumn, builtinColumns []string) error {
+func validateScalarColumn(column collection.ScalarColumn, builtinColumns []string) error {
 	if !isColumnIdentifier(column.Name) {
 		return adapterr.NewInvalidColumnDeclaration(
 			column.Name,
@@ -322,14 +323,14 @@ func validateScalarColumn(column model.ScalarColumn, builtinColumns []string) er
 		)
 	}
 	switch column.Type {
-	case model.ScalarTypeString:
+	case collection.ScalarTypeString:
 		if column.MaxLength < 1 || column.MaxLength > maxDeclaredStringLength {
 			return adapterr.NewInvalidColumnDeclaration(
 				column.Name,
 				fmt.Sprintf("string column %q needs max_length from 1 to %d", column.Name, maxDeclaredStringLength),
 			)
 		}
-	case model.ScalarTypeBool, model.ScalarTypeInt64:
+	case collection.ScalarTypeBool, collection.ScalarTypeInt64:
 		if column.MaxLength != 0 {
 			return adapterr.NewInvalidColumnDeclaration(
 				column.Name,
@@ -367,7 +368,7 @@ func isColumnIdentifier(name string) bool {
 
 // compareCollectionDeclarations reports the first difference between the saved
 // declaration and a requested one as a schema mismatch.
-func compareCollectionDeclarations(collectionID string, saved model.CollectionDeclaration, requested model.CollectionDeclaration) error {
+func compareCollectionDeclarations(collectionID string, saved collection.Declaration, requested collection.Declaration) error {
 	if saved.ItemIDColumn != requested.ItemIDColumn {
 		return adapterr.NewCollectionSchemaMismatch(
 			collectionID,
@@ -382,8 +383,8 @@ func compareCollectionDeclarations(collectionID string, saved model.CollectionDe
 // and requested columns as a schema mismatch. It checks requested columns in
 // order, then reports the first existing column the request omits, sorted by
 // name. The error message uses source as the label of the existing side.
-func compareScalarColumns(collectionID string, source string, existing []model.ScalarColumn, requested []model.ScalarColumn) error {
-	existingByName := make(map[string]model.ScalarColumn, len(existing))
+func compareScalarColumns(collectionID string, source string, existing []collection.ScalarColumn, requested []collection.ScalarColumn) error {
+	existingByName := make(map[string]collection.ScalarColumn, len(existing))
 	for _, column := range existing {
 		existingByName[column.Name] = column
 	}
@@ -423,19 +424,19 @@ func compareScalarColumns(collectionID string, source string, existing []model.S
 	return nil
 }
 
-func describeScalarColumn(column model.ScalarColumn) string {
+func describeScalarColumn(column collection.ScalarColumn) string {
 	nullability := "not nullable"
 	if column.Nullable {
 		nullability = "nullable"
 	}
-	if column.Type == model.ScalarTypeString {
+	if column.Type == collection.ScalarTypeString {
 		return fmt.Sprintf("%s(max_length=%d, %s)", column.Type, column.MaxLength, nullability)
 	}
 	return fmt.Sprintf("%s(%s)", column.Type, nullability)
 }
 
-func cloneCollectionDeclaration(declaration model.CollectionDeclaration) model.CollectionDeclaration {
-	return model.CollectionDeclaration{
+func cloneCollectionDeclaration(declaration collection.Declaration) collection.Declaration {
+	return collection.Declaration{
 		ItemIDColumn: declaration.ItemIDColumn,
 		Scalars:      slices.Clone(declaration.Scalars),
 	}

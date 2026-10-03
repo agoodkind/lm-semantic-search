@@ -9,14 +9,14 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/collection"
 )
 
 func candidate(primaryKey string, relativePath string, conversationID string, score float64) rankedCandidate {
 	return rankedCandidate{
 		PrimaryKey:   primaryKey,
 		RelativePath: relativePath,
-		Group:        ValueCell(conversationIDFieldName, StringScalar(conversationID)),
+		Group:        collection.ValueCell(conversationIDFieldName, collection.StringScalar(conversationID)),
 		Score:        score,
 	}
 }
@@ -43,7 +43,7 @@ func TestRankedCandidatesRejectMissingScores(t *testing.T) {
 		},
 		Scores: []float32{0.9},
 	}
-	groupColumn := model.ScalarColumn{Name: conversationIDFieldName, Type: model.ScalarTypeString, Nullable: true, MaxLength: 256}
+	groupColumn := collection.ScalarColumn{Name: conversationIDFieldName, Type: collection.ScalarTypeString, Nullable: true, MaxLength: 256}
 	_, err := rankedCandidatesFromResultSets(context.Background(), "conv_chunks_test", []milvusclient.ResultSet{resultSet}, groupColumn, false)
 	if !errors.Is(err, ErrSearchResultIncomplete) {
 		t.Fatalf("rankedCandidatesFromResultSets error = %v, want ErrSearchResultIncomplete", err)
@@ -57,7 +57,7 @@ func TestApplyLegacyConversationGroupsDropsDeletedRows(t *testing.T) {
 	t.Parallel()
 
 	nullGroup := func(primaryKey string, relativePath string, score float64) rankedCandidate {
-		return rankedCandidate{PrimaryKey: primaryKey, RelativePath: relativePath, Group: AbsentCell(conversationIDFieldName), Score: score}
+		return rankedCandidate{PrimaryKey: primaryKey, RelativePath: relativePath, Group: collection.AbsentCell(conversationIDFieldName), Score: score}
 	}
 	resolved := applyLegacyConversationGroups(
 		[]rankedCandidate{
@@ -159,7 +159,7 @@ func TestSelectRankedCandidatesSmallerLimitIsPrefix(t *testing.T) {
 func TestSelectRankedCandidatesGroupsByCellValue(t *testing.T) {
 	t.Parallel()
 
-	nullCandidate := func(primaryKey string, score float64, cell ScalarCell) rankedCandidate {
+	nullCandidate := func(primaryKey string, score float64, cell collection.ScalarCell) rankedCandidate {
 		return rankedCandidate{PrimaryKey: primaryKey, RelativePath: "row/" + primaryKey, Group: cell, Score: score}
 	}
 	candidates := []rankedCandidate{
@@ -167,8 +167,8 @@ func TestSelectRankedCandidatesGroupsByCellValue(t *testing.T) {
 		candidate("k2", "conv/x/1", "x", 0.8),
 		candidate("k3", "code/a", "", 0.7),
 		candidate("k4", "code/b", "", 0.6),
-		nullCandidate("k5", 0.5, NullCell(conversationIDFieldName)),
-		nullCandidate("k6", 0.4, AbsentCell(conversationIDFieldName)),
+		nullCandidate("k5", 0.5, collection.NullCell(conversationIDFieldName)),
+		nullCandidate("k6", 0.4, collection.AbsentCell(conversationIDFieldName)),
 	}
 	if got, want := candidateKeys(selectRankedCandidates(candidates, 1, 0, 10)), []string{"k1", "k3", "k5"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected %v, want %v", got, want)
@@ -185,18 +185,18 @@ func TestCompileCollectionFilterExprNestsBooleanNodes(t *testing.T) {
 
 	lower := int64(5)
 	upper := int64(9)
-	tree := AllOf(
-		AnyOf(
-			ColumnEquals(roleFieldName, StringScalar(`ro"le`)),
-			ColumnRange(messageIndexFieldName, &lower, &upper),
-			AllOf(ColumnEquals(archivedFieldName, BoolScalar(false)), ColumnIsNull(workspaceRootFieldName)),
+	tree := collection.AllOf(
+		collection.AnyOf(
+			collection.ColumnEquals(roleFieldName, collection.StringScalar(`ro"le`)),
+			collection.ColumnRange(messageIndexFieldName, &lower, &upper),
+			collection.AllOf(collection.ColumnEquals(archivedFieldName, collection.BoolScalar(false)), collection.ColumnIsNull(workspaceRootFieldName)),
 		),
-		Negate(ColumnIn(timestampUnixFieldName, []ScalarValue{Int64Scalar(1), Int64Scalar(2)})),
-		ColumnIn(archivedFieldName, []ScalarValue{BoolScalar(true)}),
-		ColumnIsPresent(loadRulesFieldName),
-		ColumnRange(timestampUnixFieldName, nil, &upper),
+		collection.Negate(collection.ColumnIn(timestampUnixFieldName, []collection.ScalarValue{collection.Int64Scalar(1), collection.Int64Scalar(2)})),
+		collection.ColumnIn(archivedFieldName, []collection.ScalarValue{collection.BoolScalar(true)}),
+		collection.ColumnIsPresent(loadRulesFieldName),
+		collection.ColumnRange(timestampUnixFieldName, nil, &upper),
 	)
-	got, err := compileCollectionFilterExpr(&tree)
+	got, err := collection.Compile(&tree)
 	if err != nil {
 		t.Fatalf("compile returned error: %v", err)
 	}
@@ -204,20 +204,20 @@ func TestCompileCollectionFilterExprNestsBooleanNodes(t *testing.T) {
 	if got.Expression != want {
 		t.Fatalf("expression = %q, want %q", got.Expression, want)
 	}
-	wantParams := []filterTemplateParam{
-		{Name: "p0", Type: model.ScalarTypeInt64, Strings: nil, Bools: nil, Int64s: []int64{1, 2}},
-		{Name: "p1", Type: model.ScalarTypeBool, Strings: nil, Bools: []bool{true}, Int64s: nil},
+	wantParams := []collection.TemplateParam{
+		{Name: "p0", Type: collection.ScalarTypeInt64, Strings: nil, Bools: nil, Int64s: []int64{1, 2}},
+		{Name: "p1", Type: collection.ScalarTypeBool, Strings: nil, Bools: []bool{true}, Int64s: nil},
 	}
 	if !reflect.DeepEqual(got.Params, wantParams) {
 		t.Fatalf("params = %#v, want %#v", got.Params, wantParams)
 	}
 
-	empty, err := compileCollectionFilterExpr(nil)
+	empty, err := collection.Compile(nil)
 	if err != nil || empty.Expression != "" || len(empty.Params) != 0 {
 		t.Fatalf("compile(nil) = %+v, %v, want the empty expression", empty, err)
 	}
-	emptyGroup := AnyOf()
-	if _, err := compileCollectionFilterExpr(&emptyGroup); err == nil {
+	emptyGroup := collection.AnyOf()
+	if _, err := collection.Compile(&emptyGroup); err == nil {
 		t.Fatal("compile of an empty any group succeeded, want an error")
 	}
 }
@@ -246,24 +246,24 @@ func TestScalarCellsAtDecodesDeclaredScalars(t *testing.T) {
 			column.NewColumnInt64(messageIndexFieldName, []int64{0, 1}),
 		},
 	}
-	declared := []model.ScalarColumn{
-		{Name: workspaceRootFieldName, Type: model.ScalarTypeString, Nullable: true, MaxLength: conversationWorkspaceMaxLength},
-		{Name: archivedFieldName, Type: model.ScalarTypeBool, Nullable: true, MaxLength: 0},
-		{Name: messageIndexFieldName, Type: model.ScalarTypeInt64, Nullable: true, MaxLength: 0},
-		{Name: loadRulesFieldName, Type: model.ScalarTypeString, Nullable: true, MaxLength: conversationLoadRulesMaxLength},
+	declared := []collection.ScalarColumn{
+		{Name: workspaceRootFieldName, Type: collection.ScalarTypeString, Nullable: true, MaxLength: conversationWorkspaceMaxLength},
+		{Name: archivedFieldName, Type: collection.ScalarTypeBool, Nullable: true, MaxLength: 0},
+		{Name: messageIndexFieldName, Type: collection.ScalarTypeInt64, Nullable: true, MaxLength: 0},
+		{Name: loadRulesFieldName, Type: collection.ScalarTypeString, Nullable: true, MaxLength: conversationLoadRulesMaxLength},
 	}
-	want := [][]ScalarCell{
+	want := [][]collection.ScalarCell{
 		{
-			NullCell(workspaceRootFieldName),
-			ValueCell(archivedFieldName, BoolScalar(true)),
-			ValueCell(messageIndexFieldName, Int64Scalar(0)),
-			AbsentCell(loadRulesFieldName),
+			collection.NullCell(workspaceRootFieldName),
+			collection.ValueCell(archivedFieldName, collection.BoolScalar(true)),
+			collection.ValueCell(messageIndexFieldName, collection.Int64Scalar(0)),
+			collection.AbsentCell(loadRulesFieldName),
 		},
 		{
-			ValueCell(workspaceRootFieldName, StringScalar("/work/alpha")),
-			ValueCell(archivedFieldName, BoolScalar(false)),
-			ValueCell(messageIndexFieldName, Int64Scalar(1)),
-			AbsentCell(loadRulesFieldName),
+			collection.ValueCell(workspaceRootFieldName, collection.StringScalar("/work/alpha")),
+			collection.ValueCell(archivedFieldName, collection.BoolScalar(false)),
+			collection.ValueCell(messageIndexFieldName, collection.Int64Scalar(1)),
+			collection.AbsentCell(loadRulesFieldName),
 		},
 	}
 	for rowIndex := range 2 {
