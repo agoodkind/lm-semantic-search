@@ -15,13 +15,13 @@ import (
 	"sync/atomic"
 	"unicode"
 
-	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
-
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/collection"
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/config"
-	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/embeddingprovider"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/lm-semantic-search/internal/tshash"
@@ -186,7 +186,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		return service, nil
 	}
 
-	embedder, err := embedding.NewProvider(ctx, cfg)
+	embedder, err := embeddingprovider.New(ctx, cfg)
 	if err != nil {
 		slog.ErrorContext(ctx, "create embedding provider failed", "provider", cfg.EmbeddingProvider, "err", err)
 		return nil, fmt.Errorf("create embedding provider: %w", err)

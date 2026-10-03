@@ -1,4 +1,4 @@
-package embedding
+package onnx
 
 import (
 	"context"

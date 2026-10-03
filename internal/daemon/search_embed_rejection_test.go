@@ -14,7 +14,7 @@ import (
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
-	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/embeddingprovider"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -65,7 +65,7 @@ func TestSearchCodeTellsTheClientWhyTheEmbedderRefusedTheQuery(t *testing.T) {
 			}))
 			defer endpoint.Close()
 
-			provider, err := embedding.NewProvider(context.Background(), config.Config{
+			provider, err := embeddingprovider.New(context.Background(), config.Config{
 				EmbeddingProvider: "OpenAI",
 				OpenAIAPIKey:      "test-key",
 				OpenAIBaseURL:     endpoint.URL,
