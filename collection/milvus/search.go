@@ -91,8 +91,22 @@ func (store *Store) Rank(ctx context.Context, request collection.SearchRequest) 
 		return nil, collection.ErrCollectionMissing
 	}
 	groupColumn, grouped := GroupColumnFor(request)
-	return store.rankCandidates(ctx, collectionName, request.Vector, request.Query, compiled, groupColumn, grouped)
+	limit := request.Limit
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+	depth := rankingDepthFor(limit)
+	return store.rankCandidates(ctx, collectionName, request.Vector, request.Query, compiled, groupColumn, grouped, depth)
 }
+
+// rankingDepthFor returns the rows each ranking leg requests for a search
+// limit: min(max(limit*4, 64), collection.RankingDepth).
+func rankingDepthFor(limit int32) int {
+	return min(max(int(limit)*4, minimumRankingDepth), collection.RankingDepth)
+}
+
+// minimumRankingDepth is the fewest rows a ranking leg requests.
+const minimumRankingDepth = 64
 
 // SelectCandidates orders candidates by descending score, then ascending
 // relativePath, then ascending primary key. It then walks them once to drop a
@@ -150,14 +164,14 @@ func selectRankedCandidates(candidates []Candidate, perGroupLimit int32, minScor
 // A hybrid collection runs both legs at collection.RankingDepth and fuses them
 // with the RRF reranker into at most collection.RankingDepth rows. A dense
 // collection runs one search at the same depth.
-func (store *Store) rankCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled collection.CompiledFilter, groupColumn collection.ScalarColumn, grouped bool) ([]Candidate, error) {
+func (store *Store) rankCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled collection.CompiledFilter, groupColumn collection.ScalarColumn, grouped bool, depth int) ([]Candidate, error) {
 	outputFields := []string{RelativePathField}
 	if grouped {
 		outputFields = append(outputFields, groupColumn.Name)
 	}
 	if store.options.Hybrid {
-		denseRequest := milvusclient.NewAnnRequest(DenseVectorField, collection.RankingDepth, entity.FloatVector(queryVector))
-		sparseRequest := milvusclient.NewAnnRequest(SparseVectorField, collection.RankingDepth, entity.Text(rawQuery))
+		denseRequest := milvusclient.NewAnnRequest(DenseVectorField, depth, entity.FloatVector(queryVector))
+		sparseRequest := milvusclient.NewAnnRequest(SparseVectorField, depth, entity.Text(rawQuery))
 		if compiled.Expression != "" {
 			denseRequest = denseRequest.WithFilter(compiled.Expression)
 			sparseRequest = sparseRequest.WithFilter(compiled.Expression)
@@ -168,7 +182,7 @@ func (store *Store) rankCandidates(ctx context.Context, collectionName string, q
 		}
 		hybridOption := milvusclient.NewHybridSearchOption(
 			collectionName,
-			collection.RankingDepth,
+			depth,
 			denseRequest,
 			sparseRequest,
 		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...)
@@ -181,7 +195,7 @@ func (store *Store) rankCandidates(ctx context.Context, collectionName string, q
 
 	searchOption := milvusclient.NewSearchOption(
 		collectionName,
-		collection.RankingDepth,
+		depth,
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	).WithANNSField(DenseVectorField).WithOutputFields(outputFields...)
 	if compiled.Expression != "" {
