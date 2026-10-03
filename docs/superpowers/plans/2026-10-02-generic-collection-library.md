@@ -6,6 +6,8 @@ One generic library in lm-semantic-search stores items (text, embedding, typed l
 
 An in-memory backend behind the same library interface is a follow-up plan.
 
+A dense index fix for `conv_chunks_09cfca5e` (LMS-707) is a second follow-up plan. The 2026-09-18 restore recreated the vector index as `AUTOINDEX`, which Milvus 2.6.18 resolves to HNSW_SQ SQ4U. Measured recall@10 dropped from 0.912 (HNSW float, before the restore) to 0.840. The follow-up builds HNSW float on a test copy, compares it with the baseline queries, and asks the operator before rebuilding the live index.
+
 ## Current behavior
 
 Verified on 2026-10-02 between 8:40 PM and 9:30 PM Pacific.
