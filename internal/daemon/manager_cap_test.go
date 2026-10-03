@@ -283,6 +283,41 @@ func TestSchedulerAdmissionRegistersQueuedJobBeforeRunning(t *testing.T) {
 	waitForCodebaseStatus(t, manager, secondRepo, model.CodebaseStatusIndexed)
 }
 
+func TestConversationUsesNormalPriority(t *testing.T) {
+	manager, _ := newTestManagerWithCap(t, 1)
+	codebase := newCodebaseRecord("chat:///scheduler-priority")
+	codebase.Kind = model.CodebaseKindDocument
+	codebase.Status = model.CodebaseStatusIndexed
+	codebase.SchedulingPolicy.Priority = model.JobPriorityHigh
+	payload := conversationJobPayload{
+		Kind:           conversationJobKindUpsert,
+		CollectionName: "conversation_scheduler_priority",
+		Manifest:       map[string]string{"conversation-1": "fingerprint-1"},
+		Documents: []model.ConversationDocument{{
+			ConversationID: "conversation-1",
+			MessageIndex:   0,
+			Role:           "user",
+			Text:           "hello",
+		}},
+		Absence: absenceRetain,
+	}
+
+	manager.mu.Lock()
+	manager.codebases[codebase.ID] = codebase
+	job, err := manager.enqueueConversationJobLocked(codebase, testClientInfo(), payload)
+	manager.mu.Unlock()
+	if err != nil {
+		t.Fatalf("enqueueConversationJobLocked returned error: %v", err)
+	}
+	if job.EffectiveSchedulingPolicy.Priority != model.JobPriorityNormal {
+		t.Fatalf(
+			"conversation priority = %q, want %q",
+			job.EffectiveSchedulingPolicy.Priority,
+			model.JobPriorityNormal,
+		)
+	}
+}
+
 // A reuse collection can spend the full bounded load window in Milvus. Once
 // that read has run past the release grace, it gives up both scarce holds, so
 // another job can start even when the configured job cap is one.

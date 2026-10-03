@@ -4,7 +4,6 @@ package live
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,45 +14,47 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
-	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const (
 	paritySearchQuery        = "needle"
-	parityBulkItems          = 300
-	parityDenseRows          = 30
-	parityLegacyItem         = "source-a:legacy"
-	parityDenseItem          = "source-a:dense"
+	parityBulkConversations  = 300
+	parityDenseMessages      = 30
+	parityLegacyConversation = "claude:legacy"
+	parityDenseConversation  = "claude:dense"
 	parityFullLimit          = 1000
 	parityPageLimit          = 10
 	parityGroupLimit         = 2
 	parityBatchSize          = 256
 	parityVisibilityTimeout  = 60 * time.Second
 	parityVisibilityInterval = 500 * time.Millisecond
-	parityBaseCreated        = 1_700_000_000
-	parityDenseCreated       = 1_600_000_000
-	parityLegacyCreated      = 1_500_000_000
-	parityLegacyRows         = 3
+	parityBaseTimestamp      = 1_700_000_000
+	parityDenseTimestamp     = 1_600_000_000
+	parityLegacyTimestamp    = 1_500_000_000
+	parityLegacyMessages     = 3
 )
 
+// parityRow is the scalar metadata of one corpus row. A nil pointer is a null
+// stored value, which only the legacy rows written directly to Milvus have.
 type searchParityRow struct {
-	rowKey   string
-	itemID   string
-	source   string
-	category string
-	created  int64
-	sequence int64
-	parent   *string
-	location *string
-	hidden   *bool
-	tag      *string
+	rowKey         string
+	conversationID string
+	provider       string
+	role           string
+	timestampUnix  int64
+	messageIndex   int64
+	parent         *string
+	workspaceRoot  *string
+	archived       *bool
+	loadRules      *string
 }
 
 type parityCorpus struct {
-	items   map[string][]*pb.CollectionRow
-	rows    []searchParityRow
-	bulkIDs []string
+	conversations map[string][]*pb.ConversationDocument
+	rows          []searchParityRow
+	bulkIDs       []string
 }
 
 func stringPointer(value string) *string {
@@ -64,108 +65,190 @@ func boolPointer(value bool) *bool {
 	return &value
 }
 
-func bulkItemID(index int) string {
-	source := "source-a"
+func bulkConversationID(index int) string {
+	provider := "claude"
 	if index%2 == 1 {
-		source = "source-b"
+		provider = "codex"
 	}
-	return fmt.Sprintf("%s:bulk-%03d", source, index)
+	return fmt.Sprintf("%s:bulk-%03d", provider, index)
 }
 
+// buildParityCorpus returns the synthetic parity corpus. Three hundred bulk
+// conversations exceed one membership batch and vary every scalar column. The
+// dense conversation has thirty messages. Each dense message text equals the
+// query, and the dense rows fill the first ranked pages.
 func buildParityCorpus() parityCorpus {
-	corpus := parityCorpus{items: map[string][]*pb.CollectionRow{}, rows: nil, bulkIDs: nil}
-	for index := range parityBulkItems {
-		itemID := bulkItemID(index)
-		corpus.bulkIDs = append(corpus.bulkIDs, itemID)
-		source, _, _ := strings.Cut(itemID, ":")
-		location := fmt.Sprintf("/work/w%d", index%3)
-		hidden := index%4 == 0
+	corpus := parityCorpus{conversations: map[string][]*pb.ConversationDocument{}, rows: nil, bulkIDs: nil}
+	for index := range parityBulkConversations {
+		conversationID := bulkConversationID(index)
+		corpus.bulkIDs = append(corpus.bulkIDs, conversationID)
+		provider, _, _ := strings.Cut(conversationID, ":")
+		workspaceRoot := fmt.Sprintf("/work/w%d", index%3)
+		archived := index%4 == 0
 		parent := ""
 		if index%5 == 0 && index != 0 {
-			parent = bulkItemID(0)
+			parent = bulkConversationID(0)
 		}
-		tag := ""
+		loadRules := ""
 		if index%2 == 0 {
-			tag = "tag-v2"
+			loadRules = "rules-v2"
 		}
-		categories := []string{"Primary", "secondary"}
+		roles := []string{"User", "assistant"}
 		if index%3 == 0 {
-			categories[0] = "primary"
+			roles[0] = "user"
 		}
-		for sequence, category := range categories {
-			timestamp := int64(parityBaseCreated + index*10 + sequence)
+		for messageIndex, role := range roles {
+			timestamp := int64(parityBaseTimestamp + index*10 + messageIndex)
+			corpus.conversations[conversationID] = append(corpus.conversations[conversationID], &pb.ConversationDocument{
+				ConversationId:       conversationID,
+				ParentConversationId: parent,
+				MessageIndex:         int32(messageIndex),
+				Role:                 role,
+				TimestampUnix:        timestamp,
+				Text:                 fmt.Sprintf("bulk conversation %03d message %d covers topic %d", index, messageIndex, index%7),
+				WorkspaceRoot:        workspaceRoot,
+				Archived:             archived,
+				LoadRules:            loadRules,
+			})
 			corpus.rows = append(corpus.rows, searchParityRow{
-				rowKey:   fmt.Sprintf("items/%s/%d", itemID, sequence),
-				itemID:   itemID,
-				source:   source,
-				category: strings.ToLower(category),
-				created:  timestamp,
-				sequence: int64(sequence),
-				parent:   stringPointer(parent),
-				location: stringPointer(location),
-				hidden:   boolPointer(hidden),
-				tag:      stringPointer(tag),
+				rowKey:         fmt.Sprintf("conv/%s/%d", conversationID, messageIndex),
+				conversationID: conversationID,
+				provider:       provider,
+				role:           strings.ToLower(role),
+				timestampUnix:  timestamp,
+				messageIndex:   int64(messageIndex),
+				parent:         stringPointer(parent),
+				workspaceRoot:  stringPointer(workspaceRoot),
+				archived:       boolPointer(archived),
+				loadRules:      stringPointer(loadRules),
 			})
 		}
 	}
-	for sequence := range parityDenseRows {
-		category := "secondary"
-		if sequence%2 == 0 {
-			category = "primary"
+	for messageIndex := range parityDenseMessages {
+		role := "assistant"
+		if messageIndex%2 == 0 {
+			role = "user"
 		}
-		timestamp := int64(parityDenseCreated + sequence)
+		timestamp := int64(parityDenseTimestamp + messageIndex)
+		corpus.conversations[parityDenseConversation] = append(corpus.conversations[parityDenseConversation], &pb.ConversationDocument{
+			ConversationId: parityDenseConversation,
+			MessageIndex:   int32(messageIndex),
+			Role:           role,
+			TimestampUnix:  timestamp,
+			Text:           paritySearchQuery,
+			WorkspaceRoot:  "/work/dense",
+			LoadRules:      "rules-dense",
+		})
 		corpus.rows = append(corpus.rows, searchParityRow{
-			rowKey:   fmt.Sprintf("items/%s/%d", parityDenseItem, sequence),
-			itemID:   parityDenseItem,
-			source:   "source-a",
-			category: category,
-			created:  timestamp,
-			sequence: int64(sequence),
-			parent:   stringPointer(""),
-			location: stringPointer("/work/dense"),
-			hidden:   boolPointer(false),
-			tag:      stringPointer("tag-dense"),
+			rowKey:         fmt.Sprintf("conv/%s/%d", parityDenseConversation, messageIndex),
+			conversationID: parityDenseConversation,
+			provider:       "claude",
+			role:           role,
+			timestampUnix:  timestamp,
+			messageIndex:   int64(messageIndex),
+			parent:         stringPointer(""),
+			workspaceRoot:  stringPointer("/work/dense"),
+			archived:       boolPointer(false),
+			loadRules:      stringPointer("rules-dense"),
 		})
 	}
-	for sequence := range parityLegacyRows {
+	for messageIndex := range parityLegacyMessages {
 		corpus.rows = append(corpus.rows, searchParityRow{
-			rowKey:   fmt.Sprintf("items/%s/%d", parityLegacyItem, sequence),
-			itemID:   parityLegacyItem,
-			source:   "source-a",
-			category: "primary",
-			created:  int64(parityLegacyCreated + sequence),
-			sequence: int64(sequence),
-			parent:   nil,
-			location: nil,
-			hidden:   nil,
-			tag:      nil,
+			rowKey:         fmt.Sprintf("conv/%s/%d", parityLegacyConversation, messageIndex),
+			conversationID: parityLegacyConversation,
+			provider:       "claude",
+			role:           "user",
+			timestampUnix:  int64(parityLegacyTimestamp + messageIndex),
+			messageIndex:   int64(messageIndex),
+			parent:         nil,
+			workspaceRoot:  nil,
+			archived:       nil,
+			loadRules:      nil,
 		})
-	}
-
-	for _, row := range corpus.rows {
-		text := fmt.Sprintf("bulk item %s entry %d covers design note ingestion step", row.itemID, row.sequence)
-		if row.itemID == parityDenseItem {
-			text = paritySearchQuery
-		}
-		scalars := []*pb.CollectionScalarValue{
-			{Column: "source", Value: &pb.CollectionScalarValue_StringValue{StringValue: row.source}},
-			{Column: "category", Value: &pb.CollectionScalarValue_StringValue{StringValue: row.category}},
-			{Column: "created", Value: &pb.CollectionScalarValue_Int64Value{Int64Value: row.created}},
-			{Column: "sequence", Value: &pb.CollectionScalarValue_Int64Value{Int64Value: row.sequence}},
-		}
-		for name, value := range map[string]*string{"parentId": row.parent, "location": row.location, "tag": row.tag} {
-			if value != nil {
-				scalars = append(scalars, &pb.CollectionScalarValue{Column: name, Value: &pb.CollectionScalarValue_StringValue{StringValue: *value}})
-			}
-		}
-		if row.hidden != nil {
-			scalars = append(scalars, &pb.CollectionScalarValue{Column: "hidden", Value: &pb.CollectionScalarValue_BoolValue{BoolValue: *row.hidden}})
-		}
-		corpus.items[row.itemID] = append(corpus.items[row.itemID], &pb.CollectionRow{RowKey: row.rowKey, ItemId: row.itemID, Text: text, Scalars: scalars})
 	}
 	return corpus
 }
 
+// insertLegacyRows writes the legacy rows directly to the harness collection
+// with null parent, workspace, archived, and load rules values, the shape of a
+// row the enrichment backfill has not updated.
+func (h *harness) insertLegacyRows(corpus parityCorpus) {
+	h.t.Helper()
+	legacy := make([]searchParityRow, 0, parityLegacyMessages)
+	for _, row := range corpus.rows {
+		if row.conversationID == parityLegacyConversation {
+			legacy = append(legacy, row)
+		}
+	}
+	count := len(legacy)
+	ids := make([]string, 0, count)
+	contents := make([]string, 0, count)
+	paths := make([]string, 0, count)
+	metadata := make([]string, 0, count)
+	vectors := make([][]float32, 0, count)
+	conversationIDs := make([]string, 0, count)
+	providers := make([]string, 0, count)
+	roles := make([]string, 0, count)
+	timestamps := make([]int64, 0, count)
+	messageIndexes := make([]int64, 0, count)
+	for _, row := range legacy {
+		content := fmt.Sprintf("legacy message %d before scalar enrichment", row.messageIndex)
+		ids = append(ids, "legacy_"+strconv.FormatInt(row.messageIndex, 10))
+		contents = append(contents, content)
+		paths = append(paths, row.rowKey)
+		metadata = append(metadata, fmt.Sprintf(`{"conversation_id":%q,"message_index":%d,"role":%q,"timestamp_unix":%d}`, row.conversationID, row.messageIndex, row.role, row.timestampUnix))
+		vector := make([]float32, 0, fakeEmbeddingDimension)
+		for _, value := range deterministicVector(content, fakeEmbeddingDimension) {
+			vector = append(vector, float32(value))
+		}
+		vectors = append(vectors, vector)
+		conversationIDs = append(conversationIDs, row.conversationID)
+		providers = append(providers, row.provider)
+		roles = append(roles, row.role)
+		timestamps = append(timestamps, row.timestampUnix)
+		messageIndexes = append(messageIndexes, row.messageIndex)
+	}
+	allNull := make([]bool, count)
+	nullColumns := make([]column.Column, 0, 7)
+	for _, name := range []string{"parentConversationId", "workspaceRoot", "loadRules", "contentHash", "embeddingModel"} {
+		nullColumn, err := column.NewNullableColumnVarChar(name, make([]string, count), allNull, column.WithSparseNullableMode[string](true))
+		if err != nil {
+			h.t.Fatalf("build null column %s: %v", name, err)
+		}
+		nullColumns = append(nullColumns, nullColumn)
+	}
+	archivedColumn, err := column.NewNullableColumnBool("archived", make([]bool, count), allNull, column.WithSparseNullableMode[bool](true))
+	if err != nil {
+		h.t.Fatalf("build null archived column: %v", err)
+	}
+	splitPartColumn, err := column.NewNullableColumnInt64("splitPart", make([]int64, count), allNull, column.WithSparseNullableMode[int64](true))
+	if err != nil {
+		h.t.Fatalf("build null splitPart column: %v", err)
+	}
+	nullColumns = append(nullColumns, archivedColumn, splitPartColumn)
+	zeros := make([]int64, count)
+	extensions := make([]string, count)
+	insertOption := milvusclient.NewColumnBasedInsertOption(h.collectionName).
+		WithVarcharColumn("id", ids).
+		WithVarcharColumn("content", contents).
+		WithVarcharColumn(relativePathField, paths).
+		WithInt64Column("startLine", zeros).
+		WithInt64Column("endLine", zeros).
+		WithVarcharColumn("fileExtension", extensions).
+		WithVarcharColumn("metadata", metadata).
+		WithFloatVectorColumn("vector", fakeEmbeddingDimension, vectors).
+		WithVarcharColumn("conversationId", conversationIDs).
+		WithVarcharColumn("provider", providers).
+		WithVarcharColumn("role", roles).
+		WithInt64Column("timestampUnix", timestamps).
+		WithInt64Column("messageIndex", messageIndexes).
+		WithColumns(nullColumns...)
+	if _, err := h.milvus.Insert(correlatedContext(), insertOption); err != nil {
+		h.t.Fatalf("insert legacy rows into %s: %v", h.collectionName, err)
+	}
+}
+
+// genericSearch runs the generic RPC on the harness collection.
 func (h *harness) genericSearch(request *pb.SearchCollectionRequest) []*pb.CollectionSearchHit {
 	h.t.Helper()
 	request.CollectionId = h.collectionID
@@ -177,6 +260,25 @@ func (h *harness) genericSearch(request *pb.SearchCollectionRequest) []*pb.Colle
 	return response.GetHits()
 }
 
+// oldSearch runs the old conversation search RPC on the harness collection.
+func (h *harness) oldSearch(filter *pb.ConversationSearchFilter, limit int32, perConversationLimit int32) []*pb.ConversationSearchResult {
+	h.t.Helper()
+	response, err := h.client.SearchConversations(correlatedContext(), &pb.SearchConversationsRequest{
+		CollectionId:         h.collectionID,
+		Query:                paritySearchQuery,
+		Limit:                limit,
+		Filter:               filter,
+		PerConversationLimit: perConversationLimit,
+	})
+	if err != nil {
+		h.t.Fatalf("SearchConversations returned error: %v", err)
+	}
+	return response.GetResults()
+}
+
+// waitForCorpusVisibility polls the generic search until every corpus row is
+// searchable. Milvus search reads at bounded consistency. A direct insert
+// becomes visible to search after a short delay.
 func (h *harness) waitForCorpusVisibility(corpus parityCorpus) {
 	h.t.Helper()
 	deadline := time.Now().Add(parityVisibilityTimeout)
@@ -260,7 +362,7 @@ func sortedKeysOfHits(hits []*pb.CollectionSearchHit) []string {
 }
 
 func groupOfRowKey(rowKey string) string {
-	trimmed := strings.TrimPrefix(rowKey, "items/")
+	trimmed := strings.TrimPrefix(rowKey, "conv/")
 	separator := strings.LastIndex(trimmed, "/")
 	if separator < 0 {
 		return trimmed
@@ -268,6 +370,27 @@ func groupOfRowKey(rowKey string) string {
 	return trimmed[:separator]
 }
 
+// requireOldGenericParity requires the old and generic responses to list the
+// same rows in the same order with equal scores and content. A mismatch
+// reports row keys and scores only.
+func requireOldGenericParity(t *testing.T, label string, old []*pb.ConversationSearchResult, generic []*pb.CollectionSearchHit) {
+	t.Helper()
+	if len(old) != len(generic) {
+		t.Fatalf("%s: old RPC returned %d rows, generic returned %d", label, len(old), len(generic))
+	}
+	for index := range old {
+		oldKey := fmt.Sprintf("conv/%s/%d", old[index].GetConversationId(), old[index].GetMessageIndex())
+		if oldKey != generic[index].GetRowKey() || old[index].GetScore() != generic[index].GetScore() {
+			t.Fatalf("%s: rank %d old %s score %v, generic %s score %v", label, index, oldKey, old[index].GetScore(), generic[index].GetRowKey(), generic[index].GetScore())
+		}
+		if old[index].GetContent() != generic[index].GetContent() {
+			t.Fatalf("%s: rank %d row %s content differs between the old and generic RPCs", label, index, oldKey)
+		}
+	}
+}
+
+// requireSameRanking requires two rankings to list the same rows in the same
+// order with equal scores.
 func requireSameRanking(t *testing.T, label string, got []*pb.CollectionSearchHit, want []*pb.CollectionSearchHit) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -288,6 +411,8 @@ func hitKeys(hits []*pb.CollectionSearchHit) []string {
 	return keys
 }
 
+// capHits applies a per-group cap, a score floor, and a limit to a ranked list,
+// the reduction the daemon applies after its store search.
 func capHits(hits []*pb.CollectionSearchHit, perGroupLimit int, minScore float64, limit int) []*pb.CollectionSearchHit {
 	kept := make([]*pb.CollectionSearchHit, 0, limit)
 	perGroup := map[string]int{}
@@ -314,9 +439,11 @@ func (h *harness) searchCallCount() int {
 	return h.callRecorder.count("Search", h.collectionName) + h.callRecorder.count("HybridSearch", h.collectionName)
 }
 
+// storedScalarRows reads the stored relativePath and declared scalar values of
+// rowKeys directly from Milvus at strong consistency.
 func (h *harness) storedScalarRows(rowKeys []string) map[string]map[string]*pb.CollectionHitScalar {
 	h.t.Helper()
-	declared := searchFixtureDeclaration().Scalars
+	declared := semantic.ConversationDeclaration().Scalars
 	outputFields := []string{relativePathField}
 	for _, declaredColumn := range declared {
 		outputFields = append(outputFields, declaredColumn.Name)
@@ -388,72 +515,98 @@ func (h *harness) storedCell(valueColumn column.Column, name string, rowIndex in
 	return cell
 }
 
-func TestGenericCollectionSearchLive(t *testing.T) {
-	h := newSearchFixtureHarness(t)
+// TestGenericCollectionSearchParity is the read-only parity battery on an
+// isolated harness collection. It compares the old conversation RPCs with the
+// generic RPC on the same corpus: provider, role, time, message index, parent,
+// workspace, and archived filters, a scope of more than 256 conversation ids,
+// group caps, the score floor, and within-conversation fingerprints. Both RPCs
+// must return identical ordered rows. It checks every filter result against the
+// corpus definition, proves the group cap fills past an overfilled top in one
+// ranking search, proves a scope of more than 256 ids ranks in one search,
+// proves repeated rankings are identical and smaller limits are prefixes, and
+// reads the stored rows directly to confirm row keys and every scalar echo,
+// including null values. Failure messages report row keys, scores, and scalar
+// metadata, never message text.
+func TestGenericCollectionSearchParity(t *testing.T) {
+	h := newHarness(t)
 	corpus := buildParityCorpus()
-	for _, itemID := range slices.Sorted(maps.Keys(corpus.items)) {
-		requireCompleted(t, h.upsert(map[string][]*pb.CollectionRow{itemID: corpus.items[itemID]}, pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN, false, false), "corpus item ingest")
-	}
+	ingested := h.upsert(corpus.conversations, pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, false, false)
+	requireCompleted(t, ingested, "parity corpus ingest")
+	h.insertLegacyRows(corpus)
 	h.waitForCorpusVisibility(corpus)
 
-	t.Run("filters match the corpus", func(t *testing.T) {
+	t.Run("filters match the corpus and the old RPC", func(t *testing.T) {
+		archivedTrue := true
+		archivedFalse := false
 		cases := []struct {
-			name    string
-			generic *pb.CollectionFilter
-			keep    func(searchParityRow) bool
+			name      string
+			oldFilter *pb.ConversationSearchFilter
+			generic   *pb.CollectionFilter
+			keep      func(searchParityRow) bool
 		}{
 			{
-				name:    "source",
-				generic: parityAll(parityIn("source", "source-b")),
-				keep:    func(row searchParityRow) bool { return row.source == "source-b" },
+				name:      "provider",
+				oldFilter: &pb.ConversationSearchFilter{Providers: []string{"codex"}},
+				generic:   parityAll(parityIn("provider", "codex")),
+				keep:      func(row searchParityRow) bool { return row.provider == "codex" },
 			},
 			{
-				name:    "category",
-				generic: parityAll(parityIn("category", "primary")),
-				keep:    func(row searchParityRow) bool { return row.category == "primary" },
+				name:      "uppercase role",
+				oldFilter: &pb.ConversationSearchFilter{Roles: []string{"USER"}},
+				generic:   parityAll(parityIn("role", "user")),
+				keep:      func(row searchParityRow) bool { return row.role == "user" },
 			},
 			{
-				name:    "time bounds",
-				generic: parityAll(parityRange("created", parityBound(parityBaseCreated+1000), nil), parityRange("created", nil, parityBound(parityBaseCreated+1500))),
+				name:      "time bounds",
+				oldFilter: &pb.ConversationSearchFilter{FromUnix: parityBaseTimestamp + 1000, UntilUnix: parityBaseTimestamp + 1500},
+				generic:   parityAll(parityRange("timestampUnix", parityBound(parityBaseTimestamp+1000), nil), parityRange("timestampUnix", nil, parityBound(parityBaseTimestamp+1500))),
 				keep: func(row searchParityRow) bool {
-					return row.created >= parityBaseCreated+1000 && row.created < parityBaseCreated+1500
+					return row.timestampUnix >= parityBaseTimestamp+1000 && row.timestampUnix < parityBaseTimestamp+1500
 				},
 			},
 			{
-				name:    "entry index bounds",
-				generic: parityAll(parityRange("sequence", parityBound(1), nil), parityRange("sequence", nil, parityBound(5))),
-				keep:    func(row searchParityRow) bool { return row.sequence >= 1 && row.sequence < 5 },
+				name:      "message index bounds",
+				oldFilter: &pb.ConversationSearchFilter{MessageIndexFrom: 1, MessageIndexUntil: 5},
+				generic:   parityAll(parityRange("messageIndex", parityBound(1), nil), parityRange("messageIndex", nil, parityBound(5))),
+				keep:      func(row searchParityRow) bool { return row.messageIndex >= 1 && row.messageIndex < 5 },
 			},
 			{
-				name:    "parent",
-				generic: parityAll(parityEquals("parentId", parityStringValue(bulkItemID(0)))),
-				keep:    func(row searchParityRow) bool { return row.parent != nil && *row.parent == bulkItemID(0) },
+				name:      "parent",
+				oldFilter: &pb.ConversationSearchFilter{ParentConversationId: bulkConversationID(0)},
+				generic:   parityAll(parityEquals("parentConversationId", parityStringValue(bulkConversationID(0)))),
+				keep:      func(row searchParityRow) bool { return row.parent != nil && *row.parent == bulkConversationID(0) },
 			},
 			{
-				name:    "location",
-				generic: parityAll(parityIn("location", "/work/w1", "/work/dense")),
+				name:      "workspace",
+				oldFilter: &pb.ConversationSearchFilter{WorkspaceRoots: []string{"/work/w1", "/work/dense"}},
+				generic:   parityAll(parityIn("workspaceRoot", "/work/w1", "/work/dense")),
 				keep: func(row searchParityRow) bool {
-					return row.location != nil && (*row.location == "/work/w1" || *row.location == "/work/dense")
+					return row.workspaceRoot != nil && (*row.workspaceRoot == "/work/w1" || *row.workspaceRoot == "/work/dense")
 				},
 			},
 			{
-				name:    "hidden true excludes null",
-				generic: parityAll(parityEquals("hidden", parityBoolValue(true))),
-				keep:    func(row searchParityRow) bool { return row.hidden != nil && *row.hidden },
+				name:      "archived true excludes null",
+				oldFilter: &pb.ConversationSearchFilter{Archived: &archivedTrue},
+				generic:   parityAll(parityEquals("archived", parityBoolValue(true))),
+				keep:      func(row searchParityRow) bool { return row.archived != nil && *row.archived },
 			},
 			{
-				name:    "hidden false excludes null",
-				generic: parityAll(parityEquals("hidden", parityBoolValue(false))),
-				keep:    func(row searchParityRow) bool { return row.hidden != nil && !*row.hidden },
+				name:      "archived false excludes null",
+				oldFilter: &pb.ConversationSearchFilter{Archived: &archivedFalse},
+				generic:   parityAll(parityEquals("archived", parityBoolValue(false))),
+				keep:      func(row searchParityRow) bool { return row.archived != nil && !*row.archived },
 			},
 			{
-				name:    "more than 256 item ids",
-				generic: parityAll(parityIn("itemId", corpus.bulkIDs...)),
-				keep:    func(row searchParityRow) bool { return strings.Contains(row.itemID, ":bulk-") },
+				name:      "more than 256 conversation ids",
+				oldFilter: &pb.ConversationSearchFilter{ConversationIds: corpus.bulkIDs},
+				generic:   parityAll(parityIn("conversationId", corpus.bulkIDs...)),
+				keep:      func(row searchParityRow) bool { return strings.Contains(row.conversationID, ":bulk-") },
 			},
 		}
 		for _, testCase := range cases {
+			old := h.oldSearch(testCase.oldFilter, parityFullLimit, 0)
 			generic := h.genericSearch(&pb.SearchCollectionRequest{Limit: parityFullLimit, Filter: testCase.generic})
+			requireOldGenericParity(t, testCase.name, old, generic)
 			if got, want := sortedKeysOfHits(generic), expectedRowKeys(corpus, testCase.keep); !slices.Equal(got, want) {
 				t.Fatalf("%s: generic returned %d rows, want %d from the corpus definition", testCase.name, len(got), len(want))
 			}
@@ -466,31 +619,31 @@ func TestGenericCollectionSearchLive(t *testing.T) {
 			filter *pb.CollectionFilter
 			keep   func(searchParityRow) bool
 		}{
-			{name: "is_null hidden", filter: parityIsNull("hidden"), keep: func(row searchParityRow) bool { return row.hidden == nil }},
+			{name: "is_null archived", filter: parityIsNull("archived"), keep: func(row searchParityRow) bool { return row.archived == nil }},
 			{
 				name: "int64 and bool membership",
 				filter: parityAll(
-					&pb.CollectionFilter{Node: &pb.CollectionFilter_InSet{InSet: &pb.CollectionFilterIn{Column: "sequence", Values: []*pb.CollectionFilterValue{
+					&pb.CollectionFilter{Node: &pb.CollectionFilter_InSet{InSet: &pb.CollectionFilterIn{Column: "messageIndex", Values: []*pb.CollectionFilterValue{
 						{Value: &pb.CollectionFilterValue_Int64Value{Int64Value: 1}},
 						{Value: &pb.CollectionFilterValue_Int64Value{Int64Value: 2}},
 					}}}},
-					&pb.CollectionFilter{Node: &pb.CollectionFilter_InSet{InSet: &pb.CollectionFilterIn{Column: "hidden", Values: []*pb.CollectionFilterValue{parityBoolValue(true)}}}},
+					&pb.CollectionFilter{Node: &pb.CollectionFilter_InSet{InSet: &pb.CollectionFilterIn{Column: "archived", Values: []*pb.CollectionFilterValue{parityBoolValue(true)}}}},
 				),
 				keep: func(row searchParityRow) bool {
-					return (row.sequence == 1 || row.sequence == 2) && row.hidden != nil && *row.hidden
+					return (row.messageIndex == 1 || row.messageIndex == 2) && row.archived != nil && *row.archived
 				},
 			},
-			{name: "is_present location", filter: parityIsPresent("location"), keep: func(row searchParityRow) bool { return row.location != nil }},
+			{name: "is_present workspaceRoot", filter: parityIsPresent("workspaceRoot"), keep: func(row searchParityRow) bool { return row.workspaceRoot != nil }},
 			{
 				name:   "negated comparison excludes null",
-				filter: parityNegate(parityEquals("hidden", parityBoolValue(true))),
-				keep:   func(row searchParityRow) bool { return row.hidden != nil && !*row.hidden },
+				filter: parityNegate(parityEquals("archived", parityBoolValue(true))),
+				keep:   func(row searchParityRow) bool { return row.archived != nil && !*row.archived },
 			},
 			{
 				name:   "negated group over null columns",
-				filter: parityNegate(parityAny(parityEquals("hidden", parityBoolValue(true)), parityIn("tag", "tag-v2"))),
+				filter: parityNegate(parityAny(parityEquals("archived", parityBoolValue(true)), parityIn("loadRules", "rules-v2"))),
 				keep: func(row searchParityRow) bool {
-					return row.hidden != nil && !*row.hidden && row.tag != nil && *row.tag != "tag-v2"
+					return row.archived != nil && !*row.archived && row.loadRules != nil && *row.loadRules != "rules-v2"
 				},
 			},
 		}
@@ -506,7 +659,7 @@ func TestGenericCollectionSearchLive(t *testing.T) {
 		full := h.genericSearch(&pb.SearchCollectionRequest{Limit: parityFullLimit})
 		denseInTop := 0
 		for _, hit := range full[:parityPageLimit] {
-			if groupOfRowKey(hit.GetRowKey()) == parityDenseItem {
+			if groupOfRowKey(hit.GetRowKey()) == parityDenseConversation {
 				denseInTop++
 			}
 		}
@@ -514,18 +667,20 @@ func TestGenericCollectionSearchLive(t *testing.T) {
 			t.Fatalf("top %d ranks have %d dense rows, want more than the group limit %d", parityPageLimit, denseInTop, parityGroupLimit)
 		}
 		h.callRecorder.reset()
-		capped := h.genericSearch(&pb.SearchCollectionRequest{Limit: parityPageLimit, GroupBy: "itemId", PerGroupLimit: parityGroupLimit})
+		capped := h.genericSearch(&pb.SearchCollectionRequest{Limit: parityPageLimit, GroupBy: "conversationId", PerGroupLimit: parityGroupLimit})
 		if calls := h.searchCallCount(); calls != 1 {
 			t.Fatalf("capped search ran %d ranking searches, want 1", calls)
 		}
 		requireSameRanking(t, "group cap fill", capped, capHits(full, parityGroupLimit, 0, parityPageLimit))
+		old := h.oldSearch(nil, parityPageLimit, parityGroupLimit)
+		requireOldGenericParity(t, "group cap fill old RPC", old, capped)
 	})
 
 	t.Run("more than 256 ids rank in one search", func(t *testing.T) {
-		scope := append(slices.Clone(corpus.bulkIDs), parityDenseItem)
+		scope := append(slices.Clone(corpus.bulkIDs), parityDenseConversation)
 		inScope := map[string]bool{}
-		for _, itemID := range scope {
-			inScope[itemID] = true
+		for _, conversationID := range scope {
+			inScope[conversationID] = true
 		}
 		full := h.genericSearch(&pb.SearchCollectionRequest{Limit: parityFullLimit})
 		scopedFull := make([]*pb.CollectionSearchHit, 0, len(full))
@@ -535,11 +690,13 @@ func TestGenericCollectionSearchLive(t *testing.T) {
 			}
 		}
 		h.callRecorder.reset()
-		generic := h.genericSearch(&pb.SearchCollectionRequest{Limit: parityPageLimit, GroupBy: "itemId", PerGroupLimit: parityGroupLimit, Filter: parityAll(parityIn("itemId", scope...))})
+		generic := h.genericSearch(&pb.SearchCollectionRequest{Limit: parityPageLimit, GroupBy: "conversationId", PerGroupLimit: parityGroupLimit, Filter: parityAll(parityIn("conversationId", scope...))})
 		if calls := h.searchCallCount(); calls != 1 {
 			t.Fatalf("scoped search ran %d ranking searches, want 1", calls)
 		}
 		requireSameRanking(t, "large scope", generic, capHits(scopedFull, parityGroupLimit, 0, parityPageLimit))
+		old := h.oldSearch(&pb.ConversationSearchFilter{ConversationIds: scope}, parityPageLimit, parityGroupLimit)
+		requireOldGenericParity(t, "large scope old RPC", old, generic)
 	})
 
 	t.Run("rankings are stable and smaller limits are prefixes", func(t *testing.T) {
@@ -549,12 +706,14 @@ func TestGenericCollectionSearchLive(t *testing.T) {
 				t.Fatalf("repeated full ranking differs: %d rows versus %d", len(again), len(full))
 			}
 		}
-		larger := h.genericSearch(&pb.SearchCollectionRequest{Limit: 2 * parityPageLimit, GroupBy: "itemId", PerGroupLimit: parityGroupLimit})
+		larger := h.genericSearch(&pb.SearchCollectionRequest{Limit: 2 * parityPageLimit, GroupBy: "conversationId", PerGroupLimit: parityGroupLimit})
 		for _, limit := range []int32{1, 3, 5, parityPageLimit, 15} {
-			smaller := h.genericSearch(&pb.SearchCollectionRequest{Limit: limit, GroupBy: "itemId", PerGroupLimit: parityGroupLimit})
+			smaller := h.genericSearch(&pb.SearchCollectionRequest{Limit: limit, GroupBy: "conversationId", PerGroupLimit: parityGroupLimit})
 			if len(smaller) > len(larger) || !slices.Equal(hitKeys(smaller), hitKeys(larger)[:len(smaller)]) {
 				t.Fatalf("limit %d rows %v are not a prefix of %v", limit, hitKeys(smaller), hitKeys(larger))
 			}
+			old := h.oldSearch(nil, limit, parityGroupLimit)
+			requireOldGenericParity(t, fmt.Sprintf("prefix limit %d old RPC", limit), old, smaller)
 		}
 	})
 
@@ -563,6 +722,8 @@ func TestGenericCollectionSearchLive(t *testing.T) {
 		floor := full[len(full)/4].GetScore()
 		floored := h.genericSearch(&pb.SearchCollectionRequest{Limit: parityFullLimit, MinScore: floor})
 		requireSameRanking(t, "score floor", floored, capHits(full, 0, floor, parityFullLimit))
+		old := h.oldSearch(&pb.ConversationSearchFilter{MinScore: floor}, parityFullLimit, 0)
+		requireOldGenericParity(t, "score floor old RPC", old, floored)
 	})
 
 	t.Run("stored rows match row keys and scalar echoes", func(t *testing.T) {
@@ -589,57 +750,38 @@ func TestGenericCollectionSearchLive(t *testing.T) {
 			}
 		}
 		if nullEchoes == 0 {
-			t.Fatal("no hit echoed a null scalar, want the optional null values")
+			t.Fatal("no hit echoed a null scalar, want the legacy rows' null values")
 		}
 	})
 
-	t.Run("item fingerprints and scoped rows", func(t *testing.T) {
-		for _, itemID := range []string{parityDenseItem, bulkItemID(7), parityLegacyItem} {
-			state, err := h.client.GetCollectionItemState(correlatedContext(), &pb.GetCollectionItemStateRequest{CollectionId: h.collectionID, ItemId: itemID})
+	t.Run("within-conversation fingerprints", func(t *testing.T) {
+		for _, conversationID := range []string{parityDenseConversation, bulkConversationID(7), parityLegacyConversation} {
+			within, err := h.client.SearchWithinConversation(correlatedContext(), &pb.SearchWithinConversationRequest{
+				CollectionId:   h.collectionID,
+				ConversationId: conversationID,
+				Query:          paritySearchQuery,
+				Limit:          parityFullLimit,
+			})
 			if err != nil {
-				t.Fatalf("GetCollectionItemState: %v", err)
+				t.Fatalf("SearchWithinConversation(%s) returned error: %v", conversationID, err)
 			}
-			if got := state.GetIndexedFingerprint(); got == "" || got != h.parityCheckpoint(h.codebaseID)[itemID] {
-				t.Fatalf("item %s fingerprint = %q, want the stored manifest", itemID, got)
+			state, err := h.client.GetCollectionItemState(correlatedContext(), &pb.GetCollectionItemStateRequest{CollectionId: h.collectionID, ItemId: conversationID})
+			if err != nil {
+				t.Fatalf("GetCollectionItemState(%s) returned error: %v", conversationID, err)
 			}
-			scoped := h.genericSearch(&pb.SearchCollectionRequest{Limit: parityFullLimit, Filter: parityAll(parityIn("itemId", itemID))})
-			want := expectedRowKeys(corpus, func(row searchParityRow) bool { return row.itemID == itemID })
-			if got := sortedKeysOfHits(scoped); !slices.Equal(got, want) {
-				t.Fatalf("item %s rows = %v, want %v", itemID, got, want)
+			wantFingerprint := ""
+			if documents, ingestedConversation := corpus.conversations[conversationID]; ingestedConversation {
+				wantFingerprint = fingerprint(documents)
+			}
+			if within.GetIndexedFingerprint() != wantFingerprint || state.GetIndexedFingerprint() != wantFingerprint {
+				t.Fatalf("%s fingerprints: within %q, item state %q, want %q", conversationID, within.GetIndexedFingerprint(), state.GetIndexedFingerprint(), wantFingerprint)
+			}
+			scoped := h.genericSearch(&pb.SearchCollectionRequest{Limit: parityFullLimit, Filter: parityAll(parityIn("conversationId", conversationID))})
+			requireOldGenericParity(t, "within "+conversationID, within.GetResults(), scoped)
+			wantKeys := expectedRowKeys(corpus, func(row searchParityRow) bool { return row.conversationID == conversationID })
+			if got := sortedKeysOfHits(scoped); !slices.Equal(got, wantKeys) {
+				t.Fatalf("within %s returned %d rows, want %d", conversationID, len(got), len(wantKeys))
 			}
 		}
 	})
-}
-
-func searchFixtureDeclaration() model.CollectionDeclaration {
-	return model.CollectionDeclaration{ItemIDColumn: "itemId", Scalars: []model.ScalarColumn{
-		{Name: "itemId", Type: model.ScalarTypeString, MaxLength: 512},
-		{Name: "parentId", Type: model.ScalarTypeString, Nullable: true, MaxLength: 512},
-		{Name: "category", Type: model.ScalarTypeString, MaxLength: 64},
-		{Name: "source", Type: model.ScalarTypeString, MaxLength: 64},
-		{Name: "location", Type: model.ScalarTypeString, Nullable: true, MaxLength: 512},
-		{Name: "hidden", Type: model.ScalarTypeBool, Nullable: true},
-		{Name: "created", Type: model.ScalarTypeInt64},
-		{Name: "sequence", Type: model.ScalarTypeInt64},
-		{Name: "tag", Type: model.ScalarTypeString, Nullable: true, MaxLength: 512},
-	}}
-}
-
-func newSearchFixtureHarness(t *testing.T) *harness {
-	h := newHarnessWithOptions(t, nil, 0, true, true)
-	collectionID := "live-generic-search-" + randomID()
-	declaration := searchFixtureDeclaration()
-	scalars := make([]*pb.ScalarColumnDeclaration, 0, len(declaration.Scalars))
-	for _, scalar := range declaration.Scalars {
-		scalars = append(scalars, &pb.ScalarColumnDeclaration{Column: scalar.Name, Type: liveScalarType(scalar.Type), Nullable: scalar.Nullable, MaxLength: scalar.MaxLength})
-	}
-	response, err := h.client.RegisterCollection(correlatedContext(), &pb.RegisterCollectionRequest{CollectionId: collectionID, ItemIdColumn: declaration.ItemIDColumn, Scalars: scalars, Client: &pb.ClientInfo{Name: "live-harness"}})
-	if err != nil {
-		t.Fatalf("RegisterCollection: %v", err)
-	}
-	h.trackCollectionFamily(response.GetCollectionName())
-	h.collectionID = collectionID
-	h.collectionName = response.GetCollectionName()
-	h.codebaseID = response.GetCodebaseId()
-	return h
 }

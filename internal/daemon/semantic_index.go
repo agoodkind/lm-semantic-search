@@ -13,7 +13,7 @@ type semanticReader interface {
 	Available() bool
 	semanticResidencyReader
 	CollectionName(codebasePath string) string
-	DocumentCollectionName(collectionID string) string
+	ConversationCollectionName(collectionID string) string
 	Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error)
 	// SearchCollection runs a validated typed search of a document collection
 	// and returns hits already reduced to the limit, group cap, and score floor.
@@ -60,12 +60,19 @@ type semanticReuseLoader interface {
 	LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
 	LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
 	LoadReuseVectorsForContents(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string][]float32, error)
-
+	// LoadConversationDerivedBatch resolves the stored rows for a batch of
+	// conversations in one Milvus query per id batch, replacing the
+	// per-conversation message-state iterator in the examination path.
+	LoadConversationDerivedBatch(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error)
 	// LoadCollectionItemBatch reads the stored rows of a batch of items from a
 	// generic document collection, selected by the declared item id column.
 	LoadCollectionItemBatch(ctx context.Context, collectionName string, itemColumn string, itemIDs []string) (semantic.CollectionItemBatchState, error)
 }
 
+// semanticDeclarationRecorder is how the manager tells a backend the saved
+// declaration of a document collection. A backend uses it to keep the
+// conversation schema migrations off generic collections, which share the
+// conversation collection name prefix.
 type semanticDeclarationRecorder interface {
 	RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration)
 }
@@ -100,6 +107,10 @@ type semanticMaintainer interface {
 	// EnsureMmapEnabledAllCollections applies the current mmap policy to every
 	// collection, converging across ticks and skipping already-migrated ones.
 	EnsureMmapEnabledAllCollections(ctx context.Context)
+	// BackfillConversationCollectionsOnce populates the native scalar columns on
+	// pre-existing conversation rows from stored metadata, preserving each dense
+	// vector, at most once per collection per process.
+	BackfillConversationCollectionsOnce(ctx context.Context)
 }
 
 // semanticIdentity is how a backend names itself, so a surface reporting which

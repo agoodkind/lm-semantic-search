@@ -59,7 +59,7 @@ func (server *GRPCServer) UpdateCodebasePolicy(
 		CollectionID:    "",
 		CollectionName:  "",
 		CodebaseID:      codebase.ID,
-		ItemID:          "",
+		ConversationID:  "",
 		DocumentCount:   0,
 		NeededCount:     0,
 		TotalCount:      0,

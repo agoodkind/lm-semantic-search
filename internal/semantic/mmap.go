@@ -463,13 +463,6 @@ func (service *Service) ensureMmapEnabledOnCollection(
 		return mmapOutcomeSkipped, nil
 	}
 
-	managed, err := collectionUsesLegacyResidency(ctx, service.milvus, collectionName)
-	if err != nil {
-		return mmapOutcomeUnknown, err
-	}
-	if !managed {
-		return mmapOutcomeSkipped, nil
-	}
 	observedState, observation, err := service.residency.Observe(ctx, collectionName)
 	if err != nil {
 		return mmapOutcomeUnknown, err

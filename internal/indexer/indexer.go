@@ -41,7 +41,10 @@ type Result struct {
 	SkippedFiles      []string
 	SkippedOversize   int32
 	SkippedUnreadable int32
-	SkippedPending    int32
+	// SkippedPending counts changed items whose content was not delivered this
+	// pass (the conversation-ingest undelivered case). They are transient, not
+	// errors, and are re-requested on the next sync.
+	SkippedPending int32
 }
 
 // SkipReason names why the indexer declined to embed a changed file. The empty
@@ -55,7 +58,10 @@ const (
 	SkipOversize SkipReason = "oversize"
 	// SkipUnreadable marks a file whose bytes are not valid UTF-8.
 	SkipUnreadable SkipReason = "unreadable"
-	// SkipPending marks a file awaiting indexing.
+	// SkipPending marks a changed item whose content was not delivered this pass,
+	// so it cannot be embedded yet and will be re-requested on the next sync. It
+	// is the conversation-ingest case where clyde listed a conversation as changed
+	// but has not sent its documents. It is transient, not an error.
 	SkipPending SkipReason = "pending"
 )
 
@@ -68,7 +74,9 @@ type Progress struct {
 	FilesEmbedded          int32
 	FilesSkippedOversize   int32
 	FilesSkippedUnreadable int32
-	FilesPending           int32
+	// FilesPending counts changed items whose content was not delivered this pass
+	// (the conversation-ingest undelivered case). Transient, re-requested next sync.
+	FilesPending int32
 	// ChunksProcessed counts chunks handled by this run. ChunksEmbedded counts
 	// chunks sent to the embedder, ChunksReused counts chunks served from stored
 	// vectors, and ChunksGenerated is the legacy alias for ChunksEmbedded.
@@ -116,7 +124,23 @@ func NewRunner() *Runner {
 	}
 }
 
-// OneFileResult includes indexed chunks and row removal instructions.
+// OneFileResult is the per-item output of one source's indexOne pass, uniform
+// across sources: the produced chunks plus an optional explicit removal set and
+// an optional reuse-vector map. Skipped=true means SkipReason names why no chunks
+// were produced; callers route each SkipReason into the matching Result counter.
+// Removed=true means the item was absent when the task ran, so the converge
+// operation for it is a removal: callers delete its rows and drop it from the
+// snapshot rather than treating the absence as an error.
+//
+// The removal set and reuse map are source-agnostic: any item source may set
+// them, and the delta routine consumes them without a concrete-type assumption.
+// RemovalOverride true makes RemovalPaths and RemovalPrefixes replace the
+// caller's default removal, and when both slices are empty the item deletes
+// nothing. ReuseVectors, when non-nil, carries the already-embedded vectors this
+// item may reuse so the caller skips the per-item reuse load. The code path
+// leaves all of them zero; only a source that computes its own removal or reuse
+// (the conversation message delta) sets them, and R1 classifies the conversation
+// no-op up front so these fields carry real work rather than a per-item bulge.
 type OneFileResult struct {
 	Chunks     []model.StoredChunk
 	FileHash   string
@@ -240,16 +264,24 @@ func (runner *Runner) processFile(ctx context.Context, resolver *indexability.Re
 	chunks := make([]model.StoredChunk, 0, len(splitResult.Chunks))
 	for _, splitChunk := range splitResult.Chunks {
 		chunks = append(chunks, model.StoredChunk{
-			Content:           splitChunk.Content,
-			RelativePath:      relativePath,
-			StartLine:         safeInt32(splitChunk.StartLine),
-			EndLine:           safeInt32(splitChunk.EndLine),
-			Language:          splitChunk.Language,
-			FileExtension:     filepath.Ext(relativePath),
-			SplitPart:         0,
-			SplitPartRecorded: true,
-			Scalars:           nil,
-			Score:             0,
+			Content:              splitChunk.Content,
+			RelativePath:         relativePath,
+			StartLine:            safeInt32(splitChunk.StartLine),
+			EndLine:              safeInt32(splitChunk.EndLine),
+			Language:             splitChunk.Language,
+			FileExtension:        filepath.Ext(relativePath),
+			ConversationID:       "",
+			ParentConversationID: "",
+			MessageIndex:         0,
+			Role:                 "",
+			TimestampUnix:        0,
+			WorkspaceRoot:        "",
+			Archived:             false,
+			SplitPart:            0,
+			SplitPartRecorded:    true,
+			LoadRules:            "",
+			Scalars:              nil,
+			Score:                0,
 		})
 	}
 	return newProcessedFile(chunks, digestFileBytes(data), false, SkipNone, false), nil

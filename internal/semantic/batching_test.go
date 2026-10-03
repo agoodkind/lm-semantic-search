@@ -19,16 +19,16 @@ func chunkOfBytes(n int) model.StoredChunk {
 	return model.StoredChunk{Content: strings.Repeat("a", n)}
 }
 
-// sampleSizedChunks builds count chunks of distinct content at roughly the
-// size of a real document chunk, 1,500 bytes, which the packer estimates at
+// conversationSizedChunks builds count chunks of distinct content at roughly the
+// size of a real conversation chunk, 1,500 bytes, which the packer estimates at
 // 376 tokens each. Distinct content matters because the reuse map is keyed by
 // content hash, so identical chunks could not be selectively marked reused.
-func sampleSizedChunks(count int) []model.StoredChunk {
-	const sampleChunkBytes = 1500
+func conversationSizedChunks(count int) []model.StoredChunk {
+	const conversationChunkBytes = 1500
 	chunks := make([]model.StoredChunk, count)
 	for index := range chunks {
 		chunks[index] = model.StoredChunk{
-			Content: strconv.Itoa(index) + ":" + strings.Repeat("a", sampleChunkBytes),
+			Content: strconv.Itoa(index) + ":" + strings.Repeat("a", conversationChunkBytes),
 		}
 	}
 	return chunks
@@ -156,7 +156,7 @@ func TestPackForEmbeddingClosesOnConfiguredTokenBudget(t *testing.T) {
 
 // TestPackForEmbeddingFillsRowCapWhenReuseCoversMostChunks pins the capacity
 // invariant: a batch fills to the configured budget rather than stopping early
-// on tokens the request will never carry. Sixty-four sample-sized chunks
+// on tokens the request will never carry. Sixty-four conversation-sized chunks
 // estimate at 376 tokens each, so charging all of them against a 6,000-token
 // budget closes a group after 15 rows and never reaches the 64-row ceiling. Only
 // eight of them actually reach the embedder here, which is 3,008 estimated
@@ -166,7 +166,7 @@ func TestPackForEmbeddingFillsRowCapWhenReuseCoversMostChunks(t *testing.T) {
 		EmbeddingBatchSize:        64,
 		EmbeddingBatchTokenBudget: 6000,
 	}}
-	chunks := sampleSizedChunks(64)
+	chunks := conversationSizedChunks(64)
 	reuse := reuseCoveringAllBut(chunks, 8)
 
 	groups := service.packForEmbedding(chunks, reuse)
@@ -259,6 +259,19 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 		}
 	}
 
+	conversationChunks := make([]model.StoredChunk, len(chunks))
+	copy(conversationChunks, chunks)
+	for index := range conversationChunks {
+		conversationChunks[index].ConversationID = strings.Repeat("p", 32) +
+			":" +
+			strings.Repeat("c", 223)
+		conversationChunks[index].ParentConversationID = strings.Repeat("q", 256)
+		conversationChunks[index].Role = strings.Repeat("R", 64)
+		conversationChunks[index].WorkspaceRoot = strings.Repeat("w", 1024)
+		conversationChunks[index].TimestampUnix = int64(index)
+		conversationChunks[index].MessageIndex = int32(index)
+	}
+
 	tests := []struct {
 		name      string
 		chunks    []model.StoredChunk
@@ -268,6 +281,11 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 			name:      "code columns",
 			chunks:    chunks,
 			columnSet: CodeColumns(),
+		},
+		{
+			name:      "conversation columns",
+			chunks:    conversationChunks,
+			columnSet: ConversationColumns(),
 		},
 	}
 	for _, test := range tests {
@@ -316,6 +334,7 @@ func actualInsertRequestBytes(
 	fileExtensions := make([]string, 0, len(chunks))
 	metadataValues := make([]string, 0, len(chunks))
 	vectors := make([][]float32, 0, len(chunks))
+	scalars := newConversationScalarColumns(columnSet.ConversationScalars(), len(chunks))
 	for index, chunk := range chunks {
 		content, _ := sanitizeUTF8(chunk.Content)
 		relativePath, _ := sanitizeUTF8(chunk.RelativePath)
@@ -331,6 +350,7 @@ func actualInsertRequestBytes(
 		fileExtensions = append(fileExtensions, fileExtension)
 		metadataValues = append(metadataValues, metadataValue)
 		vectors = append(vectors, make([]float32, vectorDimension))
+		scalars.append(chunk)
 	}
 
 	fieldsData := []*schemapb.FieldData{
@@ -348,6 +368,31 @@ func actualInsertRequestBytes(
 			vectorDimension,
 			vectors,
 		).FieldData(),
+	}
+	if columnSet.ConversationScalars() {
+		fieldsData = append(
+			fieldsData,
+			column.NewColumnVarChar(
+				conversationIDFieldName,
+				scalars.conversationIDs,
+			).FieldData(),
+			column.NewColumnVarChar(
+				parentConversationIDFieldName,
+				scalars.parentConversationIDs,
+			).FieldData(),
+			column.NewColumnVarChar(roleFieldName, scalars.roles).FieldData(),
+			column.NewColumnVarChar(providerFieldName, scalars.providers).FieldData(),
+			column.NewColumnVarChar(
+				workspaceRootFieldName,
+				scalars.workspaceRoots,
+			).FieldData(),
+			column.NewColumnBool(archivedFieldName, scalars.archiveds).FieldData(),
+			column.NewColumnInt64(timestampUnixFieldName, scalars.timestamps).FieldData(),
+			column.NewColumnInt64(
+				messageIndexFieldName,
+				scalars.messageIndexes,
+			).FieldData(),
+		)
 	}
 
 	request := &milvuspb.InsertRequest{
@@ -367,7 +412,7 @@ func TestPackForEmbeddingAllReusedGroupsOnlyOnRowCap(t *testing.T) {
 		EmbeddingBatchSize:        16,
 		EmbeddingBatchTokenBudget: 6000,
 	}}
-	chunks := sampleSizedChunks(40)
+	chunks := conversationSizedChunks(40)
 	reuse := reuseCoveringAllBut(chunks, 40)
 
 	groups := service.packForEmbedding(chunks, reuse)
@@ -385,7 +430,7 @@ func TestPackForEmbeddingNeverExceedsTokenBudgetWithPartialReuse(t *testing.T) {
 		EmbeddingBatchSize:        256,
 		EmbeddingBatchTokenBudget: 6000,
 	}}
-	chunks := sampleSizedChunks(120)
+	chunks := conversationSizedChunks(120)
 	reuse := reuseCoveringAllBut(chunks, 2)
 
 	groups := service.packForEmbedding(chunks, reuse)

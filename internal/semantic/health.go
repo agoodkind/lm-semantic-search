@@ -108,6 +108,12 @@ func (service *Service) observeCollectionName(
 		Rows:      0,
 		RowsKnown: false,
 	}
+	controllerState, observation, err := service.residency.Observe(ctx, collectionName)
+	if err != nil {
+		return unknown, err
+	}
+	defer observation.ReleaseContext(ctx)
+
 	has, err := service.hasCollection(ctx, collectionName, "check collection "+collectionName)
 	if err != nil {
 		return unknown, adapterr.NewMilvusUnavailable(err)
@@ -118,19 +124,6 @@ func (service *Service) observeCollectionName(
 			Rows:      0,
 			RowsKnown: false,
 		}, nil
-	}
-	managed, err := collectionUsesLegacyResidency(ctx, service.milvus, collectionName)
-	if err != nil {
-		return unknown, adapterr.NewMilvusUnavailable(err)
-	}
-	controllerState := collectionResidencyUnknown
-	if managed {
-		state, observation, observeErr := service.residency.Observe(ctx, collectionName)
-		if observeErr != nil {
-			return unknown, observeErr
-		}
-		defer observation.ReleaseContext(ctx)
-		controllerState = state
 	}
 	loadState, err := service.milvus.GetLoadState(
 		ctx,

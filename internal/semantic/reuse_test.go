@@ -77,7 +77,7 @@ func TestEmbedChunkBatchDropsOversizedInputWithoutError(t *testing.T) {
 	service := &Service{embedder: skippingEmbedder{}}
 
 	chunks := []model.StoredChunk{
-		{Content: "oversized"},
+		{Content: "oversized", ConversationID: "conv-1"},
 		{Content: "small", RelativePath: "a/b.go"},
 	}
 
@@ -212,7 +212,7 @@ func TestBuildRelativePathPrefixFilterMatchesSubtree(t *testing.T) {
 	}
 }
 
-func TestReusePrefixFilterEscapesNewlineItemPrefix(t *testing.T) {
+func TestReusePrefixFilterEscapesNewlineConversationPrefix(t *testing.T) {
 	prefix := "conv/cursor:task-call_0mtc\nfc_00729/"
 
 	got := relativePathPrefixExpression(prefix)

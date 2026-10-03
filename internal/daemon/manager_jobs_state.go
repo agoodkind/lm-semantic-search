@@ -131,7 +131,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	if !found {
 		return
 	}
-	delete(manager.collectionJobs, jobID)
+	delete(manager.conversationJobs, jobID)
 	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStateCancelling {
 		return
 	}
@@ -146,7 +146,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	if unit != "" {
 		job.Progress.Unit = unit
 		if unit == "document" {
-			job.Progress.ScopeUnit = "document"
+			job.Progress.ScopeUnit = "conversation"
 		}
 	}
 	job.Progress.FilesTotal = progress.FilesTotal
@@ -233,6 +233,13 @@ func (manager *Manager) updateDetachedJobHeartbeat(jobID string) {
 	manager.jobs[jobID] = job
 }
 
+// updateJobChunkProgress advances the chunk counters, the current item's embed
+// batch denominator, and the heartbeat during a single item's embed loop. It is
+// called once per embed batch, so a long item (a large conversation with many
+// chunks) shows visible forward movement and a fresh heartbeat instead of
+// sitting frozen until the item finishes. It deliberately leaves the file
+// counters and the change breakdown alone, since reportDeltaProgress owns the
+// per-file totals and setJobDeltaCounts owns the added/modified/removed counts.
 func (manager *Manager) updateJobChunkProgress(jobID string, processed int32, reused int32, embedded int32, dropped int32, batchesTotal int32, batchesCompleted int32, rowsWritten int32) {
 	manager.transitionMutex.Lock()
 	defer manager.transitionMutex.Unlock()
@@ -519,7 +526,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	metrics.JobFailed()
 
 	manager.mu.Lock()
-	delete(manager.collectionJobs, jobID)
+	delete(manager.conversationJobs, jobID)
 	manager.forgetJobJournalLocked(jobID)
 	infra := adapterr.IsInfraFailure(runErr)
 	safeMessage := ""
@@ -771,7 +778,7 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 	}
 	now := *job.CompletedAt
 	manager.mu.Lock()
-	delete(manager.collectionJobs, jobID)
+	delete(manager.conversationJobs, jobID)
 	manager.forgetJobJournalLocked(jobID)
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {

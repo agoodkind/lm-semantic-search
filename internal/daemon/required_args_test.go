@@ -31,7 +31,7 @@ func TestCanonicalizePathRejectsRelative(t *testing.T) {
 func TestCanonicalizePathRejectsURI(t *testing.T) {
 	t.Parallel()
 
-	if _, err := canonicalizePath("chat:///document-items"); err == nil {
+	if _, err := canonicalizePath("chat:///clyde-conversations"); err == nil {
 		t.Fatal("canonicalizePath accepted a URI-shaped path")
 	}
 }

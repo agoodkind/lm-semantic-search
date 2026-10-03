@@ -10,6 +10,7 @@ Related jumping-off points:
 
 - The incremental sync flow that also drives graph refresh lives in the AGENTS incremental-sync section.
 - The shared Milvus collection contract, which the graph deliberately sits outside of, is in the AGENTS drop-in-compatibility section.
+- Conversation ingest, a sibling derived surface with its own overview, is at [conversation ingest overview](../conversationingest/overview.md).
 
 ## What the graph is, and where it is stored
 
@@ -21,7 +22,7 @@ Because the graph is local and derived, it can be removed and rebuilt at any tim
 
 Graph building rides the semantic index and sync flow. When the daemon finishes indexing or syncing a code codebase, it reconciles the graph as a follow-on step. Reconciliation happens when the graph has not been built, when a previous build did not finish, or when the codebase's files have changed since the graph was last built. The effect is that a not-current graph heals itself on the next sync of that codebase, with no separate action required, since the periodic sweep and the file watcher both drive that sync (see the AGENTS incremental-sync section).
 
-Graph building applies only to code codebases. Document collections do not get a graph.
+Graph building applies only to code codebases. Conversation and other document codebases do not get a graph.
 
 The graph store is reconciled against the same content signature the semantic index uses, so the graph tracks the indexed file set rather than a separate notion of freshness.
 

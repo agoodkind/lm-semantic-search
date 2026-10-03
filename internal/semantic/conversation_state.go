@@ -1,0 +1,403 @@
+package semantic
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/milvus-io/milvus/client/v2/column"
+	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"google.golang.org/grpc/peer"
+)
+
+// StoredMessageState is the stored text and role for one delivered conversation
+// message as currently represented in Milvus.
+type StoredMessageState struct {
+	Role              string
+	Text              string
+	HasDerivedContent bool
+}
+
+type storedMessagePart struct {
+	pathIndex         int
+	splitPart         int32
+	splitPartRecorded bool
+	content           string
+}
+
+type storedMessageAssembly struct {
+	role string
+	// roleFromBase records that role came from a base text row rather than a
+	// derived one. Rows arrive in no guaranteed order, and the delta comparison
+	// is against the base row, so a base row's role must win whenever the two
+	// disagree however late it arrives.
+	roleFromBase      bool
+	parts             []storedMessagePart
+	hasDerivedContent bool
+}
+
+// LoadConversationMessageState reads rows for one conversation prefix and
+// returns both assembled per-message state and row-granular reuse vectors.
+func (service *Service) LoadConversationMessageState(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]StoredMessageState, map[string][]float32, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	state := make(map[int32]StoredMessageState)
+	reuse := make(map[string][]float32)
+	if !service.Available() || collectionName == "" || conversationPrefix == "" {
+		return state, reuse, nil
+	}
+
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !hasCollection {
+		return state, reuse, nil
+	}
+	if err := service.ensureConversationScalarColumnsOnce(ctx, collectionName); err != nil {
+		return nil, nil, err
+	}
+	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+		return nil, nil, err
+	}
+	lease, err := service.AcquireCollection(ctx, collectionName)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer lease.Release()
+
+	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
+		WithBatchSize(reuseVectorBatchSize).
+		WithFilter(conversationStateFilterExpression(conversationPrefix)).
+		WithOutputFields(relativePathFieldName, messageIndexFieldName, roleFieldName, contentFieldName, denseVectorFieldName, splitPartFieldName))
+	if err != nil {
+		slog.ErrorContext(ctx, "open conversation state query iterator failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
+		return nil, nil, fmt.Errorf("open conversation state iterator for %s: %w", collectionName, err)
+	}
+
+	state, reuse, err = loadConversationMessageStateFromIterator(ctx, collectionName, conversationPrefix, iterator)
+	if err != nil {
+		return nil, nil, err
+	}
+	slog.DebugContext(
+		ctx, "semantic.conversation_message_state_loaded",
+		"collection", collectionName,
+		"prefix", conversationPrefix,
+		"messages", len(state),
+		"chunks", len(reuse),
+		"peer", peerInfo.String(),
+	)
+	return state, reuse, nil
+}
+
+func loadConversationMessageStateFromIterator(ctx context.Context, collectionName string, conversationPrefix string, iterator milvusclient.QueryIterator) (map[int32]StoredMessageState, map[string][]float32, error) {
+	assemblies := make(map[int32]*storedMessageAssembly)
+	reuse := make(map[string][]float32)
+	legacyRows := 0
+
+	for {
+		resultSet, nextErr := iterator.Next(ctx)
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			slog.ErrorContext(ctx, "conversation state query iterator next failed", "collection", collectionName, "err", nextErr)
+			return nil, nil, fmt.Errorf("iterate %s for conversation state: %w", collectionName, nextErr)
+		}
+		pageLegacyRows, err := appendConversationMessageStateRows(resultSet, conversationPrefix, assemblies, reuse)
+		if err != nil {
+			return nil, nil, err
+		}
+		legacyRows += pageLegacyRows
+	}
+
+	if legacyRows > 0 {
+		slog.WarnContext(
+			ctx, "semantic.conversation_message_state_legacy_rows",
+			"collection", collectionName,
+			"prefix", conversationPrefix,
+			"legacy_rows", legacyRows,
+		)
+	}
+	return assembleStoredMessageState(assemblies), reuse, nil
+}
+
+func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conversationPrefix string, assemblies map[int32]*storedMessageAssembly, reuse map[string][]float32) (int, error) {
+	contentColumn := resultSet.GetColumn(contentFieldName)
+	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
+	if contentColumn == nil || vectorColumn == nil {
+		return 0, ErrSearchResultIncomplete
+	}
+
+	relativePathColumn := resultSet.GetColumn(relativePathFieldName)
+	roleColumn := resultSet.GetColumn(roleFieldName)
+	messageIndexColumn := resultSet.GetColumn(messageIndexFieldName)
+	splitPartColumn := resultSet.GetColumn(splitPartFieldName)
+	legacyRows := 0
+	for rowIndex := range resultSet.ResultCount {
+		contentValue, vector, contentErr := conversationContentVectorAt(contentColumn, vectorColumn, rowIndex)
+		if contentErr != nil {
+			return legacyRows, contentErr
+		}
+		reuse[contentVectorKey(contentValue)] = vector
+
+		messageIndex, ok, messageIndexErr := messageIndexAt(messageIndexColumn, rowIndex)
+		if messageIndexErr != nil {
+			return legacyRows, messageIndexErr
+		}
+		if !ok {
+			legacyRows++
+			continue
+		}
+		if relativePathColumn == nil || roleColumn == nil {
+			return legacyRows, ErrSearchResultIncomplete
+		}
+		relativePath, relativePathErr := relativePathColumn.GetAsString(rowIndex)
+		if relativePathErr != nil {
+			slog.Error("read conversation state relative path column failed", "index", rowIndex, "err", relativePathErr)
+			return legacyRows, fmt.Errorf("read relative path column at %d: %w", rowIndex, relativePathErr)
+		}
+		role, roleErr := roleColumn.GetAsString(rowIndex)
+		if roleErr != nil {
+			slog.Error("read conversation state role column failed", "index", rowIndex, "err", roleErr)
+			return legacyRows, fmt.Errorf("read role column at %d: %w", rowIndex, roleErr)
+		}
+		if isDerivedConversationRelativePath(relativePath) {
+			// Read the role before the derived branch returns. A message whose
+			// only stored rows are derived would otherwise assemble with an empty
+			// role, and the delta comparison rejects a message whose stored role
+			// differs from the delivered one, so it would never match.
+			markStoredMessageDerivedWithRole(assemblies, safeInt32FromInt64(messageIndex), role)
+			continue
+		}
+		partIndex, partErr := conversationMessagePartIndex(relativePath, conversationPrefix)
+		if partErr != nil {
+			slog.Error("read conversation state part index failed", "index", rowIndex, "err", partErr)
+			return legacyRows, fmt.Errorf("read conversation part index at %d: %w", rowIndex, partErr)
+		}
+		splitPart, splitPartRecorded, splitPartErr := splitPartAt(
+			splitPartColumn,
+			rowIndex,
+		)
+		if splitPartErr != nil {
+			return legacyRows, splitPartErr
+		}
+		appendStoredMessagePart(
+			assemblies,
+			safeInt32FromInt64(messageIndex),
+			role,
+			partIndex,
+			splitPart,
+			splitPartRecorded,
+			contentValue,
+		)
+	}
+	return legacyRows, nil
+}
+
+func conversationContentVectorAt(contentColumn column.Column, vectorColumn column.Column, rowIndex int) (string, []float32, error) {
+	contentValue, contentErr := contentColumn.GetAsString(rowIndex)
+	if contentErr != nil {
+		slog.Error("read conversation state content column failed", "index", rowIndex, "err", contentErr)
+		return "", nil, fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
+	}
+	vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+	if vectorErr != nil {
+		slog.Error("read conversation state vector column failed", "index", rowIndex, "err", vectorErr)
+		return "", nil, fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
+	}
+	return contentValue, vector, nil
+}
+
+func conversationStateFilterExpression(conversationPrefix string) string {
+	conversationID, ok := conversationIDFromStatePrefix(conversationPrefix)
+	if !ok {
+		return relativePathPrefixExpression(conversationPrefix)
+	}
+	clauses := []string{
+		inStringClause(conversationIDFieldName, []string{conversationID}),
+		relativePathPrefixExpression(conversationPrefix),
+		relativePathPrefixExpression("convtool/" + conversationID + "/"),
+		relativePathPrefixExpression("convthink/" + conversationID + "/"),
+	}
+	return "(" + strings.Join(clauses, " or ") + ")"
+}
+
+func conversationIDFromStatePrefix(conversationPrefix string) (string, bool) {
+	trimmed := strings.TrimRight(conversationPrefix, "/")
+	conversationID, ok := strings.CutPrefix(trimmed, "conv/")
+	if !ok || conversationID == "" {
+		return "", false
+	}
+	return conversationID, true
+}
+
+func isDerivedConversationRelativePath(relativePath string) bool {
+	return strings.HasPrefix(relativePath, "convtool/") || strings.HasPrefix(relativePath, "convthink/")
+}
+
+func messageIndexAt(messageIndexColumn column.Column, rowIndex int) (int64, bool, error) {
+	if messageIndexColumn == nil {
+		return 0, false, nil
+	}
+	isNull, nullErr := messageIndexColumn.IsNull(rowIndex)
+	if nullErr != nil {
+		slog.Error("read conversation state messageIndex null state failed", "index", rowIndex, "err", nullErr)
+		return 0, false, fmt.Errorf("read messageIndex null state at %d: %w", rowIndex, nullErr)
+	}
+	if isNull {
+		return 0, false, nil
+	}
+	messageIndex, messageIndexErr := messageIndexColumn.GetAsInt64(rowIndex)
+	if messageIndexErr != nil {
+		slog.Error("read conversation state messageIndex column failed", "index", rowIndex, "err", messageIndexErr)
+		return 0, false, fmt.Errorf("read messageIndex column at %d: %w", rowIndex, messageIndexErr)
+	}
+	return messageIndex, true, nil
+}
+
+func appendStoredMessagePart(
+	assemblies map[int32]*storedMessageAssembly,
+	messageIndex int32,
+	role string,
+	pathIndex int,
+	splitPart int32,
+	splitPartRecorded bool,
+	content string,
+) {
+	assembly := assemblies[messageIndex]
+	if assembly == nil {
+		assembly = &storedMessageAssembly{role: "", roleFromBase: false, parts: nil, hasDerivedContent: false}
+		assemblies[messageIndex] = assembly
+	}
+	if !assembly.roleFromBase {
+		assembly.role = role
+		assembly.roleFromBase = true
+	}
+	assembly.parts = append(assembly.parts, storedMessagePart{
+		pathIndex:         pathIndex,
+		splitPart:         splitPart,
+		splitPartRecorded: splitPartRecorded,
+		content:           content,
+	})
+}
+
+func markStoredMessageDerived(assemblies map[int32]*storedMessageAssembly, messageIndex int32) {
+	assembly := assemblies[messageIndex]
+	if assembly == nil {
+		assembly = &storedMessageAssembly{role: "", roleFromBase: false, parts: nil, hasDerivedContent: false}
+		assemblies[messageIndex] = assembly
+	}
+	assembly.hasDerivedContent = true
+}
+
+// markStoredMessageDerivedWithRole records a message that exists because one of
+// its derived rows was read, carrying the role that row holds. A message whose
+// only stored rows are derived has no base row to take a role from, and the
+// delta comparison rejects a message whose stored role differs from the
+// delivered one, so registering it without a role would never match.
+//
+// The role is filled only when no base row has supplied one, so a base row wins
+// whatever order the rows arrive in.
+func markStoredMessageDerivedWithRole(
+	assemblies map[int32]*storedMessageAssembly,
+	messageIndex int32,
+	role string,
+) {
+	markStoredMessageDerived(assemblies, messageIndex)
+	if assembly := assemblies[messageIndex]; assembly != nil && !assembly.roleFromBase {
+		assembly.role = role
+	}
+}
+
+// storedMessagePartPrecedes orders two pieces of one message's stored text. It
+// must be a total order, and the offline loader's equivalent must match it
+// exactly: both rebuild a message's text by concatenating its pieces, and a text
+// that rebuilds differently from the one delivered makes an unchanged message
+// read as changed on every sync for as long as the conversation exists.
+//
+// Every key is consulted before falling through to the next, so two pieces are
+// treated as equal only when they are indistinguishable. Stopping at the split
+// position would leave two pieces sharing one position ordered by whatever order
+// the store returned them in, and the two stores do not return rows in the same
+// order.
+func storedMessagePartPrecedes(left storedMessagePart, right storedMessagePart) bool {
+	if left.pathIndex != right.pathIndex {
+		return left.pathIndex < right.pathIndex
+	}
+	if left.splitPartRecorded != right.splitPartRecorded {
+		return left.splitPartRecorded
+	}
+	if left.splitPartRecorded && left.splitPart != right.splitPart {
+		return left.splitPart < right.splitPart
+	}
+	return left.content < right.content
+}
+
+func assembleStoredMessageState(assemblies map[int32]*storedMessageAssembly) map[int32]StoredMessageState {
+	state := make(map[int32]StoredMessageState, len(assemblies))
+	for messageIndex, assembly := range assemblies {
+		sort.SliceStable(assembly.parts, func(left int, right int) bool {
+			return storedMessagePartPrecedes(assembly.parts[left], assembly.parts[right])
+		})
+		var text strings.Builder
+		for _, part := range assembly.parts {
+			text.WriteString(part.content)
+		}
+		state[messageIndex] = StoredMessageState{
+			Role:              assembly.role,
+			Text:              text.String(),
+			HasDerivedContent: assembly.hasDerivedContent,
+		}
+	}
+	return state
+}
+
+func conversationMessagePartIndex(relativePath string, conversationPrefix string) (int, error) {
+	prefix := strings.TrimRight(conversationPrefix, "/")
+	remainder, ok := strings.CutPrefix(relativePath, prefix+"/")
+	if !ok {
+		err := fmt.Errorf("relative path %q is outside prefix %q", relativePath, conversationPrefix)
+		slog.Error("conversation state relative path outside prefix", "relative_path", relativePath, "prefix", conversationPrefix, "err", err)
+		return 0, err
+	}
+	parts := strings.Split(remainder, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		err := fmt.Errorf("relative path %q has no message index after prefix %q", relativePath, conversationPrefix)
+		slog.Error("conversation state relative path missing message index", "relative_path", relativePath, "prefix", conversationPrefix, "err", err)
+		return 0, err
+	}
+	messageIndex, err := strconv.ParseInt(parts[0], 10, 32)
+	if err != nil {
+		slog.Error("conversation state relative path message index invalid", "relative_path", relativePath, "remainder", remainder, "err", err)
+		return 0, fmt.Errorf("parse message index from %q: %w", remainder, err)
+	}
+	if messageIndex < 0 {
+		err := fmt.Errorf("negative message index %d", messageIndex)
+		slog.Error("conversation state relative path message index invalid", "relative_path", relativePath, "remainder", remainder, "err", err)
+		return 0, fmt.Errorf("parse message index from %q: %w", remainder, err)
+	}
+	if len(parts) == 1 {
+		return 0, nil
+	}
+	if len(parts) != 2 || parts[1] == "" {
+		err := fmt.Errorf("relative path %q has invalid message part path %q", relativePath, remainder)
+		slog.Error("conversation state relative path part path invalid", "relative_path", relativePath, "remainder", remainder, "err", err)
+		return 0, err
+	}
+	partIndex, err := strconv.Atoi(parts[1])
+	if err != nil {
+		slog.Error("conversation state relative path part index invalid", "relative_path", relativePath, "remainder", remainder, "err", err)
+		return 0, fmt.Errorf("parse message part index from %q: %w", remainder, err)
+	}
+	if partIndex < 0 {
+		err := fmt.Errorf("negative message part index %d", partIndex)
+		slog.Error("conversation state relative path part index invalid", "relative_path", relativePath, "remainder", remainder, "err", err)
+		return 0, fmt.Errorf("parse message part index from %q: %w", remainder, err)
+	}
+	return partIndex, nil
+}

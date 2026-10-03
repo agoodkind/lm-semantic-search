@@ -16,7 +16,6 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
-	"goodkind.io/lm-semantic-search/internal/embedding/providers"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/tshash"
@@ -26,7 +25,7 @@ const (
 	collectionHashLength      = 16
 	stagingCollectionSuffix   = ".staging"
 	backupCollectionSuffix    = ".backup"
-	documentPathPrefix        = "chat:///"
+	conversationPathPrefix    = "chat:///"
 	localCollectionNamePrefix = "local_code_chunks_"
 )
 
@@ -72,7 +71,7 @@ func (store *Store) EmbeddingProviderName() model.EmbeddingProvider {
 func New(ctx context.Context, cfg config.Config) (*Store, error) {
 	var provider embedding.Provider
 	if cfg.EmbeddingProvider != model.EmbeddingProviderNone {
-		configuredProvider, err := providers.New(ctx, cfg)
+		configuredProvider, err := embedding.NewProvider(ctx, cfg)
 		if err != nil {
 			slog.ErrorContext(
 				ctx,
@@ -131,8 +130,8 @@ func (store *Store) AcquireCollection(
 
 // CollectionName returns the local collection name for a codebase path.
 func (store *Store) CollectionName(codebasePath string) string {
-	if collectionID, found := strings.CutPrefix(codebasePath, documentPathPrefix); found {
-		return store.DocumentCollectionName(collectionID)
+	if collectionID, found := strings.CutPrefix(codebasePath, conversationPathPrefix); found {
+		return store.ConversationCollectionName(collectionID)
 	}
 	resolvedPath := codebasePath
 	absolutePath, err := filepath.Abs(codebasePath)
@@ -148,8 +147,8 @@ func (store *Store) CollectionName(codebasePath string) string {
 	return localCollectionNamePrefix + pathHash
 }
 
-// DocumentCollectionName derives the persistent collection identifier from the caller ID.
-func (store *Store) DocumentCollectionName(collectionID string) string {
+// ConversationCollectionName returns the collection name for a conversation collection.
+func (store *Store) ConversationCollectionName(collectionID string) string {
 	return "conv_chunks_" + tshash.PathPrefix(strings.TrimSpace(collectionID))
 }
 
@@ -254,7 +253,12 @@ func (store *Store) InspectCollection(
 	return semantic.CollectionFacts{Exists: true, Rows: count, RowsKnown: true}, nil
 }
 
-// DescribeScalarColumns returns the recorded scalar schema and collection existence.
+// DescribeScalarColumns reports the declared scalar columns of a stored local
+// collection. exists is false when the collection is absent. The local row
+// format has no schema. A collection with a recorded generic declaration
+// reports the columns of that declaration. Every other existing local
+// collection reports the conversation declaration, because the local row
+// format stores the conversation scalar fields on every conversation row.
 func (store *Store) DescribeScalarColumns(
 	_ context.Context,
 	collectionName string,
@@ -273,7 +277,7 @@ func (store *Store) DescribeScalarColumns(
 	if declared, found := store.recordedScalars(collectionName); found {
 		return declared, true, nil
 	}
-	return nil, true, nil
+	return semantic.ConversationDeclaration().Scalars, true, nil
 }
 
 // HasCollectionForPath reports whether a codebase has a stored collection.
@@ -360,6 +364,43 @@ func (store *Store) DropStaging(_ context.Context, codebasePath string) error {
 // EnsureMmapEnabledAllCollections applies store maintenance to all collections.
 func (store *Store) EnsureMmapEnabledAllCollections(context.Context) {}
 
+// BackfillConversationCollectionsOnce applies conversation collection maintenance.
+func (store *Store) BackfillConversationCollectionsOnce(context.Context) {}
+
+func (store *Store) collectionForName(
+	collectionName string,
+	staging bool,
+) (*collection, error) {
+	if err := validateCollectionName(collectionName); err != nil {
+		return nil, err
+	}
+	key := collectionName
+	pathName := collectionName
+	if staging {
+		key += "\x00staging"
+		pathName += stagingCollectionSuffix
+	}
+	store.mutex.RLock()
+	stored := store.collections[key]
+	store.mutex.RUnlock()
+	if stored != nil {
+		return stored, nil
+	}
+
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	if stored = store.collections[key]; stored != nil {
+		return stored, nil
+	}
+	collectionPath := filepath.Join(store.root, pathName)
+	if err := recoverCollectionDirectory(collectionPath); err != nil {
+		return nil, err
+	}
+	stored = newCollection(collectionName, collectionPath)
+	store.collections[key] = stored
+	return stored, nil
+}
+
 func (store *Store) dropCollection(collectionName string, staging bool) error {
 	stored, err := store.collectionForName(collectionName, staging)
 	if err != nil {
@@ -423,38 +464,4 @@ func operationContextError(ctx context.Context, operation string) error {
 		err,
 	)
 	return fmt.Errorf("%s: %w", operation, err)
-}
-
-func (store *Store) collectionForName(
-	collectionName string,
-	staging bool,
-) (*collection, error) {
-	if err := validateCollectionName(collectionName); err != nil {
-		return nil, err
-	}
-	key := collectionName
-	pathName := collectionName
-	if staging {
-		key += "\x00staging"
-		pathName += stagingCollectionSuffix
-	}
-	store.mutex.RLock()
-	stored := store.collections[key]
-	store.mutex.RUnlock()
-	if stored != nil {
-		return stored, nil
-	}
-
-	store.mutex.Lock()
-	defer store.mutex.Unlock()
-	if stored = store.collections[key]; stored != nil {
-		return stored, nil
-	}
-	collectionPath := filepath.Join(store.root, pathName)
-	if err := recoverCollectionDirectory(collectionPath); err != nil {
-		return nil, err
-	}
-	stored = newCollection(collectionName, collectionPath)
-	store.collections[key] = stored
-	return stored, nil
 }

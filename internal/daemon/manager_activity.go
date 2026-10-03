@@ -56,8 +56,8 @@ type PendingWork struct {
 
 // Operations a pending slot can hold, named for what will run when it drains.
 const (
-	pendingOperationSync             = "sync"
-	pendingOperationCollectionIngest = "collection_ingest"
+	pendingOperationSync               = "sync"
+	pendingOperationConversationIngest = "conversation_ingest"
 )
 
 // PendingWork reports the coalesced requests waiting on a terminal transition.
@@ -75,7 +75,7 @@ func (manager *Manager) PendingWork() []PendingWork {
 // instant, which is what keeps a draining slot from falling between the two.
 // Caller holds manager.mu.
 func (manager *Manager) pendingWorkLocked() []PendingWork {
-	pending := make([]PendingWork, 0, len(manager.pendingCodeJobs)+len(manager.pendingCollectionJobs))
+	pending := make([]PendingWork, 0, len(manager.pendingCodeJobs)+len(manager.pendingConversationJobs))
 	for codebaseID := range manager.pendingCodeJobs {
 		pending = append(pending, PendingWork{
 			CodebaseID:    codebaseID,
@@ -83,11 +83,11 @@ func (manager *Manager) pendingWorkLocked() []PendingWork {
 			Operation:     pendingOperationSync,
 		})
 	}
-	for codebaseID := range manager.pendingCollectionJobs {
+	for codebaseID := range manager.pendingConversationJobs {
 		pending = append(pending, PendingWork{
 			CodebaseID:    codebaseID,
 			CanonicalPath: manager.codebases[codebaseID].CanonicalPath,
-			Operation:     pendingOperationCollectionIngest,
+			Operation:     pendingOperationConversationIngest,
 		})
 	}
 	sort.Slice(pending, func(first int, second int) bool {

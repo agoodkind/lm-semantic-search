@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/lm-semantic-search/library/observation"
-
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
@@ -27,14 +25,12 @@ import (
 // set so the name it reports is the same value the configuration parses to.
 const openAIProviderName = model.EmbeddingProviderOpenAI
 
-// Default embedding retry policy for transient contention (HTTP 429/503). A
-// busy endpoint is reachable but rate limiting or briefly unavailable. The
-// adapter retries the batch with exponential backoff instead of failing the
-// indexing job. The daemon always uses these values. A library caller may set
-// its own through [OpenAICompatibleOptions].
+// Embedding retry policy for transient contention (HTTP 429/503). The endpoint
+// is reachable but rate limiting or briefly unavailable, so the batch is retried
+// with exponential backoff rather than failing the indexing job outright.
 const (
-	DefaultEmbedMaxAttempts = 4
-	DefaultEmbedBackoffBase = 200 * time.Millisecond
+	embedMaxAttempts = 4
+	embedBackoffBase = 200 * time.Millisecond
 )
 
 // ErrEmbedderBusy marks a transient embedding failure: the endpoint answered but
@@ -132,20 +128,17 @@ type Provider interface {
 	Health(context.Context) error
 }
 
-// NewHostedProvider constructs the OpenAI-compatible adapter from the daemon
-// configuration. The adapter sends requests to the configured embeddings API.
-// This package links no native code. The in-process ONNX provider is in
-// package internal/embedding/onnx, and package internal/embedding/providers
-// selects between the two.
-func NewHostedProvider(ctx context.Context, cfg config.Config) (Provider, error) {
+// NewProvider constructs the configured embedding provider.
+//
+// The ONNX provider runs the embedded offline model in process. The default
+// OpenAI-compatible adapter sends requests to the configured embeddings API.
+func NewProvider(ctx context.Context, cfg config.Config) (Provider, error) {
 	switch cfg.EmbeddingProvider {
+	case config.EmbeddingProviderONNX:
+		return newONNXProvider(ctx, cfg)
 	case model.EmbeddingProviderNone, config.EmbeddingProviderOpenAI:
 		// Both build the OpenAI-compatible adapter: an unnamed provider is the
 		// historical default rather than an error.
-	case config.EmbeddingProviderONNX:
-		err := errors.New("the ONNX provider is constructed by package internal/embedding/providers")
-		slog.ErrorContext(ctx, "hosted embedding adapter cannot build the ONNX provider", "err", err)
-		return nil, fmt.Errorf("embedding provider %q: %w", cfg.EmbeddingProvider, err)
 	default:
 		slog.ErrorContext(
 			ctx,
@@ -170,109 +163,42 @@ func NewHostedProvider(ctx context.Context, cfg config.Config) (Provider, error)
 	return newOpenAICompatibleProvider(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.EmbeddingModel, cfg.EmbeddingDimension, requestTimeout)
 }
 
-// newOpenAICompatibleProvider constructs the daemon's adapter. It requires an
-// API key and uses the default retry policy.
-func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, dimensions int32, requestTimeout time.Duration) (Provider, error) {
-	if strings.TrimSpace(apiKey) == "" {
-		return nil, fmt.Errorf("%s embedding provider requires an API key", openAIProviderName)
-	}
-	return NewOpenAICompatibleProvider(OpenAICompatibleOptions{
-		Observer:       nil,
-		APIKey:         apiKey,
-		BaseURL:        baseURL,
-		Model:          model,
-		Dimensions:     int(dimensions),
-		RequestTimeout: requestTimeout,
-		MaxAttempts:    DefaultEmbedMaxAttempts,
-		BackoffBase:    DefaultEmbedBackoffBase,
-	})
-}
-
-// OpenAICompatibleOptions configures one OpenAI-compatible embedding adapter.
-type OpenAICompatibleOptions struct {
-	// Observer receives one event pair for each SDK request attempt.
-	Observer observation.Observer
-	// APIKey is sent as a bearer credential. An empty key sends no
-	// Authorization header, for a local endpoint without authentication.
-	APIKey string
-	// BaseURL is the endpoint root. Empty selects the SDK default.
-	BaseURL string
-	// Model is the embedding model name sent with every request.
-	Model string
-	// Dimensions is sent as the requested vector dimension when positive.
-	Dimensions int
-	// RequestTimeout bounds one HTTP request. Zero leaves the request bounded
-	// only by the caller's context.
-	RequestTimeout time.Duration
-	// MaxAttempts is the number of attempts for a busy endpoint. It is at
-	// least one.
-	MaxAttempts int
-	// BackoffBase is the wait before the second attempt. Each later wait
-	// doubles it.
-	BackoffBase time.Duration
-}
-
 type openAICompatibleProvider struct {
-	observer   observation.Observer
 	name       model.EmbeddingProvider
 	model      string
-	dimensions int
+	dimensions int32
 	client     openai.Client
 	// requestTimeout bounds one embedding HTTP request so an unresponsive endpoint
 	// fails the call instead of hanging the goroutine forever. Zero leaves the
 	// request unbounded (governed only by the caller's context).
 	requestTimeout time.Duration
-	maxAttempts    int
-	backoffBase    time.Duration
 }
 
-// NewOpenAICompatibleProvider constructs the OpenAI-compatible adapter from
-// explicit options. [NewHostedProvider] requires an API key before it constructs the
-// daemon's adapter. The shared search library constructs its adapter here
-// without that requirement.
-func NewOpenAICompatibleProvider(options OpenAICompatibleOptions) (Provider, error) {
-	if strings.TrimSpace(options.Model) == "" {
+func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, dimensions int32, requestTimeout time.Duration) (Provider, error) {
+	if strings.TrimSpace(apiKey) == "" {
+		return nil, fmt.Errorf("%s embedding provider requires an API key", openAIProviderName)
+	}
+	if strings.TrimSpace(model) == "" {
 		return nil, fmt.Errorf("%s embedding provider requires a model", openAIProviderName)
-	}
-	if options.MaxAttempts < 1 {
-		return nil, fmt.Errorf("%s embedding provider max attempts %d must be at least 1", openAIProviderName, options.MaxAttempts)
-	}
-	if options.BackoffBase < 0 || options.RequestTimeout < 0 {
-		return nil, fmt.Errorf(
-			"%s embedding provider backoff base %s and request timeout %s must not be negative",
-			openAIProviderName,
-			options.BackoffBase,
-			options.RequestTimeout,
-		)
 	}
 
 	// Own the retry policy explicitly in embedWithRetry rather than letting the
 	// SDK retry transparently, so transient 429/503 backoff is single-layered and
 	// classified consistently instead of compounding with the SDK's own retries.
 	requestOptions := []option.RequestOption{
+		option.WithAPIKey(apiKey),
 		option.WithMaxRetries(0),
 	}
-	if options.APIKey != "" {
-		requestOptions = append(requestOptions, option.WithAPIKey(options.APIKey))
-	} else {
-		// The SDK default options read OPENAI_API_KEY from the environment. An
-		// explicit empty key deletes that header instead of sending an ambient
-		// credential the caller did not pass.
-		requestOptions = append(requestOptions, option.WithHeaderDel("authorization"))
-	}
-	if strings.TrimSpace(options.BaseURL) != "" {
-		requestOptions = append(requestOptions, option.WithBaseURL(options.BaseURL))
+	if strings.TrimSpace(baseURL) != "" {
+		requestOptions = append(requestOptions, option.WithBaseURL(baseURL))
 	}
 
 	return &openAICompatibleProvider{
-		observer:       options.Observer,
 		name:           openAIProviderName,
-		model:          options.Model,
-		dimensions:     options.Dimensions,
+		model:          model,
+		dimensions:     dimensions,
 		client:         openai.NewClient(requestOptions...),
-		requestTimeout: options.RequestTimeout,
-		maxAttempts:    options.MaxAttempts,
-		backoffBase:    options.BackoffBase,
+		requestTimeout: requestTimeout,
 	}, nil
 }
 
@@ -394,7 +320,7 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 	surviving := make([]int, 0, len(texts))
 	var skipped []SkippedInput
 	for index, text := range texts {
-		if HasNothingToEmbed(text) {
+		if hasNothingToEmbed(text) {
 			skipped = append(skipped, SkippedInput{
 				Index:          index,
 				Reason:         adapterr.EmbedRejectionEmptyContent,
@@ -505,7 +431,7 @@ func toFloat32Vector(embedding []float64) []float32 {
 // unreachable default so a cancelled request never reads as a down endpoint.
 func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, params openai.EmbeddingNewParams) (*openai.CreateEmbeddingResponse, error) {
 	var lastErr error
-	for attempt := 1; attempt <= provider.maxAttempts; attempt++ {
+	for attempt := 1; attempt <= embedMaxAttempts; attempt++ {
 		// Bound the request when a timeout is configured so an unresponsive
 		// endpoint fails the call instead of hanging the goroutine forever. The
 		// external error is classified and wrapped below, never returned bare.
@@ -514,13 +440,7 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 		if provider.requestTimeout > 0 {
 			requestCtx, cancel = context.WithTimeout(ctx, provider.requestTimeout)
 		}
-		requestCtx, span := observation.Start(requestCtx, provider.observer, observation.EmbeddingAttempt)
 		response, err := provider.client.Embeddings.New(requestCtx, params)
-		counts := observation.EmbeddingData{Attempt: attempt, Requested: len(params.Input.OfArrayOfStrings)}
-		if response != nil {
-			counts.Returned = len(response.Data)
-		}
-		span.End(requestCtx, err, observation.Data{Embedding: counts})
 		if cancel != nil {
 			cancel()
 		}
@@ -576,11 +496,11 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 				return nil, adapterr.NewEmbedderUnreachable(fmt.Errorf("generate %s embeddings: %w", provider.name, err))
 			}
 		}
-		if attempt == provider.maxAttempts {
+		if attempt == embedMaxAttempts {
 			break
 		}
 
-		backoff := embedBackoff(provider.backoffBase, attempt)
+		backoff := embedBackoff(attempt)
 		slog.WarnContext(ctx, "embedding endpoint busy, retrying", "provider", provider.name, "model", provider.model, "status", statusCode, "attempt", attempt, "backoff", backoff)
 		timer := time.NewTimer(backoff)
 		select {
@@ -592,7 +512,7 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 	}
 
 	statusCode, _ := transientEmbedStatus(lastErr)
-	slog.ErrorContext(ctx, "embedding endpoint still busy after retries", "provider", provider.name, "model", provider.model, "status", statusCode, "attempts", provider.maxAttempts, "err", lastErr)
+	slog.ErrorContext(ctx, "embedding endpoint still busy after retries", "provider", provider.name, "model", provider.model, "status", statusCode, "attempts", embedMaxAttempts, "err", lastErr)
 	return nil, adapterr.NewEmbedderBusy(fmt.Errorf("generate %s embeddings: %w: %w", provider.name, ErrEmbedderBusy, lastErr))
 }
 
@@ -724,12 +644,12 @@ func parseFirstSubmatchInt(pattern *regexp.Regexp, text string) (int, bool) {
 
 // embedBackoff returns the wait before the next attempt, doubling from the base
 // (attempt 1 waits the base, attempt 2 twice the base, and so on).
-func embedBackoff(base time.Duration, attempt int) time.Duration {
+func embedBackoff(attempt int) time.Duration {
 	multiplier := 1 << (attempt - 1)
-	return base * time.Duration(multiplier)
+	return embedBackoffBase * time.Duration(multiplier)
 }
 
-// HasNothingToEmbed reports whether an input contains no character a vector could
+// hasNothingToEmbed reports whether an input carries no character a vector could
 // describe. It protects one invariant: a returned vector always covers the whole
 // input, and an input with no non-whitespace character offers nothing to cover,
 // so embedding it would spend a model call to store a vector that can only be
@@ -745,6 +665,6 @@ func embedBackoff(base time.Duration, attempt int) time.Duration {
 // is not the place to decide whether content is worth indexing. That is a
 // preference, it belongs to whoever assembles the input, and it is settled before
 // anything reaches a provider.
-func HasNothingToEmbed(text string) bool {
+func hasNothingToEmbed(text string) bool {
 	return strings.TrimSpace(text) == ""
 }

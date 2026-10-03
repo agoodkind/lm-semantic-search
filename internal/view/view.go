@@ -386,6 +386,9 @@ type ProgressSurface struct {
 	// Breakdown is the shared file-and-chunk outcome tree, rendered identically
 	// here and in the codebase status templates.
 	Breakdown OutcomeBreakdown
+	// ScopeLine is the classification line with its own unit, for example
+	// "Changed since last sync: 1,004 conversations added · 7 modified".
+	// Empty when the run classified nothing.
 	ScopeLine string
 	// PercentLabel is the run-progress figure on its own ("23.5%"), or the
 	// preparing label when the scope is not measured yet. Surfaces that print
@@ -525,6 +528,24 @@ type SearchView struct {
 	ResolutionLines        []string
 }
 
+// ConversationSearchView is the conversation search response view.
+type ConversationSearchView struct {
+	CollectionID string
+	Query        string
+	Results      []ConversationResultView
+	StateNote    string
+}
+
+// ConversationResultView is one reduced conversation hit.
+type ConversationResultView struct {
+	ConversationID string
+	MessageIndex   int32
+	Role           string
+	TimestampUnix  int64
+	Score          float64
+	Content        string
+}
+
 // RawStatus holds the literal stored values the human codebase status prints.
 // Each field is copied from the registry record, the live job, or the collection
 // probe without mapping it to a display word. Times are pre-formatted in the
@@ -597,7 +618,9 @@ type StartIndexView struct {
 	MergeNote          string
 }
 
-// MutationAckView includes the public job acknowledgment and selected collection identifiers.
+// MutationAckView covers clear, cancel, sync, collection, and conversation acks. Exactly
+// one Kind renders per call. ConversationID stores the conversation id of a
+// conversation delete ack and the item id of a collection item delete ack.
 type MutationAckView struct {
 	Kind            string
 	Path            string
@@ -608,7 +631,7 @@ type MutationAckView struct {
 	CollectionID    string
 	CollectionName  string
 	CodebaseID      string
-	ItemID          string
+	ConversationID  string
 	DocumentCount   int
 	NeededCount     int
 	TotalCount      int
@@ -616,12 +639,15 @@ type MutationAckView struct {
 
 // MutationAckView kinds.
 const (
-	AckClear        = "clear"
-	AckCancel       = "cancel"
-	AckSync         = "sync"
-	AckUpdatePolicy = "update_policy"
-
+	AckClear                 = "clear"
+	AckCancel                = "cancel"
+	AckSync                  = "sync"
+	AckUpdatePolicy          = "update_policy"
+	AckRegisterConversation  = "register_conversation"
 	AckRegisterCollection    = "register_collection"
+	AckUpsertConversation    = "upsert_conversation"
+	AckDeleteConversation    = "delete_conversation"
+	AckManifest              = "manifest"
 	AckUpsertCollectionItems = "upsert_collection_items"
 	AckCollectionManifest    = "collection_manifest"
 	AckDeleteCollectionItem  = "delete_collection_item"

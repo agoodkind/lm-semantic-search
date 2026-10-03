@@ -32,11 +32,47 @@ func TestProductionResidencyConfiguration(t *testing.T) {
 	t.Logf("PRODUCTION_RESIDENCY_CONFIG idle_timeout_ms=%d", cfg.MilvusCollectionIdleTimeoutMS)
 }
 
+func TestProductionConversationSearch(t *testing.T) {
+	requireProductionOptIn(t)
+	daemonSocket := requiredProductionEnvironment(t, "LMS_PRODUCTION_DAEMON_SOCKET")
+	conversationID := requiredProductionEnvironment(t, "LMS_PRODUCTION_CONVERSATION_ID")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	connection, client, err := grpcutil.DialDaemon(ctx, daemonSocket)
+	if err != nil {
+		t.Fatalf("connect to production daemon: %v", err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+
+	startedAt := time.Now()
+	response, err := client.SearchConversations(ctx, &pb.SearchConversationsRequest{
+		CollectionId: conversationID,
+		Query:        "Milvus residency",
+		Limit:        3,
+	})
+	if err != nil {
+		t.Fatalf("search production conversations: %v", err)
+	}
+	if len(response.GetResults()) == 0 {
+		t.Fatalf("production conversation search returned no results: %s", response.GetDisplayText())
+	}
+	t.Logf(
+		"PRODUCTION_CONVERSATION_SEARCH duration=%s results=%d",
+		time.Since(startedAt),
+		len(response.GetResults()),
+	)
+}
+
 func TestProductionColdSearchRecovery(t *testing.T) {
 	requireProductionOptIn(t)
 	daemonSocket := requiredProductionEnvironment(t, "LMS_PRODUCTION_DAEMON_SOCKET")
 	codePath := requiredProductionEnvironment(t, "LMS_PRODUCTION_CODE_PATH")
 	codeCollection := requiredProductionEnvironment(t, "LMS_PRODUCTION_CODE_COLLECTION")
+	conversationID := requiredProductionEnvironment(t, "LMS_PRODUCTION_CONVERSATION_ID")
+	conversationCollection := requiredProductionEnvironment(
+		t,
+		"LMS_PRODUCTION_CONVERSATION_COLLECTION",
+	)
 	cfg, err := config.Default()
 	if err != nil {
 		t.Fatalf("resolve production configuration: %v", err)
@@ -54,6 +90,7 @@ func TestProductionColdSearchRecovery(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = milvus.Close(context.Background()) })
 	releaseProductionCollection(t, milvus, codeCollection)
+	releaseProductionCollection(t, milvus, conversationCollection)
 
 	connection, client, err := grpcutil.DialDaemon(dialCtx, daemonSocket)
 	if err != nil {
@@ -78,7 +115,40 @@ func TestProductionColdSearchRecovery(t *testing.T) {
 	}
 	requireProductionLoadState(t, milvus, codeCollection, entity.LoadStateLoaded)
 
-	t.Logf("PRODUCTION_COLD_SEARCH code_duration=%s code_results=%d", codeDuration, len(codeResponse.GetResults()))
+	conversationCtx, conversationCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	conversationStartedAt := time.Now()
+	conversationResponse, err := client.SearchConversations(
+		conversationCtx,
+		&pb.SearchConversationsRequest{
+			CollectionId: conversationID,
+			Query:        "Milvus residency",
+			Limit:        3,
+		},
+	)
+	conversationDuration := time.Since(conversationStartedAt)
+	conversationCancel()
+	if err != nil {
+		t.Fatalf("search cold production conversation collection: %v", err)
+	}
+	if len(conversationResponse.GetResults()) == 0 {
+		t.Fatalf(
+			"cold production conversation search returned no results: %s",
+			conversationResponse.GetDisplayText(),
+		)
+	}
+	requireProductionLoadState(
+		t,
+		milvus,
+		conversationCollection,
+		entity.LoadStateLoaded,
+	)
+	t.Logf(
+		"PRODUCTION_COLD_SEARCH code_duration=%s code_results=%d conversation_duration=%s conversation_results=%d",
+		codeDuration,
+		len(codeResponse.GetResults()),
+		conversationDuration,
+		len(conversationResponse.GetResults()),
+	)
 }
 
 func requiredProductionEnvironment(t *testing.T, name string) string {

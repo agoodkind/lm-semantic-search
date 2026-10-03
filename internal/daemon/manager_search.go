@@ -96,7 +96,7 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		return SearchOutcome{
 			Codebase:  codebase,
 			ActiveJob: activeJob,
-			Results:   manager.codeSearchResults(codebase.CanonicalPath, chunks),
+			Results:   semantic.DeduplicateChunks(chunks),
 			StateNote: stateNote,
 		}, nil
 	case (errors.Is(semanticErr, semantic.ErrCollectionNotReady) ||
@@ -132,14 +132,6 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		slog.ErrorContext(ctx, "semantic search failed", "codebase_path", codebase.CanonicalPath, "err", semanticErr)
 		return SearchOutcome{}, fmt.Errorf("semantic search for %s: %w", codebase.CanonicalPath, semanticErr)
 	}
-}
-
-func (manager *Manager) codeSearchResults(codebasePath string, chunks []model.StoredChunk) []model.StoredChunk {
-	_, libraryCodeStore := manager.semantic.(*libraryCodeIndex)
-	if libraryCodeStore && !semantic.IsDocumentPath(codebasePath) {
-		return chunks
-	}
-	return semantic.DeduplicateChunks(chunks)
 }
 
 // searchPreconditions checks what a search needs before it resolves a path:

@@ -1,0 +1,194 @@
+package daemon
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/model"
+)
+
+// TestNoRowKindStoresContentASearchCannotReturn covers every kind of row a
+// conversation message produces, not only its text.
+//
+// Three producers write rows: the message text, one tool call, and a turn's
+// reasoning. Each one must reject content that a search cannot return.
+//
+// The decision now lives at the one point a row is appended, so this test fails
+// if any producer regains its own condition and gets it wrong.
+func TestNoRowKindStoresContentASearchCannotReturn(t *testing.T) {
+	t.Parallel()
+
+	for _, spacing := range []string{" ", "   ", "\n", "\t\n  "} {
+		documents := []model.ConversationDocument{{
+			ConversationID: "claude:a",
+			MessageIndex:   0,
+			Role:           "assistant",
+			Text:           spacing,
+			Thinking:       spacing,
+			Tools: []model.ConversationToolCall{{
+				Name:    "Bash",
+				Display: spacing,
+				Output:  spacing,
+			}},
+		}}
+
+		chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents)
+		if err != nil {
+			t.Fatalf("conversationDocumentsToStoredChunks(%q) returned error: %v", spacing, err)
+		}
+		for _, chunk := range chunks {
+			if strings.TrimSpace(chunk.Content) == "" {
+				t.Fatalf(
+					"spacing %q stored a row with nothing to retrieve at %q",
+					spacing,
+					chunk.RelativePath,
+				)
+			}
+		}
+	}
+}
+
+// TestEveryRowKindStillStoresRealContent is the other half: the refusal must not
+// take content with it. A message carrying real values in each stored field
+// writes a row for each.
+func TestEveryRowKindStillStoresRealContent(t *testing.T) {
+	t.Parallel()
+
+	documents := []model.ConversationDocument{{
+		ConversationID: "claude:a",
+		MessageIndex:   0,
+		Role:           "assistant",
+		Text:           "here is what I ran",
+		Thinking:       "weighing the options",
+		Tools: []model.ConversationToolCall{{
+			Name:     "Bash",
+			Display:  "ls -la",
+			LangHint: "bash",
+			Output:   "total 0",
+		}},
+	}}
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	wantSuffixes := map[string]string{
+		"conv/claude:a/0":       "the message text",
+		"convtool/claude:a/0/0": "the tool call",
+		"convthink/claude:a/0":  "the reasoning",
+	}
+	seen := map[string]bool{}
+	for _, chunk := range chunks {
+		for path := range wantSuffixes {
+			if chunk.RelativePath == path || strings.HasPrefix(chunk.RelativePath, path+"/") {
+				seen[path] = true
+			}
+		}
+	}
+	for path, description := range wantSuffixes {
+		if !seen[path] {
+			t.Fatalf("%s is missing: no row at or under %q in %d chunks", description, path, len(chunks))
+		}
+	}
+}
+
+// TestAToolRowHoldsItsCommandOnce covers a command whose shell decomposition
+// carries the same string as the display text beside it. Measured over 56,682
+// distinct shell commands from real transcripts, 1,195 of them (2.11%) store
+// their command twice without the guard, costing 1.23% of tool-row bytes.
+func TestAToolRowHoldsItsCommandOnce(t *testing.T) {
+	t.Parallel()
+
+	const command = "!!weird!!"
+	documents := []model.ConversationDocument{{
+		ConversationID: "claude:a",
+		MessageIndex:   0,
+		Role:           "assistant",
+		Tools: []model.ConversationToolCall{{
+			Name:     "Bash",
+			Display:  command,
+			LangHint: "bash",
+		}},
+	}}
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("chunks = %d, want 1", len(chunks))
+	}
+	if count := strings.Count(chunks[0].Content, command); count != 1 {
+		t.Fatalf("command occurrences = %d, want 1, in %q", count, chunks[0].Content)
+	}
+}
+
+// TestASplitMessageStoresEveryPieceOfItsText is the reason the decision cannot
+// move from the field to the individual piece.
+//
+// A message's stored text is rebuilt by concatenating its pieces in order. A
+// piece that is declined for holding only spacing leaves the rebuilt text
+// shorter than the delivered one, so the message compares unequal to itself on
+// every later sync, is re-sent, and has its derived rows removed as orphans, for
+// as long as the conversation exists. A field worth storing stores all of
+// itself.
+func TestASplitMessageStoresEveryPieceOfItsText(t *testing.T) {
+	t.Parallel()
+
+	text := "alpha" + strings.Repeat(" ", 64) + "omega"
+	documents := []model.ConversationDocument{{
+		ConversationID: "claude:a",
+		MessageIndex:   0,
+		Role:           "assistant",
+		Text:           text,
+	}}
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents, 8)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+
+	var rebuilt strings.Builder
+	pieces := 0
+	for _, chunk := range chunks {
+		if strings.HasPrefix(chunk.RelativePath, "conv/claude:a/0") {
+			rebuilt.WriteString(chunk.Content)
+			pieces++
+		}
+	}
+	if pieces < 2 {
+		t.Fatalf("expected the text to split into several pieces, got %d", pieces)
+	}
+	if rebuilt.String() != text {
+		t.Fatalf(
+			"the stored pieces rebuild to %q, want the delivered text %q",
+			rebuilt.String(),
+			text,
+		)
+	}
+}
+
+// TestAFieldOfOnlySpacingStoresNothing is the other half of the same rule,
+// taken at the field rather than the piece.
+func TestAFieldOfOnlySpacingStoresNothing(t *testing.T) {
+	t.Parallel()
+
+	documents := []model.ConversationDocument{{
+		ConversationID: "claude:a",
+		MessageIndex:   0,
+		Role:           "assistant",
+		Text:           strings.Repeat(" ", 64),
+	}}
+
+	chunks, err := conversationDocumentsToStoredChunks(context.Background(), documents, 8)
+	if err != nil {
+		t.Fatalf("conversationDocumentsToStoredChunks returned error: %v", err)
+	}
+	for _, chunk := range chunks {
+		if strings.HasPrefix(chunk.RelativePath, "conv/claude:a/0") {
+			t.Fatalf("a text of only spacing stored a row at %q", chunk.RelativePath)
+		}
+	}
+}

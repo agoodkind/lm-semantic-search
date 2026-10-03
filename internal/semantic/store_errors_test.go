@@ -50,7 +50,7 @@ func TestStoreUnavailableIgnoresPlainErrors(t *testing.T) {
 func TestWrapStoreErrorPlainError(t *testing.T) {
 	t.Parallel()
 
-	cause := errors.New("collection schema mismatch[field itemId does not exist]")
+	cause := errors.New("collection schema mismatch[field conversationId does not exist]")
 	wrapped := wrapStoreError(context.Background(), cause, "insert Milvus batch into conv_chunks_x")
 	if adapterr.IsInfraFailure(wrapped) {
 		t.Fatalf("a non-transport error must not be classified as an infra outage: %v", wrapped)

@@ -1071,3 +1071,147 @@ func TestReconciliationExcludesRecoveryEntriesFromStateAndTimers(t *testing.T) {
 		t.Fatal("reconciliation admitted a recovery idle timer")
 	}
 }
+
+func TestPublishReconcilesAsynchronouslyWithoutWarmingOrStaleOverwrite(t *testing.T) {
+	server := resetPromotionRecoveryServer()
+	service, client := newDisconnectedPromotionTestService(t, server)
+	if err := service.residency.Close(context.Background()); err != nil {
+		t.Fatalf("close initial residency controller: %v", err)
+	}
+	service.residency = newCollectionResidencyController(residencyControllerConfig{
+		waitTimeout: time.Second,
+		loadCeiling: time.Second,
+		load: func(context.Context, string) error {
+			return nil
+		},
+	})
+	liveName := "a_live"
+	afterName := "z_after"
+	server.setCollections(liveName, afterName)
+	server.loadStates = map[string]commonpb.LoadState{
+		liveName:  commonpb.LoadState_LoadStateNotLoad,
+		afterName: commonpb.LoadState_LoadStateLoaded,
+	}
+	server.blockLoadState = liveName
+	server.loadStateStarted = make(chan struct{})
+	server.resumeLoadState = make(chan struct{})
+	server.afterLoadState = afterName
+	server.afterLoadStateStarted = make(chan struct{})
+
+	publishResult := make(chan error, 1)
+	go func() {
+		publishResult <- service.publishClient(context.Background(), client)
+	}()
+	select {
+	case err := <-publishResult:
+		if err != nil {
+			t.Fatalf("publishClient returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("publishClient waited for asynchronous reconciliation")
+	}
+	if !service.Available() {
+		t.Fatal("service stayed unavailable while reconciliation ran")
+	}
+	select {
+	case <-server.loadStateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("asynchronous reconciliation did not inspect load state")
+	}
+	lease, err := service.residency.Acquire(context.Background(), liveName)
+	if err != nil {
+		t.Fatalf("Acquire during reconciliation returned error: %v", err)
+	}
+	pin, err := service.residency.Pin(liveName)
+	if err != nil {
+		t.Fatalf("Pin during reconciliation returned error: %v", err)
+	}
+	close(server.resumeLoadState)
+	select {
+	case <-server.afterLoadStateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reconciliation did not continue after the blocked result")
+	}
+
+	service.residency.mutex.Lock()
+	entry := service.residency.entries[liveName]
+	state := entry.state
+	leases := entry.leases
+	pins := entry.pins
+	service.residency.mutex.Unlock()
+	if state != collectionResidencyReady {
+		t.Fatalf("state = %d, want newer ready state", state)
+	}
+	if leases != 1 || pins != 1 {
+		t.Fatalf("protection = (%d leases, %d pins), want (1, 1)", leases, pins)
+	}
+	if calls := server.loadCallCount(); calls != 0 {
+		t.Fatalf("LoadCollection calls = %d, want 0", calls)
+	}
+	lease.Release()
+	pin.Release()
+}
+
+func TestConversationBackfillSweepDefersColdCollections(t *testing.T) {
+	server := resetPromotionRecoveryServer()
+	service := newPromotionTestService(t, server)
+	if err := service.stopResidencyReconciliation(context.Background()); err != nil {
+		t.Fatalf("stop reconciliation: %v", err)
+	}
+	if err := service.residency.Close(context.Background()); err != nil {
+		t.Fatalf("close initial residency controller: %v", err)
+	}
+	loadStarted := make(chan struct{}, 1)
+	service.residency = newCollectionResidencyController(residencyControllerConfig{
+		waitTimeout: time.Second,
+		loadCeiling: time.Second,
+		load: func(context.Context, string) error {
+			loadStarted <- struct{}{}
+			return nil
+		},
+	})
+	collectionName := conversationCollectionPrefix + "idle"
+	server.setCollections(collectionName)
+	service.residency.mutex.Lock()
+	entry := service.residency.entryLocked(collectionName)
+	entry.state = collectionResidencyCold
+	service.residency.mutex.Unlock()
+
+	service.BackfillConversationCollectionsOnce(context.Background())
+
+	select {
+	case <-loadStarted:
+		t.Fatal("background backfill warmed a cold conversation collection")
+	default:
+	}
+}
+
+func TestConversationBackfillUsesMaintenanceForSchemaMigration(t *testing.T) {
+	server := resetPromotionRecoveryServer()
+	server.missingSchema = true
+	service := newPromotionTestService(t, server)
+	collectionName := conversationCollectionPrefix + "migration"
+	server.setCollections(collectionName)
+	server.addStarted = make(chan struct{})
+	server.resumeAdd = make(chan struct{})
+	addStarted := server.addStartedSnapshot()
+	backfillContext, cancelBackfill := context.WithCancel(context.Background())
+	backfillResult := make(chan error, 1)
+	go func() {
+		_, backfillErr := service.BackfillConversationScalarColumns(
+			backfillContext,
+			collectionName,
+		)
+		backfillResult <- backfillErr
+	}()
+	select {
+	case <-addStarted:
+	case <-time.After(time.Second):
+		t.Fatal("backfill did not reach AddCollectionField")
+	}
+	waitForMaintenance(t, service.residency, collectionName)
+	cancelBackfill()
+	if err := <-backfillResult; err == nil {
+		t.Fatal("backfill returned nil after schema migration cancellation")
+	}
+}

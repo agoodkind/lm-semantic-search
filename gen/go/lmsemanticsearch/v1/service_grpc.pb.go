@@ -19,30 +19,37 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SemanticSearchDaemonService_Version_FullMethodName                     = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Version"
-	SemanticSearchDaemonService_StartIndex_FullMethodName                  = "/lmsemanticsearch.v1.SemanticSearchDaemonService/StartIndex"
-	SemanticSearchDaemonService_ClearIndex_FullMethodName                  = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ClearIndex"
-	SemanticSearchDaemonService_CancelJob_FullMethodName                   = "/lmsemanticsearch.v1.SemanticSearchDaemonService/CancelJob"
-	SemanticSearchDaemonService_SyncIndex_FullMethodName                   = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncIndex"
-	SemanticSearchDaemonService_UpdateCodebasePolicy_FullMethodName        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpdateCodebasePolicy"
-	SemanticSearchDaemonService_GetIndex_FullMethodName                    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetIndex"
-	SemanticSearchDaemonService_ListIndexes_FullMethodName                 = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ListIndexes"
-	SemanticSearchDaemonService_GetJob_FullMethodName                      = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetJob"
-	SemanticSearchDaemonService_ListJobs_FullMethodName                    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ListJobs"
-	SemanticSearchDaemonService_WatchJobs_FullMethodName                   = "/lmsemanticsearch.v1.SemanticSearchDaemonService/WatchJobs"
-	SemanticSearchDaemonService_SearchCode_FullMethodName                  = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCode"
-	SemanticSearchDaemonService_GraphTool_FullMethodName                   = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GraphTool"
-	SemanticSearchDaemonService_RegisterCollection_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterCollection"
-	SemanticSearchDaemonService_SyncCollectionManifest_FullMethodName      = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncCollectionManifest"
-	SemanticSearchDaemonService_UpsertCollectionItemsStream_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertCollectionItemsStream"
-	SemanticSearchDaemonService_BackfillCollectionScalars_FullMethodName   = "/lmsemanticsearch.v1.SemanticSearchDaemonService/BackfillCollectionScalars"
-	SemanticSearchDaemonService_DeleteCollectionItem_FullMethodName        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteCollectionItem"
-	SemanticSearchDaemonService_SearchCollection_FullMethodName            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCollection"
-	SemanticSearchDaemonService_GetCollectionItemState_FullMethodName      = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetCollectionItemState"
-	SemanticSearchDaemonService_Doctor_FullMethodName                      = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Doctor"
-	SemanticSearchDaemonService_GetStatus_FullMethodName                   = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetStatus"
-	SemanticSearchDaemonService_SetMaintenanceMode_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SetMaintenanceMode"
-	SemanticSearchDaemonService_Shutdown_FullMethodName                    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Shutdown"
+	SemanticSearchDaemonService_Version_FullMethodName                           = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Version"
+	SemanticSearchDaemonService_StartIndex_FullMethodName                        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/StartIndex"
+	SemanticSearchDaemonService_ClearIndex_FullMethodName                        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ClearIndex"
+	SemanticSearchDaemonService_CancelJob_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/CancelJob"
+	SemanticSearchDaemonService_SyncIndex_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncIndex"
+	SemanticSearchDaemonService_UpdateCodebasePolicy_FullMethodName              = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpdateCodebasePolicy"
+	SemanticSearchDaemonService_GetIndex_FullMethodName                          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetIndex"
+	SemanticSearchDaemonService_ListIndexes_FullMethodName                       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ListIndexes"
+	SemanticSearchDaemonService_GetJob_FullMethodName                            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetJob"
+	SemanticSearchDaemonService_ListJobs_FullMethodName                          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/ListJobs"
+	SemanticSearchDaemonService_WatchJobs_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/WatchJobs"
+	SemanticSearchDaemonService_SearchCode_FullMethodName                        = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCode"
+	SemanticSearchDaemonService_GraphTool_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GraphTool"
+	SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName    = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterConversationCollection"
+	SemanticSearchDaemonService_RegisterCollection_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/RegisterCollection"
+	SemanticSearchDaemonService_SyncCollectionManifest_FullMethodName            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncCollectionManifest"
+	SemanticSearchDaemonService_UpsertCollectionItemsStream_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertCollectionItemsStream"
+	SemanticSearchDaemonService_BackfillCollectionScalars_FullMethodName         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/BackfillCollectionScalars"
+	SemanticSearchDaemonService_DeleteCollectionItem_FullMethodName              = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteCollectionItem"
+	SemanticSearchDaemonService_SyncConversationManifest_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SyncConversationManifest"
+	SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName = "/lmsemanticsearch.v1.SemanticSearchDaemonService/UpsertConversationDocumentsStream"
+	SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName       = "/lmsemanticsearch.v1.SemanticSearchDaemonService/BackfillConversationScalars"
+	SemanticSearchDaemonService_DeleteConversation_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/DeleteConversation"
+	SemanticSearchDaemonService_SearchConversations_FullMethodName               = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchConversations"
+	SemanticSearchDaemonService_SearchWithinConversation_FullMethodName          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchWithinConversation"
+	SemanticSearchDaemonService_SearchCollection_FullMethodName                  = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SearchCollection"
+	SemanticSearchDaemonService_GetCollectionItemState_FullMethodName            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetCollectionItemState"
+	SemanticSearchDaemonService_Doctor_FullMethodName                            = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Doctor"
+	SemanticSearchDaemonService_GetStatus_FullMethodName                         = "/lmsemanticsearch.v1.SemanticSearchDaemonService/GetStatus"
+	SemanticSearchDaemonService_SetMaintenanceMode_FullMethodName                = "/lmsemanticsearch.v1.SemanticSearchDaemonService/SetMaintenanceMode"
+	SemanticSearchDaemonService_Shutdown_FullMethodName                          = "/lmsemanticsearch.v1.SemanticSearchDaemonService/Shutdown"
 )
 
 // SemanticSearchDaemonServiceClient is the client API for SemanticSearchDaemonService service.
@@ -62,6 +69,7 @@ type SemanticSearchDaemonServiceClient interface {
 	WatchJobs(ctx context.Context, in *WatchJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchJobsResponse], error)
 	SearchCode(ctx context.Context, in *SearchCodeRequest, opts ...grpc.CallOption) (*SearchCodeResponse, error)
 	GraphTool(ctx context.Context, in *GraphToolRequest, opts ...grpc.CallOption) (*GraphToolResponse, error)
+	RegisterConversationCollection(ctx context.Context, in *RegisterConversationCollectionRequest, opts ...grpc.CallOption) (*RegisterConversationCollectionResponse, error)
 	// RegisterCollection records a document collection with its declared scalar
 	// columns. Registering an existing collection again succeeds only when the
 	// declaration matches the saved one and the stored collection schema; a
@@ -69,6 +77,10 @@ type SemanticSearchDaemonServiceClient interface {
 	// conflicting column in metadata key "column". The engine never rebuilds or
 	// drops an existing collection to satisfy a conflicting declaration.
 	RegisterCollection(ctx context.Context, in *RegisterCollectionRequest, opts ...grpc.CallOption) (*RegisterCollectionResponse, error)
+	// SyncCollectionManifest compares item fingerprints with the collection's
+	// stored checkpoint and returns the item ids the engine needs, capped per
+	// ingest in the same order as SyncConversationManifest. The collection must
+	// be registered.
 	SyncCollectionManifest(ctx context.Context, in *SyncCollectionManifestRequest, opts ...grpc.CallOption) (*SyncCollectionManifestResponse, error)
 	// UpsertCollectionItemsStream is the client-streaming generic item upsert.
 	// The client sends one header chunk, then row chunks, then at most one
@@ -89,6 +101,32 @@ type SemanticSearchDaemonServiceClient interface {
 	// delete fails with FailedPrecondition, ErrorInfo reason active_job_conflict,
 	// and that job's id in ErrorInfo metadata key active_job_id.
 	DeleteCollectionItem(ctx context.Context, in *DeleteCollectionItemRequest, opts ...grpc.CallOption) (*DeleteCollectionItemResponse, error)
+	SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error)
+	// UpsertConversationDocumentsStream is the client-streaming conversation
+	// upsert. clyde sends one header chunk, then document chunks, then one manifest
+	// chunk, so the document set and manifest are not bounded by the gRPC max
+	// message size. The engine accumulates the chunks and queues an async ingest
+	// job.
+	UpsertConversationDocumentsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse], error)
+	// BackfillConversationScalars is the client-streaming conversation scalar
+	// backfill. clyde sends one header chunk, then enrichment entry chunks, so the
+	// conversation id to workspace root map is not bounded by the gRPC max message
+	// size. The engine runs the BackfillCollectionScalars backfill on
+	// workspaceRoot and archived. It writes an entry's values only where those
+	// columns are null or empty and returns row counts.
+	BackfillConversationScalars(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse], error)
+	// DeleteConversation queues the DeleteCollectionItem job for one
+	// conversation id. While another job of the collection is queued or running,
+	// it fails the way DeleteCollectionItem does.
+	DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error)
+	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
+	SearchWithinConversation(ctx context.Context, in *SearchWithinConversationRequest, opts ...grpc.CallOption) (*SearchWithinConversationResponse, error)
+	// SearchCollection searches a registered document collection with a typed
+	// filter tree over its declared scalar columns, an optional per-group cap, and
+	// a score floor. The daemon validates every filter and group column against
+	// the saved declaration before it runs the query, and it never accepts a raw
+	// vector store expression. An invalid filter fails with InvalidArgument and
+	// the rejected column in ErrorInfo metadata key "column".
 	SearchCollection(ctx context.Context, in *SearchCollectionRequest, opts ...grpc.CallOption) (*SearchCollectionResponse, error)
 	// GetCollectionItemState returns the content fingerprint the daemon has
 	// indexed for one item of a registered collection. An unknown item or an
@@ -96,6 +134,13 @@ type SemanticSearchDaemonServiceClient interface {
 	GetCollectionItemState(ctx context.Context, in *GetCollectionItemStateRequest, opts ...grpc.CallOption) (*GetCollectionItemStateResponse, error)
 	Doctor(ctx context.Context, in *DoctorRequest, opts ...grpc.CallOption) (*DoctorResponse, error)
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
+	// SetMaintenanceMode turns maintenance mode on or off in the running daemon.
+	// While it is on the daemon starts no background sweep, repair pass,
+	// automatic rebuild, or collection load, refuses index and conversation
+	// writes, and fails searches fast with a maintenance status, so an operator
+	// can back up or restore Milvus with no daemon traffic against it. The mode
+	// is persisted in the daemon state root, so a daemon restart mid-maintenance
+	// comes back still paused.
 	SetMaintenanceMode(ctx context.Context, in *SetMaintenanceModeRequest, opts ...grpc.CallOption) (*SetMaintenanceModeResponse, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 }
@@ -247,6 +292,16 @@ func (c *semanticSearchDaemonServiceClient) GraphTool(ctx context.Context, in *G
 	return out, nil
 }
 
+func (c *semanticSearchDaemonServiceClient) RegisterConversationCollection(ctx context.Context, in *RegisterConversationCollectionRequest, opts ...grpc.CallOption) (*RegisterConversationCollectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterConversationCollectionResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *semanticSearchDaemonServiceClient) RegisterCollection(ctx context.Context, in *RegisterCollectionRequest, opts ...grpc.CallOption) (*RegisterCollectionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterCollectionResponse)
@@ -297,6 +352,72 @@ func (c *semanticSearchDaemonServiceClient) DeleteCollectionItem(ctx context.Con
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteCollectionItemResponse)
 	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_DeleteCollectionItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *semanticSearchDaemonServiceClient) SyncConversationManifest(ctx context.Context, in *SyncConversationManifestRequest, opts ...grpc.CallOption) (*SyncConversationManifestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncConversationManifestResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_SyncConversationManifest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *semanticSearchDaemonServiceClient) UpsertConversationDocumentsStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[3], SemanticSearchDaemonService_UpsertConversationDocumentsStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_UpsertConversationDocumentsStreamClient = grpc.ClientStreamingClient[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]
+
+func (c *semanticSearchDaemonServiceClient) BackfillConversationScalars(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SemanticSearchDaemonService_ServiceDesc.Streams[4], SemanticSearchDaemonService_BackfillConversationScalars_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_BackfillConversationScalarsClient = grpc.ClientStreamingClient[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]
+
+func (c *semanticSearchDaemonServiceClient) DeleteConversation(ctx context.Context, in *DeleteConversationRequest, opts ...grpc.CallOption) (*DeleteConversationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteConversationResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_DeleteConversation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *semanticSearchDaemonServiceClient) SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchConversationsResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_SearchConversations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *semanticSearchDaemonServiceClient) SearchWithinConversation(ctx context.Context, in *SearchWithinConversationRequest, opts ...grpc.CallOption) (*SearchWithinConversationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchWithinConversationResponse)
+	err := c.cc.Invoke(ctx, SemanticSearchDaemonService_SearchWithinConversation_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -380,6 +501,7 @@ type SemanticSearchDaemonServiceServer interface {
 	WatchJobs(*WatchJobsRequest, grpc.ServerStreamingServer[WatchJobsResponse]) error
 	SearchCode(context.Context, *SearchCodeRequest) (*SearchCodeResponse, error)
 	GraphTool(context.Context, *GraphToolRequest) (*GraphToolResponse, error)
+	RegisterConversationCollection(context.Context, *RegisterConversationCollectionRequest) (*RegisterConversationCollectionResponse, error)
 	// RegisterCollection records a document collection with its declared scalar
 	// columns. Registering an existing collection again succeeds only when the
 	// declaration matches the saved one and the stored collection schema; a
@@ -387,6 +509,10 @@ type SemanticSearchDaemonServiceServer interface {
 	// conflicting column in metadata key "column". The engine never rebuilds or
 	// drops an existing collection to satisfy a conflicting declaration.
 	RegisterCollection(context.Context, *RegisterCollectionRequest) (*RegisterCollectionResponse, error)
+	// SyncCollectionManifest compares item fingerprints with the collection's
+	// stored checkpoint and returns the item ids the engine needs, capped per
+	// ingest in the same order as SyncConversationManifest. The collection must
+	// be registered.
 	SyncCollectionManifest(context.Context, *SyncCollectionManifestRequest) (*SyncCollectionManifestResponse, error)
 	// UpsertCollectionItemsStream is the client-streaming generic item upsert.
 	// The client sends one header chunk, then row chunks, then at most one
@@ -407,6 +533,32 @@ type SemanticSearchDaemonServiceServer interface {
 	// delete fails with FailedPrecondition, ErrorInfo reason active_job_conflict,
 	// and that job's id in ErrorInfo metadata key active_job_id.
 	DeleteCollectionItem(context.Context, *DeleteCollectionItemRequest) (*DeleteCollectionItemResponse, error)
+	SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error)
+	// UpsertConversationDocumentsStream is the client-streaming conversation
+	// upsert. clyde sends one header chunk, then document chunks, then one manifest
+	// chunk, so the document set and manifest are not bounded by the gRPC max
+	// message size. The engine accumulates the chunks and queues an async ingest
+	// job.
+	UpsertConversationDocumentsStream(grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]) error
+	// BackfillConversationScalars is the client-streaming conversation scalar
+	// backfill. clyde sends one header chunk, then enrichment entry chunks, so the
+	// conversation id to workspace root map is not bounded by the gRPC max message
+	// size. The engine runs the BackfillCollectionScalars backfill on
+	// workspaceRoot and archived. It writes an entry's values only where those
+	// columns are null or empty and returns row counts.
+	BackfillConversationScalars(grpc.ClientStreamingServer[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]) error
+	// DeleteConversation queues the DeleteCollectionItem job for one
+	// conversation id. While another job of the collection is queued or running,
+	// it fails the way DeleteCollectionItem does.
+	DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error)
+	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
+	SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error)
+	// SearchCollection searches a registered document collection with a typed
+	// filter tree over its declared scalar columns, an optional per-group cap, and
+	// a score floor. The daemon validates every filter and group column against
+	// the saved declaration before it runs the query, and it never accepts a raw
+	// vector store expression. An invalid filter fails with InvalidArgument and
+	// the rejected column in ErrorInfo metadata key "column".
 	SearchCollection(context.Context, *SearchCollectionRequest) (*SearchCollectionResponse, error)
 	// GetCollectionItemState returns the content fingerprint the daemon has
 	// indexed for one item of a registered collection. An unknown item or an
@@ -414,6 +566,13 @@ type SemanticSearchDaemonServiceServer interface {
 	GetCollectionItemState(context.Context, *GetCollectionItemStateRequest) (*GetCollectionItemStateResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
+	// SetMaintenanceMode turns maintenance mode on or off in the running daemon.
+	// While it is on the daemon starts no background sweep, repair pass,
+	// automatic rebuild, or collection load, refuses index and conversation
+	// writes, and fails searches fast with a maintenance status, so an operator
+	// can back up or restore Milvus with no daemon traffic against it. The mode
+	// is persisted in the daemon state root, so a daemon restart mid-maintenance
+	// comes back still paused.
 	SetMaintenanceMode(context.Context, *SetMaintenanceModeRequest) (*SetMaintenanceModeResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
@@ -464,6 +623,9 @@ func (UnimplementedSemanticSearchDaemonServiceServer) SearchCode(context.Context
 func (UnimplementedSemanticSearchDaemonServiceServer) GraphTool(context.Context, *GraphToolRequest) (*GraphToolResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GraphTool not implemented")
 }
+func (UnimplementedSemanticSearchDaemonServiceServer) RegisterConversationCollection(context.Context, *RegisterConversationCollectionRequest) (*RegisterConversationCollectionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterConversationCollection not implemented")
+}
 func (UnimplementedSemanticSearchDaemonServiceServer) RegisterCollection(context.Context, *RegisterCollectionRequest) (*RegisterCollectionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterCollection not implemented")
 }
@@ -478,6 +640,24 @@ func (UnimplementedSemanticSearchDaemonServiceServer) BackfillCollectionScalars(
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) DeleteCollectionItem(context.Context, *DeleteCollectionItemRequest) (*DeleteCollectionItemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteCollectionItem not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) SyncConversationManifest(context.Context, *SyncConversationManifestRequest) (*SyncConversationManifestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SyncConversationManifest not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) UpsertConversationDocumentsStream(grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]) error {
+	return status.Error(codes.Unimplemented, "method UpsertConversationDocumentsStream not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) BackfillConversationScalars(grpc.ClientStreamingServer[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]) error {
+	return status.Error(codes.Unimplemented, "method BackfillConversationScalars not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) DeleteConversation(context.Context, *DeleteConversationRequest) (*DeleteConversationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteConversation not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchConversations not implemented")
+}
+func (UnimplementedSemanticSearchDaemonServiceServer) SearchWithinConversation(context.Context, *SearchWithinConversationRequest) (*SearchWithinConversationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchWithinConversation not implemented")
 }
 func (UnimplementedSemanticSearchDaemonServiceServer) SearchCollection(context.Context, *SearchCollectionRequest) (*SearchCollectionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchCollection not implemented")
@@ -744,6 +924,24 @@ func _SemanticSearchDaemonService_GraphTool_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SemanticSearchDaemonService_RegisterConversationCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterConversationCollectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).RegisterConversationCollection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).RegisterConversationCollection(ctx, req.(*RegisterConversationCollectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SemanticSearchDaemonService_RegisterCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterCollectionRequest)
 	if err := dec(in); err != nil {
@@ -808,6 +1006,92 @@ func _SemanticSearchDaemonService_DeleteCollectionItem_Handler(srv interface{}, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(SemanticSearchDaemonServiceServer).DeleteCollectionItem(ctx, req.(*DeleteCollectionItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SemanticSearchDaemonService_SyncConversationManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncConversationManifestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).SyncConversationManifest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_SyncConversationManifest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).SyncConversationManifest(ctx, req.(*SyncConversationManifestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SemanticSearchDaemonService_UpsertConversationDocumentsStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SemanticSearchDaemonServiceServer).UpsertConversationDocumentsStream(&grpc.GenericServerStream[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_UpsertConversationDocumentsStreamServer = grpc.ClientStreamingServer[UpsertConversationDocumentsChunk, UpsertConversationDocumentsResponse]
+
+func _SemanticSearchDaemonService_BackfillConversationScalars_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SemanticSearchDaemonServiceServer).BackfillConversationScalars(&grpc.GenericServerStream[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SemanticSearchDaemonService_BackfillConversationScalarsServer = grpc.ClientStreamingServer[BackfillConversationScalarsChunk, BackfillConversationScalarsResponse]
+
+func _SemanticSearchDaemonService_DeleteConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteConversationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).DeleteConversation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_DeleteConversation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).DeleteConversation(ctx, req.(*DeleteConversationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SemanticSearchDaemonService_SearchConversations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchConversationsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).SearchConversations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_SearchConversations_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).SearchConversations(ctx, req.(*SearchConversationsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SemanticSearchDaemonService_SearchWithinConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchWithinConversationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SemanticSearchDaemonServiceServer).SearchWithinConversation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SemanticSearchDaemonService_SearchWithinConversation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SemanticSearchDaemonServiceServer).SearchWithinConversation(ctx, req.(*SearchWithinConversationRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -976,6 +1260,10 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _SemanticSearchDaemonService_GraphTool_Handler,
 		},
 		{
+			MethodName: "RegisterConversationCollection",
+			Handler:    _SemanticSearchDaemonService_RegisterConversationCollection_Handler,
+		},
+		{
 			MethodName: "RegisterCollection",
 			Handler:    _SemanticSearchDaemonService_RegisterCollection_Handler,
 		},
@@ -986,6 +1274,22 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteCollectionItem",
 			Handler:    _SemanticSearchDaemonService_DeleteCollectionItem_Handler,
+		},
+		{
+			MethodName: "SyncConversationManifest",
+			Handler:    _SemanticSearchDaemonService_SyncConversationManifest_Handler,
+		},
+		{
+			MethodName: "DeleteConversation",
+			Handler:    _SemanticSearchDaemonService_DeleteConversation_Handler,
+		},
+		{
+			MethodName: "SearchConversations",
+			Handler:    _SemanticSearchDaemonService_SearchConversations_Handler,
+		},
+		{
+			MethodName: "SearchWithinConversation",
+			Handler:    _SemanticSearchDaemonService_SearchWithinConversation_Handler,
 		},
 		{
 			MethodName: "SearchCollection",
@@ -1026,6 +1330,16 @@ var SemanticSearchDaemonService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "BackfillCollectionScalars",
 			Handler:       _SemanticSearchDaemonService_BackfillCollectionScalars_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "UpsertConversationDocumentsStream",
+			Handler:       _SemanticSearchDaemonService_UpsertConversationDocumentsStream_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "BackfillConversationScalars",
+			Handler:       _SemanticSearchDaemonService_BackfillConversationScalars_Handler,
 			ClientStreams: true,
 		},
 	},

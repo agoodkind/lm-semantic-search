@@ -69,7 +69,7 @@ func (manager *Manager) ClearIndex(
 		policyLocked = true
 	}
 	manager.mu.Lock()
-	delete(manager.pendingCollectionJobs, codebase.ID)
+	delete(manager.pendingConversationJobs, codebase.ID)
 	delete(manager.pendingCodeJobs, codebase.ID)
 	manager.mu.Unlock()
 	if err := manager.removeCodebaseArtifacts(ctx, codebase); err != nil {

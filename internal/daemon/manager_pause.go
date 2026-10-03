@@ -320,7 +320,7 @@ func (manager *Manager) failJobTransition(
 	}
 	metrics.JobFailed()
 	manager.mu.Lock()
-	delete(manager.collectionJobs, jobID)
+	delete(manager.conversationJobs, jobID)
 	manager.forgetJobJournalLocked(jobID)
 	manager.mu.Unlock()
 	slog.ErrorContext(ctx, "job.failed", "component", "daemon", "subcomponent", "jobs", "job_id", jobID, "trace_id", traceID, "transient", transient, "err", runErr)

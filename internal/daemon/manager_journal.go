@@ -56,6 +56,16 @@ func (manager *Manager) forgetJobJournalLocked(jobID string) {
 	delete(manager.lastJobJournalAt, jobID)
 }
 
+// reconcileJournalOnStartLocked sanitizes the job journal after the previous
+// daemon process exited. Any queued, running, paused, or cancelling job becomes
+// cancelled in the journal because its goroutine is gone, while its last
+// journaled progress is preserved so the orphan record reflects how far the
+// interrupted run got rather than resetting to zero. A code codebase keeps
+// Status=Indexing when it was mid-flight so ResumeOrphanedJobs can pick it back
+// up on boot, since the registry already holds the canonical path and effective
+// config that resume needs. A document (conversation) codebase whose active job
+// was orphaned is instead reset to Status=Indexed, because conversation ingest
+// is push-driven and is not resumed from the registry.
 func (manager *Manager) reconcileJournalOnStartLocked() {
 	now := clock.Now()
 	registryChanged := false

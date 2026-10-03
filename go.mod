@@ -10,7 +10,6 @@ require (
 	github.com/git-pkgs/gitignore v1.3.0
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.4
 	github.com/mark3labs/mcp-go v1.1.1
-	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/milvus-io/milvus/client/v2 v2.6.5
 	github.com/openai/openai-go/v2 v2.7.1
 	github.com/rjeczalik/notify v0.9.3
@@ -192,11 +191,11 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
 	go.etcd.io/bbolt v1.4.3 // indirect
-	go.etcd.io/etcd/api/v3 v3.6.14 // indirect
-	go.etcd.io/etcd/client/pkg/v3 v3.6.14 // indirect
-	go.etcd.io/etcd/client/v3 v3.6.14 // indirect
-	go.etcd.io/etcd/pkg/v3 v3.6.14 // indirect
-	go.etcd.io/etcd/server/v3 v3.6.14 // indirect
+	go.etcd.io/etcd/api/v3 v3.6.11 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.6.11 // indirect
+	go.etcd.io/etcd/client/v3 v3.6.11 // indirect
+	go.etcd.io/etcd/pkg/v3 v3.6.11 // indirect
+	go.etcd.io/etcd/server/v3 v3.6.11 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.70.0 // indirect
 	go.opentelemetry.io/otel v1.46.0 // indirect
