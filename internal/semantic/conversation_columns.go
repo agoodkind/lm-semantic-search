@@ -3,6 +3,7 @@ package semantic
 import (
 	"strings"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -49,27 +50,27 @@ func ProviderFromConversationID(conversationID string) string {
 // the same declaration defines a freshly created collection and the
 // AddCollectionField migration onto a collection with existing rows. The
 // column order and string maximum lengths define the stored Milvus schema.
-func ConversationDeclaration() model.CollectionDeclaration {
-	return model.CollectionDeclaration{
+func ConversationDeclaration() collection.Declaration {
+	return collection.Declaration{
 		ItemIDColumn: conversationIDFieldName,
-		Scalars: []model.ScalarColumn{
+		Scalars: []collection.ScalarColumn{
 			nullableStringColumn(conversationIDFieldName, conversationIDFieldMaxLength),
 			nullableStringColumn(parentConversationIDFieldName, conversationIDFieldMaxLength),
 			nullableStringColumn(roleFieldName, conversationRoleFieldMaxLength),
 			nullableStringColumn(providerFieldName, conversationProviderMaxLength),
 			nullableStringColumn(workspaceRootFieldName, conversationWorkspaceMaxLength),
-			{Name: archivedFieldName, Type: model.ScalarTypeBool, Nullable: true, MaxLength: 0},
-			{Name: timestampUnixFieldName, Type: model.ScalarTypeInt64, Nullable: true, MaxLength: 0},
-			{Name: messageIndexFieldName, Type: model.ScalarTypeInt64, Nullable: true, MaxLength: 0},
+			{Name: archivedFieldName, Type: collection.ScalarTypeBool, Nullable: true, MaxLength: 0},
+			{Name: timestampUnixFieldName, Type: collection.ScalarTypeInt64, Nullable: true, MaxLength: 0},
+			{Name: messageIndexFieldName, Type: collection.ScalarTypeInt64, Nullable: true, MaxLength: 0},
 			nullableStringColumn(loadRulesFieldName, conversationLoadRulesMaxLength),
 		},
 	}
 }
 
-func nullableStringColumn(name string, maxLength int32) model.ScalarColumn {
-	return model.ScalarColumn{
+func nullableStringColumn(name string, maxLength int32) collection.ScalarColumn {
+	return collection.ScalarColumn{
 		Name:      name,
-		Type:      model.ScalarTypeString,
+		Type:      collection.ScalarTypeString,
 		Nullable:  true,
 		MaxLength: maxLength,
 	}
@@ -117,6 +118,23 @@ func (columns *conversationScalarColumns) append(chunk model.StoredChunk) {
 	columns.timestamps = append(columns.timestamps, chunk.TimestampUnix)
 	columns.messageIndexes = append(columns.messageIndexes, int64(chunk.MessageIndex))
 	columns.loadRules = append(columns.loadRules, chunk.LoadRules)
+}
+
+// conversationScalarValues returns the value of every conversation scalar
+// column for one chunk. The role is lowercased and the provider comes from the
+// conversation id prefix. Every value is concrete and none is null.
+func conversationScalarValues(chunk model.StoredChunk) map[string]collection.ScalarValue {
+	return map[string]collection.ScalarValue{
+		conversationIDFieldName:       collection.StringScalar(chunk.ConversationID),
+		parentConversationIDFieldName: collection.StringScalar(chunk.ParentConversationID),
+		roleFieldName:                 collection.StringScalar(strings.ToLower(chunk.Role)),
+		providerFieldName:             collection.StringScalar(providerFromConversationID(chunk.ConversationID)),
+		workspaceRootFieldName:        collection.StringScalar(chunk.WorkspaceRoot),
+		archivedFieldName:             collection.BoolScalar(chunk.Archived),
+		timestampUnixFieldName:        collection.Int64Scalar(chunk.TimestampUnix),
+		messageIndexFieldName:         collection.Int64Scalar(int64(chunk.MessageIndex)),
+		loadRulesFieldName:            collection.StringScalar(chunk.LoadRules),
+	}
 }
 
 // providerFromConversationID returns the provider encoded as the prefix of a

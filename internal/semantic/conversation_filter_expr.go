@@ -2,6 +2,8 @@ package semantic
 
 import (
 	"strings"
+
+	"goodkind.io/lm-semantic-search/collection"
 )
 
 // conversationFilterIDBatchSize bounds how many conversation ids go into one
@@ -58,46 +60,46 @@ func (filter ConversationFilter) HasConversationScope() bool {
 // inclusive and until bounds are exclusive. An archived value compares the
 // nullable archived column, which excludes a row with a null archived value
 // for either value.
-func (filter ConversationFilter) CollectionFilter() *CollectionFilter {
-	children := make([]CollectionFilter, 0, conversationFilterDimensionCount)
+func (filter ConversationFilter) CollectionFilter() *collection.Filter {
+	children := make([]collection.Filter, 0, conversationFilterDimensionCount)
 	if len(filter.Providers) > 0 {
-		children = append(children, ColumnIn(providerFieldName, StringValues(filter.Providers)))
+		children = append(children, collection.ColumnIn(providerFieldName, collection.StringValues(filter.Providers)))
 	}
 	if len(filter.WorkspaceRoots) > 0 {
-		children = append(children, ColumnIn(workspaceRootFieldName, StringValues(filter.WorkspaceRoots)))
+		children = append(children, collection.ColumnIn(workspaceRootFieldName, collection.StringValues(filter.WorkspaceRoots)))
 	}
 	if len(filter.Roles) > 0 {
-		children = append(children, ColumnIn(roleFieldName, StringValues(lowercaseAll(filter.Roles))))
+		children = append(children, collection.ColumnIn(roleFieldName, collection.StringValues(lowercaseAll(filter.Roles))))
 	}
 	if len(filter.ConversationIDs) > 0 {
-		children = append(children, ColumnIn(conversationIDFieldName, StringValues(filter.ConversationIDs)))
+		children = append(children, collection.ColumnIn(conversationIDFieldName, collection.StringValues(filter.ConversationIDs)))
 	}
 	if filter.ParentConversationID != "" {
-		children = append(children, ColumnEquals(parentConversationIDFieldName, StringScalar(filter.ParentConversationID)))
+		children = append(children, collection.ColumnEquals(parentConversationIDFieldName, collection.StringScalar(filter.ParentConversationID)))
 	}
 	if filter.FromUnix > 0 {
 		lower := filter.FromUnix
-		children = append(children, ColumnRange(timestampUnixFieldName, &lower, nil))
+		children = append(children, collection.ColumnRange(timestampUnixFieldName, &lower, nil))
 	}
 	if filter.UntilUnix > 0 {
 		upper := filter.UntilUnix
-		children = append(children, ColumnRange(timestampUnixFieldName, nil, &upper))
+		children = append(children, collection.ColumnRange(timestampUnixFieldName, nil, &upper))
 	}
 	if filter.MessageIndexFrom > 0 {
 		lower := int64(filter.MessageIndexFrom)
-		children = append(children, ColumnRange(messageIndexFieldName, &lower, nil))
+		children = append(children, collection.ColumnRange(messageIndexFieldName, &lower, nil))
 	}
 	if filter.MessageIndexUntil > 0 {
 		upper := int64(filter.MessageIndexUntil)
-		children = append(children, ColumnRange(messageIndexFieldName, nil, &upper))
+		children = append(children, collection.ColumnRange(messageIndexFieldName, nil, &upper))
 	}
 	if filter.Archived != nil {
-		children = append(children, ColumnEquals(archivedFieldName, BoolScalar(*filter.Archived)))
+		children = append(children, collection.ColumnEquals(archivedFieldName, collection.BoolScalar(*filter.Archived)))
 	}
 	if len(children) == 0 {
 		return nil
 	}
-	tree := AllOf(children...)
+	tree := collection.AllOf(children...)
 	return &tree
 }
 
@@ -110,7 +112,7 @@ func inStringClause(field string, values []string) string {
 	}
 	quoted := make([]string, 0, len(values))
 	for _, value := range values {
-		quoted = append(quoted, `"`+escapeMilvusString(value)+`"`)
+		quoted = append(quoted, `"`+collection.EscapeString(value)+`"`)
 	}
 	return field + " in [" + strings.Join(quoted, ", ") + "]"
 }

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
@@ -107,7 +109,7 @@ func (service *Service) createReuseCatalog(
 			WithName(contentHashFieldName).
 			WithDataType(entity.FieldTypeVarChar).
 			WithMaxLength(64)).
-		WithField(embeddingModelField()).
+		WithField(milvusstore.EmbeddingModelFieldSchema()).
 		WithField(entity.NewField().
 			WithName(denseVectorFieldName).
 			WithDataType(entity.FieldTypeFloatVector).
@@ -298,9 +300,9 @@ func (service *Service) getReuseCatalogModelKeys(
 		if !found {
 			return nil, fmt.Errorf("read unrequested catalog row key %q", rowKey)
 		}
-		vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+		vector, vectorErr := milvusstore.VectorAt(vectorColumn, rowIndex)
 		if vectorErr != nil {
-			return nil, vectorErr
+			return nil, fmt.Errorf("read catalog vector at %d: %w", rowIndex, vectorErr)
 		}
 		entries[storageKey] = append(entries[storageKey], reuseCatalogEntry{
 			embeddingModel: embeddingModel,
@@ -369,9 +371,9 @@ func readReuseCatalogEntries(
 			slog.ErrorContext(ctx, "read catalog embedding model failed", "err", wrappedErr)
 			return nil, wrappedErr
 		}
-		vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+		vector, vectorErr := milvusstore.VectorAt(vectorColumn, rowIndex)
 		if vectorErr != nil {
-			return nil, vectorErr
+			return nil, fmt.Errorf("read catalog vector at %d: %w", rowIndex, vectorErr)
 		}
 		entries[storageKey] = append(entries[storageKey], reuseCatalogEntry{
 			embeddingModel: embeddingModel,
@@ -382,7 +384,7 @@ func readReuseCatalogEntries(
 }
 
 func reuseCatalogRowKey(contentHashValue string, embeddingModel string) string {
-	normalizedModel, _ := sanitizeUTF8(embeddingModel)
+	normalizedModel, _ := milvusstore.SanitizeUTF8(embeddingModel)
 	sum := sha256.Sum256([]byte(contentHashValue + "\x00" + normalizedModel))
 	return hex.EncodeToString(sum[:])
 }
@@ -481,13 +483,14 @@ func (service *Service) appendReuseCatalog(
 	if len(missingKeys) == 0 {
 		return nil
 	}
-	embeddingModelColumn, err := newEmbeddingModelColumn(
+	embeddingModelColumn, err := milvusstore.NewEmbeddingModelColumn(
 		reuseCatalogCollectionName(service.cfg, dimension),
 		service.cfg.EmbeddingModel,
 		len(missingKeys),
 	)
 	if err != nil {
-		return err
+		slog.ErrorContext(ctx, "build catalog embedding model column failed", "err", err)
+		return fmt.Errorf("build catalog embedding model column: %w", err)
 	}
 	result, err := service.milvus.Insert(
 		ctx,
@@ -517,7 +520,7 @@ func reuseCatalogStorageVectors(
 	vectorsByStorageKey := make(map[string][]float32, len(vectorsByContent))
 	dimension := 0
 	for rawContent, vector := range vectorsByContent {
-		content, _ := sanitizeUTF8(rawContent)
+		content, _ := milvusstore.SanitizeUTF8(rawContent)
 		if len(vector) == 0 {
 			continue
 		}

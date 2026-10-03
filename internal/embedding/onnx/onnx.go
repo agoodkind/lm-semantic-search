@@ -1,4 +1,5 @@
-package embedding
+// Package onnx implements the in-process ONNX Runtime embedding provider.
+package onnx
 
 /*
 #cgo darwin LDFLAGS: -Wl,-rpath,@loader_path
@@ -19,6 +20,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
@@ -52,10 +54,13 @@ type inProcessONNXRuntime struct {
 	mutex     sync.Mutex
 }
 
-func newONNXProvider(
+// NewProvider returns the in-process ONNX provider for the offline model the
+// configuration selects. Providers that load the same model file share one
+// runtime.
+func NewProvider(
 	ctx context.Context,
 	cfg config.Config,
-) (Provider, error) {
+) (embedding.Provider, error) {
 	preset, err := offlinemodel.Resolve(cfg.OfflineEmbeddingModel)
 	if err != nil {
 		slog.ErrorContext(
@@ -245,14 +250,14 @@ func (provider *onnxProvider) clientRejection(
 func (provider *onnxProvider) skippedInput(
 	index int,
 	outcome onnxEmbedOutcome,
-) SkippedInput {
+) embedding.SkippedInput {
 	reportedTokens := adapterr.UnreportedFigure()
 	maximumTokens := adapterr.UnreportedFigure()
 	if outcome.rejection == onnxInputOverTokenLimit {
 		reportedTokens = adapterr.ReportedFigure(outcome.tokenCount)
 		maximumTokens = adapterr.ReportedFigure(int(provider.runtime.preset.MaximumTokens))
 	}
-	return SkippedInput{
+	return embedding.SkippedInput{
 		Index:          index,
 		Reason:         adapterr.EmbedRejectionReason(outcome.rejection),
 		ReportedTokens: reportedTokens,
@@ -406,9 +411,9 @@ func failedONNXEmbedOutcome() onnxEmbedOutcome {
 func (provider *onnxProvider) EmbedBatch(
 	ctx context.Context,
 	texts []string,
-) (result BatchResult, err error) {
+) (result embedding.BatchResult, err error) {
 	if len(texts) == 0 {
-		return BatchResult{Vectors: nil, Skipped: nil}, nil
+		return embedding.BatchResult{Vectors: nil, Skipped: nil}, nil
 	}
 
 	start := clock.Now()
@@ -419,16 +424,16 @@ func (provider *onnxProvider) EmbedBatch(
 
 	// Every input the provider refuses is reported as skipped with a nil vector and
 	// its reason code, exactly as the OpenAI-compatible provider reports a
-	// context_length_exceeded rejection. Both implementations of Provider therefore
+	// context_length_exceeded rejection. Both implementations of embedding.Provider therefore
 	// honor the same promise: a returned vector always covers the whole input, and
 	// the caller's split-and-retry loop divides anything that does not fit.
 	vectors := make([][]float32, len(texts))
-	var skipped []SkippedInput
+	var skipped []embedding.SkippedInput
 	refusedEmpty := 0
 	for index, text := range texts {
 		outcome, embedErr := provider.embedOne(ctx, text)
 		if embedErr != nil {
-			return BatchResult{}, embedErr
+			return embedding.BatchResult{}, embedErr
 		}
 		if outcome.rejection != onnxInputAccepted {
 			if outcome.rejection == onnxInputEmpty {
@@ -442,7 +447,7 @@ func (provider *onnxProvider) EmbedBatch(
 	if refusedEmpty > 0 {
 		metrics.EmbedInputsRefusedEmpty(refusedEmpty)
 	}
-	return BatchResult{Vectors: vectors, Skipped: skipped}, nil
+	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
 }
 
 func poolAndNormalize(

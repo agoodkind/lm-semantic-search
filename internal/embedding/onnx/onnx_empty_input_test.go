@@ -1,4 +1,4 @@
-package embedding
+package onnx
 
 import (
 	"context"
@@ -16,7 +16,7 @@ func asAdapterError(err error, target **adapterr.AdapterError) bool {
 }
 
 // TestONNXEmbedBatchRefusesEmptyContent proves the in-process provider honors the
-// same refusal as the hosted one. Both implement one Provider contract, so a
+// same refusal as the hosted one. Both implement one embedding.Provider contract, so a
 // guarantee that held only for the hosted endpoint would leave the offline
 // backend accumulating exactly the rows the guard exists to prevent.
 //

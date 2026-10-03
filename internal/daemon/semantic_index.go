@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -24,6 +25,13 @@ type semanticReader interface {
 	HasStaging(ctx context.Context, codebasePath string) (bool, error)
 }
 
+// semanticConversationSearcher runs the typed collection search over a
+// collection with the conversation declaration. It also resolves the
+// conversation of rows written before the conversationId column existed.
+type semanticConversationSearcher interface {
+	SearchConversationCollection(ctx context.Context, search semantic.CollectionSearch) ([]semantic.CollectionHit, error)
+}
+
 type semanticResidencyReader interface {
 	PrepareCollection(ctx context.Context, collectionName string) error
 	AcquireCollection(ctx context.Context, collectionName string) (semantic.CollectionLease, error)
@@ -34,7 +42,7 @@ type semanticCollectionInspector interface {
 	InspectCollection(ctx context.Context, collectionName string) (semantic.CollectionFacts, error)
 	// DescribeScalarColumns reports the declared scalar columns of a stored
 	// collection. exists is false when the collection is absent.
-	DescribeScalarColumns(ctx context.Context, collectionName string) (columns []model.ScalarColumn, exists bool, err error)
+	DescribeScalarColumns(ctx context.Context, collectionName string) (columns []collection.ScalarColumn, exists bool, err error)
 }
 
 // semanticHealthReader probes whether search can serve a query, both globally
@@ -74,7 +82,7 @@ type semanticReuseLoader interface {
 // conversation schema migrations off generic collections, which share the
 // conversation collection name prefix.
 type semanticDeclarationRecorder interface {
-	RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration)
+	RecordCollectionDeclaration(collectionName string, declaration collection.Declaration)
 }
 
 // semanticWriter is the slice that mutates the live or staging collection.
@@ -139,6 +147,7 @@ type semanticMaintenanceGate interface {
 // exactly what the daemon calls, no more.
 type semanticIndex interface {
 	semanticReader
+	semanticConversationSearcher
 	semanticHealthReader
 	semanticReuseLoader
 	semanticWriter

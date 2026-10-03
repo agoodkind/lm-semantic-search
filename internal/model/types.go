@@ -3,6 +3,8 @@ package model
 
 import (
 	"time"
+
+	"goodkind.io/lm-semantic-search/collection"
 )
 
 // CodebaseStatus captures the lifecycle state of one tracked codebase.
@@ -264,48 +266,8 @@ type Codebase struct {
 	// Declaration is the scalar schema a document collection registered. It is
 	// nil for code codebases and for document records written before
 	// registration saved a declaration.
-	Declaration *CollectionDeclaration `json:"declaration,omitempty"`
-	UpdatedAt   time.Time              `json:"updated_at"`
-}
-
-// ScalarType is the closed set of scalar column types a document collection
-// can declare.
-type ScalarType string
-
-const (
-	// ScalarTypeString is a variable-length string column with a maximum length.
-	ScalarTypeString ScalarType = "string"
-	// ScalarTypeBool is a boolean column.
-	ScalarTypeBool ScalarType = "bool"
-	// ScalarTypeInt64 is a 64-bit signed integer column.
-	ScalarTypeInt64 ScalarType = "int64"
-)
-
-// ScalarColumn declares one scalar column of a document collection. MaxLength
-// applies only to a string column and is zero for every other type.
-type ScalarColumn struct {
-	Name      string     `json:"name"`
-	Type      ScalarType `json:"type"`
-	Nullable  bool       `json:"nullable"`
-	MaxLength int32      `json:"max_length,omitempty"`
-}
-
-// CollectionDeclaration is the scalar schema of a document collection. The
-// declared string column ItemIDColumn stores the client item id.
-type CollectionDeclaration struct {
-	ItemIDColumn string         `json:"item_id_column"`
-	Scalars      []ScalarColumn `json:"scalars"`
-}
-
-// ScalarValue is one typed value of a declared scalar column. Type selects the
-// field that stores the value. Null marks a null value of a nullable column, and
-// the value fields then stay zero.
-type ScalarValue struct {
-	Type   ScalarType `json:"type"`
-	Null   bool       `json:"null,omitempty"`
-	String string     `json:"string,omitempty"`
-	Bool   bool       `json:"bool,omitempty"`
-	Int64  int64      `json:"int64,omitempty"`
+	Declaration *collection.Declaration `json:"declaration,omitempty"`
+	UpdatedAt   time.Time               `json:"updated_at"`
 }
 
 // QuarantineState records why destructive sync is paused for a codebase and
@@ -400,7 +362,7 @@ type StoredChunk struct {
 	// generic document collection. It is nil for code rows and for rows of a
 	// collection with the conversation declaration, which store their scalars in
 	// the conversation fields above.
-	Scalars map[string]ScalarValue `json:"scalars,omitempty"`
+	Scalars map[string]collection.ScalarValue `json:"scalars,omitempty"`
 	// Score is the vector similarity for a semantic search. Zero on chunks that
 	// did not come from a search.
 	Score float64 `json:"score,omitempty"`

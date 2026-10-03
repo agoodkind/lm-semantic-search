@@ -3,6 +3,7 @@ package semantic
 import (
 	"testing"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -53,9 +54,9 @@ func TestStoreColumnSetForCollectionClassifiesByName(t *testing.T) {
 	}
 
 	genericName := conversationCollectionPrefix + "generic"
-	service.RecordCollectionDeclaration(genericName, model.CollectionDeclaration{
+	service.RecordCollectionDeclaration(genericName, collection.Declaration{
 		ItemIDColumn: "itemId",
-		Scalars:      []model.ScalarColumn{{Name: "itemId", Type: model.ScalarTypeString, Nullable: false, MaxLength: 64}},
+		Scalars:      []collection.ScalarColumn{{Name: "itemId", Type: collection.ScalarTypeString, Nullable: false, MaxLength: 64}},
 	})
 	if service.isConversationCollection(genericName) {
 		t.Fatal("isConversationCollection(generic) = true, want false")

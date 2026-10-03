@@ -16,7 +16,6 @@ import (
 	"github.com/openai/openai-go/v2/option"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
-	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
@@ -128,39 +127,30 @@ type Provider interface {
 	Health(context.Context) error
 }
 
-// NewProvider constructs the configured embedding provider.
+// OpenAIOptions configures [NewOpenAICompatible].
+type OpenAIOptions struct {
+	// APIKey authenticates the embeddings requests. It is required.
+	APIKey string
+	// BaseURL overrides the embeddings API base URL. Empty uses the SDK default.
+	BaseURL string
+	// Model is the embedding model name. It is required.
+	Model string
+	// Dimensions asks the endpoint for vectors of this width. Zero leaves the
+	// width to the model.
+	Dimensions int32
+	// RequestTimeout bounds one embeddings HTTP request. Zero or negative leaves
+	// the request unbounded.
+	RequestTimeout time.Duration
+}
+
+// NewOpenAICompatible constructs the OpenAI-compatible embeddings adapter.
 //
-// The ONNX provider runs the embedded offline model in process. The default
-// OpenAI-compatible adapter sends requests to the configured embeddings API.
-func NewProvider(ctx context.Context, cfg config.Config) (Provider, error) {
-	switch cfg.EmbeddingProvider {
-	case config.EmbeddingProviderONNX:
-		return newONNXProvider(ctx, cfg)
-	case model.EmbeddingProviderNone, config.EmbeddingProviderOpenAI:
-		// Both build the OpenAI-compatible adapter: an unnamed provider is the
-		// historical default rather than an error.
-	default:
-		slog.ErrorContext(
-			ctx,
-			"embedding provider is not supported",
-			"provider",
-			cfg.EmbeddingProvider,
-			"err",
-			errors.New("only ONNX and OpenAI-compatible adapters are supported"),
-		)
-		return nil, fmt.Errorf(
-			"embedding provider %q is not supported; use %q or %q",
-			cfg.EmbeddingProvider,
-			config.EmbeddingProviderONNX,
-			config.EmbeddingProviderOpenAI,
-		)
-	}
-	// A negative configured value would build a negative duration, which makes
-	// context.WithTimeout expire immediately and fail every embed. Treat it as
-	// disabled (unbounded) instead, matching the zero-disables semantics.
-	requestTimeoutMS := max(cfg.EmbeddingRequestTimeoutMS, 0)
-	requestTimeout := time.Duration(requestTimeoutMS) * time.Millisecond
-	return newOpenAICompatibleProvider(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.EmbeddingModel, cfg.EmbeddingDimension, requestTimeout)
+// A negative RequestTimeout would make [context.WithTimeout] expire immediately
+// and fail every embed. NewOpenAICompatible treats it as disabled (unbounded),
+// matching the zero-disables semantics.
+func NewOpenAICompatible(options OpenAIOptions) (Provider, error) {
+	requestTimeout := max(options.RequestTimeout, 0)
+	return newOpenAICompatibleProvider(options.APIKey, options.BaseURL, options.Model, options.Dimensions, requestTimeout)
 }
 
 type openAICompatibleProvider struct {
@@ -667,4 +657,10 @@ func embedBackoff(attempt int) time.Duration {
 // anything reaches a provider.
 func hasNothingToEmbed(text string) bool {
 	return strings.TrimSpace(text) == ""
+}
+
+// HasNothingToEmbed reports whether an input has no non-whitespace character.
+// Providers outside this package use it for the same refusal.
+func HasNothingToEmbed(text string) bool {
+	return hasNothingToEmbed(text)
 }

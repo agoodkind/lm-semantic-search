@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -30,7 +31,7 @@ const maxCollectionContinuationPrefixBytes = 1024
 // marks a value the wire left unset.
 type collectionScalarInput struct {
 	Column string
-	Value  model.ScalarValue
+	Value  collection.ScalarValue
 }
 
 // collectionRowInput is one client row before validation against the saved
@@ -117,7 +118,7 @@ func (manager *Manager) registeredCollection(collectionID string) (model.Codebas
 // savedCollectionDeclaration returns a document collection's saved
 // declaration. Conversation registration created every record without one, and
 // such a record uses the conversation declaration.
-func savedCollectionDeclaration(codebase model.Codebase) model.CollectionDeclaration {
+func savedCollectionDeclaration(codebase model.Codebase) collection.Declaration {
 	if codebase.Declaration == nil {
 		return semantic.ConversationDeclaration()
 	}
@@ -170,8 +171,8 @@ func (manager *Manager) recordCollectionDeclarations() {
 // oversized row key or item id, an oversized continuation prefix, an
 // undeclared, duplicated, mistyped, oversized, or missing column value, and an
 // item id column value that differs from the row's item_id.
-func validateCollectionRows(declaration model.CollectionDeclaration, inputs []collectionRowInput) ([]collectionRow, error) {
-	columns := make(map[string]model.ScalarColumn, len(declaration.Scalars))
+func validateCollectionRows(declaration collection.Declaration, inputs []collectionRowInput) ([]collectionRow, error) {
+	columns := make(map[string]collection.ScalarColumn, len(declaration.Scalars))
 	for _, column := range declaration.Scalars {
 		columns[column.Name] = column
 	}
@@ -197,7 +198,7 @@ func validateCollectionRows(declaration model.CollectionDeclaration, inputs []co
 	return rows, nil
 }
 
-func validateCollectionRow(declaration model.CollectionDeclaration, columns map[string]model.ScalarColumn, input collectionRowInput) (collectionRow, error) {
+func validateCollectionRow(declaration collection.Declaration, columns map[string]collection.ScalarColumn, input collectionRowInput) (collectionRow, error) {
 	if strings.TrimSpace(input.RowKey) == "" {
 		return collectionRow{}, adapterr.NewMissingArgument("row_key")
 	}
@@ -215,7 +216,7 @@ func validateCollectionRow(declaration model.CollectionDeclaration, columns map[
 	if len(input.ContinuationPrefix) > maxCollectionContinuationPrefixBytes {
 		return collectionRow{}, adapterr.NewInvalidArgument(fmt.Sprintf("row %q continuation_prefix must be at most %d bytes", input.RowKey, maxCollectionContinuationPrefixBytes))
 	}
-	scalars := make(map[string]model.ScalarValue, len(columns))
+	scalars := make(map[string]collection.ScalarValue, len(columns))
 	for _, scalar := range input.Scalars {
 		if _, duplicate := scalars[scalar.Column]; duplicate {
 			return collectionRow{}, adapterr.NewInvalidColumnValue(scalar.Column, fmt.Sprintf("row %q sets column %q more than once", input.RowKey, scalar.Column))
@@ -228,7 +229,7 @@ func validateCollectionRow(declaration model.CollectionDeclaration, columns map[
 		}
 		scalars[scalar.Column] = scalar.Value
 	}
-	scalars[itemColumn.Name] = model.ScalarValue{Type: model.ScalarTypeString, Null: false, String: itemID, Bool: false, Int64: 0}
+	scalars[itemColumn.Name] = collection.ScalarValue{Type: collection.ScalarTypeString, Null: false, String: itemID, Bool: false, Int64: 0}
 	for _, column := range declaration.Scalars {
 		value, present := scalars[column.Name]
 		if !column.Nullable && (!present || value.Null) {
@@ -241,7 +242,7 @@ func validateCollectionRow(declaration model.CollectionDeclaration, columns map[
 // validateCollectionScalar checks one scalar value against the declared
 // columns. subject identifies the row or item that sets the value in an error
 // message, for example `row "doc-a/title"`.
-func validateCollectionScalar(subject string, columns map[string]model.ScalarColumn, scalar collectionScalarInput) error {
+func validateCollectionScalar(subject string, columns map[string]collection.ScalarColumn, scalar collectionScalarInput) error {
 	column, declared := columns[scalar.Column]
 	if !declared {
 		return adapterr.NewInvalidColumnValue(scalar.Column, fmt.Sprintf("%s sets undeclared column %q", subject, scalar.Column))
@@ -255,7 +256,7 @@ func validateCollectionScalar(subject string, columns map[string]model.ScalarCol
 	if scalar.Value.Type != column.Type {
 		return adapterr.NewInvalidColumnValue(column.Name, fmt.Sprintf("%s sets %s column %q to a %s value", subject, column.Type, column.Name, scalar.Value.Type))
 	}
-	if column.Type == model.ScalarTypeString && (len(scalar.Value.String) > int(column.MaxLength) || !utf8.ValidString(scalar.Value.String)) {
+	if column.Type == collection.ScalarTypeString && (len(scalar.Value.String) > int(column.MaxLength) || !utf8.ValidString(scalar.Value.String)) {
 		return adapterr.NewInvalidColumnValue(column.Name, fmt.Sprintf("%s column %q must be valid UTF-8 of at most %d bytes", subject, column.Name, column.MaxLength))
 	}
 	return nil

@@ -161,7 +161,7 @@ func (service *Service) inspectMmapPolicy(
 	ctx context.Context,
 	collectionName string,
 ) (mmapInspection, error) {
-	collection, err := service.milvus.DescribeCollection(
+	described, err := service.milvus.DescribeCollection(
 		ctx,
 		milvusclient.NewDescribeCollectionOption(collectionName),
 	)
@@ -172,15 +172,15 @@ func (service *Service) inspectMmapPolicy(
 			"describe collection for mmap "+collectionName,
 		)
 	}
-	if collection.Schema == nil {
+	if described.Schema == nil {
 		return mmapInspection{}, fmt.Errorf(
 			"describe collection for mmap %s: missing schema",
 			collectionName,
 		)
 	}
 
-	missingTargets := make([]mmapTarget, 0, len(collection.Schema.Fields))
-	for _, field := range collection.Schema.Fields {
+	missingTargets := make([]mmapTarget, 0, len(described.Schema.Fields))
+	for _, field := range described.Schema.Fields {
 		if !mmapFieldSupported(field) {
 			continue
 		}

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	lmcollection "goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -57,7 +58,7 @@ type row struct {
 	SplitPartRecorded bool `json:"splitPartRecorded"`
 	// Scalars stores the declared scalar values of a row in a generic document
 	// collection by column name. It is omitted for code and conversation rows.
-	Scalars map[string]model.ScalarValue `json:"scalars,omitempty"`
+	Scalars map[string]lmcollection.ScalarValue `json:"scalars,omitempty"`
 }
 
 // itemID returns the row's value of the item id column. A conversation row
@@ -69,7 +70,7 @@ func (stored row) itemID(itemColumn string) (string, bool) {
 		return "", false
 	}
 	if value, found := stored.Scalars[itemColumn]; found {
-		if value.Null || value.Type != model.ScalarTypeString {
+		if value.Null || value.Type != lmcollection.ScalarTypeString {
 			return "", false
 		}
 		return value.String, true

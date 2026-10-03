@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -22,7 +23,7 @@ type CollectionSearchRequest struct {
 	Query         string
 	Limit         int32
 	MinScore      float64
-	Filter        *semantic.CollectionFilter
+	Filter        *collection.Filter
 	GroupBy       string
 	PerGroupLimit int32
 }
@@ -75,7 +76,7 @@ func (manager *Manager) CollectionItemState(ctx context.Context, collectionID st
 // collectionDeclaration returns the saved declaration of a document
 // collection. A record written before declarations were saved was created by
 // conversation registration, and it uses the conversation declaration.
-func collectionDeclaration(codebase model.Codebase) model.CollectionDeclaration {
+func collectionDeclaration(codebase model.Codebase) collection.Declaration {
 	if codebase.Declaration == nil {
 		return semantic.ConversationDeclaration()
 	}
@@ -118,7 +119,7 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 		return nil, fmt.Errorf("acquire collection %s: %w", codebase.CollectionName, leaseErr)
 	}
 	defer lease.Release()
-	hits, err := manager.semantic.SearchCollection(ctx, semantic.CollectionSearch{
+	search := semantic.CollectionSearch{
 		CollectionName: codebase.CollectionName,
 		Query:          request.Query,
 		Limit:          limit,
@@ -127,7 +128,14 @@ func (manager *Manager) searchRegisteredCollection(ctx context.Context, collecti
 		GroupBy:        request.GroupBy,
 		PerGroupLimit:  request.PerGroupLimit,
 		Declaration:    declaration,
-	})
+	}
+	var hits []semantic.CollectionHit
+	var err error
+	if semantic.IsConversationDeclaration(declaration) {
+		hits, err = manager.semantic.SearchConversationCollection(ctx, search)
+	} else {
+		hits, err = manager.semantic.SearchCollection(ctx, search)
+	}
 	if err != nil {
 		manager.noteDependencyFailure(err)
 		slog.ErrorContext(ctx, "search collection failed", "collection_id", collectionID, "collection", codebase.CollectionName, "err", err)

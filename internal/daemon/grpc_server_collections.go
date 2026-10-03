@@ -3,9 +3,9 @@ package daemon
 import (
 	"context"
 
+	"goodkind.io/lm-semantic-search/collection"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
-	"goodkind.io/lm-semantic-search/internal/model"
 	render "goodkind.io/lm-semantic-search/internal/render"
 	"goodkind.io/lm-semantic-search/internal/view"
 )
@@ -23,7 +23,7 @@ func (server *GRPCServer) RegisterCollection(ctx context.Context, request *pb.Re
 	}
 	codebase, callErr := server.manager.RegisterCollection(ctx, CollectionRegistration{
 		CollectionID: request.GetCollectionId(),
-		Declaration: model.CollectionDeclaration{
+		Declaration: collection.Declaration{
 			ItemIDColumn: request.GetItemIdColumn(),
 			Scalars:      pbScalarColumns(request.GetScalars()),
 		},
@@ -31,7 +31,7 @@ func (server *GRPCServer) RegisterCollection(ctx context.Context, request *pb.Re
 	if callErr != nil {
 		return nil, adapterr.RespondGRPC(ctx, callErr)
 	}
-	savedDeclaration := model.CollectionDeclaration{ItemIDColumn: "", Scalars: nil}
+	savedDeclaration := collection.Declaration{ItemIDColumn: "", Scalars: nil}
 	if codebase.Declaration != nil {
 		savedDeclaration = *codebase.Declaration
 	}
@@ -68,10 +68,10 @@ func (server *GRPCServer) RegisterCollection(ctx context.Context, request *pb.Re
 
 // pbScalarColumns converts wire scalar declarations. An unspecified or unknown
 // wire type converts to an empty type, which declaration validation rejects.
-func pbScalarColumns(declarations []*pb.ScalarColumnDeclaration) []model.ScalarColumn {
-	columns := make([]model.ScalarColumn, 0, len(declarations))
+func pbScalarColumns(declarations []*pb.ScalarColumnDeclaration) []collection.ScalarColumn {
+	columns := make([]collection.ScalarColumn, 0, len(declarations))
 	for _, declaration := range declarations {
-		columns = append(columns, model.ScalarColumn{
+		columns = append(columns, collection.ScalarColumn{
 			Name:      declaration.GetColumn(),
 			Type:      scalarTypeFromPB(declaration.GetType()),
 			Nullable:  declaration.GetNullable(),
@@ -81,14 +81,14 @@ func pbScalarColumns(declarations []*pb.ScalarColumnDeclaration) []model.ScalarC
 	return columns
 }
 
-func scalarTypeFromPB(scalarType pb.ScalarColumnType) model.ScalarType {
+func scalarTypeFromPB(scalarType pb.ScalarColumnType) collection.ScalarType {
 	switch scalarType {
 	case pb.ScalarColumnType_SCALAR_COLUMN_TYPE_STRING:
-		return model.ScalarTypeString
+		return collection.ScalarTypeString
 	case pb.ScalarColumnType_SCALAR_COLUMN_TYPE_BOOL:
-		return model.ScalarTypeBool
+		return collection.ScalarTypeBool
 	case pb.ScalarColumnType_SCALAR_COLUMN_TYPE_INT64:
-		return model.ScalarTypeInt64
+		return collection.ScalarTypeInt64
 	case pb.ScalarColumnType_SCALAR_COLUMN_TYPE_UNSPECIFIED:
 		return ""
 	default:
@@ -96,7 +96,7 @@ func scalarTypeFromPB(scalarType pb.ScalarColumnType) model.ScalarType {
 	}
 }
 
-func scalarColumnsToPB(columns []model.ScalarColumn) []*pb.ScalarColumnDeclaration {
+func scalarColumnsToPB(columns []collection.ScalarColumn) []*pb.ScalarColumnDeclaration {
 	declarations := make([]*pb.ScalarColumnDeclaration, 0, len(columns))
 	for _, column := range columns {
 		declarations = append(declarations, &pb.ScalarColumnDeclaration{
@@ -109,13 +109,13 @@ func scalarColumnsToPB(columns []model.ScalarColumn) []*pb.ScalarColumnDeclarati
 	return declarations
 }
 
-func scalarTypeToPB(scalarType model.ScalarType) pb.ScalarColumnType {
+func scalarTypeToPB(scalarType collection.ScalarType) pb.ScalarColumnType {
 	switch scalarType {
-	case model.ScalarTypeString:
+	case collection.ScalarTypeString:
 		return pb.ScalarColumnType_SCALAR_COLUMN_TYPE_STRING
-	case model.ScalarTypeBool:
+	case collection.ScalarTypeBool:
 		return pb.ScalarColumnType_SCALAR_COLUMN_TYPE_BOOL
-	case model.ScalarTypeInt64:
+	case collection.ScalarTypeInt64:
 		return pb.ScalarColumnType_SCALAR_COLUMN_TYPE_INT64
 	default:
 		return pb.ScalarColumnType_SCALAR_COLUMN_TYPE_UNSPECIFIED

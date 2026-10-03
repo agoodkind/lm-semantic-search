@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -188,13 +189,13 @@ func (h *harness) registerConversationDeclaration() (*pb.RegisterCollectionRespo
 	})
 }
 
-func liveScalarType(scalarType model.ScalarType) pb.ScalarColumnType {
+func liveScalarType(scalarType collection.ScalarType) pb.ScalarColumnType {
 	switch scalarType {
-	case model.ScalarTypeString:
+	case collection.ScalarTypeString:
 		return pb.ScalarColumnType_SCALAR_COLUMN_TYPE_STRING
-	case model.ScalarTypeBool:
+	case collection.ScalarTypeBool:
 		return pb.ScalarColumnType_SCALAR_COLUMN_TYPE_BOOL
-	case model.ScalarTypeInt64:
+	case collection.ScalarTypeInt64:
 		return pb.ScalarColumnType_SCALAR_COLUMN_TYPE_INT64
 	default:
 		return pb.ScalarColumnType_SCALAR_COLUMN_TYPE_UNSPECIFIED

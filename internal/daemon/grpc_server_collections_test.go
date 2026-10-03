@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/lm-semantic-search/collection"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
@@ -270,7 +271,7 @@ func removeRegistryDeclarations(t *testing.T, registryPath string) {
 
 // savedRegistryDeclaration reads the declaration saved on collectionID's
 // record from the registry file.
-func savedRegistryDeclaration(t *testing.T, registryPath string, collectionID string) *model.CollectionDeclaration {
+func savedRegistryDeclaration(t *testing.T, registryPath string, collectionID string) *collection.Declaration {
 	t.Helper()
 	var registry model.RegistryFile
 	if err := json.Unmarshal(readFileBytes(t, registryPath), &registry); err != nil {

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"goodkind.io/lm-semantic-search/internal/model"
+	lmcollection "goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
@@ -23,12 +23,22 @@ const (
 	truthUnknown
 )
 
+// SearchConversationCollection runs the typed search of a local collection with
+// the conversation declaration. A local row stores the conversation fields, so
+// the search needs no legacy group resolution.
+func (store *Store) SearchConversationCollection(
+	ctx context.Context,
+	search semantic.CollectionSearch,
+) ([]semantic.CollectionHit, error) {
+	return store.SearchCollection(ctx, search)
+}
+
 // SearchCollection runs a typed search of a local collection. It ranks a
 // fixed candidate set that never depends on the limit, the group cap, or the
 // score floor, at the depth the Milvus collection search ranks. When at most
-// semantic.CollectionRankingDepth rows match the filter tree, the candidates
+// lmcollection.RankingDepth rows match the filter tree, the candidates
 // are every matching row, scored exactly. Otherwise the candidates are the
-// semantic.CollectionRankingDepth nearest rows from the HNSW index. It sorts
+// lmcollection.RankingDepth nearest rows from the HNSW index. It sorts
 // the candidates with sortScoredRows and walks them once to keep the rows
 // that match the filter tree and score at or above MinScore, at most
 // PerGroupLimit per GroupBy value, up to Limit rows. A smaller limit therefore
@@ -62,7 +72,7 @@ func (store *Store) SearchCollection(
 	matchesFilter := func(candidate row) bool {
 		return search.Filter == nil || evaluateFilter(*search.Filter, candidate, declared) == truthTrue
 	}
-	candidates, err := stored.rankCandidates(ctx, query, matchesFilter, semantic.CollectionRankingDepth)
+	candidates, err := stored.rankCandidates(ctx, query, matchesFilter, lmcollection.RankingDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +105,7 @@ func (store *Store) SearchCollection(
 	)
 	hits := make([]semantic.CollectionHit, 0, len(scored))
 	for _, candidate := range scored {
-		cells := make([]semantic.ScalarCell, 0, len(declared))
+		cells := make([]lmcollection.ScalarCell, 0, len(declared))
 		for _, column := range declared {
 			cells = append(cells, rowScalarCell(candidate.stored, column.Name, declared))
 		}
@@ -195,19 +205,19 @@ func (stored *collection) nearestCandidatesLocked(query []float32, depth int) ([
 // conversation id prefix and role is lowercased, as the Milvus insert writes
 // them. A column the declaration omits, a column the row format lacks, and a
 // column declared with a different type are absent.
-func rowScalarCell(stored row, columnName string, declared []model.ScalarColumn) semantic.ScalarCell {
+func rowScalarCell(stored row, columnName string, declared []lmcollection.ScalarColumn) lmcollection.ScalarCell {
 	declaredType, found := declaredColumnType(declared, columnName)
 	if !found {
-		return semantic.AbsentCell(columnName)
+		return lmcollection.AbsentCell(columnName)
 	}
 	value, stores := conversationRowValue(stored, columnName)
 	if !stores || value.Type != declaredType {
-		return semantic.AbsentCell(columnName)
+		return lmcollection.AbsentCell(columnName)
 	}
-	return semantic.ValueCell(columnName, value)
+	return lmcollection.ValueCell(columnName, value)
 }
 
-func declaredColumnType(declared []model.ScalarColumn, columnName string) (model.ScalarType, bool) {
+func declaredColumnType(declared []lmcollection.ScalarColumn, columnName string) (lmcollection.ScalarType, bool) {
 	for _, column := range declared {
 		if column.Name == columnName {
 			return column.Type, true
@@ -232,28 +242,28 @@ const (
 	rowColumnLoadRules            conversationRowColumn = "loadRules"
 )
 
-func conversationRowValue(stored row, columnName string) (semantic.ScalarValue, bool) {
+func conversationRowValue(stored row, columnName string) (lmcollection.ScalarValue, bool) {
 	switch conversationRowColumn(columnName) {
 	case rowColumnConversationID:
-		return semantic.StringScalar(stored.ConversationID), true
+		return lmcollection.StringScalar(stored.ConversationID), true
 	case rowColumnParentConversationID:
-		return semantic.StringScalar(stored.ParentConversationID), true
+		return lmcollection.StringScalar(stored.ParentConversationID), true
 	case rowColumnRole:
-		return semantic.StringScalar(strings.ToLower(stored.Role)), true
+		return lmcollection.StringScalar(strings.ToLower(stored.Role)), true
 	case rowColumnProvider:
-		return semantic.StringScalar(conversationProvider(stored.ConversationID)), true
+		return lmcollection.StringScalar(conversationProvider(stored.ConversationID)), true
 	case rowColumnWorkspaceRoot:
-		return semantic.StringScalar(stored.WorkspaceRoot), true
+		return lmcollection.StringScalar(stored.WorkspaceRoot), true
 	case rowColumnArchived:
-		return semantic.BoolScalar(stored.Archived), true
+		return lmcollection.BoolScalar(stored.Archived), true
 	case rowColumnTimestampUnix:
-		return semantic.Int64Scalar(stored.TimestampUnix), true
+		return lmcollection.Int64Scalar(stored.TimestampUnix), true
 	case rowColumnMessageIndex:
-		return semantic.Int64Scalar(int64(stored.MessageIndex)), true
+		return lmcollection.Int64Scalar(int64(stored.MessageIndex)), true
 	case rowColumnLoadRules:
-		return semantic.StringScalar(stored.LoadRules), true
+		return lmcollection.StringScalar(stored.LoadRules), true
 	default:
-		return semantic.ScalarValue{Type: "", String: "", Bool: false, Int64: 0}, false
+		return lmcollection.ScalarValue{Type: "", String: "", Bool: false, Int64: 0}, false
 	}
 }
 
@@ -261,9 +271,9 @@ func conversationRowValue(stored row, columnName string) (semantic.ScalarValue, 
 // logic. A not node inverts true and false and keeps unknown. An all node is
 // false when any child is false, else unknown when any child is unknown. An any
 // node is true when any child is true, else unknown when any child is unknown.
-func evaluateFilter(filter semantic.CollectionFilter, stored row, declared []model.ScalarColumn) filterTruth {
+func evaluateFilter(filter lmcollection.Filter, stored row, declared []lmcollection.ScalarColumn) filterTruth {
 	switch filter.Kind {
-	case semantic.CollectionFilterAll:
+	case lmcollection.FilterAll:
 		result := truthTrue
 		for _, child := range filter.Children {
 			switch evaluateFilter(child, stored, declared) {
@@ -275,7 +285,7 @@ func evaluateFilter(filter semantic.CollectionFilter, stored row, declared []mod
 			}
 		}
 		return result
-	case semantic.CollectionFilterAny:
+	case lmcollection.FilterAny:
 		result := truthFalse
 		for _, child := range filter.Children {
 			switch evaluateFilter(child, stored, declared) {
@@ -287,7 +297,7 @@ func evaluateFilter(filter semantic.CollectionFilter, stored row, declared []mod
 			}
 		}
 		return result
-	case semantic.CollectionFilterNot:
+	case lmcollection.FilterNot:
 		if len(filter.Children) != 1 {
 			return truthFalse
 		}
@@ -301,13 +311,13 @@ func evaluateFilter(filter semantic.CollectionFilter, stored row, declared []mod
 		default:
 			return truthUnknown
 		}
-	case semantic.CollectionFilterIsNull:
-		return truthOf(rowScalarCell(stored, filter.Column, declared).State != semantic.ScalarCellValue)
-	case semantic.CollectionFilterIsPresent:
-		return truthOf(rowScalarCell(stored, filter.Column, declared).State == semantic.ScalarCellValue)
-	case semantic.CollectionFilterEquals, semantic.CollectionFilterIn, semantic.CollectionFilterRange:
+	case lmcollection.FilterIsNull:
+		return truthOf(rowScalarCell(stored, filter.Column, declared).State != lmcollection.ScalarCellValue)
+	case lmcollection.FilterIsPresent:
+		return truthOf(rowScalarCell(stored, filter.Column, declared).State == lmcollection.ScalarCellValue)
+	case lmcollection.FilterEquals, lmcollection.FilterIn, lmcollection.FilterRange:
 		cell := rowScalarCell(stored, filter.Column, declared)
-		if cell.State != semantic.ScalarCellValue {
+		if cell.State != lmcollection.ScalarCellValue {
 			return truthUnknown
 		}
 		return truthOf(comparisonMatches(filter, cell.Value))
@@ -316,8 +326,8 @@ func evaluateFilter(filter semantic.CollectionFilter, stored row, declared []mod
 	}
 }
 
-func comparisonMatches(filter semantic.CollectionFilter, value semantic.ScalarValue) bool {
-	if filter.Kind == semantic.CollectionFilterRange {
+func comparisonMatches(filter lmcollection.Filter, value lmcollection.ScalarValue) bool {
+	if filter.Kind == lmcollection.FilterRange {
 		if filter.Lower != nil && value.Int64 < *filter.Lower {
 			return false
 		}

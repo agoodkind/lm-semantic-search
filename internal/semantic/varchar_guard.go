@@ -4,26 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
-	"unicode/utf8"
 
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
-
-// sanitizeUTF8 returns a copy of value with invalid UTF-8 byte sequences
-// replaced by the Unicode replacement character. Milvus rejects VarChar
-// payloads with invalid UTF-8 at the gRPC marshal boundary, so any chunk
-// content that survives the file-level skip but still slices through a
-// multi-byte codepoint (for example from a tree-sitter byte-offset
-// boundary) gets repaired here. The second return value reports whether
-// the input needed repair so callers can log the event.
-func sanitizeUTF8(value string) (string, bool) {
-	if utf8.ValidString(value) {
-		return value, false
-	}
-	return strings.ToValidUTF8(value, "�"), true
-}
 
 // milvusVarcharMaxBytes mirrors the schema's WithMaxLength(65535) for VarChar
 // fields. Chunks longer than this fail the Milvus insert with "length of

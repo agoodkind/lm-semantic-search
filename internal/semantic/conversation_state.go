@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"google.golang.org/grpc/peer"
@@ -171,7 +173,7 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 			// only stored rows are derived would otherwise assemble with an empty
 			// role, and the delta comparison rejects a message whose stored role
 			// differs from the delivered one, so it would never match.
-			markStoredMessageDerivedWithRole(assemblies, safeInt32FromInt64(messageIndex), role)
+			markStoredMessageDerivedWithRole(assemblies, milvusstore.SafeInt32(messageIndex), role)
 			continue
 		}
 		partIndex, partErr := conversationMessagePartIndex(relativePath, conversationPrefix)
@@ -179,16 +181,16 @@ func appendConversationMessageStateRows(resultSet milvusclient.ResultSet, conver
 			slog.Error("read conversation state part index failed", "index", rowIndex, "err", partErr)
 			return legacyRows, fmt.Errorf("read conversation part index at %d: %w", rowIndex, partErr)
 		}
-		splitPart, splitPartRecorded, splitPartErr := splitPartAt(
+		splitPart, splitPartRecorded, splitPartErr := milvusstore.SplitPartAt(
 			splitPartColumn,
 			rowIndex,
 		)
 		if splitPartErr != nil {
-			return legacyRows, splitPartErr
+			return legacyRows, fmt.Errorf("read conversation state split part at %d: %w", rowIndex, splitPartErr)
 		}
 		appendStoredMessagePart(
 			assemblies,
-			safeInt32FromInt64(messageIndex),
+			milvusstore.SafeInt32(messageIndex),
 			role,
 			partIndex,
 			splitPart,
@@ -205,7 +207,7 @@ func conversationContentVectorAt(contentColumn column.Column, vectorColumn colum
 		slog.Error("read conversation state content column failed", "index", rowIndex, "err", contentErr)
 		return "", nil, fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
 	}
-	vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+	vector, vectorErr := milvusstore.VectorAt(vectorColumn, rowIndex)
 	if vectorErr != nil {
 		slog.Error("read conversation state vector column failed", "index", rowIndex, "err", vectorErr)
 		return "", nil, fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)

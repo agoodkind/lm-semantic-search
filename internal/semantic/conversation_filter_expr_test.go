@@ -4,14 +4,14 @@ import (
 	"reflect"
 	"testing"
 
-	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/collection"
 )
 
 // conversationCompiled compiles the conversation filter through the
 // conversation adapter and the generic expression compiler.
-func conversationCompiled(t *testing.T, filter ConversationFilter) compiledFilter {
+func conversationCompiled(t *testing.T, filter ConversationFilter) collection.CompiledFilter {
 	t.Helper()
-	compiled, err := compileCollectionFilterExpr(filter.CollectionFilter())
+	compiled, err := collection.Compile(filter.CollectionFilter())
 	if err != nil {
 		t.Fatalf("compile conversation filter: %v", err)
 	}
@@ -23,8 +23,8 @@ func conversationExpr(t *testing.T, filter ConversationFilter) string {
 	return conversationCompiled(t, filter).Expression
 }
 
-func stringParam(name string, values ...string) filterTemplateParam {
-	return filterTemplateParam{Name: name, Type: model.ScalarTypeString, Strings: values, Bools: nil, Int64s: nil}
+func stringParam(name string, values ...string) collection.TemplateParam {
+	return collection.TemplateParam{Name: name, Type: collection.ScalarTypeString, Strings: values, Bools: nil, Int64s: nil}
 }
 
 func TestConversationFilterCompilesExpr(t *testing.T) {
@@ -47,7 +47,7 @@ func TestConversationFilterCompilesExpr(t *testing.T) {
 	if got.Expression != want {
 		t.Fatalf("expression = %q, want %q", got.Expression, want)
 	}
-	wantParams := []filterTemplateParam{
+	wantParams := []collection.TemplateParam{
 		stringParam("p0", "claude", "codex"),
 		stringParam("p1", "/work/alpha"),
 		stringParam("p2", "assistant", "user"),
@@ -72,7 +72,7 @@ func TestConversationFilterCompilesExprEscapesStrings(t *testing.T) {
 	if got.Expression != want {
 		t.Fatalf("expression = %q, want %q", got.Expression, want)
 	}
-	wantParams := []filterTemplateParam{stringParam("p0", `cla"ude`), stringParam("p1", `thread\one`)}
+	wantParams := []collection.TemplateParam{stringParam("p0", `cla"ude`), stringParam("p1", `thread\one`)}
 	if !reflect.DeepEqual(got.Params, wantParams) {
 		t.Fatalf("params = %#v, want %#v (template values are sent unescaped)", got.Params, wantParams)
 	}

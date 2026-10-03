@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"goodkind.io/lm-semantic-search/internal/model"
+	lmcollection "goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
@@ -13,7 +13,7 @@ import (
 // collection. A generic declaration replaces the conversation declaration that
 // DescribeScalarColumns reports for the collection, and the conversation
 // declaration removes a recorded generic one.
-func (store *Store) RecordCollectionDeclaration(collectionName string, declaration model.CollectionDeclaration) {
+func (store *Store) RecordCollectionDeclaration(collectionName string, declaration lmcollection.Declaration) {
 	if semantic.IsConversationDeclaration(declaration) {
 		store.declaredScalars.Delete(collectionName)
 		return
@@ -21,12 +21,12 @@ func (store *Store) RecordCollectionDeclaration(collectionName string, declarati
 	store.declaredScalars.Store(collectionName, slices.Clone(declaration.Scalars))
 }
 
-func (store *Store) recordedScalars(collectionName string) ([]model.ScalarColumn, bool) {
+func (store *Store) recordedScalars(collectionName string) ([]lmcollection.ScalarColumn, bool) {
 	loaded, found := store.declaredScalars.Load(collectionName)
 	if !found {
 		return nil, false
 	}
-	columns, isColumns := loaded.([]model.ScalarColumn)
+	columns, isColumns := loaded.([]lmcollection.ScalarColumn)
 	if !isColumns {
 		return nil, false
 	}

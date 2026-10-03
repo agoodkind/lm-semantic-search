@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/collection"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -399,19 +400,19 @@ func TestBackfillCollectionScalarsFillsOnlyMissingValues(t *testing.T) {
 	requireBackfillCounts(t, "backfill", run.GetChanged(), run.GetOrphan(), 2, 1)
 
 	after := daemon.localRows(registered.GetCollectionName())
-	wantScalars := map[string]map[string]model.ScalarValue{
+	wantScalars := map[string]map[string]collection.ScalarValue{
 		"a/0": {
-			"docId":  {Type: model.ScalarTypeString, String: "doc-a"},
-			"title":  {Type: model.ScalarTypeString, String: "title from backfill a"},
-			"pinned": {Type: model.ScalarTypeBool, Bool: false},
-			"rank":   {Type: model.ScalarTypeInt64, Int64: 1},
+			"docId":  {Type: collection.ScalarTypeString, String: "doc-a"},
+			"title":  {Type: collection.ScalarTypeString, String: "title from backfill a"},
+			"pinned": {Type: collection.ScalarTypeBool, Bool: false},
+			"rank":   {Type: collection.ScalarTypeInt64, Int64: 1},
 		},
 		"a/1": rowByPath(t, before, "a/1").Scalars,
 		"b/0": {
-			"docId":  {Type: model.ScalarTypeString, String: "doc-b"},
-			"title":  {Type: model.ScalarTypeString, String: "title from backfill b"},
-			"pinned": {Type: model.ScalarTypeBool, Bool: false},
-			"rank":   {Type: model.ScalarTypeInt64, Int64: 3},
+			"docId":  {Type: collection.ScalarTypeString, String: "doc-b"},
+			"title":  {Type: collection.ScalarTypeString, String: "title from backfill b"},
+			"pinned": {Type: collection.ScalarTypeBool, Bool: false},
+			"rank":   {Type: collection.ScalarTypeInt64, Int64: 3},
 		},
 		"c/0": rowByPath(t, before, "c/0").Scalars,
 	}

@@ -1,4 +1,4 @@
-package embedding
+package onnx
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/daulet/tokenizers"
+	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 )
 
@@ -26,7 +27,7 @@ import (
 const onnxMaximumInputBytesPerToken = 64
 
 // onnxInputRejection names why an input must not be embedded. Its values are the
-// reason codes carried on SkippedInput, so one rejection reads the same whether
+// reason codes carried on embedding.SkippedInput, so one rejection reads the same whether
 // the in-process tokenizer or a hosted endpoint refused the input.
 type onnxInputRejection string
 
@@ -119,7 +120,7 @@ func (tokenizer *genericTokenizer) maximumInputBytes() int {
 // caller can reject an input before taking the runtime lock and without
 // allocating an encoding it would discard.
 func (tokenizer *genericTokenizer) classifyInput(text string) onnxInputRejection {
-	if hasNothingToEmbed(text) {
+	if embedding.HasNothingToEmbed(text) {
 		return onnxInputEmpty
 	}
 	if strings.ContainsRune(text, 0) {

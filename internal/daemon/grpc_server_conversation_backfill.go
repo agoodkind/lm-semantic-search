@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"goodkind.io/lm-semantic-search/collection"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -26,7 +27,7 @@ func (server *GRPCServer) BackfillConversationScalars(stream pb.SemanticSearchDa
 	dryRun := false
 	client := model.ClientInfo{Name: "", PID: 0}
 	headerSeen := false
-	values := make(map[string]map[string]model.ScalarValue)
+	values := make(map[string]map[string]collection.ScalarValue)
 	for {
 		chunk, recvErr := stream.Recv()
 		if errors.Is(recvErr, io.EOF) {
@@ -90,7 +91,7 @@ func (server *GRPCServer) BackfillConversationScalars(stream pb.SemanticSearchDa
 // addConversationScalarEntries records each entry's workspaceRoot and archived
 // values under its trimmed conversation id. An entry without a conversation id
 // is skipped, and a later entry for the same id replaces an earlier one.
-func addConversationScalarEntries(values map[string]map[string]model.ScalarValue, entries []*pb.BackfillConversationScalarEntry) {
+func addConversationScalarEntries(values map[string]map[string]collection.ScalarValue, entries []*pb.BackfillConversationScalarEntry) {
 	for _, entry := range entries {
 		if entry == nil {
 			continue
@@ -99,9 +100,9 @@ func addConversationScalarEntries(values map[string]map[string]model.ScalarValue
 		if conversationID == "" {
 			continue
 		}
-		values[conversationID] = map[string]model.ScalarValue{
-			semantic.ConversationWorkspaceRootColumn: {Type: model.ScalarTypeString, Null: false, String: entry.GetWorkspaceRoot(), Bool: false, Int64: 0},
-			semantic.ConversationArchivedColumn:      {Type: model.ScalarTypeBool, Null: false, String: "", Bool: entry.GetArchived(), Int64: 0},
+		values[conversationID] = map[string]collection.ScalarValue{
+			semantic.ConversationWorkspaceRootColumn: {Type: collection.ScalarTypeString, Null: false, String: entry.GetWorkspaceRoot(), Bool: false, Int64: 0},
+			semantic.ConversationArchivedColumn:      {Type: collection.ScalarTypeBool, Null: false, String: "", Bool: entry.GetArchived(), Int64: 0},
 		}
 	}
 }

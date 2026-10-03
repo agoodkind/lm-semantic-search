@@ -3,6 +3,8 @@ package semantic
 import (
 	"strings"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -147,11 +149,11 @@ func estimatedInsertRowBytes(
 	columnSet StoreColumnSet,
 	embeddingModel string,
 ) int {
-	content, _ := sanitizeUTF8(chunk.Content)
-	relativePath, _ := sanitizeUTF8(chunk.RelativePath)
-	fileExtension, _ := sanitizeUTF8(chunk.FileExtension)
-	metadataValue, _ := sanitizeUTF8(encodeMetadata(chunk))
-	normalizedModel, _ := sanitizeUTF8(embeddingModel)
+	content, _ := milvusstore.SanitizeUTF8(chunk.Content)
+	relativePath, _ := milvusstore.SanitizeUTF8(chunk.RelativePath)
+	fileExtension, _ := milvusstore.SanitizeUTF8(chunk.FileExtension)
+	metadataValue, _ := milvusstore.SanitizeUTF8(encodeMetadata(chunk))
+	normalizedModel, _ := milvusstore.SanitizeUTF8(embeddingModel)
 
 	rowBytes := len(generateID(chunk, 0)) +
 		len(content) +
@@ -174,6 +176,6 @@ func estimatedInsertRowBytes(
 			int64Bytes +
 			int64Bytes
 	}
-	rowBytes += declaredScalarRowBytes(columnSet.DeclaredScalars(), chunk)
+	rowBytes += milvusstore.ScalarRowBytes(columnSet.DeclaredScalars(), chunk.Scalars)
 	return rowBytes
 }
