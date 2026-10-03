@@ -358,7 +358,7 @@ func (service *Service) CollectionName(codebasePath string) string {
 // conversation document collection.
 func (service *Service) ConversationCollectionName(collectionID string) string {
 	_ = service
-	return "conv_chunks_" + tshash.PathPrefix(strings.TrimSpace(collectionID))
+	return collection.DocumentName(collectionID)
 }
 
 func (service *Service) renameCollection(ctx context.Context, oldName string, newName string) error {
