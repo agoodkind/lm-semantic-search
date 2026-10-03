@@ -82,7 +82,7 @@ func TestCodebaseStatusPrintsLiteralValuesWhileSyncRebuildsDroppedCollection(t *
 	requirePublicCompleted(t, initial, "initial codebase index")
 	snapshot := captureWatcherIndexSnapshot(t, harness, root)
 
-	dropContext, cancelDrop := context.WithTimeout(harness.milvusContext(), 15*time.Second)
+	dropContext, cancelDrop := context.WithTimeout(harness.milvusContext, 15*time.Second)
 	dropErr := harness.milvus.DropCollection(dropContext, milvusclient.NewDropCollectionOption(snapshot.collectionName))
 	cancelDrop()
 	if dropErr != nil {

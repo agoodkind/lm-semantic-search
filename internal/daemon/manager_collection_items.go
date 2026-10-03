@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
 // maxCollectionRowKeyBytes bounds a client row key. The stored relativePath
@@ -53,7 +55,11 @@ type collectionItemsRequest struct {
 	Force        bool
 }
 
-// SyncCollectionManifest returns item IDs that differ from the registered collection manifest.
+// SyncCollectionManifest diffs a registered document collection's item
+// manifest against its stored checkpoint and returns the item ids the engine
+// needs. It uses the same checkpoint, per-ingest cap, and rotation cursor as
+// SyncConversationManifest. An unregistered collection id fails. The generic
+// RPCs never register a collection implicitly.
 func (manager *Manager) SyncCollectionManifest(ctx context.Context, collectionID string, manifest map[string]string) ([]string, error) {
 	codebase, err := manager.registeredCollection(collectionID)
 	if err != nil {
@@ -83,11 +89,12 @@ func (manager *Manager) upsertCollectionItems(ctx context.Context, request colle
 		manifest = manifestFromRows(rows)
 	}
 	return manager.queueCollectionUpsert(ctx, codebase, request.Client, collectionUpsert{
-		Manifest: manifest,
-		Rows:     rows,
-		Absence:  request.Absence,
-		Backfill: request.Backfill,
-		Force:    request.Force,
+		Manifest:  manifest,
+		Documents: nil,
+		Rows:      rows,
+		Absence:   request.Absence,
+		Backfill:  request.Backfill,
+		Force:     request.Force,
 	})
 }
 
@@ -99,7 +106,7 @@ func (manager *Manager) registeredCollection(collectionID string) (model.Codebas
 		return model.Codebase{}, adapterr.NewMissingArgument("collection_id")
 	}
 	manager.mu.Lock()
-	codebase, found := manager.findDocumentCollectionLocked(trimmedCollectionID)
+	codebase, found := manager.findConversationCollectionLocked(trimmedCollectionID)
 	manager.mu.Unlock()
 	if !found {
 		return model.Codebase{}, adapterr.NewCollectionNotRegistered(trimmedCollectionID)
@@ -107,27 +114,38 @@ func (manager *Manager) registeredCollection(collectionID string) (model.Codebas
 	return codebase, nil
 }
 
+// savedCollectionDeclaration returns a document collection's saved
+// declaration. Conversation registration created every record without one, and
+// such a record uses the conversation declaration.
 func savedCollectionDeclaration(codebase model.Codebase) model.CollectionDeclaration {
 	if codebase.Declaration == nil {
-		return model.CollectionDeclaration{ItemIDColumn: "", Scalars: nil}
+		return semantic.ConversationDeclaration()
 	}
 	return cloneCollectionDeclaration(*codebase.Declaration)
 }
 
-func (manager *Manager) documentItemSource(codebaseID string, payload collectionJobPayload) collectionItemSource {
+// documentItemSource builds the ingest source of one document collection job
+// from the collection's saved declaration. The conversation declaration reads
+// stored rows through the conversation batch read and selects legacy rows by
+// path prefix. Every other declaration reads and selects rows by its declared
+// item id column.
+func (manager *Manager) documentItemSource(codebaseID string, payload conversationJobPayload) collectionItemSource {
 	manager.mu.Lock()
 	codebase := manager.codebases[codebaseID]
 	manager.mu.Unlock()
 	declaration := savedCollectionDeclaration(codebase)
 	var stored collectionStoredReader = declaredStoredReader{loader: manager.semantic, itemColumn: declaration.ItemIDColumn}
-
+	if semantic.IsConversationDeclaration(declaration) {
+		stored = conversationStoredReader{rowReader: manager.semantic}
+	}
 	return newDocumentItemSource(payload.CollectionName, declaration, stored, documentDelivery{
 		manifest:        payload.Manifest,
+		documents:       payload.Documents,
 		rows:            payload.Rows,
 		absence:         payload.Absence,
 		backfill:        payload.Backfill,
 		force:           payload.Force,
-		chunkByteBudget: manager.collectionChunkByteBudget,
+		chunkByteBudget: manager.conversationChunkByteBudget,
 	})
 }
 
@@ -157,6 +175,7 @@ func validateCollectionRows(declaration model.CollectionDeclaration, inputs []co
 	for _, column := range declaration.Scalars {
 		columns[column.Name] = column
 	}
+	conversation := semantic.IsConversationDeclaration(declaration)
 	rowKeys := make(map[string]struct{}, len(inputs))
 	rows := make([]collectionRow, 0, len(inputs))
 	for _, input := range inputs {
@@ -168,7 +187,11 @@ func validateCollectionRows(declaration model.CollectionDeclaration, inputs []co
 			return nil, adapterr.NewInvalidArgument(fmt.Sprintf("row_key %q appears more than once", row.RowKey))
 		}
 		rowKeys[row.RowKey] = struct{}{}
-
+		if conversation {
+			if err := validateConversationRowScalars(row); err != nil {
+				return nil, err
+			}
+		}
 		rows = append(rows, row)
 	}
 	return rows, nil
@@ -236,6 +259,62 @@ func validateCollectionScalar(subject string, columns map[string]model.ScalarCol
 		return adapterr.NewInvalidColumnValue(column.Name, fmt.Sprintf("%s column %q must be valid UTF-8 of at most %d bytes", subject, column.Name, column.MaxLength))
 	}
 	return nil
+}
+
+// validateConversationRowScalars checks a row of a collection with the
+// conversation declaration. The conversation stored-row read and the family
+// delta require the conversation row key layout: conv/<id>/<message>,
+// convtool/<id>/<message>/<tool>, or convthink/<id>/<message>, where <id> is
+// the row's item_id and <message> equals the messageIndex value. A
+// conversation collection stores the provider derived from the conversation id
+// and stores messageIndex as a 32-bit integer.
+func validateConversationRowScalars(row collectionRow) error {
+	provider, providerPresent := row.Scalars[semantic.ConversationProviderColumn]
+	storedProvider := semantic.ProviderFromConversationID(row.ItemID)
+	if providerPresent && !provider.Null && provider.String != storedProvider {
+		return adapterr.NewInvalidColumnValue(semantic.ConversationProviderColumn, fmt.Sprintf("row %q sets provider %q, and its item_id stores provider %q", row.RowKey, provider.String, storedProvider))
+	}
+	messageIndex := row.Scalars[semantic.ConversationMessageIndexColumn].Int64
+	if messageIndex < math.MinInt32 || messageIndex > math.MaxInt32 {
+		return adapterr.NewInvalidColumnValue(semantic.ConversationMessageIndexColumn, fmt.Sprintf("row %q sets messageIndex outside the 32-bit range", row.RowKey))
+	}
+	if !conversationRowKeyMatches(row.RowKey, row.ItemID, messageIndex) {
+		return adapterr.NewInvalidArgument(fmt.Sprintf(
+			"row_key %q must be conv/<item_id>/<messageIndex>, convtool/<item_id>/<messageIndex>/<tool>, or convthink/<item_id>/<messageIndex> in a collection with the conversation declaration",
+			row.RowKey,
+		))
+	}
+	return nil
+}
+
+// conversationRowKeyMatches reports whether rowKey is a message text, tool
+// call, or thinking path of conversationID at messageIndex.
+func conversationRowKeyMatches(rowKey string, conversationID string, messageIndex int64) bool {
+	families := []struct {
+		prefix   string
+		segments int
+	}{
+		{prefix: conversationRelativePathPrefix(conversationID), segments: 1},
+		{prefix: conversationToolRelativePathPrefix(conversationID), segments: 2},
+		{prefix: conversationThinkingRelativePathPrefix(conversationID), segments: 1},
+	}
+	for _, family := range families {
+		remainder, found := strings.CutPrefix(rowKey, family.prefix)
+		if !found {
+			continue
+		}
+		parts := strings.Split(remainder, "/")
+		if len(parts) != family.segments {
+			return false
+		}
+		for _, part := range parts {
+			if _, err := strconv.ParseUint(part, 10, 31); err != nil {
+				return false
+			}
+		}
+		return parts[0] == strconv.FormatInt(messageIndex, 10)
+	}
+	return false
 }
 
 // manifestFromRows fingerprints each delivered item from its rows: every row

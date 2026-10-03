@@ -1,6 +1,8 @@
 package semantic
 
 import (
+	"strings"
+
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -92,6 +94,11 @@ func embeddedTokenCount(chunk model.StoredChunk, reuse map[string][]float32) int
 	return estimatedTokenCount(chunk.Content)
 }
 
+// packChunksByEstimatedInsertBytes groups consecutive chunks for one store
+// insert. Every row is charged because reused vectors still cross the store
+// transport. The estimate includes every base column and the optional
+// conversation scalar columns, using the values insertBatch sends after its
+// string transformations.
 func packChunksByEstimatedInsertBytes(
 	chunks []model.StoredChunk,
 	vectorDimension int,
@@ -157,6 +164,16 @@ func estimatedInsertRowBytes(
 		len(metadataValue) +
 		vectorDimension*float32Bytes +
 		insertRowProtobufFramingAllowance
+	if columnSet.ConversationScalars() {
+		rowBytes += len(chunk.ConversationID) +
+			len(chunk.ParentConversationID) +
+			len(strings.ToLower(chunk.Role)) +
+			len(providerFromConversationID(chunk.ConversationID)) +
+			len(chunk.WorkspaceRoot) +
+			boolBytes +
+			int64Bytes +
+			int64Bytes
+	}
 	rowBytes += declaredScalarRowBytes(columnSet.DeclaredScalars(), chunk)
 	return rowBytes
 }

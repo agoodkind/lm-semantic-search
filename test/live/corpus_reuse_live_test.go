@@ -22,13 +22,12 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
-	"goodkind.io/lm-semantic-search/internal/daemon"
-	"goodkind.io/lm-semantic-search/internal/embedding/providers"
+	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
-func TestCollectionContentReusesVectorAcrossCorpus(t *testing.T) {
+func TestConversationContentReusesVectorAcrossCorpus(t *testing.T) {
 	gate := &embedGate{arrived: make(chan int), release: make(chan struct{})}
 	var mutex sync.Mutex
 	embedCalls := 0
@@ -59,26 +58,31 @@ func TestCollectionContentReusesVectorAcrossCorpus(t *testing.T) {
 
 	harness := newHarnessWithGate(t, gate)
 	secondCollectionID := "live-reuse-" + randomID()
-	secondCodebase, err := harness.manager.RegisterCollection(context.Background(), daemon.CollectionRegistration{CollectionID: secondCollectionID, Declaration: liveCollectionDeclaration()})
+	secondCodebase, err := harness.manager.RegisterConversationCollection(
+		context.Background(),
+		secondCollectionID,
+	)
 	if err != nil {
-		t.Fatalf("RegisterCollection for second corpus returned error: %v", err)
+		t.Fatalf("RegisterConversationCollection for second corpus returned error: %v", err)
 	}
 	harness.trackCollectionFamily(secondCodebase.CollectionName)
 	secondHarness := *harness
 	secondHarness.collectionID = secondCollectionID
 	secondHarness.collectionName = secondCodebase.CollectionName
 	secondHarness.codebaseID = secondCodebase.ID
-	sharedContent := "cross collection reuse sentinel"
-	uniqueContent := "cross collection unique control"
+	sharedContent := "cross conversation reuse sentinel"
+	uniqueContent := "cross conversation unique control"
 
 	first := harness.upsert(
-		map[string][]*pb.CollectionRow{
+		map[string][]*pb.ConversationDocument{
 			"reuse-first": {{
-				ItemId: "reuse-first",
-				Text:   sharedContent,
+				ConversationId: "reuse-first",
+				MessageIndex:   0,
+				Role:           "user",
+				Text:           sharedContent,
 			}},
 		},
-		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -88,19 +92,23 @@ func TestCollectionContentReusesVectorAcrossCorpus(t *testing.T) {
 	}
 
 	second := secondHarness.upsert(
-		map[string][]*pb.CollectionRow{
+		map[string][]*pb.ConversationDocument{
 			"reuse-second": {
 				{
-					ItemId: "reuse-second",
-					Text:   sharedContent,
+					ConversationId: "reuse-second",
+					MessageIndex:   0,
+					Role:           "user",
+					Text:           sharedContent,
 				},
 				{
-					ItemId: "reuse-second",
-					Text:   uniqueContent,
+					ConversationId: "reuse-second",
+					MessageIndex:   1,
+					Role:           "assistant",
+					Text:           uniqueContent,
 				},
 			},
 		},
-		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -165,7 +173,7 @@ func TestDuplicateLegacyCorpusReuseImmutabilitySmoke(t *testing.T) {
 	lookupConfig := harness.childConfig()
 	lookupConfig.OpenAIBaseURL = embedServer.URL
 	lookupConfig.EmbeddingDimension = vectorDimension
-	service, err := semantic.NewService(harness.milvusContext(), lookupConfig)
+	service, err := semantic.NewService(harness.milvusContext, lookupConfig)
 	if err != nil {
 		t.Fatalf("open 4096-dimension semantic service: %v", err)
 	}
@@ -335,13 +343,15 @@ func TestDuplicateLegacyCorpusReuseImmutabilitySmoke(t *testing.T) {
 func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	harness := newHarness(t)
 	seed := harness.upsert(
-		map[string][]*pb.CollectionRow{
+		map[string][]*pb.ConversationDocument{
 			"catalog-seed": {{
-				ItemId: "catalog-seed",
-				Text:   "current identity catalog seed",
+				ConversationId: "catalog-seed",
+				MessageIndex:   0,
+				Role:           "user",
+				Text:           "current identity catalog seed",
 			}},
 		},
-		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -356,7 +366,7 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 		t.Fatalf("legacy identity = hash:%t model:%t, want both absent", legacyBefore.contentHashKnown, legacyBefore.embeddingModelKnown)
 	}
 	searchConfig := harness.childConfig()
-	searchService, err := semantic.NewService(harness.milvusContext(), searchConfig)
+	searchService, err := semantic.NewService(harness.milvusContext, searchConfig)
 	if err != nil {
 		t.Fatalf("open search service: %v", err)
 	}
@@ -367,9 +377,9 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 		Limit:          10,
 		MinScore:       -1,
 		Filter:         nil,
-		GroupBy:        "itemId",
+		GroupBy:        "conversationId",
 		PerGroupLimit:  10,
-		Declaration:    liveCollectionDeclaration(),
+		Declaration:    semantic.ConversationDeclaration(),
 	})
 	if err != nil {
 		t.Fatalf("search collection containing untagged row: %v", err)
@@ -381,9 +391,12 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	}
 
 	secondCollectionID := "live-legacy-reuse-" + randomID()
-	secondCodebase, err := harness.manager.RegisterCollection(context.Background(), daemon.CollectionRegistration{CollectionID: secondCollectionID, Declaration: liveCollectionDeclaration()})
+	secondCodebase, err := harness.manager.RegisterConversationCollection(
+		context.Background(),
+		secondCollectionID,
+	)
 	if err != nil {
-		t.Fatalf("RegisterCollection for second corpus returned error: %v", err)
+		t.Fatalf("RegisterConversationCollection for second corpus returned error: %v", err)
 	}
 	harness.trackCollectionFamily(secondCodebase.CollectionName)
 	secondHarness := *harness
@@ -391,15 +404,17 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	secondHarness.collectionName = secondCodebase.CollectionName
 	secondHarness.codebaseID = secondCodebase.ID
 
-	secondDocuments := map[string][]*pb.CollectionRow{
+	secondDocuments := map[string][]*pb.ConversationDocument{
 		"legacy-second": {{
-			ItemId: "legacy-second",
-			Text:   legacyContent,
+			ConversationId: "legacy-second",
+			MessageIndex:   0,
+			Role:           "user",
+			Text:           legacyContent,
 		}},
 	}
 	second := secondHarness.upsert(
 		secondDocuments,
-		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -440,7 +455,7 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 	repeatBefore := snapshotsForContent(t, harness, secondHarness.collectionName, legacyContent)
 	repeat := secondHarness.upsert(
 		secondDocuments,
-		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -456,7 +471,7 @@ func TestUntaggedReuseAcrossCorpusPreservesSourceRow(t *testing.T) {
 
 	cfg := harness.childConfig()
 	cfg.EmbeddingModel = "known-unequal-model"
-	unequalService, err := semantic.NewService(harness.milvusContext(), cfg)
+	unequalService, err := semantic.NewService(harness.milvusContext, cfg)
 	if err != nil {
 		t.Fatalf("open unequal-model service: %v", err)
 	}
@@ -493,20 +508,22 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 	content := "two known model catalog sentinel"
 	emptyModelContent := "empty model catalog sentinel"
 	seed := harness.upsert(
-		map[string][]*pb.CollectionRow{
+		map[string][]*pb.ConversationDocument{
 			"model-a": {{
-				ItemId: "model-a",
-				Text:   content,
+				ConversationId: "model-a",
+				MessageIndex:   0,
+				Role:           "user",
+				Text:           content,
 			}},
 		},
-		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
 	requireCompleted(t, seed, "model A catalog seed")
 
 	cfgA := harness.childConfig()
-	serviceA, err := semantic.NewService(harness.milvusContext(), cfgA)
+	serviceA, err := semantic.NewService(harness.milvusContext, cfgA)
 	if err != nil {
 		t.Fatalf("open model A service: %v", err)
 	}
@@ -514,7 +531,7 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 
 	cfgB := cfgA
 	cfgB.EmbeddingModel = "known-model-b"
-	serviceB, err := semantic.NewService(harness.milvusContext(), cfgB)
+	serviceB, err := semantic.NewService(harness.milvusContext, cfgB)
 	if err != nil {
 		t.Fatalf("open model B service: %v", err)
 	}
@@ -562,7 +579,7 @@ func TestReuseCatalogStoresEachKnownEmbeddingModel(t *testing.T) {
 
 	cfgC := cfgA
 	cfgC.EmbeddingModel = "known-model-c"
-	serviceC, err := semantic.NewService(harness.milvusContext(), cfgC)
+	serviceC, err := semantic.NewService(harness.milvusContext, cfgC)
 	if err != nil {
 		t.Fatalf("open model C service: %v", err)
 	}
@@ -595,13 +612,15 @@ func TestCompleteCatalogHitSkipsCollectionFallback(t *testing.T) {
 	harness := newHarness(t)
 	content := "complete catalog hit sentinel"
 	seed := harness.upsert(
-		map[string][]*pb.CollectionRow{
+		map[string][]*pb.ConversationDocument{
 			"complete-hit": {{
-				ItemId: "complete-hit",
-				Text:   content,
+				ConversationId: "complete-hit",
+				MessageIndex:   0,
+				Role:           "user",
+				Text:           content,
 			}},
 		},
-		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
@@ -609,7 +628,7 @@ func TestCompleteCatalogHitSkipsCollectionFallback(t *testing.T) {
 
 	cfg := harness.childConfig()
 	cfg.RegistryPath = filepath.Join(t.TempDir(), "missing-registry.json")
-	service, err := semantic.NewService(harness.milvusContext(), cfg)
+	service, err := semantic.NewService(harness.milvusContext, cfg)
 	if err != nil {
 		t.Fatalf("open complete catalog hit service: %v", err)
 	}
@@ -644,12 +663,12 @@ func TestUnknownConfiguredDimensionScopesCatalogByReturnedVectorWidth(t *testing
 	targetConfig := initialConfig
 	targetConfig.OpenAIBaseURL = targetServer.URL
 
-	initialService, err := semantic.NewService(harness.milvusContext(), initialConfig)
+	initialService, err := semantic.NewService(harness.milvusContext, initialConfig)
 	if err != nil {
 		t.Fatalf("open initial dimension service: %v", err)
 	}
 	t.Cleanup(func() { _ = initialService.Close(context.Background()) })
-	targetService, err := semantic.NewService(harness.milvusContext(), targetConfig)
+	targetService, err := semantic.NewService(harness.milvusContext, targetConfig)
 	if err != nil {
 		t.Fatalf("open target dimension service: %v", err)
 	}
@@ -1360,7 +1379,7 @@ func TestCorpusReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load configured embedder: %v", err)
 	}
-	provider, err := providers.New(context.Background(), actualConfig)
+	provider, err := embedding.NewProvider(context.Background(), actualConfig)
 	if err != nil {
 		t.Fatalf("create configured embedder: %v", err)
 	}
@@ -1369,24 +1388,26 @@ func TestCorpusReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 	lookupConfig := harness.childConfig()
 	const sampleCount = 20
 	contents := make([]string, 0, sampleCount)
-	documents := make([]*pb.CollectionRow, 0, sampleCount)
+	documents := make([]*pb.ConversationDocument, 0, sampleCount)
 	for index := range sampleCount {
 		content := fmt.Sprintf("harmless corpus reuse performance control %02d", index)
 		contents = append(contents, content)
-		documents = append(documents, &pb.CollectionRow{
-			ItemId: "reuse-performance",
-			Text:   content,
+		documents = append(documents, &pb.ConversationDocument{
+			ConversationId: "reuse-performance",
+			MessageIndex:   int32(index),
+			Role:           "user",
+			Text:           content,
 		})
 	}
 	completed := harness.upsert(
-		map[string][]*pb.CollectionRow{"reuse-performance": documents},
-		pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN,
+		map[string][]*pb.ConversationDocument{"reuse-performance": documents},
+		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 		false,
 		false,
 	)
 	requireCompleted(t, completed, "reuse performance seed")
 
-	service, err := semantic.NewService(harness.milvusContext(), lookupConfig)
+	service, err := semantic.NewService(harness.milvusContext, lookupConfig)
 	if err != nil {
 		t.Fatalf("open semantic service for lookup measurement: %v", err)
 	}

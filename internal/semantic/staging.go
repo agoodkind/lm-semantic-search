@@ -582,7 +582,10 @@ func logEmptyContentRefused(ctx context.Context, collectionName string, refused 
 		"semantic.embed_inputs_refused_empty",
 		"collection", collectionName,
 		"refused_inputs", len(refused),
+		"conversation_id", first.ConversationID,
 		"relative_path", first.RelativePath,
+		"message_index", first.MessageIndex,
+		"role", first.Role,
 	)
 }
 

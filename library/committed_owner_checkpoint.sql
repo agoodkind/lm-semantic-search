@@ -1,1 +1,0 @@
-PRAGMA wal_checkpoint(TRUNCATE)

@@ -5,6 +5,8 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"slices"
@@ -19,23 +21,25 @@ import (
 )
 
 type productionCensus struct {
-	Collections           int            `json:"collections"`
-	Loaded                int            `json:"loaded"`
-	Cold                  int            `json:"cold"`
-	OtherLoadState        int            `json:"other_load_state"`
-	Staging               int            `json:"staging"`
-	Recovery              int            `json:"recovery"`
-	MmapMissing           int            `json:"mmap_missing"`
-	ProductionLogicalRows int64          `json:"production_logical_rows"`
-	ProductionStatsRows   string         `json:"production_stats_rows"`
-	LoadStates            map[string]int `json:"load_states"`
+	Collections             int            `json:"collections"`
+	Loaded                  int            `json:"loaded"`
+	Cold                    int            `json:"cold"`
+	OtherLoadState          int            `json:"other_load_state"`
+	Staging                 int            `json:"staging"`
+	Recovery                int            `json:"recovery"`
+	ConversationCollections int            `json:"conversation_collections"`
+	ConversationDebt        []string       `json:"conversation_debt"`
+	MmapMissing             int            `json:"mmap_missing"`
+	ProductionLogicalRows   int64          `json:"production_logical_rows"`
+	ProductionStatsRows     string         `json:"production_stats_rows"`
+	LoadStates              map[string]int `json:"load_states"`
 }
 
-func TestProductionCensus(t *testing.T) {
+func TestProductionCensusAndConversationDebt(t *testing.T) {
 	requireProductionOptIn(t)
-	productionProtectedCollection := requiredProductionEnvironment(
+	productionConversationCollection := requiredProductionEnvironment(
 		t,
-		"LMS_PRODUCTION_COLLECTION",
+		"LMS_PRODUCTION_CONVERSATION_COLLECTION",
 	)
 	cfg, err := config.Default()
 	if err != nil {
@@ -61,6 +65,7 @@ func TestProductionCensus(t *testing.T) {
 	slices.Sort(names)
 	census := productionCensus{
 		Collections:           len(names),
+		ConversationDebt:      make([]string, 0),
 		LoadStates:            make(map[string]int, len(names)),
 		ProductionLogicalRows: -1,
 		ProductionStatsRows:   "unknown",
@@ -95,14 +100,22 @@ func TestProductionCensus(t *testing.T) {
 		if missingMmap > 0 {
 			t.Logf("MMAP_MISSING collection=%s count=%d", name, missingMmap)
 		}
-		if name == productionProtectedCollection {
+		if !strings.HasPrefix(name, "conv_chunks_") {
+			collectionCancel()
+			continue
+		}
+		census.ConversationCollections++
+		if probeConversationDebt(t, collectionCtx, client, name, state.State) {
+			census.ConversationDebt = append(census.ConversationDebt, name)
+		}
+		if name == productionConversationCollection {
 			census.ProductionLogicalRows = strongRowCount(t, collectionCtx, client, name)
 			stats, statsErr := client.GetCollectionStats(
 				collectionCtx,
 				milvusclient.NewGetCollectionStatsOption(name),
 			)
 			if statsErr != nil {
-				t.Fatalf("read production collection stats: %v", statsErr)
+				t.Fatalf("read production conversation stats: %v", statsErr)
 			}
 			census.ProductionStatsRows = stats["row_count"]
 		}
@@ -120,10 +133,80 @@ func TestProductionCensus(t *testing.T) {
 	t.Logf("PRODUCTION_CENSUS_JSON=%s", encoded)
 	if census.ProductionLogicalRows < 0 {
 		t.Fatalf(
-			"production document collection %q was not measured",
-			productionProtectedCollection,
+			"production conversation collection %q was not measured",
+			productionConversationCollection,
 		)
 	}
+	if len(census.ConversationDebt) != 0 {
+		t.Fatalf("conversation scalar debt exists: %v", census.ConversationDebt)
+	}
+}
+
+func probeConversationDebt(
+	t *testing.T,
+	ctx context.Context,
+	client *milvusclient.Client,
+	name string,
+	originalState entity.LoadStateCode,
+) bool {
+	t.Helper()
+	description, err := client.DescribeCollection(
+		ctx,
+		milvusclient.NewDescribeCollectionOption(name),
+	)
+	if err != nil {
+		t.Fatalf("describe conversation collection %s: %v", name, err)
+	}
+	hasProvider := false
+	for _, field := range description.Schema.Fields {
+		if field.Name == "provider" {
+			hasProvider = true
+			break
+		}
+	}
+	if !hasProvider {
+		return true
+	}
+	if originalState == entity.LoadStateNotLoad {
+		if _, err := client.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(name)); err != nil {
+			t.Fatalf("load cold conversation collection %s: %v", name, err)
+		}
+		waitForClientLoadState(t, ctx, client, name, entity.LoadStateLoaded)
+		defer func() {
+			if err := client.ReleaseCollection(
+				context.Background(),
+				milvusclient.NewReleaseCollectionOption(name),
+			); err != nil {
+				t.Fatalf("restore cold conversation collection %s: %v", name, err)
+			}
+			waitForClientLoadState(
+				t,
+				context.Background(),
+				client,
+				name,
+				entity.LoadStateNotLoad,
+			)
+		}()
+	}
+	iterator, err := client.QueryIterator(
+		ctx,
+		milvusclient.NewQueryIteratorOption(name).
+			WithBatchSize(1).
+			WithFilter("provider is null").
+			WithOutputFields("id").
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		t.Fatalf("open null-provider probe for %s: %v", name, err)
+	}
+	result, err := iterator.Next(ctx)
+	if errors.Is(err, io.EOF) {
+		return false
+	}
+	if err != nil {
+		t.Fatalf("query null provider in %s: %v", name, err)
+	}
+	return result.ResultCount > 0
 }
 
 func strongRowCount(

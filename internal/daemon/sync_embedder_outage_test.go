@@ -212,3 +212,39 @@ func TestPeriodicMaintenanceCannotBlockRecoverySweep(t *testing.T) {
 	}
 	drainToIndexed(t, manager, repos)
 }
+
+func TestPeriodicMaintenanceDoesNotLetMmapBlockConversationBackfill(t *testing.T) {
+	manager, _, _ := newTestManager(t)
+	semantic := &fakeSemantic{}
+	manager.semantic = semantic
+	mmapStarted := make(chan struct{})
+	releaseMmap := make(chan struct{})
+	backfillStarted := make(chan struct{})
+	semantic.ensureMmap = func(context.Context) {
+		close(mmapStarted)
+		<-releaseMmap
+	}
+	semantic.backfillCollections = func(context.Context) {
+		close(backfillStarted)
+	}
+	syncer := NewBackgroundSync(manager.config, manager)
+	mmapDone := make(chan struct{})
+	go func() {
+		syncer.ensureMmapEnabled(context.Background())
+		close(mmapDone)
+	}()
+	<-mmapStarted
+	backfillDone := make(chan struct{})
+	go func() {
+		syncer.backfillConversationColumns(context.Background())
+		close(backfillDone)
+	}()
+	select {
+	case <-backfillStarted:
+	case <-time.After(time.Second):
+		t.Fatal("conversation backfill waited for blocked mmap maintenance")
+	}
+	<-backfillDone
+	close(releaseMmap)
+	<-mmapDone
+}

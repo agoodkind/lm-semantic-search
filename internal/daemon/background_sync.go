@@ -211,6 +211,18 @@ func (syncer *BackgroundSync) ensureMmapEnabled(ctx context.Context) {
 	syncer.manager.semantic.EnsureMmapEnabledAllCollections(ctx)
 }
 
+// backfillConversationColumns drives the metadata-only conversation scalar-column
+// backfill once per conversation collection per process. It is a no-op when
+// Milvus is unavailable and a guard hit after the first successful run per
+// collection, so it is safe to run on every tick. It preserves each dense vector,
+// so no chunk is re-embedded.
+func (syncer *BackgroundSync) backfillConversationColumns(ctx context.Context) {
+	if syncer.manager == nil || syncer.manager.semantic == nil {
+		return
+	}
+	syncer.manager.semantic.BackfillConversationCollectionsOnce(ctx)
+}
+
 func (syncer *BackgroundSync) watchTrigger(ctx context.Context) {
 	if err := store.EnsureDir(syncer.cfg.ContextRoot); err != nil {
 		slog.ErrorContext(ctx, "ensure legacy context directory failed", "path", syncer.cfg.ContextRoot, "err", err)

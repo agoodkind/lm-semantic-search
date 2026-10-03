@@ -46,7 +46,7 @@ func TestResolveRequestPathRejectsRelativeWithoutCallerCwd(t *testing.T) {
 func TestResolveRequestPathPassesThroughAbsoluteIDAndURI(t *testing.T) {
 	t.Parallel()
 
-	cases := []string{"/abs/path", "cb_123_abc", "chat:///document-items"}
+	cases := []string{"/abs/path", "cb_123_abc", "chat:///clyde-conversations"}
 	for _, requested := range cases {
 		got, err := resolveRequestPath(requested, "/Users/example/repo")
 		if err != nil {
@@ -63,7 +63,7 @@ func TestResolveRequestPathPassesThroughAbsoluteIDAndURI(t *testing.T) {
 // "/chat:/x" that broke the boot resume pass.
 func TestCanonicalizePathRejectsURISchemes(t *testing.T) {
 	t.Parallel()
-	for _, arg := range []string{"chat:///document-items", "https://example.com/repo", "file:///tmp/x"} {
+	for _, arg := range []string{"chat:///clyde-conversations", "https://example.com/repo", "file:///tmp/x"} {
 		_, err := canonicalizePath(arg)
 		if err == nil {
 			t.Fatalf("canonicalizePath(%q) succeeded, want a rejection", arg)
@@ -76,11 +76,11 @@ func TestCanonicalizePathRejectsURISchemes(t *testing.T) {
 
 func TestDropGhostURICodebases(t *testing.T) {
 	t.Parallel()
-	ghost := newCodebaseRecord("/chat:/document-items")
+	ghost := newCodebaseRecord("/chat:/clyde-conversations")
 	real := newCodebaseRecord("/Users/x/repo")
-	item := newCodebaseRecord("chat:///document-items")
-	item.Kind = model.CodebaseKindDocument
-	codebases := map[string]model.Codebase{ghost.ID: ghost, real.ID: real, item.ID: item}
+	conversation := newCodebaseRecord("chat:///clyde-conversations")
+	conversation.Kind = model.CodebaseKindDocument
+	codebases := map[string]model.Codebase{ghost.ID: ghost, real.ID: real, conversation.ID: conversation}
 
 	dropGhostURICodebases(codebases)
 
@@ -90,7 +90,7 @@ func TestDropGhostURICodebases(t *testing.T) {
 	if _, ok := codebases[real.ID]; !ok {
 		t.Fatal("real filesystem record was dropped")
 	}
-	if _, ok := codebases[item.ID]; !ok {
+	if _, ok := codebases[conversation.ID]; !ok {
 		t.Fatal("document codebase was dropped")
 	}
 }

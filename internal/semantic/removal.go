@@ -11,7 +11,16 @@ import (
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
-// Removal selects stored rows by path, prefix, or declared item ID.
+// Removal names the stored rows one delta step drops before inserting the
+// item's fresh chunks. Paths match a row's relativePath exactly, which a code
+// file uses because all its chunks share one relativePath. Prefixes match every
+// row whose relativePath begins with the prefix, which a conversation uses
+// because its messages span many relativePaths under one conv/<id>/ prefix.
+//
+// ItemColumn and ItemIDs select rows by a declared item id scalar column. A
+// document collection removes an item's rows by the item id stored in that
+// column, and a conversation collection adds its legacy relativePath prefixes
+// for rows written before the conversationId column existed.
 type Removal struct {
 	Paths      []string
 	Prefixes   []string
@@ -36,7 +45,11 @@ func RemovePaths(paths []string) Removal {
 	return Removal{Paths: paths, Prefixes: nil, ItemColumn: "", ItemIDs: nil}
 }
 
-// DeleteItemRows deletes selected rows from a document collection.
+// DeleteItemRows deletes the rows removal selects from a document collection.
+// It serves an explicit item delete, and a missing collection deletes nothing.
+// An item removal filters on the item id column. The conversation scalar
+// migration adds that column to a legacy conversation collection, and
+// DeleteItemRows prepares the collection before an item removal.
 func (service *Service) DeleteItemRows(ctx context.Context, collectionName string, removal Removal) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.deleteItemRows")
 	defer done(&err)
@@ -145,7 +158,7 @@ func (service *Service) deleteByItemIDs(
 		return 0, fmt.Errorf("delete items from %s: item column is required", collectionName)
 	}
 	var removed int64
-	for _, idBatch := range batchItemIDs(itemIDs, itemIDFilterBatchSize) {
+	for _, idBatch := range batchConversationIDs(itemIDs, conversationFilterIDBatchSize) {
 		result, err := service.milvus.Delete(
 			ctx,
 			milvusclient.NewDeleteOption(collectionName).WithExpr(inStringClause(itemColumn, idBatch)),
@@ -162,6 +175,9 @@ func (service *Service) deleteByItemIDs(
 	return removed, nil
 }
 
+// deleteByRelativePathPrefix removes every row whose relativePath begins with
+// prefix. A conversation uses it to drop all of one conversation's message rows
+// in a single expression delete.
 func (service *Service) deleteByRelativePathPrefix(
 	ctx context.Context,
 	collectionName string,

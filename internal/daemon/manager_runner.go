@@ -186,6 +186,13 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) (*graphIndexTa
 		return nil, errors.Is(err, errRetryJobStart)
 	}
 
+	// Every operation reaches a terminal job state below. An incremental sync
+	// or streaming reindex that finds no usable delta (no prior snapshot, or a
+	// live collection that has gone missing) falls through to the from-scratch
+	// staging build, which is also the path a true first index and a forced
+	// rebuild take. A code job walks the filesystem through the code source; a
+	// conversation ingest feeds the manifest and documents through its own source
+	// in runConversationIngest, then shares the same delta-then-bootstrap routine.
 	codeSource := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config)
 	if manager.semantic != nil && manager.semantic.Available() {
 		codeSource = codeSource.withCollectionName(manager.semantic.CollectionName(job.CanonicalPath))
@@ -210,8 +217,8 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) (*graphIndexTa
 		}
 		manager.routeToBootstrap(ctx, job.ID, reason)
 		return manager.runBootstrap(ctx, job, codeSource), false
-	case jobOperationCollectionIngest:
-		manager.runCollectionIngest(ctx, job)
+	case jobOperationConversationIngest:
+		manager.runConversationIngest(ctx, job)
 	}
 	return nil, false
 }

@@ -371,6 +371,16 @@ func TestCancellationBetweenPauseSnapshotAndJournalStaysTerminal(t *testing.T) {
 	waitPauseTestJobState(t, manager, job.ID, model.JobStateCancelled)
 }
 
+func TestConversationTerminalCannotBeFollowedByPause(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	job := seedPauseTestJob(t, manager, repoPath, model.CodebaseKindDocument)
+	manager.finishConversationDelete(context.Background(), job.ID)
+	if err := manager.pauseJob(job.ID, "stale"); err != nil {
+		t.Fatalf("pauseJob: %v", err)
+	}
+	waitPauseTestJobState(t, manager, job.ID, model.JobStateCompleted)
+}
+
 func TestTerminalEventSupersedesPausedJournalState(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	job := seedPauseTestJob(t, manager, repoPath, model.CodebaseKindCode)

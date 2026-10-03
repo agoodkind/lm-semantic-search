@@ -19,7 +19,6 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/embedding"
-	"goodkind.io/lm-semantic-search/internal/embedding/providers"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/lm-semantic-search/internal/tshash"
@@ -121,6 +120,10 @@ type Service struct {
 	// coordinator and the residency paths.
 	loadGates collectionLoadGates
 	residency *collectionResidencyController
+	// ensuredConvColumns maps a conversation collection name to its
+	// *conversationScalarMigration, gating the one-time scalar-column migration to
+	// once per collection per process. See ensureConversationScalarColumnsOnce.
+	ensuredConvColumns sync.Map
 	// ensuredSplitPartColumns gates the nullable splitPart schema migration once
 	// per collection per process.
 	ensuredSplitPartColumns sync.Map
@@ -133,8 +136,12 @@ type Service struct {
 	mmapPolicyMutex      sync.Mutex
 	mmapPolicyGeneration map[string]uint64
 	mmapPolicyFailures   map[string]mmapPolicyFailure
+	// ensuredBackfill records the conversation collections this process has
+	// scalar-column backfilled, so the daemon's periodic backfill sweep runs the
+	// metadata-only backfill at most once per collection per process.
+	ensuredBackfill sync.Map
 	// declaredCollections records the live names of document collections with a
-	// generic saved declaration. See isDocumentCollection.
+	// generic saved declaration. See isConversationCollection.
 	declaredCollections sync.Map
 }
 
@@ -165,19 +172,21 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			},
 			loadGates:                   newCollectionLoadGates(),
 			residency:                   nil,
+			ensuredConvColumns:          sync.Map{},
 			ensuredSplitPartColumns:     sync.Map{},
 			ensuredReuseIdentityColumns: sync.Map{},
 			mmapPolicyVersions:          make(map[string]int),
 			mmapPolicyMutex:             sync.Mutex{},
 			mmapPolicyGeneration:        make(map[string]uint64),
 			mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
+			ensuredBackfill:             sync.Map{},
 			declaredCollections:         sync.Map{},
 		}
 		service.initializeResidencyController()
 		return service, nil
 	}
 
-	embedder, err := providers.New(ctx, cfg)
+	embedder, err := embedding.NewProvider(ctx, cfg)
 	if err != nil {
 		slog.ErrorContext(ctx, "create embedding provider failed", "provider", cfg.EmbeddingProvider, "err", err)
 		return nil, fmt.Errorf("create embedding provider: %w", err)
@@ -207,12 +216,14 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		},
 		loadGates:                   newCollectionLoadGates(),
 		residency:                   nil,
+		ensuredConvColumns:          sync.Map{},
 		ensuredSplitPartColumns:     sync.Map{},
 		ensuredReuseIdentityColumns: sync.Map{},
 		mmapPolicyVersions:          make(map[string]int),
 		mmapPolicyMutex:             sync.Mutex{},
 		mmapPolicyGeneration:        make(map[string]uint64),
 		mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
+		ensuredBackfill:             sync.Map{},
 		declaredCollections:         sync.Map{},
 	}
 	service.initializeResidencyController()
@@ -288,25 +299,31 @@ func (service *Service) Degraded() bool {
 	return service != nil && strings.TrimSpace(service.cfg.MilvusAddress) != "" && !service.Available()
 }
 
-const documentPathPrefix = "chat:///"
+// conversationPathPrefix marks a virtual conversation collection's canonical
+// path. A path with this prefix is not a filesystem directory; its collection
+// name derives from the trailing collection id rather than a path hash, so the
+// shared embed, staging, and count functions address the conversation
+// collection when handed the conversation codebase's canonical path.
+const conversationPathPrefix = "chat:///"
 
-func documentCollectionIDFromPath(codebasePath string) (string, bool) {
-	if !strings.HasPrefix(codebasePath, documentPathPrefix) {
+// conversationCollectionIDFromPath returns the conversation collection id
+// encoded in a canonical path and whether the path is a conversation path.
+func conversationCollectionIDFromPath(codebasePath string) (string, bool) {
+	if !strings.HasPrefix(codebasePath, conversationPathPrefix) {
 		return "", false
 	}
-	return strings.TrimPrefix(codebasePath, documentPathPrefix), true
+	return strings.TrimPrefix(codebasePath, conversationPathPrefix), true
 }
 
-// IsDocumentPath reports whether a path identifies a document collection.
-func IsDocumentPath(codebasePath string) bool {
-	_, isDocument := documentCollectionIDFromPath(codebasePath)
-	return isDocument
-}
-
-// CollectionName derives the persistent collection identifier for a codebase or document path.
+// CollectionName matches the TypeScript collection naming contract at
+// packages/core/src/context.ts:275 so the Go daemon reads and writes the
+// same Milvus collections as the upstream TS adapter. A conversation canonical
+// path resolves to the conversation collection so every shared embed, staging,
+// and count function addresses the right collection from the codebase path
+// alone.
 func (service *Service) CollectionName(codebasePath string) string {
-	if collectionID, isDocument := documentCollectionIDFromPath(codebasePath); isDocument {
-		return service.DocumentCollectionName(collectionID)
+	if collectionID, isConversation := conversationCollectionIDFromPath(codebasePath); isConversation {
+		return service.ConversationCollectionName(collectionID)
 	}
 
 	prefix := "code_chunks"
@@ -337,8 +354,9 @@ func (service *Service) CollectionName(codebasePath string) string {
 	return prefix + "_" + sanitized + hashSuffix
 }
 
-// DocumentCollectionName derives the persistent collection identifier from the caller ID.
-func (service *Service) DocumentCollectionName(collectionID string) string {
+// ConversationCollectionName returns the Milvus collection name for a virtual
+// conversation document collection.
+func (service *Service) ConversationCollectionName(collectionID string) string {
 	_ = service
 	return "conv_chunks_" + tshash.PathPrefix(strings.TrimSpace(collectionID))
 }
@@ -354,6 +372,7 @@ func (service *Service) renameCollection(ctx context.Context, oldName string, ne
 }
 
 func (service *Service) invalidateCollectionCaches(collectionName string) {
+	service.ensuredConvColumns.Delete(collectionName)
 	service.ensuredSplitPartColumns.Delete(collectionName)
 	service.ensuredReuseIdentityColumns.Delete(collectionName)
 	service.reuseVectorDimensionMutex.Lock()
@@ -364,6 +383,7 @@ func (service *Service) invalidateCollectionCaches(collectionName string) {
 	service.reuseVectorDimensions.Delete(collectionName)
 	service.reuseVectorDimensionMutex.Unlock()
 	service.invalidateMmapPolicy(collectionName)
+	service.ensuredBackfill.Delete(collectionName)
 }
 
 func (service *Service) invalidateMmapPolicy(collectionName string) {
@@ -399,7 +419,13 @@ func (service *Service) hasCollection(
 	return hasCollection, nil
 }
 
-// Reindex replaces selected rows with prepared chunks and reusable vectors.
+// Reindex applies a per-item delta against an existing live collection.
+//
+// removal deletes the item's prior rows (a code file by exact relativePath, a
+// conversation by relativePath prefix). The chunk batch is then embedded and
+// inserted through the same batched flow the staging build uses. Reindex
+// returns ErrCollectionMissing when the live collection no longer exists, so
+// callers can fall back to a full staging build.
 func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.reindex")
 	defer done(&err)
@@ -416,6 +442,9 @@ func (service *Service) Reindex(ctx context.Context, codebasePath string, addedO
 	if !hasCollection {
 		return ErrCollectionMissing
 	}
+	// An item removal filters on a scalar column. The conversation scalar
+	// migration adds that column to a legacy collection. An item removal
+	// prepares the collection before its delete.
 	if len(addedOrModifiedChunks) > 0 || len(removal.ItemIDs) > 0 {
 		if err := service.PrepareCollection(ctx, collectionName); err != nil {
 			return err
@@ -573,6 +602,14 @@ func (service *Service) searchCollectionWithVector(ctx context.Context, collecti
 		fileExtensionFieldName,
 		metadataFieldName,
 		splitPartFieldName,
+	}
+	if service.isConversationCollection(collectionName) {
+		// Conversation collections carry workspaceRoot as a native scalar column.
+		// Request it so a workspace_roots post-filter on the daemon side sees the
+		// real value rather than the empty default; code collections have no such
+		// column, so they keep the base output set. loadRules rides along so a
+		// search hit can report which loading rules produced its message index.
+		outputFields = append(outputFields, workspaceRootFieldName, loadRulesFieldName)
 	}
 
 	if service.cfg.HybridMode {

@@ -20,6 +20,10 @@ func buildSearchFilter(extensionFilter []string, relativePathPrefixes []string) 
 	return strings.Join(clauses, " and ")
 }
 
+// buildRelativePathPrefixSetFilter ORs the per-prefix clauses so a search can
+// scope to several subtrees at once, which is how a conversation-id set scopes
+// retrieval to those conversations' rows. Empty or root prefixes contribute no
+// clause; an empty result means the whole collection is searched.
 func buildRelativePathPrefixSetFilter(relativePathPrefixes []string) string {
 	clauses := make([]string, 0, len(relativePathPrefixes))
 	for _, relativePathPrefix := range relativePathPrefixes {
@@ -48,6 +52,18 @@ func buildRelativePathPrefixFilter(relativePathPrefix string) string {
 	return fmt.Sprintf(`(%s == "%s" or %s like "%s/%%")`, relativePathFieldName, escapeMilvusString(trimmed), relativePathFieldName, escapeMilvusLikePattern(trimmed))
 }
 
+// escapeMilvusLikePattern escapes a value for the literal portion of a Milvus
+// LIKE pattern. Ordering is load-bearing: the wildcard escapes must be applied
+// to the raw value FIRST and then pass through the string-literal escaping,
+// because Milvus's expression lexer (Plan.g4 EscapeSequence) only accepts
+// C-style escapes, so a literal wildcard must reach the parser as \\% or \\_
+// (an escaped backslash followed by the wildcard), which the pattern matcher
+// (planparserv2 optimizeLikePattern) then reads as an escaped literal. The
+// reverse order emits \% and \_, which the lexer rejects with a token
+// recognition error; that failed live on a cursor conversation id containing
+// an underscore. Without the wildcard escapes, an id containing _ or % would
+// over-match neighbors, which on the delete path could drop another
+// conversation's rows.
 func escapeMilvusLikePattern(value string) string {
 	value = strings.ReplaceAll(value, "%", `\%`)
 	value = strings.ReplaceAll(value, "_", `\_`)

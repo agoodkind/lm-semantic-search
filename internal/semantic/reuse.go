@@ -54,7 +54,13 @@ func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []
 	return reuse, nil
 }
 
-// LoadReuseVectorsForPrefix reads reusable vectors from rows matching a path prefix.
+// LoadReuseVectorsForPrefix reads one collection's chunks whose relativePath
+// begins with relativePathPrefix and returns the contentVectorKey -> vector
+// map for them. A conversation ingest passes the live conversation collection
+// and the changed conversation's conv/<id>/ prefix, loaded before that
+// conversation's prefix delete runs, so the reindex reuses the unchanged
+// chunks' stored vectors instead of re-embedding the whole conversation. A
+// missing collection or an empty prefix returns an empty map.
 func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	reuse := make(map[string][]float32)

@@ -17,6 +17,9 @@ func (manager *Manager) applyDeltaAbsencePolicy(
 	source itemSource,
 	plan *deltaPlan,
 ) bool {
+	// A code source deletes missing files behind the large-delete quarantine. A
+	// conversation source retains absent transcripts because a missing document
+	// in one push is usually transient.
 	switch source.absencePolicy() {
 	case absenceDeleteGuarded:
 		signal, suspicious := assessDeltaDeleteWave(

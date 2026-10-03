@@ -11,9 +11,6 @@ CLI behavior lives in the current help output, starting with `lm-semantic-search
 
 [`docs/metrics.md`](docs/metrics.md) explains the historical `status --since` report.
 
-[Search terms](docs/search.md) explains source occurrences, shared vectors,
-backend scoring batches, result pages, and measurement comparisons.
-
 [`docs/restartacceptance.md`](docs/restartacceptance.md) explains how to run destructive restart recovery tests inside an isolated Linux virtual machine.
 
 ## Configuration

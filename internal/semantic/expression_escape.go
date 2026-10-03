@@ -5,6 +5,9 @@ import (
 	"strings"
 )
 
+// escapeMilvusString escapes one value for a Milvus string literal. Cursor
+// conversation ids can contain raw newlines, so control bytes must become
+// parser-safe escapes before any relativePath expression reaches Milvus.
 func escapeMilvusString(value string) string {
 	value = strings.ReplaceAll(value, `\`, `\\`)
 	value = strings.ReplaceAll(value, `"`, `\"`)

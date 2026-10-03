@@ -4,15 +4,18 @@ package live
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
+	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/semantic"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -23,21 +26,33 @@ const (
 	extraStoredColumnMaxLength = 64
 )
 
+// TestRegisterCollectionValidatesMilvusSchemaAcrossRestart ingests into a real
+// Milvus collection, restarts the daemon, and registers through both RPCs. Both
+// return the same record and leave the checkpoint unchanged. A column added to
+// the stored collection outside the declaration then fails registration with
+// collection_schema_mismatch, and the stored collection keeps every field.
 func TestRegisterCollectionValidatesMilvusSchemaAcrossRestart(t *testing.T) {
 	h := newHarness(t)
 
-	ingested := h.upsert(seedItems(), pb.CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN, false, false)
+	ingested := h.upsert(seedConversations(), pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN, false, false)
 	requireCompleted(t, ingested, "ingest")
 	checkpointPath := filepath.Join(h.config.MerkleDir, h.codebaseID+".json")
 	checkpoint := readLiveFile(t, checkpointPath)
 
 	h.restart(nil)
 
-	genericResponse, err := h.registerLiveDeclaration()
+	oldResponse, err := h.client.RegisterConversationCollection(correlatedContext(), &pb.RegisterConversationCollectionRequest{
+		CollectionId: h.collectionID,
+		Client:       &pb.ClientInfo{Name: "live-harness"},
+	})
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection after restart returned error: %v", err)
+	}
+	genericResponse, err := h.registerConversationDeclaration()
 	if err != nil {
 		t.Fatalf("RegisterCollection after restart returned error: %v", err)
 	}
-	for _, codebaseID := range []string{genericResponse.GetCodebaseId()} {
+	for _, codebaseID := range []string{oldResponse.GetCodebaseId(), genericResponse.GetCodebaseId()} {
 		if codebaseID != h.codebaseID {
 			t.Fatalf("codebase id after restart = %q, want %q", codebaseID, h.codebaseID)
 		}
@@ -52,7 +67,12 @@ func TestRegisterCollectionValidatesMilvusSchemaAcrossRestart(t *testing.T) {
 	h.addStoredColumn(extraStoredColumn)
 	fieldsBefore := h.storedFieldNames()
 
-	_, err = h.registerLiveDeclaration()
+	_, err = h.registerConversationDeclaration()
+	requireLiveColumnError(t, err, extraStoredColumn)
+	_, err = h.client.RegisterConversationCollection(correlatedContext(), &pb.RegisterConversationCollectionRequest{
+		CollectionId: h.collectionID,
+		Client:       &pb.ClientInfo{Name: "live-harness"},
+	})
 	requireLiveColumnError(t, err, extraStoredColumn)
 
 	fieldsAfter := h.storedFieldNames()
@@ -69,8 +89,88 @@ func TestRegisterCollectionValidatesMilvusSchemaAcrossRestart(t *testing.T) {
 	}
 }
 
-func (h *harness) registerLiveDeclaration() (*pb.RegisterCollectionResponse, error) {
-	declaration := liveCollectionDeclaration()
+// TestRegisterCollectionMigratesLegacyMilvusCollection starts from a registry
+// record without a saved declaration and a stored collection created without
+// the conversation scalar columns. Registration with the conversation
+// declaration runs the conversation scalar migration, compares the migrated
+// schema, and saves the declaration on the same record.
+func TestRegisterCollectionMigratesLegacyMilvusCollection(t *testing.T) {
+	h := newHarness(t)
+
+	h.createLegacyCollection()
+	h.restart(func() { removeLiveRegistryDeclarations(t, h.config.RegistryPath) })
+
+	response, err := h.registerConversationDeclaration()
+	if err != nil {
+		t.Fatalf("RegisterCollection for the legacy record returned error: %v", err)
+	}
+	if response.GetCodebaseId() != h.codebaseID {
+		t.Fatalf("codebase id = %q, want %q", response.GetCodebaseId(), h.codebaseID)
+	}
+
+	storedFields := h.storedFields()
+	for _, column := range semantic.ConversationDeclaration().Scalars {
+		field, found := storedFields[column.Name]
+		if !found {
+			t.Fatalf("stored collection lacks migrated column %s", column.Name)
+		}
+		if !field.Nullable {
+			t.Fatalf("migrated column %s is not nullable", column.Name)
+		}
+	}
+
+	var registry model.RegistryFile
+	if err := json.Unmarshal(readLiveFile(t, h.config.RegistryPath), &registry); err != nil {
+		t.Fatalf("decode registry: %v", err)
+	}
+	declarationSaved := false
+	for _, codebase := range registry.Codebases {
+		if codebase.ID == h.codebaseID && codebase.Declaration != nil && codebase.Declaration.ItemIDColumn == "conversationId" {
+			declarationSaved = true
+		}
+	}
+	if !declarationSaved {
+		t.Fatal("registry has no conversation declaration on the legacy record after registration")
+	}
+	if _, err := os.Stat(filepath.Join(h.config.MerkleDir, h.codebaseID+".json")); err == nil {
+		t.Fatal("registration wrote a Merkle checkpoint")
+	}
+}
+
+// TestRegisterConversationCollectionMigratesUnregisteredLegacyCollection starts
+// from a stored collection created without the conversation scalar columns and
+// an empty registry. The old conversation RPC still registers it, runs the
+// conversation scalar migration, and saves the conversation declaration.
+func TestRegisterConversationCollectionMigratesUnregisteredLegacyCollection(t *testing.T) {
+	h := newHarness(t)
+
+	h.createLegacyCollection()
+	h.restart(func() {
+		if err := os.WriteFile(h.config.RegistryPath, []byte(`{"codebases":[]}`), 0o600); err != nil {
+			t.Fatalf("write empty registry: %v", err)
+		}
+	})
+
+	response, err := h.client.RegisterConversationCollection(correlatedContext(), &pb.RegisterConversationCollectionRequest{
+		CollectionId: h.collectionID,
+		Client:       &pb.ClientInfo{Name: "live-harness"},
+	})
+	if err != nil {
+		t.Fatalf("RegisterConversationCollection for the unregistered legacy collection returned error: %v", err)
+	}
+	if response.GetCollectionName() != h.collectionName {
+		t.Fatalf("collection name = %q, want %q", response.GetCollectionName(), h.collectionName)
+	}
+	storedFields := h.storedFields()
+	for _, column := range semantic.ConversationDeclaration().Scalars {
+		if _, found := storedFields[column.Name]; !found {
+			t.Fatalf("stored collection lacks migrated column %s", column.Name)
+		}
+	}
+}
+
+func (h *harness) registerConversationDeclaration() (*pb.RegisterCollectionResponse, error) {
+	declaration := semantic.ConversationDeclaration()
 	scalars := make([]*pb.ScalarColumnDeclaration, 0, len(declaration.Scalars))
 	for _, column := range declaration.Scalars {
 		scalars = append(scalars, &pb.ScalarColumnDeclaration{
@@ -98,6 +198,27 @@ func liveScalarType(scalarType model.ScalarType) pb.ScalarColumnType {
 		return pb.ScalarColumnType_SCALAR_COLUMN_TYPE_INT64
 	default:
 		return pb.ScalarColumnType_SCALAR_COLUMN_TYPE_UNSPECIFIED
+	}
+}
+
+// createLegacyCollection creates the harness collection with the base chunk
+// schema, its dense vector index, and no conversation scalar columns, the
+// schema a conversation collection had before those columns existed.
+func (h *harness) createLegacyCollection() {
+	h.t.Helper()
+	schema := entity.NewSchema().
+		WithField(entity.NewField().WithName("id").WithDataType(entity.FieldTypeVarChar).WithMaxLength(512).WithIsPrimaryKey(true)).
+		WithField(entity.NewField().WithName("content").WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
+		WithField(entity.NewField().WithName(relativePathField).WithDataType(entity.FieldTypeVarChar).WithMaxLength(1024)).
+		WithField(entity.NewField().WithName("startLine").WithDataType(entity.FieldTypeInt64)).
+		WithField(entity.NewField().WithName("endLine").WithDataType(entity.FieldTypeInt64)).
+		WithField(entity.NewField().WithName("fileExtension").WithDataType(entity.FieldTypeVarChar).WithMaxLength(32)).
+		WithField(entity.NewField().WithName("metadata").WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
+		WithField(entity.NewField().WithName("vector").WithDataType(entity.FieldTypeFloatVector).WithDim(fakeEmbeddingDimension))
+	vectorIndex := milvusclient.NewCreateIndexOption(h.collectionName, "vector", index.NewAutoIndex(entity.COSINE))
+	createOption := milvusclient.NewCreateCollectionOption(h.collectionName, schema).WithIndexOptions(vectorIndex)
+	if err := h.milvus.CreateCollection(correlatedContext(), createOption); err != nil {
+		h.t.Fatalf("create legacy collection %s: %v", h.collectionName, err)
 	}
 }
 
@@ -146,6 +267,43 @@ func readLiveFile(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return content
+}
+
+// removeLiveRegistryDeclarations rewrites the registry file in the format a
+// daemon wrote before declarations were saved: every record without the
+// declaration key. It fails when no record had one.
+func removeLiveRegistryDeclarations(t *testing.T, registryPath string) {
+	t.Helper()
+	var registry map[string]json.RawMessage
+	if err := json.Unmarshal(readLiveFile(t, registryPath), &registry); err != nil {
+		t.Fatalf("decode registry: %v", err)
+	}
+	var codebases []map[string]json.RawMessage
+	if err := json.Unmarshal(registry["codebases"], &codebases); err != nil {
+		t.Fatalf("decode registry codebases: %v", err)
+	}
+	removed := 0
+	for _, codebase := range codebases {
+		if _, found := codebase["declaration"]; found {
+			delete(codebase, "declaration")
+			removed++
+		}
+	}
+	if removed == 0 {
+		t.Fatal("registry has no saved declaration to remove")
+	}
+	encodedCodebases, err := json.Marshal(codebases)
+	if err != nil {
+		t.Fatalf("encode registry codebases: %v", err)
+	}
+	registry["codebases"] = encodedCodebases
+	encodedRegistry, err := json.Marshal(registry)
+	if err != nil {
+		t.Fatalf("encode registry: %v", err)
+	}
+	if err := os.WriteFile(registryPath, encodedRegistry, 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
 }
 
 func requireLiveColumnError(t *testing.T, err error, wantColumn string) {

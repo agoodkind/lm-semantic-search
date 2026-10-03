@@ -27,7 +27,7 @@ const (
 	defaultEmbeddingBatchTokenBudget = 6000
 	defaultEmbeddingRequestTimeoutMS = 300000
 	defaultMaxJobChunks              = 200000
-	defaultMaxItemsPerIngest         = 100
+	defaultMaxConversationsPerIngest = 100
 	defaultMaxJobBytes               = 1073741824
 	defaultExpectedJobGrowthFactor   = 4
 	defaultExpectedJobGrowthFloor    = 10000
@@ -125,10 +125,6 @@ type Config struct {
 	// checkpoint.
 	EmbeddingProvider model.EmbeddingProvider
 	EmbeddingModel    string
-	// EmbeddingRevision identifies the immutable artifacts used by the embedding model.
-	EmbeddingRevision string
-	// EmbeddingNormalization declares the normalization of vectors returned by the provider.
-	EmbeddingNormalization string
 	// OfflineEmbeddingModel selects a pinned ONNX model preset for the offline
 	// profile. ApplyProfile derives EmbeddingModel and EmbeddingDimension from it.
 	OfflineEmbeddingModel string
@@ -207,7 +203,6 @@ type Config struct {
 	// canonical value when the config is read. Derived from Profile by
 	// ApplyProfile; may also be set directly.
 	IndexBackend           model.VectorBackend
-	CodebaseStore          CodebaseStoreKind
 	CollectionNameOverride string
 	HybridMode             bool
 	BackgroundSyncEnabled  bool
@@ -232,8 +227,9 @@ type Config struct {
 	// the embedding endpoint.
 	MaxConcurrentIndexJobs int
 	// MaxJobChunks caps the chunks one job may write before admission halts it.
-	MaxJobChunks      int32
-	MaxItemsPerIngest int
+	MaxJobChunks int32
+	// MaxConversationsPerIngest caps the conversation ids one manifest sync may request.
+	MaxConversationsPerIngest int
 	// MaxJobBytes caps the chunk content bytes one job may write.
 	MaxJobBytes int64
 	// ExpectedJobGrowthFactor caps growth relative to the last successful run
@@ -265,8 +261,6 @@ type persistedConfig struct {
 	Profile                   string `json:"profile"`
 	EmbeddingProvider         string `json:"embeddingProvider"`
 	EmbeddingModel            string `json:"embeddingModel"`
-	EmbeddingRevision         string `json:"embeddingRevision"`
-	EmbeddingNormalization    string `json:"embeddingNormalization"`
 	OfflineEmbeddingModel     string `json:"offlineEmbeddingModel"`
 	EmbeddingBatchSize        int    `json:"embeddingBatchSize"`
 	EmbeddingBatchTokenBudget int    `json:"embeddingBatchTokenBudget"`
@@ -385,12 +379,17 @@ func Default() (Config, error) {
 		requestTimeoutMS = *fileConfig.EmbeddingRequestTimeoutMS
 	}
 	loadWaitTimeoutMS, idleTimeoutMS := resolveMilvusCollectionResidencyTimeouts(fileConfig)
-	embeddingProviderName, codebaseStore, err := resolveBackendSelection(embeddingDefaults.provider)
+	// Resolve the configured provider name to its canonical value here, the one
+	// place a raw name enters the config, so no later comparison and no stored
+	// record can hold a variant spelling.
+	embeddingProviderName, err := model.ParseEmbeddingProvider(
+		envOrDefault("EMBEDDING_PROVIDER", embeddingDefaults.provider),
+	)
 	if err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("resolve configured embedding provider: %w", err)
 	}
 	return ApplyProfile(Config{
-		Profile: resolveProfile(fileConfig.Profile), IndexBackend: IndexBackendMilvus, CodebaseStore: codebaseStore,
+		Profile: resolveProfile(fileConfig.Profile), IndexBackend: IndexBackendMilvus,
 		ConfigRoot:                         configRoot,
 		ConfigPath:                         configPath,
 		StateRoot:                          stateRoot,
@@ -409,8 +408,6 @@ func Default() (Config, error) {
 		ModelCacheRoot:                     modelCacheRoot,
 		EmbeddingProvider:                  embeddingProviderName,
 		EmbeddingModel:                     envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model),
-		EmbeddingRevision:                  envOrDefault("EMBEDDING_REVISION", fileConfig.EmbeddingRevision),
-		EmbeddingNormalization:             envOrDefault("EMBEDDING_NORMALIZATION", fileConfig.EmbeddingNormalization),
 		OfflineEmbeddingModel:              embeddingDefaults.offlineModel,
 		EmbeddingBatchSize:                 envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
 		EmbeddingBatchTokenBudget:          intOrDefault(fileConfig.EmbeddingBatchTokenBudget, defaultEmbeddingBatchTokenBudget),
@@ -442,7 +439,7 @@ func Default() (Config, error) {
 		PerfCountersIntervalMS:             envIntOrDefault("CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", defaultPerfCountersIntervalMS),
 		MaxConcurrentIndexJobs:             envIntOrDefault("CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", defaultMaxConcurrentIndexJobs),
 		MaxJobChunks:                       envInt32OrDefault("CLAUDE_CONTEXT_MAX_JOB_CHUNKS", defaultMaxJobChunks),
-		MaxItemsPerIngest:                  envIntOrDefault("CLAUDE_CONTEXT_MAX_ITEMS_PER_INGEST", defaultMaxItemsPerIngest),
+		MaxConversationsPerIngest:          envIntOrDefault("CLAUDE_CONTEXT_MAX_CONVERSATIONS_PER_INGEST", defaultMaxConversationsPerIngest),
 		MaxJobBytes:                        envInt64OrDefault("CLAUDE_CONTEXT_MAX_JOB_BYTES", defaultMaxJobBytes),
 		ExpectedJobGrowthFactor:            envFloat64OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FACTOR", defaultExpectedJobGrowthFactor),
 		ExpectedJobGrowthFloor:             envInt32OrDefault("CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FLOOR", defaultExpectedJobGrowthFloor),
@@ -878,47 +875,6 @@ func resolveProfile(persistedProfile string) string {
 	)
 	normalizedProfile := strings.ToLower(strings.TrimSpace(resolvedProfile))
 	return stringOrDefault(normalizedProfile, ProfileStandard)
-}
-
-// resolveBackendSelection resolves the configured embedding provider and the
-// codebase store. The provider name is the one raw name that enters the
-// config, and this function resolves it to its canonical value. Later
-// comparisons and stored records then read only canonical spellings.
-func resolveBackendSelection(defaultProvider string) (model.EmbeddingProvider, CodebaseStoreKind, error) {
-	embeddingProviderName, err := model.ParseEmbeddingProvider(
-		envOrDefault("EMBEDDING_PROVIDER", defaultProvider),
-	)
-	if err != nil {
-		slog.Error("resolve configured embedding provider failed", "err", err)
-		return "", "", fmt.Errorf("resolve configured embedding provider: %w", err)
-	}
-	codebaseStore, err := resolveCodebaseStore()
-	if err != nil {
-		return "", "", err
-	}
-	return embeddingProviderName, codebaseStore, nil
-}
-
-// resolveCodebaseStore reads CLAUDE_CONTEXT_CODEBASE_STORE. An unset value
-// selects [CodebaseStoreSemantic]. An unknown value returns an error.
-func resolveCodebaseStore() (CodebaseStoreKind, error) {
-	requested := strings.ToLower(strings.TrimSpace(os.Getenv(codebaseStoreEnv)))
-	switch requested {
-	case "", string(CodebaseStoreSemantic):
-		return CodebaseStoreSemantic, nil
-	case string(CodebaseStoreLibrary):
-		return CodebaseStoreLibrary, nil
-	default:
-		err := fmt.Errorf(
-			"%s %q is not supported; use %q or %q",
-			codebaseStoreEnv,
-			requested,
-			CodebaseStoreSemantic,
-			CodebaseStoreLibrary,
-		)
-		slog.Error("resolve codebase store failed", "err", err)
-		return "", err
-	}
 }
 
 func boolOrDefault(value *bool, fallback bool) bool {

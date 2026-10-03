@@ -22,26 +22,48 @@ import (
 const (
 	rowIDHashLength  = 16
 	jsonLineMaxBytes = 16 * 1024 * 1024
+	// conversationIDColumn is the item id column of the conversation
+	// declaration, which a conversation row stores in ConversationID.
+	conversationIDColumn = "conversationId"
 )
 
 type row struct {
-	Label            uint64    `json:"label"`
-	ID               string    `json:"id"`
-	RelativePath     string    `json:"relativePath"`
-	StartLine        int32     `json:"startLine"`
-	EndLine          int32     `json:"endLine"`
-	Language         string    `json:"language,omitempty"`
-	FileExtension    string    `json:"fileExtension"`
-	Content          string    `json:"content"`
-	ContentVectorKey string    `json:"contentVectorKey"`
-	Vector           []float32 `json:"vector"`
-	SplitPart        int32     `json:"splitPart,omitempty"`
+	Label                uint64    `json:"label"`
+	ID                   string    `json:"id"`
+	RelativePath         string    `json:"relativePath"`
+	StartLine            int32     `json:"startLine"`
+	EndLine              int32     `json:"endLine"`
+	Language             string    `json:"language,omitempty"`
+	FileExtension        string    `json:"fileExtension"`
+	Content              string    `json:"content"`
+	ContentVectorKey     string    `json:"contentVectorKey"`
+	Vector               []float32 `json:"vector"`
+	ConversationID       string    `json:"conversationId,omitempty"`
+	ParentConversationID string    `json:"parentConversationId,omitempty"`
+	MessageIndex         int32     `json:"messageIndex,omitempty"`
+	Role                 string    `json:"role,omitempty"`
+	TimestampUnix        int64     `json:"timestampUnix,omitempty"`
+	WorkspaceRoot        string    `json:"workspaceRoot,omitempty"`
+	Archived             bool      `json:"archived,omitempty"`
+	// LoadRules is the caller's opaque loading-rules tag for a conversation
+	// row; empty for code rows and rows written before the tag existed.
+	LoadRules string `json:"loadRules,omitempty"`
+	// SplitPart carries the source chunk's SplitPart so a split child keeps a
+	// distinct, stable primary key across a rewrite (CopyChunks regenerates the id
+	// from the row's chunk). Zero for an unsplit row.
+	SplitPart int32 `json:"splitPart,omitempty"`
 	// SplitPartRecorded marks a row written after SplitPart was persisted, so a
 	// legacy row that predates the field is not read back as position zero.
-	SplitPartRecorded bool                         `json:"splitPartRecorded"`
-	Scalars           map[string]model.ScalarValue `json:"scalars,omitempty"`
+	SplitPartRecorded bool `json:"splitPartRecorded"`
+	// Scalars stores the declared scalar values of a row in a generic document
+	// collection by column name. It is omitted for code and conversation rows.
+	Scalars map[string]model.ScalarValue `json:"scalars,omitempty"`
 }
 
+// itemID returns the row's value of the item id column. A conversation row
+// stores conversationId in ConversationID, and a generic row stores its item
+// id in Scalars. present is false for an empty column name, a null value, and
+// a row without the column.
 func (stored row) itemID(itemColumn string) (string, bool) {
 	if itemColumn == "" {
 		return "", false
@@ -51,6 +73,9 @@ func (stored row) itemID(itemColumn string) (string, bool) {
 			return "", false
 		}
 		return value.String, true
+	}
+	if itemColumn == conversationIDColumn && stored.ConversationID != "" {
+		return stored.ConversationID, true
 	}
 	return "", false
 }
@@ -68,19 +93,27 @@ func newRow(chunk model.StoredChunk, vector []float32) (row, error) {
 		return row{}, fmt.Errorf("normalize vector for %s: %w", chunk.RelativePath, err)
 	}
 	return row{
-		Label:             0,
-		ID:                generateRowID(chunk),
-		RelativePath:      chunk.RelativePath,
-		StartLine:         chunk.StartLine,
-		EndLine:           chunk.EndLine,
-		Language:          chunk.Language,
-		FileExtension:     chunk.FileExtension,
-		Content:           chunk.Content,
-		ContentVectorKey:  semantic.ContentVectorKey(chunk.Content),
-		Vector:            normalized,
-		SplitPart:         chunk.SplitPart,
-		SplitPartRecorded: true,
-		Scalars:           maps.Clone(chunk.Scalars),
+		Label:                0,
+		ID:                   generateRowID(chunk),
+		RelativePath:         chunk.RelativePath,
+		StartLine:            chunk.StartLine,
+		EndLine:              chunk.EndLine,
+		Language:             chunk.Language,
+		FileExtension:        chunk.FileExtension,
+		Content:              chunk.Content,
+		ContentVectorKey:     semantic.ContentVectorKey(chunk.Content),
+		Vector:               normalized,
+		ConversationID:       chunk.ConversationID,
+		ParentConversationID: chunk.ParentConversationID,
+		MessageIndex:         chunk.MessageIndex,
+		Role:                 chunk.Role,
+		TimestampUnix:        chunk.TimestampUnix,
+		WorkspaceRoot:        chunk.WorkspaceRoot,
+		Archived:             chunk.Archived,
+		LoadRules:            chunk.LoadRules,
+		SplitPart:            chunk.SplitPart,
+		SplitPartRecorded:    true,
+		Scalars:              maps.Clone(chunk.Scalars),
 	}, nil
 }
 
@@ -153,16 +186,24 @@ func vectorDimensions(rows []row) (int, error) {
 
 func (stored row) chunk(score float64) model.StoredChunk {
 	return model.StoredChunk{
-		Content:           stored.Content,
-		RelativePath:      stored.RelativePath,
-		StartLine:         stored.StartLine,
-		EndLine:           stored.EndLine,
-		Language:          stored.Language,
-		FileExtension:     stored.FileExtension,
-		SplitPart:         stored.SplitPart,
-		SplitPartRecorded: stored.SplitPartRecorded,
-		Scalars:           maps.Clone(stored.Scalars),
-		Score:             score,
+		Content:              stored.Content,
+		RelativePath:         stored.RelativePath,
+		StartLine:            stored.StartLine,
+		EndLine:              stored.EndLine,
+		Language:             stored.Language,
+		FileExtension:        stored.FileExtension,
+		ConversationID:       stored.ConversationID,
+		ParentConversationID: stored.ParentConversationID,
+		MessageIndex:         stored.MessageIndex,
+		Role:                 stored.Role,
+		TimestampUnix:        stored.TimestampUnix,
+		WorkspaceRoot:        stored.WorkspaceRoot,
+		Archived:             stored.Archived,
+		SplitPart:            stored.SplitPart,
+		SplitPartRecorded:    stored.SplitPartRecorded,
+		LoadRules:            stored.LoadRules,
+		Scalars:              maps.Clone(stored.Scalars),
+		Score:                score,
 	}
 }
 

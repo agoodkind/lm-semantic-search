@@ -28,7 +28,28 @@ type CollectionRegistration struct {
 	Declaration  model.CollectionDeclaration
 }
 
-// RegisterCollection validates and persists a caller-declared collection schema.
+// RegisterCollection records a document collection addressed by logical
+// collection id and saves its scalar declaration on the registry record.
+//
+// A repeat registration must match the saved declaration. Conversation
+// registration created every record written before declarations were saved,
+// and such a record uses the conversation declaration as its saved
+// declaration. When the stored collection exists, the registration also
+// compares its schema. For a record without a saved declaration, and for a new
+// record with the conversation declaration, the conversation scalar migration
+// runs before that comparison. A matching registration then saves the
+// declaration. A conflict returns an
+// [adapterr.ColumnError] of class [adapterr.ClassCollectionSchemaMismatch].
+// Registration never changes the stored collection schema to resolve a
+// conflict and never writes the Merkle checkpoint.
+//
+// While the vector store is unavailable, registration compares only the saved
+// declaration. It creates a new record with its declaration, and it returns a
+// record without a saved declaration unchanged.
+//
+// Conversation collections and generic collections share the chat:/// canonical
+// path and the conversation collection name. Both registration RPCs therefore
+// resolve one collection id to one registry record.
 func (manager *Manager) RegisterCollection(ctx context.Context, registration CollectionRegistration) (model.Codebase, error) {
 	collectionID := strings.TrimSpace(registration.CollectionID)
 	if collectionID == "" {
@@ -49,14 +70,14 @@ func (manager *Manager) RegisterCollection(ctx context.Context, registration Col
 	defer manager.policyMutationMutex.Unlock()
 
 	manager.mu.Lock()
-	existing, found := manager.findDocumentCollectionLocked(collectionID)
+	existing, found := manager.findConversationCollectionLocked(collectionID)
 	manager.mu.Unlock()
 
-	collectionName := manager.semantic.DocumentCollectionName(collectionID)
+	collectionName := manager.semantic.ConversationCollectionName(collectionID)
 	legacyRecord := false
 	if found {
 		collectionName = existing.CollectionName
-		saved := model.CollectionDeclaration{ItemIDColumn: "", Scalars: nil}
+		saved := semantic.ConversationDeclaration()
 		if existing.Declaration != nil {
 			saved = cloneCollectionDeclaration(*existing.Declaration)
 		} else {
@@ -67,14 +88,18 @@ func (manager *Manager) RegisterCollection(ctx context.Context, registration Col
 		}
 	}
 	if collectionName == "" {
-		return model.Codebase{}, errors.New("document collection name is unavailable")
+		return model.Codebase{}, errors.New("conversation collection name is unavailable")
 	}
 	if !manager.semantic.Available() {
+		// Registration worked without a reachable store before it validated
+		// schemas, and the conversation RPCs keep that contract. The stored schema
+		// comparison waits for a registration while the store is available. A
+		// record without a saved declaration keeps none until that comparison runs.
 		slog.WarnContext(ctx, "collection registration skipped stored schema comparison", "collection_id", collectionID, "collection", collectionName, "reason", "vector store unavailable", "legacy_record", legacyRecord)
 		if legacyRecord {
 			return existing, nil
 		}
-	} else if err := manager.validateStoredCollectionSchema(ctx, collectionID, collectionName, declaration); err != nil {
+	} else if err := manager.validateStoredCollectionSchema(ctx, collectionID, collectionName, declaration, migratesConversationColumns(collectionID, declaration, found, legacyRecord)); err != nil {
 		return model.Codebase{}, err
 	}
 
@@ -86,11 +111,69 @@ func (manager *Manager) RegisterCollection(ctx context.Context, registration Col
 	return manager.createDocumentCollectionLocked(ctx, collectionID, collectionName, declaration)
 }
 
+// RegisterConversationCollection records a virtual conversation document
+// collection through [Manager.RegisterCollection] with the conversation
+// declaration.
+func (manager *Manager) RegisterConversationCollection(ctx context.Context, collectionID string) (model.Codebase, error) {
+	return manager.RegisterCollection(ctx, CollectionRegistration{
+		CollectionID: collectionID,
+		Declaration:  semantic.ConversationDeclaration(),
+	})
+}
+
+// resolveConversationCollection returns the registered record for a
+// conversation collection. It registers the collection through
+// [Manager.RegisterConversationCollection] only when no record exists. Every
+// conversation manifest, ingest, search, backfill, and delete request resolves
+// its collection here, and an existing record returns without a stored schema
+// read, matching the request cost before registration validated schemas. A
+// record with a generic saved declaration fails with a schema mismatch.
+func (manager *Manager) resolveConversationCollection(ctx context.Context, collectionID string) (model.Codebase, error) {
+	trimmedCollectionID := strings.TrimSpace(collectionID)
+	manager.mu.Lock()
+	codebase, found := manager.findConversationCollectionLocked(trimmedCollectionID)
+	manager.mu.Unlock()
+	if found && trimmedCollectionID != "" {
+		declaration := savedCollectionDeclaration(codebase)
+		if !semantic.IsConversationDeclaration(declaration) {
+			return model.Codebase{}, adapterr.NewCollectionSchemaMismatch(
+				trimmedCollectionID,
+				declaration.ItemIDColumn,
+				"the collection has a generic declaration, and the conversation RPCs accept only the conversation declaration",
+			)
+		}
+		return codebase, nil
+	}
+	return manager.RegisterConversationCollection(ctx, trimmedCollectionID)
+}
+
+// migratesConversationColumns reports whether registration runs the
+// conversation scalar migration before it compares the stored schema. A record
+// without a saved declaration always migrates, because conversation
+// registration created it. A registration that creates a record migrates only
+// for the conversation declaration. That case covers a stored conversation
+// collection from before the scalar columns existed and without a registry
+// record, which the conversation RPC registered before schemas were validated.
+func migratesConversationColumns(collectionID string, declaration model.CollectionDeclaration, found bool, legacyRecord bool) bool {
+	if legacyRecord {
+		return true
+	}
+	if found {
+		return false
+	}
+	return compareCollectionDeclarations(collectionID, semantic.ConversationDeclaration(), declaration) == nil
+}
+
+// validateStoredCollectionSchema compares declaration with the stored
+// collection schema when the stored collection exists. With migrateLegacy set,
+// the conversation scalar migration runs first, because a stored conversation
+// collection from before the scalar columns existed still lacks them.
 func (manager *Manager) validateStoredCollectionSchema(
 	ctx context.Context,
 	collectionID string,
 	collectionName string,
 	declaration model.CollectionDeclaration,
+	migrateLegacy bool,
 ) error {
 	columns, exists, err := manager.semantic.DescribeScalarColumns(ctx, collectionName)
 	if err != nil {
@@ -100,7 +183,20 @@ func (manager *Manager) validateStoredCollectionSchema(
 	if !exists {
 		return nil
 	}
-
+	if migrateLegacy {
+		if err := manager.semantic.PrepareCollection(ctx, collectionName); err != nil {
+			slog.ErrorContext(ctx, "migrate legacy conversation collection failed", "collection_id", collectionID, "collection", collectionName, "err", err)
+			return fmt.Errorf("migrate legacy conversation collection %s: %w", collectionName, err)
+		}
+		columns, exists, err = manager.semantic.DescribeScalarColumns(ctx, collectionName)
+		if err != nil {
+			slog.ErrorContext(ctx, "describe migrated collection schema failed", "collection_id", collectionID, "collection", collectionName, "err", err)
+			return fmt.Errorf("describe collection %s: %w", collectionName, err)
+		}
+		if !exists {
+			return nil
+		}
+	}
 	return compareScalarColumns(collectionID, "stored collection schema", columns, declaration.Scalars)
 }
 
@@ -147,7 +243,7 @@ func (manager *Manager) createDocumentCollectionLocked(
 	collectionName string,
 	declaration model.CollectionDeclaration,
 ) (model.Codebase, error) {
-	codebase := newCodebaseRecord(documentCanonicalPath(collectionID))
+	codebase := newCodebaseRecord(conversationCanonicalPath(collectionID))
 	codebase.Kind = model.CodebaseKindDocument
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.EffectiveConfig = manager.enrichIndexConfig(emptyAutoIndexConfig())

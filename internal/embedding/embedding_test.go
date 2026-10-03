@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
+	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
 // testEmbedTimeout bounds one request in the happy-path tests. It is generous
@@ -426,6 +428,103 @@ func TestEmbedReportsOversizedQueryRejectionInsteadOfShorteningIt(t *testing.T) 
 	}
 }
 
+// TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument pins the shape both
+// providers give a refused single input: a typed invalid-argument error whose
+// client-safe message names the reason and the model's limit, and which never
+// names the provider or the model. A caller can act on the reason and still
+// cannot tell which provider refused the input.
+func TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens, however the input at index 0 resolved to 10000 tokens. Reduce the input length."}}`))
+	}))
+	defer server.Close()
+
+	hostedProvider, err := newOpenAICompatibleProvider("test-key", server.URL, "text-embedding-3-small", 2, testEmbedTimeout)
+	if err != nil {
+		t.Fatalf("newOpenAICompatibleProvider returned error: %v", err)
+	}
+	_, hostedErr := hostedProvider.Embed(context.Background(), strings.Repeat("a", oversizedHostedInputBytes))
+	if hostedErr == nil {
+		t.Fatal("the hosted provider accepted an input its endpoint rejected")
+	}
+
+	onnxProviderUnderTest := newUnloadedONNXProvider(t, offlinemodel.BGESmall)
+	onnxOversized := strings.Repeat("a", onnxProviderUnderTest.runtime.tokenizer.maximumInputBytes()+1)
+	_, onnxErr := onnxProviderUnderTest.Embed(context.Background(), onnxOversized)
+	if onnxErr == nil {
+		t.Fatal("the in-process provider accepted an input past its tokenizer bound")
+	}
+
+	// The in-process input was refused by the byte ceiling, which is 64 bytes per
+	// allowed token, so the limit the caller must act on is that byte figure and
+	// never the model's 512-token window.
+	onnxByteBound := strconv.Itoa(onnxProviderUnderTest.runtime.tokenizer.maximumInputBytes())
+	onnxTokenLimit := strconv.Itoa(onnxProviderUnderTest.runtime.tokenizer.maximumTokens)
+
+	cases := []struct {
+		name          string
+		err           error
+		wantReason    adapterr.EmbedRejectionReason
+		wantFigures   []string
+		forbidFigures []string
+	}{
+		{
+			name:          "hosted endpoint rejection",
+			err:           hostedErr,
+			wantReason:    adapterr.EmbedRejectionContextLengthExceeded,
+			wantFigures:   []string{"10000", "8192", "tokens"},
+			forbidFigures: nil,
+		},
+		{
+			name:          "in-process rejection",
+			err:           onnxErr,
+			wantReason:    adapterr.EmbedRejectionInputBytesExceeded,
+			wantFigures:   []string{onnxByteBound, "bytes"},
+			forbidFigures: []string{onnxTokenLimit + " tokens", onnxTokenLimit + "-token"},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var adapterErr *adapterr.AdapterError
+			if !errors.As(testCase.err, &adapterErr) {
+				t.Fatalf("error stayed untyped, so the boundary sanitizes it into an internal error: %v", testCase.err)
+			}
+			if adapterErr.Class != adapterr.ClassInvalidArgument {
+				t.Fatalf("class = %q, want %q", adapterErr.Class, adapterr.ClassInvalidArgument)
+			}
+			if !adapterErr.SafeForClient {
+				t.Fatal("a refused input must be safe to show the caller; otherwise the reason never leaves the daemon log")
+			}
+			if adapterErr.Code != string(testCase.wantReason) {
+				t.Fatalf("code = %q, want the reason %q", adapterErr.Code, testCase.wantReason)
+			}
+			message := adapterr.SafeMessage(testCase.err)
+			if !strings.Contains(message, string(testCase.wantReason)) {
+				t.Fatalf("client message %q does not name the reason %q", message, testCase.wantReason)
+			}
+			for _, figure := range testCase.wantFigures {
+				if !strings.Contains(message, figure) {
+					t.Fatalf("client message %q does not carry the figure %q", message, figure)
+				}
+			}
+			for _, wrongFigure := range testCase.forbidFigures {
+				if strings.Contains(message, wrongFigure) {
+					t.Fatalf("client message %q quotes %q, which is not the limit that refused the input", message, wrongFigure)
+				}
+			}
+			for _, leak := range []string{"OpenAI", "ONNX", "onnx", "bge-small", "endpoint"} {
+				if strings.Contains(message, leak) {
+					t.Fatalf("client message %q names %q, so a caller can tell the providers apart", message, leak)
+				}
+			}
+		})
+	}
+}
+
 // TestHostedRefusalWithoutIndexProseStaysAnInvalidArgument covers the endpoint
 // that answers context_length_exceeded without the "input at index N" wording
 // the live endpoint happens to use. Classification comes from the HTTP status
@@ -621,19 +720,18 @@ func TestTransientEmbedStatus(t *testing.T) {
 func TestEmbedBackoffDoubles(t *testing.T) {
 	t.Parallel()
 
-	base := DefaultEmbedBackoffBase
-	if embedBackoff(base, 1) != base {
-		t.Fatalf("attempt 1 backoff = %v, want %v", embedBackoff(base, 1), base)
+	if embedBackoff(1) != embedBackoffBase {
+		t.Fatalf("attempt 1 backoff = %v, want %v", embedBackoff(1), embedBackoffBase)
 	}
-	if embedBackoff(base, 2) != 2*base {
-		t.Fatalf("attempt 2 backoff = %v, want %v", embedBackoff(base, 2), 2*base)
+	if embedBackoff(2) != 2*embedBackoffBase {
+		t.Fatalf("attempt 2 backoff = %v, want %v", embedBackoff(2), 2*embedBackoffBase)
 	}
-	if embedBackoff(base, 3) != 4*base {
-		t.Fatalf("attempt 3 backoff = %v, want %v", embedBackoff(base, 3), 4*base)
+	if embedBackoff(3) != 4*embedBackoffBase {
+		t.Fatalf("attempt 3 backoff = %v, want %v", embedBackoff(3), 4*embedBackoffBase)
 	}
 }
 
-func TestNewHostedProviderClampsTimeout(t *testing.T) {
+func TestNewProviderClampsTimeout(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -647,14 +745,14 @@ func TestNewHostedProviderClampsTimeout(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			provider, err := NewHostedProvider(context.Background(), config.Config{
+			provider, err := NewProvider(context.Background(), config.Config{
 				EmbeddingProvider:         "OpenAI",
 				OpenAIAPIKey:              "test-key",
 				EmbeddingModel:            "text-embedding-3-small",
 				EmbeddingRequestTimeoutMS: testCase.timeoutMS,
 			})
 			if err != nil {
-				t.Fatalf("NewHostedProvider returned error: %v", err)
+				t.Fatalf("NewProvider returned error: %v", err)
 			}
 			concrete, ok := provider.(*openAICompatibleProvider)
 			if !ok {
@@ -667,30 +765,30 @@ func TestNewHostedProviderClampsTimeout(t *testing.T) {
 	}
 }
 
-func TestNewHostedProviderRejectsNonOpenAI(t *testing.T) {
+func TestNewProviderRejectsNonOpenAI(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewHostedProvider(context.Background(), config.Config{
+	_, err := NewProvider(context.Background(), config.Config{
 		EmbeddingProvider: "VoyageAI",
 		OpenAIAPIKey:      "test-key",
 		EmbeddingModel:    "voyage-code-3",
 	})
 	if err == nil {
-		t.Fatal("NewHostedProvider returned nil error for unsupported provider")
+		t.Fatal("NewProvider returned nil error for unsupported provider")
 	}
 }
 
-func TestNewHostedProviderAcceptsOpenAIWithBaseURL(t *testing.T) {
+func TestNewProviderAcceptsOpenAIWithBaseURL(t *testing.T) {
 	t.Parallel()
 
-	provider, err := NewHostedProvider(context.Background(), config.Config{
+	provider, err := NewProvider(context.Background(), config.Config{
 		EmbeddingProvider: "OpenAI",
 		OpenAIAPIKey:      "test-key",
 		OpenAIBaseURL:     "https://example.invalid/v1",
 		EmbeddingModel:    "text-embedding-3-small",
 	})
 	if err != nil {
-		t.Fatalf("NewHostedProvider returned error: %v", err)
+		t.Fatalf("NewProvider returned error: %v", err)
 	}
 	if provider.ProviderName() != "OpenAI" {
 		t.Fatalf("provider name = %q", provider.ProviderName())

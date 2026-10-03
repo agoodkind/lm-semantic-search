@@ -386,6 +386,94 @@ func TestUpdateCodebasePolicySerializesSyncAdmission(t *testing.T) {
 	}
 }
 
+func TestUpdateCodebasePolicySerializesConversationRegistration(t *testing.T) {
+	manager, cfg, repoPath := newTestManager(t)
+	manager.semantic = &fakeSemantic{}
+	codebase, _ := seedWatcherPolicyUpdateJob(
+		t,
+		manager,
+		repoPath,
+		model.JobStateQueued,
+	)
+	journalEntered, releaseJournal, restoreJournal := blockPolicyUpdateJournal(manager)
+	t.Cleanup(restoreJournal)
+	var releaseOnce sync.Once
+	releaseUpdate := func() { releaseOnce.Do(func() { close(releaseJournal) }) }
+	t.Cleanup(releaseUpdate)
+
+	priority := model.JobPriorityHigh
+	updateResult := make(chan error, 1)
+	go func() {
+		_, updateErr := manager.UpdateCodebasePolicy(
+			context.Background(),
+			repoPath,
+			model.SchedulingPolicyPatch{Priority: &priority},
+		)
+		updateResult <- updateErr
+	}()
+	waitForPolicyRunnerEntry(t, journalEntered)
+
+	registrationResult := make(chan policyConversationRegistrationResult, 1)
+	go func() {
+		registered, registrationErr := manager.RegisterConversationCollection(
+			context.Background(),
+			"policy-race-conversations",
+		)
+		registrationResult <- policyConversationRegistrationResult{
+			codebase: registered,
+			err:      registrationErr,
+		}
+	}()
+	select {
+	case result := <-registrationResult:
+		t.Fatalf(
+			"RegisterConversationCollection completed during policy journal barrier: %v",
+			result.err,
+		)
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseUpdate()
+	if err := receivePolicyMutationResult(t, updateResult, "UpdateCodebasePolicy"); err != nil {
+		t.Fatalf("UpdateCodebasePolicy: %v", err)
+	}
+	var registration policyConversationRegistrationResult
+	select {
+	case registration = <-registrationResult:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RegisterConversationCollection did not complete after policy update")
+	}
+	if registration.err != nil {
+		t.Fatalf("RegisterConversationCollection: %v", registration.err)
+	}
+	if registration.codebase.ID == "" {
+		t.Fatal("RegisterConversationCollection returned an empty codebase")
+	}
+
+	registry, err := store.ReadRegistry(cfg.RegistryPath)
+	if err != nil {
+		t.Fatalf("ReadRegistry: %v", err)
+	}
+	foundPolicy := false
+	foundConversation := false
+	for _, storedCodebase := range registry.Codebases {
+		if storedCodebase.ID == codebase.ID {
+			foundPolicy = storedCodebase.SchedulingPolicy.Priority ==
+				model.JobPriorityHigh
+		}
+		if storedCodebase.ID == registration.codebase.ID {
+			foundConversation = true
+		}
+	}
+	if !foundPolicy || !foundConversation {
+		t.Fatalf(
+			"registry lost serialized writes: policy=%v conversation=%v records=%+v",
+			foundPolicy,
+			foundConversation,
+			registry.Codebases,
+		)
+	}
+}
+
 func TestForceIndexReleasesPolicyLockWhileCancellationFinishes(t *testing.T) {
 	manager, _ := newTestManagerWithCap(t, 1)
 	manager.semantic = &fakeSemantic{}
@@ -442,6 +530,11 @@ func TestForceIndexReleasesPolicyLockWhileCancellationFinishes(t *testing.T) {
 type policySyncResult struct {
 	job model.Job
 	err error
+}
+
+type policyConversationRegistrationResult struct {
+	codebase model.Codebase
+	err      error
 }
 
 func blockPolicyUpdateJournal(

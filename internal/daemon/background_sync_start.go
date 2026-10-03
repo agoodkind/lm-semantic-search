@@ -6,11 +6,15 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
+// runPeriodicMaintenanceOnce runs one tick of the store-maintenance sweep: the
+// mmap migration and the conversation scalar backfill. Both touch the store,
+// so the tick is skipped whole while the operator's maintenance mode is on.
 func (syncer *BackgroundSync) runPeriodicMaintenanceOnce(ctx context.Context) {
 	if syncer.manager != nil && syncer.manager.skipForMaintenance(ctx, "store-maintenance-sweep") {
 		return
 	}
 	syncer.ensureMmapEnabled(ctx)
+	syncer.backfillConversationColumns(ctx)
 }
 
 // startSweepSync starts the periodic sweep's sync of an indexed codebase whose

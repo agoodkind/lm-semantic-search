@@ -54,9 +54,12 @@ type deltaOutcome struct {
 }
 
 type deltaState struct {
-	plan             deltaPlan
-	snapshotPath     string
-	working          map[string]string
+	plan         deltaPlan
+	snapshotPath string
+	working      map[string]string
+	// source lists items and produces one item's chunks. It is the only
+	// kind-specific part of the routine: a code source walks the filesystem, a
+	// conversation source reads the manifest and documents handed over the wire.
 	source           itemSource
 	semantic         bool
 	itemReuseEnabled bool
@@ -589,10 +592,10 @@ func (manager *Manager) promoteStagingMerkle(ctx context.Context, job model.Job,
 	return deltaOutcome{fallback: false, handled: false, progressed: false}
 }
 
-// promoteBootstrap publishes the completed library namespace or swaps a
-// legacy staging collection onto the live name. An empty library bootstrap
-// still registers its namespace. An empty legacy bootstrap has no collection
-// to promote. A handled outcome means the job already has a terminal state.
+// promoteBootstrap swaps the freshly built staging collection onto the live
+// name. When no file produced chunks there is no staging collection to
+// promote, which is a successful empty index rather than an error. A handled
+// outcome means promoteBootstrap already set a terminal job state.
 func (manager *Manager) promoteBootstrap(ctx context.Context, job model.Job, state deltaState) deltaOutcome {
 	if !state.semantic {
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
@@ -603,10 +606,7 @@ func (manager *Manager) promoteBootstrap(ctx context.Context, job model.Job, sta
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
 	if !hasStaging {
-		_, libraryStore := manager.semantic.(*libraryCodeIndex)
-		if !libraryStore || semantic.IsDocumentPath(job.CanonicalPath) {
-			return deltaOutcome{fallback: false, handled: false, progressed: false}
-		}
+		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 	if err := manager.semantic.PromoteStaging(ctx, job.CanonicalPath); err != nil {
 		manager.cleanupHaltedStaging(ctx, job, state)
@@ -675,6 +675,10 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		if outcome.fallback || outcome.handled {
 			return result, outcome
 		}
+		// A skipped item changes nothing in the working set, so rewriting the
+		// snapshot for it would be one full-file disk write per skipped item; a
+		// job that skips a thousand undelivered conversations checkpoints only
+		// after the items that actually embedded or removed.
 		if outcome.progressed {
 			manager.writeCheckpoint(ctx, state, relativePath)
 		}
@@ -848,6 +852,9 @@ func (manager *Manager) finishJobForReuseFailure(ctx context.Context, jobID stri
 	manager.updateJobFailed(ctx, jobID, err)
 }
 
+// mergedReuse overlays an item's own reuse vectors on any build-wide reuse map
+// without mutating either input. With no build-wide map the item map is used
+// as-is, which is the conversation delta case.
 func mergedReuse(base map[string][]float32, item map[string][]float32) map[string][]float32 {
 	if len(base) == 0 {
 		return item
@@ -864,7 +871,7 @@ func (manager *Manager) classifyReindexErr(ctx context.Context, job model.Job, e
 		manager.routeToBootstrap(ctx, job.ID, bootstrapReasonDeltaCollectionMissing)
 		slog.WarnContext(ctx, "semantic collection missing; falling back to full reindex", "job_id", job.ID, "phase", phase)
 		return deltaOutcome{fallback: true, handled: false, progressed: false}
-	case errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled):
+	case errors.Is(err, context.Canceled):
 		manager.updateJobCancelled(ctx, job.ID)
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	default:

@@ -15,6 +15,7 @@ func TestProductionReadOnlySearchConfirmation(t *testing.T) {
 	requireProductionOptIn(t)
 	daemonSocket := requiredProductionEnvironment(t, "LMS_PRODUCTION_DAEMON_SOCKET")
 	codePath := requiredProductionEnvironment(t, "LMS_PRODUCTION_CODE_PATH")
+	conversationID := requiredProductionEnvironment(t, "LMS_PRODUCTION_CONVERSATION_ID")
 	dialContext, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer dialCancel()
 	connection, client, err := grpcutil.DialDaemon(dialContext, daemonSocket)
@@ -36,6 +37,22 @@ func TestProductionReadOnlySearchConfirmation(t *testing.T) {
 	}
 	if len(codeResponse.GetResults()) == 0 {
 		t.Fatalf("production code search returned no results: %s", codeResponse.GetDisplayText())
+	}
+	conversationContext, conversationCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	conversationResponse, err := client.SearchConversations(
+		conversationContext,
+		&pb.SearchConversationsRequest{
+			CollectionId: conversationID,
+			Query:        "Milvus residency",
+			Limit:        3,
+		},
+	)
+	conversationCancel()
+	if err != nil {
+		t.Fatalf("search production conversations through public daemon: %v", err)
+	}
+	if len(conversationResponse.GetResults()) == 0 {
+		t.Fatalf("production conversation search returned no results: %s", conversationResponse.GetDisplayText())
 	}
 	requireProductionDaemonHealthy(t, client)
 }

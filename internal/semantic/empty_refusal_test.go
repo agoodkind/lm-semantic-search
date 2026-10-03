@@ -68,8 +68,8 @@ func TestInsertChunksBatchedNeverCountsAnEmptyRefusalAsADrop(t *testing.T) {
 		embedder: embedder,
 	}
 	chunks := []model.StoredChunk{
-		{Content: "", RelativePath: "conv/thread-1/4"},
-		{Content: "   \n\t ", RelativePath: "conv/thread-1/5"},
+		{Content: "", RelativePath: "conv/thread-1/4", ConversationID: "thread-1", MessageIndex: 4, Role: "assistant"},
+		{Content: "   \n\t ", RelativePath: "conv/thread-1/5", ConversationID: "thread-1", MessageIndex: 5, Role: "assistant"},
 	}
 	var reports []Progress
 
@@ -81,7 +81,7 @@ func TestInsertChunksBatchedNeverCountsAnEmptyRefusalAsADrop(t *testing.T) {
 		"test",
 		func(progress Progress) { reports = append(reports, progress) },
 		nil,
-		CodeColumns(),
+		ConversationColumns(),
 	)
 	if err != nil {
 		t.Fatalf("insertChunksBatched returned error: %v", err)
@@ -117,6 +117,10 @@ func TestInsertChunksBatchedNeverCountsAnEmptyRefusalAsADrop(t *testing.T) {
 	if refusal.Attrs["refused_inputs"] != "2" {
 		t.Fatalf("refused_inputs = %q, want \"2\"", refusal.Attrs["refused_inputs"])
 	}
+	// The identity is what makes the count actionable: it names who sent it.
+	if refusal.Attrs["conversation_id"] != "thread-1" {
+		t.Fatalf("conversation_id = %q, want thread-1 so the offending caller is nameable", refusal.Attrs["conversation_id"])
+	}
 	if refusal.Attrs["relative_path"] != "conv/thread-1/4" {
 		t.Fatalf("relative_path = %q, want conv/thread-1/4", refusal.Attrs["relative_path"])
 	}
@@ -144,8 +148,8 @@ func TestInsertChunksBatchedStillWritesContentBesideARefusal(t *testing.T) {
 		embedder: embedder,
 	}
 	chunks := []model.StoredChunk{
-		{Content: "", RelativePath: "conv/thread-2/0"},
-		{Content: "a real message worth indexing", RelativePath: "conv/thread-2/1"},
+		{Content: "", RelativePath: "conv/thread-2/0", ConversationID: "thread-2"},
+		{Content: "a real message worth indexing", RelativePath: "conv/thread-2/1", ConversationID: "thread-2"},
 	}
 
 	keptChunks, keptVectors := filterEmbeddedChunks(chunks, [][]float32{nil, {29}})

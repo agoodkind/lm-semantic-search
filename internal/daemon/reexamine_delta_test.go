@@ -12,7 +12,7 @@ import (
 
 // TestApplyDeltaChangesRespectsForcedItems proves the hash-equality skip in
 // applyDeltaChanges is bypassed for a forced item (so an operator backfill of an
-// unchanged item actually re-runs indexOne) and stays in force for an
+// unchanged conversation actually re-runs indexOne) and stays in force for an
 // unforced item whose fingerprint is unchanged (so the normal sync is untouched).
 func TestApplyDeltaChangesRespectsForcedItems(t *testing.T) {
 	cases := []struct {
@@ -62,64 +62,5 @@ func TestApplyDeltaChangesRespectsForcedItems(t *testing.T) {
 				t.Fatalf("reindex called = %v, want %v", reindexed, testCase.wantReindex)
 			}
 		})
-	}
-}
-
-type oneFileResultOverrideSource struct {
-	result          indexer.OneFileResult
-	fallbackRemoval semantic.Removal
-	reuse           itemReuseSource
-}
-
-func (source oneFileResultOverrideSource) capture(context.Context) (merkle.Snapshot, error) {
-	return merkle.Snapshot{}, nil
-}
-
-func (source oneFileResultOverrideSource) forcedWorkSet(context.Context) ([]string, error) {
-	return nil, nil
-}
-
-func (source oneFileResultOverrideSource) columnSet() semantic.StoreColumnSet {
-	return semantic.CodeColumns()
-}
-
-func (source oneFileResultOverrideSource) indexOne(context.Context, string) (indexer.OneFileResult, error) {
-	return source.result, nil
-}
-
-func (source oneFileResultOverrideSource) removalFor([]string) semantic.Removal {
-	return source.fallbackRemoval
-}
-
-func (source oneFileResultOverrideSource) absencePolicy() absencePolicy {
-	return absenceRetain
-}
-
-func (source oneFileResultOverrideSource) reuseSource(string) itemReuseSource {
-	return source.reuse
-}
-
-func (source oneFileResultOverrideSource) unit() string {
-	return "document"
-}
-
-func (source oneFileResultOverrideSource) producesGraph() bool {
-	return false
-}
-
-func (source oneFileResultOverrideSource) tracksByteTotals() bool {
-	return false
-}
-
-func overrideDeltaState(merkleDir string, source oneFileResultOverrideSource) deltaState {
-	return deltaState{
-		plan:         deltaPlan{},
-		snapshotPath: merkleDir + "/override-checkpoint-test.json",
-		working:      map[string]string{},
-		source:       source,
-		semantic:     true,
-		staging:      false,
-		reuse:        nil,
-		chunkCounts:  &chunkCounters{},
 	}
 }

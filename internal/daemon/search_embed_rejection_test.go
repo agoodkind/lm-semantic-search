@@ -65,14 +65,14 @@ func TestSearchCodeTellsTheClientWhyTheEmbedderRefusedTheQuery(t *testing.T) {
 			}))
 			defer endpoint.Close()
 
-			provider, err := embedding.NewHostedProvider(context.Background(), config.Config{
+			provider, err := embedding.NewProvider(context.Background(), config.Config{
 				EmbeddingProvider: "OpenAI",
 				OpenAIAPIKey:      "test-key",
 				OpenAIBaseURL:     endpoint.URL,
 				EmbeddingModel:    "model",
 			})
 			if err != nil {
-				t.Fatalf("NewHostedProvider returned error: %v", err)
+				t.Fatalf("NewProvider returned error: %v", err)
 			}
 			_, embedErr := provider.Embed(context.Background(), strings.Repeat("a", 40000))
 			if embedErr == nil {
