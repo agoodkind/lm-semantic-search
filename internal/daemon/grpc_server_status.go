@@ -13,6 +13,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/pbconv"
 	render "goodkind.io/lm-semantic-search/internal/render"
+	statusdisplay "goodkind.io/lm-semantic-search/status"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -64,7 +65,7 @@ func (server *GRPCServer) GetStatus(ctx context.Context, request *pb.GetStatusRe
 		Maintenance: toMaintenanceStatus(daemon.Maintenance),
 		DisplayText: "",
 	}
-	response.DisplayText = server.envelopeText(ctx, daemon.Health, render.StatusMetrics(response))
+	response.DisplayText = server.envelopeText(ctx, daemon.Health, statusdisplay.Dump(render.StatusSnapshot(response)))
 	return response, nil
 }
 

@@ -1,52 +1,41 @@
-package main
+package status
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
-	render "goodkind.io/lm-semantic-search/internal/render"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // statusValueGap and statusUnitGap separate the four columns. They are constants
-// so the layout is identical between two renders of the same terminal width.
+// to keep the layout identical between two renders of the same terminal width.
 const (
 	statusValueGap = 2
 	statusUnitGap  = 2
 	statusUnitWide = 10
+	// defaultTermWidth is the width used before the terminal reports its size.
+	defaultTermWidth = 120
 )
 
-// runStatusTUI drives the live status screen until the operator quits. It polls
-// rather than subscribes: WatchJobs sends one message per requested job id and
-// returns, so it is a snapshot rather than a subscription and cannot drive a
-// refreshing screen.
-func runStatusTUI(options cliOptions, interval time.Duration) error {
-	first, err := fetchStatusResponse(options)
-	if err != nil {
-		return err
-	}
-	program := tea.NewProgram(newStatusModel(options, interval, first), tea.WithAltScreen())
-	if _, runErr := program.Run(); runErr != nil {
-		slog.Error("run status TUI failed", "err", runErr)
-		return fmt.Errorf("run status screen: %w", runErr)
-	}
-	return nil
-}
+var (
+	faintStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	headerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true)
+)
 
 // statusModel is the bubbletea state for the live screen. It keeps the previous
 // read's integer values so each refresh can report the change, and it keeps the
-// last successful read time so a failed refresh never reads as a quiet system.
+// last successful read time. A failed refresh therefore never reads as a quiet
+// system.
 type statusModel struct {
-	options  cliOptions
+	source   Source
 	interval time.Duration
-	response *pb.GetStatusResponse
+	now      func() time.Time
+	snapshot Snapshot
 	previous map[string]int64
 	// comparable records that the next read may be subtracted from the current
 	// one. It is false after a resume, because the gap the operator chose is not
@@ -63,20 +52,21 @@ type statusModel struct {
 }
 
 type statusRefreshedMsg struct {
-	response *pb.GetStatusResponse
+	snapshot Snapshot
 	err      error
 }
 
 type statusTickMsg struct{}
 
-func newStatusModel(options cliOptions, interval time.Duration, first *pb.GetStatusResponse) statusModel {
+func newStatusModel(source Source, interval time.Duration, now func() time.Time, first Snapshot) statusModel {
 	return statusModel{
-		options:    options,
+		source:     source,
 		interval:   interval,
-		response:   first,
+		now:        now,
+		snapshot:   first,
 		previous:   nil,
 		comparable: true,
-		readAt:     time.Now(),
+		readAt:     now(),
 		refreshErr: nil,
 		paused:     false,
 		refreshing: false,
@@ -105,7 +95,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := []tea.Cmd{statusTick(m.interval)}
 		if !m.paused && !m.refreshing {
 			m.refreshing = true
-			cmds = append(cmds, statusRefreshCmd(m.options))
+			cmds = append(cmds, statusRefreshCmd(m.source))
 		}
 		return m, tea.Batch(cmds...)
 	}
@@ -131,7 +121,7 @@ func (m statusModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.refreshing = true
-		return m, statusRefreshCmd(m.options)
+		return m, statusRefreshCmd(m.source)
 	case keyMatches(msg, "down", "j"):
 		// Clamped on the way down, not only when rendering. View clamps a local
 		// copy, so without this m.offset would keep climbing past the last line
@@ -147,13 +137,13 @@ func (m statusModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// applyRefresh swaps in a fresh reply and keeps the prior integer values so the
-// next render can report the change. A failed refresh keeps the previous reply
-// and the previous read time, so the screen states it is stale rather than
-// showing an empty one.
+// applyRefresh swaps in a fresh snapshot and keeps the prior integer values for
+// the next render to report the change. A failed refresh keeps the previous
+// snapshot and the previous read time, and the screen states it is stale rather
+// than showing an empty one.
 //
 // The baseline is dropped whenever the two reads did not observe one continuous
-// run of one process. A restarted daemon zeroes every counter, so subtracting
+// run of one process. A restarted process zeroes every counter, so subtracting
 // across it reports large negative changes as if work were being undone, and a
 // resumed pause would report a change spanning the whole pause under a header
 // still claiming the poll interval.
@@ -164,30 +154,25 @@ func (m statusModel) applyRefresh(msg statusRefreshedMsg) statusModel {
 		return m
 	}
 	m.refreshErr = nil
-	if sameDaemonRun(m.response, msg.response) && m.comparable {
-		m.previous = integerValuesByName(m.response)
+	if sameRun(m.snapshot, msg.snapshot) && m.comparable {
+		m.previous = integerValuesByName(m.snapshot)
 	} else {
 		m.previous = nil
 	}
 	m.comparable = true
-	m.response = msg.response
-	m.readAt = time.Now()
+	m.snapshot = msg.snapshot
+	m.readAt = m.now()
 	return m
 }
 
-// sameDaemonRun reports whether two replies came from one continuous run of one
-// process. A different pid or a different start time means the counters restarted
-// from zero, so a difference between the two is not a change anyone observed.
-func sameDaemonRun(previous *pb.GetStatusResponse, current *pb.GetStatusResponse) bool {
-	first := previous.GetDaemon()
-	second := current.GetDaemon()
-	if first == nil || second == nil {
+// sameRun reports whether two snapshots came from one continuous run of one
+// process. A different or missing RunID means the counters may have restarted
+// from zero, and a difference between the two is not a change anyone observed.
+func sameRun(previous Snapshot, current Snapshot) bool {
+	if previous.RunID == "" || current.RunID == "" {
 		return false
 	}
-	if first.GetPid() != second.GetPid() {
-		return false
-	}
-	return first.GetStartedAt().AsTime().Equal(second.GetStartedAt().AsTime())
+	return previous.RunID == current.RunID
 }
 
 // View composes the frame. The header and the key line are pinned; everything
@@ -228,11 +213,11 @@ func (m statusModel) View() string {
 }
 
 // bodyLines is everything that scrolls: the counter block, a blank separator,
-// then the activity block. View and the scroll keys both read it, so the last
-// reachable line is the same number in both.
+// then the activity block. View and the scroll keys both read it. The last
+// scrollable line has the same number in both.
 func (m statusModel) bodyLines(width int) []string {
 	lines := append(
-		strings.Split(statusCounterBlock(m.response, m.previous, width), "\n"),
+		strings.Split(statusCounterBlock(m.snapshot, m.previous, width), "\n"),
 		"",
 	)
 	return append(lines, strings.Split(m.activityBlock(width), "\n")...)
@@ -250,8 +235,8 @@ func (m statusModel) maxOffset() int {
 }
 
 // visibleBodyRows is how many body lines fit between the pinned header and the
-// pinned key line. An unknown height renders everything, which is what a piped
-// or freshly started screen wants.
+// pinned key line. An unknown height renders everything, the right choice for a
+// freshly started screen.
 func (m statusModel) visibleBodyRows(headerLines int) int {
 	if m.height <= 0 {
 		return int(^uint(0) >> 1)
@@ -265,24 +250,25 @@ func (m statusModel) visibleBodyRows(headerLines int) int {
 	return rows
 }
 
-// headerBlock names the process and states when the screen last read it. A
-// failed refresh keeps the last successful timestamp and appends the reason, so
-// a dead connection never reads as a quiet system.
+// headerBlock shows the snapshot's title and details and states when the screen
+// last read the source. A failed refresh keeps the last successful timestamp and
+// appends the reason. A dead connection therefore never reads as a quiet system.
 func (m statusModel) headerBlock() string {
-	daemon := m.response.GetDaemon()
-	first := fmt.Sprintf("lm-semantic-search  version=%s  pid=%d",
-		daemon.GetVersion(), daemon.GetPid())
-	second := "socket=" + daemon.GetSocketPath()
-
-	stamp := m.readAt.Format("15:04:05")
-	third := fmt.Sprintf("read_at=%s  interval=%s", stamp, m.interval)
+	stamp := inLocalZone(m.readAt).Format("15:04:05")
+	last := fmt.Sprintf("read_at=%s  interval=%s", stamp, m.interval)
 	if m.paused {
-		third = fmt.Sprintf("paused_at=%s  interval=%s", stamp, m.interval)
+		last = fmt.Sprintf("paused_at=%s  interval=%s", stamp, m.interval)
 	}
 	if m.refreshErr != nil {
-		third += fmt.Sprintf(`  refresh_error=%q`, m.refreshErr.Error())
+		last += fmt.Sprintf(`  refresh_error=%q`, m.refreshErr.Error())
 	}
-	return headerStyle.Render(first) + "\n" + faintStyle.Render(second) + "\n" + faintStyle.Render(third)
+
+	lines := []string{headerStyle.Render(m.snapshot.Title)}
+	for _, detail := range m.snapshot.Details {
+		lines = append(lines, faintStyle.Render(detail))
+	}
+	lines = append(lines, faintStyle.Render(last))
+	return strings.Join(lines, "\n")
 }
 
 func (m statusModel) keyLine() string {
@@ -298,43 +284,43 @@ func (m statusModel) keyLine() string {
 
 // statusCounterBlock lays out the counters in four columns: the name, the
 // digit-grouped value, the unit, and the change since the previous read. Column
-// widths come from one pass over the metrics, so a value growing a digit never
-// shifts the columns beside it.
-func statusCounterBlock(response *pb.GetStatusResponse, previous map[string]int64, width int) string {
-	metrics := response.GetMetrics()
+// widths come from one pass over the counters, and a value growing a digit does
+// not shift the columns beside it.
+func statusCounterBlock(snapshot Snapshot, previous map[string]int64, width int) string {
+	counters := snapshot.Counters
 	nameWidth := 0
 	valueWidth := 0
 	deltaWidth := 0
-	for _, metric := range metrics {
-		nameWidth = max(nameWidth, len(metric.GetName()))
-		valueWidth = max(valueWidth, len(statusValueText(metric)))
-		deltaWidth = max(deltaWidth, len(statusDeltaText(metric, previous)))
+	for _, counter := range counters {
+		nameWidth = max(nameWidth, len(counter.Name))
+		valueWidth = max(valueWidth, len(statusValueText(counter.Value)))
+		deltaWidth = max(deltaWidth, len(statusDeltaText(counter, previous)))
 	}
 
-	lines := make([]string, 0, len(metrics)+8)
+	lines := make([]string, 0, len(counters)+8)
 	group := ""
-	for _, metric := range metrics {
-		if metric.GetGroup() != group && group != "" {
+	for _, counter := range counters {
+		if counter.Group != group && group != "" {
 			lines = append(lines, "")
 		}
-		group = metric.GetGroup()
-		lines = append(lines, statusCounterLine(metric, previous, nameWidth, valueWidth, deltaWidth, width))
+		group = counter.Group
+		lines = append(lines, statusCounterLine(counter, previous, nameWidth, valueWidth, deltaWidth, width))
 	}
 	return strings.Join(lines, "\n")
 }
 
 func statusCounterLine(
-	metric *pb.Metric,
+	counter Field,
 	previous map[string]int64,
 	nameWidth int,
 	valueWidth int,
 	deltaWidth int,
 	width int,
 ) string {
-	name := padTo(metric.GetName(), nameWidth)
-	value := padLeftTo(statusValueText(metric), valueWidth)
-	unit := padTo(metric.GetUnit(), statusUnitWide)
-	delta := padLeftTo(statusDeltaText(metric, previous), deltaWidth)
+	name := padTo(counter.Name, nameWidth)
+	value := padLeftTo(statusValueText(counter.Value), valueWidth)
+	unit := padTo(counter.Unit, statusUnitWide)
+	delta := padLeftTo(statusDeltaText(counter, previous), deltaWidth)
 
 	line := name + strings.Repeat(" ", statusValueGap) + value +
 		strings.Repeat(" ", statusUnitGap) + unit + delta
@@ -351,12 +337,12 @@ func statusCounterLine(
 // statusValueText renders a value for the screen: digits grouped, and a
 // timestamp shown in the operator's own zone.
 //
-// The piped and JSON forms keep UTC, because both are parsed and a machine
-// consumer wants one unambiguous zone. The screen is the only surface a person
-// reads directly, so it is the only one that converts.
-func statusValueText(metric *pb.Metric) string {
-	text := render.MetricValueText(metric)
-	if _, isInt := metric.GetValue().(*pb.Metric_IntValue); isInt {
+// The dump keeps UTC, because it is parsed and a machine consumer wants one
+// unambiguous zone. The screen is the only surface a person reads directly, so
+// it is the only one that converts.
+func statusValueText(value Value) string {
+	text := valueText(value)
+	if value.kind == kindInteger {
 		return groupDigits(text)
 	}
 	return displayTimeText(text)
@@ -364,45 +350,52 @@ func statusValueText(metric *pb.Metric) string {
 
 // displayTimeText converts an RFC3339 timestamp into the host's zone with its
 // offset, and returns anything else unchanged. A counter, a phase name, and a
-// path never parse as RFC3339, so nothing else is rewritten.
+// path never parse as RFC3339, and the function returns each of them as given.
 func displayTimeText(text string) string {
 	parsed, err := time.Parse(time.RFC3339Nano, text)
 	if err != nil {
 		return text
 	}
-	return render.InLocalZone(parsed).Format("2006-01-02T15:04:05-07:00")
+	return inLocalZone(parsed).Format("2006-01-02T15:04:05-07:00")
 }
 
-// constantMetrics never change while the daemon runs, so a delta column beside
-// them would only ever read +0 and add noise to every line of the screen.
-var constantMetrics = map[string]bool{
-	"index_slots_total": true,
+// inLocalZone returns value in the host's zone, or unchanged when that zone
+// cannot be loaded.
+//
+// Loading the zone by name rather than reading the process-wide local zone is
+// what keeps the gosmopolitan analyzer satisfied: the analyzer exists to catch
+// an implicit machine locale, and a named lookup states the intent.
+func inLocalZone(value time.Time) time.Time {
+	location, err := time.LoadLocation("Local")
+	if err != nil {
+		return value
+	}
+	return value.In(location)
 }
 
 // statusDeltaText reports the change since the previous read for an integer
-// value. A value with no previous read, a constant, and any non-integer value
-// report nothing rather than a change of zero.
-func statusDeltaText(metric *pb.Metric, previous map[string]int64) string {
-	if constantMetrics[metric.GetName()] {
+// value. A value with no previous read, a field marked NoDelta, and any
+// non-integer value report an empty string rather than a change of zero.
+func statusDeltaText(field Field, previous map[string]int64) string {
+	if field.NoDelta {
 		return ""
 	}
-	intValue, isInt := metric.GetValue().(*pb.Metric_IntValue)
-	if !isInt || previous == nil {
+	if field.Value.kind != kindInteger || previous == nil {
 		return ""
 	}
-	prior, seen := previous[metric.GetName()]
+	prior, seen := previous[field.Name]
 	if !seen {
 		return ""
 	}
-	return deltaText(intValue.IntValue-prior, true)
+	return deltaText(field.Value.integer-prior, true)
 }
 
 // activityBlock renders every unit of work as an indented block of name=value
-// pairs, using the same names the counters use. It renders all of them; View
-// owns the scrolling, so the counters and the activity share one window rather
+// pairs, using the same labels as the counters. It renders all of them; View
+// owns the scrolling, and the counters and the activity share one window rather
 // than competing for the same rows.
 func (m statusModel) activityBlock(width int) string {
-	rows := m.response.GetActivity()
+	rows := m.snapshot.Activity
 	header := headerStyle.Render(fmt.Sprintf("activity  rows=%d", len(rows)))
 	if len(rows) == 0 {
 		return header + "\n" + faintStyle.Render("  none running, none queued")
@@ -415,16 +408,16 @@ func (m statusModel) activityBlock(width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// statusActivityRow renders one unit of work. Fields carry their unit in their
-// name, so they take no unit column.
+// statusActivityRow renders one unit of work. Fields include their unit in
+// their name, so they take no unit column.
 //
-// A row carrying no fields still renders a line. Every row this daemon builds
-// carries fields, but the reply comes off a socket, so a daemon of another
-// version or a truncated message must not crash the screen.
-func statusActivityRow(index int, row *pb.ActivityRow, width int) []string {
-	pairs := make([]string, 0, len(row.GetMetrics()))
-	for _, metric := range row.GetMetrics() {
-		pairs = append(pairs, metric.GetName()+"="+statusValueText(metric))
+// A row with no fields still renders a line. A source can return an empty row,
+// for example after a version mismatch with the program it reads, and that must
+// not crash the screen.
+func statusActivityRow(index int, row []Field, width int) []string {
+	pairs := make([]string, 0, len(row))
+	for _, field := range row {
+		pairs = append(pairs, field.Name+"="+statusValueText(field.Value))
 	}
 	if len(pairs) == 0 {
 		return []string{fmt.Sprintf("  [%d] (no fields reported)", index)}
@@ -445,14 +438,14 @@ func statusActivityRow(index int, row *pb.ActivityRow, width int) []string {
 	return lines
 }
 
-// integerValuesByName indexes a reply's integer values so the next render can
-// subtract them. Only integers carry a delta; a rate, a timestamp, and a string
+// integerValuesByName indexes a snapshot's integer values for the next render
+// to subtract. Only integers have a delta; a rate, a timestamp, and a string
 // have no meaningful difference between two reads.
-func integerValuesByName(response *pb.GetStatusResponse) map[string]int64 {
-	values := make(map[string]int64, len(response.GetMetrics()))
-	for _, metric := range response.GetMetrics() {
-		if intValue, isInt := metric.GetValue().(*pb.Metric_IntValue); isInt {
-			values[metric.GetName()] = intValue.IntValue
+func integerValuesByName(snapshot Snapshot) map[string]int64 {
+	values := make(map[string]int64, len(snapshot.Counters))
+	for _, counter := range snapshot.Counters {
+		if counter.Value.kind == kindInteger {
+			values[counter.Name] = counter.Value.integer
 		}
 	}
 	return values
@@ -460,8 +453,8 @@ func integerValuesByName(response *pb.GetStatusResponse) map[string]int64 {
 
 // groupDigits inserts a comma every three digits from the right, preserving a
 // leading sign. The terminal groups digits so a value crossing a digit boundary
-// is visible without reading it; the piped and JSON forms keep raw digits
-// because both are parsed.
+// is visible without reading it; the dump keeps raw digits because it is
+// parsed.
 func groupDigits(digits string) string {
 	sign := ""
 	if strings.HasPrefix(digits, "-") {
@@ -480,9 +473,9 @@ func groupDigits(digits string) string {
 	return sign + strings.Join(parts, ",")
 }
 
-// deltaText renders the change since the previous read. It always carries a
-// sign, so direction never has to be inferred, and it is empty when there is no
-// previous read to compare against.
+// deltaText renders the change since the previous read. It always has a sign,
+// and direction never has to be inferred. It is empty when there is no previous
+// read to compare against.
 func deltaText(delta int64, hasPrevious bool) string {
 	if !hasPrevious {
 		return ""
@@ -499,25 +492,54 @@ func statusTick(interval time.Duration) tea.Cmd {
 	})
 }
 
-func statusRefreshCmd(options cliOptions) tea.Cmd {
+func statusRefreshCmd(source Source) tea.Cmd {
 	return func() tea.Msg {
-		response, err := fetchStatusResponse(options)
-		return statusRefreshedMsg{response: response, err: err}
+		snapshot, err := source()
+		return statusRefreshedMsg{snapshot: snapshot, err: err}
 	}
 }
 
-// fetchStatusResponse reads one status reply, rejecting an unexpected reply type
-// rather than rendering a zero value as if the daemon had reported it.
-func fetchStatusResponse(options cliOptions) (*pb.GetStatusResponse, error) {
-	result, err := callDaemon(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
-		return client.GetStatus(ctx, &pb.GetStatusRequest{})
-	})
-	if err != nil {
-		return nil, err
+// keyMatches reports whether the pressed key equals any of the given names,
+// keeping key handling as plain comparisons rather than a switch on a bare
+// string.
+func keyMatches(msg tea.KeyMsg, keys ...string) bool {
+	return slices.Contains(keys, msg.String())
+}
+
+// padTo pads text with trailing spaces to a display width of width, measured in
+// runes. A multibyte ellipsis counts as one column. It assumes text already
+// fits; fit it first with fitTail.
+func padTo(text string, width int) string {
+	gap := width - utf8.RuneCountInString(text)
+	if gap <= 0 {
+		return text
 	}
-	response, ok := result.(*pb.GetStatusResponse)
-	if !ok {
-		return nil, errors.New("unexpected response type from GetStatus")
+	return text + strings.Repeat(" ", gap)
+}
+
+// padLeftTo right-aligns text within width by prepending spaces, measured in
+// runes.
+func padLeftTo(text string, width int) string {
+	gap := width - utf8.RuneCountInString(text)
+	if gap <= 0 {
+		return text
 	}
-	return response, nil
+	return strings.Repeat(" ", gap) + text
+}
+
+// fitTail keeps the head of text and drops the tail with a trailing ellipsis
+// when it overflows width. Width and slicing are rune-based, and the ellipsis
+// is counted once.
+func fitTail(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= width {
+		return text
+	}
+	if width == 1 {
+		return "…"
+	}
+	return string(runes[:width-1]) + "…"
 }
