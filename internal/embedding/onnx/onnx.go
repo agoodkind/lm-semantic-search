@@ -61,13 +61,24 @@ func NewProvider(
 	ctx context.Context,
 	cfg config.Config,
 ) (embedding.Provider, error) {
-	preset, err := offlinemodel.Resolve(cfg.OfflineEmbeddingModel)
+	return NewProviderForModel(ctx, cfg.OfflineEmbeddingModel, cfg.ModelCacheRoot)
+}
+
+// NewProviderForModel returns the in-process ONNX provider for one offline
+// model preset. An empty modelName selects the default preset. cacheRoot is the
+// directory that stores the downloaded model files.
+func NewProviderForModel(
+	ctx context.Context,
+	modelName string,
+	cacheRoot string,
+) (embedding.Provider, error) {
+	preset, err := offlinemodel.Resolve(modelName)
 	if err != nil {
 		slog.ErrorContext(
 			ctx,
 			"resolve offline embedding model failed",
 			"model",
-			cfg.OfflineEmbeddingModel,
+			modelName,
 			"err",
 			err,
 		)
@@ -76,7 +87,7 @@ func NewProvider(
 	files, err := ensureModelFiles(
 		ctx,
 		http.DefaultClient,
-		cfg.ModelCacheRoot,
+		cacheRoot,
 		preset,
 	)
 	if err != nil {
