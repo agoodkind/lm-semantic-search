@@ -149,12 +149,7 @@ func (driver *realAcceptanceDriver) confirmClone(
 			ColdConversationSearch: func(
 				searchContext context.Context,
 			) (semanticSearchObservation, error) {
-				return searchConversationObservation(
-					searchContext,
-					lms.client,
-					collectionID,
-					fixture.marker,
-				)
+				return driver.searchClyde(searchContext, run, fixture.marker)
 			},
 			Health: func(healthContext context.Context) error {
 				return driver.checkCloneHealth(
@@ -198,26 +193,6 @@ func waitForCloneConversationSeed(
 		defaultScenarioPollInterval,
 	)
 	return err
-}
-
-// errConversationSearchNotServed reports that the lm-semantic-search daemon
-// serves no conversation search. Clyde searches conversations in process, and
-// the cold conversation check of the clone confirmation needs a Clyde query.
-var errConversationSearchNotServed = errors.New(
-	"lm-semantic-search serves no conversation search; query Clyde for the cold conversation check",
-)
-
-func searchConversationObservation(
-	_ context.Context,
-	_ pb.SemanticSearchDaemonServiceClient,
-	collectionID string,
-	_ string,
-) (semanticSearchObservation, error) {
-	return semanticSearchObservation{}, fmt.Errorf(
-		"search conversation collection %q: %w",
-		collectionID,
-		errConversationSearchNotServed,
-	)
 }
 
 func prepareCloneConfirmationColdTargets(
