@@ -20,7 +20,6 @@ func ContentHash(content string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// insertColumns accumulates the built-in column values of one insert batch.
 type insertColumns struct {
 	ids            []string
 	contents       []string
@@ -43,9 +42,9 @@ type WriteOption interface {
 }
 
 // BuildInsertOption builds the column-based insert request for rows. Every row
-// must carry a vector of the same width. scalars lists the declared scalar
-// columns the request writes from each row's Scalars map. embeddingModel fills
-// the embeddingModel column of every row, and an empty value writes null.
+// must have a vector of the same width. scalars lists the declared scalar
+// columns the request writes from the Scalars map of each row. embeddingModel
+// fills the embeddingModel column of every row, and an empty value writes null.
 func BuildInsertOption(ctx context.Context, collectionName string, rows []collection.Row, scalars []collection.ScalarColumn, embeddingModel string) (WriteOption, error) {
 	columns := buildInsertColumns(ctx, rows)
 	if columns.sanitizedCount > 0 {

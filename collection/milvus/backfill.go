@@ -109,8 +109,6 @@ func scalarBackfillFilter(columns []collection.ScalarColumn) string {
 	return strings.Join(clauses, " or ")
 }
 
-// scalarBackfillOutputFields lists the fields one backfill page reads: the
-// primary key, the row key, the item ID column, and the backfill columns.
 func scalarBackfillOutputFields(backfill collection.ScalarBackfill) []string {
 	fields := []string{IDField, RelativePathField, backfill.ItemColumn}
 	for _, column := range backfill.Columns {
@@ -119,8 +117,6 @@ func scalarBackfillOutputFields(backfill collection.ScalarBackfill) []string {
 	return fields
 }
 
-// readScalarBackfillPage counts the rows of one iterator page that need the
-// backfill and collects the filled values of the rows that change.
 func readScalarBackfillPage(resultSet milvusclient.ResultSet, backfill collection.ScalarBackfill) (scalarBackfillPage, error) {
 	page := scalarBackfillPage{ids: nil, rows: nil, changed: 0, orphan: 0}
 	idColumn := resultSet.GetColumn(IDField)
@@ -165,8 +161,6 @@ func readScalarBackfillPage(resultSet milvusclient.ResultSet, backfill collectio
 	return page, nil
 }
 
-// storedBackfillValues reads the stored value of every backfill column at one
-// row.
 func storedBackfillValues(resultSet milvusclient.ResultSet, columns []collection.ScalarColumn, rowIndex int) (map[string]collection.ScalarValue, error) {
 	stored := make(map[string]collection.ScalarValue, len(columns))
 	for _, column := range columns {

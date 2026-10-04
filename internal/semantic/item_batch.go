@@ -87,7 +87,6 @@ func readOptionalStringAt(valueColumn column.Column, rowIndex int) (string, bool
 	return value, true, nil
 }
 
-// contentVectorAt reads the content and the dense vector of one result row.
 func contentVectorAt(contentColumn column.Column, vectorColumn column.Column, rowIndex int) (string, []float32, error) {
 	contentValue, contentErr := contentColumn.GetAsString(rowIndex)
 	if contentErr != nil {

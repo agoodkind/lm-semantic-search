@@ -13,7 +13,6 @@ import (
 	"goodkind.io/lm-semantic-search/collection"
 )
 
-// rowsPageSize is the row count of one page of the stored-row query iterator.
 const rowsPageSize = 1000
 
 // QueryRows returns every stored row of the requested items. A query iterator
@@ -61,8 +60,6 @@ func (store *Store) QueryRows(ctx context.Context, request collection.RowsReques
 	}
 }
 
-// rowsFilterExpression renders the item ID membership and the path prefix
-// matches as one Milvus boolean expression.
 func rowsFilterExpression(request collection.RowsRequest) (string, error) {
 	clauses := make([]string, 0, 1+len(request.PathPrefixes))
 	if len(request.ItemIDs) > 0 {

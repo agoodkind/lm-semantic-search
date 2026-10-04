@@ -422,11 +422,10 @@ func (provider *onnxProvider) EmbedBatch(
 		metrics.EmbedBatchDone(len(texts), clock.Now().Sub(start), err != nil)
 	}()
 
-	// Every input the provider refuses is reported as skipped with a nil vector and
-	// its reason code, exactly as the OpenAI-compatible provider reports a
-	// context_length_exceeded rejection. Both implementations of embedding.Provider therefore
-	// honor the same promise: a returned vector always covers the whole input, and
-	// the caller's split-and-retry loop divides anything that does not fit.
+	// The provider reports every refused input as skipped, with a nil vector
+	// and its reason code. A returned vector always covers the whole input, and
+	// the split-and-retry loop of the caller divides an input that does not
+	// fit.
 	vectors := make([][]float32, len(texts))
 	var skipped []embedding.SkippedInput
 	refusedEmpty := 0

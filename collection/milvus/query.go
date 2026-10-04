@@ -65,9 +65,9 @@ func (store *Store) Query(ctx context.Context, request collection.QueryRequest) 
 	return HitsFromResultSet(resultSet, request.Declaration.Scalars)
 }
 
-// Delete removes the rows a filter matches and returns the deleted count. The
-// delete request cannot bind template parameters, so membership sets are
-// written inline.
+// Delete removes the rows a filter matches and returns the deleted count. A
+// Milvus delete request binds no template parameters, and Delete writes
+// membership sets inline.
 func (store *Store) Delete(ctx context.Context, collectionName string, filter collection.Filter) (int64, error) {
 	expression, err := collection.CompileInline(&filter)
 	if err != nil {

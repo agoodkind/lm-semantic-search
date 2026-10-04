@@ -22,13 +22,12 @@ const (
 	// DefaultInterval is how often the live screen reads the Source when the
 	// caller has no preference.
 	DefaultInterval = 2 * time.Second
-	// minimumInterval floors the cadence so several open screens cannot become
-	// a busy loop against the program that owns the Source.
+	// minimumInterval is the shortest refresh interval. Several open screens at
+	// a shorter interval would load the program that owns the Source.
 	minimumInterval = 500 * time.Millisecond
 )
 
-// Value is one raw value. The zero Value is absent and prints as null, which is
-// how every surface says a fact is missing rather than zero or empty.
+// Value is one raw value. The zero Value is absent and prints as null.
 type Value struct {
 	kind    valueKind
 	integer int64

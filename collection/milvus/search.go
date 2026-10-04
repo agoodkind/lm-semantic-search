@@ -105,7 +105,6 @@ func rankingDepthFor(limit int32) int {
 	return min(max(int(limit)*4, minimumRankingDepth), collection.RankingDepth)
 }
 
-// minimumRankingDepth is the fewest rows a ranking leg requests.
 const minimumRankingDepth = 64
 
 // SelectCandidates orders candidates by descending score, then ascending
@@ -160,10 +159,9 @@ func selectRankedCandidates(candidates []Candidate, perGroupLimit int32, minScor
 	return kept
 }
 
-// rankCandidates runs the one ranking search of a collection search.
-// A hybrid collection runs both legs at collection.RankingDepth and fuses them
-// with the RRF reranker into at most collection.RankingDepth rows. A dense
-// collection runs one search at the same depth.
+// rankCandidates runs the one ranking search of a collection search. A hybrid
+// collection runs both legs at depth and fuses them with the RRF reranker into
+// at most depth rows. A dense collection runs one search at depth.
 func (store *Store) rankCandidates(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, compiled collection.CompiledFilter, groupColumn collection.ScalarColumn, grouped bool, depth int) ([]Candidate, error) {
 	outputFields := []string{RelativePathField}
 	if grouped {

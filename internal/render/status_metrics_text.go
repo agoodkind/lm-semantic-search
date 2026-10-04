@@ -9,8 +9,8 @@ import (
 	statusdisplay "goodkind.io/lm-semantic-search/status"
 )
 
-// constantMetrics never change while the daemon runs. A delta column beside
-// them would only ever read +0 and add noise to every line of the screen.
+// constantMetrics never change while the daemon runs. The status screen shows
+// no delta column for them.
 var constantMetrics = map[string]bool{
 	"index_slots_total": true,
 }
@@ -90,7 +90,6 @@ func statusRunID(response *pb.GetStatusResponse) string {
 	return fmt.Sprintf("%d@%d", daemon.GetPid(), startedAt)
 }
 
-// statusField converts one wire metric into a display field.
 func statusField(metric *pb.Metric) statusdisplay.Field {
 	return statusdisplay.Field{
 		Group:   metric.GetGroup(),

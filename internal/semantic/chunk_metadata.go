@@ -6,11 +6,9 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// chunkMetadata mirrors the JSON shape the TS adapter writes into the
-// Milvus `metadata` field. The Go daemon adds a language hint so search
-// results can resurface the splitter-derived language without a dedicated
-// column. Rows written by earlier versions can carry more keys, and decoding
-// ignores them.
+// chunkMetadata is the JSON the TypeScript adapter writes to the Milvus
+// `metadata` field, plus a language hint from the Go daemon. Decoding ignores
+// keys that earlier versions wrote.
 type chunkMetadata struct {
 	Language string `json:"language,omitempty"`
 }

@@ -4,10 +4,8 @@
 // computed from the content column.
 package milvus
 
-// The column names below are the names of the upstream TS schema at
-// packages/core/src/vectordb/milvus-vectordb.ts. Go code reads and writes the
-// same collections the TS adapter does. The names are camelCase because the TS
-// adapter wrote them.
+// The TypeScript adapter created the stored collections with these camelCase
+// column names. A renamed constant no longer matches the stored column.
 const (
 	// DenseVectorField is the dense embedding column.
 	DenseVectorField = "vector"

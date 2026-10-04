@@ -27,10 +27,9 @@ var (
 	headerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true)
 )
 
-// statusModel is the bubbletea state for the live screen. It keeps the previous
-// read's integer values so each refresh can report the change, and it keeps the
-// last successful read time. A failed refresh therefore never reads as a quiet
-// system.
+// statusModel is the bubbletea state for the live screen. It stores the integer
+// values of the previous read for the change column and the time of the last
+// successful read.
 type statusModel struct {
 	source   Source
 	interval time.Duration
@@ -137,16 +136,13 @@ func (m statusModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// applyRefresh swaps in a fresh snapshot and keeps the prior integer values for
-// the next render to report the change. A failed refresh keeps the previous
-// snapshot and the previous read time, and the screen states it is stale rather
-// than showing an empty one.
+// applyRefresh installs a fresh snapshot and stores the prior integer values
+// for the change column. A failed refresh does not replace the previous
+// snapshot or the previous read time.
 //
-// The baseline is dropped whenever the two reads did not observe one continuous
-// run of one process. A restarted process zeroes every counter, so subtracting
-// across it reports large negative changes as if work were being undone, and a
-// resumed pause would report a change spanning the whole pause under a header
-// still claiming the poll interval.
+// It drops the baseline when the two reads did not observe one continuous run
+// of one process. A restarted process starts its counters at zero, and a
+// resumed pause spans more than one poll interval.
 func (m statusModel) applyRefresh(msg statusRefreshedMsg) statusModel {
 	m.refreshing = false
 	if msg.err != nil {
@@ -235,8 +231,7 @@ func (m statusModel) maxOffset() int {
 }
 
 // visibleBodyRows is how many body lines fit between the pinned header and the
-// pinned key line. An unknown height renders everything, the right choice for a
-// freshly started screen.
+// pinned key line. An unknown height renders every line.
 func (m statusModel) visibleBodyRows(headerLines int) int {
 	if m.height <= 0 {
 		return int(^uint(0) >> 1)
@@ -250,9 +245,9 @@ func (m statusModel) visibleBodyRows(headerLines int) int {
 	return rows
 }
 
-// headerBlock shows the snapshot's title and details and states when the screen
-// last read the source. A failed refresh keeps the last successful timestamp and
-// appends the reason. A dead connection therefore never reads as a quiet system.
+// headerBlock shows the title and details of the snapshot and the time of the
+// last successful read. A failed refresh shows that time with the failure
+// reason.
 func (m statusModel) headerBlock() string {
 	stamp := inLocalZone(m.readAt).Format("15:04:05")
 	last := fmt.Sprintf("read_at=%s  interval=%s", stamp, m.interval)
@@ -335,11 +330,7 @@ func statusCounterLine(
 }
 
 // statusValueText renders a value for the screen: digits grouped, and a
-// timestamp shown in the operator's own zone.
-//
-// The dump keeps UTC, because it is parsed and a machine consumer wants one
-// unambiguous zone. The screen is the only surface a person reads directly, so
-// it is the only one that converts.
+// timestamp in the zone of the host. The dump prints UTC.
 func statusValueText(value Value) string {
 	text := valueText(value)
 	if value.kind == kindInteger {
@@ -359,12 +350,9 @@ func displayTimeText(text string) string {
 	return inLocalZone(parsed).Format("2006-01-02T15:04:05-07:00")
 }
 
-// inLocalZone returns value in the host's zone, or unchanged when that zone
-// cannot be loaded.
-//
-// Loading the zone by name rather than reading the process-wide local zone is
-// what keeps the gosmopolitan analyzer satisfied: the analyzer exists to catch
-// an implicit machine locale, and a named lookup states the intent.
+// inLocalZone returns value in the zone of the host, or unchanged when that
+// zone cannot be loaded. It loads the zone by name, because the gosmopolitan
+// analyzer rejects the process-wide local zone.
 func inLocalZone(value time.Time) time.Time {
 	location, err := time.LoadLocation("Local")
 	if err != nil {
@@ -391,9 +379,7 @@ func statusDeltaText(field Field, previous map[string]int64) string {
 }
 
 // activityBlock renders every unit of work as an indented block of name=value
-// pairs, using the same labels as the counters. It renders all of them; View
-// owns the scrolling, and the counters and the activity share one window rather
-// than competing for the same rows.
+// pairs. View owns the scrolling.
 func (m statusModel) activityBlock(width int) string {
 	rows := m.snapshot.Activity
 	header := headerStyle.Render(fmt.Sprintf("activity  rows=%d", len(rows)))
@@ -408,12 +394,11 @@ func (m statusModel) activityBlock(width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// statusActivityRow renders one unit of work. Fields include their unit in
-// their name, so they take no unit column.
+// statusActivityRow renders one unit of work. A field name includes its unit,
+// and the row has no unit column.
 //
 // A row with no fields still renders a line. A source can return an empty row,
-// for example after a version mismatch with the program it reads, and that must
-// not crash the screen.
+// for example after a version mismatch with the program it reads.
 func statusActivityRow(index int, row []Field, width int) []string {
 	pairs := make([]string, 0, len(row))
 	for _, field := range row {
@@ -451,10 +436,8 @@ func integerValuesByName(snapshot Snapshot) map[string]int64 {
 	return values
 }
 
-// groupDigits inserts a comma every three digits from the right, preserving a
-// leading sign. The terminal groups digits so a value crossing a digit boundary
-// is visible without reading it; the dump keeps raw digits because it is
-// parsed.
+// groupDigits inserts a comma every three digits from the right and preserves a
+// leading sign. The dump prints raw digits.
 func groupDigits(digits string) string {
 	sign := ""
 	if strings.HasPrefix(digits, "-") {
@@ -499,9 +482,7 @@ func statusRefreshCmd(source Source) tea.Cmd {
 	}
 }
 
-// keyMatches reports whether the pressed key equals any of the given names,
-// keeping key handling as plain comparisons rather than a switch on a bare
-// string.
+// keyMatches reports whether the pressed key equals any of the given names.
 func keyMatches(msg tea.KeyMsg, keys ...string) bool {
 	return slices.Contains(keys, msg.String())
 }
