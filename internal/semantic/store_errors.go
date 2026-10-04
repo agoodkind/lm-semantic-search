@@ -74,14 +74,3 @@ func wrapStoreError(ctx context.Context, err error, operation string) error {
 	}
 	return fmt.Errorf("%s: %w", operation, err)
 }
-
-// searchErr logs a Milvus search failure and maps it to a typed store sentinel
-// when one applies. Otherwise it wraps the failure with the operation and
-// collection.
-func searchErr(ctx context.Context, operation string, collectionName string, err error) error {
-	slog.ErrorContext(ctx, operation+" failed", "collection", collectionName, "err", err)
-	if sentinel := storeSearchSentinel(err); sentinel != nil {
-		return sentinel
-	}
-	return fmt.Errorf("%s collection %s: %w", operation, collectionName, err)
-}

@@ -312,62 +312,6 @@ func (client *mockDaemonClient) GraphTool(context.Context, *pb.GraphToolRequest,
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) RegisterConversationCollection(context.Context, *pb.RegisterConversationCollectionRequest, ...grpc.CallOption) (*pb.RegisterConversationCollectionResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) RegisterCollection(context.Context, *pb.RegisterCollectionRequest, ...grpc.CallOption) (*pb.RegisterCollectionResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) SyncConversationManifest(context.Context, *pb.SyncConversationManifestRequest, ...grpc.CallOption) (*pb.SyncConversationManifestResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) SyncCollectionManifest(context.Context, *pb.SyncCollectionManifestRequest, ...grpc.CallOption) (*pb.SyncCollectionManifestResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) UpsertCollectionItemsStream(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[pb.UpsertCollectionItemsStreamRequest, pb.UpsertCollectionItemsStreamResponse], error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) BackfillCollectionScalars(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[pb.BackfillCollectionScalarsStreamRequest, pb.BackfillCollectionScalarsResponse], error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) DeleteCollectionItem(context.Context, *pb.DeleteCollectionItemRequest, ...grpc.CallOption) (*pb.DeleteCollectionItemResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) UpsertConversationDocumentsStream(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[pb.UpsertConversationDocumentsChunk, pb.UpsertConversationDocumentsResponse], error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) BackfillConversationScalars(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[pb.BackfillConversationScalarsChunk, pb.BackfillConversationScalarsResponse], error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) DeleteConversation(context.Context, *pb.DeleteConversationRequest, ...grpc.CallOption) (*pb.DeleteConversationResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) SearchConversations(context.Context, *pb.SearchConversationsRequest, ...grpc.CallOption) (*pb.SearchConversationsResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) SearchWithinConversation(context.Context, *pb.SearchWithinConversationRequest, ...grpc.CallOption) (*pb.SearchWithinConversationResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) SearchCollection(context.Context, *pb.SearchCollectionRequest, ...grpc.CallOption) (*pb.SearchCollectionResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (client *mockDaemonClient) GetCollectionItemState(context.Context, *pb.GetCollectionItemStateRequest, ...grpc.CallOption) (*pb.GetCollectionItemStateResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
 func (client *mockDaemonClient) Doctor(context.Context, *pb.DoctorRequest, ...grpc.CallOption) (*pb.DoctorResponse, error) {
 	return nil, errors.New("not implemented")
 }

@@ -323,25 +323,12 @@ type JobEvent struct {
 
 // StoredChunk is one persisted search chunk for a codebase.
 type StoredChunk struct {
-	Content        string `json:"content"`
-	RelativePath   string `json:"relative_path"`
-	StartLine      int32  `json:"start_line"`
-	EndLine        int32  `json:"end_line"`
-	Language       string `json:"language"`
-	FileExtension  string `json:"file_extension"`
-	ConversationID string `json:"conversation_id"`
-	// ParentConversationID names the conversation this chunk's conversation
-	// forked from, so a fork can be grouped with its parent. Empty for code
-	// chunks and for conversations with no parent.
-	ParentConversationID string `json:"parent_conversation_id"`
-	MessageIndex         int32  `json:"message_index"`
-	Role                 string `json:"role"`
-	TimestampUnix        int64  `json:"timestamp_unix"`
-	// WorkspaceRoot is the workspace a conversation chunk belongs to, stored as a
-	// native scalar column so a search can filter by it. Empty for code chunks
-	// and for conversation chunks whose caller did not supply it.
-	WorkspaceRoot string `json:"workspace_root,omitempty"`
-	Archived      bool   `json:"archived,omitempty"`
+	Content       string `json:"content"`
+	RelativePath  string `json:"relative_path"`
+	StartLine     int32  `json:"start_line"`
+	EndLine       int32  `json:"end_line"`
+	Language      string `json:"language"`
+	FileExtension string `json:"file_extension"`
 	// SplitPart identifies one piece of an oversized chunk the token-budget
 	// splitter divided so each piece fits the embedding model's input limit. Zero
 	// marks an unsplit chunk, whose primary key is unchanged. A positive value
@@ -353,50 +340,12 @@ type StoredChunk struct {
 	// SplitPartRecorded distinguishes a stored nullable splitPart value from a
 	// legacy row written before the field existed.
 	SplitPartRecorded bool `json:"-"`
-	// LoadRules is the caller's opaque loading-rules tag for a conversation
-	// chunk: it names the rules that produced MessageIndex so a reader can
-	// rebuild the same message sequence. Empty for code chunks and for rows
-	// written before the tag existed.
-	LoadRules string `json:"load_rules,omitempty"`
 	// Scalars maps each declared scalar column name to the row's value in a
-	// generic document collection. It is nil for code rows and for rows of a
-	// collection with the conversation declaration, which store their scalars in
-	// the conversation fields above.
+	// generic document collection. It is nil for code rows.
 	Scalars map[string]collection.ScalarValue `json:"scalars,omitempty"`
 	// Score is the vector similarity for a semantic search. Zero on chunks that
 	// did not come from a search.
 	Score float64 `json:"score,omitempty"`
-}
-
-// ConversationDocument is one caller-provided conversation message chunk.
-type ConversationDocument struct {
-	ConversationID string `json:"conversation_id"`
-	// ParentConversationID names the conversation this one forked from, carried
-	// into chunk metadata so forks group with their parent. Empty when absent.
-	ParentConversationID string                 `json:"parent_conversation_id"`
-	MessageIndex         int32                  `json:"message_index"`
-	Role                 string                 `json:"role"`
-	TimestampUnix        int64                  `json:"timestamp_unix"`
-	Text                 string                 `json:"text"`
-	Tools                []ConversationToolCall `json:"tools,omitempty"`
-	Thinking             string                 `json:"thinking,omitempty"`
-	// WorkspaceRoot is the workspace the conversation belongs to. clyde supplies
-	// it so the engine can store it as a filterable scalar column.
-	WorkspaceRoot string `json:"workspace_root,omitempty"`
-	Archived      bool   `json:"archived,omitempty"`
-	// LoadRules is the caller's opaque loading-rules tag: it names the rules
-	// that produced MessageIndex so a reader can rebuild the same message
-	// sequence. The engine stores it per row and returns it on search hits.
-	LoadRules string `json:"load_rules,omitempty"`
-}
-
-// ConversationToolCall is one structured tool call attached to a conversation document.
-type ConversationToolCall struct {
-	Name     string `json:"name,omitempty"`
-	Display  string `json:"display,omitempty"`
-	LangHint string `json:"lang_hint,omitempty"`
-	Output   string `json:"output,omitempty"`
-	IsError  bool   `json:"is_error,omitempty"`
 }
 
 // PathClassificationKind reports the daemon's verdict about one queried path.

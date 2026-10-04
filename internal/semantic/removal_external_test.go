@@ -164,13 +164,10 @@ func removalSuccessStatus() *commonpb.Status {
 
 func TestReindexLogsRemovedRowCountsAfterEveryDeleteSucceeds(t *testing.T) {
 	events := &removalTestEvents{}
-	service := newRemovalTestService(t, events, []int64{500, 0, 7}, 0)
+	service := newRemovalTestService(t, events, []int64{500}, 0)
 	captureRemovalLogs(t, events)
 
-	removal := semantic.Removal{
-		Paths:    []string{"obsolete.go"},
-		Prefixes: []string{"conv/one/", "conv/two/"},
-	}
+	removal := semantic.RemovePaths([]string{"obsolete.go"})
 	err := service.Reindex(
 		context.Background(),
 		t.TempDir(),
@@ -185,15 +182,13 @@ func TestReindexLogsRemovedRowCountsAfterEveryDeleteSucceeds(t *testing.T) {
 	}
 
 	got := events.snapshot()
-	if len(got) != 4 {
-		t.Fatalf("event count = %d, want three deletes followed by one success log: %+v", len(got), got)
+	if len(got) != 2 {
+		t.Fatalf("event count = %d, want one delete followed by one success log: %+v", len(got), got)
 	}
-	for index := 0; index < 3; index++ {
-		if got[index].kind != "delete" {
-			t.Fatalf("event %d = %q, want delete before the success log", index, got[index].kind)
-		}
+	if got[0].kind != "delete" {
+		t.Fatalf("event 0 = %q, want delete before the success log", got[0].kind)
 	}
-	completed := got[3]
+	completed := got[1]
 	if completed.kind != removalCompletedMessage {
 		t.Fatalf("last event = %q, want %q after every delete", completed.kind, removalCompletedMessage)
 	}
@@ -203,47 +198,14 @@ func TestReindexLogsRemovedRowCountsAfterEveryDeleteSucceeds(t *testing.T) {
 			completed.attrs["path_rows_removed"],
 		)
 	}
-	if completed.attrs["prefix_rows_removed"] != "7" {
-		t.Fatalf(
-			"prefix_rows_removed = %q, want \"7\"",
-			completed.attrs["prefix_rows_removed"],
-		)
-	}
-	if completed.attrs["rows_removed"] != "507" {
-		t.Fatalf("rows_removed = %q, want \"507\"", completed.attrs["rows_removed"])
+	if completed.attrs["rows_removed"] != "500" {
+		t.Fatalf("rows_removed = %q, want \"500\"", completed.attrs["rows_removed"])
 	}
 	if _, found := completed.attrs["path_filters"]; found {
 		t.Fatal("success log still exposes the requested path-filter count")
 	}
 	if _, found := completed.attrs["prefix_filters"]; found {
 		t.Fatal("success log still exposes the requested prefix-filter count")
-	}
-}
-
-func TestReindexDoesNotLogRemovalSuccessWhenSecondPrefixDeleteFails(t *testing.T) {
-	events := &removalTestEvents{}
-	server, service := newRemovalTestServerAndService(t, events, []int64{11, 13}, 2)
-	captureRemovalLogs(t, events)
-
-	err := service.Reindex(
-		context.Background(),
-		t.TempDir(),
-		nil,
-		semantic.Removal{Prefixes: []string{"conv/one/", "conv/two/"}},
-		nil,
-		nil,
-		semantic.CodeColumns(),
-	)
-	if err == nil {
-		t.Fatal("Reindex returned nil error for the configured second prefix-delete failure")
-	}
-	if server.deleteCalls() != 2 {
-		t.Fatalf("delete call count = %d, want 2", server.deleteCalls())
-	}
-	for _, event := range events.snapshot() {
-		if event.kind == removalCompletedMessage || event.kind == removedRowsMessage {
-			t.Fatalf("removal success %q was logged before the second prefix delete failed", event.kind)
-		}
 	}
 }
 

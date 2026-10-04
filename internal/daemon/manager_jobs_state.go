@@ -131,7 +131,6 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	if !found {
 		return
 	}
-	delete(manager.conversationJobs, jobID)
 	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStateCancelling {
 		return
 	}
@@ -526,7 +525,6 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	metrics.JobFailed()
 
 	manager.mu.Lock()
-	delete(manager.conversationJobs, jobID)
 	manager.forgetJobJournalLocked(jobID)
 	infra := adapterr.IsInfraFailure(runErr)
 	safeMessage := ""
@@ -778,7 +776,6 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 	}
 	now := *job.CompletedAt
 	manager.mu.Lock()
-	delete(manager.conversationJobs, jobID)
 	manager.forgetJobJournalLocked(jobID)
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {

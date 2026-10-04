@@ -261,19 +261,6 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 		}
 	}
 
-	conversationChunks := make([]model.StoredChunk, len(chunks))
-	copy(conversationChunks, chunks)
-	for index := range conversationChunks {
-		conversationChunks[index].ConversationID = strings.Repeat("p", 32) +
-			":" +
-			strings.Repeat("c", 223)
-		conversationChunks[index].ParentConversationID = strings.Repeat("q", 256)
-		conversationChunks[index].Role = strings.Repeat("R", 64)
-		conversationChunks[index].WorkspaceRoot = strings.Repeat("w", 1024)
-		conversationChunks[index].TimestampUnix = int64(index)
-		conversationChunks[index].MessageIndex = int32(index)
-	}
-
 	tests := []struct {
 		name      string
 		chunks    []model.StoredChunk
@@ -283,11 +270,6 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 			name:      "code columns",
 			chunks:    chunks,
 			columnSet: CodeColumns(),
-		},
-		{
-			name:      "conversation columns",
-			chunks:    conversationChunks,
-			columnSet: ConversationColumns(),
 		},
 	}
 	for _, test := range tests {
@@ -304,7 +286,6 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 				requestBytes := actualInsertRequestBytes(
 					group,
 					vectorDimension,
-					test.columnSet,
 					"model-a",
 				)
 				if requestBytes > scaledTransportLimit {
@@ -323,7 +304,6 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 func actualInsertRequestBytes(
 	chunks []model.StoredChunk,
 	vectorDimension int,
-	columnSet StoreColumnSet,
 	embeddingModel string,
 ) int {
 	ids := make([]string, 0, len(chunks))
@@ -336,7 +316,6 @@ func actualInsertRequestBytes(
 	fileExtensions := make([]string, 0, len(chunks))
 	metadataValues := make([]string, 0, len(chunks))
 	vectors := make([][]float32, 0, len(chunks))
-	scalars := newConversationScalarColumns(columnSet.ConversationScalars(), len(chunks))
 	for index, chunk := range chunks {
 		content, _ := milvusstore.SanitizeUTF8(chunk.Content)
 		relativePath, _ := milvusstore.SanitizeUTF8(chunk.RelativePath)
@@ -352,7 +331,6 @@ func actualInsertRequestBytes(
 		fileExtensions = append(fileExtensions, fileExtension)
 		metadataValues = append(metadataValues, metadataValue)
 		vectors = append(vectors, make([]float32, vectorDimension))
-		scalars.append(chunk)
 	}
 
 	fieldsData := []*schemapb.FieldData{
@@ -370,31 +348,6 @@ func actualInsertRequestBytes(
 			vectorDimension,
 			vectors,
 		).FieldData(),
-	}
-	if columnSet.ConversationScalars() {
-		fieldsData = append(
-			fieldsData,
-			column.NewColumnVarChar(
-				conversationIDFieldName,
-				scalars.conversationIDs,
-			).FieldData(),
-			column.NewColumnVarChar(
-				parentConversationIDFieldName,
-				scalars.parentConversationIDs,
-			).FieldData(),
-			column.NewColumnVarChar(roleFieldName, scalars.roles).FieldData(),
-			column.NewColumnVarChar(providerFieldName, scalars.providers).FieldData(),
-			column.NewColumnVarChar(
-				workspaceRootFieldName,
-				scalars.workspaceRoots,
-			).FieldData(),
-			column.NewColumnBool(archivedFieldName, scalars.archiveds).FieldData(),
-			column.NewColumnInt64(timestampUnixFieldName, scalars.timestamps).FieldData(),
-			column.NewColumnInt64(
-				messageIndexFieldName,
-				scalars.messageIndexes,
-			).FieldData(),
-		)
 	}
 
 	request := &milvuspb.InsertRequest{

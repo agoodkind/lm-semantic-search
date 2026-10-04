@@ -9,11 +9,6 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
-// ConversationLegacyPathFamilies are the relativePath family prefixes of
-// conversation rows. A conversation row written before the conversationId
-// column existed stores its conversation id only in this path.
-var ConversationLegacyPathFamilies = []string{"conv/", "convtool/", "convthink/"}
-
 // BackfillCollectionScalars writes backfill values into the declared columns
 // that are null or an empty string on the rows of streamed items, through the
 // collection store. It returns the rows that need the backfill: changed counts

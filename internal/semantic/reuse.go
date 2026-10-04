@@ -57,32 +57,6 @@ func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []
 	return reuse, nil
 }
 
-// LoadReuseVectorsForPrefix reads one collection's chunks whose relativePath
-// begins with relativePathPrefix and returns the contentVectorKey -> vector
-// map for them. A conversation ingest passes the live conversation collection
-// and the changed conversation's conv/<id>/ prefix, loaded before that
-// conversation's prefix delete runs, so the reindex reuses the unchanged
-// chunks' stored vectors instead of re-embedding the whole conversation. A
-// missing collection or an empty prefix returns an empty map.
-func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
-	peerInfo, _ := peer.FromContext(ctx)
-	reuse := make(map[string][]float32)
-	if !service.Available() || collectionName == "" || relativePathPrefix == "" {
-		return reuse, nil
-	}
-	if err := service.loadReuseVectorsFiltered(ctx, collectionName, relativePathPrefixExpression(relativePathPrefix), reuse); err != nil {
-		return nil, err
-	}
-	slog.DebugContext(
-		ctx, "semantic.reuse_vectors_loaded_for_prefix",
-		"collection", collectionName,
-		"prefix", relativePathPrefix,
-		"chunks", len(reuse),
-		"peer", peerInfo.String(),
-	)
-	return reuse, nil
-}
-
 // LoadReuseVectorsForPath reads one collection's chunks whose relativePath
 // exactly equals relativePath and returns the contentVectorKey -> vector map for
 // them. Code delta syncs load a changed file's current rows before the exact

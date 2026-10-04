@@ -264,24 +264,16 @@ func (runner *Runner) processFile(ctx context.Context, resolver *indexability.Re
 	chunks := make([]model.StoredChunk, 0, len(splitResult.Chunks))
 	for _, splitChunk := range splitResult.Chunks {
 		chunks = append(chunks, model.StoredChunk{
-			Content:              splitChunk.Content,
-			RelativePath:         relativePath,
-			StartLine:            safeInt32(splitChunk.StartLine),
-			EndLine:              safeInt32(splitChunk.EndLine),
-			Language:             splitChunk.Language,
-			FileExtension:        filepath.Ext(relativePath),
-			ConversationID:       "",
-			ParentConversationID: "",
-			MessageIndex:         0,
-			Role:                 "",
-			TimestampUnix:        0,
-			WorkspaceRoot:        "",
-			Archived:             false,
-			SplitPart:            0,
-			SplitPartRecorded:    true,
-			LoadRules:            "",
-			Scalars:              nil,
-			Score:                0,
+			Content:           splitChunk.Content,
+			RelativePath:      relativePath,
+			StartLine:         safeInt32(splitChunk.StartLine),
+			EndLine:           safeInt32(splitChunk.EndLine),
+			Language:          splitChunk.Language,
+			FileExtension:     filepath.Ext(relativePath),
+			SplitPart:         0,
+			SplitPartRecorded: true,
+			Scalars:           nil,
+			Score:             0,
 		})
 	}
 	return newProcessedFile(chunks, digestFileBytes(data), false, SkipNone, false), nil

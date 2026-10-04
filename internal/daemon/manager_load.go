@@ -36,7 +36,6 @@ func (manager *Manager) load(ctx context.Context) error {
 		manager.codebases[codebase.ID] = codebase
 	}
 	dropGhostURICodebases(manager.codebases)
-	manager.recordCollectionDeclarations()
 
 	jobs, err := store.ReadJobEvents(manager.config.JobsPath)
 	if err != nil {

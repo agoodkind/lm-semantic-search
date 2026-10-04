@@ -3,7 +3,6 @@ package localvec
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"strings"
 
@@ -54,14 +53,14 @@ func (store *Store) BackfillCollectionScalars(ctx context.Context, collectionNam
 		if !exists {
 			return 0, 0, semantic.ErrCollectionMissing
 		}
-		return backfillRows(rows, backfill)
+		changed, orphan := backfillRows(rows, backfill)
+		return changed, orphan, nil
 	}
 	changed := 0
 	orphan := 0
 	err = stored.rewrite(true, func(rows []row) ([]row, error) {
-		var fillErr error
-		changed, orphan, fillErr = backfillRows(rows, backfill)
-		return rows, fillErr
+		changed, orphan = backfillRows(rows, backfill)
+		return rows, nil
 	})
 	return changed, orphan, err
 }
@@ -69,15 +68,11 @@ func (store *Store) BackfillCollectionScalars(ctx context.Context, collectionNam
 // backfillRows counts the rows that need the backfill. Unless the backfill is a
 // dry run, it fills the missing backfill columns of streamed items' rows in
 // place.
-func backfillRows(rows []row, backfill lmcollection.ScalarBackfill) (int, int, error) {
-	conversation := len(backfill.LegacyPathFamilies) > 0
+func backfillRows(rows []row, backfill lmcollection.ScalarBackfill) (int, int) {
 	changed := 0
 	orphan := 0
 	for index := range rows {
-		stored, err := rows[index].backfillValues(backfill, conversation)
-		if err != nil {
-			return changed, orphan, err
-		}
+		stored := rows[index].backfillValues(backfill)
 		if !backfill.Needs(stored) {
 			continue
 		}
@@ -96,92 +91,34 @@ func backfillRows(rows []row, backfill lmcollection.ScalarBackfill) (int, int, e
 			if filled[column.Name] == stored[column.Name] {
 				continue
 			}
-			rows[index], err = rows[index].withScalarValue(column, filled[column.Name], conversation)
-			if err != nil {
-				return changed, orphan, err
-			}
+			rows[index] = rows[index].withScalarValue(column, filled[column.Name])
 		}
 	}
-	return changed, orphan, nil
+	return changed, orphan
 }
 
-// backfillValues returns the row's stored value of every backfill column.
-func (stored row) backfillValues(backfill lmcollection.ScalarBackfill, conversation bool) (map[string]lmcollection.ScalarValue, error) {
+// backfillValues returns the row's stored value of every backfill column. A
+// column the row lacks is null.
+func (stored row) backfillValues(backfill lmcollection.ScalarBackfill) map[string]lmcollection.ScalarValue {
 	values := make(map[string]lmcollection.ScalarValue, len(backfill.Columns))
 	for _, column := range backfill.Columns {
-		value, err := stored.scalarValue(column, conversation)
-		if err != nil {
-			return nil, err
+		value, found := stored.Scalars[column.Name]
+		if !found {
+			value = lmcollection.ScalarValue{Type: column.Type, Null: true, String: "", Bool: false, Int64: 0}
 		}
 		values[column.Name] = value
 	}
-	return values, nil
-}
-
-// scalarValue returns the row's value of one declared column. A generic row
-// keeps declared values in Scalars, and a column the row lacks is null. A
-// conversation row keeps the conversation columns in its conversation fields.
-// An unset string field there is an empty string, and archived and
-// timestampUnix are never null.
-func (stored row) scalarValue(column lmcollection.ScalarColumn, conversation bool) (lmcollection.ScalarValue, error) {
-	if !conversation {
-		value, found := stored.Scalars[column.Name]
-		if !found {
-			return lmcollection.ScalarValue{Type: column.Type, Null: true, String: "", Bool: false, Int64: 0}, nil
-		}
-		return value, nil
-	}
-	switch column.Name {
-	case semantic.ConversationParentColumn:
-		return stringScalarValue(stored.ParentConversationID), nil
-	case semantic.ConversationRoleColumn:
-		return stringScalarValue(stored.Role), nil
-	case semantic.ConversationWorkspaceRootColumn:
-		return stringScalarValue(stored.WorkspaceRoot), nil
-	case semantic.ConversationLoadRulesColumn:
-		return stringScalarValue(stored.LoadRules), nil
-	case semantic.ConversationArchivedColumn:
-		return lmcollection.ScalarValue{Type: lmcollection.ScalarTypeBool, Null: false, String: "", Bool: stored.Archived, Int64: 0}, nil
-	case semantic.ConversationTimestampColumn:
-		return lmcollection.ScalarValue{Type: lmcollection.ScalarTypeInt64, Null: false, String: "", Bool: false, Int64: stored.TimestampUnix}, nil
-	default:
-		return lmcollection.ScalarValue{}, fmt.Errorf("a local conversation row does not store column %s", column.Name)
-	}
+	return values
 }
 
 // withScalarValue returns a copy of the row that stores value in one declared
 // column. The copy owns its Scalars map, and the stored row keeps its own.
-func (stored row) withScalarValue(column lmcollection.ScalarColumn, value lmcollection.ScalarValue, conversation bool) (row, error) {
-	if !conversation {
-		scalars := maps.Clone(stored.Scalars)
-		if scalars == nil {
-			scalars = make(map[string]lmcollection.ScalarValue, 1)
-		}
-		scalars[column.Name] = value
-		stored.Scalars = scalars
-		return stored, nil
+func (stored row) withScalarValue(column lmcollection.ScalarColumn, value lmcollection.ScalarValue) row {
+	scalars := maps.Clone(stored.Scalars)
+	if scalars == nil {
+		scalars = make(map[string]lmcollection.ScalarValue, 1)
 	}
-	switch column.Name {
-	case semantic.ConversationParentColumn:
-		stored.ParentConversationID = value.String
-	case semantic.ConversationRoleColumn:
-		stored.Role = value.String
-	case semantic.ConversationWorkspaceRootColumn:
-		stored.WorkspaceRoot = value.String
-	case semantic.ConversationLoadRulesColumn:
-		stored.LoadRules = value.String
-	case semantic.ConversationArchivedColumn:
-		stored.Archived = value.Bool
-	case semantic.ConversationTimestampColumn:
-		stored.TimestampUnix = value.Int64
-	default:
-		return stored, fmt.Errorf("a local conversation row does not store column %s", column.Name)
-	}
-	return stored, nil
-}
-
-// stringScalarValue returns a string value that a conversation row field
-// stores.
-func stringScalarValue(value string) lmcollection.ScalarValue {
-	return lmcollection.ScalarValue{Type: lmcollection.ScalarTypeString, Null: false, String: value, Bool: false, Int64: 0}
+	scalars[column.Name] = value
+	stored.Scalars = scalars
+	return stored
 }

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -781,22 +780,9 @@ func removeRows(rows []row, removal semantic.Removal) ([]row, bool) {
 				continue
 			}
 		}
-		if matchesAnyPrefix(stored.RelativePath, removal.Prefixes) {
-			removed = true
-			continue
-		}
 		kept = append(kept, stored)
 	}
 	return kept, removed
-}
-
-func matchesAnyPrefix(value string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if prefix != "" && strings.HasPrefix(value, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func safeInt32(value int) int32 {

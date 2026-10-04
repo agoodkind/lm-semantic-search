@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 
 	"goodkind.io/lm-semantic-search/internal/indexability"
 	"goodkind.io/lm-semantic-search/internal/indexer"
@@ -144,23 +143,14 @@ const (
 type itemReuseScope string
 
 const (
-	itemReuseScopeNone   itemReuseScope = ""
-	itemReuseScopePrefix itemReuseScope = "prefix"
-	itemReuseScopePath   itemReuseScope = "path"
+	itemReuseScopeNone itemReuseScope = ""
+	itemReuseScopePath itemReuseScope = "path"
 )
 
 type itemReuseSource struct {
 	CollectionName string
 	RelativePath   string
 	Scope          itemReuseScope
-}
-
-type conversationRowReader interface {
-	// LoadConversationDerivedBatch reads the stored rows for a batch of
-	// conversations in one Milvus query per id batch. The examination path resolves
-	// every delivered conversation from this single read instead of one
-	// per-conversation state load.
-	LoadConversationDerivedBatch(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error)
 }
 
 // codeItemSource lists and reads a filesystem codebase. It is the byte-for-byte
@@ -274,34 +264,4 @@ func (source codeItemSource) producesGraph() bool {
 // total rather than only the changed files' bytes.
 func (source codeItemSource) tracksByteTotals() bool {
 	return true
-}
-
-// derivedPrefixPresent reports whether any stored derived-path key matches the
-// exact path or begins with the slash-terminated prefix. The trailing slash on
-// prefix is load-bearing: a bare prefix would like-match a sibling index
-// (message 1 catching message 12), the same boundary conversationDerivedPathsForMessage
-// enforces.
-func derivedPrefixPresent(storedDerivedPaths map[string]struct{}, prefix string, exact string) bool {
-	for relativePath := range storedDerivedPaths {
-		if exact != "" && relativePath == exact {
-			return true
-		}
-		if prefix != "" && strings.HasPrefix(relativePath, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func usableConversationDerivedPaths(
-	stored semantic.ConversationStoredRows,
-) map[string]struct{} {
-	if stored.UsableDerivedPaths != nil {
-		return stored.UsableDerivedPaths
-	}
-	paths := make(map[string]struct{}, len(stored.DerivedPaths))
-	for relativePath := range stored.DerivedPaths {
-		paths[relativePath] = struct{}{}
-	}
-	return paths
 }
