@@ -29,8 +29,7 @@ func New(ctx context.Context, cfg config.Config) (embedding.Provider, error) {
 		}
 		return provider, nil
 	case model.EmbeddingProviderNone, config.EmbeddingProviderOpenAI:
-		// Both build the OpenAI-compatible adapter: an unnamed provider is the
-		// historical default rather than an error.
+		// An unnamed provider builds the OpenAI-compatible adapter.
 	default:
 		slog.ErrorContext(
 			ctx,

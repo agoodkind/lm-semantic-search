@@ -6,7 +6,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/tshash"
 )
 
-// documentNamePrefix starts the name of every document collection.
 const documentNamePrefix = "conv_chunks_"
 
 // DocumentName returns the stored collection name for a caller's collection

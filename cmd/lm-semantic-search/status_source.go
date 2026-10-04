@@ -10,8 +10,6 @@ import (
 	statusdisplay "goodkind.io/lm-semantic-search/status"
 )
 
-// newStatusSource returns the source the status display reads. Each call reads
-// one status reply from the daemon and converts it into raw display values.
 func newStatusSource(options cliOptions) statusdisplay.Source {
 	return func() (statusdisplay.Snapshot, error) {
 		reply, err := fetchStatusResponse(options)
@@ -24,10 +22,9 @@ func newStatusSource(options cliOptions) statusdisplay.Source {
 	}
 }
 
-// statusNotices returns the lines the daemon placed before the records in its
+// statusNotices returns the lines the daemon printed before the records of its
 // display text: the maintenance banner, the dependency-health banner, and the
-// correlation header. The daemon renders the records from the same values as
-// the snapshot, and the notices are the text in front of them.
+// correlation header.
 func statusNotices(reply *pb.GetStatusResponse, snapshot statusdisplay.Snapshot) []string {
 	text := strings.TrimSpace(reply.GetDisplayText())
 	records := strings.TrimSpace(statusdisplay.Dump(snapshot))

@@ -23,13 +23,12 @@ type CompiledFilter struct {
 	Params     []TemplateParam
 }
 
-// Compile renders a validated filter tree as a Milvus boolean expression. A
-// nil tree renders the empty expression, which searches the whole collection.
-// Every set membership leaf renders as a placeholder such as `role in {p0}` and
-// binds its values as one typed template parameter. A membership set of any
-// size therefore runs in one search. An equality leaf renders its literal
-// inline with the existing Milvus string escape. An all node joins its
-// children with " and " and wraps only an any child in parentheses.
+// Compile renders a validated filter tree as a Milvus boolean expression. A nil
+// tree renders the empty expression, and the search covers the whole
+// collection. Every set membership leaf renders as a placeholder such as `role
+// in {p0}` and binds its values as one typed template parameter. An equality
+// leaf renders its literal inline with the Milvus string escape. An all node
+// joins its children with " and " and wraps only an any child in parentheses.
 func Compile(filter *Filter) (CompiledFilter, error) {
 	compiler := filterCompiler{params: nil, inline: false}
 	if filter == nil {
@@ -199,9 +198,8 @@ func literal(value ScalarValue) string {
 	}
 }
 
-// EscapeString escapes one value for a Milvus string literal. Cursor
-// conversation ids can contain raw newlines, so control bytes must become
-// parser-safe escapes before any relativePath expression is sent to Milvus.
+// EscapeString escapes one value for a Milvus string literal, including control
+// bytes. A Cursor conversation id can contain a raw newline.
 func EscapeString(value string) string {
 	value = strings.ReplaceAll(value, `\`, `\\`)
 	value = strings.ReplaceAll(value, `"`, `\"`)

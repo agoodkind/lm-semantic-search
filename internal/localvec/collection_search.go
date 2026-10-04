@@ -23,18 +23,14 @@ const (
 	truthUnknown
 )
 
-// SearchCollection runs a typed search of a local collection. It ranks a
-// fixed candidate set that never depends on the limit, the group cap, or the
-// score floor, at the depth the Milvus collection search ranks. When at most
-// lmcollection.RankingDepth rows match the filter tree, the candidates
-// are every matching row, scored exactly. Otherwise the candidates are the
-// lmcollection.RankingDepth nearest rows from the HNSW index. It sorts
-// the candidates with sortScoredRows and walks them once to keep the rows
-// that match the filter tree and score at or above MinScore, at most
-// PerGroupLimit per GroupBy value, up to Limit rows. A smaller limit therefore
-// returns a prefix of a larger one at any collection size. A local row stores
-// each declared scalar value by column name, and a column the row lacks reads
-// as absent.
+// SearchCollection runs a typed search of a local collection. It ranks a fixed
+// candidate set that does not depend on the limit, the group cap, or the score
+// floor. When at most lmcollection.RankingDepth rows match the filter tree, the
+// candidates are every matching row, scored exactly. Otherwise the candidates
+// are the lmcollection.RankingDepth nearest rows from the HNSW index. It sorts
+// the candidates with sortScoredRows and keeps the rows that match the filter
+// tree and score at or above MinScore, at most PerGroupLimit per GroupBy value,
+// up to Limit rows. A column the row lacks reads as absent.
 func (store *Store) SearchCollection(
 	ctx context.Context,
 	search semantic.CollectionSearch,

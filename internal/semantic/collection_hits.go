@@ -34,7 +34,6 @@ func chunkFromHit(hit collection.Hit) model.StoredChunk {
 	}
 }
 
-// chunksFromHits converts store hits to stored chunks in order.
 func chunksFromHits(hits []collection.Hit) []model.StoredChunk {
 	chunks := make([]model.StoredChunk, 0, len(hits))
 	for _, hit := range hits {

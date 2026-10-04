@@ -7,12 +7,11 @@ import (
 )
 
 // Dump renders one snapshot as one record per line, formatted "name value unit"
-// with single spaces. This output is parsed, so digits are raw and a record
-// with no unit ends after its value.
+// with single spaces. Digits are raw, and a record with no unit ends after its
+// value.
 //
 // The notices come first, then the identity records, then the counters. An
-// activity field is prefixed with its row position. The prefix keeps the rows
-// apart without an index field.
+// activity field name starts with its row position.
 func Dump(snapshot Snapshot) string {
 	var builder strings.Builder
 	for _, notice := range snapshot.Notices {
@@ -32,12 +31,9 @@ func Dump(snapshot Snapshot) string {
 	return strings.TrimRight(builder.String(), "\n")
 }
 
-// writeIdentityLines emits the records that identify the process the snapshot
-// came from, before the counters. A captured snapshot without them cannot say
-// which process produced it or when, so two files could not be told apart.
-//
-// They carry the same escaping as every other value, because a socket path is
-// operator-supplied.
+// writeIdentityLines writes the records that identify the process of the
+// snapshot, before the counters. It escapes each value like every other value,
+// because a socket path is operator-supplied.
 func writeIdentityLines(builder *strings.Builder, identity []Field) {
 	for _, field := range identity {
 		writeIdentityLine(builder, field.Name, field.Value.text)
@@ -56,7 +52,6 @@ func writeIdentityLine(builder *strings.Builder, name string, value string) {
 	builder.WriteString("\n")
 }
 
-// writeFieldLine emits one record.
 func writeFieldLine(builder *strings.Builder, name string, field Field) {
 	builder.WriteString(name)
 	builder.WriteString(" ")
@@ -68,8 +63,7 @@ func writeFieldLine(builder *strings.Builder, name string, field Field) {
 	builder.WriteString("\n")
 }
 
-// valueText renders the set member of a Value. An absent value prints null,
-// which is how every surface says a fact is missing rather than zero or empty.
+// valueText renders the set member of a Value. An absent value prints null.
 func valueText(value Value) string {
 	switch value.kind {
 	case kindInteger:
@@ -87,20 +81,13 @@ func valueText(value Value) string {
 	}
 }
 
-// stringValueText renders a string value for a person to read. This form is
-// human-facing; a machine consumer reads the JSON form, where every value is a
-// typed field rather than a line of text.
+// stringValueText renders a string value for a person to read. A machine
+// consumer reads the JSON form.
 //
-// A value keeps its spaces and prints as itself. A version string reads as
-// `202607270542-fe-6e0a44c 6e0a44c built 2026-07-27T05:42:11Z` rather than
-// carrying an escape in place of each space.
-//
-// A value is quoted only when printing it raw would damage the output. A
-// newline would end the line early and leave its tail looking like a separate
-// record. An unprintable rune would arrive at the terminal as a control
-// sequence: a codebase path is operator-supplied, and a path with an escape
-// character could clear the screen or move the cursor. An empty string quotes
-// for a third reason: unquoted, it would look like an absent value, which
+// A value prints as itself, with its spaces. Three kinds of value print quoted.
+// A value with a newline would end the line early. A value with an unprintable
+// rune would send a control sequence to the terminal, and a codebase path is
+// operator-supplied. An empty string would look like an absent value, which
 // prints as null.
 func stringValueText(value string) string {
 	if value == "" || strings.ContainsFunc(value, needsEscaping) {
@@ -109,13 +96,11 @@ func stringValueText(value string) string {
 	return value
 }
 
-// needsEscaping reports whether one rune would damage the line it appears on.
-//
-// A space is safe and stays, because this output is read rather than parsed.
-// Every other whitespace rune is not: a newline ends the line and a tab
-// disturbs the column layout. A quote or a backslash is what the escaping
-// itself uses. Anything unprintable would arrive at the terminal as a control
-// sequence.
+// needsEscaping reports whether one rune forces the value to print quoted. A
+// space does not. Every other whitespace rune does: a newline ends the line and
+// a tab shifts the columns. A quote and a backslash do, because the quoted form
+// uses them. An unprintable rune does, because the terminal would read it as a
+// control sequence.
 func needsEscaping(candidate rune) bool {
 	if candidate == ' ' {
 		return false

@@ -25,12 +25,10 @@ func SafeInt32(value int64) int32 {
 }
 
 // SanitizeUTF8 returns a copy of value with invalid UTF-8 byte sequences
-// replaced by the Unicode replacement character. Milvus rejects VarChar
-// payloads with invalid UTF-8 at the gRPC marshal boundary. Chunk content that
-// survives the file-level skip can still slice through a multi-byte codepoint,
-// for example from a tree-sitter byte-offset boundary, and gets repaired here.
-// The second return value reports whether the input needed repair so callers
-// can log the event.
+// replaced by the Unicode replacement character. Milvus rejects a VarChar
+// payload with invalid UTF-8. Chunk content can cut a multi-byte codepoint, for
+// example at a tree-sitter byte offset. The second return value reports whether
+// the input needed repair.
 func SanitizeUTF8(value string) (string, bool) {
 	if utf8.ValidString(value) {
 		return value, false
@@ -137,7 +135,6 @@ func ScalarCellAt(valueColumn column.Column, declared collection.ScalarColumn, r
 	}
 }
 
-// scalarReadError logs and wraps a failed read of one declared scalar cell.
 func scalarReadError(declared collection.ScalarColumn, rowIndex int, part string, err error) error {
 	slog.Error("read declared scalar column failed", "column", declared.Name, "index", rowIndex, "part", part, "err", err)
 	return fmt.Errorf("read %s of scalar column %s at %d: %w", part, declared.Name, rowIndex, err)

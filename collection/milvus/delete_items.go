@@ -10,7 +10,6 @@ import (
 	"goodkind.io/lm-semantic-search/collection"
 )
 
-// deleteItemIDBatchSize bounds the item IDs in one delete expression.
 const deleteItemIDBatchSize = 256
 
 // DeleteItems removes every row with an item ID column value in ItemIDs and

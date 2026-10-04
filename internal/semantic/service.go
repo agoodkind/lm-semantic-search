@@ -28,7 +28,6 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
-// The collection/milvus package defines the column name constants below.
 const (
 	maxCollectionNameLength = 255
 	stagingCollectionSuffix = "_stg"
@@ -289,8 +288,6 @@ func (service *Service) Degraded() bool {
 // from the record's canonical path.
 const documentPathPrefix = "chat:///"
 
-// documentCollectionIDFromPath returns the document collection id encoded in a
-// canonical path and whether the path is a document collection path.
 func documentCollectionIDFromPath(codebasePath string) (string, bool) {
 	if !strings.HasPrefix(codebasePath, documentPathPrefix) {
 		return "", false
@@ -298,10 +295,11 @@ func documentCollectionIDFromPath(codebasePath string) (string, bool) {
 	return strings.TrimPrefix(codebasePath, documentPathPrefix), true
 }
 
-// CollectionName matches the TypeScript collection naming contract at
-// packages/core/src/context.ts:275 so the Go daemon reads and writes the
-// same Milvus collections as the upstream TS adapter. A document collection
-// canonical path resolves to the document collection name.
+// CollectionName returns the Milvus collection name of a codebase path: the
+// prefix, an optional sanitized override, and a hash of the absolute path. The
+// TypeScript adapter created the stored collections with this format. Do not
+// change it. A document collection canonical path resolves to the document
+// collection name.
 func (service *Service) CollectionName(codebasePath string) string {
 	if collectionID, isDocument := documentCollectionIDFromPath(codebasePath); isDocument {
 		return service.DocumentCollectionName(collectionID)
@@ -400,11 +398,11 @@ func (service *Service) hasCollection(
 
 // Reindex applies a per-item delta against an existing live collection.
 //
-// removal deletes the item's prior rows (a code file by exact relativePath, a
-// document collection item by its item id column). The chunk batch is then embedded and
-// inserted through the same batched flow the staging build uses. Reindex
-// returns ErrCollectionMissing when the live collection no longer exists, so
-// callers can fall back to a full staging build.
+// removal deletes the prior rows of the item: a code file by exact
+// relativePath, a document collection item by its item id column. The chunk
+// batch is then embedded and inserted through the batched flow of the staging
+// build. Reindex returns ErrCollectionMissing when the live collection no
+// longer exists, and the caller runs a full staging build.
 func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.reindex")
 	defer done(&err)

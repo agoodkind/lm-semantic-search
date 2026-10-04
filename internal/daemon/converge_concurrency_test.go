@@ -483,8 +483,6 @@ func (f *fakeSemantic) PromoteStaging(ctx context.Context, codebasePath string) 
 	return nil
 }
 
-// removalPaths returns a copy of the exact paths of a removal, the list the
-// converge tests assert on.
 func removalPaths(removal semantic.Removal) []string {
 	return append(make([]string, 0, len(removal.Paths)), removal.Paths...)
 }

@@ -2,12 +2,8 @@ package collection
 
 import "strconv"
 
-// RankingDepth is the number of candidates one collection search ranks: the
-// topK of each hybrid leg, the fused hybrid limit, and the dense topK. It is
-// the Milvus single-search ceiling. It never depends on the requested limit,
-// the group cap, or the score floor. Every request for one query and filter
-// therefore ranks the same candidate list. The offline store ranks at the
-// same depth.
+// RankingDepth is the largest number of candidates one ranking leg requests. It
+// is the Milvus single-search ceiling.
 const RankingDepth = 16384
 
 // nullGroupKey is the group key of every hit with a null or absent group

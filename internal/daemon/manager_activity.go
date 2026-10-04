@@ -54,7 +54,6 @@ type PendingWork struct {
 	Operation     string
 }
 
-// pendingOperationSync is the operation of a pending code sync slot.
 const pendingOperationSync = "sync"
 
 // PendingWork reports the coalesced requests waiting on a terminal transition.

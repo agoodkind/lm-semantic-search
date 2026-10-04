@@ -11,13 +11,11 @@ import (
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
 
-// Removal names the stored rows one delta step drops before inserting the
-// item's fresh chunks. Paths match a row's relativePath exactly, which a code
-// file uses because all its chunks share one relativePath.
+// Removal selects the stored rows one delta step deletes before it inserts the
+// new chunks of the item. Paths match the relativePath of a row exactly; all
+// chunks of a code file have one relativePath.
 //
-// ItemColumn and ItemIDs select rows by a declared item id scalar column. A
-// document collection removes an item's rows by the item id stored in that
-// column.
+// ItemColumn and ItemIDs select rows by a declared item id scalar column.
 type Removal struct {
 	Paths      []string
 	ItemColumn string
@@ -78,15 +76,14 @@ func (service *Service) DeleteItemRows(ctx context.Context, collectionName strin
 	return service.deleteByRemoval(ctx, trimmedCollectionName, removal)
 }
 
-// deleteByRemoval drops an item's prior rows by exact relativePath, by item id
-// column, or both. The caller holds the collection lease because
-// Milvus serves an expression-filtered Delete only on a loaded collection.
+// deleteByRemoval deletes the prior rows of an item by exact relativePath, by
+// item id column, or both. The caller acquires the collection lease first,
+// because Milvus serves an expression-filtered Delete only on a loaded
+// collection.
 //
 // The span separates the delete from the embed and insert phases of the same
-// reindex. An expression-filtered Delete matches an unbounded row count and a
-// cold collection pays a load first, so this phase can dominate a slow reindex
-// without any other line saying so. semantic.removal_completed reports the
-// rows the store removed after every delete succeeds.
+// reindex. semantic.removal_completed reports the rows the store removed after
+// every delete succeeds.
 func (service *Service) deleteByRemoval(ctx context.Context, collectionName string, removal Removal) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.deleteByRemoval")
 	defer done(&err)

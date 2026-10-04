@@ -7,8 +7,8 @@ import (
 	"unicode"
 )
 
-// lineFields indexes the rendered text by record name so a test asserts on one
-// record without depending on the order of the others.
+// lineFields indexes the rendered text by record name. A test then asserts on
+// one record without depending on the order of the others.
 func lineFields(text string) map[string]string {
 	fields := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
@@ -20,14 +20,13 @@ func lineFields(text string) map[string]string {
 	return fields
 }
 
-// testField builds one counter for a test.
 func testField(group string, name string, unit string, value Value) Field {
 	return Field{Group: group, Name: name, Unit: unit, Value: value, NoDelta: false}
 }
 
-// TestDumpPrintsOneRecordPerLine proves the piped form is one
-// whitespace-separated record per line, so grep, awk, and cut work on it, and
-// that a value is followed by its unit as a third field.
+// TestDumpPrintsOneRecordPerLine checks that the piped form is one
+// whitespace-separated record per line and that a value is followed by its unit
+// as a third field.
 func TestDumpPrintsOneRecordPerLine(t *testing.T) {
 	t.Parallel()
 
@@ -225,8 +224,7 @@ func TestDumpNewlineValueCannotForgeARecord(t *testing.T) {
 func TestDumpEscapesControlRunes(t *testing.T) {
 	t.Parallel()
 
-	// A clear-screen sequence with no whitespace in it, which an earlier
-	// whitespace-only predicate let through untouched.
+	// A clear-screen sequence with no whitespace in it.
 	hostile := "/Users/a/\x1b[2Jwiped"
 	rendered := valueText(Text(hostile))
 

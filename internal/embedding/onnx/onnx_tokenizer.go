@@ -26,9 +26,8 @@ import (
 // be split, while a measured one could still only ever be embedded whole.
 const onnxMaximumInputBytesPerToken = 64
 
-// onnxInputRejection names why an input must not be embedded. Its values are the
-// reason codes carried on embedding.SkippedInput, so one rejection reads the same whether
-// the in-process tokenizer or a hosted endpoint refused the input.
+// onnxInputRejection is the reason an input is not embedded. Its values are the
+// reason codes of embedding.SkippedInput.
 type onnxInputRejection string
 
 const (
