@@ -58,11 +58,7 @@ func (service *Service) insertBatchWithIDs(
 	); err != nil {
 		return err
 	}
-	if err := service.ensureInsertColumns(
-		ctx,
-		collectionName,
-		columnSet.ConversationScalars(),
-	); err != nil {
+	if err := service.ensureInsertColumns(ctx, collectionName); err != nil {
 		return err
 	}
 
@@ -136,18 +132,11 @@ func insertRowsFromChunks(
 func (service *Service) ensureInsertColumns(
 	ctx context.Context,
 	collectionName string,
-	conversationCollection bool,
 ) error {
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return err
 	}
-	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
-		return err
-	}
-	if !conversationCollection {
-		return nil
-	}
-	return service.ensureConversationScalarColumnsOnce(ctx, collectionName)
+	return service.ensureReuseIdentityColumnsOnce(ctx, collectionName)
 }
 
 func (service *Service) executeInsert(

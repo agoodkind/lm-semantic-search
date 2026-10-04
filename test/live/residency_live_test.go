@@ -359,55 +359,6 @@ func TestActiveMutationPreventsIdleUnloadAndUnpinnedStagingPreservesRows(t *test
 	cancelRelease()
 }
 
-func TestPublicConversationSearchLoadsAnIdleCollection(t *testing.T) {
-	harness := newResidencyHarness(t, residencyLiveIdleTimeout)
-	conversationID := "idle-conversation-" + randomID()
-	sentinel := "public idle conversation residency sentinel"
-	job := harness.upsert(
-		map[string][]*pb.ConversationDocument{
-			conversationID: {
-				{
-					ConversationId: conversationID,
-					MessageIndex:   0,
-					Role:           "user",
-					TimestampUnix:  1712345000,
-					Text:           sentinel,
-				},
-			},
-		},
-		pb.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
-		true,
-		false,
-	)
-	requireCompleted(t, job, "public conversation idle setup")
-	waitForLoadState(t, harness, harness.collectionName, entity.LoadStateNotLoad)
-	harness.callRecorder.reset()
-
-	response, err := harness.client.SearchConversations(
-		correlatedContext(),
-		&pb.SearchConversationsRequest{
-			CollectionId: harness.collectionID,
-			Query:        sentinel,
-			Limit:        5,
-		},
-	)
-	if err != nil {
-		t.Fatalf("public conversation search from idle: %v", err)
-	}
-	if len(response.GetResults()) == 0 {
-		t.Fatalf(
-			"public conversation search from idle returned no results: %s",
-			response.GetDisplayText(),
-		)
-	}
-	if got := response.GetResults()[0].GetConversationId(); got != conversationID {
-		t.Fatalf("public conversation result id = %q, want %q", got, conversationID)
-	}
-	if calls := harness.callRecorder.count("LoadCollection", harness.collectionName); calls != 1 {
-		t.Fatalf("conversation idle load calls = %d, want 1", calls)
-	}
-}
-
 func TestColdResidencyTransitionPreservesRowsMmapAndJobs(t *testing.T) {
 	harness := newResidencyHarness(t, residencyLiveIdleTimeout)
 	const sentinel = "cold residency preservation sentinel"

@@ -739,23 +739,6 @@ func resolveSearchResults(chunks []model.StoredChunk) []view.SearchResultView {
 	return results
 }
 
-// resolveConversationSearchResults reduces stored conversation chunks to the
-// view shape.
-func resolveConversationSearchResults(chunks []model.StoredChunk) []view.ConversationResultView {
-	results := make([]view.ConversationResultView, 0, len(chunks))
-	for _, chunk := range chunks {
-		results = append(results, view.ConversationResultView{
-			ConversationID: chunk.ConversationID,
-			MessageIndex:   chunk.MessageIndex,
-			Role:           chunk.Role,
-			TimestampUnix:  chunk.TimestampUnix,
-			Score:          chunk.Score,
-			Content:        chunk.Content,
-		})
-	}
-	return results
-}
-
 // resolveSearchStatusView builds the optional in-flight status portion for a
 // search response.
 func resolveSearchStatusView(codebase model.Codebase, activeJob *model.Job, health dependencyHealth, graphBuilding bool) (view.StatusView, string, bool) {

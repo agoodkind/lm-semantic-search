@@ -38,7 +38,7 @@ func (service *Service) LoadCollectionItemBatch(
 	itemIDs []string,
 ) (CollectionItemBatchState, error) {
 	state := CollectionItemBatchState{Rows: map[string]CollectionItemRows{}, Reuse: map[string][]float32{}}
-	uniqueIDs := dedupeConversationIDs(itemIDs)
+	uniqueIDs := dedupeItemIDs(itemIDs)
 	if !service.Available() || collectionName == "" || itemColumn == "" || len(uniqueIDs) == 0 {
 		return state, nil
 	}
@@ -58,7 +58,7 @@ func (service *Service) LoadCollectionItemBatch(
 	}
 	defer lease.Release()
 
-	for _, idBatch := range batchConversationIDs(uniqueIDs, conversationBatchIDFilterSize) {
+	for _, idBatch := range batchItemIDs(uniqueIDs, itemIDBatchSize) {
 		if err := service.loadCollectionItemGroup(ctx, collectionName, itemColumn, idBatch, state); err != nil {
 			return CollectionItemBatchState{}, err
 		}
@@ -110,7 +110,7 @@ func (service *Service) appendCollectionItemRows(
 	}
 	embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
 	for rowIndex := range resultSet.ResultCount {
-		contentValue, vector, contentErr := conversationContentVectorAt(contentColumn, vectorColumn, rowIndex)
+		contentValue, vector, contentErr := contentVectorAt(contentColumn, vectorColumn, rowIndex)
 		if contentErr != nil {
 			return contentErr
 		}

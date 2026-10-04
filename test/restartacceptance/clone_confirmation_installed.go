@@ -200,33 +200,24 @@ func waitForCloneConversationSeed(
 	return err
 }
 
+// errConversationSearchNotServed reports that the lm-semantic-search daemon
+// serves no conversation search. Clyde searches conversations in process, and
+// the cold conversation check of the clone confirmation needs a Clyde query.
+var errConversationSearchNotServed = errors.New(
+	"lm-semantic-search serves no conversation search; query Clyde for the cold conversation check",
+)
+
 func searchConversationObservation(
-	ctx context.Context,
-	client pb.SemanticSearchDaemonServiceClient,
+	_ context.Context,
+	_ pb.SemanticSearchDaemonServiceClient,
 	collectionID string,
-	query string,
+	_ string,
 ) (semanticSearchObservation, error) {
-	response, err := client.SearchConversations(ctx, &pb.SearchConversationsRequest{
-		CollectionId: collectionID,
-		Query:        query,
-		Limit:        3,
-	})
-	if err != nil {
-		return semanticSearchObservation{Code: classifySearchError(err)}, nil
-	}
-	resultIDs := make([]string, 0, len(response.GetResults()))
-	for _, result := range response.GetResults() {
-		resultIDs = append(
-			resultIDs,
-			result.GetConversationId()+":"+strconv.Itoa(int(result.GetMessageIndex())),
-		)
-	}
-	return semanticSearchObservation{
-		Succeeded: true,
-		Source:    "semantic",
-		Matches:   len(response.GetResults()),
-		ResultIDs: resultIDs,
-	}, nil
+	return semanticSearchObservation{}, fmt.Errorf(
+		"search conversation collection %q: %w",
+		collectionID,
+		errConversationSearchNotServed,
+	)
 }
 
 func prepareCloneConfirmationColdTargets(

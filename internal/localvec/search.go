@@ -322,14 +322,6 @@ func matchesSearchPrefix(relativePath string, prefix string) bool {
 	return relativePath == prefix || strings.HasPrefix(relativePath, prefix+"/")
 }
 
-func conversationProvider(conversationID string) string {
-	separator := strings.IndexByte(conversationID, ':')
-	if separator <= 0 {
-		return ""
-	}
-	return conversationID[:separator]
-}
-
 func effectiveLimit(limit int32) int {
 	if limit <= 0 {
 		return defaultSearchLimit

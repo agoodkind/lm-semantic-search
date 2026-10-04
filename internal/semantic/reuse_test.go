@@ -77,7 +77,7 @@ func TestEmbedChunkBatchDropsOversizedInputWithoutError(t *testing.T) {
 	service := &Service{embedder: skippingEmbedder{}}
 
 	chunks := []model.StoredChunk{
-		{Content: "oversized", ConversationID: "conv-1"},
+		{Content: "oversized", RelativePath: "a/big.go"},
 		{Content: "small", RelativePath: "a/b.go"},
 	}
 

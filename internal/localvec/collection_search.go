@@ -23,16 +23,6 @@ const (
 	truthUnknown
 )
 
-// SearchConversationCollection runs the typed search of a local collection with
-// the conversation declaration. A local row stores the conversation fields, so
-// the search needs no legacy group resolution.
-func (store *Store) SearchConversationCollection(
-	ctx context.Context,
-	search semantic.CollectionSearch,
-) ([]semantic.CollectionHit, error) {
-	return store.SearchCollection(ctx, search)
-}
-
 // SearchCollection runs a typed search of a local collection. It ranks a
 // fixed candidate set that never depends on the limit, the group cap, or the
 // score floor, at the depth the Milvus collection search ranks. When at most
@@ -43,8 +33,8 @@ func (store *Store) SearchConversationCollection(
 // that match the filter tree and score at or above MinScore, at most
 // PerGroupLimit per GroupBy value, up to Limit rows. A smaller limit therefore
 // returns a prefix of a larger one at any collection size. A local row stores
-// the conversation scalar fields, so each hit decodes a declared conversation
-// column from the row and reports every other declared column as absent.
+// each declared scalar value by column name, and a column the row lacks reads
+// as absent.
 func (store *Store) SearchCollection(
 	ctx context.Context,
 	search semantic.CollectionSearch,
@@ -200,18 +190,23 @@ func (stored *collection) nearestCandidatesLocked(query []float32, depth int) ([
 	return scored, nil
 }
 
-// rowScalarCell returns the row's cell for a declared column. The row stores
-// the conversation scalar fields concretely. provider comes from the
-// conversation id prefix and role is lowercased, as the Milvus insert writes
-// them. A column the declaration omits, a column the row format lacks, and a
-// column declared with a different type are absent.
+// rowScalarCell returns the row's cell for a declared column. A column the
+// declaration omits, a column the row does not store, and a column stored with
+// a different type than the declaration are absent. A stored null value is a
+// null cell.
 func rowScalarCell(stored row, columnName string, declared []lmcollection.ScalarColumn) lmcollection.ScalarCell {
 	declaredType, found := declaredColumnType(declared, columnName)
 	if !found {
 		return lmcollection.AbsentCell(columnName)
 	}
-	value, stores := conversationRowValue(stored, columnName)
-	if !stores || value.Type != declaredType {
+	value, stores := stored.Scalars[columnName]
+	if !stores {
+		return lmcollection.AbsentCell(columnName)
+	}
+	if value.Null {
+		return lmcollection.NullCell(columnName)
+	}
+	if value.Type != declaredType {
 		return lmcollection.AbsentCell(columnName)
 	}
 	return lmcollection.ValueCell(columnName, value)
@@ -224,47 +219,6 @@ func declaredColumnType(declared []lmcollection.ScalarColumn, columnName string)
 		}
 	}
 	return "", false
-}
-
-// conversationRowColumn is the closed set of conversation scalar columns a
-// local row stores. The names match the conversation declaration.
-type conversationRowColumn string
-
-const (
-	rowColumnConversationID       conversationRowColumn = "conversationId"
-	rowColumnParentConversationID conversationRowColumn = "parentConversationId"
-	rowColumnRole                 conversationRowColumn = "role"
-	rowColumnProvider             conversationRowColumn = "provider"
-	rowColumnWorkspaceRoot        conversationRowColumn = "workspaceRoot"
-	rowColumnArchived             conversationRowColumn = "archived"
-	rowColumnTimestampUnix        conversationRowColumn = "timestampUnix"
-	rowColumnMessageIndex         conversationRowColumn = "messageIndex"
-	rowColumnLoadRules            conversationRowColumn = "loadRules"
-)
-
-func conversationRowValue(stored row, columnName string) (lmcollection.ScalarValue, bool) {
-	switch conversationRowColumn(columnName) {
-	case rowColumnConversationID:
-		return lmcollection.StringScalar(stored.ConversationID), true
-	case rowColumnParentConversationID:
-		return lmcollection.StringScalar(stored.ParentConversationID), true
-	case rowColumnRole:
-		return lmcollection.StringScalar(strings.ToLower(stored.Role)), true
-	case rowColumnProvider:
-		return lmcollection.StringScalar(conversationProvider(stored.ConversationID)), true
-	case rowColumnWorkspaceRoot:
-		return lmcollection.StringScalar(stored.WorkspaceRoot), true
-	case rowColumnArchived:
-		return lmcollection.BoolScalar(stored.Archived), true
-	case rowColumnTimestampUnix:
-		return lmcollection.Int64Scalar(stored.TimestampUnix), true
-	case rowColumnMessageIndex:
-		return lmcollection.Int64Scalar(int64(stored.MessageIndex)), true
-	case rowColumnLoadRules:
-		return lmcollection.StringScalar(stored.LoadRules), true
-	default:
-		return lmcollection.ScalarValue{Type: "", String: "", Bool: false, Int64: 0}, false
-	}
 }
 
 // evaluateFilter evaluates a validated filter tree on one row with three-valued

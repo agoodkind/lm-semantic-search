@@ -256,10 +256,9 @@ func (store *Store) InspectCollection(
 
 // DescribeScalarColumns reports the declared scalar columns of a stored local
 // collection. exists is false when the collection is absent. The local row
-// format has no schema. A collection with a recorded generic declaration
-// reports the columns of that declaration. Every other existing local
-// collection reports the conversation declaration, because the local row
-// format stores the conversation scalar fields on every conversation row.
+// format has no schema. A collection with a recorded declaration reports the
+// columns of that declaration. Every other existing local collection reports
+// no scalar columns.
 func (store *Store) DescribeScalarColumns(
 	_ context.Context,
 	collectionName string,
@@ -278,7 +277,7 @@ func (store *Store) DescribeScalarColumns(
 	if declared, found := store.recordedScalars(collectionName); found {
 		return declared, true, nil
 	}
-	return semantic.ConversationDeclaration().Scalars, true, nil
+	return nil, true, nil
 }
 
 // HasCollectionForPath reports whether a codebase has a stored collection.

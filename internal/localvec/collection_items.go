@@ -10,14 +10,9 @@ import (
 )
 
 // RecordCollectionDeclaration records the saved declaration of a document
-// collection. A generic declaration replaces the conversation declaration that
-// DescribeScalarColumns reports for the collection, and the conversation
-// declaration removes a recorded generic one.
+// collection. DescribeScalarColumns reports the recorded columns for the
+// collection.
 func (store *Store) RecordCollectionDeclaration(collectionName string, declaration lmcollection.Declaration) {
-	if semantic.IsConversationDeclaration(declaration) {
-		store.declaredScalars.Delete(collectionName)
-		return
-	}
 	store.declaredScalars.Store(collectionName, slices.Clone(declaration.Scalars))
 }
 

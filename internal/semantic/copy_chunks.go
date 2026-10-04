@@ -71,9 +71,7 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 
 	mutations := copyChunkMutations{
 		insertDestination: func() error {
-			// CopyChunks rewrites existing rows within one known collection and
-			// has no item source to ask, so it classifies the column set from
-			// that collection.
+			// CopyChunks rewrites the rows of a code collection.
 			return service.insertBatchWithIDs(
 				ctx,
 				collectionName,
@@ -81,7 +79,7 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 				destinationIDs,
 				source.vectors,
 				splitPartsRecorded,
-				service.storeColumnSetForCollection(collectionName),
+				CodeColumns(),
 			)
 		},
 		persistDestination: func() error {
@@ -353,24 +351,16 @@ func copiedRowAt(
 	}
 	return copiedRow{
 		chunk: model.StoredChunk{
-			Content:              contentValue,
-			RelativePath:         relativePath,
-			StartLine:            milvusstore.SafeInt32(startLineValue),
-			EndLine:              milvusstore.SafeInt32(endLineValue),
-			Language:             languageValue,
-			FileExtension:        fileExtensionValue,
-			ConversationID:       "",
-			ParentConversationID: "",
-			MessageIndex:         0,
-			Role:                 "",
-			TimestampUnix:        0,
-			WorkspaceRoot:        "",
-			Archived:             false,
-			SplitPart:            splitPartValue,
-			SplitPartRecorded:    splitPartRecorded,
-			LoadRules:            "",
-			Scalars:              nil,
-			Score:                0,
+			Content:           contentValue,
+			RelativePath:      relativePath,
+			StartLine:         milvusstore.SafeInt32(startLineValue),
+			EndLine:           milvusstore.SafeInt32(endLineValue),
+			Language:          languageValue,
+			FileExtension:     fileExtensionValue,
+			SplitPart:         splitPartValue,
+			SplitPartRecorded: splitPartRecorded,
+			Scalars:           nil,
+			Score:             0,
 		},
 		id:                idValue,
 		vector:            vector,

@@ -446,20 +446,6 @@ func newHarnessWithOptions(
 		t.Fatalf("DialDaemon returned error: %v", err)
 	}
 
-	// A fresh random id derives a unique conv_chunks_<hash> collection name, so
-	// the throwaway collection can never be the production one.
-	collectionID := "live-marker-" + harnessID
-	codebase, err := manager.RegisterConversationCollection(context.Background(), collectionID)
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-	if codebase.CollectionName == "" {
-		t.Fatal("RegisterConversationCollection returned an empty collection name")
-	}
-	if codebase.CollectionName == productionConversationCollection {
-		t.Fatalf("throwaway collection name equals production %q; refusing to run", productionConversationCollection)
-	}
-
 	h := &harness{
 		t:                 t,
 		config:            cfg,
@@ -469,10 +455,7 @@ func newHarnessWithOptions(
 		operatorMilvus:    operatorMilvus,
 		milvus:            sandboxMilvus,
 		databaseName:      databaseName,
-		collectionID:      collectionID,
-		collectionName:    codebase.CollectionName,
 		reuseCatalogName:  semantic.ReuseCatalogCollectionName(cfg),
-		codebaseID:        codebase.ID,
 		stateRoot:         stateRoot,
 		merkleDir:         cfg.MerkleDir,
 		embedGate:         gate,
@@ -485,7 +468,6 @@ func newHarnessWithOptions(
 		milvusContext:     sandboxContext,
 		stopServer:        stopServer,
 	}
-	h.trackCollectionFamily(codebase.CollectionName)
 	h.trackTemporaryCollection(h.reuseCatalogName)
 	t.Cleanup(func() { h.teardown(h.stopServer) })
 	setupComplete = true

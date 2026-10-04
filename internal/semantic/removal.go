@@ -13,42 +13,36 @@ import (
 
 // Removal names the stored rows one delta step drops before inserting the
 // item's fresh chunks. Paths match a row's relativePath exactly, which a code
-// file uses because all its chunks share one relativePath. Prefixes match every
-// row whose relativePath begins with the prefix, which a conversation uses
-// because its messages span many relativePaths under one conv/<id>/ prefix.
+// file uses because all its chunks share one relativePath.
 //
 // ItemColumn and ItemIDs select rows by a declared item id scalar column. A
 // document collection removes an item's rows by the item id stored in that
-// column, and a conversation collection adds its legacy relativePath prefixes
-// for rows written before the conversationId column existed.
+// column.
 type Removal struct {
 	Paths      []string
-	Prefixes   []string
 	ItemColumn string
 	ItemIDs    []string
 }
 
 // Empty reports whether the removal would delete nothing.
 func (removal Removal) Empty() bool {
-	return len(removal.Paths) == 0 && len(removal.Prefixes) == 0 && len(removal.ItemIDs) == 0
+	return len(removal.Paths) == 0 && len(removal.ItemIDs) == 0
 }
 
 // RemoveItems builds a removal that drops every row with an itemColumn value in
-// itemIDs, plus every row under legacyPrefixes.
-func RemoveItems(itemColumn string, itemIDs []string, legacyPrefixes []string) Removal {
-	return Removal{Paths: nil, Prefixes: legacyPrefixes, ItemColumn: itemColumn, ItemIDs: itemIDs}
+// itemIDs.
+func RemoveItems(itemColumn string, itemIDs []string) Removal {
+	return Removal{Paths: nil, ItemColumn: itemColumn, ItemIDs: itemIDs}
 }
 
 // RemovePaths builds a removal that drops rows by exact relativePath, the code
 // file shape.
 func RemovePaths(paths []string) Removal {
-	return Removal{Paths: paths, Prefixes: nil, ItemColumn: "", ItemIDs: nil}
+	return Removal{Paths: paths, ItemColumn: "", ItemIDs: nil}
 }
 
 // DeleteItemRows deletes the rows removal selects from a document collection.
 // It serves an explicit item delete, and a missing collection deletes nothing.
-// An item removal filters on the item id column. The conversation scalar
-// migration adds that column to a legacy conversation collection, and
 // DeleteItemRows prepares the collection before an item removal.
 func (service *Service) DeleteItemRows(ctx context.Context, collectionName string, removal Removal) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.deleteItemRows")
@@ -84,8 +78,8 @@ func (service *Service) DeleteItemRows(ctx context.Context, collectionName strin
 	return service.deleteByRemoval(ctx, trimmedCollectionName, removal)
 }
 
-// deleteByRemoval drops an item's prior rows by exact relativePath, by
-// relativePath prefix, or both. The caller holds the collection lease because
+// deleteByRemoval drops an item's prior rows by exact relativePath, by item id
+// column, or both. The caller holds the collection lease because
 // Milvus serves an expression-filtered Delete only on a loaded collection.
 //
 // The span separates the delete from the embed and insert phases of the same
@@ -123,23 +117,6 @@ func (service *Service) deleteByRemoval(ctx context.Context, collectionName stri
 			return fmt.Errorf("delete items from %s: %w", collectionName, err)
 		}
 	}
-	var prefixRowsRemoved int64
-	for _, prefix := range removal.Prefixes {
-		if prefix == "" {
-			continue
-		}
-		removed, deleteErr := store.DeleteItems(ctx, collection.DeleteItemsRequest{
-			Collection:   collectionName,
-			Declaration:  declaration,
-			ItemIDs:      nil,
-			PathPrefixes: []string{prefix},
-		})
-		if deleteErr != nil {
-			slog.ErrorContext(ctx, "delete prefix rows failed", "collection", collectionName, "prefix", prefix, "err", deleteErr)
-			return fmt.Errorf("delete prefix %s from %s: %w", prefix, collectionName, deleteErr)
-		}
-		prefixRowsRemoved += removed
-	}
 	slog.InfoContext(
 		ctx,
 		"semantic.removal_completed",
@@ -147,12 +124,10 @@ func (service *Service) deleteByRemoval(ctx context.Context, collectionName stri
 		collectionName,
 		"path_rows_removed",
 		pathRowsRemoved,
-		"prefix_rows_removed",
-		prefixRowsRemoved,
 		"item_rows_removed",
 		itemRowsRemoved,
 		"rows_removed",
-		pathRowsRemoved+prefixRowsRemoved+itemRowsRemoved,
+		pathRowsRemoved+itemRowsRemoved,
 	)
 	return nil
 }

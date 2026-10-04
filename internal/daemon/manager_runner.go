@@ -18,6 +18,10 @@ const (
 	jobStartRetryDelay    = time.Second
 )
 
+// errUnsupportedDocumentIngest fails a document ingest job that an earlier
+// daemon version queued.
+var errUnsupportedDocumentIngest = errors.New("document ingest is not supported by this daemon")
+
 func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 	detachedCorr := correlation.FromContext(ctx).Child()
 	backgroundContext, cancel := context.WithCancel(
@@ -218,7 +222,10 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) (*graphIndexTa
 		manager.routeToBootstrap(ctx, job.ID, reason)
 		return manager.runBootstrap(ctx, job, codeSource), false
 	case jobOperationConversationIngest:
-		manager.runConversationIngest(ctx, job)
+		// A job journal written by an earlier daemon version can still list a
+		// queued document ingest. This daemon has no document ingest, and the job
+		// fails here.
+		manager.updateJobFailed(ctx, job.ID, errUnsupportedDocumentIngest)
 	}
 	return nil, false
 }
