@@ -11,18 +11,12 @@ import (
 	"goodkind.io/lm-semantic-search/collection"
 )
 
-// defaultSearchLimit is the hit count a search returns when the request sets no
-// positive limit.
 const defaultSearchLimit = 10
 
-// cancellationCheckInterval is the number of rows a scan reads between two
-// checks of the request context.
 const cancellationCheckInterval = 4096
 
-// filterTruth is the three-valued result of a filter node on one row. A
-// comparison on a null or absent value is unknown, and a row matches only when
-// the whole tree is true. The Milvus expression evaluator gives the same
-// results for the same tree.
+// Comparisons with absent or null values return unknown.
+// A row matches only when the complete filter evaluates to true.
 type filterTruth int
 
 const (
@@ -36,12 +30,8 @@ type candidate struct {
 	score  float64
 }
 
-// Search scores every row the filter matches by its cosine similarity with
-// request.Vector. It orders the rows by descending score, then ascending
-// relativePath, then ascending ID. It returns at most Limit rows, at most
-// PerGroupLimit per GroupBy value, none scoring below a positive MinScore. A
-// smaller limit returns a prefix of a larger limit's result. Search ignores
-// request.Query.
+// Search ranks matching rows by cosine similarity. Equal scores are ordered
+// by relativePath, then ID. Search uses request.Vector and ignores request.Query.
 func (store *Store) Search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, error) {
 	name, err := requireName(request.Collection)
 	if err != nil {
@@ -75,8 +65,6 @@ func (store *Store) Search(ctx context.Context, request collection.SearchRequest
 	return stored.selectHits(candidates, request), nil
 }
 
-// rank scores every row the request filter matches and returns the rows in
-// ranking order.
 func (stored *storedCollection) rank(ctx context.Context, name string, request collection.SearchRequest, queryNorm float64) ([]candidate, error) {
 	declared := request.Declaration.Scalars
 	candidates := make([]candidate, 0, len(stored.rows))
@@ -108,8 +96,8 @@ func (stored *storedCollection) rank(ctx context.Context, name string, request c
 	return candidates, nil
 }
 
-// selectHits walks ranked candidates once and applies the score floor, the
-// per-group cap, and the limit.
+// Candidates must be sorted by descending score. Selection stops at the first
+// score below request.MinScore when that limit is positive.
 func (stored *storedCollection) selectHits(candidates []candidate, request collection.SearchRequest) []collection.Hit {
 	declared := request.Declaration.Scalars
 	limit := int(request.Limit)
@@ -138,8 +126,6 @@ func (stored *storedCollection) selectHits(candidates []candidate, request colle
 	return hits
 }
 
-// cosine returns the cosine similarity of the query and a stored row. A stored
-// zero vector scores zero.
 func cosine(query []float32, queryNorm float64, row *storedRow) float64 {
 	if row.norm == 0 {
 		return 0
@@ -151,9 +137,8 @@ func cosine(query []float32, queryNorm float64, row *storedRow) float64 {
 	return dot / (queryNorm * row.norm)
 }
 
-// Query returns the rows a filter matches in ascending ID order, without
-// ranking. A nil filter needs a positive Limit, which is the rule the Milvus
-// store enforces.
+// Query returns matching rows in ascending ID order.
+// A request without a filter must specify a positive Limit.
 func (store *Store) Query(ctx context.Context, request collection.QueryRequest) ([]collection.Hit, error) {
 	name, err := requireName(request.Collection)
 	if err != nil {
@@ -187,7 +172,7 @@ func (store *Store) Query(ctx context.Context, request collection.QueryRequest) 
 	return hits, nil
 }
 
-// Delete removes the rows a filter matches and returns the deleted count.
+// Delete removes a row only when the complete filter evaluates to true.
 func (store *Store) Delete(ctx context.Context, collectionName string, filter collection.Filter) (int64, error) {
 	name, err := requireName(collectionName)
 	if err != nil {
@@ -243,11 +228,6 @@ func (stored *storedCollection) hit(row *storedRow, score float64, declared []co
 	}
 }
 
-// cell returns the row's cell for a column of the request declaration. The
-// cell is absent when the request does not declare the column, when the
-// collection has no such column, or when the request declares another type
-// than the collection stores. The cell is null when the collection has the
-// column and the row stores no value for it.
 func (stored *storedCollection) cell(row *storedRow, columnName string, declared []collection.ScalarColumn) collection.ScalarCell {
 	position := slices.IndexFunc(declared, func(column collection.ScalarColumn) bool {
 		return column.Name == columnName
@@ -266,8 +246,7 @@ func (stored *storedCollection) cell(row *storedRow, columnName string, declared
 	return collection.ValueCell(columnName, value)
 }
 
-// groupCell returns the cell the per-group cap reads. A group column the
-// request does not declare reads with the type the collection stores.
+// Undeclared grouping columns use the collection schema.
 func (stored *storedCollection) groupCell(row *storedRow, columnName string, declared []collection.ScalarColumn) collection.ScalarCell {
 	for _, column := range declared {
 		if column.Name == columnName {
@@ -277,10 +256,6 @@ func (stored *storedCollection) groupCell(row *storedRow, columnName string, dec
 	return stored.cell(row, columnName, stored.scalars)
 }
 
-// evaluate evaluates a validated filter tree on one row with three-valued
-// logic. A not node inverts true and false and keeps unknown. An all node is
-// false when any child is false, else unknown when any child is unknown. An any
-// node is true when any child is true, else unknown when any child is unknown.
 func (stored *storedCollection) evaluate(filter collection.Filter, row *storedRow, declared []collection.ScalarColumn) filterTruth {
 	switch filter.Kind {
 	case collection.FilterAll:
