@@ -15,3 +15,8 @@ const documentNamePrefix = "conv_chunks_"
 func DocumentName(collectionID string) string {
 	return documentNamePrefix + tshash.PathPrefix(strings.TrimSpace(collectionID))
 }
+
+// IsDocumentName reports whether a stored name is a document collection name.
+func IsDocumentName(collectionName string) bool {
+	return strings.HasPrefix(collectionName, documentNamePrefix)
+}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 )
@@ -196,6 +197,11 @@ func (service *Service) reconcileResidency(
 	}
 	for _, collectionName := range collections {
 		if isRecoveryCollection(collectionName) {
+			continue
+		}
+		// Clyde loads and searches document collections; the idle timer here
+		// would unload them.
+		if collection.IsDocumentName(collectionName) {
 			continue
 		}
 		loadState, loadStateErr := client.GetLoadState(
