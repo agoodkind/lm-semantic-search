@@ -6,16 +6,107 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"os"
+	"runtime"
 	"strings"
 
 	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/embedding/onnx"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
+	"goodkind.io/lm-semantic-search/internal/onnxruntimedist"
 )
 
 // ErrModelUnavailable reports that a model file is absent from the cache root
 // and its download failed.
 var ErrModelUnavailable = onnx.ErrArtifactUnavailable
+
+// ErrRuntimeUnavailable reports that New opened no ONNX Runtime library from
+// the executable's directory or runpath. The error names each path it tried.
+var ErrRuntimeUnavailable = onnx.ErrRuntimeLibraryUnavailable
+
+const runtimeDirectoryMode = 0o755
+
+// RuntimeVersion is the ONNX Runtime release that InstallRuntime installs.
+const RuntimeVersion = onnxruntimedist.Version
+
+// Runtime is the ONNX Runtime library file the process opened and the version
+// that file reports.
+type Runtime struct {
+	Path    string
+	Version string
+}
+
+// LoadRuntime opens the ONNX Runtime library from the same paths as [New]. A
+// process that opened one library file keeps it until the process exits.
+func LoadRuntime() (Runtime, error) {
+	library, err := onnx.LoadRuntimeLibrary()
+	if err != nil {
+		slog.Warn("ONNX Runtime library is unavailable", "pinned_version", RuntimeVersion)
+		return Runtime{Path: "", Version: ""}, fmt.Errorf("load ONNX Runtime: %w", err)
+	}
+	return Runtime{Path: library.Path, Version: library.Version}, nil
+}
+
+// ModelInstalled reports whether every file of a model exists under cacheRoot.
+// It downloads nothing and does not verify checksums.
+func ModelInstalled(cacheRoot string, name string) (bool, error) {
+	present, err := onnx.ModelFilesPresent(cacheRoot, name)
+	if err != nil {
+		slog.Warn("check local embedding model failed", "model", name, "err", err)
+		return false, fmt.Errorf("check local embedding model %q: %w", name, err)
+	}
+	return present, nil
+}
+
+// InstallModel downloads every missing or checksum-mismatched file of a model
+// into cacheRoot through httpClient.
+func InstallModel(ctx context.Context, httpClient *http.Client, cacheRoot string, name string) error {
+	if err := onnx.InstallModelFiles(ctx, httpClient, cacheRoot, name); err != nil {
+		slog.ErrorContext(ctx, "install local embedding model failed", "model", name, "err", err)
+		return fmt.Errorf("install local embedding model %q: %w", name, err)
+	}
+	return nil
+}
+
+// InstallRuntime downloads the pinned ONNX Runtime release for the running
+// platform, verifies its SHA-256, and writes the shared library and its SONAME
+// and unversioned symlinks into directory. httpClient downloads the archive.
+// [New] opens the library from the directory of the running executable. No
+// other function in this module calls InstallRuntime.
+func InstallRuntime(ctx context.Context, httpClient *http.Client, directory string) error {
+	if strings.TrimSpace(directory) == "" {
+		return errors.New("install ONNX Runtime: directory is required")
+	}
+	archive, err := onnxruntimedist.ArchiveFor(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		slog.ErrorContext(ctx, "resolve ONNX Runtime archive failed", "err", err)
+		return fmt.Errorf("install ONNX Runtime: %w", err)
+	}
+	names, err := onnxruntimedist.LibraryNamesFor(runtime.GOOS)
+	if err != nil {
+		slog.ErrorContext(ctx, "resolve ONNX Runtime library names failed", "err", err)
+		return fmt.Errorf("install ONNX Runtime: %w", err)
+	}
+	workDirectory, err := os.MkdirTemp("", "lms-onnxruntime-install.")
+	if err != nil {
+		slog.ErrorContext(ctx, "create ONNX Runtime download directory failed", "err", err)
+		return fmt.Errorf("install ONNX Runtime: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(workDirectory) }()
+	archiveDirectory, err := onnxruntimedist.FetchArchive(ctx, httpClient, archive, workDirectory)
+	if err != nil {
+		return fmt.Errorf("install ONNX Runtime: %w", err)
+	}
+	if err := os.MkdirAll(directory, runtimeDirectoryMode); err != nil {
+		slog.ErrorContext(ctx, "create ONNX Runtime directory failed", "directory", directory, "err", err)
+		return fmt.Errorf("install ONNX Runtime into %s: %w", directory, err)
+	}
+	if err := onnxruntimedist.InstallLibrary(archiveDirectory, names, directory); err != nil {
+		return fmt.Errorf("install ONNX Runtime into %s: %w", directory, err)
+	}
+	return nil
+}
 
 // Options requires CacheRoot and uses DefaultModel when Model is empty.
 type Options struct {

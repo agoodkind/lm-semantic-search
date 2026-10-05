@@ -208,3 +208,44 @@ func TestEmbedFromCacheInChildProcess(t *testing.T) {
 		t.Fatalf("vector width = %d, want 384", len(vector))
 	}
 }
+
+func TestLoadRuntimeReportsTheOpenedLibraryAndPinnedVersion(t *testing.T) {
+	runtime, err := local.LoadRuntime()
+	if err != nil {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+	if runtime.Version != local.RuntimeVersion {
+		t.Fatalf("runtime version = %q, want %q", runtime.Version, local.RuntimeVersion)
+	}
+	if _, err := os.Stat(runtime.Path); err != nil {
+		t.Fatalf("runtime path %q: %v", runtime.Path, err)
+	}
+}
+
+func TestModelInstalledReadsTheCacheWithoutDownloading(t *testing.T) {
+	empty := t.TempDir()
+	installed, err := local.ModelInstalled(empty, testModel)
+	if err != nil {
+		t.Fatalf("ModelInstalled on an empty cache: %v", err)
+	}
+	if installed {
+		t.Fatal("ModelInstalled reported an empty cache as installed")
+	}
+	entries, err := os.ReadDir(empty)
+	if err != nil {
+		t.Fatalf("read the empty cache: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("ModelInstalled wrote %d entries into the cache", len(entries))
+	}
+
+	cacheRoot := modelCacheRoot(t)
+	newProvider(t, cacheRoot)
+	installed, err = local.ModelInstalled(cacheRoot, testModel)
+	if err != nil {
+		t.Fatalf("ModelInstalled on the populated cache: %v", err)
+	}
+	if !installed {
+		t.Fatal("ModelInstalled reported the populated cache as missing")
+	}
+}

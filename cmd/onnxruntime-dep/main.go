@@ -19,7 +19,10 @@ import (
 )
 
 const (
-	cacheFormatRevision             = 3
+	cacheFormatRevision = 4
+	// The ONNX provider opens the library with dlopen. A link-time
+	// -lonnxruntime makes every binary fail to start without the library.
+	rejectedLinkedRuntime           = "-lonnxruntime"
 	rejectedDarwinCoreML            = "-framework CoreML"
 	rejectedDarwinStaticCXX         = "-lc++"
 	rejectedDarwinStaticDescription = "Description: statically linked ONNX Runtime"
@@ -275,6 +278,9 @@ func (installer dependencyInstaller) isCached() (bool, error) {
 		return false, wrapError("read pkg-config file", err)
 	}
 	pkgConfig := string(pkgConfigContents)
+	if strings.Contains(pkgConfig, rejectedLinkedRuntime) {
+		return false, nil
+	}
 	switch installer.target.goos {
 	case operatingSystemDarwin:
 		if strings.Contains(pkgConfig, rejectedDarwinCoreML) ||
@@ -514,7 +520,7 @@ Name: onnxruntime
 Description: dynamically linked ONNX Runtime
 Version: %s
 Cflags: -I${includedir}
-Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -lonnxruntime -ltokenizers
+Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -ltokenizers
 `, installer.prefix, onnxruntimedist.Version)
 	if err := os.WriteFile(
 		installer.pkgConfigFile(),
@@ -545,7 +551,7 @@ Name: onnxruntime
 Description: dynamically linked ONNX Runtime
 Version: %s
 Cflags: -I${includedir}
-Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -lonnxruntime -ltokenizers -lstdc++ -ldl -lpthread -lm
+Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -ltokenizers -lstdc++ -ldl -lpthread -lm
 `, installer.prefix, onnxruntimedist.Version)
 	if err := os.WriteFile(
 		installer.pkgConfigFile(),
