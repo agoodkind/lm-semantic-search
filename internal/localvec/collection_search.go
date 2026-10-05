@@ -222,11 +222,17 @@ func declaredColumnType(declared []lmcollection.ScalarColumn, columnName string)
 // false when any child is false, else unknown when any child is unknown. An any
 // node is true when any child is true, else unknown when any child is unknown.
 func evaluateFilter(filter lmcollection.Filter, stored row, declared []lmcollection.ScalarColumn) filterTruth {
+	return evaluateFilterCells(filter, func(columnName string) lmcollection.ScalarCell {
+		return rowScalarCell(stored, columnName, declared)
+	})
+}
+
+func evaluateFilterCells(filter lmcollection.Filter, cell func(string) lmcollection.ScalarCell) filterTruth {
 	switch filter.Kind {
 	case lmcollection.FilterAll:
 		result := truthTrue
 		for _, child := range filter.Children {
-			switch evaluateFilter(child, stored, declared) {
+			switch evaluateFilterCells(child, cell) {
 			case truthFalse:
 				return truthFalse
 			case truthUnknown:
@@ -238,7 +244,7 @@ func evaluateFilter(filter lmcollection.Filter, stored row, declared []lmcollect
 	case lmcollection.FilterAny:
 		result := truthFalse
 		for _, child := range filter.Children {
-			switch evaluateFilter(child, stored, declared) {
+			switch evaluateFilterCells(child, cell) {
 			case truthTrue:
 				return truthTrue
 			case truthUnknown:
@@ -251,7 +257,7 @@ func evaluateFilter(filter lmcollection.Filter, stored row, declared []lmcollect
 		if len(filter.Children) != 1 {
 			return truthFalse
 		}
-		switch evaluateFilter(filter.Children[0], stored, declared) {
+		switch evaluateFilterCells(filter.Children[0], cell) {
 		case truthTrue:
 			return truthFalse
 		case truthFalse:
@@ -262,15 +268,15 @@ func evaluateFilter(filter lmcollection.Filter, stored row, declared []lmcollect
 			return truthUnknown
 		}
 	case lmcollection.FilterIsNull:
-		return truthOf(rowScalarCell(stored, filter.Column, declared).State != lmcollection.ScalarCellValue)
+		return truthOf(cell(filter.Column).State != lmcollection.ScalarCellValue)
 	case lmcollection.FilterIsPresent:
-		return truthOf(rowScalarCell(stored, filter.Column, declared).State == lmcollection.ScalarCellValue)
+		return truthOf(cell(filter.Column).State == lmcollection.ScalarCellValue)
 	case lmcollection.FilterEquals, lmcollection.FilterIn, lmcollection.FilterRange:
-		cell := rowScalarCell(stored, filter.Column, declared)
-		if cell.State != lmcollection.ScalarCellValue {
+		compared := cell(filter.Column)
+		if compared.State != lmcollection.ScalarCellValue {
 			return truthUnknown
 		}
-		return truthOf(comparisonMatches(filter, cell.Value))
+		return truthOf(comparisonMatches(filter, compared.Value))
 	default:
 		return truthFalse
 	}

@@ -93,7 +93,14 @@ func newStoreWithProvider(
 	cfg config.Config,
 	provider embedding.Provider,
 ) (*Store, error) {
-	root := filepath.Join(cfg.StateRoot, "localvec")
+	return newStoreAtRoot(cfg, filepath.Join(cfg.StateRoot, "localvec"), provider)
+}
+
+func newStoreAtRoot(
+	cfg config.Config,
+	root string,
+	provider embedding.Provider,
+) (*Store, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		slog.Error("create local vector store directory failed", "path", root, "err", err)
 		return nil, fmt.Errorf("create local vector store directory %s: %w", root, err)
