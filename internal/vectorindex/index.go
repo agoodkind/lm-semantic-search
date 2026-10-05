@@ -1,10 +1,10 @@
 // Package vectorindex is an HNSW cosine index over uint64 keys, built on
 // github.com/coder/hnsw.
 //
-// The graph contains one node per distinct vector. HNSW links identical vectors
-// only to each other, and a group of identical vectors larger than the neighbor
-// limit separates from the rest of the graph. Each node therefore represents
-// every key that stores its vector.
+// Keys with identical vectors share one graph node, and groups maps that node to
+// every such key. In a graph with one node per key, a set of identical vectors
+// larger than the neighbor limit links only to itself, and a search can miss
+// every other node.
 package vectorindex
 
 import (
@@ -295,9 +295,15 @@ func read(reader *bufio.Reader) (*Index, error) {
 		if !found {
 			return nil, fmt.Errorf("key group %d without a graph node", node)
 		}
-		group := make([]uint64, header[1])
-		if err := binary.Read(reader, binary.LittleEndian, group); err != nil {
-			return nil, codecError("read group keys", err)
+		// The loop appends one key per read. A corrupt length fails at the end of
+		// the file instead of allocating that many keys.
+		group := make([]uint64, 0)
+		for range header[1] {
+			var key uint64
+			if err := binary.Read(reader, binary.LittleEndian, &key); err != nil {
+				return nil, codecError("read group keys", err)
+			}
+			group = append(group, key)
 		}
 		index.groups[node] = group
 		index.nodeOfValue[digest(vector)] = node
