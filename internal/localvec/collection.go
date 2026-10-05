@@ -11,11 +11,11 @@ import (
 	"sync"
 
 	"goodkind.io/lm-semantic-search/internal/semantic"
-	"goodkind.io/lm-semantic-search/internal/usearch"
+	"goodkind.io/lm-semantic-search/internal/vectorindex"
 )
 
 const (
-	indexFileName    = "index.usearch"
+	indexFileName    = "index.hnsw"
 	metadataFileName = "metadata.jsonl"
 )
 
@@ -25,7 +25,7 @@ type collection struct {
 	mutex      sync.RWMutex
 	rows       []row
 	reuseRows  map[string]int
-	index      *usearch.Index
+	index      *vectorindex.Index
 	dimensions int
 	loaded     bool
 	exists     bool
@@ -106,22 +106,7 @@ func (stored *collection) vectorCount() (int, bool, error) {
 	if !stored.exists {
 		return 0, false, nil
 	}
-	count, err := stored.index.Size()
-	if err != nil {
-		slog.Error(
-			"read local vector index size failed",
-			"collection",
-			stored.name,
-			"err",
-			err,
-		)
-		return 0, true, fmt.Errorf(
-			"read usearch index size for local vector collection %s: %w",
-			stored.name,
-			err,
-		)
-	}
-	return count, true, nil
+	return stored.index.Size(), true, nil
 }
 
 func (stored *collection) nearest(
@@ -148,7 +133,7 @@ func (stored *collection) nearest(
 			err,
 		)
 		return nil, nil, true, fmt.Errorf(
-			"search usearch index for local vector collection %s: %w",
+			"search vector index for local vector collection %s: %w",
 			stored.name,
 			err,
 		)
@@ -162,7 +147,7 @@ func (stored *collection) nearest(
 		candidate, found := rowsByLabel[key]
 		if !found {
 			return nil, nil, true, fmt.Errorf(
-				"usearch returned unknown label %d for %s",
+				"vector index returned unknown label %d for %s",
 				key,
 				stored.name,
 			)
@@ -339,28 +324,14 @@ func readVectorIndex(
 	indexPath string,
 	rows []row,
 	dimensions int,
-) (*usearch.Index, int, error) {
-	vectorIndex, err := usearch.New(dimensions)
+) (*vectorindex.Index, int, error) {
+	vectorIndex, err := vectorindex.Load(indexPath)
+	if errors.Is(err, vectorindex.ErrFormat) && len(rows) > 0 {
+		return nil, 0, fmt.Errorf("local vector collection %s: %w: %w", collectionName, errIndexRowsMismatch, err)
+	}
 	if err != nil {
 		slog.Error(
-			"create local usearch index failed",
-			"collection",
-			collectionName,
-			"dimensions",
-			dimensions,
-			"err",
-			err,
-		)
-		return nil, 0, fmt.Errorf(
-			"create usearch index for local vector collection %s: %w",
-			collectionName,
-			err,
-		)
-	}
-	if err := vectorIndex.Load(indexPath); err != nil {
-		vectorIndex.Close()
-		slog.Error(
-			"load local usearch index failed",
+			"load local vector index failed",
 			"collection",
 			collectionName,
 			"path",
@@ -368,22 +339,9 @@ func readVectorIndex(
 			"err",
 			err,
 		)
-		return nil, 0, fmt.Errorf("load local usearch index %s: %w", indexPath, err)
+		return nil, 0, fmt.Errorf("load local vector index %s: %w", indexPath, err)
 	}
-	indexDimensions, err := vectorIndex.Dimensions()
-	if err != nil {
-		vectorIndex.Close()
-		slog.Error(
-			"read local usearch index dimensions failed",
-			"collection",
-			collectionName,
-			"path",
-			indexPath,
-			"err",
-			err,
-		)
-		return nil, 0, fmt.Errorf("read local usearch index dimensions: %w", err)
-	}
+	indexDimensions := vectorIndex.Dimensions()
 	if len(rows) > 0 && dimensions != indexDimensions {
 		vectorIndex.Close()
 		return nil, 0, fmt.Errorf(
@@ -392,21 +350,7 @@ func readVectorIndex(
 			indexDimensions,
 		)
 	}
-	size, err := vectorIndex.Size()
-	if err != nil {
-		vectorIndex.Close()
-		slog.Error(
-			"read local usearch index size failed",
-			"collection",
-			collectionName,
-			"path",
-			indexPath,
-			"err",
-			err,
-		)
-		return nil, 0, fmt.Errorf("read local usearch index size: %w", err)
-	}
-	if err := validateVectorIndexRows(collectionName, rows, size, vectorIndex); err != nil {
+	if err := validateVectorIndexRows(collectionName, rows, vectorIndex); err != nil {
 		vectorIndex.Close()
 		return nil, 0, err
 	}
@@ -416,10 +360,10 @@ func readVectorIndex(
 func validateVectorIndexRows(
 	collectionName string,
 	rows []row,
-	size int,
-	vectorIndex *usearch.Index,
+	vectorIndex *vectorindex.Index,
 ) error {
-	if size != len(rows) {
+	if size := vectorIndex.Size(); size != len(rows) {
+		slog.Warn("local vector index size differs from the row file", "collection", collectionName, "rows", len(rows), "indexed", size)
 		return fmt.Errorf(
 			"local vector collection %s has %d metadata rows and %d indexed vectors: %w",
 			collectionName,
@@ -429,24 +373,8 @@ func validateVectorIndexRows(
 		)
 	}
 	for _, candidate := range rows {
-		contains, containsErr := vectorIndex.Contains(candidate.Label)
-		if containsErr != nil {
-			slog.Error(
-				"check local usearch index label failed",
-				"collection",
-				collectionName,
-				"label",
-				candidate.Label,
-				"err",
-				containsErr,
-			)
-			return fmt.Errorf(
-				"check local usearch index label %d: %w",
-				candidate.Label,
-				containsErr,
-			)
-		}
-		if !contains {
+		if !vectorIndex.Contains(candidate.Label) {
+			slog.Warn("local vector index lacks a row label", "collection", collectionName, "label", candidate.Label)
 			return fmt.Errorf(
 				"local vector index %s is missing label %d: %w",
 				collectionName,
@@ -527,22 +455,17 @@ func (stored *collection) persistLocked(rows []row) error {
 	return nil
 }
 
-func buildVectorIndex(rows []row, dimensions int) (*usearch.Index, error) {
-	vectorIndex, err := usearch.New(dimensions)
+func buildVectorIndex(rows []row, dimensions int) (*vectorindex.Index, error) {
+	vectorIndex, err := vectorindex.New(dimensions)
 	if err != nil {
-		slog.Error("create usearch index failed", "dimensions", dimensions, "err", err)
-		return nil, fmt.Errorf("create usearch index for local vectors: %w", err)
-	}
-	if err := vectorIndex.Reserve(len(rows)); err != nil {
-		vectorIndex.Close()
-		slog.Error("reserve usearch index failed", "row_count", len(rows), "err", err)
-		return nil, fmt.Errorf("reserve usearch index for local vectors: %w", err)
+		slog.Error("create vector index failed", "dimensions", dimensions, "err", err)
+		return nil, fmt.Errorf("create vector index for local vectors: %w", err)
 	}
 	for _, candidate := range rows {
 		if err := vectorIndex.Add(candidate.Label, candidate.Vector); err != nil {
 			vectorIndex.Close()
 			slog.Error(
-				"add local vector to usearch failed",
+				"add local vector to vector index failed",
 				"row_id",
 				candidate.ID,
 				"label",
@@ -551,7 +474,7 @@ func buildVectorIndex(rows []row, dimensions int) (*usearch.Index, error) {
 				err,
 			)
 			return nil, fmt.Errorf(
-				"add local vector row %s to usearch index: %w",
+				"add local vector row %s to vector index: %w",
 				candidate.ID,
 				err,
 			)
@@ -563,7 +486,7 @@ func buildVectorIndex(rows []row, dimensions int) (*usearch.Index, error) {
 func writeCollectionDirectory(
 	destination string,
 	rows []row,
-	vectorIndex *usearch.Index,
+	vectorIndex *vectorindex.Index,
 ) (string, error) {
 	parent := filepath.Dir(destination)
 	tempPath, err := os.MkdirTemp(parent, "."+filepath.Base(destination)+".write-*")
@@ -585,8 +508,8 @@ func writeCollectionDirectory(
 	}()
 	indexPath := filepath.Join(tempPath, indexFileName)
 	if err := vectorIndex.Save(indexPath); err != nil {
-		slog.Error("save local usearch index failed", "path", indexPath, "err", err)
-		return "", fmt.Errorf("save local usearch index %s: %w", indexPath, err)
+		slog.Error("save local vector index failed", "path", indexPath, "err", err)
+		return "", fmt.Errorf("save local vector index %s: %w", indexPath, err)
 	}
 	if err := os.Chmod(indexPath, 0o600); err != nil {
 		slog.Error("set local vector index permissions failed", "path", indexPath, "err", err)

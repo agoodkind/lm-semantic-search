@@ -369,7 +369,7 @@ func TestReopenedStoreRebuildsStaleIndex(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	indexPath := filepath.Join(root, testCollection, "index.usearch")
+	indexPath := filepath.Join(root, testCollection, "index.hnsw")
 	rows := rankingRows()
 	first, err := local.Open(local.Options{Root: root, EmbeddingModel: "test-model"})
 	if err != nil {

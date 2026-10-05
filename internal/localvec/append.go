@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"goodkind.io/lm-semantic-search/internal/usearch"
+	"goodkind.io/lm-semantic-search/internal/vectorindex"
 )
 
 // appendLocked writes the row file before replacing the index file.
@@ -26,15 +26,11 @@ func (stored *collection) appendLocked(added []row) error {
 		appended[index].Label = labelForRowID(appended[index].ID, labels)
 		labels[appended[index].Label] = appended[index].ID
 	}
-	if err := stored.index.Reserve(len(stored.rows) + len(appended)); err != nil {
-		slog.Error("reserve local vector index capacity failed", "collection", stored.name, "err", err)
-		return fmt.Errorf("reserve local vector index capacity for %s: %w", stored.name, err)
-	}
 	for _, candidate := range appended {
 		if err := stored.index.Add(candidate.Label, candidate.Vector); err != nil {
 			stored.discardLoadedLocked()
-			slog.Error("add local vector row to usearch index failed", "collection", stored.name, "row_id", candidate.ID, "err", err)
-			return fmt.Errorf("add local vector row %s to usearch index: %w", candidate.ID, err)
+			slog.Error("add local vector row to vector index failed", "collection", stored.name, "row_id", candidate.ID, "err", err)
+			return fmt.Errorf("add local vector row %s to vector index: %w", candidate.ID, err)
 		}
 	}
 	if err := appendRows(filepath.Join(stored.path, metadataFileName), appended); err != nil {
@@ -64,7 +60,7 @@ func (stored *collection) discardLoadedLocked() {
 	stored.loaded = false
 }
 
-func (stored *collection) rebuildIndexLocked(rows []row, dimensions int) (*usearch.Index, int, error) {
+func (stored *collection) rebuildIndexLocked(rows []row, dimensions int) (*vectorindex.Index, int, error) {
 	vectorIndex, err := buildVectorIndex(rows, dimensions)
 	if err != nil {
 		return nil, 0, err
