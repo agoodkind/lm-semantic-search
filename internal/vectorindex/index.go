@@ -31,7 +31,7 @@ const (
 	fileFormat       = "lms-vectorindex-1"
 )
 
-// ErrFormat reports an unrecognized index file format.
+// ErrFormat reports malformed data even when the file format is recognized.
 var ErrFormat = errors.New("unrecognized vector index file")
 
 type vectorDigest [sha256.Size]byte
@@ -312,7 +312,7 @@ func read(reader *bufio.Reader) (*Index, error) {
 	return index, nil
 }
 
-// Close releases the graph and the key maps.
+// Close does not delete files written by Save.
 func (index *Index) Close() {
 	if index == nil {
 		return
