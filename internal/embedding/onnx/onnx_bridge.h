@@ -8,12 +8,12 @@ typedef struct lms_onnx_session lms_onnx_session;
 
 #define LMS_ONNX_ERROR_BUFFER_BYTES 2048
 
-// lms_onnx_load_runtime returns 0 after it opens library_path and finds
-// OrtGetApiBase. lms_onnx_session_create fails until a load returns 0.
+// `lms_onnx_load_runtime` returns 0 after it opens `library_path` and finds
+// `OrtGetApiBase`. `lms_onnx_session_create` fails until a load returns 0.
 int lms_onnx_load_runtime(const char *library_path, char *error_buffer);
 
-// lms_onnx_runtime_info writes the opened library file path and its ONNX
-// Runtime version. Each buffer must hold LMS_ONNX_ERROR_BUFFER_BYTES bytes.
+// `lms_onnx_runtime_info` writes the opened library file path and its ONNX
+// Runtime version. Each buffer must hold `LMS_ONNX_ERROR_BUFFER_BYTES` bytes.
 int lms_onnx_runtime_info(char *path_buffer, char *version_buffer);
 
 lms_onnx_session *lms_onnx_session_create(

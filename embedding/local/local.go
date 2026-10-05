@@ -37,7 +37,7 @@ type Runtime struct {
 	Version string
 }
 
-// LoadRuntime opens the ONNX Runtime library from the same paths as New. A
+// LoadRuntime opens the ONNX Runtime library from the same paths as [New]. A
 // process that opened one library file keeps it until the process exits.
 func LoadRuntime() (Runtime, error) {
 	library, err := onnx.LoadRuntimeLibrary()
@@ -72,8 +72,8 @@ func InstallModel(ctx context.Context, httpClient *http.Client, cacheRoot string
 // InstallRuntime downloads the pinned ONNX Runtime release for the running
 // platform, verifies its SHA-256, and writes the shared library and its SONAME
 // and unversioned symlinks into directory. httpClient downloads the archive.
-// New opens the library from the directory of the running executable. No other
-// function in this module calls InstallRuntime.
+// [New] opens the library from the directory of the running executable. No
+// other function in this module calls InstallRuntime.
 func InstallRuntime(ctx context.Context, httpClient *http.Client, directory string) error {
 	if strings.TrimSpace(directory) == "" {
 		return errors.New("install ONNX Runtime: directory is required")
