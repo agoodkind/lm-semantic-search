@@ -1,4 +1,4 @@
-package memory_test
+package local_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"goodkind.io/lm-semantic-search/collection"
-	"goodkind.io/lm-semantic-search/collection/memory"
+	"goodkind.io/lm-semantic-search/collection/local"
 )
 
 const (
@@ -45,9 +45,19 @@ func testRow(id string, relativePath string, vector []float32, scalars map[strin
 	}
 }
 
-func newTestStore(t *testing.T, rows []collection.Row) *memory.Store {
+func openStore(t *testing.T, root string) *local.Store {
 	t.Helper()
-	store := memory.New(memory.Options{EmbeddingModel: "test-model"})
+	store, err := local.Open(local.Options{Root: root, EmbeddingModel: "test-model"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(store.Close)
+	return store
+}
+
+func newTestStore(t *testing.T, rows []collection.Row) *local.Store {
+	t.Helper()
+	store := openStore(t, t.TempDir())
 	request := collection.EnsureRequest{Collection: testCollection, Declaration: testDeclaration(), Dimension: testDimension}
 	if err := store.EnsureCollection(context.Background(), request); err != nil {
 		t.Fatalf("EnsureCollection: %v", err)
@@ -58,7 +68,7 @@ func newTestStore(t *testing.T, rows []collection.Row) *memory.Store {
 	return store
 }
 
-func searchIDs(t *testing.T, store *memory.Store, request collection.SearchRequest) []string {
+func searchIDs(t *testing.T, store *local.Store, request collection.SearchRequest) []string {
 	t.Helper()
 	request.Collection = testCollection
 	request.Vector = []float32{1, 0, 0}
@@ -74,7 +84,7 @@ func searchIDs(t *testing.T, store *memory.Store, request collection.SearchReque
 	return ids
 }
 
-func queryAll(t *testing.T, store *memory.Store) []collection.Hit {
+func queryAll(t *testing.T, store *local.Store) []collection.Hit {
 	t.Helper()
 	request := collection.QueryRequest{Collection: testCollection, Declaration: testDeclaration(), Filter: nil, Limit: 100}
 	hits, err := store.Query(context.Background(), request)
@@ -133,7 +143,7 @@ func TestSearchAppliesFilterGroupCapAndScoreFloor(t *testing.T) {
 	notArchived := collection.Negate(collection.ColumnEquals(archivedColumn, collection.BoolScalar(true)))
 	filtered := searchIDs(t, store, collection.SearchRequest{Limit: 10, Filter: &notArchived})
 	if want := []string{"a0", "a1", "a2"}; !reflect.DeepEqual(filtered, want) {
-		t.Fatalf("filtered IDs = %v, want %v (b0 and n0 store no archived value)", filtered, want)
+		t.Fatalf("filtered IDs = %v, want %v (b0 and n0 do not store an archived value)", filtered, want)
 	}
 
 	capped := searchIDs(t, store, collection.SearchRequest{Limit: 10, GroupBy: itemColumn, PerGroupLimit: 1})
@@ -180,7 +190,7 @@ func TestUpsertReplacesByIDAndRejectsWholeBatch(t *testing.T) {
 		t.Fatalf("store has %d rows after a rejected batch, want 6", len(after))
 	}
 
-	empty := memory.New(memory.Options{EmbeddingModel: ""})
+	empty := openStore(t, t.TempDir())
 	_, err := empty.Search(ctx, collection.SearchRequest{Collection: testCollection, Vector: []float32{1, 0, 0}, Limit: 1, Declaration: testDeclaration()})
 	if !errors.Is(err, collection.ErrCollectionMissing) {
 		t.Fatalf("Search on a new store returned %v, want ErrCollectionMissing", err)
@@ -209,9 +219,8 @@ func itemRows() []collection.Row {
 
 // TestBackfillScalarsFillsMissingValuesOfStreamedItems proves the backfill
 // fills a null value and an empty string, and assigns a row without an item ID
-// to the item in its relativePath. It writes no value to row b0, which stores
-// a workspace. It counts row z0 of an unstreamed item as an orphan. A dry run
-// writes no value.
+// to the item in its relativePath. It counts row z0 of an unstreamed item as
+// an orphan.
 func TestBackfillScalarsFillsMissingValuesOfStreamedItems(t *testing.T) {
 	t.Parallel()
 
@@ -271,7 +280,7 @@ func TestBackfillScalarsFillsMissingValuesOfStreamedItems(t *testing.T) {
 }
 
 // TestItemRowsReadAndDelete proves QueryRows and DeleteItems select rows by
-// item ID column value and by relativePath prefix, and select no other row.
+// item ID column value and by relativePath prefix.
 func TestItemRowsReadAndDelete(t *testing.T) {
 	t.Parallel()
 
@@ -323,5 +332,37 @@ func TestItemRowsReadAndDelete(t *testing.T) {
 	}
 	if deleted != 1 {
 		t.Fatalf("Delete removed %d rows, want 1", deleted)
+	}
+}
+
+// TestReopenedStoreReadsSavedRows proves a second store opened at the same
+// root returns the same ranked rows as the store that wrote them.
+func TestReopenedStoreReadsSavedRows(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	first, err := local.Open(local.Options{Root: root, EmbeddingModel: "test-model"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ensure := collection.EnsureRequest{Collection: testCollection, Declaration: testDeclaration(), Dimension: testDimension}
+	if err := first.EnsureCollection(context.Background(), ensure); err != nil {
+		t.Fatalf("EnsureCollection: %v", err)
+	}
+	if err := first.Upsert(context.Background(), testCollection, testDeclaration(), rankingRows()); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	want := searchIDs(t, first, collection.SearchRequest{Limit: 10})
+	first.Close()
+
+	second := openStore(t, root)
+	if got := searchIDs(t, second, collection.SearchRequest{Limit: 10}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reopened store ranked %v, want %v", got, want)
+	}
+	if err := second.EnsureCollection(context.Background(), ensure); err != nil {
+		t.Fatalf("EnsureCollection on a reopened store: %v", err)
+	}
+	if got := len(queryAll(t, second)); got != len(want) {
+		t.Fatalf("reopened store has %d rows after EnsureCollection, want %d", got, len(want))
 	}
 }

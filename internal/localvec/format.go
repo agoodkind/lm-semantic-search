@@ -46,6 +46,9 @@ type row struct {
 	// Scalars stores the declared scalar values of a row in a generic document
 	// collection by column name. It is omitted for code rows.
 	Scalars map[string]lmcollection.ScalarValue `json:"scalars,omitempty"`
+	// Metadata and EmbeddingModel are set only on rows a GenericStore writes.
+	Metadata       string `json:"metadata,omitempty"`
+	EmbeddingModel string `json:"embeddingModel,omitempty"`
 }
 
 // itemID returns the row's value of the item id column. A row stores its item
@@ -90,6 +93,8 @@ func newRow(chunk model.StoredChunk, vector []float32) (row, error) {
 		SplitPart:         chunk.SplitPart,
 		SplitPartRecorded: true,
 		Scalars:           maps.Clone(chunk.Scalars),
+		Metadata:          "",
+		EmbeddingModel:    "",
 	}, nil
 }
 

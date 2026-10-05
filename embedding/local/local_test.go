@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"goodkind.io/lm-semantic-search/collection"
-	"goodkind.io/lm-semantic-search/collection/memory"
+	localstore "goodkind.io/lm-semantic-search/collection/local"
 	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/embedding/local"
 )
@@ -19,8 +19,7 @@ const (
 	testCollection       = "local_code_snippets"
 	languageColumn       = "language"
 	cacheRootEnvironment = "LOCAL_EMBEDDING_TEST_CACHE_ROOT"
-	// unreachableProxy refuses every connection. A process that uses it as its
-	// HTTP proxy cannot complete any HTTP request.
+	// unreachableProxy refuses every connection.
 	unreachableProxy = "http://127.0.0.1:1"
 )
 
@@ -73,11 +72,10 @@ func snippetDeclaration() collection.Declaration {
 	}
 }
 
-// TestLocalProviderSearchesMemoryStore embeds code snippets with the in-process
-// model, stores them in the in-memory store, and proves a natural-language
-// query returns the snippet that answers it first. The test uses no Milvus
-// server and no embedding service.
-func TestLocalProviderSearchesMemoryStore(t *testing.T) {
+// TestLocalProviderSearchesLocalStore embeds code snippets with the in-process
+// model, writes them to the file-backed store, and proves a natural-language
+// query returns the snippet that answers it first.
+func TestLocalProviderSearchesLocalStore(t *testing.T) {
 	ctx := context.Background()
 	provider := newProvider(t, modelCacheRoot(t))
 	described, err := local.Describe(testModel)
@@ -98,7 +96,11 @@ func TestLocalProviderSearchesMemoryStore(t *testing.T) {
 		t.Fatalf("EmbedBatch skipped %+v, want every snippet embedded", batch.Skipped)
 	}
 
-	store := memory.New(memory.Options{EmbeddingModel: described.Name})
+	store, err := localstore.Open(localstore.Options{Root: t.TempDir(), EmbeddingModel: described.Name})
+	if err != nil {
+		t.Fatalf("open local store: %v", err)
+	}
+	t.Cleanup(store.Close)
 	declaration := snippetDeclaration()
 	ensure := collection.EnsureRequest{Collection: testCollection, Declaration: declaration, Dimension: described.Dimension}
 	if err := store.EnsureCollection(ctx, ensure); err != nil {
@@ -174,11 +176,9 @@ func TestLocalProviderSearchesMemoryStore(t *testing.T) {
 	}
 }
 
-// TestLocalProviderStartsFromCacheWithoutNetwork proves a process that cannot
-// complete any HTTP request builds the provider from cached model files and
-// embeds a text. The first provider downloads the files when the cache lacks
-// them. The child process then runs with an HTTP proxy that refuses every
-// connection.
+// The first provider downloads the model files when the cache lacks them. The
+// child process then uses unreachableProxy as its HTTP proxy, builds the
+// provider from the cached files, and embeds a text.
 func TestLocalProviderStartsFromCacheWithoutNetwork(t *testing.T) {
 	cacheRoot := modelCacheRoot(t)
 	newProvider(t, cacheRoot)

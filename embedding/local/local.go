@@ -1,7 +1,6 @@
 // Package local builds the embedding provider that runs an ONNX model in the
-// calling process. The provider sends no request to an embedding service. The
-// first use of a model downloads its files into the cache root, and every later
-// use reads the cached files.
+// calling process. The first use of a model downloads its files into the cache
+// root, and every later use reads the cached files.
 package local
 
 import (
@@ -35,10 +34,10 @@ type Model struct {
 	// Dimension is the width of every vector the model returns.
 	Dimension int
 	// QueryPrefix is the text a caller prepends to a search query before
-	// embedding it. A stored document takes no prefix.
+	// embedding it.
 	QueryPrefix string
 	// MaximumTokens is the longest input the model embeds. The provider refuses
-	// a longer input and does not embed a prefix of it.
+	// a longer input.
 	MaximumTokens int
 }
 
