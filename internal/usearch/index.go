@@ -2,8 +2,8 @@
 package usearch
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../third_party/usearch/c
-#cgo CXXFLAGS: -std=c++17 -I${SRCDIR}/../../third_party/usearch/c -I${SRCDIR}/../../third_party/usearch/include -I${SRCDIR}/../../third_party/usearch/numkong/include -I${SRCDIR}/../../third_party/usearch/stringzilla/include
+#cgo CFLAGS: -I${SRCDIR}/upstream/usearch/c
+#cgo CXXFLAGS: -std=c++17 -I${SRCDIR}/upstream/usearch/c -I${SRCDIR}/upstream/usearch/include -I${SRCDIR}/upstream/numkong/include -I${SRCDIR}/upstream/stringzilla/include
 #cgo darwin LDFLAGS: -lc++
 #cgo linux LDFLAGS: -lstdc++ -lm
 #include <stdlib.h>
