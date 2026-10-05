@@ -18,8 +18,9 @@ import (
 const invalidUTF8Replacement = "�"
 
 // GenericStore implements [lmcollection.Store] on the local vector files. The
-// caller supplies every vector. Each write rewrites the row file and the
-// vector index of its collection.
+// caller supplies every vector. A write of new IDs appends to the row file. A
+// write that replaces a stored ID rewrites the row file. Every write replaces
+// the vector index file.
 type GenericStore struct {
 	store          *Store
 	embeddingModel string
@@ -27,8 +28,7 @@ type GenericStore struct {
 
 var _ lmcollection.Store = (*GenericStore)(nil)
 
-// OpenGeneric opens the store rooted at one directory. embeddingModel is the
-// model name written to each row.
+// OpenGeneric writes embeddingModel to every row.
 func OpenGeneric(root string, embeddingModel string) (*GenericStore, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("local vector store root is required")
@@ -40,8 +40,7 @@ func OpenGeneric(root string, embeddingModel string) (*GenericStore, error) {
 	return &GenericStore{store: store, embeddingModel: embeddingModel}, nil
 }
 
-// Close releases the vector indexes the store loaded. A later call loads a
-// collection from its files again.
+// Close releases the loaded vector indexes.
 func (generic *GenericStore) Close() {
 	generic.store.mutex.Lock()
 	defer generic.store.mutex.Unlock()
@@ -68,8 +67,8 @@ func (generic *GenericStore) collection(collectionName string) (*collection, str
 	return stored, name, err
 }
 
-// EnsureCollection creates an empty collection of the requested vector width
-// when it is absent. A collection with rows of another width returns an error.
+// EnsureCollection returns an error for a collection with rows of another
+// vector width.
 func (generic *GenericStore) EnsureCollection(ctx context.Context, request lmcollection.EnsureRequest) error {
 	if err := operationContextError(ctx, "ensure local collection"); err != nil {
 		return err
@@ -278,8 +277,8 @@ func (generic *GenericStore) Delete(ctx context.Context, collectionName string, 
 	return removed, missingAsLibraryError(err)
 }
 
-// QueryRows returns every stored row of the requested items in ascending ID
-// order. A returned vector has unit length.
+// QueryRows returns rows in ascending ID order. Each returned vector has unit
+// length.
 func (generic *GenericStore) QueryRows(ctx context.Context, request lmcollection.RowsRequest) ([]lmcollection.StoredRow, error) {
 	if err := operationContextError(ctx, "query local collection item rows"); err != nil {
 		return nil, err
@@ -345,8 +344,8 @@ func (generic *GenericStore) DeleteItems(ctx context.Context, request lmcollecti
 	return removed, missingAsLibraryError(err)
 }
 
-// BackfillScalars fills the null or empty backfill columns of the rows of
-// streamed items. It returns the changed and orphan row counts.
+// BackfillScalars returns [lmcollection.ErrCollectionMissing] for an absent
+// collection.
 func (generic *GenericStore) BackfillScalars(ctx context.Context, collectionName string, backfill lmcollection.ScalarBackfill) (int, int, error) {
 	name := strings.TrimSpace(collectionName)
 	if name == "" {
@@ -386,8 +385,6 @@ func itemSelector(itemColumn string, itemIDs []string, pathPrefixes []string) fu
 	}
 }
 
-// storedCell reads a column with the type the row stores. A row without the
-// column returns an absent cell.
 func storedCell(stored row, columnName string) lmcollection.ScalarCell {
 	value, stores := stored.Scalars[columnName]
 	if !stores {
@@ -423,8 +420,6 @@ func genericHit(stored row, score float64, declared []lmcollection.ScalarColumn)
 	}
 }
 
-// ensure creates an empty collection of one vector width when the collection
-// is absent or empty.
 func (stored *collection) ensure(dimensions int) error {
 	stored.mutex.Lock()
 	defer stored.mutex.Unlock()
@@ -472,6 +467,16 @@ func (stored *collection) upsert(added []row) error {
 		}
 		addedIDs[candidate.ID] = struct{}{}
 	}
+	replaces := len(addedIDs) < len(added)
+	for _, existing := range stored.rows {
+		if _, found := addedIDs[existing.ID]; found {
+			replaces = true
+			break
+		}
+	}
+	if !replaces {
+		return stored.appendLocked(added)
+	}
 	rewritten := make([]row, 0, len(stored.rows)+len(added))
 	for _, existing := range stored.rows {
 		if _, replaced := addedIDs[existing.ID]; !replaced {
@@ -482,9 +487,6 @@ func (stored *collection) upsert(added []row) error {
 	return stored.persistLocked(rewritten)
 }
 
-// selectRows returns the rows keep accepts in ascending ID order. A positive
-// limit caps the result. The rows omit their vectors unless withVectors is
-// true.
 func (stored *collection) selectRows(keep func(row) bool, limit int, withVectors bool) ([]row, error) {
 	stored.mutex.Lock()
 	defer stored.mutex.Unlock()

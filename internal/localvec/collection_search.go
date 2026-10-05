@@ -227,8 +227,6 @@ func evaluateFilter(filter lmcollection.Filter, stored row, declared []lmcollect
 	})
 }
 
-// evaluateFilterCells evaluates a filter tree with cell as the source of each
-// column value.
 func evaluateFilterCells(filter lmcollection.Filter, cell func(string) lmcollection.ScalarCell) filterTruth {
 	switch filter.Kind {
 	case lmcollection.FilterAll:

@@ -309,6 +309,10 @@ func (stored *collection) loadLocked() error {
 		rows,
 		dimensions,
 	)
+	if errors.Is(err, errIndexRowsMismatch) {
+		slog.Warn("rebuilding local vector index from the row file", "collection", stored.name, "rows", len(rows), "err", err)
+		vectorIndex, indexDimensions, err = stored.rebuildIndexLocked(rows, dimensions)
+	}
 	if err != nil {
 		slog.Error(
 			"load local vector index failed",
@@ -417,10 +421,11 @@ func validateVectorIndexRows(
 ) error {
 	if size != len(rows) {
 		return fmt.Errorf(
-			"local vector collection %s has %d metadata rows and %d indexed vectors",
+			"local vector collection %s has %d metadata rows and %d indexed vectors: %w",
 			collectionName,
 			len(rows),
 			size,
+			errIndexRowsMismatch,
 		)
 	}
 	for _, candidate := range rows {
@@ -443,9 +448,10 @@ func validateVectorIndexRows(
 		}
 		if !contains {
 			return fmt.Errorf(
-				"local vector index %s is missing label %d",
+				"local vector index %s is missing label %d: %w",
 				collectionName,
 				candidate.Label,
+				errIndexRowsMismatch,
 			)
 		}
 	}

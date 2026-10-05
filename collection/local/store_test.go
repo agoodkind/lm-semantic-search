@@ -3,6 +3,8 @@ package local_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -114,9 +116,6 @@ func rankingRows() []collection.Row {
 	}
 }
 
-// TestSearchRanksByCosineSimilarity proves Search orders rows by cosine
-// similarity and breaks a score tie by relativePath. Row c0 has five times the
-// length of row a0 and the same direction, and both score 1.
 func TestSearchRanksByCosineSimilarity(t *testing.T) {
 	t.Parallel()
 
@@ -132,9 +131,6 @@ func TestSearchRanksByCosineSimilarity(t *testing.T) {
 	}
 }
 
-// TestSearchAppliesFilterGroupCapAndScoreFloor proves the three selection
-// rules. A negated equality rejects a row with a null value, the per-group cap
-// counts null group values as one group, and the floor drops lower scores.
 func TestSearchAppliesFilterGroupCapAndScoreFloor(t *testing.T) {
 	t.Parallel()
 
@@ -157,9 +153,6 @@ func TestSearchAppliesFilterGroupCapAndScoreFloor(t *testing.T) {
 	}
 }
 
-// TestUpsertReplacesByIDAndRejectsWholeBatch proves a row replaces the stored
-// row with the same ID, and that one invalid row stops Upsert from storing the
-// valid rows of the same call.
 func TestUpsertReplacesByIDAndRejectsWholeBatch(t *testing.T) {
 	t.Parallel()
 
@@ -217,10 +210,6 @@ func itemRows() []collection.Row {
 	}
 }
 
-// TestBackfillScalarsFillsMissingValuesOfStreamedItems proves the backfill
-// fills a null value and an empty string, and assigns a row without an item ID
-// to the item in its relativePath. It counts row z0 of an unstreamed item as
-// an orphan.
 func TestBackfillScalarsFillsMissingValuesOfStreamedItems(t *testing.T) {
 	t.Parallel()
 
@@ -279,8 +268,6 @@ func TestBackfillScalarsFillsMissingValuesOfStreamedItems(t *testing.T) {
 	}
 }
 
-// TestItemRowsReadAndDelete proves QueryRows and DeleteItems select rows by
-// item ID column value and by relativePath prefix.
 func TestItemRowsReadAndDelete(t *testing.T) {
 	t.Parallel()
 
@@ -335,8 +322,6 @@ func TestItemRowsReadAndDelete(t *testing.T) {
 	}
 }
 
-// TestReopenedStoreReadsSavedRows proves a second store opened at the same
-// root returns the same ranked rows as the store that wrote them.
 func TestReopenedStoreReadsSavedRows(t *testing.T) {
 	t.Parallel()
 
@@ -364,5 +349,43 @@ func TestReopenedStoreReadsSavedRows(t *testing.T) {
 	}
 	if got := len(queryAll(t, second)); got != len(want) {
 		t.Fatalf("reopened store has %d rows after EnsureCollection, want %d", got, len(want))
+	}
+}
+
+// An interrupted append leaves an index file that lists fewer rows than the row
+// file. The test restores the index file from before the second write.
+func TestReopenedStoreRebuildsStaleIndex(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	indexPath := filepath.Join(root, testCollection, "index.usearch")
+	rows := rankingRows()
+	first, err := local.Open(local.Options{Root: root, EmbeddingModel: "test-model"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ensure := collection.EnsureRequest{Collection: testCollection, Declaration: testDeclaration(), Dimension: testDimension}
+	if err := first.EnsureCollection(context.Background(), ensure); err != nil {
+		t.Fatalf("EnsureCollection: %v", err)
+	}
+	if err := first.Upsert(context.Background(), testCollection, testDeclaration(), rows[:2]); err != nil {
+		t.Fatalf("first Upsert: %v", err)
+	}
+	staleIndex, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read index file: %v", err)
+	}
+	if err := first.Upsert(context.Background(), testCollection, testDeclaration(), rows[2:]); err != nil {
+		t.Fatalf("second Upsert: %v", err)
+	}
+	want := searchIDs(t, first, collection.SearchRequest{Limit: 10})
+	first.Close()
+	if err := os.WriteFile(indexPath, staleIndex, 0o600); err != nil {
+		t.Fatalf("restore stale index file: %v", err)
+	}
+
+	second := openStore(t, root)
+	if got := searchIDs(t, second, collection.SearchRequest{Limit: 10}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("store with a stale index ranked %v, want %v", got, want)
 	}
 }

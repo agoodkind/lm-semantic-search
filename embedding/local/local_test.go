@@ -72,9 +72,6 @@ func snippetDeclaration() collection.Declaration {
 	}
 }
 
-// TestLocalProviderSearchesLocalStore embeds code snippets with the in-process
-// model, writes them to the file-backed store, and proves a natural-language
-// query returns the snippet that answers it first.
 func TestLocalProviderSearchesLocalStore(t *testing.T) {
 	ctx := context.Background()
 	provider := newProvider(t, modelCacheRoot(t))
