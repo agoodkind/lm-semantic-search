@@ -54,8 +54,8 @@ func LoadRuntimeLibrary() (RuntimeLibrary, error) {
 	return RuntimeLibrary{Path: cErrorMessage(pathBuffer), Version: cErrorMessage(versionBuffer)}, nil
 }
 
-// A binary that never builds an ONNX provider does not open the library. After
-// a failed load, the next call tries every candidate again.
+// Only NewProviderForModel and LoadRuntimeLibrary open the library. After a
+// failed load, the next call tries every candidate again.
 func loadRuntimeLibraryLocked() error {
 	if onnxLibraryLoaded {
 		return nil

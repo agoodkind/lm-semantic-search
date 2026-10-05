@@ -60,9 +60,9 @@ func ModelInstalled(cacheRoot string, name string) (bool, error) {
 }
 
 // InstallModel downloads every missing or checksum-mismatched file of a model
-// into cacheRoot.
-func InstallModel(ctx context.Context, cacheRoot string, name string) error {
-	if err := onnx.InstallModelFiles(ctx, cacheRoot, name); err != nil {
+// into cacheRoot through httpClient.
+func InstallModel(ctx context.Context, httpClient *http.Client, cacheRoot string, name string) error {
+	if err := onnx.InstallModelFiles(ctx, httpClient, cacheRoot, name); err != nil {
 		slog.ErrorContext(ctx, "install local embedding model failed", "model", name, "err", err)
 		return fmt.Errorf("install local embedding model %q: %w", name, err)
 	}
@@ -71,10 +71,10 @@ func InstallModel(ctx context.Context, cacheRoot string, name string) error {
 
 // InstallRuntime downloads the pinned ONNX Runtime release for the running
 // platform, verifies its SHA-256, and writes the shared library and its SONAME
-// and unversioned symlinks into directory. New opens the library from the
-// directory of the running executable. No other function in this module calls
-// InstallRuntime.
-func InstallRuntime(ctx context.Context, directory string) error {
+// and unversioned symlinks into directory. httpClient downloads the archive.
+// New opens the library from the directory of the running executable. No other
+// function in this module calls InstallRuntime.
+func InstallRuntime(ctx context.Context, httpClient *http.Client, directory string) error {
 	if strings.TrimSpace(directory) == "" {
 		return errors.New("install ONNX Runtime: directory is required")
 	}
@@ -94,7 +94,7 @@ func InstallRuntime(ctx context.Context, directory string) error {
 		return fmt.Errorf("install ONNX Runtime: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(workDirectory) }()
-	archiveDirectory, err := onnxruntimedist.FetchArchive(ctx, http.DefaultClient, archive, workDirectory)
+	archiveDirectory, err := onnxruntimedist.FetchArchive(ctx, httpClient, archive, workDirectory)
 	if err != nil {
 		return fmt.Errorf("install ONNX Runtime: %w", err)
 	}

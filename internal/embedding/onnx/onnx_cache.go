@@ -149,14 +149,14 @@ func ModelFilesPresent(cacheRoot string, modelName string) (bool, error) {
 }
 
 // InstallModelFiles downloads and checksum-verifies every missing or
-// mismatched artifact of the preset into cacheRoot.
-func InstallModelFiles(ctx context.Context, cacheRoot string, modelName string) error {
+// mismatched artifact of the preset into cacheRoot through httpClient.
+func InstallModelFiles(ctx context.Context, httpClient *http.Client, cacheRoot string, modelName string) error {
 	preset, err := offlinemodel.Resolve(modelName)
 	if err != nil {
 		slog.ErrorContext(ctx, "resolve offline embedding model failed", "model", modelName, "err", err)
 		return fmt.Errorf("resolve offline embedding model: %w", err)
 	}
-	_, err = ensureModelFiles(ctx, http.DefaultClient, cacheRoot, preset)
+	_, err = ensureModelFiles(ctx, httpClient, cacheRoot, preset)
 	return err
 }
 
