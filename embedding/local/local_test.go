@@ -19,12 +19,10 @@ const (
 	testCollection       = "local_code_snippets"
 	languageColumn       = "language"
 	cacheRootEnvironment = "LOCAL_EMBEDDING_TEST_CACHE_ROOT"
-	// unreachableProxy refuses every connection.
-	unreachableProxy = "http://127.0.0.1:1"
+	unreachableProxy     = "http://127.0.0.1:1"
 )
 
-// modelCacheRoot returns the cache root the ONNX provider tests also use. The
-// pinned model files download once per machine.
+// The embedding tests use the shared ONNX model cache.
 func modelCacheRoot(t *testing.T) string {
 	t.Helper()
 	root := filepath.Join(os.TempDir(), "lm-semantic-search-offline-model-test-cache")
@@ -173,9 +171,6 @@ func TestLocalProviderSearchesLocalStore(t *testing.T) {
 	}
 }
 
-// The first provider downloads the model files when the cache lacks them. The
-// child process then uses unreachableProxy as its HTTP proxy, builds the
-// provider from the cached files, and embeds a text.
 func TestLocalProviderStartsFromCacheWithoutNetwork(t *testing.T) {
 	cacheRoot := modelCacheRoot(t)
 	newProvider(t, cacheRoot)

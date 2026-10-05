@@ -11,12 +11,11 @@ import (
 	"goodkind.io/lm-semantic-search/internal/usearch"
 )
 
-// errIndexRowsMismatch marks a vector index file that lists other labels than
-// the row file. An interrupted append writes the row file before the index
-// file.
+// appendLocked writes the row file before replacing the index file.
+// An interruption between those writes can produce mismatched rows and labels.
 var errIndexRowsMismatch = errors.New("local vector index does not match the row file")
 
-// Caller must hold stored.mutex.
+// Lock stored.mutex before calling appendLocked.
 func (stored *collection) appendLocked(added []row) error {
 	labels := make(map[uint64]string, len(stored.rows)+len(added))
 	for _, existing := range stored.rows {

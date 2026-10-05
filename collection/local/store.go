@@ -21,21 +21,20 @@ type Options struct {
 }
 
 // Store stores the collections under one root directory.
-type Store struct {
-	*localvec.GenericStore
-}
+type Store = localvec.GenericStore
 
 var _ collection.Store = (*Store)(nil)
 
 // Open creates options.Root when the directory is absent.
 func Open(options Options) (*Store, error) {
-	if strings.TrimSpace(options.Root) == "" {
+	root := strings.TrimSpace(options.Root)
+	if root == "" {
 		return nil, errors.New("local collection store requires a root directory")
 	}
-	generic, err := localvec.OpenGeneric(options.Root, options.EmbeddingModel)
+	store, err := localvec.OpenGeneric(root, options.EmbeddingModel)
 	if err != nil {
-		slog.Error("open local collection store failed", "root", options.Root, "err", err)
-		return nil, fmt.Errorf("open local collection store at %s: %w", options.Root, err)
+		slog.Error("open local collection store failed", "root", root, "err", err)
+		return nil, fmt.Errorf("open local collection store at %s: %w", root, err)
 	}
-	return &Store{GenericStore: generic}, nil
+	return store, nil
 }

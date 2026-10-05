@@ -183,6 +183,17 @@ func TestUpsertReplacesByIDAndRejectsWholeBatch(t *testing.T) {
 		t.Fatalf("store has %d rows after a rejected batch, want 6", len(after))
 	}
 
+	duplicated := []collection.Row{
+		testRow("twin", "doc/twin/0", []float32{1, 0, 0}, nil),
+		testRow("twin", "doc/twin/1", []float32{0, 1, 0}, nil),
+	}
+	if err := store.Upsert(ctx, testCollection, testDeclaration(), duplicated); err == nil {
+		t.Fatal("Upsert accepted two rows with the same ID")
+	}
+	if after := queryAll(t, store); len(after) != 6 {
+		t.Fatalf("store has %d rows after a batch with a duplicated ID, want 6", len(after))
+	}
+
 	empty := openStore(t, t.TempDir())
 	_, err := empty.Search(ctx, collection.SearchRequest{Collection: testCollection, Vector: []float32{1, 0, 0}, Limit: 1, Declaration: testDeclaration()})
 	if !errors.Is(err, collection.ErrCollectionMissing) {

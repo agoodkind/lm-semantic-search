@@ -1,6 +1,4 @@
-// Package local builds the embedding provider that runs an ONNX model in the
-// calling process. The first use of a model downloads its files into the cache
-// root, and every later use reads the cached files.
+// Package local runs an ONNX embedding model in the calling process.
 package local
 
 import (
@@ -19,12 +17,9 @@ import (
 // and its download failed.
 var ErrModelUnavailable = onnx.ErrArtifactUnavailable
 
-// Options configures [New].
+// Options requires CacheRoot and uses DefaultModel when Model is empty.
 type Options struct {
-	// Model is a name from [Models]. An empty value selects [DefaultModel].
-	Model string
-	// CacheRoot is the directory that stores the downloaded model files. It is
-	// required.
+	Model     string
 	CacheRoot string
 }
 

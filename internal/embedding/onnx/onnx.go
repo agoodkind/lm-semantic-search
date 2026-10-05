@@ -253,11 +253,9 @@ func (provider *onnxProvider) clientRejection(
 	}
 }
 
-// skippedInput renders one refused input for the batch's Skipped list. Both token
-// figures travel only with a rejection the tokenizer measured against the model's
-// window. A NUL byte and an over-long byte count are both refused before
-// tokenizing, so neither figure exists for them and both come back unreported
-// rather than as a zero the caller would read as a measurement.
+// The entry reports both token figures only for a rejection the tokenizer
+// measured against the model's window. The provider refuses a NUL byte and an
+// over-long input before tokenizing, and both figures are unreported for them.
 func (provider *onnxProvider) skippedInput(
 	index int,
 	outcome onnxEmbedOutcome,

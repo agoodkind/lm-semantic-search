@@ -28,7 +28,7 @@ type GenericStore struct {
 
 var _ lmcollection.Store = (*GenericStore)(nil)
 
-// OpenGeneric writes embeddingModel to every row.
+// OpenGeneric writes embeddingModel to each row that the returned store writes.
 func OpenGeneric(root string, embeddingModel string) (*GenericStore, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("local vector store root is required")
@@ -46,13 +46,7 @@ func (generic *GenericStore) Close() {
 	defer generic.store.mutex.Unlock()
 	for key, stored := range generic.store.collections {
 		stored.mutex.Lock()
-		if stored.index != nil {
-			stored.index.Close()
-			stored.index = nil
-		}
-		stored.rows = nil
-		stored.reuseRows = nil
-		stored.loaded = false
+		stored.discardLoadedLocked()
 		stored.mutex.Unlock()
 		delete(generic.store.collections, key)
 	}
@@ -99,7 +93,14 @@ func (generic *GenericStore) Upsert(ctx context.Context, collectionName string, 
 		return err
 	}
 	prepared := make([]row, 0, len(rows))
+	seenIDs := make(map[string]struct{}, len(rows))
 	for _, source := range rows {
+		if _, duplicate := seenIDs[source.ID]; duplicate {
+			err := fmt.Errorf("upsert into %s: row ID %s appears more than once", name, source.ID)
+			slog.ErrorContext(ctx, "prepare local collection row failed", "collection", name, "relative_path", source.RelativePath, "err", err)
+			return err
+		}
+		seenIDs[source.ID] = struct{}{}
 		next, prepareErr := generic.genericRow(declaration.Scalars, source)
 		if prepareErr != nil {
 			slog.ErrorContext(ctx, "prepare local collection row failed", "collection", name, "relative_path", source.RelativePath, "err", prepareErr)
@@ -467,7 +468,7 @@ func (stored *collection) upsert(added []row) error {
 		}
 		addedIDs[candidate.ID] = struct{}{}
 	}
-	replaces := len(addedIDs) < len(added)
+	replaces := false
 	for _, existing := range stored.rows {
 		if _, found := addedIDs[existing.ID]; found {
 			replaces = true
