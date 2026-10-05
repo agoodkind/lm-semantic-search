@@ -31,7 +31,7 @@ const (
 	fileFormat       = "lms-vectorindex-1"
 )
 
-// ErrFormat reports an index file that this package cannot read.
+// ErrFormat reports malformed data even when the file format is recognized.
 var ErrFormat = errors.New("unrecognized vector index file")
 
 type vectorDigest [sha256.Size]byte
@@ -48,7 +48,7 @@ type Index struct {
 	nodeOfValue map[vectorDigest]uint64
 }
 
-// New returns an empty index for vectors of the given width.
+// New rejects a width that is not positive.
 func New(dimensions int) (*Index, error) {
 	if dimensions <= 0 {
 		return nil, fmt.Errorf("vector index dimensions must be positive: %d", dimensions)
@@ -144,7 +144,7 @@ func (index *Index) Search(vector []float32, count int) ([]uint64, []float32, er
 	return keys, keyDistances, nil
 }
 
-// Contains reports whether the index stores key.
+// Contains includes keys that share another key's graph node.
 func (index *Index) Contains(key uint64) bool {
 	index.mutex.Lock()
 	defer index.mutex.Unlock()
@@ -159,15 +159,15 @@ func (index *Index) Size() int {
 	return len(index.nodeOfKey)
 }
 
-// Dimensions returns the vector width that New or the file header set.
+// Dimensions returns the configured width, also after Close.
 func (index *Index) Dimensions() int {
 	index.mutex.Lock()
 	defer index.mutex.Unlock()
 	return index.dimensions
 }
 
-// Save writes fileFormat, the vector width, the graph, and the key groups to
-// path. The graph does not record a width when it is empty.
+// Save writes the vector width to the file header.
+// An empty graph does not store its vector width.
 func (index *Index) Save(path string) error {
 	index.mutex.Lock()
 	defer index.mutex.Unlock()
@@ -238,8 +238,7 @@ func (index *Index) writeLocked(writer io.Writer) error {
 	return nil
 }
 
-// Load reads an index that Save wrote. A file in another format returns
-// ErrFormat.
+// Load returns ErrFormat for an unrecognized file format.
 func Load(path string) (*Index, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -295,8 +294,7 @@ func read(reader *bufio.Reader) (*Index, error) {
 		if !found {
 			return nil, fmt.Errorf("key group %d without a graph node", node)
 		}
-		// The loop appends one key per read. A corrupt length fails at the end of
-		// the file instead of allocating that many keys.
+		// Read group keys individually instead of allocating from the untrusted length.
 		group := make([]uint64, 0)
 		for range header[1] {
 			var key uint64
@@ -314,7 +312,7 @@ func read(reader *bufio.Reader) (*Index, error) {
 	return index, nil
 }
 
-// Close releases the graph. Later calls return errors or empty results.
+// Close does not delete files written by Save.
 func (index *Index) Close() {
 	if index == nil {
 		return
