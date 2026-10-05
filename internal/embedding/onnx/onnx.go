@@ -3,7 +3,7 @@ package onnx
 
 /*
 #cgo darwin LDFLAGS: -Wl,-rpath,@loader_path
-#cgo linux LDFLAGS: -Wl,-rpath,$ORIGIN
+#cgo linux LDFLAGS: -Wl,-rpath,$ORIGIN -ldl
 #cgo pkg-config: onnxruntime
 #include <stdlib.h>
 #include "onnx_bridge.h"
@@ -98,6 +98,9 @@ func NewProviderForModel(
 	defer onnxRuntimesMutex.Unlock()
 	if runtime, found := onnxRuntimes[files.modelPath]; found {
 		return &onnxProvider{runtime: runtime}, nil
+	}
+	if err := loadRuntimeLibraryLocked(); err != nil {
+		return nil, err
 	}
 	runtime, err := initializeONNXRuntime(files, preset)
 	if err != nil {

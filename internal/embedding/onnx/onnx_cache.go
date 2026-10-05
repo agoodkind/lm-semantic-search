@@ -115,6 +115,51 @@ func ensureModelFiles(
 	}, nil
 }
 
+// ModelFilesPresent reports whether every artifact file of the preset exists in
+// cacheRoot. It reads no file contents and downloads nothing.
+// NewProviderForModel verifies each checksum.
+func ModelFilesPresent(cacheRoot string, modelName string) (bool, error) {
+	preset, err := offlinemodel.Resolve(modelName)
+	if err != nil {
+		slog.Error("resolve offline embedding model failed", "model", modelName, "err", err)
+		return false, fmt.Errorf("resolve offline embedding model: %w", err)
+	}
+	modelDirectory := filepath.Join(cacheRoot, offlineModelCacheDirectory, preset.Name)
+	for _, rawURL := range []string{preset.ModelONNXURL, preset.ModelDataURL, preset.TokenizerURL} {
+		if rawURL == "" {
+			continue
+		}
+		filename, filenameErr := artifactFilename(rawURL)
+		if filenameErr != nil {
+			return false, filenameErr
+		}
+		info, statErr := os.Stat(filepath.Join(modelDirectory, filename))
+		if errors.Is(statErr, os.ErrNotExist) {
+			return false, nil
+		}
+		if statErr != nil {
+			slog.Error("inspect offline embedding artifact failed", "path", filepath.Join(modelDirectory, filename), "err", statErr)
+			return false, fmt.Errorf("inspect offline embedding artifact %s: %w", filename, statErr)
+		}
+		if !info.Mode().IsRegular() {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// InstallModelFiles downloads and checksum-verifies every missing or
+// mismatched artifact of the preset into cacheRoot.
+func InstallModelFiles(ctx context.Context, cacheRoot string, modelName string) error {
+	preset, err := offlinemodel.Resolve(modelName)
+	if err != nil {
+		slog.ErrorContext(ctx, "resolve offline embedding model failed", "model", modelName, "err", err)
+		return fmt.Errorf("resolve offline embedding model: %w", err)
+	}
+	_, err = ensureModelFiles(ctx, http.DefaultClient, cacheRoot, preset)
+	return err
+}
+
 func artifactFilename(rawURL string) (string, error) {
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil {

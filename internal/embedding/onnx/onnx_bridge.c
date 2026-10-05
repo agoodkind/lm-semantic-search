@@ -1,10 +1,72 @@
+// glibc declares dladdr only with _GNU_SOURCE.
+#define _GNU_SOURCE
 #include "onnx_bridge.h"
 
+#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "onnxruntime_c_api.h"
+
+typedef const OrtApiBase *(*lms_ort_get_api_base)(void);
+
+// The Go caller serializes lms_onnx_load_runtime and reads this pointer only
+// after a load returns 0.
+static lms_ort_get_api_base lms_onnx_get_api_base = NULL;
+
+int lms_onnx_load_runtime(const char *library_path, char *error_buffer) {
+    if (lms_onnx_get_api_base != NULL) {
+        return 0;
+    }
+    void *handle = dlopen(library_path, RTLD_NOW | RTLD_LOCAL);
+    if (handle == NULL) {
+        const char *reason = dlerror();
+        snprintf(
+            error_buffer,
+            LMS_ONNX_ERROR_BUFFER_BYTES,
+            "%s",
+            reason != NULL ? reason : "dlopen failed"
+        );
+        return 1;
+    }
+    lms_ort_get_api_base symbol =
+        (lms_ort_get_api_base)dlsym(handle, "OrtGetApiBase");
+    if (symbol == NULL) {
+        const char *reason = dlerror();
+        snprintf(
+            error_buffer,
+            LMS_ONNX_ERROR_BUFFER_BYTES,
+            "%s",
+            reason != NULL ? reason : "OrtGetApiBase is not exported"
+        );
+        dlclose(handle);
+        return 1;
+    }
+    lms_onnx_get_api_base = symbol;
+    return 0;
+}
+
+int lms_onnx_runtime_info(char *path_buffer, char *version_buffer) {
+    if (lms_onnx_get_api_base == NULL) {
+        return 1;
+    }
+    Dl_info info;
+    memset(&info, 0, sizeof(info));
+    if (dladdr((const void *)lms_onnx_get_api_base, &info) == 0 ||
+        info.dli_fname == NULL) {
+        return 1;
+    }
+    snprintf(path_buffer, LMS_ONNX_ERROR_BUFFER_BYTES, "%s", info.dli_fname);
+    const char *version = lms_onnx_get_api_base()->GetVersionString();
+    snprintf(
+        version_buffer,
+        LMS_ONNX_ERROR_BUFFER_BYTES,
+        "%s",
+        version != NULL ? version : ""
+    );
+    return 0;
+}
 
 struct lms_onnx_session {
     const OrtApi *api;
@@ -73,7 +135,15 @@ lms_onnx_session *lms_onnx_session_create(
         return NULL;
     }
 
-    const OrtApiBase *api_base = OrtGetApiBase();
+    if (lms_onnx_get_api_base == NULL) {
+        lms_onnx_plain_error(
+            "ONNX Runtime library is not loaded",
+            error_buffer,
+            LMS_ONNX_ERROR_BUFFER_BYTES
+        );
+        return NULL;
+    }
+    const OrtApiBase *api_base = lms_onnx_get_api_base();
     if (api_base == NULL) {
         lms_onnx_plain_error(
             "OrtGetApiBase returned nil",
