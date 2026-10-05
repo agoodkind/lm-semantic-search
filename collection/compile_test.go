@@ -1,8 +1,10 @@
-package collection
+package collection_test
 
 import (
 	"reflect"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/collection"
 )
 
 // TestCompileNestsBooleanNodes proves the compiler renders every predicate and
@@ -15,18 +17,18 @@ func TestCompileNestsBooleanNodes(t *testing.T) {
 
 	lower := int64(5)
 	upper := int64(9)
-	tree := AllOf(
-		AnyOf(
-			ColumnEquals("role", StringScalar(`ro"le`)),
-			ColumnRange("messageIndex", &lower, &upper),
-			AllOf(ColumnEquals("archived", BoolScalar(false)), ColumnIsNull("workspaceRoot")),
+	tree := collection.AllOf(
+		collection.AnyOf(
+			collection.ColumnEquals("role", collection.StringScalar(`ro"le`)),
+			collection.ColumnRange("messageIndex", &lower, &upper),
+			collection.AllOf(collection.ColumnEquals("archived", collection.BoolScalar(false)), collection.ColumnIsNull("workspaceRoot")),
 		),
-		Negate(ColumnIn("timestampUnix", []ScalarValue{Int64Scalar(1), Int64Scalar(2)})),
-		ColumnIn("archived", []ScalarValue{BoolScalar(true)}),
-		ColumnIsPresent("loadRules"),
-		ColumnRange("timestampUnix", nil, &upper),
+		collection.Negate(collection.ColumnIn("timestampUnix", []collection.ScalarValue{collection.Int64Scalar(1), collection.Int64Scalar(2)})),
+		collection.ColumnIn("archived", []collection.ScalarValue{collection.BoolScalar(true)}),
+		collection.ColumnIsPresent("loadRules"),
+		collection.ColumnRange("timestampUnix", nil, &upper),
 	)
-	got, err := Compile(&tree)
+	got, err := collection.Compile(&tree)
 	if err != nil {
 		t.Fatalf("compile returned error: %v", err)
 	}
@@ -34,20 +36,20 @@ func TestCompileNestsBooleanNodes(t *testing.T) {
 	if got.Expression != want {
 		t.Fatalf("expression = %q, want %q", got.Expression, want)
 	}
-	wantParams := []TemplateParam{
-		{Name: "p0", Type: ScalarTypeInt64, Strings: nil, Bools: nil, Int64s: []int64{1, 2}},
-		{Name: "p1", Type: ScalarTypeBool, Strings: nil, Bools: []bool{true}, Int64s: nil},
+	wantParams := []collection.TemplateParam{
+		{Name: "p0", Type: collection.ScalarTypeInt64, Strings: nil, Bools: nil, Int64s: []int64{1, 2}},
+		{Name: "p1", Type: collection.ScalarTypeBool, Strings: nil, Bools: []bool{true}, Int64s: nil},
 	}
 	if !reflect.DeepEqual(got.Params, wantParams) {
 		t.Fatalf("params = %#v, want %#v", got.Params, wantParams)
 	}
 
-	empty, err := Compile(nil)
+	empty, err := collection.Compile(nil)
 	if err != nil || empty.Expression != "" || len(empty.Params) != 0 {
 		t.Fatalf("compile(nil) = %+v, %v, want the empty expression", empty, err)
 	}
-	emptyGroup := AnyOf()
-	if _, err := Compile(&emptyGroup); err == nil {
+	emptyGroup := collection.AnyOf()
+	if _, err := collection.Compile(&emptyGroup); err == nil {
 		t.Fatal("compile of an empty any group succeeded, want an error")
 	}
 }
