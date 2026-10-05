@@ -168,7 +168,7 @@ func (store *Store) rankCandidates(ctx context.Context, collectionName string, q
 		outputFields = append(outputFields, groupColumn.Name)
 	}
 	if store.options.Hybrid {
-		denseRequest := milvusclient.NewAnnRequest(DenseVectorField, depth, entity.FloatVector(queryVector))
+		denseRequest := store.denseAnnRequest(depth, queryVector)
 		sparseRequest := milvusclient.NewAnnRequest(SparseVectorField, depth, entity.Text(rawQuery))
 		if compiled.Expression != "" {
 			denseRequest = denseRequest.WithFilter(compiled.Expression)
@@ -196,6 +196,9 @@ func (store *Store) rankCandidates(ctx context.Context, collectionName string, q
 		depth,
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	).WithANNSField(DenseVectorField).WithOutputFields(outputFields...)
+	for key, value := range store.options.DenseSearchParams {
+		searchOption = searchOption.WithSearchParam(key, value)
+	}
 	if compiled.Expression != "" {
 		searchOption = searchOption.WithFilter(compiled.Expression)
 	}
@@ -356,7 +359,7 @@ func (store *Store) SearchExpression(ctx context.Context, search ExpressionSearc
 	}
 	if store.options.Hybrid {
 		legDepth := max(searchLimit, minimumLegDepth)
-		denseRequest := milvusclient.NewAnnRequest(DenseVectorField, legDepth, entity.FloatVector(search.Vector))
+		denseRequest := store.denseAnnRequest(legDepth, search.Vector)
 		sparseRequest := milvusclient.NewAnnRequest(SparseVectorField, legDepth, entity.Text(search.Query))
 		if search.Expression != "" {
 			denseRequest = denseRequest.WithFilter(search.Expression)
@@ -380,6 +383,9 @@ func (store *Store) SearchExpression(ctx context.Context, search ExpressionSearc
 		searchLimit,
 		[]entity.Vector{entity.FloatVector(search.Vector)},
 	).WithANNSField(DenseVectorField).WithOutputFields(outputFields...)
+	for key, value := range store.options.DenseSearchParams {
+		searchOption = searchOption.WithSearchParam(key, value)
+	}
 	if search.Expression != "" {
 		searchOption = searchOption.WithFilter(search.Expression)
 	}
