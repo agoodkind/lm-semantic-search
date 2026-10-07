@@ -729,6 +729,9 @@ func (controller *collectionResidencyController) waitForLoad(
 		if err := ctx.Err(); err != nil {
 			return collectionLoadWaitContextError(ctx, collectionName, err)
 		}
+		if controller.closedNow() {
+			return ErrResidencyControllerClosed
+		}
 		err := fmt.Errorf(
 			"wait for collection %s: %w",
 			collectionName,
@@ -763,7 +766,23 @@ func (controller *collectionResidencyController) waitForLoad(
 		if err := ctx.Err(); err != nil {
 			return collectionLoadWaitContextError(ctx, collectionName, err)
 		}
+		if controller.closedNow() {
+			return ErrResidencyControllerClosed
+		}
 		return flight.err
+	}
+}
+
+// closedNow reports whether Close has run. A select that finds closedCh and
+// another channel ready at once picks either case, and Close cancels the load
+// that closes flight.done, so waitForLoad checks this before it reports a
+// timeout or a load result.
+func (controller *collectionResidencyController) closedNow() bool {
+	select {
+	case <-controller.closedCh:
+		return true
+	default:
+		return false
 	}
 }
 
