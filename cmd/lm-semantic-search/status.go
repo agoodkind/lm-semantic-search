@@ -10,20 +10,13 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/response"
 	"goodkind.io/lm-semantic-search/internal/statushistory"
-)
-
-const (
-	// defaultStatusInterval is how often the live screen re-reads the daemon.
-	defaultStatusInterval = 2 * time.Second
-	// minimumStatusInterval floors the cadence so several open screens cannot
-	// become a busy loop against the daemon socket.
-	minimumStatusInterval = 500 * time.Millisecond
+	statusdisplay "goodkind.io/lm-semantic-search/status"
 )
 
 func newStatusCmd(options *rootOptions) *cobra.Command {
@@ -58,14 +51,12 @@ func newStatusCmd(options *rootOptions) *cobra.Command {
 				}
 				return runHistoricalStatus(cliOpts, since)
 			}
-			if interval < minimumStatusInterval {
-				interval = minimumStatusInterval
-			}
-			live := cliOpts.outputMode == response.ModeHuman &&
-				!once &&
-				term.IsTerminal(int(os.Stdout.Fd()))
-			if live {
-				return runStatusTUI(cliOpts, interval)
+			if cliOpts.outputMode == response.ModeHuman {
+				return statusdisplay.Run(newStatusSource(cliOpts), statusdisplay.Options{
+					Interval: interval,
+					Once:     once,
+					Now:      clock.Now,
+				})
 			}
 			return callAndPrint(cliOpts, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
 				return client.GetStatus(ctx, &pb.GetStatusRequest{})
@@ -73,7 +64,7 @@ func newStatusCmd(options *rootOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&once, "once", false, "print one snapshot even on a terminal")
-	cmd.Flags().DurationVar(&interval, "interval", defaultStatusInterval, "refresh cadence for the live screen")
+	cmd.Flags().DurationVar(&interval, "interval", statusdisplay.DefaultInterval, "refresh cadence for the live screen")
 	cmd.Flags().DurationVar(&since, "since", 0, "report daemon history for a duration")
 	return cmd
 }

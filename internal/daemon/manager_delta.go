@@ -771,7 +771,7 @@ func (manager *Manager) applyChangedFileSemantic(ctx context.Context, job model.
 
 func effectiveRemoval(source itemSource, fileResult indexer.OneFileResult, relativePath string) semantic.Removal {
 	if fileResult.RemovalOverride {
-		return semantic.Removal{Paths: fileResult.RemovalPaths, Prefixes: fileResult.RemovalPrefixes, ItemColumn: "", ItemIDs: nil}
+		return semantic.Removal{Paths: fileResult.RemovalPaths, ItemColumn: "", ItemIDs: nil}
 	}
 	return source.removalFor([]string{relativePath})
 }
@@ -806,12 +806,6 @@ func (manager *Manager) itemReuse(
 			return nil
 		case itemReuseScopePath:
 			itemReuse, loadErr = manager.semantic.LoadReuseVectorsForPath(
-				ctx,
-				source.CollectionName,
-				source.RelativePath,
-			)
-		case itemReuseScopePrefix:
-			itemReuse, loadErr = manager.semantic.LoadReuseVectorsForPrefix(
 				ctx,
 				source.CollectionName,
 				source.RelativePath,

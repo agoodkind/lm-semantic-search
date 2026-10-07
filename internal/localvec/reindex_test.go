@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/config"
-	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
@@ -240,51 +240,6 @@ func TestStageReindexReportsProgressWhenEveryChunkDropped(t *testing.T) {
 	}
 }
 
-func TestReindexPrefixDeleteRemovesEverySplitPiece(t *testing.T) {
-	t.Parallel()
-
-	const codebasePath = "/tmp/localvec-oversized-prefix-delete"
-	provider := &recordingEmbeddingProvider{}
-	store, err := newStoreWithProvider(config.Config{StateRoot: t.TempDir()}, provider)
-	if err != nil {
-		t.Fatalf("newStoreWithProvider returned error: %v", err)
-	}
-
-	byteBudget := config.EmbedChunkByteBudget(0)
-	// One oversized message splits into many pieces that all share its relativePath
-	// prefix, so a message delete-by-prefix must remove every piece.
-	content := strings.Repeat("z", byteBudget*2+5)
-	stageAndPromote(t, store, codebasePath, []model.StoredChunk{{Content: content, RelativePath: "conv/c/msg"}}, semantic.CodeColumns())
-
-	before, err := store.Count(context.Background(), codebasePath)
-	if err != nil {
-		t.Fatalf("Count returned error: %v", err)
-	}
-	if before < 3 {
-		t.Fatalf("stored %d pieces before delete, want at least 3", before)
-	}
-
-	if err := store.Reindex(
-		context.Background(),
-		codebasePath,
-		nil,
-		semantic.Removal{Prefixes: []string{"conv/c/"}},
-		nil,
-		nil,
-		semantic.CodeColumns(),
-	); err != nil {
-		t.Fatalf("Reindex returned error: %v", err)
-	}
-
-	after, err := store.Count(context.Background(), codebasePath)
-	if err != nil {
-		t.Fatalf("Count returned error: %v", err)
-	}
-	if after != 0 {
-		t.Fatalf("Count after prefix delete = %d, want 0 (every split piece removed)", after)
-	}
-}
-
 func TestReindexSplitsOversizedChunkIntoDistinctRows(t *testing.T) {
 	t.Parallel()
 
@@ -435,7 +390,7 @@ func TestSplitRowsRoundTripAndCopyWithDistinctIdentities(t *testing.T) {
 	}
 }
 
-func TestReindexDeletesPathsAndPrefixesBeforeAppending(t *testing.T) {
+func TestReindexDeletesPathsBeforeAppending(t *testing.T) {
 	t.Parallel()
 
 	const codebasePath = "/tmp/localvec-reindex-delete"
@@ -466,10 +421,7 @@ func TestReindexDeletesPathsAndPrefixesBeforeAppending(t *testing.T) {
 	}
 	stageAndPromote(t, store, codebasePath, initial, semantic.CodeColumns())
 
-	removal := semantic.Removal{
-		Paths:    []string{"exact.go"},
-		Prefixes: []string{"conv/a/"},
-	}
+	removal := semantic.RemovePaths([]string{"exact.go"})
 	replacement := []model.StoredChunk{
 		{Content: "replacement", RelativePath: "exact.go"},
 	}
@@ -489,8 +441,8 @@ func TestReindexDeletesPathsAndPrefixesBeforeAppending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Count returned error: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("Count = %d, want 2", count)
+	if count != 4 {
+		t.Fatalf("Count = %d, want 4", count)
 	}
 	exactReuse, err := store.LoadReuseVectorsForPath(
 		context.Background(),
@@ -505,16 +457,5 @@ func TestReindexDeletesPathsAndPrefixesBeforeAppending(t *testing.T) {
 	}
 	if _, found := exactReuse[semantic.ContentVectorKey("replacement")]; !found {
 		t.Fatal("replacement row is missing from the collection")
-	}
-	prefixReuse, err := store.LoadReuseVectorsForPrefix(
-		context.Background(),
-		store.CollectionName(codebasePath),
-		"conv/a/",
-	)
-	if err != nil {
-		t.Fatalf("LoadReuseVectorsForPrefix returned error: %v", err)
-	}
-	if len(prefixReuse) != 0 {
-		t.Fatalf("prefix reuse = %v, want empty", prefixReuse)
 	}
 }

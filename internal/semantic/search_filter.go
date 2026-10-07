@@ -3,6 +3,8 @@ package semantic
 import (
 	"fmt"
 	"strings"
+
+	"goodkind.io/lm-semantic-search/collection"
 )
 
 // buildSearchFilter joins the extension filter and the relative-path prefix
@@ -49,7 +51,7 @@ func buildRelativePathPrefixFilter(relativePathPrefix string) string {
 	if trimmed == "" || trimmed == "." {
 		return ""
 	}
-	return fmt.Sprintf(`(%s == "%s" or %s like "%s/%%")`, relativePathFieldName, escapeMilvusString(trimmed), relativePathFieldName, escapeMilvusLikePattern(trimmed))
+	return fmt.Sprintf(`(%s == "%s" or %s like "%s/%%")`, relativePathFieldName, collection.EscapeString(trimmed), relativePathFieldName, escapeMilvusLikePattern(trimmed))
 }
 
 // escapeMilvusLikePattern escapes a value for the literal portion of a Milvus
@@ -67,7 +69,7 @@ func buildRelativePathPrefixFilter(relativePathPrefix string) string {
 func escapeMilvusLikePattern(value string) string {
 	value = strings.ReplaceAll(value, "%", `\%`)
 	value = strings.ReplaceAll(value, "_", `\_`)
-	return escapeMilvusString(value)
+	return collection.EscapeString(value)
 }
 
 func buildExtensionFilter(extensionFilter []string) string {

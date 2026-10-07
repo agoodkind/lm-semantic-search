@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/column"
-	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc/peer"
@@ -70,9 +71,7 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 
 	mutations := copyChunkMutations{
 		insertDestination: func() error {
-			// CopyChunks rewrites existing rows within one known collection and
-			// has no item source to ask, so it classifies the column set from
-			// that collection.
+			// CopyChunks rewrites the rows of a code collection.
 			return service.insertBatchWithIDs(
 				ctx,
 				collectionName,
@@ -80,7 +79,7 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 				destinationIDs,
 				source.vectors,
 				splitPartsRecorded,
-				service.storeColumnSetForCollection(collectionName),
+				CodeColumns(),
 			)
 		},
 		persistDestination: func() error {
@@ -341,83 +340,30 @@ func copiedRowAt(
 			languageValue = decodeMetadataLanguage(metadataValue)
 		}
 	}
-	vector, err := vectorAt(columns.vector, rowIndex)
+	vector, err := milvusstore.VectorAt(columns.vector, rowIndex)
 	if err != nil {
 		slog.ErrorContext(ctx, "read vector column for copy failed", "row", rowIndex, "err", err)
 		return copiedRow{}, fmt.Errorf("read vector column at %d: %w", rowIndex, err)
 	}
-	splitPartValue, splitPartRecorded, err := splitPartAt(columns.splitPart, rowIndex)
+	splitPartValue, splitPartRecorded, err := milvusstore.SplitPartAt(columns.splitPart, rowIndex)
 	if err != nil {
-		return copiedRow{}, err
+		return copiedRow{}, fmt.Errorf("read split part column for copy at %d: %w", rowIndex, err)
 	}
 	return copiedRow{
 		chunk: model.StoredChunk{
-			Content:              contentValue,
-			RelativePath:         relativePath,
-			StartLine:            safeInt32FromInt64(startLineValue),
-			EndLine:              safeInt32FromInt64(endLineValue),
-			Language:             languageValue,
-			FileExtension:        fileExtensionValue,
-			ConversationID:       "",
-			ParentConversationID: "",
-			MessageIndex:         0,
-			Role:                 "",
-			TimestampUnix:        0,
-			WorkspaceRoot:        "",
-			Archived:             false,
-			SplitPart:            splitPartValue,
-			SplitPartRecorded:    splitPartRecorded,
-			LoadRules:            "",
-			Scalars:              nil,
-			Score:                0,
+			Content:           contentValue,
+			RelativePath:      relativePath,
+			StartLine:         milvusstore.SafeInt32(startLineValue),
+			EndLine:           milvusstore.SafeInt32(endLineValue),
+			Language:          languageValue,
+			FileExtension:     fileExtensionValue,
+			SplitPart:         splitPartValue,
+			SplitPartRecorded: splitPartRecorded,
+			Scalars:           nil,
+			Score:             0,
 		},
 		id:                idValue,
 		vector:            vector,
 		splitPartRecorded: splitPartRecorded,
 	}, nil
-}
-
-func splitPartAt(splitPartColumn column.Column, rowIndex int) (int32, bool, error) {
-	if splitPartColumn == nil {
-		return 0, false, nil
-	}
-	isNull, nullErr := splitPartColumn.IsNull(rowIndex)
-	if nullErr != nil {
-		slog.Error("read split part null state failed", "row", rowIndex, "err", nullErr)
-		return 0, false, fmt.Errorf("read split part null state at %d: %w", rowIndex, nullErr)
-	}
-	if isNull {
-		return 0, false, nil
-	}
-	value, valueErr := splitPartColumn.GetAsInt64(rowIndex)
-	if valueErr != nil {
-		slog.Error("read split part column failed", "row", rowIndex, "err", valueErr)
-		return 0, false, fmt.Errorf("read split part column at %d: %w", rowIndex, valueErr)
-	}
-	return safeInt32FromInt64(value), true, nil
-}
-
-// vectorAt extracts one float-vector row from a Milvus result column. The
-// client's typed Column surface exposes the row through Get(int); for a
-// dense FloatVector column the returned value is entity.FloatVector,
-// which is just a []float32 with a named type.
-func vectorAt(vectorColumn column.Column, rowIndex int) ([]float32, error) {
-	raw, err := vectorColumn.Get(rowIndex)
-	if err != nil {
-		slog.Error("read vector row failed", "row", rowIndex, "err", err)
-		return nil, fmt.Errorf("read vector row %d: %w", rowIndex, err)
-	}
-	switch typed := raw.(type) {
-	case entity.FloatVector:
-		out := make([]float32, len(typed))
-		copy(out, typed)
-		return out, nil
-	case []float32:
-		out := make([]float32, len(typed))
-		copy(out, typed)
-		return out, nil
-	}
-	err = fmt.Errorf("unexpected vector row type %T", raw)
-	slog.Error("vector row type unexpected", "row", rowIndex, "err", err)
-	return nil, err
 }

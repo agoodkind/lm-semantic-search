@@ -9,7 +9,7 @@ package lmsemanticsearchv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	structpb "google.golang.org/protobuf/types/known/structpb"
+	_ "google.golang.org/protobuf/types/known/structpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -200,169 +200,6 @@ func (OutcomeKind) EnumDescriptor() ([]byte, []int) {
 	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{2}
 }
 
-// ScalarColumnType is the closed set of scalar column types a document
-// collection can declare. UNSPECIFIED is rejected.
-type ScalarColumnType int32
-
-const (
-	ScalarColumnType_SCALAR_COLUMN_TYPE_UNSPECIFIED ScalarColumnType = 0
-	ScalarColumnType_SCALAR_COLUMN_TYPE_STRING      ScalarColumnType = 1
-	ScalarColumnType_SCALAR_COLUMN_TYPE_BOOL        ScalarColumnType = 2
-	ScalarColumnType_SCALAR_COLUMN_TYPE_INT64       ScalarColumnType = 3
-)
-
-// Enum value maps for ScalarColumnType.
-var (
-	ScalarColumnType_name = map[int32]string{
-		0: "SCALAR_COLUMN_TYPE_UNSPECIFIED",
-		1: "SCALAR_COLUMN_TYPE_STRING",
-		2: "SCALAR_COLUMN_TYPE_BOOL",
-		3: "SCALAR_COLUMN_TYPE_INT64",
-	}
-	ScalarColumnType_value = map[string]int32{
-		"SCALAR_COLUMN_TYPE_UNSPECIFIED": 0,
-		"SCALAR_COLUMN_TYPE_STRING":      1,
-		"SCALAR_COLUMN_TYPE_BOOL":        2,
-		"SCALAR_COLUMN_TYPE_INT64":       3,
-	}
-)
-
-func (x ScalarColumnType) Enum() *ScalarColumnType {
-	p := new(ScalarColumnType)
-	*p = x
-	return p
-}
-
-func (x ScalarColumnType) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ScalarColumnType) Descriptor() protoreflect.EnumDescriptor {
-	return file_lmsemanticsearch_v1_service_proto_enumTypes[3].Descriptor()
-}
-
-func (ScalarColumnType) Type() protoreflect.EnumType {
-	return &file_lmsemanticsearch_v1_service_proto_enumTypes[3]
-}
-
-func (x ScalarColumnType) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ScalarColumnType.Descriptor instead.
-func (ScalarColumnType) EnumDescriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{3}
-}
-
-// CollectionReconcileMode declares how the engine treats an item the upsert
-// manifest omits. RETAIN keeps it and its rows. AUTHORITATIVE deletes it and
-// requires an explicit manifest chunk. UNSPECIFIED is treated as RETAIN.
-type CollectionReconcileMode int32
-
-const (
-	CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED   CollectionReconcileMode = 0
-	CollectionReconcileMode_COLLECTION_RECONCILE_MODE_RETAIN        CollectionReconcileMode = 1
-	CollectionReconcileMode_COLLECTION_RECONCILE_MODE_AUTHORITATIVE CollectionReconcileMode = 2
-)
-
-// Enum value maps for CollectionReconcileMode.
-var (
-	CollectionReconcileMode_name = map[int32]string{
-		0: "COLLECTION_RECONCILE_MODE_UNSPECIFIED",
-		1: "COLLECTION_RECONCILE_MODE_RETAIN",
-		2: "COLLECTION_RECONCILE_MODE_AUTHORITATIVE",
-	}
-	CollectionReconcileMode_value = map[string]int32{
-		"COLLECTION_RECONCILE_MODE_UNSPECIFIED":   0,
-		"COLLECTION_RECONCILE_MODE_RETAIN":        1,
-		"COLLECTION_RECONCILE_MODE_AUTHORITATIVE": 2,
-	}
-)
-
-func (x CollectionReconcileMode) Enum() *CollectionReconcileMode {
-	p := new(CollectionReconcileMode)
-	*p = x
-	return p
-}
-
-func (x CollectionReconcileMode) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (CollectionReconcileMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_lmsemanticsearch_v1_service_proto_enumTypes[4].Descriptor()
-}
-
-func (CollectionReconcileMode) Type() protoreflect.EnumType {
-	return &file_lmsemanticsearch_v1_service_proto_enumTypes[4]
-}
-
-func (x CollectionReconcileMode) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use CollectionReconcileMode.Descriptor instead.
-func (CollectionReconcileMode) EnumDescriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{4}
-}
-
-// ConversationReconcileMode declares how the engine treats a conversation the
-// upsert manifest omits. RETAIN keeps it and its rows (additive-only); the
-// explicit DeleteConversation RPC is then the only path that removes a
-// conversation. AUTHORITATIVE deletes it; the large-delete quarantine guard is
-// code-only and does not gate conversation deletes, so send AUTHORITATIVE only
-// with a complete manifest (the engine rejects an authoritative upsert that
-// omits the manifest). UNSPECIFIED is treated as RETAIN, so a caller that sets
-// nothing never triggers a mass delete on a transient short manifest.
-type ConversationReconcileMode int32
-
-const (
-	ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_UNSPECIFIED   ConversationReconcileMode = 0
-	ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN        ConversationReconcileMode = 1
-	ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_AUTHORITATIVE ConversationReconcileMode = 2
-)
-
-// Enum value maps for ConversationReconcileMode.
-var (
-	ConversationReconcileMode_name = map[int32]string{
-		0: "CONVERSATION_RECONCILE_MODE_UNSPECIFIED",
-		1: "CONVERSATION_RECONCILE_MODE_RETAIN",
-		2: "CONVERSATION_RECONCILE_MODE_AUTHORITATIVE",
-	}
-	ConversationReconcileMode_value = map[string]int32{
-		"CONVERSATION_RECONCILE_MODE_UNSPECIFIED":   0,
-		"CONVERSATION_RECONCILE_MODE_RETAIN":        1,
-		"CONVERSATION_RECONCILE_MODE_AUTHORITATIVE": 2,
-	}
-)
-
-func (x ConversationReconcileMode) Enum() *ConversationReconcileMode {
-	p := new(ConversationReconcileMode)
-	*p = x
-	return p
-}
-
-func (x ConversationReconcileMode) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ConversationReconcileMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_lmsemanticsearch_v1_service_proto_enumTypes[5].Descriptor()
-}
-
-func (ConversationReconcileMode) Type() protoreflect.EnumType {
-	return &file_lmsemanticsearch_v1_service_proto_enumTypes[5]
-}
-
-func (x ConversationReconcileMode) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ConversationReconcileMode.Descriptor instead.
-func (ConversationReconcileMode) EnumDescriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{5}
-}
-
 type PathClassification_Kind int32
 
 const (
@@ -402,11 +239,11 @@ func (x PathClassification_Kind) String() string {
 }
 
 func (PathClassification_Kind) Descriptor() protoreflect.EnumDescriptor {
-	return file_lmsemanticsearch_v1_service_proto_enumTypes[6].Descriptor()
+	return file_lmsemanticsearch_v1_service_proto_enumTypes[3].Descriptor()
 }
 
 func (PathClassification_Kind) Type() protoreflect.EnumType {
-	return &file_lmsemanticsearch_v1_service_proto_enumTypes[6]
+	return &file_lmsemanticsearch_v1_service_proto_enumTypes[3]
 }
 
 func (x PathClassification_Kind) Number() protoreflect.EnumNumber {
@@ -415,7 +252,7 @@ func (x PathClassification_Kind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PathClassification_Kind.Descriptor instead.
 func (PathClassification_Kind) EnumDescriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{32, 0}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{29, 0}
 }
 
 type VersionRequest struct {
@@ -900,7 +737,7 @@ type Progress struct {
 	// embedded is visible on the wire.
 	ChunksReused int32 `protobuf:"varint,12,opt,name=chunks_reused,json=chunksReused,proto3" json:"chunks_reused,omitempty"`
 	// unit is the human progress noun for the counted items: "file" for a code
-	// index and "document" for a conversation index. Empty reads as "file".
+	// index and "document" for a document collection. Empty reads as "file".
 	Unit string `protobuf:"bytes,13,opt,name=unit,proto3" json:"unit,omitempty"`
 	// breakdown is the resolved file-and-chunk outcome tree, the same structured
 	// value every surface renders, so JSON consumers get the exact tree without
@@ -2042,342 +1879,6 @@ func (x *SearchResult) GetContent() string {
 	return ""
 }
 
-type ConversationDocument struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	MessageIndex   int32                  `protobuf:"varint,2,opt,name=message_index,json=messageIndex,proto3" json:"message_index,omitempty"`
-	Role           string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
-	TimestampUnix  int64                  `protobuf:"varint,4,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
-	Text           string                 `protobuf:"bytes,5,opt,name=text,proto3" json:"text,omitempty"`
-	// parent_conversation_id names the conversation this one forked from, so the
-	// index can group a fork with its parent. Empty when the conversation has no
-	// parent.
-	ParentConversationId string `protobuf:"bytes,6,opt,name=parent_conversation_id,json=parentConversationId,proto3" json:"parent_conversation_id,omitempty"`
-	// workspace_root is the workspace the conversation belongs to, stored as a
-	// native scalar column so a search can filter by it. clyde owns the value;
-	// empty when unknown. provider is derived from the conversation_id prefix and
-	// is not carried here.
-	WorkspaceRoot string `protobuf:"bytes,7,opt,name=workspace_root,json=workspaceRoot,proto3" json:"workspace_root,omitempty"`
-	// archived marks a conversation hidden from normal clyde lists. clyde owns
-	// this value, and it defaults false when unset.
-	Archived bool `protobuf:"varint,8,opt,name=archived,proto3" json:"archived,omitempty"`
-	// tools carries the structured tool calls made in this message, so the engine
-	// can index the user-visible display text. clyde populates it;
-	// it is empty for messages with no tool calls.
-	Tools []*ConversationToolCall `protobuf:"bytes,9,rep,name=tools,proto3" json:"tools,omitempty"`
-	// thinking is the assistant's internal reasoning text for this message. It can
-	// be sensitive, so a consumer that persists or exposes conversation content
-	// should treat it as private and index it only where that is intended.
-	Thinking string `protobuf:"bytes,10,opt,name=thinking,proto3" json:"thinking,omitempty"`
-	// load_rules names the loading rules that produced this document's
-	// message_index, so a reader can rebuild the same message sequence the index
-	// positions refer to. clyde owns the value and treats it as opaque here; the
-	// engine stores it per row and returns it on search hits. Empty means the row
-	// predates the tag and was written under the sender's default rules.
-	LoadRules     string `protobuf:"bytes,11,opt,name=load_rules,json=loadRules,proto3" json:"load_rules,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ConversationDocument) Reset() {
-	*x = ConversationDocument{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[17]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ConversationDocument) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ConversationDocument) ProtoMessage() {}
-
-func (x *ConversationDocument) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[17]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ConversationDocument.ProtoReflect.Descriptor instead.
-func (*ConversationDocument) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{17}
-}
-
-func (x *ConversationDocument) GetConversationId() string {
-	if x != nil {
-		return x.ConversationId
-	}
-	return ""
-}
-
-func (x *ConversationDocument) GetMessageIndex() int32 {
-	if x != nil {
-		return x.MessageIndex
-	}
-	return 0
-}
-
-func (x *ConversationDocument) GetRole() string {
-	if x != nil {
-		return x.Role
-	}
-	return ""
-}
-
-func (x *ConversationDocument) GetTimestampUnix() int64 {
-	if x != nil {
-		return x.TimestampUnix
-	}
-	return 0
-}
-
-func (x *ConversationDocument) GetText() string {
-	if x != nil {
-		return x.Text
-	}
-	return ""
-}
-
-func (x *ConversationDocument) GetParentConversationId() string {
-	if x != nil {
-		return x.ParentConversationId
-	}
-	return ""
-}
-
-func (x *ConversationDocument) GetWorkspaceRoot() string {
-	if x != nil {
-		return x.WorkspaceRoot
-	}
-	return ""
-}
-
-func (x *ConversationDocument) GetArchived() bool {
-	if x != nil {
-		return x.Archived
-	}
-	return false
-}
-
-func (x *ConversationDocument) GetTools() []*ConversationToolCall {
-	if x != nil {
-		return x.Tools
-	}
-	return nil
-}
-
-func (x *ConversationDocument) GetThinking() string {
-	if x != nil {
-		return x.Thinking
-	}
-	return ""
-}
-
-func (x *ConversationDocument) GetLoadRules() string {
-	if x != nil {
-		return x.LoadRules
-	}
-	return ""
-}
-
-// ConversationToolCall is one structured tool call attached to a conversation document.
-type ConversationToolCall struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// name is the tool name, for example "Bash" or "run_command".
-	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// display is what the user saw for this call. It takes a fresh tag rather than
-	// the one input_json held, because a sender that has not been upgraded yet
-	// still writes its serialization at tag 2. Reading that as display text would
-	// put the serialization into a stored row, which is the defect this field
-	// exists to remove.
-	Display string `protobuf:"bytes,7,opt,name=display,proto3" json:"display,omitempty"`
-	// lang_hint names the language the display text is written in, for example
-	// "bash", "json", or "markdown". Empty when unknown.
-	LangHint string `protobuf:"bytes,4,opt,name=lang_hint,json=langHint,proto3" json:"lang_hint,omitempty"`
-	// output is the tool result text when captured.
-	Output string `protobuf:"bytes,5,opt,name=output,proto3" json:"output,omitempty"`
-	// is_error marks a tool call that returned an error result.
-	IsError       bool `protobuf:"varint,6,opt,name=is_error,json=isError,proto3" json:"is_error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ConversationToolCall) Reset() {
-	*x = ConversationToolCall{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[18]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ConversationToolCall) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ConversationToolCall) ProtoMessage() {}
-
-func (x *ConversationToolCall) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[18]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ConversationToolCall.ProtoReflect.Descriptor instead.
-func (*ConversationToolCall) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *ConversationToolCall) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *ConversationToolCall) GetDisplay() string {
-	if x != nil {
-		return x.Display
-	}
-	return ""
-}
-
-func (x *ConversationToolCall) GetLangHint() string {
-	if x != nil {
-		return x.LangHint
-	}
-	return ""
-}
-
-func (x *ConversationToolCall) GetOutput() string {
-	if x != nil {
-		return x.Output
-	}
-	return ""
-}
-
-func (x *ConversationToolCall) GetIsError() bool {
-	if x != nil {
-		return x.IsError
-	}
-	return false
-}
-
-type ConversationSearchResult struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	MessageIndex   int32                  `protobuf:"varint,2,opt,name=message_index,json=messageIndex,proto3" json:"message_index,omitempty"`
-	Role           string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
-	TimestampUnix  int64                  `protobuf:"varint,4,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
-	Score          float64                `protobuf:"fixed64,5,opt,name=score,proto3" json:"score,omitempty"`
-	Content        string                 `protobuf:"bytes,6,opt,name=content,proto3" json:"content,omitempty"`
-	// parent_conversation_id names the conversation this one forked from, carried
-	// through from the indexed document. Empty when the conversation has no parent.
-	ParentConversationId string `protobuf:"bytes,7,opt,name=parent_conversation_id,json=parentConversationId,proto3" json:"parent_conversation_id,omitempty"`
-	// load_rules is the opaque loading-rules tag stored with this row, carried
-	// back so the caller can rebuild the message sequence message_index refers
-	// to. Empty when the row predates the tag.
-	LoadRules     string `protobuf:"bytes,8,opt,name=load_rules,json=loadRules,proto3" json:"load_rules,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ConversationSearchResult) Reset() {
-	*x = ConversationSearchResult{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ConversationSearchResult) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ConversationSearchResult) ProtoMessage() {}
-
-func (x *ConversationSearchResult) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ConversationSearchResult.ProtoReflect.Descriptor instead.
-func (*ConversationSearchResult) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{19}
-}
-
-func (x *ConversationSearchResult) GetConversationId() string {
-	if x != nil {
-		return x.ConversationId
-	}
-	return ""
-}
-
-func (x *ConversationSearchResult) GetMessageIndex() int32 {
-	if x != nil {
-		return x.MessageIndex
-	}
-	return 0
-}
-
-func (x *ConversationSearchResult) GetRole() string {
-	if x != nil {
-		return x.Role
-	}
-	return ""
-}
-
-func (x *ConversationSearchResult) GetTimestampUnix() int64 {
-	if x != nil {
-		return x.TimestampUnix
-	}
-	return 0
-}
-
-func (x *ConversationSearchResult) GetScore() float64 {
-	if x != nil {
-		return x.Score
-	}
-	return 0
-}
-
-func (x *ConversationSearchResult) GetContent() string {
-	if x != nil {
-		return x.Content
-	}
-	return ""
-}
-
-func (x *ConversationSearchResult) GetParentConversationId() string {
-	if x != nil {
-		return x.ParentConversationId
-	}
-	return ""
-}
-
-func (x *ConversationSearchResult) GetLoadRules() string {
-	if x != nil {
-		return x.LoadRules
-	}
-	return ""
-}
-
 type StartIndexRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Path              string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
@@ -2395,7 +1896,7 @@ type StartIndexRequest struct {
 
 func (x *StartIndexRequest) Reset() {
 	*x = StartIndexRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[20]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2407,7 +1908,7 @@ func (x *StartIndexRequest) String() string {
 func (*StartIndexRequest) ProtoMessage() {}
 
 func (x *StartIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[20]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2420,7 +1921,7 @@ func (x *StartIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartIndexRequest.ProtoReflect.Descriptor instead.
 func (*StartIndexRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{20}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *StartIndexRequest) GetPath() string {
@@ -2504,7 +2005,7 @@ type StartIndexResponse struct {
 
 func (x *StartIndexResponse) Reset() {
 	*x = StartIndexResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[21]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2516,7 +2017,7 @@ func (x *StartIndexResponse) String() string {
 func (*StartIndexResponse) ProtoMessage() {}
 
 func (x *StartIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[21]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2529,7 +2030,7 @@ func (x *StartIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartIndexResponse.ProtoReflect.Descriptor instead.
 func (*StartIndexResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{21}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *StartIndexResponse) GetJobId() string {
@@ -2591,7 +2092,7 @@ type ClearIndexRequest struct {
 
 func (x *ClearIndexRequest) Reset() {
 	*x = ClearIndexRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[22]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2603,7 +2104,7 @@ func (x *ClearIndexRequest) String() string {
 func (*ClearIndexRequest) ProtoMessage() {}
 
 func (x *ClearIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[22]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2616,7 +2117,7 @@ func (x *ClearIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearIndexRequest.ProtoReflect.Descriptor instead.
 func (*ClearIndexRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{22}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ClearIndexRequest) GetPath() string {
@@ -2644,7 +2145,7 @@ type ClearIndexResponse struct {
 
 func (x *ClearIndexResponse) Reset() {
 	*x = ClearIndexResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[23]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2656,7 +2157,7 @@ func (x *ClearIndexResponse) String() string {
 func (*ClearIndexResponse) ProtoMessage() {}
 
 func (x *ClearIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[23]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2669,7 +2170,7 @@ func (x *ClearIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearIndexResponse.ProtoReflect.Descriptor instead.
 func (*ClearIndexResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{23}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ClearIndexResponse) GetCodebaseId() string {
@@ -2703,7 +2204,7 @@ type CancelJobRequest struct {
 
 func (x *CancelJobRequest) Reset() {
 	*x = CancelJobRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[24]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2715,7 +2216,7 @@ func (x *CancelJobRequest) String() string {
 func (*CancelJobRequest) ProtoMessage() {}
 
 func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[24]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2728,7 +2229,7 @@ func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobRequest.ProtoReflect.Descriptor instead.
 func (*CancelJobRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{24}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CancelJobRequest) GetJobId() string {
@@ -2756,7 +2257,7 @@ type CancelJobResponse struct {
 
 func (x *CancelJobResponse) Reset() {
 	*x = CancelJobResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[25]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2768,7 +2269,7 @@ func (x *CancelJobResponse) String() string {
 func (*CancelJobResponse) ProtoMessage() {}
 
 func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[25]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2781,7 +2282,7 @@ func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobResponse.ProtoReflect.Descriptor instead.
 func (*CancelJobResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{25}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CancelJobResponse) GetJobId() string {
@@ -2816,7 +2317,7 @@ type SyncIndexRequest struct {
 
 func (x *SyncIndexRequest) Reset() {
 	*x = SyncIndexRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[26]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2828,7 +2329,7 @@ func (x *SyncIndexRequest) String() string {
 func (*SyncIndexRequest) ProtoMessage() {}
 
 func (x *SyncIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[26]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2841,7 +2342,7 @@ func (x *SyncIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncIndexRequest.ProtoReflect.Descriptor instead.
 func (*SyncIndexRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{26}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SyncIndexRequest) GetPath() string {
@@ -2877,7 +2378,7 @@ type SyncIndexResponse struct {
 
 func (x *SyncIndexResponse) Reset() {
 	*x = SyncIndexResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[27]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2889,7 +2390,7 @@ func (x *SyncIndexResponse) String() string {
 func (*SyncIndexResponse) ProtoMessage() {}
 
 func (x *SyncIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[27]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2902,7 +2403,7 @@ func (x *SyncIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncIndexResponse.ProtoReflect.Descriptor instead.
 func (*SyncIndexResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{27}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SyncIndexResponse) GetJobId() string {
@@ -2944,7 +2445,7 @@ type UpdateCodebasePolicyRequest struct {
 
 func (x *UpdateCodebasePolicyRequest) Reset() {
 	*x = UpdateCodebasePolicyRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[28]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2956,7 +2457,7 @@ func (x *UpdateCodebasePolicyRequest) String() string {
 func (*UpdateCodebasePolicyRequest) ProtoMessage() {}
 
 func (x *UpdateCodebasePolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[28]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2969,7 +2470,7 @@ func (x *UpdateCodebasePolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateCodebasePolicyRequest.ProtoReflect.Descriptor instead.
 func (*UpdateCodebasePolicyRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{28}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *UpdateCodebasePolicyRequest) GetPath() string {
@@ -3003,7 +2504,7 @@ type UpdateCodebasePolicyResponse struct {
 
 func (x *UpdateCodebasePolicyResponse) Reset() {
 	*x = UpdateCodebasePolicyResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[29]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3015,7 +2516,7 @@ func (x *UpdateCodebasePolicyResponse) String() string {
 func (*UpdateCodebasePolicyResponse) ProtoMessage() {}
 
 func (x *UpdateCodebasePolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[29]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3028,7 +2529,7 @@ func (x *UpdateCodebasePolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateCodebasePolicyResponse.ProtoReflect.Descriptor instead.
 func (*UpdateCodebasePolicyResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{29}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *UpdateCodebasePolicyResponse) GetCodebase() *Codebase {
@@ -3055,7 +2556,7 @@ type GetIndexRequest struct {
 
 func (x *GetIndexRequest) Reset() {
 	*x = GetIndexRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[30]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3067,7 +2568,7 @@ func (x *GetIndexRequest) String() string {
 func (*GetIndexRequest) ProtoMessage() {}
 
 func (x *GetIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[30]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3080,7 +2581,7 @@ func (x *GetIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetIndexRequest.ProtoReflect.Descriptor instead.
 func (*GetIndexRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{30}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *GetIndexRequest) GetPath() string {
@@ -3146,7 +2647,7 @@ type GetIndexResponse struct {
 
 func (x *GetIndexResponse) Reset() {
 	*x = GetIndexResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[31]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3158,7 +2659,7 @@ func (x *GetIndexResponse) String() string {
 func (*GetIndexResponse) ProtoMessage() {}
 
 func (x *GetIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[31]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3171,7 +2672,7 @@ func (x *GetIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetIndexResponse.ProtoReflect.Descriptor instead.
 func (*GetIndexResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{31}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetIndexResponse) GetCodebase() *Codebase {
@@ -3254,7 +2755,7 @@ type PathClassification struct {
 
 func (x *PathClassification) Reset() {
 	*x = PathClassification{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[32]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3266,7 +2767,7 @@ func (x *PathClassification) String() string {
 func (*PathClassification) ProtoMessage() {}
 
 func (x *PathClassification) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[32]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3279,7 +2780,7 @@ func (x *PathClassification) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PathClassification.ProtoReflect.Descriptor instead.
 func (*PathClassification) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{32}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *PathClassification) GetKind() PathClassification_Kind {
@@ -3318,7 +2819,7 @@ type ListIndexesRequest struct {
 
 func (x *ListIndexesRequest) Reset() {
 	*x = ListIndexesRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[33]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3330,7 +2831,7 @@ func (x *ListIndexesRequest) String() string {
 func (*ListIndexesRequest) ProtoMessage() {}
 
 func (x *ListIndexesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[33]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3343,7 +2844,7 @@ func (x *ListIndexesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIndexesRequest.ProtoReflect.Descriptor instead.
 func (*ListIndexesRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{33}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{30}
 }
 
 type ListIndexesResponse struct {
@@ -3357,7 +2858,7 @@ type ListIndexesResponse struct {
 
 func (x *ListIndexesResponse) Reset() {
 	*x = ListIndexesResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[34]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3369,7 +2870,7 @@ func (x *ListIndexesResponse) String() string {
 func (*ListIndexesResponse) ProtoMessage() {}
 
 func (x *ListIndexesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[34]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3382,7 +2883,7 @@ func (x *ListIndexesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIndexesResponse.ProtoReflect.Descriptor instead.
 func (*ListIndexesResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{34}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ListIndexesResponse) GetIndexes() []*Codebase {
@@ -3415,7 +2916,7 @@ type GetJobRequest struct {
 
 func (x *GetJobRequest) Reset() {
 	*x = GetJobRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[35]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3427,7 +2928,7 @@ func (x *GetJobRequest) String() string {
 func (*GetJobRequest) ProtoMessage() {}
 
 func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[35]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3440,7 +2941,7 @@ func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobRequest.ProtoReflect.Descriptor instead.
 func (*GetJobRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{35}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GetJobRequest) GetJobId() string {
@@ -3461,7 +2962,7 @@ type GetJobResponse struct {
 
 func (x *GetJobResponse) Reset() {
 	*x = GetJobResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[36]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3473,7 +2974,7 @@ func (x *GetJobResponse) String() string {
 func (*GetJobResponse) ProtoMessage() {}
 
 func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[36]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3486,7 +2987,7 @@ func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobResponse.ProtoReflect.Descriptor instead.
 func (*GetJobResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{36}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *GetJobResponse) GetJob() *Job {
@@ -3519,7 +3020,7 @@ type ListJobsRequest struct {
 
 func (x *ListJobsRequest) Reset() {
 	*x = ListJobsRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[37]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3531,7 +3032,7 @@ func (x *ListJobsRequest) String() string {
 func (*ListJobsRequest) ProtoMessage() {}
 
 func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[37]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3544,7 +3045,7 @@ func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsRequest.ProtoReflect.Descriptor instead.
 func (*ListJobsRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{37}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ListJobsRequest) GetCodebaseId() string {
@@ -3565,7 +3066,7 @@ type ListJobsResponse struct {
 
 func (x *ListJobsResponse) Reset() {
 	*x = ListJobsResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[38]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3577,7 +3078,7 @@ func (x *ListJobsResponse) String() string {
 func (*ListJobsResponse) ProtoMessage() {}
 
 func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[38]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3590,7 +3091,7 @@ func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsResponse.ProtoReflect.Descriptor instead.
 func (*ListJobsResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{38}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ListJobsResponse) GetJobs() []*Job {
@@ -3623,7 +3124,7 @@ type WatchJobsRequest struct {
 
 func (x *WatchJobsRequest) Reset() {
 	*x = WatchJobsRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[39]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3635,7 +3136,7 @@ func (x *WatchJobsRequest) String() string {
 func (*WatchJobsRequest) ProtoMessage() {}
 
 func (x *WatchJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[39]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3648,7 +3149,7 @@ func (x *WatchJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchJobsRequest.ProtoReflect.Descriptor instead.
 func (*WatchJobsRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{39}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *WatchJobsRequest) GetJobIds() []string {
@@ -3667,7 +3168,7 @@ type WatchJobsResponse struct {
 
 func (x *WatchJobsResponse) Reset() {
 	*x = WatchJobsResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[40]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3679,7 +3180,7 @@ func (x *WatchJobsResponse) String() string {
 func (*WatchJobsResponse) ProtoMessage() {}
 
 func (x *WatchJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[40]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3692,7 +3193,7 @@ func (x *WatchJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchJobsResponse.ProtoReflect.Descriptor instead.
 func (*WatchJobsResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{40}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *WatchJobsResponse) GetJob() *Job {
@@ -3715,7 +3216,7 @@ type SearchCodeRequest struct {
 
 func (x *SearchCodeRequest) Reset() {
 	*x = SearchCodeRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[41]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3727,7 +3228,7 @@ func (x *SearchCodeRequest) String() string {
 func (*SearchCodeRequest) ProtoMessage() {}
 
 func (x *SearchCodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[41]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3740,7 +3241,7 @@ func (x *SearchCodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchCodeRequest.ProtoReflect.Descriptor instead.
 func (*SearchCodeRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{41}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *SearchCodeRequest) GetPath() string {
@@ -3791,7 +3292,7 @@ type SearchCodeResponse struct {
 
 func (x *SearchCodeResponse) Reset() {
 	*x = SearchCodeResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[42]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3803,7 +3304,7 @@ func (x *SearchCodeResponse) String() string {
 func (*SearchCodeResponse) ProtoMessage() {}
 
 func (x *SearchCodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[42]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3816,7 +3317,7 @@ func (x *SearchCodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchCodeResponse.ProtoReflect.Descriptor instead.
 func (*SearchCodeResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{42}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *SearchCodeResponse) GetResults() []*SearchResult {
@@ -3866,7 +3367,7 @@ type GraphToolRequest struct {
 
 func (x *GraphToolRequest) Reset() {
 	*x = GraphToolRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[43]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3878,7 +3379,7 @@ func (x *GraphToolRequest) String() string {
 func (*GraphToolRequest) ProtoMessage() {}
 
 func (x *GraphToolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[43]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3891,7 +3392,7 @@ func (x *GraphToolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GraphToolRequest.ProtoReflect.Descriptor instead.
 func (*GraphToolRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{43}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GraphToolRequest) GetPath() string {
@@ -3932,7 +3433,7 @@ type GraphToolResponse struct {
 
 func (x *GraphToolResponse) Reset() {
 	*x = GraphToolResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[44]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3944,7 +3445,7 @@ func (x *GraphToolResponse) String() string {
 func (*GraphToolResponse) ProtoMessage() {}
 
 func (x *GraphToolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[44]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3957,7 +3458,7 @@ func (x *GraphToolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GraphToolResponse.ProtoReflect.Descriptor instead.
 func (*GraphToolResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{44}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *GraphToolResponse) GetResultJson() string {
@@ -3968,3849 +3469,6 @@ func (x *GraphToolResponse) GetResultJson() string {
 }
 
 func (x *GraphToolResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-type RegisterConversationCollectionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId  string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	Client        *ClientInfo            `protobuf:"bytes,2,opt,name=client,proto3" json:"client,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RegisterConversationCollectionRequest) Reset() {
-	*x = RegisterConversationCollectionRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[45]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RegisterConversationCollectionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegisterConversationCollectionRequest) ProtoMessage() {}
-
-func (x *RegisterConversationCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[45]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegisterConversationCollectionRequest.ProtoReflect.Descriptor instead.
-func (*RegisterConversationCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{45}
-}
-
-func (x *RegisterConversationCollectionRequest) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *RegisterConversationCollectionRequest) GetClient() *ClientInfo {
-	if x != nil {
-		return x.Client
-	}
-	return nil
-}
-
-type RegisterConversationCollectionResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	CodebaseId     string                 `protobuf:"bytes,1,opt,name=codebase_id,json=codebaseId,proto3" json:"codebase_id,omitempty"`
-	CollectionName string                 `protobuf:"bytes,2,opt,name=collection_name,json=collectionName,proto3" json:"collection_name,omitempty"`
-	DisplayText    string                 `protobuf:"bytes,3,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *RegisterConversationCollectionResponse) Reset() {
-	*x = RegisterConversationCollectionResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[46]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RegisterConversationCollectionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegisterConversationCollectionResponse) ProtoMessage() {}
-
-func (x *RegisterConversationCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[46]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegisterConversationCollectionResponse.ProtoReflect.Descriptor instead.
-func (*RegisterConversationCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{46}
-}
-
-func (x *RegisterConversationCollectionResponse) GetCodebaseId() string {
-	if x != nil {
-		return x.CodebaseId
-	}
-	return ""
-}
-
-func (x *RegisterConversationCollectionResponse) GetCollectionName() string {
-	if x != nil {
-		return x.CollectionName
-	}
-	return ""
-}
-
-func (x *RegisterConversationCollectionResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-// ScalarColumnDeclaration declares one scalar column of a document collection.
-// column must be a letter or underscore followed by letters, digits, or
-// underscores, and must not name a built-in schema column. max_length is the
-// maximum string length. A string column requires it, and every other type
-// rejects it.
-type ScalarColumnDeclaration struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Column        string                 `protobuf:"bytes,1,opt,name=column,proto3" json:"column,omitempty"`
-	Type          ScalarColumnType       `protobuf:"varint,2,opt,name=type,proto3,enum=lmsemanticsearch.v1.ScalarColumnType" json:"type,omitempty"`
-	Nullable      bool                   `protobuf:"varint,3,opt,name=nullable,proto3" json:"nullable,omitempty"`
-	MaxLength     int32                  `protobuf:"varint,4,opt,name=max_length,json=maxLength,proto3" json:"max_length,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ScalarColumnDeclaration) Reset() {
-	*x = ScalarColumnDeclaration{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[47]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ScalarColumnDeclaration) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ScalarColumnDeclaration) ProtoMessage() {}
-
-func (x *ScalarColumnDeclaration) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[47]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ScalarColumnDeclaration.ProtoReflect.Descriptor instead.
-func (*ScalarColumnDeclaration) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{47}
-}
-
-func (x *ScalarColumnDeclaration) GetColumn() string {
-	if x != nil {
-		return x.Column
-	}
-	return ""
-}
-
-func (x *ScalarColumnDeclaration) GetType() ScalarColumnType {
-	if x != nil {
-		return x.Type
-	}
-	return ScalarColumnType_SCALAR_COLUMN_TYPE_UNSPECIFIED
-}
-
-func (x *ScalarColumnDeclaration) GetNullable() bool {
-	if x != nil {
-		return x.Nullable
-	}
-	return false
-}
-
-func (x *ScalarColumnDeclaration) GetMaxLength() int32 {
-	if x != nil {
-		return x.MaxLength
-	}
-	return 0
-}
-
-// RegisterCollectionRequest registers a document collection. item_id_column
-// must name a declared string column. Item operations select an item's rows by
-// the client item id stored in that column.
-type RegisterCollectionRequest struct {
-	state         protoimpl.MessageState     `protogen:"open.v1"`
-	CollectionId  string                     `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	ItemIdColumn  string                     `protobuf:"bytes,2,opt,name=item_id_column,json=itemIdColumn,proto3" json:"item_id_column,omitempty"`
-	Scalars       []*ScalarColumnDeclaration `protobuf:"bytes,3,rep,name=scalars,proto3" json:"scalars,omitempty"`
-	Client        *ClientInfo                `protobuf:"bytes,4,opt,name=client,proto3" json:"client,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RegisterCollectionRequest) Reset() {
-	*x = RegisterCollectionRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[48]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RegisterCollectionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegisterCollectionRequest) ProtoMessage() {}
-
-func (x *RegisterCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[48]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegisterCollectionRequest.ProtoReflect.Descriptor instead.
-func (*RegisterCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{48}
-}
-
-func (x *RegisterCollectionRequest) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *RegisterCollectionRequest) GetItemIdColumn() string {
-	if x != nil {
-		return x.ItemIdColumn
-	}
-	return ""
-}
-
-func (x *RegisterCollectionRequest) GetScalars() []*ScalarColumnDeclaration {
-	if x != nil {
-		return x.Scalars
-	}
-	return nil
-}
-
-func (x *RegisterCollectionRequest) GetClient() *ClientInfo {
-	if x != nil {
-		return x.Client
-	}
-	return nil
-}
-
-// RegisterCollectionResponse returns the registered collection and its saved
-// declaration.
-type RegisterCollectionResponse struct {
-	state          protoimpl.MessageState     `protogen:"open.v1"`
-	CodebaseId     string                     `protobuf:"bytes,1,opt,name=codebase_id,json=codebaseId,proto3" json:"codebase_id,omitempty"`
-	CollectionName string                     `protobuf:"bytes,2,opt,name=collection_name,json=collectionName,proto3" json:"collection_name,omitempty"`
-	ItemIdColumn   string                     `protobuf:"bytes,3,opt,name=item_id_column,json=itemIdColumn,proto3" json:"item_id_column,omitempty"`
-	Scalars        []*ScalarColumnDeclaration `protobuf:"bytes,4,rep,name=scalars,proto3" json:"scalars,omitempty"`
-	DisplayText    string                     `protobuf:"bytes,5,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *RegisterCollectionResponse) Reset() {
-	*x = RegisterCollectionResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[49]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RegisterCollectionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegisterCollectionResponse) ProtoMessage() {}
-
-func (x *RegisterCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[49]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegisterCollectionResponse.ProtoReflect.Descriptor instead.
-func (*RegisterCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{49}
-}
-
-func (x *RegisterCollectionResponse) GetCodebaseId() string {
-	if x != nil {
-		return x.CodebaseId
-	}
-	return ""
-}
-
-func (x *RegisterCollectionResponse) GetCollectionName() string {
-	if x != nil {
-		return x.CollectionName
-	}
-	return ""
-}
-
-func (x *RegisterCollectionResponse) GetItemIdColumn() string {
-	if x != nil {
-		return x.ItemIdColumn
-	}
-	return ""
-}
-
-func (x *RegisterCollectionResponse) GetScalars() []*ScalarColumnDeclaration {
-	if x != nil {
-		return x.Scalars
-	}
-	return nil
-}
-
-func (x *RegisterCollectionResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-// CollectionItemFingerprint is one item id paired with a content fingerprint
-// that changes whenever the item's rows change. The client computes it; the
-// engine compares it with the stored checkpoint.
-type CollectionItemFingerprint struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ItemId        string                 `protobuf:"bytes,1,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
-	Fingerprint   string                 `protobuf:"bytes,2,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionItemFingerprint) Reset() {
-	*x = CollectionItemFingerprint{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[50]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionItemFingerprint) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionItemFingerprint) ProtoMessage() {}
-
-func (x *CollectionItemFingerprint) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[50]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionItemFingerprint.ProtoReflect.Descriptor instead.
-func (*CollectionItemFingerprint) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{50}
-}
-
-func (x *CollectionItemFingerprint) GetItemId() string {
-	if x != nil {
-		return x.ItemId
-	}
-	return ""
-}
-
-func (x *CollectionItemFingerprint) GetFingerprint() string {
-	if x != nil {
-		return x.Fingerprint
-	}
-	return ""
-}
-
-type SyncCollectionManifestRequest struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	// manifest lists every current item with its content fingerprint.
-	Manifest      []*CollectionItemFingerprint `protobuf:"bytes,2,rep,name=manifest,proto3" json:"manifest,omitempty"`
-	Client        *ClientInfo                  `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SyncCollectionManifestRequest) Reset() {
-	*x = SyncCollectionManifestRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[51]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SyncCollectionManifestRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SyncCollectionManifestRequest) ProtoMessage() {}
-
-func (x *SyncCollectionManifestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[51]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SyncCollectionManifestRequest.ProtoReflect.Descriptor instead.
-func (*SyncCollectionManifestRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{51}
-}
-
-func (x *SyncCollectionManifestRequest) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *SyncCollectionManifestRequest) GetManifest() []*CollectionItemFingerprint {
-	if x != nil {
-		return x.Manifest
-	}
-	return nil
-}
-
-func (x *SyncCollectionManifestRequest) GetClient() *ClientInfo {
-	if x != nil {
-		return x.Client
-	}
-	return nil
-}
-
-type SyncCollectionManifestResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// needed_item_ids lists the items new or changed since the last ingest. The
-	// client sends rows for only these.
-	NeededItemIds []string `protobuf:"bytes,1,rep,name=needed_item_ids,json=neededItemIds,proto3" json:"needed_item_ids,omitempty"`
-	DisplayText   string   `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SyncCollectionManifestResponse) Reset() {
-	*x = SyncCollectionManifestResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[52]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SyncCollectionManifestResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SyncCollectionManifestResponse) ProtoMessage() {}
-
-func (x *SyncCollectionManifestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[52]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SyncCollectionManifestResponse.ProtoReflect.Descriptor instead.
-func (*SyncCollectionManifestResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{52}
-}
-
-func (x *SyncCollectionManifestResponse) GetNeededItemIds() []string {
-	if x != nil {
-		return x.NeededItemIds
-	}
-	return nil
-}
-
-func (x *SyncCollectionManifestResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-// CollectionScalarValue is one typed value of a declared scalar column. The
-// value case must match the declared column type. An unset value is null, which
-// only a nullable column accepts.
-type CollectionScalarValue struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Column string                 `protobuf:"bytes,1,opt,name=column,proto3" json:"column,omitempty"`
-	// Types that are valid to be assigned to Value:
-	//
-	//	*CollectionScalarValue_StringValue
-	//	*CollectionScalarValue_BoolValue
-	//	*CollectionScalarValue_Int64Value
-	Value         isCollectionScalarValue_Value `protobuf_oneof:"value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionScalarValue) Reset() {
-	*x = CollectionScalarValue{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[53]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionScalarValue) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionScalarValue) ProtoMessage() {}
-
-func (x *CollectionScalarValue) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[53]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionScalarValue.ProtoReflect.Descriptor instead.
-func (*CollectionScalarValue) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{53}
-}
-
-func (x *CollectionScalarValue) GetColumn() string {
-	if x != nil {
-		return x.Column
-	}
-	return ""
-}
-
-func (x *CollectionScalarValue) GetValue() isCollectionScalarValue_Value {
-	if x != nil {
-		return x.Value
-	}
-	return nil
-}
-
-func (x *CollectionScalarValue) GetStringValue() string {
-	if x != nil {
-		if x, ok := x.Value.(*CollectionScalarValue_StringValue); ok {
-			return x.StringValue
-		}
-	}
-	return ""
-}
-
-func (x *CollectionScalarValue) GetBoolValue() bool {
-	if x != nil {
-		if x, ok := x.Value.(*CollectionScalarValue_BoolValue); ok {
-			return x.BoolValue
-		}
-	}
-	return false
-}
-
-func (x *CollectionScalarValue) GetInt64Value() int64 {
-	if x != nil {
-		if x, ok := x.Value.(*CollectionScalarValue_Int64Value); ok {
-			return x.Int64Value
-		}
-	}
-	return 0
-}
-
-type isCollectionScalarValue_Value interface {
-	isCollectionScalarValue_Value()
-}
-
-type CollectionScalarValue_StringValue struct {
-	StringValue string `protobuf:"bytes,2,opt,name=string_value,json=stringValue,proto3,oneof"`
-}
-
-type CollectionScalarValue_BoolValue struct {
-	BoolValue bool `protobuf:"varint,3,opt,name=bool_value,json=boolValue,proto3,oneof"`
-}
-
-type CollectionScalarValue_Int64Value struct {
-	Int64Value int64 `protobuf:"varint,4,opt,name=int64_value,json=int64Value,proto3,oneof"`
-}
-
-func (*CollectionScalarValue_StringValue) isCollectionScalarValue_Value() {}
-
-func (*CollectionScalarValue_BoolValue) isCollectionScalarValue_Value() {}
-
-func (*CollectionScalarValue_Int64Value) isCollectionScalarValue_Value() {}
-
-// CollectionRow is one client row. row_key is the row's stable identity within
-// the collection and is stored as the row's relative path; text longer than the
-// engine's split size is stored as parts keyed row_key/0, row_key/1, and so on.
-// item_id identifies the item that owns the row. The engine stores item_id in
-// the declared item id column, and a scalar value for that column must equal it.
-type CollectionRow struct {
-	state   protoimpl.MessageState   `protogen:"open.v1"`
-	RowKey  string                   `protobuf:"bytes,1,opt,name=row_key,json=rowKey,proto3" json:"row_key,omitempty"`
-	ItemId  string                   `protobuf:"bytes,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
-	Text    string                   `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
-	Scalars []*CollectionScalarValue `protobuf:"bytes,4,rep,name=scalars,proto3" json:"scalars,omitempty"`
-	// continuation_prefix starts every stored part after the first with the
-	// prefix and a newline. A non-empty prefix shorter than the split size
-	// lowers the split size by the prefix length plus one, and the engine splits
-	// the text at that lowered size. An empty prefix changes nothing.
-	ContinuationPrefix string `protobuf:"bytes,5,opt,name=continuation_prefix,json=continuationPrefix,proto3" json:"continuation_prefix,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
-}
-
-func (x *CollectionRow) Reset() {
-	*x = CollectionRow{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[54]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionRow) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionRow) ProtoMessage() {}
-
-func (x *CollectionRow) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[54]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionRow.ProtoReflect.Descriptor instead.
-func (*CollectionRow) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{54}
-}
-
-func (x *CollectionRow) GetRowKey() string {
-	if x != nil {
-		return x.RowKey
-	}
-	return ""
-}
-
-func (x *CollectionRow) GetItemId() string {
-	if x != nil {
-		return x.ItemId
-	}
-	return ""
-}
-
-func (x *CollectionRow) GetText() string {
-	if x != nil {
-		return x.Text
-	}
-	return ""
-}
-
-func (x *CollectionRow) GetScalars() []*CollectionScalarValue {
-	if x != nil {
-		return x.Scalars
-	}
-	return nil
-}
-
-func (x *CollectionRow) GetContinuationPrefix() string {
-	if x != nil {
-		return x.ContinuationPrefix
-	}
-	return ""
-}
-
-// UpsertCollectionItemsHeader opens a streamed item upsert.
-type UpsertCollectionItemsHeader struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	CollectionId  string                  `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	Client        *ClientInfo             `protobuf:"bytes,2,opt,name=client,proto3" json:"client,omitempty"`
-	ReconcileMode CollectionReconcileMode `protobuf:"varint,3,opt,name=reconcile_mode,json=reconcileMode,proto3,enum=lmsemanticsearch.v1.CollectionReconcileMode" json:"reconcile_mode,omitempty"`
-	// backfill_delivered embeds absent rows of each delivered item and skips an
-	// item when all of its rows are present, even when fingerprints match.
-	BackfillDelivered bool `protobuf:"varint,4,opt,name=backfill_delivered,json=backfillDelivered,proto3" json:"backfill_delivered,omitempty"`
-	// force_reexamine replaces every delivered item's rows with vector reuse
-	// disabled. When both flags are set force wins.
-	ForceReexamine bool `protobuf:"varint,5,opt,name=force_reexamine,json=forceReexamine,proto3" json:"force_reexamine,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *UpsertCollectionItemsHeader) Reset() {
-	*x = UpsertCollectionItemsHeader{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[55]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpsertCollectionItemsHeader) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpsertCollectionItemsHeader) ProtoMessage() {}
-
-func (x *UpsertCollectionItemsHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[55]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpsertCollectionItemsHeader.ProtoReflect.Descriptor instead.
-func (*UpsertCollectionItemsHeader) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{55}
-}
-
-func (x *UpsertCollectionItemsHeader) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *UpsertCollectionItemsHeader) GetClient() *ClientInfo {
-	if x != nil {
-		return x.Client
-	}
-	return nil
-}
-
-func (x *UpsertCollectionItemsHeader) GetReconcileMode() CollectionReconcileMode {
-	if x != nil {
-		return x.ReconcileMode
-	}
-	return CollectionReconcileMode_COLLECTION_RECONCILE_MODE_UNSPECIFIED
-}
-
-func (x *UpsertCollectionItemsHeader) GetBackfillDelivered() bool {
-	if x != nil {
-		return x.BackfillDelivered
-	}
-	return false
-}
-
-func (x *UpsertCollectionItemsHeader) GetForceReexamine() bool {
-	if x != nil {
-		return x.ForceReexamine
-	}
-	return false
-}
-
-// UpsertCollectionItemsRows is one bounded batch of rows in a streamed upsert.
-type UpsertCollectionItemsRows struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Rows          []*CollectionRow       `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpsertCollectionItemsRows) Reset() {
-	*x = UpsertCollectionItemsRows{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[56]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpsertCollectionItemsRows) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpsertCollectionItemsRows) ProtoMessage() {}
-
-func (x *UpsertCollectionItemsRows) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[56]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpsertCollectionItemsRows.ProtoReflect.Descriptor instead.
-func (*UpsertCollectionItemsRows) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{56}
-}
-
-func (x *UpsertCollectionItemsRows) GetRows() []*CollectionRow {
-	if x != nil {
-		return x.Rows
-	}
-	return nil
-}
-
-// UpsertCollectionItemsManifest lists the full current item set with
-// fingerprints. Without it the engine fingerprints each delivered item from
-// its rows, which RETAIN allows and AUTHORITATIVE rejects.
-type UpsertCollectionItemsManifest struct {
-	state         protoimpl.MessageState       `protogen:"open.v1"`
-	Manifest      []*CollectionItemFingerprint `protobuf:"bytes,1,rep,name=manifest,proto3" json:"manifest,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpsertCollectionItemsManifest) Reset() {
-	*x = UpsertCollectionItemsManifest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[57]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpsertCollectionItemsManifest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpsertCollectionItemsManifest) ProtoMessage() {}
-
-func (x *UpsertCollectionItemsManifest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[57]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpsertCollectionItemsManifest.ProtoReflect.Descriptor instead.
-func (*UpsertCollectionItemsManifest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{57}
-}
-
-func (x *UpsertCollectionItemsManifest) GetManifest() []*CollectionItemFingerprint {
-	if x != nil {
-		return x.Manifest
-	}
-	return nil
-}
-
-// UpsertCollectionItemsStreamRequest is one frame of a streamed item upsert: exactly
-// one header first, then zero or more rows chunks, then at most one manifest
-// chunk last.
-type UpsertCollectionItemsStreamRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Chunk:
-	//
-	//	*UpsertCollectionItemsStreamRequest_Header
-	//	*UpsertCollectionItemsStreamRequest_Rows
-	//	*UpsertCollectionItemsStreamRequest_Manifest
-	Chunk         isUpsertCollectionItemsStreamRequest_Chunk `protobuf_oneof:"chunk"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpsertCollectionItemsStreamRequest) Reset() {
-	*x = UpsertCollectionItemsStreamRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[58]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpsertCollectionItemsStreamRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpsertCollectionItemsStreamRequest) ProtoMessage() {}
-
-func (x *UpsertCollectionItemsStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[58]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpsertCollectionItemsStreamRequest.ProtoReflect.Descriptor instead.
-func (*UpsertCollectionItemsStreamRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{58}
-}
-
-func (x *UpsertCollectionItemsStreamRequest) GetChunk() isUpsertCollectionItemsStreamRequest_Chunk {
-	if x != nil {
-		return x.Chunk
-	}
-	return nil
-}
-
-func (x *UpsertCollectionItemsStreamRequest) GetHeader() *UpsertCollectionItemsHeader {
-	if x != nil {
-		if x, ok := x.Chunk.(*UpsertCollectionItemsStreamRequest_Header); ok {
-			return x.Header
-		}
-	}
-	return nil
-}
-
-func (x *UpsertCollectionItemsStreamRequest) GetRows() *UpsertCollectionItemsRows {
-	if x != nil {
-		if x, ok := x.Chunk.(*UpsertCollectionItemsStreamRequest_Rows); ok {
-			return x.Rows
-		}
-	}
-	return nil
-}
-
-func (x *UpsertCollectionItemsStreamRequest) GetManifest() *UpsertCollectionItemsManifest {
-	if x != nil {
-		if x, ok := x.Chunk.(*UpsertCollectionItemsStreamRequest_Manifest); ok {
-			return x.Manifest
-		}
-	}
-	return nil
-}
-
-type isUpsertCollectionItemsStreamRequest_Chunk interface {
-	isUpsertCollectionItemsStreamRequest_Chunk()
-}
-
-type UpsertCollectionItemsStreamRequest_Header struct {
-	Header *UpsertCollectionItemsHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
-}
-
-type UpsertCollectionItemsStreamRequest_Rows struct {
-	Rows *UpsertCollectionItemsRows `protobuf:"bytes,2,opt,name=rows,proto3,oneof"`
-}
-
-type UpsertCollectionItemsStreamRequest_Manifest struct {
-	Manifest *UpsertCollectionItemsManifest `protobuf:"bytes,3,opt,name=manifest,proto3,oneof"`
-}
-
-func (*UpsertCollectionItemsStreamRequest_Header) isUpsertCollectionItemsStreamRequest_Chunk() {}
-
-func (*UpsertCollectionItemsStreamRequest_Rows) isUpsertCollectionItemsStreamRequest_Chunk() {}
-
-func (*UpsertCollectionItemsStreamRequest_Manifest) isUpsertCollectionItemsStreamRequest_Chunk() {}
-
-type UpsertCollectionItemsStreamResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	DisplayText   string                 `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpsertCollectionItemsStreamResponse) Reset() {
-	*x = UpsertCollectionItemsStreamResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[59]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpsertCollectionItemsStreamResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpsertCollectionItemsStreamResponse) ProtoMessage() {}
-
-func (x *UpsertCollectionItemsStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[59]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpsertCollectionItemsStreamResponse.ProtoReflect.Descriptor instead.
-func (*UpsertCollectionItemsStreamResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{59}
-}
-
-func (x *UpsertCollectionItemsStreamResponse) GetJobId() string {
-	if x != nil {
-		return x.JobId
-	}
-	return ""
-}
-
-func (x *UpsertCollectionItemsStreamResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-// BackfillCollectionScalarsHeader opens a streamed scalar backfill. columns
-// lists the declared scalar columns the backfill fills and must not name the
-// item id column. A row needs the backfill when one of these columns is null,
-// or an empty string, on the row.
-type BackfillCollectionScalarsHeader struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId  string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	DryRun        bool                   `protobuf:"varint,2,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
-	Client        *ClientInfo            `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`
-	Columns       []string               `protobuf:"bytes,4,rep,name=columns,proto3" json:"columns,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BackfillCollectionScalarsHeader) Reset() {
-	*x = BackfillCollectionScalarsHeader{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[60]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackfillCollectionScalarsHeader) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackfillCollectionScalarsHeader) ProtoMessage() {}
-
-func (x *BackfillCollectionScalarsHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[60]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackfillCollectionScalarsHeader.ProtoReflect.Descriptor instead.
-func (*BackfillCollectionScalarsHeader) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{60}
-}
-
-func (x *BackfillCollectionScalarsHeader) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *BackfillCollectionScalarsHeader) GetDryRun() bool {
-	if x != nil {
-		return x.DryRun
-	}
-	return false
-}
-
-func (x *BackfillCollectionScalarsHeader) GetClient() *ClientInfo {
-	if x != nil {
-		return x.Client
-	}
-	return nil
-}
-
-func (x *BackfillCollectionScalarsHeader) GetColumns() []string {
-	if x != nil {
-		return x.Columns
-	}
-	return nil
-}
-
-// BackfillCollectionItem sets one value for every header column of one item.
-// Each value must match the declared column type and must not be null.
-type BackfillCollectionItem struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	ItemId        string                   `protobuf:"bytes,1,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
-	Scalars       []*CollectionScalarValue `protobuf:"bytes,2,rep,name=scalars,proto3" json:"scalars,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BackfillCollectionItem) Reset() {
-	*x = BackfillCollectionItem{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[61]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackfillCollectionItem) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackfillCollectionItem) ProtoMessage() {}
-
-func (x *BackfillCollectionItem) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[61]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackfillCollectionItem.ProtoReflect.Descriptor instead.
-func (*BackfillCollectionItem) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{61}
-}
-
-func (x *BackfillCollectionItem) GetItemId() string {
-	if x != nil {
-		return x.ItemId
-	}
-	return ""
-}
-
-func (x *BackfillCollectionItem) GetScalars() []*CollectionScalarValue {
-	if x != nil {
-		return x.Scalars
-	}
-	return nil
-}
-
-// BackfillCollectionScalarsItems is one batch of items in a streamed scalar
-// backfill.
-type BackfillCollectionScalarsItems struct {
-	state         protoimpl.MessageState    `protogen:"open.v1"`
-	Items         []*BackfillCollectionItem `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BackfillCollectionScalarsItems) Reset() {
-	*x = BackfillCollectionScalarsItems{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[62]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackfillCollectionScalarsItems) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackfillCollectionScalarsItems) ProtoMessage() {}
-
-func (x *BackfillCollectionScalarsItems) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[62]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackfillCollectionScalarsItems.ProtoReflect.Descriptor instead.
-func (*BackfillCollectionScalarsItems) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{62}
-}
-
-func (x *BackfillCollectionScalarsItems) GetItems() []*BackfillCollectionItem {
-	if x != nil {
-		return x.Items
-	}
-	return nil
-}
-
-// BackfillCollectionScalarsStreamRequest is one frame of a streamed scalar
-// backfill: exactly one header first, then zero or more items chunks.
-type BackfillCollectionScalarsStreamRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Chunk:
-	//
-	//	*BackfillCollectionScalarsStreamRequest_Header
-	//	*BackfillCollectionScalarsStreamRequest_Items
-	Chunk         isBackfillCollectionScalarsStreamRequest_Chunk `protobuf_oneof:"chunk"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BackfillCollectionScalarsStreamRequest) Reset() {
-	*x = BackfillCollectionScalarsStreamRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[63]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackfillCollectionScalarsStreamRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackfillCollectionScalarsStreamRequest) ProtoMessage() {}
-
-func (x *BackfillCollectionScalarsStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[63]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackfillCollectionScalarsStreamRequest.ProtoReflect.Descriptor instead.
-func (*BackfillCollectionScalarsStreamRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{63}
-}
-
-func (x *BackfillCollectionScalarsStreamRequest) GetChunk() isBackfillCollectionScalarsStreamRequest_Chunk {
-	if x != nil {
-		return x.Chunk
-	}
-	return nil
-}
-
-func (x *BackfillCollectionScalarsStreamRequest) GetHeader() *BackfillCollectionScalarsHeader {
-	if x != nil {
-		if x, ok := x.Chunk.(*BackfillCollectionScalarsStreamRequest_Header); ok {
-			return x.Header
-		}
-	}
-	return nil
-}
-
-func (x *BackfillCollectionScalarsStreamRequest) GetItems() *BackfillCollectionScalarsItems {
-	if x != nil {
-		if x, ok := x.Chunk.(*BackfillCollectionScalarsStreamRequest_Items); ok {
-			return x.Items
-		}
-	}
-	return nil
-}
-
-type isBackfillCollectionScalarsStreamRequest_Chunk interface {
-	isBackfillCollectionScalarsStreamRequest_Chunk()
-}
-
-type BackfillCollectionScalarsStreamRequest_Header struct {
-	Header *BackfillCollectionScalarsHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
-}
-
-type BackfillCollectionScalarsStreamRequest_Items struct {
-	Items *BackfillCollectionScalarsItems `protobuf:"bytes,2,opt,name=items,proto3,oneof"`
-}
-
-func (*BackfillCollectionScalarsStreamRequest_Header) isBackfillCollectionScalarsStreamRequest_Chunk() {
-}
-
-func (*BackfillCollectionScalarsStreamRequest_Items) isBackfillCollectionScalarsStreamRequest_Chunk() {
-}
-
-// BackfillCollectionScalarsResponse counts the rows that need the backfill.
-// changed counts the rows of streamed items. orphan counts the rows of items
-// the stream omits, which the backfill leaves unchanged. A dry run returns the
-// same counts and writes nothing.
-type BackfillCollectionScalarsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Changed       int64                  `protobuf:"varint,1,opt,name=changed,proto3" json:"changed,omitempty"`
-	Orphan        int64                  `protobuf:"varint,2,opt,name=orphan,proto3" json:"orphan,omitempty"`
-	DisplayText   string                 `protobuf:"bytes,3,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BackfillCollectionScalarsResponse) Reset() {
-	*x = BackfillCollectionScalarsResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[64]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackfillCollectionScalarsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackfillCollectionScalarsResponse) ProtoMessage() {}
-
-func (x *BackfillCollectionScalarsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[64]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackfillCollectionScalarsResponse.ProtoReflect.Descriptor instead.
-func (*BackfillCollectionScalarsResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{64}
-}
-
-func (x *BackfillCollectionScalarsResponse) GetChanged() int64 {
-	if x != nil {
-		return x.Changed
-	}
-	return 0
-}
-
-func (x *BackfillCollectionScalarsResponse) GetOrphan() int64 {
-	if x != nil {
-		return x.Orphan
-	}
-	return 0
-}
-
-func (x *BackfillCollectionScalarsResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-type DeleteCollectionItemRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId  string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	ItemId        string                 `protobuf:"bytes,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
-	Client        *ClientInfo            `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteCollectionItemRequest) Reset() {
-	*x = DeleteCollectionItemRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[65]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteCollectionItemRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteCollectionItemRequest) ProtoMessage() {}
-
-func (x *DeleteCollectionItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[65]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteCollectionItemRequest.ProtoReflect.Descriptor instead.
-func (*DeleteCollectionItemRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{65}
-}
-
-func (x *DeleteCollectionItemRequest) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *DeleteCollectionItemRequest) GetItemId() string {
-	if x != nil {
-		return x.ItemId
-	}
-	return ""
-}
-
-func (x *DeleteCollectionItemRequest) GetClient() *ClientInfo {
-	if x != nil {
-		return x.Client
-	}
-	return nil
-}
-
-type DeleteCollectionItemResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	DisplayText   string                 `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteCollectionItemResponse) Reset() {
-	*x = DeleteCollectionItemResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[66]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteCollectionItemResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteCollectionItemResponse) ProtoMessage() {}
-
-func (x *DeleteCollectionItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[66]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteCollectionItemResponse.ProtoReflect.Descriptor instead.
-func (*DeleteCollectionItemResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{66}
-}
-
-func (x *DeleteCollectionItemResponse) GetJobId() string {
-	if x != nil {
-		return x.JobId
-	}
-	return ""
-}
-
-func (x *DeleteCollectionItemResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-// ConversationFingerprint is one conversation id paired with a content
-// fingerprint that changes whenever the conversation's messages change. clyde
-// computes it per conversation; the engine compares it against the stored
-// checkpoint to decide which conversations to re-embed.
-type ConversationFingerprint struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	Fingerprint    string                 `protobuf:"bytes,2,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *ConversationFingerprint) Reset() {
-	*x = ConversationFingerprint{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[67]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ConversationFingerprint) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ConversationFingerprint) ProtoMessage() {}
-
-func (x *ConversationFingerprint) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[67]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ConversationFingerprint.ProtoReflect.Descriptor instead.
-func (*ConversationFingerprint) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{67}
-}
-
-func (x *ConversationFingerprint) GetConversationId() string {
-	if x != nil {
-		return x.ConversationId
-	}
-	return ""
-}
-
-func (x *ConversationFingerprint) GetFingerprint() string {
-	if x != nil {
-		return x.Fingerprint
-	}
-	return ""
-}
-
-type SyncConversationManifestRequest struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	// manifest lists every current conversation with its content fingerprint, so
-	// the engine can diff against its checkpoint and reply with the ids it needs.
-	Manifest      []*ConversationFingerprint `protobuf:"bytes,2,rep,name=manifest,proto3" json:"manifest,omitempty"`
-	Client        *ClientInfo                `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SyncConversationManifestRequest) Reset() {
-	*x = SyncConversationManifestRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[68]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SyncConversationManifestRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SyncConversationManifestRequest) ProtoMessage() {}
-
-func (x *SyncConversationManifestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[68]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SyncConversationManifestRequest.ProtoReflect.Descriptor instead.
-func (*SyncConversationManifestRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{68}
-}
-
-func (x *SyncConversationManifestRequest) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *SyncConversationManifestRequest) GetManifest() []*ConversationFingerprint {
-	if x != nil {
-		return x.Manifest
-	}
-	return nil
-}
-
-func (x *SyncConversationManifestRequest) GetClient() *ClientInfo {
-	if x != nil {
-		return x.Client
-	}
-	return nil
-}
-
-type SyncConversationManifestResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// needed_conversation_ids names the conversations new or changed since the
-	// last ingest. clyde sends documents for only these.
-	NeededConversationIds []string `protobuf:"bytes,1,rep,name=needed_conversation_ids,json=neededConversationIds,proto3" json:"needed_conversation_ids,omitempty"`
-	DisplayText           string   `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
-}
-
-func (x *SyncConversationManifestResponse) Reset() {
-	*x = SyncConversationManifestResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[69]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SyncConversationManifestResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SyncConversationManifestResponse) ProtoMessage() {}
-
-func (x *SyncConversationManifestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[69]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SyncConversationManifestResponse.ProtoReflect.Descriptor instead.
-func (*SyncConversationManifestResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{69}
-}
-
-func (x *SyncConversationManifestResponse) GetNeededConversationIds() []string {
-	if x != nil {
-		return x.NeededConversationIds
-	}
-	return nil
-}
-
-func (x *SyncConversationManifestResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-type UpsertConversationDocumentsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	DisplayText   string                 `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpsertConversationDocumentsResponse) Reset() {
-	*x = UpsertConversationDocumentsResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[70]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpsertConversationDocumentsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpsertConversationDocumentsResponse) ProtoMessage() {}
-
-func (x *UpsertConversationDocumentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[70]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpsertConversationDocumentsResponse.ProtoReflect.Descriptor instead.
-func (*UpsertConversationDocumentsResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{70}
-}
-
-func (x *UpsertConversationDocumentsResponse) GetJobId() string {
-	if x != nil {
-		return x.JobId
-	}
-	return ""
-}
-
-func (x *UpsertConversationDocumentsResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-// UpsertConversationDocumentsHeader opens a streamed upsert. It carries the
-// collection id, the caller info, and the reconcile mode once, before any
-// documents. reconcile_mode declares whether a conversation the manifest omits
-// is retained or deleted; it defaults to RETAIN when unset.
-type UpsertConversationDocumentsHeader struct {
-	state         protoimpl.MessageState    `protogen:"open.v1"`
-	CollectionId  string                    `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	Client        *ClientInfo               `protobuf:"bytes,2,opt,name=client,proto3" json:"client,omitempty"`
-	ReconcileMode ConversationReconcileMode `protobuf:"varint,3,opt,name=reconcile_mode,json=reconcileMode,proto3,enum=lmsemanticsearch.v1.ConversationReconcileMode" json:"reconcile_mode,omitempty"`
-	// backfill_delivered fills derived rows that are ABSENT for a delivered
-	// conversation and skips conversations whose expected derived rows are all
-	// present. It is presence-based, so it never rebuilds a present row: an
-	// operator backfill picks up a new indexing capability for conversations whose
-	// transcript files never changed on disk without re-embedding work already
-	// stored. The normal delta sync leaves it false.
-	BackfillDelivered bool `protobuf:"varint,5,opt,name=backfill_delivered,json=backfillDelivered,proto3" json:"backfill_delivered,omitempty"`
-	// force_reexamine rebuilds EVERY delivered conversation regardless of presence,
-	// with vector reuse disabled, so present rows re-embed from scratch. It is the
-	// blunt rebuild-it-all lever an operator uses after a chunking change. When
-	// both flags are set force wins. The normal delta sync leaves it false.
-	ForceReexamine bool `protobuf:"varint,6,opt,name=force_reexamine,json=forceReexamine,proto3" json:"force_reexamine,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *UpsertConversationDocumentsHeader) Reset() {
-	*x = UpsertConversationDocumentsHeader{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[71]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpsertConversationDocumentsHeader) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpsertConversationDocumentsHeader) ProtoMessage() {}
-
-func (x *UpsertConversationDocumentsHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[71]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpsertConversationDocumentsHeader.ProtoReflect.Descriptor instead.
-func (*UpsertConversationDocumentsHeader) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{71}
-}
-
-func (x *UpsertConversationDocumentsHeader) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *UpsertConversationDocumentsHeader) GetClient() *ClientInfo {
-	if x != nil {
-		return x.Client
-	}
-	return nil
-}
-
-func (x *UpsertConversationDocumentsHeader) GetReconcileMode() ConversationReconcileMode {
-	if x != nil {
-		return x.ReconcileMode
-	}
-	return ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_UNSPECIFIED
-}
-
-func (x *UpsertConversationDocumentsHeader) GetBackfillDelivered() bool {
-	if x != nil {
-		return x.BackfillDelivered
-	}
-	return false
-}
-
-func (x *UpsertConversationDocumentsHeader) GetForceReexamine() bool {
-	if x != nil {
-		return x.ForceReexamine
-	}
-	return false
-}
-
-// UpsertConversationDocumentsDocuments is one batch of documents in a streamed
-// upsert. The engine concatenates the documents from every documents chunk in
-// receive order into the full document set.
-type UpsertConversationDocumentsDocuments struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	Documents     []*ConversationDocument `protobuf:"bytes,1,rep,name=documents,proto3" json:"documents,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpsertConversationDocumentsDocuments) Reset() {
-	*x = UpsertConversationDocumentsDocuments{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[72]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpsertConversationDocumentsDocuments) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpsertConversationDocumentsDocuments) ProtoMessage() {}
-
-func (x *UpsertConversationDocumentsDocuments) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[72]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpsertConversationDocumentsDocuments.ProtoReflect.Descriptor instead.
-func (*UpsertConversationDocumentsDocuments) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{72}
-}
-
-func (x *UpsertConversationDocumentsDocuments) GetDocuments() []*ConversationDocument {
-	if x != nil {
-		return x.Documents
-	}
-	return nil
-}
-
-// UpsertConversationDocumentsManifest carries the full current conversation set
-// with fingerprints. The header's reconcile_mode governs what happens to a
-// conversation the manifest omits (default RETAIN keeps it); the manifest is
-// sent whole as one chunk under the per-chunk size bound rather than split.
-type UpsertConversationDocumentsManifest struct {
-	state         protoimpl.MessageState     `protogen:"open.v1"`
-	Manifest      []*ConversationFingerprint `protobuf:"bytes,1,rep,name=manifest,proto3" json:"manifest,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpsertConversationDocumentsManifest) Reset() {
-	*x = UpsertConversationDocumentsManifest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[73]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpsertConversationDocumentsManifest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpsertConversationDocumentsManifest) ProtoMessage() {}
-
-func (x *UpsertConversationDocumentsManifest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[73]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpsertConversationDocumentsManifest.ProtoReflect.Descriptor instead.
-func (*UpsertConversationDocumentsManifest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{73}
-}
-
-func (x *UpsertConversationDocumentsManifest) GetManifest() []*ConversationFingerprint {
-	if x != nil {
-		return x.Manifest
-	}
-	return nil
-}
-
-// UpsertConversationDocumentsChunk is one frame of a streamed upsert: a header,
-// a batch of documents, or the manifest. The stream sends exactly one header
-// first, then zero or more documents chunks, then exactly one manifest chunk.
-type UpsertConversationDocumentsChunk struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Chunk:
-	//
-	//	*UpsertConversationDocumentsChunk_Header
-	//	*UpsertConversationDocumentsChunk_Documents
-	//	*UpsertConversationDocumentsChunk_Manifest
-	Chunk         isUpsertConversationDocumentsChunk_Chunk `protobuf_oneof:"chunk"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpsertConversationDocumentsChunk) Reset() {
-	*x = UpsertConversationDocumentsChunk{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[74]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpsertConversationDocumentsChunk) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpsertConversationDocumentsChunk) ProtoMessage() {}
-
-func (x *UpsertConversationDocumentsChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[74]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpsertConversationDocumentsChunk.ProtoReflect.Descriptor instead.
-func (*UpsertConversationDocumentsChunk) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{74}
-}
-
-func (x *UpsertConversationDocumentsChunk) GetChunk() isUpsertConversationDocumentsChunk_Chunk {
-	if x != nil {
-		return x.Chunk
-	}
-	return nil
-}
-
-func (x *UpsertConversationDocumentsChunk) GetHeader() *UpsertConversationDocumentsHeader {
-	if x != nil {
-		if x, ok := x.Chunk.(*UpsertConversationDocumentsChunk_Header); ok {
-			return x.Header
-		}
-	}
-	return nil
-}
-
-func (x *UpsertConversationDocumentsChunk) GetDocuments() *UpsertConversationDocumentsDocuments {
-	if x != nil {
-		if x, ok := x.Chunk.(*UpsertConversationDocumentsChunk_Documents); ok {
-			return x.Documents
-		}
-	}
-	return nil
-}
-
-func (x *UpsertConversationDocumentsChunk) GetManifest() *UpsertConversationDocumentsManifest {
-	if x != nil {
-		if x, ok := x.Chunk.(*UpsertConversationDocumentsChunk_Manifest); ok {
-			return x.Manifest
-		}
-	}
-	return nil
-}
-
-type isUpsertConversationDocumentsChunk_Chunk interface {
-	isUpsertConversationDocumentsChunk_Chunk()
-}
-
-type UpsertConversationDocumentsChunk_Header struct {
-	Header *UpsertConversationDocumentsHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
-}
-
-type UpsertConversationDocumentsChunk_Documents struct {
-	Documents *UpsertConversationDocumentsDocuments `protobuf:"bytes,2,opt,name=documents,proto3,oneof"`
-}
-
-type UpsertConversationDocumentsChunk_Manifest struct {
-	Manifest *UpsertConversationDocumentsManifest `protobuf:"bytes,3,opt,name=manifest,proto3,oneof"`
-}
-
-func (*UpsertConversationDocumentsChunk_Header) isUpsertConversationDocumentsChunk_Chunk() {}
-
-func (*UpsertConversationDocumentsChunk_Documents) isUpsertConversationDocumentsChunk_Chunk() {}
-
-func (*UpsertConversationDocumentsChunk_Manifest) isUpsertConversationDocumentsChunk_Chunk() {}
-
-// BackfillConversationScalarsChunk is one frame of a streamed scalar backfill:
-// a header or a batch of enrichment entries. The stream sends exactly one header
-// first, then zero or more entries chunks.
-type BackfillConversationScalarsChunk struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Chunk:
-	//
-	//	*BackfillConversationScalarsChunk_Header
-	//	*BackfillConversationScalarsChunk_Entries
-	Chunk         isBackfillConversationScalarsChunk_Chunk `protobuf_oneof:"chunk"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BackfillConversationScalarsChunk) Reset() {
-	*x = BackfillConversationScalarsChunk{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[75]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackfillConversationScalarsChunk) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackfillConversationScalarsChunk) ProtoMessage() {}
-
-func (x *BackfillConversationScalarsChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[75]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackfillConversationScalarsChunk.ProtoReflect.Descriptor instead.
-func (*BackfillConversationScalarsChunk) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{75}
-}
-
-func (x *BackfillConversationScalarsChunk) GetChunk() isBackfillConversationScalarsChunk_Chunk {
-	if x != nil {
-		return x.Chunk
-	}
-	return nil
-}
-
-func (x *BackfillConversationScalarsChunk) GetHeader() *BackfillConversationScalarsHeader {
-	if x != nil {
-		if x, ok := x.Chunk.(*BackfillConversationScalarsChunk_Header); ok {
-			return x.Header
-		}
-	}
-	return nil
-}
-
-func (x *BackfillConversationScalarsChunk) GetEntries() *BackfillConversationScalarsEntries {
-	if x != nil {
-		if x, ok := x.Chunk.(*BackfillConversationScalarsChunk_Entries); ok {
-			return x.Entries
-		}
-	}
-	return nil
-}
-
-type isBackfillConversationScalarsChunk_Chunk interface {
-	isBackfillConversationScalarsChunk_Chunk()
-}
-
-type BackfillConversationScalarsChunk_Header struct {
-	Header *BackfillConversationScalarsHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
-}
-
-type BackfillConversationScalarsChunk_Entries struct {
-	Entries *BackfillConversationScalarsEntries `protobuf:"bytes,2,opt,name=entries,proto3,oneof"`
-}
-
-func (*BackfillConversationScalarsChunk_Header) isBackfillConversationScalarsChunk_Chunk() {}
-
-func (*BackfillConversationScalarsChunk_Entries) isBackfillConversationScalarsChunk_Chunk() {}
-
-// BackfillConversationScalarsHeader opens a streamed scalar backfill. It
-// carries the collection id, dry-run flag, and caller info once, before any
-// entries.
-type BackfillConversationScalarsHeader struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId  string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	DryRun        bool                   `protobuf:"varint,2,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
-	Client        *ClientInfo            `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BackfillConversationScalarsHeader) Reset() {
-	*x = BackfillConversationScalarsHeader{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[76]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackfillConversationScalarsHeader) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackfillConversationScalarsHeader) ProtoMessage() {}
-
-func (x *BackfillConversationScalarsHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[76]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackfillConversationScalarsHeader.ProtoReflect.Descriptor instead.
-func (*BackfillConversationScalarsHeader) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{76}
-}
-
-func (x *BackfillConversationScalarsHeader) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *BackfillConversationScalarsHeader) GetDryRun() bool {
-	if x != nil {
-		return x.DryRun
-	}
-	return false
-}
-
-func (x *BackfillConversationScalarsHeader) GetClient() *ClientInfo {
-	if x != nil {
-		return x.Client
-	}
-	return nil
-}
-
-// BackfillConversationScalarsEntries is one batch of conversation scalar
-// enrichment entries in a streamed scalar backfill.
-type BackfillConversationScalarsEntries struct {
-	state         protoimpl.MessageState             `protogen:"open.v1"`
-	Entries       []*BackfillConversationScalarEntry `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BackfillConversationScalarsEntries) Reset() {
-	*x = BackfillConversationScalarsEntries{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[77]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackfillConversationScalarsEntries) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackfillConversationScalarsEntries) ProtoMessage() {}
-
-func (x *BackfillConversationScalarsEntries) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[77]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackfillConversationScalarsEntries.ProtoReflect.Descriptor instead.
-func (*BackfillConversationScalarsEntries) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{77}
-}
-
-func (x *BackfillConversationScalarsEntries) GetEntries() []*BackfillConversationScalarEntry {
-	if x != nil {
-		return x.Entries
-	}
-	return nil
-}
-
-// BackfillConversationScalarEntry maps one conversation id to the workspace root
-// and archived status that clyde observed for that conversation.
-type BackfillConversationScalarEntry struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	WorkspaceRoot  string                 `protobuf:"bytes,2,opt,name=workspace_root,json=workspaceRoot,proto3" json:"workspace_root,omitempty"`
-	Archived       bool                   `protobuf:"varint,3,opt,name=archived,proto3" json:"archived,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *BackfillConversationScalarEntry) Reset() {
-	*x = BackfillConversationScalarEntry{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[78]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackfillConversationScalarEntry) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackfillConversationScalarEntry) ProtoMessage() {}
-
-func (x *BackfillConversationScalarEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[78]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackfillConversationScalarEntry.ProtoReflect.Descriptor instead.
-func (*BackfillConversationScalarEntry) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{78}
-}
-
-func (x *BackfillConversationScalarEntry) GetConversationId() string {
-	if x != nil {
-		return x.ConversationId
-	}
-	return ""
-}
-
-func (x *BackfillConversationScalarEntry) GetWorkspaceRoot() string {
-	if x != nil {
-		return x.WorkspaceRoot
-	}
-	return ""
-}
-
-func (x *BackfillConversationScalarEntry) GetArchived() bool {
-	if x != nil {
-		return x.Archived
-	}
-	return false
-}
-
-// BackfillConversationScalarsResponse reports the scalar backfill result.
-type BackfillConversationScalarsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Changed       int64                  `protobuf:"varint,1,opt,name=changed,proto3" json:"changed,omitempty"`
-	Orphan        int64                  `protobuf:"varint,2,opt,name=orphan,proto3" json:"orphan,omitempty"`
-	DisplayText   string                 `protobuf:"bytes,3,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BackfillConversationScalarsResponse) Reset() {
-	*x = BackfillConversationScalarsResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[79]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackfillConversationScalarsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackfillConversationScalarsResponse) ProtoMessage() {}
-
-func (x *BackfillConversationScalarsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[79]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackfillConversationScalarsResponse.ProtoReflect.Descriptor instead.
-func (*BackfillConversationScalarsResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{79}
-}
-
-func (x *BackfillConversationScalarsResponse) GetChanged() int64 {
-	if x != nil {
-		return x.Changed
-	}
-	return 0
-}
-
-func (x *BackfillConversationScalarsResponse) GetOrphan() int64 {
-	if x != nil {
-		return x.Orphan
-	}
-	return 0
-}
-
-func (x *BackfillConversationScalarsResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-type DeleteConversationRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId   string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	ConversationId string                 `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	Client         *ClientInfo            `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *DeleteConversationRequest) Reset() {
-	*x = DeleteConversationRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[80]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteConversationRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteConversationRequest) ProtoMessage() {}
-
-func (x *DeleteConversationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[80]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteConversationRequest.ProtoReflect.Descriptor instead.
-func (*DeleteConversationRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{80}
-}
-
-func (x *DeleteConversationRequest) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *DeleteConversationRequest) GetConversationId() string {
-	if x != nil {
-		return x.ConversationId
-	}
-	return ""
-}
-
-func (x *DeleteConversationRequest) GetClient() *ClientInfo {
-	if x != nil {
-		return x.Client
-	}
-	return nil
-}
-
-type DeleteConversationResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	DisplayText   string                 `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteConversationResponse) Reset() {
-	*x = DeleteConversationResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[81]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteConversationResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteConversationResponse) ProtoMessage() {}
-
-func (x *DeleteConversationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[81]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteConversationResponse.ProtoReflect.Descriptor instead.
-func (*DeleteConversationResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{81}
-}
-
-func (x *DeleteConversationResponse) GetJobId() string {
-	if x != nil {
-		return x.JobId
-	}
-	return ""
-}
-
-func (x *DeleteConversationResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-// ConversationSearchFilter narrows conversation retrieval by row attributes.
-// Every field is optional; an empty filter matches everything. conversation_ids
-// pushes into the vector store as path-prefix expressions; the other fields
-// apply to the decoded row metadata after retrieval.
-type ConversationSearchFilter struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// roles keeps only hits whose message role is in the set, e.g. "user".
-	Roles []string `protobuf:"bytes,1,rep,name=roles,proto3" json:"roles,omitempty"`
-	// from_unix / until_unix bound the message timestamp (inclusive from,
-	// exclusive until). Zero means unbounded.
-	FromUnix  int64 `protobuf:"varint,2,opt,name=from_unix,json=fromUnix,proto3" json:"from_unix,omitempty"`
-	UntilUnix int64 `protobuf:"varint,3,opt,name=until_unix,json=untilUnix,proto3" json:"until_unix,omitempty"`
-	// conversation_ids restricts retrieval to these conversations. clyde resolves
-	// record-level scopes (provider, workspace, archived) into this set.
-	ConversationIds []string `protobuf:"bytes,4,rep,name=conversation_ids,json=conversationIds,proto3" json:"conversation_ids,omitempty"`
-	// parent_conversation_id keeps only hits whose conversation forked from this
-	// parent, selecting a fork family.
-	ParentConversationId string `protobuf:"bytes,5,opt,name=parent_conversation_id,json=parentConversationId,proto3" json:"parent_conversation_id,omitempty"`
-	// min_score drops hits scoring below the floor. Zero means no floor.
-	MinScore float64 `protobuf:"fixed64,6,opt,name=min_score,json=minScore,proto3" json:"min_score,omitempty"`
-	// message_index_from / message_index_until bound the message index
-	// (inclusive from, exclusive until). until zero means unbounded.
-	MessageIndexFrom  int32 `protobuf:"varint,7,opt,name=message_index_from,json=messageIndexFrom,proto3" json:"message_index_from,omitempty"`
-	MessageIndexUntil int32 `protobuf:"varint,8,opt,name=message_index_until,json=messageIndexUntil,proto3" json:"message_index_until,omitempty"`
-	// providers keeps only hits whose provider is in the set, e.g. "claude".
-	// Filtered natively on the provider scalar column.
-	Providers []string `protobuf:"bytes,9,rep,name=providers,proto3" json:"providers,omitempty"`
-	// workspace_roots keeps only hits whose workspace_root is in the set. clyde
-	// resolves a workspace prefix filter into the small set of matching roots
-	// (one value per workspace directory) so the engine does an exact IN.
-	WorkspaceRoots []string `protobuf:"bytes,10,rep,name=workspace_roots,json=workspaceRoots,proto3" json:"workspace_roots,omitempty"`
-	// archived, when set, keeps only hits whose archived column equals the value.
-	// It filters the nullable archived scalar, so a row whose archived is still
-	// NULL (an old row the enrichment backfill has not reached) is excluded by
-	// either value; clyde should send it only after the backfill populates
-	// archived across the corpus.
-	Archived      *bool `protobuf:"varint,11,opt,name=archived,proto3,oneof" json:"archived,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ConversationSearchFilter) Reset() {
-	*x = ConversationSearchFilter{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[82]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ConversationSearchFilter) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ConversationSearchFilter) ProtoMessage() {}
-
-func (x *ConversationSearchFilter) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[82]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ConversationSearchFilter.ProtoReflect.Descriptor instead.
-func (*ConversationSearchFilter) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{82}
-}
-
-func (x *ConversationSearchFilter) GetRoles() []string {
-	if x != nil {
-		return x.Roles
-	}
-	return nil
-}
-
-func (x *ConversationSearchFilter) GetFromUnix() int64 {
-	if x != nil {
-		return x.FromUnix
-	}
-	return 0
-}
-
-func (x *ConversationSearchFilter) GetUntilUnix() int64 {
-	if x != nil {
-		return x.UntilUnix
-	}
-	return 0
-}
-
-func (x *ConversationSearchFilter) GetConversationIds() []string {
-	if x != nil {
-		return x.ConversationIds
-	}
-	return nil
-}
-
-func (x *ConversationSearchFilter) GetParentConversationId() string {
-	if x != nil {
-		return x.ParentConversationId
-	}
-	return ""
-}
-
-func (x *ConversationSearchFilter) GetMinScore() float64 {
-	if x != nil {
-		return x.MinScore
-	}
-	return 0
-}
-
-func (x *ConversationSearchFilter) GetMessageIndexFrom() int32 {
-	if x != nil {
-		return x.MessageIndexFrom
-	}
-	return 0
-}
-
-func (x *ConversationSearchFilter) GetMessageIndexUntil() int32 {
-	if x != nil {
-		return x.MessageIndexUntil
-	}
-	return 0
-}
-
-func (x *ConversationSearchFilter) GetProviders() []string {
-	if x != nil {
-		return x.Providers
-	}
-	return nil
-}
-
-func (x *ConversationSearchFilter) GetWorkspaceRoots() []string {
-	if x != nil {
-		return x.WorkspaceRoots
-	}
-	return nil
-}
-
-func (x *ConversationSearchFilter) GetArchived() bool {
-	if x != nil && x.Archived != nil {
-		return *x.Archived
-	}
-	return false
-}
-
-type SearchConversationsRequest struct {
-	state        protoimpl.MessageState    `protogen:"open.v1"`
-	CollectionId string                    `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	Query        string                    `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
-	Limit        int32                     `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
-	Filter       *ConversationSearchFilter `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
-	// per_conversation_limit caps hits per conversation so one large transcript
-	// does not monopolize the result list. Zero means uncapped.
-	PerConversationLimit int32 `protobuf:"varint,5,opt,name=per_conversation_limit,json=perConversationLimit,proto3" json:"per_conversation_limit,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
-}
-
-func (x *SearchConversationsRequest) Reset() {
-	*x = SearchConversationsRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[83]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SearchConversationsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SearchConversationsRequest) ProtoMessage() {}
-
-func (x *SearchConversationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[83]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SearchConversationsRequest.ProtoReflect.Descriptor instead.
-func (*SearchConversationsRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{83}
-}
-
-func (x *SearchConversationsRequest) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *SearchConversationsRequest) GetQuery() string {
-	if x != nil {
-		return x.Query
-	}
-	return ""
-}
-
-func (x *SearchConversationsRequest) GetLimit() int32 {
-	if x != nil {
-		return x.Limit
-	}
-	return 0
-}
-
-func (x *SearchConversationsRequest) GetFilter() *ConversationSearchFilter {
-	if x != nil {
-		return x.Filter
-	}
-	return nil
-}
-
-func (x *SearchConversationsRequest) GetPerConversationLimit() int32 {
-	if x != nil {
-		return x.PerConversationLimit
-	}
-	return 0
-}
-
-type SearchConversationsResponse struct {
-	state            protoimpl.MessageState      `protogen:"open.v1"`
-	Results          []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
-	DisplayText      string                      `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	DependencyHealth *DependencyHealth           `protobuf:"bytes,3,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
-}
-
-func (x *SearchConversationsResponse) Reset() {
-	*x = SearchConversationsResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[84]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SearchConversationsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SearchConversationsResponse) ProtoMessage() {}
-
-func (x *SearchConversationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[84]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SearchConversationsResponse.ProtoReflect.Descriptor instead.
-func (*SearchConversationsResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{84}
-}
-
-func (x *SearchConversationsResponse) GetResults() []*ConversationSearchResult {
-	if x != nil {
-		return x.Results
-	}
-	return nil
-}
-
-func (x *SearchConversationsResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-func (x *SearchConversationsResponse) GetDependencyHealth() *DependencyHealth {
-	if x != nil {
-		return x.DependencyHealth
-	}
-	return nil
-}
-
-type SearchWithinConversationRequest struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	// conversation_id scopes retrieval to one conversation and is required.
-	ConversationId string                    `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	Query          string                    `protobuf:"bytes,3,opt,name=query,proto3" json:"query,omitempty"`
-	Limit          int32                     `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
-	Filter         *ConversationSearchFilter `protobuf:"bytes,5,opt,name=filter,proto3" json:"filter,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *SearchWithinConversationRequest) Reset() {
-	*x = SearchWithinConversationRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[85]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SearchWithinConversationRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SearchWithinConversationRequest) ProtoMessage() {}
-
-func (x *SearchWithinConversationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[85]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SearchWithinConversationRequest.ProtoReflect.Descriptor instead.
-func (*SearchWithinConversationRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{85}
-}
-
-func (x *SearchWithinConversationRequest) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *SearchWithinConversationRequest) GetConversationId() string {
-	if x != nil {
-		return x.ConversationId
-	}
-	return ""
-}
-
-func (x *SearchWithinConversationRequest) GetQuery() string {
-	if x != nil {
-		return x.Query
-	}
-	return ""
-}
-
-func (x *SearchWithinConversationRequest) GetLimit() int32 {
-	if x != nil {
-		return x.Limit
-	}
-	return 0
-}
-
-func (x *SearchWithinConversationRequest) GetFilter() *ConversationSearchFilter {
-	if x != nil {
-		return x.Filter
-	}
-	return nil
-}
-
-type SearchWithinConversationResponse struct {
-	state   protoimpl.MessageState      `protogen:"open.v1"`
-	Results []*ConversationSearchResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
-	// indexed_fingerprint is the content fingerprint the engine has embedded for
-	// this conversation, from its checkpoint. Empty means the conversation is not
-	// indexed. A caller compares it to the conversation's current fingerprint to
-	// decide whether the hits are complete or a literal scan of newer content is
-	// needed.
-	IndexedFingerprint string            `protobuf:"bytes,2,opt,name=indexed_fingerprint,json=indexedFingerprint,proto3" json:"indexed_fingerprint,omitempty"`
-	DisplayText        string            `protobuf:"bytes,3,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	DependencyHealth   *DependencyHealth `protobuf:"bytes,4,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
-}
-
-func (x *SearchWithinConversationResponse) Reset() {
-	*x = SearchWithinConversationResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[86]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SearchWithinConversationResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SearchWithinConversationResponse) ProtoMessage() {}
-
-func (x *SearchWithinConversationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[86]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SearchWithinConversationResponse.ProtoReflect.Descriptor instead.
-func (*SearchWithinConversationResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{86}
-}
-
-func (x *SearchWithinConversationResponse) GetResults() []*ConversationSearchResult {
-	if x != nil {
-		return x.Results
-	}
-	return nil
-}
-
-func (x *SearchWithinConversationResponse) GetIndexedFingerprint() string {
-	if x != nil {
-		return x.IndexedFingerprint
-	}
-	return ""
-}
-
-func (x *SearchWithinConversationResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-func (x *SearchWithinConversationResponse) GetDependencyHealth() *DependencyHealth {
-	if x != nil {
-		return x.DependencyHealth
-	}
-	return nil
-}
-
-// CollectionFilterValue is one typed literal in a collection filter. Its type
-// must match the declared type of the column it tests.
-type CollectionFilterValue struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Value:
-	//
-	//	*CollectionFilterValue_StringValue
-	//	*CollectionFilterValue_BoolValue
-	//	*CollectionFilterValue_Int64Value
-	Value         isCollectionFilterValue_Value `protobuf_oneof:"value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionFilterValue) Reset() {
-	*x = CollectionFilterValue{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[87]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionFilterValue) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionFilterValue) ProtoMessage() {}
-
-func (x *CollectionFilterValue) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[87]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionFilterValue.ProtoReflect.Descriptor instead.
-func (*CollectionFilterValue) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{87}
-}
-
-func (x *CollectionFilterValue) GetValue() isCollectionFilterValue_Value {
-	if x != nil {
-		return x.Value
-	}
-	return nil
-}
-
-func (x *CollectionFilterValue) GetStringValue() string {
-	if x != nil {
-		if x, ok := x.Value.(*CollectionFilterValue_StringValue); ok {
-			return x.StringValue
-		}
-	}
-	return ""
-}
-
-func (x *CollectionFilterValue) GetBoolValue() bool {
-	if x != nil {
-		if x, ok := x.Value.(*CollectionFilterValue_BoolValue); ok {
-			return x.BoolValue
-		}
-	}
-	return false
-}
-
-func (x *CollectionFilterValue) GetInt64Value() int64 {
-	if x != nil {
-		if x, ok := x.Value.(*CollectionFilterValue_Int64Value); ok {
-			return x.Int64Value
-		}
-	}
-	return 0
-}
-
-type isCollectionFilterValue_Value interface {
-	isCollectionFilterValue_Value()
-}
-
-type CollectionFilterValue_StringValue struct {
-	StringValue string `protobuf:"bytes,1,opt,name=string_value,json=stringValue,proto3,oneof"`
-}
-
-type CollectionFilterValue_BoolValue struct {
-	BoolValue bool `protobuf:"varint,2,opt,name=bool_value,json=boolValue,proto3,oneof"`
-}
-
-type CollectionFilterValue_Int64Value struct {
-	Int64Value int64 `protobuf:"varint,3,opt,name=int64_value,json=int64Value,proto3,oneof"`
-}
-
-func (*CollectionFilterValue_StringValue) isCollectionFilterValue_Value() {}
-
-func (*CollectionFilterValue_BoolValue) isCollectionFilterValue_Value() {}
-
-func (*CollectionFilterValue_Int64Value) isCollectionFilterValue_Value() {}
-
-// CollectionFilterGroup lists the child nodes of an all_of or any_of node. A
-// group must have at least one child.
-type CollectionFilterGroup struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Filters       []*CollectionFilter    `protobuf:"bytes,1,rep,name=filters,proto3" json:"filters,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionFilterGroup) Reset() {
-	*x = CollectionFilterGroup{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[88]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionFilterGroup) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionFilterGroup) ProtoMessage() {}
-
-func (x *CollectionFilterGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[88]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionFilterGroup.ProtoReflect.Descriptor instead.
-func (*CollectionFilterGroup) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{88}
-}
-
-func (x *CollectionFilterGroup) GetFilters() []*CollectionFilter {
-	if x != nil {
-		return x.Filters
-	}
-	return nil
-}
-
-// CollectionFilterEquals keeps a row when the column value equals value.
-type CollectionFilterEquals struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Column        string                 `protobuf:"bytes,1,opt,name=column,proto3" json:"column,omitempty"`
-	Value         *CollectionFilterValue `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionFilterEquals) Reset() {
-	*x = CollectionFilterEquals{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[89]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionFilterEquals) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionFilterEquals) ProtoMessage() {}
-
-func (x *CollectionFilterEquals) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[89]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionFilterEquals.ProtoReflect.Descriptor instead.
-func (*CollectionFilterEquals) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{89}
-}
-
-func (x *CollectionFilterEquals) GetColumn() string {
-	if x != nil {
-		return x.Column
-	}
-	return ""
-}
-
-func (x *CollectionFilterEquals) GetValue() *CollectionFilterValue {
-	if x != nil {
-		return x.Value
-	}
-	return nil
-}
-
-// CollectionFilterIn keeps a row when the column value equals one of values.
-// values must be non-empty.
-type CollectionFilterIn struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	Column        string                   `protobuf:"bytes,1,opt,name=column,proto3" json:"column,omitempty"`
-	Values        []*CollectionFilterValue `protobuf:"bytes,2,rep,name=values,proto3" json:"values,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionFilterIn) Reset() {
-	*x = CollectionFilterIn{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[90]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionFilterIn) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionFilterIn) ProtoMessage() {}
-
-func (x *CollectionFilterIn) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[90]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionFilterIn.ProtoReflect.Descriptor instead.
-func (*CollectionFilterIn) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{90}
-}
-
-func (x *CollectionFilterIn) GetColumn() string {
-	if x != nil {
-		return x.Column
-	}
-	return ""
-}
-
-func (x *CollectionFilterIn) GetValues() []*CollectionFilterValue {
-	if x != nil {
-		return x.Values
-	}
-	return nil
-}
-
-// CollectionFilterRange keeps a row when the value of an int64 column lies in
-// the half-open range [lower, upper). Time columns store Unix seconds as int64.
-// At least one bound must be set.
-type CollectionFilterRange struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Column        string                 `protobuf:"bytes,1,opt,name=column,proto3" json:"column,omitempty"`
-	Lower         *int64                 `protobuf:"varint,2,opt,name=lower,proto3,oneof" json:"lower,omitempty"`
-	Upper         *int64                 `protobuf:"varint,3,opt,name=upper,proto3,oneof" json:"upper,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionFilterRange) Reset() {
-	*x = CollectionFilterRange{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[91]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionFilterRange) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionFilterRange) ProtoMessage() {}
-
-func (x *CollectionFilterRange) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[91]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionFilterRange.ProtoReflect.Descriptor instead.
-func (*CollectionFilterRange) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{91}
-}
-
-func (x *CollectionFilterRange) GetColumn() string {
-	if x != nil {
-		return x.Column
-	}
-	return ""
-}
-
-func (x *CollectionFilterRange) GetLower() int64 {
-	if x != nil && x.Lower != nil {
-		return *x.Lower
-	}
-	return 0
-}
-
-func (x *CollectionFilterRange) GetUpper() int64 {
-	if x != nil && x.Upper != nil {
-		return *x.Upper
-	}
-	return 0
-}
-
-// CollectionFilterColumn is the column that an is_null or is_present test
-// checks.
-type CollectionFilterColumn struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Column        string                 `protobuf:"bytes,1,opt,name=column,proto3" json:"column,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionFilterColumn) Reset() {
-	*x = CollectionFilterColumn{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[92]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionFilterColumn) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionFilterColumn) ProtoMessage() {}
-
-func (x *CollectionFilterColumn) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[92]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionFilterColumn.ProtoReflect.Descriptor instead.
-func (*CollectionFilterColumn) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{92}
-}
-
-func (x *CollectionFilterColumn) GetColumn() string {
-	if x != nil {
-		return x.Column
-	}
-	return ""
-}
-
-// CollectionFilter is one node of a typed filter tree. all_of, any_of, and
-// negate combine child nodes; the other members are leaf predicates. A leaf
-// comparison on a null value never matches, and negating it does not match
-// either, so is_null and is_present are the only tests that select null
-// values.
-type CollectionFilter struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Node:
-	//
-	//	*CollectionFilter_AllOf
-	//	*CollectionFilter_AnyOf
-	//	*CollectionFilter_Negate
-	//	*CollectionFilter_Equals
-	//	*CollectionFilter_InSet
-	//	*CollectionFilter_Range
-	//	*CollectionFilter_IsNull
-	//	*CollectionFilter_IsPresent
-	Node          isCollectionFilter_Node `protobuf_oneof:"node"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionFilter) Reset() {
-	*x = CollectionFilter{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[93]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionFilter) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionFilter) ProtoMessage() {}
-
-func (x *CollectionFilter) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[93]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionFilter.ProtoReflect.Descriptor instead.
-func (*CollectionFilter) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{93}
-}
-
-func (x *CollectionFilter) GetNode() isCollectionFilter_Node {
-	if x != nil {
-		return x.Node
-	}
-	return nil
-}
-
-func (x *CollectionFilter) GetAllOf() *CollectionFilterGroup {
-	if x != nil {
-		if x, ok := x.Node.(*CollectionFilter_AllOf); ok {
-			return x.AllOf
-		}
-	}
-	return nil
-}
-
-func (x *CollectionFilter) GetAnyOf() *CollectionFilterGroup {
-	if x != nil {
-		if x, ok := x.Node.(*CollectionFilter_AnyOf); ok {
-			return x.AnyOf
-		}
-	}
-	return nil
-}
-
-func (x *CollectionFilter) GetNegate() *CollectionFilter {
-	if x != nil {
-		if x, ok := x.Node.(*CollectionFilter_Negate); ok {
-			return x.Negate
-		}
-	}
-	return nil
-}
-
-func (x *CollectionFilter) GetEquals() *CollectionFilterEquals {
-	if x != nil {
-		if x, ok := x.Node.(*CollectionFilter_Equals); ok {
-			return x.Equals
-		}
-	}
-	return nil
-}
-
-func (x *CollectionFilter) GetInSet() *CollectionFilterIn {
-	if x != nil {
-		if x, ok := x.Node.(*CollectionFilter_InSet); ok {
-			return x.InSet
-		}
-	}
-	return nil
-}
-
-func (x *CollectionFilter) GetRange() *CollectionFilterRange {
-	if x != nil {
-		if x, ok := x.Node.(*CollectionFilter_Range); ok {
-			return x.Range
-		}
-	}
-	return nil
-}
-
-func (x *CollectionFilter) GetIsNull() *CollectionFilterColumn {
-	if x != nil {
-		if x, ok := x.Node.(*CollectionFilter_IsNull); ok {
-			return x.IsNull
-		}
-	}
-	return nil
-}
-
-func (x *CollectionFilter) GetIsPresent() *CollectionFilterColumn {
-	if x != nil {
-		if x, ok := x.Node.(*CollectionFilter_IsPresent); ok {
-			return x.IsPresent
-		}
-	}
-	return nil
-}
-
-type isCollectionFilter_Node interface {
-	isCollectionFilter_Node()
-}
-
-type CollectionFilter_AllOf struct {
-	AllOf *CollectionFilterGroup `protobuf:"bytes,1,opt,name=all_of,json=allOf,proto3,oneof"`
-}
-
-type CollectionFilter_AnyOf struct {
-	AnyOf *CollectionFilterGroup `protobuf:"bytes,2,opt,name=any_of,json=anyOf,proto3,oneof"`
-}
-
-type CollectionFilter_Negate struct {
-	Negate *CollectionFilter `protobuf:"bytes,3,opt,name=negate,proto3,oneof"`
-}
-
-type CollectionFilter_Equals struct {
-	Equals *CollectionFilterEquals `protobuf:"bytes,4,opt,name=equals,proto3,oneof"`
-}
-
-type CollectionFilter_InSet struct {
-	InSet *CollectionFilterIn `protobuf:"bytes,5,opt,name=in_set,json=inSet,proto3,oneof"`
-}
-
-type CollectionFilter_Range struct {
-	Range *CollectionFilterRange `protobuf:"bytes,6,opt,name=range,proto3,oneof"`
-}
-
-type CollectionFilter_IsNull struct {
-	IsNull *CollectionFilterColumn `protobuf:"bytes,7,opt,name=is_null,json=isNull,proto3,oneof"`
-}
-
-type CollectionFilter_IsPresent struct {
-	IsPresent *CollectionFilterColumn `protobuf:"bytes,8,opt,name=is_present,json=isPresent,proto3,oneof"`
-}
-
-func (*CollectionFilter_AllOf) isCollectionFilter_Node() {}
-
-func (*CollectionFilter_AnyOf) isCollectionFilter_Node() {}
-
-func (*CollectionFilter_Negate) isCollectionFilter_Node() {}
-
-func (*CollectionFilter_Equals) isCollectionFilter_Node() {}
-
-func (*CollectionFilter_InSet) isCollectionFilter_Node() {}
-
-func (*CollectionFilter_Range) isCollectionFilter_Node() {}
-
-func (*CollectionFilter_IsNull) isCollectionFilter_Node() {}
-
-func (*CollectionFilter_IsPresent) isCollectionFilter_Node() {}
-
-// SearchCollectionRequest searches one registered collection. limit defaults to
-// 10 when zero or negative. filter is optional, and an absent filter matches
-// every row. group_by must be a declared column. per_group_limit caps the hits
-// that share one value of the group_by column, and rows with a null or absent
-// group value share one group. In a conversation collection grouped by
-// conversationId, a row with a null conversationId instead groups by the
-// conversation id in its legacy metadata. per_group_limit requires group_by.
-// min_score drops hits scoring below the floor, and zero means no floor. One
-// query and request always return the same rows in the same order, ranked by
-// descending score, then ascending row_key, then ascending stored primary
-// key. A smaller limit returns a prefix of a larger one.
-type SearchCollectionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId  string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	Query         string                 `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
-	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
-	MinScore      float64                `protobuf:"fixed64,4,opt,name=min_score,json=minScore,proto3" json:"min_score,omitempty"`
-	Filter        *CollectionFilter      `protobuf:"bytes,5,opt,name=filter,proto3" json:"filter,omitempty"`
-	GroupBy       string                 `protobuf:"bytes,6,opt,name=group_by,json=groupBy,proto3" json:"group_by,omitempty"`
-	PerGroupLimit int32                  `protobuf:"varint,7,opt,name=per_group_limit,json=perGroupLimit,proto3" json:"per_group_limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SearchCollectionRequest) Reset() {
-	*x = SearchCollectionRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[94]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SearchCollectionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SearchCollectionRequest) ProtoMessage() {}
-
-func (x *SearchCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[94]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SearchCollectionRequest.ProtoReflect.Descriptor instead.
-func (*SearchCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{94}
-}
-
-func (x *SearchCollectionRequest) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *SearchCollectionRequest) GetQuery() string {
-	if x != nil {
-		return x.Query
-	}
-	return ""
-}
-
-func (x *SearchCollectionRequest) GetLimit() int32 {
-	if x != nil {
-		return x.Limit
-	}
-	return 0
-}
-
-func (x *SearchCollectionRequest) GetMinScore() float64 {
-	if x != nil {
-		return x.MinScore
-	}
-	return 0
-}
-
-func (x *SearchCollectionRequest) GetFilter() *CollectionFilter {
-	if x != nil {
-		return x.Filter
-	}
-	return nil
-}
-
-func (x *SearchCollectionRequest) GetGroupBy() string {
-	if x != nil {
-		return x.GroupBy
-	}
-	return ""
-}
-
-func (x *SearchCollectionRequest) GetPerGroupLimit() int32 {
-	if x != nil {
-		return x.PerGroupLimit
-	}
-	return 0
-}
-
-// CollectionHitScalar is one declared scalar column value on a search hit. An
-// unset value means the stored row has no such column. null_value means the
-// stored row has the column and its value is null.
-type CollectionHitScalar struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Column string                 `protobuf:"bytes,1,opt,name=column,proto3" json:"column,omitempty"`
-	// Types that are valid to be assigned to Value:
-	//
-	//	*CollectionHitScalar_StringValue
-	//	*CollectionHitScalar_BoolValue
-	//	*CollectionHitScalar_Int64Value
-	//	*CollectionHitScalar_NullValue
-	Value         isCollectionHitScalar_Value `protobuf_oneof:"value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionHitScalar) Reset() {
-	*x = CollectionHitScalar{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[95]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionHitScalar) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionHitScalar) ProtoMessage() {}
-
-func (x *CollectionHitScalar) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[95]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionHitScalar.ProtoReflect.Descriptor instead.
-func (*CollectionHitScalar) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{95}
-}
-
-func (x *CollectionHitScalar) GetColumn() string {
-	if x != nil {
-		return x.Column
-	}
-	return ""
-}
-
-func (x *CollectionHitScalar) GetValue() isCollectionHitScalar_Value {
-	if x != nil {
-		return x.Value
-	}
-	return nil
-}
-
-func (x *CollectionHitScalar) GetStringValue() string {
-	if x != nil {
-		if x, ok := x.Value.(*CollectionHitScalar_StringValue); ok {
-			return x.StringValue
-		}
-	}
-	return ""
-}
-
-func (x *CollectionHitScalar) GetBoolValue() bool {
-	if x != nil {
-		if x, ok := x.Value.(*CollectionHitScalar_BoolValue); ok {
-			return x.BoolValue
-		}
-	}
-	return false
-}
-
-func (x *CollectionHitScalar) GetInt64Value() int64 {
-	if x != nil {
-		if x, ok := x.Value.(*CollectionHitScalar_Int64Value); ok {
-			return x.Int64Value
-		}
-	}
-	return 0
-}
-
-func (x *CollectionHitScalar) GetNullValue() structpb.NullValue {
-	if x != nil {
-		if x, ok := x.Value.(*CollectionHitScalar_NullValue); ok {
-			return x.NullValue
-		}
-	}
-	return structpb.NullValue(0)
-}
-
-type isCollectionHitScalar_Value interface {
-	isCollectionHitScalar_Value()
-}
-
-type CollectionHitScalar_StringValue struct {
-	StringValue string `protobuf:"bytes,2,opt,name=string_value,json=stringValue,proto3,oneof"`
-}
-
-type CollectionHitScalar_BoolValue struct {
-	BoolValue bool `protobuf:"varint,3,opt,name=bool_value,json=boolValue,proto3,oneof"`
-}
-
-type CollectionHitScalar_Int64Value struct {
-	Int64Value int64 `protobuf:"varint,4,opt,name=int64_value,json=int64Value,proto3,oneof"`
-}
-
-type CollectionHitScalar_NullValue struct {
-	NullValue structpb.NullValue `protobuf:"varint,5,opt,name=null_value,json=nullValue,proto3,enum=google.protobuf.NullValue,oneof"`
-}
-
-func (*CollectionHitScalar_StringValue) isCollectionHitScalar_Value() {}
-
-func (*CollectionHitScalar_BoolValue) isCollectionHitScalar_Value() {}
-
-func (*CollectionHitScalar_Int64Value) isCollectionHitScalar_Value() {}
-
-func (*CollectionHitScalar_NullValue) isCollectionHitScalar_Value() {}
-
-// CollectionSearchHit is one ranked search hit. row_key is the logical row key
-// the client stored. scalars lists every declared scalar column in
-// declaration order.
-type CollectionSearchHit struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RowKey        string                 `protobuf:"bytes,1,opt,name=row_key,json=rowKey,proto3" json:"row_key,omitempty"`
-	Content       string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
-	Score         float64                `protobuf:"fixed64,3,opt,name=score,proto3" json:"score,omitempty"`
-	Scalars       []*CollectionHitScalar `protobuf:"bytes,4,rep,name=scalars,proto3" json:"scalars,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CollectionSearchHit) Reset() {
-	*x = CollectionSearchHit{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[96]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CollectionSearchHit) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CollectionSearchHit) ProtoMessage() {}
-
-func (x *CollectionSearchHit) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[96]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CollectionSearchHit.ProtoReflect.Descriptor instead.
-func (*CollectionSearchHit) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{96}
-}
-
-func (x *CollectionSearchHit) GetRowKey() string {
-	if x != nil {
-		return x.RowKey
-	}
-	return ""
-}
-
-func (x *CollectionSearchHit) GetContent() string {
-	if x != nil {
-		return x.Content
-	}
-	return ""
-}
-
-func (x *CollectionSearchHit) GetScore() float64 {
-	if x != nil {
-		return x.Score
-	}
-	return 0
-}
-
-func (x *CollectionSearchHit) GetScalars() []*CollectionHitScalar {
-	if x != nil {
-		return x.Scalars
-	}
-	return nil
-}
-
-type SearchCollectionResponse struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Hits             []*CollectionSearchHit `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`
-	DisplayText      string                 `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	DependencyHealth *DependencyHealth      `protobuf:"bytes,3,opt,name=dependency_health,json=dependencyHealth,proto3" json:"dependency_health,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
-}
-
-func (x *SearchCollectionResponse) Reset() {
-	*x = SearchCollectionResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[97]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SearchCollectionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SearchCollectionResponse) ProtoMessage() {}
-
-func (x *SearchCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[97]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SearchCollectionResponse.ProtoReflect.Descriptor instead.
-func (*SearchCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{97}
-}
-
-func (x *SearchCollectionResponse) GetHits() []*CollectionSearchHit {
-	if x != nil {
-		return x.Hits
-	}
-	return nil
-}
-
-func (x *SearchCollectionResponse) GetDisplayText() string {
-	if x != nil {
-		return x.DisplayText
-	}
-	return ""
-}
-
-func (x *SearchCollectionResponse) GetDependencyHealth() *DependencyHealth {
-	if x != nil {
-		return x.DependencyHealth
-	}
-	return nil
-}
-
-type GetCollectionItemStateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CollectionId  string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`
-	ItemId        string                 `protobuf:"bytes,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetCollectionItemStateRequest) Reset() {
-	*x = GetCollectionItemStateRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[98]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetCollectionItemStateRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetCollectionItemStateRequest) ProtoMessage() {}
-
-func (x *GetCollectionItemStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[98]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetCollectionItemStateRequest.ProtoReflect.Descriptor instead.
-func (*GetCollectionItemStateRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{98}
-}
-
-func (x *GetCollectionItemStateRequest) GetCollectionId() string {
-	if x != nil {
-		return x.CollectionId
-	}
-	return ""
-}
-
-func (x *GetCollectionItemStateRequest) GetItemId() string {
-	if x != nil {
-		return x.ItemId
-	}
-	return ""
-}
-
-// GetCollectionItemStateResponse returns the content fingerprint from the
-// collection's Merkle checkpoint. Empty means the item is not indexed.
-type GetCollectionItemStateResponse struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	IndexedFingerprint string                 `protobuf:"bytes,1,opt,name=indexed_fingerprint,json=indexedFingerprint,proto3" json:"indexed_fingerprint,omitempty"`
-	DisplayText        string                 `protobuf:"bytes,2,opt,name=display_text,json=displayText,proto3" json:"display_text,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
-}
-
-func (x *GetCollectionItemStateResponse) Reset() {
-	*x = GetCollectionItemStateResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[99]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetCollectionItemStateResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetCollectionItemStateResponse) ProtoMessage() {}
-
-func (x *GetCollectionItemStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[99]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetCollectionItemStateResponse.ProtoReflect.Descriptor instead.
-func (*GetCollectionItemStateResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{99}
-}
-
-func (x *GetCollectionItemStateResponse) GetIndexedFingerprint() string {
-	if x != nil {
-		return x.IndexedFingerprint
-	}
-	return ""
-}
-
-func (x *GetCollectionItemStateResponse) GetDisplayText() string {
 	if x != nil {
 		return x.DisplayText
 	}
@@ -7829,7 +3487,7 @@ type Diagnostic struct {
 
 func (x *Diagnostic) Reset() {
 	*x = Diagnostic{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[100]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7841,7 +3499,7 @@ func (x *Diagnostic) String() string {
 func (*Diagnostic) ProtoMessage() {}
 
 func (x *Diagnostic) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[100]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7854,7 +3512,7 @@ func (x *Diagnostic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Diagnostic.ProtoReflect.Descriptor instead.
 func (*Diagnostic) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{100}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *Diagnostic) GetSeverity() string {
@@ -7893,7 +3551,7 @@ type DoctorRequest struct {
 
 func (x *DoctorRequest) Reset() {
 	*x = DoctorRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[101]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7905,7 +3563,7 @@ func (x *DoctorRequest) String() string {
 func (*DoctorRequest) ProtoMessage() {}
 
 func (x *DoctorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[101]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7918,7 +3576,7 @@ func (x *DoctorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorRequest.ProtoReflect.Descriptor instead.
 func (*DoctorRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{101}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{43}
 }
 
 type DoctorResponse struct {
@@ -7931,7 +3589,7 @@ type DoctorResponse struct {
 
 func (x *DoctorResponse) Reset() {
 	*x = DoctorResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[102]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7943,7 +3601,7 @@ func (x *DoctorResponse) String() string {
 func (*DoctorResponse) ProtoMessage() {}
 
 func (x *DoctorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[102]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7956,7 +3614,7 @@ func (x *DoctorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorResponse.ProtoReflect.Descriptor instead.
 func (*DoctorResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{102}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *DoctorResponse) GetDiagnostics() []*Diagnostic {
@@ -7981,7 +3639,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[103]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7993,7 +3651,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[103]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8006,7 +3664,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{103}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{45}
 }
 
 type ShutdownResponse struct {
@@ -8018,7 +3676,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[104]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8030,7 +3688,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[104]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8043,7 +3701,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{104}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *ShutdownResponse) GetAccepted() bool {
@@ -8067,7 +3725,7 @@ type MaintenanceStatus struct {
 
 func (x *MaintenanceStatus) Reset() {
 	*x = MaintenanceStatus{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[105]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8079,7 +3737,7 @@ func (x *MaintenanceStatus) String() string {
 func (*MaintenanceStatus) ProtoMessage() {}
 
 func (x *MaintenanceStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[105]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8092,7 +3750,7 @@ func (x *MaintenanceStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MaintenanceStatus.ProtoReflect.Descriptor instead.
 func (*MaintenanceStatus) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{105}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *MaintenanceStatus) GetEnabled() bool {
@@ -8129,7 +3787,7 @@ type SetMaintenanceModeRequest struct {
 
 func (x *SetMaintenanceModeRequest) Reset() {
 	*x = SetMaintenanceModeRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[106]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8141,7 +3799,7 @@ func (x *SetMaintenanceModeRequest) String() string {
 func (*SetMaintenanceModeRequest) ProtoMessage() {}
 
 func (x *SetMaintenanceModeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[106]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8154,7 +3812,7 @@ func (x *SetMaintenanceModeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetMaintenanceModeRequest.ProtoReflect.Descriptor instead.
 func (*SetMaintenanceModeRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{106}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *SetMaintenanceModeRequest) GetEnabled() bool {
@@ -8192,7 +3850,7 @@ type SetMaintenanceModeResponse struct {
 
 func (x *SetMaintenanceModeResponse) Reset() {
 	*x = SetMaintenanceModeResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[107]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8204,7 +3862,7 @@ func (x *SetMaintenanceModeResponse) String() string {
 func (*SetMaintenanceModeResponse) ProtoMessage() {}
 
 func (x *SetMaintenanceModeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[107]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8217,7 +3875,7 @@ func (x *SetMaintenanceModeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetMaintenanceModeResponse.ProtoReflect.Descriptor instead.
 func (*SetMaintenanceModeResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{107}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *SetMaintenanceModeResponse) GetMaintenance() *MaintenanceStatus {
@@ -8272,7 +3930,7 @@ type Metric struct {
 
 func (x *Metric) Reset() {
 	*x = Metric{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[108]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8284,7 +3942,7 @@ func (x *Metric) String() string {
 func (*Metric) ProtoMessage() {}
 
 func (x *Metric) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[108]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8297,7 +3955,7 @@ func (x *Metric) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Metric.ProtoReflect.Descriptor instead.
 func (*Metric) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{108}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *Metric) GetGroup() string {
@@ -8405,7 +4063,7 @@ type ActivityRow struct {
 
 func (x *ActivityRow) Reset() {
 	*x = ActivityRow{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[109]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8417,7 +4075,7 @@ func (x *ActivityRow) String() string {
 func (*ActivityRow) ProtoMessage() {}
 
 func (x *ActivityRow) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[109]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8430,7 +4088,7 @@ func (x *ActivityRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActivityRow.ProtoReflect.Descriptor instead.
 func (*ActivityRow) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{109}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *ActivityRow) GetMetrics() []*Metric {
@@ -8456,7 +4114,7 @@ type DaemonIdentity struct {
 
 func (x *DaemonIdentity) Reset() {
 	*x = DaemonIdentity{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[110]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8468,7 +4126,7 @@ func (x *DaemonIdentity) String() string {
 func (*DaemonIdentity) ProtoMessage() {}
 
 func (x *DaemonIdentity) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[110]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8481,7 +4139,7 @@ func (x *DaemonIdentity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DaemonIdentity.ProtoReflect.Descriptor instead.
 func (*DaemonIdentity) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{110}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *DaemonIdentity) GetVersion() string {
@@ -8527,7 +4185,7 @@ type GetStatusRequest struct {
 
 func (x *GetStatusRequest) Reset() {
 	*x = GetStatusRequest{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[111]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8539,7 +4197,7 @@ func (x *GetStatusRequest) String() string {
 func (*GetStatusRequest) ProtoMessage() {}
 
 func (x *GetStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[111]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8552,7 +4210,7 @@ func (x *GetStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetStatusRequest) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{111}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{53}
 }
 
 // ActivitySourceStatus reports the cached host-activity decision used by quiet
@@ -8570,7 +4228,7 @@ type ActivitySourceStatus struct {
 
 func (x *ActivitySourceStatus) Reset() {
 	*x = ActivitySourceStatus{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[112]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8582,7 +4240,7 @@ func (x *ActivitySourceStatus) String() string {
 func (*ActivitySourceStatus) ProtoMessage() {}
 
 func (x *ActivitySourceStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[112]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8595,7 +4253,7 @@ func (x *ActivitySourceStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActivitySourceStatus.ProtoReflect.Descriptor instead.
 func (*ActivitySourceStatus) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{112}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ActivitySourceStatus) GetInputAvailable() bool {
@@ -8651,7 +4309,7 @@ type GetStatusResponse struct {
 
 func (x *GetStatusResponse) Reset() {
 	*x = GetStatusResponse{}
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[113]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8663,7 +4321,7 @@ func (x *GetStatusResponse) String() string {
 func (*GetStatusResponse) ProtoMessage() {}
 
 func (x *GetStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[113]
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8676,7 +4334,7 @@ func (x *GetStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetStatusResponse) Descriptor() ([]byte, []int) {
-	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{113}
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *GetStatusResponse) GetReadAt() *timestamppb.Timestamp {
@@ -8891,38 +4549,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\bend_line\x18\x03 \x01(\x05R\aendLine\x12\x1a\n" +
 	"\blanguage\x18\x04 \x01(\tR\blanguage\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
-	"\acontent\x18\x06 \x01(\tR\acontent\"\xa8\x03\n" +
-	"\x14ConversationDocument\x12'\n" +
-	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
-	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +
-	"\x04role\x18\x03 \x01(\tR\x04role\x12%\n" +
-	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x12\n" +
-	"\x04text\x18\x05 \x01(\tR\x04text\x124\n" +
-	"\x16parent_conversation_id\x18\x06 \x01(\tR\x14parentConversationId\x12%\n" +
-	"\x0eworkspace_root\x18\a \x01(\tR\rworkspaceRoot\x12\x1a\n" +
-	"\barchived\x18\b \x01(\bR\barchived\x12?\n" +
-	"\x05tools\x18\t \x03(\v2).lmsemanticsearch.v1.ConversationToolCallR\x05tools\x12\x1a\n" +
-	"\bthinking\x18\n" +
-	" \x01(\tR\bthinking\x12\x1d\n" +
-	"\n" +
-	"load_rules\x18\v \x01(\tR\tloadRules\"\xb5\x01\n" +
-	"\x14ConversationToolCall\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
-	"\adisplay\x18\a \x01(\tR\adisplay\x12\x1b\n" +
-	"\tlang_hint\x18\x04 \x01(\tR\blangHint\x12\x16\n" +
-	"\x06output\x18\x05 \x01(\tR\x06output\x12\x19\n" +
-	"\bis_error\x18\x06 \x01(\bR\aisErrorJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\n" +
-	"input_jsonR\acommand\"\xa8\x02\n" +
-	"\x18ConversationSearchResult\x12'\n" +
-	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12#\n" +
-	"\rmessage_index\x18\x02 \x01(\x05R\fmessageIndex\x12\x12\n" +
-	"\x04role\x18\x03 \x01(\tR\x04role\x12%\n" +
-	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x14\n" +
-	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
-	"\acontent\x18\x06 \x01(\tR\acontent\x124\n" +
-	"\x16parent_conversation_id\x18\a \x01(\tR\x14parentConversationId\x12\x1d\n" +
-	"\n" +
-	"load_rules\x18\b \x01(\tR\tloadRules\"\xb2\x03\n" +
+	"\acontent\x18\x06 \x01(\tR\acontent\"\xb2\x03\n" +
 	"\x11StartIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x12?\n" +
@@ -9045,255 +4672,6 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x11GraphToolResponse\x12\x1f\n" +
 	"\vresult_json\x18\x01 \x01(\tR\n" +
 	"resultJson\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\x85\x01\n" +
-	"%RegisterConversationCollectionRequest\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x127\n" +
-	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\x95\x01\n" +
-	"&RegisterConversationCollectionResponse\x12\x1f\n" +
-	"\vcodebase_id\x18\x01 \x01(\tR\n" +
-	"codebaseId\x12'\n" +
-	"\x0fcollection_name\x18\x02 \x01(\tR\x0ecollectionName\x12!\n" +
-	"\fdisplay_text\x18\x03 \x01(\tR\vdisplayText\"\xa7\x01\n" +
-	"\x17ScalarColumnDeclaration\x12\x16\n" +
-	"\x06column\x18\x01 \x01(\tR\x06column\x129\n" +
-	"\x04type\x18\x02 \x01(\x0e2%.lmsemanticsearch.v1.ScalarColumnTypeR\x04type\x12\x1a\n" +
-	"\bnullable\x18\x03 \x01(\bR\bnullable\x12\x1d\n" +
-	"\n" +
-	"max_length\x18\x04 \x01(\x05R\tmaxLength\"\xe7\x01\n" +
-	"\x19RegisterCollectionRequest\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12$\n" +
-	"\x0eitem_id_column\x18\x02 \x01(\tR\fitemIdColumn\x12F\n" +
-	"\ascalars\x18\x03 \x03(\v2,.lmsemanticsearch.v1.ScalarColumnDeclarationR\ascalars\x127\n" +
-	"\x06client\x18\x04 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"\xf7\x01\n" +
-	"\x1aRegisterCollectionResponse\x12\x1f\n" +
-	"\vcodebase_id\x18\x01 \x01(\tR\n" +
-	"codebaseId\x12'\n" +
-	"\x0fcollection_name\x18\x02 \x01(\tR\x0ecollectionName\x12$\n" +
-	"\x0eitem_id_column\x18\x03 \x01(\tR\fitemIdColumn\x12F\n" +
-	"\ascalars\x18\x04 \x03(\v2,.lmsemanticsearch.v1.ScalarColumnDeclarationR\ascalars\x12!\n" +
-	"\fdisplay_text\x18\x05 \x01(\tR\vdisplayText\"V\n" +
-	"\x19CollectionItemFingerprint\x12\x17\n" +
-	"\aitem_id\x18\x01 \x01(\tR\x06itemId\x12 \n" +
-	"\vfingerprint\x18\x02 \x01(\tR\vfingerprint\"\xc9\x01\n" +
-	"\x1dSyncCollectionManifestRequest\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12J\n" +
-	"\bmanifest\x18\x02 \x03(\v2..lmsemanticsearch.v1.CollectionItemFingerprintR\bmanifest\x127\n" +
-	"\x06client\x18\x03 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"k\n" +
-	"\x1eSyncCollectionManifestResponse\x12&\n" +
-	"\x0fneeded_item_ids\x18\x01 \x03(\tR\rneededItemIds\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\xa1\x01\n" +
-	"\x15CollectionScalarValue\x12\x16\n" +
-	"\x06column\x18\x01 \x01(\tR\x06column\x12#\n" +
-	"\fstring_value\x18\x02 \x01(\tH\x00R\vstringValue\x12\x1f\n" +
-	"\n" +
-	"bool_value\x18\x03 \x01(\bH\x00R\tboolValue\x12!\n" +
-	"\vint64_value\x18\x04 \x01(\x03H\x00R\n" +
-	"int64ValueB\a\n" +
-	"\x05value\"\xcc\x01\n" +
-	"\rCollectionRow\x12\x17\n" +
-	"\arow_key\x18\x01 \x01(\tR\x06rowKey\x12\x17\n" +
-	"\aitem_id\x18\x02 \x01(\tR\x06itemId\x12\x12\n" +
-	"\x04text\x18\x03 \x01(\tR\x04text\x12D\n" +
-	"\ascalars\x18\x04 \x03(\v2*.lmsemanticsearch.v1.CollectionScalarValueR\ascalars\x12/\n" +
-	"\x13continuation_prefix\x18\x05 \x01(\tR\x12continuationPrefix\"\xa8\x02\n" +
-	"\x1bUpsertCollectionItemsHeader\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x127\n" +
-	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\x12S\n" +
-	"\x0ereconcile_mode\x18\x03 \x01(\x0e2,.lmsemanticsearch.v1.CollectionReconcileModeR\rreconcileMode\x12-\n" +
-	"\x12backfill_delivered\x18\x04 \x01(\bR\x11backfillDelivered\x12'\n" +
-	"\x0fforce_reexamine\x18\x05 \x01(\bR\x0eforceReexamine\"S\n" +
-	"\x19UpsertCollectionItemsRows\x126\n" +
-	"\x04rows\x18\x01 \x03(\v2\".lmsemanticsearch.v1.CollectionRowR\x04rows\"k\n" +
-	"\x1dUpsertCollectionItemsManifest\x12J\n" +
-	"\bmanifest\x18\x01 \x03(\v2..lmsemanticsearch.v1.CollectionItemFingerprintR\bmanifest\"\x91\x02\n" +
-	"\"UpsertCollectionItemsStreamRequest\x12J\n" +
-	"\x06header\x18\x01 \x01(\v20.lmsemanticsearch.v1.UpsertCollectionItemsHeaderH\x00R\x06header\x12D\n" +
-	"\x04rows\x18\x02 \x01(\v2..lmsemanticsearch.v1.UpsertCollectionItemsRowsH\x00R\x04rows\x12P\n" +
-	"\bmanifest\x18\x03 \x01(\v22.lmsemanticsearch.v1.UpsertCollectionItemsManifestH\x00R\bmanifestB\a\n" +
-	"\x05chunk\"_\n" +
-	"#UpsertCollectionItemsStreamResponse\x12\x15\n" +
-	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\xb2\x01\n" +
-	"\x1fBackfillCollectionScalarsHeader\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x17\n" +
-	"\adry_run\x18\x02 \x01(\bR\x06dryRun\x127\n" +
-	"\x06client\x18\x03 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\x12\x18\n" +
-	"\acolumns\x18\x04 \x03(\tR\acolumns\"w\n" +
-	"\x16BackfillCollectionItem\x12\x17\n" +
-	"\aitem_id\x18\x01 \x01(\tR\x06itemId\x12D\n" +
-	"\ascalars\x18\x02 \x03(\v2*.lmsemanticsearch.v1.CollectionScalarValueR\ascalars\"c\n" +
-	"\x1eBackfillCollectionScalarsItems\x12A\n" +
-	"\x05items\x18\x01 \x03(\v2+.lmsemanticsearch.v1.BackfillCollectionItemR\x05items\"\xce\x01\n" +
-	"&BackfillCollectionScalarsStreamRequest\x12N\n" +
-	"\x06header\x18\x01 \x01(\v24.lmsemanticsearch.v1.BackfillCollectionScalarsHeaderH\x00R\x06header\x12K\n" +
-	"\x05items\x18\x02 \x01(\v23.lmsemanticsearch.v1.BackfillCollectionScalarsItemsH\x00R\x05itemsB\a\n" +
-	"\x05chunk\"x\n" +
-	"!BackfillCollectionScalarsResponse\x12\x18\n" +
-	"\achanged\x18\x01 \x01(\x03R\achanged\x12\x16\n" +
-	"\x06orphan\x18\x02 \x01(\x03R\x06orphan\x12!\n" +
-	"\fdisplay_text\x18\x03 \x01(\tR\vdisplayText\"\x94\x01\n" +
-	"\x1bDeleteCollectionItemRequest\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x17\n" +
-	"\aitem_id\x18\x02 \x01(\tR\x06itemId\x127\n" +
-	"\x06client\x18\x03 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"X\n" +
-	"\x1cDeleteCollectionItemResponse\x12\x15\n" +
-	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"d\n" +
-	"\x17ConversationFingerprint\x12'\n" +
-	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12 \n" +
-	"\vfingerprint\x18\x02 \x01(\tR\vfingerprint\"\xc9\x01\n" +
-	"\x1fSyncConversationManifestRequest\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12H\n" +
-	"\bmanifest\x18\x02 \x03(\v2,.lmsemanticsearch.v1.ConversationFingerprintR\bmanifest\x127\n" +
-	"\x06client\x18\x03 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"}\n" +
-	" SyncConversationManifestResponse\x126\n" +
-	"\x17needed_conversation_ids\x18\x01 \x03(\tR\x15neededConversationIds\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"_\n" +
-	"#UpsertConversationDocumentsResponse\x12\x15\n" +
-	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\xcb\x02\n" +
-	"!UpsertConversationDocumentsHeader\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x127\n" +
-	"\x06client\x18\x02 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\x12U\n" +
-	"\x0ereconcile_mode\x18\x03 \x01(\x0e2..lmsemanticsearch.v1.ConversationReconcileModeR\rreconcileMode\x12-\n" +
-	"\x12backfill_delivered\x18\x05 \x01(\bR\x11backfillDelivered\x12'\n" +
-	"\x0fforce_reexamine\x18\x06 \x01(\bR\x0eforceReexamineJ\x04\b\x04\x10\x05R\x13reexamine_delivered\"o\n" +
-	"$UpsertConversationDocumentsDocuments\x12G\n" +
-	"\tdocuments\x18\x01 \x03(\v2).lmsemanticsearch.v1.ConversationDocumentR\tdocuments\"o\n" +
-	"#UpsertConversationDocumentsManifest\x12H\n" +
-	"\bmanifest\x18\x01 \x03(\v2,.lmsemanticsearch.v1.ConversationFingerprintR\bmanifest\"\xb0\x02\n" +
-	" UpsertConversationDocumentsChunk\x12P\n" +
-	"\x06header\x18\x01 \x01(\v26.lmsemanticsearch.v1.UpsertConversationDocumentsHeaderH\x00R\x06header\x12Y\n" +
-	"\tdocuments\x18\x02 \x01(\v29.lmsemanticsearch.v1.UpsertConversationDocumentsDocumentsH\x00R\tdocuments\x12V\n" +
-	"\bmanifest\x18\x03 \x01(\v28.lmsemanticsearch.v1.UpsertConversationDocumentsManifestH\x00R\bmanifestB\a\n" +
-	"\x05chunk\"\xd2\x01\n" +
-	" BackfillConversationScalarsChunk\x12P\n" +
-	"\x06header\x18\x01 \x01(\v26.lmsemanticsearch.v1.BackfillConversationScalarsHeaderH\x00R\x06header\x12S\n" +
-	"\aentries\x18\x02 \x01(\v27.lmsemanticsearch.v1.BackfillConversationScalarsEntriesH\x00R\aentriesB\a\n" +
-	"\x05chunk\"\x9a\x01\n" +
-	"!BackfillConversationScalarsHeader\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x17\n" +
-	"\adry_run\x18\x02 \x01(\bR\x06dryRun\x127\n" +
-	"\x06client\x18\x03 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"t\n" +
-	"\"BackfillConversationScalarsEntries\x12N\n" +
-	"\aentries\x18\x01 \x03(\v24.lmsemanticsearch.v1.BackfillConversationScalarEntryR\aentries\"\x8d\x01\n" +
-	"\x1fBackfillConversationScalarEntry\x12'\n" +
-	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12%\n" +
-	"\x0eworkspace_root\x18\x02 \x01(\tR\rworkspaceRoot\x12\x1a\n" +
-	"\barchived\x18\x03 \x01(\bR\barchived\"z\n" +
-	"#BackfillConversationScalarsResponse\x12\x18\n" +
-	"\achanged\x18\x01 \x01(\x03R\achanged\x12\x16\n" +
-	"\x06orphan\x18\x02 \x01(\x03R\x06orphan\x12!\n" +
-	"\fdisplay_text\x18\x03 \x01(\tR\vdisplayText\"\xa2\x01\n" +
-	"\x19DeleteConversationRequest\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12'\n" +
-	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x127\n" +
-	"\x06client\x18\x03 \x01(\v2\x1f.lmsemanticsearch.v1.ClientInfoR\x06client\"V\n" +
-	"\x1aDeleteConversationResponse\x12\x15\n" +
-	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"\xbd\x03\n" +
-	"\x18ConversationSearchFilter\x12\x14\n" +
-	"\x05roles\x18\x01 \x03(\tR\x05roles\x12\x1b\n" +
-	"\tfrom_unix\x18\x02 \x01(\x03R\bfromUnix\x12\x1d\n" +
-	"\n" +
-	"until_unix\x18\x03 \x01(\x03R\tuntilUnix\x12)\n" +
-	"\x10conversation_ids\x18\x04 \x03(\tR\x0fconversationIds\x124\n" +
-	"\x16parent_conversation_id\x18\x05 \x01(\tR\x14parentConversationId\x12\x1b\n" +
-	"\tmin_score\x18\x06 \x01(\x01R\bminScore\x12,\n" +
-	"\x12message_index_from\x18\a \x01(\x05R\x10messageIndexFrom\x12.\n" +
-	"\x13message_index_until\x18\b \x01(\x05R\x11messageIndexUntil\x12\x1c\n" +
-	"\tproviders\x18\t \x03(\tR\tproviders\x12'\n" +
-	"\x0fworkspace_roots\x18\n" +
-	" \x03(\tR\x0eworkspaceRoots\x12\x1f\n" +
-	"\barchived\x18\v \x01(\bH\x00R\barchived\x88\x01\x01B\v\n" +
-	"\t_archived\"\xea\x01\n" +
-	"\x1aSearchConversationsRequest\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x14\n" +
-	"\x05query\x18\x02 \x01(\tR\x05query\x12\x14\n" +
-	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12E\n" +
-	"\x06filter\x18\x04 \x01(\v2-.lmsemanticsearch.v1.ConversationSearchFilterR\x06filter\x124\n" +
-	"\x16per_conversation_limit\x18\x05 \x01(\x05R\x14perConversationLimit\"\xdd\x01\n" +
-	"\x1bSearchConversationsResponse\x12G\n" +
-	"\aresults\x18\x01 \x03(\v2-.lmsemanticsearch.v1.ConversationSearchResultR\aresults\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\x12R\n" +
-	"\x11dependency_health\x18\x03 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\"\xe2\x01\n" +
-	"\x1fSearchWithinConversationRequest\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12'\n" +
-	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x14\n" +
-	"\x05query\x18\x03 \x01(\tR\x05query\x12\x14\n" +
-	"\x05limit\x18\x04 \x01(\x05R\x05limit\x12E\n" +
-	"\x06filter\x18\x05 \x01(\v2-.lmsemanticsearch.v1.ConversationSearchFilterR\x06filter\"\x93\x02\n" +
-	" SearchWithinConversationResponse\x12G\n" +
-	"\aresults\x18\x01 \x03(\v2-.lmsemanticsearch.v1.ConversationSearchResultR\aresults\x12/\n" +
-	"\x13indexed_fingerprint\x18\x02 \x01(\tR\x12indexedFingerprint\x12!\n" +
-	"\fdisplay_text\x18\x03 \x01(\tR\vdisplayText\x12R\n" +
-	"\x11dependency_health\x18\x04 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\"\x89\x01\n" +
-	"\x15CollectionFilterValue\x12#\n" +
-	"\fstring_value\x18\x01 \x01(\tH\x00R\vstringValue\x12\x1f\n" +
-	"\n" +
-	"bool_value\x18\x02 \x01(\bH\x00R\tboolValue\x12!\n" +
-	"\vint64_value\x18\x03 \x01(\x03H\x00R\n" +
-	"int64ValueB\a\n" +
-	"\x05value\"X\n" +
-	"\x15CollectionFilterGroup\x12?\n" +
-	"\afilters\x18\x01 \x03(\v2%.lmsemanticsearch.v1.CollectionFilterR\afilters\"r\n" +
-	"\x16CollectionFilterEquals\x12\x16\n" +
-	"\x06column\x18\x01 \x01(\tR\x06column\x12@\n" +
-	"\x05value\x18\x02 \x01(\v2*.lmsemanticsearch.v1.CollectionFilterValueR\x05value\"p\n" +
-	"\x12CollectionFilterIn\x12\x16\n" +
-	"\x06column\x18\x01 \x01(\tR\x06column\x12B\n" +
-	"\x06values\x18\x02 \x03(\v2*.lmsemanticsearch.v1.CollectionFilterValueR\x06values\"y\n" +
-	"\x15CollectionFilterRange\x12\x16\n" +
-	"\x06column\x18\x01 \x01(\tR\x06column\x12\x19\n" +
-	"\x05lower\x18\x02 \x01(\x03H\x00R\x05lower\x88\x01\x01\x12\x19\n" +
-	"\x05upper\x18\x03 \x01(\x03H\x01R\x05upper\x88\x01\x01B\b\n" +
-	"\x06_lowerB\b\n" +
-	"\x06_upper\"0\n" +
-	"\x16CollectionFilterColumn\x12\x16\n" +
-	"\x06column\x18\x01 \x01(\tR\x06column\"\xc8\x04\n" +
-	"\x10CollectionFilter\x12C\n" +
-	"\x06all_of\x18\x01 \x01(\v2*.lmsemanticsearch.v1.CollectionFilterGroupH\x00R\x05allOf\x12C\n" +
-	"\x06any_of\x18\x02 \x01(\v2*.lmsemanticsearch.v1.CollectionFilterGroupH\x00R\x05anyOf\x12?\n" +
-	"\x06negate\x18\x03 \x01(\v2%.lmsemanticsearch.v1.CollectionFilterH\x00R\x06negate\x12E\n" +
-	"\x06equals\x18\x04 \x01(\v2+.lmsemanticsearch.v1.CollectionFilterEqualsH\x00R\x06equals\x12@\n" +
-	"\x06in_set\x18\x05 \x01(\v2'.lmsemanticsearch.v1.CollectionFilterInH\x00R\x05inSet\x12B\n" +
-	"\x05range\x18\x06 \x01(\v2*.lmsemanticsearch.v1.CollectionFilterRangeH\x00R\x05range\x12F\n" +
-	"\ais_null\x18\a \x01(\v2+.lmsemanticsearch.v1.CollectionFilterColumnH\x00R\x06isNull\x12L\n" +
-	"\n" +
-	"is_present\x18\b \x01(\v2+.lmsemanticsearch.v1.CollectionFilterColumnH\x00R\tisPresentB\x06\n" +
-	"\x04node\"\x89\x02\n" +
-	"\x17SearchCollectionRequest\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x14\n" +
-	"\x05query\x18\x02 \x01(\tR\x05query\x12\x14\n" +
-	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x1b\n" +
-	"\tmin_score\x18\x04 \x01(\x01R\bminScore\x12=\n" +
-	"\x06filter\x18\x05 \x01(\v2%.lmsemanticsearch.v1.CollectionFilterR\x06filter\x12\x19\n" +
-	"\bgroup_by\x18\x06 \x01(\tR\agroupBy\x12&\n" +
-	"\x0fper_group_limit\x18\a \x01(\x05R\rperGroupLimit\"\xdc\x01\n" +
-	"\x13CollectionHitScalar\x12\x16\n" +
-	"\x06column\x18\x01 \x01(\tR\x06column\x12#\n" +
-	"\fstring_value\x18\x02 \x01(\tH\x00R\vstringValue\x12\x1f\n" +
-	"\n" +
-	"bool_value\x18\x03 \x01(\bH\x00R\tboolValue\x12!\n" +
-	"\vint64_value\x18\x04 \x01(\x03H\x00R\n" +
-	"int64Value\x12;\n" +
-	"\n" +
-	"null_value\x18\x05 \x01(\x0e2\x1a.google.protobuf.NullValueH\x00R\tnullValueB\a\n" +
-	"\x05value\"\xa2\x01\n" +
-	"\x13CollectionSearchHit\x12\x17\n" +
-	"\arow_key\x18\x01 \x01(\tR\x06rowKey\x12\x18\n" +
-	"\acontent\x18\x02 \x01(\tR\acontent\x12\x14\n" +
-	"\x05score\x18\x03 \x01(\x01R\x05score\x12B\n" +
-	"\ascalars\x18\x04 \x03(\v2(.lmsemanticsearch.v1.CollectionHitScalarR\ascalars\"\xcf\x01\n" +
-	"\x18SearchCollectionResponse\x12<\n" +
-	"\x04hits\x18\x01 \x03(\v2(.lmsemanticsearch.v1.CollectionSearchHitR\x04hits\x12!\n" +
-	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\x12R\n" +
-	"\x11dependency_health\x18\x03 \x01(\v2%.lmsemanticsearch.v1.DependencyHealthR\x10dependencyHealth\"]\n" +
-	"\x1dGetCollectionItemStateRequest\x12#\n" +
-	"\rcollection_id\x18\x01 \x01(\tR\fcollectionId\x12\x17\n" +
-	"\aitem_id\x18\x02 \x01(\tR\x06itemId\"t\n" +
-	"\x1eGetCollectionItemStateResponse\x12/\n" +
-	"\x13indexed_fingerprint\x18\x01 \x01(\tR\x12indexedFingerprint\x12!\n" +
 	"\fdisplay_text\x18\x02 \x01(\tR\vdisplayText\"n\n" +
 	"\n" +
 	"Diagnostic\x12\x1a\n" +
@@ -9376,20 +4754,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x15OUTCOME_KIND_OVERSIZE\x10\x05\x12\x1b\n" +
 	"\x17OUTCOME_KIND_UNREADABLE\x10\x06\x12\x16\n" +
 	"\x12OUTCOME_KIND_ADDED\x10\a\x12\x17\n" +
-	"\x13OUTCOME_KIND_REUSED\x10\b*\x90\x01\n" +
-	"\x10ScalarColumnType\x12\"\n" +
-	"\x1eSCALAR_COLUMN_TYPE_UNSPECIFIED\x10\x00\x12\x1d\n" +
-	"\x19SCALAR_COLUMN_TYPE_STRING\x10\x01\x12\x1b\n" +
-	"\x17SCALAR_COLUMN_TYPE_BOOL\x10\x02\x12\x1c\n" +
-	"\x18SCALAR_COLUMN_TYPE_INT64\x10\x03*\x97\x01\n" +
-	"\x17CollectionReconcileMode\x12)\n" +
-	"%COLLECTION_RECONCILE_MODE_UNSPECIFIED\x10\x00\x12$\n" +
-	" COLLECTION_RECONCILE_MODE_RETAIN\x10\x01\x12+\n" +
-	"'COLLECTION_RECONCILE_MODE_AUTHORITATIVE\x10\x02*\x9f\x01\n" +
-	"\x19ConversationReconcileMode\x12+\n" +
-	"'CONVERSATION_RECONCILE_MODE_UNSPECIFIED\x10\x00\x12&\n" +
-	"\"CONVERSATION_RECONCILE_MODE_RETAIN\x10\x01\x12-\n" +
-	")CONVERSATION_RECONCILE_MODE_AUTHORITATIVE\x10\x022\xc9\x1b\n" +
+	"\x13OUTCOME_KIND_REUSED\x10\b2\xe5\f\n" +
 	"\x1bSemanticSearchDaemonService\x12T\n" +
 	"\aVersion\x12#.lmsemanticsearch.v1.VersionRequest\x1a$.lmsemanticsearch.v1.VersionResponse\x12]\n" +
 	"\n" +
@@ -9406,21 +4771,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\tWatchJobs\x12%.lmsemanticsearch.v1.WatchJobsRequest\x1a&.lmsemanticsearch.v1.WatchJobsResponse0\x01\x12]\n" +
 	"\n" +
 	"SearchCode\x12&.lmsemanticsearch.v1.SearchCodeRequest\x1a'.lmsemanticsearch.v1.SearchCodeResponse\x12Z\n" +
-	"\tGraphTool\x12%.lmsemanticsearch.v1.GraphToolRequest\x1a&.lmsemanticsearch.v1.GraphToolResponse\x12\x99\x01\n" +
-	"\x1eRegisterConversationCollection\x12:.lmsemanticsearch.v1.RegisterConversationCollectionRequest\x1a;.lmsemanticsearch.v1.RegisterConversationCollectionResponse\x12u\n" +
-	"\x12RegisterCollection\x12..lmsemanticsearch.v1.RegisterCollectionRequest\x1a/.lmsemanticsearch.v1.RegisterCollectionResponse\x12\x81\x01\n" +
-	"\x16SyncCollectionManifest\x122.lmsemanticsearch.v1.SyncCollectionManifestRequest\x1a3.lmsemanticsearch.v1.SyncCollectionManifestResponse\x12\x92\x01\n" +
-	"\x1bUpsertCollectionItemsStream\x127.lmsemanticsearch.v1.UpsertCollectionItemsStreamRequest\x1a8.lmsemanticsearch.v1.UpsertCollectionItemsStreamResponse(\x01\x12\x92\x01\n" +
-	"\x19BackfillCollectionScalars\x12;.lmsemanticsearch.v1.BackfillCollectionScalarsStreamRequest\x1a6.lmsemanticsearch.v1.BackfillCollectionScalarsResponse(\x01\x12{\n" +
-	"\x14DeleteCollectionItem\x120.lmsemanticsearch.v1.DeleteCollectionItemRequest\x1a1.lmsemanticsearch.v1.DeleteCollectionItemResponse\x12\x87\x01\n" +
-	"\x18SyncConversationManifest\x124.lmsemanticsearch.v1.SyncConversationManifestRequest\x1a5.lmsemanticsearch.v1.SyncConversationManifestResponse\x12\x96\x01\n" +
-	"!UpsertConversationDocumentsStream\x125.lmsemanticsearch.v1.UpsertConversationDocumentsChunk\x1a8.lmsemanticsearch.v1.UpsertConversationDocumentsResponse(\x01\x12\x90\x01\n" +
-	"\x1bBackfillConversationScalars\x125.lmsemanticsearch.v1.BackfillConversationScalarsChunk\x1a8.lmsemanticsearch.v1.BackfillConversationScalarsResponse(\x01\x12u\n" +
-	"\x12DeleteConversation\x12..lmsemanticsearch.v1.DeleteConversationRequest\x1a/.lmsemanticsearch.v1.DeleteConversationResponse\x12x\n" +
-	"\x13SearchConversations\x12/.lmsemanticsearch.v1.SearchConversationsRequest\x1a0.lmsemanticsearch.v1.SearchConversationsResponse\x12\x87\x01\n" +
-	"\x18SearchWithinConversation\x124.lmsemanticsearch.v1.SearchWithinConversationRequest\x1a5.lmsemanticsearch.v1.SearchWithinConversationResponse\x12o\n" +
-	"\x10SearchCollection\x12,.lmsemanticsearch.v1.SearchCollectionRequest\x1a-.lmsemanticsearch.v1.SearchCollectionResponse\x12\x81\x01\n" +
-	"\x16GetCollectionItemState\x122.lmsemanticsearch.v1.GetCollectionItemStateRequest\x1a3.lmsemanticsearch.v1.GetCollectionItemStateResponse\x12Q\n" +
+	"\tGraphTool\x12%.lmsemanticsearch.v1.GraphToolRequest\x1a&.lmsemanticsearch.v1.GraphToolResponse\x12Q\n" +
 	"\x06Doctor\x12\".lmsemanticsearch.v1.DoctorRequest\x1a#.lmsemanticsearch.v1.DoctorResponse\x12Z\n" +
 	"\tGetStatus\x12%.lmsemanticsearch.v1.GetStatusRequest\x1a&.lmsemanticsearch.v1.GetStatusResponse\x12u\n" +
 	"\x12SetMaintenanceMode\x12..lmsemanticsearch.v1.SetMaintenanceModeRequest\x1a/.lmsemanticsearch.v1.SetMaintenanceModeResponse\x12W\n" +
@@ -9438,330 +4789,182 @@ func file_lmsemanticsearch_v1_service_proto_rawDescGZIP() []byte {
 	return file_lmsemanticsearch_v1_service_proto_rawDescData
 }
 
-var file_lmsemanticsearch_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_lmsemanticsearch_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 114)
+var file_lmsemanticsearch_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_lmsemanticsearch_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
 var file_lmsemanticsearch_v1_service_proto_goTypes = []any{
-	(SchedulingPriority)(0),                        // 0: lmsemanticsearch.v1.SchedulingPriority
-	(SchedulingReason)(0),                          // 1: lmsemanticsearch.v1.SchedulingReason
-	(OutcomeKind)(0),                               // 2: lmsemanticsearch.v1.OutcomeKind
-	(ScalarColumnType)(0),                          // 3: lmsemanticsearch.v1.ScalarColumnType
-	(CollectionReconcileMode)(0),                   // 4: lmsemanticsearch.v1.CollectionReconcileMode
-	(ConversationReconcileMode)(0),                 // 5: lmsemanticsearch.v1.ConversationReconcileMode
-	(PathClassification_Kind)(0),                   // 6: lmsemanticsearch.v1.PathClassification.Kind
-	(*VersionRequest)(nil),                         // 7: lmsemanticsearch.v1.VersionRequest
-	(*VersionResponse)(nil),                        // 8: lmsemanticsearch.v1.VersionResponse
-	(*ClientInfo)(nil),                             // 9: lmsemanticsearch.v1.ClientInfo
-	(*SplitterConfig)(nil),                         // 10: lmsemanticsearch.v1.SplitterConfig
-	(*IndexConfig)(nil),                            // 11: lmsemanticsearch.v1.IndexConfig
-	(*SchedulingPolicy)(nil),                       // 12: lmsemanticsearch.v1.SchedulingPolicy
-	(*SchedulingPolicyPatch)(nil),                  // 13: lmsemanticsearch.v1.SchedulingPolicyPatch
-	(*Progress)(nil),                               // 14: lmsemanticsearch.v1.Progress
-	(*OutcomeRow)(nil),                             // 15: lmsemanticsearch.v1.OutcomeRow
-	(*OutcomeBreakdown)(nil),                       // 16: lmsemanticsearch.v1.OutcomeBreakdown
-	(*JobError)(nil),                               // 17: lmsemanticsearch.v1.JobError
-	(*DependencyHealth)(nil),                       // 18: lmsemanticsearch.v1.DependencyHealth
-	(*IndexRunSummary)(nil),                        // 19: lmsemanticsearch.v1.IndexRunSummary
-	(*IndexRunFailure)(nil),                        // 20: lmsemanticsearch.v1.IndexRunFailure
-	(*Codebase)(nil),                               // 21: lmsemanticsearch.v1.Codebase
-	(*Job)(nil),                                    // 22: lmsemanticsearch.v1.Job
-	(*SearchResult)(nil),                           // 23: lmsemanticsearch.v1.SearchResult
-	(*ConversationDocument)(nil),                   // 24: lmsemanticsearch.v1.ConversationDocument
-	(*ConversationToolCall)(nil),                   // 25: lmsemanticsearch.v1.ConversationToolCall
-	(*ConversationSearchResult)(nil),               // 26: lmsemanticsearch.v1.ConversationSearchResult
-	(*StartIndexRequest)(nil),                      // 27: lmsemanticsearch.v1.StartIndexRequest
-	(*StartIndexResponse)(nil),                     // 28: lmsemanticsearch.v1.StartIndexResponse
-	(*ClearIndexRequest)(nil),                      // 29: lmsemanticsearch.v1.ClearIndexRequest
-	(*ClearIndexResponse)(nil),                     // 30: lmsemanticsearch.v1.ClearIndexResponse
-	(*CancelJobRequest)(nil),                       // 31: lmsemanticsearch.v1.CancelJobRequest
-	(*CancelJobResponse)(nil),                      // 32: lmsemanticsearch.v1.CancelJobResponse
-	(*SyncIndexRequest)(nil),                       // 33: lmsemanticsearch.v1.SyncIndexRequest
-	(*SyncIndexResponse)(nil),                      // 34: lmsemanticsearch.v1.SyncIndexResponse
-	(*UpdateCodebasePolicyRequest)(nil),            // 35: lmsemanticsearch.v1.UpdateCodebasePolicyRequest
-	(*UpdateCodebasePolicyResponse)(nil),           // 36: lmsemanticsearch.v1.UpdateCodebasePolicyResponse
-	(*GetIndexRequest)(nil),                        // 37: lmsemanticsearch.v1.GetIndexRequest
-	(*GetIndexResponse)(nil),                       // 38: lmsemanticsearch.v1.GetIndexResponse
-	(*PathClassification)(nil),                     // 39: lmsemanticsearch.v1.PathClassification
-	(*ListIndexesRequest)(nil),                     // 40: lmsemanticsearch.v1.ListIndexesRequest
-	(*ListIndexesResponse)(nil),                    // 41: lmsemanticsearch.v1.ListIndexesResponse
-	(*GetJobRequest)(nil),                          // 42: lmsemanticsearch.v1.GetJobRequest
-	(*GetJobResponse)(nil),                         // 43: lmsemanticsearch.v1.GetJobResponse
-	(*ListJobsRequest)(nil),                        // 44: lmsemanticsearch.v1.ListJobsRequest
-	(*ListJobsResponse)(nil),                       // 45: lmsemanticsearch.v1.ListJobsResponse
-	(*WatchJobsRequest)(nil),                       // 46: lmsemanticsearch.v1.WatchJobsRequest
-	(*WatchJobsResponse)(nil),                      // 47: lmsemanticsearch.v1.WatchJobsResponse
-	(*SearchCodeRequest)(nil),                      // 48: lmsemanticsearch.v1.SearchCodeRequest
-	(*SearchCodeResponse)(nil),                     // 49: lmsemanticsearch.v1.SearchCodeResponse
-	(*GraphToolRequest)(nil),                       // 50: lmsemanticsearch.v1.GraphToolRequest
-	(*GraphToolResponse)(nil),                      // 51: lmsemanticsearch.v1.GraphToolResponse
-	(*RegisterConversationCollectionRequest)(nil),  // 52: lmsemanticsearch.v1.RegisterConversationCollectionRequest
-	(*RegisterConversationCollectionResponse)(nil), // 53: lmsemanticsearch.v1.RegisterConversationCollectionResponse
-	(*ScalarColumnDeclaration)(nil),                // 54: lmsemanticsearch.v1.ScalarColumnDeclaration
-	(*RegisterCollectionRequest)(nil),              // 55: lmsemanticsearch.v1.RegisterCollectionRequest
-	(*RegisterCollectionResponse)(nil),             // 56: lmsemanticsearch.v1.RegisterCollectionResponse
-	(*CollectionItemFingerprint)(nil),              // 57: lmsemanticsearch.v1.CollectionItemFingerprint
-	(*SyncCollectionManifestRequest)(nil),          // 58: lmsemanticsearch.v1.SyncCollectionManifestRequest
-	(*SyncCollectionManifestResponse)(nil),         // 59: lmsemanticsearch.v1.SyncCollectionManifestResponse
-	(*CollectionScalarValue)(nil),                  // 60: lmsemanticsearch.v1.CollectionScalarValue
-	(*CollectionRow)(nil),                          // 61: lmsemanticsearch.v1.CollectionRow
-	(*UpsertCollectionItemsHeader)(nil),            // 62: lmsemanticsearch.v1.UpsertCollectionItemsHeader
-	(*UpsertCollectionItemsRows)(nil),              // 63: lmsemanticsearch.v1.UpsertCollectionItemsRows
-	(*UpsertCollectionItemsManifest)(nil),          // 64: lmsemanticsearch.v1.UpsertCollectionItemsManifest
-	(*UpsertCollectionItemsStreamRequest)(nil),     // 65: lmsemanticsearch.v1.UpsertCollectionItemsStreamRequest
-	(*UpsertCollectionItemsStreamResponse)(nil),    // 66: lmsemanticsearch.v1.UpsertCollectionItemsStreamResponse
-	(*BackfillCollectionScalarsHeader)(nil),        // 67: lmsemanticsearch.v1.BackfillCollectionScalarsHeader
-	(*BackfillCollectionItem)(nil),                 // 68: lmsemanticsearch.v1.BackfillCollectionItem
-	(*BackfillCollectionScalarsItems)(nil),         // 69: lmsemanticsearch.v1.BackfillCollectionScalarsItems
-	(*BackfillCollectionScalarsStreamRequest)(nil), // 70: lmsemanticsearch.v1.BackfillCollectionScalarsStreamRequest
-	(*BackfillCollectionScalarsResponse)(nil),      // 71: lmsemanticsearch.v1.BackfillCollectionScalarsResponse
-	(*DeleteCollectionItemRequest)(nil),            // 72: lmsemanticsearch.v1.DeleteCollectionItemRequest
-	(*DeleteCollectionItemResponse)(nil),           // 73: lmsemanticsearch.v1.DeleteCollectionItemResponse
-	(*ConversationFingerprint)(nil),                // 74: lmsemanticsearch.v1.ConversationFingerprint
-	(*SyncConversationManifestRequest)(nil),        // 75: lmsemanticsearch.v1.SyncConversationManifestRequest
-	(*SyncConversationManifestResponse)(nil),       // 76: lmsemanticsearch.v1.SyncConversationManifestResponse
-	(*UpsertConversationDocumentsResponse)(nil),    // 77: lmsemanticsearch.v1.UpsertConversationDocumentsResponse
-	(*UpsertConversationDocumentsHeader)(nil),      // 78: lmsemanticsearch.v1.UpsertConversationDocumentsHeader
-	(*UpsertConversationDocumentsDocuments)(nil),   // 79: lmsemanticsearch.v1.UpsertConversationDocumentsDocuments
-	(*UpsertConversationDocumentsManifest)(nil),    // 80: lmsemanticsearch.v1.UpsertConversationDocumentsManifest
-	(*UpsertConversationDocumentsChunk)(nil),       // 81: lmsemanticsearch.v1.UpsertConversationDocumentsChunk
-	(*BackfillConversationScalarsChunk)(nil),       // 82: lmsemanticsearch.v1.BackfillConversationScalarsChunk
-	(*BackfillConversationScalarsHeader)(nil),      // 83: lmsemanticsearch.v1.BackfillConversationScalarsHeader
-	(*BackfillConversationScalarsEntries)(nil),     // 84: lmsemanticsearch.v1.BackfillConversationScalarsEntries
-	(*BackfillConversationScalarEntry)(nil),        // 85: lmsemanticsearch.v1.BackfillConversationScalarEntry
-	(*BackfillConversationScalarsResponse)(nil),    // 86: lmsemanticsearch.v1.BackfillConversationScalarsResponse
-	(*DeleteConversationRequest)(nil),              // 87: lmsemanticsearch.v1.DeleteConversationRequest
-	(*DeleteConversationResponse)(nil),             // 88: lmsemanticsearch.v1.DeleteConversationResponse
-	(*ConversationSearchFilter)(nil),               // 89: lmsemanticsearch.v1.ConversationSearchFilter
-	(*SearchConversationsRequest)(nil),             // 90: lmsemanticsearch.v1.SearchConversationsRequest
-	(*SearchConversationsResponse)(nil),            // 91: lmsemanticsearch.v1.SearchConversationsResponse
-	(*SearchWithinConversationRequest)(nil),        // 92: lmsemanticsearch.v1.SearchWithinConversationRequest
-	(*SearchWithinConversationResponse)(nil),       // 93: lmsemanticsearch.v1.SearchWithinConversationResponse
-	(*CollectionFilterValue)(nil),                  // 94: lmsemanticsearch.v1.CollectionFilterValue
-	(*CollectionFilterGroup)(nil),                  // 95: lmsemanticsearch.v1.CollectionFilterGroup
-	(*CollectionFilterEquals)(nil),                 // 96: lmsemanticsearch.v1.CollectionFilterEquals
-	(*CollectionFilterIn)(nil),                     // 97: lmsemanticsearch.v1.CollectionFilterIn
-	(*CollectionFilterRange)(nil),                  // 98: lmsemanticsearch.v1.CollectionFilterRange
-	(*CollectionFilterColumn)(nil),                 // 99: lmsemanticsearch.v1.CollectionFilterColumn
-	(*CollectionFilter)(nil),                       // 100: lmsemanticsearch.v1.CollectionFilter
-	(*SearchCollectionRequest)(nil),                // 101: lmsemanticsearch.v1.SearchCollectionRequest
-	(*CollectionHitScalar)(nil),                    // 102: lmsemanticsearch.v1.CollectionHitScalar
-	(*CollectionSearchHit)(nil),                    // 103: lmsemanticsearch.v1.CollectionSearchHit
-	(*SearchCollectionResponse)(nil),               // 104: lmsemanticsearch.v1.SearchCollectionResponse
-	(*GetCollectionItemStateRequest)(nil),          // 105: lmsemanticsearch.v1.GetCollectionItemStateRequest
-	(*GetCollectionItemStateResponse)(nil),         // 106: lmsemanticsearch.v1.GetCollectionItemStateResponse
-	(*Diagnostic)(nil),                             // 107: lmsemanticsearch.v1.Diagnostic
-	(*DoctorRequest)(nil),                          // 108: lmsemanticsearch.v1.DoctorRequest
-	(*DoctorResponse)(nil),                         // 109: lmsemanticsearch.v1.DoctorResponse
-	(*ShutdownRequest)(nil),                        // 110: lmsemanticsearch.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),                       // 111: lmsemanticsearch.v1.ShutdownResponse
-	(*MaintenanceStatus)(nil),                      // 112: lmsemanticsearch.v1.MaintenanceStatus
-	(*SetMaintenanceModeRequest)(nil),              // 113: lmsemanticsearch.v1.SetMaintenanceModeRequest
-	(*SetMaintenanceModeResponse)(nil),             // 114: lmsemanticsearch.v1.SetMaintenanceModeResponse
-	(*Metric)(nil),                                 // 115: lmsemanticsearch.v1.Metric
-	(*ActivityRow)(nil),                            // 116: lmsemanticsearch.v1.ActivityRow
-	(*DaemonIdentity)(nil),                         // 117: lmsemanticsearch.v1.DaemonIdentity
-	(*GetStatusRequest)(nil),                       // 118: lmsemanticsearch.v1.GetStatusRequest
-	(*ActivitySourceStatus)(nil),                   // 119: lmsemanticsearch.v1.ActivitySourceStatus
-	(*GetStatusResponse)(nil),                      // 120: lmsemanticsearch.v1.GetStatusResponse
-	(*timestamppb.Timestamp)(nil),                  // 121: google.protobuf.Timestamp
-	(structpb.NullValue)(0),                        // 122: google.protobuf.NullValue
+	(SchedulingPriority)(0),              // 0: lmsemanticsearch.v1.SchedulingPriority
+	(SchedulingReason)(0),                // 1: lmsemanticsearch.v1.SchedulingReason
+	(OutcomeKind)(0),                     // 2: lmsemanticsearch.v1.OutcomeKind
+	(PathClassification_Kind)(0),         // 3: lmsemanticsearch.v1.PathClassification.Kind
+	(*VersionRequest)(nil),               // 4: lmsemanticsearch.v1.VersionRequest
+	(*VersionResponse)(nil),              // 5: lmsemanticsearch.v1.VersionResponse
+	(*ClientInfo)(nil),                   // 6: lmsemanticsearch.v1.ClientInfo
+	(*SplitterConfig)(nil),               // 7: lmsemanticsearch.v1.SplitterConfig
+	(*IndexConfig)(nil),                  // 8: lmsemanticsearch.v1.IndexConfig
+	(*SchedulingPolicy)(nil),             // 9: lmsemanticsearch.v1.SchedulingPolicy
+	(*SchedulingPolicyPatch)(nil),        // 10: lmsemanticsearch.v1.SchedulingPolicyPatch
+	(*Progress)(nil),                     // 11: lmsemanticsearch.v1.Progress
+	(*OutcomeRow)(nil),                   // 12: lmsemanticsearch.v1.OutcomeRow
+	(*OutcomeBreakdown)(nil),             // 13: lmsemanticsearch.v1.OutcomeBreakdown
+	(*JobError)(nil),                     // 14: lmsemanticsearch.v1.JobError
+	(*DependencyHealth)(nil),             // 15: lmsemanticsearch.v1.DependencyHealth
+	(*IndexRunSummary)(nil),              // 16: lmsemanticsearch.v1.IndexRunSummary
+	(*IndexRunFailure)(nil),              // 17: lmsemanticsearch.v1.IndexRunFailure
+	(*Codebase)(nil),                     // 18: lmsemanticsearch.v1.Codebase
+	(*Job)(nil),                          // 19: lmsemanticsearch.v1.Job
+	(*SearchResult)(nil),                 // 20: lmsemanticsearch.v1.SearchResult
+	(*StartIndexRequest)(nil),            // 21: lmsemanticsearch.v1.StartIndexRequest
+	(*StartIndexResponse)(nil),           // 22: lmsemanticsearch.v1.StartIndexResponse
+	(*ClearIndexRequest)(nil),            // 23: lmsemanticsearch.v1.ClearIndexRequest
+	(*ClearIndexResponse)(nil),           // 24: lmsemanticsearch.v1.ClearIndexResponse
+	(*CancelJobRequest)(nil),             // 25: lmsemanticsearch.v1.CancelJobRequest
+	(*CancelJobResponse)(nil),            // 26: lmsemanticsearch.v1.CancelJobResponse
+	(*SyncIndexRequest)(nil),             // 27: lmsemanticsearch.v1.SyncIndexRequest
+	(*SyncIndexResponse)(nil),            // 28: lmsemanticsearch.v1.SyncIndexResponse
+	(*UpdateCodebasePolicyRequest)(nil),  // 29: lmsemanticsearch.v1.UpdateCodebasePolicyRequest
+	(*UpdateCodebasePolicyResponse)(nil), // 30: lmsemanticsearch.v1.UpdateCodebasePolicyResponse
+	(*GetIndexRequest)(nil),              // 31: lmsemanticsearch.v1.GetIndexRequest
+	(*GetIndexResponse)(nil),             // 32: lmsemanticsearch.v1.GetIndexResponse
+	(*PathClassification)(nil),           // 33: lmsemanticsearch.v1.PathClassification
+	(*ListIndexesRequest)(nil),           // 34: lmsemanticsearch.v1.ListIndexesRequest
+	(*ListIndexesResponse)(nil),          // 35: lmsemanticsearch.v1.ListIndexesResponse
+	(*GetJobRequest)(nil),                // 36: lmsemanticsearch.v1.GetJobRequest
+	(*GetJobResponse)(nil),               // 37: lmsemanticsearch.v1.GetJobResponse
+	(*ListJobsRequest)(nil),              // 38: lmsemanticsearch.v1.ListJobsRequest
+	(*ListJobsResponse)(nil),             // 39: lmsemanticsearch.v1.ListJobsResponse
+	(*WatchJobsRequest)(nil),             // 40: lmsemanticsearch.v1.WatchJobsRequest
+	(*WatchJobsResponse)(nil),            // 41: lmsemanticsearch.v1.WatchJobsResponse
+	(*SearchCodeRequest)(nil),            // 42: lmsemanticsearch.v1.SearchCodeRequest
+	(*SearchCodeResponse)(nil),           // 43: lmsemanticsearch.v1.SearchCodeResponse
+	(*GraphToolRequest)(nil),             // 44: lmsemanticsearch.v1.GraphToolRequest
+	(*GraphToolResponse)(nil),            // 45: lmsemanticsearch.v1.GraphToolResponse
+	(*Diagnostic)(nil),                   // 46: lmsemanticsearch.v1.Diagnostic
+	(*DoctorRequest)(nil),                // 47: lmsemanticsearch.v1.DoctorRequest
+	(*DoctorResponse)(nil),               // 48: lmsemanticsearch.v1.DoctorResponse
+	(*ShutdownRequest)(nil),              // 49: lmsemanticsearch.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),             // 50: lmsemanticsearch.v1.ShutdownResponse
+	(*MaintenanceStatus)(nil),            // 51: lmsemanticsearch.v1.MaintenanceStatus
+	(*SetMaintenanceModeRequest)(nil),    // 52: lmsemanticsearch.v1.SetMaintenanceModeRequest
+	(*SetMaintenanceModeResponse)(nil),   // 53: lmsemanticsearch.v1.SetMaintenanceModeResponse
+	(*Metric)(nil),                       // 54: lmsemanticsearch.v1.Metric
+	(*ActivityRow)(nil),                  // 55: lmsemanticsearch.v1.ActivityRow
+	(*DaemonIdentity)(nil),               // 56: lmsemanticsearch.v1.DaemonIdentity
+	(*GetStatusRequest)(nil),             // 57: lmsemanticsearch.v1.GetStatusRequest
+	(*ActivitySourceStatus)(nil),         // 58: lmsemanticsearch.v1.ActivitySourceStatus
+	(*GetStatusResponse)(nil),            // 59: lmsemanticsearch.v1.GetStatusResponse
+	(*timestamppb.Timestamp)(nil),        // 60: google.protobuf.Timestamp
 }
 var file_lmsemanticsearch_v1_service_proto_depIdxs = []int32{
-	0,   // 0: lmsemanticsearch.v1.SchedulingPolicy.priority:type_name -> lmsemanticsearch.v1.SchedulingPriority
-	0,   // 1: lmsemanticsearch.v1.SchedulingPolicyPatch.priority:type_name -> lmsemanticsearch.v1.SchedulingPriority
-	121, // 2: lmsemanticsearch.v1.Progress.last_event_at:type_name -> google.protobuf.Timestamp
-	121, // 3: lmsemanticsearch.v1.Progress.heartbeat_at:type_name -> google.protobuf.Timestamp
-	16,  // 4: lmsemanticsearch.v1.Progress.breakdown:type_name -> lmsemanticsearch.v1.OutcomeBreakdown
-	2,   // 5: lmsemanticsearch.v1.OutcomeRow.kind:type_name -> lmsemanticsearch.v1.OutcomeKind
-	15,  // 6: lmsemanticsearch.v1.OutcomeBreakdown.file_rows:type_name -> lmsemanticsearch.v1.OutcomeRow
-	15,  // 7: lmsemanticsearch.v1.OutcomeBreakdown.chunk_rows:type_name -> lmsemanticsearch.v1.OutcomeRow
-	121, // 8: lmsemanticsearch.v1.DependencyHealth.since:type_name -> google.protobuf.Timestamp
-	121, // 9: lmsemanticsearch.v1.DependencyHealth.last_healthy_at:type_name -> google.protobuf.Timestamp
-	121, // 10: lmsemanticsearch.v1.IndexRunSummary.completed_at:type_name -> google.protobuf.Timestamp
-	121, // 11: lmsemanticsearch.v1.IndexRunFailure.failed_at:type_name -> google.protobuf.Timestamp
-	19,  // 12: lmsemanticsearch.v1.Codebase.last_successful_run:type_name -> lmsemanticsearch.v1.IndexRunSummary
-	20,  // 13: lmsemanticsearch.v1.Codebase.last_failed_run:type_name -> lmsemanticsearch.v1.IndexRunFailure
-	11,  // 14: lmsemanticsearch.v1.Codebase.effective_config:type_name -> lmsemanticsearch.v1.IndexConfig
-	121, // 15: lmsemanticsearch.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
-	14,  // 16: lmsemanticsearch.v1.Codebase.active_progress:type_name -> lmsemanticsearch.v1.Progress
-	12,  // 17: lmsemanticsearch.v1.Codebase.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicy
-	9,   // 18: lmsemanticsearch.v1.Job.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	14,  // 19: lmsemanticsearch.v1.Job.progress:type_name -> lmsemanticsearch.v1.Progress
-	11,  // 20: lmsemanticsearch.v1.Job.config:type_name -> lmsemanticsearch.v1.IndexConfig
-	121, // 21: lmsemanticsearch.v1.Job.started_at:type_name -> google.protobuf.Timestamp
-	121, // 22: lmsemanticsearch.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
-	121, // 23: lmsemanticsearch.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
-	17,  // 24: lmsemanticsearch.v1.Job.error:type_name -> lmsemanticsearch.v1.JobError
-	12,  // 25: lmsemanticsearch.v1.Job.effective_scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicy
-	1,   // 26: lmsemanticsearch.v1.Job.scheduling_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
-	25,  // 27: lmsemanticsearch.v1.ConversationDocument.tools:type_name -> lmsemanticsearch.v1.ConversationToolCall
-	10,  // 28: lmsemanticsearch.v1.StartIndexRequest.splitter:type_name -> lmsemanticsearch.v1.SplitterConfig
-	9,   // 29: lmsemanticsearch.v1.StartIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	13,  // 30: lmsemanticsearch.v1.StartIndexRequest.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
-	9,   // 31: lmsemanticsearch.v1.ClearIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	9,   // 32: lmsemanticsearch.v1.CancelJobRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	9,   // 33: lmsemanticsearch.v1.SyncIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	13,  // 34: lmsemanticsearch.v1.SyncIndexRequest.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
-	13,  // 35: lmsemanticsearch.v1.UpdateCodebasePolicyRequest.patch:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
-	9,   // 36: lmsemanticsearch.v1.UpdateCodebasePolicyRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	21,  // 37: lmsemanticsearch.v1.UpdateCodebasePolicyResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
-	9,   // 38: lmsemanticsearch.v1.GetIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	21,  // 39: lmsemanticsearch.v1.GetIndexResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
-	22,  // 40: lmsemanticsearch.v1.GetIndexResponse.active_job:type_name -> lmsemanticsearch.v1.Job
-	39,  // 41: lmsemanticsearch.v1.GetIndexResponse.classification:type_name -> lmsemanticsearch.v1.PathClassification
-	18,  // 42: lmsemanticsearch.v1.GetIndexResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	112, // 43: lmsemanticsearch.v1.GetIndexResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
-	6,   // 44: lmsemanticsearch.v1.PathClassification.kind:type_name -> lmsemanticsearch.v1.PathClassification.Kind
-	21,  // 45: lmsemanticsearch.v1.ListIndexesResponse.indexes:type_name -> lmsemanticsearch.v1.Codebase
-	18,  // 46: lmsemanticsearch.v1.ListIndexesResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	22,  // 47: lmsemanticsearch.v1.GetJobResponse.job:type_name -> lmsemanticsearch.v1.Job
-	18,  // 48: lmsemanticsearch.v1.GetJobResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	22,  // 49: lmsemanticsearch.v1.ListJobsResponse.jobs:type_name -> lmsemanticsearch.v1.Job
-	18,  // 50: lmsemanticsearch.v1.ListJobsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	22,  // 51: lmsemanticsearch.v1.WatchJobsResponse.job:type_name -> lmsemanticsearch.v1.Job
-	9,   // 52: lmsemanticsearch.v1.SearchCodeRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	23,  // 53: lmsemanticsearch.v1.SearchCodeResponse.results:type_name -> lmsemanticsearch.v1.SearchResult
-	21,  // 54: lmsemanticsearch.v1.SearchCodeResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
-	22,  // 55: lmsemanticsearch.v1.SearchCodeResponse.active_job:type_name -> lmsemanticsearch.v1.Job
-	18,  // 56: lmsemanticsearch.v1.SearchCodeResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	9,   // 57: lmsemanticsearch.v1.GraphToolRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	9,   // 58: lmsemanticsearch.v1.RegisterConversationCollectionRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	3,   // 59: lmsemanticsearch.v1.ScalarColumnDeclaration.type:type_name -> lmsemanticsearch.v1.ScalarColumnType
-	54,  // 60: lmsemanticsearch.v1.RegisterCollectionRequest.scalars:type_name -> lmsemanticsearch.v1.ScalarColumnDeclaration
-	9,   // 61: lmsemanticsearch.v1.RegisterCollectionRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	54,  // 62: lmsemanticsearch.v1.RegisterCollectionResponse.scalars:type_name -> lmsemanticsearch.v1.ScalarColumnDeclaration
-	57,  // 63: lmsemanticsearch.v1.SyncCollectionManifestRequest.manifest:type_name -> lmsemanticsearch.v1.CollectionItemFingerprint
-	9,   // 64: lmsemanticsearch.v1.SyncCollectionManifestRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	60,  // 65: lmsemanticsearch.v1.CollectionRow.scalars:type_name -> lmsemanticsearch.v1.CollectionScalarValue
-	9,   // 66: lmsemanticsearch.v1.UpsertCollectionItemsHeader.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	4,   // 67: lmsemanticsearch.v1.UpsertCollectionItemsHeader.reconcile_mode:type_name -> lmsemanticsearch.v1.CollectionReconcileMode
-	61,  // 68: lmsemanticsearch.v1.UpsertCollectionItemsRows.rows:type_name -> lmsemanticsearch.v1.CollectionRow
-	57,  // 69: lmsemanticsearch.v1.UpsertCollectionItemsManifest.manifest:type_name -> lmsemanticsearch.v1.CollectionItemFingerprint
-	62,  // 70: lmsemanticsearch.v1.UpsertCollectionItemsStreamRequest.header:type_name -> lmsemanticsearch.v1.UpsertCollectionItemsHeader
-	63,  // 71: lmsemanticsearch.v1.UpsertCollectionItemsStreamRequest.rows:type_name -> lmsemanticsearch.v1.UpsertCollectionItemsRows
-	64,  // 72: lmsemanticsearch.v1.UpsertCollectionItemsStreamRequest.manifest:type_name -> lmsemanticsearch.v1.UpsertCollectionItemsManifest
-	9,   // 73: lmsemanticsearch.v1.BackfillCollectionScalarsHeader.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	60,  // 74: lmsemanticsearch.v1.BackfillCollectionItem.scalars:type_name -> lmsemanticsearch.v1.CollectionScalarValue
-	68,  // 75: lmsemanticsearch.v1.BackfillCollectionScalarsItems.items:type_name -> lmsemanticsearch.v1.BackfillCollectionItem
-	67,  // 76: lmsemanticsearch.v1.BackfillCollectionScalarsStreamRequest.header:type_name -> lmsemanticsearch.v1.BackfillCollectionScalarsHeader
-	69,  // 77: lmsemanticsearch.v1.BackfillCollectionScalarsStreamRequest.items:type_name -> lmsemanticsearch.v1.BackfillCollectionScalarsItems
-	9,   // 78: lmsemanticsearch.v1.DeleteCollectionItemRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	74,  // 79: lmsemanticsearch.v1.SyncConversationManifestRequest.manifest:type_name -> lmsemanticsearch.v1.ConversationFingerprint
-	9,   // 80: lmsemanticsearch.v1.SyncConversationManifestRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	9,   // 81: lmsemanticsearch.v1.UpsertConversationDocumentsHeader.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	5,   // 82: lmsemanticsearch.v1.UpsertConversationDocumentsHeader.reconcile_mode:type_name -> lmsemanticsearch.v1.ConversationReconcileMode
-	24,  // 83: lmsemanticsearch.v1.UpsertConversationDocumentsDocuments.documents:type_name -> lmsemanticsearch.v1.ConversationDocument
-	74,  // 84: lmsemanticsearch.v1.UpsertConversationDocumentsManifest.manifest:type_name -> lmsemanticsearch.v1.ConversationFingerprint
-	78,  // 85: lmsemanticsearch.v1.UpsertConversationDocumentsChunk.header:type_name -> lmsemanticsearch.v1.UpsertConversationDocumentsHeader
-	79,  // 86: lmsemanticsearch.v1.UpsertConversationDocumentsChunk.documents:type_name -> lmsemanticsearch.v1.UpsertConversationDocumentsDocuments
-	80,  // 87: lmsemanticsearch.v1.UpsertConversationDocumentsChunk.manifest:type_name -> lmsemanticsearch.v1.UpsertConversationDocumentsManifest
-	83,  // 88: lmsemanticsearch.v1.BackfillConversationScalarsChunk.header:type_name -> lmsemanticsearch.v1.BackfillConversationScalarsHeader
-	84,  // 89: lmsemanticsearch.v1.BackfillConversationScalarsChunk.entries:type_name -> lmsemanticsearch.v1.BackfillConversationScalarsEntries
-	9,   // 90: lmsemanticsearch.v1.BackfillConversationScalarsHeader.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	85,  // 91: lmsemanticsearch.v1.BackfillConversationScalarsEntries.entries:type_name -> lmsemanticsearch.v1.BackfillConversationScalarEntry
-	9,   // 92: lmsemanticsearch.v1.DeleteConversationRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	89,  // 93: lmsemanticsearch.v1.SearchConversationsRequest.filter:type_name -> lmsemanticsearch.v1.ConversationSearchFilter
-	26,  // 94: lmsemanticsearch.v1.SearchConversationsResponse.results:type_name -> lmsemanticsearch.v1.ConversationSearchResult
-	18,  // 95: lmsemanticsearch.v1.SearchConversationsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	89,  // 96: lmsemanticsearch.v1.SearchWithinConversationRequest.filter:type_name -> lmsemanticsearch.v1.ConversationSearchFilter
-	26,  // 97: lmsemanticsearch.v1.SearchWithinConversationResponse.results:type_name -> lmsemanticsearch.v1.ConversationSearchResult
-	18,  // 98: lmsemanticsearch.v1.SearchWithinConversationResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	100, // 99: lmsemanticsearch.v1.CollectionFilterGroup.filters:type_name -> lmsemanticsearch.v1.CollectionFilter
-	94,  // 100: lmsemanticsearch.v1.CollectionFilterEquals.value:type_name -> lmsemanticsearch.v1.CollectionFilterValue
-	94,  // 101: lmsemanticsearch.v1.CollectionFilterIn.values:type_name -> lmsemanticsearch.v1.CollectionFilterValue
-	95,  // 102: lmsemanticsearch.v1.CollectionFilter.all_of:type_name -> lmsemanticsearch.v1.CollectionFilterGroup
-	95,  // 103: lmsemanticsearch.v1.CollectionFilter.any_of:type_name -> lmsemanticsearch.v1.CollectionFilterGroup
-	100, // 104: lmsemanticsearch.v1.CollectionFilter.negate:type_name -> lmsemanticsearch.v1.CollectionFilter
-	96,  // 105: lmsemanticsearch.v1.CollectionFilter.equals:type_name -> lmsemanticsearch.v1.CollectionFilterEquals
-	97,  // 106: lmsemanticsearch.v1.CollectionFilter.in_set:type_name -> lmsemanticsearch.v1.CollectionFilterIn
-	98,  // 107: lmsemanticsearch.v1.CollectionFilter.range:type_name -> lmsemanticsearch.v1.CollectionFilterRange
-	99,  // 108: lmsemanticsearch.v1.CollectionFilter.is_null:type_name -> lmsemanticsearch.v1.CollectionFilterColumn
-	99,  // 109: lmsemanticsearch.v1.CollectionFilter.is_present:type_name -> lmsemanticsearch.v1.CollectionFilterColumn
-	100, // 110: lmsemanticsearch.v1.SearchCollectionRequest.filter:type_name -> lmsemanticsearch.v1.CollectionFilter
-	122, // 111: lmsemanticsearch.v1.CollectionHitScalar.null_value:type_name -> google.protobuf.NullValue
-	102, // 112: lmsemanticsearch.v1.CollectionSearchHit.scalars:type_name -> lmsemanticsearch.v1.CollectionHitScalar
-	103, // 113: lmsemanticsearch.v1.SearchCollectionResponse.hits:type_name -> lmsemanticsearch.v1.CollectionSearchHit
-	18,  // 114: lmsemanticsearch.v1.SearchCollectionResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	107, // 115: lmsemanticsearch.v1.DoctorResponse.diagnostics:type_name -> lmsemanticsearch.v1.Diagnostic
-	121, // 116: lmsemanticsearch.v1.MaintenanceStatus.since:type_name -> google.protobuf.Timestamp
-	9,   // 117: lmsemanticsearch.v1.SetMaintenanceModeRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	112, // 118: lmsemanticsearch.v1.SetMaintenanceModeResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
-	115, // 119: lmsemanticsearch.v1.ActivityRow.metrics:type_name -> lmsemanticsearch.v1.Metric
-	121, // 120: lmsemanticsearch.v1.DaemonIdentity.started_at:type_name -> google.protobuf.Timestamp
-	1,   // 121: lmsemanticsearch.v1.ActivitySourceStatus.input_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
-	1,   // 122: lmsemanticsearch.v1.ActivitySourceStatus.thermal_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
-	121, // 123: lmsemanticsearch.v1.GetStatusResponse.read_at:type_name -> google.protobuf.Timestamp
-	117, // 124: lmsemanticsearch.v1.GetStatusResponse.daemon:type_name -> lmsemanticsearch.v1.DaemonIdentity
-	115, // 125: lmsemanticsearch.v1.GetStatusResponse.metrics:type_name -> lmsemanticsearch.v1.Metric
-	116, // 126: lmsemanticsearch.v1.GetStatusResponse.activity:type_name -> lmsemanticsearch.v1.ActivityRow
-	119, // 127: lmsemanticsearch.v1.GetStatusResponse.activity_source:type_name -> lmsemanticsearch.v1.ActivitySourceStatus
-	112, // 128: lmsemanticsearch.v1.GetStatusResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
-	7,   // 129: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:input_type -> lmsemanticsearch.v1.VersionRequest
-	27,  // 130: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:input_type -> lmsemanticsearch.v1.StartIndexRequest
-	29,  // 131: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:input_type -> lmsemanticsearch.v1.ClearIndexRequest
-	31,  // 132: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:input_type -> lmsemanticsearch.v1.CancelJobRequest
-	33,  // 133: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:input_type -> lmsemanticsearch.v1.SyncIndexRequest
-	35,  // 134: lmsemanticsearch.v1.SemanticSearchDaemonService.UpdateCodebasePolicy:input_type -> lmsemanticsearch.v1.UpdateCodebasePolicyRequest
-	37,  // 135: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:input_type -> lmsemanticsearch.v1.GetIndexRequest
-	40,  // 136: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:input_type -> lmsemanticsearch.v1.ListIndexesRequest
-	42,  // 137: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:input_type -> lmsemanticsearch.v1.GetJobRequest
-	44,  // 138: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:input_type -> lmsemanticsearch.v1.ListJobsRequest
-	46,  // 139: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:input_type -> lmsemanticsearch.v1.WatchJobsRequest
-	48,  // 140: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:input_type -> lmsemanticsearch.v1.SearchCodeRequest
-	50,  // 141: lmsemanticsearch.v1.SemanticSearchDaemonService.GraphTool:input_type -> lmsemanticsearch.v1.GraphToolRequest
-	52,  // 142: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterConversationCollection:input_type -> lmsemanticsearch.v1.RegisterConversationCollectionRequest
-	55,  // 143: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterCollection:input_type -> lmsemanticsearch.v1.RegisterCollectionRequest
-	58,  // 144: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncCollectionManifest:input_type -> lmsemanticsearch.v1.SyncCollectionManifestRequest
-	65,  // 145: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertCollectionItemsStream:input_type -> lmsemanticsearch.v1.UpsertCollectionItemsStreamRequest
-	70,  // 146: lmsemanticsearch.v1.SemanticSearchDaemonService.BackfillCollectionScalars:input_type -> lmsemanticsearch.v1.BackfillCollectionScalarsStreamRequest
-	72,  // 147: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteCollectionItem:input_type -> lmsemanticsearch.v1.DeleteCollectionItemRequest
-	75,  // 148: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncConversationManifest:input_type -> lmsemanticsearch.v1.SyncConversationManifestRequest
-	81,  // 149: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertConversationDocumentsStream:input_type -> lmsemanticsearch.v1.UpsertConversationDocumentsChunk
-	82,  // 150: lmsemanticsearch.v1.SemanticSearchDaemonService.BackfillConversationScalars:input_type -> lmsemanticsearch.v1.BackfillConversationScalarsChunk
-	87,  // 151: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteConversation:input_type -> lmsemanticsearch.v1.DeleteConversationRequest
-	90,  // 152: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchConversations:input_type -> lmsemanticsearch.v1.SearchConversationsRequest
-	92,  // 153: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchWithinConversation:input_type -> lmsemanticsearch.v1.SearchWithinConversationRequest
-	101, // 154: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCollection:input_type -> lmsemanticsearch.v1.SearchCollectionRequest
-	105, // 155: lmsemanticsearch.v1.SemanticSearchDaemonService.GetCollectionItemState:input_type -> lmsemanticsearch.v1.GetCollectionItemStateRequest
-	108, // 156: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:input_type -> lmsemanticsearch.v1.DoctorRequest
-	118, // 157: lmsemanticsearch.v1.SemanticSearchDaemonService.GetStatus:input_type -> lmsemanticsearch.v1.GetStatusRequest
-	113, // 158: lmsemanticsearch.v1.SemanticSearchDaemonService.SetMaintenanceMode:input_type -> lmsemanticsearch.v1.SetMaintenanceModeRequest
-	110, // 159: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:input_type -> lmsemanticsearch.v1.ShutdownRequest
-	8,   // 160: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:output_type -> lmsemanticsearch.v1.VersionResponse
-	28,  // 161: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:output_type -> lmsemanticsearch.v1.StartIndexResponse
-	30,  // 162: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:output_type -> lmsemanticsearch.v1.ClearIndexResponse
-	32,  // 163: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:output_type -> lmsemanticsearch.v1.CancelJobResponse
-	34,  // 164: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:output_type -> lmsemanticsearch.v1.SyncIndexResponse
-	36,  // 165: lmsemanticsearch.v1.SemanticSearchDaemonService.UpdateCodebasePolicy:output_type -> lmsemanticsearch.v1.UpdateCodebasePolicyResponse
-	38,  // 166: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:output_type -> lmsemanticsearch.v1.GetIndexResponse
-	41,  // 167: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:output_type -> lmsemanticsearch.v1.ListIndexesResponse
-	43,  // 168: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:output_type -> lmsemanticsearch.v1.GetJobResponse
-	45,  // 169: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:output_type -> lmsemanticsearch.v1.ListJobsResponse
-	47,  // 170: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:output_type -> lmsemanticsearch.v1.WatchJobsResponse
-	49,  // 171: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:output_type -> lmsemanticsearch.v1.SearchCodeResponse
-	51,  // 172: lmsemanticsearch.v1.SemanticSearchDaemonService.GraphTool:output_type -> lmsemanticsearch.v1.GraphToolResponse
-	53,  // 173: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterConversationCollection:output_type -> lmsemanticsearch.v1.RegisterConversationCollectionResponse
-	56,  // 174: lmsemanticsearch.v1.SemanticSearchDaemonService.RegisterCollection:output_type -> lmsemanticsearch.v1.RegisterCollectionResponse
-	59,  // 175: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncCollectionManifest:output_type -> lmsemanticsearch.v1.SyncCollectionManifestResponse
-	66,  // 176: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertCollectionItemsStream:output_type -> lmsemanticsearch.v1.UpsertCollectionItemsStreamResponse
-	71,  // 177: lmsemanticsearch.v1.SemanticSearchDaemonService.BackfillCollectionScalars:output_type -> lmsemanticsearch.v1.BackfillCollectionScalarsResponse
-	73,  // 178: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteCollectionItem:output_type -> lmsemanticsearch.v1.DeleteCollectionItemResponse
-	76,  // 179: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncConversationManifest:output_type -> lmsemanticsearch.v1.SyncConversationManifestResponse
-	77,  // 180: lmsemanticsearch.v1.SemanticSearchDaemonService.UpsertConversationDocumentsStream:output_type -> lmsemanticsearch.v1.UpsertConversationDocumentsResponse
-	86,  // 181: lmsemanticsearch.v1.SemanticSearchDaemonService.BackfillConversationScalars:output_type -> lmsemanticsearch.v1.BackfillConversationScalarsResponse
-	88,  // 182: lmsemanticsearch.v1.SemanticSearchDaemonService.DeleteConversation:output_type -> lmsemanticsearch.v1.DeleteConversationResponse
-	91,  // 183: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchConversations:output_type -> lmsemanticsearch.v1.SearchConversationsResponse
-	93,  // 184: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchWithinConversation:output_type -> lmsemanticsearch.v1.SearchWithinConversationResponse
-	104, // 185: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCollection:output_type -> lmsemanticsearch.v1.SearchCollectionResponse
-	106, // 186: lmsemanticsearch.v1.SemanticSearchDaemonService.GetCollectionItemState:output_type -> lmsemanticsearch.v1.GetCollectionItemStateResponse
-	109, // 187: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:output_type -> lmsemanticsearch.v1.DoctorResponse
-	120, // 188: lmsemanticsearch.v1.SemanticSearchDaemonService.GetStatus:output_type -> lmsemanticsearch.v1.GetStatusResponse
-	114, // 189: lmsemanticsearch.v1.SemanticSearchDaemonService.SetMaintenanceMode:output_type -> lmsemanticsearch.v1.SetMaintenanceModeResponse
-	111, // 190: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:output_type -> lmsemanticsearch.v1.ShutdownResponse
-	160, // [160:191] is the sub-list for method output_type
-	129, // [129:160] is the sub-list for method input_type
-	129, // [129:129] is the sub-list for extension type_name
-	129, // [129:129] is the sub-list for extension extendee
-	0,   // [0:129] is the sub-list for field type_name
+	0,  // 0: lmsemanticsearch.v1.SchedulingPolicy.priority:type_name -> lmsemanticsearch.v1.SchedulingPriority
+	0,  // 1: lmsemanticsearch.v1.SchedulingPolicyPatch.priority:type_name -> lmsemanticsearch.v1.SchedulingPriority
+	60, // 2: lmsemanticsearch.v1.Progress.last_event_at:type_name -> google.protobuf.Timestamp
+	60, // 3: lmsemanticsearch.v1.Progress.heartbeat_at:type_name -> google.protobuf.Timestamp
+	13, // 4: lmsemanticsearch.v1.Progress.breakdown:type_name -> lmsemanticsearch.v1.OutcomeBreakdown
+	2,  // 5: lmsemanticsearch.v1.OutcomeRow.kind:type_name -> lmsemanticsearch.v1.OutcomeKind
+	12, // 6: lmsemanticsearch.v1.OutcomeBreakdown.file_rows:type_name -> lmsemanticsearch.v1.OutcomeRow
+	12, // 7: lmsemanticsearch.v1.OutcomeBreakdown.chunk_rows:type_name -> lmsemanticsearch.v1.OutcomeRow
+	60, // 8: lmsemanticsearch.v1.DependencyHealth.since:type_name -> google.protobuf.Timestamp
+	60, // 9: lmsemanticsearch.v1.DependencyHealth.last_healthy_at:type_name -> google.protobuf.Timestamp
+	60, // 10: lmsemanticsearch.v1.IndexRunSummary.completed_at:type_name -> google.protobuf.Timestamp
+	60, // 11: lmsemanticsearch.v1.IndexRunFailure.failed_at:type_name -> google.protobuf.Timestamp
+	16, // 12: lmsemanticsearch.v1.Codebase.last_successful_run:type_name -> lmsemanticsearch.v1.IndexRunSummary
+	17, // 13: lmsemanticsearch.v1.Codebase.last_failed_run:type_name -> lmsemanticsearch.v1.IndexRunFailure
+	8,  // 14: lmsemanticsearch.v1.Codebase.effective_config:type_name -> lmsemanticsearch.v1.IndexConfig
+	60, // 15: lmsemanticsearch.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
+	11, // 16: lmsemanticsearch.v1.Codebase.active_progress:type_name -> lmsemanticsearch.v1.Progress
+	9,  // 17: lmsemanticsearch.v1.Codebase.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicy
+	6,  // 18: lmsemanticsearch.v1.Job.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	11, // 19: lmsemanticsearch.v1.Job.progress:type_name -> lmsemanticsearch.v1.Progress
+	8,  // 20: lmsemanticsearch.v1.Job.config:type_name -> lmsemanticsearch.v1.IndexConfig
+	60, // 21: lmsemanticsearch.v1.Job.started_at:type_name -> google.protobuf.Timestamp
+	60, // 22: lmsemanticsearch.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
+	60, // 23: lmsemanticsearch.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
+	14, // 24: lmsemanticsearch.v1.Job.error:type_name -> lmsemanticsearch.v1.JobError
+	9,  // 25: lmsemanticsearch.v1.Job.effective_scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicy
+	1,  // 26: lmsemanticsearch.v1.Job.scheduling_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
+	7,  // 27: lmsemanticsearch.v1.StartIndexRequest.splitter:type_name -> lmsemanticsearch.v1.SplitterConfig
+	6,  // 28: lmsemanticsearch.v1.StartIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	10, // 29: lmsemanticsearch.v1.StartIndexRequest.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
+	6,  // 30: lmsemanticsearch.v1.ClearIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	6,  // 31: lmsemanticsearch.v1.CancelJobRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	6,  // 32: lmsemanticsearch.v1.SyncIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	10, // 33: lmsemanticsearch.v1.SyncIndexRequest.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
+	10, // 34: lmsemanticsearch.v1.UpdateCodebasePolicyRequest.patch:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
+	6,  // 35: lmsemanticsearch.v1.UpdateCodebasePolicyRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	18, // 36: lmsemanticsearch.v1.UpdateCodebasePolicyResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
+	6,  // 37: lmsemanticsearch.v1.GetIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	18, // 38: lmsemanticsearch.v1.GetIndexResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
+	19, // 39: lmsemanticsearch.v1.GetIndexResponse.active_job:type_name -> lmsemanticsearch.v1.Job
+	33, // 40: lmsemanticsearch.v1.GetIndexResponse.classification:type_name -> lmsemanticsearch.v1.PathClassification
+	15, // 41: lmsemanticsearch.v1.GetIndexResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	51, // 42: lmsemanticsearch.v1.GetIndexResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
+	3,  // 43: lmsemanticsearch.v1.PathClassification.kind:type_name -> lmsemanticsearch.v1.PathClassification.Kind
+	18, // 44: lmsemanticsearch.v1.ListIndexesResponse.indexes:type_name -> lmsemanticsearch.v1.Codebase
+	15, // 45: lmsemanticsearch.v1.ListIndexesResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	19, // 46: lmsemanticsearch.v1.GetJobResponse.job:type_name -> lmsemanticsearch.v1.Job
+	15, // 47: lmsemanticsearch.v1.GetJobResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	19, // 48: lmsemanticsearch.v1.ListJobsResponse.jobs:type_name -> lmsemanticsearch.v1.Job
+	15, // 49: lmsemanticsearch.v1.ListJobsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	19, // 50: lmsemanticsearch.v1.WatchJobsResponse.job:type_name -> lmsemanticsearch.v1.Job
+	6,  // 51: lmsemanticsearch.v1.SearchCodeRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	20, // 52: lmsemanticsearch.v1.SearchCodeResponse.results:type_name -> lmsemanticsearch.v1.SearchResult
+	18, // 53: lmsemanticsearch.v1.SearchCodeResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
+	19, // 54: lmsemanticsearch.v1.SearchCodeResponse.active_job:type_name -> lmsemanticsearch.v1.Job
+	15, // 55: lmsemanticsearch.v1.SearchCodeResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	6,  // 56: lmsemanticsearch.v1.GraphToolRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	46, // 57: lmsemanticsearch.v1.DoctorResponse.diagnostics:type_name -> lmsemanticsearch.v1.Diagnostic
+	60, // 58: lmsemanticsearch.v1.MaintenanceStatus.since:type_name -> google.protobuf.Timestamp
+	6,  // 59: lmsemanticsearch.v1.SetMaintenanceModeRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	51, // 60: lmsemanticsearch.v1.SetMaintenanceModeResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
+	54, // 61: lmsemanticsearch.v1.ActivityRow.metrics:type_name -> lmsemanticsearch.v1.Metric
+	60, // 62: lmsemanticsearch.v1.DaemonIdentity.started_at:type_name -> google.protobuf.Timestamp
+	1,  // 63: lmsemanticsearch.v1.ActivitySourceStatus.input_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
+	1,  // 64: lmsemanticsearch.v1.ActivitySourceStatus.thermal_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
+	60, // 65: lmsemanticsearch.v1.GetStatusResponse.read_at:type_name -> google.protobuf.Timestamp
+	56, // 66: lmsemanticsearch.v1.GetStatusResponse.daemon:type_name -> lmsemanticsearch.v1.DaemonIdentity
+	54, // 67: lmsemanticsearch.v1.GetStatusResponse.metrics:type_name -> lmsemanticsearch.v1.Metric
+	55, // 68: lmsemanticsearch.v1.GetStatusResponse.activity:type_name -> lmsemanticsearch.v1.ActivityRow
+	58, // 69: lmsemanticsearch.v1.GetStatusResponse.activity_source:type_name -> lmsemanticsearch.v1.ActivitySourceStatus
+	51, // 70: lmsemanticsearch.v1.GetStatusResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
+	4,  // 71: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:input_type -> lmsemanticsearch.v1.VersionRequest
+	21, // 72: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:input_type -> lmsemanticsearch.v1.StartIndexRequest
+	23, // 73: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:input_type -> lmsemanticsearch.v1.ClearIndexRequest
+	25, // 74: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:input_type -> lmsemanticsearch.v1.CancelJobRequest
+	27, // 75: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:input_type -> lmsemanticsearch.v1.SyncIndexRequest
+	29, // 76: lmsemanticsearch.v1.SemanticSearchDaemonService.UpdateCodebasePolicy:input_type -> lmsemanticsearch.v1.UpdateCodebasePolicyRequest
+	31, // 77: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:input_type -> lmsemanticsearch.v1.GetIndexRequest
+	34, // 78: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:input_type -> lmsemanticsearch.v1.ListIndexesRequest
+	36, // 79: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:input_type -> lmsemanticsearch.v1.GetJobRequest
+	38, // 80: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:input_type -> lmsemanticsearch.v1.ListJobsRequest
+	40, // 81: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:input_type -> lmsemanticsearch.v1.WatchJobsRequest
+	42, // 82: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:input_type -> lmsemanticsearch.v1.SearchCodeRequest
+	44, // 83: lmsemanticsearch.v1.SemanticSearchDaemonService.GraphTool:input_type -> lmsemanticsearch.v1.GraphToolRequest
+	47, // 84: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:input_type -> lmsemanticsearch.v1.DoctorRequest
+	57, // 85: lmsemanticsearch.v1.SemanticSearchDaemonService.GetStatus:input_type -> lmsemanticsearch.v1.GetStatusRequest
+	52, // 86: lmsemanticsearch.v1.SemanticSearchDaemonService.SetMaintenanceMode:input_type -> lmsemanticsearch.v1.SetMaintenanceModeRequest
+	49, // 87: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:input_type -> lmsemanticsearch.v1.ShutdownRequest
+	5,  // 88: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:output_type -> lmsemanticsearch.v1.VersionResponse
+	22, // 89: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:output_type -> lmsemanticsearch.v1.StartIndexResponse
+	24, // 90: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:output_type -> lmsemanticsearch.v1.ClearIndexResponse
+	26, // 91: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:output_type -> lmsemanticsearch.v1.CancelJobResponse
+	28, // 92: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:output_type -> lmsemanticsearch.v1.SyncIndexResponse
+	30, // 93: lmsemanticsearch.v1.SemanticSearchDaemonService.UpdateCodebasePolicy:output_type -> lmsemanticsearch.v1.UpdateCodebasePolicyResponse
+	32, // 94: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:output_type -> lmsemanticsearch.v1.GetIndexResponse
+	35, // 95: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:output_type -> lmsemanticsearch.v1.ListIndexesResponse
+	37, // 96: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:output_type -> lmsemanticsearch.v1.GetJobResponse
+	39, // 97: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:output_type -> lmsemanticsearch.v1.ListJobsResponse
+	41, // 98: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:output_type -> lmsemanticsearch.v1.WatchJobsResponse
+	43, // 99: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:output_type -> lmsemanticsearch.v1.SearchCodeResponse
+	45, // 100: lmsemanticsearch.v1.SemanticSearchDaemonService.GraphTool:output_type -> lmsemanticsearch.v1.GraphToolResponse
+	48, // 101: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:output_type -> lmsemanticsearch.v1.DoctorResponse
+	59, // 102: lmsemanticsearch.v1.SemanticSearchDaemonService.GetStatus:output_type -> lmsemanticsearch.v1.GetStatusResponse
+	53, // 103: lmsemanticsearch.v1.SemanticSearchDaemonService.SetMaintenanceMode:output_type -> lmsemanticsearch.v1.SetMaintenanceModeResponse
+	50, // 104: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:output_type -> lmsemanticsearch.v1.ShutdownResponse
+	88, // [88:105] is the sub-list for method output_type
+	71, // [71:88] is the sub-list for method input_type
+	71, // [71:71] is the sub-list for extension type_name
+	71, // [71:71] is the sub-list for extension extendee
+	0,  // [0:71] is the sub-list for field type_name
 }
 
 func init() { file_lmsemanticsearch_v1_service_proto_init() }
@@ -9770,54 +4973,8 @@ func file_lmsemanticsearch_v1_service_proto_init() {
 		return
 	}
 	file_lmsemanticsearch_v1_service_proto_msgTypes[6].OneofWrappers = []any{}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[31].OneofWrappers = []any{}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[53].OneofWrappers = []any{
-		(*CollectionScalarValue_StringValue)(nil),
-		(*CollectionScalarValue_BoolValue)(nil),
-		(*CollectionScalarValue_Int64Value)(nil),
-	}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[58].OneofWrappers = []any{
-		(*UpsertCollectionItemsStreamRequest_Header)(nil),
-		(*UpsertCollectionItemsStreamRequest_Rows)(nil),
-		(*UpsertCollectionItemsStreamRequest_Manifest)(nil),
-	}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[63].OneofWrappers = []any{
-		(*BackfillCollectionScalarsStreamRequest_Header)(nil),
-		(*BackfillCollectionScalarsStreamRequest_Items)(nil),
-	}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[74].OneofWrappers = []any{
-		(*UpsertConversationDocumentsChunk_Header)(nil),
-		(*UpsertConversationDocumentsChunk_Documents)(nil),
-		(*UpsertConversationDocumentsChunk_Manifest)(nil),
-	}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[75].OneofWrappers = []any{
-		(*BackfillConversationScalarsChunk_Header)(nil),
-		(*BackfillConversationScalarsChunk_Entries)(nil),
-	}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[82].OneofWrappers = []any{}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[87].OneofWrappers = []any{
-		(*CollectionFilterValue_StringValue)(nil),
-		(*CollectionFilterValue_BoolValue)(nil),
-		(*CollectionFilterValue_Int64Value)(nil),
-	}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[91].OneofWrappers = []any{}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[93].OneofWrappers = []any{
-		(*CollectionFilter_AllOf)(nil),
-		(*CollectionFilter_AnyOf)(nil),
-		(*CollectionFilter_Negate)(nil),
-		(*CollectionFilter_Equals)(nil),
-		(*CollectionFilter_InSet)(nil),
-		(*CollectionFilter_Range)(nil),
-		(*CollectionFilter_IsNull)(nil),
-		(*CollectionFilter_IsPresent)(nil),
-	}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[95].OneofWrappers = []any{
-		(*CollectionHitScalar_StringValue)(nil),
-		(*CollectionHitScalar_BoolValue)(nil),
-		(*CollectionHitScalar_Int64Value)(nil),
-		(*CollectionHitScalar_NullValue)(nil),
-	}
-	file_lmsemanticsearch_v1_service_proto_msgTypes[108].OneofWrappers = []any{
+	file_lmsemanticsearch_v1_service_proto_msgTypes[28].OneofWrappers = []any{}
+	file_lmsemanticsearch_v1_service_proto_msgTypes[50].OneofWrappers = []any{
 		(*Metric_IntValue)(nil),
 		(*Metric_DoubleValue)(nil),
 		(*Metric_BoolValue)(nil),
@@ -9828,8 +4985,8 @@ func file_lmsemanticsearch_v1_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lmsemanticsearch_v1_service_proto_rawDesc), len(file_lmsemanticsearch_v1_service_proto_rawDesc)),
-			NumEnums:      7,
-			NumMessages:   114,
+			NumEnums:      4,
+			NumMessages:   56,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

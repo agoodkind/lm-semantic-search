@@ -69,26 +69,13 @@ type CodebaseLifecycleHook interface {
 
 // Manager coordinates persisted codebase and job state for the daemon.
 type Manager struct {
-	config config.Config
-	// conversationChunkByteBudget is this manager's immutable byte cap for
-	// splitting conversation text, derived once from config at construction. It
-	// keeps a conversation chunk within the embedder's token limit. Held per
-	// manager (not a package global) so managers with different configs, and
-	// concurrent construction, never contaminate or race each other.
-	conversationChunkByteBudget int
-	mu                          sync.Mutex
-	policyMutationBlocked       bool
-	transitionMutex             sync.Mutex
-	policyMutationMutex         sync.Mutex
-	codebases                   map[string]model.Codebase
-	jobs                        map[string]model.Job
-	conversationJobs            map[string]conversationJobPayload
-	conversationSyncCursors     map[string]string
-	// pendingConversationJobs holds at most one coalesced conversation upsert
-	// payload per codebase (depth 1). An upsert that arrives while that codebase
-	// has an active job merges into this slot instead of refusing; the slot drains
-	// into a fresh job when the active job reaches a terminal state. Guarded by mu.
-	pendingConversationJobs map[string]conversationJobPayload
+	config                config.Config
+	mu                    sync.Mutex
+	policyMutationBlocked bool
+	transitionMutex       sync.Mutex
+	policyMutationMutex   sync.Mutex
+	codebases             map[string]model.Codebase
+	jobs                  map[string]model.Job
 	// pendingCodeJobs holds at most one coalesced code sync request per codebase
 	// (depth 1), admitted when a non-matching-config index or sync request arrives
 	// while a code job is active and drained on terminal. Guarded by mu.
@@ -226,39 +213,35 @@ func newManagerWithDependencies(
 	dependencies managerDependencies,
 ) (*Manager, error) {
 	manager := &Manager{
-		config:                      cfg,
-		conversationChunkByteBudget: conversationChunkMaxBytes,
-		mu:                          sync.Mutex{},
-		policyMutationBlocked:       false,
-		transitionMutex:             sync.Mutex{},
-		policyMutationMutex:         sync.Mutex{},
-		codebases:                   map[string]model.Codebase{},
-		jobs:                        map[string]model.Job{},
-		conversationJobs:            map[string]conversationJobPayload{},
-		conversationSyncCursors:     map[string]string{},
-		pendingConversationJobs:     map[string]conversationJobPayload{},
-		pendingCodeJobs:             map[string]pendingCodeRequest{},
-		interruptedConvergeJobs:     map[string]model.Job{},
-		cancels:                     map[string]context.CancelFunc{},
-		done:                        map[string]chan struct{}{},
-		failedBuildRetries:          map[string]int{},
-		heldWorktreeBuilds:          map[string]struct{}{},
-		lastJobJournalAt:            map[string]time.Time{},
-		appendJobEvent:              store.AppendJobEvent,
-		appendJobTransition:         nil,
-		jobJournal:                  nil,
-		runner:                      indexer.NewRunner(),
-		semantic:                    nil,
-		graphEngines:                map[string]*cbm.Engine{},
-		graphLifecycle:              map[string]*graphLifecycleState{},
-		graphMutex:                  sync.Mutex{},
-		graphIndex:                  defaultGraphIndex,
-		graphIndexHook:              nil,
-		lifecycleHook:               nil,
-		lifecycleMutex:              sync.Mutex{},
-		startedAt:                   clock.Now(),
-		watcherActivity:             nil,
-		watcherActivityMutex:        sync.Mutex{},
+		config:                  cfg,
+		mu:                      sync.Mutex{},
+		policyMutationBlocked:   false,
+		transitionMutex:         sync.Mutex{},
+		policyMutationMutex:     sync.Mutex{},
+		codebases:               map[string]model.Codebase{},
+		jobs:                    map[string]model.Job{},
+		pendingCodeJobs:         map[string]pendingCodeRequest{},
+		interruptedConvergeJobs: map[string]model.Job{},
+		cancels:                 map[string]context.CancelFunc{},
+		done:                    map[string]chan struct{}{},
+		failedBuildRetries:      map[string]int{},
+		heldWorktreeBuilds:      map[string]struct{}{},
+		lastJobJournalAt:        map[string]time.Time{},
+		appendJobEvent:          store.AppendJobEvent,
+		appendJobTransition:     nil,
+		jobJournal:              nil,
+		runner:                  indexer.NewRunner(),
+		semantic:                nil,
+		graphEngines:            map[string]*cbm.Engine{},
+		graphLifecycle:          map[string]*graphLifecycleState{},
+		graphMutex:              sync.Mutex{},
+		graphIndex:              defaultGraphIndex,
+		graphIndexHook:          nil,
+		lifecycleHook:           nil,
+		lifecycleMutex:          sync.Mutex{},
+		startedAt:               clock.Now(),
+		watcherActivity:         nil,
+		watcherActivityMutex:    sync.Mutex{},
 		jobScheduler: jobscheduler.New(
 			ctx,
 			max(1, cfg.MaxConcurrentIndexJobs),
@@ -277,14 +260,6 @@ func newManagerWithDependencies(
 		indexability:                nil,
 		observer:                    nil,
 		maintenance:                 model.MaintenanceState{Enabled: false, Reason: "", Since: time.Time{}},
-	}
-	// Drop this manager's conversation chunk byte budget from the varchar-safe
-	// default (set in the literal above) to the embedding token budget when
-	// EmbeddingMaxTokens is set, so a conversation chunk stays within the model's
-	// input limit instead of being silently truncated. Stored on the manager, not
-	// a package global, so managers never contaminate or race each other.
-	if budget := config.EmbedChunkByteBudget(cfg.EmbeddingMaxTokens); budget > 0 && budget < manager.conversationChunkByteBudget {
-		manager.conversationChunkByteBudget = budget
 	}
 	if err := store.EnsureDir(cfg.GraphDir); err != nil {
 		slog.ErrorContext(ctx, "create graph cache directory failed", "path", cfg.GraphDir, "err", err)

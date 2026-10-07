@@ -116,9 +116,6 @@ type milvusInventory map[string]map[string]string
 type operatorStateAudit struct {
 	violations          []string
 	concurrentAdditions []string
-	// concurrentDatabases lists the databases outside the harness database name
-	// that appeared in or disappeared from the database list during the test.
-	concurrentDatabases []string
 }
 
 type milvusCall struct {
@@ -449,20 +446,6 @@ func newHarnessWithOptions(
 		t.Fatalf("DialDaemon returned error: %v", err)
 	}
 
-	// A fresh random id derives a unique conv_chunks_<hash> collection name, so
-	// the throwaway collection can never be the production one.
-	collectionID := "live-marker-" + harnessID
-	codebase, err := manager.RegisterConversationCollection(context.Background(), collectionID)
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-	if codebase.CollectionName == "" {
-		t.Fatal("RegisterConversationCollection returned an empty collection name")
-	}
-	if codebase.CollectionName == productionConversationCollection {
-		t.Fatalf("throwaway collection name equals production %q; refusing to run", productionConversationCollection)
-	}
-
 	h := &harness{
 		t:                 t,
 		config:            cfg,
@@ -472,10 +455,7 @@ func newHarnessWithOptions(
 		operatorMilvus:    operatorMilvus,
 		milvus:            sandboxMilvus,
 		databaseName:      databaseName,
-		collectionID:      collectionID,
-		collectionName:    codebase.CollectionName,
 		reuseCatalogName:  semantic.ReuseCatalogCollectionName(cfg),
-		codebaseID:        codebase.ID,
 		stateRoot:         stateRoot,
 		merkleDir:         cfg.MerkleDir,
 		embedGate:         gate,
@@ -488,7 +468,6 @@ func newHarnessWithOptions(
 		milvusContext:     sandboxContext,
 		stopServer:        stopServer,
 	}
-	h.trackCollectionFamily(codebase.CollectionName)
 	h.trackTemporaryCollection(h.reuseCatalogName)
 	t.Cleanup(func() { h.teardown(h.stopServer) })
 	setupComplete = true
@@ -675,9 +654,6 @@ func (h *harness) cleanupMilvus() []error {
 	if len(audit.concurrentAdditions) > 0 {
 		h.t.Logf("Concurrent operator additions: %v", audit.concurrentAdditions)
 	}
-	if len(audit.concurrentDatabases) > 0 {
-		h.t.Logf("Database changes outside the harness database: %v", audit.concurrentDatabases)
-	}
 	for _, violation := range audit.violations {
 		cleanupErrors = append(cleanupErrors, fmt.Errorf("%s", violation))
 	}
@@ -698,7 +674,13 @@ func auditOperatorState(
 		violations: milvusIsolationViolations(databaseName, temporaryNames, calls),
 	}
 	hasHarnessMutationEvidence := len(audit.violations) > 0
-	audit.concurrentDatabases, audit.violations = auditDatabaseInventory(databaseName, beforeDatabases, afterDatabases, audit.violations)
+	if !reflect.DeepEqual(afterDatabases, beforeDatabases) {
+		audit.violations = append(audit.violations, fmt.Sprintf(
+			"Milvus database inventory changed\nbefore: %v\nafter: %v",
+			beforeDatabases,
+			afterDatabases,
+		))
+	}
 	baselineNames := make([]string, 0, len(beforeInventory))
 	for collectionName := range beforeInventory {
 		baselineNames = append(baselineNames, collectionName)
@@ -748,40 +730,6 @@ func auditOperatorState(
 		audit.concurrentAdditions = append(audit.concurrentAdditions, collectionName)
 	}
 	return audit
-}
-
-// auditDatabaseInventory compares the database lists before and after one
-// test. After teardown, a database name that starts with databaseName is a
-// violation: the harness left its own database behind. Any other added or
-// removed database is returned as a change outside the harness database. The
-// audit does not identify what made that change. The Milvus call recorder
-// separately rejects a CreateDatabase or DropDatabase that the harness sends
-// for any other database.
-func auditDatabaseInventory(
-	databaseName string,
-	beforeDatabases []string,
-	afterDatabases []string,
-	violations []string,
-) ([]string, []string) {
-	concurrent := make([]string, 0)
-	for _, name := range afterDatabases {
-		if strings.HasPrefix(name, databaseName) {
-			violations = append(violations, fmt.Sprintf(
-				"temporary Milvus database %q remains after teardown",
-				name,
-			))
-			continue
-		}
-		if !slices.Contains(beforeDatabases, name) {
-			concurrent = append(concurrent, "added "+name)
-		}
-	}
-	for _, name := range beforeDatabases {
-		if !slices.Contains(afterDatabases, name) {
-			concurrent = append(concurrent, "removed "+name)
-		}
-	}
-	return concurrent, violations
 }
 
 func milvusIsolationViolations(

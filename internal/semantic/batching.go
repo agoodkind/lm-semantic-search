@@ -1,13 +1,12 @@
 package semantic
 
 import (
-	"strings"
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 const (
-	boolBytes                         = 1
 	float32Bytes                      = 4
 	int64Bytes                        = 8
 	insertRowProtobufFramingAllowance = 48
@@ -96,9 +95,9 @@ func embeddedTokenCount(chunk model.StoredChunk, reuse map[string][]float32) int
 
 // packChunksByEstimatedInsertBytes groups consecutive chunks for one store
 // insert. Every row is charged because reused vectors still cross the store
-// transport. The estimate includes every base column and the optional
-// conversation scalar columns, using the values insertBatch sends after its
-// string transformations.
+// transport. The estimate includes every base column and the declared scalar
+// columns, using the values insertBatch sends after its string
+// transformations.
 func packChunksByEstimatedInsertBytes(
 	chunks []model.StoredChunk,
 	vectorDimension int,
@@ -147,11 +146,11 @@ func estimatedInsertRowBytes(
 	columnSet StoreColumnSet,
 	embeddingModel string,
 ) int {
-	content, _ := sanitizeUTF8(chunk.Content)
-	relativePath, _ := sanitizeUTF8(chunk.RelativePath)
-	fileExtension, _ := sanitizeUTF8(chunk.FileExtension)
-	metadataValue, _ := sanitizeUTF8(encodeMetadata(chunk))
-	normalizedModel, _ := sanitizeUTF8(embeddingModel)
+	content, _ := milvusstore.SanitizeUTF8(chunk.Content)
+	relativePath, _ := milvusstore.SanitizeUTF8(chunk.RelativePath)
+	fileExtension, _ := milvusstore.SanitizeUTF8(chunk.FileExtension)
+	metadataValue, _ := milvusstore.SanitizeUTF8(encodeMetadata(chunk))
+	normalizedModel, _ := milvusstore.SanitizeUTF8(embeddingModel)
 
 	rowBytes := len(generateID(chunk, 0)) +
 		len(content) +
@@ -164,16 +163,6 @@ func estimatedInsertRowBytes(
 		len(metadataValue) +
 		vectorDimension*float32Bytes +
 		insertRowProtobufFramingAllowance
-	if columnSet.ConversationScalars() {
-		rowBytes += len(chunk.ConversationID) +
-			len(chunk.ParentConversationID) +
-			len(strings.ToLower(chunk.Role)) +
-			len(providerFromConversationID(chunk.ConversationID)) +
-			len(chunk.WorkspaceRoot) +
-			boolBytes +
-			int64Bytes +
-			int64Bytes
-	}
-	rowBytes += declaredScalarRowBytes(columnSet.DeclaredScalars(), chunk)
+	rowBytes += milvusstore.ScalarRowBytes(columnSet.DeclaredScalars(), chunk.Scalars)
 	return rowBytes
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
@@ -54,7 +55,7 @@ type fakeSemantic struct {
 	collectionName        func(codebasePath string) string
 	conversationName      func(collectionID string) string
 	inspectCollection     func(context.Context, string) (semantic.CollectionFacts, error)
-	describeScalars       func(context.Context, string) ([]model.ScalarColumn, bool, error)
+	describeScalars       func(context.Context, string) ([]collection.ScalarColumn, bool, error)
 	listCollections       func(context.Context) ([]string, error)
 	hasCollectionForPath  func(context.Context, string) (bool, error)
 	collectionState       func(context.Context, string) (bool, bool, error)
@@ -80,17 +81,9 @@ type fakeSemantic struct {
 	loadReuseForPath     func(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
 	reusePathCalls       []reusePathCall
 	loadReuseForContents func(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string][]float32, error)
-	loadMessageState     func(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error)
 	messageStateCalls    []messageStateCall
-	// loadDerivedBatch, when set, supplies the batched stored-row read the
-	// examination path issues once per run; derivedBatchCalls records the
-	// conversation-id batches each call asked for. When it is nil but
-	// loadMessageState is set, LoadConversationDerivedBatch synthesizes the batch
-	// from per-conversation state so existing base-text integration tests keep
-	// their fixtures.
-	loadDerivedBatch  func(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error)
-	derivedBatchCalls [][]string
-	reindexReuse      map[string]map[string][]float32
+	derivedBatchCalls    [][]string
+	reindexReuse         map[string]map[string][]float32
 	// conversationSearchScopes records the conversation-id scope each
 	// conversation search received, so tests can prove native scoping.
 	conversationSearchScopes [][]string
@@ -116,7 +109,7 @@ func (f *fakeSemantic) SetMaintenance(enabled bool) {
 
 // RecordCollectionDeclaration accepts the manager's declaration record. The
 // fake has no schema migrations for the record to steer.
-func (f *fakeSemantic) RecordCollectionDeclaration(string, model.CollectionDeclaration) {}
+func (f *fakeSemantic) RecordCollectionDeclaration(string, collection.Declaration) {}
 
 // LoadCollectionItemBatch reports no stored rows for a generic collection.
 func (f *fakeSemantic) LoadCollectionItemBatch(context.Context, string, string, []string) (semantic.CollectionItemBatchState, error) {
@@ -171,7 +164,7 @@ func (f *fakeSemantic) ConversationCollectionName(collectionID string) string {
 	return "conv_chunks_" + tshash.PathPrefix(collectionID)
 }
 
-func (f *fakeSemantic) DescribeScalarColumns(ctx context.Context, collectionName string) ([]model.ScalarColumn, bool, error) {
+func (f *fakeSemantic) DescribeScalarColumns(ctx context.Context, collectionName string) ([]collection.ScalarColumn, bool, error) {
 	if f.describeScalars != nil {
 		return f.describeScalars(ctx, collectionName)
 	}
@@ -233,6 +226,10 @@ func (lease fakeCollectionLease) ReleaseContext(context.Context) {
 	lease.Release()
 }
 
+func (f *fakeSemantic) SearchConversationCollection(ctx context.Context, search semantic.CollectionSearch) ([]semantic.CollectionHit, error) {
+	return f.SearchCollection(ctx, search)
+}
+
 func (f *fakeSemantic) SearchCollection(ctx context.Context, search semantic.CollectionSearch) ([]semantic.CollectionHit, error) {
 	f.mu.Lock()
 	f.conversationSearchScopes = append(f.conversationSearchScopes, itemIDScope(search.Filter, search.Declaration.ItemIDColumn))
@@ -254,12 +251,12 @@ func (f *fakeSemantic) SearchCollection(ctx context.Context, search semantic.Col
 // itemIDScope returns the values of the item id membership child of a root all
 // node, which is where the conversation adapter puts an explicit conversation
 // scope. It returns nil when the filter has no such child.
-func itemIDScope(filter *semantic.CollectionFilter, itemIDColumn string) []string {
-	if filter == nil || filter.Kind != semantic.CollectionFilterAll {
+func itemIDScope(filter *collection.Filter, itemIDColumn string) []string {
+	if filter == nil || filter.Kind != collection.FilterAll {
 		return nil
 	}
 	for _, child := range filter.Children {
-		if child.Kind != semantic.CollectionFilterIn || child.Column != itemIDColumn {
+		if child.Kind != collection.FilterIn || child.Column != itemIDColumn {
 			continue
 		}
 		scope := make([]string, 0, len(child.Values))
@@ -406,48 +403,6 @@ func (f *fakeSemantic) LoadReuseVectorsForContents(
 	return map[string][]float32{}, nil
 }
 
-func (f *fakeSemantic) LoadConversationMessageState(ctx context.Context, collectionName string, conversationPrefix string) (map[int32]semantic.StoredMessageState, map[string][]float32, error) {
-	f.mu.Lock()
-	f.messageStateCalls = append(f.messageStateCalls, messageStateCall{Collection: collectionName, Prefix: conversationPrefix})
-	f.mu.Unlock()
-	if f.loadMessageState != nil {
-		return f.loadMessageState(ctx, collectionName, conversationPrefix)
-	}
-	return map[int32]semantic.StoredMessageState{}, map[string][]float32{}, nil
-}
-
-func (f *fakeSemantic) LoadConversationDerivedBatch(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error) {
-	f.mu.Lock()
-	f.derivedBatchCalls = append(f.derivedBatchCalls, append([]string(nil), conversationIDs...))
-	f.mu.Unlock()
-	if f.loadDerivedBatch != nil {
-		return f.loadDerivedBatch(ctx, collectionName, conversationIDs)
-	}
-	if f.loadMessageState != nil {
-		return f.conversationBatchFromMessageState(ctx, collectionName, conversationIDs)
-	}
-	return semantic.ConversationBatchState{Rows: map[string]semantic.ConversationStoredRows{}, Reuse: map[string][]float32{}}, nil
-}
-
-// conversationBatchFromMessageState synthesizes a batched read from the
-// per-conversation loadMessageState hook, so a base-text integration test that
-// only stubs message state keeps working. It carries no derived-path identities,
-// so a test that stores derived rows must stub loadDerivedBatch directly.
-func (f *fakeSemantic) conversationBatchFromMessageState(ctx context.Context, collectionName string, conversationIDs []string) (semantic.ConversationBatchState, error) {
-	state := semantic.ConversationBatchState{Rows: map[string]semantic.ConversationStoredRows{}, Reuse: map[string][]float32{}}
-	for _, conversationID := range conversationIDs {
-		messages, reuse, err := f.LoadConversationMessageState(ctx, collectionName, "conv/"+conversationID+"/")
-		if err != nil {
-			return semantic.ConversationBatchState{}, err
-		}
-		state.Rows[conversationID] = semantic.ConversationStoredRows{Messages: messages, DerivedPaths: map[string]string{}}
-		for key, vector := range reuse {
-			state.Reuse[key] = vector
-		}
-	}
-	return state, nil
-}
-
 func (f *fakeSemantic) derivedBatchCallsSnapshot() [][]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -487,29 +442,11 @@ func (f *fakeSemantic) reindexReuseSnapshot() map[string]map[string][]float32 {
 	return out
 }
 
-// recordReindexReuse stores the reuse map a Reindex call carried, keyed by the
-// conversation id of its first chunk, so conversation tests can assert which
-// reuse map reached which conversation's reindex.
-func (f *fakeSemantic) recordReindexReuse(chunks []model.StoredChunk, reuse map[string][]float32) {
-	if len(chunks) == 0 || chunks[0].ConversationID == "" {
-		return
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.reindexReuse == nil {
-		f.reindexReuse = make(map[string]map[string][]float32)
-	}
-	copied := make(map[string][]float32, len(reuse))
-	maps.Copy(copied, reuse)
-	f.reindexReuse[chunks[0].ConversationID] = copied
-}
-
 func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error {
 	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
 	f.reindexCalls = append(f.reindexCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval, ColumnSet: columnSet})
 	f.mu.Unlock()
-	f.recordReindexReuse(chunks, reuse)
 	if f.reindexWithReuse != nil {
 		return f.reindexWithReuse(ctx, codebasePath, chunks, removalPaths(removal), progress, reuse)
 	}
@@ -527,7 +464,6 @@ func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, ch
 	f.mu.Lock()
 	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval, ColumnSet: columnSet})
 	f.mu.Unlock()
-	f.recordReindexReuse(chunks, reuse)
 	if f.stageReindexWithReuse != nil {
 		return f.stageReindexWithReuse(ctx, codebasePath, chunks, removalPaths(removal), progress, reuse)
 	}
@@ -547,19 +483,15 @@ func (f *fakeSemantic) PromoteStaging(ctx context.Context, codebasePath string) 
 	return nil
 }
 
-// removalPaths flattens a removal into the legacy path list the converge tests
-// assert on: exact paths first, then prefixes.
 func removalPaths(removal semantic.Removal) []string {
-	combined := make([]string, 0, len(removal.Paths)+len(removal.Prefixes))
-	combined = append(combined, removal.Paths...)
-	combined = append(combined, removal.Prefixes...)
-	return combined
+	return append(make([]string, 0, len(removal.Paths)), removal.Paths...)
 }
 
 func copyRemoval(removal semantic.Removal) semantic.Removal {
 	return semantic.Removal{
-		Paths:    append([]string(nil), removal.Paths...),
-		Prefixes: append([]string(nil), removal.Prefixes...),
+		Paths:      append([]string(nil), removal.Paths...),
+		ItemColumn: removal.ItemColumn,
+		ItemIDs:    append([]string(nil), removal.ItemIDs...),
 	}
 }
 
@@ -571,7 +503,7 @@ func (f *fakeSemantic) DeleteItemRows(ctx context.Context, collectionName string
 }
 
 // BackfillCollectionScalars reports no rows that need a backfill.
-func (f *fakeSemantic) BackfillCollectionScalars(context.Context, string, semantic.ScalarBackfill) (int, int, error) {
+func (f *fakeSemantic) BackfillCollectionScalars(context.Context, string, collection.ScalarBackfill) (int, int, error) {
 	return 0, 0, nil
 }
 
@@ -587,12 +519,6 @@ func (f *fakeSemantic) PruneToCurrent(context.Context, string, []string) error {
 func (f *fakeSemantic) EnsureMmapEnabledAllCollections(ctx context.Context) {
 	if f.ensureMmap != nil {
 		f.ensureMmap(ctx)
-	}
-}
-
-func (f *fakeSemantic) BackfillConversationCollectionsOnce(ctx context.Context) {
-	if f.backfillCollections != nil {
-		f.backfillCollections(ctx)
 	}
 }
 
@@ -845,51 +771,6 @@ func TestConvergeCopyChunksFiresOnRename(t *testing.T) {
 	}
 }
 
-// gatedRecordingSemantic builds a fakeSemantic that records every conversation
-// id reaching an embed call and blocks the FIRST embed on release after
-// signalling entered. A test uses it to hold the first conversation job active
-// inside its embed, submit a coalescing second job, then release and prove the
-// drained successor embedded the coalesced ids. The returned snapshot is a
-// concurrency-safe copy of the embedded-id set.
-func gatedRecordingSemantic() (*fakeSemantic, func() map[string]struct{}, chan struct{}, chan struct{}) {
-	var mu sync.Mutex
-	embedded := map[string]struct{}{}
-	var calls atomic.Int32
-	entered := make(chan struct{}, 1)
-	release := make(chan struct{})
-	record := func(chunks []model.StoredChunk) {
-		mu.Lock()
-		for _, chunk := range chunks {
-			if chunk.ConversationID != "" {
-				embedded[chunk.ConversationID] = struct{}{}
-			}
-		}
-		mu.Unlock()
-	}
-	gate := func() {
-		if calls.Add(1) == 1 {
-			entered <- struct{}{}
-			<-release
-		}
-	}
-	embed := func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, _ func(semantic.Progress), _ map[string][]float32) error {
-		record(chunks)
-		gate()
-		return nil
-	}
-	fake := &fakeSemantic{stageReindexWithReuse: embed, reindexWithReuse: embed}
-	snapshot := func() map[string]struct{} {
-		mu.Lock()
-		defer mu.Unlock()
-		out := make(map[string]struct{}, len(embedded))
-		for id := range embedded {
-			out[id] = struct{}{}
-		}
-		return out
-	}
-	return fake, snapshot, entered, release
-}
-
 func waitForCompletedJobCount(t *testing.T, manager *Manager, want int) {
 	t.Helper()
 	waitForCondition(t, func() bool {
@@ -904,151 +785,6 @@ func waitForCompletedJobCount(t *testing.T, manager *Manager, want int) {
 		}
 		return true
 	})
-}
-
-// TestConversationUpsertCoalescesWithoutContention proves the no-contention
-// contract: a normal ingest and a backfill on the SAME collection do not
-// collide. While the first ingest holds the embed, the second submission returns
-// the ACTIVE job id and does not error with the removed conflict message.
-func TestConversationUpsertCoalescesWithoutContention(t *testing.T) {
-	manager, _, _ := newTestManager(t)
-	fake, _, entered, release := gatedRecordingSemantic()
-	manager.semantic = fake
-	ctx := context.Background()
-	collectionID := "coalesce-no-contention"
-
-	firstDocs := []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}}
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false, false)
-	if err != nil {
-		t.Fatalf("first upsert returned error: %v", err)
-	}
-	<-entered // the first job is now blocked inside the embed, ActiveJobID set
-
-	backfillDocs := []model.ConversationDocument{{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "b"}}
-	secondJob, err := manager.upsertConversationDocuments(ctx, collectionID, backfillDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, true, false)
-	if err != nil {
-		t.Fatalf("second same-collection upsert returned error, want coalesced success: %v", err)
-	}
-	if secondJob.ID != firstJob.ID {
-		t.Fatalf("coalesced submission returned job %s, want the active job %s", secondJob.ID, firstJob.ID)
-	}
-
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-	manager.mu.Lock()
-	pending, ok := manager.pendingConversationJobs[codebase.ID]
-	manager.mu.Unlock()
-	if !ok {
-		t.Fatal("pending slot empty after coalesce, want the merged backfill payload")
-	}
-	if _, present := pending.Manifest["conv-b"]; !present {
-		t.Fatalf("pending manifest = %v, want conv-b", pending.Manifest)
-	}
-	if !pending.Backfill {
-		t.Fatal("pending payload lost the backfill intent")
-	}
-
-	close(release)
-	waitForCompletedJobCount(t, manager, 2)
-}
-
-// TestConversationCoalesceDrainsPendingAfterTerminal proves the drain: after the
-// first job reaches terminal and clears ActiveJobID, the coalesced pending
-// payload runs as a fresh job and BOTH id sets end up embedded.
-func TestConversationCoalesceDrainsPendingAfterTerminal(t *testing.T) {
-	manager, _, _ := newTestManager(t)
-	fake, embeddedSnapshot, entered, release := gatedRecordingSemantic()
-	manager.semantic = fake
-	ctx := context.Background()
-	collectionID := "coalesce-drain"
-
-	firstDocs := []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}}
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false, false)
-	if err != nil {
-		t.Fatalf("first upsert returned error: %v", err)
-	}
-	<-entered
-
-	secondDocs := []model.ConversationDocument{{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "b"}}
-	if _, err := manager.upsertConversationDocuments(ctx, collectionID, secondDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, false, false); err != nil {
-		t.Fatalf("second upsert returned error: %v", err)
-	}
-
-	close(release)
-	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
-	// The drained successor runs as a separate second job.
-	waitForCompletedJobCount(t, manager, 2)
-
-	embedded := embeddedSnapshot()
-	for _, want := range []string{"conv-a", "conv-b"} {
-		if _, present := embedded[want]; !present {
-			t.Fatalf("embedded ids = %v, want both conv-a and conv-b (drained work not lost)", embedded)
-		}
-	}
-	manager.mu.Lock()
-	_, stillPending := manager.pendingConversationJobs[firstJob.CodebaseID]
-	manager.mu.Unlock()
-	if stillPending {
-		t.Fatal("pending slot not drained after terminal transition")
-	}
-}
-
-// TestConversationCoalesceDepthOneMergesThirdSubmission proves depth 1: with one
-// job active and one pending, a third submission merges into the single pending
-// payload rather than growing an unbounded queue, and the one drained job covers
-// every delivered id.
-func TestConversationCoalesceDepthOneMergesThirdSubmission(t *testing.T) {
-	manager, _, _ := newTestManager(t)
-	fake, embeddedSnapshot, entered, release := gatedRecordingSemantic()
-	manager.semantic = fake
-	ctx := context.Background()
-	collectionID := "coalesce-depth-one"
-
-	firstDocs := []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}}
-	firstJob, err := manager.upsertConversationDocuments(ctx, collectionID, firstDocs, testConversationManifest("conv-a"), testClientInfo(), absenceRetain, false, false)
-	if err != nil {
-		t.Fatalf("first upsert returned error: %v", err)
-	}
-	<-entered
-
-	secondDocs := []model.ConversationDocument{{ConversationID: "conv-b", MessageIndex: 0, Role: "user", Text: "b"}}
-	if _, err := manager.upsertConversationDocuments(ctx, collectionID, secondDocs, testConversationManifest("conv-b"), testClientInfo(), absenceRetain, false, false); err != nil {
-		t.Fatalf("second upsert returned error: %v", err)
-	}
-	thirdDocs := []model.ConversationDocument{{ConversationID: "conv-c", MessageIndex: 0, Role: "user", Text: "c"}}
-	if _, err := manager.upsertConversationDocuments(ctx, collectionID, thirdDocs, testConversationManifest("conv-c"), testClientInfo(), absenceRetain, false, false); err != nil {
-		t.Fatalf("third upsert returned error: %v", err)
-	}
-
-	codebase, err := manager.RegisterConversationCollection(ctx, collectionID)
-	if err != nil {
-		t.Fatalf("RegisterConversationCollection returned error: %v", err)
-	}
-	manager.mu.Lock()
-	pending, ok := manager.pendingConversationJobs[codebase.ID]
-	manager.mu.Unlock()
-	if !ok {
-		t.Fatal("pending slot empty, want the merged conv-b + conv-c payload")
-	}
-	for _, want := range []string{"conv-b", "conv-c"} {
-		if _, present := pending.Manifest[want]; !present {
-			t.Fatalf("pending manifest = %v, want both conv-b and conv-c (depth-1 merge)", pending.Manifest)
-		}
-	}
-
-	close(release)
-	waitForConversationJobState(t, manager, firstJob.ID, model.JobStateCompleted)
-	// Exactly one drained job runs (first + drained = 2), proving no unbounded queue.
-	waitForCompletedJobCount(t, manager, 2)
-
-	embedded := embeddedSnapshot()
-	for _, want := range []string{"conv-a", "conv-b", "conv-c"} {
-		if _, present := embedded[want]; !present {
-			t.Fatalf("embedded ids = %v, want conv-a, conv-b, and conv-c (no dropped ids)", embedded)
-		}
-	}
 }
 
 // TestCodeIndexCoalescesNonMatchingConfigAndDrains proves the code admission
@@ -1135,59 +871,5 @@ func TestCodeIndexCoalescesNonMatchingConfigAndDrains(t *testing.T) {
 	}
 	if !drainedFound {
 		t.Fatal("no drained successor job found after terminal")
-	}
-}
-
-// TestMergePendingConversationPayloadORsBackfillAndForce proves the depth-1
-// coalescing merge keeps both orthogonal flags sticky true, independent of order:
-// a coalesced backfill stays a backfill and a coalesced force stays a force, so a
-// force that lands next to a plain or backfill submission is never downgraded.
-func TestMergePendingConversationPayloadORsBackfillAndForce(t *testing.T) {
-	t.Parallel()
-
-	upsert := func(backfill bool, force bool) conversationJobPayload {
-		return conversationJobPayload{
-			Kind:           conversationJobKindUpsert,
-			CollectionName: "conv_chunks_merge",
-			Manifest:       map[string]string{"conv-a": "fp"},
-			Documents:      []model.ConversationDocument{{ConversationID: "conv-a", MessageIndex: 0, Role: "user", Text: "a"}},
-			ItemID:         "",
-			Absence:        absenceRetain,
-			Backfill:       backfill,
-			Force:          force,
-		}
-	}
-
-	cases := []struct {
-		name         string
-		first        conversationJobPayload
-		second       conversationJobPayload
-		wantBackfill bool
-		wantForce    bool
-	}{
-		{"backfill then force keeps both", upsert(true, false), upsert(false, true), true, true},
-		{"force then backfill keeps both", upsert(false, true), upsert(true, false), true, true},
-		{"force then plain stays force", upsert(false, true), upsert(false, false), false, true},
-		{"backfill then plain stays backfill", upsert(true, false), upsert(false, false), true, false},
-		{"plain then plain stays plain", upsert(false, false), upsert(false, false), false, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			manager, _, _ := newTestManager(t)
-			const codebaseID = "cb-merge"
-
-			manager.mu.Lock()
-			manager.mergePendingConversationPayloadLocked(codebaseID, tc.first)
-			manager.mergePendingConversationPayloadLocked(codebaseID, tc.second)
-			merged := manager.pendingConversationJobs[codebaseID]
-			manager.mu.Unlock()
-
-			if merged.Backfill != tc.wantBackfill {
-				t.Fatalf("merged Backfill = %v, want %v", merged.Backfill, tc.wantBackfill)
-			}
-			if merged.Force != tc.wantForce {
-				t.Fatalf("merged Force = %v, want %v", merged.Force, tc.wantForce)
-			}
-		})
 	}
 }

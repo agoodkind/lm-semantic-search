@@ -1,10 +1,9 @@
-// Package onnx runs an offline embedding model in process through ONNX Runtime.
-// It is the only embedding package that links native code.
+// Package onnx implements the in-process ONNX Runtime embedding provider.
 package onnx
 
 /*
 #cgo darwin LDFLAGS: -Wl,-rpath,@loader_path
-#cgo linux LDFLAGS: -Wl,-rpath,$ORIGIN
+#cgo linux LDFLAGS: -Wl,-rpath,$ORIGIN -ldl
 #cgo pkg-config: onnxruntime
 #include <stdlib.h>
 #include "onnx_bridge.h"
@@ -18,13 +17,13 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"strings"
 	"sync"
 	"unsafe"
 
+	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
-	"goodkind.io/lm-semantic-search/internal/embedding"
+	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
@@ -55,78 +54,24 @@ type inProcessONNXRuntime struct {
 	mutex     sync.Mutex
 }
 
-// NewProvider constructs the in-process ONNX provider for one offline model
-// preset. It downloads and checksum-verifies missing artifacts under
-// modelCacheRoot. Providers for the same model file share one native session
-// for the process lifetime.
+// NewProvider returns the in-process ONNX provider for the offline model the
+// configuration selects. Providers that load the same model file share one
+// runtime.
 func NewProvider(
 	ctx context.Context,
-	modelName string,
-	modelCacheRoot string,
+	cfg config.Config,
 ) (embedding.Provider, error) {
-	runtime, err := loadONNXRuntime(ctx, modelName, modelCacheRoot)
-	if err != nil {
-		return nil, err
-	}
-	return &onnxProvider{runtime: runtime}, nil
+	return NewProviderForModel(ctx, cfg.OfflineEmbeddingModel, cfg.ModelCacheRoot)
 }
 
-// TokenCounter measures inputs with the tokenizer of one offline model preset.
-// It shares the cached runtime with [NewProvider] for the same model.
-type TokenCounter struct {
-	runtime *inProcessONNXRuntime
-}
-
-// NewTokenCounter returns the token counter for one offline model preset.
-func NewTokenCounter(
+// NewProviderForModel returns the in-process ONNX provider for one offline
+// model preset. An empty modelName selects the default preset. cacheRoot is the
+// directory that stores the downloaded model files.
+func NewProviderForModel(
 	ctx context.Context,
 	modelName string,
-	modelCacheRoot string,
-) (*TokenCounter, error) {
-	runtime, err := loadONNXRuntime(ctx, modelName, modelCacheRoot)
-	if err != nil {
-		return nil, err
-	}
-	return &TokenCounter{runtime: runtime}, nil
-}
-
-// CountTokens returns the token count the provider measures for text,
-// including the special tokens the model adds. It counts text of any length.
-// Text with a NUL byte returns an error, because the tokenizer binding reads
-// only the bytes before the NUL.
-func (counter *TokenCounter) CountTokens(ctx context.Context, text string) (int, error) {
-	if err := ctx.Err(); err != nil {
-		slog.WarnContext(ctx, "ONNX token count cancelled before start", "err", err)
-		return 0, fmt.Errorf("count ONNX tokens: %w", err)
-	}
-	if strings.ContainsRune(text, 0) {
-		err := errors.New("input contains a NUL byte, which the tokenizer cannot read past")
-		slog.WarnContext(ctx, "ONNX token count refused input", "input_bytes", len(text), "err", err)
-		return 0, fmt.Errorf("count ONNX tokens: %w", err)
-	}
-	counter.runtime.mutex.Lock()
-	defer counter.runtime.mutex.Unlock()
-	return counter.runtime.tokenizer.count(text)
-}
-
-// MaxTokens returns the model's maximum token count for one input.
-func (counter *TokenCounter) MaxTokens() int {
-	return int(counter.runtime.preset.MaximumTokens)
-}
-
-// MaxInputBytes returns the byte ceiling the provider applies to one input
-// before tokenizing it.
-func (counter *TokenCounter) MaxInputBytes() int {
-	return counter.runtime.tokenizer.maximumInputBytes()
-}
-
-// loadONNXRuntime returns the cached runtime for one offline model preset, or
-// initializes and caches it.
-func loadONNXRuntime(
-	ctx context.Context,
-	modelName string,
-	modelCacheRoot string,
-) (*inProcessONNXRuntime, error) {
+	cacheRoot string,
+) (embedding.Provider, error) {
 	preset, err := offlinemodel.Resolve(modelName)
 	if err != nil {
 		slog.ErrorContext(
@@ -142,7 +87,7 @@ func loadONNXRuntime(
 	files, err := ensureModelFiles(
 		ctx,
 		http.DefaultClient,
-		modelCacheRoot,
+		cacheRoot,
 		preset,
 	)
 	if err != nil {
@@ -152,14 +97,17 @@ func loadONNXRuntime(
 	onnxRuntimesMutex.Lock()
 	defer onnxRuntimesMutex.Unlock()
 	if runtime, found := onnxRuntimes[files.modelPath]; found {
-		return runtime, nil
+		return &onnxProvider{runtime: runtime}, nil
+	}
+	if err := loadRuntimeLibraryLocked(); err != nil {
+		return nil, err
 	}
 	runtime, err := initializeONNXRuntime(files, preset)
 	if err != nil {
 		return nil, err
 	}
 	onnxRuntimes[files.modelPath] = runtime
-	return runtime, nil
+	return &onnxProvider{runtime: runtime}, nil
 }
 
 func initializeONNXRuntime(
@@ -308,11 +256,9 @@ func (provider *onnxProvider) clientRejection(
 	}
 }
 
-// skippedInput renders one refused input for the batch's Skipped list. Both token
-// figures travel only with a rejection the tokenizer measured against the model's
-// window. A NUL byte and an over-long byte count are both refused before
-// tokenizing, so neither figure exists for them and both come back unreported
-// rather than as a zero the caller would read as a measurement.
+// The entry reports both token figures only for a rejection the tokenizer
+// measured against the model's window. The provider refuses a NUL byte and an
+// over-long input before tokenizing, and both figures are unreported for them.
 func (provider *onnxProvider) skippedInput(
 	index int,
 	outcome onnxEmbedOutcome,
@@ -488,11 +434,10 @@ func (provider *onnxProvider) EmbedBatch(
 		metrics.EmbedBatchDone(len(texts), clock.Now().Sub(start), err != nil)
 	}()
 
-	// Every input the provider refuses is reported as skipped with a nil vector and
-	// its reason code, exactly as the OpenAI-compatible provider reports a
-	// context_length_exceeded rejection. Both implementations of Provider therefore
-	// honor the same promise: a returned vector always covers the whole input, and
-	// the caller's split-and-retry loop divides anything that does not fit.
+	// The provider reports every refused input as skipped, with a nil vector
+	// and its reason code. A returned vector always covers the whole input, and
+	// the split-and-retry loop of the caller divides an input that does not
+	// fit.
 	vectors := make([][]float32, len(texts))
 	var skipped []embedding.SkippedInput
 	refusedEmpty := 0

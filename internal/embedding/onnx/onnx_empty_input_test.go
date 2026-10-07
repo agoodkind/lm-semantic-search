@@ -15,14 +15,9 @@ func asAdapterError(err error, target **adapterr.AdapterError) bool {
 	return errors.As(err, target)
 }
 
-// TestONNXEmbedBatchRefusesEmptyContent proves the in-process provider honors the
-// same refusal as the hosted one. Both implement one Provider contract, so a
-// guarantee that held only for the hosted endpoint would leave the offline
-// backend accumulating exactly the rows the guard exists to prevent.
-//
-// The provider is deliberately unloaded: no session and no tokenizer. Reaching
-// either would panic, so passing also proves the refusal happens before any
-// tokenization, which is what keeps an empty input off the shared runtime lock.
+// TestONNXEmbedBatchRefusesEmptyContent checks that the in-process provider
+// refuses an empty input before tokenization. The provider has no session and
+// no tokenizer, and a call to either would panic.
 func TestONNXEmbedBatchRefusesEmptyContent(t *testing.T) {
 	provider := newUnloadedONNXProvider(t, offlinemodel.BGESmall)
 

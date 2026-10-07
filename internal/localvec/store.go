@@ -14,12 +14,12 @@ import (
 	"strings"
 	"sync"
 
+	lmcollection "goodkind.io/lm-semantic-search/collection"
+	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/config"
-	"goodkind.io/lm-semantic-search/internal/embedding"
-	"goodkind.io/lm-semantic-search/internal/embedding/providers"
+	"goodkind.io/lm-semantic-search/internal/embeddingprovider"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
-	"goodkind.io/lm-semantic-search/internal/tshash"
 )
 
 const (
@@ -72,7 +72,7 @@ func (store *Store) EmbeddingProviderName() model.EmbeddingProvider {
 func New(ctx context.Context, cfg config.Config) (*Store, error) {
 	var provider embedding.Provider
 	if cfg.EmbeddingProvider != model.EmbeddingProviderNone {
-		configuredProvider, err := providers.New(ctx, cfg)
+		configuredProvider, err := embeddingprovider.New(ctx, cfg)
 		if err != nil {
 			slog.ErrorContext(
 				ctx,
@@ -93,7 +93,14 @@ func newStoreWithProvider(
 	cfg config.Config,
 	provider embedding.Provider,
 ) (*Store, error) {
-	root := filepath.Join(cfg.StateRoot, "localvec")
+	return newStoreAtRoot(cfg, filepath.Join(cfg.StateRoot, "localvec"), provider)
+}
+
+func newStoreAtRoot(
+	cfg config.Config,
+	root string,
+	provider embedding.Provider,
+) (*Store, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		slog.Error("create local vector store directory failed", "path", root, "err", err)
 		return nil, fmt.Errorf("create local vector store directory %s: %w", root, err)
@@ -150,7 +157,7 @@ func (store *Store) CollectionName(codebasePath string) string {
 
 // ConversationCollectionName returns the collection name for a conversation collection.
 func (store *Store) ConversationCollectionName(collectionID string) string {
-	return "conv_chunks_" + tshash.PathPrefix(strings.TrimSpace(collectionID))
+	return lmcollection.DocumentName(collectionID)
 }
 
 // Count returns the number of stored chunks for a codebase.
@@ -256,14 +263,13 @@ func (store *Store) InspectCollection(
 
 // DescribeScalarColumns reports the declared scalar columns of a stored local
 // collection. exists is false when the collection is absent. The local row
-// format has no schema. A collection with a recorded generic declaration
-// reports the columns of that declaration. Every other existing local
-// collection reports the conversation declaration, because the local row
-// format stores the conversation scalar fields on every conversation row.
+// format has no schema. A collection with a recorded declaration reports the
+// columns of that declaration. Every other existing local collection reports
+// no scalar columns.
 func (store *Store) DescribeScalarColumns(
 	_ context.Context,
 	collectionName string,
-) ([]model.ScalarColumn, bool, error) {
+) ([]lmcollection.ScalarColumn, bool, error) {
 	stored, err := store.collectionForName(collectionName, false)
 	if err != nil {
 		return nil, false, err
@@ -278,7 +284,7 @@ func (store *Store) DescribeScalarColumns(
 	if declared, found := store.recordedScalars(collectionName); found {
 		return declared, true, nil
 	}
-	return semantic.ConversationDeclaration().Scalars, true, nil
+	return nil, true, nil
 }
 
 // HasCollectionForPath reports whether a codebase has a stored collection.

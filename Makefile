@@ -134,7 +134,7 @@ build install release: | daemon-entitlements-signer
 # Project-local
 # ---------------------------------------------------------------------------
 
-.PHONY: daemon-entitlements-signer go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live offline-live library-live-prereqs library-live-l1 library-live-l2 library-live-l3 library-live-l4 library-live-l4-offline library-live-l5 install-live milvus-integration service-activity-live restart-acceptance-unit restart-acceptance proto
+.PHONY: daemon-entitlements-signer go-mk-cgo-dep-cbm go-mk-cgo-dep-onnxruntime go-mk-cgo-dep-tokenizers deploy deploy-service daemon-wait daemon-status kill-orphans live offline-live install-live milvus-integration service-activity-live restart-acceptance-unit restart-acceptance proto
 
 # live runs the opt-in conversation-marker validation suite against a real local
 # Milvus, fully isolated from the operator's daemon (build tag `live`). It reuses
@@ -148,40 +148,6 @@ live: | $(GO_MK_PREREQS)
 # an isolated in-process daemon, embedded vector store, and embedded ONNX model.
 offline-live: | $(GO_MK_PREREQS)
 	go test -tags offlinelive -count=1 ./test/offlinelive/
-
-# The library-live lane targets run the shared search library acceptance suites
-# through cmd/library-live-gate. The gate fails when go test fails, when no
-# selected test runs, when any selected test skips, or when no selected test
-# passes. Each suite uses an isolated real Milvus database, a temporary SQLite
-# catalog, and the real embedding adapter and endpoint. A target is an
-# acceptance command only after its lane adds the matching tests.
-LIBRARY_LIVE_GATE := go run ./cmd/library-live-gate
-
-library-live-prereqs: | $(GO_MK_PREREQS)
-
-library-live-l1: library-live-prereqs
-	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibraryWrite' ./test/live/
-
-# library-live-l2 runs the in-package analyzer and BM25 parity suite in
-# ./library/ and then the public lexical suite in ./test/live/. Make stops at
-# the first invocation that fails. The target passes only when both pass.
-library-live-l2: library-live-prereqs
-	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibraryLexical' ./library/
-	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibraryLexical' ./test/live/
-
-library-live-l3: library-live-prereqs
-	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibrarySearch' ./test/live/
-
-# library-live-l4 runs the Milvus codebase suite and then the offline suite.
-library-live-l4: library-live-prereqs
-	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibraryCodebase' ./test/live/
-	$(MAKE) library-live-l4-offline
-
-library-live-l4-offline: library-live-prereqs
-	$(LIBRARY_LIVE_GATE) -tags offlinelive -run '^TestLibraryCodebaseOffline' ./test/offlinelive/
-
-library-live-l5: library-live-prereqs
-	$(LIBRARY_LIVE_GATE) -tags live -run '^TestLibraryRetirement' ./test/live/
 
 # milvus-integration runs the opt-in suite that proves the daemon's collection
 # load controls against a real Milvus. Each test starts its own throwaway

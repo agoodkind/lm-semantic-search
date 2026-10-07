@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -90,12 +92,12 @@ func TestDeduplicateChunks(t *testing.T) {
 	}
 }
 
-func TestResultSetsToChunksReturnsIncompleteResultError(t *testing.T) {
+func TestHitsFromResultSetReturnsIncompleteResultError(t *testing.T) {
 	t.Parallel()
 
-	_, err := resultSetsToChunks([]milvusclient.ResultSet{{ResultCount: 1}})
+	_, err := milvusstore.HitsFromResultSet(milvusclient.ResultSet{ResultCount: 1}, nil)
 	if !errors.Is(err, ErrSearchResultIncomplete) {
-		t.Fatalf("resultSetsToChunks returned err=%v", err)
+		t.Fatalf("HitsFromResultSet returned err=%v", err)
 	}
 }
 
@@ -110,41 +112,6 @@ func TestEncodeMetadataCodeChunkShapeUnchanged(t *testing.T) {
 	languageMetadata := encodeMetadata(model.StoredChunk{Language: "go"})
 	if languageMetadata != `{"language":"go"}` {
 		t.Fatalf("language metadata = %q, want language-only JSON", languageMetadata)
-	}
-}
-
-func TestEncodeDecodeMetadataConversationFields(t *testing.T) {
-	t.Parallel()
-
-	metadata := encodeMetadata(model.StoredChunk{
-		ConversationID:       "thread-alpha",
-		ParentConversationID: "thread-root",
-		MessageIndex:         0,
-		Role:                 "assistant",
-		TimestampUnix:        1712345678,
-	})
-	decoded := decodeMetadata(metadata)
-
-	if decoded.ConversationID != "thread-alpha" {
-		t.Fatalf("ConversationID = %q, want thread-alpha", decoded.ConversationID)
-	}
-	if decoded.ParentConversationID != "thread-root" {
-		t.Fatalf("ParentConversationID = %q, want thread-root", decoded.ParentConversationID)
-	}
-	if decoded.messageIndex() != 0 {
-		t.Fatalf("MessageIndex = %d, want 0", decoded.messageIndex())
-	}
-	if decoded.Role != "assistant" {
-		t.Fatalf("Role = %q, want assistant", decoded.Role)
-	}
-	if decoded.timestampUnix() != 1712345678 {
-		t.Fatalf("TimestampUnix = %d, want 1712345678", decoded.timestampUnix())
-	}
-	if !strings.Contains(metadata, `"message_index":0`) {
-		t.Fatalf("metadata %q omitted zero message_index for a conversation chunk", metadata)
-	}
-	if !strings.Contains(metadata, `"parent_conversation_id":"thread-root"`) {
-		t.Fatalf("metadata %q omitted parent_conversation_id for a forked conversation chunk", metadata)
 	}
 }
 

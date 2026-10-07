@@ -162,10 +162,9 @@ func TestStatusSnapshotSeesADrainingSlotExactlyOnce(t *testing.T) {
 		codebases: map[string]model.Codebase{
 			codebaseID: {ID: codebaseID, CanonicalPath: "/code"},
 		},
-		jobs:                    map[string]model.Job{},
-		pendingCodeJobs:         map[string]pendingCodeRequest{codebaseID: {}},
-		pendingConversationJobs: map[string]conversationJobPayload{},
-		jobScheduler:            jobscheduler.New(context.Background(), 1, nil),
+		jobs:            map[string]model.Job{},
+		pendingCodeJobs: map[string]pendingCodeRequest{codebaseID: {}},
+		jobScheduler:    jobscheduler.New(context.Background(), 1, nil),
 	}
 
 	// Move the slot into the job store the way drainPendingJobLocked does, under
@@ -216,9 +215,8 @@ func TestStatusSnapshotOmitsTerminalJobs(t *testing.T) {
 			"failed":    {ID: "failed", State: model.JobStateFailed},
 			"cancelled": {ID: "cancelled", State: model.JobStateCancelled},
 		},
-		pendingCodeJobs:         map[string]pendingCodeRequest{},
-		pendingConversationJobs: map[string]conversationJobPayload{},
-		jobScheduler:            jobscheduler.New(context.Background(), 4, nil),
+		pendingCodeJobs: map[string]pendingCodeRequest{},
+		jobScheduler:    jobscheduler.New(context.Background(), 4, nil),
 	}
 
 	snapshot := manager.StatusSnapshot()
@@ -245,12 +243,11 @@ func TestStatusSnapshotResolvesHealthLikeEverySurface(t *testing.T) {
 
 	newManager := func() *Manager {
 		return &Manager{
-			codebases:               map[string]model.Codebase{},
-			jobs:                    map[string]model.Job{},
-			pendingCodeJobs:         map[string]pendingCodeRequest{},
-			pendingConversationJobs: map[string]conversationJobPayload{},
-			jobScheduler:            jobscheduler.New(context.Background(), 1, nil),
-			semantic:                nil,
+			codebases:       map[string]model.Codebase{},
+			jobs:            map[string]model.Job{},
+			pendingCodeJobs: map[string]pendingCodeRequest{},
+			jobScheduler:    jobscheduler.New(context.Background(), 1, nil),
+			semantic:        nil,
 			health: dependencyHealth{
 				Mode:  dependencyStoreUnavailable,
 				Since: time.Unix(1785156767, 0),

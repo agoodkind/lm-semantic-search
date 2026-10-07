@@ -9,7 +9,10 @@ import (
 	"io"
 	"log/slog"
 
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"google.golang.org/grpc/peer"
 )
@@ -54,32 +57,6 @@ func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []
 	return reuse, nil
 }
 
-// LoadReuseVectorsForPrefix reads one collection's chunks whose relativePath
-// begins with relativePathPrefix and returns the contentVectorKey -> vector
-// map for them. A conversation ingest passes the live conversation collection
-// and the changed conversation's conv/<id>/ prefix, loaded before that
-// conversation's prefix delete runs, so the reindex reuses the unchanged
-// chunks' stored vectors instead of re-embedding the whole conversation. A
-// missing collection or an empty prefix returns an empty map.
-func (service *Service) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
-	peerInfo, _ := peer.FromContext(ctx)
-	reuse := make(map[string][]float32)
-	if !service.Available() || collectionName == "" || relativePathPrefix == "" {
-		return reuse, nil
-	}
-	if err := service.loadReuseVectorsFiltered(ctx, collectionName, relativePathPrefixExpression(relativePathPrefix), reuse); err != nil {
-		return nil, err
-	}
-	slog.DebugContext(
-		ctx, "semantic.reuse_vectors_loaded_for_prefix",
-		"collection", collectionName,
-		"prefix", relativePathPrefix,
-		"chunks", len(reuse),
-		"peer", peerInfo.String(),
-	)
-	return reuse, nil
-}
-
 // LoadReuseVectorsForPath reads one collection's chunks whose relativePath
 // exactly equals relativePath and returns the contentVectorKey -> vector map for
 // them. Code delta syncs load a changed file's current rows before the exact
@@ -113,7 +90,7 @@ func (service *Service) loadReuseVectorsFromCollection(ctx context.Context, coll
 // relativePath value. Code-file reuse uses this instead of a prefix expression
 // so like-named neighbors never seed reuse for the target file.
 func relativePathExpression(relativePath string) string {
-	return fmt.Sprintf(`%s == "%s"`, relativePathFieldName, escapeMilvusString(relativePath))
+	return fmt.Sprintf(`%s == "%s"`, relativePathFieldName, collection.EscapeString(relativePath))
 }
 
 // loadReuseVectorsFiltered streams the rows of one collection matching
@@ -176,7 +153,7 @@ func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collection
 			if contentErr != nil {
 				return fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
 			}
-			vector, vectorErr := vectorAt(vectorColumn, rowIndex)
+			vector, vectorErr := milvusstore.VectorAt(vectorColumn, rowIndex)
 			if vectorErr != nil {
 				return fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
 			}

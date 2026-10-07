@@ -17,35 +17,33 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/collection"
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/config"
-	"goodkind.io/lm-semantic-search/internal/embedding"
-	"goodkind.io/lm-semantic-search/internal/embedding/providers"
+	"goodkind.io/lm-semantic-search/internal/embeddingprovider"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"goodkind.io/lm-semantic-search/internal/tshash"
 	"google.golang.org/grpc/peer"
 )
 
-// Milvus field names match the upstream TS schema at
-// packages/core/src/vectordb/milvus-vectordb.ts so the Go daemon reads and
-// writes the same collections the TS adapter does. The names are camelCase
-// because that is what the TS adapter wrote.
 const (
 	maxCollectionNameLength = 255
 	stagingCollectionSuffix = "_stg"
-	denseVectorFieldName    = "vector"
-	sparseVectorFieldName   = "sparse_vector"
-	contentFieldName        = "content"
-	relativePathFieldName   = "relativePath"
-	startLineFieldName      = "startLine"
-	endLineFieldName        = "endLine"
-	fileExtensionFieldName  = "fileExtension"
-	metadataFieldName       = "metadata"
-	idFieldName             = "id"
-	splitPartFieldName      = "splitPart"
-	contentHashFieldName    = "contentHash"
-	embeddingModelFieldName = "embeddingModel"
-	countOutputField        = "count(*)"
+	denseVectorFieldName    = milvusstore.DenseVectorField
+	sparseVectorFieldName   = milvusstore.SparseVectorField
+	contentFieldName        = milvusstore.ContentField
+	relativePathFieldName   = milvusstore.RelativePathField
+	startLineFieldName      = milvusstore.StartLineField
+	endLineFieldName        = milvusstore.EndLineField
+	fileExtensionFieldName  = milvusstore.FileExtensionField
+	metadataFieldName       = milvusstore.MetadataField
+	idFieldName             = milvusstore.IDField
+	splitPartFieldName      = milvusstore.SplitPartField
+	contentHashFieldName    = milvusstore.ContentHashField
+	embeddingModelFieldName = milvusstore.EmbeddingModelField
+	countOutputField        = milvusstore.CountOutputField
 )
 
 // Progress reports semantic indexing progress after chunk extraction.
@@ -121,10 +119,6 @@ type Service struct {
 	// coordinator and the residency paths.
 	loadGates collectionLoadGates
 	residency *collectionResidencyController
-	// ensuredConvColumns maps a conversation collection name to its
-	// *conversationScalarMigration, gating the one-time scalar-column migration to
-	// once per collection per process. See ensureConversationScalarColumnsOnce.
-	ensuredConvColumns sync.Map
 	// ensuredSplitPartColumns gates the nullable splitPart schema migration once
 	// per collection per process.
 	ensuredSplitPartColumns sync.Map
@@ -137,13 +131,6 @@ type Service struct {
 	mmapPolicyMutex      sync.Mutex
 	mmapPolicyGeneration map[string]uint64
 	mmapPolicyFailures   map[string]mmapPolicyFailure
-	// ensuredBackfill records the conversation collections this process has
-	// scalar-column backfilled, so the daemon's periodic backfill sweep runs the
-	// metadata-only backfill at most once per collection per process.
-	ensuredBackfill sync.Map
-	// declaredCollections records the live names of document collections with a
-	// generic saved declaration. See isConversationCollection.
-	declaredCollections sync.Map
 }
 
 // NewService constructs the semantic search runtime.
@@ -173,21 +160,18 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			},
 			loadGates:                   newCollectionLoadGates(),
 			residency:                   nil,
-			ensuredConvColumns:          sync.Map{},
 			ensuredSplitPartColumns:     sync.Map{},
 			ensuredReuseIdentityColumns: sync.Map{},
 			mmapPolicyVersions:          make(map[string]int),
 			mmapPolicyMutex:             sync.Mutex{},
 			mmapPolicyGeneration:        make(map[string]uint64),
 			mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
-			ensuredBackfill:             sync.Map{},
-			declaredCollections:         sync.Map{},
 		}
 		service.initializeResidencyController()
 		return service, nil
 	}
 
-	embedder, err := providers.New(ctx, cfg)
+	embedder, err := embeddingprovider.New(ctx, cfg)
 	if err != nil {
 		slog.ErrorContext(ctx, "create embedding provider failed", "provider", cfg.EmbeddingProvider, "err", err)
 		return nil, fmt.Errorf("create embedding provider: %w", err)
@@ -217,15 +201,12 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		},
 		loadGates:                   newCollectionLoadGates(),
 		residency:                   nil,
-		ensuredConvColumns:          sync.Map{},
 		ensuredSplitPartColumns:     sync.Map{},
 		ensuredReuseIdentityColumns: sync.Map{},
 		mmapPolicyVersions:          make(map[string]int),
 		mmapPolicyMutex:             sync.Mutex{},
 		mmapPolicyGeneration:        make(map[string]uint64),
 		mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
-		ensuredBackfill:             sync.Map{},
-		declaredCollections:         sync.Map{},
 	}
 	service.initializeResidencyController()
 
@@ -300,31 +281,28 @@ func (service *Service) Degraded() bool {
 	return service != nil && strings.TrimSpace(service.cfg.MilvusAddress) != "" && !service.Available()
 }
 
-// conversationPathPrefix marks a virtual conversation collection's canonical
-// path. A path with this prefix is not a filesystem directory; its collection
-// name derives from the trailing collection id rather than a path hash, so the
-// shared embed, staging, and count functions address the conversation
-// collection when handed the conversation codebase's canonical path.
-const conversationPathPrefix = "chat:///"
+// documentPathPrefix marks the canonical path of a document collection record.
+// A path with this prefix is not a filesystem directory. The collection name
+// derives from the trailing collection id instead of a path hash. The shared
+// embed, staging, and count functions then address the document collection
+// from the record's canonical path.
+const documentPathPrefix = "chat:///"
 
-// conversationCollectionIDFromPath returns the conversation collection id
-// encoded in a canonical path and whether the path is a conversation path.
-func conversationCollectionIDFromPath(codebasePath string) (string, bool) {
-	if !strings.HasPrefix(codebasePath, conversationPathPrefix) {
+func documentCollectionIDFromPath(codebasePath string) (string, bool) {
+	if !strings.HasPrefix(codebasePath, documentPathPrefix) {
 		return "", false
 	}
-	return strings.TrimPrefix(codebasePath, conversationPathPrefix), true
+	return strings.TrimPrefix(codebasePath, documentPathPrefix), true
 }
 
-// CollectionName matches the TypeScript collection naming contract at
-// packages/core/src/context.ts:275 so the Go daemon reads and writes the
-// same Milvus collections as the upstream TS adapter. A conversation canonical
-// path resolves to the conversation collection so every shared embed, staging,
-// and count function addresses the right collection from the codebase path
-// alone.
+// CollectionName returns the Milvus collection name of a codebase path: the
+// prefix, an optional sanitized override, and a hash of the absolute path. The
+// TypeScript adapter created the stored collections with this format. Do not
+// change it. A document collection canonical path resolves to the document
+// collection name.
 func (service *Service) CollectionName(codebasePath string) string {
-	if collectionID, isConversation := conversationCollectionIDFromPath(codebasePath); isConversation {
-		return service.ConversationCollectionName(collectionID)
+	if collectionID, isDocument := documentCollectionIDFromPath(codebasePath); isDocument {
+		return service.DocumentCollectionName(collectionID)
 	}
 
 	prefix := "code_chunks"
@@ -355,11 +333,11 @@ func (service *Service) CollectionName(codebasePath string) string {
 	return prefix + "_" + sanitized + hashSuffix
 }
 
-// ConversationCollectionName returns the Milvus collection name for a virtual
-// conversation document collection.
-func (service *Service) ConversationCollectionName(collectionID string) string {
+// DocumentCollectionName returns the Milvus collection name for a document
+// collection.
+func (service *Service) DocumentCollectionName(collectionID string) string {
 	_ = service
-	return "conv_chunks_" + tshash.PathPrefix(strings.TrimSpace(collectionID))
+	return collection.DocumentName(collectionID)
 }
 
 func (service *Service) renameCollection(ctx context.Context, oldName string, newName string) error {
@@ -373,7 +351,6 @@ func (service *Service) renameCollection(ctx context.Context, oldName string, ne
 }
 
 func (service *Service) invalidateCollectionCaches(collectionName string) {
-	service.ensuredConvColumns.Delete(collectionName)
 	service.ensuredSplitPartColumns.Delete(collectionName)
 	service.ensuredReuseIdentityColumns.Delete(collectionName)
 	service.reuseVectorDimensionMutex.Lock()
@@ -384,7 +361,6 @@ func (service *Service) invalidateCollectionCaches(collectionName string) {
 	service.reuseVectorDimensions.Delete(collectionName)
 	service.reuseVectorDimensionMutex.Unlock()
 	service.invalidateMmapPolicy(collectionName)
-	service.ensuredBackfill.Delete(collectionName)
 }
 
 func (service *Service) invalidateMmapPolicy(collectionName string) {
@@ -422,11 +398,11 @@ func (service *Service) hasCollection(
 
 // Reindex applies a per-item delta against an existing live collection.
 //
-// removal deletes the item's prior rows (a code file by exact relativePath, a
-// conversation by relativePath prefix). The chunk batch is then embedded and
-// inserted through the same batched flow the staging build uses. Reindex
-// returns ErrCollectionMissing when the live collection no longer exists, so
-// callers can fall back to a full staging build.
+// removal deletes the prior rows of the item: a code file by exact
+// relativePath, a document collection item by its item id column. The chunk
+// batch is then embedded and inserted through the batched flow of the staging
+// build. Reindex returns ErrCollectionMissing when the live collection no
+// longer exists, and the caller runs a full staging build.
 func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.reindex")
 	defer done(&err)
@@ -443,9 +419,8 @@ func (service *Service) Reindex(ctx context.Context, codebasePath string, addedO
 	if !hasCollection {
 		return ErrCollectionMissing
 	}
-	// An item removal filters on a scalar column. The conversation scalar
-	// migration adds that column to a legacy collection. An item removal
-	// prepares the collection before its delete.
+	// An item removal filters on a scalar column. The collection is prepared
+	// before the delete.
 	if len(addedOrModifiedChunks) > 0 || len(removal.ItemIDs) > 0 {
 		if err := service.PrepareCollection(ctx, collectionName); err != nil {
 			return err
@@ -496,7 +471,7 @@ func (service *Service) PruneToCurrent(ctx context.Context, codebasePath string,
 
 	quoted := make([]string, 0, len(currentRelativePaths))
 	for _, path := range currentRelativePaths {
-		quoted = append(quoted, `"`+escapeMilvusString(path)+`"`)
+		quoted = append(quoted, `"`+collection.EscapeString(path)+`"`)
 	}
 	expression := fmt.Sprintf(`%s not in [%s]`, relativePathFieldName, strings.Join(quoted, ","))
 
@@ -519,7 +494,7 @@ func (service *Service) deleteByRelativePaths(
 
 	quoted := make([]string, 0, len(relativePaths))
 	for _, path := range relativePaths {
-		quoted = append(quoted, `"`+escapeMilvusString(path)+`"`)
+		quoted = append(quoted, `"`+collection.EscapeString(path)+`"`)
 	}
 	expression := fmt.Sprintf(`%s in [%s]`, relativePathFieldName, strings.Join(quoted, ","))
 
@@ -587,77 +562,22 @@ func (service *Service) searchCollection(ctx context.Context, collectionName str
 // query vector. rawQuery feeds the BM25 sparse leg, which is lexical and never
 // embeds. The caller confirms the collection exists.
 func (service *Service) searchCollectionWithVector(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, limit int, filterExpr string) ([]model.StoredChunk, error) {
+	peerInfo, _ := peer.FromContext(ctx)
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return nil, err
 	}
-	searchLimit := limit
-	if searchLimit <= 0 {
-		searchLimit = 10
-	}
-
-	outputFields := []string{
-		contentFieldName,
-		relativePathFieldName,
-		startLineFieldName,
-		endLineFieldName,
-		fileExtensionFieldName,
-		metadataFieldName,
-		splitPartFieldName,
-	}
-	if service.isConversationCollection(collectionName) {
-		// Conversation collections carry workspaceRoot as a native scalar column.
-		// Request it so a workspace_roots post-filter on the daemon side sees the
-		// real value rather than the empty default; code collections have no such
-		// column, so they keep the base output set. loadRules rides along so a
-		// search hit can report which loading rules produced its message index.
-		outputFields = append(outputFields, workspaceRootFieldName, loadRulesFieldName)
-	}
-
-	if service.cfg.HybridMode {
-		denseRequest := milvusclient.NewAnnRequest(denseVectorFieldName, maxInt(searchLimit, 10), entity.FloatVector(queryVector))
-		sparseRequest := milvusclient.NewAnnRequest(sparseVectorFieldName, maxInt(searchLimit, 10), entity.Text(rawQuery))
-		if filterExpr != "" {
-			denseRequest = denseRequest.WithFilter(filterExpr)
-			sparseRequest = sparseRequest.WithFilter(filterExpr)
-		}
-		hybridOption := milvusclient.NewHybridSearchOption(
-			collectionName,
-			searchLimit,
-			denseRequest,
-			sparseRequest,
-		).WithReranker(milvusclient.NewRRFReranker()).WithOutputFields(outputFields...)
-		resultSets, err := service.milvus.HybridSearch(ctx, hybridOption)
-		if err != nil {
-			return nil, searchErr(ctx, "hybrid search", collectionName, err)
-		}
-		return resultSetsToChunks(resultSets)
-	}
-
-	searchOption := milvusclient.NewSearchOption(
-		collectionName,
-		searchLimit,
-		[]entity.Vector{entity.FloatVector(queryVector)},
-	).WithANNSField(denseVectorFieldName).WithOutputFields(outputFields...)
-	if filterExpr != "" {
-		searchOption = searchOption.WithFilter(filterExpr)
-	}
-
-	resultSets, err := service.milvus.Search(ctx, searchOption)
+	hits, err := service.collectionStore().SearchExpression(ctx, milvusstore.ExpressionSearch{
+		Collection: collectionName,
+		Vector:     queryVector,
+		Query:      rawQuery,
+		Limit:      limit,
+		Expression: filterExpr,
+	})
 	if err != nil {
-		return nil, searchErr(ctx, "dense search", collectionName, err)
+		slog.ErrorContext(ctx, "search collection rows failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
+		return nil, fmt.Errorf("search %s: %w", collectionName, err)
 	}
-	return resultSetsToChunks(resultSets)
-}
-
-// searchErr logs a Milvus search failure and maps it to a typed store sentinel
-// when one applies, otherwise wraps it with the operation and collection for
-// context.
-func searchErr(ctx context.Context, operation string, collectionName string, err error) error {
-	slog.ErrorContext(ctx, operation+" failed", "collection", collectionName, "err", err)
-	if sentinel := storeSearchSentinel(err); sentinel != nil {
-		return sentinel
-	}
-	return fmt.Errorf("%s collection %s: %w", operation, collectionName, err)
+	return chunksFromHits(hits), nil
 }
 
 // Drop removes one semantic index collection.
@@ -713,7 +633,7 @@ func (service *Service) collectionRowCount(ctx context.Context, collectionName s
 		slog.ErrorContext(ctx, "read count column failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return 0, fmt.Errorf("read count(*) column for %s: %w", collectionName, err)
 	}
-	return safeInt32FromInt64(total), nil
+	return milvusstore.SafeInt32(total), nil
 }
 
 // InspectCollection reports whether one collection exists and counts rows only
@@ -825,16 +745,6 @@ func sanitizeCollectionSuffix(value string) string {
 	return builder.String()
 }
 
-func maxInt(values ...int) int {
-	currentMax := 0
-	for _, value := range values {
-		if value > currentMax {
-			currentMax = value
-		}
-	}
-	return currentMax
-}
-
 // ValidateExtensionFilter returns the normalized extension list or an error if any entry is invalid.
 func ValidateExtensionFilter(extensionFilter []string) ([]string, error) {
 	cleanedExtensions := normalizeExtensionFilter(extensionFilter)
@@ -927,16 +837,6 @@ func minInt32(left int32, right int32) int32 {
 }
 
 func safeInt32FromInt(value int) int32 {
-	if value > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	if value < math.MinInt32 {
-		return math.MinInt32
-	}
-	return int32(value)
-}
-
-func safeInt32FromInt64(value int64) int32 {
 	if value > math.MaxInt32 {
 		return math.MaxInt32
 	}

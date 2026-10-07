@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/daulet/tokenizers"
+	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
-	"goodkind.io/lm-semantic-search/internal/embedding"
 )
 
 // onnxMaximumInputBytesPerToken caps the input the tokenizer is asked to measure,
@@ -26,9 +26,8 @@ import (
 // be split, while a measured one could still only ever be embedded whole.
 const onnxMaximumInputBytesPerToken = 64
 
-// onnxInputRejection names why an input must not be embedded. Its values are the
-// reason codes carried on SkippedInput, so one rejection reads the same whether
-// the in-process tokenizer or a hosted endpoint refused the input.
+// onnxInputRejection is the reason an input is not embedded. Its values are the
+// reason codes of embedding.SkippedInput.
 type onnxInputRejection string
 
 const (
@@ -223,18 +222,6 @@ func rejectedEncodedONNXInput(
 		tokenCount:    tokenCount,
 		rejection:     rejection,
 	}
-}
-
-// count returns the full token count of text with the model's special tokens.
-// It applies neither the byte ceiling nor the token limit. The caller rejects a
-// NUL byte first.
-func (tokenizer *genericTokenizer) count(text string) (int, error) {
-	encoding, err := tokenizer.tokenizer.EncodeWithOptionsErr(text, true)
-	if err != nil {
-		slog.Error("count ONNX input tokens failed", "input_bytes", len(text), "err", err)
-		return 0, fmt.Errorf("count ONNX input tokens: %w", err)
-	}
-	return len(encoding.IDs), nil
 }
 
 func (tokenizer *genericTokenizer) Close() error {

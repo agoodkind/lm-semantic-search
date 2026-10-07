@@ -149,12 +149,7 @@ func (driver *realAcceptanceDriver) confirmClone(
 			ColdConversationSearch: func(
 				searchContext context.Context,
 			) (semanticSearchObservation, error) {
-				return searchConversationObservation(
-					searchContext,
-					lms.client,
-					collectionID,
-					fixture.marker,
-				)
+				return driver.searchClyde(searchContext, run, fixture.marker)
 			},
 			Health: func(healthContext context.Context) error {
 				return driver.checkCloneHealth(
@@ -198,35 +193,6 @@ func waitForCloneConversationSeed(
 		defaultScenarioPollInterval,
 	)
 	return err
-}
-
-func searchConversationObservation(
-	ctx context.Context,
-	client pb.SemanticSearchDaemonServiceClient,
-	collectionID string,
-	query string,
-) (semanticSearchObservation, error) {
-	response, err := client.SearchConversations(ctx, &pb.SearchConversationsRequest{
-		CollectionId: collectionID,
-		Query:        query,
-		Limit:        3,
-	})
-	if err != nil {
-		return semanticSearchObservation{Code: classifySearchError(err)}, nil
-	}
-	resultIDs := make([]string, 0, len(response.GetResults()))
-	for _, result := range response.GetResults() {
-		resultIDs = append(
-			resultIDs,
-			result.GetConversationId()+":"+strconv.Itoa(int(result.GetMessageIndex())),
-		)
-	}
-	return semanticSearchObservation{
-		Succeeded: true,
-		Source:    "semantic",
-		Matches:   len(response.GetResults()),
-		ResultIDs: resultIDs,
-	}, nil
 }
 
 func prepareCloneConfirmationColdTargets(

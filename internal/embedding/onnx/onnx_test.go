@@ -47,7 +47,7 @@ func TestONNXBGEProviderDeterministicNormalizedAndConfigured(t *testing.T) {
 		OfflineEmbeddingModel: offlinemodel.BGESmall,
 		ModelCacheRoot:        offlineModelCacheRoot(t),
 	})
-	provider, err := NewProvider(context.Background(), cfg.OfflineEmbeddingModel, cfg.ModelCacheRoot)
+	provider, err := NewProvider(context.Background(), cfg)
 	if err != nil {
 		skipIfArtifactUnavailable(t, err)
 		t.Fatalf("NewProvider: %v", err)
@@ -208,7 +208,7 @@ func TestONNXEmbedBatchSkipsOverLimitInputInsteadOfTruncating(t *testing.T) {
 		OfflineEmbeddingModel: offlinemodel.BGESmall,
 		ModelCacheRoot:        offlineModelCacheRoot(t),
 	})
-	provider, err := NewProvider(context.Background(), cfg.OfflineEmbeddingModel, cfg.ModelCacheRoot)
+	provider, err := NewProvider(context.Background(), cfg)
 	if err != nil {
 		skipIfArtifactUnavailable(t, err)
 		t.Fatalf("NewProvider: %v", err)
@@ -318,7 +318,7 @@ func TestONNXEmbedRejectsNULInputThatSharesAPrefixWithAnEmbeddableOne(t *testing
 		OfflineEmbeddingModel: offlinemodel.BGESmall,
 		ModelCacheRoot:        offlineModelCacheRoot(t),
 	})
-	provider, err := NewProvider(context.Background(), cfg.OfflineEmbeddingModel, cfg.ModelCacheRoot)
+	provider, err := NewProvider(context.Background(), cfg)
 	if err != nil {
 		skipIfArtifactUnavailable(t, err)
 		t.Fatalf("NewProvider: %v", err)

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
-	"goodkind.io/lm-semantic-search/internal/embedding"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/store"
@@ -77,7 +77,7 @@ func TestEmbedChunkBatchDropsOversizedInputWithoutError(t *testing.T) {
 	service := &Service{embedder: skippingEmbedder{}}
 
 	chunks := []model.StoredChunk{
-		{Content: "oversized", ConversationID: "conv-1"},
+		{Content: "oversized", RelativePath: "a/big.go"},
 		{Content: "small", RelativePath: "a/b.go"},
 	}
 
