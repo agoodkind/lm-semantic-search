@@ -8,14 +8,16 @@ import (
 	"os"
 	"path/filepath"
 
+	"goodkind.io/lm-semantic-search/internal/networkcost"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
 const (
-	profileJSONField                           = "profile"
-	offlineEmbeddingModelJSONField             = "offlineEmbeddingModel"
-	persistedConfigDirectoryMode   os.FileMode = 0o755
-	persistedConfigFileMode        os.FileMode = 0o600
+	profileJSONField                                = "profile"
+	offlineEmbeddingModelJSONField                  = "offlineEmbeddingModel"
+	modelDownloadNetworkPolicyJSONField             = "modelDownloadNetworkPolicy"
+	persistedConfigDirectoryMode        os.FileMode = 0o755
+	persistedConfigFileMode             os.FileMode = 0o600
 )
 
 // SetProfile atomically updates the profile in the daemon JSON config while
@@ -107,6 +109,50 @@ func SetOfflineModel(path string, model string) error {
 		return err
 	}
 	slog.Info("set offline embedding model", "path", path, "model", preset.Name)
+	return nil
+}
+
+// SetModelDownloadNetworkPolicy validates the policy before writing the value
+// to the daemon JSON config.
+// SetModelDownloadNetworkPolicy does not change other fields.
+func SetModelDownloadNetworkPolicy(path string, policy string) error {
+	preference, err := networkcost.ParsePreference(policy)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", modelDownloadNetworkPolicyJSONField, err)
+	}
+
+	document := make(map[string]json.RawMessage)
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if err := json.Unmarshal(data, &document); err != nil {
+			slog.Error("unmarshal daemon config failed", "path", path, "err", err)
+			return fmt.Errorf("unmarshal daemon config %s: %w", path, err)
+		}
+		if document == nil {
+			document = make(map[string]json.RawMessage)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		slog.Error("read daemon config failed", "path", path, "err", err)
+		return fmt.Errorf("read daemon config %s: %w", path, err)
+	}
+
+	preferenceData, err := json.Marshal(preference)
+	if err != nil {
+		slog.Error("marshal model download network policy failed", "policy", preference, "err", err)
+		return fmt.Errorf("marshal model download network policy %q: %w", preference, err)
+	}
+	document[modelDownloadNetworkPolicyJSONField] = preferenceData
+
+	output, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		slog.Error("marshal daemon config failed", "path", path, "err", err)
+		return fmt.Errorf("marshal daemon config %s: %w", path, err)
+	}
+	output = append(output, '\n')
+	if err := writePersistedConfig(path, output); err != nil {
+		return err
+	}
+	slog.Info("set model download network policy", "path", path, "policy", preference)
 	return nil
 }
 

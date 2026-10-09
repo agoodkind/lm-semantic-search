@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/networkcost"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
@@ -127,8 +128,9 @@ type Config struct {
 	EmbeddingModel    string
 	// OfflineEmbeddingModel selects a pinned ONNX model preset for the offline
 	// profile. ApplyProfile derives EmbeddingModel and EmbeddingDimension from it.
-	OfflineEmbeddingModel string
-	EmbeddingBatchSize    int
+	OfflineEmbeddingModel      string
+	ModelDownloadNetworkPolicy networkcost.Preference
+	EmbeddingBatchSize         int
 	// EmbeddingBatchTokenBudget caps the estimated tokens (bytes/4) packed into
 	// one embedding request. EmbeddingBatchSize stays as the row-count ceiling.
 	EmbeddingBatchTokenBudget int
@@ -294,6 +296,7 @@ type persistedConfig struct {
 	MilvusMaxConcurrentCollectionLoads int    `json:"milvusMaxConcurrentCollectionLoads"`
 	CollectionNameOverride             string `json:"collectionNameOverride"`
 	HybridMode                         *bool  `json:"hybridMode"`
+	ModelDownloadNetworkPolicy         string `json:"modelDownloadNetworkPolicy"`
 }
 
 type embeddingConfigDefaults struct {
@@ -354,8 +357,7 @@ func Default() (Config, error) {
 	configRoot := envOrDefault("CLAUDE_CONTEXTD_CONFIG_ROOT", defaultConfigRoot)
 	configPath := filepath.Join(configRoot, "config.json")
 
-	stateRoot := defaultStateRoot
-	stateRoot = envOrDefault("CLAUDE_CONTEXTD_STATE_ROOT", stateRoot)
+	stateRoot := envOrDefault("CLAUDE_CONTEXTD_STATE_ROOT", defaultStateRoot)
 	socketsDir := filepath.Join(stateRoot, "sockets")
 	logsDir := filepath.Join(stateRoot, "logs")
 	// ContextRoot holds the advisory lock the upstream TS adapter also takes, so
@@ -371,13 +373,6 @@ func Default() (Config, error) {
 	embeddingDefaults := resolveEmbeddingConfigDefaults(fileConfig)
 
 	embeddingMaxTokens := resolveEmbeddingMaxTokens(fileConfig.EmbeddingMaxTokens)
-	// An explicit config.json value (including 0 to disable) wins over the
-	// default; a nil pointer means the field was omitted. The env var overrides
-	// either.
-	requestTimeoutMS := defaultEmbeddingRequestTimeoutMS
-	if fileConfig.EmbeddingRequestTimeoutMS != nil {
-		requestTimeoutMS = *fileConfig.EmbeddingRequestTimeoutMS
-	}
 	loadWaitTimeoutMS, idleTimeoutMS := resolveMilvusCollectionResidencyTimeouts(fileConfig)
 	// Resolve the configured provider name to its canonical value here, the one
 	// place a raw name enters the config, so no later comparison and no stored
@@ -387,6 +382,10 @@ func Default() (Config, error) {
 	)
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve configured embedding provider: %w", err)
+	}
+	modelDownloadNetworkPolicy, err := resolveModelDownloadNetworkPolicy(fileConfig.ModelDownloadNetworkPolicy)
+	if err != nil {
+		return Config{}, err
 	}
 	return ApplyProfile(Config{
 		Profile: resolveProfile(fileConfig.Profile), IndexBackend: IndexBackendMilvus,
@@ -409,10 +408,11 @@ func Default() (Config, error) {
 		EmbeddingProvider:                  embeddingProviderName,
 		EmbeddingModel:                     envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model),
 		OfflineEmbeddingModel:              embeddingDefaults.offlineModel,
+		ModelDownloadNetworkPolicy:         modelDownloadNetworkPolicy,
 		EmbeddingBatchSize:                 envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
 		EmbeddingBatchTokenBudget:          intOrDefault(fileConfig.EmbeddingBatchTokenBudget, defaultEmbeddingBatchTokenBudget),
 		EmbeddingMaxTokens:                 embeddingMaxTokens,
-		EmbeddingRequestTimeoutMS:          envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", requestTimeoutMS),
+		EmbeddingRequestTimeoutMS:          resolveEmbeddingRequestTimeoutMS(fileConfig.EmbeddingRequestTimeoutMS),
 		EmbeddingDimension:                 envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
 		OpenAIAPIKey:                       envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
 		OpenAIBaseURL:                      envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL),
@@ -564,6 +564,17 @@ func resolveEmbeddingMaxTokens(fileValue int) int {
 		return 0
 	}
 	return value
+}
+
+// An explicit config.json value (including 0 to disable) wins over the
+// default; a nil pointer means the field was omitted. The env var overrides
+// either.
+func resolveEmbeddingRequestTimeoutMS(fileValue *int) int {
+	requestTimeoutMS := defaultEmbeddingRequestTimeoutMS
+	if fileValue != nil {
+		requestTimeoutMS = *fileValue
+	}
+	return envIntOrDefault("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", requestTimeoutMS)
 }
 
 // MaxMilvusMutationCallTimeoutMS is the largest millisecond count that converts
