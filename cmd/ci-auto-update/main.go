@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -25,6 +24,7 @@ import (
 
 	"goodkind.io/go-makefile/selfupdate"
 	"goodkind.io/lm-semantic-search/internal/installer"
+	"goodkind.io/lm-semantic-search/internal/releaseproxy"
 )
 
 const (
@@ -153,7 +153,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer, stde
 	if err := check.installOldRelease(ctx, selection.previous); err != nil {
 		return err
 	}
-	if err := check.startAuthenticatedProxy(ctx); err != nil {
+	if err := check.startAuthenticatedProxy(ctx, selection.target); err != nil {
 		return err
 	}
 	if err := check.startDaemon(ctx); err != nil {
@@ -352,14 +352,7 @@ func (check *updateCheck) installOldRelease(ctx context.Context, release githubR
 	return nil
 }
 
-func authenticatedProxy(target *url.URL, token string) *httputil.ReverseProxy {
-	return &httputil.ReverseProxy{Rewrite: func(request *httputil.ProxyRequest) {
-		request.SetURL(target)
-		request.Out.Header.Set("Authorization", "Bearer "+token)
-	}}
-}
-
-func (check *updateCheck) startAuthenticatedProxy(ctx context.Context) error {
+func (check *updateCheck) startAuthenticatedProxy(ctx context.Context, newest githubRelease) error {
 	target, err := url.Parse(githubAPIBaseURL)
 	if err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.api_proxy_url_invalid", "err", err)
@@ -370,7 +363,7 @@ func (check *updateCheck) startAuthenticatedProxy(ctx context.Context) error {
 		slog.WarnContext(ctx, "ci.auto_update.api_proxy_listen_failed", "err", err)
 		return fmt.Errorf("listen for authenticated GitHub API proxy: %w", err)
 	}
-	server := httptest.NewUnstartedServer(authenticatedProxy(target, check.environment.token))
+	server := httptest.NewUnstartedServer(releaseproxy.New(target, check.environment.token, newest.PublishedAt))
 	server.Listener = listener
 	server.Start()
 	check.apiProxy = server
