@@ -2,11 +2,8 @@ package onnx
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -14,13 +11,13 @@ import (
 	"path"
 	"path/filepath"
 
+	"goodkind.io/lm-semantic-search/internal/modeldownload"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
 const (
 	offlineModelCacheDirectory = "embedding-models"
-	offlineModelDirectoryMode  = 0o700
-	offlineModelFileMode       = 0o644
+	tokenizerArtifactKind      = "tokenizer"
 )
 
 // ErrArtifactUnavailable marks a failure to fetch an offline model artifact
@@ -29,7 +26,7 @@ const (
 // on this condition, and tests that need a downloaded artifact skip on it. It is
 // exported so a test outside this package can tell a missing download apart from
 // a real provider failure.
-var ErrArtifactUnavailable = errors.New("offline embedding artifact unavailable")
+var ErrArtifactUnavailable = modeldownload.ErrUnavailable
 
 type cachedModelFiles struct {
 	modelPath     string
@@ -46,6 +43,7 @@ func ensureModelFiles(
 	httpClient *http.Client,
 	cacheRoot string,
 	preset offlinemodel.Preset,
+	progress modeldownload.ProgressFunc,
 ) (cachedModelFiles, error) {
 	if cacheRoot == "" {
 		return cachedModelFiles{}, fmt.Errorf(
@@ -63,7 +61,7 @@ func ensureModelFiles(
 		return cachedModelFiles{}, err
 	}
 	modelPath := filepath.Join(modelDirectory, modelFilename)
-	if err := ensurePresetArtifact(
+	if err := ensureArtifact(
 		ctx,
 		httpClient,
 		preset.Name,
@@ -71,6 +69,7 @@ func ensureModelFiles(
 		preset.ModelONNXURL,
 		preset.ModelSHA256,
 		modelPath,
+		progress,
 	); err != nil {
 		return cachedModelFiles{}, err
 	}
@@ -80,7 +79,7 @@ func ensureModelFiles(
 		if filenameErr != nil {
 			return cachedModelFiles{}, filenameErr
 		}
-		if err := ensurePresetArtifact(
+		if err := ensureArtifact(
 			ctx,
 			httpClient,
 			preset.Name,
@@ -88,6 +87,7 @@ func ensureModelFiles(
 			preset.ModelDataURL,
 			preset.ModelDataSHA256,
 			filepath.Join(modelDirectory, modelDataFilename),
+			progress,
 		); err != nil {
 			return cachedModelFiles{}, err
 		}
@@ -98,14 +98,15 @@ func ensureModelFiles(
 		return cachedModelFiles{}, err
 	}
 	tokenizerPath := filepath.Join(modelDirectory, tokenizerFilename)
-	if err := ensurePresetArtifact(
+	if err := ensureArtifact(
 		ctx,
 		httpClient,
 		preset.Name,
-		"tokenizer",
+		tokenizerArtifactKind,
 		preset.TokenizerURL,
 		preset.TokenizerSHA256,
 		tokenizerPath,
+		progress,
 	); err != nil {
 		return cachedModelFiles{}, err
 	}
@@ -151,12 +152,24 @@ func ModelFilesPresent(cacheRoot string, modelName string) (bool, error) {
 // InstallModelFiles downloads and checksum-verifies every missing or
 // mismatched artifact of the preset into cacheRoot through httpClient.
 func InstallModelFiles(ctx context.Context, httpClient *http.Client, cacheRoot string, modelName string) error {
+	return InstallModelFilesWithProgress(ctx, httpClient, cacheRoot, modelName, nil)
+}
+
+// InstallModelFilesWithProgress installs model files with download progress.
+// A nil progress function disables reports.
+func InstallModelFilesWithProgress(
+	ctx context.Context,
+	httpClient *http.Client,
+	cacheRoot string,
+	modelName string,
+	progress modeldownload.ProgressFunc,
+) error {
 	preset, err := offlinemodel.Resolve(modelName)
 	if err != nil {
 		slog.ErrorContext(ctx, "resolve offline embedding model failed", "model", modelName, "err", err)
 		return fmt.Errorf("resolve offline embedding model: %w", err)
 	}
-	_, err = ensureModelFiles(ctx, httpClient, cacheRoot, preset)
+	_, err = ensureModelFiles(ctx, httpClient, cacheRoot, preset, progress)
 	return err
 }
 
@@ -173,7 +186,7 @@ func artifactFilename(rawURL string) (string, error) {
 	return filename, nil
 }
 
-func ensurePresetArtifact(
+func ensureArtifact(
 	ctx context.Context,
 	httpClient *http.Client,
 	modelName string,
@@ -181,14 +194,17 @@ func ensurePresetArtifact(
 	rawURL string,
 	expectedSHA256 string,
 	destinationPath string,
+	progress modeldownload.ProgressFunc,
 ) error {
-	if err := ensureArtifact(
-		ctx,
-		httpClient,
-		rawURL,
-		expectedSHA256,
-		destinationPath,
-	); err != nil {
+	request := modeldownload.Request{
+		HTTPClient:      httpClient,
+		URL:             rawURL,
+		SHA256:          expectedSHA256,
+		DestinationPath: destinationPath,
+		Progress:        progress,
+		Sleep:           nil,
+	}
+	if err := modeldownload.Ensure(ctx, request); err != nil {
 		slog.ErrorContext(
 			ctx,
 			"cache offline embedding artifact failed",
@@ -207,342 +223,4 @@ func ensurePresetArtifact(
 		)
 	}
 	return nil
-}
-
-func ensureArtifact(
-	ctx context.Context,
-	httpClient *http.Client,
-	rawURL string,
-	expectedSHA256 string,
-	destinationPath string,
-) error {
-	matches, err := artifactMatches(destinationPath, expectedSHA256)
-	if err != nil {
-		return err
-	}
-	if matches {
-		return nil
-	}
-
-	if _, statErr := os.Stat(destinationPath); statErr == nil {
-		slog.WarnContext(
-			ctx,
-			"offline embedding artifact checksum mismatch; downloading replacement",
-			"path",
-			destinationPath,
-		)
-	}
-	if err := os.MkdirAll(
-		filepath.Dir(destinationPath),
-		offlineModelDirectoryMode,
-	); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"create offline embedding cache directory failed",
-			"path",
-			filepath.Dir(destinationPath),
-			"err",
-			err,
-		)
-		return fmt.Errorf(
-			"create offline embedding cache directory %s: %w",
-			filepath.Dir(destinationPath),
-			err,
-		)
-	}
-	return downloadAndInstallArtifact(
-		ctx,
-		httpClient,
-		rawURL,
-		expectedSHA256,
-		destinationPath,
-	)
-}
-
-func downloadAndInstallArtifact(
-	ctx context.Context,
-	httpClient *http.Client,
-	rawURL string,
-	expectedSHA256 string,
-	destinationPath string,
-) error {
-	slog.InfoContext(
-		ctx,
-		"download offline embedding artifact",
-		"url",
-		rawURL,
-		"path",
-		destinationPath,
-	)
-	response, err := downloadArtifactResponse(ctx, httpClient, rawURL)
-	if err != nil {
-		return err
-	}
-	temporaryPath, actualSHA256, err := writeArtifactResponse(
-		response,
-		destinationPath,
-	)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = os.Remove(temporaryPath)
-	}()
-
-	if actualSHA256 != expectedSHA256 {
-		checksumErr := fmt.Errorf(
-			"offline embedding artifact checksum mismatch for %s: got %s, want %s",
-			rawURL,
-			actualSHA256,
-			expectedSHA256,
-		)
-		slog.ErrorContext(
-			ctx,
-			"offline embedding artifact checksum mismatch",
-			"url",
-			rawURL,
-			"actual_sha256",
-			actualSHA256,
-			"expected_sha256",
-			expectedSHA256,
-			"err",
-			checksumErr,
-		)
-		return checksumErr
-	}
-	if err := os.Chmod(temporaryPath, offlineModelFileMode); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"set offline embedding artifact permissions failed",
-			"path",
-			temporaryPath,
-			"err",
-			err,
-		)
-		return fmt.Errorf("set offline embedding artifact permissions: %w", err)
-	}
-	if err := os.Rename(temporaryPath, destinationPath); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"install offline embedding artifact failed",
-			"path",
-			destinationPath,
-			"err",
-			err,
-		)
-		return fmt.Errorf(
-			"install offline embedding artifact %s: %w",
-			destinationPath,
-			err,
-		)
-	}
-	return nil
-}
-
-func writeArtifactResponse(
-	response *http.Response,
-	destinationPath string,
-) (string, string, error) {
-	slog.Info("write offline embedding artifact response", "path", destinationPath)
-	temporaryFile, err := os.CreateTemp(
-		filepath.Dir(destinationPath),
-		"."+filepath.Base(destinationPath)+".download-*",
-	)
-	if err != nil {
-		slog.Error(
-			"create offline embedding download file failed",
-			"path",
-			destinationPath,
-			"err",
-			err,
-		)
-		createErr := fmt.Errorf(
-			"create offline embedding download file: %w",
-			err,
-		)
-		if closeErr := response.Body.Close(); closeErr != nil {
-			slog.Error(
-				"close offline embedding response failed",
-				"path",
-				destinationPath,
-				"err",
-				closeErr,
-			)
-			return "", "", errors.Join(
-				createErr,
-				fmt.Errorf("close offline embedding response: %w", closeErr),
-			)
-		}
-		return "", "", createErr
-	}
-	temporaryPath := temporaryFile.Name()
-
-	hash := sha256.New()
-	_, copyErr := io.Copy(io.MultiWriter(temporaryFile, hash), response.Body)
-	responseCloseErr := response.Body.Close()
-	fileCloseErr := temporaryFile.Close()
-	if copyErr != nil {
-		_ = os.Remove(temporaryPath)
-		slog.Error(
-			"write offline embedding artifact failed",
-			"path",
-			temporaryPath,
-			"err",
-			copyErr,
-		)
-		return "", "", fmt.Errorf("write offline embedding artifact: %w", copyErr)
-	}
-	if responseCloseErr != nil {
-		_ = os.Remove(temporaryPath)
-		slog.Error(
-			"close offline embedding response failed",
-			"path",
-			temporaryPath,
-			"err",
-			responseCloseErr,
-		)
-		return "", "", fmt.Errorf(
-			"close offline embedding response: %w",
-			responseCloseErr,
-		)
-	}
-	if fileCloseErr != nil {
-		_ = os.Remove(temporaryPath)
-		slog.Error(
-			"close offline embedding artifact failed",
-			"path",
-			temporaryPath,
-			"err",
-			fileCloseErr,
-		)
-		return "", "", fmt.Errorf(
-			"close offline embedding artifact: %w",
-			fileCloseErr,
-		)
-	}
-	actualSHA256 := hex.EncodeToString(hash.Sum(nil))
-	return temporaryPath, actualSHA256, nil
-}
-
-func downloadArtifactResponse(
-	ctx context.Context,
-	httpClient *http.Client,
-	rawURL string,
-) (*http.Response, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"create offline embedding download request failed",
-			"url",
-			rawURL,
-			"err",
-			err,
-		)
-		return nil, fmt.Errorf(
-			"create offline embedding download request: %w",
-			err,
-		)
-	}
-	response, err := httpClient.Do(request)
-	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"download offline embedding artifact failed",
-			"url",
-			rawURL,
-			"err",
-			err,
-		)
-		return nil, fmt.Errorf(
-			"download offline embedding artifact %s: %w: %w",
-			rawURL,
-			ErrArtifactUnavailable,
-			err,
-		)
-	}
-	if response.StatusCode >= http.StatusOK &&
-		response.StatusCode < http.StatusMultipleChoices {
-		return response, nil
-	}
-	closeErr := response.Body.Close()
-	if closeErr != nil {
-		slog.ErrorContext(
-			ctx,
-			"close failed offline embedding response failed",
-			"url",
-			rawURL,
-			"status",
-			response.Status,
-			"err",
-			closeErr,
-		)
-		return nil, fmt.Errorf(
-			"download offline embedding artifact %s: %w: HTTP status %s; close response: %w",
-			rawURL,
-			ErrArtifactUnavailable,
-			response.Status,
-			closeErr,
-		)
-	}
-	return nil, fmt.Errorf(
-		"download offline embedding artifact %s: %w: HTTP status %s",
-		rawURL,
-		ErrArtifactUnavailable,
-		response.Status,
-	)
-}
-
-func artifactMatches(artifactPath string, expectedSHA256 string) (bool, error) {
-	artifact, err := os.Open(artifactPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		slog.Error(
-			"open offline embedding artifact failed",
-			"path",
-			artifactPath,
-			"err",
-			err,
-		)
-		return false, fmt.Errorf(
-			"open offline embedding artifact %s: %w",
-			artifactPath,
-			err,
-		)
-	}
-	hash := sha256.New()
-	_, copyErr := io.Copy(hash, artifact)
-	closeErr := artifact.Close()
-	if copyErr != nil {
-		slog.Error(
-			"hash offline embedding artifact failed",
-			"path",
-			artifactPath,
-			"err",
-			copyErr,
-		)
-		return false, fmt.Errorf(
-			"hash offline embedding artifact %s: %w",
-			artifactPath,
-			copyErr,
-		)
-	}
-	if closeErr != nil {
-		slog.Error(
-			"close offline embedding artifact failed",
-			"path",
-			artifactPath,
-			"err",
-			closeErr,
-		)
-		return false, fmt.Errorf(
-			"close offline embedding artifact %s: %w",
-			artifactPath,
-			closeErr,
-		)
-	}
-	actualSHA256 := hex.EncodeToString(hash.Sum(nil))
-	return actualSHA256 == expectedSHA256, nil
 }
