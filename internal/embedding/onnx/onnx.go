@@ -90,11 +90,18 @@ func NewProviderForModel(
 		cacheRoot,
 		preset,
 		nil,
+		nil,
 	)
 	if err != nil {
 		return nil, err
 	}
+	return providerForFiles(files, preset)
+}
 
+func providerForFiles(
+	files cachedModelFiles,
+	preset offlinemodel.Preset,
+) (embedding.Provider, error) {
 	onnxRuntimesMutex.Lock()
 	defer onnxRuntimesMutex.Unlock()
 	if runtime, found := onnxRuntimes[files.modelPath]; found {
