@@ -64,6 +64,7 @@ func newQueuedJob(
 			CollectionRowsWritten:     0,
 			LastEventAt:               now,
 			HeartbeatAt:               now,
+			ModelDownload:             nil,
 		},
 		Config:                    indexConfig,
 		Budget:                    budget,

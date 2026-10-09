@@ -96,6 +96,11 @@ const (
 	// refuses the conflicting declaration.
 	ClassCollectionSchemaMismatch Class = "collection_schema_mismatch"
 
+	// ClassEmbeddingModelNotReady maps missing offline model files to
+	// FailedPrecondition. The class is transient.
+	// The class does not mark dependency health as degraded.
+	ClassEmbeddingModelNotReady Class = "embedding_model_not_ready"
+
 	// ClassInternal is the catch-all class for unknown errors. The
 	// message is sanitized at the boundary; the operator finds the
 	// real cause in the daemon log by grepping trace_id.
@@ -113,7 +118,7 @@ func CodeFor(class Class) codes.Code {
 	case ClassNotIndexed, ClassJobNotFound, ClassUnknownCodebaseID:
 		return codes.NotFound
 	case ClassCollectionMissing, ClassCollectionNotReady, ClassConflictingJob, ClassMaintenance,
-		ClassCollectionSchemaMismatch:
+		ClassCollectionSchemaMismatch, ClassEmbeddingModelNotReady:
 		return codes.FailedPrecondition
 	case ClassMilvusUnavailable, ClassEmbedderUnreachable:
 		return codes.Unavailable
@@ -234,6 +239,19 @@ func NewEmbedderPaused(message string, hint string, cause error) *AdapterError {
 		Class:         ClassEmbedderPaused,
 		Message:       message,
 		Code:          "embedder_paused",
+		Hint:          hint,
+		Cause:         cause,
+		SafeForClient: true,
+	}
+}
+
+// NewEmbeddingModelNotReady creates a transient FailedPrecondition error.
+// The message and hint are safe to show to clients.
+func NewEmbeddingModelNotReady(message string, hint string, cause error) *AdapterError {
+	return &AdapterError{
+		Class:         ClassEmbeddingModelNotReady,
+		Message:       message,
+		Code:          "embedding_model_not_ready",
 		Hint:          hint,
 		Cause:         cause,
 		SafeForClient: true,
