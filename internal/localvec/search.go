@@ -134,7 +134,7 @@ func (store *Store) embedQuery(
 	collectionName string,
 	query string,
 ) ([]float32, error) {
-	provider, err := store.embeddingProvider()
+	provider, err := store.embeddingProvider(ctx)
 	if err != nil {
 		return nil, err
 	}
