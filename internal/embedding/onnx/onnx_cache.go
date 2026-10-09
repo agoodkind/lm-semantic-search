@@ -44,6 +44,7 @@ func ensureModelFiles(
 	cacheRoot string,
 	preset offlinemodel.Preset,
 	progress modeldownload.ProgressFunc,
+	sleep modeldownload.SleepFunc,
 ) (cachedModelFiles, error) {
 	if cacheRoot == "" {
 		return cachedModelFiles{}, fmt.Errorf(
@@ -70,6 +71,7 @@ func ensureModelFiles(
 		preset.ModelSHA256,
 		modelPath,
 		progress,
+		sleep,
 	); err != nil {
 		return cachedModelFiles{}, err
 	}
@@ -88,6 +90,7 @@ func ensureModelFiles(
 			preset.ModelDataSHA256,
 			filepath.Join(modelDirectory, modelDataFilename),
 			progress,
+			sleep,
 		); err != nil {
 			return cachedModelFiles{}, err
 		}
@@ -107,6 +110,7 @@ func ensureModelFiles(
 		preset.TokenizerSHA256,
 		tokenizerPath,
 		progress,
+		sleep,
 	); err != nil {
 		return cachedModelFiles{}, err
 	}
@@ -169,7 +173,7 @@ func InstallModelFilesWithProgress(
 		slog.ErrorContext(ctx, "resolve offline embedding model failed", "model", modelName, "err", err)
 		return fmt.Errorf("resolve offline embedding model: %w", err)
 	}
-	_, err = ensureModelFiles(ctx, httpClient, cacheRoot, preset, progress)
+	_, err = ensureModelFiles(ctx, httpClient, cacheRoot, preset, progress, nil)
 	return err
 }
 
@@ -195,6 +199,7 @@ func ensureArtifact(
 	expectedSHA256 string,
 	destinationPath string,
 	progress modeldownload.ProgressFunc,
+	sleep modeldownload.SleepFunc,
 ) error {
 	request := modeldownload.Request{
 		HTTPClient:      httpClient,
@@ -202,7 +207,7 @@ func ensureArtifact(
 		SHA256:          expectedSHA256,
 		DestinationPath: destinationPath,
 		Progress:        progress,
-		Sleep:           nil,
+		Sleep:           sleep,
 	}
 	if err := modeldownload.Ensure(ctx, request); err != nil {
 		slog.ErrorContext(

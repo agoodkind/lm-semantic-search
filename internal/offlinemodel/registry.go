@@ -110,6 +110,40 @@ var presets = map[string]Preset{
 	},
 }
 
+// Registry uses its default preset when the requested identifier is empty.
+type Registry struct {
+	defaultName string
+	presets     map[string]Preset
+}
+
+// NewRegistry uses each preset's Name field as its registry identifier.
+func NewRegistry(defaultName string, registered ...Preset) *Registry {
+	byName := make(map[string]Preset, len(registered))
+	for _, preset := range registered {
+		byName[preset.Name] = preset
+	}
+	return &Registry{defaultName: defaultName, presets: byName}
+}
+
+// PinnedRegistry returns two pinned presets with DefaultName as the default.
+func PinnedRegistry() *Registry {
+	return NewRegistry(DefaultName, presets[EmbeddingGemma], presets[BGESmall])
+}
+
+// Resolve selects the default preset for an empty name.
+// The method rejects unregistered preset identifiers.
+func (registry *Registry) Resolve(name string) (Preset, error) {
+	normalizedName := strings.TrimSpace(strings.ToLower(name))
+	if normalizedName == "" {
+		normalizedName = registry.defaultName
+	}
+	preset, found := registry.presets[normalizedName]
+	if !found {
+		return Preset{}, fmt.Errorf("model identifier %q is not registered", name)
+	}
+	return preset, nil
+}
+
 // Names returns the supported preset names in display order.
 func Names() []string {
 	return []string{EmbeddingGemma, BGESmall}
