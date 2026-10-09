@@ -13,6 +13,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/embedding/onnx"
+	"goodkind.io/lm-semantic-search/internal/modeldownload"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 	"goodkind.io/lm-semantic-search/internal/onnxruntimedist"
 )
@@ -63,6 +64,35 @@ func ModelInstalled(cacheRoot string, name string) (bool, error) {
 // into cacheRoot through httpClient.
 func InstallModel(ctx context.Context, httpClient *http.Client, cacheRoot string, name string) error {
 	if err := onnx.InstallModelFiles(ctx, httpClient, cacheRoot, name); err != nil {
+		slog.ErrorContext(ctx, "install local embedding model failed", "model", name, "err", err)
+		return fmt.Errorf("install local embedding model %q: %w", name, err)
+	}
+	return nil
+}
+
+// ModelDownloadProgress reports disk bytes including earlier partial bytes.
+// artifact is the destination file name. totalBytes is 0 for unknown lengths.
+// The installer reports progress at most once per 250 milliseconds and once
+// after the last byte.
+type ModelDownloadProgress func(artifact string, downloadedBytes int64, totalBytes int64)
+
+// InstallModelWithProgress reports progress during each model file download.
+// A nil progress function disables reports.
+func InstallModelWithProgress(
+	ctx context.Context,
+	httpClient *http.Client,
+	cacheRoot string,
+	name string,
+	progress ModelDownloadProgress,
+) error {
+	err := onnx.InstallModelFilesWithProgress(
+		ctx,
+		httpClient,
+		cacheRoot,
+		name,
+		modeldownload.ProgressFunc(progress),
+	)
+	if err != nil {
 		slog.ErrorContext(ctx, "install local embedding model failed", "model", name, "err", err)
 		return fmt.Errorf("install local embedding model %q: %w", name, err)
 	}

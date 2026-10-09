@@ -89,6 +89,7 @@ func NewProviderForModel(
 		http.DefaultClient,
 		cacheRoot,
 		preset,
+		nil,
 	)
 	if err != nil {
 		return nil, err
