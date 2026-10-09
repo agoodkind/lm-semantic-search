@@ -130,7 +130,11 @@ type Config struct {
 	// profile. ApplyProfile derives EmbeddingModel and EmbeddingDimension from it.
 	OfflineEmbeddingModel      string
 	ModelDownloadNetworkPolicy networkcost.Preference
-	EmbeddingBatchSize         int
+	// ModelDownloadNetworkOverride forces downloads on every network when true.
+	// CLAUDE_CONTEXT_MODEL_DOWNLOAD_NETWORK_OVERRIDE takes precedence over
+	// modelDownloadNetworkOverride in the config file.
+	ModelDownloadNetworkOverride bool
+	EmbeddingBatchSize           int
 	// EmbeddingBatchTokenBudget caps the estimated tokens (bytes/4) packed into
 	// one embedding request. EmbeddingBatchSize stays as the row-count ceiling.
 	EmbeddingBatchTokenBudget int
@@ -297,6 +301,7 @@ type persistedConfig struct {
 	CollectionNameOverride             string `json:"collectionNameOverride"`
 	HybridMode                         *bool  `json:"hybridMode"`
 	ModelDownloadNetworkPolicy         string `json:"modelDownloadNetworkPolicy"`
+	ModelDownloadNetworkOverride       *bool  `json:"modelDownloadNetworkOverride"`
 }
 
 type embeddingConfigDefaults struct {
@@ -372,7 +377,6 @@ func Default() (Config, error) {
 	fileConfig := readPersistedConfig(configPath)
 	embeddingDefaults := resolveEmbeddingConfigDefaults(fileConfig)
 
-	embeddingMaxTokens := resolveEmbeddingMaxTokens(fileConfig.EmbeddingMaxTokens)
 	loadWaitTimeoutMS, idleTimeoutMS := resolveMilvusCollectionResidencyTimeouts(fileConfig)
 	// Resolve the configured provider name to its canonical value here, the one
 	// place a raw name enters the config, so no later comparison and no stored
@@ -383,7 +387,7 @@ func Default() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve configured embedding provider: %w", err)
 	}
-	modelDownloadNetworkPolicy, err := resolveModelDownloadNetworkPolicy(fileConfig.ModelDownloadNetworkPolicy)
+	modelDownloadNetwork, err := resolveModelDownloadNetworkSettings(fileConfig)
 	if err != nil {
 		return Config{}, err
 	}
@@ -408,10 +412,11 @@ func Default() (Config, error) {
 		EmbeddingProvider:                  embeddingProviderName,
 		EmbeddingModel:                     envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model),
 		OfflineEmbeddingModel:              embeddingDefaults.offlineModel,
-		ModelDownloadNetworkPolicy:         modelDownloadNetworkPolicy,
+		ModelDownloadNetworkPolicy:         modelDownloadNetwork.Policy,
+		ModelDownloadNetworkOverride:       modelDownloadNetwork.Override,
 		EmbeddingBatchSize:                 envIntOrDefault("EMBEDDING_BATCH_SIZE", intOrDefault(fileConfig.EmbeddingBatchSize, 32)),
 		EmbeddingBatchTokenBudget:          intOrDefault(fileConfig.EmbeddingBatchTokenBudget, defaultEmbeddingBatchTokenBudget),
-		EmbeddingMaxTokens:                 embeddingMaxTokens,
+		EmbeddingMaxTokens:                 resolveEmbeddingMaxTokens(fileConfig.EmbeddingMaxTokens),
 		EmbeddingRequestTimeoutMS:          resolveEmbeddingRequestTimeoutMS(fileConfig.EmbeddingRequestTimeoutMS),
 		EmbeddingDimension:                 envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension),
 		OpenAIAPIKey:                       envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),

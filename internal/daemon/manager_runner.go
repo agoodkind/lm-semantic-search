@@ -58,6 +58,10 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 			manager.mu.Unlock()
 			close(done)
 		}()
+		if !manager.awaitEmbeddingModel(backgroundContext, jobID) {
+			manager.updateJobCancelled(backgroundContext, jobID)
+			return
+		}
 		for attempt := 1; attempt <= jobStartRetryAttempts; attempt++ {
 			manager.mu.Lock()
 			job, found := manager.jobs[jobID]

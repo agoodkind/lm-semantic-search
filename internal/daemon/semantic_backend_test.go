@@ -11,7 +11,7 @@ import (
 
 func TestNewSemanticIndexSelectsLocalBackend(t *testing.T) {
 	t.Parallel()
-	idx, err := newSemanticIndex(context.Background(), config.Config{IndexBackend: config.IndexBackendLocal, StateRoot: t.TempDir()})
+	idx, err := newSemanticIndex(context.Background(), config.Config{IndexBackend: config.IndexBackendLocal, StateRoot: t.TempDir()}, nil)
 	if err != nil {
 		t.Fatalf("newSemanticIndex(local) error: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestNewSemanticIndexSelectsLocalBackend(t *testing.T) {
 
 func TestNewSemanticIndexSelectsMilvusBackend(t *testing.T) {
 	t.Parallel()
-	idx, err := newSemanticIndex(context.Background(), config.Config{IndexBackend: config.IndexBackendMilvus})
+	idx, err := newSemanticIndex(context.Background(), config.Config{IndexBackend: config.IndexBackendMilvus}, nil)
 	if err != nil {
 		t.Fatalf("newSemanticIndex(milvus) error: %v", err)
 	}

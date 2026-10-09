@@ -165,6 +165,62 @@ func TestSetModelDownloadNetworkPolicyPersistsValueDefaultReads(t *testing.T) {
 	}
 }
 
+func TestDefaultResolvesModelDownloadNetworkOverride(t *testing.T) {
+	testCases := []struct {
+		name        string
+		environment string
+		fileData    string
+		want        bool
+	}{
+		{name: "omitted is off", fileData: `{}`, want: false},
+		{name: "config.json on", fileData: `{"modelDownloadNetworkOverride":true}`, want: true},
+		{name: "environment on", environment: "true", fileData: `{}`, want: true},
+		{
+			name:        "environment overrides config.json",
+			environment: "false",
+			fileData:    `{"modelDownloadNetworkOverride":true}`,
+			want:        false,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			configPath := isolatedConfigPath(t, "")
+			t.Setenv("CLAUDE_CONTEXT_MODEL_DOWNLOAD_NETWORK_OVERRIDE", testCase.environment)
+			writeConfigFile(t, configPath, testCase.fileData)
+
+			cfg, err := config.Default()
+			if err != nil {
+				t.Fatalf("Default returned error: %v", err)
+			}
+			if cfg.ModelDownloadNetworkOverride != testCase.want {
+				t.Errorf(
+					"ModelDownloadNetworkOverride = %t want %t",
+					cfg.ModelDownloadNetworkOverride,
+					testCase.want,
+				)
+			}
+		})
+	}
+}
+
+func TestSetModelDownloadNetworkOverridePersistsValueSettingsRead(t *testing.T) {
+	configPath := isolatedConfigPath(t, "")
+	t.Setenv("CLAUDE_CONTEXT_MODEL_DOWNLOAD_NETWORK_OVERRIDE", "")
+	writeConfigFile(t, configPath, `{"modelDownloadNetworkPolicy":"defer"}`)
+
+	if err := config.SetModelDownloadNetworkOverride(configPath, true); err != nil {
+		t.Fatalf("SetModelDownloadNetworkOverride returned error: %v", err)
+	}
+
+	settings, err := config.ReadModelDownloadNetworkSettings(configPath)
+	if err != nil {
+		t.Fatalf("ReadModelDownloadNetworkSettings returned error: %v", err)
+	}
+	if !settings.Override || settings.Policy != networkcost.PreferenceDefer {
+		t.Errorf("settings = %+v want override with policy %q", settings, networkcost.PreferenceDefer)
+	}
+}
+
 func TestSetModelDownloadNetworkPolicyRejectsUnknownWithoutWriting(t *testing.T) {
 	configPath := isolatedConfigPath(t, "")
 	initialData := "{\"modelDownloadNetworkPolicy\":\"allow\"}\n"

@@ -102,6 +102,7 @@ func TestGenericTokenizerLoadsTokenizerJSONWithStableIDs(t *testing.T) {
 		preset.TokenizerSHA256,
 		tokenizerPath,
 		nil,
+		nil,
 	); err != nil {
 		skipIfArtifactUnavailable(t, err)
 		t.Fatalf("ensureArtifact: %v", err)
@@ -150,6 +151,7 @@ func loadPresetTokenizer(t *testing.T, presetName string) (*genericTokenizer, of
 		preset.TokenizerURL,
 		preset.TokenizerSHA256,
 		tokenizerPath,
+		nil,
 		nil,
 	); err != nil {
 		skipIfArtifactUnavailable(t, err)

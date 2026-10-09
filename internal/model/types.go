@@ -190,6 +190,17 @@ type Progress struct {
 	CollectionRowsWritten     int32     `json:"collection_rows_written"`
 	LastEventAt               time.Time `json:"last_event_at"`
 	HeartbeatAt               time.Time `json:"heartbeat_at"`
+	// ModelDownload contains progress while a queued job waits for model files.
+	// The field is nil otherwise.
+	ModelDownload *DownloadProgress `json:"model_download,omitempty"`
+}
+
+// DownloadProgress reports bytes on disk for one artifact.
+type DownloadProgress struct {
+	Artifact        string `json:"artifact,omitempty"`
+	DownloadedBytes int64  `json:"downloaded_bytes"`
+	// TotalBytes is zero when the total is unknown.
+	TotalBytes int64 `json:"total_bytes,omitempty"`
 }
 
 // JobError records job-level failure details. TraceID and JobID tie the

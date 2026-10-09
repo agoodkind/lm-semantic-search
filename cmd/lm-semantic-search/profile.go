@@ -8,13 +8,20 @@ import (
 	"github.com/spf13/cobra"
 
 	"goodkind.io/lm-semantic-search/internal/config"
+	"goodkind.io/lm-semantic-search/internal/networkcost"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 )
 
-const profileArgumentChoices = "standard|offline"
+const (
+	profileArgumentChoices           = "standard|offline"
+	modelDownloadNetworkPolicyFlag   = "model-download-network-policy"
+	modelDownloadNetworkOverrideFlag = "model-download-network-override"
+)
 
 func newProfileCmd() *cobra.Command {
 	var offlineModel string
+	var networkPolicy string
+	var networkOverride bool
 	validModelNames := strings.Join(offlinemodel.Names(), ", ")
 	command := &cobra.Command{
 		Use:   "profile PROFILE",
@@ -41,6 +48,12 @@ func newProfileCmd() *cobra.Command {
 			profile := args[0]
 			if err := validateOfflineModel(profile, offlineModel); err != nil {
 				return err
+			}
+			if cmd.Flags().Changed(modelDownloadNetworkPolicyFlag) {
+				if _, err := networkcost.ParsePreference(networkPolicy); err != nil {
+					slog.Error("profile.model_download_network_policy.invalid", "policy", networkPolicy, "err", err)
+					return fmt.Errorf("--%s: %w", modelDownloadNetworkPolicyFlag, err)
+				}
 			}
 			daemonConfig, err := config.Default()
 			if err != nil {
@@ -71,6 +84,14 @@ func newProfileCmd() *cobra.Command {
 				)
 				return fmt.Errorf("set offline embedding model: %w", err)
 			}
+			if err := persistModelDownloadNetworkFlags(
+				cmd,
+				daemonConfig.ConfigPath,
+				networkPolicy,
+				networkOverride,
+			); err != nil {
+				return err
+			}
 			_, err = fmt.Fprintf(
 				cmd.OutOrStdout(),
 				"Profile set to %s in %s. Restart the daemon to apply it.\n",
@@ -90,7 +111,40 @@ func newProfileCmd() *cobra.Command {
 		"",
 		"offline embedding model ("+validModelNames+")",
 	)
+	command.Flags().StringVar(&networkPolicy, modelDownloadNetworkPolicyFlag, "", "Set allow, warn, or defer for embedding model downloads on expensive, constrained, or unknown networks. The daemon reads changes without a restart.")
+	command.Flags().BoolVar(&networkOverride, modelDownloadNetworkOverrideFlag, false, "Download the embedding model on every network. Set --model-download-network-override=false to clear the override. The daemon reads changes without a restart.")
 	return command
+}
+
+func persistModelDownloadNetworkFlags(
+	cmd *cobra.Command,
+	configPath string,
+	networkPolicy string,
+	networkOverride bool,
+) error {
+	if cmd.Flags().Changed(modelDownloadNetworkPolicyFlag) {
+		if err := config.SetModelDownloadNetworkPolicy(configPath, networkPolicy); err != nil {
+			slog.Error(
+				"profile.model_download_network_policy.set_failed",
+				"path", configPath,
+				"policy", networkPolicy,
+				"err", err,
+			)
+			return fmt.Errorf("write model download network policy to config file: %w", err)
+		}
+	}
+	if cmd.Flags().Changed(modelDownloadNetworkOverrideFlag) {
+		if err := config.SetModelDownloadNetworkOverride(configPath, networkOverride); err != nil {
+			slog.Error(
+				"profile.model_download_network_override.set_failed",
+				"path", configPath,
+				"override", networkOverride,
+				"err", err,
+			)
+			return fmt.Errorf("write model download network override to config file: %w", err)
+		}
+	}
+	return nil
 }
 
 func validateProfileArgs(_ *cobra.Command, args []string) error {

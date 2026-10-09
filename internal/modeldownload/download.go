@@ -91,6 +91,19 @@ func Ensure(ctx context.Context, request Request) error {
 	return download(ctx, request)
 }
 
+// Installed checks the file against the given SHA-256 without sending a
+// network request.
+func Installed(ctx context.Context, destinationPath string, sha256Digest string) (bool, error) {
+	return installedArtifactMatches(ctx, Request{
+		HTTPClient:      nil,
+		URL:             "",
+		SHA256:          sha256Digest,
+		DestinationPath: destinationPath,
+		Progress:        nil,
+		Sleep:           nil,
+	})
+}
+
 func installedArtifactMatches(ctx context.Context, request Request) (bool, error) {
 	_, statErr := os.Stat(request.DestinationPath)
 	if errors.Is(statErr, os.ErrNotExist) {

@@ -167,7 +167,8 @@ type Manager struct {
 	observer *ignoreObserver
 	// maintenance is the operator's maintenance mode, persisted beside the
 	// registry and mirrored onto the semantic backend's load gate. Guarded by mu.
-	maintenance model.MaintenanceState
+	maintenance   model.MaintenanceState
+	modelDownload *modelDownloadSupervisor
 }
 
 // SearchOutcome carries search results plus current indexing context.
@@ -189,11 +190,7 @@ type indexingRunner interface {
 type managerDependencies struct {
 	semanticFactory func(context.Context, config.Config) (semanticIndex, error)
 	activitySource  platformactivity.Source
-}
-
-// NewManager loads persisted daemon state from disk.
-func NewManager(ctx context.Context, cfg config.Config) (*Manager, error) {
-	return newManagerWithSemanticFactory(ctx, cfg, newSemanticIndex)
+	modelDownload   ModelDownloadOptions
 }
 
 func newManagerWithSemanticFactory(
@@ -204,6 +201,7 @@ func newManagerWithSemanticFactory(
 	return newManagerWithDependencies(ctx, cfg, managerDependencies{
 		semanticFactory: semanticFactory,
 		activitySource:  platformactivity.New(ctx),
+		modelDownload:   DefaultManagerOptions().ModelDownload,
 	})
 }
 
@@ -260,6 +258,7 @@ func newManagerWithDependencies(
 		indexability:                nil,
 		observer:                    nil,
 		maintenance:                 model.MaintenanceState{Enabled: false, Reason: "", Since: time.Time{}},
+		modelDownload:               nil,
 	}
 	if err := store.EnsureDir(cfg.GraphDir); err != nil {
 		slog.ErrorContext(ctx, "create graph cache directory failed", "path", cfg.GraphDir, "err", err)
@@ -282,7 +281,7 @@ func newManagerWithDependencies(
 	// The observer is the sole caller of the resolver's invalidate, so every
 	// consumer signals it instead of invalidating the cache itself.
 	manager.observer = newIgnoreObserver(manager.indexability)
-	semanticBackend, err := dependencies.semanticFactory(ctx, cfg)
+	semanticBackend, err := manager.buildSemanticBackend(ctx, cfg, dependencies)
 	if err != nil {
 		manager.jobScheduler.Close()
 		return nil, err
@@ -309,7 +308,26 @@ func newManagerWithDependencies(
 		jobJournalQueueCapacity,
 	)
 	manager.appendJobTransition = manager.jobJournal.enqueueAndSync
+	manager.modelDownload.start(ctx)
 	return manager, nil
+}
+
+func (manager *Manager) buildSemanticBackend(
+	ctx context.Context,
+	cfg config.Config,
+	dependencies managerDependencies,
+) (semanticIndex, error) {
+	if dependencies.semanticFactory != nil {
+		return dependencies.semanticFactory(ctx, cfg)
+	}
+	if modelDownloadRequired(cfg) {
+		supervisor, err := newModelDownloadSupervisor(ctx, cfg, dependencies.modelDownload)
+		if err != nil {
+			return nil, err
+		}
+		manager.modelDownload = supervisor
+	}
+	return newSemanticIndex(ctx, cfg, manager.modelDownload)
 }
 
 // dropGhostURICodebases removes code-kind records whose canonical path is a

@@ -15,10 +15,20 @@ import (
 // profile's embedded store; every other value builds the Milvus-backed service,
 // including the zero value, which a config assembled without ApplyProfile leaves
 // unset.
-func newSemanticIndex(ctx context.Context, cfg config.Config) (semanticIndex, error) {
+func newSemanticIndex(
+	ctx context.Context,
+	cfg config.Config,
+	modelDownload *modelDownloadSupervisor,
+) (semanticIndex, error) {
 	switch cfg.IndexBackend {
 	case config.IndexBackendLocal:
-		store, err := localvec.New(ctx, cfg)
+		var store *localvec.Store
+		var err error
+		if modelDownload == nil {
+			store, err = localvec.New(ctx, cfg)
+		} else {
+			store, err = localvec.NewWithProviderSource(cfg, newModelGatedProvider(modelDownload))
+		}
 		if err != nil {
 			slog.ErrorContext(ctx, "create local vector store failed", "err", err)
 			return nil, fmt.Errorf("create local vector store: %w", err)

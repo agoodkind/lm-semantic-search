@@ -131,6 +131,17 @@ message Progress {
   int32 reuse_vectors_loaded = 17;
   // chunks_dropped counts refused inputs that could not be split safely.
   int32 chunks_dropped = 18;
+  // The server sets model_download while a queued job waits for embedding
+  // model files.
+  ModelDownloadProgress model_download = 19;
+}
+
+// The message reports download progress for one artifact.
+message ModelDownloadProgress {
+  string artifact = 1;
+  int64 downloaded_bytes = 2;
+  // The field is absent when the server sends no length.
+  optional int64 total_bytes = 3;
 }
 
 // OutcomeKind is the semantic identity of one outcome row. The render layer maps

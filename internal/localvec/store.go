@@ -36,12 +36,14 @@ var errEmbeddingProviderUnconfigured = errors.New(
 
 // Store is the embedded vector store used by the offline profile.
 type Store struct {
-	cfg         config.Config
-	root        string
-	embedder    embedding.Provider
-	mutex       sync.RWMutex
-	collections map[string]*collection
-	available   bool
+	cfg      config.Config
+	root     string
+	embedder embedding.Provider
+	// providerSource supplies the provider for each embedding operation when set.
+	providerSource ProviderSource
+	mutex          sync.RWMutex
+	collections    map[string]*collection
+	available      bool
 	// declaredScalars maps a generic document collection name to the scalar
 	// columns of its saved declaration. See RecordCollectionDeclaration.
 	declaredScalars sync.Map
@@ -62,6 +64,9 @@ func (store *Store) BackendName() model.VectorBackend {
 // constructed with no embedder reports none rather than naming one, because an
 // absent embedder is a fact a caller needs and a guessed name would hide it.
 func (store *Store) EmbeddingProviderName() model.EmbeddingProvider {
+	if store.providerSource != nil {
+		return store.providerSource.ProviderName()
+	}
 	if store.embedder == nil {
 		return model.EmbeddingProviderNone
 	}
@@ -89,6 +94,23 @@ func New(ctx context.Context, cfg config.Config) (*Store, error) {
 	return newStoreWithProvider(cfg, provider)
 }
 
+// ProviderSource returns an error while the embedding provider is unavailable.
+type ProviderSource interface {
+	ProviderName() model.EmbeddingProvider
+	Provider(ctx context.Context) (embedding.Provider, error)
+}
+
+// NewWithProviderSource creates a store that requests its provider on each
+// embedding operation.
+func NewWithProviderSource(cfg config.Config, source ProviderSource) (*Store, error) {
+	store, err := newStoreWithProvider(cfg, nil)
+	if err != nil {
+		return nil, err
+	}
+	store.providerSource = source
+	return store, nil
+}
+
 func newStoreWithProvider(
 	cfg config.Config,
 	provider embedding.Provider,
@@ -109,6 +131,7 @@ func newStoreAtRoot(
 		cfg:             cfg,
 		root:            root,
 		embedder:        provider,
+		providerSource:  nil,
 		mutex:           sync.RWMutex{},
 		collections:     make(map[string]*collection),
 		available:       true,
@@ -428,7 +451,15 @@ func (store *Store) dropCollection(collectionName string, staging bool) error {
 	return nil
 }
 
-func (store *Store) embeddingProvider() (embedding.Provider, error) {
+func (store *Store) embeddingProvider(ctx context.Context) (embedding.Provider, error) {
+	if store.providerSource != nil {
+		provider, err := store.providerSource.Provider(ctx)
+		if err != nil {
+			slog.WarnContext(ctx, "localvec.embedding_provider.unavailable", "err", err)
+			return nil, fmt.Errorf("provider source returned no embedding provider: %w", err)
+		}
+		return provider, nil
+	}
 	if store.embedder == nil {
 		return nil, errEmbeddingProviderUnconfigured
 	}
