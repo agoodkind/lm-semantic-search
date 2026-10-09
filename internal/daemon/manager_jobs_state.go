@@ -103,6 +103,7 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 			current.SchedulingReason = model.SchedulingReasonUnspecified
 			current.UpdatedAt = now
 			current.Progress.Phase = "Preparing and scanning files..."
+			current.Progress.ModelDownload = nil
 			current.Progress.LastEventAt = now
 			current.Progress.HeartbeatAt = now
 			current.Progress.OverallPercent = 0
