@@ -291,6 +291,23 @@ func ToProgress(p model.Progress) *pb.Progress {
 		LastEventAt:               ts(p.LastEventAt),
 		HeartbeatAt:               ts(p.HeartbeatAt),
 		Breakdown:                 BreakdownProto(p),
+		ModelDownload:             modelDownloadProgressToProto(p.ModelDownload),
+	}
+}
+
+func modelDownloadProgressToProto(progress *model.DownloadProgress) *pb.ModelDownloadProgress {
+	if progress == nil {
+		return nil
+	}
+	var totalBytes *int64
+	if progress.TotalBytes > 0 {
+		knownTotal := progress.TotalBytes
+		totalBytes = &knownTotal
+	}
+	return &pb.ModelDownloadProgress{
+		Artifact:        progress.Artifact,
+		DownloadedBytes: progress.DownloadedBytes,
+		TotalBytes:      totalBytes,
 	}
 }
 
