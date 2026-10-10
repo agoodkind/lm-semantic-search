@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"goodkind.io/lm-semantic-search/internal/config"
@@ -10,13 +11,13 @@ import (
 
 func (supervisor *modelDownloadSupervisor) networkSettings(
 	ctx context.Context,
-) (config.ModelDownloadNetworkSettings, bool) {
+) (config.ModelDownloadNetworkSettings, error) {
 	if supervisor.cfg.ConfigPath == "" {
 		configured := config.ModelDownloadNetworkSettings{
 			Policy:   supervisor.cfg.ModelDownloadNetworkPolicy,
 			Override: supervisor.cfg.ModelDownloadNetworkOverride,
 		}
-		return configured, true
+		return configured, nil
 	}
 	settings, err := config.ReadModelDownloadNetworkSettings(supervisor.cfg.ConfigPath)
 	if err != nil {
@@ -27,14 +28,17 @@ func (supervisor *modelDownloadSupervisor) networkSettings(
 			"path", supervisor.cfg.ConfigPath,
 			"err", err,
 		)
-		return config.ModelDownloadNetworkSettings{Policy: "", Override: false}, false
+		return config.ModelDownloadNetworkSettings{Policy: "", Override: false}, fmt.Errorf(
+			"load model download supervisor network settings: %w",
+			err,
+		)
 	}
-	return settings, true
+	return settings, nil
 }
 
 func (supervisor *modelDownloadSupervisor) decide(ctx context.Context) bool {
-	settings, settingsRead := supervisor.networkSettings(ctx)
-	if !settingsRead {
+	settings, err := supervisor.networkSettings(ctx)
+	if err != nil {
 		supervisor.update(func(snapshot *modelDownloadSnapshot) {
 			snapshot.State = modelDownloadDeferred
 			snapshot.DecisionKnown = false

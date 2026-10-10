@@ -50,7 +50,9 @@ func (provider *modelGatedProvider) ProviderName() model.EmbeddingProvider {
 func (provider *modelGatedProvider) Provider(ctx context.Context) (embedding.Provider, error) {
 	snapshot, _ := provider.supervisor.observe()
 	if snapshot.State != modelDownloadComplete {
-		provider.supervisor.requestRecheck()
+		if snapshot.State == modelDownloadDeferred {
+			provider.supervisor.requestRecheck()
+		}
 		notReady := modelNotReadyError(snapshot)
 		slog.WarnContext(ctx, "model_download.embedding_refused", "state", string(snapshot.State), "err", notReady)
 		return nil, notReady

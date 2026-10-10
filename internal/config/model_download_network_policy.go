@@ -23,7 +23,7 @@ type ModelDownloadNetworkSettings struct {
 }
 
 // ReadModelDownloadNetworkSettings rereads the config file and environment on every call.
-// A missing config file yields the default settings without an error.
+// A missing config file supplies no persisted values; environment variables and defaults determine the settings.
 // The function returns an error for unknown policies, unreadable existing files, or invalid JSON.
 func ReadModelDownloadNetworkSettings(configPath string) (ModelDownloadNetworkSettings, error) {
 	fileConfig, err := readModelDownloadNetworkConfig(configPath)
