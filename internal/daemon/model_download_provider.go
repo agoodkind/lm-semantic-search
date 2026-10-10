@@ -65,7 +65,6 @@ func (provider *modelGatedProvider) Provider(ctx context.Context) (embedding.Pro
 		provider.supervisor.preset,
 	)
 	if err != nil {
-		slog.ErrorContext(ctx, "create ONNX embedding provider failed", "err", err)
 		return nil, fmt.Errorf("create ONNX embedding provider: %w", err)
 	}
 	provider.provider = built

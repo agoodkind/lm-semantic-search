@@ -221,6 +221,30 @@ func TestSetModelDownloadNetworkOverridePersistsValueSettingsRead(t *testing.T) 
 	}
 }
 
+func TestReadModelDownloadNetworkSettingsDefaultsWithoutConfigFile(t *testing.T) {
+	configPath := isolatedConfigPath(t, "")
+	t.Setenv("CLAUDE_CONTEXT_MODEL_DOWNLOAD_NETWORK_OVERRIDE", "")
+
+	settings, err := config.ReadModelDownloadNetworkSettings(configPath)
+	if err != nil {
+		t.Fatalf("ReadModelDownloadNetworkSettings returned error: %v", err)
+	}
+	if settings.Override || settings.Policy != networkcost.DefaultPreference {
+		t.Errorf("ReadModelDownloadNetworkSettings returned %+v instead of override off with the default policy %q when no config file exists.", settings, networkcost.DefaultPreference)
+	}
+}
+
+func TestReadModelDownloadNetworkSettingsRejectsInvalidJSON(t *testing.T) {
+	configPath := isolatedConfigPath(t, "")
+	t.Setenv("CLAUDE_CONTEXT_MODEL_DOWNLOAD_NETWORK_OVERRIDE", "")
+	writeConfigFile(t, configPath, `{"modelDownloadNetworkPolicy":`)
+
+	settings, err := config.ReadModelDownloadNetworkSettings(configPath)
+	if err == nil {
+		t.Fatalf("ReadModelDownloadNetworkSettings returned %+v without an error for a config file with invalid JSON.", settings)
+	}
+}
+
 func TestSetModelDownloadNetworkPolicyRejectsUnknownWithoutWriting(t *testing.T) {
 	configPath := isolatedConfigPath(t, "")
 	initialData := "{\"modelDownloadNetworkPolicy\":\"allow\"}\n"

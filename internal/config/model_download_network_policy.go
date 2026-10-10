@@ -1,8 +1,12 @@
 package config
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
 
 	"goodkind.io/lm-semantic-search/internal/networkcost"
 )
@@ -18,10 +22,35 @@ type ModelDownloadNetworkSettings struct {
 	Override bool
 }
 
-// ReadModelDownloadNetworkSettings rereads the config file and environment
-// on every call. The function rejects unknown policies.
+// ReadModelDownloadNetworkSettings rereads the config file and environment on every call.
+// A missing config file yields the default settings without an error.
+// The function returns an error for unknown policies, unreadable existing files, or invalid JSON.
 func ReadModelDownloadNetworkSettings(configPath string) (ModelDownloadNetworkSettings, error) {
-	return resolveModelDownloadNetworkSettings(readPersistedConfig(configPath))
+	fileConfig, err := readModelDownloadNetworkConfig(configPath)
+	if err != nil {
+		return ModelDownloadNetworkSettings{}, err
+	}
+	return resolveModelDownloadNetworkSettings(fileConfig)
+}
+
+// readModelDownloadNetworkConfig returns an empty config without an error
+// only when the config file does not exist.
+func readModelDownloadNetworkConfig(path string) (persistedConfig, error) {
+	var cfg persistedConfig
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return cfg, nil
+	}
+	if err != nil {
+		slog.Error("read model download network settings config failed", "path", path, "err", err)
+		return cfg, fmt.Errorf("read model download network settings from %s: %w", path, err)
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		slog.Error("invalid JSON in model download network settings config", "path", path, "err", err)
+		var emptyConfig persistedConfig
+		return emptyConfig, fmt.Errorf("parse model download network settings JSON from %s: %w", path, err)
+	}
+	return cfg, nil
 }
 
 func resolveModelDownloadNetworkSettings(

@@ -10,29 +10,37 @@ import (
 
 func (supervisor *modelDownloadSupervisor) networkSettings(
 	ctx context.Context,
-) config.ModelDownloadNetworkSettings {
-	configured := config.ModelDownloadNetworkSettings{
-		Policy:   supervisor.cfg.ModelDownloadNetworkPolicy,
-		Override: supervisor.cfg.ModelDownloadNetworkOverride,
-	}
+) (config.ModelDownloadNetworkSettings, bool) {
 	if supervisor.cfg.ConfigPath == "" {
-		return configured
+		configured := config.ModelDownloadNetworkSettings{
+			Policy:   supervisor.cfg.ModelDownloadNetworkPolicy,
+			Override: supervisor.cfg.ModelDownloadNetworkOverride,
+		}
+		return configured, true
 	}
 	settings, err := config.ReadModelDownloadNetworkSettings(supervisor.cfg.ConfigPath)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
 			"model_download.network_settings.read_failed",
+			"model", supervisor.preset.Name,
 			"path", supervisor.cfg.ConfigPath,
 			"err", err,
 		)
-		return configured
+		return config.ModelDownloadNetworkSettings{Policy: "", Override: false}, false
 	}
-	return settings
+	return settings, true
 }
 
 func (supervisor *modelDownloadSupervisor) decide(ctx context.Context) bool {
-	settings := supervisor.networkSettings(ctx)
+	settings, settingsRead := supervisor.networkSettings(ctx)
+	if !settingsRead {
+		supervisor.update(func(snapshot *modelDownloadSnapshot) {
+			snapshot.State = modelDownloadDeferred
+			snapshot.DecisionKnown = false
+		})
+		return false
+	}
 	classification := supervisor.dependencies.NetworkSource.Classify(ctx)
 	decision := networkcost.Decide(classification, settings.Policy, settings.Override)
 	state := modelDownloadDownloading

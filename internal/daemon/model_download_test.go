@@ -2,6 +2,7 @@ package daemon_test
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,42 @@ func TestModelDownloadDefersOnExpensiveNetworkUntilOverride(t *testing.T) {
 	}
 	if requests := artifacts.requests.Load(); requests == 0 {
 		t.Fatal("artifact server received no request after the override")
+	}
+}
+
+func TestModelDownloadDefersWhileNetworkSettingsAreUnreadable(t *testing.T) {
+	testCases := []struct {
+		name           string
+		configDocument string
+	}{
+		{name: "unknown policy", configDocument: `{"modelDownloadNetworkPolicy":"unsupported"}`},
+		{name: "invalid JSON", configDocument: `{"modelDownloadNetworkPolicy":`},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := offlineDownloadTestConfig(t)
+			if err := os.WriteFile(cfg.ConfigPath, []byte(testCase.configDocument), 0o600); err != nil {
+				t.Fatalf("WriteFile(config) returned error: %v", err)
+			}
+			artifacts := newModelArtifactServer(t, false)
+			harness := startModelDownloadDaemon(t, cfg, artifacts, networkcost.ClassificationNormal, 50*time.Millisecond)
+
+			deferred := harness.waitForMetrics(t, "a deferred download", modelDownloadStateIs(stateDeferred))
+			requireMetricAbsent(t, deferred, "model_download.decision")
+			requireMetricAbsent(t, deferred, "model_download.network_policy")
+			time.Sleep(200 * time.Millisecond)
+			if requests := artifacts.requests.Load(); requests != 0 {
+				t.Fatalf("The artifact server received requests while the network settings were unreadable; the request count was %d.", requests)
+			}
+
+			validDocument := []byte(`{"modelDownloadNetworkPolicy":"warn"}`)
+			if err := os.WriteFile(cfg.ConfigPath, validDocument, 0o600); err != nil {
+				t.Fatalf("WriteFile(config) returned error: %v", err)
+			}
+			completed := harness.waitForMetrics(t, "a complete download after the policy repair", modelDownloadStateIs(stateComplete))
+			requireMetricString(t, completed, "model_download.network_policy", string(networkcost.PreferenceWarn))
+			requireMetricString(t, completed, "model_download.decision", string(networkcost.DecisionDownload))
+		})
 	}
 }
 
