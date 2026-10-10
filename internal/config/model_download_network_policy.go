@@ -9,6 +9,41 @@ import (
 
 const modelDownloadNetworkPolicyEnvVar = "CLAUDE_CONTEXT_MODEL_DOWNLOAD_NETWORK_POLICY"
 
+const modelDownloadNetworkOverrideEnvVar = "CLAUDE_CONTEXT_MODEL_DOWNLOAD_NETWORK_OVERRIDE"
+
+// ModelDownloadNetworkSettings includes an override that permits downloads
+// on every network.
+type ModelDownloadNetworkSettings struct {
+	Policy   networkcost.Preference
+	Override bool
+}
+
+// ReadModelDownloadNetworkSettings rereads the config file and environment
+// on every call. The function rejects unknown policies.
+func ReadModelDownloadNetworkSettings(configPath string) (ModelDownloadNetworkSettings, error) {
+	return resolveModelDownloadNetworkSettings(readPersistedConfig(configPath))
+}
+
+func resolveModelDownloadNetworkSettings(
+	fileConfig persistedConfig,
+) (ModelDownloadNetworkSettings, error) {
+	policy, err := resolveModelDownloadNetworkPolicy(fileConfig.ModelDownloadNetworkPolicy)
+	if err != nil {
+		return ModelDownloadNetworkSettings{}, err
+	}
+	return ModelDownloadNetworkSettings{
+		Policy:   policy,
+		Override: resolveModelDownloadNetworkOverride(fileConfig.ModelDownloadNetworkOverride),
+	}, nil
+}
+
+func resolveModelDownloadNetworkOverride(fileValue *bool) bool {
+	return envBoolOrDefault(
+		modelDownloadNetworkOverrideEnvVar,
+		boolOrDefault(fileValue, false),
+	)
+}
+
 func resolveModelDownloadNetworkPolicy(fileValue string) (networkcost.Preference, error) {
 	configuredValue := envOrDefault(
 		modelDownloadNetworkPolicyEnvVar,
