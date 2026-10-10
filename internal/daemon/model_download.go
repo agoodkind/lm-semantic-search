@@ -139,9 +139,13 @@ func (supervisor *modelDownloadSupervisor) start(ctx context.Context) {
 	if supervisor == nil {
 		return
 	}
+	supervisor.mutex.Lock()
+	if supervisor.done != nil {
+		supervisor.mutex.Unlock()
+		return
+	}
 	runContext, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
-	supervisor.mutex.Lock()
 	supervisor.cancel = cancel
 	supervisor.done = done
 	supervisor.mutex.Unlock()
