@@ -48,17 +48,8 @@ func offlineDownloadTestConfig(t *testing.T) config.Config {
 		t.Fatalf("MkdirTemp returned error: %v", err)
 	}
 	t.Cleanup(func() {
-		deadline := time.Now().Add(testDownloadTimeout)
-		for {
-			removeErr := os.RemoveAll(root)
-			if removeErr == nil {
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Errorf("remove daemon root %s: %v", root, removeErr)
-				return
-			}
-			time.Sleep(testPollInterval)
+		if removeErr := os.RemoveAll(root); removeErr != nil {
+			t.Errorf("remove daemon root %s: %v", root, removeErr)
 		}
 	})
 	socketDirectory, err := os.MkdirTemp("", "lms-dl")
