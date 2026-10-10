@@ -190,6 +190,7 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 			statusView.UpdatedAt = formatStampWithRelative(run.CompletedAt)
 		}
 		return statusView, "ready.md.tmpl"
+	case displayPreparing, displayIndexing, displayStale, displayFailed, displayMissing:
 	}
 	statusView.PrepareLabel = prepareLabel(activeJob)
 	embedding := false

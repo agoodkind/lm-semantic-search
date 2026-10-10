@@ -42,6 +42,8 @@ func resolveBannerView(health dependencyHealth, cfg config.Config) view.BannerVi
 			Headline: headline,
 			Detail:   joinBannerDetail(embedderEndpointRef(cfg), lastReachable),
 		}
+	case dependencyHealthy:
+		fallthrough
 	default:
 		return view.BannerView{Headline: headline, Detail: lastReachable}
 	}
