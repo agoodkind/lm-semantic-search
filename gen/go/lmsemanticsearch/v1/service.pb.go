@@ -751,6 +751,9 @@ type Progress struct {
 	ReuseVectorsLoaded int32 `protobuf:"varint,17,opt,name=reuse_vectors_loaded,json=reuseVectorsLoaded,proto3" json:"reuse_vectors_loaded,omitempty"`
 	// chunks_dropped counts refused inputs that could not be split safely.
 	ChunksDropped int32 `protobuf:"varint,18,opt,name=chunks_dropped,json=chunksDropped,proto3" json:"chunks_dropped,omitempty"`
+	// The server sets model_download while a queued job waits for embedding
+	// model files.
+	ModelDownload *ModelDownloadProgress `protobuf:"bytes,19,opt,name=model_download,json=modelDownload,proto3" json:"model_download,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -909,6 +912,13 @@ func (x *Progress) GetChunksDropped() int32 {
 		return x.ChunksDropped
 	}
 	return 0
+}
+
+func (x *Progress) GetModelDownload() *ModelDownloadProgress {
+	if x != nil {
+		return x.ModelDownload
+	}
+	return nil
 }
 
 // OutcomeRow is one child line in an outcome tree: a semantic kind and a count.
@@ -4386,6 +4396,67 @@ func (x *GetStatusResponse) GetMaintenance() *MaintenanceStatus {
 	return nil
 }
 
+type ModelDownloadProgress struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Artifact        string                 `protobuf:"bytes,1,opt,name=artifact,proto3" json:"artifact,omitempty"`
+	DownloadedBytes int64                  `protobuf:"varint,2,opt,name=downloaded_bytes,json=downloadedBytes,proto3" json:"downloaded_bytes,omitempty"`
+	// The field is absent when the server sends no length.
+	TotalBytes    *int64 `protobuf:"varint,3,opt,name=total_bytes,json=totalBytes,proto3,oneof" json:"total_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelDownloadProgress) Reset() {
+	*x = ModelDownloadProgress{}
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelDownloadProgress) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelDownloadProgress) ProtoMessage() {}
+
+func (x *ModelDownloadProgress) ProtoReflect() protoreflect.Message {
+	mi := &file_lmsemanticsearch_v1_service_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelDownloadProgress.ProtoReflect.Descriptor instead.
+func (*ModelDownloadProgress) Descriptor() ([]byte, []int) {
+	return file_lmsemanticsearch_v1_service_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *ModelDownloadProgress) GetArtifact() string {
+	if x != nil {
+		return x.Artifact
+	}
+	return ""
+}
+
+func (x *ModelDownloadProgress) GetDownloadedBytes() int64 {
+	if x != nil {
+		return x.DownloadedBytes
+	}
+	return 0
+}
+
+func (x *ModelDownloadProgress) GetTotalBytes() int64 {
+	if x != nil && x.TotalBytes != nil {
+		return *x.TotalBytes
+	}
+	return 0
+}
+
 var File_lmsemanticsearch_v1_service_proto protoreflect.FileDescriptor
 
 const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
@@ -4431,7 +4502,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x12idle_after_seconds\x18\x03 \x01(\x05H\x02R\x10idleAfterSeconds\x88\x01\x01B\v\n" +
 	"\t_priorityB\b\n" +
 	"\x06_quietB\x15\n" +
-	"\x13_idle_after_seconds\"\xbd\x06\n" +
+	"\x13_idle_after_seconds\"\x90\a\n" +
 	"\bProgress\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12#\n" +
 	"\rphase_percent\x18\x02 \x01(\x01R\fphasePercent\x12'\n" +
@@ -4452,7 +4523,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x10chunks_processed\x18\x0f \x01(\x05R\x0fchunksProcessed\x12'\n" +
 	"\x0fchunks_embedded\x18\x10 \x01(\x05R\x0echunksEmbedded\x120\n" +
 	"\x14reuse_vectors_loaded\x18\x11 \x01(\x05R\x12reuseVectorsLoaded\x12%\n" +
-	"\x0echunks_dropped\x18\x12 \x01(\x05R\rchunksDropped\"X\n" +
+	"\x0echunks_dropped\x18\x12 \x01(\x05R\rchunksDropped\x12Q\n" +
+	"\x0emodel_download\x18\x13 \x01(\v2*.lmsemanticsearch.v1.ModelDownloadProgressR\rmodelDownload\"X\n" +
 	"\n" +
 	"OutcomeRow\x124\n" +
 	"\x04kind\x18\x01 \x01(\x0e2 .lmsemanticsearch.v1.OutcomeKindR\x04kind\x12\x14\n" +
@@ -4733,7 +4805,13 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\bactivity\x18\x04 \x03(\v2 .lmsemanticsearch.v1.ActivityRowR\bactivity\x12!\n" +
 	"\fdisplay_text\x18\x05 \x01(\tR\vdisplayText\x12R\n" +
 	"\x0factivity_source\x18\x06 \x01(\v2).lmsemanticsearch.v1.ActivitySourceStatusR\x0eactivitySource\x12H\n" +
-	"\vmaintenance\x18\a \x01(\v2&.lmsemanticsearch.v1.MaintenanceStatusR\vmaintenance*\x94\x01\n" +
+	"\vmaintenance\x18\a \x01(\v2&.lmsemanticsearch.v1.MaintenanceStatusR\vmaintenance\"\x94\x01\n" +
+	"\x15ModelDownloadProgress\x12\x1a\n" +
+	"\bartifact\x18\x01 \x01(\tR\bartifact\x12)\n" +
+	"\x10downloaded_bytes\x18\x02 \x01(\x03R\x0fdownloadedBytes\x12$\n" +
+	"\vtotal_bytes\x18\x03 \x01(\x03H\x00R\n" +
+	"totalBytes\x88\x01\x01B\x0e\n" +
+	"\f_total_bytes*\x94\x01\n" +
 	"\x12SchedulingPriority\x12#\n" +
 	"\x1fSCHEDULING_PRIORITY_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18SCHEDULING_PRIORITY_HIGH\x10\x01\x12\x1e\n" +
@@ -4790,7 +4868,7 @@ func file_lmsemanticsearch_v1_service_proto_rawDescGZIP() []byte {
 }
 
 var file_lmsemanticsearch_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_lmsemanticsearch_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
+var file_lmsemanticsearch_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 57)
 var file_lmsemanticsearch_v1_service_proto_goTypes = []any{
 	(SchedulingPriority)(0),              // 0: lmsemanticsearch.v1.SchedulingPriority
 	(SchedulingReason)(0),                // 1: lmsemanticsearch.v1.SchedulingReason
@@ -4852,119 +4930,121 @@ var file_lmsemanticsearch_v1_service_proto_goTypes = []any{
 	(*GetStatusRequest)(nil),             // 57: lmsemanticsearch.v1.GetStatusRequest
 	(*ActivitySourceStatus)(nil),         // 58: lmsemanticsearch.v1.ActivitySourceStatus
 	(*GetStatusResponse)(nil),            // 59: lmsemanticsearch.v1.GetStatusResponse
-	(*timestamppb.Timestamp)(nil),        // 60: google.protobuf.Timestamp
+	(*ModelDownloadProgress)(nil),        // 60: lmsemanticsearch.v1.ModelDownloadProgress
+	(*timestamppb.Timestamp)(nil),        // 61: google.protobuf.Timestamp
 }
 var file_lmsemanticsearch_v1_service_proto_depIdxs = []int32{
 	0,  // 0: lmsemanticsearch.v1.SchedulingPolicy.priority:type_name -> lmsemanticsearch.v1.SchedulingPriority
 	0,  // 1: lmsemanticsearch.v1.SchedulingPolicyPatch.priority:type_name -> lmsemanticsearch.v1.SchedulingPriority
-	60, // 2: lmsemanticsearch.v1.Progress.last_event_at:type_name -> google.protobuf.Timestamp
-	60, // 3: lmsemanticsearch.v1.Progress.heartbeat_at:type_name -> google.protobuf.Timestamp
+	61, // 2: lmsemanticsearch.v1.Progress.last_event_at:type_name -> google.protobuf.Timestamp
+	61, // 3: lmsemanticsearch.v1.Progress.heartbeat_at:type_name -> google.protobuf.Timestamp
 	13, // 4: lmsemanticsearch.v1.Progress.breakdown:type_name -> lmsemanticsearch.v1.OutcomeBreakdown
-	2,  // 5: lmsemanticsearch.v1.OutcomeRow.kind:type_name -> lmsemanticsearch.v1.OutcomeKind
-	12, // 6: lmsemanticsearch.v1.OutcomeBreakdown.file_rows:type_name -> lmsemanticsearch.v1.OutcomeRow
-	12, // 7: lmsemanticsearch.v1.OutcomeBreakdown.chunk_rows:type_name -> lmsemanticsearch.v1.OutcomeRow
-	60, // 8: lmsemanticsearch.v1.DependencyHealth.since:type_name -> google.protobuf.Timestamp
-	60, // 9: lmsemanticsearch.v1.DependencyHealth.last_healthy_at:type_name -> google.protobuf.Timestamp
-	60, // 10: lmsemanticsearch.v1.IndexRunSummary.completed_at:type_name -> google.protobuf.Timestamp
-	60, // 11: lmsemanticsearch.v1.IndexRunFailure.failed_at:type_name -> google.protobuf.Timestamp
-	16, // 12: lmsemanticsearch.v1.Codebase.last_successful_run:type_name -> lmsemanticsearch.v1.IndexRunSummary
-	17, // 13: lmsemanticsearch.v1.Codebase.last_failed_run:type_name -> lmsemanticsearch.v1.IndexRunFailure
-	8,  // 14: lmsemanticsearch.v1.Codebase.effective_config:type_name -> lmsemanticsearch.v1.IndexConfig
-	60, // 15: lmsemanticsearch.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
-	11, // 16: lmsemanticsearch.v1.Codebase.active_progress:type_name -> lmsemanticsearch.v1.Progress
-	9,  // 17: lmsemanticsearch.v1.Codebase.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicy
-	6,  // 18: lmsemanticsearch.v1.Job.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	11, // 19: lmsemanticsearch.v1.Job.progress:type_name -> lmsemanticsearch.v1.Progress
-	8,  // 20: lmsemanticsearch.v1.Job.config:type_name -> lmsemanticsearch.v1.IndexConfig
-	60, // 21: lmsemanticsearch.v1.Job.started_at:type_name -> google.protobuf.Timestamp
-	60, // 22: lmsemanticsearch.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
-	60, // 23: lmsemanticsearch.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
-	14, // 24: lmsemanticsearch.v1.Job.error:type_name -> lmsemanticsearch.v1.JobError
-	9,  // 25: lmsemanticsearch.v1.Job.effective_scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicy
-	1,  // 26: lmsemanticsearch.v1.Job.scheduling_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
-	7,  // 27: lmsemanticsearch.v1.StartIndexRequest.splitter:type_name -> lmsemanticsearch.v1.SplitterConfig
-	6,  // 28: lmsemanticsearch.v1.StartIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	10, // 29: lmsemanticsearch.v1.StartIndexRequest.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
-	6,  // 30: lmsemanticsearch.v1.ClearIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	6,  // 31: lmsemanticsearch.v1.CancelJobRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	6,  // 32: lmsemanticsearch.v1.SyncIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	10, // 33: lmsemanticsearch.v1.SyncIndexRequest.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
-	10, // 34: lmsemanticsearch.v1.UpdateCodebasePolicyRequest.patch:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
-	6,  // 35: lmsemanticsearch.v1.UpdateCodebasePolicyRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	18, // 36: lmsemanticsearch.v1.UpdateCodebasePolicyResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
-	6,  // 37: lmsemanticsearch.v1.GetIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	18, // 38: lmsemanticsearch.v1.GetIndexResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
-	19, // 39: lmsemanticsearch.v1.GetIndexResponse.active_job:type_name -> lmsemanticsearch.v1.Job
-	33, // 40: lmsemanticsearch.v1.GetIndexResponse.classification:type_name -> lmsemanticsearch.v1.PathClassification
-	15, // 41: lmsemanticsearch.v1.GetIndexResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	51, // 42: lmsemanticsearch.v1.GetIndexResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
-	3,  // 43: lmsemanticsearch.v1.PathClassification.kind:type_name -> lmsemanticsearch.v1.PathClassification.Kind
-	18, // 44: lmsemanticsearch.v1.ListIndexesResponse.indexes:type_name -> lmsemanticsearch.v1.Codebase
-	15, // 45: lmsemanticsearch.v1.ListIndexesResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	19, // 46: lmsemanticsearch.v1.GetJobResponse.job:type_name -> lmsemanticsearch.v1.Job
-	15, // 47: lmsemanticsearch.v1.GetJobResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	19, // 48: lmsemanticsearch.v1.ListJobsResponse.jobs:type_name -> lmsemanticsearch.v1.Job
-	15, // 49: lmsemanticsearch.v1.ListJobsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	19, // 50: lmsemanticsearch.v1.WatchJobsResponse.job:type_name -> lmsemanticsearch.v1.Job
-	6,  // 51: lmsemanticsearch.v1.SearchCodeRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	20, // 52: lmsemanticsearch.v1.SearchCodeResponse.results:type_name -> lmsemanticsearch.v1.SearchResult
-	18, // 53: lmsemanticsearch.v1.SearchCodeResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
-	19, // 54: lmsemanticsearch.v1.SearchCodeResponse.active_job:type_name -> lmsemanticsearch.v1.Job
-	15, // 55: lmsemanticsearch.v1.SearchCodeResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
-	6,  // 56: lmsemanticsearch.v1.GraphToolRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	46, // 57: lmsemanticsearch.v1.DoctorResponse.diagnostics:type_name -> lmsemanticsearch.v1.Diagnostic
-	60, // 58: lmsemanticsearch.v1.MaintenanceStatus.since:type_name -> google.protobuf.Timestamp
-	6,  // 59: lmsemanticsearch.v1.SetMaintenanceModeRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
-	51, // 60: lmsemanticsearch.v1.SetMaintenanceModeResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
-	54, // 61: lmsemanticsearch.v1.ActivityRow.metrics:type_name -> lmsemanticsearch.v1.Metric
-	60, // 62: lmsemanticsearch.v1.DaemonIdentity.started_at:type_name -> google.protobuf.Timestamp
-	1,  // 63: lmsemanticsearch.v1.ActivitySourceStatus.input_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
-	1,  // 64: lmsemanticsearch.v1.ActivitySourceStatus.thermal_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
-	60, // 65: lmsemanticsearch.v1.GetStatusResponse.read_at:type_name -> google.protobuf.Timestamp
-	56, // 66: lmsemanticsearch.v1.GetStatusResponse.daemon:type_name -> lmsemanticsearch.v1.DaemonIdentity
-	54, // 67: lmsemanticsearch.v1.GetStatusResponse.metrics:type_name -> lmsemanticsearch.v1.Metric
-	55, // 68: lmsemanticsearch.v1.GetStatusResponse.activity:type_name -> lmsemanticsearch.v1.ActivityRow
-	58, // 69: lmsemanticsearch.v1.GetStatusResponse.activity_source:type_name -> lmsemanticsearch.v1.ActivitySourceStatus
-	51, // 70: lmsemanticsearch.v1.GetStatusResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
-	4,  // 71: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:input_type -> lmsemanticsearch.v1.VersionRequest
-	21, // 72: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:input_type -> lmsemanticsearch.v1.StartIndexRequest
-	23, // 73: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:input_type -> lmsemanticsearch.v1.ClearIndexRequest
-	25, // 74: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:input_type -> lmsemanticsearch.v1.CancelJobRequest
-	27, // 75: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:input_type -> lmsemanticsearch.v1.SyncIndexRequest
-	29, // 76: lmsemanticsearch.v1.SemanticSearchDaemonService.UpdateCodebasePolicy:input_type -> lmsemanticsearch.v1.UpdateCodebasePolicyRequest
-	31, // 77: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:input_type -> lmsemanticsearch.v1.GetIndexRequest
-	34, // 78: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:input_type -> lmsemanticsearch.v1.ListIndexesRequest
-	36, // 79: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:input_type -> lmsemanticsearch.v1.GetJobRequest
-	38, // 80: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:input_type -> lmsemanticsearch.v1.ListJobsRequest
-	40, // 81: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:input_type -> lmsemanticsearch.v1.WatchJobsRequest
-	42, // 82: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:input_type -> lmsemanticsearch.v1.SearchCodeRequest
-	44, // 83: lmsemanticsearch.v1.SemanticSearchDaemonService.GraphTool:input_type -> lmsemanticsearch.v1.GraphToolRequest
-	47, // 84: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:input_type -> lmsemanticsearch.v1.DoctorRequest
-	57, // 85: lmsemanticsearch.v1.SemanticSearchDaemonService.GetStatus:input_type -> lmsemanticsearch.v1.GetStatusRequest
-	52, // 86: lmsemanticsearch.v1.SemanticSearchDaemonService.SetMaintenanceMode:input_type -> lmsemanticsearch.v1.SetMaintenanceModeRequest
-	49, // 87: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:input_type -> lmsemanticsearch.v1.ShutdownRequest
-	5,  // 88: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:output_type -> lmsemanticsearch.v1.VersionResponse
-	22, // 89: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:output_type -> lmsemanticsearch.v1.StartIndexResponse
-	24, // 90: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:output_type -> lmsemanticsearch.v1.ClearIndexResponse
-	26, // 91: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:output_type -> lmsemanticsearch.v1.CancelJobResponse
-	28, // 92: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:output_type -> lmsemanticsearch.v1.SyncIndexResponse
-	30, // 93: lmsemanticsearch.v1.SemanticSearchDaemonService.UpdateCodebasePolicy:output_type -> lmsemanticsearch.v1.UpdateCodebasePolicyResponse
-	32, // 94: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:output_type -> lmsemanticsearch.v1.GetIndexResponse
-	35, // 95: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:output_type -> lmsemanticsearch.v1.ListIndexesResponse
-	37, // 96: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:output_type -> lmsemanticsearch.v1.GetJobResponse
-	39, // 97: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:output_type -> lmsemanticsearch.v1.ListJobsResponse
-	41, // 98: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:output_type -> lmsemanticsearch.v1.WatchJobsResponse
-	43, // 99: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:output_type -> lmsemanticsearch.v1.SearchCodeResponse
-	45, // 100: lmsemanticsearch.v1.SemanticSearchDaemonService.GraphTool:output_type -> lmsemanticsearch.v1.GraphToolResponse
-	48, // 101: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:output_type -> lmsemanticsearch.v1.DoctorResponse
-	59, // 102: lmsemanticsearch.v1.SemanticSearchDaemonService.GetStatus:output_type -> lmsemanticsearch.v1.GetStatusResponse
-	53, // 103: lmsemanticsearch.v1.SemanticSearchDaemonService.SetMaintenanceMode:output_type -> lmsemanticsearch.v1.SetMaintenanceModeResponse
-	50, // 104: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:output_type -> lmsemanticsearch.v1.ShutdownResponse
-	88, // [88:105] is the sub-list for method output_type
-	71, // [71:88] is the sub-list for method input_type
-	71, // [71:71] is the sub-list for extension type_name
-	71, // [71:71] is the sub-list for extension extendee
-	0,  // [0:71] is the sub-list for field type_name
+	60, // 5: lmsemanticsearch.v1.Progress.model_download:type_name -> lmsemanticsearch.v1.ModelDownloadProgress
+	2,  // 6: lmsemanticsearch.v1.OutcomeRow.kind:type_name -> lmsemanticsearch.v1.OutcomeKind
+	12, // 7: lmsemanticsearch.v1.OutcomeBreakdown.file_rows:type_name -> lmsemanticsearch.v1.OutcomeRow
+	12, // 8: lmsemanticsearch.v1.OutcomeBreakdown.chunk_rows:type_name -> lmsemanticsearch.v1.OutcomeRow
+	61, // 9: lmsemanticsearch.v1.DependencyHealth.since:type_name -> google.protobuf.Timestamp
+	61, // 10: lmsemanticsearch.v1.DependencyHealth.last_healthy_at:type_name -> google.protobuf.Timestamp
+	61, // 11: lmsemanticsearch.v1.IndexRunSummary.completed_at:type_name -> google.protobuf.Timestamp
+	61, // 12: lmsemanticsearch.v1.IndexRunFailure.failed_at:type_name -> google.protobuf.Timestamp
+	16, // 13: lmsemanticsearch.v1.Codebase.last_successful_run:type_name -> lmsemanticsearch.v1.IndexRunSummary
+	17, // 14: lmsemanticsearch.v1.Codebase.last_failed_run:type_name -> lmsemanticsearch.v1.IndexRunFailure
+	8,  // 15: lmsemanticsearch.v1.Codebase.effective_config:type_name -> lmsemanticsearch.v1.IndexConfig
+	61, // 16: lmsemanticsearch.v1.Codebase.updated_at:type_name -> google.protobuf.Timestamp
+	11, // 17: lmsemanticsearch.v1.Codebase.active_progress:type_name -> lmsemanticsearch.v1.Progress
+	9,  // 18: lmsemanticsearch.v1.Codebase.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicy
+	6,  // 19: lmsemanticsearch.v1.Job.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	11, // 20: lmsemanticsearch.v1.Job.progress:type_name -> lmsemanticsearch.v1.Progress
+	8,  // 21: lmsemanticsearch.v1.Job.config:type_name -> lmsemanticsearch.v1.IndexConfig
+	61, // 22: lmsemanticsearch.v1.Job.started_at:type_name -> google.protobuf.Timestamp
+	61, // 23: lmsemanticsearch.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
+	61, // 24: lmsemanticsearch.v1.Job.completed_at:type_name -> google.protobuf.Timestamp
+	14, // 25: lmsemanticsearch.v1.Job.error:type_name -> lmsemanticsearch.v1.JobError
+	9,  // 26: lmsemanticsearch.v1.Job.effective_scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicy
+	1,  // 27: lmsemanticsearch.v1.Job.scheduling_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
+	7,  // 28: lmsemanticsearch.v1.StartIndexRequest.splitter:type_name -> lmsemanticsearch.v1.SplitterConfig
+	6,  // 29: lmsemanticsearch.v1.StartIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	10, // 30: lmsemanticsearch.v1.StartIndexRequest.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
+	6,  // 31: lmsemanticsearch.v1.ClearIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	6,  // 32: lmsemanticsearch.v1.CancelJobRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	6,  // 33: lmsemanticsearch.v1.SyncIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	10, // 34: lmsemanticsearch.v1.SyncIndexRequest.scheduling_policy:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
+	10, // 35: lmsemanticsearch.v1.UpdateCodebasePolicyRequest.patch:type_name -> lmsemanticsearch.v1.SchedulingPolicyPatch
+	6,  // 36: lmsemanticsearch.v1.UpdateCodebasePolicyRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	18, // 37: lmsemanticsearch.v1.UpdateCodebasePolicyResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
+	6,  // 38: lmsemanticsearch.v1.GetIndexRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	18, // 39: lmsemanticsearch.v1.GetIndexResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
+	19, // 40: lmsemanticsearch.v1.GetIndexResponse.active_job:type_name -> lmsemanticsearch.v1.Job
+	33, // 41: lmsemanticsearch.v1.GetIndexResponse.classification:type_name -> lmsemanticsearch.v1.PathClassification
+	15, // 42: lmsemanticsearch.v1.GetIndexResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	51, // 43: lmsemanticsearch.v1.GetIndexResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
+	3,  // 44: lmsemanticsearch.v1.PathClassification.kind:type_name -> lmsemanticsearch.v1.PathClassification.Kind
+	18, // 45: lmsemanticsearch.v1.ListIndexesResponse.indexes:type_name -> lmsemanticsearch.v1.Codebase
+	15, // 46: lmsemanticsearch.v1.ListIndexesResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	19, // 47: lmsemanticsearch.v1.GetJobResponse.job:type_name -> lmsemanticsearch.v1.Job
+	15, // 48: lmsemanticsearch.v1.GetJobResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	19, // 49: lmsemanticsearch.v1.ListJobsResponse.jobs:type_name -> lmsemanticsearch.v1.Job
+	15, // 50: lmsemanticsearch.v1.ListJobsResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	19, // 51: lmsemanticsearch.v1.WatchJobsResponse.job:type_name -> lmsemanticsearch.v1.Job
+	6,  // 52: lmsemanticsearch.v1.SearchCodeRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	20, // 53: lmsemanticsearch.v1.SearchCodeResponse.results:type_name -> lmsemanticsearch.v1.SearchResult
+	18, // 54: lmsemanticsearch.v1.SearchCodeResponse.codebase:type_name -> lmsemanticsearch.v1.Codebase
+	19, // 55: lmsemanticsearch.v1.SearchCodeResponse.active_job:type_name -> lmsemanticsearch.v1.Job
+	15, // 56: lmsemanticsearch.v1.SearchCodeResponse.dependency_health:type_name -> lmsemanticsearch.v1.DependencyHealth
+	6,  // 57: lmsemanticsearch.v1.GraphToolRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	46, // 58: lmsemanticsearch.v1.DoctorResponse.diagnostics:type_name -> lmsemanticsearch.v1.Diagnostic
+	61, // 59: lmsemanticsearch.v1.MaintenanceStatus.since:type_name -> google.protobuf.Timestamp
+	6,  // 60: lmsemanticsearch.v1.SetMaintenanceModeRequest.client:type_name -> lmsemanticsearch.v1.ClientInfo
+	51, // 61: lmsemanticsearch.v1.SetMaintenanceModeResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
+	54, // 62: lmsemanticsearch.v1.ActivityRow.metrics:type_name -> lmsemanticsearch.v1.Metric
+	61, // 63: lmsemanticsearch.v1.DaemonIdentity.started_at:type_name -> google.protobuf.Timestamp
+	1,  // 64: lmsemanticsearch.v1.ActivitySourceStatus.input_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
+	1,  // 65: lmsemanticsearch.v1.ActivitySourceStatus.thermal_reason:type_name -> lmsemanticsearch.v1.SchedulingReason
+	61, // 66: lmsemanticsearch.v1.GetStatusResponse.read_at:type_name -> google.protobuf.Timestamp
+	56, // 67: lmsemanticsearch.v1.GetStatusResponse.daemon:type_name -> lmsemanticsearch.v1.DaemonIdentity
+	54, // 68: lmsemanticsearch.v1.GetStatusResponse.metrics:type_name -> lmsemanticsearch.v1.Metric
+	55, // 69: lmsemanticsearch.v1.GetStatusResponse.activity:type_name -> lmsemanticsearch.v1.ActivityRow
+	58, // 70: lmsemanticsearch.v1.GetStatusResponse.activity_source:type_name -> lmsemanticsearch.v1.ActivitySourceStatus
+	51, // 71: lmsemanticsearch.v1.GetStatusResponse.maintenance:type_name -> lmsemanticsearch.v1.MaintenanceStatus
+	4,  // 72: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:input_type -> lmsemanticsearch.v1.VersionRequest
+	21, // 73: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:input_type -> lmsemanticsearch.v1.StartIndexRequest
+	23, // 74: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:input_type -> lmsemanticsearch.v1.ClearIndexRequest
+	25, // 75: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:input_type -> lmsemanticsearch.v1.CancelJobRequest
+	27, // 76: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:input_type -> lmsemanticsearch.v1.SyncIndexRequest
+	29, // 77: lmsemanticsearch.v1.SemanticSearchDaemonService.UpdateCodebasePolicy:input_type -> lmsemanticsearch.v1.UpdateCodebasePolicyRequest
+	31, // 78: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:input_type -> lmsemanticsearch.v1.GetIndexRequest
+	34, // 79: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:input_type -> lmsemanticsearch.v1.ListIndexesRequest
+	36, // 80: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:input_type -> lmsemanticsearch.v1.GetJobRequest
+	38, // 81: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:input_type -> lmsemanticsearch.v1.ListJobsRequest
+	40, // 82: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:input_type -> lmsemanticsearch.v1.WatchJobsRequest
+	42, // 83: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:input_type -> lmsemanticsearch.v1.SearchCodeRequest
+	44, // 84: lmsemanticsearch.v1.SemanticSearchDaemonService.GraphTool:input_type -> lmsemanticsearch.v1.GraphToolRequest
+	47, // 85: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:input_type -> lmsemanticsearch.v1.DoctorRequest
+	57, // 86: lmsemanticsearch.v1.SemanticSearchDaemonService.GetStatus:input_type -> lmsemanticsearch.v1.GetStatusRequest
+	52, // 87: lmsemanticsearch.v1.SemanticSearchDaemonService.SetMaintenanceMode:input_type -> lmsemanticsearch.v1.SetMaintenanceModeRequest
+	49, // 88: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:input_type -> lmsemanticsearch.v1.ShutdownRequest
+	5,  // 89: lmsemanticsearch.v1.SemanticSearchDaemonService.Version:output_type -> lmsemanticsearch.v1.VersionResponse
+	22, // 90: lmsemanticsearch.v1.SemanticSearchDaemonService.StartIndex:output_type -> lmsemanticsearch.v1.StartIndexResponse
+	24, // 91: lmsemanticsearch.v1.SemanticSearchDaemonService.ClearIndex:output_type -> lmsemanticsearch.v1.ClearIndexResponse
+	26, // 92: lmsemanticsearch.v1.SemanticSearchDaemonService.CancelJob:output_type -> lmsemanticsearch.v1.CancelJobResponse
+	28, // 93: lmsemanticsearch.v1.SemanticSearchDaemonService.SyncIndex:output_type -> lmsemanticsearch.v1.SyncIndexResponse
+	30, // 94: lmsemanticsearch.v1.SemanticSearchDaemonService.UpdateCodebasePolicy:output_type -> lmsemanticsearch.v1.UpdateCodebasePolicyResponse
+	32, // 95: lmsemanticsearch.v1.SemanticSearchDaemonService.GetIndex:output_type -> lmsemanticsearch.v1.GetIndexResponse
+	35, // 96: lmsemanticsearch.v1.SemanticSearchDaemonService.ListIndexes:output_type -> lmsemanticsearch.v1.ListIndexesResponse
+	37, // 97: lmsemanticsearch.v1.SemanticSearchDaemonService.GetJob:output_type -> lmsemanticsearch.v1.GetJobResponse
+	39, // 98: lmsemanticsearch.v1.SemanticSearchDaemonService.ListJobs:output_type -> lmsemanticsearch.v1.ListJobsResponse
+	41, // 99: lmsemanticsearch.v1.SemanticSearchDaemonService.WatchJobs:output_type -> lmsemanticsearch.v1.WatchJobsResponse
+	43, // 100: lmsemanticsearch.v1.SemanticSearchDaemonService.SearchCode:output_type -> lmsemanticsearch.v1.SearchCodeResponse
+	45, // 101: lmsemanticsearch.v1.SemanticSearchDaemonService.GraphTool:output_type -> lmsemanticsearch.v1.GraphToolResponse
+	48, // 102: lmsemanticsearch.v1.SemanticSearchDaemonService.Doctor:output_type -> lmsemanticsearch.v1.DoctorResponse
+	59, // 103: lmsemanticsearch.v1.SemanticSearchDaemonService.GetStatus:output_type -> lmsemanticsearch.v1.GetStatusResponse
+	53, // 104: lmsemanticsearch.v1.SemanticSearchDaemonService.SetMaintenanceMode:output_type -> lmsemanticsearch.v1.SetMaintenanceModeResponse
+	50, // 105: lmsemanticsearch.v1.SemanticSearchDaemonService.Shutdown:output_type -> lmsemanticsearch.v1.ShutdownResponse
+	89, // [89:106] is the sub-list for method output_type
+	72, // [72:89] is the sub-list for method input_type
+	72, // [72:72] is the sub-list for extension type_name
+	72, // [72:72] is the sub-list for extension extendee
+	0,  // [0:72] is the sub-list for field type_name
 }
 
 func init() { file_lmsemanticsearch_v1_service_proto_init() }
@@ -4980,13 +5060,14 @@ func file_lmsemanticsearch_v1_service_proto_init() {
 		(*Metric_BoolValue)(nil),
 		(*Metric_StringValue)(nil),
 	}
+	file_lmsemanticsearch_v1_service_proto_msgTypes[56].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lmsemanticsearch_v1_service_proto_rawDesc), len(file_lmsemanticsearch_v1_service_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   56,
+			NumMessages:   57,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
