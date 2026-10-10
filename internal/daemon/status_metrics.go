@@ -173,6 +173,8 @@ func buildStatusMetrics(daemon *StatusSnapshot, snapshot metrics.Snapshot, now t
 			timeMetric(statusGroupDependency, "dependency_health.last_healthy_at", daemon.Health.lastReachableAt()),
 		)
 
+		list = append(list, modelDownloadMetrics(daemon.ModelDownload)...)
+
 		list = append(list,
 			intMetric(statusGroupJobs, "index_slots_in_use", int64(schedulerRunningCount(daemon.Scheduler.Running)), unitSlots),
 			intMetric(statusGroupJobs, "index_slots_total", int64(daemon.Scheduler.Capacity), unitSlots),

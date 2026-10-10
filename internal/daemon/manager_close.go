@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 )
@@ -12,21 +13,55 @@ type semanticCloser interface {
 
 // Close shuts down the manager's activity, graph, journal, and semantic resources.
 func (manager *Manager) Close(ctx context.Context) error {
+	manager.modelDownload.stop()
 	if err := manager.cancelAndWaitForJobs(ctx); err != nil {
 		return err
 	}
 	manager.jobScheduler.Close()
 	manager.closeJobJournal()
+	graphErr := manager.waitForGraphOperations(ctx)
 	manager.CloseGraphEngines()
 	closer, ok := manager.semantic.(semanticCloser)
 	if !ok {
-		return nil
+		return graphErr
 	}
 	if err := closer.Close(ctx); err != nil {
 		slog.ErrorContext(ctx, "close semantic backend", "err", err)
-		return fmt.Errorf("close semantic backend: %w", err)
+		return errors.Join(graphErr, fmt.Errorf("close semantic backend: %w", err))
 	}
-	return nil
+	return graphErr
+}
+
+func (manager *Manager) waitForGraphOperations(ctx context.Context) error {
+	manager.graphMutex.Lock()
+	defer manager.graphMutex.Unlock()
+
+	stopWake := context.AfterFunc(ctx, func() {
+		manager.graphMutex.Lock()
+		defer manager.graphMutex.Unlock()
+		for _, state := range manager.graphLifecycle {
+			state.idle.Broadcast()
+		}
+	})
+	defer stopWake()
+
+	for {
+		var busy *graphLifecycleState
+		for _, state := range manager.graphLifecycle {
+			state.clearing = true
+			if state.active > 0 {
+				busy = state
+			}
+		}
+		if busy == nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			slog.ErrorContext(ctx, "close context ended while graph index operation was still running", "err", err)
+			return fmt.Errorf("close manager after context ended while graph index operation was still running: %w", err)
+		}
+		busy.idle.Wait()
+	}
 }
 
 func (manager *Manager) cancelAndWaitForJobs(ctx context.Context) error {

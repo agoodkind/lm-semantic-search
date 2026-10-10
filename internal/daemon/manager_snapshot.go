@@ -48,6 +48,9 @@ type StatusSnapshot struct {
 	Watcher []WatcherActivity
 	// Maintenance is the operator's maintenance mode at the same instant.
 	Maintenance model.MaintenanceState
+	// ModelDownload reports download state observed before the manager-owned
+	// snapshot values.
+	ModelDownload modelDownloadSnapshot
 }
 
 // StatusSnapshot reads every fact a status reply needs. The watcher activity is
@@ -56,6 +59,7 @@ type StatusSnapshot struct {
 // under one hold of that lock.
 func (manager *Manager) StatusSnapshot() StatusSnapshot {
 	watcher := manager.WatcherActivity()
+	modelDownload, _ := manager.modelDownload.observe()
 
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
@@ -93,6 +97,8 @@ func (manager *Manager) StatusSnapshot() StatusSnapshot {
 		Codebases:   manager.codebaseViewsLocked(),
 		Watcher:     watcher,
 		Maintenance: manager.maintenance,
+
+		ModelDownload: modelDownload,
 	}
 }
 

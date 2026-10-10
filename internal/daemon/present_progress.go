@@ -199,6 +199,8 @@ func displayJobPhase(phase string) string {
 		return "canceling"
 	case jobPhaseCancelled:
 		return "canceled"
+	case jobPhaseModelDownload:
+		return "Waiting for the embedding model download..."
 	default:
 		return phase
 	}

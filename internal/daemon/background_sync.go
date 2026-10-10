@@ -478,6 +478,11 @@ func (syncer *BackgroundSync) runWatcherConverge(
 	codebaseID string,
 	relativePaths []string,
 ) {
+	if !syncer.manager.awaitEmbeddingModel(registrationCtx, registration.job.ID) {
+		syncer.requeuePaths(codebaseID, relativePaths)
+		syncer.manager.updateDetachedJobCancelled(context.WithoutCancel(registrationCtx), registration.job.ID)
+		return
+	}
 	holdSyncLock := syncer.manager.semantic != nil && syncer.manager.semantic.Available()
 	capacity, outcome, capacityErr := syncer.manager.acquireJobCapacity(
 		registrationCtx,
