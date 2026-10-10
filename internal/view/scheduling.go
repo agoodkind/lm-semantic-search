@@ -29,6 +29,9 @@ const (
 	SchedulingReasonActivityUnavailable SchedulingReason = "activity unavailable"
 	// SchedulingReasonThermalSafety means host thermal state blocks quiet work.
 	SchedulingReasonThermalSafety SchedulingReason = "thermal safety"
+	// SchedulingReasonStalledRead applies when a store read exceeds release grace.
+	// The paused job released its scheduler slot and sync lock.
+	SchedulingReasonStalledRead SchedulingReason = "stalled read"
 )
 
 // ResolveScheduling builds the shared scheduling presentation from stored or
@@ -83,7 +86,8 @@ func canonicalSchedulingReason(reason SchedulingReason) SchedulingReason {
 	case SchedulingReasonHigherPriorityWork,
 		SchedulingReasonUserActive,
 		SchedulingReasonActivityUnavailable,
-		SchedulingReasonThermalSafety:
+		SchedulingReasonThermalSafety,
+		SchedulingReasonStalledRead:
 		return reason
 	case SchedulingReasonUnspecified:
 		return SchedulingReasonUnspecified

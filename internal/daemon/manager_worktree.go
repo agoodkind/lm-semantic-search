@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"time"
 
 	"goodkind.io/gklog/correlation"
@@ -515,20 +516,18 @@ func (manager *Manager) worktreeSiblingReuseCollections(canonicalPath string, in
 	if !ok {
 		return nil
 	}
-	siblingRoots := gitworktree.SiblingWorktreeRoots(info.CommonDir)
+	siblingRoots := gitworktree.SiblingWorktreeRootsMainFirst(info.CommonDir, info.WorktreeRoot)
+	if len(siblingRoots) == 0 {
+		return nil
+	}
 	siblings := make(map[string]struct{}, len(siblingRoots))
 	for _, root := range siblingRoots {
-		if root != info.WorktreeRoot {
-			siblings[root] = struct{}{}
-		}
-	}
-	if len(siblings) == 0 {
-		return nil
+		siblings[root] = struct{}{}
 	}
 
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	collections := make([]string, 0)
+	collectionsByRoot := make(map[string][]string, len(siblingRoots))
 	for _, codebase := range manager.codebases {
 		if _, member := siblings[codebase.CanonicalPath]; !member {
 			continue
@@ -552,7 +551,13 @@ func (manager *Manager) worktreeSiblingReuseCollections(canonicalPath string, in
 		if !reuseModelMatches(codebase.EffectiveConfig, indexConfig) {
 			continue
 		}
-		collections = append(collections, codebase.CollectionName)
+		collectionsByRoot[codebase.CanonicalPath] = append(collectionsByRoot[codebase.CanonicalPath], codebase.CollectionName)
+	}
+	collections := make([]string, 0)
+	for _, root := range siblingRoots {
+		rootCollections := collectionsByRoot[root]
+		slices.Sort(rootCollections)
+		collections = append(collections, rootCollections...)
 	}
 	return collections
 }

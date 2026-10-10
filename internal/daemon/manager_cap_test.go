@@ -371,6 +371,11 @@ func TestStuckReuseLoadDoesNotHoldIndexSlotOrSyncLock(t *testing.T) {
 		slotsInUse, _ := manager.IndexSlots()
 		return slotsInUse == 0 && lockRefcount == 0
 	})
+	waitForCondition(t, func() bool {
+		pausedJob, found := manager.GetJob(firstJob.ID)
+		return found && pausedJob.State == model.JobStatePaused &&
+			pausedJob.SchedulingReason == model.SchedulingReasonStalledRead
+	})
 
 	if _, _, _, _, err := manager.StartIndex(
 		context.Background(),
