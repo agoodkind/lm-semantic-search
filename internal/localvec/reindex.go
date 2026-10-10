@@ -211,7 +211,7 @@ func (store *Store) embedRows(
 	if len(chunks) == 0 {
 		return nil, 0, 0, nil
 	}
-	provider, err := store.embeddingProvider()
+	provider, err := store.embeddingProvider(ctx)
 	if err != nil {
 		return nil, 0, 0, err
 	}
