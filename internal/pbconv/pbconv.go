@@ -233,6 +233,8 @@ func SchedulingReasonToProto(reason model.SchedulingReason) pb.SchedulingReason 
 		return pb.SchedulingReason_SCHEDULING_REASON_ACTIVITY_UNAVAILABLE
 	case model.SchedulingReasonThermalSafety:
 		return pb.SchedulingReason_SCHEDULING_REASON_THERMAL_SAFETY
+	case model.SchedulingReasonStalledRead:
+		return pb.SchedulingReason_SCHEDULING_REASON_STALLED_READ
 	case model.SchedulingReasonUnspecified:
 		return pb.SchedulingReason_SCHEDULING_REASON_UNSPECIFIED
 	default:
@@ -250,6 +252,8 @@ func schedulingReasonFromProto(reason pb.SchedulingReason) model.SchedulingReaso
 		return model.SchedulingReasonActivityUnavailable
 	case pb.SchedulingReason_SCHEDULING_REASON_THERMAL_SAFETY:
 		return model.SchedulingReasonThermalSafety
+	case pb.SchedulingReason_SCHEDULING_REASON_STALLED_READ:
+		return model.SchedulingReasonStalledRead
 	case pb.SchedulingReason_SCHEDULING_REASON_UNSPECIFIED:
 		return model.SchedulingReasonUnspecified
 	default:

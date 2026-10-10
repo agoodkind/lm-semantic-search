@@ -22,7 +22,7 @@ const (
 	// take.
 	defaultJobCapacityReleaseGrace = 4500 * time.Millisecond
 
-	stalledReadSchedulingReason = model.SchedulingReasonUnspecified
+	stalledReadSchedulingReason = model.SchedulingReasonStalledRead
 	syncLockSchedulingReason    = model.SchedulingReasonUnspecified
 )
 

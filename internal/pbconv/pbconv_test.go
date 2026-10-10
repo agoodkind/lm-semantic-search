@@ -6,6 +6,7 @@ import (
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 func TestFromSchedulingPolicyPatchPreservesOmissionAndExplicitFalse(t *testing.T) {
@@ -111,6 +112,28 @@ func TestSchedulingPolicyViewsCarryStoredAndEffectiveValues(t *testing.T) {
 	}
 }
 
+func TestPausedJobReportsStalledReadReason(t *testing.T) {
+	t.Parallel()
+
+	job := ToJob(model.Job{
+		State:                     model.JobStatePaused,
+		EffectiveSchedulingPolicy: model.DefaultSchedulingPolicy(),
+		SchedulingReason:          model.SchedulingReasonStalledRead,
+	})
+	if got := job.GetSchedulingReason(); got != pb.SchedulingReason_SCHEDULING_REASON_STALLED_READ {
+		t.Fatalf("job scheduling reason = %v, want %v", got, pb.SchedulingReason_SCHEDULING_REASON_STALLED_READ)
+	}
+
+	scheduling := SchedulingFromProto(
+		job.GetEffectiveSchedulingPolicy(),
+		job.GetState(),
+		job.GetSchedulingReason(),
+	)
+	if scheduling.Reason != view.SchedulingReasonStalledRead {
+		t.Fatalf("scheduling view reason = %q, want %q", scheduling.Reason, view.SchedulingReasonStalledRead)
+	}
+}
+
 func TestSchedulingReasonProtoConversionIsClosed(t *testing.T) {
 	t.Parallel()
 
@@ -120,6 +143,7 @@ func TestSchedulingReasonProtoConversionIsClosed(t *testing.T) {
 		model.SchedulingReasonUserActive:          pb.SchedulingReason_SCHEDULING_REASON_USER_ACTIVE,
 		model.SchedulingReasonActivityUnavailable: pb.SchedulingReason_SCHEDULING_REASON_ACTIVITY_UNAVAILABLE,
 		model.SchedulingReasonThermalSafety:       pb.SchedulingReason_SCHEDULING_REASON_THERMAL_SAFETY,
+		model.SchedulingReasonStalledRead:         pb.SchedulingReason_SCHEDULING_REASON_STALLED_READ,
 	}
 	for modelReason, protoReason := range testCases {
 		if got := SchedulingReasonToProto(modelReason); got != protoReason {

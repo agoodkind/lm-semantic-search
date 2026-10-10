@@ -236,6 +236,39 @@ func TestSiblingWorktreeRootsOmitsMissingDir(t *testing.T) {
 	}
 }
 
+func TestSiblingWorktreeRootsMainFirstOrdersMainBeforeSortedLinkedRoots(t *testing.T) {
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "zz-main")
+	gitDir := filepath.Join(mainRoot, ".git")
+	writeFile(t, filepath.Join(gitDir, "HEAD"), "ref: refs/heads/main\n")
+	commonDir := resolved(t, gitDir)
+	linkedNames := []string{"beta", "current", "alpha"}
+	for _, name := range linkedNames {
+		linkedDir := filepath.Join(base, name)
+		perWorktree := filepath.Join(gitDir, "worktrees", name)
+		writeFile(t, filepath.Join(perWorktree, "commondir"), "../..\n")
+		writeFile(t, filepath.Join(perWorktree, "gitdir"), filepath.Join(linkedDir, ".git")+"\n")
+		writeFile(t, filepath.Join(perWorktree, "HEAD"), "ref: refs/heads/"+name+"\n")
+		writeFile(t, filepath.Join(linkedDir, ".git"), "gitdir: "+perWorktree+"\n")
+	}
+	alphaRoot := resolved(t, filepath.Join(base, "alpha"))
+	betaRoot := resolved(t, filepath.Join(base, "beta"))
+	currentRoot := resolved(t, filepath.Join(base, "current"))
+	resolvedMainRoot := resolved(t, mainRoot)
+
+	got := SiblingWorktreeRootsMainFirst(commonDir, currentRoot)
+	want := []string{resolvedMainRoot, alphaRoot, betaRoot}
+	if !slices.Equal(got, want) {
+		t.Errorf("SiblingWorktreeRootsMainFirst(linked) = %v, want %v", got, want)
+	}
+
+	gotFromMain := SiblingWorktreeRootsMainFirst(commonDir, resolvedMainRoot)
+	wantFromMain := []string{alphaRoot, betaRoot, currentRoot}
+	if !slices.Equal(gotFromMain, wantFromMain) {
+		t.Errorf("SiblingWorktreeRootsMainFirst(main) = %v, want %v", gotFromMain, wantFromMain)
+	}
+}
+
 func TestWorktreeOfRepo(t *testing.T) {
 	base := t.TempDir()
 	linkedDir := filepath.Join(base, "feature")

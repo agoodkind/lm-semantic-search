@@ -227,6 +227,31 @@ func SiblingWorktreeRoots(commonDir string) []string {
 	return roots
 }
 
+// SiblingWorktreeRootsMainFirst returns the existing main root first.
+// Linked worktree roots follow in sorted order.
+// The result excludes excludedRoot.
+func SiblingWorktreeRootsMainFirst(commonDir string, excludedRoot string) []string {
+	roots := SiblingWorktreeRoots(commonDir)
+	mainRoot := ""
+	if filepath.Base(commonDir) == ".git" {
+		resolvedMainRoot, err := filepath.EvalSymlinks(filepath.Dir(commonDir))
+		if err == nil {
+			mainRoot = resolvedMainRoot
+		}
+	}
+	ordered := make([]string, 0, len(roots))
+	if mainRoot != "" && mainRoot != excludedRoot && slices.Contains(roots, mainRoot) {
+		ordered = append(ordered, mainRoot)
+	}
+	for _, root := range roots {
+		if root == excludedRoot || root == mainRoot {
+			continue
+		}
+		ordered = append(ordered, root)
+	}
+	return ordered
+}
+
 // worktreeRootOf walks up from start to the nearest ancestor that holds a .git
 // entry, returning that directory. It stops at the filesystem root.
 func worktreeRootOf(start string) (string, bool) {
