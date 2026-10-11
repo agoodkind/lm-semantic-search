@@ -231,7 +231,7 @@ func (manager *Manager) clearHeldWorktreeBuild(codebaseID string) {
 // hasIndexedSiblingWorktreeLocked reports whether any worktree of the same repo
 // group (other than worktreeRoot) is a tracked codebase holding embedded
 // content, which is the condition that turns a worktree into "a worktree of an
-// indexed repo" for the auto-create trigger.
+// indexed repo" for the auto-create trigger. A sibling without embedded content does not count.
 // Caller must hold manager.mu.
 func (manager *Manager) hasIndexedSiblingWorktreeLocked(worktreeRoot string, commonDir string) bool {
 	if commonDir == "" {
@@ -258,7 +258,7 @@ func (manager *Manager) hasIndexedSiblingWorktreeLocked(worktreeRoot string, com
 	return false
 }
 
-// Caller must hold manager.mu.
+// siblingFirstBuildInProgressLocked reports whether another worktree in the same repo group is building without embedded content. The caller must hold manager.mu.
 func (manager *Manager) siblingFirstBuildInProgressLocked(worktreeRoot string, commonDir string) bool {
 	if commonDir == "" {
 		return false
