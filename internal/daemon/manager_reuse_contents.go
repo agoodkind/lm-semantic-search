@@ -60,7 +60,7 @@ func (manager *Manager) contentReuseForChangedFile(
 	relativePath string,
 	chunks []model.StoredChunk,
 	force bool,
-) (map[string][]float32, error) {
+) (map[string]model.ReuseVector, error) {
 	if force || len(chunks) == 0 {
 		return nil, nil
 	}
@@ -68,9 +68,9 @@ func (manager *Manager) contentReuseForChangedFile(
 	if source.Scope == itemReuseScopeNone {
 		return nil, nil
 	}
-	var reuse map[string][]float32
+	var reuse map[string]model.ReuseVector
 	err := manager.runReleasingCapacityIfStalled(ctx, func() error {
-		var loaded map[string][]float32
+		var loaded map[string]model.ReuseVector
 		var loadErr error
 		switch source.ContentReuse.lookup {
 		case contentReuseLookupListedCollections:
@@ -109,8 +109,8 @@ func (manager *Manager) declaredSourceContentReuse(
 	ctx context.Context,
 	source *jobSourceReuse,
 	chunks []model.StoredChunk,
-	targetReuse map[string][]float32,
-) (map[string][]float32, error) {
+	targetReuse map[string]model.ReuseVector,
+) (map[string]model.ReuseVector, error) {
 	if source.disabled.Load() {
 		return targetReuse, nil
 	}
@@ -123,7 +123,7 @@ func (manager *Manager) declaredSourceContentReuse(
 	if len(missing) == 0 {
 		return targetReuse, nil
 	}
-	var sourceReuse map[string][]float32
+	var sourceReuse map[string]model.ReuseVector
 	var sourceErr error
 	capacityErr := manager.runReleasingCapacityIfStalled(ctx, func() error {
 		sourceReuse, sourceErr = manager.semantic.LoadReuseVectorsForContentsFrom(

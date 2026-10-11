@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	lmcollection "goodkind.io/lm-semantic-search/collection"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
 
@@ -39,7 +40,7 @@ func (store *Store) LoadCollectionItemBatch(
 ) (semantic.CollectionItemBatchState, error) {
 	state := semantic.CollectionItemBatchState{
 		Rows:  map[string]semantic.CollectionItemRows{},
-		Reuse: map[string][]float32{},
+		Reuse: map[string]model.ReuseVector{},
 	}
 	requested := make(map[string]struct{}, len(itemIDs))
 	for _, itemID := range itemIDs {
@@ -77,7 +78,10 @@ func (store *Store) LoadCollectionItemBatch(
 		if contentKey == "" {
 			contentKey = semantic.ContentVectorKey(candidate.Content)
 		}
-		state.Reuse[contentKey] = append([]float32(nil), candidate.Vector...)
+		state.Reuse[contentKey] = model.ReuseVector{
+			Vector:           append([]float32(nil), candidate.Vector...),
+			SourceModelKnown: false,
+		}
 		itemRows, found := state.Rows[itemID]
 		if !found {
 			itemRows = semantic.CollectionItemRows{UsablePaths: map[string]struct{}{}}

@@ -57,7 +57,7 @@ func TestDuplicateLegacyCorpusReuseImmutabilitySmoke(t *testing.T) {
 		[]model.StoredChunk{{Content: schemaSeedContent, RelativePath: "seed.txt"}},
 		semantic.Removal{},
 		nil,
-		map[string][]float32{},
+		map[string]model.ReuseVector{},
 		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("stage duplicate legacy source: %v", err)
@@ -155,7 +155,8 @@ func TestDuplicateLegacyCorpusReuseImmutabilitySmoke(t *testing.T) {
 			)
 		}
 		for content, expectedVector := range expectedVectors {
-			actualVector, found := reuse[semantic.ContentVectorKey(content)]
+			reusedVector, found := reuse[semantic.ContentVectorKey(content)]
+			actualVector := reusedVector.Vector
 			if !found {
 				t.Fatalf("reuse attempt %d omitted %q", attempt, content)
 			}
@@ -260,7 +261,7 @@ func TestUnknownConfiguredDimensionScopesCatalogByReturnedVectorWidth(t *testing
 		[]model.StoredChunk{{Content: sharedContent, RelativePath: "seed.txt"}},
 		semantic.Removal{},
 		nil,
-		map[string][]float32{},
+		map[string]model.ReuseVector{},
 		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("stage initial dimension row: %v", err)
@@ -279,7 +280,7 @@ func TestUnknownConfiguredDimensionScopesCatalogByReturnedVectorWidth(t *testing
 		},
 		semantic.Removal{},
 		func(progress semantic.Progress) { targetProgress = progress },
-		map[string][]float32{},
+		map[string]model.ReuseVector{},
 		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("stage target dimension row: %v", err)

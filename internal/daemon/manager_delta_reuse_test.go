@@ -127,8 +127,8 @@ func TestRunDeltaSyncCreatesGraphTaskForLegacyEmptyKindCodebase(t *testing.T) {
 func TestRunDeltaSyncReadsOnlyTargetAndDeclaredSource(t *testing.T) {
 	t.Run("added file reuses declared source vectors", func(t *testing.T) {
 		addedContent := "package feature\n\nfunc Added() string { return \"shared\" }\n"
-		manager, codebase, job, fake := newWorktreeDeltaReuseFixture(t, map[string][]float32{
-			hashText(addedContent): {1, 2, 3},
+		manager, codebase, job, fake := newWorktreeDeltaReuseFixture(t, map[string]model.ReuseVector{
+			hashText(addedContent): {Vector: []float32{1, 2, 3}},
 		}, true)
 		writeDeltaFixtureFile(t, job.CanonicalPath, "added.go", addedContent)
 		manager.runner = deltaReuseRunner(map[string]string{"added.go": addedContent, "feature.go": addedContent})
@@ -154,8 +154,8 @@ func TestRunDeltaSyncReadsOnlyTargetAndDeclaredSource(t *testing.T) {
 
 	t.Run("added file without declared source reads only the target", func(t *testing.T) {
 		addedContent := "package feature\n\nfunc Added() string { return \"shared\" }\n"
-		manager, codebase, job, fake := newWorktreeDeltaReuseFixture(t, map[string][]float32{
-			hashText(addedContent): {1, 2, 3},
+		manager, codebase, job, fake := newWorktreeDeltaReuseFixture(t, map[string]model.ReuseVector{
+			hashText(addedContent): {Vector: []float32{1, 2, 3}},
 		}, false)
 		writeDeltaFixtureFile(t, job.CanonicalPath, "added.go", addedContent)
 		manager.runner = deltaReuseRunner(map[string]string{"added.go": addedContent, "feature.go": addedContent})
@@ -228,7 +228,7 @@ func syncWorktreeDeltaReuseFixture(t *testing.T, manager *Manager, codebase mode
 	return completed
 }
 
-func newWorktreeDeltaReuseFixture(t *testing.T, sourceVectors map[string][]float32, declareSource bool) (*Manager, model.Codebase, model.Job, *fakeSemantic) {
+func newWorktreeDeltaReuseFixture(t *testing.T, sourceVectors map[string]model.ReuseVector, declareSource bool) (*Manager, model.Codebase, model.Job, *fakeSemantic) {
 	t.Helper()
 
 	manager, _, _ := newTestManager(t)
@@ -238,17 +238,20 @@ func newWorktreeDeltaReuseFixture(t *testing.T, sourceVectors map[string][]float
 	fake := &fakeSemantic{
 		collectionName:       func(path string) string { return "cc_" + filepath.Base(path) },
 		hasCollectionForPath: func(context.Context, string) (bool, error) { return true, nil },
-		loadReuse: func(context.Context, []string) (map[string][]float32, error) {
+		loadReuse: func(context.Context, []string) (map[string]model.ReuseVector, error) {
 			return cloneReuseVectors(sourceVectors), nil
 		},
-		loadReuseForContents: func(_ context.Context, collectionName string, chunks []model.StoredChunk) (map[string][]float32, error) {
-			found := map[string][]float32{}
+		loadReuseForContents: func(_ context.Context, collectionName string, chunks []model.StoredChunk) (map[string]model.ReuseVector, error) {
+			found := map[string]model.ReuseVector{}
 			if collectionName != "cc_repo" {
 				return found, nil
 			}
 			for _, chunk := range chunks {
 				if vector, present := sourceVectors[hashText(chunk.Content)]; present {
-					found[hashText(chunk.Content)] = append([]float32(nil), vector...)
+					found[hashText(chunk.Content)] = model.ReuseVector{
+						Vector:           append([]float32(nil), vector.Vector...),
+						SourceModelKnown: vector.SourceModelKnown,
+					}
 				}
 			}
 			return found, nil
@@ -307,7 +310,7 @@ func newWorktreeDeltaReuseFixture(t *testing.T, sourceVectors map[string][]float
 	return manager, worktreeCodebase, job, fake
 }
 
-func reportWorktreeDeltaReuse(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string][]float32) error {
+func reportWorktreeDeltaReuse(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string]model.ReuseVector) error {
 	if progress == nil {
 		return nil
 	}
@@ -325,10 +328,13 @@ func reportWorktreeDeltaReuse(_ context.Context, _ string, chunks []model.Stored
 	return nil
 }
 
-func cloneReuseVectors(reuse map[string][]float32) map[string][]float32 {
-	cloned := make(map[string][]float32, len(reuse))
+func cloneReuseVectors(reuse map[string]model.ReuseVector) map[string]model.ReuseVector {
+	cloned := make(map[string]model.ReuseVector, len(reuse))
 	for key, vector := range reuse {
-		cloned[key] = append([]float32(nil), vector...)
+		cloned[key] = model.ReuseVector{
+			Vector:           append([]float32(nil), vector.Vector...),
+			SourceModelKnown: vector.SourceModelKnown,
+		}
 	}
 	return cloned
 }

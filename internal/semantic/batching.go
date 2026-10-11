@@ -42,7 +42,7 @@ func packChunksByEstimatedTokens(
 	chunks []model.StoredChunk,
 	maxRows int,
 	tokenBudget int,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) [][]model.StoredChunk {
 	if maxRows < 1 {
 		maxRows = 1
@@ -84,7 +84,7 @@ func packChunksByEstimatedTokens(
 // embedding request. A chunk whose vector is already in reuse contributes zero,
 // because it is served from the map and never sent. The lookup mirrors
 // embedChunkBatch's, so the packer's view of a request matches what is built.
-func embeddedTokenCount(chunk model.StoredChunk, reuse map[string][]float32) int {
+func embeddedTokenCount(chunk model.StoredChunk, reuse map[string]model.ReuseVector) int {
 	if len(reuse) > 0 {
 		if _, hit := reuse[contentVectorKey(chunk.Content)]; hit {
 			return 0

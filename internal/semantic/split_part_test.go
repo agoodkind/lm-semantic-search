@@ -63,6 +63,7 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 		collectionName,
 		input,
 		[][]float32{{1}, {2}},
+		[]string{"model-a", "model-a"},
 		CodeColumns(),
 	)
 	if err != nil {
@@ -237,6 +238,7 @@ func TestInsertBatchRejectsPartialInsertCount(t *testing.T) {
 		collectionName,
 		chunks,
 		[][]float32{{1}, {2}},
+		[]string{"model-a", "model-a"},
 		CodeColumns(),
 	)
 	if err == nil {

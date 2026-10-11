@@ -151,7 +151,7 @@ type OneFileResult struct {
 	RemovalOverride bool
 	RemovalPaths    []string
 	RemovalPrefixes []string
-	ReuseVectors    map[string][]float32
+	ReuseVectors    map[string]model.ReuseVector
 }
 
 // processedFile mirrors OneFileResult for the runner's internal accumulator.

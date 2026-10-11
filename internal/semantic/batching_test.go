@@ -169,7 +169,7 @@ func TestPackForEmbeddingFillsRowCapWhenReuseCoversMostChunks(t *testing.T) {
 		EmbeddingBatchTokenBudget: 6000,
 	}}
 	chunks := conversationSizedChunks(64)
-	reuse := reuseCoveringAllBut(chunks, 8)
+	reuse := knownModelReuse(reuseCoveringAllBut(chunks, 8))
 
 	groups := service.packForEmbedding(chunks, reuse)
 
@@ -199,7 +199,7 @@ func TestReuseAwareEmbeddingAndInsertPackingUseIndependentBudgets(t *testing.T) 
 		}
 	}
 	vector := make([]float32, vectorDimension)
-	reuse := map[string][]float32{contentVectorKey(sharedContent): vector}
+	reuse := knownModelReuse(map[string][]float32{contentVectorKey(sharedContent): vector})
 	service := &Service{cfg: config.Config{
 		EmbeddingBatchSize:        rowCount,
 		EmbeddingBatchTokenBudget: 6000,
@@ -368,7 +368,7 @@ func TestPackForEmbeddingAllReusedGroupsOnlyOnRowCap(t *testing.T) {
 		EmbeddingBatchTokenBudget: 6000,
 	}}
 	chunks := conversationSizedChunks(40)
-	reuse := reuseCoveringAllBut(chunks, 40)
+	reuse := knownModelReuse(reuseCoveringAllBut(chunks, 40))
 
 	groups := service.packForEmbedding(chunks, reuse)
 
@@ -386,7 +386,7 @@ func TestPackForEmbeddingNeverExceedsTokenBudgetWithPartialReuse(t *testing.T) {
 		EmbeddingBatchTokenBudget: 6000,
 	}}
 	chunks := conversationSizedChunks(120)
-	reuse := reuseCoveringAllBut(chunks, 2)
+	reuse := knownModelReuse(reuseCoveringAllBut(chunks, 2))
 
 	groups := service.packForEmbedding(chunks, reuse)
 
@@ -400,7 +400,15 @@ func TestPackForEmbeddingNeverExceedsTokenBudgetWithPartialReuse(t *testing.T) {
 // assertGroupsWithinTokenBudget fails when any group's embedded share, which is
 // what the embedding request actually carries, exceeds tokenBudget. A group
 // holding one chunk is exempt because an oversize chunk ships alone.
-func assertGroupsWithinTokenBudget(t *testing.T, groups [][]model.StoredChunk, reuse map[string][]float32, tokenBudget int) {
+func knownModelReuse(vectors map[string][]float32) map[string]model.ReuseVector {
+	reuse := make(map[string]model.ReuseVector, len(vectors))
+	for key, vector := range vectors {
+		reuse[key] = model.ReuseVector{Vector: vector, SourceModelKnown: true}
+	}
+	return reuse
+}
+
+func assertGroupsWithinTokenBudget(t *testing.T, groups [][]model.StoredChunk, reuse map[string]model.ReuseVector, tokenBudget int) {
 	t.Helper()
 	for index, group := range groups {
 		total := 0

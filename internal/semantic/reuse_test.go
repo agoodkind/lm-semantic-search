@@ -116,10 +116,10 @@ func TestEmbedChunkBatchReusesByContentAndEmbedsOnlyMisses(t *testing.T) {
 		{Content: "fresh-B"},
 		{Content: "reused-C"},
 	}
-	reuse := map[string][]float32{
+	reuse := knownModelReuse(map[string][]float32{
 		contentVectorKey("reused-A"): {7, 7},
 		contentVectorKey("reused-C"): {9, 9},
-	}
+	})
 
 	embedded, err := service.embedChunkBatch(context.Background(), chunks, reuse)
 	vectors, reused := embedded.vectors, embedded.reused
@@ -156,10 +156,10 @@ func TestEmbedChunkBatchAllReusedSkipsEmbedderEntirely(t *testing.T) {
 	service := &Service{embedder: embedder}
 
 	chunks := []model.StoredChunk{{Content: "x"}, {Content: "y"}}
-	reuse := map[string][]float32{
+	reuse := knownModelReuse(map[string][]float32{
 		contentVectorKey("x"): {1},
 		contentVectorKey("y"): {2},
-	}
+	})
 
 	embedded, err := service.embedChunkBatch(context.Background(), chunks, reuse)
 	vectors, reused := embedded.vectors, embedded.reused
@@ -358,7 +358,7 @@ func assertNoRawControlBytes(t *testing.T, expression string) {
 func TestEmbedChunkBatchCountsReuseInMetrics(t *testing.T) {
 	service := &Service{embedder: &countingEmbedder{}}
 	chunks := []model.StoredChunk{{Content: "reused-A"}, {Content: "fresh-B"}}
-	reuse := map[string][]float32{contentVectorKey("reused-A"): {7, 7}}
+	reuse := knownModelReuse(map[string][]float32{contentVectorKey("reused-A"): {7, 7}})
 
 	before := metrics.Read().EmbedChunksReusedTotal
 	embedded, err := service.embedChunkBatch(context.Background(), chunks, reuse)
@@ -377,7 +377,7 @@ func TestEmbedChunkBatchCountsReuseInMetrics(t *testing.T) {
 func TestNewlyEmbeddedReuseCatalogExcludesReusedVectors(t *testing.T) {
 	chunks := []model.StoredChunk{{Content: "reused"}, {Content: "fresh"}}
 	vectors := [][]float32{{1, 2}, {3, 4}}
-	reuse := map[string][]float32{contentVectorKey("reused"): {1, 2}}
+	reuse := knownModelReuse(map[string][]float32{contentVectorKey("reused"): {1, 2}})
 
 	catalog := newlyEmbeddedReuseCatalog(chunks, vectors, reuse)
 
@@ -520,7 +520,7 @@ func TestColdFallbackReuseSkipsCollectionInspection(t *testing.T) {
 		context.Background(),
 		"missing-primary",
 		map[string]string{contentHash("new content"): "new content"},
-		map[string][]float32{},
+		map[string]model.ReuseVector{},
 	)
 	if err != nil {
 		t.Fatalf("load collection reuse: %v", err)

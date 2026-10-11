@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // CollectionItemRows is the stored row identity of one item in a generic
@@ -25,7 +26,7 @@ type CollectionItemRows struct {
 // recorded embedding model or the current one.
 type CollectionItemBatchState struct {
 	Rows  map[string]CollectionItemRows
-	Reuse map[string][]float32
+	Reuse map[string]model.ReuseVector
 }
 
 // LoadCollectionItemBatch reads the stored rows of itemIDs from a generic
@@ -37,7 +38,7 @@ func (service *Service) LoadCollectionItemBatch(
 	itemColumn string,
 	itemIDs []string,
 ) (CollectionItemBatchState, error) {
-	state := CollectionItemBatchState{Rows: map[string]CollectionItemRows{}, Reuse: map[string][]float32{}}
+	state := CollectionItemBatchState{Rows: map[string]CollectionItemRows{}, Reuse: map[string]model.ReuseVector{}}
 	uniqueIDs := dedupeItemIDs(itemIDs)
 	if !service.Available() || collectionName == "" || itemColumn == "" || len(uniqueIDs) == 0 {
 		return state, nil
@@ -119,7 +120,10 @@ func (service *Service) appendCollectionItemRows(
 			return fmt.Errorf("read collection item embedding model at %d: %w", rowIndex, modelErr)
 		}
 		if embeddingModelsCompatible(embeddingModel, service.cfg.EmbeddingModel) {
-			state.Reuse[contentVectorKey(contentValue)] = vector
+			state.Reuse[contentVectorKey(contentValue)] = model.ReuseVector{
+				Vector:           vector,
+				SourceModelKnown: embeddingModel != "",
+			}
 		}
 		itemID, present, idErr := readOptionalStringAt(itemIDColumn, rowIndex)
 		if idErr != nil {

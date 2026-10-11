@@ -18,6 +18,7 @@ func (service *Service) insertBatch(
 	collectionName string,
 	chunks []model.StoredChunk,
 	vectors [][]float32,
+	embeddingModels []string,
 	columnSet StoreColumnSet,
 ) error {
 	ids := make([]string, 0, len(chunks))
@@ -32,6 +33,7 @@ func (service *Service) insertBatch(
 		chunks,
 		ids,
 		vectors,
+		embeddingModels,
 		splitPartsRecorded,
 		columnSet,
 	)
@@ -43,6 +45,7 @@ func (service *Service) insertBatchWithIDs(
 	chunks []model.StoredChunk,
 	ids []string,
 	vectors [][]float32,
+	embeddingModels []string,
 	splitPartsRecorded []bool,
 	columnSet StoreColumnSet,
 ) (err error) {
@@ -63,12 +66,12 @@ func (service *Service) insertBatchWithIDs(
 	}
 
 	rows := insertRowsFromChunks(chunks, ids, vectors, splitPartsRecorded, columnSet)
-	insertOption, err := milvusstore.BuildInsertOption(
+	insertOption, err := milvusstore.BuildInsertOptionWithRowModels(
 		ctx,
 		collectionName,
 		rows,
 		columnSet.creationScalars(),
-		service.cfg.EmbeddingModel,
+		embeddingModels,
 	)
 	if err != nil {
 		return fmt.Errorf("build insert request for %s: %w", collectionName, err)

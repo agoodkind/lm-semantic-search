@@ -342,8 +342,8 @@ func TestLoadReuseVectorsForContentsBoundsCandidateTransportResponse(t *testing.
 		t.Fatalf("load reuse through bounded transport: %v", err)
 	}
 	actualVector, found := reuse[ContentVectorKey(content)]
-	if !found || !slices.Equal(actualVector, expectedVector) {
-		t.Fatalf("reuse vector found=%t dimension=%d, want exact selected vector", found, len(actualVector))
+	if !found || !slices.Equal(actualVector.Vector, expectedVector) {
+		t.Fatalf("reuse vector found=%t dimension=%d, want exact selected vector", found, len(actualVector.Vector))
 	}
 
 	requests := server.snapshot()

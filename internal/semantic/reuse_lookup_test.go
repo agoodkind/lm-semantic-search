@@ -544,7 +544,7 @@ func loadReuseLookupRows(t *testing.T, service *Service, contents []string) map[
 	for _, content := range contents {
 		contentsByHash[contentHash(content)] = content
 	}
-	reuse := make(map[string][]float32)
+	reuse := make(map[string]model.ReuseVector)
 	if err := service.loadCollectionReuseFromSource(
 		context.Background(),
 		"reuse_source",
@@ -553,7 +553,15 @@ func loadReuseLookupRows(t *testing.T, service *Service, contents []string) map[
 	); err != nil {
 		t.Fatalf("load collection reuse: %v", err)
 	}
-	return reuse
+	return reuseVectorsOnly(reuse)
+}
+
+func reuseVectorsOnly(reuse map[string]model.ReuseVector) map[string][]float32 {
+	vectors := make(map[string][]float32, len(reuse))
+	for key, reused := range reuse {
+		vectors[key] = reused.Vector
+	}
+	return vectors
 }
 
 func loadReuseLookupRowsResult(
@@ -564,14 +572,14 @@ func loadReuseLookupRowsResult(
 	for _, content := range contents {
 		contentsByHash[contentHash(content)] = content
 	}
-	reuse := make(map[string][]float32)
+	reuse := make(map[string]model.ReuseVector)
 	err := service.loadCollectionReuseFromSource(
 		context.Background(),
 		"reuse_source",
 		contentsByHash,
 		reuse,
 	)
-	return reuse, err
+	return reuseVectorsOnly(reuse), err
 }
 
 func TestReuseVectorFetchBatchFitsExactBudget(t *testing.T) {
@@ -892,7 +900,7 @@ func TestLoadReuseVectorsForContentsUsesSourceSchemaDimension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadReuseVectorsForContents: %v", err)
 	}
-	if !slices.Equal(reuse[contentVectorKey(content)], vector) {
+	if !slices.Equal(reuse[contentVectorKey(content)].Vector, vector) {
 		t.Fatal("reused vector does not match selected source vector")
 	}
 	requests, _ := server.snapshot()
@@ -1028,7 +1036,7 @@ func TestReuseSourceDimensionErrorsAreAuthoritative(t *testing.T) {
 				row.id: {id: row.id, expectedContent: row.content},
 			}
 
-			reuse := make(map[string][]float32)
+			reuse := make(map[string]model.ReuseVector)
 			err := service.loadReuseVectorCandidates(
 				context.Background(),
 				"reuse_source",
@@ -1306,7 +1314,7 @@ func TestEmptyReuseCandidatesSkipSourceSchema(t *testing.T) {
 		context.Background(),
 		"reuse_source",
 		reuseVectorCandidateByID{},
-		make(map[string][]float32),
+		make(map[string]model.ReuseVector),
 	)
 	if err != nil {
 		t.Fatalf("load empty candidates: %v", err)

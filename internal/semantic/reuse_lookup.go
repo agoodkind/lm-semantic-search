@@ -42,8 +42,8 @@ func (service *Service) LoadReuseVectorsForContents(
 	ctx context.Context,
 	collectionName string,
 	chunks []model.StoredChunk,
-) (map[string][]float32, error) {
-	reuse := make(map[string][]float32)
+) (map[string]model.ReuseVector, error) {
+	reuse := make(map[string]model.ReuseVector)
 	if !service.Available() || len(chunks) == 0 {
 		return reuse, nil
 	}
@@ -71,8 +71,8 @@ func (service *Service) LoadReuseVectorsForContentsFrom(
 	ctx context.Context,
 	collectionNames []string,
 	chunks []model.StoredChunk,
-) (map[string][]float32, error) {
-	reuse := make(map[string][]float32)
+) (map[string]model.ReuseVector, error) {
+	reuse := make(map[string]model.ReuseVector)
 	if !service.Available() || len(chunks) == 0 {
 		return reuse, nil
 	}
@@ -123,7 +123,7 @@ func (service *Service) loadCatalogReuse(
 	ctx context.Context,
 	storageKeys []string,
 	contentsByStorageKey map[string]string,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) error {
 	dimension := int(service.cfg.EmbeddingDimension)
 	if dimension <= 0 {
@@ -154,7 +154,10 @@ func (service *Service) loadCatalogReuse(
 			}
 			for _, entry := range entries {
 				if embeddingModelsCompatible(entry.embeddingModel, service.cfg.EmbeddingModel) {
-					reuse[contentVectorKey(content)] = entry.vector
+					reuse[contentVectorKey(content)] = model.ReuseVector{
+						Vector:           entry.vector,
+						SourceModelKnown: entry.embeddingModel != "",
+					}
 					break
 				}
 			}
@@ -165,7 +168,7 @@ func (service *Service) loadCatalogReuse(
 
 func missingReuseContents(
 	contentsByStorageKey map[string]string,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) []string {
 	missingContents := make([]string, 0, len(contentsByStorageKey))
 	for _, content := range contentsByStorageKey {
@@ -184,7 +187,7 @@ func (service *Service) loadCollectionReuse(
 	ctx context.Context,
 	collectionName string,
 	contentsByStorageKey map[string]string,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) error {
 	if len(contentsByStorageKey) == 0 || collectionName == "" {
 		return nil
@@ -215,7 +218,7 @@ func (service *Service) loadRegisteredReuseSource(
 	collectionName string,
 	primary bool,
 	contentsByStorageKey map[string]string,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) error {
 	var residentProbe CollectionLease
 	if !primary {
@@ -317,7 +320,7 @@ func (service *Service) loadCollectionReuseFromSource(
 	ctx context.Context,
 	collectionName string,
 	contentsByStorageKey map[string]string,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) error {
 	missingStorageKeys := make([]string, 0, len(contentsByStorageKey))
 	for storageKey, content := range contentsByStorageKey {
@@ -356,7 +359,7 @@ func (service *Service) loadStoredHashReuseBatch(
 	collectionName string,
 	contentHashes []string,
 	contentsByHash map[string]string,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) error {
 	candidates, err := service.discoverStoredHashReuseCandidates(
 		ctx,
@@ -548,7 +551,7 @@ func (service *Service) loadLegacyReuseContent(
 	ctx context.Context,
 	collectionName string,
 	content string,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) error {
 	iterator, err := service.milvus.QueryIterator(
 		ctx,
@@ -607,7 +610,7 @@ func (service *Service) loadReuseVectorCandidates(
 	ctx context.Context,
 	collectionName string,
 	candidates reuseVectorCandidateByID,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) error {
 	if len(candidates) == 0 {
 		return nil
@@ -821,7 +824,7 @@ func (service *Service) readReuseVectorBatch(
 	requestedIDs []string,
 	candidates reuseVectorCandidateByID,
 	dimension int,
-) (map[string][]float32, error) {
+) (map[string]model.ReuseVector, error) {
 	idColumn := resultSet.GetColumn(idFieldName)
 	contentColumn := resultSet.GetColumn(contentFieldName)
 	embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
@@ -838,7 +841,7 @@ func (service *Service) readReuseVectorBatch(
 		requested[id] = candidate
 	}
 	seen := make(map[string]struct{}, resultSet.ResultCount)
-	batchReuse := make(map[string][]float32, resultSet.ResultCount)
+	batchReuse := make(map[string]model.ReuseVector, resultSet.ResultCount)
 	for rowIndex := range resultSet.ResultCount {
 		id, idErr := idColumn.GetAsString(rowIndex)
 		if idErr != nil {
@@ -880,7 +883,10 @@ func (service *Service) readReuseVectorBatch(
 				dimension,
 			)
 		}
-		batchReuse[contentVectorKey(content)] = vector
+		batchReuse[contentVectorKey(content)] = model.ReuseVector{
+			Vector:           vector,
+			SourceModelKnown: embeddingModel != "",
+		}
 	}
 	for _, id := range requestedIDs {
 		if _, found := seen[id]; !found {
