@@ -547,7 +547,7 @@ type RawStatus struct {
 	// CollectionRows is the row count the collection probe observed, nil when
 	// the probe did not count rows.
 	CollectionRows *int32
-	// HeldForSiblingBuild records whether the build waits for the first build of the declared source.
+	// HeldForSiblingBuild is true while the codebase build waits for the recorded source's first build.
 	HeldForSiblingBuild bool
 	// The fields store the recorded worktree source path, source codebase identifier, and starting commit; each field is empty when its value has not been recorded.
 	WorktreeSourcePath     string
