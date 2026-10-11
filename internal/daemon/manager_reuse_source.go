@@ -24,9 +24,16 @@ type jobSourceReuse struct {
 	disabled   atomic.Bool
 }
 
+type contentReuseLookup int
+
+const (
+	contentReuseLookupStoreWide contentReuseLookup = iota
+	contentReuseLookupListedCollections
+)
+
 type jobContentReusePlan struct {
-	explicit bool
-	source   *jobSourceReuse
+	lookup contentReuseLookup
+	source *jobSourceReuse
 }
 
 func (manager *Manager) selectWorktreeReuseSourceLocked(
@@ -81,7 +88,7 @@ func (manager *Manager) worktreeReuseStatus(codebase model.Codebase, discovered 
 
 func (manager *Manager) jobContentReusePlan(ctx context.Context, job model.Job) jobContentReusePlan {
 	if _, inRepository := gitworktree.Resolve(job.CanonicalPath); !inRepository {
-		return jobContentReusePlan{explicit: false, source: nil}
+		return jobContentReusePlan{lookup: contentReuseLookupStoreWide, source: nil}
 	}
 	manager.mu.Lock()
 	target := manager.codebases[job.CodebaseID]
@@ -95,7 +102,7 @@ func (manager *Manager) jobContentReusePlan(ctx context.Context, job model.Job) 
 			"source_path", selection.sourcePath,
 			"reason", string(selection.unavailable),
 		)
-		return jobContentReusePlan{explicit: true, source: nil}
+		return jobContentReusePlan{lookup: contentReuseLookupListedCollections, source: nil}
 	}
 	slog.InfoContext(ctx, "job reuses vectors from the declared source",
 		"job_id", job.ID,
@@ -110,5 +117,5 @@ func (manager *Manager) jobContentReusePlan(ctx context.Context, job model.Job) 
 		collection: selection.sourceCollection,
 		disabled:   atomic.Bool{},
 	}
-	return jobContentReusePlan{explicit: true, source: source}
+	return jobContentReusePlan{lookup: contentReuseLookupListedCollections, source: source}
 }

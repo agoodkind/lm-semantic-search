@@ -151,10 +151,11 @@ func (manager *Manager) searchPreconditions(extensionFilter []string) ([]string,
 
 func discoveredSearchNote(selection worktreeReuseSelection) string {
 	note := "🔎 This worktree was just discovered and is not indexed yet; its build is starting now"
-	if selection.unavailable == view.WorktreeReuseAvailable {
-		note += fmt.Sprintf(" (reusing embeddings from %s)", selection.sourcePath)
-	} else {
+	switch {
+	case selection.unavailable != view.WorktreeReuseAvailable:
 		note += fmt.Sprintf(" (source reuse unavailable because of %s)", selection.unavailable)
+	case selection.sourcePath != "":
+		note += fmt.Sprintf(" (reusing embeddings from %s)", selection.sourcePath)
 	}
 	return note + ". Search again shortly."
 }

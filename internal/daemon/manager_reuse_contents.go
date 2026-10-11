@@ -72,13 +72,14 @@ func (manager *Manager) contentReuseForChangedFile(
 	err := manager.runReleasingCapacityIfStalled(ctx, func() error {
 		var loaded map[string][]float32
 		var loadErr error
-		if source.ContentReuse.explicit {
+		switch source.ContentReuse.lookup {
+		case contentReuseLookupListedCollections:
 			loaded, loadErr = manager.semantic.LoadReuseVectorsForContentsFrom(
 				ctx,
 				[]string{source.CollectionName},
 				chunks,
 			)
-		} else {
+		case contentReuseLookupStoreWide:
 			loaded, loadErr = manager.semantic.LoadReuseVectorsForContents(
 				ctx,
 				source.CollectionName,

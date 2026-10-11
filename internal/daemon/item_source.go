@@ -170,7 +170,7 @@ type codeItemSource struct {
 func newCodeItemSource(runner indexingRunner, resolver *indexability.Resolver, codebaseID string, canonicalPath string, config model.IndexConfig) codeItemSource {
 	return codeItemSource{
 		runner: runner, resolver: resolver, codebaseID: codebaseID, canonicalPath: canonicalPath, collectionName: "",
-		contentReuse: jobContentReusePlan{explicit: false, source: nil},
+		contentReuse: jobContentReusePlan{lookup: contentReuseLookupStoreWide, source: nil},
 		config:       config,
 	}
 }
@@ -255,7 +255,7 @@ func (source codeItemSource) reuseSource(relativePath string) itemReuseSource {
 			CollectionName: "",
 			RelativePath:   "",
 			Scope:          itemReuseScopeNone,
-			ContentReuse:   jobContentReusePlan{explicit: false, source: nil},
+			ContentReuse:   jobContentReusePlan{lookup: contentReuseLookupStoreWide, source: nil},
 		}
 	}
 	return itemReuseSource{
