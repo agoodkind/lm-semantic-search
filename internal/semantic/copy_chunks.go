@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
@@ -28,9 +28,8 @@ import (
 // CopyChunks queries the source rows, computes new IDs and rows for the
 // destination path, inserts and flushes the new rows, then deletes and flushes
 // the source rows. A failure after the destination flush keeps the destination
-// durable even if the source deletion has an uncertain result. CopyChunks
-// returns the failure without retrying, leaving later convergence to remove
-// any remaining source rows.
+// durable even if the source deletion has an uncertain result.
+// CopyChunks retries a flush request after a Milvus flush rate limit rejection for up to 8 total attempts and returns every other failure without a retry.
 // The dense vector is preserved across the copy; the sparse vector, when
 // the collection is hybrid, is re-derived by the BM25 function from the
 // preserved content so no embedding API call is issued.
@@ -139,7 +138,6 @@ func runCopyChunkMutations(mutations copyChunkMutations) error {
 // CopyChunks flushes one collection twice.
 // Eight attempts 2 seconds apart wait up to 14 seconds per flush.
 const (
-	flushRateLimitMessage     = "rate limit exceeded"
 	flushRateLimitRetryWait   = 2 * time.Second
 	flushRateLimitMaxAttempts = 8
 )
@@ -172,14 +170,11 @@ func (service *Service) requestFlush(
 		if err == nil {
 			return task, attempt, nil
 		}
-		if !flushRateLimited(err) || attempt >= flushRateLimitMaxAttempts || !waitForFlushRetry(ctx) {
-			return nil, attempt, wrapStoreError(ctx, err, "flush Milvus collection "+collectionName)
+		flushErr := classifyFlushError(err)
+		if !errors.Is(flushErr, errFlushRateLimited) || attempt >= flushRateLimitMaxAttempts || !waitForFlushRetry(ctx) {
+			return nil, attempt, wrapStoreError(ctx, flushErr, "flush Milvus collection "+collectionName)
 		}
 	}
-}
-
-func flushRateLimited(err error) bool {
-	return strings.Contains(strings.ToLower(err.Error()), flushRateLimitMessage)
 }
 
 func waitForFlushRetry(ctx context.Context) bool {

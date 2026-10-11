@@ -2,6 +2,7 @@ package semantic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -53,6 +54,39 @@ func storeSearchSentinel(err error) error {
 		return adapterr.NewMilvusUnavailable(err)
 	}
 	return nil
+}
+
+const flushRateLimitMessage = "rate limit exceeded"
+
+// errFlushRateLimited marks Milvus flush rate limit rejections that requestFlush retries.
+var errFlushRateLimited = errors.New("milvus flush rate limit rejection")
+
+type flushRateLimitError struct {
+	cause error
+}
+
+func (err flushRateLimitError) Error() string {
+	return err.cause.Error()
+}
+
+func (err flushRateLimitError) Unwrap() error {
+	return err.cause
+}
+
+func (err flushRateLimitError) Is(target error) bool {
+	return target == errFlushRateLimited
+}
+
+// classifyFlushError wraps Milvus Flush errors containing "rate limit exceeded" in flushRateLimitError and returns every other error unchanged.
+// The text match replaces merr.ErrServiceRateLimit because importing merr crashes the govulncheck gate.
+func classifyFlushError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(strings.ToLower(err.Error()), flushRateLimitMessage) {
+		return flushRateLimitError{cause: err}
+	}
+	return err
 }
 
 // wrapStoreError logs and classifies a milvus call error from the write, index,
