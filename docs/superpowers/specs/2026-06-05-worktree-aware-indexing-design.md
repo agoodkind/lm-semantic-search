@@ -29,12 +29,11 @@ failures follow:
 
 ## Goal
 
-Let an agent search the worktree it is in and get correct per-branch results,
-while making the worktree's index cheap to build. Concretely: a worktree
-becomes its own first-class codebase whose collection reflects its branch, but
-the build reuses the sibling repo's already-embedded vectors so only the branch
-diff plus uncommitted changes hit the embedder. This is the "linked clone with
-a diff" model.
+An agent searches a worktree and receives results for that worktree's branch.
+Each worktree has its own codebase, collection, registry record, and merkle
+snapshot. For each changed file, the build looks up chunk vectors by content
+hash in the target collection, then in one recorded source collection for
+chunks without a match. The build embeds chunks without a compatible match.
 
 ## Locked decisions
 
@@ -43,26 +42,28 @@ a diff" model.
   merkle snapshot. Per-branch correctness and the TS shared-collection
   invariant both hold (a non-symlinked worktree path hashes identically in TS
   `path.resolve` and Go).
-- **Build**: linked-clone via content reuse. Preload `LoadReuseVectors`
-  (`internal/semantic/reuse.go`) from already-indexed sibling worktree
-  collections in the same repo group, filtered to the same embedding model and
-  dimension. Reuse is keyed on content SHA-256 and embeddings are a pure
-  function of content with no path salt (`reuse.go:20-28`), so unchanged files
-  reuse vectors and only changed content is embedded. No new copy logic is
-  required.
-- **Trigger**: auto on first use. When `GetIndex` resolves a path that is a git
-  worktree of an already-indexed repo and has no codebase of its own yet, the
-  daemon auto-creates the worktree codebase and starts a reuse-seeded build in
-  the background, mirroring `adoptUnregisteredCodebase`
-  (`internal/daemon/manager_adopt.go`).
+- The build looks up chunk vectors for each changed file in the target
+  collection, then in one recorded source collection for chunks without a
+  match. Reuse requires equal content and a compatible embedding model and
+  vector dimension. The build embeds unmatched chunks. The build reads no
+  other sibling collection, preloads no collection, and does not read the
+  content vector catalog for a codebase in a Git repository.
+- A status or search read discovers an unregistered Git worktree when a sibling
+  worktree is indexed or runs its first build. `discoverWorktree` registers the
+  worktree in the discovered state and records a selected source.
+  `scheduleDeferredBuild` starts the build after a short delay. The read itself
+  starts no embedding work. Without an indexed sibling or a sibling running its
+  first build, the read registers no codebase. An explicit index request builds
+  that worktree with a full embed.
 - **Locations**: both nested worktrees (under the repo root) and external or
   sibling worktrees (`git worktree add ../feature`, centralized worktree dirs)
   are supported. Nested requires a discovery boundary and a coverage override.
-- **Source of truth**: `.git` is the sole SOT for worktree topology. No sidecar
-  file is introduced. The daemon reads the same on-disk files git reads. The
-  existing registry (`registry.json`) and per-codebase merkle remain the SOT for
-  index metadata (collection name, embedding model, snapshot); these are
-  orthogonal to topology and already exist.
+- `.git` is the only source for worktree topology. The registry stores index
+  metadata, including `WorktreeSourcePath`, `WorktreeSourceID`, and the optional
+  `WorktreeStartingCommit`. `WorktreeSourceID` records the codebase identifier
+  registered at the source path and is empty when none exists. The daemon does
+  not derive a starting commit from HEAD. The recorded source is a reuse choice
+  and does not identify the checkout that created the worktree.
 
 ## Topology from `.git`
 
@@ -87,12 +88,13 @@ is up.
 - The forward direction (the path being resolved -> its own `.git` -> common
   dir) starts from the path we hold and is always reliable, so "am I a worktree
   and what is my group" never depends on a possibly-stale reverse list.
-- The reverse enumeration (common dir -> sibling roots) can list a stale entry
-  if a worktree was moved on disk without `git worktree move` (its `gitdir`
-  pointer is stale until `git worktree repair`). We tolerate this by checking
-  that each sibling root still exists and has a registry entry before using it
-  as a reuse source, so a stale entry contributes nothing rather than breaking
-  resolution.
+- Enumeration from the common directory to sibling worktree roots can list a
+  stale entry when a worktree moves on disk without `git worktree move`; the
+  worktree's `gitdir` pointer remains stale until `git worktree repair`.
+  `gitworktree.SiblingWorktreeRoots` omits roots with nonexistent directories.
+  Source selection at discovery uses a sibling root only when a registered code
+  index at that root has the same embedding provider, model, and dimension.
+  A stale entry supplies no reuse source and does not cause resolution to fail.
 - Detection parses files directly rather than shelling out to `git`, so it has
   no dependency on git being on PATH and adds no subprocess per resolve.
 - A bare repo, a corrupt `.git` pointer, or a non-git directory all fail soft to
@@ -114,25 +116,51 @@ A small, isolated, unit-tested package that, given an absolute path, returns:
 It parses the `.git` pointer file and the `worktrees/<name>/{commondir,gitdir,
 HEAD}` files. It does not depend on the daemon and does not call git.
 
-### 2. Linked-clone build via content reuse
+### 2. Build with reuse from one recorded source
 
-When building a worktree's collection (the Replace/index pass):
+Discovery selects one source with `selectDiscoveredWorktreeSourceLocked`.
+Candidates are registered code indexes at other worktree roots in the same
+repository with the same embedding provider, model, and dimension. The daemon
+prefers an indexed sibling with the same HEAD commit, then the indexed main
+worktree, then the indexed sibling with the latest successful run. Without an
+indexed sibling, the daemon selects a sibling running its first build. Ties
+resolve by main worktree first, then path order. The daemon skips candidates
+that would create a source cycle and records no source without an eligible
+candidate.
 
-1. Detect the repo group and sibling worktree roots.
-2. Intersect siblings with registry records at those paths whose effective
-   embedding model and dimension match the worktree's effective config. Prefer
-   the main worktree, then any other indexed sibling.
-3. `LoadReuseVectors(ctx, [sibling collections])` to build the content-hash ->
-   vector map.
-4. Run the normal discovery + chunk pass over the worktree, passing the reuse
-   map through the existing `reuse` parameter of
-   `Reindex`/`StageReindex`/`Replace`. Unchanged files reuse vectors; only the
-   branch diff and uncommitted edits are embedded.
+Selection reads the registry and Git pointer files without querying the vector
+store. `gitworktree.HeadCommit` reads HEAD, loose refs, and `packed-refs` from
+disk.
 
-When no eligible reuse source exists (main not indexed, or all siblings on a
-different embedding model), the build falls back to a full embed. It stays
-correct, it is just not cheap. We do not auto-index the main worktree to create
-a reuse source (out of scope, YAGNI).
+An index request can declare a source with `source_path` and `starting_commit`.
+The command `lm-semantic-search codebase index` accepts `--source-path` and
+`--starting-commit`. The MCP `index_codebase` tool accepts `sourcePath` and
+`startingCommit`. A later request without source fields preserves the stored
+source. A new valid source replaces the stored source and clears the stored
+starting commit unless the request supplies a commit.
+
+The daemon selects the recorded source once per job. A usable source must have
+a registered codebase, a live collection, and the same embedding provider,
+model, and dimension as the target.
+
+A deferred build after discovery, an automatic sync, or a resumed build waits
+while the recorded source runs its first build. The waiting build starts after
+the source build completes, fails, or is canceled. An operator's index request
+does not wait; an unrelated sibling build does not delay the target build.
+
+1. The build processes the chunks of each changed file.
+2. The build looks up vectors by content hash in the target collection.
+3. The build looks up unmatched chunks in the recorded source collection when
+   the source is usable.
+4. The build embeds chunks without a compatible match.
+
+The build reads no other sibling collection and preloads no collection. An
+unavailable source limits lookup to the target collection. Status reports
+`worktree_reuse_unavailable_reason` as `no_source_recorded`,
+`source_not_registered`, `source_not_indexed`, or
+`source_embedding_configuration_differs`. A source collection read error other
+than cancellation stops source reads without failing the build. The build
+continues with the target collection and embeds unmatched chunks.
 
 ### 3. Worktree-bounded resolution and discovery
 
@@ -148,11 +176,11 @@ a reuse source (out of scope, YAGNI).
   the no-coverage branch (an external worktree whose path no registry codebase
   covers), so an external worktree of an indexed repo auto-creates instead of
   returning out-of-scope.
-- **Auto-create**: a new `adoptWorktreeCodebase` path modeled on
-  `adoptUnregisteredCodebase` mints a stable id, persists a registry record,
-  selects reuse sources, enqueues one reuse-seeded build, starts the watcher,
-  and returns. It dedupes against any in-flight job via the existing
-  `dedupAgainstActiveJob` contract.
+- `discoverWorktree` registers an unregistered worktree in the discovered state
+  and records a selected source when a sibling is indexed or runs its first
+  build. `scheduleDeferredBuild` starts the build after a short delay. A first
+  build waits for the recorded source's first build to complete, fail, or be
+  canceled. The status or search read itself starts no embedding work.
 - **Discovery boundary** (`discovery.go`, `walkFiles` and `walkGitignore`): stop
   descending into a subdirectory that is a worktree pointer into *this same*
   repo's common dir. The rule is precise to same-repo worktree pointers, so
@@ -161,18 +189,18 @@ a reuse source (out of scope, YAGNI).
 
 ## Status and observability
 
-`get_indexing_status` gains a `git worktree of <main path> (branch <x>)` line
-when the queried path is a worktree, mirroring the existing
-`symlink resolved to: <real path>` line in `internal/daemon/render.go`. The
-reuse-seeded build logs how many vectors were reused versus embedded, mirroring
-`semantic.reuse_vectors_loaded`.
+`get_indexing_status` shows `git worktree of <main path>`, the recorded
+`WorktreeSourcePath`, `WorktreeSourceID`, optional `WorktreeStartingCommit`, and
+`worktree_reuse_unavailable_reason`. Job progress reports chunks reused and
+chunks embedded.
 
 ## Use-case battery
 
 Location / nesting:
 
-1. External sibling worktree (`git worktree add ../feature`): detected, own
-   collection, reuse from main; no nesting work triggered.
+1. An external sibling worktree (`git worktree add ../feature`) has its own
+   codebase and collection after discovery or an explicit index request.
+   Discovery records one selected source.
 2. Nested worktree under repo root (`.claude/worktrees/foo`): discovery boundary
    keeps it out of the parent index; resolution prefers the worktree over the
    covering parent.
@@ -186,26 +214,37 @@ Location / nesting:
 
 Reuse source availability:
 
-6. Main indexed, worktree first use: reuse from main; only diff embeds.
-7. Main not indexed, worktree first use: no reuse source; full build (correct,
-   not cheap); main is not auto-indexed.
-8. Several siblings indexed: reuse merges across all same-model sibling
-   collections; main preferred for logging.
-9. Sibling indexed with a different embedding model or dimension: excluded from
-   reuse so vectors stay valid; it contributes nothing.
-10. Two worktrees on the same branch: the second reuses the first almost
-    entirely.
+6. On first use with an indexed main worktree, discovery selects one eligible
+   source. An indexed sibling with the same HEAD commit takes priority over
+   the indexed main worktree.
+7. When the main worktree is not indexed, discovery can select another indexed
+   sibling or a sibling running its first build. Without either candidate, a
+   read registers no codebase. An explicit index request performs a full embed.
+   The daemon does not index the main worktree to create a source.
+8. With several indexed siblings, discovery selects one source by HEAD commit,
+   main worktree, and latest successful run, in that order. The build reads only
+   the target collection and the recorded source collection.
+9. A sibling with a different embedding provider, model, or dimension is
+   ineligible for discovery selection. If the recorded source's configuration
+   differs at job time, status reports `source_embedding_configuration_differs`
+   and the build reads only the target collection.
+10. A second worktree on the same branch reuses matching chunk vectors when the
+    first worktree is its recorded, usable source.
 
 Branch / content state:
 
-11. Worktree branch equals main branch, clean tree: ~100% reuse, near-zero
-    embed.
-12. Worktree diverged by N files: N files embed, the rest reuse.
-13. Worktree with uncommitted or untracked edits: dirty files embed, committed
-    files reuse.
-14. Branch checkout inside an already-indexed worktree: files change on disk,
-    merkle diff drives incremental re-embed, reuse from siblings still applies
-    to the changed set.
+11. When a recorded, usable source exists, a clean worktree on the same branch
+    as the main worktree reuses matching chunk vectors from the target or
+    recorded source collection. The build embeds chunks without a match.
+12. When a recorded, usable source exists, a worktree that diverges by N files
+    looks up vectors for chunks in those changed files. The build embeds only
+    chunks without a compatible match.
+13. When a recorded, usable source exists, uncommitted or untracked changes
+    reuse matching chunk vectors from the target or recorded source collection.
+    The build embeds chunks without a compatible match.
+14. A branch checkout inside an indexed worktree changes files on disk. The
+    merkle diff selects the changed files for vector lookup in the target
+    collection and, when usable, the recorded source collection.
 15. Detached HEAD worktree: treated as a group member; branch label is the
     commit sha.
 
@@ -215,10 +254,11 @@ Lifecycle:
     logic handles it; no special GC is added (matches the no-orphan-GC rule).
 17. Worktree removed then recreated at the same path: same real path -> same
     collection, re-adopted and reused.
-18. Worktree moved with `git worktree move`: new real path -> new collection;
-    reuse from siblings makes the rebuild cheap.
-19. Main repo deleted while a worktree lives on: the worktree is self-contained
-    as its own codebase; the reuse source simply disappears.
+18. After `git worktree move`, the new path is a new codebase. Discovery selects
+    one source for the new path by the same source selection rules.
+19. If the removed main codebase is the worktree's recorded source, later
+    worktree builds read only the target collection. Status reports
+    `source_not_registered`.
 
 Resolution / search:
 
@@ -229,8 +269,8 @@ Resolution / search:
     reuse stats.
 23. Concurrent first-use from two agents in the same new worktree: dedupes on
     `dedupAgainstActiveJob`; one build.
-24. `index_codebase(force=true)` on a worktree: full rebuild, still
-    reuse-seeded.
+24. `index_codebase(force=true)` rebuilds the worktree without reading the
+    recorded source collection.
 
 Migration / correctness:
 
@@ -259,8 +299,9 @@ Invariants held:
 - `internal/daemon/manager_status.go` (`GetIndex`) and a new
   `internal/daemon/manager_worktree.go`: worktree-bounded resolution and
   auto-on-use creation, modeled on `adoptUnregisteredCodebase`.
-- `internal/daemon/manager_adopt.go` and the build path: reuse-source selection
-  from siblings, wired into the index pass via the existing `reuse` parameter.
+- The build selects the recorded source once per job and looks up chunk vectors
+  by content hash in the target collection before querying the recorded source
+  collection for chunks without a match.
 - `internal/daemon/render.go`: the worktree status line.
 - Tests alongside each package, plus a portability test confirming worktree
   collection names match the shared invariant.
@@ -270,7 +311,8 @@ Invariants held:
 - Auto-indexing the main worktree to manufacture a reuse source.
 - Orphan-collection garbage collection for removed worktrees.
 - Submodule-aware indexing changes (behavior preserved, not extended).
-- Any sidecar or parallel bookkeeping file for worktree topology.
+- The daemon uses no sidecar or parallel bookkeeping file for worktree topology.
+  The registry stores the recorded reuse source as index metadata.
 
 ## Verification
 
