@@ -203,7 +203,9 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) (*graphIndexTa
 	// in runConversationIngest, then shares the same delta-then-bootstrap routine.
 	codeSource := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config)
 	if manager.semantic != nil && manager.semantic.Available() {
-		codeSource = codeSource.withCollectionName(manager.semantic.CollectionName(job.CanonicalPath))
+		collectionName := manager.semantic.CollectionName(job.CanonicalPath)
+		codeSource = codeSource.withCollectionName(collectionName)
+		codeSource = codeSource.withContentReuse(manager.jobContentReusePlan(ctx, job))
 	}
 	switch jobOperation(job.Operation) {
 	case jobOperationSync:

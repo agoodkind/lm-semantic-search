@@ -143,14 +143,7 @@ func TestSweepOfEmptyWorktreeWaitsForSiblingFirstBuild(t *testing.T) {
 func (harness *harness) requireEmptyWorktreeFilesWaitForSibling() {
 	harness.t.Helper()
 
-	repository := newEmptyRepository(harness.t)
-	gitRun(harness.t, repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "--message", "start empty")
-	worktree := addNestedWorktree(harness.t, repository)
-	emptyRun := harness.waitForJob(harness.startIndexAt(worktree))
-	requireCompleted(harness.t, emptyRun)
-	if processed := emptyRun.GetProgress().GetFilesProcessed(); processed != 0 {
-		harness.t.Fatalf("empty worktree run processed %d files, want 0", processed)
-	}
+	repository, worktree := harness.newEmptyWorktreeWithDeclaredSource()
 
 	writeGeneratedSources(harness.t, repository, heldParentFileCount)
 	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, func() {

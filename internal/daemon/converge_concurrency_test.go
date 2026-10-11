@@ -76,14 +76,15 @@ type fakeSemantic struct {
 	// conversation ingest loads by conv/<id>/ prefix; reusePrefixCalls records
 	// every such load and reindexReuse records the reuse map each conversation's
 	// Reindex actually received.
-	loadReuseForPrefix   func(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
-	reusePrefixCalls     []reusePrefixCall
-	loadReuseForPath     func(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
-	reusePathCalls       []reusePathCall
-	loadReuseForContents func(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string][]float32, error)
-	messageStateCalls    []messageStateCall
-	derivedBatchCalls    [][]string
-	reindexReuse         map[string]map[string][]float32
+	loadReuseForPrefix      func(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
+	reusePrefixCalls        []reusePrefixCall
+	loadReuseForPath        func(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
+	reusePathCalls          []reusePathCall
+	loadReuseForContents    func(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string][]float32, error)
+	reuseContentCollections [][]string
+	messageStateCalls       []messageStateCall
+	derivedBatchCalls       [][]string
+	reindexReuse            map[string]map[string][]float32
 	// conversationSearchScopes records the conversation-id scope each
 	// conversation search received, so tests can prove native scoping.
 	conversationSearchScopes [][]string
@@ -401,6 +402,32 @@ func (f *fakeSemantic) LoadReuseVectorsForContents(
 		return f.loadReuseForContents(ctx, collectionName, chunks)
 	}
 	return map[string][]float32{}, nil
+}
+
+func (f *fakeSemantic) LoadReuseVectorsForContentsFrom(
+	ctx context.Context,
+	collectionNames []string,
+	chunks []model.StoredChunk,
+) (map[string][]float32, error) {
+	f.mu.Lock()
+	f.reuseContentCollections = append(f.reuseContentCollections, append([]string(nil), collectionNames...))
+	f.mu.Unlock()
+	reuse := map[string][]float32{}
+	if f.loadReuseForContents == nil {
+		return reuse, nil
+	}
+	for _, collectionName := range collectionNames {
+		loaded, err := f.loadReuseForContents(ctx, collectionName, chunks)
+		if err != nil {
+			return nil, err
+		}
+		for key, vector := range loaded {
+			if _, found := reuse[key]; !found {
+				reuse[key] = vector
+			}
+		}
+	}
+	return reuse, nil
 }
 
 func (f *fakeSemantic) derivedBatchCallsSnapshot() [][]string {

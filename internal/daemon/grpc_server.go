@@ -369,12 +369,8 @@ func applyDisplayTokens(pbCodebase *pb.Codebase, display displayStatus) {
 	pbCodebase.StatusLabel = labelForDisplay(display)
 }
 
-// applyReuseForecast sets the discovered-worktree reuse forecast on the wire
-// codebase so a list client can show that a pending build is cheap. It is zero
-// for every non-discovered codebase. pbconv cannot compute it, so the boundary
-// applies it here from the manager.
-func applyReuseForecast(pbCodebase *pb.Codebase, reuseSiblingCount int32) {
-	pbCodebase.ReuseSiblingCount = reuseSiblingCount
+func applyWorktreeReuse(pbCodebase *pb.Codebase, selection worktreeReuseSelection) {
+	pbCodebase.WorktreeReuseUnavailableReason = string(selection.unavailable)
 }
 
 // applyJobDisplayTokens sets the resolved presentation fields on a protobuf job
@@ -467,9 +463,7 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 		pbCodebase := pbconv.ToCodebase(codebase)
 		display := computeDisplayStatus(codebase, activeJob, health.Mode, readiness)
 		applyDisplayTokens(pbCodebase, display)
-		if display == displayDiscovered {
-			applyReuseForecast(pbCodebase, server.manager.worktreeReuseForecast(codebase))
-		}
+		applyWorktreeReuse(pbCodebase, server.manager.worktreeReuseStatus(codebase, display == displayDiscovered))
 		response.Codebase = pbCodebase
 		response.ActiveJob = toJobPointerWithTokens(activeJob, health.Degraded(), "")
 	}

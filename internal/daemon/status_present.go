@@ -159,9 +159,6 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 	)
 	switch display {
 	case displayDiscovered:
-		// A discovered worktree is registered and watched but not yet built. The
-		// reuse forecast is attached by resolveGetIndexView, which holds the manager
-		// needed to compute it cheaply.
 		return statusView, "discovered.md.tmpl"
 	case displayPending:
 		// A requested index whose build has not started running yet (a queued job
@@ -276,7 +273,6 @@ func blankStatusView(name string, updatedAt string) view.StatusView {
 		FilesChanged:        0,
 		FilesUnchanged:      0,
 		Breakdown:           view.ZeroBreakdown(),
-		ReuseForecastLine:   "",
 		HeldForSiblingBuild: false,
 		RawStatus:           "",
 		CurrentIndex: view.CurrentIndexCounts{
@@ -479,7 +475,8 @@ func (manager *Manager) resolveGetIndexView(
 	display := computeDisplayStatus(*codebase, activeJob, health.Mode, readiness)
 	getIndex.Display = view.Display(display)
 	getIndex.Raw = resolveRawStatus(*codebase, activeJob, readiness, observedRows)
-	getIndex.Raw.HeldForSiblingBuild = display == displayDiscovered && manager.waitsForSiblingFirstBuild(codebase.CanonicalPath)
+	getIndex.Raw.HeldForSiblingBuild = manager.waitsForSourceFirstBuild(codebase.CanonicalPath)
+	getIndex.Raw.WorktreeReuseUnavailableReason = manager.worktreeReuseStatus(*codebase, display == displayDiscovered).unavailable
 	getIndex.Status.Scheduling = resolveSchedulingView(codebase.SchedulingPolicy, "", "")
 	return getIndex
 }
@@ -497,6 +494,8 @@ func blankRawStatus() view.RawStatus {
 		WorktreeSourcePath:     "",
 		WorktreeSourceID:       "",
 		WorktreeStartingCommit: "",
+
+		WorktreeReuseUnavailableReason: view.WorktreeReuseAvailable,
 
 		HasJob:           false,
 		JobID:            "",

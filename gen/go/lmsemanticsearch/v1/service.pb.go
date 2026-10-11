@@ -1391,10 +1391,8 @@ type Codebase struct {
 	// map. status_label is the human word per display status.
 	GlyphToken  string `protobuf:"bytes,15,opt,name=glyph_token,json=glyphToken,proto3" json:"glyph_token,omitempty"`
 	StatusLabel string `protobuf:"bytes,16,opt,name=status_label,json=statusLabel,proto3" json:"status_label,omitempty"`
-	// reuse_sibling_count is the number of indexed sibling worktree collections a
-	// discovered (not-yet-built) worktree will reuse on its deferred build. It is
-	// zero for every other state and lets a list row show that a pending build is
-	// cheap.
+	// The daemon always sends 0 for the deprecated reuse_sibling_count field.
+	// Field number 17 remains reserved for reuse_sibling_count.
 	ReuseSiblingCount int32 `protobuf:"varint,17,opt,name=reuse_sibling_count,json=reuseSiblingCount,proto3" json:"reuse_sibling_count,omitempty"`
 	// active_progress carries the live job's progress (including its breakdown)
 	// for a codebase that is currently indexing, so the list and the TUI render
@@ -1411,8 +1409,11 @@ type Codebase struct {
 	// worktree_starting_commit records the starting commit supplied by the caller.
 	// The daemon does not derive the value from HEAD.
 	WorktreeStartingCommit string `protobuf:"bytes,23,opt,name=worktree_starting_commit,json=worktreeStartingCommit,proto3" json:"worktree_starting_commit,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// worktree_reuse_unavailable_reason contains no_source_recorded, source_not_registered, source_not_indexed, or source_embedding_configuration_differs.
+	// The field is empty when a source is selected or when the codebase records no source and is not discovered.
+	WorktreeReuseUnavailableReason string `protobuf:"bytes,24,opt,name=worktree_reuse_unavailable_reason,json=worktreeReuseUnavailableReason,proto3" json:"worktree_reuse_unavailable_reason,omitempty"`
+	unknownFields                  protoimpl.UnknownFields
+	sizeCache                      protoimpl.SizeCache
 }
 
 func (x *Codebase) Reset() {
@@ -1595,6 +1596,13 @@ func (x *Codebase) GetWorktreeSourceId() string {
 func (x *Codebase) GetWorktreeStartingCommit() string {
 	if x != nil {
 		return x.WorktreeStartingCommit
+	}
+	return ""
+}
+
+func (x *Codebase) GetWorktreeReuseUnavailableReason() string {
+	if x != nil {
+		return x.WorktreeReuseUnavailableReason
 	}
 	return ""
 }
@@ -4612,7 +4620,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12:\n" +
 	"\x19last_attempted_percentage\x18\x02 \x01(\x05R\x17lastAttemptedPercentage\x127\n" +
 	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\x12\x12\n" +
-	"\x04code\x18\x04 \x01(\tR\x04code\"\x98\t\n" +
+	"\x04code\x18\x04 \x01(\tR\x04code\"\xe3\t\n" +
 	"\bCodebase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0ecanonical_path\x18\x02 \x01(\tR\rcanonicalPath\x12\x16\n" +
@@ -4638,7 +4646,8 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x1dpolicy_pending_initialization\x18\x14 \x01(\bR\x1bpolicyPendingInitialization\x120\n" +
 	"\x14worktree_source_path\x18\x15 \x01(\tR\x12worktreeSourcePath\x12,\n" +
 	"\x12worktree_source_id\x18\x16 \x01(\tR\x10worktreeSourceId\x128\n" +
-	"\x18worktree_starting_commit\x18\x17 \x01(\tR\x16worktreeStartingCommitJ\x04\b\x03\x10\x04R\aaliases\"\x99\b\n" +
+	"\x18worktree_starting_commit\x18\x17 \x01(\tR\x16worktreeStartingCommit\x12I\n" +
+	"!worktree_reuse_unavailable_reason\x18\x18 \x01(\tR\x1eworktreeReuseUnavailableReasonJ\x04\b\x03\x10\x04R\aaliases\"\x99\b\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +

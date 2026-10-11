@@ -151,6 +151,7 @@ type itemReuseSource struct {
 	CollectionName string
 	RelativePath   string
 	Scope          itemReuseScope
+	ContentReuse   jobContentReusePlan
 }
 
 // codeItemSource lists and reads a filesystem codebase. It is the byte-for-byte
@@ -162,15 +163,25 @@ type codeItemSource struct {
 	codebaseID     string
 	canonicalPath  string
 	collectionName string
+	contentReuse   jobContentReusePlan
 	config         model.IndexConfig
 }
 
 func newCodeItemSource(runner indexingRunner, resolver *indexability.Resolver, codebaseID string, canonicalPath string, config model.IndexConfig) codeItemSource {
-	return codeItemSource{runner: runner, resolver: resolver, codebaseID: codebaseID, canonicalPath: canonicalPath, collectionName: "", config: config}
+	return codeItemSource{
+		runner: runner, resolver: resolver, codebaseID: codebaseID, canonicalPath: canonicalPath, collectionName: "",
+		contentReuse: jobContentReusePlan{explicit: false, source: nil},
+		config:       config,
+	}
 }
 
 func (source codeItemSource) withCollectionName(collectionName string) codeItemSource {
 	source.collectionName = collectionName
+	return source
+}
+
+func (source codeItemSource) withContentReuse(contentReuse jobContentReusePlan) codeItemSource {
+	source.contentReuse = contentReuse
 	return source
 }
 
@@ -244,9 +255,15 @@ func (source codeItemSource) reuseSource(relativePath string) itemReuseSource {
 			CollectionName: "",
 			RelativePath:   "",
 			Scope:          itemReuseScopeNone,
+			ContentReuse:   jobContentReusePlan{explicit: false, source: nil},
 		}
 	}
-	return itemReuseSource{CollectionName: source.collectionName, RelativePath: relativePath, Scope: itemReuseScopePath}
+	return itemReuseSource{
+		CollectionName: source.collectionName,
+		RelativePath:   relativePath,
+		Scope:          itemReuseScopePath,
+		ContentReuse:   source.contentReuse,
+	}
 }
 
 func (source codeItemSource) unit() string {

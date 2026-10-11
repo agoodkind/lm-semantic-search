@@ -217,6 +217,9 @@ func rawStatusLines(getIndex view.GetIndexView) []string {
 		lines = append(lines, fmt.Sprintf("worktree_source_path=%s worktree_source_id=%s worktree_starting_commit=%s",
 			raw.WorktreeSourcePath, raw.WorktreeSourceID, raw.WorktreeStartingCommit))
 	}
+	if raw.WorktreeReuseUnavailableReason != view.WorktreeReuseAvailable {
+		lines = append(lines, "worktree_reuse_unavailable_reason="+string(raw.WorktreeReuseUnavailableReason))
+	}
 	if raw.HasJob {
 		lines = append(lines,
 			fmt.Sprintf("job_id=%s operation=%s state=%s trigger=%s phase=%q",
@@ -261,12 +264,7 @@ func renderListIndexes(views []view.CodebaseRowView) string {
 	lines = append(lines, "Tracked "+countWord("codebase", len(views))+":")
 	for _, row := range views {
 		line := fmt.Sprintf("- %s  %s  [%s]", row.ID, row.CanonicalPath, row.Display)
-		// A discovered worktree is not built yet; surface its reuse forecast so the
-		// row reads as a cheap pending build rather than blank, matching what the
-		// status detail shows.
-		if row.Display == displayDiscovered && row.ReuseSiblingCount > 0 {
-			line += fmt.Sprintf("  ♻️ reuses %d sibling %s", row.ReuseSiblingCount, plural("collection", int(row.ReuseSiblingCount)))
-		}
+		line += worktreeReuseSuffix(row)
 		if policy := SchedulingPolicy(row.Scheduling); policy != "" {
 			line += "  stored policy: " + policy
 		}
@@ -280,6 +278,33 @@ func renderListIndexes(views []view.CodebaseRowView) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func worktreeReuseSuffix(row view.CodebaseRowView) string {
+	if row.ReuseUnavailableReason != view.WorktreeReuseAvailable {
+		return "  ♻️ " + worktreeReuseUnavailableLabel(row.ReuseUnavailableReason)
+	}
+	if row.WorktreeSourcePath == "" {
+		return ""
+	}
+	return "  ♻️ reusing embeddings from " + row.WorktreeSourcePath
+}
+
+func worktreeReuseUnavailableLabel(reason view.WorktreeReuseReason) string {
+	switch reason {
+	case view.WorktreeReuseAvailable:
+		return ""
+	case view.WorktreeReuseNoSourceRecorded:
+		return "no source recorded"
+	case view.WorktreeReuseSourceNotRegistered:
+		return "source not registered"
+	case view.WorktreeReuseSourceNotIndexed:
+		return "source not indexed"
+	case view.WorktreeReuseSourceEmbeddingConfigurationDiffers:
+		return "source embedding configuration differs"
+	default:
+		return string(reason)
+	}
 }
 
 func renderGetJob(entry view.JobEntryView, found bool) string {

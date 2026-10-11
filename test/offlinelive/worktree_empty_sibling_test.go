@@ -25,10 +25,6 @@ const (
 	worktreeBranch = "feature"
 )
 
-// TestWorktreeOfEmptyIndexWaitsForEmbeddedSibling proves a sibling whose only
-// completed run indexed no file does not make a worktree eligible for its own
-// build, and that once the sibling holds embedded content the worktree builds by
-// reusing it rather than embedding again.
 func TestWorktreeOfEmptyIndexWaitsForEmbeddedSibling(t *testing.T) {
 	harness := newHarness(t)
 
@@ -70,7 +66,7 @@ func TestWorktreeOfEmptyIndexWaitsForEmbeddedSibling(t *testing.T) {
 	}
 	worktreeRun := harness.waitForJob(harness.waitForFirstJobID(discovered.GetCodebase().GetId()))
 	requireCompleted(t, worktreeRun)
-	requireReusedWithoutEmbedding(t, worktreeRun)
+	requireEmbeddedWithoutReuse(t, worktreeRun)
 }
 
 // newEmptyRepository creates a git repository with no files beyond .git and

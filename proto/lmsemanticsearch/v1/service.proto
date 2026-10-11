@@ -246,10 +246,8 @@ message Codebase {
   // map. status_label is the human word per display status.
   string glyph_token = 15;
   string status_label = 16;
-  // reuse_sibling_count is the number of indexed sibling worktree collections a
-  // discovered (not-yet-built) worktree will reuse on its deferred build. It is
-  // zero for every other state and lets a list row show that a pending build is
-  // cheap.
+  // The daemon always sends 0 for the deprecated reuse_sibling_count field.
+  // Field number 17 remains reserved for reuse_sibling_count.
   int32 reuse_sibling_count = 17;
   // active_progress carries the live job's progress (including its breakdown)
   // for a codebase that is currently indexing, so the list and the TUI render
@@ -266,6 +264,9 @@ message Codebase {
   // worktree_starting_commit records the starting commit supplied by the caller.
   // The daemon does not derive the value from HEAD.
   string worktree_starting_commit = 23;
+  // worktree_reuse_unavailable_reason contains no_source_recorded, source_not_registered, source_not_indexed, or source_embedding_configuration_differs.
+  // The field is empty when a source is selected or when the codebase records no source and is not discovered.
+  string worktree_reuse_unavailable_reason = 24;
 }
 
 message Job {
