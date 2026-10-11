@@ -48,6 +48,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 	"goodkind.io/lm-semantic-search/internal/sandbox"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
@@ -110,6 +111,13 @@ type harness struct {
 	milvusContext     context.Context
 	stopServer        func()
 }
+
+type harnessEmbedder int
+
+const (
+	harnessEmbedderFake harnessEmbedder = iota
+	harnessEmbedderONNX
+)
 
 type milvusInventory map[string]map[string]string
 
@@ -281,6 +289,22 @@ func newHarnessWithOptions(
 	requireMilvus bool,
 ) *harness {
 	t.Helper()
+	return newHarnessWithEmbedder(t, gate, idleTimeout, requireMilvus, harnessEmbedderFake)
+}
+
+func newONNXHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessWithEmbedder(t, nil, 0, true, harnessEmbedderONNX)
+}
+
+func newHarnessWithEmbedder(
+	t *testing.T,
+	gate *embedGate,
+	idleTimeout time.Duration,
+	requireMilvus bool,
+	embedder harnessEmbedder,
+) *harness {
+	t.Helper()
 
 	defaultConfig, err := config.Default()
 	if err != nil {
@@ -407,24 +431,36 @@ func newHarnessWithOptions(
 	socketPath := filepath.Join(socketDir, "daemon.sock")
 
 	embeddingRecorder := &embeddingCallRecorder{}
-	embedServer := newFakeEmbeddingServerWithRecorder(
-		t,
-		gate,
-		fakeEmbeddingDimension,
-		embeddingRecorder,
-	)
-
-	cfg := resolveLiveConfig(
-		t,
-		stateRoot,
-		socketPath,
-		embedServer.URL,
-		milvusAddress,
-		defaultConfig.MilvusToken,
-		databaseName,
-		harnessID,
-		idleTimeout,
-	)
+	var cfg config.Config
+	if embedder == harnessEmbedderONNX {
+		cfg = resolveLiveONNXConfig(
+			t,
+			stateRoot,
+			socketPath,
+			milvusAddress,
+			defaultConfig.MilvusToken,
+			databaseName,
+			idleTimeout,
+		)
+	} else {
+		embedServer := newFakeEmbeddingServerWithRecorder(
+			t,
+			gate,
+			fakeEmbeddingDimension,
+			embeddingRecorder,
+		)
+		cfg = resolveLiveConfig(
+			t,
+			stateRoot,
+			socketPath,
+			embedServer.URL,
+			milvusAddress,
+			defaultConfig.MilvusToken,
+			databaseName,
+			harnessID,
+			idleTimeout,
+		)
+	}
 	for _, dir := range sandbox.Directories(cfg) {
 		if err := store.EnsureDir(dir); err != nil {
 			t.Fatalf("EnsureDir(%s) returned error: %v", dir, err)
@@ -996,11 +1032,80 @@ func resolveLiveConfig(
 	idleTimeout time.Duration,
 ) config.Config {
 	t.Helper()
+	return resolveLiveConfigFor(
+		t,
+		sandboxRoot,
+		socketPath,
+		embedServerURL,
+		milvusAddress,
+		milvusToken,
+		databaseName,
+		harnessID,
+		idleTimeout,
+		harnessEmbedderFake,
+	)
+}
 
-	chosen := []struct {
-		name  string
-		value string
-	}{
+func resolveLiveONNXConfig(
+	t *testing.T,
+	sandboxRoot string,
+	socketPath string,
+	milvusAddress string,
+	milvusToken string,
+	databaseName string,
+	idleTimeout time.Duration,
+) config.Config {
+	t.Helper()
+	return resolveLiveConfigFor(
+		t,
+		sandboxRoot,
+		socketPath,
+		"",
+		milvusAddress,
+		milvusToken,
+		databaseName,
+		"",
+		idleTimeout,
+		harnessEmbedderONNX,
+	)
+}
+
+type liveSetting struct {
+	name  string
+	value string
+}
+
+func onnxEmbeddingSettings(t *testing.T) []liveSetting {
+	t.Helper()
+	preset, err := offlinemodel.Resolve(offlinemodel.DefaultName)
+	if err != nil {
+		t.Fatalf("Resolving the ONNX embedding preset %q failed with error %v.", offlinemodel.DefaultName, err)
+	}
+	return []liveSetting{
+		{name: "EMBEDDING_PROVIDER", value: string(config.EmbeddingProviderONNX)},
+		{name: "OFFLINE_EMBEDDING_MODEL", value: preset.Name},
+		{name: "EMBEDDING_MODEL", value: preset.Name},
+		{name: "EMBEDDING_DIMENSION", value: strconv.FormatInt(int64(preset.Dimension), 10)},
+		{name: "OPENAI_BASE_URL", value: ""},
+		{name: "OPENAI_API_KEY", value: ""},
+	}
+}
+
+func resolveLiveConfigFor(
+	t *testing.T,
+	sandboxRoot string,
+	socketPath string,
+	embedServerURL string,
+	milvusAddress string,
+	milvusToken string,
+	databaseName string,
+	harnessID string,
+	idleTimeout time.Duration,
+	embedder harnessEmbedder,
+) config.Config {
+	t.Helper()
+
+	chosen := []liveSetting{
 		// The real store, which is what this suite exists to exercise.
 		{name: "CLAUDE_CONTEXT_PROFILE", value: config.ProfileStandard},
 		{name: "MILVUS_ADDRESS", value: milvusAddress},
@@ -1027,6 +1132,9 @@ func resolveLiveConfig(
 		{name: "CLAUDE_CONTEXT_RESUME_ON_BOOT", value: "false"},
 		{name: "CLAUDE_CONTEXT_MILVUS_COLLECTION_IDLE_TIMEOUT_MS", value: strconv.FormatInt(idleTimeout.Milliseconds(), 10)},
 	}
+	if embedder == harnessEmbedderONNX {
+		chosen = append(chosen, onnxEmbeddingSettings(t)...)
+	}
 	for _, setting := range chosen {
 		t.Setenv(setting.name, setting.value)
 	}
@@ -1050,6 +1158,18 @@ func resolveLiveConfig(
 			resolved.MilvusDatabase,
 			databaseName,
 		)
+	}
+	if embedder == harnessEmbedderONNX {
+		if resolved.EmbeddingProvider != config.EmbeddingProviderONNX {
+			t.Fatalf("The resolved embedding provider is %q. The ONNX harness requires %q.", resolved.EmbeddingProvider, config.EmbeddingProviderONNX)
+		}
+		if resolved.IndexBackend != config.IndexBackendMilvus {
+			t.Fatalf("The resolved vector backend is %q. The ONNX harness requires %q.", resolved.IndexBackend, config.IndexBackendMilvus)
+		}
+		if resolved.OpenAIBaseURL != "" {
+			t.Fatalf("The resolved OpenAI base URL is %q. The ONNX harness requires an empty value.", resolved.OpenAIBaseURL)
+		}
+		return resolved
 	}
 	if resolved.OpenAIBaseURL != embedServerURL {
 		t.Fatalf(
