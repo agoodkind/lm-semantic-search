@@ -488,7 +488,7 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 		slog.ErrorContext(ctx, "append completed job event failed", "job_id", jobID, "err", journalErr)
 	}
 	manager.notifyIndexReady(ctx, codebase)
-	manager.startHeldSiblingWorktreeBuilds(ctx, codebase.ID)
+	manager.startBuildsHeldForSource(ctx, codebase.ID)
 	return cancellationFollowup{
 		codebaseID:    codebase.ID,
 		drainedJobID:  drainedJobID,
@@ -588,7 +588,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	}
 	manager.policyMutationMutex.Unlock()
 	manager.notifyIndexStopped(ctx, codebaseID)
-	manager.startHeldSiblingWorktreeBuilds(ctx, codebaseID)
+	manager.startBuildsHeldForSource(ctx, codebaseID)
 	if drained {
 		manager.runDrainedJob(ctx, codebaseID, drainedJobID)
 	}
@@ -739,7 +739,7 @@ func (manager *Manager) runCancellationFollowup(
 ) {
 	if followup.notifyStopped {
 		manager.notifyIndexStopped(ctx, followup.codebaseID)
-		manager.startHeldSiblingWorktreeBuilds(ctx, followup.codebaseID)
+		manager.startBuildsHeldForSource(ctx, followup.codebaseID)
 	}
 	if !followup.drained {
 		return

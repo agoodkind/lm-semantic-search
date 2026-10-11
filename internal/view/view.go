@@ -460,17 +460,7 @@ type StatusView struct {
 	FilesUnchanged  int32
 	// Breakdown is the shared outcome tree; the status template emits it as one
 	// block via BreakdownBlock, so it stays identical to the compact job view.
-	Breakdown OutcomeBreakdown
-	// ReuseForecastLine is the pre-rendered reuse forecast for a discovered
-	// (not-yet-built) worktree, for example "reuses embeddings from 1 indexed
-	// sibling worktree", or the wait line when HeldForSiblingBuild is set. Empty
-	// for every other state. It is built from git topology and the registry with
-	// no vector-store call, so the status read that produces it stays cheap.
-	ReuseForecastLine string
-	// HeldForSiblingBuild means a discovered worktree's build waits for a sibling
-	// worktree's first index to finish. The template then neither promises that
-	// it builds shortly nor suggests index_codebase, which would embed the content
-	// that index is about to hold.
+	Breakdown                    OutcomeBreakdown
 	HeldForSiblingBuild          bool
 	RawStatus                    string
 	CurrentIndex                 CurrentIndexCounts
@@ -557,13 +547,15 @@ type RawStatus struct {
 	// CollectionRows is the row count the collection probe observed, nil when
 	// the probe did not count rows.
 	CollectionRows *int32
-	// HeldForSiblingBuild reports that a discovered worktree's build waits for a
-	// sibling worktree's first index to finish.
+	// HeldForSiblingBuild records whether the build waits for the first build of the declared source.
 	HeldForSiblingBuild bool
 	// The fields store the recorded worktree source path, source codebase identifier, and starting commit; each field is empty when its value has not been recorded.
 	WorktreeSourcePath     string
 	WorktreeSourceID       string
 	WorktreeStartingCommit string
+	// WorktreeReuseUnavailableReason contains the reason source reuse is unavailable.
+	// The field is empty when reuse is available or the daemon reports no reason.
+	WorktreeReuseUnavailableReason WorktreeReuseReason
 
 	HasJob         bool
 	JobID          string
@@ -664,16 +656,33 @@ type DoctorView struct {
 	Quarantined []string
 }
 
+// WorktreeReuseReason is the reason a build cannot reuse vectors from a declared source.
+type WorktreeReuseReason string
+
+// The empty value means a source is selected.
+// no_source_recorded means the codebase records no source.
+// source_not_registered means no codebase is registered at the source path.
+// source_not_indexed means the source owns no live collection.
+// source_embedding_configuration_differs means the source uses a different embedding provider, model, or dimension.
+const (
+	WorktreeReuseAvailable                           WorktreeReuseReason = ""
+	WorktreeReuseNoSourceRecorded                    WorktreeReuseReason = "no_source_recorded"
+	WorktreeReuseSourceNotRegistered                 WorktreeReuseReason = "source_not_registered"
+	WorktreeReuseSourceNotIndexed                    WorktreeReuseReason = "source_not_indexed"
+	WorktreeReuseSourceEmbeddingConfigurationDiffers WorktreeReuseReason = "source_embedding_configuration_differs"
+)
+
 // CodebaseRowView is one row of the codebase list.
 type CodebaseRowView struct {
 	ID            string
 	CanonicalPath string
 	Display       Display
 	Scheduling    SchedulingView
-	// ReuseSiblingCount surfaces a discovered worktree's reuse forecast in the
-	// list, so a deferred build reads as cheap rather than a blank pending row. It
-	// is zero for codebases that are not discovered worktrees.
-	ReuseSiblingCount int32
+	// WorktreeSourcePath contains the declared source path or an empty string when no source is recorded.
+	WorktreeSourcePath string
+	// ReuseUnavailableReason contains the reason source reuse is unavailable.
+	// The field is empty when reuse is available or the daemon reports no reason.
+	ReuseUnavailableReason WorktreeReuseReason
 	// Active reports whether the codebase has a live indexing job, so the list
 	// renders its breakdown tree inline. Breakdown is the same value the status
 	// surface shows; it is empty when Active is false.

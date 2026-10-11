@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"log/slog"
-	"slices"
 	"time"
 
 	"goodkind.io/gklog/correlation"
@@ -12,13 +11,8 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// worktreeDeferredBuildClient labels the reuse-seeded index jobs the daemon
-// starts for a worktree it discovered on a read, so the job's origin is legible
-// in status and logs and is distinct from an operator-driven index_codebase.
 var worktreeDeferredBuildClient = model.ClientInfo{Name: "worktree-deferred-build", PID: 0}
 
-// worktreeHeldReleaseClient labels the build that resumes an interrupted
-// worktree build once the sibling first build that held it has ended.
 var worktreeHeldReleaseClient = model.ClientInfo{Name: "worktree-held-release", PID: 0}
 
 // defaultDeferredBuildDelay is how long after discovering a worktree on a read
@@ -27,18 +21,6 @@ var worktreeHeldReleaseClient = model.ClientInfo{Name: "worktree-held-release", 
 // status or search call that discovered the worktree returns without embedding.
 const defaultDeferredBuildDelay = 3 * time.Second
 
-// resolveWorktreeIndex implements worktree-bounded resolution as a read that
-// discovers but never embeds. When canonicalPath lives inside a worktree whose
-// root is not yet tracked, and at least one sibling worktree of the same
-// repository holds embedded content, the daemon registers the worktree as a
-// discovered codebase, starts watching it, and schedules a reuse-seeded build in
-// the background; the read itself launches no embed job. When no sibling holds
-// content yet but one is running its first build, the worktree is registered
-// the same way and its build is held, so it does not embed what that sibling is
-// about to hold: startDeferredBuild skips a held worktree, and
-// startHeldSiblingWorktreeBuilds schedules it again when that build ends. The
-// returned bool is false when canonicalPath is not such a worktree,
-// leaving the caller's normal coverage resolution untouched.
 func (manager *Manager) resolveWorktreeIndex(ctx context.Context, canonicalPath string) (model.Codebase, bool) {
 	var empty model.Codebase
 	info, isWorktree := gitworktree.Resolve(canonicalPath)
@@ -71,12 +53,6 @@ func (manager *Manager) resolveWorktreeIndex(ctx context.Context, canonicalPath 
 	return record, true
 }
 
-// discoverWorktree persists a first-class registry record for a worktree the
-// daemon learned about on a read, in the discovered state, and starts watching
-// it. It mirrors adoptUnregisteredCodebase but creates no job and starts no
-// embed: the reuse-seeded build is deferred to scheduleDeferredBuild. It returns
-// the persisted record and true, or false when the registry write fails so the
-// caller falls back to normal resolution.
 func (manager *Manager) discoverWorktree(ctx context.Context, info gitworktree.Info) (model.Codebase, bool) {
 	indexConfig := manager.enrichIndexConfig(emptyAutoIndexConfig())
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
@@ -138,11 +114,8 @@ func (manager *Manager) discoverWorktree(ctx context.Context, info gitworktree.I
 	return record, true
 }
 
-// scheduleDeferredBuild starts the reuse-seeded build for a discovered worktree
-// after a short delay, off the read path, in a detached timer. The delay makes
-// the build far faster than the periodic sweep while keeping the read that
-// discovered the worktree free of any embed. The build deduplicates against any
-// job already in flight, so a repeat read or a watcher event cannot double-start.
+// A detached timer starts the discovered worktree's build after the deferred build delay.
+// Index admission prevents repeated reads or watcher events from starting a second build while a job is in flight.
 func (manager *Manager) scheduleDeferredBuild(ctx context.Context, canonicalPath string) {
 	manager.afterDeferredBuildDelay(ctx, canonicalPath, func(detached context.Context) {
 		manager.startDeferredBuild(detached, canonicalPath)
@@ -167,7 +140,6 @@ func (manager *Manager) afterDeferredBuildDelay(ctx context.Context, canonicalPa
 	})
 }
 
-// startDeferredBuild starts the reuse-seeded bootstrap for a discovered worktree.
 // It is the body scheduleDeferredBuild fires on its timer, split out so a test
 // can drive it synchronously. Shared index admission deduplicates, so calling
 // it for a worktree that already has an in-flight job is a no-op.
@@ -185,25 +157,12 @@ type automaticStart struct {
 	job          model.Job
 	codebase     model.Codebase
 	deduplicated bool
-	// held reports that nothing started because the codebase waits for a
-	// sibling worktree's first build.
-	held bool
+	held         bool
 	// paused reports that nothing started because the daemon is in
 	// maintenance mode. The sweep after the mode ends starts it again.
 	paused bool
 }
 
-// startAutomaticIndex is the one entry for the index starts the daemon makes on
-// its own: the deferred worktree build, the repair pass's resume of an
-// interrupted build, and the failed build retry. The automatic syncs go through
-// startAutomaticSync, and boot resume reads waitsForSiblingFirstBuild itself.
-// It starts nothing while the codebase at canonicalPath is a worktree that
-// waits for a sibling's first build, so none of those paths embeds what that
-// build is about to hold, and it records the codebase as held. The hold is read
-// when the build would start, not when it was scheduled.
-// startHeldSiblingWorktreeBuilds starts a held codebase again when that
-// sibling's build ends. An operator's index request goes straight to
-// startIndexWithIntent and is never held.
 func (manager *Manager) startAutomaticIndex(
 	ctx context.Context,
 	canonicalPath string,
@@ -216,8 +175,8 @@ func (manager *Manager) startAutomaticIndex(
 	if manager.skipForMaintenance(ctx, "automatic-index:"+client.Name) {
 		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: false, paused: true}, nil
 	}
-	if manager.holdForSiblingFirstBuild(canonicalPath) {
-		slog.InfoContext(ctx, "automatic build held for sibling first build", "path", canonicalPath, "client", client.Name)
+	if manager.holdForSourceFirstBuild(canonicalPath) {
+		slog.InfoContext(ctx, "automatic build waits for the first build of the declared source", "path", canonicalPath, "client", client.Name)
 		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: true, paused: false}, nil
 	}
 	job, codebase, deduplicated, _, err := manager.startIndexWithIntent(ctx, canonicalPath, client, indexConfig, false, emptyAdmissionBudget, policyIntent)
@@ -228,18 +187,12 @@ func (manager *Manager) startAutomaticIndex(
 	return automaticStart{job: job, codebase: codebase, deduplicated: deduplicated, held: false, paused: false}, nil
 }
 
-// startAutomaticSync is startAutomaticIndex for the syncs the daemon starts on
-// its own: the periodic sweep's sync of changed files and the build that
-// follows an empty run, and their release. A worktree whose last run indexed no
-// file has no content of its own, so it waits for a sibling's first build the
-// same way, and it is recorded as held without syncing. The sync covers the
-// whole tree, so the changes that prompted it are picked up when it runs later.
 func (manager *Manager) startAutomaticSync(ctx context.Context, codebase model.Codebase, client model.ClientInfo) {
 	if manager.skipForMaintenance(ctx, "automatic-sync:"+client.Name) {
 		return
 	}
-	if manager.holdForSiblingFirstBuild(codebase.CanonicalPath) {
-		slog.InfoContext(ctx, "automatic sync held for sibling first build", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "client", client.Name)
+	if manager.holdForSourceFirstBuild(codebase.CanonicalPath) {
+		slog.InfoContext(ctx, "automatic sync waits for the first build of the declared source", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "client", client.Name)
 		return
 	}
 	job, _, deduplicated, err := manager.SyncIndex(ctx, codebase.CanonicalPath, client)
@@ -253,8 +206,6 @@ func (manager *Manager) startAutomaticSync(ctx context.Context, codebase model.C
 	slog.DebugContext(ctx, "automatic sync started", "codebase_id", codebase.ID, "job_id", job.ID, "client", client.Name, "deduplicated", deduplicated)
 }
 
-// noteHeldWorktreeBuild records that an automatic path held a codebase's build,
-// so startHeldSiblingWorktreeBuilds starts it when the sibling's build ends.
 func (manager *Manager) noteHeldWorktreeBuild(codebaseID string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
@@ -277,19 +228,10 @@ func (manager *Manager) clearHeldWorktreeBuild(codebaseID string) {
 	delete(manager.heldWorktreeBuilds, codebaseID)
 }
 
-// worktreeReuseForecast reports how many indexed sibling worktree collections a
-// worktree at codebase.CanonicalPath would reuse on its build, for the discovered
-// status and the list. It is cheap: git topology plus an in-memory registry scan,
-// no vector-store call, so a status read that shows the forecast stays cheap.
-func (manager *Manager) worktreeReuseForecast(codebase model.Codebase) int32 {
-	return safeInt32(len(manager.worktreeSiblingReuseCollections(codebase.CanonicalPath, codebase.EffectiveConfig)))
-}
-
 // hasIndexedSiblingWorktreeLocked reports whether any worktree of the same repo
 // group (other than worktreeRoot) is a tracked codebase holding embedded
 // content, which is the condition that turns a worktree into "a worktree of an
-// indexed repo" for the auto-create trigger. A sibling whose last run indexed no
-// file does not count, because it has no vectors for the worktree to reuse.
+// indexed repo" for the auto-create trigger. A sibling without embedded content does not count.
 // Caller must hold manager.mu.
 func (manager *Manager) hasIndexedSiblingWorktreeLocked(worktreeRoot string, commonDir string) bool {
 	if commonDir == "" {
@@ -316,10 +258,7 @@ func (manager *Manager) hasIndexedSiblingWorktreeLocked(worktreeRoot string, com
 	return false
 }
 
-// siblingFirstBuildInProgressLocked reports whether any worktree of the same
-// repo group (other than worktreeRoot) is running a build while it holds no
-// embedded content yet, which is a first build whose vectors a worktree at the
-// same commit would otherwise embed a second time. Caller must hold manager.mu.
+// siblingFirstBuildInProgressLocked reports whether another worktree in the same repo group is building without embedded content. The caller must hold manager.mu.
 func (manager *Manager) siblingFirstBuildInProgressLocked(worktreeRoot string, commonDir string) bool {
 	if commonDir == "" {
 		return false
@@ -341,101 +280,52 @@ func (manager *Manager) siblingFirstBuildInProgressLocked(worktreeRoot string, c
 	return false
 }
 
-// waitsForSiblingFirstBuild reports whether the worktree at canonicalPath must
-// hold its build: it holds no embedded content of its own, no sibling holds any
-// to reuse yet, and one sibling is running the first build that will produce it.
-// A worktree with its own content builds as a delta against it, which a
-// sibling's vectors would not shorten.
-func (manager *Manager) waitsForSiblingFirstBuild(canonicalPath string) bool {
-	info, ok := gitworktree.Resolve(canonicalPath)
-	if !ok {
-		return false
-	}
+func (manager *Manager) waitsForSourceFirstBuild(canonicalPath string) bool {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	_, held := manager.siblingFirstBuildHoldLocked(canonicalPath, info)
+	_, held := manager.sourceFirstBuildHoldLocked(canonicalPath)
 	return held
 }
 
-// holdForSiblingFirstBuild is waitsForSiblingFirstBuild for an automatic path
-// about to start a build: when the hold applies it also records the codebase
-// as held, in the same critical section, so a release that scans the held set
-// in between cannot miss it.
-func (manager *Manager) holdForSiblingFirstBuild(canonicalPath string) bool {
-	info, ok := gitworktree.Resolve(canonicalPath)
-	if !ok {
-		return false
-	}
+func (manager *Manager) holdForSourceFirstBuild(canonicalPath string) bool {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	ownID, held := manager.siblingFirstBuildHoldLocked(canonicalPath, info)
-	if held && ownID != "" {
+	ownID, held := manager.sourceFirstBuildHoldLocked(canonicalPath)
+	if held {
 		manager.noteHeldWorktreeBuildLocked(ownID)
 	}
 	return held
 }
 
-// siblingFirstBuildHoldLocked evaluates the hold for the worktree at
-// canonicalPath and returns the id of the codebase registered there, or empty
-// when there is none. Caller must hold manager.mu.
-func (manager *Manager) siblingFirstBuildHoldLocked(canonicalPath string, info gitworktree.Info) (string, bool) {
-	ownID := ""
+func (manager *Manager) sourceFirstBuildHoldLocked(canonicalPath string) (string, bool) {
 	own, found := manager.findCodebaseByExactRoot(canonicalPath)
-	if found {
-		if ownsLiveCollection(own) {
-			return own.ID, false
-		}
-		ownID = own.ID
+	if !found {
+		return "", false
 	}
-	if manager.hasIndexedSiblingWorktreeLocked(info.WorktreeRoot, info.CommonDir) {
-		return ownID, false
+	if own.WorktreeSourcePath == "" || ownsLiveCollection(own) {
+		return own.ID, false
 	}
-	return ownID, manager.siblingFirstBuildInProgressLocked(info.WorktreeRoot, info.CommonDir)
+	source, found := manager.findCodebaseByExactRoot(own.WorktreeSourcePath)
+	if !found || source.Kind == model.CodebaseKindDocument || ownsLiveCollection(source) {
+		return own.ID, false
+	}
+	return own.ID, manager.activeJobSnapshotLocked(source) != nil
 }
 
-// startHeldSiblingWorktreeBuilds schedules a build for every sibling worktree
-// of a codebase whose job just ended that an automatic path held, plus any
-// discovered sibling without a live job, and no other. A held build is a
-// discovered worktree, an interrupted build the repair pass or boot resume
-// would restart, a failed build the retry would rerun, or an empty worktree the
-// sweep or the watcher would sync. Such a worktree would otherwise wait for the
-// periodic sweep. It runs on success, failure, and cancellation
-// alike: after a success the worktree reuses the new content, and after a
-// failure or cancellation it builds without reuse rather than staying
-// stranded. A released codebase leaves the held set; startReleasedBuild
-// re-reads the codebase and the hold when its timer fires and records it again
-// if another sibling's first build still holds it.
-func (manager *Manager) startHeldSiblingWorktreeBuilds(ctx context.Context, codebaseID string) {
+func (manager *Manager) startBuildsHeldForSource(ctx context.Context, codebaseID string) {
 	manager.mu.Lock()
 	ended, found := manager.codebases[codebaseID]
-	manager.mu.Unlock()
 	if !found || ended.Kind == model.CodebaseKindDocument {
+		manager.mu.Unlock()
 		return
 	}
-	info, ok := gitworktree.Resolve(ended.CanonicalPath)
-	if !ok || info.CommonDir == "" {
-		return
-	}
-	siblings := make(map[string]struct{})
-	for _, root := range gitworktree.SiblingWorktreeRoots(info.CommonDir) {
-		if root != info.WorktreeRoot {
-			siblings[root] = struct{}{}
-		}
-	}
-
-	manager.mu.Lock()
 	held := make([]model.Codebase, 0)
 	heldPaths := make([]string, 0)
 	for _, codebase := range manager.codebases {
-		if _, ok := siblings[codebase.CanonicalPath]; !ok {
+		if codebase.WorktreeSourcePath != ended.CanonicalPath {
 			continue
 		}
-		// A discovered worktree is released by status as well as by the set. Only
-		// the daemon leaves a codebase discovered, and always to build it later, so
-		// this covers one held before a restart emptied the set.
-		_, wasHeld := manager.heldWorktreeBuilds[codebase.ID]
-		discoveredIdle := codebase.Status == model.CodebaseStatusDiscovered && manager.activeJobSnapshotLocked(codebase) == nil
-		if !wasHeld && !discoveredIdle {
+		if _, wasHeld := manager.heldWorktreeBuilds[codebase.ID]; !wasHeld {
 			continue
 		}
 		delete(manager.heldWorktreeBuilds, codebase.ID)
@@ -447,7 +337,7 @@ func (manager *Manager) startHeldSiblingWorktreeBuilds(ctx context.Context, code
 		return
 	}
 
-	slog.InfoContext(ctx, "sibling build ended; scheduling held worktree builds", "codebase_id", codebaseID, "paths", heldPaths)
+	slog.InfoContext(ctx, "daemon scheduled waiting builds after the source build ended", "codebase_id", codebaseID, "paths", heldPaths)
 	for _, codebase := range held {
 		releasedID := codebase.ID
 		manager.afterDeferredBuildDelay(ctx, codebase.CanonicalPath, func(detached context.Context) {
@@ -456,17 +346,8 @@ func (manager *Manager) startHeldSiblingWorktreeBuilds(ctx context.Context, code
 	}
 }
 
-// startReleasedBuild starts the build the automatic path for a codebase's
-// current status would start, once the sibling build that held it has ended. It
-// goes through the same path so that path's own rules still apply, such as the
-// failed build retry's attempt cap. It starts nothing while the embedder is
-// unreachable, the condition under which the sweep also starts nothing; the
-// sweep's own paths start the codebase once the embedder answers again, so no
-// failed attempt is spent on the outage.
 func (manager *Manager) startReleasedBuild(ctx context.Context, codebaseID string) {
 	if manager.DependencyHealth().Mode == dependencyEmbedderUnreachable {
-		// The release already took the codebase out of the held set, so record it
-		// again for the next sibling build to end, in case no sweep runs.
 		slog.InfoContext(ctx, "held worktree build left to the sweep while the embedder is unreachable", "codebase_id", codebaseID)
 		manager.noteHeldWorktreeBuild(codebaseID)
 		return
@@ -503,63 +384,6 @@ func (manager *Manager) startReleasedBuild(ctx context.Context, codebaseID strin
 	default:
 		return
 	}
-}
-
-// worktreeSiblingReuseCollections returns the collection names of indexed
-// sibling worktrees of the same repo group as canonicalPath whose embedding
-// model matches indexConfig. A worktree build preloads reuse vectors from these
-// so files unchanged from a sibling reuse their embeddings and only the branch
-// diff is embedded. It returns nil when canonicalPath is not a worktree or has
-// no eligible sibling.
-func (manager *Manager) worktreeSiblingReuseCollections(canonicalPath string, indexConfig model.IndexConfig) []string {
-	info, ok := gitworktree.Resolve(canonicalPath)
-	if !ok {
-		return nil
-	}
-	siblingRoots := gitworktree.SiblingWorktreeRootsMainFirst(info.CommonDir, info.WorktreeRoot)
-	if len(siblingRoots) == 0 {
-		return nil
-	}
-	siblings := make(map[string]struct{}, len(siblingRoots))
-	for _, root := range siblingRoots {
-		siblings[root] = struct{}{}
-	}
-
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	collectionsByRoot := make(map[string][]string, len(siblingRoots))
-	for _, codebase := range manager.codebases {
-		if _, member := siblings[codebase.CanonicalPath]; !member {
-			continue
-		}
-		if codebase.Kind == model.CodebaseKindDocument {
-			continue
-		}
-		if codebase.CollectionName == "" {
-			continue
-		}
-		// Reuse keys on durable facts, not the transient ActiveJobID: a sibling
-		// whose last completed run indexed files, or an adopted sibling, owns a
-		// live collection. A run that indexed no file created no collection, so it
-		// has nothing to reuse. An in-flight sync does not drop the live
-		// collection, and reuse is content-hash keyed, so reading a mid-sync
-		// sibling is safe. This mirrors the auto-create trigger's eligibility so
-		// the two agree.
-		if !ownsLiveCollection(codebase) {
-			continue
-		}
-		if !reuseModelMatches(codebase.EffectiveConfig, indexConfig) {
-			continue
-		}
-		collectionsByRoot[codebase.CanonicalPath] = append(collectionsByRoot[codebase.CanonicalPath], codebase.CollectionName)
-	}
-	collections := make([]string, 0)
-	for _, root := range siblingRoots {
-		rootCollections := collectionsByRoot[root]
-		slices.Sort(rootCollections)
-		collections = append(collections, rootCollections...)
-	}
-	return collections
 }
 
 // isWorktreeBoundary reports whether canonicalPath is the root of a git worktree

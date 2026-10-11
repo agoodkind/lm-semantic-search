@@ -152,11 +152,8 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	}
 }
 
-// launchResumePlan resumes one interrupted build. Plans run in queue order, so
-// a sibling's first build resumed earlier in the same pass already holds a
-// worktree whose own build comes later; that worktree is parked instead.
 func (manager *Manager) launchResumePlan(ctx context.Context, plan resumePlan) {
-	if manager.holdForSiblingFirstBuild(plan.canonicalPath) {
+	if manager.holdForSourceFirstBuild(plan.canonicalPath) {
 		manager.logResumeHeld(ctx, plan.codebaseID, plan.canonicalPath)
 		manager.parkUnresumableForRetry(ctx, plan.codebaseID)
 		return

@@ -37,9 +37,10 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 				"",
 				pb.SchedulingReason_SCHEDULING_REASON_UNSPECIFIED,
 			),
-			ReuseSiblingCount: wire.reuseSiblingCount,
-			Active:            wire.active,
-			Breakdown:         wire.breakdown,
+			WorktreeSourcePath:     wire.reuse.sourcePath,
+			ReuseUnavailableReason: wire.reuse.unavailable,
+			Active:                 wire.active,
+			Breakdown:              wire.breakdown,
 		})
 	}
 	health := server.manager.DependencyHealth()
@@ -49,11 +50,11 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 }
 
 type resolvedCodebaseWireView struct {
-	codebase          *pb.Codebase
-	display           displayStatus
-	reuseSiblingCount int32
-	active            bool
-	breakdown         view.OutcomeBreakdown
+	codebase  *pb.Codebase
+	display   displayStatus
+	reuse     worktreeReuseSelection
+	active    bool
+	breakdown view.OutcomeBreakdown
 }
 
 func (server *GRPCServer) codebaseWireView(
@@ -68,11 +69,8 @@ func (server *GRPCServer) codebaseWireView(
 	display := server.manager.displayForCollectionReadiness(codebase, readiness)
 	pbCodebase := pbconv.ToCodebase(codebase)
 	applyDisplayTokens(pbCodebase, display)
-	reuseSiblingCount := int32(0)
-	if display == displayDiscovered {
-		reuseSiblingCount = server.manager.worktreeReuseForecast(codebase)
-	}
-	applyReuseForecast(pbCodebase, reuseSiblingCount)
+	reuse := server.manager.worktreeReuseStatus(codebase, display == displayDiscovered)
+	applyWorktreeReuse(pbCodebase, reuse)
 
 	active := false
 	breakdown := view.ZeroBreakdown()
@@ -84,10 +82,10 @@ func (server *GRPCServer) codebaseWireView(
 		}
 	}
 	return resolvedCodebaseWireView{
-		codebase:          pbCodebase,
-		display:           display,
-		reuseSiblingCount: reuseSiblingCount,
-		active:            active,
-		breakdown:         breakdown,
+		codebase:  pbCodebase,
+		display:   display,
+		reuse:     reuse,
+		active:    active,
+		breakdown: breakdown,
 	}
 }

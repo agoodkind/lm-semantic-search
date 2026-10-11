@@ -86,6 +86,7 @@ type harnessOptions struct {
 	// first pass. Zero keeps the default, which no test outlasts, so the test
 	// sees exactly one pass.
 	syncIntervalMS int
+	offlineEmbeddingModel string
 }
 
 // harnessShutdownTimeout bounds how long a restart waits for the old daemon's
@@ -226,6 +227,12 @@ func resolveOfflineConfig(
 			name  string
 			value string
 		}{name: "CLAUDE_CONTEXT_SYNC_INTERVAL_MS", value: strconv.Itoa(options.syncIntervalMS)})
+	}
+	if options.offlineEmbeddingModel != "" {
+		suiteSettings = append(suiteSettings, struct {
+			name  string
+			value string
+		}{name: "OFFLINE_EMBEDDING_MODEL", value: options.offlineEmbeddingModel})
 	}
 	for _, setting := range suiteSettings {
 		t.Setenv(setting.name, setting.value)

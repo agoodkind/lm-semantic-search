@@ -40,7 +40,7 @@ func TestRestartedInterruptedWorktreeWaitsForSiblingFirstBuild(t *testing.T) {
 	// An operator indexes both checkouts; the daemon exits before either build
 	// finishes, which leaves both registered without a completed run.
 	harness.startIndexAt(repository)
-	harness.startIndexAt(worktree)
+	harness.startIndexWithSourceAt(worktree, repository)
 	harness.restart(restartedHeldOptions())
 
 	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, nil)
@@ -53,6 +53,15 @@ func TestRestartedInterruptedWorktreeWaitsForSiblingFirstBuild(t *testing.T) {
 func TestRestartedFailedWorktreeRetryWaitsForSiblingFirstBuild(t *testing.T) {
 	harness := newHarness(t)
 	repository, worktree := newCommittedRepositoryWithWorktree(t, heldParentFileCount)
+
+	declaringJobID := harness.startIndexWithSourceAt(worktree, repository)
+	if _, err := harness.client.CancelJob(
+		correlatedContext(),
+		&pb.CancelJobRequest{JobId: declaringJobID, Client: harnessClientInfo()},
+	); err != nil {
+		t.Fatalf("Cancellation of build %s that declared the source failed with error %v.", declaringJobID, err)
+	}
+	harness.waitForJob(declaringJobID)
 
 	// An unreadable checkout makes the worktree's build fail; the permission is
 	// restored before the retry, so only the hold can keep the retry waiting.
@@ -88,36 +97,9 @@ func TestCrashResumedWorktreeWaitsForSiblingFirstBuild(t *testing.T) {
 	// shutting down, which leaves both resumable from their checkpoints.
 	crash := harness.startCrashableDaemon(options)
 	harness.startIndexAt(repository)
-	harness.startIndexAt(worktree)
+	harness.startIndexWithSourceAt(worktree, repository)
 	harness.waitForBuildUnderway(repository)
 	harness.waitForBuildUnderway(worktree)
-	crash()
-
-	harness.start(options, false)
-	t.Cleanup(harness.teardown)
-	harness.requireWorktreeBuildWaitsForSibling(repository, worktree, nil)
-}
-
-// TestCrashLeavesDiscoveredWorktreeReleased proves a worktree discovered and
-// held before a crash still builds once its sibling's resumed first build
-// completes, with no background sweep to start it.
-func TestCrashLeavesDiscoveredWorktreeReleased(t *testing.T) {
-	harness := newUnstartedHarness(t)
-	repository, worktree := newCommittedRepositoryWithWorktree(t, heldParentFileCount)
-	options := harnessOptions{
-		fileWatcher:            false,
-		backgroundSync:         false,
-		maxConcurrentIndexJobs: 0,
-		resumeOnBoot:           true,
-		syncIntervalMS:         0,
-	}
-
-	crash := harness.startCrashableDaemon(options)
-	harness.startIndexAt(repository)
-	if status := harness.indexStatusAt(worktree); status.GetCodebase().GetStatus() != discoveredStatus {
-		t.Fatalf("worktree read during its sibling's first build has status %q, want %q", status.GetCodebase().GetStatus(), discoveredStatus)
-	}
-	harness.waitForBuildUnderway(repository)
 	crash()
 
 	harness.start(options, false)

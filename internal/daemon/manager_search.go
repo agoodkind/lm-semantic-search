@@ -10,6 +10,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/status"
+	"goodkind.io/lm-semantic-search/internal/view"
 )
 
 // SearchCode performs a semantic search over indexed chunk content.
@@ -30,12 +31,11 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 	// A worktree the daemon just discovered on this read has no collection yet,
 	// so there is nothing to search and serving the parent's collection would
 	// return wrong-branch content. Return the discovered note with no results; the
-	// deferred build (already scheduled by GetIndex) makes it searchable shortly,
-	// unless it waits for a sibling's first index, which the note then names.
+	// deferred build (already scheduled by GetIndex) makes it searchable shortly.
 	if codebase.Status == model.CodebaseStatusDiscovered {
-		stateNote := heldForSiblingSearchNote
-		if !manager.waitsForSiblingFirstBuild(codebase.CanonicalPath) {
-			stateNote = discoveredSearchNote(manager.worktreeReuseForecast(codebase))
+		stateNote := heldForSourceSearchNote
+		if !manager.waitsForSourceFirstBuild(codebase.CanonicalPath) {
+			stateNote = discoveredSearchNote(manager.selectWorktreeReuseSource(codebase))
 		}
 		return SearchOutcome{
 			Codebase:  codebase,
@@ -149,22 +149,18 @@ func (manager *Manager) searchPreconditions(extensionFilter []string) ([]string,
 	return normalizedExtensions, nil
 }
 
-// discoveredSearchNote is the read-only note a search returns for a worktree the
-// daemon just discovered and has not built yet. It names the reuse the deferred
-// build will get so the cheapness is visible, and tells the caller to retry.
-func discoveredSearchNote(siblingCount int32) string {
+func discoveredSearchNote(selection worktreeReuseSelection) string {
 	note := "🔎 This worktree was just discovered and is not indexed yet; its build is starting now"
-	if siblingCount > 0 {
-		note += fmt.Sprintf(" (reuses embeddings from %d indexed sibling %s)", siblingCount, plural("worktree", int(siblingCount)))
+	switch {
+	case selection.unavailable != view.WorktreeReuseAvailable:
+		note += fmt.Sprintf(" (source reuse unavailable because of %s)", selection.unavailable)
+	case selection.sourcePath != "":
+		note += fmt.Sprintf(" (reusing embeddings from %s)", selection.sourcePath)
 	}
 	return note + ". Search again shortly."
 }
 
-// heldForSiblingSearchNote is the discovered note for a worktree whose build
-// waits for a sibling's first index, so it names that wait instead of claiming
-// the build is starting. It promises no reuse, because a sibling build that
-// fails or is cancelled leaves nothing to reuse.
-const heldForSiblingSearchNote = "🔎 This worktree was just discovered and is not indexed yet; it builds after its sibling worktree's first index finishes. Search again after that."
+const heldForSourceSearchNote = "🔎 The build for the discovered, unindexed worktree starts after the declared source finishes its first index. The next search should run after the worktree build finishes."
 
 func quarantinedSearchNote(quarantine *model.QuarantineState) string {
 	if quarantine == nil {

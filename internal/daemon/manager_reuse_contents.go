@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -69,11 +70,22 @@ func (manager *Manager) contentReuseForChangedFile(
 	}
 	var reuse map[string][]float32
 	err := manager.runReleasingCapacityIfStalled(ctx, func() error {
-		loaded, loadErr := manager.semantic.LoadReuseVectorsForContents(
-			ctx,
-			source.CollectionName,
-			chunks,
-		)
+		var loaded map[string][]float32
+		var loadErr error
+		switch source.ContentReuse.lookup {
+		case contentReuseLookupListedCollections:
+			loaded, loadErr = manager.semantic.LoadReuseVectorsForContentsFrom(
+				ctx,
+				[]string{source.CollectionName},
+				chunks,
+			)
+		case contentReuseLookupStoreWide:
+			loaded, loadErr = manager.semantic.LoadReuseVectorsForContents(
+				ctx,
+				source.CollectionName,
+				chunks,
+			)
+		}
 		reuse = loaded
 		if loadErr != nil {
 			slog.ErrorContext(
@@ -87,5 +99,57 @@ func (manager *Manager) contentReuseForChangedFile(
 		}
 		return nil
 	})
-	return reuse, err
+	if err != nil || source.ContentReuse.source == nil {
+		return reuse, err
+	}
+	return manager.declaredSourceContentReuse(ctx, source.ContentReuse.source, chunks, reuse)
+}
+
+func (manager *Manager) declaredSourceContentReuse(
+	ctx context.Context,
+	source *jobSourceReuse,
+	chunks []model.StoredChunk,
+	targetReuse map[string][]float32,
+) (map[string][]float32, error) {
+	if source.disabled.Load() {
+		return targetReuse, nil
+	}
+	missing := make([]model.StoredChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if _, found := targetReuse[semantic.ContentVectorKey(chunk.Content)]; !found {
+			missing = append(missing, chunk)
+		}
+	}
+	if len(missing) == 0 {
+		return targetReuse, nil
+	}
+	var sourceReuse map[string][]float32
+	var sourceErr error
+	capacityErr := manager.runReleasingCapacityIfStalled(ctx, func() error {
+		sourceReuse, sourceErr = manager.semantic.LoadReuseVectorsForContentsFrom(
+			ctx,
+			[]string{source.collection},
+			missing,
+		)
+		return nil
+	})
+	if capacityErr != nil {
+		return targetReuse, capacityErr
+	}
+	if sourceErr == nil {
+		return mergedReuse(targetReuse, sourceReuse), nil
+	}
+	if errors.Is(sourceErr, context.Canceled) {
+		slog.WarnContext(ctx, "declared source collection read canceled", "job_id", source.jobID, "source_collection", source.collection, "err", sourceErr)
+		return targetReuse, fmt.Errorf("read reuse vectors from declared source collection %s canceled: %w", source.collection, sourceErr)
+	}
+	if source.disabled.CompareAndSwap(false, true) {
+		slog.WarnContext(ctx, "declared source collection read failed and the job continues with only the target collection",
+			"job_id", source.jobID,
+			"source_path", source.sourcePath,
+			"source_collection", source.collection,
+			"err", sourceErr,
+		)
+	}
+	return targetReuse, nil
 }

@@ -71,7 +71,7 @@ type deltaState struct {
 	// populated for a merge-down build from the collections of the indexed
 	// child codebases the new parent absorbs. The embed step takes a reused
 	// vector instead of calling the embedder, so the shared subtree is never
-	// re-embedded. Nil for an ordinary build, which embeds every chunk.
+	// re-embedded.
 	reuse map[string][]float32
 	// chunkCounts accumulates chunk outcomes across every per-file reindex in this
 	// run. It is a pointer because deltaState is copied by value through the

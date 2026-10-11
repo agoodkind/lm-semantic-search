@@ -29,6 +29,41 @@ func (store *Store) LoadReuseVectorsForContents(
 	return stored.reuseVectorsForKeys(wanted)
 }
 
+// LoadReuseVectorsForContentsFrom reads only the listed collections in order.
+// The first collection with a matching vector supplies the vector.
+func (store *Store) LoadReuseVectorsForContentsFrom(
+	ctx context.Context,
+	collectionNames []string,
+	chunks []model.StoredChunk,
+) (map[string][]float32, error) {
+	wanted := make(map[string]struct{}, len(chunks))
+	for _, chunk := range chunks {
+		wanted[semantic.ContentVectorKey(chunk.Content)] = struct{}{}
+	}
+	reuse := make(map[string][]float32, len(wanted))
+	for _, collectionName := range collectionNames {
+		if collectionName == "" || len(wanted) == 0 {
+			continue
+		}
+		if err := operationContextError(ctx, "load local vector reuse contents"); err != nil {
+			return nil, err
+		}
+		stored, err := store.collectionForName(collectionName, false)
+		if err != nil {
+			return nil, err
+		}
+		found, err := stored.reuseVectorsForKeys(wanted)
+		if err != nil {
+			return nil, err
+		}
+		for key, vector := range found {
+			reuse[key] = vector
+			delete(wanted, key)
+		}
+	}
+	return reuse, nil
+}
+
 // LoadReuseVectors loads reusable vectors from collections.
 func (store *Store) LoadReuseVectors(
 	ctx context.Context,

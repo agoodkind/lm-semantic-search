@@ -65,6 +65,43 @@ func (service *Service) LoadReuseVectorsForContents(
 	return reuse, nil
 }
 
+// LoadReuseVectorsForContentsFrom reads only the listed collections in order without reading the content vector catalog or the registry.
+// The method loads a listed collection when it is not resident.
+func (service *Service) LoadReuseVectorsForContentsFrom(
+	ctx context.Context,
+	collectionNames []string,
+	chunks []model.StoredChunk,
+) (map[string][]float32, error) {
+	reuse := make(map[string][]float32)
+	if !service.Available() || len(chunks) == 0 {
+		return reuse, nil
+	}
+	contentsByStorageKey, _ := service.reuseCandidates(chunks)
+	queried := make(map[string]struct{}, len(collectionNames))
+	for _, collectionName := range collectionNames {
+		if collectionName == "" {
+			continue
+		}
+		if _, repeated := queried[collectionName]; repeated {
+			continue
+		}
+		queried[collectionName] = struct{}{}
+		if err := service.loadRegisteredReuseSource(
+			ctx,
+			collectionName,
+			true,
+			contentsByStorageKey,
+			reuse,
+		); err != nil {
+			return nil, err
+		}
+		if len(missingReuseContents(contentsByStorageKey, reuse)) == 0 {
+			break
+		}
+	}
+	return reuse, nil
+}
+
 func (service *Service) reuseCandidates(
 	chunks []model.StoredChunk,
 ) (map[string]string, []string) {

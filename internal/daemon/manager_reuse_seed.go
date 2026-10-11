@@ -9,11 +9,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// resolveReuseSeed loads build-wide reuse vectors from indexed descendants and
-// sibling worktrees that share the requested embedding model. It also returns
-// the descendant candidates it scanned so a from-scratch build can absorb them
-// without re-scanning the registry, keeping the reuse seed and the absorb list
-// derived from one consistent snapshot.
 func (manager *Manager) resolveReuseSeed(
 	ctx context.Context,
 	job model.Job,
@@ -24,7 +19,6 @@ func (manager *Manager) resolveReuseSeed(
 		return reuse, 0, descendants, nil
 	}
 	reuseCollections := collectionNamesOf(descendants)
-	reuseCollections = append(reuseCollections, manager.worktreeSiblingReuseCollections(job.CanonicalPath, job.Config)...)
 	if len(reuseCollections) == 0 {
 		return reuse, 0, descendants, nil
 	}
