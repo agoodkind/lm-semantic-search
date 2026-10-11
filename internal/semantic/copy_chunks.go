@@ -171,20 +171,10 @@ func (service *Service) requestFlush(
 			return task, attempt, nil
 		}
 		flushErr := classifyFlushError(err)
-		if !errors.Is(flushErr, errFlushRateLimited) || attempt >= flushRateLimitMaxAttempts || !waitForFlushRetry(ctx) {
+		var rateLimited flushRateLimitError
+		if !errors.As(flushErr, &rateLimited) || attempt >= flushRateLimitMaxAttempts || !reconnectSleep(ctx, flushRateLimitRetryWait) {
 			return nil, attempt, wrapStoreError(ctx, flushErr, "flush Milvus collection "+collectionName)
 		}
-	}
-}
-
-func waitForFlushRetry(ctx context.Context) bool {
-	timer := time.NewTimer(flushRateLimitRetryWait)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
 	}
 }
 
