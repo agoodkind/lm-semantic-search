@@ -160,7 +160,7 @@ func discoveredSearchNote(selection worktreeReuseSelection) string {
 	return note + ". Search again shortly."
 }
 
-const heldForSourceSearchNote = "🔎 The build for the discovered, unindexed worktree starts after the declared source finishes its first index. The next search should run after the worktree build finishes."
+const heldForSourceSearchNote = "🔎 The build for the discovered, unindexed worktree starts after the recorded source finishes its first index. The next search should run after the worktree build finishes."
 
 func quarantinedSearchNote(quarantine *model.QuarantineState) string {
 	if quarantine == nil {

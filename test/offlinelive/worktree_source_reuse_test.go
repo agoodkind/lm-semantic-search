@@ -389,23 +389,32 @@ func TestUnrelatedSiblingFirstBuildDoesNotDelayWorktree(t *testing.T) {
 	requireCompleted(t, harness.waitForJob(siblingJobID))
 }
 
-func TestDiscoveredWorktreeBuildsDuringSiblingFirstBuildWithoutReuse(t *testing.T) {
+func TestDiscoveredWorktreeWaitsForSelectedSourceFirstBuildAndReusesItsChunks(t *testing.T) {
 	harness := newHarnessWith(t, harnessOptions{maxConcurrentIndexJobs: restartedConcurrentIndexJobs})
 	repository, worktree := newCommittedRepositoryWithWorktree(t, heldParentFileCount)
 
-	siblingJobID := harness.startIndexAt(repository)
+	sourceJobID := harness.startIndexAt(repository)
 	status := harness.indexStatusAt(worktree)
 	discovered := status.GetCodebase()
 	if discovered.GetCanonicalPath() != worktree || discovered.GetStatus() != discoveredStatus {
 		t.Fatalf("The worktree at its own path %q reports status %q instead of \"discovered\" in status text %s.", discovered.GetCanonicalPath(), discovered.GetStatus(), status.GetDisplayText())
 	}
-	if strings.Contains(status.GetDisplayText(), heldForSiblingStatusField) {
-		t.Fatalf("The discovered worktree must not report a wait in status text %s.", status.GetDisplayText())
+	if discovered.GetWorktreeSourcePath() != repository {
+		t.Fatalf("The discovered worktree records source path %q instead of the checkout with a running first build %q. The status text was %s.", discovered.GetWorktreeSourcePath(), repository, status.GetDisplayText())
 	}
-	harness.requireReuseReason(worktree, view.WorktreeReuseNoSourceRecorded)
+	if !strings.Contains(status.GetDisplayText(), heldForSiblingStatusField) {
+		t.Fatalf("The status text %s lacks held_for_sibling_build=true while the selected source runs its first build.", status.GetDisplayText())
+	}
+	if reason := view.WorktreeReuseReason(discovered.GetWorktreeReuseUnavailableReason()); reason != view.WorktreeReuseSourceNotIndexed {
+		t.Fatalf("The status reports reuse reason %q instead of %q. The status text was %s.", reason, view.WorktreeReuseSourceNotIndexed, status.GetDisplayText())
+	}
 
+	sourceRun := harness.waitForJob(sourceJobID)
+	requireCompleted(t, sourceRun)
 	worktreeRun := harness.waitForJob(harness.waitForFirstJobID(discovered.GetId()))
 	requireCompleted(t, worktreeRun)
-	requireEmbeddedWithoutReuse(t, worktreeRun)
-	requireCompleted(t, harness.waitForJob(siblingJobID))
+	requireReusedWithoutEmbedding(t, worktreeRun)
+	if worktreeRun.GetStartedAt().AsTime().Before(sourceRun.GetCompletedAt().AsTime()) {
+		t.Fatalf("The worktree build started at %s before the source build ended at %s.", worktreeRun.GetStartedAt().AsTime(), sourceRun.GetCompletedAt().AsTime())
+	}
 }
