@@ -104,7 +104,7 @@ func (manager *Manager) jobContentReusePlan(ctx context.Context, job model.Job) 
 		)
 		return jobContentReusePlan{lookup: contentReuseLookupListedCollections, source: nil}
 	}
-	slog.InfoContext(ctx, "job reuses vectors from the declared source",
+	slog.InfoContext(ctx, "job reuses vectors from the recorded source",
 		"job_id", job.ID,
 		"codebase_id", job.CodebaseID,
 		"source_path", selection.sourcePath,

@@ -84,6 +84,11 @@ func (manager *Manager) discoverWorktree(ctx context.Context, info gitworktree.I
 	record.EffectiveConfig = indexConfig
 	record.CollectionName = collectionName
 	record.WorktreeCommonDir = info.CommonDir
+	source, sourceTier, sourceSelected := manager.selectDiscoveredWorktreeSourceLocked(info, indexConfig)
+	if sourceSelected {
+		record.WorktreeSourcePath = source.CanonicalPath
+		record.WorktreeSourceID = source.ID
+	}
 	record.InodeTrackingDisabled = detectInodeTrackingDisabled(ctx, info.WorktreeRoot)
 	record.MerkleSnapshotPath = manager.merklePath(record.ID)
 	record.UpdatedAt = clock.Now()
@@ -110,7 +115,7 @@ func (manager *Manager) discoverWorktree(ctx context.Context, info gitworktree.I
 		}()
 		manager.notifyCodebaseAdded(notifyCtx, record)
 	}()
-	slog.InfoContext(ctx, "discovered worktree on read; build deferred", "codebase_id", record.ID, "path", info.WorktreeRoot, "common_dir", info.CommonDir)
+	slog.InfoContext(ctx, "discovered worktree on read; build deferred", "codebase_id", record.ID, "path", info.WorktreeRoot, "common_dir", info.CommonDir, "source_path", record.WorktreeSourcePath, "source_id", record.WorktreeSourceID, "source_tier", string(sourceTier))
 	return record, true
 }
 
@@ -176,7 +181,7 @@ func (manager *Manager) startAutomaticIndex(
 		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: false, paused: true}, nil
 	}
 	if manager.holdForSourceFirstBuild(canonicalPath) {
-		slog.InfoContext(ctx, "automatic build waits for the first build of the declared source", "path", canonicalPath, "client", client.Name)
+		slog.InfoContext(ctx, "automatic build waits for the first build of the recorded source", "path", canonicalPath, "client", client.Name)
 		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: true, paused: false}, nil
 	}
 	job, codebase, deduplicated, _, err := manager.startIndexWithIntent(ctx, canonicalPath, client, indexConfig, false, emptyAdmissionBudget, policyIntent)
@@ -192,7 +197,7 @@ func (manager *Manager) startAutomaticSync(ctx context.Context, codebase model.C
 		return
 	}
 	if manager.holdForSourceFirstBuild(codebase.CanonicalPath) {
-		slog.InfoContext(ctx, "automatic sync waits for the first build of the declared source", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "client", client.Name)
+		slog.InfoContext(ctx, "automatic sync waits for the first build of the recorded source", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "client", client.Name)
 		return
 	}
 	job, _, deduplicated, err := manager.SyncIndex(ctx, codebase.CanonicalPath, client)

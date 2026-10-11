@@ -66,7 +66,7 @@ func TestWorktreeOfEmptyIndexWaitsForEmbeddedSibling(t *testing.T) {
 	}
 	worktreeRun := harness.waitForJob(harness.waitForFirstJobID(discovered.GetCodebase().GetId()))
 	requireCompleted(t, worktreeRun)
-	requireEmbeddedWithoutReuse(t, worktreeRun)
+	requireReusedWithoutEmbedding(t, worktreeRun)
 }
 
 // newEmptyRepository creates a git repository with no files beyond .git and
