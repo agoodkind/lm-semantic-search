@@ -475,7 +475,7 @@ func newlyEmbeddedReuseCatalog(
 type chunkBatchEmbedding struct {
 	vectors [][]float32
 	// embeddingModels stores one embedding model per chunk in input order.
-	// Each entry is either the configured model for an embedded chunk or a vector reused from a row with a model, or an empty value for a vector reused from a row without a model.
+	// Each entry contains the configured model for an embedded chunk, the known source model for a reused vector, or an empty string when the reused vector's source model is unknown.
 	embeddingModels []string
 	reused          int
 	refusedEmpty    []bool
