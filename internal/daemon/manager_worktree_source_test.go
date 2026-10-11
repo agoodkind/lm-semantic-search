@@ -307,12 +307,17 @@ func TestStartIndexReplacesWorktreeSourceWithRegisteredSource(t *testing.T) {
 func TestStartIndexRejectsInvalidWorktreeSource(t *testing.T) {
 	scene := newWorktreeSourceScene(t)
 	otherRepository, _ := newSourceTestRepository(t)
+	nestedSource := filepath.Join(scene.worktreeB, "nested")
+	if err := os.MkdirAll(nestedSource, 0o755); err != nil {
+		t.Fatalf("The test could not create directory %s because of error %v.", nestedSource, err)
+	}
 
 	scene.mustStartIndex(t, scene.worktreeA, scene.repository, sourceTestStartingCommit)
 
 	scene.requireRejected(t, scene.worktreeA, scene.worktreeA, "")
 	scene.requireRejected(t, scene.worktreeA, otherRepository, "")
 	scene.requireRejected(t, scene.worktreeA, filepath.Join(scene.repository, "absent"), "")
+	scene.requireRejected(t, scene.worktreeA, nestedSource, "")
 	scene.requireSource(t, scene.worktreeA, scene.repository, "", sourceTestStartingCommit)
 
 	scene.requireRejected(t, scene.repository, scene.worktreeA, "")

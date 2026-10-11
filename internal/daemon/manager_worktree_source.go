@@ -58,8 +58,12 @@ func (manager *Manager) resolveWorktreeSourceIntent(
 		return emptyIntent, adapterr.NewInvalidPath(fmt.Sprintf("worktree source path %q and target path %q are not in the same Git repository", sourcePath, canonicalPath), nil)
 	}
 	manager.mu.Lock()
+	_, sourceRegistered := manager.findCodebaseByExactRoot(sourcePath)
 	cyclic := manager.worktreeSourceCycleLocked(canonicalPath, sourcePath)
 	manager.mu.Unlock()
+	if sourceWorktree.WorktreeRoot != sourcePath && !sourceRegistered {
+		return emptyIntent, adapterr.NewInvalidPath(fmt.Sprintf("source path %q is neither a worktree root of the repository nor a registered codebase root", sourcePath), nil)
+	}
 	if cyclic {
 		return emptyIntent, adapterr.NewInvalidPath(fmt.Sprintf("recording worktree source path %q would create a source cycle that includes target path %q", sourcePath, canonicalPath), nil)
 	}
