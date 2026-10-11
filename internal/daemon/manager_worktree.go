@@ -114,10 +114,8 @@ func (manager *Manager) discoverWorktree(ctx context.Context, info gitworktree.I
 	return record, true
 }
 
-// The delay makes
-// the build far faster than the periodic sweep while keeping the read that
-// discovered the worktree free of any embed. The build deduplicates against any
-// job already in flight, so a repeat read or a watcher event cannot double-start.
+// A detached timer starts the discovered worktree's build after the deferred build delay.
+// Index admission prevents repeated reads or watcher events from starting a second build while a job is in flight.
 func (manager *Manager) scheduleDeferredBuild(ctx context.Context, canonicalPath string) {
 	manager.afterDeferredBuildDelay(ctx, canonicalPath, func(detached context.Context) {
 		manager.startDeferredBuild(detached, canonicalPath)
