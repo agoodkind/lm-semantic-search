@@ -53,7 +53,7 @@ func BuildInsertOption(ctx context.Context, collectionName string, rows []collec
 	return BuildInsertOptionWithRowModels(ctx, collectionName, rows, scalars, embeddingModels)
 }
 
-// BuildInsertOptionWithRowModels requires one embeddingModels entry per row to build the same insert request as BuildInsertOption with an embeddingModel value for each row.
+// BuildInsertOptionWithRowModels builds the insert request using one embeddingModels entry per row.
 // An empty value writes null.
 func BuildInsertOptionWithRowModels(ctx context.Context, collectionName string, rows []collection.Row, scalars []collection.ScalarColumn, embeddingModels []string) (WriteOption, error) {
 	if len(embeddingModels) != len(rows) {
