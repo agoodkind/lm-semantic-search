@@ -90,6 +90,8 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 	var splitterType string
 	var ignorePatterns []string
 	var includeSubmodules []string
+	var sourcePath string
+	var startingCommit string
 	var waitTimeout time.Duration
 	var schedulingFlags schedulingFlagValues
 
@@ -128,6 +130,8 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 				IncludeSubmodules: includeSubmodules,
 				Client:            clientInfo,
 				SchedulingPolicy:  schedulingPolicy,
+				SourcePath:        sourcePath,
+				StartingCommit:    startingCommit,
 			}
 			if splitterType != "" {
 				request.Splitter = &pb.SplitterConfig{Type: splitterType}
@@ -155,6 +159,8 @@ func newCodebaseIndexCmd(options *rootOptions) *cobra.Command {
 	cmd.Flags().StringVar(&splitterType, "splitter", "", "splitter type: ast|langchain")
 	cmd.Flags().StringArrayVar(&ignorePatterns, "ignore", nil, "ignore pattern to exclude")
 	cmd.Flags().StringArrayVar(&includeSubmodules, "include-submodule", nil, "submodule name or path to include")
+	cmd.Flags().StringVar(&sourcePath, "source-path", "", "Record the source worktree path or codebase identifier in the same Git repository. Omit the flag to preserve the stored source.")
+	cmd.Flags().StringVar(&startingCommit, "starting-commit", "", "Record the known starting commit. The daemon rejects the request when the target has no stored source path and the request supplies no source path. Omit the flag to preserve the stored value.")
 	cmd.Flags().DurationVar(&waitTimeout, "wait", 0, "attach to the job and render progress; value needs the = form (--wait=30s), bare --wait uses 5m")
 	cmd.Flags().Lookup("wait").NoOptDefVal = "5m"
 	schedulingFlags.addFlags(cmd)

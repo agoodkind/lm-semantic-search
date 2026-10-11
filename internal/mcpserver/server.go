@@ -142,6 +142,8 @@ func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMod
 			mcp.WithString("splitter", mcp.Description("splitter type, typically ast")),
 			mcp.WithArray("ignorePatterns", mcp.Description("extra ignore patterns to exclude"), mcp.WithStringItems()),
 			mcp.WithArray("includeSubmodules", mcp.Description("submodule names or paths to include"), mcp.WithStringItems()),
+			mcp.WithString("sourcePath", mcp.Description("Record the source worktree path or codebase identifier in the same Git repository. Omit the input to preserve the stored source.")),
+			mcp.WithString("startingCommit", mcp.Description("Record the known starting commit. The daemon rejects the request when the target has no stored source path and the request supplies no source path. Omit the input to preserve the stored value.")),
 			mcp.WithString("priority", mcp.Description("scheduling priority for this index request"), mcp.Enum("high", "normal", "low")),
 			mcp.WithBoolean("quiet", mcp.Description("wait for host idle for this index request")),
 			mcp.WithNumber("idle_after_seconds", mcp.Description("host idle threshold in whole seconds for this index request")),
@@ -165,6 +167,8 @@ func registerIndexTool(mcpServer *server.MCPServer, socketPath string, outputMod
 				Splitter:          &pb.SplitterConfig{Type: req.GetString("splitter", "")},
 				Client:            mcpClientInfo(),
 				SchedulingPolicy:  schedulingPolicy,
+				SourcePath:        req.GetString("sourcePath", ""),
+				StartingCommit:    req.GetString("startingCommit", ""),
 			}
 			if !req.GetBool("wait", false) {
 				return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 )
@@ -18,11 +19,12 @@ func (manager *Manager) startIndexWithRecovery(
 	force bool,
 	budget model.AdmissionBudget,
 	policyIntent indexPolicyIntent,
+	source model.WorktreeSourceRequest,
 	recoveredPlan *resumePlan,
 ) (model.Job, model.Codebase, bool, string, error) {
 	var emptyJob model.Job
 	var emptyCodebase model.Codebase
-	canonicalPath, err := manager.startIndexCanonicalPath(ctx, requestedPath)
+	canonicalPath, sourceIntent, err := manager.startIndexTarget(ctx, requestedPath, source)
 	if err != nil {
 		return emptyJob, emptyCodebase, false, "", err
 	}
@@ -43,6 +45,7 @@ func (manager *Manager) startIndexWithRecovery(
 			canonicalPath,
 			client,
 			policyIntent,
+			sourceIntent,
 		)
 		if redirected {
 			if redirectErr != nil || job.ID == "" {
@@ -59,14 +62,8 @@ func (manager *Manager) startIndexWithRecovery(
 			indexConfig,
 		); deduped {
 			resolvedCodebase, resolveErr := manager.resolveDeduplicatedStartIndex(
-				dedupedJob,
-				dedupedCodebase,
-				requestedPath,
-				canonicalPath,
-				client,
-				indexConfig,
-				force,
-				policyIntent,
+				ctx, sourceIntent, dedupedJob, dedupedCodebase,
+				requestedPath, canonicalPath, client, indexConfig, force, policyIntent,
 			)
 			if resolveErr != nil {
 				return emptyJob, emptyCodebase, false, "", resolveErr
@@ -101,6 +98,7 @@ func (manager *Manager) startIndexWithRecovery(
 		evidence.presence,
 		budget,
 		policyIntent,
+		sourceIntent,
 		recoveredPlan,
 	)
 	if err != nil || deduped {
@@ -114,6 +112,23 @@ func (manager *Manager) startIndexWithRecovery(
 	policyLocked = false
 	manager.runJobAsync(manager.indexJobContext(ctx, job), job.ID)
 	return job, codebase, false, overlapsCodebaseID, nil
+}
+
+func (manager *Manager) startIndexTarget(
+	ctx context.Context,
+	requestedPath string,
+	source model.WorktreeSourceRequest,
+) (string, worktreeSourceIntent, error) {
+	emptyIntent := worktreeSourceIntent{sourcePath: "", startingCommit: ""}
+	canonicalPath, err := manager.startIndexCanonicalPath(ctx, requestedPath)
+	if err != nil {
+		return "", emptyIntent, err
+	}
+	sourceIntent, err := manager.resolveWorktreeSourceIntent(ctx, canonicalPath, source)
+	if err != nil {
+		return "", emptyIntent, err
+	}
+	return canonicalPath, sourceIntent, nil
 }
 
 func (manager *Manager) startIndexCanonicalPath(
@@ -143,12 +158,16 @@ func (manager *Manager) redirectStartIndex(
 	canonicalPath string,
 	client model.ClientInfo,
 	policyIntent indexPolicyIntent,
+	sourceIntent worktreeSourceIntent,
 ) (model.Job, model.Codebase, bool, error) {
+	var emptyJob model.Job
+	var emptyCodebase model.Codebase
 	ancestor, found := manager.mergeUpTarget(canonicalPath)
 	if !found || manager.isWorktreeBoundary(canonicalPath, ancestor) {
-		var emptyJob model.Job
-		var emptyCodebase model.Codebase
 		return emptyJob, emptyCodebase, false, nil
+	}
+	if sourceIntent.sourcePath != "" || sourceIntent.startingCommit != "" {
+		return emptyJob, emptyCodebase, true, adapterr.NewInvalidPath(fmt.Sprintf("worktree source fields for %q are invalid inside indexed codebase %q because the daemon syncs the covering codebase without recording a source for the requested path", canonicalPath, ancestor.CanonicalPath), nil)
 	}
 	job, codebase, err := manager.redirectIndexToAncestor(
 		ctx,
@@ -161,6 +180,8 @@ func (manager *Manager) redirectStartIndex(
 }
 
 func (manager *Manager) resolveDeduplicatedStartIndex(
+	ctx context.Context,
+	sourceIntent worktreeSourceIntent,
 	job model.Job,
 	codebase model.Codebase,
 	requestedPath string,
@@ -171,6 +192,9 @@ func (manager *Manager) resolveDeduplicatedStartIndex(
 	policyIntent indexPolicyIntent,
 ) (model.Codebase, error) {
 	var emptyCodebase model.Codebase
+	if err := manager.recordWorktreeSource(ctx, codebase.ID, sourceIntent); err != nil {
+		return emptyCodebase, err
+	}
 	resolvedCodebase, err := manager.resolveAndPersistIndexPolicy(
 		codebase.ID,
 		policyIntent,

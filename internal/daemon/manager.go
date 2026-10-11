@@ -428,6 +428,9 @@ func newCodebaseRecord(canonicalPath string) model.Codebase {
 		GraphUpdatedAt:              time.Time{},
 		Quarantine:                  nil,
 		WorktreeCommonDir:           "",
+		WorktreeSourcePath:          "",
+		WorktreeSourceID:            "",
+		WorktreeStartingCommit:      "",
 		InodeTrackingDisabled:       false,
 		Declaration:                 nil,
 		UpdatedAt:                   clock.Now(),
@@ -523,8 +526,16 @@ func (manager *Manager) StartIndexWithPolicy(ctx context.Context, requestedPath 
 	})
 }
 
+// StartIndexWithSource starts an index with the behavior of StartIndexWithPolicy and validates and records the worktree source.
+func (manager *Manager) StartIndexWithSource(ctx context.Context, requestedPath string, client model.ClientInfo, indexConfig model.IndexConfig, force bool, budget model.AdmissionBudget, policyPatch model.SchedulingPolicyPatch, source model.WorktreeSourceRequest) (model.Job, model.Codebase, bool, string, error) {
+	return manager.startIndexWithRecovery(ctx, requestedPath, client, indexConfig, force, budget, indexPolicyIntent{
+		Patch:      policyPatch,
+		Initialize: true,
+	}, source, nil)
+}
+
 func (manager *Manager) startIndexWithIntent(ctx context.Context, requestedPath string, client model.ClientInfo, indexConfig model.IndexConfig, force bool, budget model.AdmissionBudget, policyIntent indexPolicyIntent) (model.Job, model.Codebase, bool, string, error) {
-	return manager.startIndexWithRecovery(ctx, requestedPath, client, indexConfig, force, budget, policyIntent, nil)
+	return manager.startIndexWithRecovery(ctx, requestedPath, client, indexConfig, force, budget, policyIntent, model.WorktreeSourceRequest{SourcePath: "", StartingCommit: ""}, nil)
 }
 
 // commitStartIndexLocked acquires the registry lock, runs the decision
@@ -532,7 +543,7 @@ func (manager *Manager) startIndexWithIntent(ctx context.Context, requestedPath 
 // and queues the job event. The returned job has an empty ID when the
 // decision resolved as already-indexed; the caller treats that as a no-op
 // success.
-func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPath string, requestedPath string, client model.ClientInfo, indexConfig model.IndexConfig, force bool, presence collectionPresence, budget model.AdmissionBudget, policyIntent indexPolicyIntent, recoveredPlan *resumePlan) (model.Job, model.Codebase, bool, string, error) {
+func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPath string, requestedPath string, client model.ClientInfo, indexConfig model.IndexConfig, force bool, presence collectionPresence, budget model.AdmissionBudget, policyIntent indexPolicyIntent, sourceIntent worktreeSourceIntent, recoveredPlan *resumePlan) (model.Job, model.Codebase, bool, string, error) {
 	var emptyJob model.Job
 	var emptyCodebase model.Codebase
 	manager.mu.Lock()
@@ -544,6 +555,10 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 		return emptyJob, emptyCodebase, false, "", err
 	}
 	resolvedCodebase, effectivePolicy, err := manager.resolveIndexPolicyLocked(decision.codebase, policyIntent)
+	if err != nil {
+		return emptyJob, emptyCodebase, false, "", err
+	}
+	resolvedCodebase, err = manager.applyWorktreeSourceLocked(ctx, resolvedCodebase, sourceIntent)
 	if err != nil {
 		return emptyJob, emptyCodebase, false, "", err
 	}
