@@ -154,8 +154,8 @@ func TestStoreRoundTripSearchDeletePruneAndReuse(t *testing.T) {
 	if !found {
 		t.Fatal("reuse map is missing the second chunk content key")
 	}
-	if !slices.Equal(reusedVector, []float32{0.8, 0.6}) {
-		t.Fatalf("reused vector = %v, want [0.8 0.6]", reusedVector)
+	if !slices.Equal(reusedVector.Vector, []float32{0.8, 0.6}) {
+		t.Fatalf("reused vector = %v, want [0.8 0.6]", reusedVector.Vector)
 	}
 
 	if err := store.Reindex(

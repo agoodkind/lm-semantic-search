@@ -20,7 +20,7 @@ func (store *Store) Reindex(
 	addedOrModifiedChunks []model.StoredChunk,
 	removal semantic.Removal,
 	progress func(semantic.Progress),
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 	_ semantic.StoreColumnSet,
 ) error {
 	if err := operationContextError(ctx, "reindex local vectors"); err != nil {
@@ -53,7 +53,7 @@ func (store *Store) StageReindex(
 	chunks []model.StoredChunk,
 	removal semantic.Removal,
 	progress func(semantic.Progress),
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 	_ semantic.StoreColumnSet,
 ) error {
 	if err := operationContextError(ctx, "stage local vectors"); err != nil {
@@ -206,7 +206,7 @@ func (store *Store) PruneToCurrent(
 func (store *Store) embedRows(
 	ctx context.Context,
 	chunks []model.StoredChunk,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) ([]row, int, int, error) {
 	if len(chunks) == 0 {
 		return nil, 0, 0, nil
@@ -232,8 +232,8 @@ func (store *Store) embedRows(
 	reused := 0
 	dropped := 0
 	for _, chunk := range splitChunks {
-		if vector, found := reuse[semantic.ContentVectorKey(chunk.Content)]; found {
-			stored, rowErr := newRow(chunk, append([]float32(nil), vector...))
+		if reusedVector, found := reuse[semantic.ContentVectorKey(chunk.Content)]; found {
+			stored, rowErr := newRow(chunk, append([]float32(nil), reusedVector.Vector...))
 			if rowErr != nil {
 				return nil, 0, 0, rowErr
 			}

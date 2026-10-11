@@ -53,17 +53,17 @@ type semanticHealthReader interface {
 // out of collections so a build or reindex can skip the embedder for chunks
 // whose content is unchanged.
 type semanticReuseLoader interface {
-	LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error)
-	LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
-	LoadReuseVectorsForContents(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string][]float32, error)
-	LoadReuseVectorsForContentsFrom(ctx context.Context, collectionNames []string, chunks []model.StoredChunk) (map[string][]float32, error)
+	LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string]model.ReuseVector, error)
+	LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string]model.ReuseVector, error)
+	LoadReuseVectorsForContents(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string]model.ReuseVector, error)
+	LoadReuseVectorsForContentsFrom(ctx context.Context, collectionNames []string, chunks []model.StoredChunk) (map[string]model.ReuseVector, error)
 }
 
 // semanticWriter is the slice that mutates the live or staging collection.
 type semanticWriter interface {
 	PinStaging(ctx context.Context, codebasePath string) (semantic.CollectionPin, error)
-	Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error
-	StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error
+	Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string]model.ReuseVector, columnSet semantic.StoreColumnSet) error
+	StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string]model.ReuseVector, columnSet semantic.StoreColumnSet) error
 	PromoteStaging(ctx context.Context, codebasePath string) error
 	CopyChunks(ctx context.Context, codebasePath string, srcRelativePath string, dstRelativePath string) (int, error)
 	PruneToCurrent(ctx context.Context, codebasePath string, currentRelativePaths []string) error

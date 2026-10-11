@@ -46,6 +46,19 @@ type WriteOption interface {
 // columns the request writes from the Scalars map of each row. embeddingModel
 // fills the embeddingModel column of every row, and an empty value writes null.
 func BuildInsertOption(ctx context.Context, collectionName string, rows []collection.Row, scalars []collection.ScalarColumn, embeddingModel string) (WriteOption, error) {
+	embeddingModels := make([]string, len(rows))
+	for index := range embeddingModels {
+		embeddingModels[index] = embeddingModel
+	}
+	return BuildInsertOptionWithRowModels(ctx, collectionName, rows, scalars, embeddingModels)
+}
+
+// BuildInsertOptionWithRowModels requires one embeddingModels entry per row to build the same insert request as BuildInsertOption with an embeddingModel value for each row.
+// An empty value writes null.
+func BuildInsertOptionWithRowModels(ctx context.Context, collectionName string, rows []collection.Row, scalars []collection.ScalarColumn, embeddingModels []string) (WriteOption, error) {
+	if len(embeddingModels) != len(rows) {
+		return nil, fmt.Errorf("build insert request for collection %s with mismatched embedding model count %d and row count %d", collectionName, len(embeddingModels), len(rows))
+	}
 	columns := buildInsertColumns(ctx, rows)
 	if columns.sanitizedCount > 0 {
 		slog.WarnContext(
@@ -63,7 +76,7 @@ func BuildInsertOption(ctx context.Context, collectionName string, rows []collec
 	if err != nil {
 		return nil, err
 	}
-	embeddingModelColumn, err := NewEmbeddingModelColumn(collectionName, embeddingModel, len(rows))
+	embeddingModelColumn, err := NewRowEmbeddingModelColumn(collectionName, embeddingModels)
 	if err != nil {
 		return nil, err
 	}
@@ -146,10 +159,20 @@ func NewSplitPartColumn(collectionName string, splitParts []int64, splitPartsRec
 // NewEmbeddingModelColumn builds the nullable embeddingModel insert column with
 // one value for every row. An empty model writes null.
 func NewEmbeddingModelColumn(collectionName string, embeddingModel string, rowCount int) (column.Column, error) {
-	normalizedModel, _ := SanitizeUTF8(embeddingModel)
-	values := make([]string, rowCount)
-	validData := make([]bool, rowCount)
-	for index := range rowCount {
+	embeddingModels := make([]string, rowCount)
+	for index := range embeddingModels {
+		embeddingModels[index] = embeddingModel
+	}
+	return NewRowEmbeddingModelColumn(collectionName, embeddingModels)
+}
+
+// NewRowEmbeddingModelColumn builds the nullable embeddingModel insert column from one value per row.
+// An empty value writes null.
+func NewRowEmbeddingModelColumn(collectionName string, embeddingModels []string) (column.Column, error) {
+	values := make([]string, len(embeddingModels))
+	validData := make([]bool, len(embeddingModels))
+	for index, embeddingModel := range embeddingModels {
+		normalizedModel, _ := SanitizeUTF8(embeddingModel)
 		values[index] = normalizedModel
 		validData[index] = normalizedModel != ""
 	}

@@ -158,11 +158,11 @@ func newSearchTestStore(t *testing.T) *Store {
 	return store
 }
 
-func largeSearchFixture(count int) ([]model.StoredChunk, map[string][]float32) {
+func largeSearchFixture(count int) ([]model.StoredChunk, map[string]model.ReuseVector) {
 	const firstFarAngle = 0.01
 
 	chunks := make([]model.StoredChunk, 0, count)
-	reuse := make(map[string][]float32, count)
+	reuse := make(map[string]model.ReuseVector, count)
 	farCount := count - 1
 	for index := 0; index < count; index++ {
 		var content string
@@ -181,7 +181,7 @@ func largeSearchFixture(count int) ([]model.StoredChunk, map[string][]float32) {
 			RelativePath:  content + ".go",
 			FileExtension: ".go",
 		})
-		reuse[semantic.ContentVectorKey(content)] = vector
+		reuse[semantic.ContentVectorKey(content)] = model.ReuseVector{Vector: vector}
 	}
 	return chunks, reuse
 }
@@ -189,14 +189,14 @@ func largeSearchFixture(count int) ([]model.StoredChunk, map[string][]float32) {
 func largeFilteredSearchFixture(
 	count int,
 	filteredCount int,
-) ([]model.StoredChunk, map[string][]float32) {
+) ([]model.StoredChunk, map[string]model.ReuseVector) {
 	const (
 		keptAngle     = 0.01
 		firstFarAngle = 0.02
 	)
 
 	chunks := make([]model.StoredChunk, 0, count)
-	reuse := make(map[string][]float32, count)
+	reuse := make(map[string]model.ReuseVector, count)
 	farCount := count - filteredCount - 1
 	for index := 0; index < count; index++ {
 		var content string
@@ -223,7 +223,7 @@ func largeFilteredSearchFixture(
 			RelativePath:  content + extension,
 			FileExtension: extension,
 		})
-		reuse[semantic.ContentVectorKey(content)] = vector
+		reuse[semantic.ContentVectorKey(content)] = model.ReuseVector{Vector: vector}
 	}
 	return chunks, reuse
 }
@@ -237,7 +237,7 @@ func stageAndPromoteWithReuse(
 	store *Store,
 	codebasePath string,
 	chunks []model.StoredChunk,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) {
 	t.Helper()
 	if err := store.StageReindex(

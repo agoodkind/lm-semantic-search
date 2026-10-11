@@ -13,6 +13,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/lm-semantic-search/collection"
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/spans"
 	"google.golang.org/grpc/peer"
 )
@@ -42,9 +43,9 @@ func contentVectorKey(content string) string {
 // it. A missing collection is skipped. The caller must restrict collectionNames
 // to indexes built with the current embedding model, so a reused vector is
 // valid for the parent's model.
-func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error) {
+func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string]model.ReuseVector, error) {
 	peerInfo, _ := peer.FromContext(ctx)
-	reuse := make(map[string][]float32)
+	reuse := make(map[string]model.ReuseVector)
 	if !service.Available() || len(collectionNames) == 0 {
 		return reuse, nil
 	}
@@ -62,9 +63,9 @@ func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []
 // them. Code delta syncs load a changed file's current rows before the exact
 // path delete runs, so unchanged chunks inside the same file skip embedding
 // without reading prefix neighbors such as foo.go.backup.
-func (service *Service) LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error) {
+func (service *Service) LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string]model.ReuseVector, error) {
 	peerInfo, _ := peer.FromContext(ctx)
-	reuse := make(map[string][]float32)
+	reuse := make(map[string]model.ReuseVector)
 	if !service.Available() || collectionName == "" || relativePath == "" {
 		return reuse, nil
 	}
@@ -82,7 +83,7 @@ func (service *Service) LoadReuseVectorsForPath(ctx context.Context, collectionN
 }
 
 // loadReuseVectorsFromCollection streams one whole source collection into reuse.
-func (service *Service) loadReuseVectorsFromCollection(ctx context.Context, collectionName string, reuse map[string][]float32) error {
+func (service *Service) loadReuseVectorsFromCollection(ctx context.Context, collectionName string, reuse map[string]model.ReuseVector) error {
 	return service.loadReuseVectorsFiltered(ctx, collectionName, relativePathFieldName+` != ""`, reuse)
 }
 
@@ -103,7 +104,7 @@ func relativePathExpression(relativePath string) string {
 // from the embed and insert phases. semantic.reuse_vectors_read carries the row
 // count under the same span id, so a reader divides rows by duration_ms without
 // measuring the store by hand.
-func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collectionName string, filterExpression string, reuse map[string][]float32) (err error) {
+func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collectionName string, filterExpression string, reuse map[string]model.ReuseVector) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.loadReuseVectors")
 	defer done(&err)
 
@@ -119,6 +120,9 @@ func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collection
 	if !hasCollection {
 		return nil
 	}
+	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
+		return err
+	}
 	lease, err := service.AcquireCollection(ctx, collectionName)
 	if err != nil {
 		return err
@@ -128,7 +132,7 @@ func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collection
 	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(reuseVectorBatchSize).
 		WithFilter(filterExpression).
-		WithOutputFields(contentFieldName, denseVectorFieldName))
+		WithOutputFields(contentFieldName, embeddingModelFieldName, denseVectorFieldName))
 	if err != nil {
 		slog.ErrorContext(ctx, "open reuse query iterator failed", "collection", collectionName, "err", err)
 		return fmt.Errorf("open query iterator for %s: %w", collectionName, err)
@@ -148,6 +152,7 @@ func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collection
 		if contentColumn == nil || vectorColumn == nil {
 			return ErrSearchResultIncomplete
 		}
+		embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
 		for rowIndex := range resultSet.ResultCount {
 			contentValue, contentErr := contentColumn.GetAsString(rowIndex)
 			if contentErr != nil {
@@ -157,7 +162,14 @@ func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collection
 			if vectorErr != nil {
 				return fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
 			}
-			reuse[contentVectorKey(contentValue)] = vector
+			embeddingModel, modelErr := nullableStringAt(embeddingModelColumn, rowIndex)
+			if modelErr != nil {
+				return fmt.Errorf("read embedding model of reuse row %d: %w", rowIndex, modelErr)
+			}
+			reuse[contentVectorKey(contentValue)] = model.ReuseVector{
+				Vector:           vector,
+				SourceModelKnown: embeddingModel != "",
+			}
 			rowsRead++
 		}
 	}

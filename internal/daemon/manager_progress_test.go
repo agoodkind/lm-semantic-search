@@ -88,16 +88,16 @@ func TestCodeItemReuseLoadsExactPath(t *testing.T) {
 
 	manager, _, _ := newTestManager(t)
 	fake := &fakeSemantic{
-		loadReuseForPath: func(_ context.Context, collectionName string, relativePath string) (map[string][]float32, error) {
+		loadReuseForPath: func(_ context.Context, collectionName string, relativePath string) (map[string]model.ReuseVector, error) {
 			if collectionName != "code_chunks_live" {
 				t.Fatalf("collectionName = %q, want code_chunks_live", collectionName)
 			}
 			if relativePath != "src/file.go" {
 				t.Fatalf("relativePath = %q, want src/file.go", relativePath)
 			}
-			return map[string][]float32{"target-hash": {1, 2, 3}}, nil
+			return map[string]model.ReuseVector{"target-hash": {Vector: []float32{1, 2, 3}}}, nil
 		},
-		loadReuseForPrefix: func(_ context.Context, _ string, prefix string) (map[string][]float32, error) {
+		loadReuseForPrefix: func(_ context.Context, _ string, prefix string) (map[string]model.ReuseVector, error) {
 			t.Fatalf("code reuse called prefix loader with %q; want exact path loader", prefix)
 			return nil, nil
 		},
@@ -109,7 +109,7 @@ func TestCodeItemReuseLoadsExactPath(t *testing.T) {
 		source:           source,
 		semantic:         true,
 		itemReuseEnabled: true,
-		reuse:            map[string][]float32{"base-hash": {9}},
+		reuse:            map[string]model.ReuseVector{"base-hash": {Vector: []float32{9}}},
 		chunkCounts:      &chunkCounters{},
 	}
 
@@ -141,11 +141,11 @@ func TestItemReuseSkipsPerFileLoadsDuringBootstrap(t *testing.T) {
 
 	manager, _, _ := newTestManager(t)
 	fake := &fakeSemantic{
-		loadReuseForPath: func(_ context.Context, _ string, _ string) (map[string][]float32, error) {
+		loadReuseForPath: func(_ context.Context, _ string, _ string) (map[string]model.ReuseVector, error) {
 			t.Fatal("bootstrap item reuse should not probe the live collection by exact path")
 			return nil, nil
 		},
-		loadReuseForPrefix: func(_ context.Context, _ string, _ string) (map[string][]float32, error) {
+		loadReuseForPrefix: func(_ context.Context, _ string, _ string) (map[string]model.ReuseVector, error) {
 			t.Fatal("bootstrap item reuse should not probe the live collection by prefix")
 			return nil, nil
 		},
@@ -157,7 +157,7 @@ func TestItemReuseSkipsPerFileLoadsDuringBootstrap(t *testing.T) {
 		source:      source,
 		semantic:    true,
 		staging:     true,
-		reuse:       map[string][]float32{"base-hash": {9}},
+		reuse:       map[string]model.ReuseVector{"base-hash": {Vector: []float32{9}}},
 		chunkCounts: &chunkCounters{},
 	}
 
@@ -168,7 +168,7 @@ func TestItemReuseSkipsPerFileLoadsDuringBootstrap(t *testing.T) {
 	if loaded != 0 {
 		t.Fatalf("loaded = %d, want 0 during bootstrap", loaded)
 	}
-	if len(reuse) != 1 || reuse["base-hash"][0] != 9 {
+	if len(reuse) != 1 || reuse["base-hash"].Vector[0] != 9 {
 		t.Fatalf("reuse = %v, want the unchanged build-wide reuse map", reuse)
 	}
 	if pathCalls := fake.reusePathCallsSnapshot(); len(pathCalls) != 0 {

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"sync"
 
+	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/vectorindex"
 )
@@ -59,13 +60,13 @@ func buildReuseRowIndex(rows []row) map[string]int {
 
 func (stored *collection) reuseVectorsForKeys(
 	keys map[string]struct{},
-) (map[string][]float32, error) {
+) (map[string]model.ReuseVector, error) {
 	stored.mutex.Lock()
 	defer stored.mutex.Unlock()
 	if err := stored.loadLocked(); err != nil {
 		return nil, err
 	}
-	reuse := make(map[string][]float32, len(keys))
+	reuse := make(map[string]model.ReuseVector, len(keys))
 	if !stored.exists {
 		return reuse, nil
 	}
@@ -74,7 +75,10 @@ func (stored *collection) reuseVectorsForKeys(
 		if !found {
 			continue
 		}
-		reuse[key] = append([]float32(nil), stored.rows[rowIndex].Vector...)
+		reuse[key] = model.ReuseVector{
+			Vector:           append([]float32(nil), stored.rows[rowIndex].Vector...),
+			SourceModelKnown: false,
+		}
 	}
 	return reuse, nil
 }

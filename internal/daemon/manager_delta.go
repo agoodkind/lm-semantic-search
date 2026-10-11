@@ -72,7 +72,7 @@ type deltaState struct {
 	// child codebases the new parent absorbs. The embed step takes a reused
 	// vector instead of calling the embedder, so the shared subtree is never
 	// re-embedded.
-	reuse map[string][]float32
+	reuse map[string]model.ReuseVector
 	// chunkCounts accumulates chunk outcomes across every per-file reindex in this
 	// run. It is a pointer because deltaState is copied by value through the
 	// per-file loop, and the totals must survive each copy.
@@ -790,7 +790,7 @@ func (manager *Manager) itemReuse(
 	ctx context.Context,
 	state deltaState,
 	relativePath string,
-) (map[string][]float32, int32, error) {
+) (map[string]model.ReuseVector, int32, error) {
 	if !state.itemReuseEnabled {
 		return state.reuse, 0, nil
 	}
@@ -798,7 +798,7 @@ func (manager *Manager) itemReuse(
 	if source.Scope == itemReuseScopeNone {
 		return state.reuse, 0, nil
 	}
-	var itemReuse map[string][]float32
+	var itemReuse map[string]model.ReuseVector
 	err := manager.runReleasingCapacityIfStalled(ctx, func() error {
 		var loadErr error
 		switch source.Scope {
@@ -849,11 +849,11 @@ func (manager *Manager) finishJobForReuseFailure(ctx context.Context, jobID stri
 // mergedReuse overlays an item's own reuse vectors on any build-wide reuse map
 // without mutating either input. With no build-wide map the item map is used
 // as-is, which is the conversation delta case.
-func mergedReuse(base map[string][]float32, item map[string][]float32) map[string][]float32 {
+func mergedReuse(base map[string]model.ReuseVector, item map[string]model.ReuseVector) map[string]model.ReuseVector {
 	if len(base) == 0 {
 		return item
 	}
-	merged := make(map[string][]float32, len(base)+len(item))
+	merged := make(map[string]model.ReuseVector, len(base)+len(item))
 	maps.Copy(merged, base)
 	maps.Copy(merged, item)
 	return merged

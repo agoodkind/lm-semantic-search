@@ -91,7 +91,7 @@ func TestEmbedPhaseSpanReportsInputCountsForRateAttribution(t *testing.T) {
 	service := &Service{embedder: &countingEmbedder{}}
 
 	chunks := []model.StoredChunk{{Content: "reused-A"}, {Content: "fresh"}}
-	reuse := map[string][]float32{contentVectorKey("reused-A"): {1}}
+	reuse := knownModelReuse(map[string][]float32{contentVectorKey("reused-A"): {1}})
 
 	if _, err := service.embedChunkBatch(context.Background(), chunks, reuse); err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
@@ -130,7 +130,7 @@ func TestEmbedPhaseSpanIsSilentForAnAllReuseBatch(t *testing.T) {
 	service := &Service{embedder: &countingEmbedder{}}
 
 	chunks := []model.StoredChunk{{Content: "reused-A"}}
-	reuse := map[string][]float32{contentVectorKey("reused-A"): {1}}
+	reuse := knownModelReuse(map[string][]float32{contentVectorKey("reused-A"): {1}})
 
 	if _, err := service.embedChunkBatch(context.Background(), chunks, reuse); err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)

@@ -305,14 +305,14 @@ func TestStuckReuseLoadDoesNotHoldIndexSlotOrSyncLock(t *testing.T) {
 		loadReuse: func(
 			ctx context.Context,
 			_ []string,
-		) (map[string][]float32, error) {
+		) (map[string]model.ReuseVector, error) {
 			select {
 			case loadEntered <- struct{}{}:
 			default:
 			}
 			select {
 			case <-releaseLoad:
-				return map[string][]float32{}, nil
+				return map[string]model.ReuseVector{}, nil
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
@@ -535,14 +535,14 @@ func TestReuseLoadWaitsPausedWhileReplacementHoldsSlot(t *testing.T) {
 		loadReuse: func(
 			ctx context.Context,
 			_ []string,
-		) (map[string][]float32, error) {
+		) (map[string]model.ReuseVector, error) {
 			select {
 			case loadEntered <- struct{}{}:
 			default:
 			}
 			select {
 			case <-releaseLoad:
-				return map[string][]float32{}, nil
+				return map[string]model.ReuseVector{}, nil
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}

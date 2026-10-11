@@ -12,9 +12,9 @@ import (
 func (manager *Manager) resolveReuseSeed(
 	ctx context.Context,
 	job model.Job,
-) (map[string][]float32, int32, []model.Codebase, error) {
+) (map[string]model.ReuseVector, int32, []model.Codebase, error) {
 	descendants := manager.descendantReuseCandidates(job.CanonicalPath, job.Config)
-	reuse := map[string][]float32{}
+	reuse := map[string]model.ReuseVector{}
 	if manager.semantic == nil || !manager.semantic.Available() {
 		return reuse, 0, descendants, nil
 	}
@@ -22,7 +22,7 @@ func (manager *Manager) resolveReuseSeed(
 	if len(reuseCollections) == 0 {
 		return reuse, 0, descendants, nil
 	}
-	var loadedReuse map[string][]float32
+	var loadedReuse map[string]model.ReuseVector
 	err := manager.runReleasingCapacityIfStalled(ctx, func() error {
 		var loadErr error
 		loadedReuse, loadErr = manager.semantic.LoadReuseVectors(ctx, reuseCollections)

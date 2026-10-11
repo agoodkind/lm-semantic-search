@@ -14,7 +14,7 @@ func (store *Store) LoadReuseVectorsForContents(
 	ctx context.Context,
 	collectionName string,
 	chunks []model.StoredChunk,
-) (map[string][]float32, error) {
+) (map[string]model.ReuseVector, error) {
 	wanted := make(map[string]struct{}, len(chunks))
 	for _, chunk := range chunks {
 		wanted[semantic.ContentVectorKey(chunk.Content)] = struct{}{}
@@ -35,12 +35,12 @@ func (store *Store) LoadReuseVectorsForContentsFrom(
 	ctx context.Context,
 	collectionNames []string,
 	chunks []model.StoredChunk,
-) (map[string][]float32, error) {
+) (map[string]model.ReuseVector, error) {
 	wanted := make(map[string]struct{}, len(chunks))
 	for _, chunk := range chunks {
 		wanted[semantic.ContentVectorKey(chunk.Content)] = struct{}{}
 	}
-	reuse := make(map[string][]float32, len(wanted))
+	reuse := make(map[string]model.ReuseVector, len(wanted))
 	for _, collectionName := range collectionNames {
 		if collectionName == "" || len(wanted) == 0 {
 			continue
@@ -68,8 +68,8 @@ func (store *Store) LoadReuseVectorsForContentsFrom(
 func (store *Store) LoadReuseVectors(
 	ctx context.Context,
 	collectionNames []string,
-) (map[string][]float32, error) {
-	reuse := make(map[string][]float32)
+) (map[string]model.ReuseVector, error) {
+	reuse := make(map[string]model.ReuseVector)
 	for _, collectionName := range collectionNames {
 		if err := operationContextError(ctx, "load local vector reuse map"); err != nil {
 			return nil, err
@@ -90,8 +90,8 @@ func (store *Store) LoadReuseVectorsForPrefix(
 	ctx context.Context,
 	collectionName string,
 	relativePathPrefix string,
-) (map[string][]float32, error) {
-	reuse := make(map[string][]float32)
+) (map[string]model.ReuseVector, error) {
+	reuse := make(map[string]model.ReuseVector)
 	if collectionName == "" || relativePathPrefix == "" {
 		return reuse, nil
 	}
@@ -113,8 +113,8 @@ func (store *Store) LoadReuseVectorsForPath(
 	ctx context.Context,
 	collectionName string,
 	relativePath string,
-) (map[string][]float32, error) {
-	reuse := make(map[string][]float32)
+) (map[string]model.ReuseVector, error) {
+	reuse := make(map[string]model.ReuseVector)
 	if collectionName == "" || relativePath == "" {
 		return reuse, nil
 	}
@@ -134,7 +134,7 @@ func (store *Store) LoadReuseVectorsForPath(
 func (store *Store) loadReuseWhere(
 	collectionName string,
 	matches func(row) bool,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) error {
 	stored, err := store.collectionForName(collectionName, false)
 	if err != nil {
@@ -155,7 +155,10 @@ func (store *Store) loadReuseWhere(
 		if key == "" {
 			key = semantic.ContentVectorKey(candidate.Content)
 		}
-		reuse[key] = append([]float32(nil), candidate.Vector...)
+		reuse[key] = model.ReuseVector{
+			Vector:           append([]float32(nil), candidate.Vector...),
+			SourceModelKnown: false,
+		}
 	}
 	return nil
 }

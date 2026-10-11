@@ -120,7 +120,7 @@ func setBootstrapCollectionName(t *testing.T, manager *Manager, codebaseID strin
 	manager.codebases[codebaseID] = codebase
 }
 
-func emitReuseProgress(progress func(semantic.Progress), chunks []model.StoredChunk, reuse map[string][]float32) {
+func emitReuseProgress(progress func(semantic.Progress), chunks []model.StoredChunk, reuse map[string]model.ReuseVector) {
 	if progress == nil {
 		return
 	}
@@ -148,14 +148,14 @@ func TestRunBootstrapReusesLiveCollectionVectors(t *testing.T) {
 			return semantic.CollectionFacts{Exists: true, Rows: 2, RowsKnown: true}, nil
 		},
 		hasStaging: func(context.Context, string) (bool, error) { return true, nil },
-		loadReuseForPath: func(_ context.Context, collectionName string, relativePath string) (map[string][]float32, error) {
+		loadReuseForPath: func(_ context.Context, collectionName string, relativePath string) (map[string]model.ReuseVector, error) {
 			if collectionName != liveCollection {
 				return nil, nil
 			}
 			content := "package main\n// " + relativePath + "\n"
-			return map[string][]float32{hashText(content): {1, 2, 3}}, nil
+			return map[string]model.ReuseVector{hashText(content): {Vector: []float32{1, 2, 3}}}, nil
 		},
-		stageReindexWithReuse: func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string][]float32) error {
+		stageReindexWithReuse: func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string]model.ReuseVector) error {
 			emitReuseProgress(progress, chunks, reuse)
 			return nil
 		},
@@ -230,12 +230,12 @@ func TestRunBootstrapReusesCatalogWithoutLiveCollection(t *testing.T) {
 			_ context.Context,
 			collectionName string,
 			chunks []model.StoredChunk,
-		) (map[string][]float32, error) {
+		) (map[string]model.ReuseVector, error) {
 			candidateCalls++
 			if collectionName != liveCollection {
 				t.Fatalf("candidate collection = %q, want %q", collectionName, liveCollection)
 			}
-			return map[string][]float32{hashText(chunks[0].Content): {1, 2, 3}}, nil
+			return map[string]model.ReuseVector{hashText(chunks[0].Content): {Vector: []float32{1, 2, 3}}}, nil
 		},
 		stageReindexWithReuse: func(
 			_ context.Context,
@@ -243,7 +243,7 @@ func TestRunBootstrapReusesCatalogWithoutLiveCollection(t *testing.T) {
 			chunks []model.StoredChunk,
 			_ []string,
 			progress func(semantic.Progress),
-			reuse map[string][]float32,
+			reuse map[string]model.ReuseVector,
 		) error {
 			emitReuseProgress(progress, chunks, reuse)
 			return nil
@@ -303,11 +303,11 @@ func TestRunBootstrapForcedSkipsLiveItemReuse(t *testing.T) {
 			context.Context,
 			string,
 			[]model.StoredChunk,
-		) (map[string][]float32, error) {
+		) (map[string]model.ReuseVector, error) {
 			t.Fatal("forced bootstrap loaded catalog reuse")
 			return nil, nil
 		},
-		stageReindexWithReuse: func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string][]float32) error {
+		stageReindexWithReuse: func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string]model.ReuseVector) error {
 			emitReuseProgress(progress, chunks, reuse)
 			return nil
 		},
@@ -662,7 +662,7 @@ func TestRunBootstrapHoldsOneStagingPinThroughPromotion(t *testing.T) {
 				releaseCount++
 			}}, nil
 		},
-		stageReindexWithReuse: func(_ context.Context, _ string, _ []model.StoredChunk, _ []string, _ func(semantic.Progress), _ map[string][]float32) error {
+		stageReindexWithReuse: func(_ context.Context, _ string, _ []model.StoredChunk, _ []string, _ func(semantic.Progress), _ map[string]model.ReuseVector) error {
 			assertPinned("staging write")
 			return nil
 		},

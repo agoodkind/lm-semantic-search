@@ -46,7 +46,7 @@ func (service *Service) PinStaging(
 // item's insert and its checkpoint, the resumed run re-embeds that one item and
 // its prior staging rows are removed before the fresh rows land. A nil chunk
 // slice with an empty removal is a no-op.
-func (service *Service) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
+func (service *Service) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string]model.ReuseVector, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.stageReindex")
 	defer done(&err)
 
@@ -241,7 +241,7 @@ func NewChunkPacker(batchRows int, tokenBudget int) ChunkPackFunc {
 // row ceiling and estimated-token budget. reuse is the same map embedChunkBatch
 // consults, so the packer charges the token budget only for the chunks that will
 // actually be sent to the embedder.
-func (service *Service) packForEmbedding(chunks []model.StoredChunk, reuse map[string][]float32) [][]model.StoredChunk {
+func (service *Service) packForEmbedding(chunks []model.StoredChunk, reuse map[string]model.ReuseVector) [][]model.StoredChunk {
 	batchRows := service.cfg.EmbeddingBatchSize
 	if batchRows <= 0 {
 		batchRows = defaultEmbeddingBatchRows
@@ -267,7 +267,7 @@ func (service *Service) packForEmbedding(chunks []model.StoredChunk, reuse map[s
 // separate the embedder round trip from the Milvus write, and
 // semantic.chunks_written closes the loop with the totals that make those
 // durations a rate.
-func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
+func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string]model.ReuseVector, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.insertChunksBatched")
 	defer done(&err)
 
@@ -294,6 +294,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 		reused := embedded.reused
 
 		keptChunks, keptVectors := filterEmbeddedChunks(embeddingBatch, embedded.vectors)
+		keptModels := embeddedRowModels(embedded)
 		catalogVectors := newlyEmbeddedReuseCatalog(keptChunks, keptVectors, reuse)
 
 		if emptyRefused := collectEmptyRefusedChunks(embeddingBatch, embedded); len(emptyRefused) > 0 {
@@ -318,6 +319,9 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			}
 			keptChunks = append(keptChunks, retryChunks...)
 			keptVectors = append(keptVectors, retryVectors...)
+			for range retryChunks {
+				keptModels = append(keptModels, service.cfg.EmbeddingModel)
+			}
 			addReuseCatalogVectors(catalogVectors, retryChunks, retryVectors)
 			droppedInputs += safeInt32FromInt(dropped)
 		}
@@ -326,6 +330,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 			collectionName,
 			keptChunks,
 			keptVectors,
+			keptModels,
 			catalogVectors,
 			collectionReady,
 			columnSet,
@@ -374,6 +379,7 @@ func (service *Service) writeEmbeddedChunkBatch(
 	collectionName string,
 	chunks []model.StoredChunk,
 	vectors [][]float32,
+	embeddingModels []string,
 	catalogVectors reuseCatalogVectors,
 	collectionReady bool,
 	columnSet StoreColumnSet,
@@ -420,6 +426,7 @@ func (service *Service) writeEmbeddedChunkBatch(
 			collectionName,
 			insertBatch,
 			vectors[vectorStart:vectorEnd],
+			embeddingModels[vectorStart:vectorEnd],
 			columnSet,
 		); err != nil {
 			return result, err
@@ -444,7 +451,7 @@ func addReuseCatalogVectors(
 func newlyEmbeddedReuseCatalog(
 	chunks []model.StoredChunk,
 	vectors [][]float32,
-	reuse map[string][]float32,
+	reuse map[string]model.ReuseVector,
 ) reuseCatalogVectors {
 	catalog := make(reuseCatalogVectors)
 	for chunkIndex, chunk := range chunks {
@@ -466,9 +473,12 @@ func newlyEmbeddedReuseCatalog(
 // must be split and retried, while a refusal means there was no content, so
 // splitting it would divide nothing and retrying it would be refused again.
 type chunkBatchEmbedding struct {
-	vectors      [][]float32
-	reused       int
-	refusedEmpty []bool
+	vectors [][]float32
+	// embeddingModels stores one embedding model per chunk in input order.
+	// Each entry is either the configured model for an embedded chunk or a vector reused from a row with a model, or an empty value for a vector reused from a row without a model.
+	embeddingModels []string
+	reused          int
+	refusedEmpty    []bool
 }
 
 // embedChunkBatch returns one dense vector per chunk in chunkBatch, in order,
@@ -477,15 +487,20 @@ type chunkBatchEmbedding struct {
 // hash) that vector is taken directly; only the remaining misses are embedded in
 // a single batch. A nil or empty reuse map makes this embed every chunk, which
 // is the ordinary first-index behavior, and reports zero reused.
-func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.StoredChunk, reuse map[string][]float32) (chunkBatchEmbedding, error) {
+func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.StoredChunk, reuse map[string]model.ReuseVector) (chunkBatchEmbedding, error) {
 	vectors := make([][]float32, len(chunkBatch))
+	embeddingModels := make([]string, len(chunkBatch))
 	refusedEmpty := make([]bool, len(chunkBatch))
 	missTexts := make([]string, 0, len(chunkBatch))
 	missIndexes := make([]int, 0, len(chunkBatch))
 	for index, chunk := range chunkBatch {
+		embeddingModels[index] = service.cfg.EmbeddingModel
 		if len(reuse) > 0 {
-			if vector, hit := reuse[contentVectorKey(chunk.Content)]; hit {
-				vectors[index] = vector
+			if reused, hit := reuse[contentVectorKey(chunk.Content)]; hit {
+				vectors[index] = reused.Vector
+				if !reused.SourceModelKnown {
+					embeddingModels[index] = ""
+				}
 				continue
 			}
 		}
@@ -499,7 +514,7 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 	// together report what a batch cost and what it skipped.
 	metrics.ChunksReused(reused)
 	if len(missTexts) == 0 {
-		return chunkBatchEmbedding{vectors: vectors, reused: reused, refusedEmpty: refusedEmpty}, nil
+		return chunkBatchEmbedding{vectors: vectors, embeddingModels: embeddingModels, reused: reused, refusedEmpty: refusedEmpty}, nil
 	}
 
 	result, err := service.embedMissedTexts(ctx, missTexts, reused)
@@ -521,7 +536,7 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 		}
 		refusedEmpty[missIndexes[skip.Index]] = true
 	}
-	return chunkBatchEmbedding{vectors: vectors, reused: reused, refusedEmpty: refusedEmpty}, nil
+	return chunkBatchEmbedding{vectors: vectors, embeddingModels: embeddingModels, reused: reused, refusedEmpty: refusedEmpty}, nil
 }
 
 // collectOversizedChunks returns the chunks whose vector is nil because the
@@ -655,6 +670,17 @@ func filterEmbeddedChunks(chunks []model.StoredChunk, vectors [][]float32) ([]mo
 		keptVectors = append(keptVectors, vector)
 	}
 	return keptChunks, keptVectors
+}
+
+func embeddedRowModels(embedded chunkBatchEmbedding) []string {
+	keptModels := make([]string, 0, len(embedded.vectors))
+	for index, vector := range embedded.vectors {
+		if vector == nil {
+			continue
+		}
+		keptModels = append(keptModels, embedded.embeddingModels[index])
+	}
+	return keptModels
 }
 
 // stagingCollectionName derives the transient rebuild collection name, kept

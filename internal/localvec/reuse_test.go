@@ -69,7 +69,7 @@ func TestLoadReuseVectorsForContentsUsesCandidateIndexNotRowScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadReuseVectorsForContents returned error: %v", err)
 	}
-	gotVector := reuse[semantic.ContentVectorKey(candidateContent)]
+	gotVector := reuse[semantic.ContentVectorKey(candidateContent)].Vector
 	if !slices.Equal(gotVector, wantVector) {
 		t.Fatalf("reused vector = %v, want indexed vector %v", gotVector, wantVector)
 	}
@@ -105,7 +105,7 @@ func TestLoadReuseVectorsForContentsDoesNotCopyWholeCollection(t *testing.T) {
 	store.collections[collectionName] = stored
 
 	candidate := model.StoredChunk{Content: rows[0].Content}
-	var latest map[string][]float32
+	var latest map[string]model.ReuseVector
 	allocations := testing.AllocsPerRun(10, func() {
 		latest, err = store.LoadReuseVectorsForContents(
 			context.Background(),
@@ -293,7 +293,7 @@ func assertReusedVector(
 	if err != nil {
 		t.Fatalf("LoadReuseVectorsForContents returned error: %v", err)
 	}
-	got := reuse[semantic.ContentVectorKey(content)]
+	got := reuse[semantic.ContentVectorKey(content)].Vector
 	if !slices.Equal(got, want) {
 		t.Fatalf("reused vector = %v, want %v", got, want)
 	}

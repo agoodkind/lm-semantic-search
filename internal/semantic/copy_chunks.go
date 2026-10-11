@@ -78,6 +78,7 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, src
 				rewritten,
 				destinationIDs,
 				source.vectors,
+				source.embeddingModels,
 				splitPartsRecorded,
 				CodeColumns(),
 			)
@@ -154,18 +155,20 @@ type copiedRows struct {
 	chunks             []model.StoredChunk
 	ids                []string
 	vectors            [][]float32
+	embeddingModels    []string
 	splitPartsRecorded []bool
 }
 
 type copiedRowColumns struct {
-	id            column.Column
-	content       column.Column
-	startLine     column.Column
-	endLine       column.Column
-	fileExtension column.Column
-	metadata      column.Column
-	vector        column.Column
-	splitPart     column.Column
+	id             column.Column
+	content        column.Column
+	startLine      column.Column
+	endLine        column.Column
+	fileExtension  column.Column
+	metadata       column.Column
+	vector         column.Column
+	splitPart      column.Column
+	embeddingModel column.Column
 }
 
 type copiedRow struct {
@@ -173,6 +176,7 @@ type copiedRow struct {
 	id                string
 	vector            []float32
 	splitPartRecorded bool
+	embeddingModel    string
 }
 
 func noCopiedRows() copiedRows {
@@ -180,6 +184,7 @@ func noCopiedRows() copiedRows {
 		chunks:             nil,
 		ids:                nil,
 		vectors:            nil,
+		embeddingModels:    nil,
 		splitPartsRecorded: nil,
 	}
 }
@@ -222,6 +227,9 @@ func (service *Service) fetchChunksForPath(
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return noCopiedRows(), err
 	}
+	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
+		return noCopiedRows(), err
+	}
 	expression := relativePathExpression(relativePath)
 	outputFields := []string{
 		idFieldName,
@@ -233,6 +241,7 @@ func (service *Service) fetchChunksForPath(
 		metadataFieldName,
 		denseVectorFieldName,
 		splitPartFieldName,
+		embeddingModelFieldName,
 	}
 	queryOption := milvusclient.NewQueryOption(collectionName).WithFilter(expression).WithOutputFields(outputFields...)
 	resultSet, err := service.milvus.Query(ctx, queryOption)
@@ -257,6 +266,7 @@ func (service *Service) fetchChunksForPath(
 	chunks := make([]model.StoredChunk, 0, resultSet.ResultCount)
 	ids := make([]string, 0, resultSet.ResultCount)
 	vectors := make([][]float32, 0, resultSet.ResultCount)
+	embeddingModels := make([]string, 0, resultSet.ResultCount)
 	splitPartsRecorded := make([]bool, 0, resultSet.ResultCount)
 	for rowIndex := range resultSet.ResultCount {
 		row, rowErr := copiedRowAt(
@@ -272,26 +282,29 @@ func (service *Service) fetchChunksForPath(
 		chunks = append(chunks, row.chunk)
 		ids = append(ids, row.id)
 		vectors = append(vectors, row.vector)
+		embeddingModels = append(embeddingModels, row.embeddingModel)
 		splitPartsRecorded = append(splitPartsRecorded, row.splitPartRecorded)
 	}
 	return copiedRows{
 		chunks:             chunks,
 		ids:                ids,
 		vectors:            vectors,
+		embeddingModels:    embeddingModels,
 		splitPartsRecorded: splitPartsRecorded,
 	}, nil
 }
 
 func copiedColumns(resultSet milvusclient.ResultSet) (copiedRowColumns, error) {
 	columns := copiedRowColumns{
-		id:            resultSet.GetColumn(idFieldName),
-		content:       resultSet.GetColumn(contentFieldName),
-		startLine:     resultSet.GetColumn(startLineFieldName),
-		endLine:       resultSet.GetColumn(endLineFieldName),
-		fileExtension: resultSet.GetColumn(fileExtensionFieldName),
-		metadata:      resultSet.GetColumn(metadataFieldName),
-		vector:        resultSet.GetColumn(denseVectorFieldName),
-		splitPart:     resultSet.GetColumn(splitPartFieldName),
+		id:             resultSet.GetColumn(idFieldName),
+		content:        resultSet.GetColumn(contentFieldName),
+		startLine:      resultSet.GetColumn(startLineFieldName),
+		endLine:        resultSet.GetColumn(endLineFieldName),
+		fileExtension:  resultSet.GetColumn(fileExtensionFieldName),
+		metadata:       resultSet.GetColumn(metadataFieldName),
+		vector:         resultSet.GetColumn(denseVectorFieldName),
+		splitPart:      resultSet.GetColumn(splitPartFieldName),
+		embeddingModel: resultSet.GetColumn(embeddingModelFieldName),
 	}
 	if columns.id == nil || columns.content == nil || columns.startLine == nil ||
 		columns.endLine == nil || columns.fileExtension == nil ||
@@ -349,6 +362,10 @@ func copiedRowAt(
 	if err != nil {
 		return copiedRow{}, fmt.Errorf("read split part column for copy at %d: %w", rowIndex, err)
 	}
+	embeddingModel, err := nullableStringAt(columns.embeddingModel, rowIndex)
+	if err != nil {
+		return copiedRow{}, fmt.Errorf("read embedding model column of copied row %d: %w", rowIndex, err)
+	}
 	return copiedRow{
 		chunk: model.StoredChunk{
 			Content:           contentValue,
@@ -365,5 +382,6 @@ func copiedRowAt(
 		id:                idValue,
 		vector:            vector,
 		splitPartRecorded: splitPartRecorded,
+		embeddingModel:    embeddingModel,
 	}, nil
 }

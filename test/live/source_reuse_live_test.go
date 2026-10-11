@@ -34,7 +34,7 @@ func stageAndPromoteContents(
 		chunks,
 		semantic.Removal{},
 		nil,
-		map[string][]float32{},
+		map[string]model.ReuseVector{},
 		semantic.CodeColumns(),
 	); err != nil {
 		t.Fatalf("Staging the contents at %s failed with error %v.", codebasePath, err)

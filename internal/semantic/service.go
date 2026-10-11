@@ -403,7 +403,7 @@ func (service *Service) hasCollection(
 // batch is then embedded and inserted through the batched flow of the staging
 // build. Reindex returns ErrCollectionMissing when the live collection no
 // longer exists, and the caller runs a full staging build.
-func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string][]float32, columnSet StoreColumnSet) (err error) {
+func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string]model.ReuseVector, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.reindex")
 	defer done(&err)
 

@@ -48,8 +48,8 @@ type fakeSemantic struct {
 	ensureMmap            func(context.Context)
 	backfillCollections   func(context.Context)
 	reindex               func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string) error
-	reindexWithReuse      func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
-	stageReindexWithReuse func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string][]float32) error
+	reindexWithReuse      func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string]model.ReuseVector) error
+	stageReindexWithReuse func(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removed []string, progress func(semantic.Progress), reuse map[string]model.ReuseVector) error
 	copyChunks            func(ctx context.Context, codebasePath string, src string, dst string) (int, error)
 	deleteItemRows        func(ctx context.Context, collectionName string, removal semantic.Removal) error
 	collectionName        func(codebasePath string) string
@@ -70,21 +70,21 @@ type fakeSemantic struct {
 	// loadReuse, when set, supplies the reuse map a merge-down build receives and
 	// records which collections were asked for. dropped records every Drop call
 	// so a test can prove an absorb never drops the absorbed child collection.
-	loadReuse        func(ctx context.Context, collectionNames []string) (map[string][]float32, error)
+	loadReuse        func(ctx context.Context, collectionNames []string) (map[string]model.ReuseVector, error)
 	reuseCollections [][]string
 	// loadReuseForPrefix, when set, supplies the per-conversation reuse map a
 	// conversation ingest loads by conv/<id>/ prefix; reusePrefixCalls records
 	// every such load and reindexReuse records the reuse map each conversation's
 	// Reindex actually received.
-	loadReuseForPrefix      func(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error)
+	loadReuseForPrefix      func(ctx context.Context, collectionName string, relativePathPrefix string) (map[string]model.ReuseVector, error)
 	reusePrefixCalls        []reusePrefixCall
-	loadReuseForPath        func(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error)
+	loadReuseForPath        func(ctx context.Context, collectionName string, relativePath string) (map[string]model.ReuseVector, error)
 	reusePathCalls          []reusePathCall
-	loadReuseForContents    func(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string][]float32, error)
+	loadReuseForContents    func(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string]model.ReuseVector, error)
 	reuseContentCollections [][]string
 	messageStateCalls       []messageStateCall
 	derivedBatchCalls       [][]string
-	reindexReuse            map[string]map[string][]float32
+	reindexReuse            map[string]map[string]model.ReuseVector
 	// conversationSearchScopes records the conversation-id scope each
 	// conversation search received, so tests can prove native scoping.
 	conversationSearchScopes [][]string
@@ -114,7 +114,7 @@ func (f *fakeSemantic) RecordCollectionDeclaration(string, collection.Declaratio
 
 // LoadCollectionItemBatch reports no stored rows for a generic collection.
 func (f *fakeSemantic) LoadCollectionItemBatch(context.Context, string, string, []string) (semantic.CollectionItemBatchState, error) {
-	return semantic.CollectionItemBatchState{Rows: map[string]semantic.CollectionItemRows{}, Reuse: map[string][]float32{}}, nil
+	return semantic.CollectionItemBatchState{Rows: map[string]semantic.CollectionItemRows{}, Reuse: map[string]model.ReuseVector{}}, nil
 }
 
 type reindexCall struct {
@@ -344,14 +344,14 @@ func (f *fakeSemantic) ObserveCollection(
 	return observation, nil
 }
 
-func (f *fakeSemantic) LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string][]float32, error) {
+func (f *fakeSemantic) LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string]model.ReuseVector, error) {
 	f.mu.Lock()
 	f.reuseCollections = append(f.reuseCollections, collectionNames)
 	f.mu.Unlock()
 	if f.loadReuse != nil {
 		return f.loadReuse(ctx, collectionNames)
 	}
-	return map[string][]float32{}, nil
+	return map[string]model.ReuseVector{}, nil
 }
 
 // reusePrefixCall records one prefix-scoped reuse load: the collection asked
@@ -373,46 +373,46 @@ type messageStateCall struct {
 	Prefix     string
 }
 
-func (f *fakeSemantic) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string][]float32, error) {
+func (f *fakeSemantic) LoadReuseVectorsForPrefix(ctx context.Context, collectionName string, relativePathPrefix string) (map[string]model.ReuseVector, error) {
 	f.mu.Lock()
 	f.reusePrefixCalls = append(f.reusePrefixCalls, reusePrefixCall{Collection: collectionName, Prefix: relativePathPrefix})
 	f.mu.Unlock()
 	if f.loadReuseForPrefix != nil {
 		return f.loadReuseForPrefix(ctx, collectionName, relativePathPrefix)
 	}
-	return map[string][]float32{}, nil
+	return map[string]model.ReuseVector{}, nil
 }
 
-func (f *fakeSemantic) LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string][]float32, error) {
+func (f *fakeSemantic) LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string]model.ReuseVector, error) {
 	f.mu.Lock()
 	f.reusePathCalls = append(f.reusePathCalls, reusePathCall{Collection: collectionName, Path: relativePath})
 	f.mu.Unlock()
 	if f.loadReuseForPath != nil {
 		return f.loadReuseForPath(ctx, collectionName, relativePath)
 	}
-	return map[string][]float32{}, nil
+	return map[string]model.ReuseVector{}, nil
 }
 
 func (f *fakeSemantic) LoadReuseVectorsForContents(
 	ctx context.Context,
 	collectionName string,
 	chunks []model.StoredChunk,
-) (map[string][]float32, error) {
+) (map[string]model.ReuseVector, error) {
 	if f.loadReuseForContents != nil {
 		return f.loadReuseForContents(ctx, collectionName, chunks)
 	}
-	return map[string][]float32{}, nil
+	return map[string]model.ReuseVector{}, nil
 }
 
 func (f *fakeSemantic) LoadReuseVectorsForContentsFrom(
 	ctx context.Context,
 	collectionNames []string,
 	chunks []model.StoredChunk,
-) (map[string][]float32, error) {
+) (map[string]model.ReuseVector, error) {
 	f.mu.Lock()
 	f.reuseContentCollections = append(f.reuseContentCollections, append([]string(nil), collectionNames...))
 	f.mu.Unlock()
-	reuse := map[string][]float32{}
+	reuse := map[string]model.ReuseVector{}
 	if f.loadReuseForContents == nil {
 		return reuse, nil
 	}
@@ -457,19 +457,19 @@ func (f *fakeSemantic) messageStateCallsSnapshot() []messageStateCall {
 
 // reindexReuseSnapshot returns, per conversation id, a copy of the reuse map
 // the last Reindex for that conversation received.
-func (f *fakeSemantic) reindexReuseSnapshot() map[string]map[string][]float32 {
+func (f *fakeSemantic) reindexReuseSnapshot() map[string]map[string]model.ReuseVector {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make(map[string]map[string][]float32, len(f.reindexReuse))
+	out := make(map[string]map[string]model.ReuseVector, len(f.reindexReuse))
 	for conversationID, reuse := range f.reindexReuse {
-		copied := make(map[string][]float32, len(reuse))
+		copied := make(map[string]model.ReuseVector, len(reuse))
 		maps.Copy(copied, reuse)
 		out[conversationID] = copied
 	}
 	return out
 }
 
-func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error {
+func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string]model.ReuseVector, columnSet semantic.StoreColumnSet) error {
 	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
 	f.reindexCalls = append(f.reindexCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval, ColumnSet: columnSet})
@@ -486,7 +486,7 @@ func (f *fakeSemantic) Reindex(ctx context.Context, codebasePath string, chunks 
 	return nil
 }
 
-func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string][]float32, columnSet semantic.StoreColumnSet) error {
+func (f *fakeSemantic) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string]model.ReuseVector, columnSet semantic.StoreColumnSet) error {
 	recordedRemoval := copyRemoval(removal)
 	f.mu.Lock()
 	f.stageCalls = append(f.stageCalls, reindexCall{CodebasePath: codebasePath, Chunks: len(chunks), Removed: removalPaths(recordedRemoval), Removal: recordedRemoval, ColumnSet: columnSet})

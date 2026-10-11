@@ -804,8 +804,8 @@ func TestCreatedCollectionWaitsForIndexesAndLoadsAfterPolicy(t *testing.T) {
 		}},
 		semantic.Removal{},
 		nil,
-		map[string][]float32{
-			semantic.ContentVectorKey("package created"): {1, 0, 0},
+		map[string]model.ReuseVector{
+			semantic.ContentVectorKey("package created"): {Vector: []float32{1, 0, 0}},
 		},
 		semantic.CodeColumns(),
 	)
@@ -878,8 +878,8 @@ func TestCreatedCollectionFailsWithoutLoadWhenRequiredIndexStaysInvisible(t *tes
 		}},
 		semantic.Removal{},
 		nil,
-		map[string][]float32{
-			semantic.ContentVectorKey("package invisible"): {1, 0, 0},
+		map[string]model.ReuseVector{
+			semantic.ContentVectorKey("package invisible"): {Vector: []float32{1, 0, 0}},
 		},
 		semantic.CodeColumns(),
 	)
@@ -979,8 +979,8 @@ func stageMmapTestChunk(
 		}},
 		semantic.Removal{},
 		nil,
-		map[string][]float32{
-			semantic.ContentVectorKey(content): {1, 0, 0},
+		map[string]model.ReuseVector{
+			semantic.ContentVectorKey(content): {Vector: []float32{1, 0, 0}},
 		},
 		semantic.CodeColumns(),
 	)
